@@ -21,6 +21,13 @@ _logger = get_logger("server_list_window.batch_status")
 
 
 class ServerListWindowBatchStatusMixin:
+        def _widget_exists(self, widget) -> bool:
+            """Return True if a Tk widget is still alive."""
+            try:
+                return bool(widget) and widget.winfo_exists()
+            except Exception:
+                return False
+
         def _parse_accessible_shares(self, raw_value: Optional[Any]) -> List[str]:
             if not raw_value:
                 return []
@@ -51,6 +58,10 @@ class ServerListWindowBatchStatusMixin:
             return config_path
 
         def _on_batch_future_done(self, job_id: str, target: Dict[str, Any], future: Future) -> None:
+            # If the window is already destroyed, ignore late callbacks
+            if not self._widget_exists(getattr(self, "window", None)):
+                return
+
             job = self.active_jobs.get(job_id)
             if not job:
                 return
@@ -92,7 +103,7 @@ class ServerListWindowBatchStatusMixin:
             if completed >= total:
                 self._finalize_batch_job(job_id, dialog)
 
-        def _finalize_batch_job(self, job_id: str, dialog: Optional[BatchStatusDialog] = None) -> None:
+        def _finalize_batch_job(self, job_id: str, dialog: Optional[BatchStatusDialog] = None, *, show_summary: bool = True) -> None:
             job = self.active_jobs.pop(job_id, None)
             if not job:
                 return
@@ -112,7 +123,7 @@ class ServerListWindowBatchStatusMixin:
             self._set_status(f"{job_type.title()} batch finished")
             self._flush_pending_refresh()
             self._set_table_interaction_enabled(True)
-            if results:
+            if results and show_summary:
                 self._show_batch_summary(job_type, results)
             # Close the status pop-out once the summary is shown
             if dlg:
@@ -161,7 +172,7 @@ class ServerListWindowBatchStatusMixin:
             self._set_status("Batch stopped")
             self._finalize_batch_job(job_id)
 
-        def _stop_all_jobs(self) -> None:
+        def _stop_all_jobs(self, *, show_summary: bool = True) -> None:
             """Stop all active jobs (used on window close)."""
             for job_id in list(self.active_jobs.keys()):
                 job = self.active_jobs.get(job_id)
@@ -174,7 +185,7 @@ class ServerListWindowBatchStatusMixin:
                 if executor:
                     executor.shutdown(wait=False, cancel_futures=True)
                 job["completed"] = job["total"]
-                self._finalize_batch_job(job_id)
+                self._finalize_batch_job(job_id, show_summary=show_summary)
 
         def _is_batch_active(self) -> bool:
             return any(job.get("completed", 0) < job.get("total", 0) for job in self.active_jobs.values())
@@ -196,8 +207,11 @@ class ServerListWindowBatchStatusMixin:
             return any(job.get("type") == "extract" and job.get("completed", 0) < job.get("total", 0) for job in self.active_jobs.values())
 
         def _set_status(self, message: str) -> None:
-            if self.status_label:
-                self.status_label.configure(text=message)
+            if self._widget_exists(getattr(self, "status_label", None)):
+                try:
+                    self.status_label.configure(text=message)
+                except Exception:
+                    pass
 
         def _set_pry_status_button_visible(self, visible: bool) -> None:
             if not self.pry_status_button:
@@ -240,7 +254,7 @@ class ServerListWindowBatchStatusMixin:
             return dialog
 
         def _update_batch_status_dialog(self, dialog: BatchStatusDialog, done: int, total: Optional[int], message: Optional[str]) -> None:
-            if not dialog:
+            if not self._widget_exists(dialog):
                 return
             try:
                 dialog.update_progress(done, total, message)
@@ -248,7 +262,7 @@ class ServerListWindowBatchStatusMixin:
                 pass
 
         def _finish_batch_status_dialog(self, dialog: BatchStatusDialog, status: str, notes: str) -> None:
-            if not dialog:
+            if not self._widget_exists(dialog):
                 return
             try:
                 dialog.mark_finished(status, notes)
