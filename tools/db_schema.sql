@@ -8,6 +8,8 @@ DROP TABLE IF EXISTS share_access;
 DROP TABLE IF EXISTS failure_logs;
 DROP TABLE IF EXISTS smb_servers;
 DROP TABLE IF EXISTS scan_sessions;
+DROP TABLE IF EXISTS ftp_access;
+DROP TABLE IF EXISTS ftp_servers;
 
 -- Core scan session tracking
 CREATE TABLE scan_sessions (
@@ -221,7 +223,7 @@ ORDER BY
     count DESC;
 
 CREATE VIEW v_scan_statistics AS
-SELECT 
+SELECT
     tool_name,
     DATE(timestamp) AS scan_date,
     COUNT(*) AS sessions,
@@ -232,7 +234,69 @@ SELECT
         CASE WHEN total_targets > 0 THEN CAST(successful_targets AS FLOAT) / CAST(total_targets AS FLOAT)
         ELSE 0 END
     ) * 100, 2) AS success_rate
-FROM scan_sessions 
+FROM scan_sessions
 WHERE total_targets > 0
 GROUP BY tool_name, DATE(timestamp)
 ORDER BY scan_date DESC;
+
+-- FTP sidecar tables (additive; SMB schema untouched)
+
+-- Central FTP server registry — one row per IP address (host-centric, port is informational)
+CREATE TABLE IF NOT EXISTS ftp_servers (
+    id              INTEGER  PRIMARY KEY AUTOINCREMENT,
+    ip_address      TEXT     NOT NULL UNIQUE,
+    country         TEXT,
+    country_code    TEXT,
+    port            INTEGER  NOT NULL DEFAULT 21,
+    anon_accessible BOOLEAN  NOT NULL DEFAULT FALSE,
+    banner          TEXT,
+    shodan_data     TEXT,
+    first_seen      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_seen       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    scan_count      INTEGER  DEFAULT 1,
+    status          TEXT     DEFAULT 'active',
+    notes           TEXT,
+    updated_at      DATETIME,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Per-session FTP access summary (parallel to share_access)
+CREATE TABLE IF NOT EXISTS ftp_access (
+    id                     INTEGER  PRIMARY KEY AUTOINCREMENT,
+    server_id              INTEGER  NOT NULL,
+    session_id             INTEGER,
+    accessible             BOOLEAN  NOT NULL DEFAULT FALSE,
+    auth_status            TEXT,
+    root_listing_available BOOLEAN  DEFAULT FALSE,
+    root_entry_count       INTEGER  DEFAULT 0,
+    error_message          TEXT,
+    test_timestamp         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    access_details         TEXT,
+    created_at             DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (server_id)  REFERENCES ftp_servers(id)   ON DELETE CASCADE,
+    FOREIGN KEY (session_id) REFERENCES scan_sessions(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_ftp_servers_ip       ON ftp_servers(ip_address);
+CREATE INDEX IF NOT EXISTS idx_ftp_servers_country  ON ftp_servers(country);
+CREATE INDEX IF NOT EXISTS idx_ftp_servers_last_seen ON ftp_servers(last_seen);
+CREATE INDEX IF NOT EXISTS idx_ftp_access_server    ON ftp_access(server_id);
+CREATE INDEX IF NOT EXISTS idx_ftp_access_session   ON ftp_access(session_id);
+
+-- Protocol coexistence view — resolves has_smb / has_ftp / both per IP
+CREATE VIEW IF NOT EXISTS v_host_protocols AS
+SELECT
+    ip_address,
+    MAX(has_smb) AS has_smb,
+    MAX(has_ftp) AS has_ftp,
+    CASE
+        WHEN MAX(has_smb) = 1 AND MAX(has_ftp) = 1 THEN 'both'
+        WHEN MAX(has_smb) = 1                       THEN 'smb_only'
+        ELSE                                              'ftp_only'
+    END AS protocol_presence
+FROM (
+    SELECT ip_address, 1 AS has_smb, 0 AS has_ftp FROM smb_servers
+    UNION ALL
+    SELECT ip_address, 0 AS has_smb, 1 AS has_ftp FROM ftp_servers
+) combined
+GROUP BY ip_address;

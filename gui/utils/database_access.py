@@ -1332,3 +1332,81 @@ class DatabaseReader:
             )
             conn.commit()
         self.clear_cache()
+
+    # ------------------------------------------------------------------
+    # FTP sidecar read methods
+    # All methods guard against OperationalError in case the migration has
+    # not yet fired (e.g. very early startup), returning safe empty values.
+    # ------------------------------------------------------------------
+
+    def get_ftp_servers(self, country: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Return active FTP server rows, optionally filtered by country_code.
+
+        Args:
+            country: ISO 3166-1 alpha-2 code to filter by, or None for all.
+
+        Returns:
+            List of dicts with ftp_servers columns.
+        """
+        query = "SELECT * FROM ftp_servers WHERE status = 'active'"
+        params: tuple = ()
+        if country:
+            query += " AND country_code = ?"
+            params = (country,)
+        query += " ORDER BY last_seen DESC"
+        try:
+            with self._get_connection() as conn:
+                rows = conn.execute(query, params).fetchall()
+                return [dict(row) for row in rows]
+        except sqlite3.OperationalError:
+            return []
+
+    def get_ftp_server_count(self) -> int:
+        """Return count of active FTP servers."""
+        try:
+            with self._get_connection() as conn:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM ftp_servers WHERE status = 'active'"
+                ).fetchone()
+                return row[0] if row else 0
+        except sqlite3.OperationalError:
+            return 0
+
+    def get_host_protocols(self, ip: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Query v_host_protocols for protocol presence per IP.
+
+        Args:
+            ip: Specific IP address to look up, or None to return all hosts.
+
+        Returns:
+            List of dicts with keys: ip_address, has_smb, has_ftp,
+            protocol_presence ('smb_only' | 'ftp_only' | 'both').
+        """
+        query = (
+            "SELECT ip_address, has_smb, has_ftp, protocol_presence"
+            " FROM v_host_protocols"
+        )
+        params: tuple = ()
+        if ip:
+            query += " WHERE ip_address = ?"
+            params = (ip,)
+        try:
+            with self._get_connection() as conn:
+                rows = conn.execute(query, params).fetchall()
+                return [dict(row) for row in rows]
+        except sqlite3.OperationalError:
+            return []
+
+    def get_dual_protocol_count(self) -> int:
+        """Return count of IPs present in both smb_servers and ftp_servers."""
+        try:
+            with self._get_connection() as conn:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM v_host_protocols"
+                    " WHERE protocol_presence = 'both'"
+                ).fetchone()
+                return row[0] if row else 0
+        except sqlite3.OperationalError:
+            return 0

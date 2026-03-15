@@ -789,6 +789,95 @@ class SMBSeekWorkflowDatabase:
             self.db_manager.close()
 
 
+class FtpPersistence:
+    """
+    Write operations for the FTP sidecar tables (ftp_servers, ftp_access).
+
+    Intentionally decoupled from SMBSeekWorkflowDatabase / DatabaseManager so
+    that FTP persistence does not depend on SMB infrastructure. Both tables
+    must already exist (created by shared.db_migrations.run_migrations).
+    """
+
+    def __init__(self, db_path: str) -> None:
+        self.db_path = str(db_path)
+
+    def upsert_ftp_server(
+        self,
+        ip: str,
+        country: str,
+        country_code: str,
+        port: int,
+        anon_accessible: bool,
+        banner: str,
+        shodan_data: str,
+    ) -> int:
+        """
+        Insert or update the ftp_servers row for ip_address.
+
+        On conflict (same IP re-scanned): increments scan_count, updates
+        last_seen and all mutable discovery fields. first_seen is never
+        overwritten.
+
+        Returns the authoritative row id, always resolved via SELECT because
+        lastrowid is not reliable on the conflict-update code path.
+        """
+        upsert_sql = """
+            INSERT INTO ftp_servers
+                (ip_address, country, country_code, port, anon_accessible,
+                 banner, shodan_data, last_seen, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT(ip_address) DO UPDATE SET
+                last_seen       = CURRENT_TIMESTAMP,
+                scan_count      = ftp_servers.scan_count + 1,
+                port            = excluded.port,
+                anon_accessible = excluded.anon_accessible,
+                banner          = excluded.banner,
+                country         = excluded.country,
+                country_code    = excluded.country_code,
+                shodan_data     = excluded.shodan_data,
+                status          = 'active',
+                updated_at      = CURRENT_TIMESTAMP
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(upsert_sql, (ip, country, country_code, port,
+                                      anon_accessible, banner, shodan_data))
+            conn.commit()
+            row = conn.execute(
+                "SELECT id FROM ftp_servers WHERE ip_address = ?", (ip,)
+            ).fetchone()
+            return row[0]
+
+    def record_ftp_access(
+        self,
+        server_id: int,
+        session_id: Optional[int],
+        accessible: bool,
+        auth_status: str,
+        root_listing_available: bool,
+        root_entry_count: int,
+        error_message: str,
+        access_details: str,
+    ) -> None:
+        """
+        Insert one ftp_access row for the given server/session.
+
+        One row per session per server is the expected usage pattern; callers
+        that need idempotency should check for an existing row first.
+        """
+        sql = """
+            INSERT INTO ftp_access
+                (server_id, session_id, accessible, auth_status,
+                 root_listing_available, root_entry_count,
+                 error_message, access_details)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(sql, (server_id, session_id, accessible, auth_status,
+                               root_listing_available, root_entry_count,
+                               error_message, access_details))
+            conn.commit()
+
+
 def create_workflow_database(config, verbose=False) -> SMBSeekWorkflowDatabase:
     """
     Create and initialize workflow database manager.

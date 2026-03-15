@@ -38,6 +38,17 @@ def main() -> None:
     if args.verbose and args.quiet:
         parser.error("--verbose and --quiet are mutually exclusive")
 
+    # Ensure FTP (and SMB) schema migrations are applied before any workflow runs.
+    # Best-effort: mirrors the pattern in SMBSeekWorkflowDatabase.__init__.
+    try:
+        from shared.config import load_config
+        from shared.db_migrations import run_migrations
+        _cfg = load_config(args.config)
+        _db_path = _cfg.get_database_path()
+        run_migrations(_db_path)
+    except Exception:
+        pass
+
     try:
         workflow = create_ftp_workflow(args)
         workflow.run(args)
