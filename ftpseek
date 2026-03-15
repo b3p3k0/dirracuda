@@ -1,0 +1,56 @@
+#!/usr/bin/env python3
+"""FTP scan CLI entry point (Card 2 skeleton — no real FTP I/O yet)."""
+
+import argparse
+import sys
+from pathlib import Path
+
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+
+from shared.ftp_workflow import create_ftp_workflow
+
+
+def create_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="ftpseek",
+        description="FTP server discovery and assessment (MVP skeleton)",
+    )
+    parser.add_argument(
+        "--country", metavar="CODE", default=None,
+        help="ISO 3166-1 alpha-2 country code(s), comma-separated (e.g. US,GB)",
+    )
+    parser.add_argument(
+        "--config", metavar="FILE", default=None,
+        help="Path to config file (default: conf/config.json)",
+    )
+    parser.add_argument("--verbose", "-v", action="store_true", default=False)
+    parser.add_argument("--quiet", "-q", action="store_true", default=False)
+    parser.add_argument("--no-colors", action="store_true", default=False)
+    return parser
+
+
+def main() -> None:
+    parser = create_parser()
+    args = parser.parse_args()
+
+    if args.verbose and args.quiet:
+        parser.error("--verbose and --quiet are mutually exclusive")
+
+    try:
+        workflow = create_ftp_workflow(args)
+        workflow.run(args)
+    except KeyboardInterrupt:
+        print("\nScan interrupted by user.", file=sys.stderr)
+        sys.exit(130)
+    except Exception as exc:
+        print(f"Fatal error: {exc}", file=sys.stderr)
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

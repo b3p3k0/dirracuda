@@ -633,7 +633,9 @@ class ScanManager:
         # Add fallback logic only for successful scans with missing numbers.
         # If an error was returned (e.g., Shodan API failure), do NOT fallback to prior DB data.
         used_fallback = False
-        if results.get("success", False) and not results.get("error") and hosts_scanned == 0 and accessible_hosts == 0 and shares_found == 0:
+        if (results.get("success", False) and not results.get("error")
+                and hosts_scanned == 0 and accessible_hosts == 0 and shares_found == 0
+                and self.scan_results.get("protocol") != "ftp"):
             _logger.warning("CLI parsing returned zero values for all statistics. Attempting database fallback.")
             try:
                 # Try to get recent statistics from database as fallback
@@ -856,6 +858,96 @@ class ScanManager:
         except Exception:
             # Any error in database fallback should not crash the scan
             return None
+
+    def start_ftp_scan(
+        self,
+        scan_options: dict,
+        backend_path: str,
+        progress_callback: Callable,
+        log_callback: Optional[Callable[[str], None]] = None,
+    ) -> bool:
+        """
+        Start an FTP scan in a background thread.
+
+        Shares the same lock/state mechanism as start_scan() so only one
+        protocol scan can run at a time. SMB behaviour is unchanged.
+
+        Args:
+            scan_options: Dict with optional 'country' key.
+            backend_path: Path to SMBSeek installation directory.
+            progress_callback: Called with (percentage, status, phase).
+            log_callback: Called with raw stdout lines for log streaming.
+
+        Returns:
+            True if scan started, False if already scanning or lock failed.
+        """
+        if self.is_scan_active():
+            return False
+
+        country = scan_options.get("country")
+        if not self.create_lock_file(country, "ftp"):
+            return False
+
+        try:
+            self.backend_interface = BackendInterface(backend_path)
+            self.is_scanning = True
+            self.scan_start_time = datetime.now()
+            self.progress_callback = progress_callback
+            self.log_callback = log_callback
+            self.scan_results = {
+                "start_time": self.scan_start_time.isoformat(),
+                "country": country,
+                "scan_options": scan_options,
+                "status": "running",
+                "protocol": "ftp",
+            }
+
+            self.scan_thread = threading.Thread(
+                target=self._ftp_scan_worker,
+                args=(scan_options,),
+                daemon=True,
+            )
+            self.scan_thread.start()
+            return True
+
+        except Exception as exc:
+            self.is_scanning = False
+            self.remove_lock_file()
+            self._update_progress(0, f"Failed to start FTP scan: {exc}", "error")
+            return False
+
+    def _ftp_scan_worker(self, scan_options: dict) -> None:
+        """
+        Worker thread for FTP scan execution.
+
+        Mirrors _scan_worker() structure exactly:
+        - try: execute + _process_scan_results()
+        - except: _handle_scan_error()
+        - finally: _cleanup_scan() — always runs
+
+        Progress updates go through _update_progress() for thread-safe UI dispatch
+        via ui_dispatcher. Never call self.progress_callback directly from here.
+        """
+        try:
+            country_raw = scan_options.get("country") or ""
+            countries = [c.strip() for c in country_raw.split(",") if c.strip()]
+
+            self._update_progress(5, "Initializing FTP scan...", "initialization")
+
+            result = self.backend_interface.run_ftp_scan(
+                countries=countries,
+                progress_callback=self._handle_backend_progress,
+                log_callback=self._handle_backend_log_line,
+                verbose=True,
+            )
+
+            self._process_scan_results(result)
+
+        except Exception as exc:
+            self._handle_scan_error(exc)
+
+        finally:
+            self._cleanup_scan()
 
 
 # Global scan manager instance

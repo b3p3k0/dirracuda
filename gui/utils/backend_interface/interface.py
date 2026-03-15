@@ -57,6 +57,7 @@ class BackendInterface:
         """
         self.backend_path = Path(backend_path).resolve()
         self.cli_script = self.backend_path / "smbseek"
+        self.ftp_cli_script = self.backend_path / "ftpseek"
         self.config_path = self.backend_path / "conf" / "config.json"
         self.config_example_path = self.backend_path / "conf" / "config.json.example"
 
@@ -136,6 +137,16 @@ class BackendInterface:
         if os.getenv("XSMBSEEK_DEBUG_SUBPROCESS"):
             # Log script and arg count only (avoid logging potential credentials)
             _logger.debug("CLI command: %s with %d args", script_path, len(args))
+        return command_list
+
+    def _build_ftp_cli_command(self, *args) -> List[str]:
+        """Build CLI command for ftpseek using same interpreter as GUI."""
+        interpreter = sys.executable or "python3"
+        command_list = [interpreter, str(self.ftp_cli_script), *args]
+        if os.getenv("XSMBSEEK_DEBUG_SUBPROCESS"):
+            _logger.debug(
+                "FTP CLI command: %s with %d args", str(self.ftp_cli_script), len(args)
+            )
         return command_list
 
     def _build_tool_command(self, script_name: str, *args) -> List[str]:
@@ -318,7 +329,42 @@ class BackendInterface:
                 progress_callback,
                 log_callback=log_callback
             )
-    
+
+    def run_ftp_scan(
+        self,
+        countries: List[str],
+        progress_callback: Optional[Callable] = None,
+        log_callback: Optional[Callable[[str], None]] = None,
+        verbose: bool = True,
+    ) -> Dict:
+        """
+        Execute FTP scan workflow via ftpseek CLI subprocess.
+
+        Args:
+            countries: ISO country codes (empty list = global scan).
+            progress_callback: Called with (percentage, message) during scan.
+            log_callback: Called with raw stdout lines for log streaming.
+            verbose: Pass --verbose for parseable progress output.
+
+        Returns:
+            Result dict with 'success' key and parsed summary stats.
+        """
+        if self.mock_mode:
+            return mock_operations.mock_ftp_scan_operation(countries, progress_callback)
+
+        cmd = self._build_ftp_cli_command()
+        if verbose:
+            cmd.append("--verbose")
+        if countries:
+            cmd.extend(["--country", ",".join(countries)])
+
+        return process_runner.execute_with_progress(
+            self,
+            cmd,
+            progress_callback,
+            log_callback=log_callback,
+        )
+
     def run_discover(self, countries: List[str], progress_callback: Optional[Callable] = None) -> Dict:
         """
         DEPRECATED: Discovery-only mode has been removed in SMBSeek 3.0.

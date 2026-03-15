@@ -613,14 +613,10 @@ class ServerListWindow(ServerListWindowActionsMixin):
             self.all_servers = servers
             self._attach_probe_status(self.all_servers)
 
-            # Load denied share lists for details rendering
-            try:
-                for server in self.all_servers:
-                    ip = server.get("ip_address")
-                    server["denied_shares_list"] = self.db_reader.get_denied_shares(ip) if ip else []
-            except Exception:
-                for server in self.all_servers:
-                    server["denied_shares_list"] = []
+            # Do NOT preload denied share lists for every server here.
+            # For large datasets this results in thousands of per-server DB queries
+            # on the UI thread and can make the window appear permanently "Loading...".
+            # Denied share lists are fetched lazily when a details popup is opened.
 
             # Set initial date filter if requested
             if self.filter_recent and self.last_scan_time:
@@ -732,7 +728,8 @@ class ServerListWindow(ServerListWindowActionsMixin):
         # Get server data
         item = selected_items[0]
         values = self.tree.item(item)["values"]
-        ip_address = values[4]  # IP Address now at index 4 (fav/avoid/probe/extracted)
+        # Columns are: fav, avoid, probe, rce, extracted, ip, shares, ...
+        ip_address = values[5]
 
         # Find server in data
         server_data = next(
@@ -749,6 +746,14 @@ class ServerListWindow(ServerListWindowActionsMixin):
 
     def _show_server_detail_popup(self, server_data: Dict[str, Any]) -> None:
         """Show server detail popup using details module."""
+        ip_address = server_data.get("ip_address")
+        if ip_address and "denied_shares_list" not in server_data:
+            try:
+                server_data["denied_shares_list"] = self.db_reader.get_denied_shares(ip_address)
+            except Exception as exc:
+                _logger.warning("Failed to fetch denied share list for %s: %s", ip_address, exc)
+                server_data["denied_shares_list"] = []
+
         details.show_server_detail_popup(
             self.window,
             server_data,

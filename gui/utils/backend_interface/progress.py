@@ -565,7 +565,8 @@ def parse_final_results(output: str) -> Dict:
     # Check for success indicators using cleaned output
     if ("🎉 SMBSeek security assessment completed successfully!" in cleaned_output or
         ("✓ Found" in cleaned_output and "accessible SMB servers" in cleaned_output) or
-        "✓ Discovery completed:" in cleaned_output):
+        "✓ Discovery completed:" in cleaned_output or
+        "🎉 FTP scan completed successfully" in cleaned_output):
         results["success"] = True
 
     # Fallback: also consider it success if we actually parsed scan results

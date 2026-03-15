@@ -1818,13 +1818,40 @@ class DashboardWidget:
         # Non-idle states: button is disabled; defensive no-op if somehow reached.
 
     def _start_ftp_scan_placeholder(self) -> None:
-        """Placeholder for FTP scan launch. Implemented in Card 2."""
-        messagebox.showinfo(
-            "FTP Scan",
-            "FTP scanning is not yet implemented.\n"
-            "This feature will be available in a future update.",
-            parent=self.parent
+        """Launch FTP scan via scan manager (Card 2+)."""
+        scan_options = self._build_ftp_scan_options()
+        backend_path = str(self.backend_interface.backend_path)
+
+        started = self.scan_manager.start_ftp_scan(
+            scan_options=scan_options,
+            backend_path=backend_path,
+            progress_callback=self._handle_scan_progress,
+            log_callback=self._handle_scan_log_line,
         )
+
+        if started:
+            # Mirror _start_new_scan() post-start sequence (lines 779-791) exactly.
+            self.current_scan_options = scan_options
+            self._reset_log_output(scan_options.get("country"))
+            self._update_scan_button_state("scanning")
+            self._show_scan_progress(scan_options.get("country"))
+            self._monitor_scan_completion()
+        else:
+            messagebox.showerror(
+                "FTP Scan Error",
+                "Could not start FTP scan.\n"
+                "A scan may already be running.",
+                parent=self.parent,
+            )
+
+    def _build_ftp_scan_options(self) -> dict:
+        """
+        Build FTP scan options from current dashboard state.
+
+        Card 2: Global scan (country=None). A proper FTP scan dialog
+        with country selection is a Card 5 follow-up.
+        """
+        return {"country": None}
 
     def _update_scan_button_state(self, new_state: str) -> None:
         """Update scan button state and appearance."""
