@@ -147,6 +147,7 @@ class DashboardWidget:
         self.scan_button_state = "idle"  # idle, disabled_external, scanning, stopping, retry, error
         self.external_scan_pid = None
         self.stopping_started_time = None  # Timestamp when stop was initiated
+        self.ftp_scan_button = None
         
         # Callbacks
         self.drill_down_callback = None
@@ -314,11 +315,20 @@ class DashboardWidget:
         # Start Scan button (preserve state management)
         self.scan_button = tk.Button(
             actions_frame,
-            text="🔍 Start Scan",
+            text="🔍 Start SMB Scan",
             command=self._handle_scan_button_click
         )
         self.theme.apply_to_widget(self.scan_button, "button_primary")
         self.scan_button.pack(side=tk.LEFT, padx=(0, 5))
+
+        # FTP Scan button (placeholder; wired in Card 2+)
+        self.ftp_scan_button = tk.Button(
+            actions_frame,
+            text="📡 Start FTP Scan",
+            command=self._handle_ftp_scan_button_click
+        )
+        self.theme.apply_to_widget(self.ftp_scan_button, "button_primary")
+        self.ftp_scan_button.pack(side=tk.LEFT, padx=(0, 5))
 
         # Servers button (existing functionality)
         servers_button = tk.Button(
@@ -1798,7 +1808,24 @@ class DashboardWidget:
             # Retry stopping the scan
             self._stop_scan_immediate()
         # "stopping" state doesn't respond to clicks (button is disabled)
-    
+
+    def _handle_ftp_scan_button_click(self) -> None:
+        """Handle FTP scan button click. Phase 2+ will wire real backend."""
+        if self.scan_button_state == "idle":
+            self._check_external_scans()        # mirror SMB handler: re-verify lock state
+            if self.scan_button_state == "idle":    # still idle after check
+                self._start_ftp_scan_placeholder()
+        # Non-idle states: button is disabled; defensive no-op if somehow reached.
+
+    def _start_ftp_scan_placeholder(self) -> None:
+        """Placeholder for FTP scan launch. Implemented in Card 2."""
+        messagebox.showinfo(
+            "FTP Scan",
+            "FTP scanning is not yet implemented.\n"
+            "This feature will be available in a future update.",
+            parent=self.parent
+        )
+
     def _update_scan_button_state(self, new_state: str) -> None:
         """Update scan button state and appearance."""
         self.scan_button_state = new_state
@@ -1807,23 +1834,35 @@ class DashboardWidget:
             self._set_button_to_start()
             self._hide_status_bar()
             self.stopping_started_time = None  # Clear stop timeout tracking
+            if self.ftp_scan_button is not None:
+                self.ftp_scan_button.config(state=tk.NORMAL)
         elif new_state == "disabled_external":
             self._set_button_to_disabled()
             self._show_status_bar(f"Scan running by PID: {self.external_scan_pid} - Please wait")
+            if self.ftp_scan_button is not None:
+                self.ftp_scan_button.config(state=tk.DISABLED)
         elif new_state == "scanning":
             self._set_button_to_stop()
             self._hide_status_bar()
+            if self.ftp_scan_button is not None:
+                self.ftp_scan_button.config(state=tk.DISABLED)
         elif new_state == "stopping":
             self._set_button_to_stopping()
+            if self.ftp_scan_button is not None:
+                self.ftp_scan_button.config(state=tk.DISABLED)
         elif new_state == "retry":
             self._set_button_to_retry()
+            if self.ftp_scan_button is not None:
+                self.ftp_scan_button.config(state=tk.DISABLED)
         elif new_state == "error":
             self._set_button_to_error()
+            if self.ftp_scan_button is not None:
+                self.ftp_scan_button.config(state=tk.DISABLED)
     
     def _set_button_to_start(self) -> None:
         """Configure button for start state."""
         self.scan_button.config(
-            text="🔍 Start Scan",
+            text="🔍 Start SMB Scan",
             state="normal"
         )
         self.theme.apply_to_widget(self.scan_button, "button_primary")

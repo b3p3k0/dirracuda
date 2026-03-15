@@ -27,6 +27,9 @@ __pycache__/
 venv/
 ENV/
 env/
+# Also exclude any local venv variations
+venv-*/
+.local-venv/
 
 # Build / dist
 build/
