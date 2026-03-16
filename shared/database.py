@@ -5,6 +5,7 @@ Enhanced database operations for the unified CLI including new host filtering,
 workflow management, and intelligent scanning logic.
 """
 
+import json
 import sqlite3
 import os
 from datetime import datetime, timedelta
@@ -798,6 +799,33 @@ class FtpPersistence:
     must already exist (created by shared.db_migrations.run_migrations).
     """
 
+    # Shared SQL constants used by both per-host and batch methods to prevent drift.
+    _UPSERT_SQL = """
+        INSERT INTO ftp_servers
+            (ip_address, country, country_code, port, anon_accessible,
+             banner, shodan_data, last_seen, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT(ip_address) DO UPDATE SET
+            last_seen       = CURRENT_TIMESTAMP,
+            scan_count      = ftp_servers.scan_count + 1,
+            port            = excluded.port,
+            anon_accessible = excluded.anon_accessible,
+            banner          = excluded.banner,
+            country         = excluded.country,
+            country_code    = excluded.country_code,
+            shodan_data     = excluded.shodan_data,
+            status          = 'active',
+            updated_at      = CURRENT_TIMESTAMP
+    """
+
+    _ACCESS_SQL = """
+        INSERT INTO ftp_access
+            (server_id, session_id, accessible, auth_status,
+             root_listing_available, root_entry_count,
+             error_message, access_details)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """
+
     def __init__(self, db_path: str) -> None:
         self.db_path = str(db_path)
 
@@ -821,26 +849,9 @@ class FtpPersistence:
         Returns the authoritative row id, always resolved via SELECT because
         lastrowid is not reliable on the conflict-update code path.
         """
-        upsert_sql = """
-            INSERT INTO ftp_servers
-                (ip_address, country, country_code, port, anon_accessible,
-                 banner, shodan_data, last_seen, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            ON CONFLICT(ip_address) DO UPDATE SET
-                last_seen       = CURRENT_TIMESTAMP,
-                scan_count      = ftp_servers.scan_count + 1,
-                port            = excluded.port,
-                anon_accessible = excluded.anon_accessible,
-                banner          = excluded.banner,
-                country         = excluded.country,
-                country_code    = excluded.country_code,
-                shodan_data     = excluded.shodan_data,
-                status          = 'active',
-                updated_at      = CURRENT_TIMESTAMP
-        """
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute(upsert_sql, (ip, country, country_code, port,
-                                      anon_accessible, banner, shodan_data))
+            conn.execute(self._UPSERT_SQL, (ip, country, country_code, port,
+                                            anon_accessible, banner, shodan_data))
             conn.commit()
             row = conn.execute(
                 "SELECT id FROM ftp_servers WHERE ip_address = ?", (ip,)
@@ -864,17 +875,65 @@ class FtpPersistence:
         One row per session per server is the expected usage pattern; callers
         that need idempotency should check for an existing row first.
         """
-        sql = """
-            INSERT INTO ftp_access
-                (server_id, session_id, accessible, auth_status,
-                 root_listing_available, root_entry_count,
-                 error_message, access_details)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute(sql, (server_id, session_id, accessible, auth_status,
-                               root_listing_available, root_entry_count,
-                               error_message, access_details))
+            conn.execute(self._ACCESS_SQL, (server_id, session_id, accessible,
+                                            auth_status, root_listing_available,
+                                            root_entry_count, error_message,
+                                            access_details))
+            conn.commit()
+
+    def persist_discovery_outcomes_batch(self, outcomes: list) -> None:
+        """
+        Persist stage-1 port-failed hosts in a single transaction.
+
+        Each outcome is an FtpDiscoveryOutcome. Opens one connection, upserts
+        each ftp_servers row, resolves server_id, writes an ftp_access row,
+        then commits once at the end.
+        """
+        if not outcomes:
+            return
+        with sqlite3.connect(self.db_path) as conn:
+            for o in outcomes:
+                conn.execute(self._UPSERT_SQL, (
+                    o.ip, o.country, o.country_code, o.port,
+                    False, o.banner, o.shodan_data,
+                ))
+                row = conn.execute(
+                    "SELECT id FROM ftp_servers WHERE ip_address = ?", (o.ip,)
+                ).fetchone()
+                server_id = row[0]
+                conn.execute(self._ACCESS_SQL, (
+                    server_id, None, False, o.reason,
+                    False, 0, o.error_message,
+                    json.dumps({"reason": o.reason, "error": o.error_message}),
+                ))
+            conn.commit()
+
+    def persist_access_outcomes_batch(self, outcomes: list) -> None:
+        """
+        Persist stage-2 access results in a single transaction.
+
+        Each outcome is an FtpAccessOutcome. Opens one connection, upserts
+        each ftp_servers row, resolves server_id, writes an ftp_access row,
+        then commits once at the end.
+        """
+        if not outcomes:
+            return
+        with sqlite3.connect(self.db_path) as conn:
+            for o in outcomes:
+                conn.execute(self._UPSERT_SQL, (
+                    o.ip, o.country, o.country_code, o.port,
+                    o.accessible, o.banner, o.shodan_data,
+                ))
+                row = conn.execute(
+                    "SELECT id FROM ftp_servers WHERE ip_address = ?", (o.ip,)
+                ).fetchone()
+                server_id = row[0]
+                conn.execute(self._ACCESS_SQL, (
+                    server_id, None, o.accessible, o.auth_status,
+                    o.root_listing_available, o.root_entry_count,
+                    o.error_message, o.access_details,
+                ))
             conn.commit()
 
 

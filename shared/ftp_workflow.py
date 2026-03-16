@@ -1,5 +1,5 @@
 """
-FTP scan workflow orchestrator (Card 2 skeleton).
+FTP scan workflow orchestrator (Card 4).
 
 Completely separate from shared/workflow.py — no changes to SMB workflow.
 """
@@ -35,14 +35,20 @@ class _FtpOutput:
 
 
 class FtpWorkflow:
-    """FTP scan workflow skeleton."""
+    """FTP scan workflow orchestrator."""
 
     STEP_COUNT = 2
 
-    def __init__(self, output: _FtpOutput) -> None:
+    def __init__(self, output: _FtpOutput, config, db_path: str) -> None:
         self.output = output
+        self.config = config
+        self.db_path = db_path
+        self.args: argparse.Namespace | None = None
 
     def run(self, args: argparse.Namespace) -> None:
+        from commands.ftp.models import FtpDiscoveryError
+
+        self.args = args
         country = getattr(args, "country", None) or "ALL"
         out = self.output
 
@@ -50,25 +56,32 @@ class FtpWorkflow:
 
         out.workflow_step("FTP Discovery", 1, self.STEP_COUNT)
         from commands.ftp.operation import run_discover_stage
-        candidates = run_discover_stage(self)
+        try:
+            reachable, shodan_total = run_discover_stage(self)
+        except FtpDiscoveryError:
+            raise  # re-raise to ftpseek main() for exit(1)
 
         out.workflow_step("FTP Access Verification", 2, self.STEP_COUNT)
         from commands.ftp.operation import run_access_stage
-        accessible = run_access_stage(self, candidates)
+        accessible = run_access_stage(self, reachable)
 
-        # Rollup lines — field regexes in parse_final_results() will parse these.
-        out.raw(f"📊 Hosts Scanned: {candidates}")
+        # Rollup lines parsed by progress.py field regexes.
+        out.raw(f"📊 Hosts Scanned: {shodan_total}")
         out.raw(f"🔓 Hosts Accessible: {accessible}")
         out.raw(f"📁 Accessible Shares: 0")
 
-        # Success line — matched by the pattern added to parse_final_results().
+        # Success marker — must NOT be emitted on error paths.
         out.raw("🎉 FTP scan completed successfully")
 
 
 def create_ftp_workflow(args: argparse.Namespace) -> FtpWorkflow:
     """Factory mirroring create_unified_workflow() in shared/workflow.py."""
+    from shared.config import load_config
+
+    config = load_config(getattr(args, "config", None))
+    db_path = config.get_database_path()
     output = _FtpOutput(
         verbose=getattr(args, "verbose", False),
         no_colors=getattr(args, "no_colors", False),
     )
-    return FtpWorkflow(output)
+    return FtpWorkflow(output, config, db_path)

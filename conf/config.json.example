@@ -159,6 +159,22 @@
     "first_run": true,
     "github_repo": "https://github.com/b3p3k0/smbseek"
   },
+  "ftp": {
+    "shodan": {
+      "query_components": {
+        "base_query": "port:21 \"230 Login successful\"",
+        "additional_exclusions": []
+      },
+      "query_limits": {
+        "max_results": 1000
+      }
+    },
+    "verification": {
+      "connect_timeout": 5,
+      "auth_timeout": 10,
+      "listing_timeout": 15
+    }
+  },
   "rce": {
     "enabled_default": false,
     "safe_active_budget": {

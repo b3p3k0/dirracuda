@@ -240,6 +240,23 @@ class SMBSeekConfig:
                 "timeout": 30
             }
         })
+
+    def get_ftp_config(self) -> Dict[str, Any]:
+        """Get FTP configuration section with defaults."""
+        return self.get("ftp") or {
+            "shodan": {
+                "query_components": {
+                    "base_query": "port:21 \"230 Login successful\"",
+                    "additional_exclusions": []
+                },
+                "query_limits": {"max_results": None}
+            },
+            "verification": {
+                "connect_timeout": 5,
+                "auth_timeout": 10,
+                "listing_timeout": 15
+            }
+        }
     
     def get_database_path(self) -> str:
         """Get database file path."""

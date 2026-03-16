@@ -10,6 +10,7 @@ if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
 from shared.ftp_workflow import create_ftp_workflow
+from commands.ftp.models import FtpDiscoveryError
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -55,6 +56,9 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\nScan interrupted by user.", file=sys.stderr)
         sys.exit(130)
+    except FtpDiscoveryError as exc:
+        print(f"✗  {exc}", file=sys.stderr)
+        sys.exit(1)
     except Exception as exc:
         print(f"Fatal error: {exc}", file=sys.stderr)
         if args.verbose:
