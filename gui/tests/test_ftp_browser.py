@@ -6,6 +6,7 @@ All tests mock ftplib.FTP so no live FTP server is required.
 
 import sys
 import ftplib
+import warnings
 from pathlib import Path
 from unittest.mock import patch, MagicMock, call
 
@@ -118,6 +119,17 @@ def test_list_dir_unix_format():
     assert entry_script.is_dir is False
     assert entry_script.size == 8192
     assert entry_script.modified_time is not None
+
+
+def test_unix_time_format_emits_no_deprecation_warning():
+    line = "-rw-r--r-- 1 user group 512 Jan  1 12:00 readme.txt"
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", DeprecationWarning)
+        entry = FtpNavigator._parse_list_line(line)
+
+    assert entry is not None
+    dep_warnings = [w for w in caught if issubclass(w.category, DeprecationWarning)]
+    assert dep_warnings == []
 
 
 # ---------------------------------------------------------------------------

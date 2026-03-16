@@ -11,6 +11,7 @@ Goals:
 
 from __future__ import annotations
 
+import calendar
 import ftplib
 import io
 import os
@@ -18,7 +19,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import Callable, List, Optional, Tuple
 
@@ -246,6 +247,52 @@ class FtpNavigator:
         return entries, truncated, warning
 
     @staticmethod
+    def _parse_unix_list_mtime(date_token: str) -> Optional[float]:
+        """
+        Parse Unix LIST mtime token.
+
+        Supported forms:
+        - "Mon DD HH:MM" (year omitted)
+        - "Mon DD YYYY"
+        """
+        parts = date_token.split()
+        if len(parts) != 3:
+            return None
+
+        month_str, day_str, year_or_time = parts
+        try:
+            month = list(calendar.month_abbr).index(month_str)
+            day = int(day_str)
+        except (ValueError, TypeError):
+            return None
+
+        if month <= 0:
+            return None
+
+        now = datetime.now()
+
+        # Typical LIST output omits year for recent files.
+        # Infer year as current year, then roll back one year if it lands in
+        # the future by more than one day.
+        if ":" in year_or_time:
+            try:
+                hour_str, minute_str = year_or_time.split(":", 1)
+                hour = int(hour_str)
+                minute = int(minute_str)
+                dt = datetime(now.year, month, day, hour, minute)
+                if dt > (now + timedelta(days=1)):
+                    dt = dt.replace(year=dt.year - 1)
+                return dt.timestamp()
+            except ValueError:
+                return None
+
+        try:
+            year = int(year_or_time)
+            return datetime(year, month, day).timestamp()
+        except ValueError:
+            return None
+
+    @staticmethod
     def _parse_list_line(line: str) -> Optional[Entry]:
         """Parse a single LIST output line; returns None if unrecognised."""
         # Unix format: -rwxr-xr-x 1 user group 1234 Jan  1 12:00 filename
@@ -257,18 +304,7 @@ class FtpNavigator:
             if name in (".", ".."):
                 return None
             # Best-effort date parse from Unix LIST (no seconds)
-            modified_time: Optional[float] = None
-            try:
-                modified_time = datetime.strptime(
-                    m.group(3), "%b %d %H:%M"
-                ).replace(year=datetime.now().year).timestamp()
-            except ValueError:
-                try:
-                    modified_time = datetime.strptime(
-                        m.group(3), "%b %d %Y"
-                    ).timestamp()
-                except ValueError:
-                    pass
+            modified_time = FtpNavigator._parse_unix_list_mtime(m.group(3))
             return Entry(name=name, is_dir=is_dir, size=size, modified_time=modified_time)
 
         # DOS/Windows format: 01-01-2024  12:00AM  <DIR>  foldername
