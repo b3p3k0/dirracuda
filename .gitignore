@@ -3,7 +3,7 @@
 
 #internal docs
 docs/release/
-docs/dev/
+#docs/dev/
 docs/archive/
 
 # OS / Editor junk
@@ -139,4 +139,4 @@ conf/wordlists/rockyou.txt
 !docs/sample_db/smbseek_bogan_sm.db
 
 # dev notes
-dev/
+#dev/
