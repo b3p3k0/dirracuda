@@ -255,9 +255,25 @@ class SMBSeekConfig:
                 "connect_timeout": 5,
                 "auth_timeout": 10,
                 "listing_timeout": 15
-            }
+            },
+            "discovery": {"max_concurrent_hosts": 10},
+            "access": {"max_concurrent_hosts": 4},
         }
-    
+
+    def get_max_concurrent_ftp_discovery_hosts(self) -> int:
+        """Get max concurrent hosts for FTP discovery with validation. Default 10, min 1."""
+        value = self.get_ftp_config().get("discovery", {}).get("max_concurrent_hosts", 10)
+        if isinstance(value, int) and value >= 1:
+            return value
+        return 10
+
+    def get_max_concurrent_ftp_access_hosts(self) -> int:
+        """Get max concurrent hosts for FTP access with validation. Default 4, min 1."""
+        value = self.get_ftp_config().get("access", {}).get("max_concurrent_hosts", 4)
+        if isinstance(value, int) and value >= 1:
+            return value
+        return 4
+
     def get_database_path(self) -> str:
         """Get database file path."""
         return self.get("database", "path", "smbseek.db")

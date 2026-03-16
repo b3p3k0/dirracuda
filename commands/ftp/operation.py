@@ -7,6 +7,7 @@ TCP port checks, and anonymous FTP authentication / root listing.
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Tuple, TYPE_CHECKING
 
 from commands.ftp.models import (
@@ -56,17 +57,39 @@ def run_discover_stage(workflow: "FtpWorkflow") -> Tuple[List[FtpCandidate], int
     reachable: List[FtpCandidate] = []
     port_failed_outcomes: List[FtpDiscoveryOutcome] = []
 
-    for i, candidate in enumerate(candidates, start=1):
-        pct = (i / shodan_total) * 100
-        out.raw(f"📊 Progress: {i}/{shodan_total} ({pct:.1f}%)")
+    max_workers = min(workflow.config.get_max_concurrent_ftp_discovery_hosts(), shodan_total)
 
+    def _check_host(candidate: FtpCandidate) -> Tuple[bool, str]:
         ok, reason = port_check(candidate.ip, candidate.port, timeout=float(connect_timeout))
+        return ok, reason
 
+    results_by_index = [None] * shodan_total
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_index = {
+            executor.submit(_check_host, c): i
+            for i, c in enumerate(candidates)
+        }
+        completed = 0
+        for future in as_completed(future_to_index):
+            completed += 1
+            pct = (completed / shodan_total) * 100
+            out.raw(f"📊 Progress: {completed}/{shodan_total} ({pct:.1f}%)")
+            idx = future_to_index[future]
+            try:
+                ok, reason = future.result()
+                results_by_index[idx] = (ok, reason, None)
+            except Exception as exc:
+                results_by_index[idx] = (False, "connect_fail", str(exc))
+            ok_v, reason_v, exc_v = results_by_index[idx]
+            if verbose and not ok_v:
+                detail = exc_v or reason_v
+                out.info(f"  {candidates[idx].ip} — {detail} (port check)")
+
+    for i, candidate in enumerate(candidates):
+        ok, reason, exc_detail = results_by_index[i]
         if ok:
             reachable.append(candidate)
         else:
-            if verbose:
-                out.info(f"  {candidate.ip} — {reason} (port check)")
             port_failed_outcomes.append(FtpDiscoveryOutcome(
                 ip=candidate.ip,
                 country=candidate.country,
@@ -75,7 +98,7 @@ def run_discover_stage(workflow: "FtpWorkflow") -> Tuple[List[FtpCandidate], int
                 banner=candidate.banner,
                 shodan_data=json.dumps(candidate.shodan_data),
                 reason=reason,
-                error_message=f"Port {candidate.port} unreachable: {reason}",
+                error_message=exc_detail or f"Port {candidate.port} unreachable: {reason}",
             ))
 
     unreachable_count = len(port_failed_outcomes)
@@ -113,18 +136,14 @@ def run_access_stage(workflow: "FtpWorkflow", candidates: List[FtpCandidate]) ->
 
     outcomes: List[FtpAccessOutcome] = []
 
-    for i, candidate in enumerate(candidates, start=1):
-        pct = (i / total) * 100
-        out.raw(f"📊 Progress: {i}/{total} ({pct:.1f}%)")
+    max_workers = min(workflow.config.get_max_concurrent_ftp_access_hosts(), total)
 
+    def _check_access(candidate: FtpCandidate) -> FtpAccessOutcome:
         login_ok, connect_banner, login_reason = try_anon_login(
             candidate.ip, candidate.port, timeout=float(auth_timeout)
         )
-
         if not login_ok:
-            if verbose:
-                out.info(f"  {candidate.ip} — {login_reason}")
-            outcomes.append(FtpAccessOutcome(
+            return FtpAccessOutcome(
                 ip=candidate.ip,
                 country=candidate.country,
                 country_code=candidate.country_code,
@@ -140,18 +159,13 @@ def run_access_stage(workflow: "FtpWorkflow", candidates: List[FtpCandidate]) ->
                     "reason": login_reason,
                     "banner": connect_banner or candidate.banner,
                 }),
-            ))
-            continue
-
+            )
         # Login succeeded — attempt root listing.
         list_ok, entry_count, list_reason = try_root_listing(
             candidate.ip, candidate.port, timeout=float(listing_timeout)
         )
-
         if list_ok:
-            if verbose:
-                out.info(f"  {candidate.ip} — anonymous OK, {entry_count} root entries")
-            outcomes.append(FtpAccessOutcome(
+            return FtpAccessOutcome(
                 ip=candidate.ip,
                 country=candidate.country,
                 country_code=candidate.country_code,
@@ -167,27 +181,66 @@ def run_access_stage(workflow: "FtpWorkflow", candidates: List[FtpCandidate]) ->
                     "reason": "anonymous",
                     "banner": connect_banner,
                 }),
-            ))
-        else:
+            )
+        return FtpAccessOutcome(
+            ip=candidate.ip,
+            country=candidate.country,
+            country_code=candidate.country_code,
+            port=candidate.port,
+            banner=connect_banner,
+            shodan_data=json.dumps(candidate.shodan_data),
+            accessible=False,
+            auth_status=list_reason,
+            root_listing_available=False,
+            root_entry_count=0,
+            error_message=f"Root listing failed: {list_reason}",
+            access_details=json.dumps({
+                "reason": list_reason,
+                "banner": connect_banner,
+            }),
+        )
+
+    results_by_index: List = [None] * total
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_index = {
+            executor.submit(_check_access, c): i
+            for i, c in enumerate(candidates)
+        }
+        completed = 0
+        for future in as_completed(future_to_index):
+            completed += 1
+            pct = (completed / total) * 100
+            out.raw(f"📊 Progress: {completed}/{total} ({pct:.1f}%)")
+            idx = future_to_index[future]
+            try:
+                results_by_index[idx] = future.result()
+            except Exception as exc:
+                err_str = str(exc)
+                candidate = candidates[idx]
+                results_by_index[idx] = FtpAccessOutcome(
+                    ip=candidate.ip,
+                    country=candidate.country,
+                    country_code=candidate.country_code,
+                    port=candidate.port,
+                    banner=candidate.banner,
+                    shodan_data=json.dumps(candidate.shodan_data),
+                    accessible=False,
+                    auth_status="auth_fail",
+                    root_listing_available=False,
+                    root_entry_count=0,
+                    error_message=f"Unexpected error: {err_str}",
+                    access_details=json.dumps({"reason": "auth_fail", "error": err_str}),
+                )
+            outcome = results_by_index[idx]
             if verbose:
-                out.info(f"  {candidate.ip} — {list_reason}")
-            outcomes.append(FtpAccessOutcome(
-                ip=candidate.ip,
-                country=candidate.country,
-                country_code=candidate.country_code,
-                port=candidate.port,
-                banner=connect_banner,
-                shodan_data=json.dumps(candidate.shodan_data),
-                accessible=False,
-                auth_status=list_reason,
-                root_listing_available=False,
-                root_entry_count=0,
-                error_message=f"Root listing failed: {list_reason}",
-                access_details=json.dumps({
-                    "reason": list_reason,
-                    "banner": connect_banner,
-                }),
-            ))
+                candidate_v = candidates[idx]
+                if outcome.accessible:
+                    out.info(f"  {candidate_v.ip} — anonymous OK, {outcome.root_entry_count} root entries")
+                else:
+                    out.info(f"  {candidate_v.ip} — {outcome.auth_status}")
+
+    for outcome in results_by_index:
+        outcomes.append(outcome)
 
     accessible_count = sum(1 for o in outcomes if o.accessible)
     out.info(f"Access verification complete: {accessible_count} accessible of {total} tested")

@@ -182,6 +182,12 @@
       "connect_timeout": 5,
       "auth_timeout": 10,
       "listing_timeout": 15
+    },
+    "discovery": {
+      "max_concurrent_hosts": 10
+    },
+    "access": {
+      "max_concurrent_hosts": 4
     }
   },
   "rce": {
