@@ -1,37 +1,11 @@
 """
-FTP scan workflow orchestrator (Card 4).
+FTP scan workflow orchestrator.
 
 Completely separate from shared/workflow.py — no changes to SMB workflow.
 """
 from __future__ import annotations
 
 import argparse
-import sys
-
-
-class _FtpOutput:
-    """Minimal stdout wrapper with flush=True for subprocess pipe streaming."""
-
-    def __init__(self, verbose: bool = False, no_colors: bool = False) -> None:
-        self.verbose = verbose
-        self.no_colors = no_colors
-
-    def info(self, msg: str) -> None:
-        print(f"ℹ  {msg}", flush=True)
-
-    def success(self, msg: str) -> None:
-        print(f"✓  {msg}", flush=True)
-
-    def error(self, msg: str) -> None:
-        print(f"✗  {msg}", file=sys.stderr, flush=True)
-
-    def raw(self, msg: str) -> None:
-        """Emit verbatim — used for 📊 Progress lines."""
-        print(msg, flush=True)
-
-    def workflow_step(self, name: str, num: int, total: int) -> None:
-        """[n/m] header — matched by progress.py workflow_step_pattern."""
-        print(f"[{num}/{total}] {name}", flush=True)
 
 
 class FtpWorkflow:
@@ -39,7 +13,7 @@ class FtpWorkflow:
 
     STEP_COUNT = 2
 
-    def __init__(self, output: _FtpOutput, config, db_path: str) -> None:
+    def __init__(self, output, config, db_path: str) -> None:
         self.output = output
         self.config = config
         self.db_path = db_path
@@ -77,10 +51,13 @@ class FtpWorkflow:
 def create_ftp_workflow(args: argparse.Namespace) -> FtpWorkflow:
     """Factory mirroring create_unified_workflow() in shared/workflow.py."""
     from shared.config import load_config
+    from shared.output import create_output_manager
 
     config = load_config(getattr(args, "config", None))
     db_path = config.get_database_path()
-    output = _FtpOutput(
+    output = create_output_manager(
+        config,
+        quiet=getattr(args, "quiet", False),
         verbose=getattr(args, "verbose", False),
         no_colors=getattr(args, "no_colors", False),
     )

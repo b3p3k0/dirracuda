@@ -103,6 +103,12 @@ class SMBSeekOutput:
         """Print workflow completion message."""
         self.print_if_not_quiet(f"\n{self.GREEN}🎉 {message}{self.RESET}")
 
+    def raw(self, msg: str) -> None:
+        """Emit msg verbatim with flush=True, respecting --quiet."""
+        if not self.quiet:
+            with self._print_lock:
+                print(msg, flush=True)
+
     def print_rollup_summary(self, summary):
         """
         Print rollup summary of workflow results.
