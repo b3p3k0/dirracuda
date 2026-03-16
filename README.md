@@ -1,6 +1,6 @@
 # SMBSeek
 
-A GUI for finding SMB servers with weak or no authentication, then auditing what's exposed.
+A GUI for finding SMB and FTP servers with weak or no authentication, then auditing what's exposed.
 
 ---
 
@@ -58,7 +58,7 @@ Launch the GUI from your venv:
 
 The main window. From here you can:
 
-- Launch discovery scans (filtered by country or global)
+- Launch SMB or FTP discovery scans (filtered by country or global) — only one scan runs at a time; starting one type disables the other until it finishes or is stopped
 - Open the Server List to work with hosts you've found
 - Manage your database (import, export, merge, maintenance)
 - Edit configuration
@@ -74,6 +74,19 @@ The main window. From here you can:
 - **Browse** — read-only exploration of accessible shares
 - **Extract** — collect files with hard limits on count, size, and time
 - **Pry** — password audit against a specific user
+
+### FTP Discovery
+
+Triggered via **Start FTP Scan** on the dashboard. The scan runs as a separate `ftpseek` process and follows four verification steps for each candidate:
+
+1. Shodan query for port 21 hosts showing a successful anonymous login banner
+2. TCP reachability check on port 21
+3. Anonymous login attempt
+4. Root directory listing
+
+Only hosts that pass all four steps are stored as verified. Failures are recorded with a reason code (`connect_fail`, `auth_fail`, `list_fail`, `timeout`) so you can see exactly where each candidate dropped out. The scan summary reports candidate count vs. verified count.
+
+Results appear in the database alongside SMB records — the same IP can have both SMB and FTP entries without collision. Use the **📡 FTP Servers** button on the dashboard to browse discovered servers and download files to quarantine.
 
 ### Probing Shares
 
@@ -134,11 +147,13 @@ App settings are stored in `conf/config.json`. The example file (`conf/config.js
 
 Key sections:
 
-- `shodan.api_key` — required for discovery
+- `shodan.api_key` — required for SMB discovery
 - `pry.*` — wordlist path, delays, lockout behavior
 - `file_collection.*` — extraction limits
 - `file_browser.*` — browse mode limits
 - `connection.*` — timeouts and rate limiting
+- `ftp.shodan.query_limits.max_results` — cap on Shodan FTP candidates per scan
+- `ftp.verification.*` — per-step timeouts for FTP connect, auth, and listing (seconds)
 
 Two additional files hold editable lists:
 
@@ -161,13 +176,23 @@ Both auto-restore your last-used template on startup.
 
 ### CLI Usage
 
-The CLI is useful for scripting and automation. The GUI uses the same backend.
+The CLI is useful for scripting and automation. The GUI uses the same backends.
+
+**SMB:**
 
 ```bash
 ./smbseek --country US              # Discover US servers
 ./smbseek --country US,GB,CA        # Multiple countries
 ./smbseek --string "SIPR files"     # Search by keyword
 ./smbseek --verbose                 # Detailed output
+```
+
+**FTP:**
+
+```bash
+./ftpseek --country US              # Discover anonymous FTP servers in the US
+./ftpseek --country US,GB,CA        # Multiple countries
+./ftpseek --verbose                 # Detailed output
 ```
 
 ---

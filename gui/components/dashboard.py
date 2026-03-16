@@ -339,6 +339,15 @@ class DashboardWidget:
         self.theme.apply_to_widget(servers_button, "button_secondary")
         servers_button.pack(side=tk.LEFT, padx=(0, 5))
 
+        # FTP Servers browser button (Card 5)
+        ftp_servers_button = tk.Button(
+            actions_frame,
+            text="\U0001f4e1 FTP Servers",
+            command=lambda: self._open_drill_down("ftp_server_list"),
+        )
+        self.theme.apply_to_widget(ftp_servers_button, "button_secondary")
+        ftp_servers_button.pack(side=tk.LEFT, padx=(0, 5))
+
         # DB Tools button
         db_tools_button = tk.Button(
             actions_frame,

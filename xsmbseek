@@ -684,6 +684,21 @@ class XSMBSeekGUI:
                 )
             elif window_type == "data_import":
                 open_data_import_dialog(self.root, self.db_reader)
+            elif window_type == "ftp_server_list":
+                try:
+                    from gui.components.ftp_server_picker import FtpServerPickerDialog
+                    FtpServerPickerDialog(
+                        parent=self.root,
+                        db_reader=self.db_reader,
+                        config_path=str(self.config.get_config_path()),
+                        theme=self.dashboard.theme,
+                        settings_manager=self.settings_manager,
+                    )
+                except ImportError as ie:
+                    messagebox.showinfo(
+                        "FTP Servers",
+                        f"FTP browser module is not available:\n{ie}",
+                    )
             elif window_type == "recent_activity":
                 server_window = ServerListWindow(self.root, self.db_reader)
                 server_window.apply_recent_discoveries_filter()

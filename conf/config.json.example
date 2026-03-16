@@ -146,6 +146,15 @@
       "hex_bytes_per_row": 16
     }
   },
+  "ftp_browser": {
+    "max_entries": 5000,
+    "max_depth": 12,
+    "max_path_length": 1024,
+    "max_file_bytes": 26214400,
+    "connect_timeout": 10,
+    "request_timeout": 15,
+    "quarantine_base": "~/.smbseek/quarantine"
+  },
   "gui_app": {
     "smbseek_path": ".",
     "database_path": null,
