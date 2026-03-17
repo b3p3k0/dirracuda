@@ -52,6 +52,18 @@ Launch the GUI from your venv:
 
 ## Using xSMBSeek
 
+### Before You Start
+
+You're connecting to machines you don't control. A few baseline precautions before you scan:
+
+- **VPN** — don't scan from your real IP address
+- **VM** — run xSMBSeek inside a virtual machine, especially if you plan to browse or extract files; unknown hosts can serve malicious content
+- **Network isolation** — keep the VM on an isolated network segment, not bridged directly to your LAN
+- **Don't open extracted files on your host** — quarantine is `~/.smbseek/quarantine/` inside the VM for a reason; treat everything you pull as untrusted
+- **Don't run as root** — there's no reason to
+
+These aren't optional if you're doing this seriously.
+
 ### Dashboard
 
 ![dashboard, pre scan](img/dash.png)
