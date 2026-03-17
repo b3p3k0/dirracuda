@@ -53,7 +53,7 @@ Design intent: ship a usable anonymous-FTP workflow quickly without destabilizin
 - FTP QA and docs hardening pass:
   - `gui/tests/test_ftp_browser.py` (12 tests)
   - `gui/tests/test_ftp_probe.py` (6 tests)
-  - `docs/dev/ftp_module/README.md` rewritten from planning state to MVP status
+  - `docs/dev/ftp_module/SUMMARY.md` rewritten from planning state to MVP status
 - Baseline preserved with no new test failures.
 
 ## 3. Commits of Note

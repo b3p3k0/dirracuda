@@ -66,8 +66,8 @@ Card 6 is a stabilization card: no new features, no schema changes. The delivera
 |------|---------------|-----|
 | FTP unit tests — navigator parsing | `gui/tests/test_ftp_browser.py` | No coverage for `FtpNavigator` LIST parsing, MLSD fallback, limit enforcement |
 | FTP unit tests — probe cache/runner | `gui/tests/test_ftp_probe.py` | No coverage for cache round-trip and snapshot structure validation |
-| FTP module README update | `docs/dev/ftp_module/README.md` | Still says "Status: planning active, implementation pending" |
-| Known limitations table | `docs/dev/ftp_module/README.md` | No explicit deferred-work record |
+| FTP module README update | `docs/dev/ftp_module/SUMMARY.md` | Still says "Status: planning active, implementation pending" |
+| Known limitations table | `docs/dev/ftp_module/SUMMARY.md` | No explicit deferred-work record |
 
 ### 2.3 What is unstable / at risk
 
@@ -91,7 +91,7 @@ Card 6 is a stabilization card: no new features, no schema changes. The delivera
 | ID | Description | Severity | Recommended Action |
 |----|-------------|----------|--------------------|
 | D1 | Zero FTP-specific automated tests | High | Write `gui/tests/test_ftp_browser.py` and `gui/tests/test_ftp_probe.py` before Card 6 exit |
-| D2 | `docs/dev/ftp_module/README.md` status stale | Low | Update status line and add capability summary |
+| D2 | `docs/dev/ftp_module/SUMMARY.md` status stale | Low | Update status line and add capability summary |
 
 ### 3.2 Likely Risks (require verification — not confirmed defects)
 
@@ -236,7 +236,7 @@ Card 6 is complete only when ALL of the following are met:
 - [ ] Automated tests introduce no new failures vs. baseline (pre-existing baseline: 125 passed, 2 failed — `test_rce_reporter`, `test_rce_verdicts`): `S1`, `S2`, `F1`, `F2`
 - [ ] All SMB regression matrix items pass: `S3`–`S10`
 - [ ] All FTP regression matrix items pass: `F3`–`F22`
-- [ ] `docs/dev/ftp_module/README.md` updated (no "planning active" in status)
+- [ ] `docs/dev/ftp_module/SUMMARY.md` updated (no "planning active" in status)
 - [ ] `README.md` FTP usage section present and accurate
 - [ ] Known MVP limits table published (see Section 6.3)
 
@@ -368,11 +368,11 @@ grep -n "FTP" README.md | head -20
 # Expected: lines covering ftpseek CLI usage and xsmbseek FTP browser
 
 # Verify ftp_module README no longer says "planning active"
-grep "planning active" docs/dev/ftp_module/README.md
+grep "planning active" docs/dev/ftp_module/SUMMARY.md
 # Expected: no output (string removed)
 
 # Confirm known limits table present
-grep -n "Known MVP Limits\|Deferred" docs/dev/ftp_module/README.md
+grep -n "Known MVP Limits\|Deferred" docs/dev/ftp_module/SUMMARY.md
 # Expected: matching lines
 ```
 
@@ -384,7 +384,7 @@ grep -n "Known MVP Limits\|Deferred" docs/dev/ftp_module/README.md
 
 | File | Change Required |
 |------|----------------|
-| `docs/dev/ftp_module/README.md` | Update status line (remove "planning active"); add capability summary, architecture note, known MVP limits table |
+| `docs/dev/ftp_module/SUMMARY.md` | Update status line (remove "planning active"); add capability summary, architecture note, known MVP limits table |
 | `README.md` | Already has FTP discovery, `ftpseek` CLI, and FTP browser button guidance. No substantive additions required — verify existing content is accurate after Card 6 testing; update only if specific inaccuracies are found. |
 
 **No changes to:**
@@ -394,7 +394,7 @@ grep -n "Known MVP Limits\|Deferred" docs/dev/ftp_module/README.md
 
 ### 6.2 Operator-Facing Capability/Limitation Statements
 
-Include the following statements verbatim (or equivalently) in `README.md` and/or `docs/dev/ftp_module/README.md`:
+Include the following statements verbatim (or equivalently) in `README.md` and/or `docs/dev/ftp_module/SUMMARY.md`:
 
 **Capabilities:**
 - Discover anonymous FTP servers via Shodan query (`port:21 "230 Login successful"`).
@@ -412,7 +412,7 @@ Include the following statements verbatim (or equivalently) in `README.md` and/o
 
 ### 6.3 Known MVP Limits Table
 
-This table must appear in `docs/dev/ftp_module/README.md` as a permanent record:
+This table must appear in `docs/dev/ftp_module/SUMMARY.md` as a permanent record:
 
 | Limitation | Scope | Deferred To |
 |-----------|-------|-------------|
@@ -440,17 +440,17 @@ Execute in order. Mark each step complete before starting the next.
 - [ ] **Step 4 — Manual GUI walkthrough:** Execute all items in Section 4.2 (Manual GUI Checks 1–10). Record pass/fail for each.
 - [ ] **Step 5 — SMB regression sign-off:** Confirm all S1–S10 items pass.
 - [ ] **Step 6 — FTP regression sign-off:** Confirm all F1–F22 items pass. Fix any defects before continuing.
-- [ ] **Step 7 — Update `docs/dev/ftp_module/README.md`:** Status, capability summary, MVP limits table (Section 6.3).
+- [ ] **Step 7 — Update `docs/dev/ftp_module/SUMMARY.md`:** Status, capability summary, MVP limits table (Section 6.3).
 - [ ] **Step 8 — Verify `README.md`:** Confirm existing FTP sections (line ~78) are still accurate post-testing; update only if specific inaccuracies are found.
 - [ ] **Step 9 — Final test run:** Re-run full suite to confirm doc/config edits introduced no regressions.
-- [ ] **Step 10 — Commit:** Stage and commit Card 6 changes only (Card 5 is already committed at aa415a3). Changes include: new test files, `docs/dev/ftp_module/README.md` update, and any targeted fixes from the verification steps.
+- [ ] **Step 10 — Commit:** Stage and commit Card 6 changes only (Card 5 is already committed at aa415a3). Changes include: new test files, `docs/dev/ftp_module/SUMMARY.md` update, and any targeted fixes from the verification steps.
 
 ### 7.2 Rollback / Safety Notes
 
 | Action | Risk | Rollback |
 |--------|------|---------|
 | Writing new test files | Low — additive only | Delete the new test file; no other code affected |
-| Updating `docs/dev/ftp_module/README.md` | Low | `git checkout -- docs/dev/ftp_module/README.md` |
+| Updating `docs/dev/ftp_module/SUMMARY.md` | Low | `git checkout -- docs/dev/ftp_module/SUMMARY.md` |
 | Any fix to `conf/config.json.example` | Medium — shared config | `git diff conf/config.json.example` before editing; `git checkout -- conf/config.json.example` to revert |
 | Any fix to `xsmbseek` (drill-down wiring) | Medium — entry point | `git diff xsmbseek` before editing; test with `--mock` after any change |
 | Any fix to `shared/ftp_browser.py` (R-C6-3, R-C6-4) | Medium — core navigator | Run `test_ftp_browser.py` suite after any fix; verify all 12 tests still pass |
@@ -470,7 +470,7 @@ Execute in order. Mark each step complete before starting the next.
 | `conf/config.json.example` | Committed (Card 5) | Lint before use; fix if invalid JSON |
 | `gui/tests/test_ftp_browser.py` | Does not exist | Create in Step 1 |
 | `gui/tests/test_ftp_probe.py` | Does not exist | Create in Step 2 |
-| `docs/dev/ftp_module/README.md` | Stale | Update in Step 7 |
+| `docs/dev/ftp_module/SUMMARY.md` | Stale | Update in Step 7 |
 | `README.md` | Committed — FTP content present | Verify accuracy in Step 8; update only if inaccuracies found |
 
 ---
