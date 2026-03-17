@@ -38,8 +38,8 @@ class ServerListWindowBatchOperationsMixin:
         ips = []
         for item in selected:
             values = self.tree.item(item)["values"]
-            if len(values) >= 5:
-                ips.append(str(values[4]))  # IP at index 4
+            if len(values) >= 7:
+                ips.append(str(values[6]))  # IP at index 6 (after fav/avoid/probe/rce/extracted/Type)
 
         if ips:
             try:

@@ -213,57 +213,77 @@ def _invoke_callback_or_warn(cb, server_data: Dict[str, Any], parent_window: tk.
 
 
 def _format_server_details(server: Dict[str, Any], probe_section: Optional[str] = None) -> str:
-    """Format server details for display with accessible shares list."""
-    # Extract share information
-    accessible_list = server.get('accessible_shares_list', '')
-    accessible_count = server.get('accessible_shares', 0)
-    total_shares = server.get('total_shares', accessible_count)
+    """Format server details for display. Renders protocol-specific sections for S vs F rows."""
+    host_type = server.get('host_type', 'S')
+    protocol_label = "SMB" if host_type == "S" else "FTP"
 
-    denied_list = server.get('denied_shares_list', []) or []
-    denied_count = server.get('denied_shares_count', 0)
-    denied_display_limit = 20
+    # ---- SMB share access section ----
+    if host_type == "S":
+        accessible_list = server.get('accessible_shares_list', '')
+        accessible_count = server.get('accessible_shares', 0)
+        total_shares = server.get('total_shares', accessible_count)
 
-    # Format accessible shares list
-    if accessible_list and accessible_list.strip():
-        shares = [share.strip() for share in accessible_list.split(',') if share.strip()]
-        if shares:
-            share_list_text = '\n'.join([f'   • {share}' for share in shares])
+        denied_list = server.get('denied_shares_list', []) or []
+        denied_count = server.get('denied_shares_count', 0)
+        denied_display_limit = 20
+
+        if accessible_list and accessible_list.strip():
+            shares = [share.strip() for share in accessible_list.split(',') if share.strip()]
+            share_list_text = '\n'.join([f'   • {share}' for share in shares]) if shares else '   • None accessible'
         else:
             share_list_text = '   • None accessible'
+
+        friendly_status = {
+            None: "Access denied",
+            "NT_STATUS_ACCESS_DENIED": "Access denied",
+            "NT_STATUS_LOGON_FAILURE": "Logon failed",
+            "NT_STATUS_BAD_NETWORK_NAME": "Not found",
+            "NT_STATUS_ACCOUNT_LOCKED_OUT": "Account locked",
+            "NT_STATUS_CONNECTION_RESET": "Connection reset",
+            "TIMEOUT": "Timeout",
+            "ERROR": "Error"
+        }
+
+        denied_lines = []
+        for idx, item in enumerate(denied_list):
+            if idx >= denied_display_limit:
+                break
+            status = friendly_status.get(item.get('auth_status')) or "Error"
+            share_name = item.get('share_name', 'Unknown')
+            denied_lines.append(f"   • {share_name} — {status}")
+
+        if not denied_lines:
+            denied_text = '   • None'
+        else:
+            more = denied_count - len(denied_lines)
+            denied_text = '\n'.join(denied_lines)
+            if more > 0:
+                denied_text += f"\n   … +{more} more not shown"
+
+        access_section = f"""📁 Share Access:
+   Total Shares Discovered: {total_shares}
+   Accessible Shares: {accessible_count}
+
+   Accessible Share List:
+{share_list_text}
+
+🚫 Denied Shares:
+{denied_text}"""
     else:
-        share_list_text = '   • None accessible'
+        # FTP row — show connection/access info instead of share tables
+        anon = server.get('anon_accessible')
+        anon_label = "Yes" if anon else ("No" if anon is not None else "Unknown")
+        port = server.get('port') or "21"
+        banner = server.get('banner') or "N/A"
+        access_section = f"""📁 FTP Access:
+   Anonymous: {anon_label}
+   Port: {port}
+   Banner: {banner}"""
 
-    # Format denied shares list
-    friendly_status = {
-        None: "Access denied",
-        "NT_STATUS_ACCESS_DENIED": "Access denied",
-        "NT_STATUS_LOGON_FAILURE": "Logon failed",
-        "NT_STATUS_BAD_NETWORK_NAME": "Not found",
-        "NT_STATUS_ACCOUNT_LOCKED_OUT": "Account locked",
-        "NT_STATUS_CONNECTION_RESET": "Connection reset",
-        "TIMEOUT": "Timeout",
-        "ERROR": "Error"
-    }
-
-    denied_lines = []
-    for idx, item in enumerate(denied_list):
-        if idx >= denied_display_limit:
-            break
-        status = friendly_status.get(item.get('auth_status')) or "Error"
-        share_name = item.get('share_name', 'Unknown')
-        denied_lines.append(f"   • {share_name} — {status}")
-
-    if not denied_lines:
-        denied_text = '   • None'
-    else:
-        more = denied_count - len(denied_lines)
-        denied_text = '\n'.join(denied_lines)
-        if more > 0:
-            denied_text += f"\n   … +{more} more not shown"
-
-    details = f"""📋 SMB Server Details
+    details = f"""📋 Server Details
 
 🖥 Basic Information:
+   Protocol: {protocol_label}
    IP Address: {server.get('ip_address', 'Unknown')}
    Country: {server.get('country', 'Unknown')} ({server.get('country_code', 'Unknown')})
    Authentication: {server.get('auth_method', 'Unknown')}
@@ -274,21 +294,13 @@ def _format_server_details(server: Dict[str, Any], probe_section: Optional[str] 
    Scan Count: {server.get('scan_count', 0)}
    Status: {server.get('status', 'Unknown')}
 
-📁 Share Access:
-   Total Shares Discovered: {total_shares}
-   Accessible Shares: {accessible_count}
-
-   Accessible Share List:
-{share_list_text}
-
-🚫 Denied Shares:
-{denied_text}
+{access_section}
 
 {probe_section or '🔍 Probe:\n   No probe has been run for this host yet.\n'}
 
 📝 Additional Notes:
-   This server was discovered through SMBSeek scanning and shows
-   the authentication method and share accessibility results.
+   This server was discovered during scanning. Protocol-specific access
+   and authentication details are shown above.
 
    For detailed vulnerability information and remediation steps,
    use the Vulnerability Report window.

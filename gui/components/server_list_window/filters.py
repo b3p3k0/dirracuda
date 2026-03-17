@@ -364,31 +364,27 @@ def apply_shares_filter(servers: List[Dict[str, Any]], shares_only: bool) -> Lis
     return [server for server in servers if server.get("accessible_shares", 0) > 0]
 
 
-def apply_favorites_filter(servers: List[Dict[str, Any]], favorites_only: bool, settings_manager) -> List[Dict[str, Any]]:
+def apply_favorites_filter(servers: List[Dict[str, Any]], favorites_only: bool, settings_manager=None) -> List[Dict[str, Any]]:
     """
-    Apply favorites filter to server list.
+    Apply favorites filter using the DB-backed per-protocol row field.
 
-    Args:
-        servers: List of servers to filter
-        favorites_only: If True, only show favorite servers
-        settings_manager: Settings manager for favorite IPs lookup
-
-    Returns:
-        Filtered list of servers
+    Note: settings_manager is ignored — DB row['favorite'] is canonical as of Card 4.
+    Settings-file favorites are intentionally not consumed here (migration boundary).
     """
-    if not favorites_only or not settings_manager:
+    if not favorites_only:
         return servers
-
-    favorite_ips = settings_manager.get_favorite_servers()
-    return [server for server in servers if server.get("ip_address") in favorite_ips]
+    return [server for server in servers if server.get("favorite", 0)]
 
 
-def apply_exclude_avoid_filter(servers: List[Dict[str, Any]], exclude_avoid: bool, settings_manager) -> List[Dict[str, Any]]:
-    """Exclude servers marked as avoid."""
-    if not exclude_avoid or not settings_manager:
+def apply_exclude_avoid_filter(servers: List[Dict[str, Any]], exclude_avoid: bool, settings_manager=None) -> List[Dict[str, Any]]:
+    """
+    Exclude servers marked as avoid using the DB-backed per-protocol row field.
+
+    Note: settings_manager is ignored — DB row['avoid'] is canonical as of Card 4.
+    """
+    if not exclude_avoid:
         return servers
-    avoid_ips = set(settings_manager.get_avoid_servers())
-    return [server for server in servers if server.get("ip_address") not in avoid_ips]
+    return [server for server in servers if not server.get("avoid", 0)]
 
 
 def apply_probed_filter(servers: List[Dict[str, Any]], probed_only: bool) -> List[Dict[str, Any]]:

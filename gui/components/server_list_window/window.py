@@ -182,7 +182,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
     def _create_window(self) -> None:
         """Create the server list window."""
         self.window = tk.Toplevel(self.parent)
-        self.window.title("SMBSeek - Server List Browser")
+        self.window.title("Server List Browser")
         self.window.geometry("1500x1000")
         self.window.minsize(800, 500)
 
@@ -244,7 +244,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
         # Title
         title_label = self.theme.create_styled_label(
             header_frame,
-            "🖥 SMB Server List",
+            "🖥 Server List",
             "heading"
         )
         title_label.pack(side=tk.LEFT)
@@ -345,11 +345,11 @@ class ServerListWindow(ServerListWindowActionsMixin):
         # Prepare callbacks
         table_callbacks = {
             'on_selection_changed': self._on_selection_changed,
-            'on_double_click': self._on_double_click,
-            'on_treeview_click': self._on_treeview_click,
-            'on_favorite_toggle': self._on_favorite_toggle,
-            'on_avoid_toggle': self._on_avoid_toggle,
-            'on_sort_column': self._sort_by_column
+            'on_double_click':      self._on_double_click,
+            'on_treeview_click':    self._on_treeview_click,
+            'on_favorite_toggle':   lambda rk, v: self._apply_flag_toggle(rk, "favorite", v),
+            'on_avoid_toggle':      lambda rk, v: self._apply_flag_toggle(rk, "avoid",    v),
+            'on_sort_column':       self._sort_by_column,
         }
 
         # Create table using module
@@ -533,7 +533,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
         """Apply current filters to server list using filter module functions."""
         if self._is_batch_active() and not force:
             if not self._pending_table_refresh:
-                self._pending_selection = self._get_selected_ips()
+                self._pending_selection = self._get_selected_row_keys()
             self._pending_table_refresh = True
             return
 
@@ -594,21 +594,24 @@ class ServerListWindow(ServerListWindowActionsMixin):
             scan_manager = get_scan_manager()
             self.last_scan_time = scan_manager.get_last_scan_time()
 
-            # Get all servers (no pagination limit)
-            servers, total_count = self.db_reader.get_server_list(
+            # Get all servers (no pagination limit) — unified S+F rows
+            servers, total_count = self.db_reader.get_protocol_server_list(
                 limit=None,
                 offset=0
             )
 
-            # Attach denied share counts
+            # Attach denied share counts — SMB rows only (FTP has no share_access data)
             try:
                 denied_map = self.db_reader.get_denied_share_counts()
             except Exception:
                 denied_map = {}
 
             for server in servers:
-                ip = server.get("ip_address")
-                server["denied_shares_count"] = denied_map.get(ip, 0) if ip else 0
+                if server.get("host_type", "S") == "S":
+                    ip = server.get("ip_address")
+                    server["denied_shares_count"] = denied_map.get(ip, 0) if ip else 0
+                else:
+                    server["denied_shares_count"] = 0
 
             self.all_servers = servers
             self._attach_probe_status(self.all_servers)
@@ -668,21 +671,45 @@ class ServerListWindow(ServerListWindowActionsMixin):
 
         self._update_action_buttons_state()
 
-    def _on_favorite_toggle(self, ip: str, is_favorite: bool) -> None:
-        if not ip or not self.settings_manager:
-            return
-        try:
-            self.db_reader.upsert_user_flags(ip, favorite=is_favorite)
-        except Exception:
-            pass
+    def _apply_flag_toggle(self, row_key: str, field: str, new_value: int) -> None:
+        """
+        Persist a favorite/avoid toggle for a protocol row.
 
-    def _on_avoid_toggle(self, ip: str, is_avoid: bool) -> None:
-        if not ip or not self.settings_manager:
+        Steps:
+          a) look up server by row_key
+          b) optimistically update in-memory dict
+          c) persist via upsert_user_flags_for_host (correct per-protocol table)
+          d) on any failure, revert both in-memory and UI icon
+        """
+        server = next((s for s in self.all_servers if s.get("row_key") == row_key), None)
+        if not server:
+            # Row not in memory — revert icon that table.py already flipped
+            if self.tree and self.tree.exists(row_key):
+                if field == "favorite":
+                    self.tree.set(row_key, "favorite", "✔" if not new_value else "○")
+                elif field == "avoid":
+                    self.tree.set(row_key, "avoid", "✖" if not new_value else "○")
             return
+
+        ip = server.get("ip_address", "")
+        host_type = server.get("host_type", "S")
+        old_value = server.get(field, 0)
+
+        # Optimistically update in-memory state
+        server[field] = new_value
+
         try:
-            self.db_reader.upsert_user_flags(ip, avoid=is_avoid)
-        except Exception:
-            pass
+            self.db_reader.upsert_user_flags_for_host(ip, host_type, **{field: bool(new_value)})
+        except Exception as exc:
+            _logger.warning("Flag toggle DB write failed for %s (%s): %s", row_key, field, exc)
+            # Revert in-memory state
+            server[field] = old_value
+            # Revert the tree icon
+            if self.tree and self.tree.exists(row_key):
+                if field == "favorite":
+                    self.tree.set(row_key, "favorite", "✔" if old_value else "○")
+                elif field == "avoid":
+                    self.tree.set(row_key, "avoid", "✖" if old_value else "○")
 
     def _on_double_click(self, event) -> None:
         """Handle double-click on table row using table module."""
@@ -695,9 +722,9 @@ class ServerListWindow(ServerListWindowActionsMixin):
         """Handle treeview clicks using table module."""
         callbacks = {
             'on_favorites_filter_changed': self._apply_filters,
-            'on_avoid_filter_changed': self._apply_filters,
-            'on_favorite_toggle': self._on_favorite_toggle,
-            'on_avoid_toggle': self._on_avoid_toggle
+            'on_avoid_filter_changed':     self._apply_filters,
+            'on_favorite_toggle':          lambda rk, v: self._apply_flag_toggle(rk, "favorite", v),
+            'on_avoid_toggle':             lambda rk, v: self._apply_flag_toggle(rk, "avoid",    v),
         }
         table.handle_treeview_click(self.tree, event, self.settings_manager, callbacks)
 
@@ -725,15 +752,11 @@ class ServerListWindow(ServerListWindowActionsMixin):
             messagebox.showwarning("Multiple Selection", "Please select only one server to view details.", parent=self.window)
             return
 
-        # Get server data
+        # Get server data — item is the iid == row_key
         item = selected_items[0]
-        values = self.tree.item(item)["values"]
-        # Columns are: fav, avoid, probe, rce, extracted, ip, shares, ...
-        ip_address = values[5]
-
-        # Find server in data
+        row_key = item  # TreeView item ID == iid == row_key
         server_data = next(
-            (server for server in self.filtered_servers if server.get("ip_address") == ip_address),
+            (server for server in self.filtered_servers if server.get("row_key") == row_key),
             None
         )
 
@@ -747,12 +770,14 @@ class ServerListWindow(ServerListWindowActionsMixin):
     def _show_server_detail_popup(self, server_data: Dict[str, Any]) -> None:
         """Show server detail popup using details module."""
         ip_address = server_data.get("ip_address")
-        if ip_address and "denied_shares_list" not in server_data:
+        if server_data.get("host_type", "S") == "S" and ip_address and "denied_shares_list" not in server_data:
             try:
                 server_data["denied_shares_list"] = self.db_reader.get_denied_shares(ip_address)
             except Exception as exc:
                 _logger.warning("Failed to fetch denied share list for %s: %s", ip_address, exc)
                 server_data["denied_shares_list"] = []
+        else:
+            server_data.setdefault("denied_shares_list", [])
 
         details.show_server_detail_popup(
             self.window,

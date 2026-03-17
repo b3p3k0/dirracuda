@@ -632,6 +632,8 @@ class ServerListWindowBatchStatusMixin:
             if not ip_address:
                 return
 
+            # TODO Card 5: IP match may double-update S+F rows for the same IP.
+            # Re-key on row_key when batch action callers pass row_key instead of ip.
             for server in self.all_servers:
                 if server.get("ip_address") == ip_address:
                     server["rce_status"] = status
@@ -639,10 +641,10 @@ class ServerListWindowBatchStatusMixin:
 
             if self._is_batch_active():
                 if not self._pending_table_refresh:
-                    self._pending_selection = self._get_selected_ips()
+                    self._pending_selection = self._get_selected_row_keys()
                 self._pending_table_refresh = True
             else:
-                selected_ips = self._get_selected_ips()
+                selected_ips = self._get_selected_row_keys()
                 self._apply_filters()
                 self._restore_selection(selected_ips)
 
@@ -706,6 +708,8 @@ class ServerListWindowBatchStatusMixin:
                 self.settings_manager.set_probe_status(ip_address, status)
             self.probe_status_map[ip_address] = status
 
+            # TODO Card 5: IP match may double-update S+F rows for the same IP.
+            # Re-key on row_key when batch action callers pass row_key instead of ip.
             for server in self.all_servers:
                 if server.get("ip_address") == ip_address:
                     server["probe_status"] = status
@@ -713,10 +717,10 @@ class ServerListWindowBatchStatusMixin:
 
             if self._is_batch_active():
                 if not self._pending_table_refresh:
-                    self._pending_selection = self._get_selected_ips()
+                    self._pending_selection = self._get_selected_row_keys()
                 self._pending_table_refresh = True
             else:
-                selected_ips = self._get_selected_ips()
+                selected_ips = self._get_selected_row_keys()
                 self._apply_filters()
                 self._restore_selection(selected_ips)
 
@@ -737,28 +741,24 @@ class ServerListWindowBatchStatusMixin:
 
             if self._is_batch_active():
                 if not self._pending_table_refresh:
-                    self._pending_selection = self._get_selected_ips()
+                    self._pending_selection = self._get_selected_row_keys()
                 self._pending_table_refresh = True
             else:
-                selected_ips = self._get_selected_ips()
+                selected_ips = self._get_selected_row_keys()
                 self._apply_filters()
                 self._restore_selection(selected_ips)
 
-        def _get_selected_ips(self) -> List[str]:
-            ips = []
-            for item in self.tree.selection():
-                values = self.tree.item(item)["values"]
-                if len(values) >= 6:
-                    ips.append(values[5])  # IP at index 5 (after fav/avoid/probe/rce/extracted)
-            return ips
+        def _get_selected_row_keys(self) -> List[str]:
+            """Return row_keys (iids) of currently selected tree rows."""
+            return list(self.tree.selection())  # item IDs == iids == row_keys
 
-        def _restore_selection(self, ip_addresses: List[str]) -> None:
-            if not ip_addresses:
+        def _restore_selection(self, row_keys: List[str]) -> None:
+            """Restore selection by row_key iids after a table refresh."""
+            if not row_keys:
                 return
-            for item in self.tree.get_children():
-                values = self.tree.item(item)["values"]
-                if len(values) >= 6 and values[5] in ip_addresses:
-                    self.tree.selection_add(item)
+            for rk in row_keys:
+                if self.tree.exists(rk):
+                    self.tree.selection_add(rk)
 
         def _toggle_mode(self) -> None:
             """Toggle between simple and advanced mode."""
@@ -805,11 +805,13 @@ class ServerListWindowBatchStatusMixin:
             self.country_listbox.delete(0, tk.END)
             self.country_code_list = []  # Reset mapping
 
-            if not self.db_reader:
-                return
-
-            # Get country breakdown (returns dict of code -> count)
-            country_breakdown = self.db_reader.get_country_breakdown()
+            # Derive country breakdown from already-loaded all_servers (unified S+F rows).
+            # Using db_reader.get_country_breakdown() would query smb_servers only and miss
+            # FTP-only countries.
+            from collections import Counter
+            country_breakdown = Counter(
+                s["country_code"] for s in self.all_servers if s.get("country_code")
+            )
 
             if not country_breakdown:
                 return  # Empty database
