@@ -2,14 +2,17 @@
 -- Central database for SMB scanning and analysis data
 
 -- Drop existing tables if they exist (for fresh installations)
+-- Child tables must drop before parents to avoid FK constraint failures.
+DROP TABLE IF EXISTS ftp_probe_cache;
+DROP TABLE IF EXISTS ftp_user_flags;
+DROP TABLE IF EXISTS ftp_access;
+DROP TABLE IF EXISTS ftp_servers;
 DROP TABLE IF EXISTS file_manifests;
 DROP TABLE IF EXISTS vulnerabilities;
 DROP TABLE IF EXISTS share_access;
 DROP TABLE IF EXISTS failure_logs;
 DROP TABLE IF EXISTS smb_servers;
 DROP TABLE IF EXISTS scan_sessions;
-DROP TABLE IF EXISTS ftp_access;
-DROP TABLE IF EXISTS ftp_servers;
 
 -- Core scan session tracking
 CREATE TABLE scan_sessions (
@@ -282,6 +285,33 @@ CREATE INDEX IF NOT EXISTS idx_ftp_servers_country  ON ftp_servers(country);
 CREATE INDEX IF NOT EXISTS idx_ftp_servers_last_seen ON ftp_servers(last_seen);
 CREATE INDEX IF NOT EXISTS idx_ftp_access_server    ON ftp_access(server_id);
 CREATE INDEX IF NOT EXISTS idx_ftp_access_session   ON ftp_access(session_id);
+
+-- FTP state tables (protocol-specific; parallel to host_user_flags / host_probe_cache)
+
+-- Per-FTP-server user flags — favorite/avoid/notes independent from SMB flags
+CREATE TABLE IF NOT EXISTS ftp_user_flags (
+    server_id  INTEGER  PRIMARY KEY,
+    favorite   BOOLEAN  DEFAULT 0,
+    avoid      BOOLEAN  DEFAULT 0,
+    notes      TEXT,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (server_id) REFERENCES ftp_servers(id) ON DELETE CASCADE
+);
+
+-- Per-FTP-server probe cache — status/indicators/extracted/rce independent from SMB probe cache
+CREATE TABLE IF NOT EXISTS ftp_probe_cache (
+    server_id           INTEGER  PRIMARY KEY,
+    status              TEXT     DEFAULT 'unprobed',
+    last_probe_at       DATETIME,
+    indicator_matches   INTEGER  DEFAULT 0,
+    indicator_samples   TEXT,
+    snapshot_path       TEXT,
+    extracted           INTEGER  DEFAULT 0,
+    rce_status          TEXT     DEFAULT 'not_run',
+    rce_verdict_summary TEXT,
+    updated_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (server_id) REFERENCES ftp_servers(id) ON DELETE CASCADE
+);
 
 -- Protocol coexistence view — resolves has_smb / has_ftp / both per IP
 CREATE VIEW IF NOT EXISTS v_host_protocols AS

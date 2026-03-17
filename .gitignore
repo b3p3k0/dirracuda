@@ -126,7 +126,7 @@ legacy/
 # Test files
 *test*.json
 *test*.csv
-tests/
+/tests/
 
 # Enhanced share tracking test files
 test_enhanced_share_tracking.py

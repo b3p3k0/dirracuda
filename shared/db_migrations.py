@@ -6,6 +6,8 @@ Currently installs:
 - host_probe_cache: caches probe status including RCE analysis results.
 - ftp_servers: FTP server registry (sidecar, coexists with smb_servers per IP).
 - ftp_access: per-session FTP access summary.
+- ftp_user_flags: per-FTP-server user flags (favorite/avoid/notes), parallel to host_user_flags.
+- ftp_probe_cache: per-FTP-server probe cache (status/indicators/extracted/rce), parallel to host_probe_cache.
 - v_host_protocols: view resolving has_smb / has_ftp / protocol_presence per IP.
 """
 
@@ -171,6 +173,55 @@ def run_migrations(db_path: str) -> None:
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_ftp_access_session ON ftp_access(session_id)"
         )
+
+        # --- FTP state tables (protocol-specific; parallel to host_user_flags / host_probe_cache) ---
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ftp_user_flags (
+                server_id INTEGER PRIMARY KEY,
+                favorite  BOOLEAN  DEFAULT 0,
+                avoid     BOOLEAN  DEFAULT 0,
+                notes     TEXT,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (server_id) REFERENCES ftp_servers(id) ON DELETE CASCADE
+            )
+            """
+        )
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ftp_probe_cache (
+                server_id           INTEGER  PRIMARY KEY,
+                status              TEXT     DEFAULT 'unprobed',
+                last_probe_at       DATETIME,
+                indicator_matches   INTEGER  DEFAULT 0,
+                indicator_samples   TEXT,
+                snapshot_path       TEXT,
+                extracted           INTEGER  DEFAULT 0,
+                rce_status          TEXT     DEFAULT 'not_run',
+                rce_verdict_summary TEXT,
+                updated_at          DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (server_id) REFERENCES ftp_servers(id) ON DELETE CASCADE
+            )
+            """
+        )
+
+        # Idempotent column backfill for ftp_probe_cache (defensive; mirrors host_probe_cache pattern)
+        cur.execute("PRAGMA table_info(ftp_probe_cache)")
+        ftp_pc_cols = [row[1] for row in cur.fetchall()]
+
+        if "extracted" not in ftp_pc_cols:
+            cur.execute(
+                "ALTER TABLE ftp_probe_cache ADD COLUMN extracted INTEGER DEFAULT 0"
+            )
+        if "rce_status" not in ftp_pc_cols:
+            cur.execute(
+                "ALTER TABLE ftp_probe_cache ADD COLUMN rce_status TEXT DEFAULT 'not_run'"
+            )
+        if "rce_verdict_summary" not in ftp_pc_cols:
+            cur.execute(
+                "ALTER TABLE ftp_probe_cache ADD COLUMN rce_verdict_summary TEXT"
+            )
 
         # Protocol coexistence view — must be created after both FTP tables exist
         cur.execute(
