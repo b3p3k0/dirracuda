@@ -23,6 +23,29 @@ if TYPE_CHECKING:
     from shared.ftp_workflow import FtpWorkflow
 
 
+def _should_report_progress(completed: int, total: int, batch_size: int = 10) -> bool:
+    """Match SMB concurrent-auth progress cadence: first, every N, and final."""
+    return completed == 1 or completed == total or completed % batch_size == 0
+
+
+def _report_concurrent_progress(
+    workflow: "FtpWorkflow",
+    completed: int,
+    total: int,
+    success_count: int,
+    failed_count: int,
+    active_threads: int,
+) -> None:
+    """Emit SMB-style aggregated concurrent progress line."""
+    progress_pct = (completed / total) * 100
+    success_rate = (success_count / max(1, completed)) * 100
+    workflow.output.info(
+        f"📊 Progress: {completed}/{total} ({progress_pct:.1f}%) | "
+        f"Success: {success_count}, Failed: {failed_count} ({success_rate:.0f}%) | "
+        f"Active: {active_threads} threads"
+    )
+
+
 def run_discover_stage(workflow: "FtpWorkflow") -> Tuple[List[FtpCandidate], int]:
     """
     Stage 1: Shodan query + TCP port reachability check.
@@ -70,10 +93,10 @@ def run_discover_stage(workflow: "FtpWorkflow") -> Tuple[List[FtpCandidate], int
             for i, c in enumerate(candidates)
         }
         completed = 0
+        progress_success_count = 0
+        progress_failed_count = 0
         for future in as_completed(future_to_index):
             completed += 1
-            pct = (completed / shodan_total) * 100
-            out.raw(f"📊 Progress: {completed}/{shodan_total} ({pct:.1f}%)")
             idx = future_to_index[future]
             try:
                 ok, reason = future.result()
@@ -81,6 +104,19 @@ def run_discover_stage(workflow: "FtpWorkflow") -> Tuple[List[FtpCandidate], int
             except Exception as exc:
                 results_by_index[idx] = (False, "connect_fail", str(exc))
             ok_v, reason_v, exc_v = results_by_index[idx]
+            if ok_v:
+                progress_success_count += 1
+            else:
+                progress_failed_count += 1
+            if _should_report_progress(completed, shodan_total):
+                _report_concurrent_progress(
+                    workflow,
+                    completed,
+                    shodan_total,
+                    progress_success_count,
+                    progress_failed_count,
+                    max(0, shodan_total - completed),
+                )
             if verbose and not ok_v:
                 detail = exc_v or reason_v
                 out.info(f"  {candidates[idx].ip} — {detail} (port check)")
@@ -207,10 +243,10 @@ def run_access_stage(workflow: "FtpWorkflow", candidates: List[FtpCandidate]) ->
             for i, c in enumerate(candidates)
         }
         completed = 0
+        progress_success_count = 0
+        progress_failed_count = 0
         for future in as_completed(future_to_index):
             completed += 1
-            pct = (completed / total) * 100
-            out.raw(f"📊 Progress: {completed}/{total} ({pct:.1f}%)")
             idx = future_to_index[future]
             try:
                 results_by_index[idx] = future.result()
@@ -232,6 +268,19 @@ def run_access_stage(workflow: "FtpWorkflow", candidates: List[FtpCandidate]) ->
                     access_details=json.dumps({"reason": "auth_fail", "error": err_str}),
                 )
             outcome = results_by_index[idx]
+            if outcome.accessible:
+                progress_success_count += 1
+            else:
+                progress_failed_count += 1
+            if _should_report_progress(completed, total):
+                _report_concurrent_progress(
+                    workflow,
+                    completed,
+                    total,
+                    progress_success_count,
+                    progress_failed_count,
+                    max(0, total - completed),
+                )
             if verbose:
                 candidate_v = candidates[idx]
                 if outcome.accessible:
