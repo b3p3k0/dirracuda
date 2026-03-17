@@ -63,19 +63,21 @@ The main window. From here you can:
 - Manage your database (import, export, merge, maintenance)
 - Edit configuration
 
-### Server List
+### SMB Discovery
 
-![server list browser](img/servers.png)
- Shows discovered SMB hosts with IP, country, auth method, and share counts as well as status indicators and a favorite/avoid list.
+Triggered via **Start SMB Scan** on the dashboard. The scan runs as a `smbseek` subprocess and tests candidates concurrently across a configurable thread pool:
 
-**Operations** (right-click a host or bottom row buttons):
+1. Shodan query for hosts with SMB auth disabled or running Samba, filtered by country and exclusion list
+2. Organization filtering — hosts belonging to excluded ISPs or hosting providers are dropped before any connection attempt
+3. Deduplication against the database — hosts scanned within the last 30 days are skipped by default; override with `--rescan-all` or `--rescan-failed`
+4. TCP reachability check on port 445
+5. Authentication test using three methods in sequence: Anonymous, Guest/blank, and Guest/Guest
 
-- **Probe** — enumerate shares, detect ransomware indicators
-- **Browse** — read-only exploration of accessible shares
-- **Extract** — collect files with hard limits on count, size, and time
-- **Pry** — password audit against a specific user
+Only hosts that authenticate are stored. The method that succeeded is recorded alongside country, timestamp, and scan count — so you can track whether a host drifts from anonymous to guest access across rescans. The scan summary reports Shodan candidates vs. verified count.
 
-### FTP Discovery
+Results appear in the Server List.
+
+### FTP Discovery **(EXPERIMENTAL)**
 
 Triggered via **Start FTP Scan** on the dashboard. The scan runs as a separate `ftpseek` process and follows four verification steps for each candidate:
 
@@ -87,6 +89,18 @@ Triggered via **Start FTP Scan** on the dashboard. The scan runs as a separate `
 Only hosts that pass all four steps are stored as verified. Failures are recorded with a reason code (`connect_fail`, `auth_fail`, `list_fail`, `timeout`) so you can see exactly where each candidate dropped out. The scan summary reports candidate count vs. verified count.
 
 Results appear in the database alongside SMB records — the same IP can have both SMB and FTP entries without collision. Use the **📡 FTP Servers** button on the dashboard to browse discovered servers and download files to quarantine.
+
+### Server List
+
+![server list browser](img/servers.png)
+ Shows discovered SMB hosts with IP, country, auth method, and share counts as well as status indicators and a favorite/avoid list.
+
+**Operations** (right-click a host or bottom row buttons):
+
+- **Probe** — enumerate shares, detect ransomware indicators
+- **Browse** — read-only exploration of accessible shares
+- **Extract** — collect files with hard limits on count, size, and time
+- **Pry** — password audit against a specific user
 
 ### Probing Shares
 
