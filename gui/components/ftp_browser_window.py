@@ -20,6 +20,14 @@ from shared.ftp_browser import FtpNavigator, FtpCancelledError, FtpFileTooLargeE
 from shared.quarantine import build_quarantine_path, log_quarantine_event
 from gui.utils.ftp_probe_cache import load_ftp_probe_result
 from gui.utils.ftp_probe_runner import run_ftp_probe
+try:
+    from gui.components.file_viewer_window import open_file_viewer
+except ImportError:
+    from file_viewer_window import open_file_viewer
+try:
+    from gui.components.image_viewer_window import open_image_viewer
+except ImportError:
+    from image_viewer_window import open_image_viewer
 
 
 # ---------------------------------------------------------------------------
@@ -50,6 +58,11 @@ def _load_ftp_browser_config(config_path: Optional[str]) -> Dict:
         "connect_timeout": 10,
         "request_timeout": 15,
         "quarantine_base": "~/.smbseek/quarantine",
+        "viewer": {
+            "max_view_size_mb": 5,
+            "max_image_size_mb": 15,
+            "max_image_pixels": 20_000_000,
+        },
     }
     if not config_path:
         return defaults
@@ -59,6 +72,9 @@ def _load_ftp_browser_config(config_path: Optional[str]) -> Dict:
     except Exception:
         pass
     return defaults
+
+
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tif", ".tiff"}
 
 
 # ---------------------------------------------------------------------------
@@ -342,9 +358,12 @@ class FtpBrowserWindow:
         self._navigate_to(self._current_path)
 
     def _on_view(self) -> None:
-        """Read selected file into memory and show in a simple text viewer."""
+        """Read selected file and open shared text/hex/image viewers."""
         sel = self.tree.selection()
         if not sel:
+            return
+        if len(sel) > 1:
+            messagebox.showinfo("View", "Select only one file to view.")
             return
         vals = self.tree.item(sel[0], "values")
         name, type_label = vals[0], vals[1]
@@ -356,17 +375,71 @@ class FtpBrowserWindow:
             return
 
         remote_path = str(PurePosixPath(self._current_path) / name)
+        try:
+            size_raw = int(vals[5]) if len(vals) > 5 and vals[5] else 0
+        except (ValueError, IndexError):
+            size_raw = 0
 
-        def _read_thread():
+        suffix = Path(name).suffix.lower()
+        is_image = suffix in IMAGE_EXTS
+
+        viewer_cfg = self.config.get("viewer", {}) or {}
+        max_view_mb = int(viewer_cfg.get("max_view_size_mb", 5) or 5)
+        max_image_mb = int(viewer_cfg.get("max_image_size_mb", max_view_mb) or max_view_mb)
+        max_image_pixels = int(viewer_cfg.get("max_image_pixels", 20_000_000) or 20_000_000)
+        max_view_bytes = (max_image_mb if is_image else max_view_mb) * 1024 * 1024
+
+        # Pre-flight file size guard when size is known from listing.
+        if size_raw and size_raw > max_view_bytes:
+            limit_mb = max_image_mb if is_image else max_view_mb
+            messagebox.showerror(
+                "View Error",
+                f"{name} is {_format_file_size(size_raw)}, exceeding the {limit_mb} MB view limit.",
+            )
+            return
+
+        self._start_view_thread(
+            remote_path=remote_path,
+            display_name=name,
+            max_bytes=max_view_bytes,
+            is_image=is_image,
+            max_image_pixels=max_image_pixels,
+            size_raw=size_raw,
+        )
+
+    def _start_view_thread(
+        self,
+        remote_path: str,
+        display_name: str,
+        max_bytes: int,
+        is_image: bool,
+        max_image_pixels: int,
+        size_raw: int,
+    ) -> None:
+        """Read remote file in background and open shared viewer on main thread."""
+
+        def _read_thread() -> None:
             try:
-                result = self._navigator.read_file(
-                    remote_path,
-                    max_bytes=int(self.config["max_file_bytes"]),
-                )
-                try:
-                    self.window.after(0, self._show_text_viewer, name, result)
-                except tk.TclError:
-                    pass
+                self.window.after(0, self._set_status, f"Reading {display_name}...")
+                result = self._navigator.read_file(remote_path, max_bytes=max_bytes)
+                if is_image:
+                    self.window.after(
+                        0,
+                        self._open_image_viewer,
+                        remote_path,
+                        result.data,
+                        size_raw or result.size,
+                        result.truncated,
+                        max_image_pixels,
+                    )
+                else:
+                    self.window.after(
+                        0,
+                        self._open_viewer,
+                        remote_path,
+                        result.data,
+                        size_raw or result.size,
+                    )
             except Exception as exc:
                 try:
                     self.window.after(
@@ -380,36 +453,54 @@ class FtpBrowserWindow:
 
         threading.Thread(target=_read_thread, daemon=True).start()
 
-    def _show_text_viewer(self, filename: str, read_result) -> None:
-        """Display file contents in a simple Toplevel text widget."""
+    def _open_viewer(self, remote_path: str, content: bytes, file_size: int) -> None:
+        """Open shared text/hex file viewer used by SMB browser."""
+        display_path = f"{self.ip_address}/ftp_root{remote_path}"
+
+        def save_callback() -> None:
+            self._start_download_thread([(remote_path, file_size)])
+
+        open_file_viewer(
+            parent=self.window,
+            file_path=display_path,
+            content=content,
+            file_size=file_size,
+            theme=self.theme,
+            on_save_callback=save_callback,
+        )
+        self._set_status(f"Viewing {remote_path}")
+
+    def _open_image_viewer(
+        self,
+        remote_path: str,
+        content: bytes,
+        file_size: int,
+        truncated: bool,
+        max_image_pixels: int,
+    ) -> None:
+        """Open shared image viewer used by SMB browser."""
+        display_path = f"{self.ip_address}/ftp_root{remote_path}"
+
+        def save_callback() -> None:
+            self._start_download_thread([(remote_path, file_size)])
+
         try:
-            text = read_result.data.decode("utf-8", errors="replace")
-            is_binary = b"\x00" in read_result.data[:4096]
-        except Exception:
-            is_binary = True
-            text = ""
-
-        if is_binary:
-            messagebox.showinfo(
-                "Binary file",
-                f"{filename}: Binary content, cannot display as text.",
+            open_image_viewer(
+                parent=self.window,
+                file_path=display_path,
+                content=content,
+                max_pixels=max_image_pixels,
+                theme=self.theme,
+                on_save_callback=save_callback,
+                truncated=truncated,
             )
-            return
-
-        viewer = tk.Toplevel(self.window)
-        viewer.title(f"View \u2014 {filename}")
-        viewer.geometry("800x500")
-        txt = tk.Text(viewer, wrap="none", font=("Courier", 10))
-        vsb = ttk.Scrollbar(viewer, orient="vertical", command=txt.yview)
-        hsb = ttk.Scrollbar(viewer, orient="horizontal", command=txt.xview)
-        txt.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
-        vsb.pack(side=tk.RIGHT, fill=tk.Y)
-        hsb.pack(side=tk.BOTTOM, fill=tk.X)
-        txt.pack(fill=tk.BOTH, expand=True)
-        txt.insert("1.0", text)
-        txt.configure(state="disabled")
-        if read_result.truncated:
-            viewer.title(f"View (truncated) \u2014 {filename}")
+            self._set_status(f"Viewing {remote_path}")
+        except Exception as exc:
+            self._set_status(f"View failed: {exc}")
+            try:
+                messagebox.showerror("View Error", str(exc), parent=self.window)
+            except tk.TclError:
+                pass
 
     # ------------------------------------------------------------------
     # Download
