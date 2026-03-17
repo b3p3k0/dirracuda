@@ -444,7 +444,7 @@ class FtpBrowserWindow:
                 try:
                     self.window.after(
                         0,
-                        lambda: messagebox.showerror(
+                        lambda exc=exc: messagebox.showerror(
                             "View Error", f"Could not read file:\n{exc}"
                         ),
                     )
