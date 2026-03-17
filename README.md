@@ -153,6 +153,18 @@ To use it, download a wordlist (we recommend [SecLists](https://github.com/danie
 
 Pry includes lockout detection and configurable delays between attempts. That said, **this feature exists mostly as a novelty/proof of concept** — dedicated tools like Hydra or CrackMapExec will serve you better for serious password auditing.
 
+### DB Tools
+
+Opened via **DB Tools** on the dashboard. Four tabs:
+
+**Import & Merge** — load an external `.db` file and merge it into the current database by IP address. Covers all related records: shares, credentials, file manifests, vulnerabilities, and failure logs. Three conflict strategies: **Keep Newer** (default — picks whichever record has the more recent `last_seen`), **Keep Source**, and **Keep Current**. Auto-backup fires before the merge unless you disable it.
+
+**Export & Backup** — **Export** runs `VACUUM INTO` to produce a clean, defragmented copy at a path you choose. **Quick Backup** drops a timestamped copy (`smbseek_backup_YYYYMMDD_HHMMSS.db`) next to the main database file.
+
+**Statistics** — server and share counts, database size, date range, and a top-10 country breakdown. Read-only; won't lock the database.
+
+**Maintenance** — Vacuum/optimize, integrity check, and age-based purge. The purge shows a full cascade preview before deleting — servers not seen within N days (default: 30) plus all associated shares, credentials, file manifests, vulnerabilities, and cached probe data.
+
 ---
 
 ## Configuration
