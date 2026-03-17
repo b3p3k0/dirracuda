@@ -73,6 +73,8 @@ Triggered via **Start SMB Scan** on the dashboard. The scan runs as a `smbseek` 
 4. TCP reachability check on port 445
 5. Authentication test using three methods in sequence: Anonymous, Guest/blank, and Guest/Guest
 
+Two security modes are available in the scan dialog (and via `--legacy` on the CLI): **Cautious** (default) restricts connections to signed SMB2+/SMB3 and rejects anything requiring unsigned sessions or SMB1; **Legacy** lifts those restrictions. Legacy tends to return more results — older hosts that have never been hardened or patched off SMB1 are exactly the ones worth finding.
+
 Only hosts that authenticate are stored. The method that succeeded is recorded alongside country, timestamp, and scan count — so you can track whether a host drifts from anonymous to guest access across rescans. The scan summary reports Shodan candidates vs. verified count.
 
 Results appear in the Server List.
