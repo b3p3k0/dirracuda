@@ -921,12 +921,13 @@ class ScanManager:
         Worker thread for FTP scan execution.
 
         Mirrors _scan_worker() structure exactly:
-        - try: execute + _process_scan_results()
+        - try: build config_overrides from scan_options, execute under
+               _temporary_config_override (if any), _process_scan_results()
         - except: _handle_scan_error()
         - finally: _cleanup_scan() — always runs
 
-        Progress updates go through _update_progress() for thread-safe UI dispatch
-        via ui_dispatcher. Never call self.progress_callback directly from here.
+        Progress updates go through _update_progress() for thread-safe UI
+        dispatch via ui_dispatcher.
         """
         try:
             country_raw = scan_options.get("country") or ""
@@ -934,12 +935,64 @@ class ScanManager:
 
             self._update_progress(5, "Initializing FTP scan...", "initialization")
 
-            result = self.backend_interface.run_ftp_scan(
-                countries=countries,
-                progress_callback=self._handle_backend_progress,
-                log_callback=self._handle_backend_log_line,
-                verbose=True,
-            )
+            # Build runtime config overrides from dialog options.
+            config_overrides = {}
+
+            # Shodan API key (shared global path, same as SMB).
+            api_key = scan_options.get("api_key_override")
+            if api_key:
+                config_overrides["shodan"] = {"api_key": api_key}
+
+            # FTP Shodan query limits.
+            max_results = scan_options.get("max_shodan_results")
+            if max_results is not None:
+                (config_overrides
+                 .setdefault("ftp", {})
+                 .setdefault("shodan", {})
+                 .setdefault("query_limits", {})
+                 )["max_results"] = max_results
+
+            # FTP discovery concurrency (key matches SMB naming convention).
+            disc_conc = scan_options.get("discovery_max_concurrent_hosts")
+            if disc_conc is not None:
+                config_overrides.setdefault("ftp", {}).setdefault("discovery", {})[
+                    "max_concurrent_hosts"
+                ] = disc_conc
+
+            # FTP access concurrency.
+            acc_conc = scan_options.get("access_max_concurrent_hosts")
+            if acc_conc is not None:
+                config_overrides.setdefault("ftp", {}).setdefault("access", {})[
+                    "max_concurrent_hosts"
+                ] = acc_conc
+
+            # FTP timeouts.
+            verif_overrides = {}
+            for key in ("connect_timeout", "auth_timeout", "listing_timeout"):
+                val = scan_options.get(key)
+                if val is not None:
+                    verif_overrides[key] = val
+            if verif_overrides:
+                config_overrides.setdefault("ftp", {})["verification"] = verif_overrides
+
+            verbose = bool(scan_options.get("verbose", False))
+
+            if config_overrides:
+                self._update_progress(7, "Applying configuration overrides...", "initialization")
+                with self.backend_interface._temporary_config_override(config_overrides):
+                    result = self.backend_interface.run_ftp_scan(
+                        countries=countries,
+                        progress_callback=self._handle_backend_progress,
+                        log_callback=self._handle_backend_log_line,
+                        verbose=verbose,
+                    )
+            else:
+                result = self.backend_interface.run_ftp_scan(
+                    countries=countries,
+                    progress_callback=self._handle_backend_progress,
+                    log_callback=self._handle_backend_log_line,
+                    verbose=verbose,
+                )
 
             self._process_scan_results(result)
 

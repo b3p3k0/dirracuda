@@ -31,6 +31,7 @@ from gui.utils.backend_interface import BackendInterface
 from gui.utils.style import get_theme, apply_theme_to_window
 from gui.utils.scan_manager import get_scan_manager
 from gui.components.scan_dialog import show_scan_dialog
+from gui.components.ftp_scan_dialog import show_ftp_scan_dialog
 from gui.components.scan_results_dialog import show_scan_results_dialog
 from gui.utils.settings_manager import SettingsManager
 from gui.utils.probe_runner import run_probe
@@ -1819,17 +1820,28 @@ class DashboardWidget:
         # "stopping" state doesn't respond to clicks (button is disabled)
 
     def _handle_ftp_scan_button_click(self) -> None:
-        """Handle FTP scan button click. Phase 2+ will wire real backend."""
+        """Handle FTP scan button click — opens FTP scan dialog."""
         if self.scan_button_state == "idle":
-            self._check_external_scans()        # mirror SMB handler: re-verify lock state
-            if self.scan_button_state == "idle":    # still idle after check
-                self._start_ftp_scan_placeholder()
+            self._check_external_scans()
+            if self.scan_button_state == "idle":
+                show_ftp_scan_dialog(
+                    parent=self.parent,
+                    config_path=self.config_path,
+                    scan_start_callback=self._start_ftp_scan,
+                    settings_manager=getattr(self, "settings_manager", None),
+                )
         # Non-idle states: button is disabled; defensive no-op if somehow reached.
 
-    def _start_ftp_scan_placeholder(self) -> None:
-        """Launch FTP scan via scan manager (Card 2+)."""
-        scan_options = self._build_ftp_scan_options()
-        backend_path = str(self.backend_interface.backend_path)
+    def _start_ftp_scan(self, scan_options: dict) -> None:
+        """Start FTP scan with options from dialog. Mirrors _start_new_scan()."""
+        # Final race-condition check before acquiring scan lock.
+        self._check_external_scans()
+        if self.scan_button_state != "idle":
+            return
+
+        # BackendInterface expects a directory path; "." mirrors BackendInterface defaults.
+        backend_path_obj = getattr(self.backend_interface, "backend_path", None)
+        backend_path = str(backend_path_obj) if backend_path_obj else "."
 
         started = self.scan_manager.start_ftp_scan(
             scan_options=scan_options,
@@ -1839,7 +1851,6 @@ class DashboardWidget:
         )
 
         if started:
-            # Mirror _start_new_scan() post-start sequence (lines 779-791) exactly.
             self.current_scan_options = scan_options
             self._reset_log_output(scan_options.get("country"))
             self._update_scan_button_state("scanning")
@@ -1852,15 +1863,6 @@ class DashboardWidget:
                 "A scan may already be running.",
                 parent=self.parent,
             )
-
-    def _build_ftp_scan_options(self) -> dict:
-        """
-        Build FTP scan options from current dashboard state.
-
-        Card 2: Global scan (country=None). A proper FTP scan dialog
-        with country selection is a Card 5 follow-up.
-        """
-        return {"country": None}
 
     def _update_scan_button_state(self, new_state: str) -> None:
         """Update scan button state and appearance."""
