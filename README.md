@@ -237,15 +237,19 @@ The CLI is useful for scripting and automation. The GUI uses the same backends.
 
 ## Development
 
-Built through AI-human collaboration. The human directing this project has hands-on experience in networking and security—this isn't autonomous code generation, it's directed development with human oversight, testing, and domain expertise driving the AI's output.
+This started as a collection of crude bash scripts I've written over 30+ years of networking and security work — dorks, one-liners for poking at SMB shares, checking for open FTP, that sort of thing. At some point it made sense to turn them into something with a GUI and a database, but the undertaking was far outside my skillset. I understand programming and logic but get lost in the sauce of syntax and structure.
+
+Part of the goal here is finding out how far AI-assisted development can actually go. The answer, in my experience, is pretty far. I bring domain knowledge, the spec, and the judgment call on what matters; the AI handles implementation, consistency, and the parts that would otherwise be tedious. 
+
+It works well - I'd still be struggling to learn the basics of tkinter if I did this the old fashioned way. With a little patience and foundational knowledge, AI tools can help build complex and functional software.
 
 ---
 
 ## Legal & Ethics
 
-Scan networks you own or have explicit permission to test. Unauthorized access is illegal in most jurisdictions—full stop.
+You should only scan networks you own or have explicit permission to test. Unauthorized access is illegal in most jurisdictions—full stop.
 
-That said: security research matters. Curiosity about how systems work isn't malicious, and understanding vulnerabilities is how we fix them. This tool exists because open SMB shares are a real problem worth studying. Use it to learn, to audit, to improve defenses and responsibly disclose. Don't use it to steal data or harm systems you have no business touching.
+That said: security research matters. Curiosity about how systems work isn't malicious, and understanding vulnerabilities is how we fix them. This tool exists because improperly secured data is a real problem worth studying. Use it to learn, to audit, to improve defenses and responsibly disclose. Don't use it to steal data or harm systems you have no business touching.
 
 If you're unsure whether something is authorized, it probably isn't. When in doubt, get it in writing.
 
