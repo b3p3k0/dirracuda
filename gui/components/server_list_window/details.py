@@ -115,7 +115,11 @@ def show_server_detail_popup(parent_window, server_data, theme, settings_manager
             if settings_manager:
                 try:
                     db_reader = DatabaseReader(settings_manager.get_database_path())
-                    db_reader.upsert_user_flags(server_data.get("ip_address", ""), notes=new_notes)
+                    db_reader.upsert_user_flags_for_host(
+                        server_data.get("ip_address", ""),
+                        server_data.get("host_type", "S"),
+                        notes=new_notes,
+                    )
                 except Exception:
                     pass
             server_data["notes"] = new_notes
@@ -780,7 +784,8 @@ def _open_extract_dialog(
         status_var,
         extract_state,
         extract_button,
-        dialog_config
+        dialog_config,
+        settings_manager,
     )
 
 
@@ -790,7 +795,8 @@ def _start_extract(
     status_var: tk.StringVar,
     extract_state: Dict[str, Any],
     extract_button: Optional[tk.Button],
-    extract_config: Dict[str, Any]
+    extract_config: Dict[str, Any],
+    settings_manager=None,
 ) -> None:
     if extract_state.get("running"):
         return
@@ -868,7 +874,11 @@ def _start_extract(
                             db_path = settings_manager.get_setting('backend.database_path', None)
                         if db_path:
                             db_reader = DatabaseReader(db_path)
-                            db_reader.upsert_extracted_flag(ip_address, True)
+                            db_reader.upsert_extracted_flag_for_host(
+                                ip_address,
+                                server_data.get("host_type", "S"),
+                                extracted=True,
+                            )
                     server_data["extracted"] = 1
                     server_data["extract_status_emoji"] = "✔"
                 except Exception:

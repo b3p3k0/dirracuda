@@ -948,92 +948,227 @@ class DatabaseReader:
 
     def upsert_user_flags(self, ip_address: str, *, favorite: Optional[bool] = None,
                           avoid: Optional[bool] = None, notes: Optional[str] = None) -> None:
-        """Upsert favorite/avoid/notes for a host."""
-        if not ip_address:
-            return
-        with self._get_connection() as conn:
-            cur = conn.cursor()
-            cur.execute("SELECT id FROM smb_servers WHERE ip_address = ?", (ip_address,))
-            row = cur.fetchone()
-            if not row:
-                return
-            server_id = row["id"]
-            cur.execute("SELECT favorite, avoid, notes FROM host_user_flags WHERE server_id = ?", (server_id,))
-            existing = cur.fetchone()
-            fav_val = existing["favorite"] if existing else 0
-            avoid_val = existing["avoid"] if existing else 0
-            notes_val = existing["notes"] if existing else ""
-            if favorite is not None:
-                fav_val = 1 if favorite else 0
-            if avoid is not None:
-                avoid_val = 1 if avoid else 0
-            if notes is not None:
-                notes_val = notes
-            cur.execute(
-                """
-                INSERT INTO host_user_flags (server_id, favorite, avoid, notes, updated_at)
-                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(server_id) DO UPDATE SET
-                    favorite=excluded.favorite,
-                    avoid=excluded.avoid,
-                    notes=excluded.notes,
-                    updated_at=CURRENT_TIMESTAMP
-                """,
-                (server_id, fav_val, avoid_val, notes_val),
-            )
-            conn.commit()
-        self.clear_cache()
+        """SMB-compatible shim. Delegates to upsert_user_flags_for_host with host_type='S'."""
+        self.upsert_user_flags_for_host(ip_address, 'S', favorite=favorite, avoid=avoid, notes=notes)
 
     def upsert_probe_cache(self, ip_address: str, *, status: str, indicator_matches: int,
                            snapshot_path: Optional[str] = None) -> None:
-        """Upsert probe cache info for a host."""
-        if not ip_address:
-            return
-        with self._get_connection() as conn:
-            cur = conn.cursor()
-            cur.execute("SELECT id FROM smb_servers WHERE ip_address = ?", (ip_address,))
-            row = cur.fetchone()
-            if not row:
-                return
-            server_id = row["id"]
-            cur.execute(
-                """
-                INSERT INTO host_probe_cache (server_id, status, last_probe_at, indicator_matches, snapshot_path, updated_at)
-                VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(server_id) DO UPDATE SET
-                    status=excluded.status,
-                    last_probe_at=excluded.last_probe_at,
-                    indicator_matches=excluded.indicator_matches,
-                    snapshot_path=COALESCE(excluded.snapshot_path, host_probe_cache.snapshot_path),
-                    updated_at=CURRENT_TIMESTAMP
-                """,
-                (server_id, status, indicator_matches, snapshot_path),
-            )
-            conn.commit()
-        self.clear_cache()
+        """SMB-compatible shim. Delegates to upsert_probe_cache_for_host with host_type='S'."""
+        self.upsert_probe_cache_for_host(ip_address, 'S', status=status,
+                                         indicator_matches=indicator_matches,
+                                         snapshot_path=snapshot_path)
 
     def upsert_extracted_flag(self, ip_address: str, extracted: bool = True) -> None:
-        """Mark a host as extracted in host_probe_cache."""
-        if not ip_address:
+        """SMB-compatible shim. Delegates to upsert_extracted_flag_for_host with host_type='S'."""
+        self.upsert_extracted_flag_for_host(ip_address, 'S', extracted=extracted)
+
+    # --- Protocol-aware write helpers (dual-protocol routing) ----------------
+
+    def upsert_user_flags_for_host(self, ip_address: str, host_type: str, *,
+                                    favorite: Optional[bool] = None,
+                                    avoid: Optional[bool] = None,
+                                    notes: Optional[str] = None) -> None:
+        """Route favorite/avoid/notes write to SMB or FTP tables based on host_type.
+
+        Args:
+            ip_address: IP address of the host
+            host_type: 'S' for SMB (writes host_user_flags), 'F' for FTP (writes ftp_user_flags)
+            favorite: Set favorite flag, or None to leave unchanged
+            avoid: Set avoid flag, or None to leave unchanged
+            notes: Set notes text, or None to leave unchanged
+
+        No-op for invalid host_type or unknown IP.
+        FTP branch degrades gracefully when ftp_ tables are absent (pre-migration).
+        """
+        host_type = (host_type or "").upper()
+        if not ip_address or host_type not in ('S', 'F'):
             return
-        with self._get_connection() as conn:
-            cur = conn.cursor()
-            cur.execute("SELECT id FROM smb_servers WHERE ip_address = ?", (ip_address,))
-            row = cur.fetchone()
-            if not row:
+        server_table = 'smb_servers'     if host_type == 'S' else 'ftp_servers'
+        flags_table  = 'host_user_flags' if host_type == 'S' else 'ftp_user_flags'
+        try:
+            with self._get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute(f"SELECT id FROM {server_table} WHERE ip_address = ?", (ip_address,))
+                row = cur.fetchone()
+                if not row:
+                    return
+                server_id = row["id"]
+                cur.execute(
+                    f"SELECT favorite, avoid, notes FROM {flags_table} WHERE server_id = ?",
+                    (server_id,),
+                )
+                existing  = cur.fetchone()
+                fav_val   = existing["favorite"] if existing else 0
+                avoid_val = existing["avoid"]    if existing else 0
+                notes_val = existing["notes"]    if existing else ""
+                if favorite is not None:
+                    fav_val = 1 if favorite else 0
+                if avoid is not None:
+                    avoid_val = 1 if avoid else 0
+                if notes is not None:
+                    notes_val = notes
+                cur.execute(
+                    f"""
+                    INSERT INTO {flags_table} (server_id, favorite, avoid, notes, updated_at)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(server_id) DO UPDATE SET
+                        favorite=excluded.favorite,
+                        avoid=excluded.avoid,
+                        notes=excluded.notes,
+                        updated_at=CURRENT_TIMESTAMP
+                    """,
+                    (server_id, fav_val, avoid_val, notes_val),
+                )
+                conn.commit()
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if host_type == 'F' and "no such table: ftp_" in msg:
+                return  # FTP tables absent — migration not yet run; degrade gracefully
+            raise
+        self.clear_cache()
+
+    def upsert_probe_cache_for_host(self, ip_address: str, host_type: str, *,
+                                     status: str,
+                                     indicator_matches: int,
+                                     snapshot_path: Optional[str] = None) -> None:
+        """Route probe cache write to SMB or FTP tables based on host_type.
+
+        Args:
+            ip_address: IP address of the host
+            host_type: 'S' for SMB (writes host_probe_cache), 'F' for FTP (writes ftp_probe_cache)
+            status: Probe status string
+            indicator_matches: Number of indicator matches found
+            snapshot_path: Optional path to probe snapshot; existing value preserved when None
+
+        No-op for invalid host_type or unknown IP.
+        FTP branch degrades gracefully when ftp_ tables are absent (pre-migration).
+        """
+        host_type = (host_type or "").upper()
+        if not ip_address or host_type not in ('S', 'F'):
+            return
+        server_table = 'smb_servers'     if host_type == 'S' else 'ftp_servers'
+        cache_table  = 'host_probe_cache' if host_type == 'S' else 'ftp_probe_cache'
+        try:
+            with self._get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute(f"SELECT id FROM {server_table} WHERE ip_address = ?", (ip_address,))
+                row = cur.fetchone()
+                if not row:
+                    return
+                server_id = row["id"]
+                cur.execute(
+                    f"""
+                    INSERT INTO {cache_table}
+                        (server_id, status, last_probe_at, indicator_matches, snapshot_path, updated_at)
+                    VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(server_id) DO UPDATE SET
+                        status=excluded.status,
+                        last_probe_at=excluded.last_probe_at,
+                        indicator_matches=excluded.indicator_matches,
+                        snapshot_path=COALESCE(excluded.snapshot_path, {cache_table}.snapshot_path),
+                        updated_at=CURRENT_TIMESTAMP
+                    """,
+                    (server_id, status, indicator_matches, snapshot_path),
+                )
+                conn.commit()
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if host_type == 'F' and "no such table: ftp_" in msg:
                 return
-            server_id = row["id"]
-            cur.execute(
-                """
-                INSERT INTO host_probe_cache (server_id, extracted, updated_at)
-                VALUES (?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(server_id) DO UPDATE SET
-                    extracted=excluded.extracted,
-                    updated_at=CURRENT_TIMESTAMP
-                """,
-                (server_id, 1 if extracted else 0),
-            )
-            conn.commit()
+            raise
+        self.clear_cache()
+
+    def upsert_extracted_flag_for_host(self, ip_address: str, host_type: str,
+                                        extracted: bool = True) -> None:
+        """Route extracted flag write to SMB or FTP tables based on host_type.
+
+        Args:
+            ip_address: IP address of the host
+            host_type: 'S' for SMB (writes host_probe_cache), 'F' for FTP (writes ftp_probe_cache)
+            extracted: True to mark as extracted, False to clear
+
+        No-op for invalid host_type or unknown IP.
+        FTP branch degrades gracefully when ftp_ tables are absent (pre-migration).
+        """
+        host_type = (host_type or "").upper()
+        if not ip_address or host_type not in ('S', 'F'):
+            return
+        server_table = 'smb_servers'     if host_type == 'S' else 'ftp_servers'
+        cache_table  = 'host_probe_cache' if host_type == 'S' else 'ftp_probe_cache'
+        try:
+            with self._get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute(f"SELECT id FROM {server_table} WHERE ip_address = ?", (ip_address,))
+                row = cur.fetchone()
+                if not row:
+                    return
+                server_id = row["id"]
+                cur.execute(
+                    f"""
+                    INSERT INTO {cache_table} (server_id, extracted, updated_at)
+                    VALUES (?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(server_id) DO UPDATE SET
+                        extracted=excluded.extracted,
+                        updated_at=CURRENT_TIMESTAMP
+                    """,
+                    (server_id, 1 if extracted else 0),
+                )
+                conn.commit()
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if host_type == 'F' and "no such table: ftp_" in msg:
+                return
+            raise
+        self.clear_cache()
+
+    def upsert_rce_status_for_host(self, ip_address: str, host_type: str,
+                                    rce_status: str,
+                                    verdict_summary: Optional[str] = None) -> None:
+        """Route RCE analysis status write to SMB or FTP tables based on host_type.
+
+        Args:
+            ip_address: IP address of the host
+            host_type: 'S' for SMB (writes host_probe_cache), 'F' for FTP (writes ftp_probe_cache)
+            rce_status: Status string ('not_run', 'clean', 'flagged', 'unknown', 'error');
+                        invalid values are normalized to 'unknown'
+            verdict_summary: Optional JSON summary of verdicts
+
+        No-op for invalid host_type or unknown IP.
+        FTP branch degrades gracefully when ftp_ tables are absent (pre-migration).
+        """
+        host_type = (host_type or "").upper()
+        if not ip_address or host_type not in ('S', 'F'):
+            return
+        valid_statuses = {'not_run', 'clean', 'flagged', 'unknown', 'error'}
+        if rce_status not in valid_statuses:
+            rce_status = 'unknown'
+        server_table = 'smb_servers'     if host_type == 'S' else 'ftp_servers'
+        cache_table  = 'host_probe_cache' if host_type == 'S' else 'ftp_probe_cache'
+        try:
+            with self._get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute(f"SELECT id FROM {server_table} WHERE ip_address = ?", (ip_address,))
+                row = cur.fetchone()
+                if not row:
+                    return
+                server_id = row["id"]
+                cur.execute(
+                    f"""
+                    INSERT INTO {cache_table} (server_id, rce_status, rce_verdict_summary, updated_at)
+                    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(server_id) DO UPDATE SET
+                        rce_status=excluded.rce_status,
+                        rce_verdict_summary=excluded.rce_verdict_summary,
+                        updated_at=CURRENT_TIMESTAMP
+                    """,
+                    (server_id, rce_status, verdict_summary),
+                )
+                conn.commit()
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if host_type == 'F' and "no such table: ftp_" in msg:
+                return
+            raise
         self.clear_cache()
 
     def bulk_delete_servers(self, ip_addresses: List[str]) -> Dict[str, Any]:
@@ -1299,39 +1434,8 @@ class DatabaseReader:
 
     def upsert_rce_status(self, ip_address: str, rce_status: str,
                           verdict_summary: Optional[str] = None) -> None:
-        """
-        Update RCE analysis status for a host.
-
-        Args:
-            ip_address: IP address of the host
-            rce_status: Status string ('not_run', 'clean', 'flagged', 'unknown', 'error')
-            verdict_summary: Optional JSON summary of verdicts
-        """
-        if not ip_address:
-            return
-        valid_statuses = {'not_run', 'clean', 'flagged', 'unknown', 'error'}
-        if rce_status not in valid_statuses:
-            rce_status = 'unknown'
-        with self._get_connection() as conn:
-            cur = conn.cursor()
-            cur.execute("SELECT id FROM smb_servers WHERE ip_address = ?", (ip_address,))
-            row = cur.fetchone()
-            if not row:
-                return
-            server_id = row["id"]
-            cur.execute(
-                """
-                INSERT INTO host_probe_cache (server_id, rce_status, rce_verdict_summary, updated_at)
-                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(server_id) DO UPDATE SET
-                    rce_status=excluded.rce_status,
-                    rce_verdict_summary=excluded.rce_verdict_summary,
-                    updated_at=CURRENT_TIMESTAMP
-                """,
-                (server_id, rce_status, verdict_summary),
-            )
-            conn.commit()
-        self.clear_cache()
+        """SMB-compatible shim. Delegates to upsert_rce_status_for_host with host_type='S'."""
+        self.upsert_rce_status_for_host(ip_address, 'S', rce_status, verdict_summary)
 
     # ------------------------------------------------------------------
     # FTP sidecar read methods
