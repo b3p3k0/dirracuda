@@ -33,6 +33,7 @@ class FtpServerPickerDialog:
         self._theme = theme
         self._settings_manager = settings_manager
         self._all_rows: List[Dict[str, Any]] = []
+        self._rows_by_item_id: Dict[str, Dict[str, Any]] = {}
 
         self._build_dialog()
         self._load_servers()
@@ -126,11 +127,12 @@ class FtpServerPickerDialog:
 
     def _populate_tree(self, rows: List[Dict[str, Any]]) -> None:
         self.tree.delete(*self.tree.get_children())
+        self._rows_by_item_id = {}
         for row in rows:
             banner = str(row.get("banner") or "")
             if len(banner) > 60:
                 banner = banner[:60] + "\u2026"
-            self.tree.insert(
+            item_id = self.tree.insert(
                 "",
                 "end",
                 values=(
@@ -141,6 +143,7 @@ class FtpServerPickerDialog:
                     row.get("last_seen", ""),
                 ),
             )
+            self._rows_by_item_id[item_id] = row
 
     def _on_filter_changed(self, *_args) -> None:
         q = self.filter_var.get().lower()
@@ -171,11 +174,15 @@ class FtpServerPickerDialog:
         except (ValueError, IndexError):
             port = 21
 
+        selected_row = self._rows_by_item_id.get(sel[0], {})
+        full_banner = str(selected_row.get("banner") or "")
+
         from gui.components.ftp_browser_window import FtpBrowserWindow
         FtpBrowserWindow(
             parent=self._dialog,
             ip_address=ip,
             port=port,
+            banner=full_banner,
             config_path=self._config_path,
             db_reader=self._db_reader,
             theme=self._theme,

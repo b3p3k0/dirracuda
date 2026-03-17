@@ -73,6 +73,7 @@ class FtpBrowserWindow:
         parent: tk.Widget,
         ip_address: str,
         port: int = 21,
+        banner: Optional[str] = None,
         config_path: Optional[str] = None,
         db_reader=None,
         theme=None,
@@ -85,6 +86,7 @@ class FtpBrowserWindow:
         self.theme = theme
         self.settings_manager = settings_manager
         self.config = _load_ftp_browser_config(config_path)
+        self._server_banner = str(banner or "")
 
         self._current_path: str = "/"
         self._cancel_event = threading.Event()
@@ -118,9 +120,35 @@ class FtpBrowserWindow:
         if self.theme:
             self.theme.apply_to_widget(self.window, "main_window")
 
+        # Banner panel (fixed 4 lines + scrollbar) at top of dialog
+        banner_frame = tk.Frame(self.window)
+        banner_frame.pack(fill=tk.X, padx=10, pady=(10, 5))
+
+        tk.Label(banner_frame, text="Banner:").pack(anchor="w")
+
+        banner_text_frame = tk.Frame(banner_frame)
+        banner_text_frame.pack(fill=tk.X, pady=(3, 0))
+
+        self.banner_text = tk.Text(
+            banner_text_frame,
+            height=4,
+            wrap="word",
+            state="normal",
+        )
+        banner_vsb = ttk.Scrollbar(
+            banner_text_frame, orient="vertical", command=self.banner_text.yview
+        )
+        self.banner_text.configure(yscrollcommand=banner_vsb.set)
+        banner_vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        self.banner_text.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        banner_value = self._server_banner.strip() or "(No FTP banner available)"
+        self.banner_text.insert("1.0", banner_value)
+        self.banner_text.configure(state="disabled")
+
         # Top frame — current path display
         top_frame = tk.Frame(self.window)
-        top_frame.pack(fill=tk.X, padx=10, pady=(10, 5))
+        top_frame.pack(fill=tk.X, padx=10, pady=(0, 5))
 
         tk.Label(top_frame, text="Path:").pack(side=tk.LEFT)
         self.path_var = tk.StringVar(value="/")
