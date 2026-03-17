@@ -20,6 +20,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import time
 import logging
 
+from shared.config import normalize_db_timestamp
+
 _logger = logging.getLogger(__name__)
 
 # Minimum date for NULL timestamp comparisons
@@ -517,7 +519,8 @@ class DBToolsEngine:
                 """, (
                     ip, ext_row['country'], ext_row['country_code'],
                     ext_row['auth_method'], ext_row['shodan_data'],
-                    ext_row['first_seen'], ext_row['last_seen'],
+                    normalize_db_timestamp(ext_row['first_seen']),
+                    normalize_db_timestamp(ext_row['last_seen']),
                     ext_row['scan_count'] or 1, ext_row['status'] or 'active',
                     ext_row['notes']
                 ))
@@ -547,7 +550,7 @@ class DBToolsEngine:
                             updated_at = CURRENT_TIMESTAMP
                         WHERE id = ?
                     """, (
-                        ext_row['last_seen'],
+                        normalize_db_timestamp(ext_row['last_seen']),
                         ext_row['auth_method'],
                         ext_row['country'],
                         ext_row['country_code'],

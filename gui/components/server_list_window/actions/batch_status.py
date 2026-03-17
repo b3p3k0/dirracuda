@@ -2,6 +2,7 @@
 Batch status and UI helpers for ServerListWindow.
 """
 
+import sqlite3
 import tkinter as tk
 from tkinter import messagebox, ttk, filedialog
 import time
@@ -16,6 +17,8 @@ from gui.components.server_list_window import table, filters
 from gui.utils import probe_cache
 from gui.utils.logging_config import get_logger
 from gui.components.pry_status_dialog import BatchStatusDialog
+from shared.config import get_standard_timestamp
+from shared.db_migrations import run_migrations
 
 _logger = get_logger("server_list_window.batch_status")
 
@@ -292,7 +295,7 @@ class ServerListWindowBatchStatusMixin:
                 # Continue even if migration logging fails
                 pass
 
-            now_ts = datetime.now().isoformat(timespec="seconds")
+            now_ts = get_standard_timestamp()
             conn = sqlite3.connect(db_path)
             conn.row_factory = sqlite3.Row
             cur = conn.cursor()

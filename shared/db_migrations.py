@@ -9,6 +9,8 @@ Currently installs:
 - ftp_user_flags: per-FTP-server user flags (favorite/avoid/notes), parallel to host_user_flags.
 - ftp_probe_cache: per-FTP-server probe cache (status/indicators/extracted/rce), parallel to host_probe_cache.
 - v_host_protocols: view resolving has_smb / has_ftp / protocol_presence per IP.
+- Timestamp canonicalization: normalizes existing T-format timestamps in smb_servers/ftp_servers
+  first_seen/last_seen to canonical YYYY-MM-DD HH:MM:SS format.
 """
 
 import json
@@ -245,10 +247,35 @@ def run_migrations(db_path: str) -> None:
             """
         )
 
+        _normalize_existing_timestamps(cur)
         conn.commit()
     finally:
         if conn:
             conn.close()
+
+
+def _normalize_existing_timestamps(cur: sqlite3.Cursor) -> None:
+    """
+    Idempotent one-time migration: normalize ISO T-format timestamps to
+    canonical DB format (YYYY-MM-DD HH:MM:SS) in smb_servers and ftp_servers.
+
+    The WHERE clause makes this a no-op once all rows are already clean.
+    Only catches OperationalError for 'no such table' (brand-new DB where
+    ftp_servers hasn't been created yet); re-raises all other errors.
+    """
+    for table in ("smb_servers", "ftp_servers"):
+        for col in ("first_seen", "last_seen"):
+            try:
+                cur.execute(
+                    f"UPDATE {table} "
+                    f"SET {col} = SUBSTR(REPLACE({col}, 'T', ' '), 1, 19) "
+                    f"WHERE {col} LIKE '%T%'"
+                )
+            except sqlite3.OperationalError as exc:
+                if "no such table" in str(exc).lower():
+                    pass  # Table doesn't exist yet on a brand-new DB
+                else:
+                    raise
 
 
 def _import_legacy_settings(cur: sqlite3.Cursor) -> None:

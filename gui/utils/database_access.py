@@ -698,16 +698,16 @@ class DatabaseReader:
         if recent_scan_only:
             # Get the most recent server timestamp (indicates most recent scan activity)
             recent_timestamp_query = """
-            SELECT MAX(last_seen) as recent_timestamp
+            SELECT MAX(datetime(last_seen)) as recent_timestamp
             FROM v_host_share_summary
             """
             timestamp_result = conn.execute(recent_timestamp_query).fetchone()
             if timestamp_result and timestamp_result["recent_timestamp"]:
                 recent_time = timestamp_result["recent_timestamp"]
                 # Filter servers seen within 1 hour of the most recent activity
-                where_clause += " AND last_seen >= datetime(?, '-1 hour')"
+                where_clause += " AND datetime(last_seen) >= datetime(?, '-1 hour')"
                 params.append(recent_time)
-        
+
         # Count query
         count_query = f"""
         SELECT COUNT(*) as total
@@ -732,7 +732,7 @@ class DatabaseReader:
             access_rate_percent
         FROM v_host_share_summary
         {where_clause}
-        ORDER BY last_seen DESC
+        ORDER BY datetime(last_seen) DESC
         """
         data_params = list(params)
         if limit is not None and limit > 0:
@@ -787,7 +787,7 @@ class DatabaseReader:
         if recent_scan_only:
             # Get the most recent server timestamp (indicates most recent scan activity)
             recent_timestamp_query = """
-            SELECT MAX(last_seen) as recent_timestamp
+            SELECT MAX(datetime(last_seen)) as recent_timestamp
             FROM smb_servers
             WHERE status = 'active'
             """
@@ -796,7 +796,7 @@ class DatabaseReader:
                 recent_time = timestamp_result["recent_timestamp"]
                 # Filter servers seen within 1 hour of the most recent activity
                 # This captures servers from the most recent scanning session
-                where_clause += " AND s.last_seen >= datetime(?, '-1 hour')"
+                where_clause += " AND datetime(s.last_seen) >= datetime(?, '-1 hour')"
                 params.append(recent_time)
         
         # Count query
@@ -841,7 +841,7 @@ class DatabaseReader:
             GROUP BY server_id
         ) v_summary ON s.id = v_summary.server_id
         {where_clause}
-        ORDER BY s.last_seen DESC
+        ORDER BY datetime(s.last_seen) DESC
         """
         
         data_params = list(params)
@@ -1410,3 +1410,355 @@ class DatabaseReader:
                 return row[0] if row else 0
         except sqlite3.OperationalError:
             return 0
+
+    # ------------------------------------------------------------------
+    # Unified protocol list — UNION ALL of SMB (S) and FTP (F) rows
+    # ------------------------------------------------------------------
+
+    def get_protocol_server_list(
+        self,
+        limit: Optional[int] = 100,
+        offset: int = 0,
+        country_filter: Optional[str] = None,
+        recent_scan_only: bool = False,
+    ) -> Tuple[List[Dict], int]:
+        """
+        Return a unified, paginated list of SMB and FTP server rows.
+
+        Each row carries a ``host_type`` field ('S' for SMB, 'F' for FTP) and a
+        stable ``row_key`` (e.g. "S:123" / "F:456") so the same IP address can
+        appear twice when both protocols are present without colliding.
+
+        Protocol-specific state (favorite, avoid, probe, extracted, rce) is read
+        from the correct per-protocol table — SMB state never bleeds into FTP
+        rows and vice-versa.
+
+        Args:
+            limit:          Max rows to return. ``None`` returns all rows.
+            offset:         Pagination offset.
+            country_filter: ISO 3166-1 alpha-2 country code, or None for all.
+            recent_scan_only: If True, restrict to rows seen within 1 hour of
+                            the most recent last_seen timestamp across both tables.
+
+        Returns:
+            Tuple of (rows, total_count) where rows is a list of dicts.
+        """
+        if self.mock_mode:
+            return self._get_mock_protocol_list(limit, offset, country_filter)
+
+        try:
+            return self._query_protocol_server_list(
+                limit, offset, country_filter, recent_scan_only
+            )
+        except sqlite3.OperationalError as exc:
+            # Graceful fallback when FTP tables do not yet exist (pre-migration
+            # startup). Any other OperationalError (e.g. schema bug in an
+            # existing FTP table) is intentionally re-raised.
+            if "no such table: ftp_" in str(exc).lower():
+                return self._query_protocol_server_list_smb_only(
+                    limit, offset, country_filter, recent_scan_only
+                )
+            raise
+
+    def _build_union_sql(self, smb_where: str, ftp_where: str) -> str:
+        """Return the UNION ALL query string for both protocol halves."""
+        return f"""
+        SELECT
+            'S'                        AS host_type,
+            s.id                       AS protocol_server_id,
+            'S:' || CAST(s.id AS TEXT) AS row_key,
+            s.ip_address,
+            s.country,
+            s.country_code,
+            s.last_seen,
+            s.scan_count,
+            s.status,
+            s.auth_method,
+            COALESCE(sa_sum.total_shares, 0)            AS total_shares,
+            COALESCE(sa_sum.accessible_shares, 0)       AS accessible_shares,
+            COALESCE(sa_sum.accessible_shares_list, '')  AS accessible_shares_list,
+            NULL                                         AS port,
+            NULL                                         AS banner,
+            NULL                                         AS anon_accessible,
+            COALESCE(uf.favorite, 0)                    AS favorite,
+            COALESCE(uf.avoid, 0)                       AS avoid,
+            COALESCE(uf.notes, '')                      AS notes,
+            COALESCE(pc.status, 'unprobed')             AS probe_status,
+            COALESCE(pc.indicator_matches, 0)           AS indicator_matches,
+            COALESCE(pc.extracted, 0)                   AS extracted,
+            COALESCE(pc.rce_status, 'not_run')          AS rce_status
+        FROM smb_servers s
+        LEFT JOIN (
+            SELECT
+                server_id,
+                COUNT(share_name)                                         AS total_shares,
+                COUNT(CASE WHEN accessible = 1 THEN 1 END)               AS accessible_shares,
+                GROUP_CONCAT(
+                    CASE WHEN accessible = 1 THEN share_name END, ','
+                )                                                         AS accessible_shares_list
+            FROM share_access
+            GROUP BY server_id
+        ) sa_sum ON s.id = sa_sum.server_id
+        LEFT JOIN host_user_flags  uf ON uf.server_id = s.id
+        LEFT JOIN host_probe_cache pc ON pc.server_id = s.id
+        {smb_where}
+
+        UNION ALL
+
+        SELECT
+            'F'                        AS host_type,
+            f.id                       AS protocol_server_id,
+            'F:' || CAST(f.id AS TEXT) AS row_key,
+            f.ip_address,
+            f.country,
+            f.country_code,
+            f.last_seen,
+            f.scan_count,
+            f.status,
+            'anonymous'                AS auth_method,
+            0                          AS total_shares,
+            0                          AS accessible_shares,
+            ''                         AS accessible_shares_list,
+            f.port,
+            f.banner,
+            f.anon_accessible,
+            COALESCE(fuf.favorite, 0)           AS favorite,
+            COALESCE(fuf.avoid, 0)              AS avoid,
+            COALESCE(fuf.notes, '')             AS notes,
+            COALESCE(fpc.status, 'unprobed')    AS probe_status,
+            COALESCE(fpc.indicator_matches, 0)  AS indicator_matches,
+            COALESCE(fpc.extracted, 0)          AS extracted,
+            COALESCE(fpc.rce_status, 'not_run') AS rce_status
+        FROM ftp_servers f
+        LEFT JOIN ftp_user_flags  fuf ON fuf.server_id = f.id
+        LEFT JOIN ftp_probe_cache fpc ON fpc.server_id = f.id
+        {ftp_where}
+        """
+
+    def _query_protocol_server_list(
+        self,
+        limit: Optional[int],
+        offset: int,
+        country_filter: Optional[str],
+        recent_scan_only: bool,
+    ) -> Tuple[List[Dict], int]:
+        """Execute full UNION ALL query (SMB + FTP)."""
+        with self._get_connection() as conn:
+            smb_where = "WHERE s.status = 'active'"
+            ftp_where = "WHERE f.status = 'active'"
+            smb_params: List[Any] = []
+            ftp_params: List[Any] = []
+
+            if country_filter:
+                smb_where += " AND s.country_code = ?"
+                ftp_where += " AND f.country_code = ?"
+                smb_params.append(country_filter)
+                ftp_params.append(country_filter)
+
+            if recent_scan_only:
+                cutoff = self._get_protocol_recent_cutoff(conn)
+                if cutoff:
+                    smb_where += " AND datetime(s.last_seen) >= datetime(?, '-1 hour')"
+                    ftp_where += " AND datetime(f.last_seen) >= datetime(?, '-1 hour')"
+                    smb_params.append(cutoff)
+                    ftp_params.append(cutoff)
+
+            union_sql = self._build_union_sql(smb_where, ftp_where)
+            union_params = smb_params + ftp_params
+
+            total = conn.execute(
+                f"SELECT COUNT(*) AS total FROM ({union_sql}) _u",
+                union_params,
+            ).fetchone()["total"]
+
+            data_sql = (
+                f"SELECT * FROM ({union_sql}) _u"
+                f" ORDER BY datetime(last_seen) DESC, row_key ASC"
+            )
+            data_params = list(union_params)
+            if limit is not None and limit > 0:
+                data_sql += " LIMIT ? OFFSET ?"
+                data_params += [limit, offset]
+
+            rows = conn.execute(data_sql, data_params).fetchall()
+            return [dict(row) for row in rows], total
+
+    def _query_protocol_server_list_smb_only(
+        self,
+        limit: Optional[int],
+        offset: int,
+        country_filter: Optional[str],
+        recent_scan_only: bool,
+    ) -> Tuple[List[Dict], int]:
+        """SMB-only fallback used when FTP tables are absent."""
+        with self._get_connection() as conn:
+            smb_where = "WHERE s.status = 'active'"
+            smb_params: List[Any] = []
+
+            if country_filter:
+                smb_where += " AND s.country_code = ?"
+                smb_params.append(country_filter)
+
+            if recent_scan_only:
+                row = conn.execute(
+                    "SELECT MAX(datetime(last_seen)) AS cutoff"
+                    " FROM smb_servers WHERE status = 'active'"
+                ).fetchone()
+                cutoff = row["cutoff"] if row else None
+                if cutoff:
+                    smb_where += " AND datetime(s.last_seen) >= datetime(?, '-1 hour')"
+                    smb_params.append(cutoff)
+
+            smb_sql = f"""
+            SELECT
+                'S'                        AS host_type,
+                s.id                       AS protocol_server_id,
+                'S:' || CAST(s.id AS TEXT) AS row_key,
+                s.ip_address,
+                s.country,
+                s.country_code,
+                s.last_seen,
+                s.scan_count,
+                s.status,
+                s.auth_method,
+                COALESCE(sa_sum.total_shares, 0)            AS total_shares,
+                COALESCE(sa_sum.accessible_shares, 0)       AS accessible_shares,
+                COALESCE(sa_sum.accessible_shares_list, '')  AS accessible_shares_list,
+                NULL                                         AS port,
+                NULL                                         AS banner,
+                NULL                                         AS anon_accessible,
+                COALESCE(uf.favorite, 0)                    AS favorite,
+                COALESCE(uf.avoid, 0)                       AS avoid,
+                COALESCE(uf.notes, '')                      AS notes,
+                COALESCE(pc.status, 'unprobed')             AS probe_status,
+                COALESCE(pc.indicator_matches, 0)           AS indicator_matches,
+                COALESCE(pc.extracted, 0)                   AS extracted,
+                COALESCE(pc.rce_status, 'not_run')          AS rce_status
+            FROM smb_servers s
+            LEFT JOIN (
+                SELECT
+                    server_id,
+                    COUNT(share_name)                                         AS total_shares,
+                    COUNT(CASE WHEN accessible = 1 THEN 1 END)               AS accessible_shares,
+                    GROUP_CONCAT(
+                        CASE WHEN accessible = 1 THEN share_name END, ','
+                    )                                                         AS accessible_shares_list
+                FROM share_access
+                GROUP BY server_id
+            ) sa_sum ON s.id = sa_sum.server_id
+            LEFT JOIN host_user_flags  uf ON uf.server_id = s.id
+            LEFT JOIN host_probe_cache pc ON pc.server_id = s.id
+            {smb_where}
+            """
+
+            total = conn.execute(
+                f"SELECT COUNT(*) AS total FROM ({smb_sql}) _u",
+                smb_params,
+            ).fetchone()["total"]
+
+            data_sql = (
+                f"SELECT * FROM ({smb_sql}) _u"
+                f" ORDER BY datetime(last_seen) DESC, row_key ASC"
+            )
+            data_params = list(smb_params)
+            if limit is not None and limit > 0:
+                data_sql += " LIMIT ? OFFSET ?"
+                data_params += [limit, offset]
+
+            rows = conn.execute(data_sql, data_params).fetchall()
+            return [dict(row) for row in rows], total
+
+    def _get_protocol_recent_cutoff(self, conn: sqlite3.Connection) -> Optional[str]:
+        """
+        Return the most recent last_seen timestamp across SMB and FTP servers.
+
+        Uses SQL datetime() normalization to handle mixed timestamp formats
+        (YYYY-MM-DD HH:MM:SS vs YYYY-MM-DDTHH:MM:SS) correctly. If FTP tables
+        are absent, falls back to SMB only.
+        """
+        try:
+            row = conn.execute("""
+                SELECT MAX(datetime(ts)) AS cutoff FROM (
+                    SELECT MAX(datetime(last_seen)) AS ts
+                    FROM smb_servers WHERE status = 'active'
+                    UNION ALL
+                    SELECT MAX(datetime(last_seen)) AS ts
+                    FROM ftp_servers WHERE status = 'active'
+                )
+            """).fetchone()
+            return row["cutoff"] if row else None
+        except sqlite3.OperationalError as exc:
+            if "no such table: ftp_" in str(exc).lower():
+                row = conn.execute(
+                    "SELECT MAX(datetime(last_seen)) AS cutoff"
+                    " FROM smb_servers WHERE status = 'active'"
+                ).fetchone()
+                return row["cutoff"] if row else None
+            raise
+
+    def _get_mock_protocol_list(
+        self,
+        limit: Optional[int],
+        offset: int,
+        country_filter: Optional[str],
+    ) -> Tuple[List[Dict], int]:
+        """Return mock S+F rows for testing without a real database."""
+        rows: List[Dict] = [
+            {
+                "host_type": "S",
+                "protocol_server_id": 1,
+                "row_key": "S:1",
+                "ip_address": "192.168.1.45",
+                "country": "United States",
+                "country_code": "US",
+                "last_seen": "2025-01-21T14:20:00",
+                "scan_count": 3,
+                "status": "active",
+                "auth_method": "Anonymous",
+                "total_shares": 7,
+                "accessible_shares": 7,
+                "accessible_shares_list": "ADMIN$,C$,IPC$,share1,share2,share3,share4",
+                "port": None,
+                "banner": None,
+                "anon_accessible": None,
+                "favorite": 0,
+                "avoid": 0,
+                "notes": "",
+                "probe_status": "unprobed",
+                "indicator_matches": 0,
+                "extracted": 0,
+                "rce_status": "not_run",
+            },
+            {
+                "host_type": "F",
+                "protocol_server_id": 1,
+                "row_key": "F:1",
+                "ip_address": "10.0.0.123",
+                "country": "United Kingdom",
+                "country_code": "GB",
+                "last_seen": "2025-01-21T11:45:00",
+                "scan_count": 1,
+                "status": "active",
+                "auth_method": "anonymous",
+                "total_shares": 0,
+                "accessible_shares": 0,
+                "accessible_shares_list": "",
+                "port": 21,
+                "banner": "220 FTP server ready",
+                "anon_accessible": 1,
+                "favorite": 0,
+                "avoid": 0,
+                "notes": "",
+                "probe_status": "unprobed",
+                "indicator_matches": 0,
+                "extracted": 0,
+                "rce_status": "not_run",
+            },
+        ]
+
+        if country_filter:
+            rows = [r for r in rows if r["country_code"] == country_filter]
+
+        total = len(rows)
+        paginated = rows[offset : (offset + limit) if limit is not None else None]
+        return paginated, total

@@ -8,7 +8,8 @@ Handles the reorganized configuration structure while maintaining compatibility.
 import json
 import logging
 import os
-from datetime import datetime
+import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -46,12 +47,57 @@ def save_json_config(config_file: str, data: Dict[str, Any]) -> bool:
 
 def get_standard_timestamp() -> str:
     """
-    Generate standard timestamp truncated to minutes (no fractional seconds).
-    
+    Generate a UTC timestamp in canonical SQLite format YYYY-MM-DD HH:MM:SS.
+
+    Uses UTC so writes are consistent with SQLite's CURRENT_TIMESTAMP default.
+
     Returns:
-        ISO format timestamp string (YYYY-MM-DDTHH:MM:SS)
+        Canonical DB timestamp string (YYYY-MM-DD HH:MM:SS, UTC, no T-separator)
     """
-    return datetime.now().replace(second=0, microsecond=0).isoformat()
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def normalize_db_timestamp(ts_str: str) -> str:
+    """
+    Convert any ISO-format timestamp string to canonical DB format
+    (YYYY-MM-DD HH:MM:SS, UTC, no T-separator, no microseconds).
+
+    Handles:
+    - "2025-01-21 14:20:05"          -> unchanged
+    - "2025-01-21T14:20:05"          -> "2025-01-21 14:20:05"  (assumed UTC)
+    - "2025-01-21T14:20:05.123456"   -> "2025-01-21 14:20:05"  (truncated)
+    - "2025-01-21T14:20:05Z"         -> "2025-01-21 14:20:05"
+    - "2025-01-21T14:20:05+05:30"    -> "2025-01-21 08:50:05"  (converted to UTC)
+    - None / non-string              -> returned unchanged
+
+    Args:
+        ts_str: Timestamp string to normalize (or None/non-string passthrough).
+
+    Returns:
+        Canonical DB timestamp string, or the original value if not a string.
+    """
+    if not isinstance(ts_str, str) or not ts_str.strip():
+        return ts_str
+
+    s = ts_str.strip().replace("T", " ")
+
+    # Detect and apply UTC offset (e.g. +05:30 or -05:00)
+    offset_match = re.search(r"([+-])(\d{2}):?(\d{2})$", s)
+    if offset_match:
+        sign_str, hh, mm = offset_match.groups()
+        base = s[: offset_match.start()].rstrip()[:19]
+        try:
+            dt = datetime.strptime(base, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            # Fallback: just strip offset and truncate
+            return base[:19]
+        sign = 1 if sign_str == "+" else -1
+        dt = dt - timedelta(hours=int(hh), minutes=int(mm)) * sign
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+    # Z suffix (already UTC) or no offset (treated as UTC) — strip Z, truncate
+    s = s.rstrip("Z").strip()
+    return s[:19]
 
 
 class SMBSeekConfig:

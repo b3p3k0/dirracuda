@@ -20,6 +20,14 @@ import tempfile
 import os
 import hashlib
 
+from shared.config import normalize_db_timestamp
+
+_TS_FIELDS = frozenset({
+    "first_seen", "last_seen", "created_at", "updated_at",
+    "last_updated", "last_accessed",
+    "test_timestamp", "last_verified_at", "last_probe_at",
+})
+
 
 class DataImportEngine:
     """
@@ -454,12 +462,15 @@ class DataImportEngine:
                     
                     for field in all_fields:
                         if field in record and record[field] is not None:
+                            v = record[field]
+                            if field in _TS_FIELDS:
+                                v = normalize_db_timestamp(v)
                             fields.append(field)
-                            values.append(record[field])
+                            values.append(v)
                             placeholders.append('?')
                     
                     # Add timestamp fields
-                    current_time = datetime.now(timezone.utc).isoformat()
+                    current_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
                     if 'created_at' not in fields:
                         fields.append('created_at')
                         values.append(current_time)
