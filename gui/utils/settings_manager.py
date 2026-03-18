@@ -484,27 +484,71 @@ class SettingsManager:
 
     def _auto_fix_backend_paths(self) -> None:
         """
-        If stored backend/config/db paths point to a non-existent nested smbseek/, try to fix them to cwd.
+        Keep backend/config/database paths aligned with the active checkout.
+
+        Behavior:
+        - If stored backend/config are missing, fall back to cwd when it looks like
+          a valid smbseek checkout.
+        - If stored backend exists but points at a different checkout than cwd, prefer
+          cwd so scans run against the currently launched repository.
         """
         try:
             backend_path = Path(self.get_backend_path()).expanduser()
             config_path = Path(self.get_setting('backend.config_path', '')).expanduser()
             db_path = Path(self.get_setting('backend.database_path', '')).expanduser()
 
-            # Already valid paths; nothing to do
-            if backend_path.exists() and config_path.exists():
+            candidate_backend = Path.cwd()
+            candidate_config = candidate_backend / "conf" / "config.json"
+            candidate_db = candidate_backend / "smbseek.db"
+            candidate_smbseek = candidate_backend / "smbseek"
+            candidate_ftpseek = candidate_backend / "ftpseek"
+
+            candidate_is_checkout = (
+                candidate_backend.exists()
+                and candidate_config.exists()
+                and candidate_smbseek.exists()
+                and candidate_ftpseek.exists()
+            )
+
+            # Nothing usable in cwd; keep existing settings as-is.
+            if not candidate_is_checkout:
                 return
 
-            cwd = Path.cwd()
-            candidate_backend = cwd
-            candidate_config = cwd / "conf" / "config.json"
-            candidate_db = cwd / "smbseek.db"
+            backend_exists = backend_path.exists()
+            config_exists = config_path.exists()
 
-            if candidate_config.exists():
+            try:
+                backend_resolved = backend_path.resolve() if backend_exists else None
+            except Exception:
+                backend_resolved = None
+            try:
+                candidate_resolved = candidate_backend.resolve()
+            except Exception:
+                candidate_resolved = candidate_backend
+
+            # Missing stored paths -> repair to cwd checkout.
+            if not (backend_exists and config_exists):
                 self.set_backend_path(str(candidate_backend), validate=False)
                 self.set_setting('backend.config_path', str(candidate_config))
                 if not db_path.exists():
-                    self.set_setting('backend.database_path', str(candidate_db))
+                    self.set_database_path(str(candidate_db), validate=False)
+                return
+
+            # Stored backend points to a different checkout; prefer cwd.
+            if backend_resolved is not None and backend_resolved != candidate_resolved:
+                self.set_backend_path(str(candidate_backend), validate=False)
+                self.set_setting('backend.config_path', str(candidate_config))
+
+                # Repoint DB if it is missing or still tied to old backend root.
+                db_missing = not db_path.exists()
+                db_under_old_backend = False
+                if not db_missing:
+                    try:
+                        db_under_old_backend = str(db_path.resolve()).startswith(str(backend_resolved))
+                    except Exception:
+                        db_under_old_backend = str(db_path).startswith(str(backend_path))
+                if db_missing or db_under_old_backend:
+                    self.set_database_path(str(candidate_db), validate=False)
         except Exception:
             # Fail silently; worst case the user corrects via dialog
             pass
