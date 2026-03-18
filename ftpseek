@@ -26,6 +26,12 @@ def create_parser() -> argparse.ArgumentParser:
         "--config", metavar="FILE", default=None,
         help="Path to config file (default: conf/config.json)",
     )
+    parser.add_argument(
+        "--filter",
+        metavar="QUERY",
+        default="",
+        help="Additional Shodan filter query to append (raw syntax).",
+    )
     parser.add_argument("--verbose", "-v", action="store_true", default=False)
     parser.add_argument("--quiet", "-q", action="store_true", default=False)
     parser.add_argument("--no-colors", action="store_true", default=False)

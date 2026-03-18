@@ -61,6 +61,7 @@ def run_discover_stage(workflow: "FtpWorkflow") -> Tuple[List[FtpCandidate], int
     out = workflow.output
     args = getattr(workflow, "args", None)
     country = getattr(args, "country", None) if args else None
+    custom_filters = getattr(args, "filter", "") if args else ""
 
     ftp_cfg = workflow.config.get_ftp_config()
     verif = ftp_cfg.get("verification", {})
@@ -68,7 +69,7 @@ def run_discover_stage(workflow: "FtpWorkflow") -> Tuple[List[FtpCandidate], int
 
     # May raise FtpDiscoveryError — propagates to FtpWorkflow.run() which re-raises
     # to ftpseek main() for clean exit(1) handling.
-    candidates = query_ftp_shodan(workflow, country)
+    candidates = query_ftp_shodan(workflow, country, custom_filters)
 
     shodan_total = len(candidates)
     if shodan_total == 0:

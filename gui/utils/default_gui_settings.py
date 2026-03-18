@@ -60,6 +60,7 @@ DEFAULT_GUI_SETTINGS = {
     'ftp_scan_dialog': {
         'max_shodan_results': 1000,
         'api_key_override': '',
+        'custom_filters': '',
         'country_code': '',
         'discovery_max_concurrent_hosts': 10,
         'access_max_concurrent_hosts': 4,

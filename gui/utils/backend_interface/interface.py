@@ -342,6 +342,7 @@ class BackendInterface:
         countries: List[str],
         progress_callback: Optional[Callable] = None,
         log_callback: Optional[Callable[[str], None]] = None,
+        filters: str = None,
         verbose: bool = True,
     ) -> Dict:
         """
@@ -351,6 +352,7 @@ class BackendInterface:
             countries: ISO country codes (empty list = global scan).
             progress_callback: Called with (percentage, message) during scan.
             log_callback: Called with raw stdout lines for log streaming.
+            filters: Custom Shodan filters string to append to query (raw syntax).
             verbose: Pass --verbose for parseable progress output.
 
         Returns:
@@ -364,6 +366,8 @@ class BackendInterface:
             cmd.append("--verbose")
         if countries:
             cmd.extend(["--country", ",".join(countries)])
+        if filters:
+            cmd.extend(["--filter", filters])
 
         return process_runner.execute_with_progress(
             self,

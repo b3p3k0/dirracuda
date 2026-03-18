@@ -74,6 +74,7 @@ class TestFtpScanDialogOptionBuild:
             "country",
             "max_shodan_results",
             "api_key_override",
+            "custom_filters",
             "discovery_max_concurrent_hosts",
             "access_max_concurrent_hosts",
             "connect_timeout",
@@ -92,6 +93,7 @@ class TestFtpScanDialogOptionBuild:
         assert opts["country"] is None or isinstance(opts["country"], str)
         assert isinstance(opts["max_shodan_results"], int)
         assert opts["api_key_override"] is None or isinstance(opts["api_key_override"], str)
+        assert isinstance(opts["custom_filters"], str)
         assert isinstance(opts["discovery_max_concurrent_hosts"], int)
         assert isinstance(opts["access_max_concurrent_hosts"], int)
         assert isinstance(opts["connect_timeout"], int)
@@ -107,6 +109,7 @@ class TestFtpScanDialogOptionBuild:
         # No country selected → global scan
         assert opts["country"] is None
         assert opts["max_shodan_results"] == 1000
+        assert opts["custom_filters"] == ""
         assert opts["verbose"] is False
         assert opts["discovery_max_concurrent_hosts"] == 10
         assert opts["access_max_concurrent_hosts"] == 4
@@ -144,6 +147,13 @@ class TestFtpScanDialogOptionBuild:
         dlg.api_key_var.set("MY_API_KEY")
         opts = dlg._build_scan_options()
         assert opts["api_key_override"] == "MY_API_KEY"
+
+    def test_custom_filters_passed_through(self, tk_root):
+        """Custom Shodan filters are included in scan options unchanged."""
+        dlg = _make_dialog(tk_root)
+        dlg.custom_filters_var.set('org:"Example ISP" has_screenshot:true')
+        opts = dlg._build_scan_options()
+        assert opts["custom_filters"] == 'org:"Example ISP" has_screenshot:true'
 
     def test_config_backed_defaults(self, tmp_path, tk_root):
         """Concurrency / timeout defaults are loaded from config.json when present."""
@@ -183,6 +193,7 @@ class TestFtpScanDialogOptionBuild:
         stored = {
             "ftp_scan_dialog.max_shodan_results": 321,
             "ftp_scan_dialog.api_key_override": "SAVED_KEY",
+            "ftp_scan_dialog.custom_filters": "org:SavedISP",
             "ftp_scan_dialog.country_code": "US,GB",
             "ftp_scan_dialog.discovery_max_concurrent_hosts": 12,
             "ftp_scan_dialog.access_max_concurrent_hosts": 6,
@@ -201,6 +212,7 @@ class TestFtpScanDialogOptionBuild:
 
         assert opts["max_shodan_results"] == 321
         assert opts["api_key_override"] == "SAVED_KEY"
+        assert opts["custom_filters"] == "org:SavedISP"
         assert opts["discovery_max_concurrent_hosts"] == 12
         assert opts["access_max_concurrent_hosts"] == 6
         assert opts["connect_timeout"] == 7
@@ -220,6 +232,7 @@ class TestFtpScanDialogOptionBuild:
         dlg.country_var.set("US")
         dlg.max_results_var.set(250)
         dlg.api_key_var.set("TMP_KEY")
+        dlg.custom_filters_var.set('country:US org:"Tmp ISP"')
         dlg.discovery_concurrency_var.set("9")
         dlg.access_concurrency_var.set("3")
         dlg.connect_timeout_var.set("4")
@@ -234,6 +247,7 @@ class TestFtpScanDialogOptionBuild:
         expected_calls = [
             call("ftp_scan_dialog.max_shodan_results", 250),
             call("ftp_scan_dialog.api_key_override", "TMP_KEY"),
+            call("ftp_scan_dialog.custom_filters", 'country:US org:"Tmp ISP"'),
             call("ftp_scan_dialog.country_code", "US"),
             call("ftp_scan_dialog.discovery_max_concurrent_hosts", 9),
             call("ftp_scan_dialog.access_max_concurrent_hosts", 3),
@@ -279,6 +293,7 @@ class TestShowFtpScanDialogCancel:
 
         dlg.max_results_var.set(123)
         dlg.country_var.set("us")
+        dlg.custom_filters_var.set("org:PersistMe")
         dlg.europe_var.set(True)
         dlg.bulk_probe_enabled_var.set(True)
 
@@ -286,6 +301,7 @@ class TestShowFtpScanDialogCancel:
 
         sm.set_setting.assert_any_call("ftp_scan_dialog.max_shodan_results", 123)
         sm.set_setting.assert_any_call("ftp_scan_dialog.country_code", "US")
+        sm.set_setting.assert_any_call("ftp_scan_dialog.custom_filters", "org:PersistMe")
         sm.set_setting.assert_any_call("ftp_scan_dialog.region_europe", True)
         sm.set_setting.assert_any_call("ftp_scan_dialog.bulk_probe_enabled", True)
 
@@ -374,6 +390,13 @@ class TestFtpScanManagerOverrides:
         sm._ftp_scan_worker({"country": None})
         _, kwargs = sm.backend_interface.run_ftp_scan.call_args
         assert kwargs.get("verbose") is False
+
+    def test_custom_filters_passed_to_run_ftp_scan(self):
+        """custom_filters is forwarded to backend run_ftp_scan()."""
+        sm = self._make_scan_manager()
+        sm._ftp_scan_worker({"country": None, "custom_filters": 'org:"Example ISP"'})
+        _, kwargs = sm.backend_interface.run_ftp_scan.call_args
+        assert kwargs.get("filters") == 'org:"Example ISP"'
 
     def test_no_overrides_skips_context_manager(self):
         """Empty scan_options → _temporary_config_override is NOT entered."""

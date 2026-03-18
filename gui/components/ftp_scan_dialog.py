@@ -10,13 +10,15 @@ Uses the same region map and country validation logic as ScanDialog.
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, simpledialog
 import json
+import webbrowser
 from pathlib import Path
 from typing import Optional, Callable, Dict, Any
 
 from gui.utils.style import get_theme
 from gui.utils.dialog_helpers import ensure_dialog_focus
+from gui.utils.template_store import TemplateStore
 from gui.components.scan_dialog import ScanDialog
 
 # Reuse the canonical region map — no forked copy.
@@ -37,23 +39,31 @@ class FtpScanDialog:
     via the existing temporary-config-override mechanism in scan_manager.
     """
 
+    TEMPLATE_PLACEHOLDER_TEXT = "Select a template..."
+
     def __init__(
         self,
         parent: tk.Widget,
         config_path: str,
         scan_start_callback: Callable[[Dict[str, Any]], None],
         settings_manager: Optional[Any] = None,
+        config_editor_callback: Optional[Callable[[str], None]] = None,
     ) -> None:
         self.parent = parent
         self.config_path = Path(config_path).resolve()
         self.scan_start_callback = scan_start_callback
         self._settings_manager = settings_manager
+        self.config_editor_callback = config_editor_callback
+        self.template_store = TemplateStore(settings_manager=settings_manager)
         self.theme = get_theme()
 
         self.result = None
         self.dialog = None
         self.country_entry = None
         self.region_status_label = None
+        self.custom_filters_entry = None
+        self.template_dropdown = None
+        self.delete_template_button = None
 
         # --- country / region ---
         self.country_var = tk.StringVar()
@@ -65,6 +75,7 @@ class FtpScanDialog:
         self.south_america_var = tk.BooleanVar(value=False)
 
         # --- scan options ---
+        self.custom_filters_var = tk.StringVar()
         self.max_results_var = tk.IntVar(value=1000)
         self.api_key_var = tk.StringVar()
         self.discovery_concurrency_var = tk.StringVar()
@@ -74,6 +85,9 @@ class FtpScanDialog:
         self.listing_timeout_var = tk.StringVar()
         self.verbose_var = tk.BooleanVar(value=False)
         self.bulk_probe_enabled_var = tk.BooleanVar(value=False)
+        self.template_var = tk.StringVar()
+        self._template_label_to_slug: Dict[str, str] = {}
+        self._selected_template_slug: Optional[str] = None
 
         self._load_config_defaults()
         self._load_initial_values()
@@ -146,6 +160,7 @@ class FtpScanDialog:
             )
             api_key = str(self._settings_manager.get_setting("ftp_scan_dialog.api_key_override", ""))
             country_code = str(self._settings_manager.get_setting("ftp_scan_dialog.country_code", ""))
+            custom_filters = str(self._settings_manager.get_setting("ftp_scan_dialog.custom_filters", ""))
 
             discovery_workers = _coerce_int(
                 self._settings_manager.get_setting("ftp_scan_dialog.discovery_max_concurrent_hosts", 10),
@@ -186,6 +201,7 @@ class FtpScanDialog:
             self.max_results_var.set(max_results)
             self.api_key_var.set(api_key)
             self.country_var.set(country_code)
+            self.custom_filters_var.set(custom_filters)
             self.discovery_concurrency_var.set(str(discovery_workers))
             self.access_concurrency_var.set(str(access_workers))
             self.connect_timeout_var.set(str(connect_timeout))
@@ -244,6 +260,7 @@ class FtpScanDialog:
 
             self._settings_manager.set_setting("ftp_scan_dialog.api_key_override", self.api_key_var.get().strip())
             self._settings_manager.set_setting("ftp_scan_dialog.country_code", self.country_var.get().strip().upper())
+            self._settings_manager.set_setting("ftp_scan_dialog.custom_filters", self.custom_filters_var.get().strip())
             self._settings_manager.set_setting("ftp_scan_dialog.verbose", bool(self.verbose_var.get()))
             self._settings_manager.set_setting(
                 "ftp_scan_dialog.bulk_probe_enabled", bool(self.bulk_probe_enabled_var.get())
@@ -270,7 +287,7 @@ class FtpScanDialog:
     def _create_dialog(self) -> None:
         self.dialog = tk.Toplevel(self.parent)
         self.dialog.title("Start FTP Scan")
-        self.dialog.geometry("950x820")
+        self.dialog.geometry("1010x825")
         self.dialog.resizable(True, True)
         self.theme.apply_to_widget(self.dialog, "main_window")
         self.dialog.transient(self.parent)
@@ -306,6 +323,7 @@ class FtpScanDialog:
 
         self._create_header()
         self._create_options()
+        self._create_config_section()
         self._create_button_panel()
 
         self.dialog.protocol("WM_DELETE_WINDOW", self._cancel)
@@ -314,8 +332,9 @@ class FtpScanDialog:
         self.country_var.trace_add("write", self._validate_country_input)
         self.max_results_var.trace_add("write", self._validate_max_results)
 
-        if self.country_entry:
-            self.country_entry.focus_set()
+        target_entry = self.custom_filters_entry or self.country_entry
+        if target_entry:
+            target_entry.focus_set()
         ensure_dialog_focus(self.dialog, self.parent)
 
     def _center_dialog(self) -> None:
@@ -361,6 +380,8 @@ class FtpScanDialog:
         self.theme.apply_to_widget(options_frame, "card")
         options_frame.pack(fill=tk.X, padx=20, pady=5)
 
+        self._create_template_toolbar(options_frame)
+
         self.theme.create_styled_label(
             options_frame, "Scan Parameters", "heading"
         ).pack(anchor="w", padx=15, pady=(10, 5))
@@ -378,6 +399,7 @@ class FtpScanDialog:
         right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         # Left column
+        self._create_custom_filters_option(left)
         self._create_country_option(left)
         self._create_region_selection(left)
         self._create_max_results_option(left)
@@ -405,12 +427,277 @@ class FtpScanDialog:
             font=self.theme.fonts["heading"],
         )
 
+    def _create_template_toolbar(self, parent_frame: tk.Frame) -> None:
+        """Create template selector + actions above scan parameters."""
+        toolbar = tk.Frame(parent_frame)
+        self.theme.apply_to_widget(toolbar, "card")
+        toolbar.pack(fill=tk.X, padx=15, pady=(10, 0))
+
+        label = self.theme.create_styled_label(toolbar, "Templates:", "body")
+        label.pack(side=tk.LEFT)
+
+        self.template_dropdown = ttk.Combobox(
+            toolbar,
+            textvariable=self.template_var,
+            state="readonly",
+            width=32,
+        )
+        self.template_dropdown.pack(side=tk.LEFT, padx=(10, 10))
+        self.template_dropdown.bind("<<ComboboxSelected>>", self._handle_template_selected)
+
+        save_button = tk.Button(
+            toolbar,
+            text="💾 Save Current",
+            command=self._prompt_save_template,
+            font=self.theme.fonts["small"],
+        )
+        self.theme.apply_to_widget(save_button, "button_secondary")
+        save_button.pack(side=tk.LEFT, padx=(0, 5))
+
+        self.delete_template_button = tk.Button(
+            toolbar,
+            text="🗑 Delete",
+            command=self._delete_selected_template,
+            font=self.theme.fonts["small"],
+        )
+        self.theme.apply_to_widget(self.delete_template_button, "button_secondary")
+        self.delete_template_button.pack(side=tk.LEFT)
+
+        self._refresh_template_toolbar()
+
+    def _refresh_template_toolbar(self, select_slug: Optional[str] = None) -> None:
+        """Refresh template dropdown values."""
+        if not self.template_dropdown:
+            return
+
+        templates = self.template_store.list_templates()
+        self._template_label_to_slug = {tpl.name: tpl.slug for tpl in templates}
+        values = [tpl.name for tpl in templates]
+
+        if not values:
+            self.template_dropdown.configure(state="disabled", values=["No templates saved"])
+            self.template_var.set("No templates saved")
+            self._selected_template_slug = None
+            self.delete_template_button.configure(state=tk.DISABLED)
+            return
+
+        placeholder = self.TEMPLATE_PLACEHOLDER_TEXT
+        display_values = [placeholder] + values
+        self.template_dropdown.configure(state="readonly", values=display_values)
+
+        slug_to_label = {tpl.slug: tpl.name for tpl in templates}
+        desired_slug = select_slug
+
+        if desired_slug and desired_slug in slug_to_label:
+            label = slug_to_label[desired_slug]
+            self.template_var.set(label)
+            self._selected_template_slug = desired_slug
+            self.delete_template_button.configure(state=tk.NORMAL)
+        else:
+            self.template_var.set(placeholder)
+            self._selected_template_slug = None
+            self.delete_template_button.configure(state=tk.DISABLED)
+
+    def _handle_template_selected(self, _event=None) -> None:
+        """Apply template when user selects it from dropdown."""
+        label = self.template_var.get()
+        if label == self.TEMPLATE_PLACEHOLDER_TEXT:
+            self._selected_template_slug = None
+            self.delete_template_button.configure(state=tk.DISABLED)
+            return
+        slug = self._template_label_to_slug.get(label)
+        self._selected_template_slug = slug
+        if slug:
+            self._apply_template_by_slug(slug)
+            self.delete_template_button.configure(state=tk.NORMAL)
+
+    def _get_selected_template_name(self) -> Optional[str]:
+        """Return the display name of the currently selected template, if any."""
+        label = self.template_var.get()
+        if label == self.TEMPLATE_PLACEHOLDER_TEXT:
+            return None
+        return label.strip() if label else None
+
+    def _prompt_save_template(self) -> None:
+        """Ask for template name and persist current form state."""
+        initial_name = self._get_selected_template_name()
+
+        name = simpledialog.askstring(
+            "Save Template",
+            "Template name:",
+            parent=self.dialog,
+            initialvalue=initial_name or "",
+        )
+        if not name:
+            return
+        name = name.strip()
+        if not name:
+            messagebox.showwarning("Save Template", "Template name cannot be empty.", parent=self.dialog)
+            return
+
+        slug = TemplateStore.slugify(name)
+        existing = self.template_store.load_template(slug)
+        if existing:
+            overwrite = messagebox.askyesno(
+                "Overwrite Template",
+                f"A template named '{name}' already exists. Overwrite it?",
+                parent=self.dialog,
+            )
+            if not overwrite:
+                return
+
+        form_state = self._capture_form_state()
+        template = self.template_store.save_template(name, form_state)
+        self._refresh_template_toolbar(select_slug=template.slug)
+        messagebox.showinfo("Template Saved", f"Template '{name}' saved.")
+
+    def _delete_selected_template(self) -> None:
+        """Delete currently selected template."""
+        slug = self._selected_template_slug
+        if not slug:
+            messagebox.showinfo("Delete Template", "No template selected.")
+            return
+
+        label = self.template_var.get()
+        confirmed = messagebox.askyesno(
+            "Delete Template",
+            f"Delete template '{label}'?",
+            parent=self.dialog,
+        )
+        if not confirmed:
+            return
+
+        deleted = self.template_store.delete_template(slug)
+        if deleted:
+            messagebox.showinfo("Template Deleted", f"Template '{label}' removed.")
+        else:
+            messagebox.showwarning("Delete Template", "Failed to delete template.", parent=self.dialog)
+
+        self._refresh_template_toolbar()
+
+    def _capture_form_state(self) -> Dict[str, Any]:
+        """Capture current FTP form state for template storage."""
+        return {
+            "custom_filters": self.custom_filters_var.get(),
+            "country_code": self.country_var.get(),
+            "regions": {
+                "africa": self.africa_var.get(),
+                "asia": self.asia_var.get(),
+                "europe": self.europe_var.get(),
+                "north_america": self.north_america_var.get(),
+                "oceania": self.oceania_var.get(),
+                "south_america": self.south_america_var.get(),
+            },
+            "max_results": self.max_results_var.get(),
+            "api_key_override": self.api_key_var.get(),
+            "discovery_concurrency": self.discovery_concurrency_var.get(),
+            "access_concurrency": self.access_concurrency_var.get(),
+            "connect_timeout": self.connect_timeout_var.get(),
+            "auth_timeout": self.auth_timeout_var.get(),
+            "listing_timeout": self.listing_timeout_var.get(),
+            "verbose": self.verbose_var.get(),
+            "bulk_probe_enabled": self.bulk_probe_enabled_var.get(),
+        }
+
+    def _apply_form_state(self, state: Dict[str, Any]) -> None:
+        """Populate FTP form fields from saved template state."""
+        self.custom_filters_var.set(state.get("custom_filters", ""))
+        self.country_var.set(state.get("country_code", ""))
+
+        regions = state.get("regions", {})
+        self.africa_var.set(bool(regions.get("africa", False)))
+        self.asia_var.set(bool(regions.get("asia", False)))
+        self.europe_var.set(bool(regions.get("europe", False)))
+        self.north_america_var.set(bool(regions.get("north_america", False)))
+        self.oceania_var.set(bool(regions.get("oceania", False)))
+        self.south_america_var.set(bool(regions.get("south_america", False)))
+
+        max_results = state.get("max_results")
+        if max_results is not None:
+            try:
+                self.max_results_var.set(int(max_results))
+            except (ValueError, tk.TclError):
+                pass
+
+        self.api_key_var.set(state.get("api_key_override", ""))
+        self.verbose_var.set(bool(state.get("verbose", False)))
+        self.bulk_probe_enabled_var.set(bool(state.get("bulk_probe_enabled", False)))
+
+        for var, key in [
+            (self.discovery_concurrency_var, "discovery_concurrency"),
+            (self.access_concurrency_var, "access_concurrency"),
+            (self.connect_timeout_var, "connect_timeout"),
+            (self.auth_timeout_var, "auth_timeout"),
+            (self.listing_timeout_var, "listing_timeout"),
+        ]:
+            value = state.get(key)
+            if value is not None:
+                var.set(str(value))
+
+        self._update_region_status()
+
+    def _apply_template_by_slug(self, slug: str, *, silent: bool = False) -> None:
+        """Load template by slug and populate form."""
+        template = self.template_store.load_template(slug)
+        if not template:
+            if not silent:
+                messagebox.showwarning("Template Missing", "Selected template could not be loaded.", parent=self.dialog)
+            self._refresh_template_toolbar()
+            return
+
+        self._apply_form_state(template.form_state)
+        self.template_store.set_last_used(slug)
+        self._selected_template_slug = slug
+
     def _validate_integer_input(self, proposed: str) -> bool:
         return proposed == "" or proposed.isdigit()
 
     # ------------------------------------------------------------------
     # Country / region
     # ------------------------------------------------------------------
+
+    def _create_custom_filters_option(self, parent: tk.Frame) -> None:
+        """Create custom Shodan filters input option with helper link."""
+        container = tk.Frame(parent)
+        self.theme.apply_to_widget(container, "card")
+        container.pack(fill=tk.X, padx=15, pady=(0, 10))
+
+        heading_frame = tk.Frame(container)
+        self.theme.apply_to_widget(heading_frame, "card")
+        heading_frame.pack(fill=tk.X)
+
+        heading = self._create_accent_heading(heading_frame, "🔍 Custom Shodan Filters (optional)")
+        heading.pack(side=tk.LEFT)
+
+        help_link = tk.Label(
+            heading_frame,
+            text="Filter Reference",
+            fg="#0066cc",
+            cursor="hand2",
+            font=self.theme.fonts["small"],
+        )
+        help_link.pack(side=tk.LEFT, padx=(10, 0))
+        help_link.bind("<Button-1>", lambda _e: webbrowser.open("https://www.shodan.io/search/filters"))
+
+        input_frame = tk.Frame(container)
+        self.theme.apply_to_widget(input_frame, "card")
+        input_frame.pack(fill=tk.X, pady=(5, 0))
+
+        self.custom_filters_entry = tk.Entry(
+            input_frame,
+            textvariable=self.custom_filters_var,
+            width=50,
+            font=self.theme.fonts["body"],
+        )
+        self.custom_filters_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        desc = self.theme.create_styled_label(
+            container,
+            '(e.g., "port:21 has_screenshot:true" or "org:\\"Example ISP\\"" — appended to base query)',
+            "small",
+            fg=self.theme.colors["text_secondary"],
+        )
+        desc.pack(anchor="w", pady=(5, 0))
 
     def _create_country_option(self, parent: tk.Frame) -> None:
         container = tk.Frame(parent)
@@ -708,6 +995,64 @@ class FtpScanDialog:
             "small", fg=self.theme.colors["text_secondary"]
         ).pack(anchor="w", pady=(6, 0))
 
+    def _create_config_section(self) -> None:
+        """Create configuration file section."""
+        config_frame = tk.Frame(self._content)
+        self.theme.apply_to_widget(config_frame, "card")
+        config_frame.pack(fill=tk.X, padx=20, pady=(0, 5))
+
+        config_title = self.theme.create_styled_label(
+            config_frame,
+            "Configuration",
+            "heading",
+        )
+        config_title.pack(anchor="w", padx=15, pady=(10, 5))
+
+        config_info_frame = tk.Frame(config_frame)
+        self.theme.apply_to_widget(config_info_frame, "card")
+        config_info_frame.pack(fill=tk.X, padx=15, pady=(0, 5))
+
+        info_text = f"Using configuration from:\n{self.config_path}"
+        config_path_label = self.theme.create_styled_label(
+            config_info_frame,
+            info_text,
+            "small",
+            fg=self.theme.colors["text_secondary"],
+            justify="left",
+        )
+        config_path_label.pack(anchor="w")
+
+        config_button_frame = tk.Frame(config_frame)
+        self.theme.apply_to_widget(config_button_frame, "card")
+        config_button_frame.pack(fill=tk.X, padx=15, pady=(0, 10))
+
+        edit_config_button = tk.Button(
+            config_button_frame,
+            text="⚙ Edit Configuration",
+            command=self._open_config_editor,
+        )
+        self.theme.apply_to_widget(edit_config_button, "button_secondary")
+        edit_config_button.pack(side=tk.LEFT)
+
+    def _open_config_editor(self) -> None:
+        """Open configuration editor."""
+        if not self.config_editor_callback:
+            messagebox.showwarning(
+                "Configuration Editor Unavailable",
+                "No configuration editor callback is available in this context.",
+                parent=self.dialog,
+            )
+            return
+        try:
+            self.config_editor_callback(str(self.config_path))
+        except Exception as exc:
+            messagebox.showerror(
+                "Configuration Editor Error",
+                f"Failed to open configuration editor:\n{exc}\n\n"
+                "Please ensure the configuration system is properly set up.",
+                parent=self.dialog,
+            )
+
     # ------------------------------------------------------------------
     # Buttons
     # ------------------------------------------------------------------
@@ -841,6 +1186,7 @@ class FtpScanDialog:
             "Listing timeout", minimum=1, maximum=_TIMEOUT_UPPER
         )
         max_results = self.max_results_var.get()
+        custom_filters = self.custom_filters_var.get().strip()
 
         api_key = self.api_key_var.get().strip()
         api_key = api_key if api_key else None
@@ -861,6 +1207,7 @@ class FtpScanDialog:
                 manual_country_input = self.country_var.get().strip()
                 self._settings_manager.set_setting("ftp_scan_dialog.max_shodan_results", max_results)
                 self._settings_manager.set_setting("ftp_scan_dialog.api_key_override", api_key or "")
+                self._settings_manager.set_setting("ftp_scan_dialog.custom_filters", custom_filters)
                 self._settings_manager.set_setting("ftp_scan_dialog.country_code", manual_country_input)
                 self._settings_manager.set_setting(
                     "ftp_scan_dialog.discovery_max_concurrent_hosts",
@@ -896,6 +1243,7 @@ class FtpScanDialog:
             "country": country_param,
             "max_shodan_results": max_results,
             "api_key_override": api_key,
+            "custom_filters": custom_filters,
             "discovery_max_concurrent_hosts": discovery_concurrency,
             "access_max_concurrent_hosts": access_concurrency,
             "connect_timeout": connect_timeout,
@@ -942,6 +1290,7 @@ def show_ftp_scan_dialog(
     config_path: str,
     scan_start_callback: Callable[[Dict[str, Any]], None],
     settings_manager: Optional[Any] = None,
+    config_editor_callback: Optional[Callable[[str], None]] = None,
 ) -> Optional[str]:
     """
     Show the FTP scan configuration dialog modally.
@@ -949,5 +1298,11 @@ def show_ftp_scan_dialog(
     Calls scan_start_callback(scan_options) when user presses Start.
     Returns "start", "cancel", or None.
     """
-    dialog = FtpScanDialog(parent, config_path, scan_start_callback, settings_manager)
+    dialog = FtpScanDialog(
+        parent,
+        config_path,
+        scan_start_callback,
+        settings_manager,
+        config_editor_callback=config_editor_callback,
+    )
     return dialog.show()

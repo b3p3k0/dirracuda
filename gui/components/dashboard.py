@@ -1923,6 +1923,7 @@ class DashboardWidget:
                     config_path=self.config_path,
                     scan_start_callback=self._start_ftp_scan,
                     settings_manager=getattr(self, "settings_manager", None),
+                    config_editor_callback=self._open_config_editor_from_scan,
                 )
         # Non-idle states: button is disabled; defensive no-op if somehow reached.
 
