@@ -133,6 +133,65 @@ def test_migration_idempotent(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Tests: legacy servers table compatibility
+# ---------------------------------------------------------------------------
+
+def test_legacy_servers_table_backfills_smb_servers(tmp_path):
+    """
+    Legacy DBs that only have a 'servers' table should auto-create smb_servers
+    and import rows so dashboard/server-list queries don't fail at startup.
+    """
+    db = tmp_path / "legacy.db"
+
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE servers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ip_address TEXT NOT NULL UNIQUE,
+                country TEXT,
+                country_code TEXT,
+                auth_method TEXT,
+                last_seen DATETIME,
+                scan_count INTEGER,
+                status TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO servers (ip_address, country, country_code, auth_method, last_seen, scan_count, status)
+            VALUES ('203.0.113.10', 'US', 'US', 'anonymous', '2026-03-01 10:00:00', 5, 'active')
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    run_migrations(str(db))
+    run_migrations(str(db))  # idempotent second run should not duplicate rows
+
+    conn = sqlite3.connect(str(db))
+    try:
+        row = conn.execute(
+            """
+            SELECT ip_address, country, country_code, auth_method, scan_count, status, host_type
+            FROM smb_servers
+            WHERE ip_address = '203.0.113.10'
+            """
+        ).fetchone()
+        count = conn.execute("SELECT COUNT(*) FROM smb_servers WHERE ip_address = '203.0.113.10'").fetchone()[0]
+    finally:
+        conn.close()
+
+    assert row == ("203.0.113.10", "US", "US", "anonymous", 5, "active", "S")
+    assert count == 1
+
+
+# ---------------------------------------------------------------------------
 # Tests: explicit protocol identity columns
 # ---------------------------------------------------------------------------
 

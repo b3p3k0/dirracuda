@@ -37,6 +37,8 @@ def run_migrations(db_path: str) -> None:
     try:
         conn = sqlite3.connect(str(path_obj))
         cur = conn.cursor()
+        _ensure_core_smb_tables(cur)
+        _backfill_smb_servers_from_legacy_servers(cur)
 
         cur.execute(
             """
@@ -409,6 +411,142 @@ def _import_legacy_settings(cur: sqlite3.Cursor) -> None:
     except Exception:
         # Silent fail; migration remains best-effort
         pass
+
+
+def _ensure_core_smb_tables(cur: sqlite3.Cursor) -> None:
+    """
+    Ensure core SMB runtime tables exist.
+
+    Some legacy databases (or partially initialized files) may not have
+    smb_servers / scan_sessions yet. Newer GUI/CLI code assumes both tables
+    exist, so we create them idempotently before other migrations run.
+    """
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS scan_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tool_name TEXT DEFAULT 'smbseek',
+            scan_type TEXT NOT NULL DEFAULT 'smbseek_unified',
+            timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            completed_at DATETIME,
+            status TEXT DEFAULT 'running',
+            total_targets INTEGER DEFAULT 0,
+            successful_targets INTEGER DEFAULT 0,
+            failed_targets INTEGER DEFAULT 0,
+            country_filter TEXT,
+            config_snapshot TEXT,
+            external_run INTEGER DEFAULT 0,
+            notes TEXT,
+            updated_at DATETIME,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS smb_servers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ip_address TEXT NOT NULL UNIQUE,
+            host_type TEXT DEFAULT 'S',
+            country TEXT,
+            country_code TEXT,
+            auth_method TEXT,
+            shodan_data TEXT,
+            first_seen DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            last_seen DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            scan_count INTEGER DEFAULT 1,
+            status TEXT DEFAULT 'active',
+            notes TEXT,
+            updated_at DATETIME,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_smb_servers_ip ON smb_servers(ip_address)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_smb_servers_country ON smb_servers(country)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_smb_servers_last_seen ON smb_servers(last_seen)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_scan_sessions_timestamp ON scan_sessions(timestamp)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_scan_sessions_tool ON scan_sessions(tool_name)"
+    )
+
+
+def _backfill_smb_servers_from_legacy_servers(cur: sqlite3.Cursor) -> None:
+    """
+    One-time compatibility import for legacy 'servers' table databases.
+
+    Copies rows into smb_servers using best-effort column mapping and leaves
+    existing smb_servers rows untouched.
+    """
+    cur.execute("PRAGMA table_info(servers)")
+    legacy_cols = {row[1] for row in cur.fetchall()}
+    if not legacy_cols or "ip_address" not in legacy_cols:
+        return
+
+    def _coalesce(*candidates: str) -> str:
+        available = [c for c in candidates if c in legacy_cols]
+        if not available:
+            return "CURRENT_TIMESTAMP"
+        return f"COALESCE({', '.join(available)}, CURRENT_TIMESTAMP)"
+
+    country_expr = "country" if "country" in legacy_cols else "NULL"
+    country_code_expr = "country_code" if "country_code" in legacy_cols else "NULL"
+    auth_method_expr = "auth_method" if "auth_method" in legacy_cols else "NULL"
+    shodan_data_expr = "shodan_data" if "shodan_data" in legacy_cols else "NULL"
+    notes_expr = "notes" if "notes" in legacy_cols else "NULL"
+    updated_at_expr = "updated_at" if "updated_at" in legacy_cols else "NULL"
+    first_seen_expr = _coalesce("first_seen", "created_at", "last_seen", "updated_at")
+    last_seen_expr = _coalesce("last_seen", "updated_at", "first_seen", "created_at")
+    scan_count_expr = "COALESCE(scan_count, 1)" if "scan_count" in legacy_cols else "1"
+    status_expr = "COALESCE(status, 'active')" if "status" in legacy_cols else "'active'"
+    created_at_expr = _coalesce("created_at", "first_seen", "last_seen", "updated_at")
+
+    cur.execute(
+        f"""
+        INSERT INTO smb_servers (
+            ip_address,
+            country,
+            country_code,
+            auth_method,
+            shodan_data,
+            first_seen,
+            last_seen,
+            scan_count,
+            status,
+            notes,
+            updated_at,
+            created_at
+        )
+        SELECT
+            TRIM(ip_address),
+            {country_expr},
+            {country_code_expr},
+            {auth_method_expr},
+            {shodan_data_expr},
+            {first_seen_expr},
+            {last_seen_expr},
+            {scan_count_expr},
+            {status_expr},
+            {notes_expr},
+            {updated_at_expr},
+            {created_at_expr}
+        FROM servers
+        WHERE ip_address IS NOT NULL
+          AND TRIM(ip_address) <> ''
+        ON CONFLICT(ip_address) DO NOTHING
+        """
+    )
 
 
 __all__ = ["run_migrations"]
