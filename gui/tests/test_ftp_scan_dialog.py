@@ -38,7 +38,7 @@ def tk_root():
 # Helper: build a FtpScanDialog without actually creating the Toplevel window
 # ---------------------------------------------------------------------------
 
-def _make_dialog(tk_root, config_path=None, callback=None):
+def _make_dialog(tk_root, config_path=None, callback=None, settings_manager=None):
     """Instantiate FtpScanDialog with _create_dialog patched out."""
     from gui.components.ftp_scan_dialog import FtpScanDialog
 
@@ -52,6 +52,7 @@ def _make_dialog(tk_root, config_path=None, callback=None):
             parent=tk_root,
             config_path=config_path,
             scan_start_callback=callback,
+            settings_manager=settings_manager,
         )
     # Provide a mock dialog widget so _start() / _cancel() don't crash on
     # dialog.destroy() calls in tests that exercise those paths.
@@ -172,6 +173,71 @@ class TestFtpScanDialogOptionBuild:
         assert opts["connect_timeout"] == 3
         assert opts["auth_timeout"] == 8
         assert opts["listing_timeout"] == 20
+
+    def test_loads_saved_values_from_settings_manager(self, tk_root):
+        """Dialog restores last-used FTP values when settings manager is provided."""
+        sm = MagicMock()
+        stored = {
+            "ftp_scan_dialog.max_shodan_results": 321,
+            "ftp_scan_dialog.api_key_override": "SAVED_KEY",
+            "ftp_scan_dialog.country_code": "US,GB",
+            "ftp_scan_dialog.discovery_max_concurrent_hosts": 12,
+            "ftp_scan_dialog.access_max_concurrent_hosts": 6,
+            "ftp_scan_dialog.connect_timeout": 7,
+            "ftp_scan_dialog.auth_timeout": 11,
+            "ftp_scan_dialog.listing_timeout": 21,
+            "ftp_scan_dialog.verbose": True,
+            "ftp_scan_dialog.region_asia": True,
+            "ftp_scan_dialog.region_europe": True,
+        }
+        sm.get_setting.side_effect = lambda key, default=None: stored.get(key, default)
+
+        dlg = _make_dialog(tk_root, settings_manager=sm)
+        opts = dlg._build_scan_options()
+
+        assert opts["max_shodan_results"] == 321
+        assert opts["api_key_override"] == "SAVED_KEY"
+        assert opts["discovery_max_concurrent_hosts"] == 12
+        assert opts["access_max_concurrent_hosts"] == 6
+        assert opts["connect_timeout"] == 7
+        assert opts["auth_timeout"] == 11
+        assert opts["listing_timeout"] == 21
+        assert opts["verbose"] is True
+        assert opts["country"] in ("GB,US", "US,GB")
+        assert dlg.asia_var.get() is True
+        assert dlg.europe_var.get() is True
+
+    def test_persists_values_to_settings_manager_on_build(self, tk_root):
+        """_build_scan_options saves FTP dialog selections for the next run."""
+        sm = MagicMock()
+        dlg = _make_dialog(tk_root, settings_manager=sm)
+
+        dlg.country_var.set("US")
+        dlg.max_results_var.set(250)
+        dlg.api_key_var.set("TMP_KEY")
+        dlg.discovery_concurrency_var.set("9")
+        dlg.access_concurrency_var.set("3")
+        dlg.connect_timeout_var.set("4")
+        dlg.auth_timeout_var.set("8")
+        dlg.listing_timeout_var.set("13")
+        dlg.verbose_var.set(True)
+        dlg.asia_var.set(True)
+
+        dlg._build_scan_options()
+
+        expected_calls = [
+            call("ftp_scan_dialog.max_shodan_results", 250),
+            call("ftp_scan_dialog.api_key_override", "TMP_KEY"),
+            call("ftp_scan_dialog.country_code", "US"),
+            call("ftp_scan_dialog.discovery_max_concurrent_hosts", 9),
+            call("ftp_scan_dialog.access_max_concurrent_hosts", 3),
+            call("ftp_scan_dialog.connect_timeout", 4),
+            call("ftp_scan_dialog.auth_timeout", 8),
+            call("ftp_scan_dialog.listing_timeout", 13),
+            call("ftp_scan_dialog.verbose", True),
+            call("ftp_scan_dialog.region_asia", True),
+        ]
+        sm.set_setting.assert_has_calls(expected_calls, any_order=False)
 
 
 # ===========================================================================
