@@ -196,6 +196,10 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                 ip_address,
                 port=port,
                 max_entries=max_entries,
+                max_directories=int(limits.get("max_directories", 3)),
+                max_files=int(limits.get("max_files", 5)),
+                connect_timeout=int(limits.get("timeout_seconds", 10)),
+                request_timeout=int(limits.get("timeout_seconds", 10)),
                 cancel_event=cancel_event,
             )
             analysis = probe_patterns.attach_indicator_analysis(snapshot, self.indicator_patterns)

@@ -1375,6 +1375,10 @@ class DashboardWidget:
                     ip_address,
                     port=port,
                     max_entries=max_entries,
+                    max_directories=int(max_dirs),
+                    max_files=int(max_files),
+                    connect_timeout=int(timeout_seconds),
+                    request_timeout=int(timeout_seconds),
                     cancel_event=cancel_event,
                 )
                 analysis = probe_patterns.attach_indicator_analysis(snapshot, self.indicator_patterns)

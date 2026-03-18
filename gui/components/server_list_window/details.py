@@ -372,14 +372,20 @@ def _format_probe_section(probe_result: Optional[Dict[str, Any]]) -> str:
             for directory in directories:
                 dir_name = directory.get("name", "")
                 lines.append(f"      📁 {dir_name}/")
+                subdirs = directory.get("subdirectories", [])
+                if subdirs:
+                    for subdir_name in subdirs:
+                        lines.append(f"         📁 {subdir_name}/")
+                    if directory.get("subdirectories_truncated"):
+                        lines.append("         … additional subdirectories not shown")
                 files = directory.get("files", [])
                 if files:
                     for file_name in files:
                         lines.append(f"         • {file_name}")
                     if directory.get("files_truncated"):
                         lines.append("         … additional files not shown")
-                else:
-                    lines.append("         (no files listed)")
+                if not subdirs and not files:
+                    lines.append("         (no files or subdirectories listed)")
             if share.get("directories_truncated"):
                 lines.append("      … additional directories not shown")
     else:
@@ -613,6 +619,10 @@ def _start_probe(
                     ip_address,
                     port=port,
                     max_entries=max_entries,
+                    max_directories=int(config["max_directories"]),
+                    max_files=int(config["max_files"]),
+                    connect_timeout=int(config["timeout_seconds"]),
+                    request_timeout=int(config["timeout_seconds"]),
                     cancel_event=cancel_event,
                 )
             else:

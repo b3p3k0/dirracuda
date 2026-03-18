@@ -43,7 +43,13 @@ def _minimal_snapshot(ip: str = "1.2.3.4") -> dict:
                 "root_files": ["readme.txt", "data.csv"],
                 "root_files_truncated": False,
                 "directories": [
-                    {"name": "pub", "files": ["file1.bin"], "files_truncated": False}
+                    {
+                        "name": "pub",
+                        "subdirectories": ["incoming"],
+                        "subdirectories_truncated": False,
+                        "files": ["file1.bin"],
+                        "files_truncated": False,
+                    }
                 ],
                 "directories_truncated": False,
             }
@@ -165,6 +171,44 @@ def test_snapshot_share_name(tmp_path, monkeypatch):
 
     assert len(snapshot["shares"]) == 1
     assert snapshot["shares"][0]["share"] == "ftp_root"
+
+
+def test_directory_listing_limits_subdirs_and_files_independently(tmp_path, monkeypatch):
+    monkeypatch.setattr("gui.utils.ftp_probe_cache.FTP_CACHE_DIR", tmp_path)
+
+    root_entries = [
+        Entry(name="pub", is_dir=True, size=0, modified_time=None),
+    ]
+    root_result = ListResult(entries=root_entries, truncated=False)
+
+    sub_entries = [
+        Entry(name="dir_a", is_dir=True, size=0, modified_time=None),
+        Entry(name="dir_b", is_dir=True, size=0, modified_time=None),
+        Entry(name="dir_c", is_dir=True, size=0, modified_time=None),
+        Entry(name="file_1.txt", is_dir=False, size=10, modified_time=None),
+        Entry(name="file_2.txt", is_dir=False, size=20, modified_time=None),
+        Entry(name="file_3.txt", is_dir=False, size=30, modified_time=None),
+    ]
+    sub_result = ListResult(entries=sub_entries, truncated=False)
+
+    mock_nav = MagicMock()
+    mock_nav.connect.return_value = None
+    mock_nav.list_dir.side_effect = [root_result, sub_result]
+    mock_nav.disconnect.return_value = None
+
+    with patch("gui.utils.ftp_probe_runner.FtpNavigator", return_value=mock_nav):
+        snapshot = run_ftp_probe(
+            "10.0.0.9",
+            port=21,
+            max_directories=3,
+            max_files=2,
+        )
+
+    directory = snapshot["shares"][0]["directories"][0]
+    assert directory["subdirectories"] == ["dir_a", "dir_b"]
+    assert directory["subdirectories_truncated"] is True
+    assert directory["files"] == ["file_1.txt", "file_2.txt"]
+    assert directory["files_truncated"] is True
 
 
 # ---------------------------------------------------------------------------
