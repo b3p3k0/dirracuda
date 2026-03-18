@@ -33,7 +33,7 @@ from gui.utils.scan_manager import get_scan_manager
 from gui.components.scan_dialog import show_scan_dialog
 from gui.components.ftp_scan_dialog import show_ftp_scan_dialog
 from gui.components.scan_results_dialog import show_scan_results_dialog
-from gui.utils.settings_manager import SettingsManager
+from gui.utils.settings_manager import get_settings_manager
 from gui.utils.probe_runner import run_probe
 from gui.utils.extract_runner import run_extract
 from gui.components import dashboard_logs
@@ -93,7 +93,7 @@ class DashboardWidget:
         # Scan management
         self.scan_manager = get_scan_manager()
         self.config_path = config_path
-        self.settings_manager = SettingsManager()
+        self.settings_manager = get_settings_manager()
         self.ransomware_indicators: List[str] = []
         self.indicator_patterns = []
         self._mock_mode_notice_shown = False

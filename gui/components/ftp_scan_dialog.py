@@ -140,95 +140,127 @@ class FtpScanDialog:
                 return default
 
         try:
-            self.max_results_var.set(
-                _coerce_int(
-                    self._settings_manager.get_setting(
-                        "ftp_scan_dialog.max_shodan_results", self.max_results_var.get()
-                    ),
-                    self.max_results_var.get(),
-                )
+            max_results = _coerce_int(
+                self._settings_manager.get_setting("ftp_scan_dialog.max_shodan_results", 1000),
+                1000,
             )
-            self.api_key_var.set(
-                str(self._settings_manager.get_setting("ftp_scan_dialog.api_key_override", ""))
+            api_key = str(self._settings_manager.get_setting("ftp_scan_dialog.api_key_override", ""))
+            country_code = str(self._settings_manager.get_setting("ftp_scan_dialog.country_code", ""))
+
+            discovery_workers = _coerce_int(
+                self._settings_manager.get_setting("ftp_scan_dialog.discovery_max_concurrent_hosts", 10),
+                10,
             )
-            self.country_var.set(
-                str(self._settings_manager.get_setting("ftp_scan_dialog.country_code", ""))
+            access_workers = _coerce_int(
+                self._settings_manager.get_setting("ftp_scan_dialog.access_max_concurrent_hosts", 4),
+                4,
+            )
+            connect_timeout = _coerce_int(
+                self._settings_manager.get_setting("ftp_scan_dialog.connect_timeout", 5),
+                5,
+            )
+            auth_timeout = _coerce_int(
+                self._settings_manager.get_setting("ftp_scan_dialog.auth_timeout", 10),
+                10,
+            )
+            listing_timeout = _coerce_int(
+                self._settings_manager.get_setting("ftp_scan_dialog.listing_timeout", 15),
+                15,
+            )
+            verbose = bool(self._settings_manager.get_setting("ftp_scan_dialog.verbose", False))
+            bulk_probe_enabled = bool(
+                self._settings_manager.get_setting("ftp_scan_dialog.bulk_probe_enabled", False)
             )
 
-            self.discovery_concurrency_var.set(
-                str(
-                    _coerce_int(
-                        self._settings_manager.get_setting(
-                            "ftp_scan_dialog.discovery_max_concurrent_hosts",
-                            self.discovery_concurrency_var.get() or 10,
-                        ),
-                        int(self.discovery_concurrency_var.get() or 10),
-                    )
-                )
+            africa = bool(self._settings_manager.get_setting("ftp_scan_dialog.region_africa", False))
+            asia = bool(self._settings_manager.get_setting("ftp_scan_dialog.region_asia", False))
+            europe = bool(self._settings_manager.get_setting("ftp_scan_dialog.region_europe", False))
+            north_america = bool(
+                self._settings_manager.get_setting("ftp_scan_dialog.region_north_america", False)
             )
-            self.access_concurrency_var.set(
-                str(
-                    _coerce_int(
-                        self._settings_manager.get_setting(
-                            "ftp_scan_dialog.access_max_concurrent_hosts",
-                            self.access_concurrency_var.get() or 4,
-                        ),
-                        int(self.access_concurrency_var.get() or 4),
-                    )
-                )
-            )
-            self.connect_timeout_var.set(
-                str(
-                    _coerce_int(
-                        self._settings_manager.get_setting(
-                            "ftp_scan_dialog.connect_timeout",
-                            self.connect_timeout_var.get() or 5,
-                        ),
-                        int(self.connect_timeout_var.get() or 5),
-                    )
-                )
-            )
-            self.auth_timeout_var.set(
-                str(
-                    _coerce_int(
-                        self._settings_manager.get_setting(
-                            "ftp_scan_dialog.auth_timeout",
-                            self.auth_timeout_var.get() or 10,
-                        ),
-                        int(self.auth_timeout_var.get() or 10),
-                    )
-                )
-            )
-            self.listing_timeout_var.set(
-                str(
-                    _coerce_int(
-                        self._settings_manager.get_setting(
-                            "ftp_scan_dialog.listing_timeout",
-                            self.listing_timeout_var.get() or 15,
-                        ),
-                        int(self.listing_timeout_var.get() or 15),
-                    )
-                )
-            )
-            self.verbose_var.set(
-                bool(self._settings_manager.get_setting("ftp_scan_dialog.verbose", False))
-            )
-            self.bulk_probe_enabled_var.set(
-                bool(self._settings_manager.get_setting("ftp_scan_dialog.bulk_probe_enabled", False))
+            oceania = bool(self._settings_manager.get_setting("ftp_scan_dialog.region_oceania", False))
+            south_america = bool(
+                self._settings_manager.get_setting("ftp_scan_dialog.region_south_america", False)
             )
 
-            self.africa_var.set(bool(self._settings_manager.get_setting("ftp_scan_dialog.region_africa", False)))
-            self.asia_var.set(bool(self._settings_manager.get_setting("ftp_scan_dialog.region_asia", False)))
-            self.europe_var.set(bool(self._settings_manager.get_setting("ftp_scan_dialog.region_europe", False)))
-            self.north_america_var.set(
-                bool(self._settings_manager.get_setting("ftp_scan_dialog.region_north_america", False))
-            )
-            self.oceania_var.set(bool(self._settings_manager.get_setting("ftp_scan_dialog.region_oceania", False)))
-            self.south_america_var.set(
-                bool(self._settings_manager.get_setting("ftp_scan_dialog.region_south_america", False))
-            )
+            self.max_results_var.set(max_results)
+            self.api_key_var.set(api_key)
+            self.country_var.set(country_code)
+            self.discovery_concurrency_var.set(str(discovery_workers))
+            self.access_concurrency_var.set(str(access_workers))
+            self.connect_timeout_var.set(str(connect_timeout))
+            self.auth_timeout_var.set(str(auth_timeout))
+            self.listing_timeout_var.set(str(listing_timeout))
+            self.verbose_var.set(verbose)
+            self.bulk_probe_enabled_var.set(bulk_probe_enabled)
+
+            self.africa_var.set(africa)
+            self.asia_var.set(asia)
+            self.europe_var.set(europe)
+            self.north_america_var.set(north_america)
+            self.oceania_var.set(oceania)
+            self.south_america_var.set(south_america)
         except Exception:
             # Best-effort only; defaults remain in place if settings are unavailable.
+            pass
+
+    def _persist_dialog_state(self) -> None:
+        """
+        Best-effort persistence so dialog changes survive reopen even if user cancels.
+        """
+        if self._settings_manager is None:
+            return
+
+        def _coerce_int(value: Any, minimum: int, maximum: int) -> Optional[int]:
+            try:
+                v = int(str(value).strip())
+            except (TypeError, ValueError):
+                return None
+            if v < minimum or v > maximum:
+                return None
+            return v
+
+        try:
+            max_results = _coerce_int(self.max_results_var.get(), 1, 1000)
+            if max_results is not None:
+                self._settings_manager.set_setting("ftp_scan_dialog.max_shodan_results", max_results)
+
+            disc = _coerce_int(self.discovery_concurrency_var.get(), 1, _CONCURRENCY_UPPER)
+            acc = _coerce_int(self.access_concurrency_var.get(), 1, _CONCURRENCY_UPPER)
+            conn_to = _coerce_int(self.connect_timeout_var.get(), 1, _TIMEOUT_UPPER)
+            auth_to = _coerce_int(self.auth_timeout_var.get(), 1, _TIMEOUT_UPPER)
+            list_to = _coerce_int(self.listing_timeout_var.get(), 1, _TIMEOUT_UPPER)
+
+            if disc is not None:
+                self._settings_manager.set_setting("ftp_scan_dialog.discovery_max_concurrent_hosts", disc)
+            if acc is not None:
+                self._settings_manager.set_setting("ftp_scan_dialog.access_max_concurrent_hosts", acc)
+            if conn_to is not None:
+                self._settings_manager.set_setting("ftp_scan_dialog.connect_timeout", conn_to)
+            if auth_to is not None:
+                self._settings_manager.set_setting("ftp_scan_dialog.auth_timeout", auth_to)
+            if list_to is not None:
+                self._settings_manager.set_setting("ftp_scan_dialog.listing_timeout", list_to)
+
+            self._settings_manager.set_setting("ftp_scan_dialog.api_key_override", self.api_key_var.get().strip())
+            self._settings_manager.set_setting("ftp_scan_dialog.country_code", self.country_var.get().strip().upper())
+            self._settings_manager.set_setting("ftp_scan_dialog.verbose", bool(self.verbose_var.get()))
+            self._settings_manager.set_setting(
+                "ftp_scan_dialog.bulk_probe_enabled", bool(self.bulk_probe_enabled_var.get())
+            )
+
+            self._settings_manager.set_setting("ftp_scan_dialog.region_africa", bool(self.africa_var.get()))
+            self._settings_manager.set_setting("ftp_scan_dialog.region_asia", bool(self.asia_var.get()))
+            self._settings_manager.set_setting("ftp_scan_dialog.region_europe", bool(self.europe_var.get()))
+            self._settings_manager.set_setting(
+                "ftp_scan_dialog.region_north_america", bool(self.north_america_var.get())
+            )
+            self._settings_manager.set_setting("ftp_scan_dialog.region_oceania", bool(self.oceania_var.get()))
+            self._settings_manager.set_setting(
+                "ftp_scan_dialog.region_south_america", bool(self.south_america_var.get())
+            )
+        except Exception:
+            # Persistence is best-effort; do not block close/start on errors.
             pass
 
     # ------------------------------------------------------------------
@@ -878,6 +910,8 @@ class FtpScanDialog:
     # ------------------------------------------------------------------
 
     def _start(self) -> None:
+        # Persist user edits even before validation (best-effort).
+        self._persist_dialog_state()
         try:
             scan_options = self._build_scan_options()
         except ValueError as exc:
@@ -889,6 +923,7 @@ class FtpScanDialog:
         self.dialog.destroy()
 
     def _cancel(self) -> None:
+        self._persist_dialog_state()
         self.result = "cancel"
         self.dialog.destroy()
 

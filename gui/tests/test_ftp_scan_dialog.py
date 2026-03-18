@@ -272,6 +272,23 @@ class TestShowFtpScanDialogCancel:
         callback.assert_not_called()
         assert dlg.result == "cancel"
 
+    def test_cancel_persists_dialog_state(self, tk_root):
+        """Cancel still saves dialog state so values are retained next open."""
+        sm = MagicMock()
+        dlg = _make_dialog(tk_root, settings_manager=sm)
+
+        dlg.max_results_var.set(123)
+        dlg.country_var.set("us")
+        dlg.europe_var.set(True)
+        dlg.bulk_probe_enabled_var.set(True)
+
+        dlg._cancel()
+
+        sm.set_setting.assert_any_call("ftp_scan_dialog.max_shodan_results", 123)
+        sm.set_setting.assert_any_call("ftp_scan_dialog.country_code", "US")
+        sm.set_setting.assert_any_call("ftp_scan_dialog.region_europe", True)
+        sm.set_setting.assert_any_call("ftp_scan_dialog.bulk_probe_enabled", True)
+
 
 # ===========================================================================
 # 3. scan_manager: FTP config overrides applied under _temporary_config_override

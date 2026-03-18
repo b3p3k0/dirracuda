@@ -57,6 +57,24 @@ DEFAULT_GUI_SETTINGS = {
         'rce_enabled': False,
         'verbose': False
     },
+    'ftp_scan_dialog': {
+        'max_shodan_results': 1000,
+        'api_key_override': '',
+        'country_code': '',
+        'discovery_max_concurrent_hosts': 10,
+        'access_max_concurrent_hosts': 4,
+        'connect_timeout': 5,
+        'auth_timeout': 10,
+        'listing_timeout': 15,
+        'verbose': False,
+        'bulk_probe_enabled': False,
+        'region_africa': False,
+        'region_asia': False,
+        'region_europe': False,
+        'region_north_america': False,
+        'region_oceania': False,
+        'region_south_america': False
+    },
     'probe': {
         'max_directories_per_share': 3,
         'max_files_per_directory': 5,
