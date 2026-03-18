@@ -162,6 +162,8 @@ def run_access_stage(workflow: "FtpWorkflow", candidates: List[FtpCandidate]) ->
     out = workflow.output
 
     if not candidates:
+        # Used by workflow summary rollup.
+        workflow.last_accessible_directory_count = 0
         return 0
 
     ftp_cfg = workflow.config.get_ftp_config()
@@ -289,6 +291,12 @@ def run_access_stage(workflow: "FtpWorkflow", candidates: List[FtpCandidate]) ->
         outcomes.append(outcome)
 
     accessible_count = sum(1 for o in outcomes if o.accessible)
+    accessible_directory_count = sum(
+        o.root_entry_count for o in outcomes if o.accessible and o.root_listing_available
+    )
+    # Used by workflow summary rollup.
+    workflow.last_accessible_directory_count = accessible_directory_count
+
     summary_msg = f"Access verification complete: {accessible_count} accessible of {total} tested"
     if accessible_count > 0:
         out.success(summary_msg)

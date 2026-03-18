@@ -506,7 +506,7 @@ def parse_final_results(output: str) -> Dict:
         # New patterns matching actual SMBSeek output format (with emoji prefixes)
         "hosts_scanned": r'📊\s*Hosts Scanned:\s*(\d[\d,]*)',
         "hosts_accessible": r'🔓\s*Hosts Accessible:\s*(\d[\d,]*)',
-        "accessible_shares": r'📁\s*Accessible Shares:\s*(\d[\d,]*)',
+        "accessible_shares": r'📁\s*Accessible (?:Shares|Directories):\s*(\d[\d,]*)',
 
         # Legacy patterns (for backward compatibility with older SMBSeek versions)
         "shodan_results": r'Shodan Results:\s*(\d[\d,]*)',

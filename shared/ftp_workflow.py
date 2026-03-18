@@ -18,6 +18,7 @@ class FtpWorkflow:
         self.config = config
         self.db_path = db_path
         self.args: argparse.Namespace | None = None
+        self.last_accessible_directory_count = 0
 
     def run(self, args: argparse.Namespace) -> None:
         from commands.ftp.models import FtpDiscoveryError
@@ -38,11 +39,12 @@ class FtpWorkflow:
         out.workflow_step("FTP Access Verification", 2, self.STEP_COUNT)
         from commands.ftp.operation import run_access_stage
         accessible = run_access_stage(self, reachable)
+        directories_found = int(getattr(self, "last_accessible_directory_count", 0))
 
         # Rollup lines parsed by progress.py field regexes.
         out.raw(f"📊 Hosts Scanned: {shodan_total}")
         out.raw(f"🔓 Hosts Accessible: {accessible}")
-        out.raw(f"📁 Accessible Shares: 0")
+        out.raw(f"📁 Accessible Directories: {directories_found}")
 
         # Success marker — must NOT be emitted on error paths.
         out.raw("🎉 FTP scan completed successfully")

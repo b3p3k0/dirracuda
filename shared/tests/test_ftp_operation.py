@@ -390,6 +390,7 @@ class TestAccessStage:
         wf, _, _ = _make_workflow([])
         count = run_access_stage(wf, [])
         assert count == 0
+        assert getattr(wf, "last_accessible_directory_count", None) == 0
 
     def test_outcomes_length_equals_candidate_count(self):
         n = 5
@@ -428,6 +429,25 @@ class TestAccessStage:
             run_access_stage(wf, candidates)
 
         assert max_inflight >= 2
+
+    def test_access_stage_sets_directory_total_for_rollup(self):
+        candidates = [_make_candidate(f"10.14.14.{i}") for i in range(2)]
+        wf, _, _ = _make_workflow(candidates, access_workers=2)
+        with (
+            patch(
+                "commands.ftp.operation.try_anon_login",
+                side_effect=[(True, "220", "anonymous"), (True, "220", "anonymous")],
+            ),
+            patch(
+                "commands.ftp.operation.try_root_listing",
+                side_effect=[(True, 5, "ok"), (True, 8, "ok")],
+            ),
+            patch("commands.ftp.operation.FtpPersistence"),
+        ):
+            accessible_count = run_access_stage(wf, candidates)
+
+        assert accessible_count == 2
+        assert getattr(wf, "last_accessible_directory_count", None) == 13
 
     def test_access_summary_uses_warning_when_none_accessible(self):
         candidates = [_make_candidate(f"10.12.12.{i}") for i in range(2)]

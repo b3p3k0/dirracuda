@@ -69,13 +69,13 @@ class ScanResultsDialog:
     def _shares_label(self) -> str:
         """Protocol-aware label for the final summary metric."""
         if self._is_ftp_scan():
-            return "Accessible FTP Roots:"
+            return "Directories Found:"
         return "Shares Found:"
 
     def _access_phrase(self) -> str:
         """Protocol-aware phrase describing successful access."""
         if self._is_ftp_scan():
-            return "accessible FTP root listings"
+            return "accessible FTP directories"
         return "accessible SMB shares"
     
     def _create_dialog(self) -> None:
@@ -300,7 +300,7 @@ class ScanResultsDialog:
             )
 
         if self.scan_results.get('shares_found', 0) > 0:
-            share_term = "FTP roots" if self._is_ftp_scan() else "shares"
+            share_term = "directories" if self._is_ftp_scan() else "shares"
             details_text += f"\n\nFound {self.scan_results.get('shares_found', 0)} total {share_term} "
             details_text += "available for further analysis."
 
