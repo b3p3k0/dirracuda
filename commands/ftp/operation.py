@@ -61,7 +61,6 @@ def run_discover_stage(workflow: "FtpWorkflow") -> Tuple[List[FtpCandidate], int
     out = workflow.output
     args = getattr(workflow, "args", None)
     country = getattr(args, "country", None) if args else None
-    verbose = getattr(out, "verbose", False)
 
     ftp_cfg = workflow.config.get_ftp_config()
     verif = ftp_cfg.get("verification", {})
@@ -117,9 +116,6 @@ def run_discover_stage(workflow: "FtpWorkflow") -> Tuple[List[FtpCandidate], int
                     progress_failed_count,
                     max(0, shodan_total - completed),
                 )
-            if verbose and not ok_v:
-                detail = exc_v or reason_v
-                out.info(f"  {candidates[idx].ip} — {detail} (port check)")
 
     for i, candidate in enumerate(candidates):
         ok, reason, exc_detail = results_by_index[i]
@@ -157,7 +153,6 @@ def run_access_stage(workflow: "FtpWorkflow", candidates: List[FtpCandidate]) ->
     All outcomes (success and failure) are persisted in a single batch commit.
     """
     out = workflow.output
-    verbose = getattr(out, "verbose", False)
 
     if not candidates:
         return 0
@@ -281,12 +276,6 @@ def run_access_stage(workflow: "FtpWorkflow", candidates: List[FtpCandidate]) ->
                     progress_failed_count,
                     max(0, total - completed),
                 )
-            if verbose:
-                candidate_v = candidates[idx]
-                if outcome.accessible:
-                    out.info(f"  {candidate_v.ip} — anonymous OK, {outcome.root_entry_count} root entries")
-                else:
-                    out.info(f"  {candidate_v.ip} — {outcome.auth_status}")
 
     for outcome in results_by_index:
         outcomes.append(outcome)

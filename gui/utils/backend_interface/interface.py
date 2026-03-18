@@ -132,8 +132,11 @@ class BackendInterface:
 
         # Ensure script path is string (currently Path object)
         script_path = str(self.cli_script)
+        cli_args = [str(arg) for arg in args]
+        if "--config" not in cli_args:
+            cli_args.extend(["--config", str(self.config_path)])
 
-        command_list = [interpreter, script_path, *args]
+        command_list = [interpreter, script_path, *cli_args]
         if os.getenv("XSMBSEEK_DEBUG_SUBPROCESS"):
             # Log script and arg count only (avoid logging potential credentials)
             _logger.debug("CLI command: %s with %d args", script_path, len(args))
@@ -142,7 +145,11 @@ class BackendInterface:
     def _build_ftp_cli_command(self, *args) -> List[str]:
         """Build CLI command for ftpseek using same interpreter as GUI."""
         interpreter = sys.executable or "python3"
-        command_list = [interpreter, str(self.ftp_cli_script), *args]
+        cli_args = [str(arg) for arg in args]
+        if "--config" not in cli_args:
+            cli_args.extend(["--config", str(self.config_path)])
+
+        command_list = [interpreter, str(self.ftp_cli_script), *cli_args]
         if os.getenv("XSMBSEEK_DEBUG_SUBPROCESS"):
             _logger.debug(
                 "FTP CLI command: %s with %d args", str(self.ftp_cli_script), len(args)

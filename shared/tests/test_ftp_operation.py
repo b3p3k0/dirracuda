@@ -10,6 +10,7 @@ Verifies:
 from __future__ import annotations
 
 import json
+import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import List
 from unittest.mock import MagicMock, patch
@@ -43,13 +44,18 @@ def _expected_progress_reports(total: int, batch_size: int = 10) -> int:
     )
 
 
-def _make_workflow(candidates: list, discovery_workers: int = 10, access_workers: int = 4):
+def _make_workflow(
+    candidates: list,
+    discovery_workers: int = 10,
+    access_workers: int = 4,
+    verbose: bool = False,
+):
     """Build a minimal mock workflow duck-typed to what operation.py reads."""
     raw_calls: List[str] = []
     info_calls: List[str] = []
 
     out = MagicMock()
-    out.verbose = False
+    out.verbose = verbose
     out.raw.side_effect = lambda msg: raw_calls.append(msg)
     out.info.side_effect = lambda msg: info_calls.append(msg)
 
@@ -74,8 +80,12 @@ def _make_workflow(candidates: list, discovery_workers: int = 10, access_workers
 # ---------------------------------------------------------------------------
 
 class TestDiscoverStage:
-    def _run(self, candidates, port_check_side_effect, discovery_workers=10):
-        wf, raw_calls, info_calls = _make_workflow(candidates, discovery_workers=discovery_workers)
+    def _run(self, candidates, port_check_side_effect, discovery_workers=10, verbose=False):
+        wf, raw_calls, info_calls = _make_workflow(
+            candidates,
+            discovery_workers=discovery_workers,
+            verbose=verbose,
+        )
         with (
             patch("commands.ftp.operation.query_ftp_shodan", return_value=candidates),
             patch("commands.ftp.operation.port_check", side_effect=port_check_side_effect),
@@ -153,6 +163,17 @@ class TestDiscoverStage:
         progress_lines = [l for l in info_calls if "📊 Progress:" in l]
         assert len(progress_lines) == _expected_progress_reports(total)
 
+    def test_no_per_host_verbose_lines_emitted(self):
+        n = 12
+        candidates = [_make_candidate(f"172.20.0.{i}") for i in range(n)]
+        _, _, _, info_calls, _ = self._run(
+            candidates,
+            port_check_side_effect=[(False, "timeout")] * n,
+            verbose=True,
+        )
+        ip_pattern = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
+        assert not any(ip_pattern.search(line or "") for line in info_calls)
+
     def test_worker_cap_bounded_to_host_count(self):
         """When config says 10 workers but only 3 hosts, ThreadPoolExecutor gets max_workers=3."""
         candidates = [_make_candidate(f"5.5.5.{i}") for i in range(3)]
@@ -190,8 +211,12 @@ class TestDiscoverStage:
 
 class TestAccessStage:
     def _run(self, candidates, anon_login_side_effect, root_listing_side_effect=None,
-             access_workers=4):
-        wf, raw_calls, info_calls = _make_workflow(candidates, access_workers=access_workers)
+             access_workers=4, verbose=False):
+        wf, raw_calls, info_calls = _make_workflow(
+            candidates,
+            access_workers=access_workers,
+            verbose=verbose,
+        )
         login_mock = MagicMock(side_effect=anon_login_side_effect)
         listing_mock = MagicMock(side_effect=root_listing_side_effect or [])
         with (
@@ -301,6 +326,14 @@ class TestAccessStage:
         _, raw_calls, info_calls, _ = self._run(candidates, login_se)
         progress_lines = [l for l in info_calls if "📊 Progress:" in l]
         assert len(progress_lines) == _expected_progress_reports(n)
+
+    def test_access_stage_no_per_host_verbose_lines_emitted(self):
+        n = 12
+        candidates = [_make_candidate(f"10.9.9.{i}") for i in range(n)]
+        login_se = [(False, None, "auth_required")] * n
+        _, _, info_calls, _ = self._run(candidates, login_se, verbose=True)
+        ip_pattern = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
+        assert not any(ip_pattern.search(line or "") for line in info_calls)
 
     def test_worker_cap_bounded_to_host_count(self):
         """When config says 4 workers but only 2 hosts, ThreadPoolExecutor gets max_workers=2."""
