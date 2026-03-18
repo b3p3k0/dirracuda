@@ -447,6 +447,8 @@ class XSMBSeekGUI:
         XSMBSeekConfig handles application-level configuration while SettingsManager
         handles user preferences and GUI state.
         """
+        self._align_backend_paths_to_active_checkout()
+
         # Validate SMBSeek installation
         validation = self.config.validate_smbseek_installation()
         
@@ -494,6 +496,53 @@ class XSMBSeekGUI:
             
         except Exception as e:
             raise RuntimeError(f"Failed to initialize settings manager: {e}")
+
+    def _is_valid_checkout_backend(self, path: Path) -> bool:
+        """Return True when path looks like a runnable smbseek checkout."""
+        required = [
+            path / "smbseek",
+            path / "ftpseek",
+            path / "xsmbseek",
+            path / "commands",
+            path / "shared",
+            path / "conf" / "config.json",
+        ]
+        return all(p.exists() for p in required)
+
+    def _align_backend_paths_to_active_checkout(self) -> None:
+        """
+        Keep gui_app backend/database paths aligned with the launched checkout.
+
+        Why: path drift to an older clone causes GUI/backend version mismatch, which
+        surfaces as stale runtime behavior (e.g. outdated progress formatting).
+        """
+        try:
+            checkout_backend = SCRIPT_DIR.resolve()
+            if not self._is_valid_checkout_backend(checkout_backend):
+                return
+
+            configured_backend = self.config.get_smbseek_path().resolve()
+            if configured_backend == checkout_backend:
+                return
+
+            current_db = self.config.get_database_path()
+            db_path = Path(current_db).expanduser().resolve() if current_db else None
+            db_under_old_backend = bool(
+                db_path and str(db_path).startswith(str(configured_backend))
+            )
+
+            self.config.set_smbseek_path(str(checkout_backend))
+            if db_path is None or db_under_old_backend or not db_path.exists():
+                self.config.set_database_path(str(checkout_backend / "smbseek.db"))
+
+            self.config.save_config()
+            _logger.info(
+                "Auto-aligned gui_app backend path from %s to %s",
+                configured_backend,
+                checkout_backend,
+            )
+        except Exception as exc:
+            _logger.warning("Unable to auto-align backend paths: %s", exc)
     
     def _create_main_window(self) -> None:
         """Create and configure main application window."""

@@ -108,13 +108,14 @@ def run_discover_stage(workflow: "FtpWorkflow") -> Tuple[List[FtpCandidate], int
             else:
                 progress_failed_count += 1
             if _should_report_progress(completed, shodan_total):
+                active_threads = sum(1 for f in future_to_index if not f.done())
                 _report_concurrent_progress(
                     workflow,
                     completed,
                     shodan_total,
                     progress_success_count,
                     progress_failed_count,
-                    max(0, shodan_total - completed),
+                    active_threads,
                 )
 
     for i, candidate in enumerate(candidates):
@@ -268,13 +269,14 @@ def run_access_stage(workflow: "FtpWorkflow", candidates: List[FtpCandidate]) ->
             else:
                 progress_failed_count += 1
             if _should_report_progress(completed, total):
+                active_threads = sum(1 for f in future_to_index if not f.done())
                 _report_concurrent_progress(
                     workflow,
                     completed,
                     total,
                     progress_success_count,
                     progress_failed_count,
-                    max(0, total - completed),
+                    active_threads,
                 )
 
     for outcome in results_by_index:

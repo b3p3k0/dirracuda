@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import List
 from unittest.mock import MagicMock, patch
@@ -370,3 +372,32 @@ class TestAccessStage:
         _, _, _, mock_persist = self._run(candidates, login_se, listing_se)
         outcomes = mock_persist.return_value.persist_access_outcomes_batch.call_args[0][0]
         assert len(outcomes) == n
+
+    def test_access_stage_executes_concurrently(self):
+        """At least two access checks should overlap when workers > 1."""
+        n = 8
+        candidates = [_make_candidate(f"10.11.11.{i}") for i in range(n)]
+
+        lock = threading.Lock()
+        inflight = 0
+        max_inflight = 0
+
+        def _slow_login(ip, port, timeout):
+            nonlocal inflight, max_inflight
+            with lock:
+                inflight += 1
+                max_inflight = max(max_inflight, inflight)
+            time.sleep(0.03)
+            with lock:
+                inflight -= 1
+            return (True, "220 FTP", "anonymous")
+
+        wf, _, _ = _make_workflow(candidates, access_workers=4)
+        with (
+            patch("commands.ftp.operation.try_anon_login", side_effect=_slow_login),
+            patch("commands.ftp.operation.try_root_listing", return_value=(True, 1, "ok")),
+            patch("commands.ftp.operation.FtpPersistence"),
+        ):
+            run_access_stage(wf, candidates)
+
+        assert max_inflight >= 2
