@@ -135,10 +135,16 @@ def run_discover_stage(workflow: "FtpWorkflow") -> Tuple[List[FtpCandidate], int
             ))
 
     unreachable_count = len(port_failed_outcomes)
-    out.info(
+    summary_msg = (
         f"Port check complete: {len(reachable)} reachable, "
         f"{unreachable_count} unreachable ({shodan_total} total)"
     )
+    if unreachable_count == 0:
+        out.success(summary_msg)
+    elif len(reachable) == 0:
+        out.error(summary_msg)
+    else:
+        out.warning(summary_msg)
 
     if port_failed_outcomes:
         FtpPersistence(workflow.db_path).persist_discovery_outcomes_batch(port_failed_outcomes)
@@ -283,7 +289,11 @@ def run_access_stage(workflow: "FtpWorkflow", candidates: List[FtpCandidate]) ->
         outcomes.append(outcome)
 
     accessible_count = sum(1 for o in outcomes if o.accessible)
-    out.info(f"Access verification complete: {accessible_count} accessible of {total} tested")
+    summary_msg = f"Access verification complete: {accessible_count} accessible of {total} tested"
+    if accessible_count > 0:
+        out.success(summary_msg)
+    else:
+        out.warning(summary_msg)
 
     if outcomes:
         FtpPersistence(workflow.db_path).persist_access_outcomes_batch(outcomes)

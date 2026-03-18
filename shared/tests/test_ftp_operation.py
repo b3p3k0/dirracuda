@@ -206,6 +206,33 @@ class TestDiscoverStage:
         assert raw_calls == []
         assert info_calls == []
 
+    def test_discover_summary_uses_success_when_all_reachable(self):
+        candidates = [_make_candidate(f"100.64.0.{i}") for i in range(3)]
+        wf, _, _ = _make_workflow(candidates)
+        with (
+            patch("commands.ftp.operation.query_ftp_shodan", return_value=candidates),
+            patch("commands.ftp.operation.port_check", return_value=(True, "ok")),
+            patch("commands.ftp.operation.FtpPersistence"),
+        ):
+            run_discover_stage(wf)
+        assert wf.output.success.call_count == 1
+        assert wf.output.warning.call_count == 0
+        assert wf.output.error.call_count == 0
+
+    def test_discover_summary_uses_warning_when_some_unreachable(self):
+        candidates = [_make_candidate(f"100.65.0.{i}") for i in range(3)]
+        wf, _, _ = _make_workflow(candidates)
+        with (
+            patch("commands.ftp.operation.query_ftp_shodan", return_value=candidates),
+            patch(
+                "commands.ftp.operation.port_check",
+                side_effect=[(True, "ok"), (False, "timeout"), (True, "ok")],
+            ),
+            patch("commands.ftp.operation.FtpPersistence"),
+        ):
+            run_discover_stage(wf)
+        assert wf.output.warning.call_count == 1
+
 
 # ---------------------------------------------------------------------------
 # run_access_stage
@@ -401,3 +428,25 @@ class TestAccessStage:
             run_access_stage(wf, candidates)
 
         assert max_inflight >= 2
+
+    def test_access_summary_uses_warning_when_none_accessible(self):
+        candidates = [_make_candidate(f"10.12.12.{i}") for i in range(2)]
+        wf, _, _ = _make_workflow(candidates)
+        with (
+            patch("commands.ftp.operation.try_anon_login", return_value=(False, None, "auth_required")),
+            patch("commands.ftp.operation.try_root_listing"),
+            patch("commands.ftp.operation.FtpPersistence"),
+        ):
+            run_access_stage(wf, candidates)
+        assert wf.output.warning.call_count == 1
+
+    def test_access_summary_uses_success_when_any_accessible(self):
+        candidates = [_make_candidate(f"10.13.13.{i}") for i in range(2)]
+        wf, _, _ = _make_workflow(candidates)
+        with (
+            patch("commands.ftp.operation.try_anon_login", return_value=(True, "220", "anonymous")),
+            patch("commands.ftp.operation.try_root_listing", return_value=(True, 1, "ok")),
+            patch("commands.ftp.operation.FtpPersistence"),
+        ):
+            run_access_stage(wf, candidates)
+        assert wf.output.success.call_count == 1

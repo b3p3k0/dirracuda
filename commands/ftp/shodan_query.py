@@ -54,8 +54,10 @@ def query_ftp_shodan(
         api = shodan.Shodan(api_key)
         results = api.search(query, limit=max_results)
     except shodan.APIError as exc:
+        out.error(f"Shodan API error: {exc}")
         raise FtpDiscoveryError(str(exc)) from exc
     except Exception as exc:
+        out.error(f"Shodan query failed: {exc}")
         raise FtpDiscoveryError(str(exc)) from exc
 
     # Deduplicate by IP (last-wins; Shodan rarely returns duplicates).
@@ -67,10 +69,10 @@ def query_ftp_shodan(
         by_ip[ip] = match
 
     if not by_ip:
-        out.info(f"No FTP candidates found in Shodan for query: {query}")
+        out.warning(f"No FTP candidates found in Shodan for query: {query}")
         return []
 
-    out.info(f"Found {len(by_ip)} FTP candidates in Shodan database")
+    out.success(f"Found {len(by_ip)} FTP candidates in Shodan database")
 
     candidates: List[FtpCandidate] = []
     for ip, match in by_ip.items():
