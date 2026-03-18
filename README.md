@@ -32,6 +32,12 @@ pip install -r requirements.txt
 cp conf/config.json.example conf/config.json
 ```
 
+Optionally: 
+
+```bash
+cp smbseek.db.example smbseek.db
+```
+
 Edit `conf/config.json` and add your Shodan API key (requires paid membership):
 
 ```json
@@ -90,7 +96,7 @@ Only hosts that authenticate are stored. The method that succeeded is recorded a
 Results appear in the Server List.
 
 ### FTP Discovery **(EXPERIMENTAL)**
-
+]
 Triggered via **Start FTP Scan** on the dashboard. The scan runs as a separate `ftpseek` process and follows four verification steps for each candidate:
 
 1. Shodan query for port 21 hosts showing a successful anonymous login banner
@@ -100,7 +106,9 @@ Triggered via **Start FTP Scan** on the dashboard. The scan runs as a separate `
 
 Only hosts that pass all four steps are stored as verified. Failures are recorded with a reason code (`connect_fail`, `auth_fail`, `list_fail`, `timeout`) so you can see exactly where each candidate dropped out. The scan summary reports candidate count vs. verified count.
 
-Results appear in the database alongside SMB records — the same IP can have both SMB and FTP entries without collision. Use the **📡 FTP Servers** button on the dashboard to browse discovered servers and download files to quarantine.
+Results appear in the database alongside SMB records — the same IP can have both SMB and FTP entries without collision.
+
+**FTP workflows are currently functional with some rough edges**
 
 ### Server List
 
@@ -131,7 +139,7 @@ Read-only navigation through SMB shares. Double-click directories to descend, fi
 
 The viewer auto-detects file types: text files display with an encoding selector (UTF-8, Latin-1, etc.), binary files switch to hex mode, and images (PNG, JPEG, GIF, WebP, BMP, TIFF) render with fit-to-window scaling.
 
-![Full suite](img/pic_view.png)
+![image viewer](img/pic_view.png)
 
 Files over the specified maximum (default: 5 MB) trigger a warning—you can bump that limit in `conf/config.json` under `file_browser.viewer.max_view_size_mb`, or click "Ignore Once" to load anyway (hard cap: 1 GB).
 
