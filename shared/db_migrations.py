@@ -466,6 +466,98 @@ def _ensure_core_smb_tables(cur: sqlite3.Cursor) -> None:
     )
 
     cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS share_access (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            server_id INTEGER NOT NULL,
+            session_id INTEGER NOT NULL,
+            share_name TEXT NOT NULL,
+            accessible BOOLEAN NOT NULL DEFAULT FALSE,
+            auth_status TEXT,
+            permissions TEXT,
+            share_type TEXT,
+            share_comment TEXT,
+            test_timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            access_details TEXT,
+            error_message TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (server_id) REFERENCES smb_servers(id) ON DELETE CASCADE,
+            FOREIGN KEY (session_id) REFERENCES scan_sessions(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS file_manifests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            server_id INTEGER NOT NULL,
+            session_id INTEGER NOT NULL,
+            share_name TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            file_name TEXT NOT NULL,
+            file_size INTEGER DEFAULT 0,
+            file_type TEXT,
+            file_extension TEXT,
+            mime_type TEXT,
+            last_modified DATETIME,
+            is_ransomware_indicator BOOLEAN DEFAULT FALSE,
+            is_sensitive BOOLEAN DEFAULT FALSE,
+            discovery_timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            metadata TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (server_id) REFERENCES smb_servers(id) ON DELETE CASCADE,
+            FOREIGN KEY (session_id) REFERENCES scan_sessions(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS vulnerabilities (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            server_id INTEGER NOT NULL,
+            session_id INTEGER NOT NULL,
+            vuln_type TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT,
+            evidence TEXT,
+            remediation TEXT,
+            cvss_score DECIMAL(3,1),
+            cve_ids TEXT,
+            discovery_timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            status TEXT DEFAULT 'open',
+            notes TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (server_id) REFERENCES smb_servers(id) ON DELETE CASCADE,
+            FOREIGN KEY (session_id) REFERENCES scan_sessions(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS failure_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER,
+            ip_address TEXT NOT NULL,
+            failure_timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            failure_type TEXT,
+            failure_reason TEXT,
+            shodan_data TEXT,
+            analysis_results TEXT,
+            retry_count INTEGER DEFAULT 0,
+            last_retry_timestamp DATETIME,
+            resolved BOOLEAN DEFAULT FALSE,
+            resolution_notes TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (session_id) REFERENCES scan_sessions(id) ON DELETE SET NULL
+        )
+        """
+    )
+
+    cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_smb_servers_ip ON smb_servers(ip_address)"
     )
     cur.execute(
@@ -479,6 +571,30 @@ def _ensure_core_smb_tables(cur: sqlite3.Cursor) -> None:
     )
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_scan_sessions_tool ON scan_sessions(tool_name)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_share_access_server ON share_access(server_id)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_share_access_session ON share_access(session_id)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_file_manifests_server ON file_manifests(server_id)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_file_manifests_session ON file_manifests(session_id)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_vulnerabilities_server ON vulnerabilities(server_id)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_vulnerabilities_session ON vulnerabilities(session_id)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_failure_logs_ip ON failure_logs(ip_address)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_failure_logs_timestamp ON failure_logs(failure_timestamp)"
     )
 
 

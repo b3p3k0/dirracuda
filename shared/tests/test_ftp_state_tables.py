@@ -174,6 +174,7 @@ def test_legacy_servers_table_backfills_smb_servers(tmp_path):
     run_migrations(str(db))
     run_migrations(str(db))  # idempotent second run should not duplicate rows
 
+    tables = _table_names(db)
     conn = sqlite3.connect(str(db))
     try:
         row = conn.execute(
@@ -187,6 +188,7 @@ def test_legacy_servers_table_backfills_smb_servers(tmp_path):
     finally:
         conn.close()
 
+    assert {"scan_sessions", "smb_servers", "share_access", "file_manifests", "vulnerabilities", "failure_logs"} <= tables
     assert row == ("203.0.113.10", "US", "US", "anonymous", 5, "active", "S")
     assert count == 1
 
