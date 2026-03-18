@@ -1,6 +1,10 @@
 # FTP DB Import Workstream
 
-Status: Planning in progress (started 2026-03-17).
+Status: Cards 1-6 completed (as of 2026-03-18).
+
+Remaining deferred follow-ups:
+- Implement real FTP probe/extract execution paths (currently stubbed in Card 5).
+- Make `failure_logs` protocol-aware (currently IP-only and SMB-oriented cleanup).
 
 This folder is the isolated planning workspace for the FTP+SMB database import/integration workstream. It intentionally avoids mixing with earlier FTP MVP planning artifacts.
 
