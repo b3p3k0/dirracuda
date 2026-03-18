@@ -1,10 +1,14 @@
 # This doc
 .gitignore
 
-#internal docs
-docs/release/
-#docs/dev/
-docs/archive/
+# Docs publish policy
+# Publish only docs/dev/** and docs/example_db/generate_bogan_dbs.py
+docs/*
+!docs/dev/
+!docs/dev/**
+!docs/example_db/
+docs/example_db/*
+!docs/example_db/generate_bogan_dbs.py
 
 # OS / Editor junk
 .DS_Store
@@ -101,6 +105,7 @@ conf/*.json
 *.db-wal
 *.db.backup*
 smbseek.db.*
+!smbseek.db.example
 *.db.cleanup_backup_*
 db_backups/
 gui/.scan_lock
@@ -134,9 +139,6 @@ test_enhanced_share_tracking.py
 # mmc fork - local copy
 mmcbrute-smbseek/
 conf/wordlists/rockyou.txt
-
-# this allows our sample db to upload
-!docs/sample_db/smbseek_bogan_sm.db
 
 # dev notes
 #dev/
