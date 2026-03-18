@@ -117,12 +117,24 @@ def run_migrations(db_path: str) -> None:
                 "ALTER TABLE host_probe_cache ADD COLUMN rce_verdict_summary TEXT"
             )
 
+        # Migration: explicit protocol identity on SMB rows (existing rows => 'S')
+        cur.execute("PRAGMA table_info(smb_servers)")
+        smb_cols = [row[1] for row in cur.fetchall()]
+        if smb_cols:
+            if "host_type" not in smb_cols:
+                cur.execute("ALTER TABLE smb_servers ADD COLUMN host_type TEXT DEFAULT 'S'")
+            cur.execute(
+                "UPDATE smb_servers SET host_type = 'S' "
+                "WHERE host_type IS NULL OR TRIM(host_type) = ''"
+            )
+
         # --- FTP sidecar tables (additive; SMB schema untouched) ---
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS ftp_servers (
                 id              INTEGER  PRIMARY KEY AUTOINCREMENT,
                 ip_address      TEXT     NOT NULL UNIQUE,
+                host_type       TEXT     DEFAULT 'F',
                 country         TEXT,
                 country_code    TEXT,
                 port            INTEGER  NOT NULL DEFAULT 21,
@@ -174,6 +186,16 @@ def run_migrations(db_path: str) -> None:
         )
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_ftp_access_session ON ftp_access(session_id)"
+        )
+
+        # Migration: explicit protocol identity on FTP rows (existing rows => 'F')
+        cur.execute("PRAGMA table_info(ftp_servers)")
+        ftp_cols = [row[1] for row in cur.fetchall()]
+        if "host_type" not in ftp_cols:
+            cur.execute("ALTER TABLE ftp_servers ADD COLUMN host_type TEXT DEFAULT 'F'")
+        cur.execute(
+            "UPDATE ftp_servers SET host_type = 'F' "
+            "WHERE host_type IS NULL OR TRIM(host_type) = ''"
         )
 
         # --- FTP state tables (protocol-specific; parallel to host_user_flags / host_probe_cache) ---

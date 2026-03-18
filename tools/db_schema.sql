@@ -38,6 +38,7 @@ CREATE TABLE scan_sessions (
 CREATE TABLE smb_servers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ip_address TEXT NOT NULL UNIQUE,
+    host_type TEXT DEFAULT 'S',
     country TEXT,
     country_code TEXT,
     auth_method TEXT,
@@ -248,6 +249,7 @@ ORDER BY scan_date DESC;
 CREATE TABLE IF NOT EXISTS ftp_servers (
     id              INTEGER  PRIMARY KEY AUTOINCREMENT,
     ip_address      TEXT     NOT NULL UNIQUE,
+    host_type       TEXT     DEFAULT 'F',
     country         TEXT,
     country_code    TEXT,
     port            INTEGER  NOT NULL DEFAULT 21,

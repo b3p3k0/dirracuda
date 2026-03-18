@@ -248,7 +248,33 @@ class TestApplyExcludeAvoidFilter:
 
 
 # ---------------------------------------------------------------------------
-# Test 4: _on_treeview_click callback wiring (no stale method refs)
+# Test 4: apply_shares_filter keeps FTP rows while filtering SMB rows
+# ---------------------------------------------------------------------------
+
+class TestApplySharesFilter:
+    """Shares filter is SMB-specific and must not hide FTP protocol rows."""
+
+    def test_shares_filter_keeps_ftp_rows(self):
+        f = _get_filters()
+        result = f.apply_shares_filter(_servers(), shares_only=True)
+        keys = {r["row_key"] for r in result}
+        assert "F:1" in keys
+
+    def test_shares_filter_drops_only_zero_share_smb_rows(self):
+        f = _get_filters()
+        servers = _servers() + [{
+            "row_key": "S:3", "ip_address": "8.8.8.8", "host_type": "S",
+            "favorite": 0, "avoid": 0, "accessible_shares": 0,
+        }]
+        result = f.apply_shares_filter(servers, shares_only=True)
+        keys = {r["row_key"] for r in result}
+        assert "S:3" not in keys
+        assert "S:1" in keys and "S:2" in keys
+        assert "F:1" in keys
+
+
+# ---------------------------------------------------------------------------
+# Test 5: _on_treeview_click callback wiring (no stale method refs)
 # ---------------------------------------------------------------------------
 
 class TestClickCallbackWiring:

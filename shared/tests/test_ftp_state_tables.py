@@ -128,6 +128,55 @@ def test_migration_idempotent(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Tests: explicit protocol identity columns
+# ---------------------------------------------------------------------------
+
+def test_host_type_columns_exist_after_migration(tmp_path):
+    db = tmp_path / "test.db"
+    _make_baseline_db(db)
+    run_migrations(str(db))
+
+    smb_cols = _column_names(db, "smb_servers")
+    ftp_cols = _column_names(db, "ftp_servers")
+    assert "host_type" in smb_cols
+    assert "host_type" in ftp_cols
+
+
+def test_existing_rows_backfilled_host_type(tmp_path):
+    db = tmp_path / "test.db"
+    _make_baseline_db(db)
+
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute("INSERT INTO smb_servers (ip_address, country) VALUES (?, ?)", ("10.10.10.10", "US"))
+        conn.execute(
+            "INSERT INTO ftp_servers (ip_address, country_code, status) VALUES (?, ?, ?)",
+            ("10.10.10.11", "US", "active"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    run_migrations(str(db))
+
+    conn = sqlite3.connect(str(db))
+    try:
+        smb_type = conn.execute(
+            "SELECT host_type FROM smb_servers WHERE ip_address = ?",
+            ("10.10.10.10",),
+        ).fetchone()[0]
+        ftp_type = conn.execute(
+            "SELECT host_type FROM ftp_servers WHERE ip_address = ?",
+            ("10.10.10.11",),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    assert smb_type == "S"
+    assert ftp_type == "F"
+
+
+# ---------------------------------------------------------------------------
 # Tests: existing DB upgrade (legacy ftp_probe_cache shape)
 # ---------------------------------------------------------------------------
 

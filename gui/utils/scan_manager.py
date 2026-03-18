@@ -240,7 +240,8 @@ class ScanManager:
     
     def start_scan(self, scan_options: dict, backend_path: str,
                   progress_callback: Callable[[float, str, str], None],
-                  log_callback: Optional[Callable[[str], None]] = None) -> bool:
+                  log_callback: Optional[Callable[[str], None]] = None,
+                  config_path: Optional[str] = None) -> bool:
         """
         Start a new SMB security scan with extended options.
 
@@ -255,6 +256,7 @@ class ScanManager:
             backend_path: Path to backend directory
             progress_callback: Function called with (percentage, status, phase)
             log_callback: Function called with raw backend stdout lines for UI streaming
+            config_path: Optional absolute/relative config file to force for CLI runs.
 
         Returns:
             True if scan started successfully, False otherwise
@@ -271,6 +273,8 @@ class ScanManager:
         try:
             # Initialize backend interface
             self.backend_interface = BackendInterface(backend_path)
+            if config_path:
+                self.backend_interface.config_path = Path(config_path).expanduser().resolve()
 
             # Set up scan state
             self.is_scanning = True
@@ -865,6 +869,7 @@ class ScanManager:
         backend_path: str,
         progress_callback: Callable,
         log_callback: Optional[Callable[[str], None]] = None,
+        config_path: Optional[str] = None,
     ) -> bool:
         """
         Start an FTP scan in a background thread.
@@ -877,6 +882,7 @@ class ScanManager:
             backend_path: Path to SMBSeek installation directory.
             progress_callback: Called with (percentage, status, phase).
             log_callback: Called with raw stdout lines for log streaming.
+            config_path: Optional absolute/relative config file to force for CLI runs.
 
         Returns:
             True if scan started, False if already scanning or lock failed.
@@ -890,6 +896,8 @@ class ScanManager:
 
         try:
             self.backend_interface = BackendInterface(backend_path)
+            if config_path:
+                self.backend_interface.config_path = Path(config_path).expanduser().resolve()
             self.is_scanning = True
             self.scan_start_time = datetime.now()
             self.progress_callback = progress_callback

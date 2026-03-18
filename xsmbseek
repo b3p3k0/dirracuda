@@ -135,18 +135,54 @@ class XSMBSeekConfig:
         self._ensure_gui_section()["smbseek_path"] = path
     
     def get_database_path(self) -> Optional[Path]:
-        """Get database path, with fallback to SMBSeek default."""
-        db_path = self._ensure_gui_section().get("database_path")
-        if db_path:
-            path = Path(db_path)
-            return path if path.is_absolute() else (SCRIPT_DIR / path).resolve()
-        else:
-            # Default to smbseek/smbseek.db
-            return self.get_smbseek_path() / "smbseek.db"
+        """
+        Get effective database path used by both GUI reads and CLI writes.
+
+        Resolution order:
+        1) if both keys exist and disagree, prefer the one that already exists
+        2) if neither exists (or both exist), prefer legacy gui_app.database_path
+           for backward compatibility
+        3) top-level config ``database.path`` (shared SMB/FTP runtime source)
+        4) default ``<smbseek_path>/smbseek.db``
+        """
+        def _resolve_db(raw: Optional[str]) -> Optional[Path]:
+            if not raw:
+                return None
+            candidate = Path(str(raw)).expanduser()
+            return candidate if candidate.is_absolute() else (self.get_smbseek_path() / candidate).resolve()
+
+        db_cfg = self.config.get("database", {})
+        shared = _resolve_db(db_cfg.get("path")) if isinstance(db_cfg, dict) else None
+        legacy = _resolve_db(self._ensure_gui_section().get("database_path"))
+
+        if legacy and shared and legacy != shared:
+            if legacy.exists() and not shared.exists():
+                return legacy
+            if shared.exists() and not legacy.exists():
+                return shared
+            return legacy
+
+        if legacy:
+            return legacy
+        if shared:
+            return shared
+
+        return self.get_smbseek_path() / "smbseek.db"
     
     def set_database_path(self, path: Optional[str]) -> None:
-        """Set database path (None for default)."""
+        """
+        Set database path for both legacy GUI settings and shared runtime config.
+
+        Keeping both keys aligned prevents drift where GUI reads one DB while
+        smbseek/ftpseek write to another.
+        """
         self._ensure_gui_section()["database_path"] = path
+        if not isinstance(self.config.get("database"), dict):
+            self.config["database"] = {}
+        if path:
+            self.config["database"]["path"] = path
+        else:
+            self.config["database"]["path"] = "smbseek.db"
 
     def get_config_path(self) -> Path:
         """Return the underlying configuration file path."""
@@ -475,6 +511,7 @@ class XSMBSeekGUI:
         # Initialize backend interface with configured path
         try:
             self.backend_interface = BackendInterface(str(self.config.get_smbseek_path()))
+            self.backend_interface.config_path = self.config.get_config_path().expanduser().resolve()
         except Exception as e:
             raise RuntimeError(f"Failed to initialize SMBSeek interface: {e}")
         
@@ -482,6 +519,12 @@ class XSMBSeekGUI:
         try:
             db_path = self.config.get_database_path()
             self.db_reader = DatabaseReader(str(db_path))
+            _logger.info(
+                "Runtime paths | backend=%s | config=%s | db=%s",
+                self.config.get_smbseek_path(),
+                self.config.get_config_path(),
+                db_path,
+            )
         except Exception as e:
             raise RuntimeError(f"Failed to initialize database reader: {e}")
         
@@ -493,6 +536,12 @@ class XSMBSeekGUI:
             # Sync SMBSeek path from XSMBSeekConfig to SettingsManager for GUI consistency
             smbseek_path = str(self.config.get_smbseek_path())
             self.settings_manager.set_backend_path(smbseek_path)
+            self.settings_manager.set_setting("backend.config_path", str(self.config.get_config_path()))
+            db_path = str(self.config.get_database_path())
+            # Normalize both config keys to the same resolved DB path for CLI/GUI parity.
+            self.config.set_database_path(db_path)
+            self.config.save_config()
+            self.settings_manager.set_database_path(db_path, validate=False)
             
         except Exception as e:
             raise RuntimeError(f"Failed to initialize settings manager: {e}")
@@ -708,7 +757,8 @@ class XSMBSeekGUI:
             data: Data to pass to the window
         """
         try:
-            if window_type == "server_list":
+            # Unified server browser: legacy ftp_server_list alias routes here too.
+            if window_type in ("server_list", "ftp_server_list"):
                 # Check if server list window already exists
                 existing_window = self.drill_down_windows.get('server_list')
 
@@ -733,21 +783,6 @@ class XSMBSeekGUI:
                 )
             elif window_type == "data_import":
                 open_data_import_dialog(self.root, self.db_reader)
-            elif window_type == "ftp_server_list":
-                try:
-                    from gui.components.ftp_server_picker import FtpServerPickerDialog
-                    FtpServerPickerDialog(
-                        parent=self.root,
-                        db_reader=self.db_reader,
-                        config_path=str(self.config.get_config_path()),
-                        theme=self.dashboard.theme,
-                        settings_manager=self.settings_manager,
-                    )
-                except ImportError as ie:
-                    messagebox.showinfo(
-                        "FTP Servers",
-                        f"FTP browser module is not available:\n{ie}",
-                    )
             elif window_type == "recent_activity":
                 server_window = ServerListWindow(self.root, self.db_reader)
                 server_window.apply_recent_discoveries_filter()
@@ -798,14 +833,24 @@ class XSMBSeekGUI:
     def _refresh_database_connection(self) -> None:
         """Refresh database connection after configuration changes."""
         try:
-            # Reinitialize database reader with updated path
+            # Reinitialize backend interface in case SMBSeek path/config changed.
+            self.backend_interface = BackendInterface(str(self.config.get_smbseek_path()))
+            self.backend_interface.config_path = self.config.get_config_path().expanduser().resolve()
+
+            # Reinitialize database reader with updated effective path.
             db_path = self.config.get_database_path()
             self.db_reader = DatabaseReader(str(db_path))
+            _logger.info("Refreshed DB connection | db=%s", db_path)
             
-            # Update dashboard with new database reader
+            # Update dashboard dependencies with refreshed interfaces.
             if self.dashboard:
+                self.dashboard.backend_interface = self.backend_interface
                 self.dashboard.db_reader = self.db_reader
                 self.dashboard._refresh_dashboard_data()
+
+            # Keep GUI settings aligned with current backend root.
+            if self.settings_manager:
+                self.settings_manager.set_backend_path(str(self.config.get_smbseek_path()))
                 
         except Exception as e:
             messagebox.showerror(

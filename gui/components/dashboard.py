@@ -89,6 +89,7 @@ class DashboardWidget:
         self.settings_manager = SettingsManager()
         self.ransomware_indicators: List[str] = []
         self.indicator_patterns = []
+        self._mock_mode_notice_shown = False
 
         # UI components
         self.main_frame = None
@@ -331,7 +332,7 @@ class DashboardWidget:
         self.theme.apply_to_widget(self.ftp_scan_button, "button_primary")
         self.ftp_scan_button.pack(side=tk.LEFT, padx=(0, 5))
 
-        # Servers button (existing functionality)
+        # Unified servers browser (SMB + FTP rows)
         servers_button = tk.Button(
             actions_frame,
             text="📋 Servers",
@@ -339,15 +340,6 @@ class DashboardWidget:
         )
         self.theme.apply_to_widget(servers_button, "button_secondary")
         servers_button.pack(side=tk.LEFT, padx=(0, 5))
-
-        # FTP Servers browser button (Card 5)
-        ftp_servers_button = tk.Button(
-            actions_frame,
-            text="\U0001f4e1 FTP Servers",
-            command=lambda: self._open_drill_down("ftp_server_list"),
-        )
-        self.theme.apply_to_widget(ftp_servers_button, "button_secondary")
-        ftp_servers_button.pack(side=tk.LEFT, padx=(0, 5))
 
         # DB Tools button
         db_tools_button = tk.Button(
@@ -763,7 +755,8 @@ class DashboardWidget:
                 scan_options=scan_options,
                 backend_path=backend_path,
                 progress_callback=self._handle_scan_progress,
-                log_callback=self._handle_scan_log_line
+                log_callback=self._handle_scan_log_line,
+                config_path=self.config_path,
             )
             
             if success:
@@ -1802,6 +1795,7 @@ class DashboardWidget:
     def _handle_scan_button_click(self) -> None:
         """Handle scan button click based on current state."""
         if self.scan_button_state == "idle":
+            self._maybe_warn_mock_mode_persistence()
             self._check_external_scans()  # Check again before starting
             if self.scan_button_state == "idle":  # Still idle after check
                 self._show_quick_scan_dialog()
@@ -1822,6 +1816,7 @@ class DashboardWidget:
     def _handle_ftp_scan_button_click(self) -> None:
         """Handle FTP scan button click — opens FTP scan dialog."""
         if self.scan_button_state == "idle":
+            self._maybe_warn_mock_mode_persistence()
             self._check_external_scans()
             if self.scan_button_state == "idle":
                 show_ftp_scan_dialog(
@@ -1831,6 +1826,19 @@ class DashboardWidget:
                     settings_manager=getattr(self, "settings_manager", None),
                 )
         # Non-idle states: button is disabled; defensive no-op if somehow reached.
+
+    def _maybe_warn_mock_mode_persistence(self) -> None:
+        """Show one-time warning that mock scans are non-persistent."""
+        if self._mock_mode_notice_shown:
+            return
+        if not getattr(self.backend_interface, "mock_mode", False):
+            return
+        self._mock_mode_notice_shown = True
+        messagebox.showinfo(
+            "Mock Mode Active",
+            "Mock mode is enabled. Scan results are simulated and are not written to the database.",
+            parent=self.parent,
+        )
 
     def _start_ftp_scan(self, scan_options: dict) -> None:
         """Start FTP scan with options from dialog. Mirrors _start_new_scan()."""
@@ -1848,6 +1856,7 @@ class DashboardWidget:
             backend_path=backend_path,
             progress_callback=self._handle_scan_progress,
             log_callback=self._handle_scan_log_line,
+            config_path=self.config_path,
         )
 
         if started:
