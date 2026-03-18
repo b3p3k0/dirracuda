@@ -165,7 +165,7 @@ def create_filter_panel(parent, theme, filter_vars, callbacks):
     # --- Date/Shares section (below templates) ---
     shares_filter_checkbox = tk.Checkbutton(
         left_column,
-        text="SMB Shares > 0",
+        text="Shares > 0",
         variable=filter_vars['shares_filter'],
         command=callbacks['on_shares_filter_changed']
     )
@@ -349,12 +349,11 @@ def apply_date_filter(servers: List[Dict[str, Any]], filter_type: str, last_scan
 
 def apply_shares_filter(servers: List[Dict[str, Any]], shares_only: bool) -> List[Dict[str, Any]]:
     """
-    Apply SMB-accessible-shares filter to server list.
+    Apply accessible-shares filter to server list.
 
     Args:
         servers: List of servers to filter
-        shares_only: If True, only show SMB rows with accessible shares > 0.
-            FTP rows are retained because they do not have SMB share semantics.
+        shares_only: If True, only show rows with accessible shares > 0.
 
     Returns:
         Filtered list of servers
@@ -362,15 +361,7 @@ def apply_shares_filter(servers: List[Dict[str, Any]], shares_only: bool) -> Lis
     if not shares_only:
         return servers
 
-    filtered: List[Dict[str, Any]] = []
-    for server in servers:
-        host_type = server.get("host_type", "S")
-        if host_type == "F":
-            filtered.append(server)
-            continue
-        if server.get("accessible_shares", 0) > 0:
-            filtered.append(server)
-    return filtered
+    return [server for server in servers if server.get("accessible_shares", 0) > 0]
 
 
 def apply_favorites_filter(servers: List[Dict[str, Any]], favorites_only: bool, settings_manager=None) -> List[Dict[str, Any]]:

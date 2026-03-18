@@ -98,6 +98,20 @@ CREATE TABLE IF NOT EXISTS ftp_user_flags (
     FOREIGN KEY (server_id) REFERENCES ftp_servers(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS ftp_access (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    server_id            INTEGER NOT NULL,
+    session_id           INTEGER,
+    accessible           BOOLEAN DEFAULT FALSE,
+    auth_status          TEXT,
+    root_listing_available BOOLEAN DEFAULT FALSE,
+    root_entry_count     INTEGER DEFAULT 0,
+    error_message        TEXT,
+    access_details       TEXT,
+    created_at           DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (server_id) REFERENCES ftp_servers(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS ftp_probe_cache (
     server_id           INTEGER PRIMARY KEY,
     status              TEXT    DEFAULT 'unprobed',
@@ -105,6 +119,8 @@ CREATE TABLE IF NOT EXISTS ftp_probe_cache (
     indicator_matches   INTEGER DEFAULT 0,
     indicator_samples   TEXT,
     snapshot_path       TEXT,
+    accessible_dirs_count INTEGER DEFAULT 0,
+    accessible_dirs_list  TEXT,
     extracted           INTEGER DEFAULT 0,
     rce_status          TEXT    DEFAULT 'not_run',
     rce_verdict_summary TEXT,
@@ -187,6 +203,63 @@ def test_ftp_only_returns_f_rows(monkeypatch):
         assert total == 2
         assert all(r["host_type"] == "F" for r in rows)
         assert {r["ip_address"] for r in rows} == {"10.0.0.1", "10.0.0.2"}
+    finally:
+        os.unlink(path)
+
+
+def test_ftp_probe_cache_populates_accessible_columns(monkeypatch):
+    """FTP rows expose probed directory count/list via total_shares/accessible columns."""
+    path = _make_db(smb=True, ftp=True)
+    try:
+        conn = sqlite3.connect(path)
+        conn.execute(
+            "INSERT INTO ftp_servers (id, ip_address, country_code, status) VALUES (1,?,?,?)",
+            ("10.0.0.10", "US", "active"),
+        )
+        conn.execute(
+            "INSERT INTO ftp_probe_cache (server_id, status, accessible_dirs_count, accessible_dirs_list) "
+            "VALUES (1, 'clean', 2, 'pub,incoming')"
+        )
+        conn.commit()
+        conn.close()
+
+        reader = _reader(path, monkeypatch)
+        rows, total = reader.get_protocol_server_list(limit=None)
+
+        assert total == 1
+        row = rows[0]
+        assert row["host_type"] == "F"
+        assert row["total_shares"] == 2
+        assert row["accessible_shares"] == 2
+        assert row["accessible_shares_list"] == "pub,incoming"
+    finally:
+        os.unlink(path)
+
+
+def test_ftp_access_fallback_populates_count_when_probe_cache_missing(monkeypatch):
+    """Without ftp_probe_cache row, latest ftp_access root_entry_count is used for FTP shares."""
+    path = _make_db(smb=True, ftp=True)
+    try:
+        conn = sqlite3.connect(path)
+        conn.execute(
+            "INSERT INTO ftp_servers (id, ip_address, country_code, status) VALUES (1,?,?,?)",
+            ("10.0.0.20", "US", "active"),
+        )
+        conn.execute(
+            "INSERT INTO ftp_access (server_id, accessible, root_listing_available, root_entry_count) "
+            "VALUES (1, 1, 1, 7)"
+        )
+        conn.commit()
+        conn.close()
+
+        reader = _reader(path, monkeypatch)
+        rows, total = reader.get_protocol_server_list(limit=None)
+        assert total == 1
+        row = rows[0]
+        assert row["host_type"] == "F"
+        assert row["total_shares"] == 7
+        assert row["accessible_shares"] == 7
+        assert row["accessible_shares_list"] == ""
     finally:
         os.unlink(path)
 

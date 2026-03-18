@@ -37,7 +37,14 @@ from gui.utils.settings_manager import SettingsManager
 from gui.utils.probe_runner import run_probe
 from gui.utils.extract_runner import run_extract
 from gui.components import dashboard_logs
-from gui.utils import probe_cache, probe_patterns, probe_runner, extract_runner
+from gui.utils import (
+    probe_cache,
+    probe_patterns,
+    probe_runner,
+    extract_runner,
+    ftp_probe_runner,
+    ftp_probe_cache,
+)
 from gui.utils.logging_config import get_logger
 from shared.quarantine import create_quarantine_dir
 
@@ -1039,9 +1046,13 @@ class DashboardWidget:
                 return
 
             # Query database for servers with successful authentication (keep UI responsive)
+            scan_protocol = str(scan_results.get("protocol") or "").lower()
+            host_type_filter = "F" if scan_protocol == "ftp" else "S"
+
             def _fetch_servers():
                 return self._get_servers_for_bulk_ops(
-                    skip_indicator_extract=scan_options.get("bulk_extract_skip_indicators", True)
+                    skip_indicator_extract=scan_options.get("bulk_extract_skip_indicators", True),
+                    host_type_filter=host_type_filter,
                 )
 
             servers_for_ops, fetch_error = self._run_background_fetch(
@@ -1124,7 +1135,11 @@ class DashboardWidget:
             except Exception:
                 pass
 
-    def _get_servers_for_bulk_ops(self, skip_indicator_extract: bool = True) -> Dict[str, List[Dict[str, Any]]]:
+    def _get_servers_for_bulk_ops(
+        self,
+        skip_indicator_extract: bool = True,
+        host_type_filter: Optional[str] = None,
+    ) -> Dict[str, List[Dict[str, Any]]]:
         """
         Gather servers eligible for bulk probe and extract.
 
@@ -1136,9 +1151,26 @@ class DashboardWidget:
             if not self.db_reader:
                 return result
 
-            servers, _ = self.db_reader.get_server_list(limit=5000, offset=0, country_filter=None, recent_scan_only=True)
+            if hasattr(self.db_reader, "get_protocol_server_list"):
+                servers, _ = self.db_reader.get_protocol_server_list(
+                    limit=5000,
+                    offset=0,
+                    country_filter=None,
+                    recent_scan_only=True,
+                )
+            else:
+                servers, _ = self.db_reader.get_server_list(
+                    limit=5000,
+                    offset=0,
+                    country_filter=None,
+                    recent_scan_only=True,
+                )
 
             for server in servers:
+                server_host_type = (server.get("host_type") or "S").upper()
+                if host_type_filter and server_host_type != host_type_filter:
+                    continue
+
                 accessible = (server.get("accessible_shares") or 0) > 0
                 if not accessible:
                     continue
@@ -1318,7 +1350,7 @@ class DashboardWidget:
 
     def _probe_single_server(self, server: Dict[str, Any], max_dirs: int, max_files: int,
                               timeout_seconds: int, enable_rce: bool, cancel_event: threading.Event) -> Dict[str, Any]:
-        """Probe a single server."""
+        """Probe a single server (SMB or FTP)."""
         if cancel_event.is_set():
             return {
                 "ip_address": server.get("ip_address"),
@@ -1328,6 +1360,72 @@ class DashboardWidget:
             }
 
         ip_address = server.get("ip_address")
+        host_type = (server.get("host_type") or "S").upper()
+
+        # FTP probe path
+        if host_type == "F":
+            try:
+                port = int(server.get("port") or 21)
+            except Exception:
+                port = 21
+
+            max_entries = max(1, int(max_dirs) * int(max_files))
+            try:
+                snapshot = ftp_probe_runner.run_ftp_probe(
+                    ip_address,
+                    port=port,
+                    max_entries=max_entries,
+                    cancel_event=cancel_event,
+                )
+                analysis = probe_patterns.attach_indicator_analysis(snapshot, self.indicator_patterns)
+                issue_detected = bool(analysis.get("is_suspicious"))
+                status = "issue" if issue_detected else "clean"
+
+                shares = snapshot.get("shares", [])
+                first_share = shares[0] if shares else {}
+                dir_names = [
+                    d.get("name")
+                    for d in first_share.get("directories", [])
+                    if isinstance(d, dict) and d.get("name")
+                ]
+                accessible_dirs_count = len(dir_names)
+                accessible_dirs_list = ",".join(dir_names)
+                snapshot_path = str(ftp_probe_cache.get_ftp_cache_path(ip_address))
+
+                try:
+                    if self.db_reader:
+                        self.db_reader.upsert_probe_cache_for_host(
+                            ip_address,
+                            "F",
+                            status=status,
+                            indicator_matches=len(analysis.get("matches", [])),
+                            snapshot_path=snapshot_path,
+                            accessible_dirs_count=accessible_dirs_count,
+                            accessible_dirs_list=accessible_dirs_list,
+                        )
+                except Exception:
+                    pass
+
+                notes: List[str] = [f"{accessible_dirs_count} directorie(s)"]
+                if issue_detected:
+                    notes.append("Indicators detected")
+
+                return {
+                    "ip_address": ip_address,
+                    "action": "probe",
+                    "status": "success",
+                    "notes": ", ".join(notes),
+                }
+            except Exception as e:
+                status = "cancelled" if "cancel" in str(e).lower() else "failed"
+                return {
+                    "ip_address": ip_address,
+                    "action": "probe",
+                    "status": status,
+                    "notes": str(e)
+                }
+
+        # SMB probe path
         raw_shares = server.get("accessible_shares_list") or server.get("accessible_shares") or ""
         shares = [s.strip() for s in str(raw_shares).split(",") if s.strip()]
 
@@ -1365,8 +1463,9 @@ class DashboardWidget:
 
             try:
                 if self.db_reader:
-                    self.db_reader.upsert_probe_cache(
+                    self.db_reader.upsert_probe_cache_for_host(
                         ip_address,
+                        "S",
                         status="issue" if issue_detected else "clean",
                         indicator_matches=len(analysis.get("matches", [])),
                         snapshot_path=snapshot_path

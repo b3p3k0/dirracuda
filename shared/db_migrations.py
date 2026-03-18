@@ -221,6 +221,8 @@ def run_migrations(db_path: str) -> None:
                 indicator_matches   INTEGER  DEFAULT 0,
                 indicator_samples   TEXT,
                 snapshot_path       TEXT,
+                accessible_dirs_count INTEGER DEFAULT 0,
+                accessible_dirs_list  TEXT,
                 extracted           INTEGER  DEFAULT 0,
                 rce_status          TEXT     DEFAULT 'not_run',
                 rce_verdict_summary TEXT,
@@ -246,6 +248,52 @@ def run_migrations(db_path: str) -> None:
             cur.execute(
                 "ALTER TABLE ftp_probe_cache ADD COLUMN rce_verdict_summary TEXT"
             )
+        if "accessible_dirs_count" not in ftp_pc_cols:
+            cur.execute(
+                "ALTER TABLE ftp_probe_cache ADD COLUMN accessible_dirs_count INTEGER DEFAULT 0"
+            )
+        if "accessible_dirs_list" not in ftp_pc_cols:
+            cur.execute(
+                "ALTER TABLE ftp_probe_cache ADD COLUMN accessible_dirs_list TEXT"
+            )
+
+        # Backfill visible FTP share counts from latest ftp_access record per server
+        # when ftp_probe_cache lacks directory data (legacy rows prior to directory-list persistence).
+        cur.execute(
+            """
+            INSERT INTO ftp_probe_cache (server_id, accessible_dirs_count, accessible_dirs_list, updated_at)
+            SELECT
+                latest_access.server_id,
+                COALESCE(latest_access.root_entry_count, 0) AS accessible_dirs_count,
+                '' AS accessible_dirs_list,
+                CURRENT_TIMESTAMP
+            FROM (
+                SELECT a.server_id, a.accessible, a.root_listing_available, a.root_entry_count
+                FROM ftp_access a
+                INNER JOIN (
+                    SELECT server_id, MAX(id) AS max_id
+                    FROM ftp_access
+                    GROUP BY server_id
+                ) latest
+                  ON latest.server_id = a.server_id
+                 AND latest.max_id    = a.id
+            ) latest_access
+            WHERE latest_access.accessible = 1
+              AND latest_access.root_listing_available = 1
+            ON CONFLICT(server_id) DO UPDATE SET
+                accessible_dirs_count = CASE
+                    WHEN COALESCE(ftp_probe_cache.accessible_dirs_count, 0) = 0
+                    THEN excluded.accessible_dirs_count
+                    ELSE ftp_probe_cache.accessible_dirs_count
+                END,
+                accessible_dirs_list = CASE
+                    WHEN ftp_probe_cache.accessible_dirs_list IS NULL
+                      OR TRIM(ftp_probe_cache.accessible_dirs_list) = ''
+                    THEN excluded.accessible_dirs_list
+                    ELSE ftp_probe_cache.accessible_dirs_list
+                END
+            """
+        )
 
         # Protocol coexistence view — must be created after both FTP tables exist
         cur.execute(

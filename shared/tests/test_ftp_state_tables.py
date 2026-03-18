@@ -12,11 +12,14 @@ Covers:
 from __future__ import annotations
 
 import sqlite3
+import json
 from pathlib import Path
 
 import pytest
 
 from shared.db_migrations import run_migrations
+from shared.database import FtpPersistence
+from commands.ftp.models import FtpAccessOutcome
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -110,7 +113,8 @@ def test_ftp_probe_cache_has_all_columns(tmp_path):
     cols = _column_names(db, "ftp_probe_cache")
     assert {"server_id", "status", "last_probe_at", "indicator_matches",
             "indicator_samples", "snapshot_path", "extracted",
-            "rce_status", "rce_verdict_summary", "updated_at"} <= cols
+            "rce_status", "rce_verdict_summary", "updated_at",
+            "accessible_dirs_count", "accessible_dirs_list"} <= cols
 
 
 # ---------------------------------------------------------------------------
@@ -124,7 +128,8 @@ def test_migration_idempotent(tmp_path):
     assert "ftp_user_flags" in _table_names(db)
     assert "ftp_probe_cache" in _table_names(db)
     cols = _column_names(db, "ftp_probe_cache")
-    assert {"extracted", "rce_status", "rce_verdict_summary"} <= cols
+    assert {"extracted", "rce_status", "rce_verdict_summary",
+            "accessible_dirs_count", "accessible_dirs_list"} <= cols
 
 
 # ---------------------------------------------------------------------------
@@ -216,6 +221,8 @@ def test_existing_db_upgrade(tmp_path):
     assert "extracted" in cols, "extracted column should be backfilled"
     assert "rce_status" in cols, "rce_status column should be backfilled"
     assert "rce_verdict_summary" in cols, "rce_verdict_summary column should be backfilled"
+    assert "accessible_dirs_count" in cols, "accessible_dirs_count column should be backfilled"
+    assert "accessible_dirs_list" in cols, "accessible_dirs_list column should be backfilled"
 
 
 # ---------------------------------------------------------------------------
@@ -352,5 +359,48 @@ def test_fk_cascade_ftp_probe_cache(tmp_path):
             "SELECT COUNT(*) FROM ftp_probe_cache WHERE server_id=?", (ftp_id,)
         ).fetchone()[0]
         assert remaining == 0, "ftp_probe_cache row should be cascade-deleted"
+    finally:
+        conn.close()
+
+
+def test_access_batch_persists_ftp_visible_share_fields(tmp_path):
+    """persist_access_outcomes_batch should populate ftp_probe_cache visible count/list fields."""
+    db = tmp_path / "test.db"
+    _make_baseline_db(db)
+    run_migrations(str(db))
+
+    persistence = FtpPersistence(str(db))
+    outcome = FtpAccessOutcome(
+        ip="198.51.100.10",
+        country="US",
+        country_code="US",
+        port=21,
+        banner="220 FTP ready",
+        shodan_data="{}",
+        accessible=True,
+        auth_status="anonymous",
+        root_listing_available=True,
+        root_entry_count=2,
+        error_message="",
+        access_details=json.dumps({
+            "reason": "anonymous",
+            "banner": "220 FTP ready",
+            "root_entries": ["pub", "incoming"],
+        }),
+    )
+    persistence.persist_access_outcomes_batch([outcome])
+
+    conn = sqlite3.connect(str(db))
+    try:
+        row = conn.execute(
+            """
+            SELECT pc.accessible_dirs_count, pc.accessible_dirs_list
+            FROM ftp_probe_cache pc
+            JOIN ftp_servers s ON s.id = pc.server_id
+            WHERE s.ip_address = ?
+            """,
+            ("198.51.100.10",),
+        ).fetchone()
+        assert row == (2, "pub,incoming")
     finally:
         conn.close()

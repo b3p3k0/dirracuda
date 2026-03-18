@@ -80,6 +80,7 @@ class TestFtpScanDialogOptionBuild:
             "auth_timeout",
             "listing_timeout",
             "verbose",
+            "bulk_probe_enabled",
         }
         assert set(opts.keys()) == expected_keys
 
@@ -97,6 +98,7 @@ class TestFtpScanDialogOptionBuild:
         assert isinstance(opts["auth_timeout"], int)
         assert isinstance(opts["listing_timeout"], int)
         assert isinstance(opts["verbose"], bool)
+        assert isinstance(opts["bulk_probe_enabled"], bool)
 
     def test_defaults(self, tk_root):
         """Defaults match the spec when no config file exists."""
@@ -111,6 +113,7 @@ class TestFtpScanDialogOptionBuild:
         assert opts["connect_timeout"] == 5
         assert opts["auth_timeout"] == 10
         assert opts["listing_timeout"] == 15
+        assert opts["bulk_probe_enabled"] is False
 
     def test_country_passed_through(self, tk_root):
         """Manual country entry is passed through correctly."""
@@ -187,6 +190,7 @@ class TestFtpScanDialogOptionBuild:
             "ftp_scan_dialog.auth_timeout": 11,
             "ftp_scan_dialog.listing_timeout": 21,
             "ftp_scan_dialog.verbose": True,
+            "ftp_scan_dialog.bulk_probe_enabled": True,
             "ftp_scan_dialog.region_asia": True,
             "ftp_scan_dialog.region_europe": True,
         }
@@ -203,6 +207,7 @@ class TestFtpScanDialogOptionBuild:
         assert opts["auth_timeout"] == 11
         assert opts["listing_timeout"] == 21
         assert opts["verbose"] is True
+        assert opts["bulk_probe_enabled"] is True
         assert opts["country"] in ("GB,US", "US,GB")
         assert dlg.asia_var.get() is True
         assert dlg.europe_var.get() is True
@@ -221,6 +226,7 @@ class TestFtpScanDialogOptionBuild:
         dlg.auth_timeout_var.set("8")
         dlg.listing_timeout_var.set("13")
         dlg.verbose_var.set(True)
+        dlg.bulk_probe_enabled_var.set(True)
         dlg.asia_var.set(True)
 
         dlg._build_scan_options()
@@ -235,6 +241,7 @@ class TestFtpScanDialogOptionBuild:
             call("ftp_scan_dialog.auth_timeout", 8),
             call("ftp_scan_dialog.listing_timeout", 13),
             call("ftp_scan_dialog.verbose", True),
+            call("ftp_scan_dialog.bulk_probe_enabled", True),
             call("ftp_scan_dialog.region_asia", True),
         ]
         sm.set_setting.assert_has_calls(expected_calls, any_order=False)

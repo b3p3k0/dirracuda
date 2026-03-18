@@ -308,6 +308,8 @@ CREATE TABLE IF NOT EXISTS ftp_probe_cache (
     indicator_matches   INTEGER  DEFAULT 0,
     indicator_samples   TEXT,
     snapshot_path       TEXT,
+    accessible_dirs_count INTEGER DEFAULT 0,
+    accessible_dirs_list  TEXT,
     extracted           INTEGER  DEFAULT 0,
     rce_status          TEXT     DEFAULT 'not_run',
     rce_verdict_summary TEXT,

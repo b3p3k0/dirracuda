@@ -201,9 +201,15 @@ def run_access_stage(workflow: "FtpWorkflow", candidates: List[FtpCandidate]) ->
                 }),
             )
         # Login succeeded — attempt root listing.
-        list_ok, entry_count, list_reason = try_root_listing(
-            candidate.ip, candidate.port, timeout=float(listing_timeout)
+        listing_result = try_root_listing(
+            candidate.ip, candidate.port, timeout=float(listing_timeout), include_entries=True
         )
+        if isinstance(listing_result, tuple) and len(listing_result) == 4:
+            list_ok, entry_count, list_reason, root_entries = listing_result
+        else:
+            # Backward-compatible fallback if a test/mocked return uses the old 3-tuple.
+            list_ok, entry_count, list_reason = listing_result
+            root_entries = []
         if list_ok:
             return FtpAccessOutcome(
                 ip=candidate.ip,
@@ -220,6 +226,7 @@ def run_access_stage(workflow: "FtpWorkflow", candidates: List[FtpCandidate]) ->
                 access_details=json.dumps({
                     "reason": "anonymous",
                     "banner": connect_banner,
+                    "root_entries": root_entries,
                 }),
             )
         return FtpAccessOutcome(

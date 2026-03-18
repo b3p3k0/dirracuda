@@ -102,6 +102,20 @@ CREATE TABLE IF NOT EXISTS ftp_user_flags (
     FOREIGN KEY (server_id) REFERENCES ftp_servers(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS ftp_access (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    server_id            INTEGER NOT NULL,
+    session_id           INTEGER,
+    accessible           BOOLEAN DEFAULT FALSE,
+    auth_status          TEXT,
+    root_listing_available BOOLEAN DEFAULT FALSE,
+    root_entry_count     INTEGER DEFAULT 0,
+    error_message        TEXT,
+    access_details       TEXT,
+    created_at           DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (server_id) REFERENCES ftp_servers(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS ftp_probe_cache (
     server_id           INTEGER PRIMARY KEY,
     status              TEXT    DEFAULT 'unprobed',
@@ -109,6 +123,8 @@ CREATE TABLE IF NOT EXISTS ftp_probe_cache (
     indicator_matches   INTEGER DEFAULT 0,
     indicator_samples   TEXT,
     snapshot_path       TEXT,
+    accessible_dirs_count INTEGER DEFAULT 0,
+    accessible_dirs_list  TEXT,
     extracted           INTEGER DEFAULT 0,
     rce_status          TEXT    DEFAULT 'not_run',
     rce_verdict_summary TEXT,
@@ -531,6 +547,41 @@ def test_snapshot_path_coalesce_preserved(monkeypatch):
 
         assert row[0] == "clean"
         assert row[1] == "/tmp/snap.json"
+    finally:
+        os.unlink(path)
+
+
+def test_ftp_probe_writes_accessible_dirs_fields(monkeypatch):
+    """FTP probe cache write stores accessible directory count/list when provided."""
+    path = _make_db(smb=True, ftp=True)
+    try:
+        conn = sqlite3.connect(path)
+        conn.execute("INSERT INTO ftp_servers (ip_address, status) VALUES (?,?)", ("13.13.13.13", "active"))
+        conn.commit()
+        conn.close()
+
+        reader = _reader(path, monkeypatch)
+        reader.upsert_probe_cache_for_host(
+            "13.13.13.13",
+            "F",
+            status="clean",
+            indicator_matches=0,
+            snapshot_path="/tmp/ftp_probe.json",
+            accessible_dirs_count=2,
+            accessible_dirs_list="pub,incoming",
+        )
+
+        conn = sqlite3.connect(path)
+        row = conn.execute(
+            "SELECT status, accessible_dirs_count, accessible_dirs_list FROM ftp_probe_cache "
+            "WHERE server_id=(SELECT id FROM ftp_servers WHERE ip_address='13.13.13.13')"
+        ).fetchone()
+        conn.close()
+
+        assert row is not None
+        assert row[0] == "clean"
+        assert row[1] == 2
+        assert row[2] == "pub,incoming"
     finally:
         os.unlink(path)
 

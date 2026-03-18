@@ -934,6 +934,38 @@ class FtpPersistence:
                     o.root_listing_available, o.root_entry_count,
                     o.error_message, o.access_details,
                 ))
+
+                # Keep unified server-list "Shares/Accessible" columns in sync for FTP rows.
+                # We source names from access_details.root_entries (if present).
+                entries = []
+                try:
+                    details = json.loads(o.access_details) if o.access_details else {}
+                    entries = details.get("root_entries") or []
+                    if not isinstance(entries, list):
+                        entries = []
+                except Exception:
+                    entries = []
+
+                entry_names = [
+                    str(name).strip()
+                    for name in entries
+                    if isinstance(name, str) and str(name).strip()
+                ]
+                dirs_count = int(o.root_entry_count or 0) if (o.accessible and o.root_listing_available) else 0
+                dirs_list = ",".join(entry_names)
+
+                conn.execute(
+                    """
+                    INSERT INTO ftp_probe_cache
+                        (server_id, accessible_dirs_count, accessible_dirs_list, updated_at)
+                    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(server_id) DO UPDATE SET
+                        accessible_dirs_count = excluded.accessible_dirs_count,
+                        accessible_dirs_list  = excluded.accessible_dirs_list,
+                        updated_at            = CURRENT_TIMESTAMP
+                    """,
+                    (server_id, dirs_count, dirs_list),
+                )
             conn.commit()
 
 

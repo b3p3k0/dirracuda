@@ -16,7 +16,14 @@ import sys
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Sequence, Tuple
 
-from gui.utils import probe_cache, probe_runner, probe_patterns, extract_runner
+from gui.utils import (
+    probe_cache,
+    probe_runner,
+    probe_patterns,
+    extract_runner,
+    ftp_probe_cache,
+    ftp_probe_runner,
+)
 from gui.utils.probe_runner import ProbeError
 from gui.utils.database_access import DatabaseReader
 from gui.utils.dialog_helpers import ensure_dialog_focus
@@ -66,7 +73,11 @@ def show_server_detail_popup(parent_window, server_data, theme, settings_manager
 
     # Initial render (includes cached probe data if available)
     ip_address = server_data.get('ip_address', 'Unknown')
-    cached_probe = probe_cache.load_probe_result(ip_address) if ip_address else None
+    host_type = server_data.get("host_type", "S")
+    if ip_address and host_type == "F":
+        cached_probe = ftp_probe_cache.load_ftp_probe_result(ip_address)
+    else:
+        cached_probe = probe_cache.load_probe_result(ip_address) if ip_address else None
     if cached_probe and indicator_patterns:
         probe_patterns.attach_indicator_analysis(cached_probe, indicator_patterns)
     _render_server_details(text_widget, server_data, cached_probe)
@@ -548,15 +559,18 @@ def _start_probe(
     if probe_state.get("running"):
         return
 
+    host_type = server_data.get("host_type", "S")
     ip_address = server_data.get('ip_address')
     if not ip_address:
         messagebox.showwarning("Probe Unavailable", "Server IP address is missing.", parent=detail_window)
         return
 
-    accessible_shares = _parse_accessible_shares(server_data.get('accessible_shares_list', ''))
-    if not accessible_shares:
-        messagebox.showinfo("Probe", "No accessible shares to probe for this host.")
-        return
+    accessible_shares: List[str] = []
+    if host_type == "S":
+        accessible_shares = _parse_accessible_shares(server_data.get('accessible_shares_list', ''))
+        if not accessible_shares:
+            messagebox.showinfo("Probe", "No accessible shares to probe for this host.")
+            return
 
     config = config_override or _load_probe_config(settings_manager)
     indicator_patterns = probe_state.get("indicator_patterns") or []
@@ -585,25 +599,67 @@ def _start_probe(
                 except Exception:
                     db_accessor = None
 
-            result = probe_runner.run_probe(
-                ip_address,
-                accessible_shares,
-                max_directories=config["max_directories"],
-                max_files=config["max_files"],
-                timeout_seconds=config["timeout_seconds"],
-                enable_rce_analysis=enable_rce,
-                cancel_event=cancel_event,
-                db_accessor=db_accessor,
-            )
+            if host_type == "F":
+                port = 21
+                try:
+                    port = int(server_data.get("port") or 21)
+                except Exception:
+                    port = 21
+                max_entries = max(
+                    1,
+                    int(config["max_directories"]) * int(config["max_files"]),
+                )
+                result = ftp_probe_runner.run_ftp_probe(
+                    ip_address,
+                    port=port,
+                    max_entries=max_entries,
+                    cancel_event=cancel_event,
+                )
+            else:
+                result = probe_runner.run_probe(
+                    ip_address,
+                    accessible_shares,
+                    max_directories=config["max_directories"],
+                    max_files=config["max_files"],
+                    timeout_seconds=config["timeout_seconds"],
+                    enable_rce_analysis=enable_rce,
+                    cancel_event=cancel_event,
+                    db_accessor=db_accessor,
+                )
             if cancel_event.is_set():
                 # Treat as cancelled; skip success callbacks
                 detail_window.after(0, lambda: status_var.set("Probe cancelled."))
                 return
             analysis = probe_patterns.attach_indicator_analysis(result, indicator_patterns)
-            probe_cache.save_probe_result(ip_address, result)
+            if host_type == "F":
+                shares = result.get("shares", [])
+                first_share = shares[0] if shares else {}
+                dir_names = [
+                    d.get("name")
+                    for d in first_share.get("directories", [])
+                    if isinstance(d, dict) and d.get("name")
+                ]
+                server_data["total_shares"] = len(dir_names)
+                server_data["accessible_shares"] = len(dir_names)
+                server_data["accessible_shares_list"] = ",".join(dir_names)
+                if db_accessor:
+                    try:
+                        db_accessor.upsert_probe_cache_for_host(
+                            ip_address,
+                            "F",
+                            status='issue' if analysis.get("is_suspicious") else 'clean',
+                            indicator_matches=len(analysis.get("matches", [])),
+                            snapshot_path=str(ftp_probe_cache.get_ftp_cache_path(ip_address)),
+                            accessible_dirs_count=len(dir_names),
+                            accessible_dirs_list=",".join(dir_names),
+                        )
+                    except Exception:
+                        pass
+            else:
+                probe_cache.save_probe_result(ip_address, result)
             issue_detected = bool(analysis.get("is_suspicious"))
             rce_status = None
-            if enable_rce:
+            if host_type == "S" and enable_rce:
                 rce_analysis = result.get("rce_analysis") or {}
                 rce_status = rce_analysis.get("rce_status")
 
@@ -621,9 +677,23 @@ def _start_probe(
                     probe_button.configure(state=tk.NORMAL)
                 _render_server_details(text_widget, server_data, result)
                 if probe_status_callback:
-                    probe_status_callback(ip_address, 'issue' if issue_detected else 'clean')
+                    try:
+                        probe_status_callback(
+                            ip_address,
+                            'issue' if issue_detected else 'clean',
+                            row_key=server_data.get("row_key"),
+                        )
+                    except TypeError:
+                        probe_status_callback(ip_address, 'issue' if issue_detected else 'clean')
                 if rce_status_callback and rce_status:
-                    rce_status_callback(ip_address, rce_status)
+                    try:
+                        rce_status_callback(
+                            ip_address,
+                            rce_status,
+                            row_key=server_data.get("row_key"),
+                        )
+                    except TypeError:
+                        rce_status_callback(ip_address, rce_status)
 
             detail_window.after(0, on_success)
         except Exception as exc:

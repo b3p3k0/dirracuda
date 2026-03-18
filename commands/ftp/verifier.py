@@ -92,11 +92,17 @@ def try_anon_login(ip: str, port: int, timeout: float = 10.0) -> Tuple[bool, str
             pass
 
 
-def try_root_listing(ip: str, port: int, timeout: float = 15.0) -> Tuple[bool, int, str]:
+def try_root_listing(
+    ip: str,
+    port: int,
+    timeout: float = 15.0,
+    include_entries: bool = False,
+):
     """
     Attempt an anonymous FTP login and root directory listing on ip:port.
 
-    Returns (ok, count, reason):
+    Returns (ok, count, reason) by default.
+    When include_entries=True, returns (ok, count, reason, entries).
       ok     — True when listing completed
       count  — number of entries in root directory (0 on failure or empty root)
       reason — '' on success; 'list_fail' or 'timeout' on failure
@@ -110,15 +116,25 @@ def try_root_listing(ip: str, port: int, timeout: float = 15.0) -> Tuple[bool, i
             ftp.quit()
         except Exception:
             pass
+        if include_entries:
+            return True, len(entries), "", entries
         return True, len(entries), ""
     except ftplib.error_perm:
+        if include_entries:
+            return False, 0, "list_fail", []
         return False, 0, "list_fail"
     except (socket.timeout, TimeoutError):
+        if include_entries:
+            return False, 0, "timeout", []
         return False, 0, "timeout"
     except EOFError:
         # Server closed connection before listing completed.
+        if include_entries:
+            return False, 0, "list_fail", []
         return False, 0, "list_fail"
     except Exception:
+        if include_entries:
+            return False, 0, "list_fail", []
         return False, 0, "list_fail"
     finally:
         try:

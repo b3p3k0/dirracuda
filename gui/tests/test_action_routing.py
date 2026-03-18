@@ -10,7 +10,7 @@ Covers:
 - _handle_rce_status_update: same isolation pattern
 - _handle_extracted_update: row_key match; uses upsert_extracted_flag_for_host
 - delete routing: SMB-only, FTP-only, mixed; probe cache cleared for SMB only
-- _execute_probe_target: F row returns skipped/units=1; S row returns units=1
+- _execute_probe_target: F row runs FTP probe/units=1; S row returns units=1
 - _execute_extract_target: F row returns skipped
 - _launch_browse_workflow: F row opens FtpBrowserWindow, not FileBrowserWindow
 - probe progress per-target invariant: mixed S+F batch completes correctly
@@ -442,13 +442,33 @@ def test_delete_ftp_only_does_not_clear_smb_probe_cache():
 # ---------------------------------------------------------------------------
 
 
-def test_probe_ftp_row_returns_skipped():
+def test_probe_ftp_row_runs_and_persists():
     stub = _BatchMixinStub()
-    target = {"ip_address": "1.2.3.4", "host_type": "F", "row_key": "F:7", "shares": []}
-    result = stub._execute_probe_target("job-1", target, {}, threading.Event())
-    assert result["status"] == "skipped"
+    target = {
+        "ip_address": "1.2.3.4",
+        "host_type": "F",
+        "row_key": "F:7",
+        "shares": [],
+        "data": {"port": 21},
+    }
+
+    import gui.utils.ftp_probe_runner as fpr
+    import gui.utils.ftp_probe_cache as fpc
+    import gui.utils.probe_patterns as pp
+
+    fake_snapshot = {
+        "shares": [{"directories": [{"name": "pub"}, {"name": "incoming"}]}],
+    }
+    with patch.object(fpr, "run_ftp_probe", return_value=fake_snapshot), \
+         patch.object(fpc, "get_ftp_cache_path", return_value=Path("/tmp/fake_ftp_probe.json")), \
+         patch.object(pp, "attach_indicator_analysis", return_value={"is_suspicious": False, "matches": []}):
+        stub.db_reader.upsert_probe_cache_for_host = MagicMock()
+        result = stub._execute_probe_target("job-1", target, {}, threading.Event())
+
+    assert result["status"] == "success"
     assert result["units"] == 1
-    assert "FTP" in result["notes"]
+    assert "2 directorie(s)" in result["notes"]
+    stub.db_reader.upsert_probe_cache_for_host.assert_called_once()
 
 
 def test_probe_smb_row_returns_units_1(monkeypatch):
@@ -534,17 +554,21 @@ def test_browse_ftp_row_opens_ftp_browser():
 
 
 def test_probe_progress_per_target_invariant(monkeypatch):
-    """Mixed S+F probe: total=len(targets), S returns units=1, F returns units=1."""
+    """Mixed S+F probe: total=len(targets), S/F both return units=1."""
     stub = _BatchMixinStub()
 
     import gui.utils.probe_runner as pr
     import gui.utils.probe_cache as pc
     import gui.utils.probe_patterns as pp
+    import gui.utils.ftp_probe_runner as fpr
+    import gui.utils.ftp_probe_cache as fpc
 
     monkeypatch.setattr(pr, "run_probe", lambda *a, **kw: {"shares": [{"share_name": "docs"}, {"share_name": "data"}]})
     monkeypatch.setattr(pc, "save_probe_result", lambda ip, r: None)
     monkeypatch.setattr(pc, "get_probe_result_path", lambda ip: None, raising=False)
     monkeypatch.setattr(pp, "attach_indicator_analysis", lambda r, p: {"is_suspicious": False, "matches": []})
+    monkeypatch.setattr(fpr, "run_ftp_probe", lambda *a, **kw: {"shares": [{"directories": [{"name": "pub"}]}]})
+    monkeypatch.setattr(fpc, "get_ftp_cache_path", lambda ip: Path("/tmp/fake_ftp_probe.json"))
     stub.db_reader.upsert_probe_cache_for_host = MagicMock()
 
     targets = [
@@ -563,7 +587,7 @@ def test_probe_progress_per_target_invariant(monkeypatch):
     assert completed == total_units, "completed must equal total_units"
     assert results[0]["units"] == 1
     assert results[1]["units"] == 1
-    assert results[1]["status"] == "skipped"
+    assert results[1]["status"] == "success"
 
 
 # ---------------------------------------------------------------------------

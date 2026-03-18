@@ -1030,7 +1030,9 @@ class DatabaseReader:
     def upsert_probe_cache_for_host(self, ip_address: str, host_type: str, *,
                                      status: str,
                                      indicator_matches: int,
-                                     snapshot_path: Optional[str] = None) -> None:
+                                     snapshot_path: Optional[str] = None,
+                                     accessible_dirs_count: Optional[int] = None,
+                                     accessible_dirs_list: Optional[str] = None) -> None:
         """Route probe cache write to SMB or FTP tables based on host_type.
 
         Args:
@@ -1039,6 +1041,8 @@ class DatabaseReader:
             status: Probe status string
             indicator_matches: Number of indicator matches found
             snapshot_path: Optional path to probe snapshot; existing value preserved when None
+            accessible_dirs_count: Optional FTP-only accessible directory count
+            accessible_dirs_list: Optional FTP-only comma-separated directory names
 
         No-op for invalid host_type or unknown IP.
         FTP branch degrades gracefully when ftp_ tables are absent (pre-migration).
@@ -1056,20 +1060,46 @@ class DatabaseReader:
                 if not row:
                     return
                 server_id = row["id"]
-                cur.execute(
-                    f"""
-                    INSERT INTO {cache_table}
-                        (server_id, status, last_probe_at, indicator_matches, snapshot_path, updated_at)
-                    VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, CURRENT_TIMESTAMP)
-                    ON CONFLICT(server_id) DO UPDATE SET
-                        status=excluded.status,
-                        last_probe_at=excluded.last_probe_at,
-                        indicator_matches=excluded.indicator_matches,
-                        snapshot_path=COALESCE(excluded.snapshot_path, {cache_table}.snapshot_path),
-                        updated_at=CURRENT_TIMESTAMP
-                    """,
-                    (server_id, status, indicator_matches, snapshot_path),
-                )
+                if host_type == 'F':
+                    cur.execute(
+                        f"""
+                        INSERT INTO {cache_table}
+                            (server_id, status, last_probe_at, indicator_matches, snapshot_path,
+                             accessible_dirs_count, accessible_dirs_list, updated_at)
+                        VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                        ON CONFLICT(server_id) DO UPDATE SET
+                            status=excluded.status,
+                            last_probe_at=excluded.last_probe_at,
+                            indicator_matches=excluded.indicator_matches,
+                            snapshot_path=COALESCE(excluded.snapshot_path, {cache_table}.snapshot_path),
+                            accessible_dirs_count=COALESCE(excluded.accessible_dirs_count, {cache_table}.accessible_dirs_count),
+                            accessible_dirs_list=COALESCE(excluded.accessible_dirs_list, {cache_table}.accessible_dirs_list),
+                            updated_at=CURRENT_TIMESTAMP
+                        """,
+                        (
+                            server_id,
+                            status,
+                            indicator_matches,
+                            snapshot_path,
+                            accessible_dirs_count,
+                            accessible_dirs_list,
+                        ),
+                    )
+                else:
+                    cur.execute(
+                        f"""
+                        INSERT INTO {cache_table}
+                            (server_id, status, last_probe_at, indicator_matches, snapshot_path, updated_at)
+                        VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, CURRENT_TIMESTAMP)
+                        ON CONFLICT(server_id) DO UPDATE SET
+                            status=excluded.status,
+                            last_probe_at=excluded.last_probe_at,
+                            indicator_matches=excluded.indicator_matches,
+                            snapshot_path=COALESCE(excluded.snapshot_path, {cache_table}.snapshot_path),
+                            updated_at=CURRENT_TIMESTAMP
+                        """,
+                        (server_id, status, indicator_matches, snapshot_path),
+                    )
                 conn.commit()
         except sqlite3.OperationalError as exc:
             msg = str(exc).lower()
@@ -1752,9 +1782,25 @@ class DatabaseReader:
             f.scan_count,
             f.status,
             'anonymous'                AS auth_method,
-            0                          AS total_shares,
-            0                          AS accessible_shares,
-            ''                         AS accessible_shares_list,
+            COALESCE(
+                fpc.accessible_dirs_count,
+                CASE
+                    WHEN fa_latest.accessible = 1 AND fa_latest.root_listing_available = 1
+                    THEN COALESCE(fa_latest.root_entry_count, 0)
+                    ELSE 0
+                END,
+                0
+            ) AS total_shares,
+            COALESCE(
+                fpc.accessible_dirs_count,
+                CASE
+                    WHEN fa_latest.accessible = 1 AND fa_latest.root_listing_available = 1
+                    THEN COALESCE(fa_latest.root_entry_count, 0)
+                    ELSE 0
+                END,
+                0
+            ) AS accessible_shares,
+            COALESCE(fpc.accessible_dirs_list, '') AS accessible_shares_list,
             f.port,
             f.banner,
             f.anon_accessible,
@@ -1768,6 +1814,21 @@ class DatabaseReader:
         FROM ftp_servers f
         LEFT JOIN ftp_user_flags  fuf ON fuf.server_id = f.id
         LEFT JOIN ftp_probe_cache fpc ON fpc.server_id = f.id
+        LEFT JOIN (
+            SELECT
+                a.server_id,
+                a.accessible,
+                a.root_listing_available,
+                a.root_entry_count
+            FROM ftp_access a
+            INNER JOIN (
+                SELECT server_id, MAX(id) AS max_id
+                FROM ftp_access
+                GROUP BY server_id
+            ) latest
+              ON latest.server_id = a.server_id
+             AND latest.max_id    = a.id
+        ) fa_latest ON fa_latest.server_id = f.id
         {ftp_where}
         """
 

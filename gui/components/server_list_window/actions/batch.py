@@ -32,7 +32,15 @@ from shared.db_migrations import run_migrations
 from gui.components.server_list_window import export, details, filters, table
 from gui.components.batch_extract_dialog import BatchExtractSettingsDialog
 from .batch_status import ServerListWindowBatchStatusMixin
-from gui.utils import probe_cache, probe_patterns, probe_runner, extract_runner, pry_runner
+from gui.utils import (
+    probe_cache,
+    probe_patterns,
+    probe_runner,
+    extract_runner,
+    pry_runner,
+    ftp_probe_runner,
+    ftp_probe_cache,
+)
 from shared.quarantine import create_quarantine_dir
 
 from .batch_operations import ServerListWindowBatchOperationsMixin
@@ -174,11 +182,65 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
         row_key = target.get("row_key")
 
         if host_type == "F":
+            port = 21
+            try:
+                port = int((target.get("data") or {}).get("port") or 21)
+            except Exception:
+                port = 21
+            limits = options.get("limits", {}) or {}
+            max_entries = max(
+                1,
+                int(limits.get("max_directories", 3)) * int(limits.get("max_files", 5)),
+            )
+            snapshot = ftp_probe_runner.run_ftp_probe(
+                ip_address,
+                port=port,
+                max_entries=max_entries,
+                cancel_event=cancel_event,
+            )
+            analysis = probe_patterns.attach_indicator_analysis(snapshot, self.indicator_patterns)
+            issue_detected = bool(analysis.get("is_suspicious"))
+            status = "issue" if issue_detected else "clean"
+            shares = snapshot.get("shares", [])
+            first_share = shares[0] if shares else {}
+            dir_names = [
+                d.get("name")
+                for d in first_share.get("directories", [])
+                if isinstance(d, dict) and d.get("name")
+            ]
+            accessible_dirs_count = len(dir_names)
+            accessible_dirs_list = ",".join(dir_names)
+            snapshot_path = str(ftp_probe_cache.get_ftp_cache_path(ip_address))
+
+            for server in self.all_servers:
+                if server.get("row_key") == row_key:
+                    server["total_shares"] = accessible_dirs_count
+                    server["accessible_shares"] = accessible_dirs_count
+                    server["accessible_shares_list"] = accessible_dirs_list
+                    break
+
+            self._handle_probe_status_update(ip_address, status, row_key=row_key)
+            try:
+                self.db_reader.upsert_probe_cache_for_host(
+                    ip_address,
+                    host_type,
+                    status=status,
+                    indicator_matches=len(analysis.get("matches", [])),
+                    snapshot_path=snapshot_path,
+                    accessible_dirs_count=accessible_dirs_count,
+                    accessible_dirs_list=accessible_dirs_list,
+                )
+            except Exception:
+                pass
+
+            notes: List[str] = [f"{accessible_dirs_count} directorie(s)"]
+            if issue_detected:
+                notes.append("Indicators detected")
             return {
                 "ip_address": ip_address,
                 "action": "probe",
-                "status": "skipped",
-                "notes": "FTP probe not yet supported",
+                "status": "success",
+                "notes": ", ".join(notes),
                 "units": 1,
             }
 

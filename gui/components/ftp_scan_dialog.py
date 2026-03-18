@@ -73,6 +73,7 @@ class FtpScanDialog:
         self.auth_timeout_var = tk.StringVar()
         self.listing_timeout_var = tk.StringVar()
         self.verbose_var = tk.BooleanVar(value=False)
+        self.bulk_probe_enabled_var = tk.BooleanVar(value=False)
 
         self._load_config_defaults()
         self._load_initial_values()
@@ -212,6 +213,9 @@ class FtpScanDialog:
             self.verbose_var.set(
                 bool(self._settings_manager.get_setting("ftp_scan_dialog.verbose", False))
             )
+            self.bulk_probe_enabled_var.set(
+                bool(self._settings_manager.get_setting("ftp_scan_dialog.bulk_probe_enabled", False))
+            )
 
             self.africa_var.set(bool(self._settings_manager.get_setting("ftp_scan_dialog.region_africa", False)))
             self.asia_var.set(bool(self._settings_manager.get_setting("ftp_scan_dialog.region_asia", False)))
@@ -349,6 +353,7 @@ class FtpScanDialog:
 
         # Right column
         self._create_verbose_option(right)
+        self._create_bulk_probe_option(right)
         self._create_concurrency_options(right)
         self._create_timeout_options(right)
 
@@ -554,6 +559,35 @@ class FtpScanDialog:
         )
         self.theme.apply_to_widget(cb, "checkbox")
         cb.pack(anchor="w", padx=12, pady=(6, 4))
+
+    def _create_bulk_probe_option(self, parent: tk.Frame) -> None:
+        """Create optional post-scan probe checkbox."""
+        container = tk.Frame(parent)
+        self.theme.apply_to_widget(container, "card")
+        container.pack(fill=tk.X, padx=15, pady=(0, 10))
+
+        self._create_accent_heading(container, "🔍 Bulk Probe").pack(fill=tk.X)
+
+        options_frame = tk.Frame(container)
+        self.theme.apply_to_widget(options_frame, "card")
+        options_frame.pack(fill=tk.X, pady=(5, 5))
+
+        bulk_probe_checkbox = tk.Checkbutton(
+            options_frame,
+            text="Run bulk probe after scan",
+            variable=self.bulk_probe_enabled_var,
+            font=self.theme.fonts["small"],
+        )
+        self.theme.apply_to_widget(bulk_probe_checkbox, "checkbox")
+        bulk_probe_checkbox.pack(anchor="w", padx=10, pady=2)
+
+        info_label = self.theme.create_styled_label(
+            container,
+            "Automatically run protocol-aware probe on discovered FTP hosts.",
+            "small",
+            fg=self.theme.colors["text_secondary"],
+        )
+        info_label.pack(anchor="w", padx=15, pady=(0, 5))
 
     # ------------------------------------------------------------------
     # Concurrency
@@ -808,6 +842,9 @@ class FtpScanDialog:
                 self._settings_manager.set_setting("ftp_scan_dialog.auth_timeout", auth_timeout)
                 self._settings_manager.set_setting("ftp_scan_dialog.listing_timeout", listing_timeout)
                 self._settings_manager.set_setting("ftp_scan_dialog.verbose", verbose)
+                self._settings_manager.set_setting(
+                    "ftp_scan_dialog.bulk_probe_enabled", bool(self.bulk_probe_enabled_var.get())
+                )
 
                 self._settings_manager.set_setting("ftp_scan_dialog.region_africa", self.africa_var.get())
                 self._settings_manager.set_setting("ftp_scan_dialog.region_asia", self.asia_var.get())
@@ -833,6 +870,7 @@ class FtpScanDialog:
             "auth_timeout": auth_timeout,
             "listing_timeout": listing_timeout,
             "verbose": verbose,
+            "bulk_probe_enabled": bool(self.bulk_probe_enabled_var.get()),
         }
 
     # ------------------------------------------------------------------
