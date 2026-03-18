@@ -61,6 +61,14 @@ class ServerListWindowBatchOperationsMixin:
     def _on_pry_selected(self) -> None:
         self._hide_context_menu()
         targets = self._build_selected_targets()
+        ftp_targets = [t for t in targets if t.get("host_type") == "F"]
+        if ftp_targets:
+            messagebox.showwarning(
+                "Pry Not Supported",
+                "Pry is an SMB-only action and cannot run on FTP server rows.",
+                parent=self.window,
+            )
+            return
         if len(targets) != 1:
             messagebox.showwarning("Select one server", "Choose exactly one server to run Pry.", parent=self.window)
             return
@@ -120,13 +128,13 @@ class ServerListWindowBatchOperationsMixin:
         self._launch_browse_workflow(targets[0])
 
     def _on_delete_selected(self) -> None:
-        """Handle delete selected servers action."""
+        """Handle delete selected rows action."""
         self._hide_context_menu()
 
         # Validate selection exists
         targets = self._build_selected_targets()
         if not targets:
-            messagebox.showwarning("No Selection", "Please select servers to delete.", parent=self.window)
+            messagebox.showwarning("No Selection", "Please select rows to delete.", parent=self.window)
             return
 
         # Check if delete already in progress
@@ -138,36 +146,59 @@ class ServerListWindowBatchOperationsMixin:
         if self._is_batch_active():
             messagebox.showinfo(
                 "Batch Active",
-                "Cannot delete servers while a batch operation is running. "
+                "Cannot delete rows while a batch operation is running. "
                 "Please wait for the batch to complete or stop it first.",
                 parent=self.window
             )
             return
 
-        # Build target IP list (deduplicate)
-        target_ips = list(set(target.get("ip_address") for target in targets if target.get("ip_address")))
+        # Dedup by row_key; fall back to synthetic key when row_key absent
+        def _row_key_or_synthetic(t):
+            rk = t.get("row_key")
+            if rk:
+                return rk
+            synthetic = f"{t.get('host_type', 'S')}:{t.get('ip_address', '')}"
+            return synthetic
 
-        if not target_ips:
-            messagebox.showwarning("No Valid IPs", "No valid IP addresses found in selection.", parent=self.window)
+        targets_by_key = {_row_key_or_synthetic(t): t for t in targets}
+
+        # Build row_specs — skip malformed entries
+        row_specs = []
+        for t in targets_by_key.values():
+            ht = t.get("host_type") or "S"
+            ip = t.get("ip_address", "").strip()
+            if ht not in ("S", "F") or not ip:
+                continue
+            row_specs.append((ht, ip))
+
+        if not row_specs:
+            messagebox.showwarning("No Valid Targets", "No valid server rows found to delete.", parent=self.window)
             return
 
-        # Check for favorites in selection
-        favorite_ips = [target.get("ip_address") for target in targets if target.get("favorite")]
+        # Build label list from validated specs only
+        validated_targets = [
+            t for t in targets_by_key.values()
+            if (t.get("host_type") or "S") in ("S", "F") and t.get("ip_address", "").strip()
+        ]
+        row_labels = [f"{t.get('host_type', 'S')} {t.get('ip_address')}" for t in validated_targets]
+        favorite_labels = [
+            lbl for t, lbl in zip(validated_targets, row_labels)
+            if t.get("data", {}).get("favorite")
+        ]
+        count = len(row_specs)
 
         # Show confirmation dialog
-        if favorite_ips:
-            # Favorites present - show explicit warning
-            favorite_list = "\n".join(f"• {ip}" for ip in favorite_ips)
+        if favorite_labels:
+            favorite_list = "\n".join(f"• {lbl}" for lbl in favorite_labels)
             message = (
-                f"You are about to delete {len(target_ips)} servers including "
-                f"{len(favorite_ips)} favorite(s):\n\n{favorite_list}\n\n"
+                f"You are about to delete {count} {'row' if count == 1 else 'rows'} including "
+                f"{len(favorite_labels)} favorite(s):\n\n{favorite_list}\n\n"
                 f"This action cannot be undone. Continue?"
             )
-            title = "Delete Favorite Servers?"
+            title = "Delete Favorite Rows?"
         else:
-            # No favorites - brief confirmation
-            message = f"Delete {len(target_ips)} selected servers? This action cannot be undone."
-            title = "Delete Servers?"
+            message = f"Delete {count} selected {'row' if count == 1 else 'rows'}? This action cannot be undone."
+            title = "Delete Rows?"
 
         confirmed = messagebox.askyesno(title, message, parent=self.window)
         if not confirmed:
@@ -175,35 +206,35 @@ class ServerListWindowBatchOperationsMixin:
 
         # Start background delete operation
         self._delete_in_progress = True
-        self._set_status(f"Deleting {len(target_ips)} servers...")
+        self._set_status(f"Deleting {count} {'row' if count == 1 else 'rows'}...")
         self._update_action_buttons_state()
 
         # Create executor and submit delete task
         executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="delete-servers")
-        future = executor.submit(self._run_delete_operation, target_ips)
+        future = executor.submit(self._run_delete_operation, row_specs)
         future.add_done_callback(lambda f: self.window.after(0, self._on_delete_complete, f))
 
-    def _run_delete_operation(self, target_ips: List[str]) -> Dict[str, Any]:
+    def _run_delete_operation(self, row_specs: List[tuple]) -> Dict[str, Any]:
         """Background thread worker for delete operation."""
         try:
-            # Call database delete
-            results = self.db_reader.bulk_delete_servers(target_ips)
+            results = self.db_reader.bulk_delete_rows(row_specs)
 
-            # If successful, clear probe cache for deleted IPs only
-            if results.get("deleted_ips"):
-                for ip in results["deleted_ips"]:
-                    try:
-                        probe_cache.clear_probe_result(ip)
-                    except Exception:
-                        pass  # Non-critical, continue
+            # Clear file-based probe cache only for SMB-deleted IPs.
+            # Probe cache is IP-keyed; clearing on FTP-only delete would
+            # also wipe the SMB probe cache for the same IP.
+            for ip in results.get("deleted_smb_ips", []):
+                try:
+                    probe_cache.clear_probe_result(ip)
+                except Exception:
+                    pass
 
             return results
 
         except Exception as e:
-            # Return error in results dict
             return {
                 "deleted_count": 0,
                 "deleted_ips": [],
+                "deleted_smb_ips": [],
                 "error": str(e)
             }
 
@@ -220,28 +251,28 @@ class ServerListWindowBatchOperationsMixin:
                 # Full success
                 messagebox.showinfo(
                     "Delete Complete",
-                    f"Deleted {deleted_count} servers successfully.",
+                    f"Deleted {deleted_count} row{'s' if deleted_count != 1 else ''} successfully.",
                     parent=self.window
                 )
             elif deleted_count > 0 and error is not None:
                 # Partial success
                 messagebox.showwarning(
                     "Partial Delete",
-                    f"Deleted {deleted_count} servers, but errors occurred:\n\n{error}",
+                    f"Deleted {deleted_count} row{'s' if deleted_count != 1 else ''}, but errors occurred:\n\n{error}",
                     parent=self.window
                 )
             elif deleted_count == 0 and error is not None:
                 # Full failure
                 messagebox.showerror(
                     "Delete Failed",
-                    f"Failed to delete servers:\n\n{error}",
+                    f"Failed to delete selected rows:\n\n{error}",
                     parent=self.window
                 )
             else:
                 # No-op (shouldn't happen)
                 messagebox.showinfo(
                     "Delete Complete",
-                    "No servers were deleted.",
+                    "No rows were deleted.",
                     parent=self.window
                 )
 
@@ -391,6 +422,30 @@ class ServerListWindowBatchOperationsMixin:
             messagebox.showerror("Missing IP", "Unable to determine IP for selected server.", parent=self.window)
             return
 
+        config_path = self._get_config_path()
+        host_type = target.get("host_type", "S")
+
+        if host_type == "F":
+            port_raw = target.get("data", {}).get("port")
+            try:
+                port = int(port_raw) if port_raw not in (None, "") else 21
+            except (TypeError, ValueError):
+                port = 21
+            banner = target.get("data", {}).get("banner")
+            from gui.components.ftp_browser_window import FtpBrowserWindow
+            FtpBrowserWindow(
+                parent=self.window,
+                ip_address=ip_addr,
+                port=port,
+                banner=banner,
+                config_path=config_path,
+                db_reader=self.db_reader,
+                theme=self.theme,
+                settings_manager=self.settings_manager,
+            )
+            return
+
+        # SMB path
         shares = self.db_reader.get_accessible_shares(ip_addr) if self.db_reader else []
 
         def _clean_share_name(name: str) -> str:
@@ -425,8 +480,6 @@ class ServerListWindowBatchOperationsMixin:
                         }
         except Exception:
             share_creds = {}
-
-        config_path = self._get_config_path()
 
         FileBrowserWindow(
             parent=self.window,
@@ -490,5 +543,7 @@ class ServerListWindowBatchOperationsMixin:
             "ip_address": ip_address,
             "auth_method": server_data.get("auth_method", ""),
             "shares": self._parse_accessible_shares(server_data.get("accessible_shares_list")),
+            "row_key": server_data.get("row_key"),
+            "host_type": server_data.get("host_type", "S"),
             "data": server_data
         }

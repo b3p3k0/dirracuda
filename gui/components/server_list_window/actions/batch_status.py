@@ -605,39 +605,49 @@ class ServerListWindowBatchStatusMixin:
 
             for server in servers:
                 ip = server.get("ip_address")
-                status = server.get("probe_status") or self._determine_probe_status(ip)
+                host_type = server.get("host_type", "S")
+                # FTP rows: use DB-supplied probe_status only — never call _determine_probe_status
+                # which reads the SMB file-based cache and IP-keyed settings_manager store.
+                # The UNION ALL query already populates probe_status from ftp_probe_cache.
+                if host_type == "F":
+                    status = server.get("probe_status") or "unprobed"
+                else:
+                    status = server.get("probe_status") or self._determine_probe_status(ip)
                 server["probe_status"] = status
                 server["probe_status_emoji"] = self._probe_status_to_emoji(status)
-                # Attach RCE status from database
-                rce_status = server.get("rce_status") or self._determine_rce_status(ip)
+                # Attach RCE status from database (protocol-aware)
+                rce_status = server.get("rce_status") or self._determine_rce_status(ip, host_type)
                 server["rce_status"] = rce_status
                 server["rce_status_emoji"] = self._rce_status_to_emoji(rce_status)
                 extracted_flag = server.get("extracted", 0)
                 server["extract_status_emoji"] = self._extract_status_to_emoji(extracted_flag)
 
-        def _determine_rce_status(self, ip_address: Optional[str]) -> str:
+        def _determine_rce_status(self, ip_address: Optional[str], host_type: str = "S") -> str:
             """Determine RCE status from database probe cache."""
             if not ip_address or not self.db_reader:
                 return 'not_run'
 
             try:
-                # Query host_probe_cache for rce_status
-                result = self.db_reader.get_rce_status(ip_address)
+                result = self.db_reader.get_rce_status_for_host(ip_address, host_type)
                 return result or 'not_run'
             except Exception:
                 return 'not_run'
 
-        def _handle_rce_status_update(self, ip_address: str, status: str) -> None:
+        def _handle_rce_status_update(self, ip_address: str, status: str, row_key: Optional[str] = None) -> None:
             """Handle RCE status update from probe/analysis."""
             if not ip_address:
                 return
 
-            # TODO Card 5: IP match may double-update S+F rows for the same IP.
-            # Re-key on row_key when batch action callers pass row_key instead of ip.
             for server in self.all_servers:
-                if server.get("ip_address") == ip_address:
-                    server["rce_status"] = status
-                    server["rce_status_emoji"] = self._rce_status_to_emoji(status)
+                if row_key is not None:
+                    if server.get("row_key") == row_key:
+                        server["rce_status"] = status
+                        server["rce_status_emoji"] = self._rce_status_to_emoji(status)
+                else:
+                    # Legacy fallback: IP match, SMB rows only
+                    if server.get("ip_address") == ip_address and server.get("host_type", "S") == "S":
+                        server["rce_status"] = status
+                        server["rce_status_emoji"] = self._rce_status_to_emoji(status)
 
             if self._is_batch_active():
                 if not self._pending_table_refresh:
@@ -701,19 +711,23 @@ class ServerListWindowBatchStatusMixin:
             except Exception:
                 return '○'
 
-        def _handle_probe_status_update(self, ip_address: str, status: str) -> None:
+        def _handle_probe_status_update(self, ip_address: str, status: str, row_key: Optional[str] = None) -> None:
             if not ip_address:
                 return
             if self.settings_manager:
                 self.settings_manager.set_probe_status(ip_address, status)
             self.probe_status_map[ip_address] = status
 
-            # TODO Card 5: IP match may double-update S+F rows for the same IP.
-            # Re-key on row_key when batch action callers pass row_key instead of ip.
             for server in self.all_servers:
-                if server.get("ip_address") == ip_address:
-                    server["probe_status"] = status
-                    server["probe_status_emoji"] = self._probe_status_to_emoji(status)
+                if row_key is not None:
+                    if server.get("row_key") == row_key:
+                        server["probe_status"] = status
+                        server["probe_status_emoji"] = self._probe_status_to_emoji(status)
+                else:
+                    # Legacy fallback: IP match, SMB rows only
+                    if server.get("ip_address") == ip_address and server.get("host_type", "S") == "S":
+                        server["probe_status"] = status
+                        server["probe_status_emoji"] = self._probe_status_to_emoji(status)
 
             if self._is_batch_active():
                 if not self._pending_table_refresh:
@@ -724,20 +738,25 @@ class ServerListWindowBatchStatusMixin:
                 self._apply_filters()
                 self._restore_selection(selected_ips)
 
-        def _handle_extracted_update(self, ip_address: str) -> None:
+        def _handle_extracted_update(self, ip_address: str, row_key: Optional[str] = None, host_type: str = "S") -> None:
             """Mark host as extracted in-memory and persist to DB."""
             if not ip_address:
                 return
             if self.db_reader:
                 try:
-                    self.db_reader.upsert_extracted_flag(ip_address, True)
+                    self.db_reader.upsert_extracted_flag_for_host(ip_address, host_type, True)
                 except Exception:
                     pass
 
             for server in self.all_servers:
-                if server.get("ip_address") == ip_address:
-                    server["extracted"] = 1
-                    server["extract_status_emoji"] = self._extract_status_to_emoji(1)
+                if row_key is not None:
+                    if server.get("row_key") == row_key:
+                        server["extracted"] = 1
+                        server["extract_status_emoji"] = self._extract_status_to_emoji(1)
+                else:
+                    if server.get("ip_address") == ip_address and server.get("host_type", "S") == host_type:
+                        server["extracted"] = 1
+                        server["extract_status_emoji"] = self._extract_status_to_emoji(1)
 
             if self._is_batch_active():
                 if not self._pending_table_refresh:

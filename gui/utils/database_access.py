@@ -1252,6 +1252,109 @@ class DatabaseReader:
                 "error": str(e)
             }
 
+    def bulk_delete_rows(self, row_specs: List[Tuple[str, str]]) -> Dict[str, Any]:
+        """
+        Delete rows by (host_type, ip_address) pairs.
+
+        'S' tuples → DELETE FROM smb_servers WHERE ip_address IN (...)
+        'F' tuples → DELETE FROM ftp_servers WHERE ip_address IN (...)
+        No cross-protocol deletion possible by construction.
+
+        Returns:
+            deleted_count:    total rows removed across both protocols
+            deleted_ips:      union of all removed IPs (for display/logging)
+            deleted_smb_ips:  IPs where the SMB row was removed — used by caller
+                              to selectively clear file-based probe cache
+            error:            error string if any partial failure, else None
+        """
+        if not row_specs:
+            return {"deleted_count": 0, "deleted_ips": [], "deleted_smb_ips": [], "error": None}
+
+        smb_ips = list({ip for ht, ip in row_specs if ht == "S" and ip})
+        ftp_ips = list({ip for ht, ip in row_specs if ht == "F" and ip})
+
+        total_deleted_count = 0
+        all_deleted_ips: List[str] = []
+        all_deleted_smb_ips: List[str] = []
+        error_parts: List[str] = []
+
+        def _append_unique(items: List[str]) -> None:
+            for ip in items:
+                if ip not in all_deleted_ips:
+                    all_deleted_ips.append(ip)
+
+        batch_size = 500
+
+        # --- SMB delete ---
+        for i in range(0, len(smb_ips), batch_size):
+            batch = smb_ips[i:i + batch_size]
+            try:
+                with self._get_connection() as conn:
+                    cur = conn.cursor()
+                    placeholders = ','.join('?' * len(batch))
+                    cur.execute(
+                        f"SELECT ip_address FROM smb_servers WHERE ip_address IN ({placeholders})",
+                        batch,
+                    )
+                    found_smb = [row["ip_address"] for row in cur.fetchall()]
+                    if not found_smb:
+                        continue
+                    fp = ','.join('?' * len(found_smb))
+                    # failure_logs has no FK — delete explicitly for SMB IPs only
+                    # TODO: failure_logs has no protocol column (schema is IP-only); deleting
+                    # by SMB IP is safe because failure_logs rows belong to SMB probes.
+                    # FTP-deleted IPs intentionally skip this to avoid clearing SMB sibling data.
+                    cur.execute(f"DELETE FROM failure_logs WHERE ip_address IN ({fp})", found_smb)
+                    cur.execute(f"DELETE FROM smb_servers WHERE ip_address IN ({fp})", found_smb)
+                    n = cur.rowcount
+                    if n > 0:
+                        conn.commit()
+                        _append_unique(found_smb)
+                        all_deleted_smb_ips.extend(found_smb)
+                        total_deleted_count += n
+            except Exception as exc:
+                error_parts.append(f"SMB delete error: {exc}")
+
+        # --- FTP delete ---
+        for i in range(0, len(ftp_ips), batch_size):
+            batch = ftp_ips[i:i + batch_size]
+            try:
+                with self._get_connection() as conn:
+                    cur = conn.cursor()
+                    placeholders = ','.join('?' * len(batch))
+                    cur.execute(
+                        f"SELECT ip_address FROM ftp_servers WHERE ip_address IN ({placeholders})",
+                        batch,
+                    )
+                    found_ftp = [row["ip_address"] for row in cur.fetchall()]
+                    if not found_ftp:
+                        continue
+                    fp = ','.join('?' * len(found_ftp))
+                    # ftp_user_flags and ftp_probe_cache CASCADE from ftp_servers — no explicit delete needed
+                    cur.execute(f"DELETE FROM ftp_servers WHERE ip_address IN ({fp})", found_ftp)
+                    n = cur.rowcount
+                    if n > 0:
+                        conn.commit()
+                        _append_unique(found_ftp)
+                        total_deleted_count += n
+            except sqlite3.OperationalError as exc:
+                if "no such table: ftp_servers" in str(exc).lower():
+                    error_parts.append("FTP tables not yet migrated; FTP rows not deleted.")
+                else:
+                    error_parts.append(f"FTP delete error: {exc}")
+            except Exception as exc:
+                error_parts.append(f"FTP delete error: {exc}")
+
+        if total_deleted_count > 0:
+            self.clear_cache()
+
+        return {
+            "deleted_count": total_deleted_count,
+            "deleted_ips": all_deleted_ips,
+            "deleted_smb_ips": all_deleted_smb_ips,
+            "error": "; ".join(error_parts) if error_parts else None,
+        }
+
     def _get_mock_data(self) -> Dict[str, Any]:
         """Get mock data for testing."""
         return {
@@ -1431,6 +1534,35 @@ class DatabaseReader:
         with self._get_connection() as conn:
             row = conn.execute(query, (ip_address,)).fetchone()
             return row["rce_status"] if row and row["rce_status"] else "not_run"
+
+    def get_rce_status_for_host(self, ip_address: str, host_type: str) -> str:
+        """
+        Get RCE analysis status for a host, protocol-aware.
+
+        Args:
+            ip_address: IP address of the host
+            host_type:  'S' → query host_probe_cache JOIN smb_servers
+                        'F' → query ftp_probe_cache JOIN ftp_servers
+
+        Returns:
+            RCE status string, or 'not_run' if not found or table absent.
+        """
+        host_type = (host_type or "S").upper()
+        if host_type == "S":
+            return self.get_rce_status(ip_address)
+        # FTP path
+        try:
+            query = """
+                SELECT pc.rce_status
+                FROM ftp_probe_cache pc
+                JOIN ftp_servers s ON pc.server_id = s.id
+                WHERE s.ip_address = ?
+            """
+            with self._get_connection() as conn:
+                row = conn.execute(query, (ip_address,)).fetchone()
+                return row["rce_status"] if row and row["rce_status"] else "not_run"
+        except sqlite3.OperationalError:
+            return "not_run"
 
     def upsert_rce_status(self, ip_address: str, rce_status: str,
                           verdict_summary: Optional[str] = None) -> None:
