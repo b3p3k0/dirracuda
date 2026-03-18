@@ -389,6 +389,11 @@ class ServerListWindowTemplateMixin:
     def _close_window(self) -> None:
         """Close the window and persist filter prefs."""
         self._persist_filter_preferences()
+        if hasattr(self, "_cancel_initial_data_load"):
+            try:
+                self._cancel_initial_data_load()
+            except Exception:
+                pass
         if self.window is not None:
             self.window.destroy()
 
@@ -402,6 +407,9 @@ class ServerListWindowTemplateMixin:
     def apply_recent_discoveries_filter(self) -> None:
         """Apply filter to show only recent discoveries (used by dashboard)."""
         try:
+            if hasattr(self, "_cancel_initial_data_load"):
+                self._cancel_initial_data_load()
+
             # Clear existing filters first
             self.search_text.set("")
             self.date_filter.set("All")

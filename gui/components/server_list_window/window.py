@@ -149,6 +149,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self.active_jobs: Dict[str, Dict[str, Any]] = {}
         self._pending_table_refresh = False
         self._pending_selection = []
+        self._initial_load_after_id = None
 
         # Window state
         self.is_advanced_mode = False
@@ -171,7 +172,8 @@ class ServerListWindow(ServerListWindowActionsMixin):
         }
 
         self._create_window()
-        self._load_data()
+        self._prime_initial_render()
+        self._schedule_initial_data_load()
 
         if self.settings_manager:
             self.probe_status_map = self.settings_manager.get_probe_status_map()
@@ -205,6 +207,70 @@ class ServerListWindow(ServerListWindowActionsMixin):
 
         # Ensure window appears on top and gains focus (without forcing modal grab)
         ensure_dialog_focus(self.window, self.parent)
+
+    def _prime_initial_render(self) -> None:
+        """
+        Force an initial paint before synchronous data loading begins.
+
+        This avoids a first-open blank frame on some window managers where the
+        first full draw can be deferred until a later expose/move event.
+        """
+        if self.window is None:
+            return
+        try:
+            self.window.update_idletasks()
+            self.window.update()
+        except tk.TclError:
+            # Best effort only; fall back to normal load path.
+            pass
+
+    def _schedule_initial_data_load(self) -> None:
+        """
+        Defer first data load until Tk has processed initial paint events.
+
+        Loading rows can take noticeable time on larger datasets; doing it in
+        __init__ can block first paint and present as a blank/transparent window.
+        """
+        if self.window is None:
+            return
+        try:
+            # Use a short timed defer (instead of after_idle) so the WM has a
+            # chance to fully map/expose the window before synchronous DB work.
+            self._initial_load_after_id = self.window.after(120, self._run_initial_data_load)
+        except tk.TclError:
+            self._initial_load_after_id = None
+            self._load_data()
+
+    def _run_initial_data_load(self) -> None:
+        """Run deferred initial load if window still exists."""
+        self._initial_load_after_id = None
+        if not self.window:
+            return
+        try:
+            if not self.window.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        self._load_data()
+        # Force a repaint pass after the synchronous table population.
+        try:
+            self.window.update_idletasks()
+            self.window.update()
+        except tk.TclError:
+            pass
+
+    def _cancel_initial_data_load(self) -> None:
+        """Cancel deferred initial load callback when another load path is chosen."""
+        if self.window is None:
+            self._initial_load_after_id = None
+            return
+        if self._initial_load_after_id is None:
+            return
+        try:
+            self.window.after_cancel(self._initial_load_after_id)
+        except tk.TclError:
+            pass
+        self._initial_load_after_id = None
 
     def _load_indicator_patterns(self) -> None:
         """Load ransomware indicator patterns from SMBSeek config."""
