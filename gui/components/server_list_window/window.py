@@ -150,6 +150,8 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self._pending_table_refresh = False
         self._pending_selection = []
         self._initial_load_after_id = None
+        self._initial_load_started = False
+        self._initial_map_bind_id = None
 
         # Window state
         self.is_advanced_mode = False
@@ -231,19 +233,49 @@ class ServerListWindow(ServerListWindowActionsMixin):
         Loading rows can take noticeable time on larger datasets; doing it in
         __init__ can block first paint and present as a blank/transparent window.
         """
-        if self.window is None:
+        if self.window is None or self._initial_load_started:
             return
         try:
-            # Use a short timed defer (instead of after_idle) so the WM has a
-            # chance to fully map/expose the window before synchronous DB work.
-            self._initial_load_after_id = self.window.after(120, self._run_initial_data_load)
+            # Trigger load as soon as the window is mapped on screen.
+            if self._initial_map_bind_id is None:
+                self._initial_map_bind_id = self.window.bind(
+                    "<Map>", self._on_window_mapped_for_initial_load, add="+"
+                )
+            # Failsafe timer in case map events are delayed/dropped on some WMs.
+            self._initial_load_after_id = self.window.after(350, self._run_initial_data_load)
         except tk.TclError:
             self._initial_load_after_id = None
-            self._load_data()
+            self._run_initial_data_load()
+
+    def _on_window_mapped_for_initial_load(self, _event=None) -> None:
+        """Start initial load right after the first map event."""
+        if self._initial_load_started or self.window is None:
+            return
+        self._cancel_initial_data_load()
+        try:
+            self._initial_load_after_id = self.window.after_idle(self._run_initial_data_load)
+        except tk.TclError:
+            self._initial_load_after_id = None
+            self._run_initial_data_load()
+
+    def _clear_initial_map_binding(self) -> None:
+        """Remove one-time map binding used for initial load scheduling."""
+        if self.window is None or self._initial_map_bind_id is None:
+            self._initial_map_bind_id = None
+            return
+        try:
+            self.window.unbind("<Map>", self._initial_map_bind_id)
+        except tk.TclError:
+            pass
+        self._initial_map_bind_id = None
 
     def _run_initial_data_load(self) -> None:
         """Run deferred initial load if window still exists."""
+        if self._initial_load_started:
+            return
+        self._initial_load_started = True
         self._initial_load_after_id = None
+        self._clear_initial_map_binding()
         if not self.window:
             return
         try:
@@ -263,14 +295,15 @@ class ServerListWindow(ServerListWindowActionsMixin):
         """Cancel deferred initial load callback when another load path is chosen."""
         if self.window is None:
             self._initial_load_after_id = None
+            self._clear_initial_map_binding()
             return
-        if self._initial_load_after_id is None:
-            return
-        try:
-            self.window.after_cancel(self._initial_load_after_id)
-        except tk.TclError:
-            pass
+        if self._initial_load_after_id is not None:
+            try:
+                self.window.after_cancel(self._initial_load_after_id)
+            except tk.TclError:
+                pass
         self._initial_load_after_id = None
+        self._clear_initial_map_binding()
 
     def _load_indicator_patterns(self) -> None:
         """Load ransomware indicator patterns from SMBSeek config."""

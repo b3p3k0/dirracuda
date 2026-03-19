@@ -2004,20 +2004,37 @@ class DashboardWidget:
             )
 
     def _start_http_scan(self, scan_options: dict) -> None:
-        """HTTP scan callback — dashboard-only placeholder until Card 2 implements backend route."""
-        # Final race-condition check before proceeding.
+        """Start HTTP scan with options from dialog. Mirrors _start_ftp_scan()."""
+        # Final race-condition check before acquiring scan lock.
         self._check_external_scans()
         if self.scan_button_state != "idle":
             return
 
-        # Card 2 will wire scan_manager.start_http_scan() here.
-        # For now, show a clear placeholder message without changing scan state or acquiring a lock.
-        messagebox.showinfo(
-            "HTTP Scan",
-            "HTTP scanning backend is not yet implemented.\n\n"
-            "Your scan options have been captured and will be used when the backend is ready (Card 2).",
-            parent=self.parent,
+        # BackendInterface expects a directory path; "." mirrors BackendInterface defaults.
+        backend_path_obj = getattr(self.backend_interface, "backend_path", None)
+        backend_path = str(backend_path_obj) if backend_path_obj else "."
+
+        started = self.scan_manager.start_http_scan(
+            scan_options=scan_options,
+            backend_path=backend_path,
+            progress_callback=self._handle_scan_progress,
+            log_callback=self._handle_scan_log_line,
+            config_path=self.config_path,
         )
+
+        if started:
+            self.current_scan_options = scan_options
+            self._reset_log_output(scan_options.get("country"))
+            self._update_scan_button_state("scanning")
+            self._show_scan_progress(scan_options.get("country"))
+            self._monitor_scan_completion()
+        else:
+            messagebox.showerror(
+                "HTTP Scan Error",
+                "Could not start HTTP scan.\n"
+                "A scan may already be running.",
+                parent=self.parent,
+            )
 
     def _update_scan_button_state(self, new_state: str) -> None:
         """Update scan button state and appearance."""

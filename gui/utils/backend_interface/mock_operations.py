@@ -150,6 +150,34 @@ def mock_ftp_scan_operation(
     }
 
 
+def mock_http_scan_operation(
+    countries: List[str],
+    progress_callback: Optional[Callable[[float, str], None]] = None,
+) -> Dict[str, Any]:
+    """Mock HTTP scan for --mock mode and tests."""
+    steps = [
+        (5.0,   "Starting HTTP scan (mock)"),
+        (15.0,  "[1/2] HTTP Discovery"),
+        (30.0,  "📊 Progress: 3/10 (30.0%)"),
+        (50.0,  "📊 Progress: 5/10 (50.0%)"),
+        (70.0,  "📊 Progress: 7/10 (70.0%)"),
+        (80.0,  "[2/2] HTTP Access Verification"),
+        (90.0,  "📊 Progress: 9/10 (90.0%)"),
+        (100.0, "🎉 HTTP scan completed successfully"),
+    ]
+    for pct, msg in steps:
+        if progress_callback:
+            progress_callback(pct, msg)
+        time.sleep(0.3)
+
+    return {
+        "success": True,
+        "hosts_scanned": 0,
+        "hosts_accessible": 0,
+        "accessible_shares": 0,
+    }
+
+
 def mock_access_on_servers_operation(ip_list: List[str], progress_callback: Optional[Callable]) -> Dict:
     """Mock access verification on specific servers."""
     if progress_callback:

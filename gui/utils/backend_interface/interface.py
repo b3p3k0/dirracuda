@@ -58,6 +58,7 @@ class BackendInterface:
         self.backend_path = Path(backend_path).resolve()
         self.cli_script = self.backend_path / "smbseek"
         self.ftp_cli_script = self.backend_path / "ftpseek"
+        self.http_cli_script = self.backend_path / "httpseek"
         self.config_path = self.backend_path / "conf" / "config.json"
         self.config_example_path = self.backend_path / "conf" / "config.json.example"
 
@@ -153,6 +154,20 @@ class BackendInterface:
         if os.getenv("XSMBSEEK_DEBUG_SUBPROCESS"):
             _logger.debug(
                 "FTP CLI command: %s with %d args", str(self.ftp_cli_script), len(args)
+            )
+        return command_list
+
+    def _build_http_cli_command(self, *args) -> List[str]:
+        """Build CLI command for httpseek using same interpreter as GUI."""
+        interpreter = sys.executable or "python3"
+        cli_args = [str(arg) for arg in args]
+        if "--config" not in cli_args:
+            cli_args.extend(["--config", str(self.config_path)])
+
+        command_list = [interpreter, str(self.http_cli_script), *cli_args]
+        if os.getenv("XSMBSEEK_DEBUG_SUBPROCESS"):
+            _logger.debug(
+                "HTTP CLI command: %s with %d args", str(self.http_cli_script), len(args)
             )
         return command_list
 
@@ -362,6 +377,45 @@ class BackendInterface:
             return mock_operations.mock_ftp_scan_operation(countries, progress_callback)
 
         cmd = self._build_ftp_cli_command()
+        if verbose:
+            cmd.append("--verbose")
+        if countries:
+            cmd.extend(["--country", ",".join(countries)])
+        if filters:
+            cmd.extend(["--filter", filters])
+
+        return process_runner.execute_with_progress(
+            self,
+            cmd,
+            progress_callback,
+            log_callback=log_callback,
+        )
+
+    def run_http_scan(
+        self,
+        countries: List[str],
+        progress_callback: Optional[Callable] = None,
+        log_callback: Optional[Callable[[str], None]] = None,
+        filters: str = None,
+        verbose: bool = True,
+    ) -> Dict:
+        """
+        Execute HTTP scan workflow via httpseek CLI subprocess.
+
+        Args:
+            countries: ISO country codes (empty list = global scan).
+            progress_callback: Called with (percentage, message) during scan.
+            log_callback: Called with raw stdout lines for log streaming.
+            filters: Custom Shodan filters string to append to query (raw syntax).
+            verbose: Pass --verbose for parseable progress output.
+
+        Returns:
+            Result dict with 'success' key and parsed summary stats.
+        """
+        if self.mock_mode:
+            return mock_operations.mock_http_scan_operation(countries, progress_callback)
+
+        cmd = self._build_http_cli_command()
         if verbose:
             cmd.append("--verbose")
         if countries:
