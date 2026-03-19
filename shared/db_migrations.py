@@ -8,8 +8,12 @@ Currently installs:
 - ftp_access: per-session FTP access summary.
 - ftp_user_flags: per-FTP-server user flags (favorite/avoid/notes), parallel to host_user_flags.
 - ftp_probe_cache: per-FTP-server probe cache (status/indicators/extracted/rce), parallel to host_probe_cache.
-- v_host_protocols: view resolving has_smb / has_ftp / protocol_presence per IP.
-- Timestamp canonicalization: normalizes existing T-format timestamps in smb_servers/ftp_servers
+- http_servers: HTTP server registry (sidecar, host_type='H', coexists with smb_servers/ftp_servers per IP).
+- http_access: per-session HTTP access summary (status_code, dir_count, file_count, tls_verified).
+- http_user_flags: per-HTTP-server user flags (favorite/avoid/notes), parallel to host_user_flags.
+- http_probe_cache: per-HTTP-server probe cache (status/indicators/dirs/files/extracted/rce), parallel to host_probe_cache.
+- v_host_protocols: view resolving has_smb / has_ftp / has_http / protocol_presence per IP.
+- Timestamp canonicalization: normalizes existing T-format timestamps in smb_servers/ftp_servers/http_servers
   first_seen/last_seen to canonical YYYY-MM-DD HH:MM:SS format.
 """
 
@@ -297,23 +301,159 @@ def run_migrations(db_path: str) -> None:
             """
         )
 
-        # Protocol coexistence view — must be created after both FTP tables exist
+        # --- HTTP sidecar tables (additive; SMB and FTP schemas untouched) ---
         cur.execute(
             """
-            CREATE VIEW IF NOT EXISTS v_host_protocols AS
+            CREATE TABLE IF NOT EXISTS http_servers (
+                id           INTEGER  PRIMARY KEY AUTOINCREMENT,
+                ip_address   TEXT     NOT NULL UNIQUE,
+                host_type    TEXT     DEFAULT 'H',
+                country      TEXT,
+                country_code TEXT,
+                port         INTEGER  NOT NULL DEFAULT 80,
+                scheme       TEXT     DEFAULT 'http',
+                banner       TEXT,
+                title        TEXT,
+                shodan_data  TEXT,
+                first_seen   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                last_seen    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                scan_count   INTEGER  DEFAULT 1,
+                status       TEXT     DEFAULT 'active',
+                notes        TEXT,
+                updated_at   DATETIME,
+                created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS http_access (
+                id             INTEGER  PRIMARY KEY AUTOINCREMENT,
+                server_id      INTEGER  NOT NULL,
+                session_id     INTEGER,
+                accessible     BOOLEAN  NOT NULL DEFAULT FALSE,
+                status_code    INTEGER,
+                is_index_page  BOOLEAN  DEFAULT FALSE,
+                dir_count      INTEGER  DEFAULT 0,
+                file_count     INTEGER  DEFAULT 0,
+                tls_verified   BOOLEAN  DEFAULT FALSE,
+                error_message  TEXT,
+                access_details TEXT,
+                test_timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (server_id)  REFERENCES http_servers(id)   ON DELETE CASCADE,
+                FOREIGN KEY (session_id) REFERENCES scan_sessions(id)  ON DELETE SET NULL
+            )
+            """
+        )
+
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_http_servers_ip      ON http_servers(ip_address)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_http_servers_country ON http_servers(country)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_http_servers_seen    ON http_servers(last_seen)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_http_access_server   ON http_access(server_id)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_http_access_session  ON http_access(session_id)"
+        )
+
+        # Migration: explicit protocol identity on HTTP rows
+        cur.execute("PRAGMA table_info(http_servers)")
+        http_cols = [row[1] for row in cur.fetchall()]
+        if "host_type" not in http_cols:
+            cur.execute("ALTER TABLE http_servers ADD COLUMN host_type TEXT DEFAULT 'H'")
+        cur.execute(
+            "UPDATE http_servers SET host_type = 'H' "
+            "WHERE host_type IS NULL OR TRIM(host_type) = ''"
+        )
+
+        # --- HTTP state tables (parallel to host_user_flags / host_probe_cache) ---
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS http_user_flags (
+                server_id  INTEGER  PRIMARY KEY,
+                favorite   BOOLEAN  DEFAULT 0,
+                avoid      BOOLEAN  DEFAULT 0,
+                notes      TEXT,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (server_id) REFERENCES http_servers(id) ON DELETE CASCADE
+            )
+            """
+        )
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS http_probe_cache (
+                server_id              INTEGER  PRIMARY KEY,
+                status                 TEXT     DEFAULT 'unprobed',
+                last_probe_at          DATETIME,
+                indicator_matches      INTEGER  DEFAULT 0,
+                indicator_samples      TEXT,
+                snapshot_path          TEXT,
+                accessible_dirs_count  INTEGER  DEFAULT 0,
+                accessible_dirs_list   TEXT,
+                accessible_files_count INTEGER  DEFAULT 0,
+                extracted              INTEGER  DEFAULT 0,
+                rce_status             TEXT     DEFAULT 'not_run',
+                rce_verdict_summary    TEXT,
+                updated_at             DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (server_id) REFERENCES http_servers(id) ON DELETE CASCADE
+            )
+            """
+        )
+
+        # Idempotent column backfill for http_probe_cache (defensive; mirrors ftp_probe_cache pattern)
+        cur.execute("PRAGMA table_info(http_probe_cache)")
+        http_pc_cols = [row[1] for row in cur.fetchall()]
+        if "accessible_files_count" not in http_pc_cols:
+            cur.execute(
+                "ALTER TABLE http_probe_cache ADD COLUMN accessible_files_count INTEGER DEFAULT 0"
+            )
+        if "extracted" not in http_pc_cols:
+            cur.execute(
+                "ALTER TABLE http_probe_cache ADD COLUMN extracted INTEGER DEFAULT 0"
+            )
+        if "rce_status" not in http_pc_cols:
+            cur.execute(
+                "ALTER TABLE http_probe_cache ADD COLUMN rce_status TEXT DEFAULT 'not_run'"
+            )
+        if "rce_verdict_summary" not in http_pc_cols:
+            cur.execute(
+                "ALTER TABLE http_probe_cache ADD COLUMN rce_verdict_summary TEXT"
+            )
+
+        # Protocol coexistence view — rebuilt to include HTTP (drop+create required for new columns)
+        cur.execute("DROP VIEW IF EXISTS v_host_protocols")
+        cur.execute(
+            """
+            CREATE VIEW v_host_protocols AS
             SELECT
                 ip_address,
-                MAX(has_smb) AS has_smb,
-                MAX(has_ftp) AS has_ftp,
+                MAX(has_smb)  AS has_smb,
+                MAX(has_ftp)  AS has_ftp,
+                MAX(has_http) AS has_http,
                 CASE
-                    WHEN MAX(has_smb) = 1 AND MAX(has_ftp) = 1 THEN 'both'
-                    WHEN MAX(has_smb) = 1                       THEN 'smb_only'
-                    ELSE                                              'ftp_only'
+                    WHEN MAX(has_smb)=1 AND MAX(has_ftp)=1 AND MAX(has_http)=1 THEN 'smb+ftp+http'
+                    WHEN MAX(has_smb)=1 AND MAX(has_ftp)=1                      THEN 'both'
+                    WHEN MAX(has_smb)=1                     AND MAX(has_http)=1 THEN 'smb+http'
+                    WHEN                    MAX(has_ftp)=1  AND MAX(has_http)=1 THEN 'ftp+http'
+                    WHEN MAX(has_smb)=1                                          THEN 'smb_only'
+                    WHEN                    MAX(has_ftp)=1                       THEN 'ftp_only'
+                    ELSE                                                               'http_only'
                 END AS protocol_presence
             FROM (
-                SELECT ip_address, 1 AS has_smb, 0 AS has_ftp FROM smb_servers
+                SELECT ip_address, 1 AS has_smb, 0 AS has_ftp, 0 AS has_http FROM smb_servers
                 UNION ALL
-                SELECT ip_address, 0 AS has_smb, 1 AS has_ftp FROM ftp_servers
+                SELECT ip_address, 0 AS has_smb, 1 AS has_ftp, 0 AS has_http FROM ftp_servers
+                UNION ALL
+                SELECT ip_address, 0 AS has_smb, 0 AS has_ftp, 1 AS has_http FROM http_servers
             ) combined
             GROUP BY ip_address
             """
@@ -329,13 +469,14 @@ def run_migrations(db_path: str) -> None:
 def _normalize_existing_timestamps(cur: sqlite3.Cursor) -> None:
     """
     Idempotent one-time migration: normalize ISO T-format timestamps to
-    canonical DB format (YYYY-MM-DD HH:MM:SS) in smb_servers and ftp_servers.
+    canonical DB format (YYYY-MM-DD HH:MM:SS) in smb_servers, ftp_servers,
+    and http_servers.
 
     The WHERE clause makes this a no-op once all rows are already clean.
     Only catches OperationalError for 'no such table' (brand-new DB where
-    ftp_servers hasn't been created yet); re-raises all other errors.
+    a table hasn't been created yet); re-raises all other errors.
     """
-    for table in ("smb_servers", "ftp_servers"):
+    for table in ("smb_servers", "ftp_servers", "http_servers"):
         for col in ("first_seen", "last_seen"):
             try:
                 cur.execute(

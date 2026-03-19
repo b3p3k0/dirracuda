@@ -969,6 +969,117 @@ class FtpPersistence:
             conn.commit()
 
 
+class HttpPersistence:
+    """
+    Write operations for the HTTP sidecar tables (http_servers, http_access).
+
+    Intentionally decoupled from SMBSeekWorkflowDatabase / DatabaseManager so
+    that HTTP persistence does not depend on SMB infrastructure. All tables
+    must already exist (created by shared.db_migrations.run_migrations).
+    """
+
+    _UPSERT_SQL = """
+        INSERT INTO http_servers
+            (ip_address, country, country_code, port, scheme,
+             banner, title, shodan_data, last_seen, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT(ip_address) DO UPDATE SET
+            last_seen    = CURRENT_TIMESTAMP,
+            scan_count   = http_servers.scan_count + 1,
+            port         = excluded.port,
+            scheme       = excluded.scheme,
+            banner       = excluded.banner,
+            title        = excluded.title,
+            country      = excluded.country,
+            country_code = excluded.country_code,
+            shodan_data  = excluded.shodan_data,
+            status       = 'active',
+            updated_at   = CURRENT_TIMESTAMP
+    """
+
+    _ACCESS_SQL = """
+        INSERT INTO http_access
+            (server_id, session_id, accessible, status_code, is_index_page,
+             dir_count, file_count, tls_verified, error_message, access_details)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
+
+    def __init__(self, db_path: str) -> None:
+        self.db_path = str(db_path)
+
+    def upsert_http_server(
+        self,
+        ip: str,
+        country: str,
+        country_code: str,
+        port: int,
+        scheme: str,
+        banner: str,
+        title: str,
+        shodan_data: str,
+    ) -> int:
+        """
+        Insert or update an http_servers row.
+
+        Returns:
+            The authoritative server_id for this IP.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                self._UPSERT_SQL,
+                (ip, country, country_code, port, scheme, banner, title, shodan_data),
+            )
+            row = conn.execute(
+                "SELECT id FROM http_servers WHERE ip_address = ?", (ip,)
+            ).fetchone()
+            conn.commit()
+            return row[0]
+
+    def record_http_access(
+        self,
+        server_id: int,
+        session_id,
+        accessible: bool,
+        status_code,
+        is_index_page: bool,
+        dir_count: int,
+        file_count: int,
+        tls_verified: bool,
+        error_message,
+        access_details,
+    ) -> None:
+        """Insert a single http_access row."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                self._ACCESS_SQL,
+                (
+                    server_id,
+                    session_id,
+                    1 if accessible else 0,
+                    status_code,
+                    1 if is_index_page else 0,
+                    dir_count or 0,
+                    file_count or 0,
+                    1 if tls_verified else 0,
+                    error_message,
+                    access_details,
+                ),
+            )
+            conn.commit()
+
+    def persist_discovery_outcomes_batch(self, outcomes) -> None:
+        """
+        Stub — Card 4 will implement.
+        Batch persist stage-1 (reachability check) failed outcomes.
+        """
+
+    def persist_access_outcomes_batch(self, outcomes) -> None:
+        """
+        Stub — Card 4 will implement.
+        Batch persist stage-2 access results with http_probe_cache sync.
+        """
+
+
 def create_workflow_database(config, verbose=False) -> SMBSeekWorkflowDatabase:
     """
     Create and initialize workflow database manager.

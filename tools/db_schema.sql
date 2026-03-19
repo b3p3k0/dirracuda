@@ -317,20 +317,108 @@ CREATE TABLE IF NOT EXISTS ftp_probe_cache (
     FOREIGN KEY (server_id) REFERENCES ftp_servers(id) ON DELETE CASCADE
 );
 
--- Protocol coexistence view — resolves has_smb / has_ftp / both per IP
+-- HTTP sidecar tables (additive; parallel to FTP sidecar; SMB and FTP schemas untouched)
+
+-- HTTP server registry — one row per IP, host_type='H'
+CREATE TABLE IF NOT EXISTS http_servers (
+    id           INTEGER  PRIMARY KEY AUTOINCREMENT,
+    ip_address   TEXT     NOT NULL UNIQUE,
+    host_type    TEXT     DEFAULT 'H',
+    country      TEXT,
+    country_code TEXT,
+    port         INTEGER  NOT NULL DEFAULT 80,
+    scheme       TEXT     DEFAULT 'http',    -- 'http' | 'https'
+    banner       TEXT,                        -- Server: header / Shodan banner
+    title        TEXT,                        -- <title> or Shodan title
+    shodan_data  TEXT,                        -- raw Shodan hit JSON
+    first_seen   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_seen    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    scan_count   INTEGER  DEFAULT 1,
+    status       TEXT     DEFAULT 'active',
+    notes        TEXT,
+    updated_at   DATETIME,
+    created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_http_servers_ip      ON http_servers(ip_address);
+CREATE INDEX IF NOT EXISTS idx_http_servers_country ON http_servers(country);
+CREATE INDEX IF NOT EXISTS idx_http_servers_seen    ON http_servers(last_seen);
+
+-- Per-session HTTP access results
+CREATE TABLE IF NOT EXISTS http_access (
+    id             INTEGER  PRIMARY KEY AUTOINCREMENT,
+    server_id      INTEGER  NOT NULL,
+    session_id     INTEGER,                   -- FK to scan_sessions(id), nullable
+    accessible     BOOLEAN  NOT NULL DEFAULT FALSE,
+    status_code    INTEGER,                   -- HTTP response code
+    is_index_page  BOOLEAN  DEFAULT FALSE,    -- confirmed open directory index
+    dir_count      INTEGER  DEFAULT 0,
+    file_count     INTEGER  DEFAULT 0,
+    tls_verified   BOOLEAN  DEFAULT FALSE,
+    error_message  TEXT,
+    access_details TEXT,                      -- JSON blob (raw listing entries)
+    test_timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (server_id)  REFERENCES http_servers(id)   ON DELETE CASCADE,
+    FOREIGN KEY (session_id) REFERENCES scan_sessions(id)  ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_http_access_server  ON http_access(server_id);
+CREATE INDEX IF NOT EXISTS idx_http_access_session ON http_access(session_id);
+
+-- HTTP state tables (protocol-specific; parallel to host_user_flags / host_probe_cache)
+
+-- Per-HTTP-server user flags — favorite/avoid/notes independent from SMB/FTP flags
+CREATE TABLE IF NOT EXISTS http_user_flags (
+    server_id  INTEGER  PRIMARY KEY,
+    favorite   BOOLEAN  DEFAULT 0,
+    avoid      BOOLEAN  DEFAULT 0,
+    notes      TEXT,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (server_id) REFERENCES http_servers(id) ON DELETE CASCADE
+);
+
+-- Per-HTTP-server probe cache — status/indicators/extracted/rce independent from SMB/FTP
+CREATE TABLE IF NOT EXISTS http_probe_cache (
+    server_id              INTEGER  PRIMARY KEY,
+    status                 TEXT     DEFAULT 'unprobed',
+    last_probe_at          DATETIME,
+    indicator_matches      INTEGER  DEFAULT 0,
+    indicator_samples      TEXT,
+    snapshot_path          TEXT,
+    accessible_dirs_count  INTEGER  DEFAULT 0,
+    accessible_dirs_list   TEXT,
+    accessible_files_count INTEGER  DEFAULT 0,   -- HTTP-specific: files found in index
+    extracted              INTEGER  DEFAULT 0,
+    rce_status             TEXT     DEFAULT 'not_run',
+    rce_verdict_summary    TEXT,
+    updated_at             DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (server_id) REFERENCES http_servers(id) ON DELETE CASCADE
+);
+
+-- Protocol coexistence view — resolves has_smb / has_ftp / has_http per IP
+-- Note: DROP + CREATE is required in migrations; schema file uses CREATE VIEW IF NOT EXISTS
+-- for fresh-DB bootstrapping only (migrations rebuild this view at runtime).
 CREATE VIEW IF NOT EXISTS v_host_protocols AS
 SELECT
     ip_address,
-    MAX(has_smb) AS has_smb,
-    MAX(has_ftp) AS has_ftp,
+    MAX(has_smb)  AS has_smb,
+    MAX(has_ftp)  AS has_ftp,
+    MAX(has_http) AS has_http,
     CASE
-        WHEN MAX(has_smb) = 1 AND MAX(has_ftp) = 1 THEN 'both'
-        WHEN MAX(has_smb) = 1                       THEN 'smb_only'
-        ELSE                                              'ftp_only'
+        WHEN MAX(has_smb)=1 AND MAX(has_ftp)=1 AND MAX(has_http)=1 THEN 'smb+ftp+http'
+        WHEN MAX(has_smb)=1 AND MAX(has_ftp)=1                      THEN 'both'
+        WHEN MAX(has_smb)=1                     AND MAX(has_http)=1 THEN 'smb+http'
+        WHEN                    MAX(has_ftp)=1  AND MAX(has_http)=1 THEN 'ftp+http'
+        WHEN MAX(has_smb)=1                                          THEN 'smb_only'
+        WHEN                    MAX(has_ftp)=1                       THEN 'ftp_only'
+        ELSE                                                               'http_only'
     END AS protocol_presence
 FROM (
-    SELECT ip_address, 1 AS has_smb, 0 AS has_ftp FROM smb_servers
+    SELECT ip_address, 1 AS has_smb, 0 AS has_ftp, 0 AS has_http FROM smb_servers
     UNION ALL
-    SELECT ip_address, 0 AS has_smb, 1 AS has_ftp FROM ftp_servers
+    SELECT ip_address, 0 AS has_smb, 1 AS has_ftp, 0 AS has_http FROM ftp_servers
+    UNION ALL
+    SELECT ip_address, 0 AS has_smb, 0 AS has_ftp, 1 AS has_http FROM http_servers
 ) combined
 GROUP BY ip_address;

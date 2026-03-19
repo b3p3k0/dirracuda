@@ -981,10 +981,17 @@ class DatabaseReader:
         FTP branch degrades gracefully when ftp_ tables are absent (pre-migration).
         """
         host_type = (host_type or "").upper()
-        if not ip_address or host_type not in ('S', 'F'):
+        if not ip_address or host_type not in ('S', 'F', 'H'):
             return
-        server_table = 'smb_servers'     if host_type == 'S' else 'ftp_servers'
-        flags_table  = 'host_user_flags' if host_type == 'S' else 'ftp_user_flags'
+        if host_type == 'S':
+            server_table = 'smb_servers'
+            flags_table  = 'host_user_flags'
+        elif host_type == 'F':
+            server_table = 'ftp_servers'
+            flags_table  = 'ftp_user_flags'
+        else:
+            server_table = 'http_servers'
+            flags_table  = 'http_user_flags'
         try:
             with self._get_connection() as conn:
                 cur = conn.cursor()
@@ -1024,6 +1031,8 @@ class DatabaseReader:
             msg = str(exc).lower()
             if host_type == 'F' and "no such table: ftp_" in msg:
                 return  # FTP tables absent — migration not yet run; degrade gracefully
+            if host_type == 'H' and "no such table: http_" in msg:
+                return  # HTTP tables absent — migration not yet run; degrade gracefully
             raise
         self.clear_cache()
 
@@ -1032,26 +1041,36 @@ class DatabaseReader:
                                      indicator_matches: int,
                                      snapshot_path: Optional[str] = None,
                                      accessible_dirs_count: Optional[int] = None,
-                                     accessible_dirs_list: Optional[str] = None) -> None:
-        """Route probe cache write to SMB or FTP tables based on host_type.
+                                     accessible_dirs_list: Optional[str] = None,
+                                     accessible_files_count: Optional[int] = None) -> None:
+        """Route probe cache write to SMB, FTP, or HTTP tables based on host_type.
 
         Args:
             ip_address: IP address of the host
-            host_type: 'S' for SMB (writes host_probe_cache), 'F' for FTP (writes ftp_probe_cache)
+            host_type: 'S' for SMB (host_probe_cache), 'F' for FTP (ftp_probe_cache),
+                       'H' for HTTP (http_probe_cache)
             status: Probe status string
             indicator_matches: Number of indicator matches found
             snapshot_path: Optional path to probe snapshot; existing value preserved when None
-            accessible_dirs_count: Optional FTP-only accessible directory count
-            accessible_dirs_list: Optional FTP-only comma-separated directory names
+            accessible_dirs_count: FTP/HTTP accessible directory count
+            accessible_dirs_list: FTP/HTTP comma-separated directory paths
+            accessible_files_count: HTTP-only accessible file count
 
         No-op for invalid host_type or unknown IP.
-        FTP branch degrades gracefully when ftp_ tables are absent (pre-migration).
+        FTP/HTTP branches degrade gracefully when tables are absent (pre-migration).
         """
         host_type = (host_type or "").upper()
-        if not ip_address or host_type not in ('S', 'F'):
+        if not ip_address or host_type not in ('S', 'F', 'H'):
             return
-        server_table = 'smb_servers'     if host_type == 'S' else 'ftp_servers'
-        cache_table  = 'host_probe_cache' if host_type == 'S' else 'ftp_probe_cache'
+        if host_type == 'S':
+            server_table = 'smb_servers'
+            cache_table  = 'host_probe_cache'
+        elif host_type == 'F':
+            server_table = 'ftp_servers'
+            cache_table  = 'ftp_probe_cache'
+        else:
+            server_table = 'http_servers'
+            cache_table  = 'http_probe_cache'
         try:
             with self._get_connection() as conn:
                 cur = conn.cursor()
@@ -1085,6 +1104,34 @@ class DatabaseReader:
                             accessible_dirs_list,
                         ),
                     )
+                elif host_type == 'H':
+                    cur.execute(
+                        f"""
+                        INSERT INTO {cache_table}
+                            (server_id, status, last_probe_at, indicator_matches, snapshot_path,
+                             accessible_dirs_count, accessible_dirs_list, accessible_files_count,
+                             updated_at)
+                        VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                        ON CONFLICT(server_id) DO UPDATE SET
+                            status=excluded.status,
+                            last_probe_at=excluded.last_probe_at,
+                            indicator_matches=excluded.indicator_matches,
+                            snapshot_path=COALESCE(excluded.snapshot_path, {cache_table}.snapshot_path),
+                            accessible_dirs_count=COALESCE(excluded.accessible_dirs_count, {cache_table}.accessible_dirs_count),
+                            accessible_dirs_list=COALESCE(excluded.accessible_dirs_list, {cache_table}.accessible_dirs_list),
+                            accessible_files_count=COALESCE(excluded.accessible_files_count, {cache_table}.accessible_files_count),
+                            updated_at=CURRENT_TIMESTAMP
+                        """,
+                        (
+                            server_id,
+                            status,
+                            indicator_matches,
+                            snapshot_path,
+                            accessible_dirs_count,
+                            accessible_dirs_list,
+                            accessible_files_count,
+                        ),
+                    )
                 else:
                     cur.execute(
                         f"""
@@ -1105,6 +1152,8 @@ class DatabaseReader:
             msg = str(exc).lower()
             if host_type == 'F' and "no such table: ftp_" in msg:
                 return
+            if host_type == 'H' and "no such table: http_" in msg:
+                return
             raise
         self.clear_cache()
 
@@ -1121,10 +1170,17 @@ class DatabaseReader:
         FTP branch degrades gracefully when ftp_ tables are absent (pre-migration).
         """
         host_type = (host_type or "").upper()
-        if not ip_address or host_type not in ('S', 'F'):
+        if not ip_address or host_type not in ('S', 'F', 'H'):
             return
-        server_table = 'smb_servers'     if host_type == 'S' else 'ftp_servers'
-        cache_table  = 'host_probe_cache' if host_type == 'S' else 'ftp_probe_cache'
+        if host_type == 'S':
+            server_table = 'smb_servers'
+            cache_table  = 'host_probe_cache'
+        elif host_type == 'F':
+            server_table = 'ftp_servers'
+            cache_table  = 'ftp_probe_cache'
+        else:
+            server_table = 'http_servers'
+            cache_table  = 'http_probe_cache'
         try:
             with self._get_connection() as conn:
                 cur = conn.cursor()
@@ -1148,6 +1204,8 @@ class DatabaseReader:
             msg = str(exc).lower()
             if host_type == 'F' and "no such table: ftp_" in msg:
                 return
+            if host_type == 'H' and "no such table: http_" in msg:
+                return
             raise
         self.clear_cache()
 
@@ -1167,13 +1225,20 @@ class DatabaseReader:
         FTP branch degrades gracefully when ftp_ tables are absent (pre-migration).
         """
         host_type = (host_type or "").upper()
-        if not ip_address or host_type not in ('S', 'F'):
+        if not ip_address or host_type not in ('S', 'F', 'H'):
             return
         valid_statuses = {'not_run', 'clean', 'flagged', 'unknown', 'error'}
         if rce_status not in valid_statuses:
             rce_status = 'unknown'
-        server_table = 'smb_servers'     if host_type == 'S' else 'ftp_servers'
-        cache_table  = 'host_probe_cache' if host_type == 'S' else 'ftp_probe_cache'
+        if host_type == 'S':
+            server_table = 'smb_servers'
+            cache_table  = 'host_probe_cache'
+        elif host_type == 'F':
+            server_table = 'ftp_servers'
+            cache_table  = 'ftp_probe_cache'
+        else:
+            server_table = 'http_servers'
+            cache_table  = 'http_probe_cache'
         try:
             with self._get_connection() as conn:
                 cur = conn.cursor()
@@ -1197,6 +1262,8 @@ class DatabaseReader:
         except sqlite3.OperationalError as exc:
             msg = str(exc).lower()
             if host_type == 'F' and "no such table: ftp_" in msg:
+                return
+            if host_type == 'H' and "no such table: http_" in msg:
                 return
             raise
         self.clear_cache()
@@ -1300,8 +1367,9 @@ class DatabaseReader:
         if not row_specs:
             return {"deleted_count": 0, "deleted_ips": [], "deleted_smb_ips": [], "error": None}
 
-        smb_ips = list({ip for ht, ip in row_specs if ht == "S" and ip})
-        ftp_ips = list({ip for ht, ip in row_specs if ht == "F" and ip})
+        smb_ips  = list({ip for ht, ip in row_specs if ht == "S" and ip})
+        ftp_ips  = list({ip for ht, ip in row_specs if ht == "F" and ip})
+        http_ips = list({ip for ht, ip in row_specs if ht == "H" and ip})
 
         total_deleted_count = 0
         all_deleted_ips: List[str] = []
@@ -1374,6 +1442,36 @@ class DatabaseReader:
                     error_parts.append(f"FTP delete error: {exc}")
             except Exception as exc:
                 error_parts.append(f"FTP delete error: {exc}")
+
+        # --- HTTP delete ---
+        for i in range(0, len(http_ips), batch_size):
+            batch = http_ips[i:i + batch_size]
+            try:
+                with self._get_connection() as conn:
+                    cur = conn.cursor()
+                    placeholders = ','.join('?' * len(batch))
+                    cur.execute(
+                        f"SELECT ip_address FROM http_servers WHERE ip_address IN ({placeholders})",
+                        batch,
+                    )
+                    found_http = [row["ip_address"] for row in cur.fetchall()]
+                    if not found_http:
+                        continue
+                    fp = ','.join('?' * len(found_http))
+                    # http_user_flags and http_probe_cache CASCADE from http_servers
+                    cur.execute(f"DELETE FROM http_servers WHERE ip_address IN ({fp})", found_http)
+                    n = cur.rowcount
+                    if n > 0:
+                        conn.commit()
+                        _append_unique(found_http)
+                        total_deleted_count += n
+            except sqlite3.OperationalError as exc:
+                if "no such table: http_servers" in str(exc).lower():
+                    error_parts.append("HTTP tables not yet migrated; HTTP rows not deleted.")
+                else:
+                    error_parts.append(f"HTTP delete error: {exc}")
+            except Exception as exc:
+                error_parts.append(f"HTTP delete error: {exc}")
 
         if total_deleted_count > 0:
             self.clear_cache()
@@ -1580,6 +1678,19 @@ class DatabaseReader:
         host_type = (host_type or "S").upper()
         if host_type == "S":
             return self.get_rce_status(ip_address)
+        if host_type == "H":
+            try:
+                query = """
+                    SELECT pc.rce_status
+                    FROM http_probe_cache pc
+                    JOIN http_servers s ON pc.server_id = s.id
+                    WHERE s.ip_address = ?
+                """
+                with self._get_connection() as conn:
+                    row = conn.execute(query, (ip_address,)).fetchone()
+                    return row["rce_status"] if row and row["rce_status"] else "not_run"
+            except sqlite3.OperationalError:
+                return "not_run"
         # FTP path
         try:
             query = """
@@ -1671,7 +1782,7 @@ class DatabaseReader:
             with self._get_connection() as conn:
                 row = conn.execute(
                     "SELECT COUNT(*) FROM v_host_protocols"
-                    " WHERE protocol_presence = 'both'"
+                    " WHERE has_smb = 1 AND has_ftp = 1"
                 ).fetchone()
                 return row[0] if row else 0
         except sqlite3.OperationalError:
@@ -1713,14 +1824,26 @@ class DatabaseReader:
             return self._get_mock_protocol_list(limit, offset, country_filter)
 
         try:
-            return self._query_protocol_server_list(
+            return self._query_protocol_server_list_smb_ftp_http(
                 limit, offset, country_filter, recent_scan_only
             )
         except sqlite3.OperationalError as exc:
-            # Graceful fallback when FTP tables do not yet exist (pre-migration
-            # startup). Any other OperationalError (e.g. schema bug in an
-            # existing FTP table) is intentionally re-raised.
-            if "no such table: ftp_" in str(exc).lower():
+            msg = str(exc).lower()
+            # Tier-2: HTTP tables absent (pre-HTTP migration) — try SMB+FTP
+            if "no such table: http_" in msg:
+                try:
+                    return self._query_protocol_server_list_smb_ftp(
+                        limit, offset, country_filter, recent_scan_only
+                    )
+                except sqlite3.OperationalError as exc2:
+                    # Tier-3: FTP tables also absent — fall back to SMB-only
+                    if "no such table: ftp_" in str(exc2).lower():
+                        return self._query_protocol_server_list_smb_only(
+                            limit, offset, country_filter, recent_scan_only
+                        )
+                    raise
+            # Tier-3 direct: FTP tables absent without HTTP tables (edge case)
+            elif "no such table: ftp_" in msg:
                 return self._query_protocol_server_list_smb_only(
                     limit, offset, country_filter, recent_scan_only
                 )
@@ -1832,14 +1955,110 @@ class DatabaseReader:
         {ftp_where}
         """
 
-    def _query_protocol_server_list(
+    def _build_http_arm(self, http_where: str) -> str:
+        """Return the HTTP SELECT arm for the 3-protocol UNION ALL query.
+
+        Produces the same 23 columns in the same order as _build_union_sql arms.
+        """
+        return f"""
+        SELECT
+            'H'                         AS host_type,
+            hs.id                       AS protocol_server_id,
+            'H:' || CAST(hs.id AS TEXT) AS row_key,
+            hs.ip_address,
+            hs.country,
+            hs.country_code,
+            hs.last_seen,
+            hs.scan_count,
+            hs.status,
+            'http'                      AS auth_method,
+            COALESCE(hpc.accessible_dirs_count, 0) + COALESCE(hpc.accessible_files_count, 0)
+                                        AS total_shares,
+            COALESCE(hpc.accessible_dirs_count, 0) + COALESCE(hpc.accessible_files_count, 0)
+                                        AS accessible_shares,
+            COALESCE(hpc.accessible_dirs_list, '') AS accessible_shares_list,
+            hs.port,
+            hs.banner,
+            0                           AS anon_accessible,
+            COALESCE(huf.favorite, 0)   AS favorite,
+            COALESCE(huf.avoid, 0)      AS avoid,
+            COALESCE(huf.notes, '')     AS notes,
+            COALESCE(hpc.status, 'unprobed')          AS probe_status,
+            COALESCE(hpc.indicator_matches, 0)        AS indicator_matches,
+            COALESCE(hpc.extracted, 0)                AS extracted,
+            COALESCE(hpc.rce_status, 'not_run')       AS rce_status
+        FROM http_servers hs
+        LEFT JOIN http_user_flags  huf ON huf.server_id = hs.id
+        LEFT JOIN http_probe_cache hpc ON hpc.server_id = hs.id
+        {http_where}
+        """
+
+    def _query_protocol_server_list_smb_ftp_http(
         self,
         limit: Optional[int],
         offset: int,
         country_filter: Optional[str],
         recent_scan_only: bool,
     ) -> Tuple[List[Dict], int]:
-        """Execute full UNION ALL query (SMB + FTP)."""
+        """Execute full UNION ALL query (SMB + FTP + HTTP)."""
+        with self._get_connection() as conn:
+            smb_where  = "WHERE s.status = 'active'"
+            ftp_where  = "WHERE f.status = 'active'"
+            http_where = "WHERE hs.status = 'active'"
+            smb_params:  List[Any] = []
+            ftp_params:  List[Any] = []
+            http_params: List[Any] = []
+
+            if country_filter:
+                smb_where  += " AND s.country_code = ?"
+                ftp_where  += " AND f.country_code = ?"
+                http_where += " AND hs.country_code = ?"
+                smb_params.append(country_filter)
+                ftp_params.append(country_filter)
+                http_params.append(country_filter)
+
+            if recent_scan_only:
+                cutoff = self._get_protocol_recent_cutoff(conn)
+                if cutoff:
+                    smb_where  += " AND datetime(s.last_seen)  >= datetime(?, '-1 hour')"
+                    ftp_where  += " AND datetime(f.last_seen)  >= datetime(?, '-1 hour')"
+                    http_where += " AND datetime(hs.last_seen) >= datetime(?, '-1 hour')"
+                    smb_params.append(cutoff)
+                    ftp_params.append(cutoff)
+                    http_params.append(cutoff)
+
+            union_sql = (
+                self._build_union_sql(smb_where, ftp_where)
+                + "\n        UNION ALL\n"
+                + self._build_http_arm(http_where)
+            )
+            union_params = smb_params + ftp_params + http_params
+
+            total = conn.execute(
+                f"SELECT COUNT(*) AS total FROM ({union_sql}) _u",
+                union_params,
+            ).fetchone()["total"]
+
+            data_sql = (
+                f"SELECT * FROM ({union_sql}) _u"
+                f" ORDER BY datetime(last_seen) DESC, row_key ASC"
+            )
+            data_params = list(union_params)
+            if limit is not None and limit > 0:
+                data_sql += " LIMIT ? OFFSET ?"
+                data_params += [limit, offset]
+
+            rows = conn.execute(data_sql, data_params).fetchall()
+            return [dict(row) for row in rows], total
+
+    def _query_protocol_server_list_smb_ftp(
+        self,
+        limit: Optional[int],
+        offset: int,
+        country_filter: Optional[str],
+        recent_scan_only: bool,
+    ) -> Tuple[List[Dict], int]:
+        """Execute SMB + FTP UNION ALL query (tier-2 fallback when HTTP tables absent)."""
         with self._get_connection() as conn:
             smb_where = "WHERE s.status = 'active'"
             ftp_where = "WHERE f.status = 'active'"
@@ -1967,11 +2186,11 @@ class DatabaseReader:
 
     def _get_protocol_recent_cutoff(self, conn: sqlite3.Connection) -> Optional[str]:
         """
-        Return the most recent last_seen timestamp across SMB and FTP servers.
+        Return the most recent last_seen timestamp across SMB, FTP, and HTTP servers.
 
         Uses SQL datetime() normalization to handle mixed timestamp formats
-        (YYYY-MM-DD HH:MM:SS vs YYYY-MM-DDTHH:MM:SS) correctly. If FTP tables
-        are absent, falls back to SMB only.
+        (YYYY-MM-DD HH:MM:SS vs YYYY-MM-DDTHH:MM:SS) correctly. Falls back
+        progressively if HTTP or FTP tables are absent (pre-migration).
         """
         try:
             row = conn.execute("""
@@ -1981,16 +2200,33 @@ class DatabaseReader:
                     UNION ALL
                     SELECT MAX(datetime(last_seen)) AS ts
                     FROM ftp_servers WHERE status = 'active'
+                    UNION ALL
+                    SELECT MAX(datetime(last_seen)) AS ts
+                    FROM http_servers WHERE status = 'active'
                 )
             """).fetchone()
             return row["cutoff"] if row else None
         except sqlite3.OperationalError as exc:
-            if "no such table: ftp_" in str(exc).lower():
-                row = conn.execute(
-                    "SELECT MAX(datetime(last_seen)) AS cutoff"
-                    " FROM smb_servers WHERE status = 'active'"
-                ).fetchone()
-                return row["cutoff"] if row else None
+            msg = str(exc).lower()
+            if "no such table: http_" in msg or "no such table: ftp_" in msg:
+                # Fall back to SMB + FTP only (or SMB only if FTP also absent)
+                try:
+                    row = conn.execute("""
+                        SELECT MAX(datetime(ts)) AS cutoff FROM (
+                            SELECT MAX(datetime(last_seen)) AS ts
+                            FROM smb_servers WHERE status = 'active'
+                            UNION ALL
+                            SELECT MAX(datetime(last_seen)) AS ts
+                            FROM ftp_servers WHERE status = 'active'
+                        )
+                    """).fetchone()
+                    return row["cutoff"] if row else None
+                except sqlite3.OperationalError:
+                    row = conn.execute(
+                        "SELECT MAX(datetime(last_seen)) AS cutoff"
+                        " FROM smb_servers WHERE status = 'active'"
+                    ).fetchone()
+                    return row["cutoff"] if row else None
             raise
 
     def _get_mock_protocol_list(
