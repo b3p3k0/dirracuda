@@ -32,6 +32,7 @@ from gui.utils.style import get_theme, apply_theme_to_window
 from gui.utils.scan_manager import get_scan_manager
 from gui.components.scan_dialog import show_scan_dialog
 from gui.components.ftp_scan_dialog import show_ftp_scan_dialog
+from gui.components.http_scan_dialog import show_http_scan_dialog
 from gui.components.scan_results_dialog import show_scan_results_dialog
 from gui.utils.settings_manager import get_settings_manager
 from gui.utils.probe_runner import run_probe
@@ -157,7 +158,8 @@ class DashboardWidget:
         self.external_scan_pid = None
         self.stopping_started_time = None  # Timestamp when stop was initiated
         self.ftp_scan_button = None
-        
+        self.http_scan_button = None
+
         # Callbacks
         self.drill_down_callback = None
         self.config_editor_callback = None
@@ -338,6 +340,15 @@ class DashboardWidget:
         )
         self.theme.apply_to_widget(self.ftp_scan_button, "button_primary")
         self.ftp_scan_button.pack(side=tk.LEFT, padx=(0, 5))
+
+        # HTTP Scan button
+        self.http_scan_button = tk.Button(
+            actions_frame,
+            text="🌐 Start HTTP Scan",
+            command=self._handle_http_scan_button_click
+        )
+        self.theme.apply_to_widget(self.http_scan_button, "button_primary")
+        self.http_scan_button.pack(side=tk.LEFT, padx=(0, 5))
 
         # Unified servers browser (SMB + FTP rows)
         servers_button = tk.Button(
@@ -1931,6 +1942,21 @@ class DashboardWidget:
                 )
         # Non-idle states: button is disabled; defensive no-op if somehow reached.
 
+    def _handle_http_scan_button_click(self) -> None:
+        """Handle HTTP scan button click — opens HTTP scan dialog."""
+        if self.scan_button_state == "idle":
+            self._maybe_warn_mock_mode_persistence()
+            self._check_external_scans()
+            if self.scan_button_state == "idle":
+                show_http_scan_dialog(
+                    parent=self.parent,
+                    config_path=self.config_path,
+                    scan_start_callback=self._start_http_scan,
+                    settings_manager=getattr(self, "settings_manager", None),
+                    config_editor_callback=self._open_config_editor_from_scan,
+                )
+        # Non-idle states: button is disabled; defensive no-op if somehow reached.
+
     def _maybe_warn_mock_mode_persistence(self) -> None:
         """Show one-time warning that mock scans are non-persistent."""
         if self._mock_mode_notice_shown:
@@ -1977,6 +2003,22 @@ class DashboardWidget:
                 parent=self.parent,
             )
 
+    def _start_http_scan(self, scan_options: dict) -> None:
+        """HTTP scan callback — dashboard-only placeholder until Card 2 implements backend route."""
+        # Final race-condition check before proceeding.
+        self._check_external_scans()
+        if self.scan_button_state != "idle":
+            return
+
+        # Card 2 will wire scan_manager.start_http_scan() here.
+        # For now, show a clear placeholder message without changing scan state or acquiring a lock.
+        messagebox.showinfo(
+            "HTTP Scan",
+            "HTTP scanning backend is not yet implemented.\n\n"
+            "Your scan options have been captured and will be used when the backend is ready (Card 2).",
+            parent=self.parent,
+        )
+
     def _update_scan_button_state(self, new_state: str) -> None:
         """Update scan button state and appearance."""
         self.scan_button_state = new_state
@@ -1987,28 +2029,40 @@ class DashboardWidget:
             self.stopping_started_time = None  # Clear stop timeout tracking
             if self.ftp_scan_button is not None:
                 self.ftp_scan_button.config(state=tk.NORMAL)
+            if self.http_scan_button is not None:
+                self.http_scan_button.config(state=tk.NORMAL)
         elif new_state == "disabled_external":
             self._set_button_to_disabled()
             self._show_status_bar(f"Scan running by PID: {self.external_scan_pid} - Please wait")
             if self.ftp_scan_button is not None:
                 self.ftp_scan_button.config(state=tk.DISABLED)
+            if self.http_scan_button is not None:
+                self.http_scan_button.config(state=tk.DISABLED)
         elif new_state == "scanning":
             self._set_button_to_stop()
             self._hide_status_bar()
             if self.ftp_scan_button is not None:
                 self.ftp_scan_button.config(state=tk.DISABLED)
+            if self.http_scan_button is not None:
+                self.http_scan_button.config(state=tk.DISABLED)
         elif new_state == "stopping":
             self._set_button_to_stopping()
             if self.ftp_scan_button is not None:
                 self.ftp_scan_button.config(state=tk.DISABLED)
+            if self.http_scan_button is not None:
+                self.http_scan_button.config(state=tk.DISABLED)
         elif new_state == "retry":
             self._set_button_to_retry()
             if self.ftp_scan_button is not None:
                 self.ftp_scan_button.config(state=tk.DISABLED)
+            if self.http_scan_button is not None:
+                self.http_scan_button.config(state=tk.DISABLED)
         elif new_state == "error":
             self._set_button_to_error()
             if self.ftp_scan_button is not None:
                 self.ftp_scan_button.config(state=tk.DISABLED)
+            if self.http_scan_button is not None:
+                self.http_scan_button.config(state=tk.DISABLED)
     
     def _set_button_to_start(self) -> None:
         """Configure button for start state."""
