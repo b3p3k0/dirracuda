@@ -190,6 +190,27 @@
       "max_concurrent_hosts": 4
     }
   },
+  "http": {
+    "shodan": {
+      "query_limits": {
+        "max_results": 1000
+      }
+    },
+    "verification": {
+      "connect_timeout": 5,
+      "request_timeout": 10,
+      "subdir_timeout": 8,
+      "allow_insecure_tls": true,
+      "verify_http": true,
+      "verify_https": true
+    },
+    "discovery": {
+      "max_concurrent_hosts": 10
+    },
+    "access": {
+      "max_concurrent_hosts": 4
+    }
+  },
   "rce": {
     "enabled_default": false,
     "safe_active_budget": {

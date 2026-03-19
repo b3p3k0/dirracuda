@@ -1069,15 +1069,142 @@ class HttpPersistence:
 
     def persist_discovery_outcomes_batch(self, outcomes) -> None:
         """
-        Stub — Card 4 will implement.
         Batch persist stage-1 (reachability check) failed outcomes.
+
+        For each HttpDiscoveryOutcome:
+          - upsert http_servers row
+          - insert http_access row (accessible=0, all counts 0)
+          - no http_probe_cache entry for stage-1 failures
         """
+        import json
+        if not outcomes:
+            return
+        with sqlite3.connect(self.db_path) as conn:
+            for o in outcomes:
+                conn.execute(
+                    self._UPSERT_SQL,
+                    (
+                        o.ip,
+                        o.country,
+                        o.country_code,
+                        o.port,
+                        o.scheme,
+                        o.banner,
+                        o.title,
+                        o.shodan_data if isinstance(o.shodan_data, str)
+                        else json.dumps(o.shodan_data),
+                    ),
+                )
+                row = conn.execute(
+                    "SELECT id FROM http_servers WHERE ip_address = ?", (o.ip,)
+                ).fetchone()
+                if row:
+                    server_id = row[0]
+                    conn.execute(
+                        self._ACCESS_SQL,
+                        (
+                            server_id,
+                            None,           # session_id
+                            0,              # accessible
+                            0,              # status_code
+                            0,              # is_index_page
+                            0,              # dir_count
+                            0,              # file_count
+                            0,              # tls_verified
+                            o.error_message,
+                            json.dumps({"reason": o.reason}),
+                        ),
+                    )
+            conn.commit()
 
     def persist_access_outcomes_batch(self, outcomes) -> None:
         """
-        Stub — Card 4 will implement.
         Batch persist stage-2 access results with http_probe_cache sync.
+
+        For each HttpAccessOutcome:
+          - upsert http_servers row
+          - insert http_access row (all fields)
+          - upsert http_probe_cache row (written for ALL outcomes, including failures)
+
+        The http_probe_cache is written for ALL outcomes so that the GUI's
+        "Shares > 0" filter (which uses accessible_dirs_count + accessible_files_count)
+        correctly shows 0-count hosts as filtered rather than missing.
         """
+        import json
+        if not outcomes:
+            return
+
+        _PROBE_CACHE_SQL = """
+            INSERT INTO http_probe_cache
+                (server_id, accessible_dirs_count, accessible_files_count,
+                 accessible_dirs_list, updated_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(server_id) DO UPDATE SET
+                accessible_dirs_count  = excluded.accessible_dirs_count,
+                accessible_files_count = excluded.accessible_files_count,
+                accessible_dirs_list   = excluded.accessible_dirs_list,
+                updated_at             = CURRENT_TIMESTAMP
+        """
+
+        with sqlite3.connect(self.db_path) as conn:
+            for o in outcomes:
+                conn.execute(
+                    self._UPSERT_SQL,
+                    (
+                        o.ip,
+                        o.country,
+                        o.country_code,
+                        o.port,
+                        o.scheme,
+                        o.banner,
+                        o.title,
+                        o.shodan_data if isinstance(o.shodan_data, str)
+                        else json.dumps(o.shodan_data),
+                    ),
+                )
+                row = conn.execute(
+                    "SELECT id FROM http_servers WHERE ip_address = ?", (o.ip,)
+                ).fetchone()
+                if not row:
+                    continue
+                server_id = row[0]
+
+                conn.execute(
+                    self._ACCESS_SQL,
+                    (
+                        server_id,
+                        None,                           # session_id
+                        1 if o.accessible else 0,
+                        o.status_code,
+                        1 if o.is_index_page else 0,
+                        o.dir_count,
+                        o.file_count,
+                        1 if o.tls_verified else 0,
+                        o.error_message,
+                        o.access_details if isinstance(o.access_details, str)
+                        else json.dumps(o.access_details),
+                    ),
+                )
+
+                # Derive accessible_dirs_list from access_details subdirs.
+                try:
+                    details = json.loads(o.access_details) if isinstance(o.access_details, str) else {}
+                    subdirs = details.get("subdirs", [])
+                    dir_names = [
+                        s["path"].strip("/")
+                        for s in subdirs
+                        if isinstance(s, dict) and s.get("path")
+                    ]
+                    dirs_list = ",".join(dir_names)
+                except Exception:
+                    dirs_list = ""
+
+                conn.execute(
+                    _PROBE_CACHE_SQL,
+                    (server_id, o.dir_count, o.file_count, dirs_list),
+                )
+
+            conn.commit()
 
 
 def create_workflow_database(config, verbose=False) -> SMBSeekWorkflowDatabase:

@@ -320,6 +320,32 @@ class SMBSeekConfig:
             return value
         return 4
 
+    def get_http_config(self) -> Dict[str, Any]:
+        """Get HTTP configuration section with defaults."""
+        return self.get("http") or {
+            "shodan": {"query_limits": {"max_results": None}},
+            "verification": {
+                "connect_timeout": 5,
+                "request_timeout": 10,
+                "subdir_timeout": 8,
+                "allow_insecure_tls": True,
+                "verify_http": True,
+                "verify_https": True,
+            },
+            "discovery": {"max_concurrent_hosts": 10},
+            "access": {"max_concurrent_hosts": 4},
+        }
+
+    def get_max_concurrent_http_discovery_hosts(self) -> int:
+        """Get max concurrent hosts for HTTP discovery with validation. Default 10, min 1."""
+        value = self.get_http_config().get("discovery", {}).get("max_concurrent_hosts", 10)
+        return value if isinstance(value, int) and value >= 1 else 10
+
+    def get_max_concurrent_http_access_hosts(self) -> int:
+        """Get max concurrent hosts for HTTP access with validation. Default 4, min 1."""
+        value = self.get_http_config().get("access", {}).get("max_concurrent_hosts", 4)
+        return value if isinstance(value, int) and value >= 1 else 4
+
     def get_database_path(self) -> str:
         """Get database file path."""
         return self.get("database", "path", "smbseek.db")
