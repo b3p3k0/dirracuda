@@ -23,6 +23,8 @@ from gui.utils import (
     extract_runner,
     ftp_probe_cache,
     ftp_probe_runner,
+    http_probe_cache,
+    http_probe_runner,
 )
 from gui.utils.probe_runner import ProbeError
 from gui.utils.database_access import DatabaseReader
@@ -76,6 +78,8 @@ def show_server_detail_popup(parent_window, server_data, theme, settings_manager
     host_type = server_data.get("host_type", "S")
     if ip_address and host_type == "F":
         cached_probe = ftp_probe_cache.load_ftp_probe_result(ip_address)
+    elif ip_address and host_type == "H":
+        cached_probe = http_probe_cache.load_http_probe_result(ip_address)
     else:
         cached_probe = probe_cache.load_probe_result(ip_address) if ip_address else None
     if cached_probe and indicator_patterns:
@@ -142,6 +146,34 @@ def show_server_detail_popup(parent_window, server_data, theme, settings_manager
     button_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
 
     def _open_browse_window() -> None:
+        if host_type == "H":
+            _db = None
+            if settings_manager:
+                try:
+                    _db = DatabaseReader(settings_manager.get_database_path())
+                except Exception:
+                    pass
+            detail = _db.get_http_server_detail(ip_address) if _db else None
+            port = int((detail or {}).get("port") or 80)
+            scheme = (detail or {}).get("scheme") or "http"
+            config_path = None
+            if settings_manager:
+                config_path = settings_manager.get_setting('backend.config_path', None)
+                if not config_path and hasattr(settings_manager, "get_smbseek_config_path"):
+                    config_path = settings_manager.get_smbseek_config_path()
+            from gui.components.http_browser_window import HttpBrowserWindow
+            HttpBrowserWindow(
+                parent=detail_window,
+                ip_address=ip_address,
+                port=port,
+                scheme=scheme,
+                db_reader=_db,
+                config_path=config_path,
+                theme=theme,
+                settings_manager=settings_manager,
+            )
+            return
+
         def _clean_share_name(name: str) -> str:
             return name.strip().strip("\\/").strip()
 
@@ -226,7 +258,7 @@ def _invoke_callback_or_warn(cb, server_data: Dict[str, Any], parent_window: tk.
 def _format_server_details(server: Dict[str, Any], probe_section: Optional[str] = None) -> str:
     """Format server details for display. Renders protocol-specific sections for S vs F rows."""
     host_type = server.get('host_type', 'S')
-    protocol_label = "SMB" if host_type == "S" else "FTP"
+    protocol_label = {"S": "SMB", "F": "FTP", "H": "HTTP"}.get(host_type, "Unknown")
 
     # ---- SMB share access section ----
     if host_type == "S":
@@ -280,6 +312,17 @@ def _format_server_details(server: Dict[str, Any], probe_section: Optional[str] 
 
 🚫 Denied Shares:
 {denied_text}"""
+    elif host_type == "H":
+        # HTTP row — show connection/access info
+        port = server.get('port') or "80"
+        banner = server.get('banner') or "N/A"
+        dirs = server.get('accessible_dirs_count') or server.get('accessible_shares', 0)
+        files = server.get('accessible_files_count') or 0
+        access_section = f"""🌐 HTTP Access:
+   Port: {port}
+   Title/Banner: {banner}
+   Directories: {dirs}
+   Files: {files}"""
     else:
         # FTP row — show connection/access info instead of share tables
         anon = server.get('anon_accessible')
@@ -625,6 +668,26 @@ def _start_probe(
                     request_timeout=int(config["timeout_seconds"]),
                     cancel_event=cancel_event,
                 )
+            elif host_type == "H":
+                detail = db_accessor.get_http_server_detail(ip_address) if db_accessor else None
+                port = int((detail or {}).get("port") or 80)
+                scheme = (detail or {}).get("scheme") or "http"
+                max_entries = max(
+                    1,
+                    int(config["max_directories"]) * int(config["max_files"]),
+                )
+                result = http_probe_runner.run_http_probe(
+                    ip_address,
+                    port=port,
+                    scheme=scheme,
+                    allow_insecure_tls=True,
+                    max_entries=max_entries,
+                    max_directories=int(config["max_directories"]),
+                    max_files=int(config["max_files"]),
+                    connect_timeout=int(config["timeout_seconds"]),
+                    request_timeout=int(config["timeout_seconds"]),
+                    cancel_event=cancel_event,
+                )
             else:
                 result = probe_runner.run_probe(
                     ip_address,
@@ -662,6 +725,37 @@ def _start_probe(
                             snapshot_path=str(ftp_probe_cache.get_ftp_cache_path(ip_address)),
                             accessible_dirs_count=len(dir_names),
                             accessible_dirs_list=",".join(dir_names),
+                        )
+                    except Exception:
+                        pass
+            elif host_type == "H":
+                shares = result.get("shares", [])
+                first_share = shares[0] if shares else {}
+                dir_names = [
+                    d.get("name")
+                    for d in first_share.get("directories", [])
+                    if isinstance(d, dict) and d.get("name")
+                ]
+                root_files = first_share.get("root_files", [])
+                total_files = len(root_files) + sum(
+                    len(d.get("files", [])) for d in first_share.get("directories", [])
+                    if isinstance(d, dict)
+                )
+                total = len(dir_names) + total_files
+                server_data["total_shares"] = total
+                server_data["accessible_shares"] = total
+                server_data["accessible_shares_list"] = ",".join(dir_names)
+                if db_accessor:
+                    try:
+                        db_accessor.upsert_probe_cache_for_host(
+                            ip_address,
+                            "H",
+                            status='issue' if analysis.get("is_suspicious") else 'clean',
+                            indicator_matches=len(analysis.get("matches", [])),
+                            snapshot_path=str(http_probe_cache.get_http_cache_path(ip_address)),
+                            accessible_dirs_count=len(dir_names),
+                            accessible_dirs_list=",".join(dir_names),
+                            accessible_files_count=total_files,
                         )
                     except Exception:
                         pass

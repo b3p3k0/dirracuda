@@ -167,7 +167,7 @@ class ServerListWindowBatchOperationsMixin:
         for t in targets_by_key.values():
             ht = t.get("host_type") or "S"
             ip = t.get("ip_address", "").strip()
-            if ht not in ("S", "F") or not ip:
+            if ht not in ("S", "F", "H") or not ip:
                 continue
             row_specs.append((ht, ip))
 
@@ -178,7 +178,7 @@ class ServerListWindowBatchOperationsMixin:
         # Build label list from validated specs only
         validated_targets = [
             t for t in targets_by_key.values()
-            if (t.get("host_type") or "S") in ("S", "F") and t.get("ip_address", "").strip()
+            if (t.get("host_type") or "S") in ("S", "F", "H") and t.get("ip_address", "").strip()
         ]
         row_labels = [f"{t.get('host_type', 'S')} {t.get('ip_address')}" for t in validated_targets]
         favorite_labels = [
@@ -437,6 +437,25 @@ class ServerListWindowBatchOperationsMixin:
                 parent=self.window,
                 ip_address=ip_addr,
                 port=port,
+                banner=banner,
+                config_path=config_path,
+                db_reader=self.db_reader,
+                theme=self.theme,
+                settings_manager=self.settings_manager,
+            )
+            return
+
+        elif host_type == "H":
+            detail = self.db_reader.get_http_server_detail(ip_addr) if self.db_reader else None
+            port = int((detail or {}).get("port") or 80)
+            scheme = (detail or {}).get("scheme") or "http"
+            banner = target.get("data", {}).get("banner")
+            from gui.components.http_browser_window import HttpBrowserWindow
+            HttpBrowserWindow(
+                parent=self.window,
+                ip_address=ip_addr,
+                port=port,
+                scheme=scheme,
                 banner=banner,
                 config_path=config_path,
                 db_reader=self.db_reader,

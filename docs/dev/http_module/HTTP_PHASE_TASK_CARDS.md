@@ -278,12 +278,16 @@ Deliver:
 Goal:
 Stabilize HTTP MVP, enforce regression gates, and document known limits.
 
+HI Guidance: adapt the existing document as neccessary but do not make major structural changes or large edits. adhere to the style guide at https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/AI_AGENT_DOC_STYLE_GUIDE.md and align with existing document style and tone
+
 Scope:
 
 1. Add/expand tests for HTTP scan, parser, persistence, and browser flows.
 2. Add regression checklist covering SMB + FTP + HTTP.
 3. Update root and module docs with HTTP behavior and constraints.
 4. Capture known limitations and deferred work.
+5. Add HTTP browser image-view parity with SMB/FTP browse windows by reusing the
+   existing file-viewer/image-preview path (no protocol-specific duplicate renderer).
 
 Primary touch targets:
 
@@ -296,12 +300,14 @@ Definition of done:
 1. HTTP behavior is documented and validated.
 2. No new SMB/FTP failures introduced.
 3. Handoff package is complete for future agents.
+4. HTTP browser can preview supported image files with behavior consistent with SMB/FTP.
 
 Regression checks:
 
 1. Dashboard launch controls for all protocols.
 2. SMB/FTP/HTTP scan lifecycle sanity checks.
 3. SMB/FTP browse paths and HTTP browse path.
+4. HTTP image preview opens and renders for supported image types.
 
 Out of scope:
 
@@ -315,6 +321,7 @@ Requirements:
 - Add tests and report exact pass/fail counts.
 - Update docs for operator and developer audiences.
 - Explicitly list residual risks and follow-ups.
+- Add HTTP image preview parity in browser flow by reusing the existing viewer path.
 Deliver:
 - changed files
 - test summary

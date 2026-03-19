@@ -45,6 +45,8 @@ from gui.utils import (
     extract_runner,
     ftp_probe_runner,
     ftp_probe_cache,
+    http_probe_runner,
+    http_probe_cache,
 )
 from gui.utils.logging_config import get_logger
 from shared.quarantine import create_quarantine_dir
@@ -1430,6 +1432,80 @@ class DashboardWidget:
                     "action": "probe",
                     "status": "success",
                     "notes": ", ".join(notes),
+                }
+            except Exception as e:
+                status = "cancelled" if "cancel" in str(e).lower() else "failed"
+                return {
+                    "ip_address": ip_address,
+                    "action": "probe",
+                    "status": status,
+                    "notes": str(e)
+                }
+
+        # HTTP probe path
+        elif host_type == "H":
+            try:
+                detail = self.db_reader.get_http_server_detail(ip_address) if self.db_reader else None
+                port = int((detail or {}).get("port") or 80)
+                scheme = (detail or {}).get("scheme") or "http"
+                max_entries = max(1, int(max_dirs) * int(max_files))
+                snapshot = http_probe_runner.run_http_probe(
+                    ip_address,
+                    port=port,
+                    scheme=scheme,
+                    allow_insecure_tls=True,
+                    max_entries=max_entries,
+                    max_directories=int(max_dirs),
+                    max_files=int(max_files),
+                    connect_timeout=int(timeout_seconds),
+                    request_timeout=int(timeout_seconds),
+                    cancel_event=cancel_event,
+                )
+                analysis = probe_patterns.attach_indicator_analysis(snapshot, self.indicator_patterns)
+                issue_detected = bool(analysis.get("is_suspicious"))
+                status = "issue" if issue_detected else "clean"
+
+                shares = snapshot.get("shares", [])
+                first_share = shares[0] if shares else {}
+                dir_names = [
+                    d.get("name")
+                    for d in first_share.get("directories", [])
+                    if isinstance(d, dict) and d.get("name")
+                ]
+                root_files = first_share.get("root_files", [])
+                total_files = len(root_files) + sum(
+                    len(d.get("files", [])) for d in first_share.get("directories", [])
+                    if isinstance(d, dict)
+                )
+                total = len(dir_names) + total_files
+                accessible_dirs_count = len(dir_names)
+                accessible_dirs_list = ",".join(dir_names)
+                snapshot_path = str(http_probe_cache.get_http_cache_path(ip_address))
+
+                try:
+                    if self.db_reader:
+                        self.db_reader.upsert_probe_cache_for_host(
+                            ip_address,
+                            "H",
+                            status=status,
+                            indicator_matches=len(analysis.get("matches", [])),
+                            snapshot_path=snapshot_path,
+                            accessible_dirs_count=accessible_dirs_count,
+                            accessible_dirs_list=accessible_dirs_list,
+                            accessible_files_count=total_files,
+                        )
+                except Exception:
+                    pass
+
+                notes_h: List[str] = [f"{total} entries"]
+                if issue_detected:
+                    notes_h.append("Indicators detected")
+
+                return {
+                    "ip_address": ip_address,
+                    "action": "probe",
+                    "status": "success",
+                    "notes": ", ".join(notes_h),
                 }
             except Exception as e:
                 status = "cancelled" if "cancel" in str(e).lower() else "failed"

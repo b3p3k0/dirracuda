@@ -1750,6 +1750,26 @@ class DatabaseReader:
         except sqlite3.OperationalError:
             return 0
 
+    def get_http_server_detail(self, ip_address: str) -> Optional[Dict[str, Any]]:
+        """
+        Return {scheme, port} for the most-recently-seen http_servers row for ip_address.
+
+        Returns None if no row found or HTTP tables are absent.
+        Silently swallows all exceptions so missing HTTP tables are non-fatal.
+        """
+        try:
+            with self._get_connection() as conn:
+                row = conn.execute(
+                    "SELECT scheme, port FROM http_servers WHERE ip_address = ? "
+                    "ORDER BY last_seen DESC LIMIT 1",
+                    (ip_address,)
+                ).fetchone()
+                if row:
+                    return {"scheme": row[0] or "http", "port": int(row[1] or 80)}
+                return None
+        except Exception:
+            return None
+
     def get_host_protocols(self, ip: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Query v_host_protocols for protocol presence per IP.

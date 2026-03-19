@@ -606,10 +606,10 @@ class ServerListWindowBatchStatusMixin:
             for server in servers:
                 ip = server.get("ip_address")
                 host_type = server.get("host_type", "S")
-                # FTP rows: use DB-supplied probe_status only — never call _determine_probe_status
-                # which reads the SMB file-based cache and IP-keyed settings_manager store.
-                # The UNION ALL query already populates probe_status from ftp_probe_cache.
-                if host_type == "F":
+                # FTP and HTTP rows: use DB-supplied probe_status only — never call
+                # _determine_probe_status which reads the SMB file-based cache.
+                # The UNION ALL query already populates probe_status from probe_cache tables.
+                if host_type in ("F", "H"):
                     status = server.get("probe_status") or "unprobed"
                 else:
                     status = server.get("probe_status") or self._determine_probe_status(ip)

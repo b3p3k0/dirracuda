@@ -40,6 +40,8 @@ from gui.utils import (
     pry_runner,
     ftp_probe_runner,
     ftp_probe_cache,
+    http_probe_runner,
+    http_probe_cache,
 )
 from shared.quarantine import create_quarantine_dir
 
@@ -248,6 +250,80 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                 "units": 1,
             }
 
+        if host_type == "H":
+            detail = self.db_reader.get_http_server_detail(ip_address) if self.db_reader else None
+            port = int((detail or {}).get("port") or 80)
+            scheme = (detail or {}).get("scheme") or "http"
+            limits = options.get("limits", {}) or {}
+            max_entries = max(
+                1,
+                int(limits.get("max_directories", 3)) * int(limits.get("max_files", 5)),
+            )
+            snapshot = http_probe_runner.run_http_probe(
+                ip_address,
+                port=port,
+                scheme=scheme,
+                allow_insecure_tls=True,
+                max_entries=max_entries,
+                max_directories=int(limits.get("max_directories", 3)),
+                max_files=int(limits.get("max_files", 5)),
+                connect_timeout=int(limits.get("timeout_seconds", 10)),
+                request_timeout=int(limits.get("timeout_seconds", 10)),
+                cancel_event=cancel_event,
+            )
+            analysis = probe_patterns.attach_indicator_analysis(snapshot, self.indicator_patterns)
+            issue_detected = bool(analysis.get("is_suspicious"))
+            status = "issue" if issue_detected else "clean"
+            shares = snapshot.get("shares", [])
+            first_share = shares[0] if shares else {}
+            dir_names = [
+                d.get("name")
+                for d in first_share.get("directories", [])
+                if isinstance(d, dict) and d.get("name")
+            ]
+            root_files = first_share.get("root_files", [])
+            total_files = len(root_files) + sum(
+                len(d.get("files", [])) for d in first_share.get("directories", [])
+                if isinstance(d, dict)
+            )
+            total = len(dir_names) + total_files
+            accessible_dirs_count = len(dir_names)
+            accessible_dirs_list = ",".join(dir_names)
+            snapshot_path = str(http_probe_cache.get_http_cache_path(ip_address))
+
+            for server in self.all_servers:
+                if server.get("row_key") == row_key:
+                    server["total_shares"] = total
+                    server["accessible_shares"] = total
+                    server["accessible_shares_list"] = accessible_dirs_list
+                    break
+
+            self._handle_probe_status_update(ip_address, status, row_key=row_key)
+            try:
+                self.db_reader.upsert_probe_cache_for_host(
+                    ip_address,
+                    host_type,
+                    status=status,
+                    indicator_matches=len(analysis.get("matches", [])),
+                    snapshot_path=snapshot_path,
+                    accessible_dirs_count=accessible_dirs_count,
+                    accessible_dirs_list=accessible_dirs_list,
+                    accessible_files_count=total_files,
+                )
+            except Exception:
+                pass
+
+            notes_h: List[str] = [f"{total} entries"]
+            if issue_detected:
+                notes_h.append("Indicators detected")
+            return {
+                "ip_address": ip_address,
+                "action": "probe",
+                "status": "success",
+                "notes": ", ".join(notes_h),
+                "units": 1,
+            }
+
         # SMB probe path
         shares = target.get("shares", [])
         limits = options.get("limits", {})
@@ -331,12 +407,13 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
         host_type = target.get("host_type", "S")
         row_key = target.get("row_key")
 
-        if host_type == "F":
+        if host_type in ("F", "H"):
+            protocol_name = {"F": "FTP", "H": "HTTP"}.get(host_type, host_type)
             return {
                 "ip_address": ip_address,
                 "action": "extract",
                 "status": "skipped",
-                "notes": "FTP extract not yet supported",
+                "notes": f"{protocol_name} extract not yet supported",
             }
 
         shares = target.get("shares", [])
