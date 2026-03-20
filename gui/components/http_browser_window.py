@@ -11,7 +11,7 @@ Mirrors FtpBrowserWindow patterns exactly, with these HTTP-specific differences:
   - Stateless navigator (no connect/disconnect lifecycle).
   - _path_map (iid -> abs_path) for safe path routing.
     Entry.name stores abs_path; display label = PurePosixPath(entry.name).name.
-  - No image viewer (HTTP index listings are web content).
+  - Image viewer: common raster formats (.png/.jpg/.gif/.bmp/.webp/.tif/.tiff) via shared image_viewer_window.
   - Download uses purpose="http" for quarantine path.
   - Up navigation uses PurePosixPath(current_path).parent.
 """
@@ -33,6 +33,11 @@ try:
 except ImportError:
     from file_viewer_window import open_file_viewer
 
+try:
+    from gui.components.image_viewer_window import open_image_viewer
+except ImportError:
+    from image_viewer_window import open_image_viewer
+
 
 # ---------------------------------------------------------------------------
 # Config loader
@@ -47,6 +52,8 @@ def _load_http_browser_config(config_path: Optional[str]) -> Dict:
         "quarantine_base": "~/.smbseek/quarantine",
         "viewer": {
             "max_view_size_mb": 5,
+            "max_image_size_mb": 15,
+            "max_image_pixels": 20_000_000,
         },
     }
     if not config_path:
@@ -57,6 +64,9 @@ def _load_http_browser_config(config_path: Optional[str]) -> Dict:
     except Exception:
         pass
     return defaults
+
+
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tif", ".tiff"}
 
 
 # ---------------------------------------------------------------------------
@@ -333,7 +343,7 @@ class HttpBrowserWindow:
         self._navigate_to(self._current_path)
 
     def _on_view(self) -> None:
-        """Read selected file and open shared text viewer (no image viewer for HTTP)."""
+        """Read selected file and open shared text/image viewer."""
         sel = self.tree.selection()
         if not sel:
             return
@@ -353,22 +363,49 @@ class HttpBrowserWindow:
             return
 
         display_name = vals[0]
+        suffix = Path(display_name).suffix.lower()
+        is_image = suffix in IMAGE_EXTS
+
         viewer_cfg = self.config.get("viewer", {}) or {}
         max_view_mb = int(viewer_cfg.get("max_view_size_mb", 5) or 5)
-        max_view_bytes = max_view_mb * 1024 * 1024
+        max_image_mb = int(viewer_cfg.get("max_image_size_mb", max_view_mb) or max_view_mb)
+        max_image_pixels = int(viewer_cfg.get("max_image_pixels", 20_000_000) or 20_000_000)
+        max_view_bytes = (max_image_mb if is_image else max_view_mb) * 1024 * 1024
 
-        self._start_view_thread(abs_path, display_name, max_view_bytes)
+        self._start_view_thread(
+            remote_path=abs_path,
+            display_name=display_name,
+            max_bytes=max_view_bytes,
+            is_image=is_image,
+            max_image_pixels=max_image_pixels,
+        )
 
     def _start_view_thread(
-        self, remote_path: str, display_name: str, max_bytes: int
+        self,
+        remote_path: str,
+        display_name: str,
+        max_bytes: int,
+        is_image: bool,
+        max_image_pixels: int,
     ) -> None:
         def _read_thread() -> None:
             try:
                 self.window.after(0, self._set_status, f"Reading {display_name}...")
                 result = self._navigator.read_file(remote_path, max_bytes=max_bytes)
-                self.window.after(
-                    0, self._open_viewer, remote_path, result.data, result.size
-                )
+                if is_image:
+                    self.window.after(
+                        0,
+                        self._open_image_viewer,
+                        remote_path,
+                        result.data,
+                        result.size,
+                        result.truncated,
+                        max_image_pixels,
+                    )
+                else:
+                    self.window.after(
+                        0, self._open_viewer, remote_path, result.data, result.size
+                    )
             except Exception as exc:
                 try:
                     self.window.after(
@@ -397,6 +434,38 @@ class HttpBrowserWindow:
             on_save_callback=save_callback,
         )
         self._set_status(f"Viewing {remote_path}")
+
+    def _open_image_viewer(
+        self,
+        remote_path: str,
+        content: bytes,
+        file_size: int,
+        truncated: bool,
+        max_image_pixels: int,
+    ) -> None:
+        """Open shared image viewer for raster image files."""
+        display_path = f"{self.scheme}://{self.ip_address}:{self.port}{remote_path}"
+
+        def save_callback() -> None:
+            self._start_download_thread([(remote_path, file_size)])
+
+        try:
+            open_image_viewer(
+                parent=self.window,
+                file_path=display_path,
+                content=content,
+                max_pixels=max_image_pixels,
+                theme=self.theme,
+                on_save_callback=save_callback,
+                truncated=truncated,
+            )
+            self._set_status(f"Viewing {remote_path}")
+        except Exception as exc:
+            self._set_status(f"View failed: {exc}")
+            try:
+                messagebox.showerror("View Error", str(exc), parent=self.window)
+            except tk.TclError:
+                pass
 
     # ------------------------------------------------------------------
     # Download

@@ -110,6 +110,24 @@ Results appear in the database alongside SMB records — the same IP can have bo
 
 **FTP workflows are currently functional with some rough edges**
 
+### HTTP Discovery **(EXPERIMENTAL)**
+
+Triggered via **Start HTTP Scan** on the dashboard. Uses a Shodan query for `http.title:"Index of /"` to find hosts serving Apache/nginx directory listings, then verifies each candidate:
+
+1. Shodan query for HTTP/HTTPS directory-index hosts
+2. Reachability check and directory-index validation (HTTP and HTTPS ports)
+3. Accessible listings stored as verified; failures recorded with a reason code
+
+Results appear in the database alongside SMB and FTP records. The browser window lets you navigate directory listings, view text files and images (`.png`, `.jpg`, `.jpeg`, `.gif`, `.bmp`, `.webp`, `.tif`, `.tiff`), and download files to quarantine at `~/.smbseek/quarantine/<ip>/<YYYYMMDD>/http_root/`.
+
+**HTTP workflows are currently functional with some rough edges**
+
+Known limits:
+- No pre-flight file size guard (HTTP directory listings carry no size metadata; the viewer size cap still applies)
+- Animated GIFs render first frame only (PIL limitation)
+- HTTPS with mutual TLS not supported; insecure TLS allowed by default
+- Browser indexes one level deep; files in nested subdirectories require manual navigation
+
 ### Server List
 
 ![server list browser](img/servers.png)

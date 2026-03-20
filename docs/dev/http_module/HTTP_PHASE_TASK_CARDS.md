@@ -327,3 +327,5 @@ Deliver:
 - test summary
 - open follow-up list
 ```
+
+**Delivered: 2026-03-19.** 14 new HTTP tests (5 browser, 7 probe, 2 progress). Image preview added to `HttpBrowserWindow`. See `claude_plan/06-card6.md` for full QA report.

@@ -1,6 +1,6 @@
 # HTTP Module Workspace
 
-Status: planning kickoff (2026-03-19)
+Status: MVP complete — Cards 1–6 delivered (2026-03-19)
 
 This folder is the planning and handoff workspace for adding an HTTP(S) module to SMBSeek with the same operational feel as the SMB and FTP modules.
 
@@ -40,6 +40,12 @@ This folder is the planning and handoff workspace for adding an HTTP(S) module t
 - `HTTP_PHASE_TASK_CARDS.md`: Claude-ready cards, one at a time.
 - `claude_plan/`: per-card implementation plans and handoff artifacts.
 - `db_import/`: reserved for HTTP-specific host-list/import integration cards.
+
+## Module Status (2026-03-19)
+
+Cards 1–6 delivered. Image preview parity (`.png`, `.jpg`, `.gif`, `.bmp`, `.webp`, `.tif`) added in Card 6 via the shared `image_viewer_window`. 14 new HTTP tests added (5 browser, 7 probe, 2 progress). See `claude_plan/06-card6.md` for the final QA report and known limits.
+
+Post-MVP backlog: pre-flight size guard (requires HEAD request), animated GIF support, HTTPS mutual TLS, deep subdirectory indexing.
 
 ## Completion Labels (Required in Reports)
 
