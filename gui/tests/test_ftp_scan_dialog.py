@@ -203,7 +203,7 @@ class TestFtpScanDialogOptionBuild:
             "ftp_scan_dialog.verbose": True,
             "ftp_scan_dialog.bulk_probe_enabled": True,
             "ftp_scan_dialog.region_asia": True,
-            "ftp_scan_dialog.region_europe": True,
+            "ftp_scan_dialog.region_europe": False,
         }
         sm.get_setting.side_effect = lambda key, default=None: stored.get(key, default)
 
@@ -220,13 +220,17 @@ class TestFtpScanDialogOptionBuild:
         assert opts["listing_timeout"] == 21
         assert opts["verbose"] is True
         assert opts["bulk_probe_enabled"] is True
-        assert opts["country"] in ("GB,US", "US,GB")
+        assert opts["country"] is not None
+        country_set = set(opts["country"].split(","))
+        assert {"US", "GB"} <= country_set
+        assert "JP" in country_set  # pulled from selected Asia region
         assert dlg.asia_var.get() is True
-        assert dlg.europe_var.get() is True
+        assert dlg.europe_var.get() is False
 
     def test_persists_values_to_settings_manager_on_build(self, tk_root):
         """_build_scan_options saves FTP dialog selections for the next run."""
         sm = MagicMock()
+        sm.get_setting.side_effect = lambda key, default=None: default
         dlg = _make_dialog(tk_root, settings_manager=sm)
 
         dlg.country_var.set("US")
@@ -256,7 +260,12 @@ class TestFtpScanDialogOptionBuild:
             call("ftp_scan_dialog.listing_timeout", 13),
             call("ftp_scan_dialog.verbose", True),
             call("ftp_scan_dialog.bulk_probe_enabled", True),
+            call("ftp_scan_dialog.region_africa", False),
             call("ftp_scan_dialog.region_asia", True),
+            call("ftp_scan_dialog.region_europe", False),
+            call("ftp_scan_dialog.region_north_america", False),
+            call("ftp_scan_dialog.region_oceania", False),
+            call("ftp_scan_dialog.region_south_america", False),
         ]
         sm.set_setting.assert_has_calls(expected_calls, any_order=False)
 

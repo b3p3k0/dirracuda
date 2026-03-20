@@ -585,6 +585,40 @@ def _ensure_core_smb_tables(cur: sqlite3.Cursor) -> None:
         """
     )
 
+    # Legacy compatibility: CREATE TABLE IF NOT EXISTS does not alter an
+    # existing table, so older scan_sessions schemas may be missing columns.
+    cur.execute("PRAGMA table_info(scan_sessions)")
+    scan_session_cols = {row[1] for row in cur.fetchall()}
+
+    def _ensure_scan_sessions_col(name: str, column_def: str) -> None:
+        if name in scan_session_cols:
+            return
+        cur.execute(f"ALTER TABLE scan_sessions ADD COLUMN {name} {column_def}")
+        scan_session_cols.add(name)
+
+    _ensure_scan_sessions_col("tool_name", "TEXT DEFAULT 'smbseek'")
+    _ensure_scan_sessions_col("scan_type", "TEXT DEFAULT 'smbseek_unified'")
+    _ensure_scan_sessions_col("started_at", "DATETIME")
+    _ensure_scan_sessions_col("completed_at", "DATETIME")
+    _ensure_scan_sessions_col("total_targets", "INTEGER DEFAULT 0")
+    _ensure_scan_sessions_col("successful_targets", "INTEGER DEFAULT 0")
+    _ensure_scan_sessions_col("failed_targets", "INTEGER DEFAULT 0")
+    _ensure_scan_sessions_col("country_filter", "TEXT")
+    _ensure_scan_sessions_col("config_snapshot", "TEXT")
+    _ensure_scan_sessions_col("external_run", "INTEGER DEFAULT 0")
+    _ensure_scan_sessions_col("notes", "TEXT")
+    _ensure_scan_sessions_col("updated_at", "DATETIME")
+
+    # Backfill critical identifiers used by query/index paths.
+    cur.execute(
+        "UPDATE scan_sessions SET tool_name = 'smbseek' "
+        "WHERE tool_name IS NULL OR TRIM(tool_name) = ''"
+    )
+    cur.execute(
+        "UPDATE scan_sessions SET scan_type = 'smbseek_unified' "
+        "WHERE scan_type IS NULL OR TRIM(scan_type) = ''"
+    )
+
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS smb_servers (
@@ -707,12 +741,14 @@ def _ensure_core_smb_tables(cur: sqlite3.Cursor) -> None:
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_smb_servers_last_seen ON smb_servers(last_seen)"
     )
-    cur.execute(
-        "CREATE INDEX IF NOT EXISTS idx_scan_sessions_timestamp ON scan_sessions(timestamp)"
-    )
-    cur.execute(
-        "CREATE INDEX IF NOT EXISTS idx_scan_sessions_tool ON scan_sessions(tool_name)"
-    )
+    if "timestamp" in scan_session_cols:
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_scan_sessions_timestamp ON scan_sessions(timestamp)"
+        )
+    if "tool_name" in scan_session_cols:
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_scan_sessions_tool ON scan_sessions(tool_name)"
+        )
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_share_access_server ON share_access(server_id)"
     )

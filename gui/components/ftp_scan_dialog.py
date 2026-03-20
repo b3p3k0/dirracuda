@@ -153,6 +153,19 @@ class FtpScanDialog:
             except (TypeError, ValueError):
                 return default
 
+        def _coerce_bool(value: Any, default: bool = False) -> bool:
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, (int, float)):
+                return bool(value)
+            if isinstance(value, str):
+                normalized = value.strip().lower()
+                if normalized in {"1", "true", "yes", "on"}:
+                    return True
+                if normalized in {"0", "false", "no", "off", ""}:
+                    return False
+            return default
+
         try:
             max_results = _coerce_int(
                 self._settings_manager.get_setting("ftp_scan_dialog.max_shodan_results", 1000),
@@ -182,19 +195,21 @@ class FtpScanDialog:
                 self._settings_manager.get_setting("ftp_scan_dialog.listing_timeout", 15),
                 15,
             )
-            verbose = bool(self._settings_manager.get_setting("ftp_scan_dialog.verbose", False))
-            bulk_probe_enabled = bool(
+            verbose = _coerce_bool(
+                self._settings_manager.get_setting("ftp_scan_dialog.verbose", False)
+            )
+            bulk_probe_enabled = _coerce_bool(
                 self._settings_manager.get_setting("ftp_scan_dialog.bulk_probe_enabled", False)
             )
 
-            africa = bool(self._settings_manager.get_setting("ftp_scan_dialog.region_africa", False))
-            asia = bool(self._settings_manager.get_setting("ftp_scan_dialog.region_asia", False))
-            europe = bool(self._settings_manager.get_setting("ftp_scan_dialog.region_europe", False))
-            north_america = bool(
+            africa = _coerce_bool(self._settings_manager.get_setting("ftp_scan_dialog.region_africa", False))
+            asia = _coerce_bool(self._settings_manager.get_setting("ftp_scan_dialog.region_asia", False))
+            europe = _coerce_bool(self._settings_manager.get_setting("ftp_scan_dialog.region_europe", False))
+            north_america = _coerce_bool(
                 self._settings_manager.get_setting("ftp_scan_dialog.region_north_america", False)
             )
-            oceania = bool(self._settings_manager.get_setting("ftp_scan_dialog.region_oceania", False))
-            south_america = bool(
+            oceania = _coerce_bool(self._settings_manager.get_setting("ftp_scan_dialog.region_oceania", False))
+            south_america = _coerce_bool(
                 self._settings_manager.get_setting("ftp_scan_dialog.region_south_america", False)
             )
 
