@@ -32,6 +32,34 @@ from shared.db_migrations import run_migrations
 
 _logger = get_logger("server_list_window")
 
+
+def _format_notes_tooltip_text(notes: str, *, max_line_len: int = 60, max_lines: int = 2) -> str:
+    """
+    Format notes for compact hover tooltip display.
+
+    Rules:
+    - Normalize whitespace
+    - Clamp to max_line_len * max_lines characters
+    - Render at most max_lines lines
+    - Add trailing ellipsis when truncated
+    """
+    normalized = " ".join(str(notes or "").split())
+    if not normalized:
+        return ""
+
+    max_chars = max_line_len * max_lines
+    truncated = len(normalized) > max_chars
+    visible = normalized[:max_chars]
+
+    if truncated:
+        if len(visible) >= 3:
+            visible = visible[:-3] + "..."
+        else:
+            visible = "..."
+
+    lines = [visible[i:i + max_line_len] for i in range(0, len(visible), max_line_len)]
+    return "\n".join(lines[:max_lines])
+
 # Import modular components
 from . import export, details, filters, table
 try:
@@ -129,6 +157,10 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self._stop_button_original_style = None
         self._context_menu_visible = False
         self._context_menu_bindings = []
+        self._notes_tooltip = None
+        self._notes_tooltip_label = None
+        self._hover_notes_row_key = None
+        self._hover_notes_text = ""
         self.filter_template_var = tk.StringVar()
         self._filter_template_label_to_slug: Dict[str, str] = {}
         self._selected_filter_template_slug: Optional[str] = None
@@ -466,6 +498,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
 
         self._create_context_menu(self.tree)
         self._bind_context_menu_events(self.tree)
+        self._bind_hover_tooltip_events(self.tree)
         self._create_table_overlay()
 
         # Pack table frame
@@ -504,6 +537,112 @@ class ServerListWindow(ServerListWindowActionsMixin):
         if platform.system() == "Darwin":
             tree.bind("<Button-2>", self._show_context_menu)
             tree.bind("<Control-Button-1>", self._show_context_menu)
+
+    def _bind_hover_tooltip_events(self, tree: ttk.Treeview) -> None:
+        """Bind Treeview events used by row-notes hover tooltips."""
+        tree.bind("<Motion>", self._on_tree_hover_for_notes, add="+")
+        tree.bind("<Leave>", self._hide_notes_tooltip, add="+")
+        tree.bind("<Button-1>", self._hide_notes_tooltip, add="+")
+        tree.bind("<Button-3>", self._hide_notes_tooltip, add="+")
+        tree.bind("<MouseWheel>", self._hide_notes_tooltip, add="+")
+        tree.bind("<Button-4>", self._hide_notes_tooltip, add="+")
+        tree.bind("<Button-5>", self._hide_notes_tooltip, add="+")
+
+    def _get_server_by_row_key(self, row_key: str) -> Optional[Dict[str, Any]]:
+        """Lookup a visible server row by row_key."""
+        if not row_key:
+            return None
+        return next((s for s in self.filtered_servers if s.get("row_key") == row_key), None)
+
+    def _show_notes_tooltip(self, text: str, x_root: int, y_root: int) -> None:
+        """Create or update notes tooltip near pointer location."""
+        if not text:
+            self._hide_notes_tooltip()
+            return
+
+        x = int(x_root) + 14
+        y = int(y_root) + 16
+        geometry = f"+{x}+{y}"
+
+        if self._notes_tooltip and self._notes_tooltip.winfo_exists():
+            self._notes_tooltip.geometry(geometry)
+            if self._hover_notes_text != text and self._notes_tooltip_label:
+                self._notes_tooltip_label.configure(text=text)
+                self._hover_notes_text = text
+            return
+
+        tip = tk.Toplevel(self.window)
+        tip.wm_overrideredirect(True)
+        try:
+            tip.wm_attributes("-topmost", True)
+        except Exception:
+            pass
+        tip.geometry(geometry)
+
+        label = tk.Label(
+            tip,
+            text=text,
+            justify=tk.LEFT,
+            anchor="w",
+            bg="#fffde8",
+            fg="#222222",
+            relief=tk.SOLID,
+            borderwidth=1,
+            padx=6,
+            pady=4,
+            font=("TkDefaultFont", 9),
+        )
+        label.pack()
+
+        self._notes_tooltip = tip
+        self._notes_tooltip_label = label
+        self._hover_notes_text = text
+
+    def _hide_notes_tooltip(self, _event=None) -> None:
+        """Destroy notes tooltip if visible."""
+        tip = self._notes_tooltip
+        self._notes_tooltip = None
+        self._notes_tooltip_label = None
+        self._hover_notes_row_key = None
+        self._hover_notes_text = ""
+        if tip is not None:
+            try:
+                tip.destroy()
+            except Exception:
+                pass
+
+    def _on_tree_hover_for_notes(self, event) -> None:
+        """
+        Show notes tooltip while hovering rows with notes.
+
+        If notes are empty/whitespace, no tooltip is created.
+        """
+        if not self.tree:
+            self._hide_notes_tooltip()
+            return
+
+        row_key = self.tree.identify_row(event.y)
+        if not row_key:
+            self._hide_notes_tooltip()
+            return
+
+        row = self._get_server_by_row_key(row_key)
+        if not row:
+            self._hide_notes_tooltip()
+            return
+
+        notes_raw = row.get("notes", "")
+        if not str(notes_raw or "").strip():
+            self._hide_notes_tooltip()
+            return
+
+        tooltip_text = _format_notes_tooltip_text(notes_raw, max_line_len=60, max_lines=2)
+        if not tooltip_text:
+            self._hide_notes_tooltip()
+            return
+
+        self._hover_notes_row_key = row_key
+        self._show_notes_tooltip(tooltip_text, event.x_root, event.y_root)
 
     def _create_table_overlay(self) -> None:
         self.table_overlay = tk.Frame(self.table_frame, bg="#f0f0f0")
@@ -659,6 +798,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
                 self._pending_selection = self._get_selected_row_keys()
             self._pending_table_refresh = True
             return
+        self._hide_notes_tooltip()
 
         filtered = self.all_servers[:]
 

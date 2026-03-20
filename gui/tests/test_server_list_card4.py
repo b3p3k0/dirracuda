@@ -304,7 +304,41 @@ class TestApplySharesFilter:
 
 
 # ---------------------------------------------------------------------------
-# Test 6: _on_treeview_click callback wiring (no stale method refs)
+# Test 6: notes tooltip formatting helper
+# ---------------------------------------------------------------------------
+
+class TestNotesTooltipFormatting:
+    def test_empty_notes_returns_empty_string(self):
+        window_mod = _get_window()
+        assert window_mod._format_notes_tooltip_text("") == ""
+        assert window_mod._format_notes_tooltip_text("   \n\t  ") == ""
+
+    def test_short_notes_preserved(self):
+        window_mod = _get_window()
+        text = "quick note"
+        assert window_mod._format_notes_tooltip_text(text) == "quick note"
+
+    def test_long_notes_truncated_with_ellipsis_and_two_lines(self):
+        window_mod = _get_window()
+        text = "A" * 200
+        out = window_mod._format_notes_tooltip_text(text)
+        lines = out.splitlines()
+        assert len(lines) == 2
+        assert len(lines[0]) <= 60
+        assert len(lines[1]) <= 60
+        assert out.endswith("...")
+        assert len(out.replace("\n", "")) <= 120
+
+    def test_newlines_are_normalized(self):
+        window_mod = _get_window()
+        text = "line1\n\nline2\tline3"
+        out = window_mod._format_notes_tooltip_text(text)
+        assert "\n" not in out
+        assert "line1 line2 line3" == out
+
+
+# ---------------------------------------------------------------------------
+# Test 7: _on_treeview_click callback wiring (no stale method refs)
 # ---------------------------------------------------------------------------
 
 class TestClickCallbackWiring:
