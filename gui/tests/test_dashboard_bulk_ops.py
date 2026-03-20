@@ -1,0 +1,62 @@
+"""Regression tests for dashboard post-scan bulk operation routing."""
+
+import sys
+from pathlib import Path
+from unittest.mock import MagicMock
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from gui.components.dashboard import DashboardWidget
+
+
+class _StubParent:
+    def after(self, _ms, _fn, *_args):
+        return None
+
+
+def test_http_post_scan_bulk_probe_uses_http_host_type_filter(monkeypatch):
+    """HTTP scans must gather H rows (not SMB S rows) for post-scan bulk probe."""
+    dash = DashboardWidget.__new__(DashboardWidget)
+    dash.parent = _StubParent()
+    dash._show_scan_results = MagicMock()
+    dash._reset_scan_status = MagicMock()
+    dash._show_batch_summary = MagicMock()
+    dash._execute_batch_probe = MagicMock(return_value=[])
+    dash._execute_batch_extract = MagicMock(return_value=[])
+
+    captured = {}
+
+    def _fake_get_servers_for_bulk_ops(skip_indicator_extract=True, host_type_filter=None):
+        captured["skip_indicator_extract"] = skip_indicator_extract
+        captured["host_type_filter"] = host_type_filter
+        return {
+            "probe": [{"ip_address": "203.0.113.10", "host_type": "H"}],
+            "extract": [],
+        }
+
+    def _fake_run_background_fetch(title, message, fetch_fn):
+        return fetch_fn(), None
+
+    monkeypatch.setattr("gui.components.dashboard.messagebox.showerror", lambda *a, **k: None)
+    monkeypatch.setattr("gui.components.dashboard.messagebox.showinfo", lambda *a, **k: None)
+
+    dash._get_servers_for_bulk_ops = _fake_get_servers_for_bulk_ops
+    dash._run_background_fetch = _fake_run_background_fetch
+
+    dash._run_post_scan_batch_operations(
+        {
+            "bulk_probe_enabled": True,
+            "bulk_extract_enabled": False,
+            "bulk_extract_skip_indicators": True,
+        },
+        {
+            "protocol": "http",
+            "hosts_scanned": 1,
+        },
+    )
+
+    assert captured["host_type_filter"] == "H"
+    dash._execute_batch_probe.assert_called_once()
+    probe_targets = dash._execute_batch_probe.call_args[0][0]
+    assert len(probe_targets) == 1
+    assert probe_targets[0]["host_type"] == "H"

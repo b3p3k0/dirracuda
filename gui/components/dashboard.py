@@ -1058,9 +1058,12 @@ class DashboardWidget:
                     pass
                 return
 
-            # Query database for servers with successful authentication (keep UI responsive)
-            scan_protocol = str(scan_results.get("protocol") or "").lower()
-            host_type_filter = "F" if scan_protocol == "ftp" else "S"
+            # Query database for eligible servers in the active protocol (keep UI responsive)
+            scan_protocol = str(scan_results.get("protocol") or "").strip().lower()
+            host_type_filter = {
+                "ftp": "F",
+                "http": "H",
+            }.get(scan_protocol, "S")
 
             def _fetch_servers():
                 return self._get_servers_for_bulk_ops(
@@ -1070,7 +1073,7 @@ class DashboardWidget:
 
             servers_for_ops, fetch_error = self._run_background_fetch(
                 title="Preparing Bulk Operations",
-                message="Gathering servers with successful authentication...",
+                message="Gathering eligible servers for bulk operations...",
                 fetch_fn=_fetch_servers
             )
 
@@ -1093,7 +1096,7 @@ class DashboardWidget:
                 # Show info message only if bulk operations were enabled
                 messagebox.showinfo(
                     "Bulk Operations Skipped",
-                    "No servers with successful authentication found.\n\n"
+                    "No eligible servers found for bulk operations.\n\n"
                     "Bulk probe/extract operations require at least one accessible server."
                 )
                 self._show_scan_results(scan_results)
