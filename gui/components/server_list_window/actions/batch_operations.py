@@ -19,7 +19,10 @@ from gui.components.batch_extract_dialog import BatchExtractSettingsDialog
 from gui.components.file_browser_window import FileBrowserWindow
 from gui.components.pry_dialog import PryDialog
 from gui.utils import probe_cache, probe_patterns, probe_runner, extract_runner, pry_runner
+from gui.utils.logging_config import get_logger
 from shared.quarantine import create_quarantine_dir
+
+_logger = get_logger("server_list_window")
 
 
 class ServerListWindowBatchOperationsMixin:
@@ -126,6 +129,131 @@ class ServerListWindowBatchOperationsMixin:
             return
 
         self._launch_browse_workflow(targets[0])
+
+    def _on_mark_favorite_selected(self) -> None:
+        """Toggle favorite flag for selected protocol rows."""
+        self._hide_context_menu()
+        self._toggle_selected_user_flag("favorite")
+
+    def _on_mark_avoid_selected(self) -> None:
+        """Toggle avoid flag for selected protocol rows."""
+        self._hide_context_menu()
+        self._toggle_selected_user_flag("avoid")
+
+    def _on_mark_compromised_selected(self) -> None:
+        """Toggle compromised status for selected protocol rows."""
+        self._hide_context_menu()
+        self._toggle_selected_compromised()
+
+    def _toggle_selected_user_flag(self, field: str) -> None:
+        """
+        Toggle favorite/avoid for selected rows.
+
+        Row-scoped behavior:
+        - Each selected row flips its own current value.
+        - Same-IP sibling rows in other protocols are not touched.
+        """
+        if field not in ("favorite", "avoid"):
+            return
+        targets = self._build_selected_targets()
+        if not targets:
+            return
+
+        selected_row_keys = self._get_selected_row_keys()
+        for target in targets:
+            row_key = target.get("row_key")
+            if not row_key:
+                continue
+            server_data = target.get("data") or {}
+            current_value = 1 if bool(server_data.get(field, 0)) else 0
+            new_value = 0 if current_value else 1
+            self._apply_flag_toggle(row_key, field, new_value)
+
+        self._apply_filters()
+        self._restore_selection(selected_row_keys)
+
+    def _toggle_selected_compromised(self) -> None:
+        """
+        Toggle compromised state for selected rows using probe cache status.
+
+        Compromised ON:
+        - probe_status = "issue"
+        - indicator_matches >= 1
+
+        Compromised OFF:
+        - probe_status = "clean"
+        - indicator_matches = 0
+        """
+        targets = self._build_selected_targets()
+        if not targets:
+            return
+
+        selected_row_keys = self._get_selected_row_keys()
+        changed = False
+
+        for target in targets:
+            server_data = target.get("data") or {}
+            ip_address = target.get("ip_address")
+            row_key = target.get("row_key")
+            host_type = str(target.get("host_type") or "S").upper()
+            if not ip_address or host_type not in ("S", "F", "H"):
+                continue
+
+            try:
+                indicator_matches = int(server_data.get("indicator_matches", 0) or 0)
+            except Exception:
+                indicator_matches = 0
+            probe_status = str(server_data.get("probe_status") or "").lower()
+            is_compromised = probe_status == "issue" or indicator_matches > 0
+
+            if is_compromised:
+                new_status = "clean"
+                new_indicator_matches = 0
+            else:
+                new_status = "issue"
+                new_indicator_matches = indicator_matches if indicator_matches > 0 else 1
+
+            try:
+                if self.db_reader:
+                    self.db_reader.upsert_probe_cache_for_host(
+                        ip_address,
+                        host_type,
+                        status=new_status,
+                        indicator_matches=new_indicator_matches,
+                        snapshot_path=None,
+                        accessible_dirs_count=None,
+                        accessible_dirs_list=None,
+                        accessible_files_count=None,
+                    )
+            except Exception as exc:
+                _logger.warning(
+                    "Compromised toggle DB write failed for %s (%s): %s",
+                    row_key or ip_address,
+                    host_type,
+                    exc,
+                )
+                continue
+
+            # Keep in-memory state in sync for immediate UI/filter behavior.
+            target_server = next((s for s in self.all_servers if s.get("row_key") == row_key), None)
+            if target_server is None:
+                target_server = next(
+                    (
+                        s for s in self.all_servers
+                        if s.get("ip_address") == ip_address
+                        and str(s.get("host_type") or "S").upper() == host_type
+                    ),
+                    None,
+                )
+            if target_server is not None:
+                target_server["probe_status"] = new_status
+                target_server["probe_status_emoji"] = self._probe_status_to_emoji(new_status)
+                target_server["indicator_matches"] = new_indicator_matches
+                changed = True
+
+        if changed:
+            self._apply_filters()
+            self._restore_selection(selected_row_keys)
 
     def _on_delete_selected(self) -> None:
         """Handle delete selected rows action."""

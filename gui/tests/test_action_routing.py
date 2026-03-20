@@ -639,3 +639,124 @@ def test_pry_blocked_for_ftp_row():
     assert len(warning_shown) == 1, "Warning dialog must be shown"
     assert "Pry" in warning_shown[0]
     assert pry_started == [], "Pry must not be launched for FTP rows"
+
+
+# ---------------------------------------------------------------------------
+# Context-menu mark toggles
+# ---------------------------------------------------------------------------
+
+
+def test_mark_favorite_toggles_selected_row_only():
+    """Context-menu Mark Favorite toggles one selected row via row_key."""
+    stub = _BatchMixinStub()
+    row = {
+        "ip_address": "1.2.3.4",
+        "host_type": "S",
+        "row_key": "S:1",
+        "favorite": 0,
+        "avoid": 0,
+        "probe_status": "unprobed",
+        "indicator_matches": 0,
+    }
+    stub.filtered_servers = [row]
+    stub.all_servers = [row]
+    stub.tree._items = {"S:1": True}
+    stub.tree._selection = ["S:1"]
+
+    toggle_calls = []
+
+    def _fake_apply_flag_toggle(row_key, field, new_value):
+        toggle_calls.append((row_key, field, new_value))
+        row[field] = new_value
+
+    stub._apply_flag_toggle = _fake_apply_flag_toggle
+    stub._apply_filters = MagicMock()
+
+    stub._on_mark_favorite_selected()
+
+    assert toggle_calls == [("S:1", "favorite", 1)]
+    assert row["favorite"] == 1
+    stub._apply_filters.assert_called_once()
+
+
+def test_mark_avoid_bulk_toggles_per_row_current_state():
+    """Bulk Mark Avoid flips each selected row independently."""
+    stub = _BatchMixinStub()
+    row_a = {"ip_address": "1.1.1.1", "host_type": "S", "row_key": "S:1", "favorite": 0, "avoid": 0}
+    row_b = {"ip_address": "2.2.2.2", "host_type": "H", "row_key": "H:2", "favorite": 0, "avoid": 1}
+    stub.filtered_servers = [row_a, row_b]
+    stub.all_servers = [row_a, row_b]
+    stub.tree._items = {"S:1": True, "H:2": True}
+    stub.tree._selection = ["S:1", "H:2"]
+
+    toggle_calls = []
+
+    def _fake_apply_flag_toggle(row_key, field, new_value):
+        toggle_calls.append((row_key, field, new_value))
+        row = row_a if row_key == "S:1" else row_b
+        row[field] = new_value
+
+    stub._apply_flag_toggle = _fake_apply_flag_toggle
+    stub._apply_filters = MagicMock()
+
+    stub._on_mark_avoid_selected()
+
+    assert set(toggle_calls) == {
+        ("S:1", "avoid", 1),  # 0 -> 1
+        ("H:2", "avoid", 0),  # 1 -> 0
+    }
+    assert row_a["avoid"] == 1
+    assert row_b["avoid"] == 0
+    stub._apply_filters.assert_called_once()
+
+
+def test_mark_compromised_toggles_selected_protocol_row_only():
+    """Same IP S+H rows: toggling compromised on H row must not mutate S row."""
+    stub = _BatchMixinStub()
+    smb_row = {
+        "ip_address": "9.9.9.9",
+        "host_type": "S",
+        "row_key": "S:10",
+        "probe_status": "clean",
+        "probe_status_emoji": "✔",
+        "indicator_matches": 0,
+    }
+    http_row = {
+        "ip_address": "9.9.9.9",
+        "host_type": "H",
+        "row_key": "H:10",
+        "probe_status": "clean",
+        "probe_status_emoji": "✔",
+        "indicator_matches": 0,
+    }
+    stub.filtered_servers = [smb_row, http_row]
+    stub.all_servers = [smb_row, http_row]
+    stub.tree._items = {"S:10": True, "H:10": True}
+    stub.tree._selection = ["H:10"]
+    stub._apply_filters = MagicMock()
+    stub.db_reader.upsert_probe_cache_for_host = MagicMock()
+
+    stub._on_mark_compromised_selected()
+
+    assert http_row["probe_status"] == "issue"
+    assert http_row["indicator_matches"] == 1
+    assert smb_row["probe_status"] == "clean", "SMB sibling must remain unchanged"
+    assert smb_row["indicator_matches"] == 0
+
+    assert stub.db_reader.upsert_probe_cache_for_host.call_count == 1
+    _, kwargs = stub.db_reader.upsert_probe_cache_for_host.call_args
+    assert kwargs["status"] == "issue"
+    assert kwargs["indicator_matches"] == 1
+    stub._apply_filters.assert_called_once()
+
+    # Toggle again -> unmark compromised
+    stub._apply_filters.reset_mock()
+    stub.tree._selection = ["H:10"]
+    stub._on_mark_compromised_selected()
+
+    assert http_row["probe_status"] == "clean"
+    assert http_row["indicator_matches"] == 0
+    _, kwargs2 = stub.db_reader.upsert_probe_cache_for_host.call_args
+    assert kwargs2["status"] == "clean"
+    assert kwargs2["indicator_matches"] == 0
+    stub._apply_filters.assert_called_once()

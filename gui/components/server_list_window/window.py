@@ -116,6 +116,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self.browser_button = None
         self.stop_button = None
         self.delete_button = None
+        self._selection_menu_indices: List[int] = []  # Selection-dependent context menu entries
         self._delete_menu_index = None  # Store context menu index
         self._delete_in_progress = False  # Flag to prevent concurrent deletes
         self.table_overlay = None
@@ -465,13 +466,29 @@ class ServerListWindow(ServerListWindowActionsMixin):
 
     def _create_context_menu(self, tree: ttk.Treeview) -> None:
         self.context_menu = tk.Menu(self.window, tearoff=0)
-        self.context_menu.add_command(label="📋 Copy IP", command=self._on_copy_ip)
-        self.context_menu.add_command(label="🔍 Probe Selected", command=self._on_probe_selected)
-        self.context_menu.add_command(label="📦 Extract Selected", command=self._on_extract_selected)
-        self.context_menu.add_command(label="🔓 Pry Selected", command=self._on_pry_selected)
-        self.context_menu.add_command(label="🗂️ Browse Selected", command=self._on_file_browser_selected)
-        # Store index before adding Delete item (context menu currently has 5 items: 0-4)
-        self._delete_menu_index = 5  # Will be the 6th item (index 5)
+        self._selection_menu_indices = []
+
+        def _add_selection_command(label: str, command) -> None:
+            self.context_menu.add_command(label=label, command=command)
+            idx = self.context_menu.index("end")
+            if idx is not None:
+                self._selection_menu_indices.append(int(idx))
+
+        _add_selection_command("📋 Copy IP", self._on_copy_ip)
+        self.context_menu.add_separator()
+        _add_selection_command("🔍 Probe Selected", self._on_probe_selected)
+        _add_selection_command("📦 Extract Selected", self._on_extract_selected)
+        _add_selection_command("🔓 Pry Selected", self._on_pry_selected)
+        _add_selection_command("🗂️ Browse Selected", self._on_file_browser_selected)
+        self.context_menu.add_separator()
+        _add_selection_command("⭐ Toggle Favorite", self._on_mark_favorite_selected)
+        _add_selection_command("🚫 Toggle Avoid", self._on_mark_avoid_selected)
+        _add_selection_command("⚠ Toggle Compromised", self._on_mark_compromised_selected)
+        self.context_menu.add_separator()
+
+        # Store index before adding Delete item.
+        end_idx = self.context_menu.index("end")
+        self._delete_menu_index = 0 if end_idx is None else int(end_idx) + 1
         self.context_menu.add_command(label="🗑️ Delete Selected", command=self._on_delete_selected)
         self._update_context_menu_state()
 
