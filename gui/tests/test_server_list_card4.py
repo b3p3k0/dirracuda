@@ -248,7 +248,36 @@ class TestApplyExcludeAvoidFilter:
 
 
 # ---------------------------------------------------------------------------
-# Test 4: apply_shares_filter applies equally to SMB and FTP rows
+# Test 4: apply_protocol_filter keeps only selected host types
+# ---------------------------------------------------------------------------
+
+class TestApplyProtocolFilter:
+    def test_single_protocol_selection(self):
+        f = _get_filters()
+        servers = _servers() + [{
+            "row_key": "H:1", "ip_address": "7.7.7.7", "host_type": "H",
+            "favorite": 0, "avoid": 0, "accessible_shares": 1,
+        }]
+        result = f.apply_protocol_filter(servers, ["H"])
+        assert [row["row_key"] for row in result] == ["H:1"]
+
+    def test_multi_protocol_selection(self):
+        f = _get_filters()
+        servers = _servers() + [{
+            "row_key": "H:1", "ip_address": "7.7.7.7", "host_type": "H",
+            "favorite": 0, "avoid": 0, "accessible_shares": 1,
+        }]
+        result = f.apply_protocol_filter(servers, ["S", "H"])
+        keys = {row["row_key"] for row in result}
+        assert keys == {"S:1", "S:2", "H:1"}
+
+    def test_empty_selection_returns_no_rows(self):
+        f = _get_filters()
+        assert f.apply_protocol_filter(_servers(), []) == []
+
+
+# ---------------------------------------------------------------------------
+# Test 5: apply_shares_filter applies equally to SMB and FTP rows
 # ---------------------------------------------------------------------------
 
 class TestApplySharesFilter:
@@ -275,7 +304,7 @@ class TestApplySharesFilter:
 
 
 # ---------------------------------------------------------------------------
-# Test 5: _on_treeview_click callback wiring (no stale method refs)
+# Test 6: _on_treeview_click callback wiring (no stale method refs)
 # ---------------------------------------------------------------------------
 
 class TestClickCallbackWiring:

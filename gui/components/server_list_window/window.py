@@ -78,6 +78,9 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self.exclude_avoid = tk.BooleanVar()
         self.probed_only = tk.BooleanVar()
         self.exclude_compromised = tk.BooleanVar()
+        self.protocol_smb = tk.BooleanVar(value=True)
+        self.protocol_ftp = tk.BooleanVar(value=True)
+        self.protocol_http = tk.BooleanVar(value=True)
 
         # Window and UI components
         self.window = None
@@ -380,6 +383,9 @@ class ServerListWindow(ServerListWindowActionsMixin):
             'exclude_avoid': self.exclude_avoid,
             'probed_only': self.probed_only,
             'exclude_compromised': self.exclude_compromised,
+            'protocol_smb': self.protocol_smb,
+            'protocol_ftp': self.protocol_ftp,
+            'protocol_http': self.protocol_http,
             'country_filter_text': self.country_filter_text
         }
 
@@ -392,6 +398,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
             'on_exclude_avoid_changed': self._apply_filters,
             'on_probed_only_changed': self._apply_filters,
             'on_exclude_compromised_changed': self._apply_filters,
+            'on_protocol_filter_changed': self._apply_filters,
             'on_country_filter_changed': self._apply_filters,
             'on_country_filter_text_changed': self._on_country_filter_text_changed,
             'on_clear_countries': self._clear_countries,
@@ -654,6 +661,15 @@ class ServerListWindow(ServerListWindowActionsMixin):
             return
 
         filtered = self.all_servers[:]
+
+        selected_protocols = []
+        if self.protocol_smb.get():
+            selected_protocols.append("S")
+        if self.protocol_ftp.get():
+            selected_protocols.append("F")
+        if self.protocol_http.get():
+            selected_protocols.append("H")
+        filtered = filters.apply_protocol_filter(filtered, selected_protocols)
 
         # Apply search filter
         search_term = self.search_text.get()
