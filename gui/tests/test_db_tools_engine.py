@@ -2442,7 +2442,8 @@ class TestMergeTimestampNormalization:
 
     def test_merge_normalizes_T_format_timestamps(self, temp_db):
         """New server inserted via merge stores first_seen/last_seen without T."""
-        ext_db = tempfile.mktemp(suffix=".db")
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+            ext_db = f.name
         try:
             conn = sqlite3.connect(ext_db)
             conn.executescript(MINIMAL_SCHEMA)
@@ -2503,7 +2504,8 @@ class TestMergeTimestampNormalization:
         conn.commit()
         conn.close()
 
-        ext_db = tempfile.mktemp(suffix=".db")
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+            ext_db = f.name
         try:
             conn = sqlite3.connect(ext_db)
             conn.executescript(MINIMAL_SCHEMA)
