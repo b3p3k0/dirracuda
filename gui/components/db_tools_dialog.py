@@ -175,7 +175,7 @@ class DBToolsDialog:
 
         # File selection section
         file_frame = tk.LabelFrame(tab, text="External Database")
-        self.theme.apply_to_widget(file_frame, "main_window")
+        self._style_labelframe(file_frame)
         file_frame.pack(fill=tk.X, padx=10, pady=10)
 
         path_frame = tk.Frame(file_frame)
@@ -203,7 +203,7 @@ class DBToolsDialog:
 
         # Preview section
         self.import_preview_frame = tk.LabelFrame(tab, text="Merge Preview")
-        self.theme.apply_to_widget(self.import_preview_frame, "main_window")
+        self._style_labelframe(self.import_preview_frame)
         self.import_preview_frame.pack(fill=tk.X, padx=10, pady=10)
 
         preview_info = self.theme.create_styled_label(
@@ -215,7 +215,7 @@ class DBToolsDialog:
 
         # Strategy selection
         strategy_frame = tk.LabelFrame(tab, text="Conflict Resolution Strategy")
-        self.theme.apply_to_widget(strategy_frame, "main_window")
+        self._style_labelframe(strategy_frame)
         strategy_frame.pack(fill=tk.X, padx=10, pady=10)
 
         self.merge_strategy_var = tk.StringVar(value=MergeConflictStrategy.KEEP_NEWER.value)
@@ -234,7 +234,7 @@ class DBToolsDialog:
                 variable=self.merge_strategy_var,
                 value=value
             )
-            self.theme.apply_to_widget(rb, "main_window")
+            self.theme.apply_to_widget(rb, "checkbox")
             rb.pack(anchor=tk.W, padx=10, pady=2)
 
         # Auto-backup checkbox
@@ -244,7 +244,7 @@ class DBToolsDialog:
             text="Auto-backup before merge (recommended)",
             variable=self.auto_backup_var
         )
-        self.theme.apply_to_widget(backup_cb, "main_window")
+        self.theme.apply_to_widget(backup_cb, "checkbox")
         backup_cb.pack(anchor=tk.W, padx=10, pady=(10, 10))
 
         # Merge button
@@ -427,7 +427,7 @@ class DBToolsDialog:
 
         # Export section
         export_frame = tk.LabelFrame(tab, text="Export Database")
-        self.theme.apply_to_widget(export_frame, "main_window")
+        self._style_labelframe(export_frame)
         export_frame.pack(fill=tk.X, padx=10, pady=10)
 
         export_desc = self.theme.create_styled_label(
@@ -448,7 +448,7 @@ class DBToolsDialog:
 
         # Quick backup section
         backup_frame = tk.LabelFrame(tab, text="Quick Backup")
-        self.theme.apply_to_widget(backup_frame, "main_window")
+        self._style_labelframe(backup_frame)
         backup_frame.pack(fill=tk.X, padx=10, pady=10)
 
         backup_desc = self.theme.create_styled_label(
@@ -633,7 +633,7 @@ class DBToolsDialog:
 
         # Additional info section
         info_frame = tk.LabelFrame(tab, text="Details")
-        self.theme.apply_to_widget(info_frame, "main_window")
+        self._style_labelframe(info_frame)
         info_frame.pack(fill=tk.X, padx=10, pady=10)
 
         self.stats_labels['details'] = self.theme.create_styled_label(
@@ -643,7 +643,7 @@ class DBToolsDialog:
 
         # Country distribution
         country_frame = tk.LabelFrame(tab, text="Country Distribution")
-        self.theme.apply_to_widget(country_frame, "main_window")
+        self._style_labelframe(country_frame)
         country_frame.pack(fill=tk.X, padx=10, pady=10)
 
         self.stats_labels['countries'] = self.theme.create_styled_label(
@@ -708,7 +708,7 @@ class DBToolsDialog:
 
         # Vacuum section
         vacuum_frame = tk.LabelFrame(tab, text="Optimize Database")
-        self.theme.apply_to_widget(vacuum_frame, "main_window")
+        self._style_labelframe(vacuum_frame)
         vacuum_frame.pack(fill=tk.X, padx=10, pady=10)
 
         vacuum_desc = self.theme.create_styled_label(
@@ -741,7 +741,7 @@ class DBToolsDialog:
 
         # Purge section
         purge_frame = tk.LabelFrame(tab, text="Purge Old Data")
-        self.theme.apply_to_widget(purge_frame, "main_window")
+        self._style_labelframe(purge_frame)
         purge_frame.pack(fill=tk.X, padx=10, pady=10)
 
         purge_desc = self.theme.create_styled_label(
@@ -1072,6 +1072,19 @@ class DBToolsDialog:
         )
         self.theme.apply_to_widget(self.close_button, "button_secondary")
         self.close_button.pack(side=tk.RIGHT)
+
+    def _style_labelframe(self, frame: tk.LabelFrame) -> None:
+        """Apply consistent themed styling to LabelFrame title and body."""
+        self.theme.apply_to_widget(frame, "main_window")
+        try:
+            frame.configure(
+                bg=self.theme.colors["primary_bg"],
+                fg=self.theme.colors["text"],
+                highlightbackground=self.theme.colors["border"],
+                highlightcolor=self.theme.colors["border"],
+            )
+        except tk.TclError:
+            pass
 
     def _center_dialog(self) -> None:
         """Center dialog on parent window."""
