@@ -1,14 +1,10 @@
 # This doc
 .gitignore
 
-# Docs publish policy
-# Publish only docs/dev/** and docs/example_db/generate_bogan_dbs.py
-docs/*
-!docs/dev/
-!docs/dev/**
-!docs/example_db/
-docs/example_db/*
-!docs/example_db/generate_bogan_dbs.py
+# internal docs
+docs/release/
+docs/dev/
+docs/archive/
 
 # OS / Editor junk
 .DS_Store
