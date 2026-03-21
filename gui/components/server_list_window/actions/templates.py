@@ -414,17 +414,25 @@ class ServerListWindowTemplateMixin:
     def _close_window(self) -> None:
         """Close the window and persist filter prefs."""
         self._persist_filter_preferences()
-        if hasattr(self, "_hide_notes_tooltip"):
-            try:
-                self._hide_notes_tooltip()
-            except Exception:
-                pass
-        if hasattr(self, "_cancel_initial_data_load"):
-            try:
-                self._cancel_initial_data_load()
-            except Exception:
-                pass
+        try:
+            self._stop_all_jobs(show_summary=False)
+        except Exception:
+            pass
+        try:
+            self._destroy_batch_status_dialog()
+        except Exception:
+            pass
         if self.window is not None:
+            if hasattr(self, "_hide_notes_tooltip"):
+                try:
+                    self._hide_notes_tooltip()
+                except Exception:
+                    pass
+            if hasattr(self, "_cancel_initial_data_load"):
+                try:
+                    self._cancel_initial_data_load()
+                except Exception:
+                    pass
             self.window.destroy()
 
     def restore_and_focus(self) -> None:
