@@ -195,13 +195,36 @@ Pry includes lockout detection and configurable delays between attempts. That sa
 
 Opened via **DB Tools** on the dashboard. Four tabs:
 
-**Import & Merge** — load an external `.db` file and merge it into the current database by IP address. Covers all related records: shares, credentials, file manifests, vulnerabilities, and failure logs. Three conflict strategies: **Keep Newer** (default — picks whichever record has the more recent `last_seen`), **Keep Source**, and **Keep Current**. Auto-backup fires before the merge unless you disable it.
+**Import & Merge** — supports two source types:
+- External `.db` merge: merge by IP into current DB (includes shares, credentials, file manifests, vulnerabilities, failure logs).
+- CSV host import: import protocol server rows only (SMB/FTP/HTTP registries), using the same conflict strategies.
+
+Three conflict strategies are available in both paths: **Keep Newer** (default — picks whichever record has the more recent `last_seen`), **Keep Source**, and **Keep Current**. Auto-backup fires before import/merge unless you disable it.
 
 **Export & Backup** — **Export** runs `VACUUM INTO` to produce a clean, defragmented copy at a path you choose. **Quick Backup** drops a timestamped copy (`smbseek_backup_YYYYMMDD_HHMMSS.db`) next to the main database file.
 
 **Statistics** — server and share counts, database size, date range, and a top-10 country breakdown. Read-only; won't lock the database.
 
 **Maintenance** — Vacuum/optimize, integrity check, and age-based purge. The purge shows a full cascade preview before deleting — servers not seen within N days (default: 30) plus all associated shares, credentials, file manifests, vulnerabilities, and cached probe data.
+
+### CSV Host Import Standard
+
+CSV import is intentionally simple: **select -> preview -> write**. The app does lightweight validation and previews skips/warnings, but CSV quality is the operator's responsibility.
+
+Required column:
+- `ip_address`
+
+Optional columns:
+- `host_type` (`S`, `F`, `H`; aliases `SMB`, `FTP`, `HTTP`; default is `S`)
+- `country`, `country_code`, `auth_method`, `first_seen`, `last_seen`, `scan_count`, `status`, `notes`, `shodan_data`
+- `port`, `anon_accessible`, `banner` (FTP/HTTP rows)
+- `scheme`, `title` (HTTP rows)
+
+Behavior notes:
+- One CSV row maps to one protocol host row.
+- `S` rows write to `smb_servers`, `F` to `ftp_servers`, `H` to `http_servers`.
+- If the current DB lacks a protocol table/columns (legacy DB shape), those protocol rows are skipped and shown in preview warnings.
+- CSV import does not create share/file/vulnerability/failure records; it imports host registries only.
 
 ---
 

@@ -10,6 +10,7 @@ duplicate IPs by comparing last_seen timestamps.
 """
 
 import os
+import csv
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -87,6 +88,8 @@ REQUIRED_SHARE_CREDENTIALS_TARGET_COLUMNS = REQUIRED_SHARE_CREDENTIALS_COLUMNS |
 REQUIRED_FILE_MANIFEST_TARGET_COLUMNS = REQUIRED_FILE_MANIFEST_COLUMNS | {'session_id'}
 REQUIRED_VULNERABILITY_TARGET_COLUMNS = REQUIRED_VULNERABILITY_COLUMNS | {'session_id'}
 REQUIRED_FAILURE_LOG_TARGET_COLUMNS = REQUIRED_FAILURE_LOG_COLUMNS | {'session_id', 'last_retry_timestamp'}
+REQUIRED_FTP_SERVER_TARGET_COLUMNS = REQUIRED_FTP_SERVER_COLUMNS | {'id'}
+REQUIRED_HTTP_SERVER_TARGET_COLUMNS = REQUIRED_HTTP_SERVER_COLUMNS | {'id'}
 
 # Required columns in core target tables needed for merge writes.
 REQUIRED_SCAN_SESSION_TARGET_COLUMNS = {'id'}
@@ -160,6 +163,23 @@ class SchemaValidation:
     missing_tables: List[str] = field(default_factory=list)
     missing_columns: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
+
+
+@dataclass
+class CSVImportResult:
+    """Result of CSV host import operation."""
+    success: bool
+    rows_total: int = 0
+    rows_valid: int = 0
+    rows_skipped: int = 0
+    servers_added: int = 0
+    servers_updated: int = 0
+    servers_skipped: int = 0
+    protocol_counts: Dict[str, int] = field(default_factory=dict)
+    errors: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+    duration_seconds: float = 0.0
+    backup_path: Optional[str] = None
 
 
 class DBToolsEngine:
@@ -442,6 +462,710 @@ class DBToolsEngine:
                 'valid': False,
                 'errors': [str(e)]
             }
+
+    # -------------------------------------------------------------------------
+    # CSV Host Import (S/F/H server rows)
+    # -------------------------------------------------------------------------
+
+    def preview_csv_import(self, csv_path: str) -> Dict[str, Any]:
+        """
+        Preview CSV host import outcomes without writing to the database.
+
+        CSV contract:
+        - Required: ip_address
+        - Optional: host_type (S/F/H; defaults to S), country, country_code,
+          auth_method, first_seen, last_seen, scan_count, status, notes,
+          port, anon_accessible, banner, scheme, title, shodan_data
+        """
+        if not os.path.exists(csv_path):
+            return {
+                'valid': False,
+                'errors': [f"CSV file not found: {csv_path}"]
+            }
+
+        try:
+            conn = sqlite3.connect(f"file:{self.current_db_path}?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            analysis = self._analyze_csv_hosts(csv_path, conn, include_rows=False)
+            conn.close()
+
+            if analysis['errors']:
+                return {
+                    'valid': False,
+                    'errors': analysis['errors'],
+                }
+
+            return {
+                'valid': True,
+                'total_rows': analysis['rows_total'],
+                'valid_rows': analysis['rows_valid'],
+                'skipped_rows': analysis['rows_skipped'],
+                'new_servers': analysis['new_servers'],
+                'existing_servers': analysis['existing_servers'],
+                'protocol_counts': analysis['protocol_counts'],
+                'warnings': analysis['warnings'],
+            }
+
+        except Exception as e:
+            return {
+                'valid': False,
+                'errors': [str(e)]
+            }
+
+    def import_csv_hosts(
+        self,
+        csv_path: str,
+        strategy: MergeConflictStrategy = MergeConflictStrategy.KEEP_NEWER,
+        auto_backup: bool = True,
+        progress_callback: Optional[Callable[[int, str], None]] = None,
+    ) -> CSVImportResult:
+        """
+        Import protocol-aware host rows from CSV into SMB/FTP/HTTP server tables.
+
+        Rows are written per protocol table based on host_type:
+        - S -> smb_servers
+        - F -> ftp_servers
+        - H -> http_servers
+        """
+        start_time = time.time()
+        result = CSVImportResult(success=False, protocol_counts={'S': 0, 'F': 0, 'H': 0})
+
+        def progress(pct: int, msg: str) -> None:
+            if progress_callback:
+                progress_callback(pct, msg)
+
+        if not os.path.exists(csv_path):
+            result.errors.append(f"CSV file not found: {csv_path}")
+            return result
+
+        try:
+            progress(0, "Preparing CSV import...")
+
+            if auto_backup:
+                progress(2, "Creating backup...")
+                backup_result = self.create_backup()
+                if backup_result['success']:
+                    result.backup_path = backup_result['backup_path']
+                else:
+                    result.warnings.append(
+                        f"Backup failed: {backup_result.get('error', 'Unknown error')}"
+                    )
+
+            db_size = os.path.getsize(self.current_db_path)
+            if not self._check_disk_space(db_size * 2, os.path.dirname(self.current_db_path)):
+                result.errors.append("Insufficient disk space for CSV import")
+                return result
+
+            conn = sqlite3.connect(self.current_db_path)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys = ON")
+
+            try:
+                progress(10, "Analyzing CSV rows...")
+                analysis = self._analyze_csv_hosts(csv_path, conn, include_rows=True)
+                result.rows_total = analysis['rows_total']
+                result.rows_valid = analysis['rows_valid']
+                result.rows_skipped = analysis['rows_skipped']
+                result.protocol_counts = analysis['protocol_counts']
+                result.warnings.extend(analysis['warnings'])
+
+                if analysis['errors']:
+                    result.errors.extend(analysis['errors'])
+                    return result
+
+                rows_to_import = analysis['rows']
+                if not rows_to_import:
+                    result.errors.append("No valid CSV rows to import.")
+                    return result
+
+                conn.execute("BEGIN IMMEDIATE")
+
+                progress(20, "Creating import session...")
+                import_session_id = self._create_import_session(
+                    conn,
+                    os.path.basename(csv_path)
+                )
+
+                total = len(rows_to_import)
+                for i, row in enumerate(rows_to_import):
+                    host_type = row['host_type']
+                    if host_type == 'S':
+                        added, updated, skipped = self._upsert_csv_smb_row(conn, row, strategy)
+                    elif host_type == 'F':
+                        added, updated, skipped = self._upsert_csv_ftp_row(conn, row, strategy)
+                    elif host_type == 'H':
+                        added, updated, skipped = self._upsert_csv_http_row(conn, row, strategy)
+                    else:
+                        # Defensive: should never happen after validation.
+                        result.rows_skipped += 1
+                        continue
+
+                    result.servers_added += added
+                    result.servers_updated += updated
+                    result.servers_skipped += skipped
+
+                    if i % 50 == 0:
+                        pct = 25 + int(((i + 1) / total) * 65)
+                        progress(min(pct, 90), f"Importing row {i + 1}/{total}...")
+
+                progress(92, "Finalizing import session...")
+                self._finalize_import_session(
+                    conn,
+                    import_session_id,
+                    result.servers_added + result.servers_updated,
+                )
+
+                conn.commit()
+                result.success = True
+                progress(100, "CSV import completed successfully")
+
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
+
+        except Exception as e:
+            _logger.exception("CSV import failed")
+            result.errors.append(str(e))
+
+        result.duration_seconds = time.time() - start_time
+        return result
+
+    def _read_csv_host_records(self, csv_path: str) -> List[Tuple[int, Dict[str, str]]]:
+        """Read CSV rows with normalized header keys; skip comment-only lines."""
+        records: List[Tuple[int, Dict[str, str]]] = []
+        with open(csv_path, 'r', encoding='utf-8-sig', newline='') as csvfile:
+            filtered_lines = (
+                line for line in csvfile
+                if not line.lstrip().startswith('#')
+            )
+            reader = csv.DictReader(filtered_lines)
+            if not reader.fieldnames:
+                raise ValueError("CSV file is missing a header row.")
+
+            normalized_headers = {
+                self._normalize_csv_column_name(header)
+                for header in reader.fieldnames
+                if header
+            }
+            if 'ip_address' not in normalized_headers:
+                raise ValueError("Missing required CSV column: ip_address")
+
+            for row_number, row in enumerate(reader, start=2):
+                normalized_row: Dict[str, str] = {}
+                for key, value in (row or {}).items():
+                    if key is None:
+                        continue
+                    norm_key = self._normalize_csv_column_name(key)
+                    if isinstance(value, str):
+                        normalized_row[norm_key] = value.strip()
+                    elif value is None:
+                        normalized_row[norm_key] = ''
+                    else:
+                        normalized_row[norm_key] = str(value)
+
+                # Ignore fully empty rows.
+                if not any(v for v in normalized_row.values()):
+                    continue
+                records.append((row_number, normalized_row))
+
+        return records
+
+    def _analyze_csv_hosts(
+        self,
+        csv_path: str,
+        conn: sqlite3.Connection,
+        include_rows: bool,
+    ) -> Dict[str, Any]:
+        """
+        Parse and validate CSV host rows against current runtime schema.
+
+        Returns analysis dictionary with summary counts, warnings, and parsed rows.
+        """
+        analysis: Dict[str, Any] = {
+            'rows_total': 0,
+            'rows_valid': 0,
+            'rows_skipped': 0,
+            'new_servers': 0,
+            'existing_servers': 0,
+            'protocol_counts': {'S': 0, 'F': 0, 'H': 0},
+            'warnings': [],
+            'errors': [],
+            'rows': [],
+        }
+
+        warnings = analysis['warnings']
+        dropped_warnings = 0
+        max_warnings = 25
+
+        def add_warning(message: str) -> None:
+            nonlocal dropped_warnings
+            if len(warnings) < max_warnings:
+                warnings.append(message)
+            else:
+                dropped_warnings += 1
+
+        protocol_specs = {
+            'S': ('smb_servers', REQUIRED_SMB_SERVER_TARGET_COLUMNS),
+            'F': ('ftp_servers', REQUIRED_FTP_SERVER_TARGET_COLUMNS),
+            'H': ('http_servers', REQUIRED_HTTP_SERVER_TARGET_COLUMNS),
+        }
+
+        protocol_support: Dict[str, Dict[str, Any]] = {}
+        existing_ip_sets: Dict[str, set[str]] = {'S': set(), 'F': set(), 'H': set()}
+        for host_type, (table_name, required_columns) in protocol_specs.items():
+            columns = self._table_columns(conn, table_name)
+            if not columns:
+                protocol_support[host_type] = {
+                    'supported': False,
+                    'reason': f"Target DB missing table {table_name}",
+                }
+                continue
+
+            missing_columns = sorted(required_columns - columns)
+            if missing_columns:
+                protocol_support[host_type] = {
+                    'supported': False,
+                    'reason': (
+                        f"Target table {table_name} missing required columns: "
+                        f"{', '.join(missing_columns)}"
+                    ),
+                }
+                continue
+
+            protocol_support[host_type] = {'supported': True, 'reason': ''}
+            rows = conn.execute(f"SELECT ip_address FROM {table_name}").fetchall()
+            existing_ip_sets[host_type] = {row['ip_address'] for row in rows}
+
+        try:
+            records = self._read_csv_host_records(csv_path)
+        except Exception as e:
+            analysis['errors'].append(str(e))
+            return analysis
+
+        if not records:
+            analysis['errors'].append("CSV file has no data rows.")
+            return analysis
+
+        seen_in_file: Dict[str, set[str]] = {'S': set(), 'F': set(), 'H': set()}
+        unsupported_rows: Dict[str, int] = {'S': 0, 'F': 0, 'H': 0}
+
+        now_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        for row_number, raw_row in records:
+            analysis['rows_total'] += 1
+
+            ip_address = (raw_row.get('ip_address') or '').strip()
+            if not ip_address:
+                analysis['rows_skipped'] += 1
+                add_warning(f"Row {row_number}: missing ip_address; row skipped.")
+                continue
+
+            host_type = self._normalize_host_type(
+                raw_row.get('host_type')
+                or raw_row.get('protocol')
+                or raw_row.get('type')
+            )
+            if host_type is None:
+                analysis['rows_skipped'] += 1
+                add_warning(
+                    f"Row {row_number}: invalid host_type '{raw_row.get('host_type', '')}'; "
+                    "expected S/F/H."
+                )
+                continue
+
+            support = protocol_support[host_type]
+            if not support['supported']:
+                analysis['rows_skipped'] += 1
+                unsupported_rows[host_type] += 1
+                continue
+
+            prepared = self._prepare_csv_host_row(raw_row, host_type, now_ts, row_number, add_warning)
+            analysis['rows_valid'] += 1
+            analysis['protocol_counts'][host_type] += 1
+
+            if (
+                ip_address in existing_ip_sets[host_type]
+                or ip_address in seen_in_file[host_type]
+            ):
+                analysis['existing_servers'] += 1
+            else:
+                analysis['new_servers'] += 1
+                seen_in_file[host_type].add(ip_address)
+
+            if include_rows:
+                analysis['rows'].append(prepared)
+
+        for host_type, skipped_count in unsupported_rows.items():
+            if skipped_count == 0:
+                continue
+            reason = protocol_support[host_type]['reason']
+            add_warning(
+                f"Skipped {skipped_count} {host_type} rows: {reason}."
+            )
+
+        if dropped_warnings:
+            warnings.append(f"{dropped_warnings} additional warnings omitted.")
+
+        return analysis
+
+    def _prepare_csv_host_row(
+        self,
+        raw_row: Dict[str, str],
+        host_type: str,
+        now_ts: str,
+        row_number: int,
+        add_warning: Callable[[str], None],
+    ) -> Dict[str, Any]:
+        """Normalize CSV row values for protocol-specific upsert operations."""
+        last_seen_raw = (
+            raw_row.get('last_seen')
+            or raw_row.get('timestamp')
+            or raw_row.get('updated_at')
+        )
+        first_seen_raw = raw_row.get('first_seen') or raw_row.get('created_at')
+
+        last_seen = self._coerce_db_timestamp(last_seen_raw, now_ts)
+        first_seen = self._coerce_db_timestamp(first_seen_raw, last_seen)
+
+        scan_count = self._coerce_int(raw_row.get('scan_count'), default=1, minimum=1)
+        if raw_row.get('scan_count') and scan_count == 1 and raw_row.get('scan_count') != '1':
+            add_warning(f"Row {row_number}: invalid scan_count '{raw_row.get('scan_count')}'; using 1.")
+
+        country_code = (raw_row.get('country_code') or '').upper() or None
+        status = raw_row.get('status') or 'active'
+        notes = raw_row.get('notes') or None
+        shodan_data = raw_row.get('shodan_data') or None
+        banner = raw_row.get('banner') or None
+
+        prepared: Dict[str, Any] = {
+            'host_type': host_type,
+            'ip_address': (raw_row.get('ip_address') or '').strip(),
+            'country': raw_row.get('country') or None,
+            'country_code': country_code,
+            'first_seen': first_seen,
+            'last_seen': last_seen,
+            'scan_count': scan_count,
+            'status': status,
+            'notes': notes,
+            'shodan_data': shodan_data,
+            'banner': banner,
+            'auth_method': raw_row.get('auth_method') or None,
+            'port': None,
+            'anon_accessible': False,
+            'scheme': None,
+            'title': raw_row.get('title') or None,
+        }
+
+        if host_type == 'F':
+            raw_port = raw_row.get('port')
+            prepared['port'] = self._coerce_int(raw_port, default=21, minimum=1)
+            if raw_port and prepared['port'] == 21 and raw_port not in ('21', '21.0'):
+                add_warning(f"Row {row_number}: invalid FTP port '{raw_port}'; using 21.")
+
+            prepared['anon_accessible'] = self._coerce_bool(
+                raw_row.get('anon_accessible') or raw_row.get('anonymous'),
+                default=False,
+            )
+
+        if host_type == 'H':
+            raw_scheme = (raw_row.get('scheme') or 'http').strip().lower()
+            if raw_scheme not in ('http', 'https'):
+                add_warning(f"Row {row_number}: invalid scheme '{raw_scheme}'; using http.")
+                raw_scheme = 'http'
+            prepared['scheme'] = raw_scheme
+
+            raw_port = raw_row.get('port')
+            default_port = 443 if raw_scheme == 'https' else 80
+            prepared['port'] = self._coerce_int(raw_port, default=default_port, minimum=1)
+            if raw_port and prepared['port'] == default_port and raw_port not in (str(default_port), f"{default_port}.0"):
+                add_warning(
+                    f"Row {row_number}: invalid HTTP port '{raw_port}'; using {default_port}."
+                )
+
+        return prepared
+
+    def _normalize_csv_column_name(self, key: str) -> str:
+        """Normalize CSV column names to lowercase snake_case."""
+        return key.strip().lower().replace('-', '_').replace(' ', '_')
+
+    def _normalize_host_type(self, raw_value: Optional[str]) -> Optional[str]:
+        """Map host type aliases to canonical S/F/H; default to S when blank."""
+        if raw_value is None:
+            return 'S'
+        value = str(raw_value).strip().upper()
+        if not value:
+            return 'S'
+
+        mapping = {
+            'S': 'S',
+            'SMB': 'S',
+            'F': 'F',
+            'FTP': 'F',
+            'H': 'H',
+            'HTTP': 'H',
+            'HTTPS': 'H',
+        }
+        return mapping.get(value)
+
+    def _coerce_db_timestamp(self, raw_value: Any, fallback: str) -> str:
+        """Normalize timestamps to canonical DB format, falling back safely."""
+        normalized = normalize_db_timestamp(raw_value)
+        if isinstance(normalized, str) and normalized.strip():
+            return normalized[:19]
+        return fallback
+
+    def _coerce_int(self, raw_value: Any, default: int, minimum: Optional[int] = None) -> int:
+        """Best-effort integer coercion with lower-bound guard."""
+        if raw_value is None:
+            return default
+        if isinstance(raw_value, str) and not raw_value.strip():
+            return default
+        try:
+            value = int(float(str(raw_value).strip()))
+        except Exception:
+            return default
+        if minimum is not None and value < minimum:
+            return default
+        return value
+
+    def _coerce_bool(self, raw_value: Any, default: bool = False) -> bool:
+        """Best-effort boolean coercion for CSV text values."""
+        if raw_value is None:
+            return default
+        if isinstance(raw_value, bool):
+            return raw_value
+        value = str(raw_value).strip().lower()
+        if not value:
+            return default
+        if value in {'1', 'true', 'yes', 'y', 'on'}:
+            return True
+        if value in {'0', 'false', 'no', 'n', 'off'}:
+            return False
+        return default
+
+    def _upsert_csv_smb_row(
+        self,
+        conn: sqlite3.Connection,
+        row: Dict[str, Any],
+        strategy: MergeConflictStrategy,
+    ) -> Tuple[int, int, int]:
+        """Upsert one SMB CSV row according to conflict strategy."""
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, last_seen FROM smb_servers WHERE ip_address = ?",
+            (row['ip_address'],),
+        )
+        current = cursor.fetchone()
+        if current is None:
+            cursor.execute("""
+                INSERT INTO smb_servers (
+                    ip_address, country, country_code, auth_method,
+                    shodan_data, first_seen, last_seen, scan_count, status, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                row['ip_address'],
+                row['country'],
+                row['country_code'],
+                row['auth_method'],
+                row['shodan_data'],
+                row['first_seen'],
+                row['last_seen'],
+                row['scan_count'],
+                row['status'],
+                row['notes'],
+            ))
+            return 1, 0, 0
+
+        current_last_seen = current['last_seen'] if isinstance(current, sqlite3.Row) else current[1]
+        source_time = self._parse_timestamp(row['last_seen'])
+        current_time = self._parse_timestamp(current_last_seen)
+        should_update = (
+            strategy == MergeConflictStrategy.KEEP_SOURCE
+            or (strategy == MergeConflictStrategy.KEEP_NEWER and source_time > current_time)
+        )
+        if not should_update:
+            return 0, 0, 1
+
+        cursor.execute("""
+            UPDATE smb_servers
+               SET country = ?,
+                   country_code = ?,
+                   auth_method = ?,
+                   shodan_data = ?,
+                   first_seen = ?,
+                   last_seen = ?,
+                   scan_count = ?,
+                   status = ?,
+                   notes = ?
+             WHERE ip_address = ?
+        """, (
+            row['country'],
+            row['country_code'],
+            row['auth_method'],
+            row['shodan_data'],
+            row['first_seen'],
+            row['last_seen'],
+            row['scan_count'],
+            row['status'],
+            row['notes'],
+            row['ip_address'],
+        ))
+        return 0, 1, 0
+
+    def _upsert_csv_ftp_row(
+        self,
+        conn: sqlite3.Connection,
+        row: Dict[str, Any],
+        strategy: MergeConflictStrategy,
+    ) -> Tuple[int, int, int]:
+        """Upsert one FTP CSV row according to conflict strategy."""
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, last_seen FROM ftp_servers WHERE ip_address = ?",
+            (row['ip_address'],),
+        )
+        current = cursor.fetchone()
+        if current is None:
+            cursor.execute("""
+                INSERT INTO ftp_servers (
+                    ip_address, country, country_code, port, anon_accessible,
+                    banner, shodan_data, first_seen, last_seen, scan_count, status, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                row['ip_address'],
+                row['country'],
+                row['country_code'],
+                row['port'],
+                1 if row['anon_accessible'] else 0,
+                row['banner'],
+                row['shodan_data'],
+                row['first_seen'],
+                row['last_seen'],
+                row['scan_count'],
+                row['status'],
+                row['notes'],
+            ))
+            return 1, 0, 0
+
+        current_last_seen = current['last_seen'] if isinstance(current, sqlite3.Row) else current[1]
+        source_time = self._parse_timestamp(row['last_seen'])
+        current_time = self._parse_timestamp(current_last_seen)
+        should_update = (
+            strategy == MergeConflictStrategy.KEEP_SOURCE
+            or (strategy == MergeConflictStrategy.KEEP_NEWER and source_time > current_time)
+        )
+        if not should_update:
+            return 0, 0, 1
+
+        cursor.execute("""
+            UPDATE ftp_servers
+               SET country = ?,
+                   country_code = ?,
+                   port = ?,
+                   anon_accessible = ?,
+                   banner = ?,
+                   shodan_data = ?,
+                   first_seen = ?,
+                   last_seen = ?,
+                   scan_count = ?,
+                   status = ?,
+                   notes = ?
+             WHERE ip_address = ?
+        """, (
+            row['country'],
+            row['country_code'],
+            row['port'],
+            1 if row['anon_accessible'] else 0,
+            row['banner'],
+            row['shodan_data'],
+            row['first_seen'],
+            row['last_seen'],
+            row['scan_count'],
+            row['status'],
+            row['notes'],
+            row['ip_address'],
+        ))
+        return 0, 1, 0
+
+    def _upsert_csv_http_row(
+        self,
+        conn: sqlite3.Connection,
+        row: Dict[str, Any],
+        strategy: MergeConflictStrategy,
+    ) -> Tuple[int, int, int]:
+        """Upsert one HTTP CSV row according to conflict strategy."""
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, last_seen FROM http_servers WHERE ip_address = ?",
+            (row['ip_address'],),
+        )
+        current = cursor.fetchone()
+        if current is None:
+            cursor.execute("""
+                INSERT INTO http_servers (
+                    ip_address, country, country_code, port, scheme, banner, title,
+                    shodan_data, first_seen, last_seen, scan_count, status, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                row['ip_address'],
+                row['country'],
+                row['country_code'],
+                row['port'],
+                row['scheme'] or 'http',
+                row['banner'],
+                row['title'],
+                row['shodan_data'],
+                row['first_seen'],
+                row['last_seen'],
+                row['scan_count'],
+                row['status'],
+                row['notes'],
+            ))
+            return 1, 0, 0
+
+        current_last_seen = current['last_seen'] if isinstance(current, sqlite3.Row) else current[1]
+        source_time = self._parse_timestamp(row['last_seen'])
+        current_time = self._parse_timestamp(current_last_seen)
+        should_update = (
+            strategy == MergeConflictStrategy.KEEP_SOURCE
+            or (strategy == MergeConflictStrategy.KEEP_NEWER and source_time > current_time)
+        )
+        if not should_update:
+            return 0, 0, 1
+
+        cursor.execute("""
+            UPDATE http_servers
+               SET country = ?,
+                   country_code = ?,
+                   port = ?,
+                   scheme = ?,
+                   banner = ?,
+                   title = ?,
+                   shodan_data = ?,
+                   first_seen = ?,
+                   last_seen = ?,
+                   scan_count = ?,
+                   status = ?,
+                   notes = ?
+             WHERE ip_address = ?
+        """, (
+            row['country'],
+            row['country_code'],
+            row['port'],
+            row['scheme'] or 'http',
+            row['banner'],
+            row['title'],
+            row['shodan_data'],
+            row['first_seen'],
+            row['last_seen'],
+            row['scan_count'],
+            row['status'],
+            row['notes'],
+            row['ip_address'],
+        ))
+        return 0, 1, 0
 
     # -------------------------------------------------------------------------
     # Backup Operations
