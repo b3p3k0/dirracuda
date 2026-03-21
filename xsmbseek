@@ -187,6 +187,24 @@ class XSMBSeekConfig:
     def get_config_path(self) -> Path:
         """Return the underlying configuration file path."""
         return self.config_file
+
+    def set_config_path(self, config_path: str) -> None:
+        """
+        Switch the active configuration file path and reload config data.
+
+        If the target path does not exist, bootstrap it from current in-memory
+        config so existing runtime keys are preserved.
+        """
+        new_path = Path(config_path).expanduser().resolve()
+        current_config = self.config if isinstance(self.config, dict) else {}
+        self.config_file = new_path
+
+        if not new_path.exists():
+            new_path.parent.mkdir(parents=True, exist_ok=True)
+            if current_config:
+                self._write_config(current_config)
+
+        self.config = self._load_config()
     
     def validate_smbseek_installation(self) -> Dict[str, Any]:
         """
@@ -850,11 +868,14 @@ class XSMBSeekGUI:
             if self.dashboard:
                 self.dashboard.backend_interface = self.backend_interface
                 self.dashboard.db_reader = self.db_reader
+                self.dashboard.config_path = str(self.config.get_config_path())
                 self.dashboard._refresh_dashboard_data()
 
             # Keep GUI settings aligned with current backend root.
             if self.settings_manager:
                 self.settings_manager.set_backend_path(str(self.config.get_smbseek_path()))
+                self.settings_manager.set_setting("backend.config_path", str(self.config.get_config_path()))
+                self.settings_manager.set_database_path(str(db_path), validate=False)
                 
         except Exception as e:
             messagebox.showerror(

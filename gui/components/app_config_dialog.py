@@ -1,683 +1,732 @@
 """
 SMBSeek Application Configuration Dialog
 
-Comprehensive configuration dialog for managing xsmbseek application settings
-including SMBSeek installation path, configuration file path, and database path.
-Replaces the existing config button functionality while preserving access to
-the existing SMBSeek configuration file editor.
-
-Design Decision: Form-based interface with real-time validation provides
-clear feedback and reduces configuration errors compared to raw file editing.
+Compact configuration dialog for managing xsmbseek integration settings.
+This includes backend paths plus runtime settings that should propagate
+to scan, browse, and extract workflows.
 """
 
-import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
-import os
 import json
+import os
 import subprocess
+import tkinter as tk
 from pathlib import Path
-from typing import Optional, Dict, Any, Callable
-import sys
+from tkinter import filedialog, messagebox
+from typing import Any, Callable, Dict, Optional
 
-from gui.utils.style import get_theme
 from gui.utils.dialog_helpers import ensure_dialog_focus
+from gui.utils.style import get_theme
+
+
+def _ensure_dict(value: Any) -> Dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _get_nested(data: Dict[str, Any], path: tuple[str, ...], default: Any = None) -> Any:
+    current: Any = data
+    for key in path:
+        if not isinstance(current, dict):
+            return default
+        current = current.get(key)
+    return default if current is None else current
+
+
+def _set_nested(data: Dict[str, Any], path: tuple[str, ...], value: Any) -> None:
+    current = data
+    for key in path[:-1]:
+        next_value = current.get(key)
+        if not isinstance(next_value, dict):
+            next_value = {}
+            current[key] = next_value
+        current = next_value
+    current[path[-1]] = value
 
 
 class AppConfigDialog:
     """
-    Application configuration dialog with form-based interface.
-    
-    Provides configuration management for:
-    - SMBSeek installation path
-    - SMBSeek configuration file path 
-    - Database file path
-    - Access to existing SMBSeek config editor
-    
-    Features real-time path validation, file browsers, and integration
-    with the existing configuration editor functionality.
+    Application configuration dialog with compact, form-based UI.
+
+    Managed settings:
+    - SMBSeek installation root
+    - SMBSeek config.json path
+    - Database path
+    - Shodan API key
+    - Quarantine directory (shared SMB/FTP/HTTP browser + extract default)
     """
-    
-    def __init__(self, parent: tk.Widget, settings_manager=None, 
-                 config_editor_callback: Optional[Callable[[str], None]] = None,
-                 main_config=None, refresh_callback: Optional[Callable[[], None]] = None):
-        """
-        Initialize application configuration dialog.
-        
-        Args:
-            parent: Parent widget
-            settings_manager: SettingsManager instance for persistence
-            config_editor_callback: Callback to open existing config editor
-            main_config: XSMBSeekConfig instance for main application config
-            refresh_callback: Callback to refresh database connection after changes
-        """
+
+    REQUIRED_FIELDS = ("smbseek", "database", "config", "quarantine")
+    FIELD_LABELS = {
+        "smbseek": "SMBSeek Root",
+        "database": "Database File",
+        "config": "SMBSeek Config",
+        "api_key": "Shodan API Key",
+        "quarantine": "Quarantine Directory",
+        "wordlist": "Pry Wordlist Path",
+    }
+
+    def __init__(
+        self,
+        parent: tk.Widget,
+        settings_manager=None,
+        config_editor_callback: Optional[Callable[[str], None]] = None,
+        main_config=None,
+        refresh_callback: Optional[Callable[[], None]] = None,
+    ):
         self.parent = parent
         self.settings_manager = settings_manager
         self.config_editor_callback = config_editor_callback
         self.main_config = main_config
         self.refresh_callback = refresh_callback
         self.theme = get_theme()
-        
-        # Configuration paths
+
         self.smbseek_path = ""
         self.config_path = ""
         self.database_path = ""
-        
-        # Validation state
-        self.validation_results = {
-            'smbseek': {'valid': False, 'message': ''},
-            'config': {'valid': False, 'message': ''},
-            'database': {'valid': False, 'message': ''}
+        self.api_key = ""
+        self.quarantine_path = "~/.smbseek/quarantine"
+        self.wordlist_path = ""
+
+        self.validation_results: Dict[str, Dict[str, Any]] = {
+            "smbseek": {"valid": False, "message": ""},
+            "database": {"valid": False, "message": ""},
+            "config": {"valid": False, "message": ""},
+            "api_key": {"valid": False, "message": ""},
+            "quarantine": {"valid": False, "message": ""},
+            "wordlist": {"valid": False, "message": ""},
         }
-        
-        # UI components
-        self.dialog = None
-        self.smbseek_var = None
-        self.config_var = None
-        self.database_var = None
-        self.smbseek_status_label = None
-        self.config_status_label = None
-        self.database_status_label = None
-        
-        # Load current settings
+
+        self.dialog: Optional[tk.Toplevel] = None
+        self.status_labels: Dict[str, tk.Label] = {}
+
+        self.smbseek_var: Optional[tk.StringVar] = None
+        self.database_var: Optional[tk.StringVar] = None
+        self.config_var: Optional[tk.StringVar] = None
+        self.api_key_var: Optional[tk.StringVar] = None
+        self.quarantine_var: Optional[tk.StringVar] = None
+        self.wordlist_var: Optional[tk.StringVar] = None
+
         self._load_current_settings()
-        
-        # Create dialog
         self._create_dialog()
-        
+
+    # ------------------------------------------------------------------
+    # Load/init
+    # ------------------------------------------------------------------
+
     def _load_current_settings(self) -> None:
-        """Load current configuration settings."""
+        """Load current configuration values from app config + runtime config file."""
         if self.main_config:
             self.smbseek_path = str(self.main_config.get_smbseek_path())
             self.config_path = str(self.main_config.get_config_path())
-            self.database_path = str(self.main_config.get_database_path())
-            return
-
-        if self.settings_manager:
+            db_path = self.main_config.get_database_path()
+            self.database_path = str(db_path) if db_path else ""
+        elif self.settings_manager:
             self.smbseek_path = self.settings_manager.get_backend_path()
-            
-            # Derive config path from SMBSeek path
-            smbseek_config = Path(self.smbseek_path) / "conf" / "config.json"
-            self.config_path = str(smbseek_config)
-            
-            # Get database path from settings or derive from SMBSeek path
-            db_path = self.settings_manager.get_setting('backend.database_path')
-            if db_path and db_path != '../backend/smbseek.db':  # Skip old default
+            self.config_path = self.settings_manager.get_setting(
+                "backend.config_path",
+                str(Path(self.smbseek_path) / "conf" / "config.json"),
+            )
+            db_path = self.settings_manager.get_setting("backend.database_path")
+            if db_path and db_path != "../backend/smbseek.db":
                 self.database_path = db_path
             else:
-                # Derive from SMBSeek path
                 self.database_path = str(Path(self.smbseek_path) / "smbseek.db")
         else:
-            # Fallback defaults
-            self.smbseek_path = "./smbseek"
-            self.config_path = "./conf/config.json"
-            self.database_path = "./smbseek/smbseek.db"
-    
+            self.smbseek_path = str(Path.cwd())
+            self.config_path = str(Path.cwd() / "conf" / "config.json")
+            self.database_path = str(Path.cwd() / "smbseek.db")
+
+        self._load_runtime_settings_from_config(self.config_path)
+
+    def _load_runtime_settings_from_config(self, config_path: str) -> None:
+        """Load API key, pry wordlist, and quarantine path from config.json."""
+        path_obj = Path(config_path).expanduser()
+        if not path_obj.exists():
+            return
+
+        try:
+            config_data = json.loads(path_obj.read_text(encoding="utf-8"))
+        except Exception:
+            return
+
+        self.api_key = str(_get_nested(config_data, ("shodan", "api_key"), "") or "")
+        self.wordlist_path = str(_get_nested(config_data, ("pry", "wordlist_path"), "") or "")
+
+        quarantine_candidates = [
+            _get_nested(config_data, ("file_browser", "quarantine_root"), ""),
+            _get_nested(config_data, ("ftp_browser", "quarantine_base"), ""),
+            _get_nested(config_data, ("http_browser", "quarantine_base"), ""),
+            _get_nested(config_data, ("file_collection", "quarantine_base"), ""),
+        ]
+        for candidate in quarantine_candidates:
+            if isinstance(candidate, str) and candidate.strip():
+                self.quarantine_path = candidate.strip()
+                break
+
+    # ------------------------------------------------------------------
+    # UI
+    # ------------------------------------------------------------------
+
     def _create_dialog(self) -> None:
-        """Create the configuration dialog window."""
         self.dialog = tk.Toplevel(self.parent)
         self.dialog.title("SMBSeek - Application Configuration")
-        self.dialog.geometry("600x760")
-        self.dialog.minsize(600, 700)
-        
-        # Apply theme
+        self.dialog.geometry("760x600")
+        self.dialog.minsize(720, 560)
         self.theme.apply_to_widget(self.dialog, "main_window")
-        
-        # Make window modal
         self.dialog.transient(self.parent)
         self.dialog.grab_set()
-        
-        # Center window
+
         self._center_window()
-        
-        # Build UI sections
         self._create_header()
-        self._create_paths_section()
+        self._create_sections()
         self._create_button_panel()
+        self._validate_all_fields()
 
-        # Initialize validation
-        self._validate_all_paths()
-
-        # Normalize all default Tk children (LabelFrame title, entries, etc.).
         self.theme.apply_theme_to_application(self.dialog)
-
-        # Ensure dialog appears on top and gains focus (critical for VMs)
         ensure_dialog_focus(self.dialog, self.parent)
 
     def _center_window(self) -> None:
-        """Center the dialog window on screen."""
         self.dialog.update_idletasks()
         width = self.dialog.winfo_width()
         height = self.dialog.winfo_height()
         x = (self.dialog.winfo_screenwidth() // 2) - (width // 2)
         y = (self.dialog.winfo_screenheight() // 2) - (height // 2)
         self.dialog.geometry(f"{width}x{height}+{x}+{y}")
-    
+
     def _create_header(self) -> None:
-        """Create dialog header with title and description."""
-        header_frame = tk.Frame(self.dialog)
-        self.theme.apply_to_widget(header_frame, "main_window")
-        header_frame.pack(fill=tk.X, padx=20, pady=20)
-        
-        # Title
-        title_label = tk.Label(
-            header_frame,
-            text="Application Configuration",
-            font=("Arial", 16, "bold")
+        header = tk.Frame(self.dialog)
+        self.theme.apply_to_widget(header, "main_window")
+        header.pack(fill=tk.X, padx=18, pady=(16, 10))
+
+        title = self.theme.create_styled_label(header, "Application Configuration", "heading")
+        title.pack(anchor=tk.W)
+
+        desc = self.theme.create_styled_label(
+            header,
+            "Set shared paths and runtime options used by scan, browse, and extract workflows.",
+            "small",
+            fg=self.theme.colors["text_secondary"],
         )
-        self.theme.apply_to_widget(title_label, "heading")
-        title_label.pack(anchor=tk.W)
-        
-        # Description
-        desc_label = tk.Label(
-            header_frame,
-            text="Configure paths for SMBSeek integration and data storage.",
-            font=("Arial", 10)
+        desc.pack(anchor=tk.W, pady=(4, 0))
+
+    def _create_sections(self) -> None:
+        container = tk.Frame(self.dialog)
+        self.theme.apply_to_widget(container, "main_window")
+        container.pack(fill=tk.BOTH, expand=True, padx=18, pady=(0, 8))
+
+        self._create_compact_card(container, "Core Paths", ("smbseek", "database", "config"))
+        self._create_compact_card(container, "Runtime Settings", ("api_key", "quarantine", "wordlist"))
+
+        action_row = tk.Frame(container)
+        self.theme.apply_to_widget(action_row, "main_window")
+        action_row.pack(fill=tk.X, padx=8, pady=(4, 0))
+
+        edit_button = tk.Button(
+            action_row,
+            text="Edit SMBSeek Config...",
+            command=self._open_smbseek_config_editor,
         )
-        self.theme.apply_to_widget(desc_label, "text")
-        desc_label.pack(anchor=tk.W, pady=(5, 0))
-    
-    def _create_paths_section(self) -> None:
-        """Create the main paths configuration section."""
-        # Main container with scrolling if needed
-        main_frame = tk.Frame(self.dialog)
-        self.theme.apply_to_widget(main_frame, "main_window")
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 10))
-        
-        # SMBSeek Installation Path
-        self._create_path_config_section(
-            main_frame,
-            "SMBSeek Installation",
-            "Path to your SMBSeek installation directory",
-            "smbseek"
-        )
-        
-        # Database Path - moved to second position
-        self._create_path_config_section(
-            main_frame,
-            "Database Location",
-            "Path to the SQLite database file",
-            "database"
-        )
-        
-        # SMBSeek Configuration Path - moved to third position
-        self._create_path_config_section(
-            main_frame,
-            "SMBSeek Configuration",
-            "Path to SMBSeek's config.json file",
-            "config",
-            show_edit_button=True
-        )
-    
-    def _create_path_config_section(self, parent: tk.Widget, title: str, 
-                                  description: str, path_type: str,
-                                  show_edit_button: bool = False) -> None:
-        """
-        Create a configuration section for a specific path.
-        
-        Args:
-            parent: Parent widget
-            title: Section title
-            description: Section description
-            path_type: Type of path ('smbseek', 'config', 'database')
-            show_edit_button: Whether to show "Edit Config" button
-        """
-        # Section frame
-        section_frame = tk.LabelFrame(parent, text=title, font=("Arial", 12, "bold"))
-        self.theme.apply_to_widget(section_frame, "card")
+        self.theme.apply_to_widget(edit_button, "button_secondary")
+        edit_button.pack(anchor=tk.W)
+
+    def _create_compact_card(self, parent: tk.Widget, title: str, fields: tuple[str, ...]) -> None:
+        card = tk.Frame(parent, highlightthickness=1, bd=0)
+        self.theme.apply_to_widget(card, "card")
         try:
-            section_frame.configure(fg=self.theme.colors["text"])
+            card.configure(highlightbackground=self.theme.colors["border"], highlightcolor=self.theme.colors["border"])
         except tk.TclError:
             pass
-        section_frame.pack(fill=tk.X, pady=(0, 15), padx=5, ipady=10)
-        
-        # Description
-        desc_label = tk.Label(section_frame, text=description, font=("Arial", 9))
-        self.theme.apply_to_widget(desc_label, "text")
-        desc_label.pack(anchor=tk.W, padx=15, pady=(5, 10))
-        
-        # Path input frame
-        input_frame = tk.Frame(section_frame)
-        self.theme.apply_to_widget(input_frame, "card")
-        input_frame.pack(fill=tk.X, padx=15, pady=(0, 5))
-        
-        # Path variable and entry
-        if path_type == "smbseek":
-            self.smbseek_var = tk.StringVar(value=self.smbseek_path)
-            path_var = self.smbseek_var
-        elif path_type == "config":
-            self.config_var = tk.StringVar(value=self.config_path)
-            path_var = self.config_var
-        else:  # database
-            self.database_var = tk.StringVar(value=self.database_path)
-            path_var = self.database_var
-        
-        # Path entry field
-        path_entry = tk.Entry(input_frame, textvariable=path_var, font=("Arial", 10))
-        self.theme.apply_to_widget(path_entry, "entry")
-        path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        
-        # Browse button
-        browse_button = tk.Button(
-            input_frame,
-            text="Browse...",
-            command=lambda: self._browse_path(path_type)
+        card.pack(fill=tk.X, pady=(0, 10))
+
+        heading = self.theme.create_styled_label(card, title, "body")
+        heading.pack(anchor=tk.W, padx=12, pady=(10, 6))
+
+        for field in fields:
+            self._create_field_row(card, field)
+
+    def _create_field_row(self, parent: tk.Widget, field: str) -> None:
+        row = tk.Frame(parent)
+        self.theme.apply_to_widget(row, "card")
+        row.pack(fill=tk.X, padx=10, pady=(0, 8))
+
+        label = self.theme.create_styled_label(
+            row,
+            f"{self.FIELD_LABELS[field]}:",
+            "small",
+            fg=self.theme.colors["text_secondary"],
         )
-        self.theme.apply_to_widget(browse_button, "button_secondary")
-        browse_button.pack(side=tk.RIGHT, padx=(10, 0))
-        
-        # Status label
-        status_frame = tk.Frame(section_frame)
-        self.theme.apply_to_widget(status_frame, "card")
-        status_frame.pack(fill=tk.X, padx=15, pady=(5, 5))
-        
-        if path_type == "smbseek":
-            self.smbseek_status_label = tk.Label(status_frame, font=("Arial", 9))
-            status_label = self.smbseek_status_label
-        elif path_type == "config":
-            self.config_status_label = tk.Label(status_frame, font=("Arial", 9))
-            status_label = self.config_status_label
-        else:  # database
-            self.database_status_label = tk.Label(status_frame, font=("Arial", 9))
-            status_label = self.database_status_label
-        
-        self.theme.apply_to_widget(status_label, "text")
-        status_label.pack(anchor=tk.W)
-        
-        # Edit button for config section
-        if show_edit_button:
-            edit_frame = tk.Frame(section_frame)
-            self.theme.apply_to_widget(edit_frame, "card")
-            edit_frame.pack(fill=tk.X, padx=15, pady=(5, 5))
-            
-            edit_button = tk.Button(
-                edit_frame,
-                text="Edit SMBSeek Config...",
-                command=self._open_smbseek_config_editor
+        label.pack(side=tk.LEFT, padx=(0, 8))
+
+        variable = self._field_var(field)
+        show_mask = "*" if field == "api_key" else ""
+        entry = tk.Entry(row, textvariable=variable, font=("Arial", 10), show=show_mask)
+        self.theme.apply_to_widget(entry, "entry")
+        entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
+
+        browse_needed = field in {"smbseek", "database", "config", "quarantine", "wordlist"}
+        if browse_needed:
+            browse_button = tk.Button(
+                row,
+                text="Browse...",
+                command=lambda ft=field: self._browse_path(ft),
             )
-            self.theme.apply_to_widget(edit_button, "button_secondary")
-            edit_button.pack(anchor=tk.W)
-        
-        # Bind validation to path changes
-        path_var.trace('w', lambda *args: self._validate_path(path_type))
-    
-    def _browse_path(self, path_type: str) -> None:
-        """
-        Open file/folder browser for path selection.
-        
-        Args:
-            path_type: Type of path to browse for
-        """
-        current_path = ""
-        if path_type == "smbseek":
-            current_path = self.smbseek_var.get()
-            # Browse for directory
+            self.theme.apply_to_widget(browse_button, "button_secondary")
+            browse_button.pack(side=tk.LEFT, padx=(0, 8))
+
+        status_label = tk.Label(row, text="", font=("Arial", 11, "bold"), width=2)
+        self.theme.apply_to_widget(status_label, "text")
+        status_label.pack(side=tk.RIGHT)
+        self.status_labels[field] = status_label
+
+        variable.trace_add("write", lambda *_args, ft=field: self._validate_field(ft))
+
+    def _field_var(self, field: str) -> tk.StringVar:
+        if field == "smbseek":
+            self.smbseek_var = tk.StringVar(value=self.smbseek_path)
+            return self.smbseek_var
+        if field == "database":
+            self.database_var = tk.StringVar(value=self.database_path)
+            return self.database_var
+        if field == "config":
+            self.config_var = tk.StringVar(value=self.config_path)
+            return self.config_var
+        if field == "api_key":
+            self.api_key_var = tk.StringVar(value=self.api_key)
+            return self.api_key_var
+        if field == "wordlist":
+            self.wordlist_var = tk.StringVar(value=self.wordlist_path)
+            return self.wordlist_var
+        self.quarantine_var = tk.StringVar(value=self.quarantine_path)
+        return self.quarantine_var
+
+    def _create_button_panel(self) -> None:
+        panel = tk.Frame(self.dialog)
+        self.theme.apply_to_widget(panel, "main_window")
+        panel.pack(fill=tk.X, padx=18, pady=(4, 16))
+
+        cancel_btn = tk.Button(panel, text="Cancel", command=self._on_cancel)
+        self.theme.apply_to_widget(cancel_btn, "button_secondary")
+        cancel_btn.pack(side=tk.RIGHT, padx=(10, 0))
+
+        save_btn = tk.Button(panel, text="Save", command=self._on_ok)
+        self.theme.apply_to_widget(save_btn, "button_primary")
+        save_btn.pack(side=tk.RIGHT)
+
+    # ------------------------------------------------------------------
+    # Browse/validation
+    # ------------------------------------------------------------------
+
+    def _browse_path(self, field: str) -> None:
+        initial = str(Path.cwd())
+        if field == "smbseek" and self.smbseek_var:
+            initial = os.path.dirname(self.smbseek_var.get()) or initial
             selected = filedialog.askdirectory(
                 title="Select SMBSeek Installation Directory",
-                initialdir=os.path.dirname(current_path) if current_path else os.getcwd()
+                initialdir=initial,
             )
             if selected:
                 self.smbseek_var.set(selected)
-                
-        elif path_type == "config":
-            current_path = self.config_var.get()
-            # Browse for JSON file
-            selected = filedialog.askopenfilename(
-                title="Select SMBSeek Configuration File",
-                initialdir=os.path.dirname(current_path) if current_path else os.getcwd(),
-                filetypes=[("JSON files", "*.json"), ("All files", "*.*")]
-            )
-            if selected:
-                self.config_var.set(selected)
-                
-        else:  # database
-            current_path = self.database_var.get()
-            # Browse for database file
+            return
+
+        if field == "database" and self.database_var:
+            initial = os.path.dirname(self.database_var.get()) or initial
             selected = filedialog.askopenfilename(
                 title="Select Database File",
-                initialdir=os.path.dirname(current_path) if current_path else os.getcwd(),
-                filetypes=[("SQLite files", "*.db"), ("All files", "*.*")]
+                initialdir=initial,
+                filetypes=[("SQLite files", "*.db"), ("All files", "*.*")],
             )
             if selected:
                 self.database_var.set(selected)
-    
-    def _validate_path(self, path_type: str) -> None:
-        """
-        Validate a specific path and update UI status.
-        
-        Args:
-            path_type: Type of path to validate
-        """
-        if path_type == "smbseek":
-            path = self.smbseek_var.get()
-            result = self._validate_smbseek_path(path)
-            self.validation_results['smbseek'] = result
-            self._update_status_label(self.smbseek_status_label, result)
-            
-            # Auto-update dependent paths
-            if result['valid']:
-                # Update config path
-                config_path = str(Path(path) / "conf" / "config.json")
-                self.config_var.set(config_path)
-                
-                # Update database path if it's still the default pattern
-                current_db = self.database_var.get()
-                if not current_db or "smbseek.db" in current_db:
-                    db_path = str(Path(path) / "smbseek.db")
-                    self.database_var.set(db_path)
-            
-        elif path_type == "config":
-            path = self.config_var.get()
-            result = self._validate_config_path(path)
-            self.validation_results['config'] = result
-            self._update_status_label(self.config_status_label, result)
-            
-        else:  # database
-            path = self.database_var.get()
-            result = self._validate_database_path(path)
-            self.validation_results['database'] = result
-            self._update_status_label(self.database_status_label, result)
-    
+            return
+
+        if field == "config" and self.config_var:
+            initial = os.path.dirname(self.config_var.get()) or initial
+            selected = filedialog.askopenfilename(
+                title="Select SMBSeek Configuration File",
+                initialdir=initial,
+                filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+            )
+            if selected:
+                self.config_var.set(selected)
+            return
+
+        if field == "quarantine" and self.quarantine_var:
+            initial = os.path.dirname(self.quarantine_var.get()) or initial
+            selected = filedialog.askdirectory(
+                title="Select Quarantine Directory",
+                initialdir=initial,
+            )
+            if selected:
+                self.quarantine_var.set(selected)
+            return
+
+        if field == "wordlist" and self.wordlist_var:
+            initial = os.path.dirname(self.wordlist_var.get()) or initial
+            selected = filedialog.askopenfilename(
+                title="Select Pry Wordlist File",
+                initialdir=initial,
+                filetypes=[
+                    ("Text files", "*.txt *.lst *.list"),
+                    ("All files", "*.*"),
+                ],
+            )
+            if selected:
+                self.wordlist_var.set(selected)
+
+    def _validate_field(self, field: str) -> None:
+        if field == "smbseek":
+            result = self._validate_smbseek_path(self.smbseek_var.get())
+            self.validation_results["smbseek"] = result
+            self._update_status_label("smbseek", result)
+
+            if result["valid"]:
+                derived_config = str(Path(self.smbseek_var.get()) / "conf" / "config.json")
+                if self.config_var and (not self.config_var.get() or "conf/config.json" in self.config_var.get()):
+                    self.config_var.set(derived_config)
+                derived_db = str(Path(self.smbseek_var.get()) / "smbseek.db")
+                if self.database_var and (not self.database_var.get() or self.database_var.get().endswith("smbseek.db")):
+                    self.database_var.set(derived_db)
+            return
+
+        if field == "database":
+            result = self._validate_database_path(self.database_var.get())
+            self.validation_results["database"] = result
+            self._update_status_label("database", result)
+            return
+
+        if field == "config":
+            result = self._validate_config_path(self.config_var.get())
+            self.validation_results["config"] = result
+            self._update_status_label("config", result)
+            return
+
+        if field == "api_key":
+            result = self._validate_api_key(self.api_key_var.get())
+            self.validation_results["api_key"] = result
+            self._update_status_label("api_key", result)
+            return
+
+        if field == "wordlist":
+            result = self._validate_wordlist_path(self.wordlist_var.get())
+            self.validation_results["wordlist"] = result
+            self._update_status_label("wordlist", result)
+            return
+
+        result = self._validate_quarantine_path(self.quarantine_var.get())
+        self.validation_results["quarantine"] = result
+        self._update_status_label("quarantine", result)
+
     def _validate_smbseek_path(self, path: str) -> Dict[str, Any]:
-        """
-        Validate SMBSeek installation path.
-        
-        Args:
-            path: Path to validate
-            
-        Returns:
-            Validation result with 'valid' and 'message' keys
-        """
+        path = str(path or "").strip()
         if not path:
-            return {'valid': False, 'message': 'Please specify SMBSeek installation path'}
-        
-        path_obj = Path(path)
-        
+            return {"valid": False, "message": "Path is required."}
+
+        path_obj = Path(path).expanduser()
         if not path_obj.exists():
-            return {'valid': False, 'message': '❌ Path does not exist'}
-        
+            return {"valid": False, "message": "Path does not exist."}
         if not path_obj.is_dir():
-            return {'valid': False, 'message': '❌ Path is not a directory'}
-        
-        # Check for smbseek executable
+            return {"valid": False, "message": "Path is not a directory."}
+
         smbseek_script = path_obj / "smbseek"
         if not smbseek_script.exists():
-            return {'valid': False, 'message': '❌ smbseek executable not found in directory'}
+            return {"valid": False, "message": "Missing smbseek executable."}
 
-        # Try to get version to confirm it's working
         try:
             result = subprocess.run(
                 [str(smbseek_script), "--version"],
                 capture_output=True,
                 text=True,
-                timeout=5
+                timeout=5,
             )
-            if result.returncode == 0:
-                version = result.stdout.strip()
-                return {'valid': True, 'message': f'✅ Valid SMBSeek installation ({version})'}
-            else:
-                return {'valid': False, 'message': '❌ SMBSeek executable not working'}
-        except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
-            # Script exists but may not be executable - still mark as valid
-            return {'valid': True, 'message': '✅ SMBSeek installation found (version check failed)'}
-    
-    def _validate_config_path(self, path: str) -> Dict[str, Any]:
-        """
-        Validate SMBSeek configuration file path.
-        
-        Args:
-            path: Path to validate
-            
-        Returns:
-            Validation result with 'valid' and 'message' keys
-        """
-        if not path:
-            return {'valid': False, 'message': 'Please specify configuration file path'}
-        
-        path_obj = Path(path)
-        
-        if not path_obj.exists():
-            # Check if parent directory exists and we can potentially create the config
-            parent_dir = path_obj.parent
-            if parent_dir.exists() and path_obj.name.endswith('.json'):
-                return {'valid': True, 'message': '⚠️ Configuration file will be created'}
-            else:
-                return {'valid': False, 'message': '❌ Configuration file not found'}
-        
-        if not path_obj.is_file():
-            return {'valid': False, 'message': '❌ Path is not a file'}
-        
-        # Try to parse as JSON
-        try:
-            with open(path_obj, 'r') as f:
-                config_data = json.load(f)
-            
-            # Basic SMBSeek config validation
-            if isinstance(config_data, dict):
-                return {'valid': True, 'message': '✅ Valid configuration file'}
-            else:
-                return {'valid': False, 'message': '❌ Invalid JSON structure'}
-                
-        except json.JSONDecodeError as e:
-            return {'valid': False, 'message': f'❌ JSON parsing error: {str(e)[:50]}...'}
-        except Exception as e:
-            return {'valid': False, 'message': f'❌ Error reading file: {str(e)[:50]}...'}
-    
+            if result.returncode != 0:
+                return {"valid": False, "message": "smbseek executable failed version check."}
+        except (subprocess.TimeoutExpired, FileNotFoundError, PermissionError, OSError):
+            return {"valid": True, "message": "smbseek found; version check skipped."}
+
+        return {"valid": True, "message": "Valid SMBSeek installation."}
+
     def _validate_database_path(self, path: str) -> Dict[str, Any]:
-        """
-        Validate database file path.
-        
-        Args:
-            path: Path to validate
-            
-        Returns:
-            Validation result with 'valid' and 'message' keys
-        """
+        path = str(path or "").strip()
         if not path:
-            return {'valid': False, 'message': 'Please specify database file path'}
-        
-        path_obj = Path(path)
-        
+            return {"valid": False, "message": "Database path is required."}
+
+        path_obj = Path(path).expanduser()
         if not path_obj.exists():
-            # Database doesn't exist yet - that's okay
-            parent_dir = path_obj.parent
-            if not parent_dir.exists():
-                return {'valid': False, 'message': '❌ Parent directory does not exist'}
-            return {'valid': True, 'message': '⚠️ Database file will be created'}
-        
+            if not path_obj.parent.exists():
+                return {"valid": False, "message": "Parent directory does not exist."}
+            return {"valid": True, "message": "Database file will be created."}
         if not path_obj.is_file():
-            return {'valid': False, 'message': '❌ Path is not a file'}
-        
-        # Try to validate as SQLite database
+            return {"valid": False, "message": "Path is not a file."}
+
         try:
             import sqlite3
+
             with sqlite3.connect(str(path_obj)) as conn:
                 cursor = conn.cursor()
-                
-                # Check for expected tables
                 cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-                tables = [row[0] for row in cursor.fetchall()]
-                
-                expected_tables = ['smb_servers', 'scan_sessions']
-                if any(table in tables for table in expected_tables):
-                    # Get server count for display
-                    if 'smb_servers' in tables:
-                        cursor.execute("SELECT COUNT(*) FROM smb_servers")
-                        count = cursor.fetchone()[0]
-                        return {'valid': True, 'message': f'✅ Valid database ({count:,} servers)'}
-                    else:
-                        return {'valid': True, 'message': '✅ Valid SQLite database'}
-                else:
-                    return {'valid': False, 'message': '❌ Database does not contain expected tables'}
-                    
-        except sqlite3.Error as e:
-            return {'valid': False, 'message': f'❌ SQLite error: {str(e)[:50]}...'}
-        except Exception as e:
-            return {'valid': False, 'message': f'❌ Database validation error: {str(e)[:50]}...'}
-    
-    def _update_status_label(self, label: tk.Label, result: Dict[str, Any]) -> None:
-        """
-        Update status label with validation result.
-        
-        Args:
-            label: Label widget to update
-            result: Validation result dictionary
-        """
-        label.config(text=result['message'])
-        
-        # Apply color based on validation result
-        if result['valid']:
-            if '✅' in result['message']:
-                label.config(fg='green')
-            else:  # Warning
-                label.config(fg='orange')
-        else:
-            label.config(fg='red')
-    
-    def _validate_all_paths(self) -> None:
-        """Validate all paths on initial load."""
-        self._validate_path("smbseek")
-        self._validate_path("config")
-        self._validate_path("database")
-    
-    def _open_smbseek_config_editor(self) -> None:
-        """Open the existing SMBSeek configuration editor."""
-        config_path = self.config_var.get()
-        
-        if not config_path:
-            messagebox.showwarning(
-                "No Configuration File",
-                "Please specify a configuration file path first."
-            )
+                tables = {row[0] for row in cursor.fetchall()}
+                if not tables:
+                    return {"valid": False, "message": "SQLite file has no tables."}
+            return {"valid": True, "message": "SQLite database is readable."}
+        except Exception as exc:
+            return {"valid": False, "message": f"SQLite validation failed: {exc}"}
+
+    def _validate_config_path(self, path: str) -> Dict[str, Any]:
+        path = str(path or "").strip()
+        if not path:
+            return {"valid": False, "message": "Config path is required."}
+
+        path_obj = Path(path).expanduser()
+        if not path_obj.exists():
+            if path_obj.parent.exists() and path_obj.suffix == ".json":
+                return {"valid": True, "message": "Config file will be created."}
+            return {"valid": False, "message": "Config file not found."}
+        if not path_obj.is_file():
+            return {"valid": False, "message": "Path is not a file."}
+
+        try:
+            data = json.loads(path_obj.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            return {"valid": False, "message": f"Invalid JSON: {exc}"}
+        except Exception as exc:
+            return {"valid": False, "message": f"Read failure: {exc}"}
+
+        if not isinstance(data, dict):
+            return {"valid": False, "message": "Config root must be a JSON object."}
+        return {"valid": True, "message": "Valid configuration file."}
+
+    def _validate_api_key(self, value: str) -> Dict[str, Any]:
+        api_key = str(value or "").strip()
+        if not api_key:
+            return {"valid": False, "message": "API key is empty; scans will fail."}
+        if any(ch.isspace() for ch in api_key):
+            return {"valid": False, "message": "API key should not contain whitespace."}
+        return {"valid": True, "message": "API key set."}
+
+    def _validate_quarantine_path(self, path: str) -> Dict[str, Any]:
+        path = str(path or "").strip()
+        if not path:
+            return {"valid": False, "message": "Quarantine directory is required."}
+
+        path_obj = Path(path).expanduser()
+        if path_obj.exists() and not path_obj.is_dir():
+            return {"valid": False, "message": "Quarantine path is not a directory."}
+        if path_obj.exists():
+            return {"valid": True, "message": "Quarantine directory is valid."}
+        if not path_obj.parent.exists():
+            return {"valid": False, "message": "Parent directory does not exist."}
+        return {"valid": True, "message": "Quarantine directory will be created."}
+
+    def _validate_wordlist_path(self, path: str) -> Dict[str, Any]:
+        path = str(path or "").strip()
+        if not path:
+            # Optional field: leaving this unset should not block Save.
+            return {"valid": True, "message": "Wordlist not set."}
+
+        path_obj = Path(path).expanduser()
+        if not path_obj.exists():
+            return {"valid": False, "message": "Wordlist file not found."}
+        if not path_obj.is_file():
+            return {"valid": False, "message": "Wordlist path is not a file."}
+        return {"valid": True, "message": "Wordlist file is valid."}
+
+    def _update_status_label(self, field: str, result: Dict[str, Any]) -> None:
+        label = self.status_labels.get(field)
+        if not label:
             return
-        
-        if self.config_editor_callback:
-            try:
-                self.config_editor_callback(config_path)
-            except Exception as e:
-                messagebox.showerror(
-                    "Configuration Editor Error",
-                    f"Failed to open configuration editor:\n{str(e)}"
-                )
+        if result.get("valid"):
+            symbol = self.theme.get_icon_symbol("success")
+            color = self.theme.colors["success"]
         else:
-            messagebox.showinfo(
-                "Configuration Editor",
-                "Configuration editor callback not available."
-            )
-    
-    def _create_button_panel(self) -> None:
-        """Create dialog button panel."""
-        button_frame = tk.Frame(self.dialog)
-        self.theme.apply_to_widget(button_frame, "main_window")
-        button_frame.pack(fill=tk.X, padx=20, pady=(5, 20))
-        
-        # Cancel button
-        cancel_button = tk.Button(
-            button_frame,
-            text="Cancel",
-            command=self._on_cancel
-        )
-        self.theme.apply_to_widget(cancel_button, "button_secondary")
-        cancel_button.pack(side=tk.RIGHT, padx=(10, 0))
-        
-        # OK button
-        ok_button = tk.Button(
-            button_frame,
-            text="OK",
-            command=self._on_ok
-        )
-        self.theme.apply_to_widget(ok_button, "button_primary")
-        ok_button.pack(side=tk.RIGHT)
-    
+            symbol = self.theme.get_icon_symbol("error")
+            color = self.theme.colors["error"]
+        label.config(text=symbol, fg=color)
+
+    def _validate_all_fields(self) -> None:
+        for field in ("smbseek", "database", "config", "api_key", "quarantine", "wordlist"):
+            self._validate_field(field)
+
+    # ------------------------------------------------------------------
+    # Save behavior
+    # ------------------------------------------------------------------
+
     def _on_ok(self) -> None:
-        """Save configuration and close dialog."""
         if self._validate_and_save():
             self.dialog.destroy()
-    
+
     def _on_cancel(self) -> None:
-        """Cancel and close dialog without saving."""
         self.dialog.destroy()
-    
+
+    def _open_smbseek_config_editor(self) -> None:
+        config_path = self.config_var.get().strip() if self.config_var else ""
+        if not config_path:
+            messagebox.showwarning("No Configuration File", "Please specify a configuration file path first.")
+            return
+
+        if not self.config_editor_callback:
+            messagebox.showinfo("Configuration Editor", "Configuration editor callback not available.")
+            return
+
+        try:
+            self.config_editor_callback(config_path)
+        except Exception as exc:
+            messagebox.showerror("Configuration Editor Error", f"Failed to open configuration editor:\n{exc}")
+
     def _validate_and_save(self) -> bool:
-        """
-        Validate all configurations and save if valid.
-        
-        Returns:
-            True if validation and save successful, False otherwise
-        """
-        # Re-validate all paths
-        self._validate_all_paths()
-        
-        # Check for any validation errors
-        invalid_paths = []
-        for path_type, result in self.validation_results.items():
-            if not result['valid']:
-                invalid_paths.append(path_type.title())
-        
-        if invalid_paths:
+        self._validate_all_fields()
+
+        invalid_required = [field for field in self.REQUIRED_FIELDS if not self.validation_results[field]["valid"]]
+        if invalid_required:
+            details = "\n".join(
+                f"- {self.FIELD_LABELS[field]}: {self.validation_results[field]['message']}"
+                for field in invalid_required
+            )
             messagebox.showerror(
                 "Configuration Validation Failed",
-                f"The following paths have validation errors:\n\n" +
-                "\n".join(f"• {path}" for path in invalid_paths) +
-                "\n\nPlease fix these issues before saving."
+                f"Please fix the following issues before saving:\n\n{details}",
             )
             return False
-        
-        # Save to both settings manager (GUI preferences) and main config (application settings)
+
+        new_smbseek = self.smbseek_var.get().strip()
+        new_database = self.database_var.get().strip()
+        new_config_path = self.config_var.get().strip()
+        new_api_key = self.api_key_var.get().strip()
+        new_quarantine = self.quarantine_var.get().strip()
+        new_wordlist = self.wordlist_var.get().strip()
+
+        old_smbseek = self.smbseek_path
+        old_database = self.database_path
+        old_config_path = self.config_path
+
         try:
-            # Save to settings manager (GUI preferences)
+            # Persist GUI-side path pointers.
             if self.settings_manager:
-                self.settings_manager.set_backend_path(self.smbseek_var.get())
-                self.settings_manager.set_database_path(self.database_var.get())
-                self.settings_manager.set_setting('backend.config_path', self.config_var.get())
-            
-            # Save to main config (application settings) - this is what the app actually uses
-            if self.main_config:
-                # Reload config from disk to avoid overwriting edits made via the config editor
-                try:
-                    self.main_config.config = self.main_config._load_config()
-                except Exception:
-                    pass
-                old_db_path = str(self.main_config.get_database_path()) if self.main_config.get_database_path() else None
-                
-                self.main_config.set_smbseek_path(self.smbseek_var.get())
-                self.main_config.set_database_path(self.database_var.get())
-                self.main_config.save_config()
-                
-                # If database path changed, refresh the database connection
-                new_db_path = self.database_var.get()
-                if old_db_path != new_db_path and self.refresh_callback:
-                    self.refresh_callback()
-            
+                self.settings_manager.set_backend_path(new_smbseek, validate=False)
+                self.settings_manager.set_database_path(new_database, validate=False)
+                self.settings_manager.set_setting("backend.config_path", new_config_path)
+                # Keeps on-demand extract defaults aligned with shared quarantine.
+                self.settings_manager.set_setting("extract.last_directory", new_quarantine)
+
+            # Persist runtime config fields in conf/config.json.
+            if self.main_config and hasattr(self.main_config, "set_config_path"):
+                self.main_config.set_config_path(new_config_path)
+                self.main_config.set_smbseek_path(new_smbseek)
+                self.main_config.set_database_path(new_database)
+                self._apply_runtime_settings(
+                    self.main_config.config,
+                    new_api_key,
+                    new_quarantine,
+                    new_wordlist,
+                )
+                if not self.main_config.save_config():
+                    raise RuntimeError("Failed to write config.json")
+            else:
+                config_data = self._load_runtime_config_json(
+                    new_config_path,
+                    fallback_from=old_config_path,
+                )
+                gui_app = _ensure_dict(config_data.get("gui_app"))
+                gui_app["smbseek_path"] = new_smbseek
+                gui_app["database_path"] = new_database
+                config_data["gui_app"] = gui_app
+                _set_nested(config_data, ("database", "path"), new_database)
+                self._apply_runtime_settings(
+                    config_data,
+                    new_api_key,
+                    new_quarantine,
+                    new_wordlist,
+                )
+                path_obj = Path(new_config_path).expanduser()
+                path_obj.parent.mkdir(parents=True, exist_ok=True)
+                path_obj.write_text(json.dumps(config_data, indent=2), encoding="utf-8")
+
+            self.smbseek_path = new_smbseek
+            self.database_path = new_database
+            self.config_path = new_config_path
+            self.api_key = new_api_key
+            self.quarantine_path = new_quarantine
+            self.wordlist_path = new_wordlist
+
+            # Refresh downstream interfaces whenever runtime-critical values changed.
+            runtime_changed = (
+                old_smbseek != new_smbseek
+                or old_database != new_database
+                or old_config_path != new_config_path
+            )
+            if self.refresh_callback and runtime_changed:
+                self.refresh_callback()
+
+            if not self.validation_results["api_key"]["valid"]:
+                messagebox.showwarning(
+                    "Configuration Saved",
+                    "Settings were saved, but Shodan API key is empty.\n"
+                    "Discovery scans will fail until a valid key is set.",
+                )
+            if not self.validation_results["wordlist"]["valid"]:
+                messagebox.showwarning(
+                    "Configuration Saved",
+                    "Settings were saved, but the Pry wordlist path is invalid.\n"
+                    "Pry operations may fail until this path is corrected.",
+                )
+
             return True
-            
-        except Exception as e:
+        except Exception as exc:
             messagebox.showerror(
                 "Configuration Save Failed",
-                f"Failed to save configuration:\n{str(e)}\n\n"
-                "Please check your settings and try again."
+                f"Failed to save configuration:\n{exc}\n\nPlease check your settings and try again.",
             )
             return False
-        
-        return True
+
+    def _load_runtime_config_json(self, config_path: str, fallback_from: Optional[str] = None) -> Dict[str, Any]:
+        path_obj = Path(config_path).expanduser()
+        candidates = [path_obj]
+
+        if not path_obj.exists():
+            example_path = path_obj.parent / f"{path_obj.name}.example"
+            if example_path.exists():
+                candidates.append(example_path)
+            if fallback_from:
+                fallback_path = Path(fallback_from).expanduser()
+                if fallback_path != path_obj and fallback_path.exists():
+                    candidates.append(fallback_path)
+
+        for candidate in candidates:
+            if not candidate.exists():
+                continue
+            try:
+                loaded = json.loads(candidate.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    return loaded
+            except Exception:
+                continue
+        return {}
+
+    def _apply_runtime_settings(
+        self,
+        config_data: Dict[str, Any],
+        api_key: str,
+        quarantine_path: str,
+        wordlist_path: str,
+    ) -> None:
+        # Shodan API key drives scan processes.
+        _set_nested(config_data, ("shodan", "api_key"), api_key)
+
+        # Keep quarantine path aligned across browser and extract-adjacent sections.
+        _set_nested(config_data, ("file_browser", "quarantine_root"), quarantine_path)
+        _set_nested(config_data, ("ftp_browser", "quarantine_base"), quarantine_path)
+        _set_nested(config_data, ("http_browser", "quarantine_base"), quarantine_path)
+        _set_nested(config_data, ("file_collection", "quarantine_base"), quarantine_path)
+        _set_nested(config_data, ("pry", "wordlist_path"), wordlist_path)
 
 
-def open_app_config_dialog(parent: tk.Widget, settings_manager=None, 
-                          config_editor_callback: Optional[Callable[[str], None]] = None,
-                          main_config=None, refresh_callback: Optional[Callable[[], None]] = None) -> None:
-    """
-    Open application configuration dialog.
-    
-    Args:
-        parent: Parent widget
-        settings_manager: SettingsManager instance for persistence
-        config_editor_callback: Callback to open existing config editor
-        main_config: XSMBSeekConfig instance for main application config
-        refresh_callback: Callback to refresh database connection after changes
-    """
+def open_app_config_dialog(
+    parent: tk.Widget,
+    settings_manager=None,
+    config_editor_callback: Optional[Callable[[str], None]] = None,
+    main_config=None,
+    refresh_callback: Optional[Callable[[], None]] = None,
+) -> None:
+    """Open application configuration dialog."""
     try:
         AppConfigDialog(parent, settings_manager, config_editor_callback, main_config, refresh_callback)
-    except Exception as e:
-        messagebox.showerror(
-            "Configuration Dialog Error",
-            f"Failed to open configuration dialog:\n{str(e)}"
-        )
+    except Exception as exc:
+        messagebox.showerror("Configuration Dialog Error", f"Failed to open configuration dialog:\n{exc}")

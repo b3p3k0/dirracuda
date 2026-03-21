@@ -1940,6 +1940,7 @@ class DashboardWidget:
         # Load extension filters from config if available
         included_extensions: List[str] = []
         excluded_extensions: List[str] = []
+        quarantine_base_path: Optional[Path] = None
         config_path = self.settings_manager.get_setting('backend.config_path', None) if self.settings_manager else None
         if config_path and Path(config_path).exists():
             try:
@@ -1947,6 +1948,14 @@ class DashboardWidget:
                 file_cfg = config_data.get("file_collection", {})
                 included_extensions = file_cfg.get("included_extensions", []) or []
                 excluded_extensions = file_cfg.get("excluded_extensions", []) or []
+                quarantine_candidate = (
+                    config_data.get("file_browser", {}).get("quarantine_root")
+                    or config_data.get("ftp_browser", {}).get("quarantine_base")
+                    or config_data.get("http_browser", {}).get("quarantine_base")
+                    or config_data.get("file_collection", {}).get("quarantine_base")
+                )
+                if quarantine_candidate:
+                    quarantine_base_path = Path(str(quarantine_candidate)).expanduser()
             except Exception:
                 pass
 
@@ -1989,6 +1998,7 @@ class DashboardWidget:
                     extension_mode,
                     included_extensions,
                     excluded_extensions,
+                    quarantine_base_path,
                     cancel_event
                 )
                 futures.append((server, future))
@@ -2014,6 +2024,7 @@ class DashboardWidget:
     def _extract_single_server(self, server: Dict[str, Any], max_file_mb: int, max_total_mb: int,
                                  max_time: int, max_files: int, extension_mode: str,
                                  included_extensions: List[str], excluded_extensions: List[str],
+                                 quarantine_base_path: Optional[Path],
                                  cancel_event: threading.Event) -> Dict[str, Any]:
         """Extract files from a single server."""
         if cancel_event.is_set():
@@ -2038,7 +2049,11 @@ class DashboardWidget:
 
         # Create quarantine directory
         try:
-            quarantine_dir = create_quarantine_dir(ip_address, purpose="post-scan-extract")
+            quarantine_dir = create_quarantine_dir(
+                ip_address,
+                purpose="post-scan-extract",
+                base_path=quarantine_base_path,
+            )
         except Exception as e:
             return {
                 "ip_address": ip_address,
