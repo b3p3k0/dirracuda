@@ -115,19 +115,31 @@ class ImageViewerWindow:
 
         save_btn = tk.Button(toolbar, text="⬇ Save to Quarantine", command=self._on_save)
         save_btn.pack(side=tk.LEFT)
+        if self.theme:
+            self.theme.apply_to_widget(save_btn, "button_secondary")
         if self.on_save_callback is None:
             save_btn.configure(state=tk.DISABLED)
 
         info_text = f"{self.original_image.width}x{self.original_image.height}"
         if self.truncated:
             info_text += " (truncated input)"
-        tk.Label(toolbar, text=info_text).pack(side=tk.LEFT, padx=(10, 0))
+        info_label = tk.Label(toolbar, text=info_text)
+        info_label.pack(side=tk.LEFT, padx=(10, 0))
+        if self.theme:
+            self.theme.apply_to_widget(info_label, "label")
 
         # Canvas with scroll + resize fit
         canvas_frame = tk.Frame(self.window)
         canvas_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        if self.theme:
+            self.theme.apply_to_widget(canvas_frame, "main_window")
 
         self.canvas = tk.Canvas(canvas_frame, highlightthickness=0)
+        if self.theme:
+            try:
+                self.canvas.configure(bg=self.theme.colors["secondary_bg"])
+            except tk.TclError:
+                pass
         self.canvas.pack(fill=tk.BOTH, expand=True)
         self.canvas.bind("<Configure>", lambda e: self._render_image())
 
@@ -135,6 +147,11 @@ class ImageViewerWindow:
         self.status_var = tk.StringVar(value="Ready")
         status = tk.Label(self.window, textvariable=self.status_var, anchor="w")
         status.pack(fill=tk.X, padx=10, pady=(0, 10))
+        if self.theme:
+            self.theme.apply_to_widget(status, "status_bar")
+
+        if self.theme:
+            self.theme.apply_theme_to_application(self.window)
 
     def _render_image(self) -> None:
         if not self.canvas:
@@ -163,4 +180,3 @@ class ImageViewerWindow:
         except Exception:
             pass
         self.window = None
-
