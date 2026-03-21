@@ -85,6 +85,7 @@ class DBToolsDialog:
         self.merge_strategy_var = None
         self.auto_backup_var = None
         self.merge_button = None
+        self.last_completed_import_source: Optional[str] = None
 
         # Stats tab components
         self.stats_labels = {}
@@ -291,6 +292,33 @@ class DBToolsDialog:
         )
         preview_label.pack(padx=10, pady=10, anchor=tk.W)
 
+    def _normalize_import_source_path(self, path: str) -> str:
+        """Return normalized absolute path for import-source identity checks."""
+        return os.path.abspath(os.path.realpath(path))
+
+    def _is_last_completed_import_source(self, path: str) -> bool:
+        """Return True when path matches the last successfully imported source."""
+        if not path or not self.last_completed_import_source:
+            return False
+        return self._normalize_import_source_path(path) == self.last_completed_import_source
+
+    def _lock_import_source_until_changed(self, source_path: str) -> None:
+        """Disable merge button until user selects a different source file."""
+        if source_path:
+            self.last_completed_import_source = self._normalize_import_source_path(source_path)
+
+        if self.merge_button:
+            self.merge_button.config(state=tk.DISABLED, text="Start Import")
+
+        if self.import_status_label:
+            source_name = os.path.basename(source_path) if source_path else "selected source"
+            self.import_status_label.config(
+                text=(
+                    f"Import complete for {source_name}. "
+                    "Select a different source file to import again."
+                )
+            )
+
     def _validate_import_file(self, path: str) -> None:
         """Validate the selected import file."""
         self.import_status_label.config(text="Validating...")
@@ -338,6 +366,12 @@ class DBToolsDialog:
             preview_text += "\n\nWarnings:\n" + "\n".join(f"- {warning}" for warning in warnings)
 
         self._set_import_preview_text(preview_text)
+        if self._is_last_completed_import_source(path):
+            self.import_status_label.config(
+                text="Import already completed for this source. Select a different source file."
+            )
+            self.merge_button.config(state=tk.DISABLED, text="Start Import")
+            return
         self.merge_button.config(state=tk.NORMAL, text="Start Merge")
 
     def _validate_csv_import_file(self, path: str) -> None:
@@ -373,6 +407,12 @@ class DBToolsDialog:
             preview_text += "\n\nWarnings:\n" + "\n".join(f"- {warning}" for warning in warnings)
 
         self._set_import_preview_text(preview_text)
+        if self._is_last_completed_import_source(path):
+            self.import_status_label.config(
+                text="Import already completed for this source. Select a different source file."
+            )
+            self.merge_button.config(state=tk.DISABLED, text="Start Import")
+            return
         self.merge_button.config(state=tk.NORMAL, text="Start CSV Import")
 
     def _start_merge(self) -> None:
@@ -464,7 +504,9 @@ class DBToolsDialog:
                     'type': 'complete',
                     'success': True,
                     'message': summary,
-                    'refresh_needed': True
+                    'refresh_needed': True,
+                    'import_completed': True,
+                    'import_path': external_path,
                 })
             else:
                 self.operation_queue.put({
@@ -526,7 +568,9 @@ class DBToolsDialog:
                     'type': 'complete',
                     'success': True,
                     'message': summary,
-                    'refresh_needed': True
+                    'refresh_needed': True,
+                    'import_completed': True,
+                    'import_path': csv_path,
                 })
             else:
                 error_text = '\\n'.join(result.errors) if result.errors else 'CSV import failed'
@@ -1168,6 +1212,8 @@ class DBToolsDialog:
 
                     if update['success']:
                         messagebox.showinfo("Success", update.get('message', 'Operation completed'))
+                        if update.get('import_completed'):
+                            self._lock_import_source_until_changed(update.get('import_path', ''))
                         if update.get('refresh_needed') and self.on_database_changed:
                             self.on_database_changed()
                         self._refresh_stats()
