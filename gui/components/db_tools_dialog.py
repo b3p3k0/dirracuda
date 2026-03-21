@@ -314,6 +314,9 @@ class DBToolsDialog:
             f"Total vulnerabilities: {preview['total_vulnerabilities']}\n"
             f"Total file manifests: {preview['total_file_manifests']}"
         )
+        warnings = preview.get('warnings') or []
+        if warnings:
+            preview_text += "\n\nWarnings:\n" + "\n".join(f"- {warning}" for warning in warnings)
 
         preview_label = self.theme.create_styled_label(
             self.import_preview_frame, preview_text, "body"
@@ -386,6 +389,8 @@ class DBToolsDialog:
                 )
                 if result.backup_path:
                     summary += f"\n\nBackup created: {os.path.basename(result.backup_path)}"
+                if result.warnings:
+                    summary += "\n\nWarnings:\n" + "\n".join(f"- {warning}" for warning in result.warnings)
 
                 self.operation_queue.put({
                     'type': 'complete',

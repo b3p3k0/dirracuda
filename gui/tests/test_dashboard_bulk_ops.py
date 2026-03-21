@@ -60,3 +60,64 @@ def test_http_post_scan_bulk_probe_uses_http_host_type_filter(monkeypatch):
     probe_targets = dash._execute_batch_probe.call_args[0][0]
     assert len(probe_targets) == 1
     assert probe_targets[0]["host_type"] == "H"
+
+
+def test_get_servers_for_bulk_ops_probe_includes_zero_accessibility_rows():
+    """Probe target selection should not require accessible_shares > 0."""
+    dash = DashboardWidget.__new__(DashboardWidget)
+
+    class _StubReader:
+        def get_protocol_server_list(
+            self,
+            limit=5000,
+            offset=0,
+            country_filter=None,
+            recent_scan_only=True,
+        ):
+            return ([
+                {
+                    "ip_address": "203.0.113.55",
+                    "host_type": "H",
+                    "accessible_shares": 0,
+                    "probe_status": "unprobed",
+                    "indicator_matches": 0,
+                }
+            ], 1)
+
+    dash.db_reader = _StubReader()
+    result = dash._get_servers_for_bulk_ops(skip_indicator_extract=True, host_type_filter="H")
+
+    assert len(result["probe"]) == 1
+    assert result["probe"][0]["ip_address"] == "203.0.113.55"
+    # Extract remains accessibility-gated.
+    assert result["extract"] == []
+
+
+def test_get_servers_for_bulk_ops_probe_includes_zero_accessibility_rows_smb():
+    """SMB probe target selection should not require accessible_shares > 0."""
+    dash = DashboardWidget.__new__(DashboardWidget)
+
+    class _StubReader:
+        def get_protocol_server_list(
+            self,
+            limit=5000,
+            offset=0,
+            country_filter=None,
+            recent_scan_only=True,
+        ):
+            return ([
+                {
+                    "ip_address": "203.0.113.99",
+                    "host_type": "S",
+                    "accessible_shares": 0,
+                    "probe_status": "unprobed",
+                    "indicator_matches": 0,
+                }
+            ], 1)
+
+    dash.db_reader = _StubReader()
+    result = dash._get_servers_for_bulk_ops(skip_indicator_extract=True, host_type_filter="S")
+
+    assert len(result["probe"]) == 1
+    assert result["probe"][0]["ip_address"] == "203.0.113.99"
+    assert result["extract"] == []
