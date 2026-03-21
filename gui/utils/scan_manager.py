@@ -356,6 +356,14 @@ class ScanManager:
             if share_access_delay is not None:
                 config_overrides.setdefault('connection', {})['share_access_delay'] = share_access_delay
 
+            connection_timeout = scan_options.get('connection_timeout')
+            if connection_timeout is not None:
+                config_overrides.setdefault('connection', {})['timeout'] = connection_timeout
+
+            port_check_timeout = scan_options.get('port_check_timeout')
+            if port_check_timeout is not None:
+                config_overrides.setdefault('connection', {})['port_check_timeout'] = port_check_timeout
+
             # Execute scan with temporary config override
             if config_overrides:
                 self._update_progress(7, "Applying configuration overrides...", "initialization")
@@ -1118,9 +1126,16 @@ class ScanManager:
                     "max_concurrent_hosts"
                 ] = disc_conc
 
+            # HTTP access concurrency.
+            acc_conc = scan_options.get("access_max_concurrent_hosts")
+            if acc_conc is not None:
+                config_overrides.setdefault("http", {}).setdefault("access", {})[
+                    "max_concurrent_hosts"
+                ] = acc_conc
+
             # HTTP verification timeouts (no auth_timeout — HTTP has no auth step).
             verif_overrides = {}
-            for key in ("connect_timeout", "request_timeout"):
+            for key in ("connect_timeout", "request_timeout", "subdir_timeout"):
                 val = scan_options.get(key)
                 if val is not None:
                     verif_overrides[key] = val

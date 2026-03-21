@@ -30,13 +30,14 @@ from gui.utils.database_access import DatabaseReader
 from gui.utils.backend_interface import BackendInterface
 from gui.utils.style import get_theme, apply_theme_to_window
 from gui.utils.scan_manager import get_scan_manager
-from gui.components.scan_dialog import show_scan_dialog
+from gui.components.unified_scan_dialog import show_unified_scan_dialog
 from gui.components.ftp_scan_dialog import show_ftp_scan_dialog
 from gui.components.http_scan_dialog import show_http_scan_dialog
 from gui.components.scan_results_dialog import show_scan_results_dialog
 from gui.utils.settings_manager import get_settings_manager
 from gui.utils.probe_runner import run_probe
 from gui.utils.extract_runner import run_extract
+from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.components import dashboard_logs
 from gui.utils import (
     probe_cache,
@@ -161,6 +162,11 @@ class DashboardWidget:
         self.stopping_started_time = None  # Timestamp when stop was initiated
         self.ftp_scan_button = None
         self.http_scan_button = None
+        self._queued_scan_active = False
+        self._queued_scan_protocols: List[str] = []
+        self._queued_scan_common_options: Optional[Dict[str, Any]] = None
+        self._queued_scan_current_protocol: Optional[str] = None
+        self._queued_scan_failures: List[Dict[str, str]] = []
 
         # Callbacks
         self.drill_down_callback = None
@@ -328,29 +334,11 @@ class DashboardWidget:
         # Start Scan button (preserve state management)
         self.scan_button = tk.Button(
             actions_frame,
-            text="🔍 Start SMB Scan",
+            text="▶ Start Scan",
             command=self._handle_scan_button_click
         )
         self.theme.apply_to_widget(self.scan_button, "button_primary")
         self.scan_button.pack(side=tk.LEFT, padx=(0, 5))
-
-        # FTP Scan button (placeholder; wired in Card 2+)
-        self.ftp_scan_button = tk.Button(
-            actions_frame,
-            text="📡 Start FTP Scan",
-            command=self._handle_ftp_scan_button_click
-        )
-        self.theme.apply_to_widget(self.ftp_scan_button, "button_primary")
-        self.ftp_scan_button.pack(side=tk.LEFT, padx=(0, 5))
-
-        # HTTP Scan button
-        self.http_scan_button = tk.Button(
-            actions_frame,
-            text="🌐 Start HTTP Scan",
-            command=self._handle_http_scan_button_click
-        )
-        self.theme.apply_to_widget(self.http_scan_button, "button_primary")
-        self.http_scan_button.pack(side=tk.LEFT, padx=(0, 5))
 
         # Unified servers browser (SMB + FTP rows)
         servers_button = tk.Button(
@@ -740,28 +728,232 @@ class DashboardWidget:
             )
             return
         
-        # Show scan dialog
-        result = show_scan_dialog(
+        # Show unified scan dialog
+        show_unified_scan_dialog(
             parent=self.parent,
             config_path=self.config_path,
+            scan_start_callback=self._start_unified_scan,
+            settings_manager=getattr(self, "settings_manager", None),
             config_editor_callback=self._open_config_editor_from_scan,
-            scan_start_callback=self._start_new_scan,
-            backend_interface=self.backend_interface,
-            settings_manager=getattr(self, 'settings_manager', None)
         )
     
     def _open_config_editor_from_scan(self, config_path: str) -> None:
         """Open configuration editor from scan dialog."""
         if self.config_editor_callback:
             self.config_editor_callback(config_path)
-    
-    def _start_new_scan(self, scan_options: dict) -> None:
+
+    def _clear_queued_scan_state(self) -> None:
+        """Reset in-memory state for queued multi-protocol scan runs."""
+        self._queued_scan_active = False
+        self._queued_scan_protocols = []
+        self._queued_scan_common_options = None
+        self._queued_scan_current_protocol = None
+        self._queued_scan_failures = []
+
+    def _start_unified_scan(self, scan_request: dict) -> None:
+        """
+        Start scans from unified dialog request.
+
+        If multiple protocols are selected, scans execute sequentially.
+        """
+        protocols = [
+            str(p).strip().lower()
+            for p in (scan_request.get("protocols") or [])
+            if str(p).strip().lower() in {"smb", "ftp", "http"}
+        ]
+        if not protocols:
+            messagebox.showerror(
+                "Scan Error",
+                "No protocols selected. Please select at least one protocol."
+            )
+            return
+
+        # Single protocol: run directly (no queue wrapper).
+        if len(protocols) == 1:
+            self._clear_queued_scan_state()
+            protocol = protocols[0]
+            options = self._build_protocol_scan_options(protocol, scan_request)
+            self._start_protocol_scan(protocol, options)
+            return
+
+        # Multi-protocol queue.
+        self._queued_scan_active = True
+        self._queued_scan_protocols = list(protocols)
+        self._queued_scan_common_options = dict(scan_request)
+        self._queued_scan_current_protocol = None
+        self._queued_scan_failures = []
+        self._launch_next_queued_scan()
+
+    def _build_protocol_scan_options(self, protocol: str, common_options: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert unified dialog options into protocol-specific scan options."""
+        country = common_options.get("country")
+        max_results = common_options.get("max_shodan_results", 1000)
+        custom_filters = common_options.get("custom_filters", "")
+        verbose = bool(common_options.get("verbose", False))
+        bulk_probe = bool(common_options.get("bulk_probe_enabled", False))
+        bulk_extract = bool(common_options.get("bulk_extract_enabled", False))
+        skip_indicator_extract = bool(common_options.get("bulk_extract_skip_indicators", True))
+        rce_enabled = bool(common_options.get("rce_enabled", False))
+
+        try:
+            shared_concurrency = int(common_options.get("shared_concurrency", 10))
+        except (TypeError, ValueError):
+            shared_concurrency = 10
+        try:
+            shared_timeout = int(common_options.get("shared_timeout_seconds", 10))
+        except (TypeError, ValueError):
+            shared_timeout = 10
+
+        shared_concurrency = max(1, min(256, shared_concurrency))
+        shared_timeout = max(1, min(300, shared_timeout))
+
+        if protocol == "smb":
+            security_mode = str(common_options.get("security_mode", "cautious")).strip().lower()
+            if security_mode not in {"cautious", "legacy"}:
+                security_mode = "cautious"
+            return {
+                "country": country,
+                "max_shodan_results": max_results,
+                "custom_filters": custom_filters,
+                "discovery_max_concurrent_hosts": shared_concurrency,
+                "access_max_concurrent_hosts": shared_concurrency,
+                "connection_timeout": shared_timeout,
+                "security_mode": security_mode,
+                "verbose": verbose,
+                "rce_enabled": rce_enabled,
+                "bulk_probe_enabled": bulk_probe,
+                "bulk_extract_enabled": bulk_extract,
+                "bulk_extract_skip_indicators": skip_indicator_extract,
+            }
+
+        if protocol == "ftp":
+            return {
+                "country": country,
+                "max_shodan_results": max_results,
+                "custom_filters": custom_filters,
+                "discovery_max_concurrent_hosts": shared_concurrency,
+                "access_max_concurrent_hosts": shared_concurrency,
+                "connect_timeout": shared_timeout,
+                "auth_timeout": shared_timeout,
+                "listing_timeout": shared_timeout,
+                "verbose": verbose,
+                "rce_enabled": rce_enabled,
+                "bulk_probe_enabled": bulk_probe,
+                "bulk_extract_enabled": bulk_extract,
+                "bulk_extract_skip_indicators": skip_indicator_extract,
+            }
+
+        # HTTP
+        allow_insecure_tls = bool(common_options.get("allow_insecure_tls", True))
+        return {
+            "country": country,
+            "max_shodan_results": max_results,
+            "custom_filters": custom_filters,
+            "discovery_max_concurrent_hosts": shared_concurrency,
+            "access_max_concurrent_hosts": shared_concurrency,
+            "connect_timeout": shared_timeout,
+            "request_timeout": shared_timeout,
+            "subdir_timeout": shared_timeout,
+            "verify_http": True,
+            "verify_https": True,
+            "allow_insecure_tls": allow_insecure_tls,
+            "verbose": verbose,
+            "rce_enabled": rce_enabled,
+            "bulk_probe_enabled": bulk_probe,
+            "bulk_extract_enabled": bulk_extract,
+            "bulk_extract_skip_indicators": skip_indicator_extract,
+        }
+
+    def _start_protocol_scan(self, protocol: str, scan_options: Dict[str, Any]) -> bool:
+        """Dispatch launch to the existing protocol-specific start handlers."""
+        if protocol == "smb":
+            return bool(self._start_new_scan(scan_options))
+        if protocol == "ftp":
+            return bool(self._start_ftp_scan(scan_options))
+        if protocol == "http":
+            return bool(self._start_http_scan(scan_options))
+        return False
+
+    def _launch_next_queued_scan(self) -> None:
+        """Start the next protocol in queue, if any remain."""
+        if not self._queued_scan_active:
+            return
+
+        if not self._queued_scan_protocols:
+            if self._queued_scan_failures:
+                lines = [
+                    f"- {item['protocol'].upper()}: {item['reason']}"
+                    for item in self._queued_scan_failures
+                ]
+                messagebox.showwarning(
+                    "Queued Scans Completed With Failures",
+                    "One or more protocol scans failed:\n\n" + "\n".join(lines),
+                )
+            self._clear_queued_scan_state()
+            return
+
+        protocol = self._queued_scan_protocols.pop(0)
+        self._queued_scan_current_protocol = protocol
+        common = self._queued_scan_common_options or {}
+        scan_options = self._build_protocol_scan_options(protocol, common)
+
+        started = self._start_protocol_scan(protocol, scan_options)
+        if not started:
+            self._queued_scan_failures.append(
+                {"protocol": protocol, "reason": "failed to start"}
+            )
+            messagebox.showwarning(
+                "Protocol Start Failed",
+                f"{protocol.upper()} scan failed to start. Continuing to next protocol.",
+            )
+            try:
+                self.parent.after(150, self._launch_next_queued_scan)
+            except tk.TclError:
+                pass
+
+    def _handle_queued_scan_completion(self, results: Dict[str, Any]) -> None:
+        """Handle queue continuation after each protocol scan completes."""
+        if not self._queued_scan_active:
+            return
+
+        protocol = (self._queued_scan_current_protocol or results.get("protocol") or "smb").lower()
+        status = str(results.get("status", "")).lower()
+        success = bool(results.get("success", False))
+        error = str(results.get("error", "") or "").strip()
+
+        # User cancellation stops the queue.
+        if status == "cancelled":
+            self._clear_queued_scan_state()
+            messagebox.showinfo(
+                "Queued Scans Cancelled",
+                "Scan queue cancelled by user. Remaining protocols were not started.",
+            )
+            return
+
+        failed = status in {"failed", "error"} or (not success and bool(error))
+        if failed:
+            reason = error or status or "unknown error"
+            self._queued_scan_failures.append({"protocol": protocol, "reason": reason})
+            messagebox.showwarning(
+                "Protocol Scan Failed",
+                f"{protocol.upper()} scan failed but the queue will continue.\n\nReason: {reason}",
+            )
+
+        if self._queued_scan_protocols:
+            try:
+                self.parent.after(150, self._launch_next_queued_scan)
+            except tk.TclError:
+                pass
+        else:
+            self._launch_next_queued_scan()
+
+    def _start_new_scan(self, scan_options: dict) -> bool:
         """Start new scan with specified options."""
         try:
             # Final check for external scans before starting
             self._check_external_scans()
             if self.scan_button_state != "idle":
-                return  # External scan detected, don't proceed
+                return False  # External scan detected, don't proceed
 
             # Store scan options for post-scan batch operations
             self.current_scan_options = scan_options
@@ -792,6 +984,7 @@ class DashboardWidget:
                 
                 # Start monitoring scan completion
                 self._monitor_scan_completion()
+                return True
             else:
                 # Get more specific error information
                 error_details = []
@@ -821,6 +1014,7 @@ class DashboardWidget:
                     detailed_msg = "Failed to start scan. Another scan may already be running."
                 
                 messagebox.showerror("Scan Error", detailed_msg)
+                return False
         except Exception as e:
             error_msg = str(e)
             
@@ -847,6 +1041,7 @@ class DashboardWidget:
                 )
             
             messagebox.showerror("Scan Error", detailed_msg)
+            return False
     
     def _handle_scan_progress(self, percentage: float, status: str, phase: str) -> None:
         """Handle progress updates from scan manager."""
@@ -913,6 +1108,7 @@ class DashboardWidget:
                 if not self.scan_manager.is_scanning:
                     # Get results first to check status
                     results = self.scan_manager.get_scan_results()
+                    queue_has_more = self._queued_scan_active and bool(self._queued_scan_protocols)
 
                     # Reset button state to idle
                     self._update_scan_button_state("idle")
@@ -968,14 +1164,22 @@ class DashboardWidget:
 
                         if has_bulk_ops:
                             self._pending_scan_results = results
-                            self._run_post_scan_batch_operations(self.current_scan_options, results)
+                            self._run_post_scan_batch_operations(
+                                self.current_scan_options,
+                                results,
+                                schedule_reset=not queue_has_more,
+                                show_dialogs=not queue_has_more,
+                            )
                         else:
-                            # Show scan summary immediately when no bulk ops or no data
-                            self._show_scan_results(results)
-                            try:
-                                self.parent.after(5000, self._reset_scan_status)
-                            except tk.TclError:
-                                pass
+                            # For queued multi-protocol runs, suppress intermediate summaries
+                            # so the next protocol can start automatically.
+                            if not queue_has_more:
+                                self._show_scan_results(results)
+                            if not queue_has_more:
+                                try:
+                                    self.parent.after(5000, self._reset_scan_status)
+                                except tk.TclError:
+                                    pass
                     else:
                         self._reset_scan_status()
                     # If no results, scan may have been cancelled before any results were recorded
@@ -986,6 +1190,9 @@ class DashboardWidget:
                     except Exception as e:
                         _logger.warning("Dashboard refresh error after scan: %s", e)
                         # Continue anyway
+
+                    if self._queued_scan_active and results:
+                        self._handle_queued_scan_completion(results)
                 else:
                     # Check again in 1 second
                     try:
@@ -1020,7 +1227,14 @@ class DashboardWidget:
             # UI not available
             pass
 
-    def _run_post_scan_batch_operations(self, scan_options: Dict[str, Any], scan_results: Dict[str, Any]) -> None:
+    def _run_post_scan_batch_operations(
+        self,
+        scan_options: Dict[str, Any],
+        scan_results: Dict[str, Any],
+        *,
+        schedule_reset: bool = True,
+        show_dialogs: bool = True,
+    ) -> None:
         """Run bulk probe/extract operations after scan completion.
 
         Called when:
@@ -1037,11 +1251,13 @@ class DashboardWidget:
             bulk_extract_enabled = scan_options.get('bulk_extract_enabled', False)
 
             if not (bulk_probe_enabled or bulk_extract_enabled):
-                self._show_scan_results(scan_results)
-                try:
-                    self.parent.after(5000, self._reset_scan_status)
-                except tk.TclError:
-                    pass
+                if show_dialogs:
+                    self._show_scan_results(scan_results)
+                if schedule_reset:
+                    try:
+                        self.parent.after(5000, self._reset_scan_status)
+                    except tk.TclError:
+                        pass
                 return  # No bulk operations requested
 
             # Skip bulk if scan failed or produced no hosts (use tolerant metrics)
@@ -1051,11 +1267,13 @@ class DashboardWidget:
                 scan_results.get("shares_found", 0) or 0,
             )
             if scan_results.get("error") or host_metric == 0:
-                self._show_scan_results(scan_results)
-                try:
-                    self.parent.after(5000, self._reset_scan_status)
-                except tk.TclError:
-                    pass
+                if show_dialogs:
+                    self._show_scan_results(scan_results)
+                if schedule_reset:
+                    try:
+                        self.parent.after(5000, self._reset_scan_status)
+                    except tk.TclError:
+                        pass
                 return
 
             # Query database for eligible servers in the active protocol (keep UI responsive)
@@ -1078,32 +1296,38 @@ class DashboardWidget:
             )
 
             if fetch_error:
-                messagebox.showerror(
-                    "Bulk Operations Error",
-                    f"Failed to gather servers for bulk operations:\n{fetch_error}"
-                )
-                self._show_scan_results(scan_results)
-                try:
-                    self.parent.after(5000, self._reset_scan_status)
-                except tk.TclError:
-                    pass
+                if show_dialogs:
+                    messagebox.showerror(
+                        "Bulk Operations Error",
+                        f"Failed to gather servers for bulk operations:\n{fetch_error}"
+                    )
+                    self._show_scan_results(scan_results)
+                else:
+                    _logger.warning("Bulk operations fetch error (suppressed dialog): %s", fetch_error)
+                if schedule_reset:
+                    try:
+                        self.parent.after(5000, self._reset_scan_status)
+                    except tk.TclError:
+                        pass
                 return
 
             probe_targets = servers_for_ops.get("probe") if isinstance(servers_for_ops, dict) else []
             extract_targets = servers_for_ops.get("extract") if isinstance(servers_for_ops, dict) else []
 
             if not probe_targets and not extract_targets and (bulk_probe_enabled or bulk_extract_enabled):
-                # Show info message only if bulk operations were enabled
-                messagebox.showinfo(
-                    "Bulk Operations Skipped",
-                    "No eligible servers found for bulk operations.\n\n"
-                    "Bulk probe/extract operations require at least one accessible server."
-                )
-                self._show_scan_results(scan_results)
-                try:
-                    self.parent.after(5000, self._reset_scan_status)
-                except tk.TclError:
-                    pass
+                # Show info message only if bulk operations were enabled.
+                if show_dialogs:
+                    messagebox.showinfo(
+                        "Bulk Operations Skipped",
+                        "No eligible servers found for bulk operations.\n\n"
+                        "Bulk probe/extract operations require at least one accessible server."
+                    )
+                    self._show_scan_results(scan_results)
+                if schedule_reset:
+                    try:
+                        self.parent.after(5000, self._reset_scan_status)
+                    except tk.TclError:
+                        pass
                 return
 
             # Run batch operations (record summaries per op, show in LIFO order)
@@ -1128,26 +1352,34 @@ class DashboardWidget:
             # Present summaries in LIFO order
             while summary_stack:
                 job_type, results = summary_stack.pop()
-                if results:
+                if show_dialogs and results:
                     self._show_batch_summary(results, job_type=job_type)
 
             # After bulk operations, show the deferred scan summary
-            self._show_scan_results(scan_results)
-            try:
-                self.parent.after(5000, self._reset_scan_status)
-            except tk.TclError:
-                pass
+            if show_dialogs:
+                self._show_scan_results(scan_results)
+            if schedule_reset:
+                try:
+                    self.parent.after(5000, self._reset_scan_status)
+                except tk.TclError:
+                    pass
 
         except Exception as e:
-            messagebox.showerror(
-                "Batch Operations Error",
-                f"Error running post-scan batch operations: {str(e)}\n\n"
-                f"The scan completed successfully but bulk operations encountered an error."
-            )
-            # Even on error, fall back to showing the scan summary
+            if show_dialogs:
+                messagebox.showerror(
+                    "Batch Operations Error",
+                    f"Error running post-scan batch operations: {str(e)}\n\n"
+                    f"The scan completed successfully but bulk operations encountered an error."
+                )
+            else:
+                _logger.exception("Post-scan batch operations error (suppressed dialog): %s", e)
+
+            # Even on error, fall back to showing the scan summary when dialogs are enabled.
             try:
-                self._show_scan_results(scan_results)
-                self.parent.after(5000, self._reset_scan_status)
+                if show_dialogs:
+                    self._show_scan_results(scan_results)
+                if schedule_reset:
+                    self.parent.after(5000, self._reset_scan_status)
             except Exception:
                 pass
 
@@ -1159,7 +1391,7 @@ class DashboardWidget:
         """
         Gather servers eligible for bulk probe and extract.
 
-        Probe: accessible_shares > 0
+        Probe: any recent active row in the selected protocol
         Extract: accessible_shares > 0 AND (no indicators) unless toggle disabled
         """
         result = {"probe": [], "extract": []}
@@ -1187,11 +1419,14 @@ class DashboardWidget:
                 if host_type_filter and server_host_type != host_type_filter:
                     continue
 
+                # Probe eligibility is protocol-row based (recent + active), not
+                # share-count based. HTTP/FTP rows may legitimately have zero
+                # accessible_shares prior to first probe-cache sync.
+                result["probe"].append(server)
+
                 accessible = (server.get("accessible_shares") or 0) > 0
                 if not accessible:
                     continue
-
-                result["probe"].append(server)
 
                 indicator_matches = int(server.get("indicator_matches", 0) or 0)
                 probe_status = (server.get("probe_status") or "").lower()
@@ -1269,7 +1504,12 @@ class DashboardWidget:
         max_dirs = int(self.settings_manager.get_setting('probe.max_directories_per_share', 3))
         max_files = int(self.settings_manager.get_setting('probe.max_files_per_directory', 5))
         timeout_seconds = int(self.settings_manager.get_setting('probe.share_timeout_seconds', 10))
-        enable_rce = bool(self.settings_manager.get_setting('scan_dialog.rce_enabled', False))
+        enable_rce = bool(
+            (self.current_scan_options or {}).get(
+                "rce_enabled",
+                self.settings_manager.get_setting('scan_dialog.rce_enabled', False)
+            )
+        )
 
         results: List[Dict[str, Any]] = []
         cancel_event = threading.Event()
@@ -2049,12 +2289,12 @@ class DashboardWidget:
             parent=self.parent,
         )
 
-    def _start_ftp_scan(self, scan_options: dict) -> None:
+    def _start_ftp_scan(self, scan_options: dict) -> bool:
         """Start FTP scan with options from dialog. Mirrors _start_new_scan()."""
         # Final race-condition check before acquiring scan lock.
         self._check_external_scans()
         if self.scan_button_state != "idle":
-            return
+            return False
 
         # BackendInterface expects a directory path; "." mirrors BackendInterface defaults.
         backend_path_obj = getattr(self.backend_interface, "backend_path", None)
@@ -2074,6 +2314,7 @@ class DashboardWidget:
             self._update_scan_button_state("scanning")
             self._show_scan_progress(scan_options.get("country"))
             self._monitor_scan_completion()
+            return True
         else:
             messagebox.showerror(
                 "FTP Scan Error",
@@ -2081,13 +2322,14 @@ class DashboardWidget:
                 "A scan may already be running.",
                 parent=self.parent,
             )
+            return False
 
-    def _start_http_scan(self, scan_options: dict) -> None:
+    def _start_http_scan(self, scan_options: dict) -> bool:
         """Start HTTP scan with options from dialog. Mirrors _start_ftp_scan()."""
         # Final race-condition check before acquiring scan lock.
         self._check_external_scans()
         if self.scan_button_state != "idle":
-            return
+            return False
 
         # BackendInterface expects a directory path; "." mirrors BackendInterface defaults.
         backend_path_obj = getattr(self.backend_interface, "backend_path", None)
@@ -2107,6 +2349,7 @@ class DashboardWidget:
             self._update_scan_button_state("scanning")
             self._show_scan_progress(scan_options.get("country"))
             self._monitor_scan_completion()
+            return True
         else:
             messagebox.showerror(
                 "HTTP Scan Error",
@@ -2114,6 +2357,7 @@ class DashboardWidget:
                 "A scan may already be running.",
                 parent=self.parent,
             )
+            return False
 
     def _update_scan_button_state(self, new_state: str) -> None:
         """Update scan button state and appearance."""
@@ -2163,7 +2407,7 @@ class DashboardWidget:
     def _set_button_to_start(self) -> None:
         """Configure button for start state."""
         self.scan_button.config(
-            text="🔍 Start SMB Scan",
+            text="▶ Start Scan",
             state="normal"
         )
         self.theme.apply_to_widget(self.scan_button, "button_primary")
@@ -2284,14 +2528,7 @@ class DashboardWidget:
         dialog.geometry("400x250")
         dialog.minsize(300, 200)
         dialog.transient(self.parent)
-        dialog.grab_set()
-        
-        # Center the dialog
-        dialog.update_idletasks()
-        x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_width() // 2)
-        y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_height() // 2)
-        dialog.geometry(f"+{x}+{y}")
-        
+
         # Apply theme
         self.theme.apply_to_widget(dialog, "main_window")
         
@@ -2361,6 +2598,22 @@ class DashboardWidget:
         
         # Handle window close
         dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
+
+        # Finalize geometry and focus/stacking after content exists.
+        dialog.update_idletasks()
+        parent_x = self.parent.winfo_x()
+        parent_y = self.parent.winfo_y()
+        parent_w = self.parent.winfo_width()
+        parent_h = self.parent.winfo_height()
+        dialog_w = dialog.winfo_width()
+        dialog_h = dialog.winfo_height()
+        x = parent_x + max(0, (parent_w - dialog_w) // 2)
+        y = parent_y + max(0, (parent_h - dialog_h) // 2)
+        dialog.geometry(f"{dialog_w}x{dialog_h}+{x}+{y}")
+
+        dialog.grab_set()
+        ensure_dialog_focus(dialog, self.parent)
+        cancel_btn.focus_set()
     
     def _handle_stop_choice(self, dialog: tk.Toplevel, choice: str) -> None:
         """Handle user's stop choice."""

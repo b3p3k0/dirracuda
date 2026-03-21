@@ -30,7 +30,6 @@ class ProbeConfigDialog:
             "max_dirs": 3,
             "max_files": 5,
             "timeout": 10,
-            "rce": False
         }
         if self.settings:
             try:
@@ -38,7 +37,6 @@ class ProbeConfigDialog:
                 defaults["max_dirs"] = int(self.settings.get_setting('probe.max_directories_per_share', defaults['max_dirs']))
                 defaults["max_files"] = int(self.settings.get_setting('probe.max_files_per_directory', defaults['max_files']))
                 defaults["timeout"] = int(self.settings.get_setting('probe.share_timeout_seconds', defaults['timeout']))
-                defaults["rce"] = bool(self.settings.get_setting('scan_dialog.rce_enabled', defaults['rce']))
             except Exception:
                 pass
 
@@ -46,7 +44,6 @@ class ProbeConfigDialog:
         self.max_dirs_var = tk.IntVar(value=defaults['max_dirs'])
         self.max_files_var = tk.IntVar(value=defaults['max_files'])
         self.timeout_var = tk.IntVar(value=defaults['timeout'])
-        self.rce_var = tk.BooleanVar(value=defaults['rce'])
 
     def show(self) -> Dict[str, Any]:
         self.dialog = tk.Toplevel(self.parent)
@@ -64,13 +61,8 @@ class ProbeConfigDialog:
         self._add_entry(frame, "Max files per directory:", self.max_files_var, 2)
         self._add_entry(frame, "Share timeout (seconds):", self.timeout_var, 3)
 
-        rce_check = tk.Checkbutton(frame, text="Enable RCE analysis", variable=self.rce_var)
-        rce_check.grid(row=4, column=0, columnspan=2, sticky="w", pady=(10, 0))
-        if self.theme:
-            self.theme.apply_to_widget(rce_check, "checkbox")
-
         btn_frame = tk.Frame(frame)
-        btn_frame.grid(row=5, column=0, columnspan=2, pady=(15, 0))
+        btn_frame.grid(row=4, column=0, columnspan=2, pady=(15, 0))
         save_btn = tk.Button(btn_frame, text="Save & Continue", command=self._save)
         disable_btn = tk.Button(btn_frame, text="Disable Probe", command=self._disable)
         abort_btn = tk.Button(btn_frame, text="Abort Scan", command=self._abort)
@@ -98,7 +90,6 @@ class ProbeConfigDialog:
                 "max_dirs": max(1, int(self.max_dirs_var.get())),
                 "max_files": max(1, int(self.max_files_var.get())),
                 "timeout": max(1, int(self.timeout_var.get())),
-                "rce": bool(self.rce_var.get())
             }
         except (ValueError, tk.TclError):
             messagebox.showerror("Invalid Input", "Please enter numeric values for probe limits.", parent=self.dialog)
@@ -110,7 +101,6 @@ class ProbeConfigDialog:
                 self.settings.set_setting('probe.max_directories_per_share', data['max_dirs'])
                 self.settings.set_setting('probe.max_files_per_directory', data['max_files'])
                 self.settings.set_setting('probe.share_timeout_seconds', data['timeout'])
-                self.settings.set_setting('scan_dialog.rce_enabled', data['rce'])
             except Exception:
                 pass
 
@@ -212,11 +202,11 @@ class ScanPreflightController:
                 self.scan_options['bulk_probe_enabled'] = False
                 self.summary_lines.append('Probe disabled for this scan')
             else:
+                rce_enabled_for_probe = bool(self.scan_options.get('rce_enabled', False))
                 self.summary_lines.append(
-                    f"Probe enabled • workers {outcome['workers']} • dirs {outcome['max_dirs']} • files {outcome['max_files']} • timeout {outcome['timeout']}s • RCE {'On' if outcome['rce'] else 'Off'}"
+                    f"Probe enabled • workers {outcome['workers']} • dirs {outcome['max_dirs']} • files {outcome['max_files']} • timeout {outcome['timeout']}s • RCE {'On' if rce_enabled_for_probe else 'Off'}"
                 )
                 self.scan_options['bulk_probe_enabled'] = True
-                self.scan_options['rce_enabled'] = outcome['rce']
         if extract_enabled:
             # Get config path from settings manager
             config_path = None

@@ -1,6 +1,6 @@
 # SMBSeek
 
-A GUI for finding SMB and FTP servers with weak or no authentication, then auditing what's exposed.
+A GUI for finding exposed SMB shares, anonymous FTP, and HTTP directory listings, then auditing what's reachable.
 
 ---
 
@@ -74,18 +74,18 @@ You're connecting to machines you don't control. A few baseline precautions befo
 
 The main window. From here you can:
 
-- Launch SMB or FTP discovery scans (filtered by country or global) — only one scan runs at a time; starting one type disables the other until it finishes or is stopped
+- Launch SMB/FTP/HTTP discovery from one **▶ Start Scan** button — pick one protocol or queue multiple protocols in sequence from the same dialog
 - Open the Server List to work with hosts you've found
 - Manage your database (import, export, merge, maintenance)
 - Edit configuration
 
 ### SMB Discovery
 
-Triggered via **Start SMB Scan** on the dashboard. The scan runs as a `smbseek` subprocess and tests candidates concurrently across a configurable thread pool:
+Triggered from **▶ Start Scan** with **SMB** selected. The scan runs as a `smbseek` subprocess and tests candidates concurrently across a configurable thread pool:
 
 1. Shodan query for hosts with SMB auth disabled or running Samba, filtered by country and exclusion list
 2. Organization filtering — hosts belonging to excluded ISPs or hosting providers are dropped before any connection attempt
-3. Deduplication against the database — hosts scanned within the last 30 days are skipped by default; override with `--rescan-all` or `--rescan-failed`
+3. Deduplication against the database — hosts scanned within the last 30 days are skipped by default (GUI uses this default behavior; CLI can override with `--rescan-all` or `--rescan-failed`)
 4. TCP reachability check on port 445
 5. Authentication test using three methods in sequence: Anonymous, Guest/blank, and Guest/Guest
 
@@ -96,8 +96,8 @@ Only hosts that authenticate are stored. The method that succeeded is recorded a
 Results appear in the Server List.
 
 ### FTP Discovery **(EXPERIMENTAL)**
-]
-Triggered via **Start FTP Scan** on the dashboard. The scan runs as a separate `ftpseek` process and follows four verification steps for each candidate:
+
+Triggered from **▶ Start Scan** with **FTP** selected. The scan runs as a separate `ftpseek` process and follows four verification steps for each candidate:
 
 1. Shodan query for port 21 hosts showing a successful anonymous login banner
 2. TCP reachability check on port 21
@@ -112,7 +112,7 @@ Results appear in the database alongside SMB records — the same IP can have bo
 
 ### HTTP Discovery **(EXPERIMENTAL)**
 
-Triggered via **Start HTTP Scan** on the dashboard. Uses a Shodan query for `http.title:"Index of /"` to find hosts serving Apache/nginx directory listings, then verifies each candidate:
+Triggered from **▶ Start Scan** with **HTTP** selected. Uses a Shodan query for `http.title:"Index of /"` to find hosts serving Apache/nginx directory listings, then verifies each candidate:
 
 1. Shodan query for HTTP/HTTPS directory-index hosts
 2. Reachability check and directory-index validation (HTTP and HTTPS ports)
@@ -211,7 +211,7 @@ App settings are stored in `conf/config.json`. The example file (`conf/config.js
 
 Key sections:
 
-- `shodan.api_key` — required for SMB discovery
+- `shodan.api_key` — required for discovery scans (SMB/FTP/HTTP)
 - `pry.*` — wordlist path, delays, lockout behavior
 - `file_collection.*` — extraction limits
 - `file_browser.*` — browse mode limits
@@ -232,7 +232,7 @@ The GUI includes a built-in config editor for common settings.
 
 ### Templates
 
-**Scan templates** save your search configuration — country filters, Shodan limits, concurrency, rate limits. Click "Save Current" in the scan dialog. Templates live in `~/.smbseek/templates/` as JSON files you can edit directly.
+**Scan templates** save your unified scan configuration — protocol selection, country/region filters, Shodan filters, max results, shared concurrency/timeout, and SMB/HTTP protocol-specific toggles. Click "Save Current" in the Start Scan dialog. Templates live in `~/.smbseek/templates/` as JSON files you can edit directly.
 
 **Filter templates** save your server list filters — search text, date range, countries, checkboxes. Click "Save Filters" in the advanced filter panel. Stored in `~/.smbseek/filter_templates/`.
 
