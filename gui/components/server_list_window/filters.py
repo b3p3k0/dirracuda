@@ -45,6 +45,7 @@ def create_filter_panel(parent, theme, filter_vars, callbacks):
         textvariable=filter_vars['search_text'],
         width=30
     )
+    theme.apply_to_widget(search_entry, "entry")
     search_entry.pack(side=tk.LEFT, padx=(0, 10))
     search_entry.bind("<KeyRelease>", lambda e: callbacks['on_search_changed']())
 
@@ -118,7 +119,7 @@ def create_filter_panel(parent, theme, filter_vars, callbacks):
     advanced_filters_frame = tk.Frame(filter_frame)
     theme.apply_to_widget(advanced_filters_frame, "card")
 
-    # Two-column layout: left (templates + filters), right (countries)
+    # Three-column layout: left (templates + filters), middle (protocols), right (countries)
     left_column = tk.Frame(advanced_filters_frame)
     theme.apply_to_widget(left_column, "card")
     left_column.pack(side=tk.LEFT, padx=10, pady=5)
@@ -189,10 +190,49 @@ def create_filter_panel(parent, theme, filter_vars, callbacks):
     date_combo.pack(anchor="w")
     date_combo.bind("<<ComboboxSelected>>", lambda e: callbacks['on_date_filter_changed']())
 
-    # --- Right column: Country filter only ---
+    # --- Middle column: Protocol filter ---
+    protocol_column = tk.Frame(advanced_filters_frame)
+    theme.apply_to_widget(protocol_column, "card")
+    protocol_column.pack(side=tk.LEFT, padx=10, pady=5, anchor="n")
+
+    protocol_label = theme.create_styled_label(
+        protocol_column,
+        "Protocols:",
+        "small"
+    )
+    protocol_label.pack(anchor="w")
+
+    protocol_smb_checkbox = tk.Checkbutton(
+        protocol_column,
+        text="SMB",
+        variable=filter_vars["protocol_smb"],
+        command=callbacks["on_protocol_filter_changed"],
+    )
+    theme.apply_to_widget(protocol_smb_checkbox, "checkbox")
+    protocol_smb_checkbox.pack(anchor="w", pady=(2, 0))
+
+    protocol_ftp_checkbox = tk.Checkbutton(
+        protocol_column,
+        text="FTP",
+        variable=filter_vars["protocol_ftp"],
+        command=callbacks["on_protocol_filter_changed"],
+    )
+    theme.apply_to_widget(protocol_ftp_checkbox, "checkbox")
+    protocol_ftp_checkbox.pack(anchor="w", pady=(2, 0))
+
+    protocol_http_checkbox = tk.Checkbutton(
+        protocol_column,
+        text="HTTP",
+        variable=filter_vars["protocol_http"],
+        command=callbacks["on_protocol_filter_changed"],
+    )
+    theme.apply_to_widget(protocol_http_checkbox, "checkbox")
+    protocol_http_checkbox.pack(anchor="w", pady=(2, 0))
+
+    # --- Right column: Country filter ---
     right_column = tk.Frame(advanced_filters_frame)
     theme.apply_to_widget(right_column, "card")
-    right_column.pack(side=tk.LEFT, padx=10, pady=5)
+    right_column.pack(side=tk.LEFT, padx=10, pady=5, anchor="n")
 
     country_label = theme.create_styled_label(
         right_column,
@@ -238,6 +278,7 @@ def create_filter_panel(parent, theme, filter_vars, callbacks):
         width=5,
         textvariable=filter_vars.get('country_filter_text')
     )
+    theme.apply_to_widget(country_filter_entry, "entry")
     country_filter_entry.pack(side=tk.LEFT, padx=(5, 0))
     country_filter_entry.bind('<KeyRelease>', lambda e: callbacks['on_country_filter_text_changed']())
 
@@ -251,6 +292,9 @@ def create_filter_panel(parent, theme, filter_vars, callbacks):
         'exclude_avoid_checkbox': exclude_avoid_checkbox,
         'probed_only_checkbox': probed_only_checkbox,
         'exclude_compromised_checkbox': exclude_compromised_checkbox,
+        'protocol_smb_checkbox': protocol_smb_checkbox,
+        'protocol_ftp_checkbox': protocol_ftp_checkbox,
+        'protocol_http_checkbox': protocol_http_checkbox,
         'country_listbox': country_listbox,
         'reset_button': reset_button,
         'mode_button': mode_button,
@@ -349,11 +393,11 @@ def apply_date_filter(servers: List[Dict[str, Any]], filter_type: str, last_scan
 
 def apply_shares_filter(servers: List[Dict[str, Any]], shares_only: bool) -> List[Dict[str, Any]]:
     """
-    Apply accessible shares filter to server list.
+    Apply accessible-shares filter to server list.
 
     Args:
         servers: List of servers to filter
-        shares_only: If True, only show servers with accessible shares > 0
+        shares_only: If True, only show rows with accessible shares > 0.
 
     Returns:
         Filtered list of servers
@@ -364,31 +408,27 @@ def apply_shares_filter(servers: List[Dict[str, Any]], shares_only: bool) -> Lis
     return [server for server in servers if server.get("accessible_shares", 0) > 0]
 
 
-def apply_favorites_filter(servers: List[Dict[str, Any]], favorites_only: bool, settings_manager) -> List[Dict[str, Any]]:
+def apply_favorites_filter(servers: List[Dict[str, Any]], favorites_only: bool, settings_manager=None) -> List[Dict[str, Any]]:
     """
-    Apply favorites filter to server list.
+    Apply favorites filter using the DB-backed per-protocol row field.
 
-    Args:
-        servers: List of servers to filter
-        favorites_only: If True, only show favorite servers
-        settings_manager: Settings manager for favorite IPs lookup
-
-    Returns:
-        Filtered list of servers
+    Note: settings_manager is ignored — DB row['favorite'] is canonical as of Card 4.
+    Settings-file favorites are intentionally not consumed here (migration boundary).
     """
-    if not favorites_only or not settings_manager:
+    if not favorites_only:
         return servers
-
-    favorite_ips = settings_manager.get_favorite_servers()
-    return [server for server in servers if server.get("ip_address") in favorite_ips]
+    return [server for server in servers if server.get("favorite", 0)]
 
 
-def apply_exclude_avoid_filter(servers: List[Dict[str, Any]], exclude_avoid: bool, settings_manager) -> List[Dict[str, Any]]:
-    """Exclude servers marked as avoid."""
-    if not exclude_avoid or not settings_manager:
+def apply_exclude_avoid_filter(servers: List[Dict[str, Any]], exclude_avoid: bool, settings_manager=None) -> List[Dict[str, Any]]:
+    """
+    Exclude servers marked as avoid using the DB-backed per-protocol row field.
+
+    Note: settings_manager is ignored — DB row['avoid'] is canonical as of Card 4.
+    """
+    if not exclude_avoid:
         return servers
-    avoid_ips = set(settings_manager.get_avoid_servers())
-    return [server for server in servers if server.get("ip_address") not in avoid_ips]
+    return [server for server in servers if not server.get("avoid", 0)]
 
 
 def apply_probed_filter(servers: List[Dict[str, Any]], probed_only: bool) -> List[Dict[str, Any]]:
@@ -417,6 +457,23 @@ def apply_exclude_compromised_filter(servers: List[Dict[str, Any]], exclude_comp
         return bool(server.get("indicator_matches", 0) > 0)
 
     return [server for server in servers if not _is_compromised(server)]
+
+
+def apply_protocol_filter(servers: List[Dict[str, Any]], selected_types: List[str]) -> List[Dict[str, Any]]:
+    """
+    Keep only rows whose host_type is selected.
+
+    Args:
+        servers: Server rows from the unified S/F/H dataset
+        selected_types: Allowed protocol types, e.g. ["S", "F", "H"]
+
+    Returns:
+        Filtered rows matching selected host_type values.
+    """
+    allowed = {str(t).upper() for t in (selected_types or []) if t}
+    if not allowed:
+        return []
+    return [server for server in servers if str(server.get("host_type", "S")).upper() in allowed]
 
 
 def apply_country_filter(servers: List[Dict[str, Any]], selected_codes: List[str]) -> List[Dict[str, Any]]:

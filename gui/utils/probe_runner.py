@@ -216,12 +216,18 @@ def _probe_share(
             safe_dir = dir_entry["name"].strip("\\/")
             nested_pattern = f"{safe_dir}\\*"
             nested_entries = _list_entries(conn, share_name, pattern=nested_pattern)
+            nested_dirs = [
+                entry for entry in nested_entries
+                if entry["is_directory"] and entry["name"] not in (".", "..")
+            ]
             file_entries = [
                 entry for entry in nested_entries
                 if not entry["is_directory"] and entry["name"] not in (".", "..")
             ]
             directory_payload.append({
                 "name": dir_entry["name"],
+                "subdirectories": [d["name"] for d in nested_dirs[:max_files]],
+                "subdirectories_truncated": len(nested_dirs) > max_files,
                 "files": [f["name"] for f in file_entries[:max_files]],
                 "files_truncated": len(file_entries) > max_files
             })

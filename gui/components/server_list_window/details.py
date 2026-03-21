@@ -16,7 +16,16 @@ import sys
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Sequence, Tuple
 
-from gui.utils import probe_cache, probe_runner, probe_patterns, extract_runner
+from gui.utils import (
+    probe_cache,
+    probe_runner,
+    probe_patterns,
+    extract_runner,
+    ftp_probe_cache,
+    ftp_probe_runner,
+    http_probe_cache,
+    http_probe_runner,
+)
 from gui.utils.probe_runner import ProbeError
 from gui.utils.database_access import DatabaseReader
 from gui.utils.dialog_helpers import ensure_dialog_focus
@@ -50,6 +59,8 @@ def show_server_detail_popup(parent_window, server_data, theme, settings_manager
     text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
     text_widget = tk.Text(text_frame, wrap=tk.WORD, state=tk.DISABLED)
+    if theme:
+        theme.apply_to_widget(text_widget, "text_area")
     scrollbar = tk.Scrollbar(text_frame, orient="vertical", command=text_widget.yview)
     text_widget.configure(yscrollcommand=scrollbar.set)
 
@@ -66,7 +77,13 @@ def show_server_detail_popup(parent_window, server_data, theme, settings_manager
 
     # Initial render (includes cached probe data if available)
     ip_address = server_data.get('ip_address', 'Unknown')
-    cached_probe = probe_cache.load_probe_result(ip_address) if ip_address else None
+    host_type = server_data.get("host_type", "S")
+    if ip_address and host_type == "F":
+        cached_probe = ftp_probe_cache.load_ftp_probe_result(ip_address)
+    elif ip_address and host_type == "H":
+        cached_probe = http_probe_cache.load_http_probe_result(ip_address)
+    else:
+        cached_probe = probe_cache.load_probe_result(ip_address) if ip_address else None
     if cached_probe and indicator_patterns:
         probe_patterns.attach_indicator_analysis(cached_probe, indicator_patterns)
     _render_server_details(text_widget, server_data, cached_probe)
@@ -98,36 +115,74 @@ def show_server_detail_popup(parent_window, server_data, theme, settings_manager
 
     # Notes editor
     notes_frame = tk.Frame(detail_window)
+    if theme:
+        theme.apply_to_widget(notes_frame, "main_window")
     notes_frame.pack(fill=tk.X, padx=10, pady=(5, 5))
-    tk.Label(notes_frame, text="Notes:").pack(anchor="w")
+    if theme:
+        notes_label = theme.create_styled_label(notes_frame, "Notes:", "body")
+    else:
+        notes_label = tk.Label(notes_frame, text="Notes:")
+    notes_label.pack(anchor="w")
     notes_text = tk.Text(notes_frame, height=3, wrap="word")
     current_notes = server_data.get("notes", "") or ""
     notes_text.insert("1.0", current_notes)
     notes_text.pack(fill=tk.X, expand=True)
-    theme.apply_to_widget(notes_text, "main_window")
+    if theme:
+        theme.apply_to_widget(notes_text, "text_area")
 
-    def save_notes():
+    def _persist_notes() -> None:
+        """Persist notes without user interaction."""
         new_notes = notes_text.get("1.0", tk.END).strip()
+        if new_notes == server_data.get("notes", ""):
+            return
         try:
             if settings_manager:
                 try:
                     db_reader = DatabaseReader(settings_manager.get_database_path())
-                    db_reader.upsert_user_flags(server_data.get("ip_address", ""), notes=new_notes)
+                    db_reader.upsert_user_flags_for_host(
+                        server_data.get("ip_address", ""),
+                        server_data.get("host_type", "S"),
+                        notes=new_notes,
+                    )
                 except Exception:
                     pass
             server_data["notes"] = new_notes
-            messagebox.showinfo("Notes saved", "Notes updated for this host.", parent=detail_window)
-        except Exception as exc:
-            messagebox.showerror("Error", f"Failed to save notes: {exc}", parent=detail_window)
-
-    notes_btn_frame = tk.Frame(detail_window)
-    notes_btn_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
-    tk.Button(notes_btn_frame, text="Save Notes", command=save_notes).pack(side=tk.RIGHT)
+        except Exception:
+            # Silently ignore; we don't want to block dialog close
+            pass
 
     # Pack button frame after notes section
     button_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
 
     def _open_browse_window() -> None:
+        if host_type == "H":
+            _db = None
+            if settings_manager:
+                try:
+                    _db = DatabaseReader(settings_manager.get_database_path())
+                except Exception:
+                    pass
+            detail = _db.get_http_server_detail(ip_address) if _db else None
+            port = int((detail or {}).get("port") or 80)
+            scheme = (detail or {}).get("scheme") or "http"
+            config_path = None
+            if settings_manager:
+                config_path = settings_manager.get_setting('backend.config_path', None)
+                if not config_path and hasattr(settings_manager, "get_smbseek_config_path"):
+                    config_path = settings_manager.get_smbseek_config_path()
+            from gui.components.http_browser_window import HttpBrowserWindow
+            HttpBrowserWindow(
+                parent=detail_window,
+                ip_address=ip_address,
+                port=port,
+                scheme=scheme,
+                db_reader=_db,
+                config_path=config_path,
+                theme=theme,
+                settings_manager=settings_manager,
+            )
+            return
+
         def _clean_share_name(name: str) -> str:
             return name.strip().strip("\\/").strip()
 
@@ -172,13 +227,22 @@ def show_server_detail_popup(parent_window, server_data, theme, settings_manager
     close_button = tk.Button(
         button_frame,
         text="Close",
-        command=detail_window.destroy
+        command=lambda: _persist_notes() or detail_window.destroy()
     )
     theme.apply_to_widget(close_button, "button_primary")
     close_button.pack(side=tk.RIGHT)
 
+    # Ensure notes persist when the window is closed via the window manager
+    def _on_close() -> None:
+        _persist_notes()
+        detail_window.destroy()
+
+    detail_window.protocol("WM_DELETE_WINDOW", _on_close)
+
     # Ensure window is fully rendered before setting grab
     detail_window.update_idletasks()
+    if theme:
+        theme.apply_theme_to_application(detail_window)
     detail_window.grab_set()
 
     # Ensure dialog appears on top and gains focus (critical for VMs)
@@ -203,57 +267,88 @@ def _invoke_callback_or_warn(cb, server_data: Dict[str, Any], parent_window: tk.
 
 
 def _format_server_details(server: Dict[str, Any], probe_section: Optional[str] = None) -> str:
-    """Format server details for display with accessible shares list."""
-    # Extract share information
-    accessible_list = server.get('accessible_shares_list', '')
-    accessible_count = server.get('accessible_shares', 0)
-    total_shares = server.get('total_shares', accessible_count)
+    """Format server details for display. Renders protocol-specific sections for S vs F rows."""
+    host_type = server.get('host_type', 'S')
+    protocol_label = {"S": "SMB", "F": "FTP", "H": "HTTP"}.get(host_type, "Unknown")
 
-    denied_list = server.get('denied_shares_list', []) or []
-    denied_count = server.get('denied_shares_count', 0)
-    denied_display_limit = 20
+    # ---- SMB share access section ----
+    if host_type == "S":
+        accessible_list = server.get('accessible_shares_list', '')
+        accessible_count = server.get('accessible_shares', 0)
+        total_shares = server.get('total_shares', accessible_count)
 
-    # Format accessible shares list
-    if accessible_list and accessible_list.strip():
-        shares = [share.strip() for share in accessible_list.split(',') if share.strip()]
-        if shares:
-            share_list_text = '\n'.join([f'   • {share}' for share in shares])
+        denied_list = server.get('denied_shares_list', []) or []
+        denied_count = server.get('denied_shares_count', 0)
+        denied_display_limit = 20
+
+        if accessible_list and accessible_list.strip():
+            shares = [share.strip() for share in accessible_list.split(',') if share.strip()]
+            share_list_text = '\n'.join([f'   • {share}' for share in shares]) if shares else '   • None accessible'
         else:
             share_list_text = '   • None accessible'
+
+        friendly_status = {
+            None: "Access denied",
+            "NT_STATUS_ACCESS_DENIED": "Access denied",
+            "NT_STATUS_LOGON_FAILURE": "Logon failed",
+            "NT_STATUS_BAD_NETWORK_NAME": "Not found",
+            "NT_STATUS_ACCOUNT_LOCKED_OUT": "Account locked",
+            "NT_STATUS_CONNECTION_RESET": "Connection reset",
+            "TIMEOUT": "Timeout",
+            "ERROR": "Error"
+        }
+
+        denied_lines = []
+        for idx, item in enumerate(denied_list):
+            if idx >= denied_display_limit:
+                break
+            status = friendly_status.get(item.get('auth_status')) or "Error"
+            share_name = item.get('share_name', 'Unknown')
+            denied_lines.append(f"   • {share_name} — {status}")
+
+        if not denied_lines:
+            denied_text = '   • None'
+        else:
+            more = denied_count - len(denied_lines)
+            denied_text = '\n'.join(denied_lines)
+            if more > 0:
+                denied_text += f"\n   … +{more} more not shown"
+
+        access_section = f"""📁 Share Access:
+   Total Shares Discovered: {total_shares}
+   Accessible Shares: {accessible_count}
+
+   Accessible Share List:
+{share_list_text}
+
+🚫 Denied Shares:
+{denied_text}"""
+    elif host_type == "H":
+        # HTTP row — show connection/access info
+        port = server.get('port') or "80"
+        banner = server.get('banner') or "N/A"
+        dirs = server.get('accessible_dirs_count') or server.get('accessible_shares', 0)
+        files = server.get('accessible_files_count') or 0
+        access_section = f"""🌐 HTTP Access:
+   Port: {port}
+   Title/Banner: {banner}
+   Directories: {dirs}
+   Files: {files}"""
     else:
-        share_list_text = '   • None accessible'
+        # FTP row — show connection/access info instead of share tables
+        anon = server.get('anon_accessible')
+        anon_label = "Yes" if anon else ("No" if anon is not None else "Unknown")
+        port = server.get('port') or "21"
+        banner = server.get('banner') or "N/A"
+        access_section = f"""📁 FTP Access:
+   Anonymous: {anon_label}
+   Port: {port}
+   Banner: {banner}"""
 
-    # Format denied shares list
-    friendly_status = {
-        None: "Access denied",
-        "NT_STATUS_ACCESS_DENIED": "Access denied",
-        "NT_STATUS_LOGON_FAILURE": "Logon failed",
-        "NT_STATUS_BAD_NETWORK_NAME": "Not found",
-        "NT_STATUS_ACCOUNT_LOCKED_OUT": "Account locked",
-        "NT_STATUS_CONNECTION_RESET": "Connection reset",
-        "TIMEOUT": "Timeout",
-        "ERROR": "Error"
-    }
-
-    denied_lines = []
-    for idx, item in enumerate(denied_list):
-        if idx >= denied_display_limit:
-            break
-        status = friendly_status.get(item.get('auth_status')) or "Error"
-        share_name = item.get('share_name', 'Unknown')
-        denied_lines.append(f"   • {share_name} — {status}")
-
-    if not denied_lines:
-        denied_text = '   • None'
-    else:
-        more = denied_count - len(denied_lines)
-        denied_text = '\n'.join(denied_lines)
-        if more > 0:
-            denied_text += f"\n   … +{more} more not shown"
-
-    details = f"""📋 SMB Server Details
+    details = f"""📋 Server Details
 
 🖥 Basic Information:
+   Protocol: {protocol_label}
    IP Address: {server.get('ip_address', 'Unknown')}
    Country: {server.get('country', 'Unknown')} ({server.get('country_code', 'Unknown')})
    Authentication: {server.get('auth_method', 'Unknown')}
@@ -264,21 +359,13 @@ def _format_server_details(server: Dict[str, Any], probe_section: Optional[str] 
    Scan Count: {server.get('scan_count', 0)}
    Status: {server.get('status', 'Unknown')}
 
-📁 Share Access:
-   Total Shares Discovered: {total_shares}
-   Accessible Shares: {accessible_count}
-
-   Accessible Share List:
-{share_list_text}
-
-🚫 Denied Shares:
-{denied_text}
+{access_section}
 
 {probe_section or '🔍 Probe:\n   No probe has been run for this host yet.\n'}
 
 📝 Additional Notes:
-   This server was discovered through SMBSeek scanning and shows
-   the authentication method and share accessibility results.
+   This server was discovered during scanning. Protocol-specific access
+   and authentication details are shown above.
 
    For detailed vulnerability information and remediation steps,
    use the Vulnerability Report window.
@@ -339,14 +426,20 @@ def _format_probe_section(probe_result: Optional[Dict[str, Any]]) -> str:
             for directory in directories:
                 dir_name = directory.get("name", "")
                 lines.append(f"      📁 {dir_name}/")
+                subdirs = directory.get("subdirectories", [])
+                if subdirs:
+                    for subdir_name in subdirs:
+                        lines.append(f"         📁 {subdir_name}/")
+                    if directory.get("subdirectories_truncated"):
+                        lines.append("         … additional subdirectories not shown")
                 files = directory.get("files", [])
                 if files:
                     for file_name in files:
                         lines.append(f"         • {file_name}")
                     if directory.get("files_truncated"):
                         lines.append("         … additional files not shown")
-                else:
-                    lines.append("         (no files listed)")
+                if not subdirs and not files:
+                    lines.append("         (no files or subdirectories listed)")
             if share.get("directories_truncated"):
                 lines.append("      … additional directories not shown")
     else:
@@ -526,15 +619,18 @@ def _start_probe(
     if probe_state.get("running"):
         return
 
+    host_type = server_data.get("host_type", "S")
     ip_address = server_data.get('ip_address')
     if not ip_address:
         messagebox.showwarning("Probe Unavailable", "Server IP address is missing.", parent=detail_window)
         return
 
-    accessible_shares = _parse_accessible_shares(server_data.get('accessible_shares_list', ''))
-    if not accessible_shares:
-        messagebox.showinfo("Probe", "No accessible shares to probe for this host.")
-        return
+    accessible_shares: List[str] = []
+    if host_type == "S":
+        accessible_shares = _parse_accessible_shares(server_data.get('accessible_shares_list', ''))
+        if not accessible_shares:
+            messagebox.showinfo("Probe", "No accessible shares to probe for this host.")
+            return
 
     config = config_override or _load_probe_config(settings_manager)
     indicator_patterns = probe_state.get("indicator_patterns") or []
@@ -563,25 +659,122 @@ def _start_probe(
                 except Exception:
                     db_accessor = None
 
-            result = probe_runner.run_probe(
-                ip_address,
-                accessible_shares,
-                max_directories=config["max_directories"],
-                max_files=config["max_files"],
-                timeout_seconds=config["timeout_seconds"],
-                enable_rce_analysis=enable_rce,
-                cancel_event=cancel_event,
-                db_accessor=db_accessor,
-            )
+            if host_type == "F":
+                port = 21
+                try:
+                    port = int(server_data.get("port") or 21)
+                except Exception:
+                    port = 21
+                max_entries = max(
+                    1,
+                    int(config["max_directories"]) * int(config["max_files"]),
+                )
+                result = ftp_probe_runner.run_ftp_probe(
+                    ip_address,
+                    port=port,
+                    max_entries=max_entries,
+                    max_directories=int(config["max_directories"]),
+                    max_files=int(config["max_files"]),
+                    connect_timeout=int(config["timeout_seconds"]),
+                    request_timeout=int(config["timeout_seconds"]),
+                    cancel_event=cancel_event,
+                )
+            elif host_type == "H":
+                detail = db_accessor.get_http_server_detail(ip_address) if db_accessor else None
+                port = int((detail or {}).get("port") or 80)
+                scheme = (detail or {}).get("scheme") or "http"
+                max_entries = max(
+                    1,
+                    int(config["max_directories"]) * int(config["max_files"]),
+                )
+                result = http_probe_runner.run_http_probe(
+                    ip_address,
+                    port=port,
+                    scheme=scheme,
+                    allow_insecure_tls=True,
+                    max_entries=max_entries,
+                    max_directories=int(config["max_directories"]),
+                    max_files=int(config["max_files"]),
+                    connect_timeout=int(config["timeout_seconds"]),
+                    request_timeout=int(config["timeout_seconds"]),
+                    cancel_event=cancel_event,
+                )
+            else:
+                result = probe_runner.run_probe(
+                    ip_address,
+                    accessible_shares,
+                    max_directories=config["max_directories"],
+                    max_files=config["max_files"],
+                    timeout_seconds=config["timeout_seconds"],
+                    enable_rce_analysis=enable_rce,
+                    cancel_event=cancel_event,
+                    db_accessor=db_accessor,
+                )
             if cancel_event.is_set():
                 # Treat as cancelled; skip success callbacks
                 detail_window.after(0, lambda: status_var.set("Probe cancelled."))
                 return
             analysis = probe_patterns.attach_indicator_analysis(result, indicator_patterns)
-            probe_cache.save_probe_result(ip_address, result)
+            if host_type == "F":
+                shares = result.get("shares", [])
+                first_share = shares[0] if shares else {}
+                dir_names = [
+                    d.get("name")
+                    for d in first_share.get("directories", [])
+                    if isinstance(d, dict) and d.get("name")
+                ]
+                server_data["total_shares"] = len(dir_names)
+                server_data["accessible_shares"] = len(dir_names)
+                server_data["accessible_shares_list"] = ",".join(dir_names)
+                if db_accessor:
+                    try:
+                        db_accessor.upsert_probe_cache_for_host(
+                            ip_address,
+                            "F",
+                            status='issue' if analysis.get("is_suspicious") else 'clean',
+                            indicator_matches=len(analysis.get("matches", [])),
+                            snapshot_path=str(ftp_probe_cache.get_ftp_cache_path(ip_address)),
+                            accessible_dirs_count=len(dir_names),
+                            accessible_dirs_list=",".join(dir_names),
+                        )
+                    except Exception:
+                        pass
+            elif host_type == "H":
+                shares = result.get("shares", [])
+                first_share = shares[0] if shares else {}
+                dir_names = [
+                    d.get("name")
+                    for d in first_share.get("directories", [])
+                    if isinstance(d, dict) and d.get("name")
+                ]
+                root_files = first_share.get("root_files", [])
+                total_files = len(root_files) + sum(
+                    len(d.get("files", [])) for d in first_share.get("directories", [])
+                    if isinstance(d, dict)
+                )
+                total = len(dir_names) + total_files
+                server_data["total_shares"] = total
+                server_data["accessible_shares"] = total
+                server_data["accessible_shares_list"] = ",".join(dir_names)
+                if db_accessor:
+                    try:
+                        db_accessor.upsert_probe_cache_for_host(
+                            ip_address,
+                            "H",
+                            status='issue' if analysis.get("is_suspicious") else 'clean',
+                            indicator_matches=len(analysis.get("matches", [])),
+                            snapshot_path=str(http_probe_cache.get_http_cache_path(ip_address)),
+                            accessible_dirs_count=len(dir_names),
+                            accessible_dirs_list=",".join(dir_names),
+                            accessible_files_count=total_files,
+                        )
+                    except Exception:
+                        pass
+            else:
+                probe_cache.save_probe_result(ip_address, result)
             issue_detected = bool(analysis.get("is_suspicious"))
             rce_status = None
-            if enable_rce:
+            if host_type == "S" and enable_rce:
                 rce_analysis = result.get("rce_analysis") or {}
                 rce_status = rce_analysis.get("rce_status")
 
@@ -599,9 +792,23 @@ def _start_probe(
                     probe_button.configure(state=tk.NORMAL)
                 _render_server_details(text_widget, server_data, result)
                 if probe_status_callback:
-                    probe_status_callback(ip_address, 'issue' if issue_detected else 'clean')
+                    try:
+                        probe_status_callback(
+                            ip_address,
+                            'issue' if issue_detected else 'clean',
+                            row_key=server_data.get("row_key"),
+                        )
+                    except TypeError:
+                        probe_status_callback(ip_address, 'issue' if issue_detected else 'clean')
                 if rce_status_callback and rce_status:
-                    rce_status_callback(ip_address, rce_status)
+                    try:
+                        rce_status_callback(
+                            ip_address,
+                            rce_status,
+                            row_key=server_data.get("row_key"),
+                        )
+                    except TypeError:
+                        rce_status_callback(ip_address, rce_status)
 
             detail_window.after(0, on_success)
         except Exception as exc:
@@ -774,7 +981,8 @@ def _open_extract_dialog(
         status_var,
         extract_state,
         extract_button,
-        dialog_config
+        dialog_config,
+        settings_manager,
     )
 
 
@@ -784,7 +992,8 @@ def _start_extract(
     status_var: tk.StringVar,
     extract_state: Dict[str, Any],
     extract_button: Optional[tk.Button],
-    extract_config: Dict[str, Any]
+    extract_config: Dict[str, Any],
+    settings_manager=None,
 ) -> None:
     if extract_state.get("running"):
         return
@@ -862,7 +1071,11 @@ def _start_extract(
                             db_path = settings_manager.get_setting('backend.database_path', None)
                         if db_path:
                             db_reader = DatabaseReader(db_path)
-                            db_reader.upsert_extracted_flag(ip_address, True)
+                            db_reader.upsert_extracted_flag_for_host(
+                                ip_address,
+                                server_data.get("host_type", "S"),
+                                extracted=True,
+                            )
                     server_data["extracted"] = 1
                     server_data["extract_status_emoji"] = "✔"
                 except Exception:

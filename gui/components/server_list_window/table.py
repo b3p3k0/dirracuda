@@ -51,6 +51,7 @@ def create_server_table(parent, theme, callbacks):
         "probe",
         "rce",
         "extracted",
+        "Type",
         "IP Address",
         "Shares",
         "Accessible",
@@ -74,9 +75,10 @@ def create_server_table(parent, theme, callbacks):
     tree.column("probe", width=65, anchor="center")
     tree.column("rce", width=40, anchor="center")  # RCE status column
     tree.column("extracted", width=85, anchor="center")
+    tree.column("Type", width=40, anchor="center")  # Protocol type: S or F
     tree.column("IP Address", width=135, anchor="w")
     tree.column("Shares", width=100, anchor="center")
-    tree.column("Accessible", width=480, anchor="w")  # Reduced to accommodate RCE column
+    tree.column("Accessible", width=440, anchor="w")  # Reduced to accommodate Type column
     tree.column("Denied", width=110, anchor="center")
     tree.column("Last Seen", width=150, anchor="w")
     tree.column("Country", width=100, anchor="w", stretch=True)  # Flexible width
@@ -87,7 +89,8 @@ def create_server_table(parent, theme, callbacks):
         "avoid": "Avoid",
         "probe": "Probed",
         "rce": "RCE",
-        "extracted": "Extracted"
+        "extracted": "Extracted",
+        "Type": "Type",
     }
     for col in columns:
         label = heading_labels.get(col, col)
@@ -97,11 +100,13 @@ def create_server_table(parent, theme, callbacks):
     scrollbar_v = ttk.Scrollbar(
         table_frame,
         orient="vertical",
+        style="Vertical.TScrollbar",
         command=tree.yview
     )
     scrollbar_h = ttk.Scrollbar(
         table_frame,
         orient="horizontal",
+        style="Horizontal.TScrollbar",
         command=tree.xview
     )
 
@@ -132,15 +137,27 @@ def update_table_display(tree, filtered_servers: List[Dict[str, Any]], settings_
     Args:
         tree: TreeView widget to update
         filtered_servers: List of server dictionaries to display
-        settings_manager: Optional settings manager for favorites/avoid status
+        settings_manager: Unused; retained for call-site compatibility.
     """
+    import logging
+    _log = logging.getLogger("server_list_window")
+
     # Clear existing items
     for item in tree.get_children():
         tree.delete(item)
 
     # Add filtered servers
     for server in filtered_servers:
-        # Format display values - updated for enhanced share tracking
+        # Format display values
+        row_key = server.get("row_key") or ""
+        if not row_key:
+            _log.warning("Skipping row with missing row_key: ip=%s", server.get("ip_address"))
+            continue
+        if tree.exists(row_key):
+            _log.warning("Duplicate row_key skipped: %s", row_key)
+            continue
+
+        host_type = server.get("host_type", "S")
         ip_addr = server.get("ip_address", "")
         shares_count = str(server.get("accessible_shares", 0))
         denied_count = str(server.get("denied_shares_count", 0))
@@ -161,27 +178,21 @@ def update_table_display(tree, filtered_servers: List[Dict[str, Any]], settings_
             # Remove any spaces after commas and ensure clean formatting
             accessible_shares = ",".join([share.strip() for share in accessible_shares.split(",") if share.strip()])
 
-        # Determine favorite icon
-        if settings_manager and settings_manager.is_favorite_server(ip_addr):
-            favorite_icon = "✔"
-        else:
-            favorite_icon = "○"
-
-        # Determine avoid icon
-        if settings_manager and settings_manager.is_avoid_server(ip_addr):
-            avoid_icon = "✖"
-        else:
-            avoid_icon = "○"
+        # Favorite/avoid icons come from DB-backed per-protocol row fields (not settings_manager IP list)
+        favorite_icon = "✔" if server.get("favorite", 0) else "○"
+        avoid_icon    = "✖" if server.get("avoid", 0)    else "○"
 
         probe_emoji = server.get("probe_status_emoji", "⚪")
         rce_emoji = server.get("rce_status_emoji", "⭘")
         extracted_emoji = server.get("extract_status_emoji", "○")
 
-        # Insert row with new column structure including favorite, avoid, probe, rce columns
+        # Insert row — iid is the row_key so selection/lookups are protocol-aware
         item_id = tree.insert(
             "",
             "end",
-            values=(favorite_icon, avoid_icon, probe_emoji, rce_emoji, extracted_emoji, ip_addr, shares_count, accessible_shares, denied_count, last_seen, country)
+            iid=row_key,
+            values=(favorite_icon, avoid_icon, probe_emoji, rce_emoji, extracted_emoji,
+                    host_type, ip_addr, shares_count, accessible_shares, denied_count, last_seen, country)
         )
 
         # Add visual indicators for shares count
@@ -205,20 +216,9 @@ def get_selected_server_data(tree, filtered_servers: List[Dict[str, Any]]) -> Li
     Returns:
         List of selected server dictionaries
     """
-    selected_items = tree.selection()
-    selected_ips = []
-
-    for item in selected_items:
-        values = tree.item(item)["values"]
-        if len(values) >= 6:
-            selected_ips.append(values[5])  # IP address at index 5 (after favorite/avoid/probe/rce/extracted)
-
-    selected_servers = [
-        server for server in filtered_servers
-        if server.get("ip_address") in selected_ips
-    ]
-
-    return selected_servers
+    # tree.selection() returns item IDs which are iids == row_keys (set during insert)
+    selected_keys = set(tree.selection())
+    return [s for s in filtered_servers if s.get("row_key") in selected_keys]
 
 
 def sort_table_by_column(tree, column: str, current_sort_column: Optional[str],
@@ -238,8 +238,8 @@ def sort_table_by_column(tree, column: str, current_sort_column: Optional[str],
     Returns:
         tuple: (new_sort_column, new_sort_direction)
     """
-    # Short-circuit for favorite/avoid/rce/extracted columns - no meaningful sort order
-    if column in ("favorite", "avoid", "rce", "extracted"):
+    # Short-circuit for flag/status/type columns - no meaningful sort order
+    if column in ("favorite", "avoid", "rce", "extracted", "Type"):
         return current_sort_column, current_sort_direction
 
     # Cache original header text on first access to this column
@@ -342,26 +342,27 @@ def handle_treeview_click(tree, event, settings_manager, callbacks):
     column = tree.identify_column(event.x)
     item = tree.identify_row(event.y)
 
-    if not item or not settings_manager:
+    if not item:
         return None
 
     values = tree.item(item)["values"]
-    if not values or len(values) < 6:
+    if not values or len(values) < 7:
         return None
 
-    ip_address = values[5]  # IP at index 5 (after favorite/avoid/probe/rce/extracted)
+    # item is the iid == row_key; persistence is handled entirely by callbacks
+    # (host_type lookup happens in window.py _apply_flag_toggle, not here)
 
     # Handle favorite column clicks (#1, since #0 hidden)
     if column == '#1':
-        # Toggle favorite status
-        is_now_favorite = settings_manager.toggle_favorite_server(ip_address)
+        current_icon = values[0]  # favorite at index 0
+        new_favorite = 0 if current_icon == "✔" else 1
+        new_icon = "✔" if new_favorite else "○"
+        tree.set(item, "favorite", new_icon)
         try:
             if callbacks.get('on_favorite_toggle'):
-                callbacks['on_favorite_toggle'](ip_address, is_now_favorite)
+                callbacks['on_favorite_toggle'](item, new_favorite)  # item == row_key
         except Exception:
             pass
-        favorite_icon = "✔" if is_now_favorite else "○"
-        tree.set(item, "favorite", favorite_icon)
 
         # Re-apply filters if favorites-only is enabled
         if callbacks.get('on_favorites_filter_changed'):
@@ -372,19 +373,19 @@ def handle_treeview_click(tree, event, settings_manager, callbacks):
             tree.selection_set(item)
             tree.focus(item)
 
-        return "break"  # Only consume event when we actually toggled
+        return "break"
 
     # Handle avoid column clicks (#2)
     elif column == '#2':
-        # Toggle avoid status
-        is_now_avoided = settings_manager.toggle_avoid_server(ip_address)
+        current_icon = values[1]  # avoid at index 1
+        new_avoid = 0 if current_icon == "✖" else 1
+        new_icon = "✖" if new_avoid else "○"
+        tree.set(item, "avoid", new_icon)
         try:
             if callbacks.get('on_avoid_toggle'):
-                callbacks['on_avoid_toggle'](ip_address, is_now_avoided)
+                callbacks['on_avoid_toggle'](item, new_avoid)  # item == row_key
         except Exception:
             pass
-        avoid_icon = "✖" if is_now_avoided else "○"
-        tree.set(item, "avoid", avoid_icon)
 
         # Re-apply filters if avoid-only is enabled
         if callbacks.get('on_avoid_filter_changed'):
@@ -395,7 +396,7 @@ def handle_treeview_click(tree, event, settings_manager, callbacks):
             tree.selection_set(item)
             tree.focus(item)
 
-        return "break"  # Only consume event when we actually toggled
+        return "break"
 
     return None
 
@@ -432,15 +433,14 @@ def handle_double_click(tree, event, filtered_servers: List[Dict[str, Any]], det
 
     # Use identical logic as "View Details" button - get data from clicked row
     values = tree.item(clicked_item)["values"]
-    if not values or len(values) < 6:
+    if not values or len(values) < 7:
         messagebox.showerror("Error", "Unable to retrieve server data.", parent=parent_window)
         return False
 
-    ip_address = values[5]  # IP Address at index 5 (fav/avoid/probe/rce/extracted columns)
-
-    # Same data lookup as working "View Details" button
+    # clicked_item is the iid == row_key; use it directly for protocol-aware lookup
+    row_key = clicked_item
     server_data = next(
-        (server for server in filtered_servers if server.get("ip_address") == ip_address),
+        (server for server in filtered_servers if server.get("row_key") == row_key),
         None
     )
 

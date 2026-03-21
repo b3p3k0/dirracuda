@@ -12,6 +12,7 @@ for long-running operations to keep the UI responsive.
 import os
 import queue
 import threading
+from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from typing import Callable, Optional
@@ -80,9 +81,11 @@ class DBToolsDialog:
         self.import_path_var = None
         self.import_status_label = None
         self.import_preview_frame = None
+        self.import_source_type = "db"
         self.merge_strategy_var = None
         self.auto_backup_var = None
         self.merge_button = None
+        self.last_completed_import_source: Optional[str] = None
 
         # Stats tab components
         self.stats_labels = {}
@@ -117,6 +120,7 @@ class DBToolsDialog:
         self._create_notebook()
         self._create_progress_frame()
         self._create_button_frame()
+        self.theme.apply_theme_to_application(self.dialog)
 
         # Center dialog
         self._center_dialog()
@@ -173,8 +177,8 @@ class DBToolsDialog:
         self.notebook.add(tab, text="Import & Merge")
 
         # File selection section
-        file_frame = tk.LabelFrame(tab, text="External Database")
-        self.theme.apply_to_widget(file_frame, "main_window")
+        file_frame = tk.LabelFrame(tab, text="External Data Source")
+        self._style_labelframe(file_frame)
         file_frame.pack(fill=tk.X, padx=10, pady=10)
 
         path_frame = tk.Frame(file_frame)
@@ -183,6 +187,7 @@ class DBToolsDialog:
 
         self.import_path_var = tk.StringVar()
         path_entry = tk.Entry(path_frame, textvariable=self.import_path_var, width=50)
+        self.theme.apply_to_widget(path_entry, "entry")
         path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
 
         browse_btn = tk.Button(
@@ -200,20 +205,20 @@ class DBToolsDialog:
         self.import_status_label.pack(anchor=tk.W, padx=10, pady=(0, 10))
 
         # Preview section
-        self.import_preview_frame = tk.LabelFrame(tab, text="Merge Preview")
-        self.theme.apply_to_widget(self.import_preview_frame, "main_window")
+        self.import_preview_frame = tk.LabelFrame(tab, text="Import Preview")
+        self._style_labelframe(self.import_preview_frame)
         self.import_preview_frame.pack(fill=tk.X, padx=10, pady=10)
 
         preview_info = self.theme.create_styled_label(
             self.import_preview_frame,
-            "Select a database file to see merge preview",
+            "Select a database or CSV file to preview",
             "body"
         )
         preview_info.pack(padx=10, pady=10)
 
         # Strategy selection
         strategy_frame = tk.LabelFrame(tab, text="Conflict Resolution Strategy")
-        self.theme.apply_to_widget(strategy_frame, "main_window")
+        self._style_labelframe(strategy_frame)
         strategy_frame.pack(fill=tk.X, padx=10, pady=10)
 
         self.merge_strategy_var = tk.StringVar(value=MergeConflictStrategy.KEEP_NEWER.value)
@@ -232,7 +237,7 @@ class DBToolsDialog:
                 variable=self.merge_strategy_var,
                 value=value
             )
-            self.theme.apply_to_widget(rb, "main_window")
+            self.theme.apply_to_widget(rb, "checkbox")
             rb.pack(anchor=tk.W, padx=10, pady=2)
 
         # Auto-backup checkbox
@@ -242,7 +247,7 @@ class DBToolsDialog:
             text="Auto-backup before merge (recommended)",
             variable=self.auto_backup_var
         )
-        self.theme.apply_to_widget(backup_cb, "main_window")
+        self.theme.apply_to_widget(backup_cb, "checkbox")
         backup_cb.pack(anchor=tk.W, padx=10, pady=(10, 10))
 
         # Merge button
@@ -252,7 +257,7 @@ class DBToolsDialog:
 
         self.merge_button = tk.Button(
             btn_frame,
-            text="Start Merge",
+            text="Start Import",
             command=self._start_merge,
             state=tk.DISABLED
         )
@@ -263,11 +268,13 @@ class DBToolsDialog:
         """Open file browser for import file selection."""
         filetypes = [
             ("SQLite databases", "*.db *.sqlite *.sqlite3"),
+            ("CSV files", "*.csv"),
+            ("Supported import files", "*.db *.sqlite *.sqlite3 *.csv"),
             ("All files", "*.*")
         ]
 
         filename = filedialog.askopenfilename(
-            title="Select SMBSeek Database to Import",
+            title="Select SMBSeek Database or CSV to Import",
             filetypes=filetypes,
             initialdir=os.path.dirname(self.db_path) or "."
         )
@@ -276,11 +283,57 @@ class DBToolsDialog:
             self.import_path_var.set(filename)
             self._validate_import_file(filename)
 
+    def _set_import_preview_text(self, preview_text: str) -> None:
+        """Replace preview panel body text with provided content."""
+        for widget in self.import_preview_frame.winfo_children():
+            widget.destroy()
+        preview_label = self.theme.create_styled_label(
+            self.import_preview_frame, preview_text, "body"
+        )
+        preview_label.pack(padx=10, pady=10, anchor=tk.W)
+
+    def _normalize_import_source_path(self, path: str) -> str:
+        """Return normalized absolute path for import-source identity checks."""
+        return os.path.abspath(os.path.realpath(path))
+
+    def _is_last_completed_import_source(self, path: str) -> bool:
+        """Return True when path matches the last successfully imported source."""
+        if not path or not self.last_completed_import_source:
+            return False
+        return self._normalize_import_source_path(path) == self.last_completed_import_source
+
+    def _lock_import_source_until_changed(self, source_path: str) -> None:
+        """Disable merge button until user selects a different source file."""
+        if source_path:
+            self.last_completed_import_source = self._normalize_import_source_path(source_path)
+
+        if self.merge_button:
+            self.merge_button.config(state=tk.DISABLED, text="Start Import")
+
+        if self.import_status_label:
+            source_name = os.path.basename(source_path) if source_path else "selected source"
+            self.import_status_label.config(
+                text=(
+                    f"Import complete for {source_name}. "
+                    "Select a different source file to import again."
+                )
+            )
+
     def _validate_import_file(self, path: str) -> None:
         """Validate the selected import file."""
         self.import_status_label.config(text="Validating...")
+        self.import_source_type = "db"
+        self.merge_button.config(state=tk.DISABLED, text="Start Import")
 
-        # Validate schema
+        suffix = Path(path).suffix.lower()
+        if suffix == ".csv":
+            self._validate_csv_import_file(path)
+            return
+
+        self._validate_db_import_file(path)
+
+    def _validate_db_import_file(self, path: str) -> None:
+        """Validate and preview database merge source."""
         validation = self.engine.validate_external_schema(path)
 
         if not validation.valid:
@@ -290,9 +343,7 @@ class DBToolsDialog:
             self.merge_button.config(state=tk.DISABLED)
             return
 
-        # Get preview
         preview = self.engine.preview_merge(path)
-
         if not preview.get('valid'):
             self.import_status_label.config(
                 text=f"Preview failed: {'; '.join(preview.get('errors', []))}"
@@ -300,12 +351,8 @@ class DBToolsDialog:
             self.merge_button.config(state=tk.DISABLED)
             return
 
-        self.import_status_label.config(text="Schema validated successfully")
-
-        # Update preview frame
-        for widget in self.import_preview_frame.winfo_children():
-            widget.destroy()
-
+        self.import_source_type = "db"
+        self.import_status_label.config(text="Database schema validated successfully")
         preview_text = (
             f"External servers: {preview['external_servers']}\n"
             f"New servers: {preview['new_servers']}\n"
@@ -314,26 +361,91 @@ class DBToolsDialog:
             f"Total vulnerabilities: {preview['total_vulnerabilities']}\n"
             f"Total file manifests: {preview['total_file_manifests']}"
         )
+        warnings = preview.get('warnings') or []
+        if warnings:
+            preview_text += "\n\nWarnings:\n" + "\n".join(f"- {warning}" for warning in warnings)
 
-        preview_label = self.theme.create_styled_label(
-            self.import_preview_frame, preview_text, "body"
+        self._set_import_preview_text(preview_text)
+        if self._is_last_completed_import_source(path):
+            self.import_status_label.config(
+                text="Import already completed for this source. Select a different source file."
+            )
+            self.merge_button.config(state=tk.DISABLED, text="Start Import")
+            return
+        self.merge_button.config(state=tk.NORMAL, text="Start Merge")
+
+    def _validate_csv_import_file(self, path: str) -> None:
+        """Validate and preview CSV host import source."""
+        preview = self.engine.preview_csv_import(path)
+        if not preview.get('valid'):
+            self.import_status_label.config(
+                text=f"Invalid CSV: {'; '.join(preview.get('errors', []))}"
+            )
+            errors = preview.get('errors') or ["CSV validation failed"]
+            self._set_import_preview_text("CSV preview failed:\n" + "\n".join(f"- {e}" for e in errors))
+            self.merge_button.config(state=tk.DISABLED, text="Start Import")
+            return
+
+        self.import_source_type = "csv"
+        self.import_status_label.config(text="CSV validated successfully")
+
+        protocol_counts = preview.get('protocol_counts') or {}
+        preview_text = (
+            f"CSV rows: {preview['total_rows']}\n"
+            f"Valid rows: {preview['valid_rows']}\n"
+            f"Skipped rows: {preview['skipped_rows']}\n"
+            f"New servers: {preview['new_servers']}\n"
+            f"Existing servers: {preview['existing_servers']}\n"
+            f"Protocol split: "
+            f"S={protocol_counts.get('S', 0)}, "
+            f"F={protocol_counts.get('F', 0)}, "
+            f"H={protocol_counts.get('H', 0)}"
         )
-        preview_label.pack(padx=10, pady=10, anchor=tk.W)
 
-        self.merge_button.config(state=tk.NORMAL)
+        warnings = preview.get('warnings') or []
+        if warnings:
+            preview_text += "\n\nWarnings:\n" + "\n".join(f"- {warning}" for warning in warnings)
+
+        self._set_import_preview_text(preview_text)
+        if self._is_last_completed_import_source(path):
+            self.import_status_label.config(
+                text="Import already completed for this source. Select a different source file."
+            )
+            self.merge_button.config(state=tk.DISABLED, text="Start Import")
+            return
+        self.merge_button.config(state=tk.NORMAL, text="Start CSV Import")
 
     def _start_merge(self) -> None:
         """Start the merge operation."""
         external_path = self.import_path_var.get()
         if not external_path or not os.path.exists(external_path):
-            messagebox.showerror("Error", "Please select a valid database file")
+            messagebox.showerror("Error", "Please select a valid import file")
             return
 
         strategy_value = self.merge_strategy_var.get()
         strategy = MergeConflictStrategy(strategy_value)
         auto_backup = self.auto_backup_var.get()
 
-        # Confirm
+        if self.import_source_type == "csv":
+            if not messagebox.askyesno(
+                "Confirm CSV Import",
+                f"Import CSV hosts from:\n{external_path}\n\n"
+                f"Strategy: {strategy.value}\n"
+                f"Auto-backup: {'Yes' if auto_backup else 'No'}\n\n"
+                "Continue?"
+            ):
+                return
+
+            self._show_progress("Starting CSV import...")
+            self.operation_thread = threading.Thread(
+                target=self._csv_import_worker,
+                args=(external_path, strategy, auto_backup),
+                daemon=True
+            )
+            self.operation_thread.start()
+            return
+
+        # Default: database merge path
         if not messagebox.askyesno(
             "Confirm Merge",
             f"Merge database from:\n{external_path}\n\n"
@@ -344,7 +456,6 @@ class DBToolsDialog:
             return
 
         self._show_progress("Starting merge...")
-
         self.operation_thread = threading.Thread(
             target=self._merge_worker,
             args=(external_path, strategy, auto_backup),
@@ -386,12 +497,16 @@ class DBToolsDialog:
                 )
                 if result.backup_path:
                     summary += f"\n\nBackup created: {os.path.basename(result.backup_path)}"
+                if result.warnings:
+                    summary += "\n\nWarnings:\n" + "\n".join(f"- {warning}" for warning in result.warnings)
 
                 self.operation_queue.put({
                     'type': 'complete',
                     'success': True,
                     'message': summary,
-                    'refresh_needed': True
+                    'refresh_needed': True,
+                    'import_completed': True,
+                    'import_path': external_path,
                 })
             else:
                 self.operation_queue.put({
@@ -402,6 +517,71 @@ class DBToolsDialog:
 
         except Exception as e:
             _logger.exception("Merge operation failed")
+            self.operation_queue.put({
+                'type': 'complete',
+                'success': False,
+                'error': str(e)
+            })
+
+    def _csv_import_worker(
+        self,
+        csv_path: str,
+        strategy: MergeConflictStrategy,
+        auto_backup: bool
+    ) -> None:
+        """Background worker for CSV host import operation."""
+        try:
+            def progress_callback(pct: int, msg: str):
+                self.operation_queue.put({
+                    'type': 'progress',
+                    'percent': pct,
+                    'message': msg
+                })
+
+            result = self.engine.import_csv_hosts(
+                csv_path,
+                strategy=strategy,
+                auto_backup=auto_backup,
+                progress_callback=progress_callback
+            )
+
+            if result.success:
+                summary = (
+                    f"CSV import completed in {result.duration_seconds:.1f}s\n\n"
+                    f"Rows total: {result.rows_total}\n"
+                    f"Rows valid: {result.rows_valid}\n"
+                    f"Rows skipped: {result.rows_skipped}\n"
+                    f"Servers added: {result.servers_added}\n"
+                    f"Servers updated: {result.servers_updated}\n"
+                    f"Servers skipped (strategy): {result.servers_skipped}\n"
+                    f"Protocol rows: "
+                    f"S={result.protocol_counts.get('S', 0)}, "
+                    f"F={result.protocol_counts.get('F', 0)}, "
+                    f"H={result.protocol_counts.get('H', 0)}"
+                )
+                if result.backup_path:
+                    summary += f"\n\nBackup created: {os.path.basename(result.backup_path)}"
+                if result.warnings:
+                    summary += "\n\nWarnings:\n" + "\n".join(f"- {warning}" for warning in result.warnings)
+
+                self.operation_queue.put({
+                    'type': 'complete',
+                    'success': True,
+                    'message': summary,
+                    'refresh_needed': True,
+                    'import_completed': True,
+                    'import_path': csv_path,
+                })
+            else:
+                error_text = '\\n'.join(result.errors) if result.errors else 'CSV import failed'
+                self.operation_queue.put({
+                    'type': 'complete',
+                    'success': False,
+                    'error': error_text
+                })
+
+        except Exception as e:
+            _logger.exception("CSV import operation failed")
             self.operation_queue.put({
                 'type': 'complete',
                 'success': False,
@@ -420,7 +600,7 @@ class DBToolsDialog:
 
         # Export section
         export_frame = tk.LabelFrame(tab, text="Export Database")
-        self.theme.apply_to_widget(export_frame, "main_window")
+        self._style_labelframe(export_frame)
         export_frame.pack(fill=tk.X, padx=10, pady=10)
 
         export_desc = self.theme.create_styled_label(
@@ -441,7 +621,7 @@ class DBToolsDialog:
 
         # Quick backup section
         backup_frame = tk.LabelFrame(tab, text="Quick Backup")
-        self.theme.apply_to_widget(backup_frame, "main_window")
+        self._style_labelframe(backup_frame)
         backup_frame.pack(fill=tk.X, padx=10, pady=10)
 
         backup_desc = self.theme.create_styled_label(
@@ -626,7 +806,7 @@ class DBToolsDialog:
 
         # Additional info section
         info_frame = tk.LabelFrame(tab, text="Details")
-        self.theme.apply_to_widget(info_frame, "main_window")
+        self._style_labelframe(info_frame)
         info_frame.pack(fill=tk.X, padx=10, pady=10)
 
         self.stats_labels['details'] = self.theme.create_styled_label(
@@ -636,7 +816,7 @@ class DBToolsDialog:
 
         # Country distribution
         country_frame = tk.LabelFrame(tab, text="Country Distribution")
-        self.theme.apply_to_widget(country_frame, "main_window")
+        self._style_labelframe(country_frame)
         country_frame.pack(fill=tk.X, padx=10, pady=10)
 
         self.stats_labels['countries'] = self.theme.create_styled_label(
@@ -701,7 +881,7 @@ class DBToolsDialog:
 
         # Vacuum section
         vacuum_frame = tk.LabelFrame(tab, text="Optimize Database")
-        self.theme.apply_to_widget(vacuum_frame, "main_window")
+        self._style_labelframe(vacuum_frame)
         vacuum_frame.pack(fill=tk.X, padx=10, pady=10)
 
         vacuum_desc = self.theme.create_styled_label(
@@ -734,7 +914,7 @@ class DBToolsDialog:
 
         # Purge section
         purge_frame = tk.LabelFrame(tab, text="Purge Old Data")
-        self.theme.apply_to_widget(purge_frame, "main_window")
+        self._style_labelframe(purge_frame)
         purge_frame.pack(fill=tk.X, padx=10, pady=10)
 
         purge_desc = self.theme.create_styled_label(
@@ -756,6 +936,7 @@ class DBToolsDialog:
 
         self.purge_days_var = tk.StringVar(value="30")
         days_entry = tk.Entry(days_frame, textvariable=self.purge_days_var, width=5)
+        self.theme.apply_to_widget(days_entry, "entry")
         days_entry.pack(side=tk.LEFT, padx=5)
 
         days_suffix = self.theme.create_styled_label(days_frame, "days", "body")
@@ -1031,6 +1212,8 @@ class DBToolsDialog:
 
                     if update['success']:
                         messagebox.showinfo("Success", update.get('message', 'Operation completed'))
+                        if update.get('import_completed'):
+                            self._lock_import_source_until_changed(update.get('import_path', ''))
                         if update.get('refresh_needed') and self.on_database_changed:
                             self.on_database_changed()
                         self._refresh_stats()
@@ -1064,6 +1247,19 @@ class DBToolsDialog:
         )
         self.theme.apply_to_widget(self.close_button, "button_secondary")
         self.close_button.pack(side=tk.RIGHT)
+
+    def _style_labelframe(self, frame: tk.LabelFrame) -> None:
+        """Apply consistent themed styling to LabelFrame title and body."""
+        self.theme.apply_to_widget(frame, "main_window")
+        try:
+            frame.configure(
+                bg=self.theme.colors["primary_bg"],
+                fg=self.theme.colors["text"],
+                highlightbackground=self.theme.colors["border"],
+                highlightcolor=self.theme.colors["border"],
+            )
+        except tk.TclError:
+            pass
 
     def _center_dialog(self) -> None:
         """Center dialog on parent window."""

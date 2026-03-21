@@ -47,6 +47,8 @@ class PryDialog:
             self.theme.apply_to_widget(self.dialog, "main_window")
 
         main = tk.Frame(self.dialog)
+        if self.theme:
+            self.theme.apply_to_widget(main, "main_window")
         main.pack(padx=18, pady=16, fill=tk.BOTH, expand=True)
 
         row = 0
@@ -77,7 +79,7 @@ class PryDialog:
         link = tk.Label(
             main,
             text="Need a list? SecLists",
-            fg="#0066cc",
+            fg=self.theme.colors["accent"] if self.theme else "#0066cc",
             cursor="hand2"
         )
         link.grid(row=row, column=1, columnspan=2, sticky="w", pady=(0, 8))
@@ -113,6 +115,8 @@ class PryDialog:
         main.columnconfigure(1, weight=1)
 
         self.dialog.protocol("WM_DELETE_WINDOW", self._on_cancel)
+        if self.theme:
+            self.theme.apply_theme_to_application(self.dialog)
         ensure_dialog_focus(self.dialog, self.parent)
         self.parent.wait_window(self.dialog)
         return self.result

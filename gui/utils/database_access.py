@@ -698,16 +698,16 @@ class DatabaseReader:
         if recent_scan_only:
             # Get the most recent server timestamp (indicates most recent scan activity)
             recent_timestamp_query = """
-            SELECT MAX(last_seen) as recent_timestamp
+            SELECT MAX(datetime(last_seen)) as recent_timestamp
             FROM v_host_share_summary
             """
             timestamp_result = conn.execute(recent_timestamp_query).fetchone()
             if timestamp_result and timestamp_result["recent_timestamp"]:
                 recent_time = timestamp_result["recent_timestamp"]
                 # Filter servers seen within 1 hour of the most recent activity
-                where_clause += " AND last_seen >= datetime(?, '-1 hour')"
+                where_clause += " AND datetime(last_seen) >= datetime(?, '-1 hour')"
                 params.append(recent_time)
-        
+
         # Count query
         count_query = f"""
         SELECT COUNT(*) as total
@@ -732,7 +732,7 @@ class DatabaseReader:
             access_rate_percent
         FROM v_host_share_summary
         {where_clause}
-        ORDER BY last_seen DESC
+        ORDER BY datetime(last_seen) DESC
         """
         data_params = list(params)
         if limit is not None and limit > 0:
@@ -787,7 +787,7 @@ class DatabaseReader:
         if recent_scan_only:
             # Get the most recent server timestamp (indicates most recent scan activity)
             recent_timestamp_query = """
-            SELECT MAX(last_seen) as recent_timestamp
+            SELECT MAX(datetime(last_seen)) as recent_timestamp
             FROM smb_servers
             WHERE status = 'active'
             """
@@ -796,7 +796,7 @@ class DatabaseReader:
                 recent_time = timestamp_result["recent_timestamp"]
                 # Filter servers seen within 1 hour of the most recent activity
                 # This captures servers from the most recent scanning session
-                where_clause += " AND s.last_seen >= datetime(?, '-1 hour')"
+                where_clause += " AND datetime(s.last_seen) >= datetime(?, '-1 hour')"
                 params.append(recent_time)
         
         # Count query
@@ -841,7 +841,7 @@ class DatabaseReader:
             GROUP BY server_id
         ) v_summary ON s.id = v_summary.server_id
         {where_clause}
-        ORDER BY s.last_seen DESC
+        ORDER BY datetime(s.last_seen) DESC
         """
         
         data_params = list(params)
@@ -948,92 +948,324 @@ class DatabaseReader:
 
     def upsert_user_flags(self, ip_address: str, *, favorite: Optional[bool] = None,
                           avoid: Optional[bool] = None, notes: Optional[str] = None) -> None:
-        """Upsert favorite/avoid/notes for a host."""
-        if not ip_address:
-            return
-        with self._get_connection() as conn:
-            cur = conn.cursor()
-            cur.execute("SELECT id FROM smb_servers WHERE ip_address = ?", (ip_address,))
-            row = cur.fetchone()
-            if not row:
-                return
-            server_id = row["id"]
-            cur.execute("SELECT favorite, avoid, notes FROM host_user_flags WHERE server_id = ?", (server_id,))
-            existing = cur.fetchone()
-            fav_val = existing["favorite"] if existing else 0
-            avoid_val = existing["avoid"] if existing else 0
-            notes_val = existing["notes"] if existing else ""
-            if favorite is not None:
-                fav_val = 1 if favorite else 0
-            if avoid is not None:
-                avoid_val = 1 if avoid else 0
-            if notes is not None:
-                notes_val = notes
-            cur.execute(
-                """
-                INSERT INTO host_user_flags (server_id, favorite, avoid, notes, updated_at)
-                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(server_id) DO UPDATE SET
-                    favorite=excluded.favorite,
-                    avoid=excluded.avoid,
-                    notes=excluded.notes,
-                    updated_at=CURRENT_TIMESTAMP
-                """,
-                (server_id, fav_val, avoid_val, notes_val),
-            )
-            conn.commit()
-        self.clear_cache()
+        """SMB-compatible shim. Delegates to upsert_user_flags_for_host with host_type='S'."""
+        self.upsert_user_flags_for_host(ip_address, 'S', favorite=favorite, avoid=avoid, notes=notes)
 
     def upsert_probe_cache(self, ip_address: str, *, status: str, indicator_matches: int,
                            snapshot_path: Optional[str] = None) -> None:
-        """Upsert probe cache info for a host."""
-        if not ip_address:
-            return
-        with self._get_connection() as conn:
-            cur = conn.cursor()
-            cur.execute("SELECT id FROM smb_servers WHERE ip_address = ?", (ip_address,))
-            row = cur.fetchone()
-            if not row:
-                return
-            server_id = row["id"]
-            cur.execute(
-                """
-                INSERT INTO host_probe_cache (server_id, status, last_probe_at, indicator_matches, snapshot_path, updated_at)
-                VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(server_id) DO UPDATE SET
-                    status=excluded.status,
-                    last_probe_at=excluded.last_probe_at,
-                    indicator_matches=excluded.indicator_matches,
-                    snapshot_path=COALESCE(excluded.snapshot_path, host_probe_cache.snapshot_path),
-                    updated_at=CURRENT_TIMESTAMP
-                """,
-                (server_id, status, indicator_matches, snapshot_path),
-            )
-            conn.commit()
-        self.clear_cache()
+        """SMB-compatible shim. Delegates to upsert_probe_cache_for_host with host_type='S'."""
+        self.upsert_probe_cache_for_host(ip_address, 'S', status=status,
+                                         indicator_matches=indicator_matches,
+                                         snapshot_path=snapshot_path)
 
     def upsert_extracted_flag(self, ip_address: str, extracted: bool = True) -> None:
-        """Mark a host as extracted in host_probe_cache."""
-        if not ip_address:
+        """SMB-compatible shim. Delegates to upsert_extracted_flag_for_host with host_type='S'."""
+        self.upsert_extracted_flag_for_host(ip_address, 'S', extracted=extracted)
+
+    # --- Protocol-aware write helpers (dual-protocol routing) ----------------
+
+    def upsert_user_flags_for_host(self, ip_address: str, host_type: str, *,
+                                    favorite: Optional[bool] = None,
+                                    avoid: Optional[bool] = None,
+                                    notes: Optional[str] = None) -> None:
+        """Route favorite/avoid/notes write to SMB or FTP tables based on host_type.
+
+        Args:
+            ip_address: IP address of the host
+            host_type: 'S' for SMB (writes host_user_flags), 'F' for FTP (writes ftp_user_flags)
+            favorite: Set favorite flag, or None to leave unchanged
+            avoid: Set avoid flag, or None to leave unchanged
+            notes: Set notes text, or None to leave unchanged
+
+        No-op for invalid host_type or unknown IP.
+        FTP branch degrades gracefully when ftp_ tables are absent (pre-migration).
+        """
+        host_type = (host_type or "").upper()
+        if not ip_address or host_type not in ('S', 'F', 'H'):
             return
-        with self._get_connection() as conn:
-            cur = conn.cursor()
-            cur.execute("SELECT id FROM smb_servers WHERE ip_address = ?", (ip_address,))
-            row = cur.fetchone()
-            if not row:
+        if host_type == 'S':
+            server_table = 'smb_servers'
+            flags_table  = 'host_user_flags'
+        elif host_type == 'F':
+            server_table = 'ftp_servers'
+            flags_table  = 'ftp_user_flags'
+        else:
+            server_table = 'http_servers'
+            flags_table  = 'http_user_flags'
+        try:
+            with self._get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute(f"SELECT id FROM {server_table} WHERE ip_address = ?", (ip_address,))
+                row = cur.fetchone()
+                if not row:
+                    return
+                server_id = row["id"]
+                cur.execute(
+                    f"SELECT favorite, avoid, notes FROM {flags_table} WHERE server_id = ?",
+                    (server_id,),
+                )
+                existing  = cur.fetchone()
+                fav_val   = existing["favorite"] if existing else 0
+                avoid_val = existing["avoid"]    if existing else 0
+                notes_val = existing["notes"]    if existing else ""
+                if favorite is not None:
+                    fav_val = 1 if favorite else 0
+                if avoid is not None:
+                    avoid_val = 1 if avoid else 0
+                if notes is not None:
+                    notes_val = notes
+                cur.execute(
+                    f"""
+                    INSERT INTO {flags_table} (server_id, favorite, avoid, notes, updated_at)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(server_id) DO UPDATE SET
+                        favorite=excluded.favorite,
+                        avoid=excluded.avoid,
+                        notes=excluded.notes,
+                        updated_at=CURRENT_TIMESTAMP
+                    """,
+                    (server_id, fav_val, avoid_val, notes_val),
+                )
+                conn.commit()
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if host_type == 'F' and "no such table: ftp_" in msg:
+                return  # FTP tables absent — migration not yet run; degrade gracefully
+            if host_type == 'H' and "no such table: http_" in msg:
+                return  # HTTP tables absent — migration not yet run; degrade gracefully
+            raise
+        self.clear_cache()
+
+    def upsert_probe_cache_for_host(self, ip_address: str, host_type: str, *,
+                                     status: str,
+                                     indicator_matches: int,
+                                     snapshot_path: Optional[str] = None,
+                                     accessible_dirs_count: Optional[int] = None,
+                                     accessible_dirs_list: Optional[str] = None,
+                                     accessible_files_count: Optional[int] = None) -> None:
+        """Route probe cache write to SMB, FTP, or HTTP tables based on host_type.
+
+        Args:
+            ip_address: IP address of the host
+            host_type: 'S' for SMB (host_probe_cache), 'F' for FTP (ftp_probe_cache),
+                       'H' for HTTP (http_probe_cache)
+            status: Probe status string
+            indicator_matches: Number of indicator matches found
+            snapshot_path: Optional path to probe snapshot; existing value preserved when None
+            accessible_dirs_count: FTP/HTTP accessible directory count
+            accessible_dirs_list: FTP/HTTP comma-separated directory paths
+            accessible_files_count: HTTP-only accessible file count
+
+        No-op for invalid host_type or unknown IP.
+        FTP/HTTP branches degrade gracefully when tables are absent (pre-migration).
+        """
+        host_type = (host_type or "").upper()
+        if not ip_address or host_type not in ('S', 'F', 'H'):
+            return
+        if host_type == 'S':
+            server_table = 'smb_servers'
+            cache_table  = 'host_probe_cache'
+        elif host_type == 'F':
+            server_table = 'ftp_servers'
+            cache_table  = 'ftp_probe_cache'
+        else:
+            server_table = 'http_servers'
+            cache_table  = 'http_probe_cache'
+        try:
+            with self._get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute(f"SELECT id FROM {server_table} WHERE ip_address = ?", (ip_address,))
+                row = cur.fetchone()
+                if not row:
+                    return
+                server_id = row["id"]
+                if host_type == 'F':
+                    cur.execute(
+                        f"""
+                        INSERT INTO {cache_table}
+                            (server_id, status, last_probe_at, indicator_matches, snapshot_path,
+                             accessible_dirs_count, accessible_dirs_list, updated_at)
+                        VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                        ON CONFLICT(server_id) DO UPDATE SET
+                            status=excluded.status,
+                            last_probe_at=excluded.last_probe_at,
+                            indicator_matches=excluded.indicator_matches,
+                            snapshot_path=COALESCE(excluded.snapshot_path, {cache_table}.snapshot_path),
+                            accessible_dirs_count=COALESCE(excluded.accessible_dirs_count, {cache_table}.accessible_dirs_count),
+                            accessible_dirs_list=COALESCE(excluded.accessible_dirs_list, {cache_table}.accessible_dirs_list),
+                            updated_at=CURRENT_TIMESTAMP
+                        """,
+                        (
+                            server_id,
+                            status,
+                            indicator_matches,
+                            snapshot_path,
+                            accessible_dirs_count,
+                            accessible_dirs_list,
+                        ),
+                    )
+                elif host_type == 'H':
+                    cur.execute(
+                        f"""
+                        INSERT INTO {cache_table}
+                            (server_id, status, last_probe_at, indicator_matches, snapshot_path,
+                             accessible_dirs_count, accessible_dirs_list, accessible_files_count,
+                             updated_at)
+                        VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                        ON CONFLICT(server_id) DO UPDATE SET
+                            status=excluded.status,
+                            last_probe_at=excluded.last_probe_at,
+                            indicator_matches=excluded.indicator_matches,
+                            snapshot_path=COALESCE(excluded.snapshot_path, {cache_table}.snapshot_path),
+                            accessible_dirs_count=COALESCE(excluded.accessible_dirs_count, {cache_table}.accessible_dirs_count),
+                            accessible_dirs_list=COALESCE(excluded.accessible_dirs_list, {cache_table}.accessible_dirs_list),
+                            accessible_files_count=COALESCE(excluded.accessible_files_count, {cache_table}.accessible_files_count),
+                            updated_at=CURRENT_TIMESTAMP
+                        """,
+                        (
+                            server_id,
+                            status,
+                            indicator_matches,
+                            snapshot_path,
+                            accessible_dirs_count,
+                            accessible_dirs_list,
+                            accessible_files_count,
+                        ),
+                    )
+                else:
+                    cur.execute(
+                        f"""
+                        INSERT INTO {cache_table}
+                            (server_id, status, last_probe_at, indicator_matches, snapshot_path, updated_at)
+                        VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, CURRENT_TIMESTAMP)
+                        ON CONFLICT(server_id) DO UPDATE SET
+                            status=excluded.status,
+                            last_probe_at=excluded.last_probe_at,
+                            indicator_matches=excluded.indicator_matches,
+                            snapshot_path=COALESCE(excluded.snapshot_path, {cache_table}.snapshot_path),
+                            updated_at=CURRENT_TIMESTAMP
+                        """,
+                        (server_id, status, indicator_matches, snapshot_path),
+                    )
+                conn.commit()
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if host_type == 'F' and "no such table: ftp_" in msg:
                 return
-            server_id = row["id"]
-            cur.execute(
-                """
-                INSERT INTO host_probe_cache (server_id, extracted, updated_at)
-                VALUES (?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(server_id) DO UPDATE SET
-                    extracted=excluded.extracted,
-                    updated_at=CURRENT_TIMESTAMP
-                """,
-                (server_id, 1 if extracted else 0),
-            )
-            conn.commit()
+            if host_type == 'H' and "no such table: http_" in msg:
+                return
+            raise
+        self.clear_cache()
+
+    def upsert_extracted_flag_for_host(self, ip_address: str, host_type: str,
+                                        extracted: bool = True) -> None:
+        """Route extracted flag write to SMB or FTP tables based on host_type.
+
+        Args:
+            ip_address: IP address of the host
+            host_type: 'S' for SMB (writes host_probe_cache), 'F' for FTP (writes ftp_probe_cache)
+            extracted: True to mark as extracted, False to clear
+
+        No-op for invalid host_type or unknown IP.
+        FTP branch degrades gracefully when ftp_ tables are absent (pre-migration).
+        """
+        host_type = (host_type or "").upper()
+        if not ip_address or host_type not in ('S', 'F', 'H'):
+            return
+        if host_type == 'S':
+            server_table = 'smb_servers'
+            cache_table  = 'host_probe_cache'
+        elif host_type == 'F':
+            server_table = 'ftp_servers'
+            cache_table  = 'ftp_probe_cache'
+        else:
+            server_table = 'http_servers'
+            cache_table  = 'http_probe_cache'
+        try:
+            with self._get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute(f"SELECT id FROM {server_table} WHERE ip_address = ?", (ip_address,))
+                row = cur.fetchone()
+                if not row:
+                    return
+                server_id = row["id"]
+                cur.execute(
+                    f"""
+                    INSERT INTO {cache_table} (server_id, extracted, updated_at)
+                    VALUES (?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(server_id) DO UPDATE SET
+                        extracted=excluded.extracted,
+                        updated_at=CURRENT_TIMESTAMP
+                    """,
+                    (server_id, 1 if extracted else 0),
+                )
+                conn.commit()
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if host_type == 'F' and "no such table: ftp_" in msg:
+                return
+            if host_type == 'H' and "no such table: http_" in msg:
+                return
+            raise
+        self.clear_cache()
+
+    def upsert_rce_status_for_host(self, ip_address: str, host_type: str,
+                                    rce_status: str,
+                                    verdict_summary: Optional[str] = None) -> None:
+        """Route RCE analysis status write to SMB or FTP tables based on host_type.
+
+        Args:
+            ip_address: IP address of the host
+            host_type: 'S' for SMB (writes host_probe_cache), 'F' for FTP (writes ftp_probe_cache)
+            rce_status: Status string ('not_run', 'clean', 'flagged', 'unknown', 'error');
+                        invalid values are normalized to 'unknown'
+            verdict_summary: Optional JSON summary of verdicts
+
+        No-op for invalid host_type or unknown IP.
+        FTP branch degrades gracefully when ftp_ tables are absent (pre-migration).
+        """
+        host_type = (host_type or "").upper()
+        if not ip_address or host_type not in ('S', 'F', 'H'):
+            return
+        valid_statuses = {'not_run', 'clean', 'flagged', 'unknown', 'error'}
+        if rce_status not in valid_statuses:
+            rce_status = 'unknown'
+        if host_type == 'S':
+            server_table = 'smb_servers'
+            cache_table  = 'host_probe_cache'
+        elif host_type == 'F':
+            server_table = 'ftp_servers'
+            cache_table  = 'ftp_probe_cache'
+        else:
+            server_table = 'http_servers'
+            cache_table  = 'http_probe_cache'
+        try:
+            with self._get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute(f"SELECT id FROM {server_table} WHERE ip_address = ?", (ip_address,))
+                row = cur.fetchone()
+                if not row:
+                    return
+                server_id = row["id"]
+                cur.execute(
+                    f"""
+                    INSERT INTO {cache_table} (server_id, rce_status, rce_verdict_summary, updated_at)
+                    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(server_id) DO UPDATE SET
+                        rce_status=excluded.rce_status,
+                        rce_verdict_summary=excluded.rce_verdict_summary,
+                        updated_at=CURRENT_TIMESTAMP
+                    """,
+                    (server_id, rce_status, verdict_summary),
+                )
+                conn.commit()
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if host_type == 'F' and "no such table: ftp_" in msg:
+                return
+            if host_type == 'H' and "no such table: http_" in msg:
+                return
+            raise
         self.clear_cache()
 
     def bulk_delete_servers(self, ip_addresses: List[str]) -> Dict[str, Any]:
@@ -1116,6 +1348,140 @@ class DatabaseReader:
                 "deleted_ips": [],
                 "error": str(e)
             }
+
+    def bulk_delete_rows(self, row_specs: List[Tuple[str, str]]) -> Dict[str, Any]:
+        """
+        Delete rows by (host_type, ip_address) pairs.
+
+        'S' tuples → DELETE FROM smb_servers WHERE ip_address IN (...)
+        'F' tuples → DELETE FROM ftp_servers WHERE ip_address IN (...)
+        No cross-protocol deletion possible by construction.
+
+        Returns:
+            deleted_count:    total rows removed across both protocols
+            deleted_ips:      union of all removed IPs (for display/logging)
+            deleted_smb_ips:  IPs where the SMB row was removed — used by caller
+                              to selectively clear file-based probe cache
+            error:            error string if any partial failure, else None
+        """
+        if not row_specs:
+            return {"deleted_count": 0, "deleted_ips": [], "deleted_smb_ips": [], "error": None}
+
+        smb_ips  = list({ip for ht, ip in row_specs if ht == "S" and ip})
+        ftp_ips  = list({ip for ht, ip in row_specs if ht == "F" and ip})
+        http_ips = list({ip for ht, ip in row_specs if ht == "H" and ip})
+
+        total_deleted_count = 0
+        all_deleted_ips: List[str] = []
+        all_deleted_smb_ips: List[str] = []
+        error_parts: List[str] = []
+
+        def _append_unique(items: List[str]) -> None:
+            for ip in items:
+                if ip not in all_deleted_ips:
+                    all_deleted_ips.append(ip)
+
+        batch_size = 500
+
+        # --- SMB delete ---
+        for i in range(0, len(smb_ips), batch_size):
+            batch = smb_ips[i:i + batch_size]
+            try:
+                with self._get_connection() as conn:
+                    cur = conn.cursor()
+                    placeholders = ','.join('?' * len(batch))
+                    cur.execute(
+                        f"SELECT ip_address FROM smb_servers WHERE ip_address IN ({placeholders})",
+                        batch,
+                    )
+                    found_smb = [row["ip_address"] for row in cur.fetchall()]
+                    if not found_smb:
+                        continue
+                    fp = ','.join('?' * len(found_smb))
+                    # failure_logs has no FK — delete explicitly for SMB IPs only
+                    # TODO: failure_logs has no protocol column (schema is IP-only); deleting
+                    # by SMB IP is safe because failure_logs rows belong to SMB probes.
+                    # FTP-deleted IPs intentionally skip this to avoid clearing SMB sibling data.
+                    cur.execute(f"DELETE FROM failure_logs WHERE ip_address IN ({fp})", found_smb)
+                    cur.execute(f"DELETE FROM smb_servers WHERE ip_address IN ({fp})", found_smb)
+                    n = cur.rowcount
+                    if n > 0:
+                        conn.commit()
+                        _append_unique(found_smb)
+                        all_deleted_smb_ips.extend(found_smb)
+                        total_deleted_count += n
+            except Exception as exc:
+                error_parts.append(f"SMB delete error: {exc}")
+
+        # --- FTP delete ---
+        for i in range(0, len(ftp_ips), batch_size):
+            batch = ftp_ips[i:i + batch_size]
+            try:
+                with self._get_connection() as conn:
+                    cur = conn.cursor()
+                    placeholders = ','.join('?' * len(batch))
+                    cur.execute(
+                        f"SELECT ip_address FROM ftp_servers WHERE ip_address IN ({placeholders})",
+                        batch,
+                    )
+                    found_ftp = [row["ip_address"] for row in cur.fetchall()]
+                    if not found_ftp:
+                        continue
+                    fp = ','.join('?' * len(found_ftp))
+                    # ftp_user_flags and ftp_probe_cache CASCADE from ftp_servers — no explicit delete needed
+                    cur.execute(f"DELETE FROM ftp_servers WHERE ip_address IN ({fp})", found_ftp)
+                    n = cur.rowcount
+                    if n > 0:
+                        conn.commit()
+                        _append_unique(found_ftp)
+                        total_deleted_count += n
+            except sqlite3.OperationalError as exc:
+                if "no such table: ftp_servers" in str(exc).lower():
+                    error_parts.append("FTP tables not yet migrated; FTP rows not deleted.")
+                else:
+                    error_parts.append(f"FTP delete error: {exc}")
+            except Exception as exc:
+                error_parts.append(f"FTP delete error: {exc}")
+
+        # --- HTTP delete ---
+        for i in range(0, len(http_ips), batch_size):
+            batch = http_ips[i:i + batch_size]
+            try:
+                with self._get_connection() as conn:
+                    cur = conn.cursor()
+                    placeholders = ','.join('?' * len(batch))
+                    cur.execute(
+                        f"SELECT ip_address FROM http_servers WHERE ip_address IN ({placeholders})",
+                        batch,
+                    )
+                    found_http = [row["ip_address"] for row in cur.fetchall()]
+                    if not found_http:
+                        continue
+                    fp = ','.join('?' * len(found_http))
+                    # http_user_flags and http_probe_cache CASCADE from http_servers
+                    cur.execute(f"DELETE FROM http_servers WHERE ip_address IN ({fp})", found_http)
+                    n = cur.rowcount
+                    if n > 0:
+                        conn.commit()
+                        _append_unique(found_http)
+                        total_deleted_count += n
+            except sqlite3.OperationalError as exc:
+                if "no such table: http_servers" in str(exc).lower():
+                    error_parts.append("HTTP tables not yet migrated; HTTP rows not deleted.")
+                else:
+                    error_parts.append(f"HTTP delete error: {exc}")
+            except Exception as exc:
+                error_parts.append(f"HTTP delete error: {exc}")
+
+        if total_deleted_count > 0:
+            self.clear_cache()
+
+        return {
+            "deleted_count": total_deleted_count,
+            "deleted_ips": all_deleted_ips,
+            "deleted_smb_ips": all_deleted_smb_ips,
+            "error": "; ".join(error_parts) if error_parts else None,
+        }
 
     def _get_mock_data(self) -> Dict[str, Any]:
         """Get mock data for testing."""
@@ -1297,38 +1663,655 @@ class DatabaseReader:
             row = conn.execute(query, (ip_address,)).fetchone()
             return row["rce_status"] if row and row["rce_status"] else "not_run"
 
-    def upsert_rce_status(self, ip_address: str, rce_status: str,
-                          verdict_summary: Optional[str] = None) -> None:
+    def get_rce_status_for_host(self, ip_address: str, host_type: str) -> str:
         """
-        Update RCE analysis status for a host.
+        Get RCE analysis status for a host, protocol-aware.
 
         Args:
             ip_address: IP address of the host
-            rce_status: Status string ('not_run', 'clean', 'flagged', 'unknown', 'error')
-            verdict_summary: Optional JSON summary of verdicts
+            host_type:  'S' → query host_probe_cache JOIN smb_servers
+                        'F' → query ftp_probe_cache JOIN ftp_servers
+
+        Returns:
+            RCE status string, or 'not_run' if not found or table absent.
         """
-        if not ip_address:
-            return
-        valid_statuses = {'not_run', 'clean', 'flagged', 'unknown', 'error'}
-        if rce_status not in valid_statuses:
-            rce_status = 'unknown'
-        with self._get_connection() as conn:
-            cur = conn.cursor()
-            cur.execute("SELECT id FROM smb_servers WHERE ip_address = ?", (ip_address,))
-            row = cur.fetchone()
-            if not row:
-                return
-            server_id = row["id"]
-            cur.execute(
+        host_type = (host_type or "S").upper()
+        if host_type == "S":
+            return self.get_rce_status(ip_address)
+        if host_type == "H":
+            try:
+                query = """
+                    SELECT pc.rce_status
+                    FROM http_probe_cache pc
+                    JOIN http_servers s ON pc.server_id = s.id
+                    WHERE s.ip_address = ?
                 """
-                INSERT INTO host_probe_cache (server_id, rce_status, rce_verdict_summary, updated_at)
-                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(server_id) DO UPDATE SET
-                    rce_status=excluded.rce_status,
-                    rce_verdict_summary=excluded.rce_verdict_summary,
-                    updated_at=CURRENT_TIMESTAMP
-                """,
-                (server_id, rce_status, verdict_summary),
+                with self._get_connection() as conn:
+                    row = conn.execute(query, (ip_address,)).fetchone()
+                    return row["rce_status"] if row and row["rce_status"] else "not_run"
+            except sqlite3.OperationalError:
+                return "not_run"
+        # FTP path
+        try:
+            query = """
+                SELECT pc.rce_status
+                FROM ftp_probe_cache pc
+                JOIN ftp_servers s ON pc.server_id = s.id
+                WHERE s.ip_address = ?
+            """
+            with self._get_connection() as conn:
+                row = conn.execute(query, (ip_address,)).fetchone()
+                return row["rce_status"] if row and row["rce_status"] else "not_run"
+        except sqlite3.OperationalError:
+            return "not_run"
+
+    def upsert_rce_status(self, ip_address: str, rce_status: str,
+                          verdict_summary: Optional[str] = None) -> None:
+        """SMB-compatible shim. Delegates to upsert_rce_status_for_host with host_type='S'."""
+        self.upsert_rce_status_for_host(ip_address, 'S', rce_status, verdict_summary)
+
+    # ------------------------------------------------------------------
+    # FTP sidecar read methods
+    # All methods guard against OperationalError in case the migration has
+    # not yet fired (e.g. very early startup), returning safe empty values.
+    # ------------------------------------------------------------------
+
+    def get_ftp_servers(self, country: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Return active FTP server rows, optionally filtered by country_code.
+
+        Args:
+            country: ISO 3166-1 alpha-2 code to filter by, or None for all.
+
+        Returns:
+            List of dicts with ftp_servers columns.
+        """
+        query = "SELECT * FROM ftp_servers WHERE status = 'active'"
+        params: tuple = ()
+        if country:
+            query += " AND country_code = ?"
+            params = (country,)
+        query += " ORDER BY last_seen DESC"
+        try:
+            with self._get_connection() as conn:
+                rows = conn.execute(query, params).fetchall()
+                return [dict(row) for row in rows]
+        except sqlite3.OperationalError:
+            return []
+
+    def get_ftp_server_count(self) -> int:
+        """Return count of active FTP servers."""
+        try:
+            with self._get_connection() as conn:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM ftp_servers WHERE status = 'active'"
+                ).fetchone()
+                return row[0] if row else 0
+        except sqlite3.OperationalError:
+            return 0
+
+    def get_http_server_detail(self, ip_address: str) -> Optional[Dict[str, Any]]:
+        """
+        Return {scheme, port} for the most-recently-seen http_servers row for ip_address.
+
+        Returns None if no row found or HTTP tables are absent.
+        Silently swallows all exceptions so missing HTTP tables are non-fatal.
+        """
+        try:
+            with self._get_connection() as conn:
+                row = conn.execute(
+                    "SELECT scheme, port FROM http_servers WHERE ip_address = ? "
+                    "ORDER BY last_seen DESC LIMIT 1",
+                    (ip_address,)
+                ).fetchone()
+                if row:
+                    return {"scheme": row[0] or "http", "port": int(row[1] or 80)}
+                return None
+        except Exception:
+            return None
+
+    def get_host_protocols(self, ip: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Query v_host_protocols for protocol presence per IP.
+
+        Args:
+            ip: Specific IP address to look up, or None to return all hosts.
+
+        Returns:
+            List of dicts with keys: ip_address, has_smb, has_ftp,
+            protocol_presence ('smb_only' | 'ftp_only' | 'both').
+        """
+        query = (
+            "SELECT ip_address, has_smb, has_ftp, protocol_presence"
+            " FROM v_host_protocols"
+        )
+        params: tuple = ()
+        if ip:
+            query += " WHERE ip_address = ?"
+            params = (ip,)
+        try:
+            with self._get_connection() as conn:
+                rows = conn.execute(query, params).fetchall()
+                return [dict(row) for row in rows]
+        except sqlite3.OperationalError:
+            return []
+
+    def get_dual_protocol_count(self) -> int:
+        """Return count of IPs present in both smb_servers and ftp_servers."""
+        try:
+            with self._get_connection() as conn:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM v_host_protocols"
+                    " WHERE has_smb = 1 AND has_ftp = 1"
+                ).fetchone()
+                return row[0] if row else 0
+        except sqlite3.OperationalError:
+            return 0
+
+    # ------------------------------------------------------------------
+    # Unified protocol list — UNION ALL of SMB (S) and FTP (F) rows
+    # ------------------------------------------------------------------
+
+    def get_protocol_server_list(
+        self,
+        limit: Optional[int] = 100,
+        offset: int = 0,
+        country_filter: Optional[str] = None,
+        recent_scan_only: bool = False,
+    ) -> Tuple[List[Dict], int]:
+        """
+        Return a unified, paginated list of SMB and FTP server rows.
+
+        Each row carries a ``host_type`` field ('S' for SMB, 'F' for FTP) and a
+        stable ``row_key`` (e.g. "S:123" / "F:456") so the same IP address can
+        appear twice when both protocols are present without colliding.
+
+        Protocol-specific state (favorite, avoid, probe, extracted, rce) is read
+        from the correct per-protocol table — SMB state never bleeds into FTP
+        rows and vice-versa.
+
+        Args:
+            limit:          Max rows to return. ``None`` returns all rows.
+            offset:         Pagination offset.
+            country_filter: ISO 3166-1 alpha-2 country code, or None for all.
+            recent_scan_only: If True, restrict to rows seen within 1 hour of
+                            the most recent last_seen timestamp across both tables.
+
+        Returns:
+            Tuple of (rows, total_count) where rows is a list of dicts.
+        """
+        if self.mock_mode:
+            return self._get_mock_protocol_list(limit, offset, country_filter)
+
+        try:
+            return self._query_protocol_server_list_smb_ftp_http(
+                limit, offset, country_filter, recent_scan_only
             )
-            conn.commit()
-        self.clear_cache()
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            # Tier-2: HTTP tables absent (pre-HTTP migration) — try SMB+FTP
+            if "no such table: http_" in msg:
+                try:
+                    return self._query_protocol_server_list_smb_ftp(
+                        limit, offset, country_filter, recent_scan_only
+                    )
+                except sqlite3.OperationalError as exc2:
+                    # Tier-3: FTP tables also absent — fall back to SMB-only
+                    if "no such table: ftp_" in str(exc2).lower():
+                        return self._query_protocol_server_list_smb_only(
+                            limit, offset, country_filter, recent_scan_only
+                        )
+                    raise
+            # Tier-3 direct: FTP tables absent without HTTP tables (edge case)
+            elif "no such table: ftp_" in msg:
+                return self._query_protocol_server_list_smb_only(
+                    limit, offset, country_filter, recent_scan_only
+                )
+            raise
+
+    def _build_union_sql(self, smb_where: str, ftp_where: str) -> str:
+        """Return the UNION ALL query string for both protocol halves."""
+        return f"""
+        SELECT
+            'S'                        AS host_type,
+            s.id                       AS protocol_server_id,
+            'S:' || CAST(s.id AS TEXT) AS row_key,
+            s.ip_address,
+            s.country,
+            s.country_code,
+            s.last_seen,
+            s.scan_count,
+            s.status,
+            s.auth_method,
+            COALESCE(sa_sum.total_shares, 0)            AS total_shares,
+            COALESCE(sa_sum.accessible_shares, 0)       AS accessible_shares,
+            COALESCE(sa_sum.accessible_shares_list, '')  AS accessible_shares_list,
+            NULL                                         AS port,
+            NULL                                         AS banner,
+            NULL                                         AS anon_accessible,
+            COALESCE(uf.favorite, 0)                    AS favorite,
+            COALESCE(uf.avoid, 0)                       AS avoid,
+            COALESCE(uf.notes, '')                      AS notes,
+            COALESCE(pc.status, 'unprobed')             AS probe_status,
+            COALESCE(pc.indicator_matches, 0)           AS indicator_matches,
+            COALESCE(pc.extracted, 0)                   AS extracted,
+            COALESCE(pc.rce_status, 'not_run')          AS rce_status
+        FROM smb_servers s
+        LEFT JOIN (
+            SELECT
+                server_id,
+                COUNT(share_name)                                         AS total_shares,
+                COUNT(CASE WHEN accessible = 1 THEN 1 END)               AS accessible_shares,
+                GROUP_CONCAT(
+                    CASE WHEN accessible = 1 THEN share_name END, ','
+                )                                                         AS accessible_shares_list
+            FROM share_access
+            GROUP BY server_id
+        ) sa_sum ON s.id = sa_sum.server_id
+        LEFT JOIN host_user_flags  uf ON uf.server_id = s.id
+        LEFT JOIN host_probe_cache pc ON pc.server_id = s.id
+        {smb_where}
+
+        UNION ALL
+
+        SELECT
+            'F'                        AS host_type,
+            f.id                       AS protocol_server_id,
+            'F:' || CAST(f.id AS TEXT) AS row_key,
+            f.ip_address,
+            f.country,
+            f.country_code,
+            f.last_seen,
+            f.scan_count,
+            f.status,
+            'anonymous'                AS auth_method,
+            COALESCE(
+                fpc.accessible_dirs_count,
+                CASE
+                    WHEN fa_latest.accessible = 1 AND fa_latest.root_listing_available = 1
+                    THEN COALESCE(fa_latest.root_entry_count, 0)
+                    ELSE 0
+                END,
+                0
+            ) AS total_shares,
+            COALESCE(
+                fpc.accessible_dirs_count,
+                CASE
+                    WHEN fa_latest.accessible = 1 AND fa_latest.root_listing_available = 1
+                    THEN COALESCE(fa_latest.root_entry_count, 0)
+                    ELSE 0
+                END,
+                0
+            ) AS accessible_shares,
+            COALESCE(fpc.accessible_dirs_list, '') AS accessible_shares_list,
+            f.port,
+            f.banner,
+            f.anon_accessible,
+            COALESCE(fuf.favorite, 0)           AS favorite,
+            COALESCE(fuf.avoid, 0)              AS avoid,
+            COALESCE(fuf.notes, '')             AS notes,
+            COALESCE(fpc.status, 'unprobed')    AS probe_status,
+            COALESCE(fpc.indicator_matches, 0)  AS indicator_matches,
+            COALESCE(fpc.extracted, 0)          AS extracted,
+            COALESCE(fpc.rce_status, 'not_run') AS rce_status
+        FROM ftp_servers f
+        LEFT JOIN ftp_user_flags  fuf ON fuf.server_id = f.id
+        LEFT JOIN ftp_probe_cache fpc ON fpc.server_id = f.id
+        LEFT JOIN (
+            SELECT
+                a.server_id,
+                a.accessible,
+                a.root_listing_available,
+                a.root_entry_count
+            FROM ftp_access a
+            INNER JOIN (
+                SELECT server_id, MAX(id) AS max_id
+                FROM ftp_access
+                GROUP BY server_id
+            ) latest
+              ON latest.server_id = a.server_id
+             AND latest.max_id    = a.id
+        ) fa_latest ON fa_latest.server_id = f.id
+        {ftp_where}
+        """
+
+    def _build_http_arm(self, http_where: str) -> str:
+        """Return the HTTP SELECT arm for the 3-protocol UNION ALL query.
+
+        Produces the same 23 columns in the same order as _build_union_sql arms.
+        """
+        return f"""
+        SELECT
+            'H'                         AS host_type,
+            hs.id                       AS protocol_server_id,
+            'H:' || CAST(hs.id AS TEXT) AS row_key,
+            hs.ip_address,
+            hs.country,
+            hs.country_code,
+            hs.last_seen,
+            hs.scan_count,
+            hs.status,
+            'http'                      AS auth_method,
+            COALESCE(hpc.accessible_dirs_count, 0) + COALESCE(hpc.accessible_files_count, 0)
+                                        AS total_shares,
+            COALESCE(hpc.accessible_dirs_count, 0) + COALESCE(hpc.accessible_files_count, 0)
+                                        AS accessible_shares,
+            COALESCE(hpc.accessible_dirs_list, '') AS accessible_shares_list,
+            hs.port,
+            hs.banner,
+            0                           AS anon_accessible,
+            COALESCE(huf.favorite, 0)   AS favorite,
+            COALESCE(huf.avoid, 0)      AS avoid,
+            COALESCE(huf.notes, '')     AS notes,
+            COALESCE(hpc.status, 'unprobed')          AS probe_status,
+            COALESCE(hpc.indicator_matches, 0)        AS indicator_matches,
+            COALESCE(hpc.extracted, 0)                AS extracted,
+            COALESCE(hpc.rce_status, 'not_run')       AS rce_status
+        FROM http_servers hs
+        LEFT JOIN http_user_flags  huf ON huf.server_id = hs.id
+        LEFT JOIN http_probe_cache hpc ON hpc.server_id = hs.id
+        {http_where}
+        """
+
+    def _query_protocol_server_list_smb_ftp_http(
+        self,
+        limit: Optional[int],
+        offset: int,
+        country_filter: Optional[str],
+        recent_scan_only: bool,
+    ) -> Tuple[List[Dict], int]:
+        """Execute full UNION ALL query (SMB + FTP + HTTP)."""
+        with self._get_connection() as conn:
+            smb_where  = "WHERE s.status = 'active'"
+            ftp_where  = "WHERE f.status = 'active'"
+            http_where = "WHERE hs.status = 'active'"
+            smb_params:  List[Any] = []
+            ftp_params:  List[Any] = []
+            http_params: List[Any] = []
+
+            if country_filter:
+                smb_where  += " AND s.country_code = ?"
+                ftp_where  += " AND f.country_code = ?"
+                http_where += " AND hs.country_code = ?"
+                smb_params.append(country_filter)
+                ftp_params.append(country_filter)
+                http_params.append(country_filter)
+
+            if recent_scan_only:
+                cutoff = self._get_protocol_recent_cutoff(conn)
+                if cutoff:
+                    smb_where  += " AND datetime(s.last_seen)  >= datetime(?, '-1 hour')"
+                    ftp_where  += " AND datetime(f.last_seen)  >= datetime(?, '-1 hour')"
+                    http_where += " AND datetime(hs.last_seen) >= datetime(?, '-1 hour')"
+                    smb_params.append(cutoff)
+                    ftp_params.append(cutoff)
+                    http_params.append(cutoff)
+
+            union_sql = (
+                self._build_union_sql(smb_where, ftp_where)
+                + "\n        UNION ALL\n"
+                + self._build_http_arm(http_where)
+            )
+            union_params = smb_params + ftp_params + http_params
+
+            total = conn.execute(
+                f"SELECT COUNT(*) AS total FROM ({union_sql}) _u",
+                union_params,
+            ).fetchone()["total"]
+
+            data_sql = (
+                f"SELECT * FROM ({union_sql}) _u"
+                f" ORDER BY datetime(last_seen) DESC, row_key ASC"
+            )
+            data_params = list(union_params)
+            if limit is not None and limit > 0:
+                data_sql += " LIMIT ? OFFSET ?"
+                data_params += [limit, offset]
+
+            rows = conn.execute(data_sql, data_params).fetchall()
+            return [dict(row) for row in rows], total
+
+    def _query_protocol_server_list_smb_ftp(
+        self,
+        limit: Optional[int],
+        offset: int,
+        country_filter: Optional[str],
+        recent_scan_only: bool,
+    ) -> Tuple[List[Dict], int]:
+        """Execute SMB + FTP UNION ALL query (tier-2 fallback when HTTP tables absent)."""
+        with self._get_connection() as conn:
+            smb_where = "WHERE s.status = 'active'"
+            ftp_where = "WHERE f.status = 'active'"
+            smb_params: List[Any] = []
+            ftp_params: List[Any] = []
+
+            if country_filter:
+                smb_where += " AND s.country_code = ?"
+                ftp_where += " AND f.country_code = ?"
+                smb_params.append(country_filter)
+                ftp_params.append(country_filter)
+
+            if recent_scan_only:
+                cutoff = self._get_protocol_recent_cutoff(conn)
+                if cutoff:
+                    smb_where += " AND datetime(s.last_seen) >= datetime(?, '-1 hour')"
+                    ftp_where += " AND datetime(f.last_seen) >= datetime(?, '-1 hour')"
+                    smb_params.append(cutoff)
+                    ftp_params.append(cutoff)
+
+            union_sql = self._build_union_sql(smb_where, ftp_where)
+            union_params = smb_params + ftp_params
+
+            total = conn.execute(
+                f"SELECT COUNT(*) AS total FROM ({union_sql}) _u",
+                union_params,
+            ).fetchone()["total"]
+
+            data_sql = (
+                f"SELECT * FROM ({union_sql}) _u"
+                f" ORDER BY datetime(last_seen) DESC, row_key ASC"
+            )
+            data_params = list(union_params)
+            if limit is not None and limit > 0:
+                data_sql += " LIMIT ? OFFSET ?"
+                data_params += [limit, offset]
+
+            rows = conn.execute(data_sql, data_params).fetchall()
+            return [dict(row) for row in rows], total
+
+    def _query_protocol_server_list_smb_only(
+        self,
+        limit: Optional[int],
+        offset: int,
+        country_filter: Optional[str],
+        recent_scan_only: bool,
+    ) -> Tuple[List[Dict], int]:
+        """SMB-only fallback used when FTP tables are absent."""
+        with self._get_connection() as conn:
+            smb_where = "WHERE s.status = 'active'"
+            smb_params: List[Any] = []
+
+            if country_filter:
+                smb_where += " AND s.country_code = ?"
+                smb_params.append(country_filter)
+
+            if recent_scan_only:
+                row = conn.execute(
+                    "SELECT MAX(datetime(last_seen)) AS cutoff"
+                    " FROM smb_servers WHERE status = 'active'"
+                ).fetchone()
+                cutoff = row["cutoff"] if row else None
+                if cutoff:
+                    smb_where += " AND datetime(s.last_seen) >= datetime(?, '-1 hour')"
+                    smb_params.append(cutoff)
+
+            smb_sql = f"""
+            SELECT
+                'S'                        AS host_type,
+                s.id                       AS protocol_server_id,
+                'S:' || CAST(s.id AS TEXT) AS row_key,
+                s.ip_address,
+                s.country,
+                s.country_code,
+                s.last_seen,
+                s.scan_count,
+                s.status,
+                s.auth_method,
+                COALESCE(sa_sum.total_shares, 0)            AS total_shares,
+                COALESCE(sa_sum.accessible_shares, 0)       AS accessible_shares,
+                COALESCE(sa_sum.accessible_shares_list, '')  AS accessible_shares_list,
+                NULL                                         AS port,
+                NULL                                         AS banner,
+                NULL                                         AS anon_accessible,
+                COALESCE(uf.favorite, 0)                    AS favorite,
+                COALESCE(uf.avoid, 0)                       AS avoid,
+                COALESCE(uf.notes, '')                      AS notes,
+                COALESCE(pc.status, 'unprobed')             AS probe_status,
+                COALESCE(pc.indicator_matches, 0)           AS indicator_matches,
+                COALESCE(pc.extracted, 0)                   AS extracted,
+                COALESCE(pc.rce_status, 'not_run')          AS rce_status
+            FROM smb_servers s
+            LEFT JOIN (
+                SELECT
+                    server_id,
+                    COUNT(share_name)                                         AS total_shares,
+                    COUNT(CASE WHEN accessible = 1 THEN 1 END)               AS accessible_shares,
+                    GROUP_CONCAT(
+                        CASE WHEN accessible = 1 THEN share_name END, ','
+                    )                                                         AS accessible_shares_list
+                FROM share_access
+                GROUP BY server_id
+            ) sa_sum ON s.id = sa_sum.server_id
+            LEFT JOIN host_user_flags  uf ON uf.server_id = s.id
+            LEFT JOIN host_probe_cache pc ON pc.server_id = s.id
+            {smb_where}
+            """
+
+            total = conn.execute(
+                f"SELECT COUNT(*) AS total FROM ({smb_sql}) _u",
+                smb_params,
+            ).fetchone()["total"]
+
+            data_sql = (
+                f"SELECT * FROM ({smb_sql}) _u"
+                f" ORDER BY datetime(last_seen) DESC, row_key ASC"
+            )
+            data_params = list(smb_params)
+            if limit is not None and limit > 0:
+                data_sql += " LIMIT ? OFFSET ?"
+                data_params += [limit, offset]
+
+            rows = conn.execute(data_sql, data_params).fetchall()
+            return [dict(row) for row in rows], total
+
+    def _get_protocol_recent_cutoff(self, conn: sqlite3.Connection) -> Optional[str]:
+        """
+        Return the most recent last_seen timestamp across SMB, FTP, and HTTP servers.
+
+        Uses SQL datetime() normalization to handle mixed timestamp formats
+        (YYYY-MM-DD HH:MM:SS vs YYYY-MM-DDTHH:MM:SS) correctly. Falls back
+        progressively if HTTP or FTP tables are absent (pre-migration).
+        """
+        try:
+            row = conn.execute("""
+                SELECT MAX(datetime(ts)) AS cutoff FROM (
+                    SELECT MAX(datetime(last_seen)) AS ts
+                    FROM smb_servers WHERE status = 'active'
+                    UNION ALL
+                    SELECT MAX(datetime(last_seen)) AS ts
+                    FROM ftp_servers WHERE status = 'active'
+                    UNION ALL
+                    SELECT MAX(datetime(last_seen)) AS ts
+                    FROM http_servers WHERE status = 'active'
+                )
+            """).fetchone()
+            return row["cutoff"] if row else None
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if "no such table: http_" in msg or "no such table: ftp_" in msg:
+                # Fall back to SMB + FTP only (or SMB only if FTP also absent)
+                try:
+                    row = conn.execute("""
+                        SELECT MAX(datetime(ts)) AS cutoff FROM (
+                            SELECT MAX(datetime(last_seen)) AS ts
+                            FROM smb_servers WHERE status = 'active'
+                            UNION ALL
+                            SELECT MAX(datetime(last_seen)) AS ts
+                            FROM ftp_servers WHERE status = 'active'
+                        )
+                    """).fetchone()
+                    return row["cutoff"] if row else None
+                except sqlite3.OperationalError:
+                    row = conn.execute(
+                        "SELECT MAX(datetime(last_seen)) AS cutoff"
+                        " FROM smb_servers WHERE status = 'active'"
+                    ).fetchone()
+                    return row["cutoff"] if row else None
+            raise
+
+    def _get_mock_protocol_list(
+        self,
+        limit: Optional[int],
+        offset: int,
+        country_filter: Optional[str],
+    ) -> Tuple[List[Dict], int]:
+        """Return mock S+F rows for testing without a real database."""
+        rows: List[Dict] = [
+            {
+                "host_type": "S",
+                "protocol_server_id": 1,
+                "row_key": "S:1",
+                "ip_address": "192.168.1.45",
+                "country": "United States",
+                "country_code": "US",
+                "last_seen": "2025-01-21T14:20:00",
+                "scan_count": 3,
+                "status": "active",
+                "auth_method": "Anonymous",
+                "total_shares": 7,
+                "accessible_shares": 7,
+                "accessible_shares_list": "ADMIN$,C$,IPC$,share1,share2,share3,share4",
+                "port": None,
+                "banner": None,
+                "anon_accessible": None,
+                "favorite": 0,
+                "avoid": 0,
+                "notes": "",
+                "probe_status": "unprobed",
+                "indicator_matches": 0,
+                "extracted": 0,
+                "rce_status": "not_run",
+            },
+            {
+                "host_type": "F",
+                "protocol_server_id": 1,
+                "row_key": "F:1",
+                "ip_address": "10.0.0.123",
+                "country": "United Kingdom",
+                "country_code": "GB",
+                "last_seen": "2025-01-21T11:45:00",
+                "scan_count": 1,
+                "status": "active",
+                "auth_method": "anonymous",
+                "total_shares": 0,
+                "accessible_shares": 0,
+                "accessible_shares_list": "",
+                "port": 21,
+                "banner": "220 FTP server ready",
+                "anon_accessible": 1,
+                "favorite": 0,
+                "avoid": 0,
+                "notes": "",
+                "probe_status": "unprobed",
+                "indicator_matches": 0,
+                "extracted": 0,
+                "rce_status": "not_run",
+            },
+        ]
+
+        if country_filter:
+            rows = [r for r in rows if r["country_code"] == country_filter]
+
+        total = len(rows)
+        paginated = rows[offset : (offset + limit) if limit is not None else None]
+        return paginated, total

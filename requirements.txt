@@ -12,6 +12,8 @@ ttkthemes>=3.2.0         # Better tkinter styling
 Pillow>=8.0.0            # Image handling for icons
 python-dateutil>=2.8.0   # Date parsing utilities
 impacket>=0.11.0         # SMB probe enumeration support
+pyasn1>=0.6.3            # Security fix: avoid vulnerable recursion DoS in <=0.6.2
+pyOpenSSL>=26.0.0        # Security fix: reject oversized DTLS cookie callback values
 
 # Testing framework
 pytest>=7.0.0            # Testing framework

@@ -77,6 +77,11 @@ class SMBSeekGUI:
         
         # Settings manager
         self.settings_manager = get_settings_manager()
+        try:
+            preferred_theme = self.settings_manager.get_setting("interface.theme", "light")
+            get_theme().set_mode(preferred_theme)
+        except Exception:
+            get_theme().set_mode("light")
         # Resolve config path preference: prioritize CLI, else settings, else repo conf/config.json
         try:
             if config_path:

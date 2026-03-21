@@ -82,8 +82,8 @@ class SMBSeekOutput:
         self.print_if_not_quiet(f"{self.YELLOW}⚠ {message}{self.RESET}")
     
     def info(self, message: str):
-        """Print info message with cyan color."""
-        self.print_if_not_quiet(f"{self.CYAN}ℹ {message}{self.RESET}")
+        """Print info message with blue color for cross-workflow visual parity."""
+        self.print_if_not_quiet(f"{self.BLUE}ℹ {message}{self.RESET}")
     
     def header(self, message: str):
         """Print header message with bold formatting."""
@@ -102,6 +102,12 @@ class SMBSeekOutput:
     def workflow_complete(self, message: str):
         """Print workflow completion message."""
         self.print_if_not_quiet(f"\n{self.GREEN}🎉 {message}{self.RESET}")
+
+    def raw(self, msg: str) -> None:
+        """Emit msg verbatim with flush=True, respecting --quiet."""
+        if not self.quiet:
+            with self._print_lock:
+                print(msg, flush=True)
 
     def print_rollup_summary(self, summary):
         """

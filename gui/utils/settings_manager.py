@@ -10,6 +10,8 @@ across all application components and provides user preference persistence.
 
 import json
 import os
+import copy
+import threading
 from pathlib import Path
 from typing import Dict, Any, Optional, Callable, List
 from datetime import datetime
@@ -47,11 +49,12 @@ class SettingsManager:
         # Ensure settings directory exists
         self.settings_dir.mkdir(exist_ok=True)
         
-        # Default settings (shared constant)
-        self.default_settings = DEFAULT_GUI_SETTINGS.copy()
+        # Default settings (deep copy so nested values are not shared/mutated globally)
+        self.default_settings = copy.deepcopy(DEFAULT_GUI_SETTINGS)
         
         # Current settings (loaded from file or defaults)
         self.settings = {}
+        self._settings_lock = threading.RLock()
         self._change_callbacks = []
         
         # Load settings from file
@@ -66,23 +69,28 @@ class SettingsManager:
                     file_settings = json.load(f)
                 
                 # Merge with defaults (in case new settings were added)
-                self.settings = self._merge_settings(self.default_settings, file_settings)
+                merged = self._merge_settings(self.default_settings, file_settings)
                 
                 # Migrate legacy settings to new format
-                self.settings = self._migrate_legacy_settings(self.settings)
+                migrated = self._migrate_legacy_settings(merged)
                 
                 # Update last_updated timestamp
-                self.settings['metadata']['last_updated'] = datetime.now().isoformat()
+                migrated.setdefault('metadata', {})
+                migrated['metadata']['last_updated'] = datetime.now().isoformat()
+                with self._settings_lock:
+                    self.settings = migrated
                 
             else:
                 # Use defaults and save them
-                self.settings = self.default_settings.copy()
+                with self._settings_lock:
+                    self.settings = copy.deepcopy(self.default_settings)
                 self.save_settings()
                 
         except Exception as e:
             _logger.warning("Failed to load settings: %s", e)
             _logger.warning("Using default settings")
-            self.settings = self.default_settings.copy()
+            with self._settings_lock:
+                self.settings = copy.deepcopy(self.default_settings)
     
     def save_settings(self) -> bool:
         """
@@ -92,10 +100,14 @@ class SettingsManager:
             True if saved successfully, False otherwise
         """
         try:
-            self.settings['metadata']['last_updated'] = datetime.now().isoformat()
+            with self._settings_lock:
+                self.settings.setdefault('metadata', {})
+                self.settings['metadata']['last_updated'] = datetime.now().isoformat()
+                # Serialize a stable snapshot so concurrent mutations cannot break json.dump
+                settings_snapshot = copy.deepcopy(self.settings)
             
             with open(self.settings_file, 'w', encoding='utf-8') as f:
-                json.dump(self.settings, f, indent=2)
+                json.dump(settings_snapshot, f, indent=2)
             
             return True
             
@@ -115,14 +127,17 @@ class SettingsManager:
             Setting value or default
         """
         keys = key_path.split('.')
-        current = self.settings
-        
-        try:
-            for key in keys:
-                current = current[key]
-            return current
-        except (KeyError, TypeError):
-            return default
+        with self._settings_lock:
+            current = self.settings
+            try:
+                for key in keys:
+                    current = current[key]
+                # Return copies for mutable objects to avoid external in-place mutation.
+                if isinstance(current, (dict, list)):
+                    return copy.deepcopy(current)
+                return current
+            except (KeyError, TypeError):
+                return default
     
     def set_setting(self, key_path: str, value: Any, save_immediately: bool = True) -> bool:
         """
@@ -137,27 +152,29 @@ class SettingsManager:
             True if set successfully, False otherwise
         """
         keys = key_path.split('.')
-        current = self.settings
-        
         try:
-            # Navigate to parent of target key
-            for key in keys[:-1]:
-                if key not in current:
-                    current[key] = {}
-                current = current[key]
-            
-            # Set the final key
-            old_value = current.get(keys[-1])
-            current[keys[-1]] = value
-            
+            with self._settings_lock:
+                current = self.settings
+
+                # Navigate to parent of target key
+                for key in keys[:-1]:
+                    if key not in current or not isinstance(current[key], dict):
+                        current[key] = {}
+                    current = current[key]
+
+                # Set the final key
+                old_value = current.get(keys[-1])
+                stored_value = copy.deepcopy(value) if isinstance(value, (dict, list)) else value
+                current[keys[-1]] = stored_value
+
             # Notify callbacks if value changed
             if old_value != value:
                 self._notify_change_callbacks(key_path, old_value, value)
-            
+
             # Save if requested
             if save_immediately:
                 return self.save_settings()
-            
+
             return True
             
         except Exception as e:
@@ -312,13 +329,14 @@ class SettingsManager:
             True if reset successfully
         """
         try:
-            if section:
-                if section in self.default_settings:
-                    self.settings[section] = self.default_settings[section].copy()
+            with self._settings_lock:
+                if section:
+                    if section in self.default_settings:
+                        self.settings[section] = copy.deepcopy(self.default_settings[section])
+                    else:
+                        return False
                 else:
-                    return False
-            else:
-                self.settings = self.default_settings.copy()
+                    self.settings = copy.deepcopy(self.default_settings)
             
             return self.save_settings()
             
@@ -337,8 +355,10 @@ class SettingsManager:
             True if exported successfully
         """
         try:
+            with self._settings_lock:
+                settings_snapshot = copy.deepcopy(self.settings)
             with open(export_path, 'w', encoding='utf-8') as f:
-                json.dump(self.settings, f, indent=2)
+                json.dump(settings_snapshot, f, indent=2)
             return True
             
         except Exception as e:
@@ -360,14 +380,16 @@ class SettingsManager:
             with open(import_path, 'r', encoding='utf-8') as f:
                 imported_settings = json.load(f)
             
-            if merge:
-                self.settings = self._merge_settings(self.settings, imported_settings)
-            else:
-                # Validate imported settings have required structure
-                if 'metadata' not in imported_settings:
-                    imported_settings['metadata'] = self.default_settings['metadata'].copy()
-                
-                self.settings = imported_settings
+            with self._settings_lock:
+                if merge:
+                    self.settings = self._merge_settings(self.settings, imported_settings)
+                else:
+                    # Validate imported settings have required structure
+                    if 'metadata' not in imported_settings:
+                        imported_settings['metadata'] = copy.deepcopy(
+                            self.default_settings.get('metadata', {})
+                        )
+                    self.settings = imported_settings
             
             return self.save_settings()
             
@@ -382,8 +404,9 @@ class SettingsManager:
         Args:
             callback: Function to call when settings change (key_path, old_value, new_value)
         """
-        if callback not in self._change_callbacks:
-            self._change_callbacks.append(callback)
+        with self._settings_lock:
+            if callback not in self._change_callbacks:
+                self._change_callbacks.append(callback)
     
     def unregister_change_callback(self, callback: Callable[[str, Any, Any], None]) -> None:
         """
@@ -392,8 +415,9 @@ class SettingsManager:
         Args:
             callback: Callback function to remove
         """
-        if callback in self._change_callbacks:
-            self._change_callbacks.remove(callback)
+        with self._settings_lock:
+            if callback in self._change_callbacks:
+                self._change_callbacks.remove(callback)
     
     def get_database_path(self) -> str:
         """
@@ -476,7 +500,9 @@ class SettingsManager:
             old_value: Previous value
             new_value: New value
         """
-        for callback in self._change_callbacks:
+        with self._settings_lock:
+            callbacks = list(self._change_callbacks)
+        for callback in callbacks:
             try:
                 callback(key_path, old_value, new_value)
             except Exception as e:
@@ -484,27 +510,71 @@ class SettingsManager:
 
     def _auto_fix_backend_paths(self) -> None:
         """
-        If stored backend/config/db paths point to a non-existent nested smbseek/, try to fix them to cwd.
+        Keep backend/config/database paths aligned with the active checkout.
+
+        Behavior:
+        - If stored backend/config are missing, fall back to cwd when it looks like
+          a valid smbseek checkout.
+        - If stored backend exists but points at a different checkout than cwd, prefer
+          cwd so scans run against the currently launched repository.
         """
         try:
             backend_path = Path(self.get_backend_path()).expanduser()
             config_path = Path(self.get_setting('backend.config_path', '')).expanduser()
             db_path = Path(self.get_setting('backend.database_path', '')).expanduser()
 
-            # Already valid paths; nothing to do
-            if backend_path.exists() and config_path.exists():
+            candidate_backend = Path.cwd()
+            candidate_config = candidate_backend / "conf" / "config.json"
+            candidate_db = candidate_backend / "smbseek.db"
+            candidate_smbseek = candidate_backend / "smbseek"
+            candidate_ftpseek = candidate_backend / "ftpseek"
+
+            candidate_is_checkout = (
+                candidate_backend.exists()
+                and candidate_config.exists()
+                and candidate_smbseek.exists()
+                and candidate_ftpseek.exists()
+            )
+
+            # Nothing usable in cwd; keep existing settings as-is.
+            if not candidate_is_checkout:
                 return
 
-            cwd = Path.cwd()
-            candidate_backend = cwd
-            candidate_config = cwd / "conf" / "config.json"
-            candidate_db = cwd / "smbseek.db"
+            backend_exists = backend_path.exists()
+            config_exists = config_path.exists()
 
-            if candidate_config.exists():
+            try:
+                backend_resolved = backend_path.resolve() if backend_exists else None
+            except Exception:
+                backend_resolved = None
+            try:
+                candidate_resolved = candidate_backend.resolve()
+            except Exception:
+                candidate_resolved = candidate_backend
+
+            # Missing stored paths -> repair to cwd checkout.
+            if not (backend_exists and config_exists):
                 self.set_backend_path(str(candidate_backend), validate=False)
                 self.set_setting('backend.config_path', str(candidate_config))
                 if not db_path.exists():
-                    self.set_setting('backend.database_path', str(candidate_db))
+                    self.set_database_path(str(candidate_db), validate=False)
+                return
+
+            # Stored backend points to a different checkout; prefer cwd.
+            if backend_resolved is not None and backend_resolved != candidate_resolved:
+                self.set_backend_path(str(candidate_backend), validate=False)
+                self.set_setting('backend.config_path', str(candidate_config))
+
+                # Repoint DB if it is missing or still tied to old backend root.
+                db_missing = not db_path.exists()
+                db_under_old_backend = False
+                if not db_missing:
+                    try:
+                        db_under_old_backend = str(db_path.resolve()).startswith(str(backend_resolved))
+                    except Exception:
+                        db_under_old_backend = str(db_path).startswith(str(backend_path))
+                if db_missing or db_under_old_backend:
+                    self.set_database_path(str(candidate_db), validate=False)
         except Exception:
             # Fail silently; worst case the user corrects via dialog
             pass
@@ -744,18 +814,36 @@ class SettingsManager:
 
     # Probe status helpers -------------------------------------------------
 
+    def _get_probe_status_store_locked(self) -> Dict[str, str]:
+        """
+        Return mutable probe status map while settings lock is held.
+
+        Creates missing/invalid nested structures on demand.
+        """
+        probe_section = self.settings.get('probe')
+        if not isinstance(probe_section, dict):
+            probe_section = {}
+            self.settings['probe'] = probe_section
+
+        status_map = probe_section.get('status_by_ip')
+        if not isinstance(status_map, dict):
+            status_map = {}
+            probe_section['status_by_ip'] = status_map
+
+        return status_map
+
     def get_probe_status_map(self) -> Dict[str, str]:
         """Return immutable copy of probe status map (ip -> status)."""
-        status_map = self.get_setting('probe.status_by_ip', {}) or {}
-        # Return a shallow copy to prevent accidental in-place edits.
-        return dict(status_map)
+        with self._settings_lock:
+            # Return a shallow copy to prevent accidental in-place edits.
+            return dict(self._get_probe_status_store_locked())
 
     def get_probe_status(self, ip_address: str) -> str:
         """Return stored status for an IP (defaults to 'unprobed')."""
         if not ip_address:
             return 'unprobed'
-        status_map = self.get_setting('probe.status_by_ip', {}) or {}
-        return status_map.get(ip_address, 'unprobed')
+        with self._settings_lock:
+            return self._get_probe_status_store_locked().get(ip_address, 'unprobed')
 
     def set_probe_status(self, ip_address: str, status: str) -> None:
         """Persist probe status for an IP."""
@@ -764,11 +852,16 @@ class SettingsManager:
         allowed = {'unprobed', 'clean', 'issue'}
         if status not in allowed:
             status = 'unprobed'
-        status_map = self.get_setting('probe.status_by_ip', {}) or {}
-        if status_map.get(ip_address) == status:
-            return
-        status_map[ip_address] = status
-        self.set_setting('probe.status_by_ip', status_map)
+
+        changed = False
+        with self._settings_lock:
+            status_map = self._get_probe_status_store_locked()
+            if status_map.get(ip_address) != status:
+                status_map[ip_address] = status
+                changed = True
+
+        if changed:
+            self.save_settings()
 
     def add_avoid_server(self, ip: Optional[str]) -> None:
         """

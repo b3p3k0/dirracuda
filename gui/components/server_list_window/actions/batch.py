@@ -32,7 +32,17 @@ from shared.db_migrations import run_migrations
 from gui.components.server_list_window import export, details, filters, table
 from gui.components.batch_extract_dialog import BatchExtractSettingsDialog
 from .batch_status import ServerListWindowBatchStatusMixin
-from gui.utils import probe_cache, probe_patterns, probe_runner, extract_runner, pry_runner
+from gui.utils import (
+    probe_cache,
+    probe_patterns,
+    probe_runner,
+    extract_runner,
+    pry_runner,
+    ftp_probe_runner,
+    ftp_probe_cache,
+    http_probe_runner,
+    http_probe_cache,
+)
 from shared.quarantine import create_quarantine_dir
 
 from .batch_operations import ServerListWindowBatchOperationsMixin
@@ -48,16 +58,16 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
             messagebox.showinfo("Too many tasks", "Please wait for an existing task to finish before starting another.")
             return
 
-        # Enforce per-host exclusivity
-        active_hosts = set()
-        for job in self.active_jobs.values():
-            for t in job.get("targets", []):
-                ip = t.get("ip_address")
-                if ip:
-                    active_hosts.add(ip)
+        # Enforce per-host exclusivity (row_key-based; falls back to ip_address)
+        active_row_keys = {
+            t.get("row_key") or t.get("ip_address")
+            for job in self.active_jobs.values()
+            for t in job.get("targets", [])
+        }
         for t in targets:
-            ip = t.get("ip_address")
-            if ip and ip in active_hosts:
+            key = t.get("row_key") or t.get("ip_address")
+            if key and key in active_row_keys:
+                ip = t.get("ip_address", key)
                 messagebox.showinfo("Task already running", f"A task is already running for host {ip}. Please wait or stop it first.")
                 return
 
@@ -68,12 +78,10 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
 
         job_id = f"{job_type}-{len(self.active_jobs)+1}-{int(threading.get_ident())}"
 
-        # Unit tracking: probe counts shares, others count targets
+        # Unit tracking: all job types count targets (1 unit per target).
+        # Share counts appear in per-target notes, not in progress math.
         unit_label = "targets"
         total_units = len(targets)
-        if job_type == "probe":
-            unit_label = "shares"
-            total_units = sum(len(t.get("shares", []) or []) for t in targets) or len(targets)
 
         job_record = {
             "id": job_id,
@@ -109,10 +117,12 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
             )
             job_record["dialog"] = dialog
         elif job_type == "probe":
+            est_shares = sum(len(t.get("shares", []) or []) for t in targets)
             dialog = self._init_batch_status_dialog(
                 "probe",
                 {
-                    "Shares": str(total_units),
+                    "Targets": str(total_units),
+                    "Shares (est)": str(est_shares),
                     "Workers": str(worker_count),
                     "Max dirs/share": str(options.get("limits", {}).get("max_directories", "")),
                     "Max files/dir": str(options.get("limits", {}).get("max_files", "")),
@@ -170,6 +180,151 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
 
     def _execute_probe_target(self, job_id: str, target: Dict[str, Any], options: Dict[str, Any], cancel_event: threading.Event) -> Dict[str, Any]:
         ip_address = target.get("ip_address")
+        host_type = target.get("host_type", "S")
+        row_key = target.get("row_key")
+
+        if host_type == "F":
+            port = 21
+            try:
+                port = int((target.get("data") or {}).get("port") or 21)
+            except Exception:
+                port = 21
+            limits = options.get("limits", {}) or {}
+            max_entries = max(
+                1,
+                int(limits.get("max_directories", 3)) * int(limits.get("max_files", 5)),
+            )
+            snapshot = ftp_probe_runner.run_ftp_probe(
+                ip_address,
+                port=port,
+                max_entries=max_entries,
+                max_directories=int(limits.get("max_directories", 3)),
+                max_files=int(limits.get("max_files", 5)),
+                connect_timeout=int(limits.get("timeout_seconds", 10)),
+                request_timeout=int(limits.get("timeout_seconds", 10)),
+                cancel_event=cancel_event,
+            )
+            analysis = probe_patterns.attach_indicator_analysis(snapshot, self.indicator_patterns)
+            issue_detected = bool(analysis.get("is_suspicious"))
+            status = "issue" if issue_detected else "clean"
+            shares = snapshot.get("shares", [])
+            first_share = shares[0] if shares else {}
+            dir_names = [
+                d.get("name")
+                for d in first_share.get("directories", [])
+                if isinstance(d, dict) and d.get("name")
+            ]
+            accessible_dirs_count = len(dir_names)
+            accessible_dirs_list = ",".join(dir_names)
+            snapshot_path = str(ftp_probe_cache.get_ftp_cache_path(ip_address))
+
+            for server in self.all_servers:
+                if server.get("row_key") == row_key:
+                    server["total_shares"] = accessible_dirs_count
+                    server["accessible_shares"] = accessible_dirs_count
+                    server["accessible_shares_list"] = accessible_dirs_list
+                    break
+
+            self._handle_probe_status_update(ip_address, status, row_key=row_key)
+            try:
+                self.db_reader.upsert_probe_cache_for_host(
+                    ip_address,
+                    host_type,
+                    status=status,
+                    indicator_matches=len(analysis.get("matches", [])),
+                    snapshot_path=snapshot_path,
+                    accessible_dirs_count=accessible_dirs_count,
+                    accessible_dirs_list=accessible_dirs_list,
+                )
+            except Exception:
+                pass
+
+            notes: List[str] = [f"{accessible_dirs_count} directorie(s)"]
+            if issue_detected:
+                notes.append("Indicators detected")
+            return {
+                "ip_address": ip_address,
+                "action": "probe",
+                "status": "success",
+                "notes": ", ".join(notes),
+                "units": 1,
+            }
+
+        if host_type == "H":
+            detail = self.db_reader.get_http_server_detail(ip_address) if self.db_reader else None
+            port = int((detail or {}).get("port") or 80)
+            scheme = (detail or {}).get("scheme") or "http"
+            limits = options.get("limits", {}) or {}
+            max_entries = max(
+                1,
+                int(limits.get("max_directories", 3)) * int(limits.get("max_files", 5)),
+            )
+            snapshot = http_probe_runner.run_http_probe(
+                ip_address,
+                port=port,
+                scheme=scheme,
+                allow_insecure_tls=True,
+                max_entries=max_entries,
+                max_directories=int(limits.get("max_directories", 3)),
+                max_files=int(limits.get("max_files", 5)),
+                connect_timeout=int(limits.get("timeout_seconds", 10)),
+                request_timeout=int(limits.get("timeout_seconds", 10)),
+                cancel_event=cancel_event,
+            )
+            analysis = probe_patterns.attach_indicator_analysis(snapshot, self.indicator_patterns)
+            issue_detected = bool(analysis.get("is_suspicious"))
+            status = "issue" if issue_detected else "clean"
+            shares = snapshot.get("shares", [])
+            first_share = shares[0] if shares else {}
+            dir_names = [
+                d.get("name")
+                for d in first_share.get("directories", [])
+                if isinstance(d, dict) and d.get("name")
+            ]
+            root_files = first_share.get("root_files", [])
+            total_files = len(root_files) + sum(
+                len(d.get("files", [])) for d in first_share.get("directories", [])
+                if isinstance(d, dict)
+            )
+            total = len(dir_names) + total_files
+            accessible_dirs_count = len(dir_names)
+            accessible_dirs_list = ",".join(dir_names)
+            snapshot_path = str(http_probe_cache.get_http_cache_path(ip_address))
+
+            for server in self.all_servers:
+                if server.get("row_key") == row_key:
+                    server["total_shares"] = total
+                    server["accessible_shares"] = total
+                    server["accessible_shares_list"] = accessible_dirs_list
+                    break
+
+            self._handle_probe_status_update(ip_address, status, row_key=row_key)
+            try:
+                self.db_reader.upsert_probe_cache_for_host(
+                    ip_address,
+                    host_type,
+                    status=status,
+                    indicator_matches=len(analysis.get("matches", [])),
+                    snapshot_path=snapshot_path,
+                    accessible_dirs_count=accessible_dirs_count,
+                    accessible_dirs_list=accessible_dirs_list,
+                    accessible_files_count=total_files,
+                )
+            except Exception:
+                pass
+
+            notes_h: List[str] = [f"{total} entries"]
+            if issue_detected:
+                notes_h.append("Indicators detected")
+            return {
+                "ip_address": ip_address,
+                "action": "probe",
+                "status": "success",
+                "notes": ", ".join(notes_h),
+                "units": 1,
+            }
+
+        # SMB probe path
         shares = target.get("shares", [])
         limits = options.get("limits", {})
         max_dirs = max(1, int(limits.get("max_directories", 3)))
@@ -199,7 +354,8 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                 "ip_address": ip_address,
                 "action": "probe",
                 "status": status,
-                "notes": str(exc)
+                "notes": str(exc),
+                "units": 1,
             }
 
         if cancel_event.is_set():
@@ -208,10 +364,11 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
         probe_cache.save_probe_result(ip_address, result)
         analysis = probe_patterns.attach_indicator_analysis(result, self.indicator_patterns)
         issue_detected = bool(analysis.get("is_suspicious"))
-        self._handle_probe_status_update(ip_address, 'issue' if issue_detected else 'clean')
+        self._handle_probe_status_update(ip_address, 'issue' if issue_detected else 'clean', row_key=row_key)
         try:
-            self.db_reader.upsert_probe_cache(
+            self.db_reader.upsert_probe_cache_for_host(
                 ip_address,
+                host_type,
                 status='issue' if issue_detected else 'clean',
                 indicator_matches=len(analysis.get("matches", [])),
                 snapshot_path=probe_cache.get_probe_result_path(ip_address) if hasattr(probe_cache, "get_probe_result_path") else None
@@ -230,7 +387,7 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
             rce_status = result["rce_analysis"].get("rce_status", "not_run")
             notes.append(f"RCE: {rce_status}")
             try:
-                self._handle_rce_status_update(ip_address, rce_status)
+                self._handle_rce_status_update(ip_address, rce_status, row_key=row_key)
             except Exception:
                 pass
 
@@ -242,11 +399,23 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
             "action": "probe",
             "status": "success",
             "notes": ", ".join(notes),
-            "units": max(share_count, 1)
+            "units": 1,
         }
 
     def _execute_extract_target(self, job_id: str, target: Dict[str, Any], options: Dict[str, Any], cancel_event: threading.Event) -> Dict[str, Any]:
         ip_address = target.get("ip_address")
+        host_type = target.get("host_type", "S")
+        row_key = target.get("row_key")
+
+        if host_type in ("F", "H"):
+            protocol_name = {"F": "FTP", "H": "HTTP"}.get(host_type, host_type)
+            return {
+                "ip_address": ip_address,
+                "action": "extract",
+                "status": "skipped",
+                "notes": f"{protocol_name} extract not yet supported",
+            }
+
         shares = target.get("shares", [])
         if not shares:
             return {
@@ -320,7 +489,7 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
         note_parts.append(f"log: {log_path}")
 
         # Mark host as extracted (successful run, even if zero files)
-        self._handle_extracted_update(ip_address)
+        self._handle_extracted_update(ip_address, row_key=row_key, host_type=host_type)
 
         # Update dialog progress (per target)
         self.window.after(0, self._update_batch_status_dialog, dialog, 1, self.active_jobs.get(job_id, {}).get("total"), f"Extracted {ip_address}")

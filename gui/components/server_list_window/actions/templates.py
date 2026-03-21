@@ -34,6 +34,24 @@ class ServerListWindowTemplateMixin:
             return []
         return [self.country_code_list[i] for i in self.country_listbox.curselection()]
 
+    def _get_selected_protocol_types(self):
+        """Return selected protocol host_type values in S/F/H form."""
+        selected = []
+        if bool(self.protocol_smb.get()):
+            selected.append("S")
+        if bool(self.protocol_ftp.get()):
+            selected.append("F")
+        if bool(self.protocol_http.get()):
+            selected.append("H")
+        return selected
+
+    def _set_selected_protocol_types(self, selected_types):
+        """Apply selected protocol host_type values to UI vars."""
+        selected = {str(v).upper() for v in (selected_types or [])}
+        self.protocol_smb.set("S" in selected)
+        self.protocol_ftp.set("F" in selected)
+        self.protocol_http.set("H" in selected)
+
     def _toggle_show_all_results(self) -> None:
         """Toggle showing all results when in recent-filter mode."""
         self.filter_recent = not self.filter_recent
@@ -49,6 +67,9 @@ class ServerListWindowTemplateMixin:
         self.exclude_avoid.set(False)
         self.probed_only.set(False)
         self.exclude_compromised.set(False)
+        self.protocol_smb.set(True)
+        self.protocol_ftp.set(True)
+        self.protocol_http.set(True)
         self.country_filter_text.set("")
 
         if self.country_listbox:
@@ -113,6 +134,7 @@ class ServerListWindowTemplateMixin:
             self.exclude_avoid.set(prefs.get('exclude_avoid', False))
             self.probed_only.set(prefs.get('probed_only', False))
             self.exclude_compromised.set(prefs.get('exclude_compromised', False))
+            self._set_selected_protocol_types(prefs.get('protocol_types', ['S', 'F', 'H']))
         except Exception:
             # Graceful degradation if settings are malformed
             pass
@@ -129,7 +151,8 @@ class ServerListWindowTemplateMixin:
             'favorites_only': bool(self.favorites_only.get()),
             'exclude_avoid': bool(self.exclude_avoid.get()),
             'probed_only': bool(self.probed_only.get()),
-            'exclude_compromised': bool(self.exclude_compromised.get())
+            'exclude_compromised': bool(self.exclude_compromised.get()),
+            'protocol_types': self._get_selected_protocol_types(),
         }
 
         if self.country_listbox:
@@ -189,6 +212,7 @@ class ServerListWindowTemplateMixin:
             'exclude_avoid': bool(self.exclude_avoid.get()),
             'probed_only': bool(self.probed_only.get()),
             'exclude_compromised': bool(self.exclude_compromised.get()),
+            'protocol_types': self._get_selected_protocol_types(),
             'country_codes': self._get_selected_country_codes(),
             'advanced_mode': bool(self.is_advanced_mode),
         }
@@ -202,6 +226,7 @@ class ServerListWindowTemplateMixin:
         self.exclude_avoid.set(bool(state.get('exclude_avoid', False)))
         self.probed_only.set(bool(state.get('probed_only', False)))
         self.exclude_compromised.set(bool(state.get('exclude_compromised', False)))
+        self._set_selected_protocol_types(state.get('protocol_types', ['S', 'F', 'H']))
 
         if self.country_listbox:
             self.country_listbox.selection_clear(0, tk.END)
@@ -398,6 +423,16 @@ class ServerListWindowTemplateMixin:
         except Exception:
             pass
         if self.window is not None:
+            if hasattr(self, "_hide_notes_tooltip"):
+                try:
+                    self._hide_notes_tooltip()
+                except Exception:
+                    pass
+            if hasattr(self, "_cancel_initial_data_load"):
+                try:
+                    self._cancel_initial_data_load()
+                except Exception:
+                    pass
             self.window.destroy()
 
     def restore_and_focus(self) -> None:
@@ -410,6 +445,9 @@ class ServerListWindowTemplateMixin:
     def apply_recent_discoveries_filter(self) -> None:
         """Apply filter to show only recent discoveries (used by dashboard)."""
         try:
+            if hasattr(self, "_cancel_initial_data_load"):
+                self._cancel_initial_data_load()
+
             # Clear existing filters first
             self.search_text.set("")
             self.date_filter.set("All")

@@ -45,6 +45,7 @@ class ScanResultsDialog:
         self.parent = parent
         self.scan_results = scan_results
         self.theme = get_theme()
+        self.protocol = str(scan_results.get("protocol", "smb")).lower()
         
         # Dialog result
         self.result = None
@@ -54,6 +55,28 @@ class ScanResultsDialog:
         self.close_button = None
         
         self._create_dialog()
+
+    def _is_ftp_scan(self) -> bool:
+        """Return True when rendering results for an FTP scan."""
+        return self.protocol == "ftp"
+
+    def _success_subtitle(self) -> str:
+        """Protocol-aware success subtitle text."""
+        if self._is_ftp_scan():
+            return "FTP scan has finished successfully."
+        return "SMB security scan has finished successfully."
+
+    def _shares_label(self) -> str:
+        """Protocol-aware label for the final summary metric."""
+        if self._is_ftp_scan():
+            return "Directories Found:"
+        return "Shares Found:"
+
+    def _access_phrase(self) -> str:
+        """Protocol-aware phrase describing successful access."""
+        if self._is_ftp_scan():
+            return "accessible FTP directories"
+        return "accessible SMB shares"
     
     def _create_dialog(self) -> None:
         """Create the scan results dialog."""
@@ -120,7 +143,7 @@ class ScanResultsDialog:
         if status == "completed":
             icon = "✅"
             title = "Scan Completed Successfully"
-            subtitle = "SMB security scan has finished successfully."
+            subtitle = self._success_subtitle()
             title_color = self.theme.colors["success"]
         elif status == "interrupted":
             icon = "⚠️"
@@ -204,7 +227,7 @@ class ScanResultsDialog:
             ("Duration:", duration),
             ("Hosts Scanned:", f"{hosts_scanned:,}"),
             ("Accessible Hosts:", f"{accessible_hosts:,}"),
-            ("Shares Found:", f"{shares_found:,}"),
+            (self._shares_label(), f"{shares_found:,}"),
             ("Completion Time:", scan_time)
         ]
         
@@ -267,17 +290,18 @@ class ScanResultsDialog:
             # Use enhanced summary message if available
             details_text = f"{summary_message}\n\n"
             details_text += f"Discovered {self.scan_results.get('accessible_hosts', 0)} servers with accessible "
-            details_text += f"SMB shares out of {self.scan_results.get('hosts_scanned', 0)} servers tested."
+            details_text += f"{self._access_phrase()} out of {self.scan_results.get('hosts_scanned', 0)} servers tested."
         else:
             # Fallback to default message for compatibility with existing mocks/tests
             details_text = (
                 "Scan completed successfully! The database has been updated with new findings.\n\n"
                 f"Discovered {self.scan_results.get('accessible_hosts', 0)} servers with accessible "
-                f"SMB shares out of {self.scan_results.get('hosts_scanned', 0)} servers tested."
+                f"{self._access_phrase()} out of {self.scan_results.get('hosts_scanned', 0)} servers tested."
             )
 
         if self.scan_results.get('shares_found', 0) > 0:
-            details_text += f"\n\nFound {self.scan_results.get('shares_found', 0)} total shares "
+            share_term = "directories" if self._is_ftp_scan() else "shares"
+            details_text += f"\n\nFound {self.scan_results.get('shares_found', 0)} total {share_term} "
             details_text += "available for further analysis."
 
         details_label = self.theme.create_styled_label(

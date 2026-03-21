@@ -176,6 +176,8 @@ class BatchExtractSettingsDialog:
 
         # Main container
         main_frame = tk.Frame(self.dialog)
+        if self.theme:
+            self.theme.apply_to_widget(main_frame, "main_window")
         main_frame.pack(padx=20, pady=20, fill=tk.BOTH, expand=True)
 
         row = 0
@@ -200,6 +202,9 @@ class BatchExtractSettingsDialog:
             self.dialog.protocol("WM_DELETE_WINDOW", self._on_abort)
         else:
             self.dialog.protocol("WM_DELETE_WINDOW", self._on_cancel)
+
+        if self.theme:
+            self.theme.apply_theme_to_application(self.dialog)
 
         # Ensure dialog appears on top and gains focus (critical for VMs)
         ensure_dialog_focus(self.dialog, self.parent)
@@ -318,7 +323,7 @@ class BatchExtractSettingsDialog:
             parent,
             text="Extension mode now applies during extract. In allow-only, add '<no extension>' to permit extensionless files.",
             font=("TkDefaultFont", 8, "italic"),
-            fg="gray"
+            fg=self.theme.colors["text_secondary"] if self.theme else "gray"
         )
         status_note.grid(row=row, column=0, columnspan=2, sticky="w", padx=(10, 0), pady=(0, 10))
         row += 1
@@ -680,6 +685,8 @@ class ExtensionEditorDialog:
 
         # Main container
         main_frame = tk.Frame(self.window)
+        if self.theme:
+            self.theme.apply_to_widget(main_frame, "main_window")
         main_frame.pack(padx=20, pady=20, fill=tk.BOTH, expand=True)
 
         # Create two-column layout
@@ -693,6 +700,9 @@ class ExtensionEditorDialog:
 
         # Handle window close
         self.window.protocol("WM_DELETE_WINDOW", self._on_cancel)
+
+        if self.theme:
+            self.theme.apply_theme_to_application(self.window)
 
         # Ensure dialog appears on top and gains focus
         ensure_dialog_focus(self.window, self.parent)

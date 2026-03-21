@@ -243,6 +243,8 @@ class FileBrowserWindow:
         self.status_var = tk.StringVar(value="Select a share to begin.")
         status = tk.Label(self.window, textvariable=self.status_var, anchor="w")
         status.pack(fill=tk.X, padx=10, pady=(0, 10))
+        if self.theme:
+            self.theme.apply_theme_to_application(self.window)
 
     # --- Navigation helpers -------------------------------------------
 
@@ -471,6 +473,7 @@ class FileBrowserWindow:
         dialog.resizable(False, False)
         dialog.transient(self.window)
         dialog.grab_set()
+        self.theme.apply_to_widget(dialog, "main_window")
 
         # Center on parent
         dialog.update_idletasks()
@@ -482,29 +485,38 @@ class FileBrowserWindow:
 
         # Message
         msg_frame = tk.Frame(dialog)
+        self.theme.apply_to_widget(msg_frame, "main_window")
         msg_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=15)
 
-        tk.Label(
+        warning_label = tk.Label(
             msg_frame,
             text=f'The file "{filename}" ({_format_file_size(file_size)}) exceeds\nthe maximum view size of {max_mb} MB.',
             justify=tk.LEFT
-        ).pack(anchor="w")
+        )
+        self.theme.apply_to_widget(warning_label, "text")
+        warning_label.pack(anchor="w")
 
-        tk.Label(
+        hint_label = tk.Label(
             msg_frame,
             text="\nYou can change this limit in:",
             justify=tk.LEFT
-        ).pack(anchor="w")
+        )
+        self.theme.apply_to_widget(hint_label, "text")
+        hint_label.pack(anchor="w")
 
-        tk.Label(
+        path_hint_label = tk.Label(
             msg_frame,
             text="conf/config.json -> file_browser.viewer.max_view_size_mb",
             font=("Courier", 9),
-            fg="#666666"
-        ).pack(anchor="w")
+            fg=self.theme.colors["text_secondary"]
+        )
+        self.theme.apply_to_widget(path_hint_label, "text")
+        path_hint_label.configure(fg=self.theme.colors["text_secondary"])
+        path_hint_label.pack(anchor="w")
 
         # Buttons
         btn_frame = tk.Frame(dialog)
+        self.theme.apply_to_widget(btn_frame, "main_window")
         btn_frame.pack(fill=tk.X, padx=20, pady=(0, 15))
 
         def on_ok():
@@ -515,10 +527,17 @@ class FileBrowserWindow:
             result["proceed"] = True
             dialog.destroy()
 
-        tk.Button(btn_frame, text="OK", width=12, command=on_ok).pack(side=tk.LEFT, padx=(0, 10))
-        tk.Button(btn_frame, text="Ignore Once", width=12, command=on_ignore).pack(side=tk.LEFT)
+        ok_button = tk.Button(btn_frame, text="OK", width=12, command=on_ok)
+        self.theme.apply_to_widget(ok_button, "button_secondary")
+        ok_button.pack(side=tk.LEFT, padx=(0, 10))
+
+        ignore_button = tk.Button(btn_frame, text="Ignore Once", width=12, command=on_ignore)
+        self.theme.apply_to_widget(ignore_button, "button_secondary")
+        ignore_button.pack(side=tk.LEFT)
 
         dialog.protocol("WM_DELETE_WINDOW", on_ok)
+        self.theme.apply_theme_to_application(dialog)
+        ensure_dialog_focus(dialog, self.window)
         dialog.wait_window()
 
         return result["proceed"]
@@ -614,18 +633,23 @@ class FileBrowserWindow:
         dialog.resizable(False, False)
         dialog.transient(self.window)
         dialog.grab_set()
+        self.theme.apply_to_widget(dialog, "main_window")
         ensure_dialog_focus(dialog, self.window)
 
         msg_frame = tk.Frame(dialog)
+        self.theme.apply_to_widget(msg_frame, "main_window")
         msg_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=15)
 
         msg = (
             f'The file "{name}" is {_format_file_size(size_bytes)}.\n'
             f"Maximum view size is set to {max_mb} MB.\n\nProceed?"
         )
-        tk.Label(msg_frame, text=msg, justify=tk.LEFT, anchor="w").pack(fill=tk.X, expand=True)
+        msg_label = tk.Label(msg_frame, text=msg, justify=tk.LEFT, anchor="w")
+        self.theme.apply_to_widget(msg_label, "text")
+        msg_label.pack(fill=tk.X, expand=True)
 
         btn_frame = tk.Frame(dialog)
+        self.theme.apply_to_widget(btn_frame, "main_window")
         btn_frame.pack(fill=tk.X, padx=20, pady=(5, 10))
 
         result = {"proceed": False}
@@ -638,10 +662,16 @@ class FileBrowserWindow:
             result["proceed"] = False
             dialog.destroy()
 
-        tk.Button(btn_frame, text="OK", width=10, command=on_ok).pack(side=tk.LEFT, padx=(0, 10))
-        tk.Button(btn_frame, text="Cancel", width=10, command=on_cancel).pack(side=tk.LEFT)
+        ok_button = tk.Button(btn_frame, text="OK", width=10, command=on_ok)
+        self.theme.apply_to_widget(ok_button, "button_secondary")
+        ok_button.pack(side=tk.LEFT, padx=(0, 10))
+
+        cancel_button = tk.Button(btn_frame, text="Cancel", width=10, command=on_cancel)
+        self.theme.apply_to_widget(cancel_button, "button_secondary")
+        cancel_button.pack(side=tk.LEFT)
 
         dialog.protocol("WM_DELETE_WINDOW", on_cancel)
+        self.theme.apply_theme_to_application(dialog)
         dialog.wait_window()
 
         return result["proceed"]

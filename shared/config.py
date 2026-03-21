@@ -8,7 +8,8 @@ Handles the reorganized configuration structure while maintaining compatibility.
 import json
 import logging
 import os
-from datetime import datetime
+import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -46,12 +47,57 @@ def save_json_config(config_file: str, data: Dict[str, Any]) -> bool:
 
 def get_standard_timestamp() -> str:
     """
-    Generate standard timestamp truncated to minutes (no fractional seconds).
-    
+    Generate a UTC timestamp in canonical SQLite format YYYY-MM-DD HH:MM:SS.
+
+    Uses UTC so writes are consistent with SQLite's CURRENT_TIMESTAMP default.
+
     Returns:
-        ISO format timestamp string (YYYY-MM-DDTHH:MM:SS)
+        Canonical DB timestamp string (YYYY-MM-DD HH:MM:SS, UTC, no T-separator)
     """
-    return datetime.now().replace(second=0, microsecond=0).isoformat()
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def normalize_db_timestamp(ts_str: str) -> str:
+    """
+    Convert any ISO-format timestamp string to canonical DB format
+    (YYYY-MM-DD HH:MM:SS, UTC, no T-separator, no microseconds).
+
+    Handles:
+    - "2025-01-21 14:20:05"          -> unchanged
+    - "2025-01-21T14:20:05"          -> "2025-01-21 14:20:05"  (assumed UTC)
+    - "2025-01-21T14:20:05.123456"   -> "2025-01-21 14:20:05"  (truncated)
+    - "2025-01-21T14:20:05Z"         -> "2025-01-21 14:20:05"
+    - "2025-01-21T14:20:05+05:30"    -> "2025-01-21 08:50:05"  (converted to UTC)
+    - None / non-string              -> returned unchanged
+
+    Args:
+        ts_str: Timestamp string to normalize (or None/non-string passthrough).
+
+    Returns:
+        Canonical DB timestamp string, or the original value if not a string.
+    """
+    if not isinstance(ts_str, str) or not ts_str.strip():
+        return ts_str
+
+    s = ts_str.strip().replace("T", " ")
+
+    # Detect and apply UTC offset (e.g. +05:30 or -05:00)
+    offset_match = re.search(r"([+-])(\d{2}):?(\d{2})$", s)
+    if offset_match:
+        sign_str, hh, mm = offset_match.groups()
+        base = s[: offset_match.start()].rstrip()[:19]
+        try:
+            dt = datetime.strptime(base, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            # Fallback: just strip offset and truncate
+            return base[:19]
+        sign = 1 if sign_str == "+" else -1
+        dt = dt - timedelta(hours=int(hh), minutes=int(mm)) * sign
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+    # Z suffix (already UTC) or no offset (treated as UTC) — strip Z, truncate
+    s = s.rstrip("Z").strip()
+    return s[:19]
 
 
 class SMBSeekConfig:
@@ -240,7 +286,66 @@ class SMBSeekConfig:
                 "timeout": 30
             }
         })
-    
+
+    def get_ftp_config(self) -> Dict[str, Any]:
+        """Get FTP configuration section with defaults."""
+        return self.get("ftp") or {
+            "shodan": {
+                "query_components": {
+                    "base_query": "port:21 \"230 Login successful\"",
+                    "additional_exclusions": []
+                },
+                "query_limits": {"max_results": None}
+            },
+            "verification": {
+                "connect_timeout": 5,
+                "auth_timeout": 10,
+                "listing_timeout": 15
+            },
+            "discovery": {"max_concurrent_hosts": 10},
+            "access": {"max_concurrent_hosts": 4},
+        }
+
+    def get_max_concurrent_ftp_discovery_hosts(self) -> int:
+        """Get max concurrent hosts for FTP discovery with validation. Default 10, min 1."""
+        value = self.get_ftp_config().get("discovery", {}).get("max_concurrent_hosts", 10)
+        if isinstance(value, int) and value >= 1:
+            return value
+        return 10
+
+    def get_max_concurrent_ftp_access_hosts(self) -> int:
+        """Get max concurrent hosts for FTP access with validation. Default 4, min 1."""
+        value = self.get_ftp_config().get("access", {}).get("max_concurrent_hosts", 4)
+        if isinstance(value, int) and value >= 1:
+            return value
+        return 4
+
+    def get_http_config(self) -> Dict[str, Any]:
+        """Get HTTP configuration section with defaults."""
+        return self.get("http") or {
+            "shodan": {"query_limits": {"max_results": None}},
+            "verification": {
+                "connect_timeout": 5,
+                "request_timeout": 10,
+                "subdir_timeout": 8,
+                "allow_insecure_tls": True,
+                "verify_http": True,
+                "verify_https": True,
+            },
+            "discovery": {"max_concurrent_hosts": 10},
+            "access": {"max_concurrent_hosts": 4},
+        }
+
+    def get_max_concurrent_http_discovery_hosts(self) -> int:
+        """Get max concurrent hosts for HTTP discovery with validation. Default 10, min 1."""
+        value = self.get_http_config().get("discovery", {}).get("max_concurrent_hosts", 10)
+        return value if isinstance(value, int) and value >= 1 else 10
+
+    def get_max_concurrent_http_access_hosts(self) -> int:
+        """Get max concurrent hosts for HTTP access with validation. Default 4, min 1."""
+        value = self.get_http_config().get("access", {}).get("max_concurrent_hosts", 4)
+        return value if isinstance(value, int) and value >= 1 else 4
+
     def get_database_path(self) -> str:
         """Get database file path."""
         return self.get("database", "path", "smbseek.db")

@@ -32,6 +32,34 @@ from shared.db_migrations import run_migrations
 
 _logger = get_logger("server_list_window")
 
+
+def _format_notes_tooltip_text(notes: str, *, max_line_len: int = 60, max_lines: int = 2) -> str:
+    """
+    Format notes for compact hover tooltip display.
+
+    Rules:
+    - Normalize whitespace
+    - Clamp to max_line_len * max_lines characters
+    - Render at most max_lines lines
+    - Add trailing ellipsis when truncated
+    """
+    normalized = " ".join(str(notes or "").split())
+    if not normalized:
+        return ""
+
+    max_chars = max_line_len * max_lines
+    truncated = len(normalized) > max_chars
+    visible = normalized[:max_chars]
+
+    if truncated:
+        if len(visible) >= 3:
+            visible = visible[:-3] + "..."
+        else:
+            visible = "..."
+
+    lines = [visible[i:i + max_line_len] for i in range(0, len(visible), max_line_len)]
+    return "\n".join(lines[:max_lines])
+
 # Import modular components
 from . import export, details, filters, table
 try:
@@ -52,6 +80,9 @@ class ServerListWindow(ServerListWindowActionsMixin):
     Acts as facade for clean external interface.
     """
     FILTER_TEMPLATE_PLACEHOLDER = "Select filter template..."
+    HINT_NO_DATABASE = "No database found. Select one in Config or run a scan."
+    HINT_EMPTY_DATABASE = "No servers in the database yet. Run a scan or import data."
+    HINT_FILTER_EMPTY = "No results to display. Try less restrictive filters."
 
     def __init__(self, parent: tk.Widget, db_reader: DatabaseReader,
                  window_data: Dict[str, Any] = None, settings_manager = None):
@@ -78,6 +109,9 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self.exclude_avoid = tk.BooleanVar()
         self.probed_only = tk.BooleanVar()
         self.exclude_compromised = tk.BooleanVar()
+        self.protocol_smb = tk.BooleanVar(value=True)
+        self.protocol_ftp = tk.BooleanVar(value=True)
+        self.protocol_http = tk.BooleanVar(value=True)
 
         # Window and UI components
         self.window = None
@@ -116,6 +150,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self.browser_button = None
         self.stop_button = None
         self.delete_button = None
+        self._selection_menu_indices: List[int] = []  # Selection-dependent context menu entries
         self._delete_menu_index = None  # Store context menu index
         self._delete_in_progress = False  # Flag to prevent concurrent deletes
         self.table_overlay = None
@@ -125,6 +160,10 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self._stop_button_original_style = None
         self._context_menu_visible = False
         self._context_menu_bindings = []
+        self._notes_tooltip = None
+        self._notes_tooltip_label = None
+        self._hover_notes_row_key = None
+        self._hover_notes_text = ""
         self.filter_template_var = tk.StringVar()
         self._filter_template_label_to_slug: Dict[str, str] = {}
         self._selected_filter_template_slug: Optional[str] = None
@@ -149,6 +188,12 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self.active_jobs: Dict[str, Dict[str, Any]] = {}
         self._pending_table_refresh = False
         self._pending_selection = []
+        self._initial_load_after_id = None
+        self._initial_load_started = False
+        self._initial_map_bind_id = None
+        self._db_available = True
+        self._table_locked = False
+        self._empty_state_hint: Optional[str] = None
 
         # Window state
         self.is_advanced_mode = False
@@ -171,7 +216,8 @@ class ServerListWindow(ServerListWindowActionsMixin):
         }
 
         self._create_window()
-        self._load_data()
+        self._prime_initial_render()
+        self._schedule_initial_data_load()
 
         if self.settings_manager:
             self.probe_status_map = self.settings_manager.get_probe_status_map()
@@ -182,7 +228,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
     def _create_window(self) -> None:
         """Create the server list window."""
         self.window = tk.Toplevel(self.parent)
-        self.window.title("SMBSeek - Server List Browser")
+        self.window.title("Server List Browser")
         self.window.geometry("1500x1000")
         self.window.minsize(800, 500)
 
@@ -203,8 +249,126 @@ class ServerListWindow(ServerListWindowActionsMixin):
         # Bind events
         self._setup_event_handlers()
 
-        # Ensure window appears on top and gains focus (without forcing modal grab)
-        ensure_dialog_focus(self.window, self.parent)
+        # Ensure window appears on top/focused after it is actually mapped.
+        # Running focus/topmost choreography too early can cause first-open
+        # paint starvation on some window managers.
+        self.window.after(10, self._ensure_window_focus_when_mapped)
+        self.theme.apply_theme_to_application(self.window)
+
+    def _ensure_window_focus_when_mapped(self) -> None:
+        """Apply focus/z-order helpers only after the window is mapped."""
+        if self.window is None:
+            return
+        try:
+            if not self.window.winfo_exists():
+                return
+            if not self.window.winfo_ismapped():
+                self.window.after(25, self._ensure_window_focus_when_mapped)
+                return
+            ensure_dialog_focus(self.window, self.parent)
+        except tk.TclError:
+            pass
+
+    def _prime_initial_render(self) -> None:
+        """
+        Force an initial paint before synchronous data loading begins.
+
+        This avoids a first-open blank frame on some window managers where the
+        first full draw can be deferred until a later expose/move event.
+        """
+        if self.window is None:
+            return
+        try:
+            self.window.update_idletasks()
+            self.window.update()
+        except tk.TclError:
+            # Best effort only; fall back to normal load path.
+            pass
+
+    def _schedule_initial_data_load(self) -> None:
+        """
+        Defer first data load until Tk has processed initial paint events.
+
+        Loading rows can take noticeable time on larger datasets; doing it in
+        __init__ can block first paint and present as a blank/transparent window.
+        """
+        if self.window is None or self._initial_load_started:
+            return
+        try:
+            # Trigger load as soon as the window is mapped on screen.
+            if self._initial_map_bind_id is None:
+                self._initial_map_bind_id = self.window.bind(
+                    "<Map>", self._on_window_mapped_for_initial_load, add="+"
+                )
+            # Failsafe timer in case map events are delayed/dropped on some WMs.
+            self._initial_load_after_id = self.window.after(350, self._run_initial_data_load)
+        except tk.TclError:
+            self._initial_load_after_id = None
+            self._run_initial_data_load()
+
+    def _on_window_mapped_for_initial_load(self, _event=None) -> None:
+        """Start initial load right after the first map event."""
+        if self._initial_load_started or self.window is None:
+            return
+        self._cancel_initial_data_load()
+        try:
+            # Give the WM/compositor one paint frame before synchronous work.
+            self._initial_load_after_id = self.window.after(16, self._run_initial_data_load)
+        except tk.TclError:
+            self._initial_load_after_id = None
+            self._run_initial_data_load()
+
+    def _clear_initial_map_binding(self) -> None:
+        """Remove one-time map binding used for initial load scheduling."""
+        if self.window is None or self._initial_map_bind_id is None:
+            self._initial_map_bind_id = None
+            return
+        try:
+            self.window.unbind("<Map>", self._initial_map_bind_id)
+        except tk.TclError:
+            pass
+        self._initial_map_bind_id = None
+
+    def _run_initial_data_load(self) -> None:
+        """Run deferred initial load if window still exists."""
+        if self._initial_load_started:
+            return
+        if not self.window:
+            return
+        try:
+            if not self.window.winfo_exists():
+                return
+            # Guard against starting data work before first visible paint; this
+            # can reintroduce first-open blank/transparent render on some WMs.
+            if (not self.window.winfo_ismapped()) or (not self.window.winfo_viewable()):
+                self._initial_load_after_id = self.window.after(50, self._run_initial_data_load)
+                return
+        except tk.TclError:
+            return
+        self._initial_load_started = True
+        self._initial_load_after_id = None
+        self._clear_initial_map_binding()
+        self._load_data()
+        # Force a repaint pass after the synchronous table population.
+        try:
+            self.window.update_idletasks()
+            self.window.update()
+        except tk.TclError:
+            pass
+
+    def _cancel_initial_data_load(self) -> None:
+        """Cancel deferred initial load callback when another load path is chosen."""
+        if self.window is None:
+            self._initial_load_after_id = None
+            self._clear_initial_map_binding()
+            return
+        if self._initial_load_after_id is not None:
+            try:
+                self.window.after_cancel(self._initial_load_after_id)
+            except tk.TclError:
+                pass
+        self._initial_load_after_id = None
+        self._clear_initial_map_binding()
 
     def _load_indicator_patterns(self) -> None:
         """Load ransomware indicator patterns from SMBSeek config."""
@@ -244,7 +408,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
         # Title
         title_label = self.theme.create_styled_label(
             header_frame,
-            "🖥 SMB Server List",
+            "🖥 Server List",
             "heading"
         )
         title_label.pack(side=tk.LEFT)
@@ -280,6 +444,9 @@ class ServerListWindow(ServerListWindowActionsMixin):
             'exclude_avoid': self.exclude_avoid,
             'probed_only': self.probed_only,
             'exclude_compromised': self.exclude_compromised,
+            'protocol_smb': self.protocol_smb,
+            'protocol_ftp': self.protocol_ftp,
+            'protocol_http': self.protocol_http,
             'country_filter_text': self.country_filter_text
         }
 
@@ -292,6 +459,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
             'on_exclude_avoid_changed': self._apply_filters,
             'on_probed_only_changed': self._apply_filters,
             'on_exclude_compromised_changed': self._apply_filters,
+            'on_protocol_filter_changed': self._apply_filters,
             'on_country_filter_changed': self._apply_filters,
             'on_country_filter_text_changed': self._on_country_filter_text_changed,
             'on_clear_countries': self._clear_countries,
@@ -345,11 +513,11 @@ class ServerListWindow(ServerListWindowActionsMixin):
         # Prepare callbacks
         table_callbacks = {
             'on_selection_changed': self._on_selection_changed,
-            'on_double_click': self._on_double_click,
-            'on_treeview_click': self._on_treeview_click,
-            'on_favorite_toggle': self._on_favorite_toggle,
-            'on_avoid_toggle': self._on_avoid_toggle,
-            'on_sort_column': self._sort_by_column
+            'on_double_click':      self._on_double_click,
+            'on_treeview_click':    self._on_treeview_click,
+            'on_favorite_toggle':   lambda rk, v: self._apply_flag_toggle(rk, "favorite", v),
+            'on_avoid_toggle':      lambda rk, v: self._apply_flag_toggle(rk, "avoid",    v),
+            'on_sort_column':       self._sort_by_column,
         }
 
         # Create table using module
@@ -359,6 +527,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
 
         self._create_context_menu(self.tree)
         self._bind_context_menu_events(self.tree)
+        self._bind_hover_tooltip_events(self.tree)
         self._create_table_overlay()
 
         # Pack table frame
@@ -366,13 +535,29 @@ class ServerListWindow(ServerListWindowActionsMixin):
 
     def _create_context_menu(self, tree: ttk.Treeview) -> None:
         self.context_menu = tk.Menu(self.window, tearoff=0)
-        self.context_menu.add_command(label="📋 Copy IP", command=self._on_copy_ip)
-        self.context_menu.add_command(label="🔍 Probe Selected", command=self._on_probe_selected)
-        self.context_menu.add_command(label="📦 Extract Selected", command=self._on_extract_selected)
-        self.context_menu.add_command(label="🔓 Pry Selected", command=self._on_pry_selected)
-        self.context_menu.add_command(label="🗂️ Browse Selected", command=self._on_file_browser_selected)
-        # Store index before adding Delete item (context menu currently has 5 items: 0-4)
-        self._delete_menu_index = 5  # Will be the 6th item (index 5)
+        self._selection_menu_indices = []
+
+        def _add_selection_command(label: str, command) -> None:
+            self.context_menu.add_command(label=label, command=command)
+            idx = self.context_menu.index("end")
+            if idx is not None:
+                self._selection_menu_indices.append(int(idx))
+
+        _add_selection_command("📋 Copy IP", self._on_copy_ip)
+        self.context_menu.add_separator()
+        _add_selection_command("🔍 Probe Selected", self._on_probe_selected)
+        _add_selection_command("📦 Extract Selected", self._on_extract_selected)
+        _add_selection_command("🔓 Pry Selected", self._on_pry_selected)
+        _add_selection_command("🗂️ Browse Selected", self._on_file_browser_selected)
+        self.context_menu.add_separator()
+        _add_selection_command("⭐ Toggle Favorite", self._on_mark_favorite_selected)
+        _add_selection_command("🚫 Toggle Avoid", self._on_mark_avoid_selected)
+        _add_selection_command("⚠ Toggle Compromised", self._on_mark_compromised_selected)
+        self.context_menu.add_separator()
+
+        # Store index before adding Delete item.
+        end_idx = self.context_menu.index("end")
+        self._delete_menu_index = 0 if end_idx is None else int(end_idx) + 1
         self.context_menu.add_command(label="🗑️ Delete Selected", command=self._on_delete_selected)
         self._update_context_menu_state()
 
@@ -382,25 +567,179 @@ class ServerListWindow(ServerListWindowActionsMixin):
             tree.bind("<Button-2>", self._show_context_menu)
             tree.bind("<Control-Button-1>", self._show_context_menu)
 
+    def _bind_hover_tooltip_events(self, tree: ttk.Treeview) -> None:
+        """Bind Treeview events used by row-notes hover tooltips."""
+        tree.bind("<Motion>", self._on_tree_hover_for_notes, add="+")
+        tree.bind("<Leave>", self._hide_notes_tooltip, add="+")
+        tree.bind("<Button-1>", self._hide_notes_tooltip, add="+")
+        tree.bind("<Button-3>", self._hide_notes_tooltip, add="+")
+        tree.bind("<MouseWheel>", self._hide_notes_tooltip, add="+")
+        tree.bind("<Button-4>", self._hide_notes_tooltip, add="+")
+        tree.bind("<Button-5>", self._hide_notes_tooltip, add="+")
+
+    def _get_server_by_row_key(self, row_key: str) -> Optional[Dict[str, Any]]:
+        """Lookup a visible server row by row_key."""
+        if not row_key:
+            return None
+        return next((s for s in self.filtered_servers if s.get("row_key") == row_key), None)
+
+    def _show_notes_tooltip(self, text: str, x_root: int, y_root: int) -> None:
+        """Create or update notes tooltip near pointer location."""
+        if not text:
+            self._hide_notes_tooltip()
+            return
+
+        x = int(x_root) + 14
+        y = int(y_root) + 16
+        geometry = f"+{x}+{y}"
+
+        if self._notes_tooltip and self._notes_tooltip.winfo_exists():
+            self._notes_tooltip.geometry(geometry)
+            if self._hover_notes_text != text and self._notes_tooltip_label:
+                self._notes_tooltip_label.configure(text=text)
+                self._hover_notes_text = text
+            return
+
+        tip = tk.Toplevel(self.window)
+        tip.wm_overrideredirect(True)
+        try:
+            tip.wm_attributes("-topmost", True)
+        except Exception:
+            pass
+        tip.geometry(geometry)
+
+        label = tk.Label(
+            tip,
+            text=text,
+            justify=tk.LEFT,
+            anchor="w",
+            bg="#fffde8",
+            fg="#222222",
+            relief=tk.SOLID,
+            borderwidth=1,
+            padx=6,
+            pady=4,
+            font=("TkDefaultFont", 9),
+        )
+        label.pack()
+
+        self._notes_tooltip = tip
+        self._notes_tooltip_label = label
+        self._hover_notes_text = text
+
+    def _hide_notes_tooltip(self, _event=None) -> None:
+        """Destroy notes tooltip if visible."""
+        tip = self._notes_tooltip
+        self._notes_tooltip = None
+        self._notes_tooltip_label = None
+        self._hover_notes_row_key = None
+        self._hover_notes_text = ""
+        if tip is not None:
+            try:
+                tip.destroy()
+            except Exception:
+                pass
+
+    def _on_tree_hover_for_notes(self, event) -> None:
+        """
+        Show notes tooltip while hovering rows with notes.
+
+        If notes are empty/whitespace, no tooltip is created.
+        """
+        if not self.tree:
+            self._hide_notes_tooltip()
+            return
+
+        row_key = self.tree.identify_row(event.y)
+        if not row_key:
+            self._hide_notes_tooltip()
+            return
+
+        row = self._get_server_by_row_key(row_key)
+        if not row:
+            self._hide_notes_tooltip()
+            return
+
+        notes_raw = row.get("notes", "")
+        if not str(notes_raw or "").strip():
+            self._hide_notes_tooltip()
+            return
+
+        tooltip_text = _format_notes_tooltip_text(notes_raw, max_line_len=60, max_lines=2)
+        if not tooltip_text:
+            self._hide_notes_tooltip()
+            return
+
+        self._hover_notes_row_key = row_key
+        self._show_notes_tooltip(tooltip_text, event.x_root, event.y_root)
+
     def _create_table_overlay(self) -> None:
-        self.table_overlay = tk.Frame(self.table_frame, bg="#f0f0f0")
+        overlay_bg, overlay_fg = self._get_table_overlay_colors()
+        self.table_overlay = tk.Frame(self.table_frame, bg=overlay_bg)
         self.table_overlay.place_forget()
         self.table_overlay_label = tk.Label(
             self.table_overlay,
             text="Batch in progress… Server list locked",
-            bg="#f0f0f0",
-            fg="#555555"
+            bg=overlay_bg,
+            fg=overlay_fg,
+            justify=tk.CENTER,
+            wraplength=560,
         )
         self.table_overlay_label.pack(expand=True)
 
-    def _set_table_interaction_enabled(self, enabled: bool) -> None:
-        if not self.table_overlay:
+    def _get_table_overlay_colors(self) -> Tuple[str, str]:
+        """Return theme-aware (background, foreground) colors for table overlay hints."""
+        colors = getattr(self.theme, "colors", {}) or {}
+        overlay_bg = colors.get("secondary_bg", "#f0f0f0")
+        overlay_fg = colors.get("text_secondary", "#555555")
+        return overlay_bg, overlay_fg
+
+    def _set_empty_state_hint(self, message: Optional[str]) -> None:
+        """Set/clear table hint text shown when results are unavailable."""
+        self._empty_state_hint = message.strip() if message and message.strip() else None
+        self._update_table_overlay_state()
+
+    def _resolve_empty_state_hint(self) -> Optional[str]:
+        """
+        Resolve which helper hint should be shown for the current table state.
+
+        Priority order:
+        1. No database available at runtime
+        2. Database available but contains zero server rows
+        3. Database has rows but current filters hide all rows
+        """
+        if not self._db_available:
+            return self.HINT_NO_DATABASE
+        if not self.all_servers:
+            return self.HINT_EMPTY_DATABASE
+        if not self.filtered_servers:
+            return self.HINT_FILTER_EMPTY
+        return None
+
+    def _update_table_overlay_state(self) -> None:
+        """Render the table overlay for batch lock or empty-state hints."""
+        if not self.table_overlay or not self.table_overlay_label:
             return
-        if enabled:
+        overlay_bg, overlay_fg = self._get_table_overlay_colors()
+        self.table_overlay.configure(bg=overlay_bg)
+
+        overlay_message = None
+        if self._table_locked:
+            overlay_message = "Batch in progress… Server list locked"
+        elif self._empty_state_hint:
+            overlay_message = self._empty_state_hint
+
+        if not overlay_message:
             self.table_overlay.place_forget()
-        else:
-            self.table_overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
-            self.table_overlay.lift()
+            return
+
+        self.table_overlay_label.configure(text=overlay_message, bg=overlay_bg, fg=overlay_fg)
+        self.table_overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self.table_overlay.lift()
+
+    def _set_table_interaction_enabled(self, enabled: bool) -> None:
+        self._table_locked = not enabled
+        self._update_table_overlay_state()
 
     def _create_button_panel(self) -> None:
         """Create bottom button panel with actions."""
@@ -533,11 +872,21 @@ class ServerListWindow(ServerListWindowActionsMixin):
         """Apply current filters to server list using filter module functions."""
         if self._is_batch_active() and not force:
             if not self._pending_table_refresh:
-                self._pending_selection = self._get_selected_ips()
+                self._pending_selection = self._get_selected_row_keys()
             self._pending_table_refresh = True
             return
+        self._hide_notes_tooltip()
 
         filtered = self.all_servers[:]
+
+        selected_protocols = []
+        if self.protocol_smb.get():
+            selected_protocols.append("S")
+        if self.protocol_ftp.get():
+            selected_protocols.append("F")
+        if self.protocol_http.get():
+            selected_protocols.append("H")
+        filtered = filters.apply_protocol_filter(filtered, selected_protocols)
 
         # Apply search filter
         search_term = self.search_text.get()
@@ -583,6 +932,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self.count_label.configure(
             text=f"Showing: {len(self.filtered_servers)} of {len(self.all_servers)} servers"
         )
+        self._set_empty_state_hint(self._resolve_empty_state_hint())
 
         self._update_action_buttons_state()
         self._persist_filter_preferences()
@@ -590,37 +940,46 @@ class ServerListWindow(ServerListWindowActionsMixin):
     def _load_data(self) -> None:
         """Load server data from database."""
         try:
+            self._db_available = bool(self.db_reader and self.db_reader.is_database_available())
+            if not self._db_available:
+                self.all_servers = []
+                self.filtered_servers = []
+                table.update_table_display(self.tree, self.filtered_servers, self.settings_manager)
+                self.count_label.configure(text="Total: 0 servers")
+                self._set_empty_state_hint(self.HINT_NO_DATABASE)
+                self._update_action_buttons_state()
+                return
+
             # Get last scan time from scan manager
             scan_manager = get_scan_manager()
             self.last_scan_time = scan_manager.get_last_scan_time()
 
-            # Get all servers (no pagination limit)
-            servers, total_count = self.db_reader.get_server_list(
+            # Get all servers (no pagination limit) — unified S+F rows
+            servers, total_count = self.db_reader.get_protocol_server_list(
                 limit=None,
                 offset=0
             )
 
-            # Attach denied share counts
+            # Attach denied share counts — SMB rows only (FTP has no share_access data)
             try:
                 denied_map = self.db_reader.get_denied_share_counts()
             except Exception:
                 denied_map = {}
 
             for server in servers:
-                ip = server.get("ip_address")
-                server["denied_shares_count"] = denied_map.get(ip, 0) if ip else 0
+                if server.get("host_type", "S") == "S":
+                    ip = server.get("ip_address")
+                    server["denied_shares_count"] = denied_map.get(ip, 0) if ip else 0
+                else:
+                    server["denied_shares_count"] = 0
 
             self.all_servers = servers
             self._attach_probe_status(self.all_servers)
 
-            # Load denied share lists for details rendering
-            try:
-                for server in self.all_servers:
-                    ip = server.get("ip_address")
-                    server["denied_shares_list"] = self.db_reader.get_denied_shares(ip) if ip else []
-            except Exception:
-                for server in self.all_servers:
-                    server["denied_shares_list"] = []
+            # Do NOT preload denied share lists for every server here.
+            # For large datasets this results in thousands of per-server DB queries
+            # on the UI thread and can make the window appear permanently "Loading...".
+            # Denied share lists are fetched lazily when a details popup is opened.
 
             # Set initial date filter if requested
             if self.filter_recent and self.last_scan_time:
@@ -672,21 +1031,45 @@ class ServerListWindow(ServerListWindowActionsMixin):
 
         self._update_action_buttons_state()
 
-    def _on_favorite_toggle(self, ip: str, is_favorite: bool) -> None:
-        if not ip or not self.settings_manager:
-            return
-        try:
-            self.db_reader.upsert_user_flags(ip, favorite=is_favorite)
-        except Exception:
-            pass
+    def _apply_flag_toggle(self, row_key: str, field: str, new_value: int) -> None:
+        """
+        Persist a favorite/avoid toggle for a protocol row.
 
-    def _on_avoid_toggle(self, ip: str, is_avoid: bool) -> None:
-        if not ip or not self.settings_manager:
+        Steps:
+          a) look up server by row_key
+          b) optimistically update in-memory dict
+          c) persist via upsert_user_flags_for_host (correct per-protocol table)
+          d) on any failure, revert both in-memory and UI icon
+        """
+        server = next((s for s in self.all_servers if s.get("row_key") == row_key), None)
+        if not server:
+            # Row not in memory — revert icon that table.py already flipped
+            if self.tree and self.tree.exists(row_key):
+                if field == "favorite":
+                    self.tree.set(row_key, "favorite", "✔" if not new_value else "○")
+                elif field == "avoid":
+                    self.tree.set(row_key, "avoid", "✖" if not new_value else "○")
             return
+
+        ip = server.get("ip_address", "")
+        host_type = server.get("host_type", "S")
+        old_value = server.get(field, 0)
+
+        # Optimistically update in-memory state
+        server[field] = new_value
+
         try:
-            self.db_reader.upsert_user_flags(ip, avoid=is_avoid)
-        except Exception:
-            pass
+            self.db_reader.upsert_user_flags_for_host(ip, host_type, **{field: bool(new_value)})
+        except Exception as exc:
+            _logger.warning("Flag toggle DB write failed for %s (%s): %s", row_key, field, exc)
+            # Revert in-memory state
+            server[field] = old_value
+            # Revert the tree icon
+            if self.tree and self.tree.exists(row_key):
+                if field == "favorite":
+                    self.tree.set(row_key, "favorite", "✔" if old_value else "○")
+                elif field == "avoid":
+                    self.tree.set(row_key, "avoid", "✖" if old_value else "○")
 
     def _on_double_click(self, event) -> None:
         """Handle double-click on table row using table module."""
@@ -699,9 +1082,9 @@ class ServerListWindow(ServerListWindowActionsMixin):
         """Handle treeview clicks using table module."""
         callbacks = {
             'on_favorites_filter_changed': self._apply_filters,
-            'on_avoid_filter_changed': self._apply_filters,
-            'on_favorite_toggle': self._on_favorite_toggle,
-            'on_avoid_toggle': self._on_avoid_toggle
+            'on_avoid_filter_changed':     self._apply_filters,
+            'on_favorite_toggle':          lambda rk, v: self._apply_flag_toggle(rk, "favorite", v),
+            'on_avoid_toggle':             lambda rk, v: self._apply_flag_toggle(rk, "avoid",    v),
         }
         table.handle_treeview_click(self.tree, event, self.settings_manager, callbacks)
 
@@ -729,14 +1112,11 @@ class ServerListWindow(ServerListWindowActionsMixin):
             messagebox.showwarning("Multiple Selection", "Please select only one server to view details.", parent=self.window)
             return
 
-        # Get server data
+        # Get server data — item is the iid == row_key
         item = selected_items[0]
-        values = self.tree.item(item)["values"]
-        ip_address = values[4]  # IP Address now at index 4 (fav/avoid/probe/extracted)
-
-        # Find server in data
+        row_key = item  # TreeView item ID == iid == row_key
         server_data = next(
-            (server for server in self.filtered_servers if server.get("ip_address") == ip_address),
+            (server for server in self.filtered_servers if server.get("row_key") == row_key),
             None
         )
 
@@ -749,6 +1129,16 @@ class ServerListWindow(ServerListWindowActionsMixin):
 
     def _show_server_detail_popup(self, server_data: Dict[str, Any]) -> None:
         """Show server detail popup using details module."""
+        ip_address = server_data.get("ip_address")
+        if server_data.get("host_type", "S") == "S" and ip_address and "denied_shares_list" not in server_data:
+            try:
+                server_data["denied_shares_list"] = self.db_reader.get_denied_shares(ip_address)
+            except Exception as exc:
+                _logger.warning("Failed to fetch denied share list for %s: %s", ip_address, exc)
+                server_data["denied_shares_list"] = []
+        else:
+            server_data.setdefault("denied_shares_list", [])
+
         details.show_server_detail_popup(
             self.window,
             server_data,

@@ -10,15 +10,17 @@ duplicate IPs by comparing last_seen timestamps.
 """
 
 import os
-import shutil
+import csv
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 import time
 import logging
+
+from shared.config import normalize_db_timestamp
 
 _logger = logging.getLogger(__name__)
 
@@ -28,11 +30,74 @@ MIN_DATE = datetime(1970, 1, 1)
 # Batch size for commit operations during merge
 BATCH_SIZE = 500
 
-# Required tables for schema validation
-REQUIRED_TABLES = {'smb_servers', 'scan_sessions'}
+# Required tables for schema validation.
+# These are the minimum core tables required for safe SMB merge/import.
+REQUIRED_TABLES = {
+    'scan_sessions',
+    'smb_servers',
+    'share_access',
+}
 
 # Required columns in smb_servers for merge
 REQUIRED_SERVER_COLUMNS = {'ip_address', 'country', 'auth_method', 'last_seen', 'first_seen'}
+REQUIRED_SHARE_ACCESS_COLUMNS = {
+    'server_id', 'share_name', 'accessible', 'auth_status', 'permissions',
+    'share_type', 'share_comment', 'test_timestamp', 'access_details', 'error_message',
+}
+
+# Required columns in optional protocol sidecar tables when they exist.
+# These reflect columns queried unconditionally by merge/import paths.
+REQUIRED_FTP_SERVER_COLUMNS = {
+    'ip_address', 'country', 'country_code', 'port', 'anon_accessible',
+    'banner', 'shodan_data', 'first_seen', 'last_seen', 'scan_count', 'status', 'notes',
+}
+REQUIRED_HTTP_SERVER_COLUMNS = {
+    'ip_address', 'country', 'country_code', 'port', 'scheme', 'banner', 'title',
+    'shodan_data', 'first_seen', 'last_seen', 'scan_count', 'status', 'notes',
+}
+REQUIRED_FTP_ACCESS_COLUMNS = {
+    'server_id', 'accessible', 'auth_status', 'root_listing_available', 'root_entry_count',
+    'error_message', 'test_timestamp', 'access_details',
+}
+REQUIRED_HTTP_ACCESS_COLUMNS = {
+    'server_id', 'accessible', 'status_code', 'is_index_page', 'dir_count', 'file_count',
+    'tls_verified', 'error_message', 'access_details', 'test_timestamp',
+}
+REQUIRED_SHARE_CREDENTIALS_COLUMNS = {
+    'server_id', 'share_name', 'username', 'password', 'source', 'last_verified_at',
+}
+REQUIRED_FILE_MANIFEST_COLUMNS = {
+    'server_id', 'share_name', 'file_path', 'file_name', 'file_size', 'file_type',
+    'file_extension', 'mime_type', 'last_modified', 'is_ransomware_indicator',
+    'is_sensitive', 'discovery_timestamp', 'metadata',
+}
+REQUIRED_VULNERABILITY_COLUMNS = {
+    'server_id', 'vuln_type', 'severity', 'title', 'description', 'evidence',
+    'remediation', 'cvss_score', 'cve_ids', 'discovery_timestamp', 'status', 'notes',
+}
+REQUIRED_FAILURE_LOG_COLUMNS = {
+    'ip_address', 'failure_timestamp', 'failure_type', 'failure_reason',
+    'shodan_data', 'analysis_results', 'retry_count',
+}
+
+# Required columns in current/target DB tables for merge writes.
+# Source-side validation can remain less strict for legacy compatibility.
+REQUIRED_FTP_ACCESS_TARGET_COLUMNS = REQUIRED_FTP_ACCESS_COLUMNS | {'session_id'}
+REQUIRED_HTTP_ACCESS_TARGET_COLUMNS = REQUIRED_HTTP_ACCESS_COLUMNS | {'session_id'}
+REQUIRED_SHARE_CREDENTIALS_TARGET_COLUMNS = REQUIRED_SHARE_CREDENTIALS_COLUMNS | {'session_id'}
+REQUIRED_FILE_MANIFEST_TARGET_COLUMNS = REQUIRED_FILE_MANIFEST_COLUMNS | {'session_id'}
+REQUIRED_VULNERABILITY_TARGET_COLUMNS = REQUIRED_VULNERABILITY_COLUMNS | {'session_id'}
+REQUIRED_FAILURE_LOG_TARGET_COLUMNS = REQUIRED_FAILURE_LOG_COLUMNS | {'session_id', 'last_retry_timestamp'}
+REQUIRED_FTP_SERVER_TARGET_COLUMNS = REQUIRED_FTP_SERVER_COLUMNS | {'id'}
+REQUIRED_HTTP_SERVER_TARGET_COLUMNS = REQUIRED_HTTP_SERVER_COLUMNS | {'id'}
+
+# Required columns in core target tables needed for merge writes.
+REQUIRED_SCAN_SESSION_TARGET_COLUMNS = {'id'}
+REQUIRED_SMB_SERVER_TARGET_COLUMNS = {
+    'id', 'ip_address', 'country', 'country_code', 'auth_method', 'shodan_data',
+    'first_seen', 'last_seen', 'scan_count', 'status', 'notes',
+}
+REQUIRED_SHARE_ACCESS_TARGET_COLUMNS = REQUIRED_SHARE_ACCESS_COLUMNS | {'session_id'}
 
 
 class MergeConflictStrategy(Enum):
@@ -100,6 +165,23 @@ class SchemaValidation:
     errors: List[str] = field(default_factory=list)
 
 
+@dataclass
+class CSVImportResult:
+    """Result of CSV host import operation."""
+    success: bool
+    rows_total: int = 0
+    rows_valid: int = 0
+    rows_skipped: int = 0
+    servers_added: int = 0
+    servers_updated: int = 0
+    servers_skipped: int = 0
+    protocol_counts: Dict[str, int] = field(default_factory=dict)
+    errors: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+    duration_seconds: float = 0.0
+    backup_path: Optional[str] = None
+
+
 class DBToolsEngine:
     """
     Database tools engine for SMBSeek GUI.
@@ -154,19 +236,37 @@ class DBToolsEngine:
             missing_tables = REQUIRED_TABLES - existing_tables
             if missing_tables:
                 result.valid = False
-                result.missing_tables = list(missing_tables)
-                result.errors.append(f"Missing required tables: {', '.join(missing_tables)}")
+                sorted_missing = sorted(missing_tables)
+                result.missing_tables = sorted_missing
+                result.errors.append(f"Missing required tables: {', '.join(sorted_missing)}")
 
-            # Check required columns in smb_servers
-            if 'smb_servers' in existing_tables:
-                cursor.execute("PRAGMA table_info(smb_servers)")
+            def validate_required_columns(table_name: str, required_columns: set[str]) -> None:
+                if table_name not in existing_tables:
+                    return
+                cursor.execute(f"PRAGMA table_info({table_name})")
                 existing_columns = {row['name'] for row in cursor.fetchall()}
 
-                missing_columns = REQUIRED_SERVER_COLUMNS - existing_columns
-                if missing_columns:
+                missing = sorted(required_columns - existing_columns)
+                if missing:
                     result.valid = False
-                    result.missing_columns = list(missing_columns)
-                    result.errors.append(f"Missing required columns in smb_servers: {', '.join(missing_columns)}")
+                    result.missing_columns.extend([f"{table_name}.{col}" for col in missing])
+                    result.errors.append(
+                        f"Missing required columns in {table_name}: {', '.join(missing)}"
+                    )
+
+            # Core SMB merge columns
+            validate_required_columns('smb_servers', REQUIRED_SERVER_COLUMNS)
+            validate_required_columns('share_access', REQUIRED_SHARE_ACCESS_COLUMNS)
+            # Optional protocol sidecars: validate only when table is present.
+            validate_required_columns('ftp_servers', REQUIRED_FTP_SERVER_COLUMNS)
+            validate_required_columns('http_servers', REQUIRED_HTTP_SERVER_COLUMNS)
+            validate_required_columns('ftp_access', REQUIRED_FTP_ACCESS_COLUMNS)
+            validate_required_columns('http_access', REQUIRED_HTTP_ACCESS_COLUMNS)
+            # Optional artifact sidecars: validate only when table is present.
+            validate_required_columns('share_credentials', REQUIRED_SHARE_CREDENTIALS_COLUMNS)
+            validate_required_columns('file_manifests', REQUIRED_FILE_MANIFEST_COLUMNS)
+            validate_required_columns('vulnerabilities', REQUIRED_VULNERABILITY_COLUMNS)
+            validate_required_columns('failure_logs', REQUIRED_FAILURE_LOG_COLUMNS)
 
             conn.close()
 
@@ -207,41 +307,154 @@ class DBToolsEngine:
             cur_conn = sqlite3.connect(f"file:{self.current_db_path}?mode=ro", uri=True)
             cur_conn.row_factory = sqlite3.Row
 
-            # Get external server IPs
             ext_cursor = ext_conn.cursor()
-            ext_cursor.execute("SELECT ip_address, last_seen FROM smb_servers")
-            ext_servers = {row['ip_address']: row['last_seen'] for row in ext_cursor.fetchall()}
-
-            # Get current server IPs
             cur_cursor = cur_conn.cursor()
-            cur_cursor.execute("SELECT ip_address, last_seen FROM smb_servers")
-            cur_servers = {row['ip_address']: row['last_seen'] for row in cur_cursor.fetchall()}
 
-            # Calculate overlap
-            new_ips = set(ext_servers.keys()) - set(cur_servers.keys())
-            existing_ips = set(ext_servers.keys()) & set(cur_servers.keys())
+            ext_cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            ext_tables = {row['name'] for row in ext_cursor.fetchall()}
+            cur_cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            cur_tables = {row['name'] for row in cur_cursor.fetchall()}
 
-            # Count related records in external DB
-            ext_cursor.execute("SELECT COUNT(*) FROM share_access")
-            total_shares = ext_cursor.fetchone()[0]
+            warnings: List[str] = []
+            schema_skipped_servers = 0
+            schema_skipped_shares = 0
+            schema_skipped_artifacts = 0
+            for table_name, label, required_columns in (
+                ("ftp_servers", "FTP server", REQUIRED_FTP_SERVER_COLUMNS),
+                ("http_servers", "HTTP server", REQUIRED_HTTP_SERVER_COLUMNS),
+            ):
+                if table_name in ext_tables and table_name not in cur_tables:
+                    ext_cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+                    skipped_rows = ext_cursor.fetchone()[0]
+                    if skipped_rows > 0:
+                        schema_skipped_servers += skipped_rows
+                        warnings.append(
+                            f"Target DB missing {table_name}; "
+                            f"{skipped_rows} {label} rows from source will be skipped."
+                        )
+                elif table_name in ext_tables and table_name in cur_tables:
+                    target_columns = self._table_columns(cur_conn, table_name)
+                    missing_columns = sorted(required_columns - target_columns)
+                    if missing_columns:
+                        ext_cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+                        skipped_rows = ext_cursor.fetchone()[0]
+                        if skipped_rows > 0:
+                            schema_skipped_servers += skipped_rows
+                            warnings.append(
+                                f"Target table {table_name} missing required columns "
+                                f"({', '.join(missing_columns)}); "
+                                f"{skipped_rows} {label} rows from source will be skipped."
+                            )
 
-            ext_cursor.execute("SELECT COUNT(*) FROM vulnerabilities")
-            total_vulns = ext_cursor.fetchone()[0]
+            for table_name, label, required_columns in (
+                ("share_credentials", "share credential", REQUIRED_SHARE_CREDENTIALS_TARGET_COLUMNS),
+                ("file_manifests", "file manifest", REQUIRED_FILE_MANIFEST_TARGET_COLUMNS),
+                ("vulnerabilities", "vulnerability", REQUIRED_VULNERABILITY_TARGET_COLUMNS),
+                ("failure_logs", "failure log", REQUIRED_FAILURE_LOG_TARGET_COLUMNS),
+            ):
+                if table_name in ext_tables and table_name not in cur_tables:
+                    ext_cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+                    skipped_rows = ext_cursor.fetchone()[0]
+                    if skipped_rows > 0:
+                        schema_skipped_artifacts += skipped_rows
+                        warnings.append(
+                            f"Target DB missing {table_name}; "
+                            f"{skipped_rows} {label} rows from source will be skipped."
+                        )
+                elif table_name in ext_tables and table_name in cur_tables:
+                    target_columns = self._table_columns(cur_conn, table_name)
+                    missing_columns = sorted(required_columns - target_columns)
+                    if missing_columns:
+                        ext_cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+                        skipped_rows = ext_cursor.fetchone()[0]
+                        if skipped_rows > 0:
+                            schema_skipped_artifacts += skipped_rows
+                            warnings.append(
+                                f"Target table {table_name} missing required columns "
+                                f"({', '.join(missing_columns)}); "
+                                f"{skipped_rows} {label} rows from source will be skipped."
+                            )
 
-            ext_cursor.execute("SELECT COUNT(*) FROM file_manifests")
-            total_files = ext_cursor.fetchone()[0]
+            for table_name, label, required_columns in (
+                ("ftp_access", "FTP access", REQUIRED_FTP_ACCESS_TARGET_COLUMNS),
+                ("http_access", "HTTP access", REQUIRED_HTTP_ACCESS_TARGET_COLUMNS),
+            ):
+                if table_name in ext_tables and table_name not in cur_tables:
+                    ext_cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+                    skipped_rows = ext_cursor.fetchone()[0]
+                    if skipped_rows > 0:
+                        schema_skipped_shares += skipped_rows
+                        warnings.append(
+                            f"Target DB missing {table_name}; "
+                            f"{skipped_rows} {label} rows from source will be skipped."
+                        )
+                elif table_name in ext_tables and table_name in cur_tables:
+                    target_columns = self._table_columns(cur_conn, table_name)
+                    missing_columns = sorted(required_columns - target_columns)
+                    if missing_columns:
+                        ext_cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+                        skipped_rows = ext_cursor.fetchone()[0]
+                        if skipped_rows > 0:
+                            schema_skipped_shares += skipped_rows
+                            warnings.append(
+                                f"Target table {table_name} missing required columns "
+                                f"({', '.join(missing_columns)}); "
+                                f"{skipped_rows} {label} rows from source will be skipped."
+                            )
+
+            external_servers = 0
+            new_servers = 0
+            existing_servers = 0
+            for table_name in ("smb_servers", "ftp_servers", "http_servers"):
+                if table_name not in ext_tables or table_name not in cur_tables:
+                    continue
+                if table_name == "ftp_servers":
+                    if not self._table_has_required_columns(cur_conn, table_name, REQUIRED_FTP_SERVER_COLUMNS):
+                        continue
+                if table_name == "http_servers":
+                    if not self._table_has_required_columns(cur_conn, table_name, REQUIRED_HTTP_SERVER_COLUMNS):
+                        continue
+
+                ext_cursor.execute(f"SELECT ip_address FROM {table_name}")
+                ext_ips = {row['ip_address'] for row in ext_cursor.fetchall()}
+                cur_cursor.execute(f"SELECT ip_address FROM {table_name}")
+                cur_ips = {row['ip_address'] for row in cur_cursor.fetchall()}
+
+                external_servers += len(ext_ips)
+                new_servers += len(ext_ips - cur_ips)
+                existing_servers += len(ext_ips & cur_ips)
+
+            total_shares = 0
+            for access_table in ("share_access", "ftp_access", "http_access"):
+                if access_table in ext_tables:
+                    ext_cursor.execute(f"SELECT COUNT(*) FROM {access_table}")
+                    total_shares += ext_cursor.fetchone()[0]
+
+            total_vulns = 0
+            if "vulnerabilities" in ext_tables:
+                ext_cursor.execute("SELECT COUNT(*) FROM vulnerabilities")
+                total_vulns = ext_cursor.fetchone()[0]
+
+            total_files = 0
+            if "file_manifests" in ext_tables:
+                ext_cursor.execute("SELECT COUNT(*) FROM file_manifests")
+                total_files = ext_cursor.fetchone()[0]
 
             ext_conn.close()
             cur_conn.close()
 
             return {
                 'valid': True,
-                'external_servers': len(ext_servers),
-                'new_servers': len(new_ips),
-                'existing_servers': len(existing_ips),
+                'external_servers': external_servers,
+                'new_servers': new_servers,
+                'existing_servers': existing_servers,
                 'total_shares': total_shares,
                 'total_vulnerabilities': total_vulns,
-                'total_file_manifests': total_files
+                'total_file_manifests': total_files,
+                'warnings': warnings,
+                'schema_skipped_servers': schema_skipped_servers,
+                'schema_skipped_shares': schema_skipped_shares,
+                'schema_skipped_artifacts': schema_skipped_artifacts,
             }
 
         except Exception as e:
@@ -249,6 +462,710 @@ class DBToolsEngine:
                 'valid': False,
                 'errors': [str(e)]
             }
+
+    # -------------------------------------------------------------------------
+    # CSV Host Import (S/F/H server rows)
+    # -------------------------------------------------------------------------
+
+    def preview_csv_import(self, csv_path: str) -> Dict[str, Any]:
+        """
+        Preview CSV host import outcomes without writing to the database.
+
+        CSV contract:
+        - Required: ip_address
+        - Optional: host_type (S/F/H; defaults to S), country, country_code,
+          auth_method, first_seen, last_seen, scan_count, status, notes,
+          port, anon_accessible, banner, scheme, title, shodan_data
+        """
+        if not os.path.exists(csv_path):
+            return {
+                'valid': False,
+                'errors': [f"CSV file not found: {csv_path}"]
+            }
+
+        try:
+            conn = sqlite3.connect(f"file:{self.current_db_path}?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            analysis = self._analyze_csv_hosts(csv_path, conn, include_rows=False)
+            conn.close()
+
+            if analysis['errors']:
+                return {
+                    'valid': False,
+                    'errors': analysis['errors'],
+                }
+
+            return {
+                'valid': True,
+                'total_rows': analysis['rows_total'],
+                'valid_rows': analysis['rows_valid'],
+                'skipped_rows': analysis['rows_skipped'],
+                'new_servers': analysis['new_servers'],
+                'existing_servers': analysis['existing_servers'],
+                'protocol_counts': analysis['protocol_counts'],
+                'warnings': analysis['warnings'],
+            }
+
+        except Exception as e:
+            return {
+                'valid': False,
+                'errors': [str(e)]
+            }
+
+    def import_csv_hosts(
+        self,
+        csv_path: str,
+        strategy: MergeConflictStrategy = MergeConflictStrategy.KEEP_NEWER,
+        auto_backup: bool = True,
+        progress_callback: Optional[Callable[[int, str], None]] = None,
+    ) -> CSVImportResult:
+        """
+        Import protocol-aware host rows from CSV into SMB/FTP/HTTP server tables.
+
+        Rows are written per protocol table based on host_type:
+        - S -> smb_servers
+        - F -> ftp_servers
+        - H -> http_servers
+        """
+        start_time = time.time()
+        result = CSVImportResult(success=False, protocol_counts={'S': 0, 'F': 0, 'H': 0})
+
+        def progress(pct: int, msg: str) -> None:
+            if progress_callback:
+                progress_callback(pct, msg)
+
+        if not os.path.exists(csv_path):
+            result.errors.append(f"CSV file not found: {csv_path}")
+            return result
+
+        try:
+            progress(0, "Preparing CSV import...")
+
+            if auto_backup:
+                progress(2, "Creating backup...")
+                backup_result = self.create_backup()
+                if backup_result['success']:
+                    result.backup_path = backup_result['backup_path']
+                else:
+                    result.warnings.append(
+                        f"Backup failed: {backup_result.get('error', 'Unknown error')}"
+                    )
+
+            db_size = os.path.getsize(self.current_db_path)
+            if not self._check_disk_space(db_size * 2, os.path.dirname(self.current_db_path)):
+                result.errors.append("Insufficient disk space for CSV import")
+                return result
+
+            conn = sqlite3.connect(self.current_db_path)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys = ON")
+
+            try:
+                progress(10, "Analyzing CSV rows...")
+                analysis = self._analyze_csv_hosts(csv_path, conn, include_rows=True)
+                result.rows_total = analysis['rows_total']
+                result.rows_valid = analysis['rows_valid']
+                result.rows_skipped = analysis['rows_skipped']
+                result.protocol_counts = analysis['protocol_counts']
+                result.warnings.extend(analysis['warnings'])
+
+                if analysis['errors']:
+                    result.errors.extend(analysis['errors'])
+                    return result
+
+                rows_to_import = analysis['rows']
+                if not rows_to_import:
+                    result.errors.append("No valid CSV rows to import.")
+                    return result
+
+                conn.execute("BEGIN IMMEDIATE")
+
+                progress(20, "Creating import session...")
+                import_session_id = self._create_import_session(
+                    conn,
+                    os.path.basename(csv_path)
+                )
+
+                total = len(rows_to_import)
+                for i, row in enumerate(rows_to_import):
+                    host_type = row['host_type']
+                    if host_type == 'S':
+                        added, updated, skipped = self._upsert_csv_smb_row(conn, row, strategy)
+                    elif host_type == 'F':
+                        added, updated, skipped = self._upsert_csv_ftp_row(conn, row, strategy)
+                    elif host_type == 'H':
+                        added, updated, skipped = self._upsert_csv_http_row(conn, row, strategy)
+                    else:
+                        # Defensive: should never happen after validation.
+                        result.rows_skipped += 1
+                        continue
+
+                    result.servers_added += added
+                    result.servers_updated += updated
+                    result.servers_skipped += skipped
+
+                    if i % 50 == 0:
+                        pct = 25 + int(((i + 1) / total) * 65)
+                        progress(min(pct, 90), f"Importing row {i + 1}/{total}...")
+
+                progress(92, "Finalizing import session...")
+                self._finalize_import_session(
+                    conn,
+                    import_session_id,
+                    result.servers_added + result.servers_updated,
+                )
+
+                conn.commit()
+                result.success = True
+                progress(100, "CSV import completed successfully")
+
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
+
+        except Exception as e:
+            _logger.exception("CSV import failed")
+            result.errors.append(str(e))
+
+        result.duration_seconds = time.time() - start_time
+        return result
+
+    def _read_csv_host_records(self, csv_path: str) -> List[Tuple[int, Dict[str, str]]]:
+        """Read CSV rows with normalized header keys; skip comment-only lines."""
+        records: List[Tuple[int, Dict[str, str]]] = []
+        with open(csv_path, 'r', encoding='utf-8-sig', newline='') as csvfile:
+            filtered_lines = (
+                line for line in csvfile
+                if not line.lstrip().startswith('#')
+            )
+            reader = csv.DictReader(filtered_lines)
+            if not reader.fieldnames:
+                raise ValueError("CSV file is missing a header row.")
+
+            normalized_headers = {
+                self._normalize_csv_column_name(header)
+                for header in reader.fieldnames
+                if header
+            }
+            if 'ip_address' not in normalized_headers:
+                raise ValueError("Missing required CSV column: ip_address")
+
+            for row_number, row in enumerate(reader, start=2):
+                normalized_row: Dict[str, str] = {}
+                for key, value in (row or {}).items():
+                    if key is None:
+                        continue
+                    norm_key = self._normalize_csv_column_name(key)
+                    if isinstance(value, str):
+                        normalized_row[norm_key] = value.strip()
+                    elif value is None:
+                        normalized_row[norm_key] = ''
+                    else:
+                        normalized_row[norm_key] = str(value)
+
+                # Ignore fully empty rows.
+                if not any(v for v in normalized_row.values()):
+                    continue
+                records.append((row_number, normalized_row))
+
+        return records
+
+    def _analyze_csv_hosts(
+        self,
+        csv_path: str,
+        conn: sqlite3.Connection,
+        include_rows: bool,
+    ) -> Dict[str, Any]:
+        """
+        Parse and validate CSV host rows against current runtime schema.
+
+        Returns analysis dictionary with summary counts, warnings, and parsed rows.
+        """
+        analysis: Dict[str, Any] = {
+            'rows_total': 0,
+            'rows_valid': 0,
+            'rows_skipped': 0,
+            'new_servers': 0,
+            'existing_servers': 0,
+            'protocol_counts': {'S': 0, 'F': 0, 'H': 0},
+            'warnings': [],
+            'errors': [],
+            'rows': [],
+        }
+
+        warnings = analysis['warnings']
+        dropped_warnings = 0
+        max_warnings = 25
+
+        def add_warning(message: str) -> None:
+            nonlocal dropped_warnings
+            if len(warnings) < max_warnings:
+                warnings.append(message)
+            else:
+                dropped_warnings += 1
+
+        protocol_specs = {
+            'S': ('smb_servers', REQUIRED_SMB_SERVER_TARGET_COLUMNS),
+            'F': ('ftp_servers', REQUIRED_FTP_SERVER_TARGET_COLUMNS),
+            'H': ('http_servers', REQUIRED_HTTP_SERVER_TARGET_COLUMNS),
+        }
+
+        protocol_support: Dict[str, Dict[str, Any]] = {}
+        existing_ip_sets: Dict[str, set[str]] = {'S': set(), 'F': set(), 'H': set()}
+        for host_type, (table_name, required_columns) in protocol_specs.items():
+            columns = self._table_columns(conn, table_name)
+            if not columns:
+                protocol_support[host_type] = {
+                    'supported': False,
+                    'reason': f"Target DB missing table {table_name}",
+                }
+                continue
+
+            missing_columns = sorted(required_columns - columns)
+            if missing_columns:
+                protocol_support[host_type] = {
+                    'supported': False,
+                    'reason': (
+                        f"Target table {table_name} missing required columns: "
+                        f"{', '.join(missing_columns)}"
+                    ),
+                }
+                continue
+
+            protocol_support[host_type] = {'supported': True, 'reason': ''}
+            rows = conn.execute(f"SELECT ip_address FROM {table_name}").fetchall()
+            existing_ip_sets[host_type] = {row['ip_address'] for row in rows}
+
+        try:
+            records = self._read_csv_host_records(csv_path)
+        except Exception as e:
+            analysis['errors'].append(str(e))
+            return analysis
+
+        if not records:
+            analysis['errors'].append("CSV file has no data rows.")
+            return analysis
+
+        seen_in_file: Dict[str, set[str]] = {'S': set(), 'F': set(), 'H': set()}
+        unsupported_rows: Dict[str, int] = {'S': 0, 'F': 0, 'H': 0}
+
+        now_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        for row_number, raw_row in records:
+            analysis['rows_total'] += 1
+
+            ip_address = (raw_row.get('ip_address') or '').strip()
+            if not ip_address:
+                analysis['rows_skipped'] += 1
+                add_warning(f"Row {row_number}: missing ip_address; row skipped.")
+                continue
+
+            host_type = self._normalize_host_type(
+                raw_row.get('host_type')
+                or raw_row.get('protocol')
+                or raw_row.get('type')
+            )
+            if host_type is None:
+                analysis['rows_skipped'] += 1
+                add_warning(
+                    f"Row {row_number}: invalid host_type '{raw_row.get('host_type', '')}'; "
+                    "expected S/F/H."
+                )
+                continue
+
+            support = protocol_support[host_type]
+            if not support['supported']:
+                analysis['rows_skipped'] += 1
+                unsupported_rows[host_type] += 1
+                continue
+
+            prepared = self._prepare_csv_host_row(raw_row, host_type, now_ts, row_number, add_warning)
+            analysis['rows_valid'] += 1
+            analysis['protocol_counts'][host_type] += 1
+
+            if (
+                ip_address in existing_ip_sets[host_type]
+                or ip_address in seen_in_file[host_type]
+            ):
+                analysis['existing_servers'] += 1
+            else:
+                analysis['new_servers'] += 1
+                seen_in_file[host_type].add(ip_address)
+
+            if include_rows:
+                analysis['rows'].append(prepared)
+
+        for host_type, skipped_count in unsupported_rows.items():
+            if skipped_count == 0:
+                continue
+            reason = protocol_support[host_type]['reason']
+            add_warning(
+                f"Skipped {skipped_count} {host_type} rows: {reason}."
+            )
+
+        if dropped_warnings:
+            warnings.append(f"{dropped_warnings} additional warnings omitted.")
+
+        return analysis
+
+    def _prepare_csv_host_row(
+        self,
+        raw_row: Dict[str, str],
+        host_type: str,
+        now_ts: str,
+        row_number: int,
+        add_warning: Callable[[str], None],
+    ) -> Dict[str, Any]:
+        """Normalize CSV row values for protocol-specific upsert operations."""
+        last_seen_raw = (
+            raw_row.get('last_seen')
+            or raw_row.get('timestamp')
+            or raw_row.get('updated_at')
+        )
+        first_seen_raw = raw_row.get('first_seen') or raw_row.get('created_at')
+
+        last_seen = self._coerce_db_timestamp(last_seen_raw, now_ts)
+        first_seen = self._coerce_db_timestamp(first_seen_raw, last_seen)
+
+        scan_count = self._coerce_int(raw_row.get('scan_count'), default=1, minimum=1)
+        if raw_row.get('scan_count') and scan_count == 1 and raw_row.get('scan_count') != '1':
+            add_warning(f"Row {row_number}: invalid scan_count '{raw_row.get('scan_count')}'; using 1.")
+
+        country_code = (raw_row.get('country_code') or '').upper() or None
+        status = raw_row.get('status') or 'active'
+        notes = raw_row.get('notes') or None
+        shodan_data = raw_row.get('shodan_data') or None
+        banner = raw_row.get('banner') or None
+
+        prepared: Dict[str, Any] = {
+            'host_type': host_type,
+            'ip_address': (raw_row.get('ip_address') or '').strip(),
+            'country': raw_row.get('country') or None,
+            'country_code': country_code,
+            'first_seen': first_seen,
+            'last_seen': last_seen,
+            'scan_count': scan_count,
+            'status': status,
+            'notes': notes,
+            'shodan_data': shodan_data,
+            'banner': banner,
+            'auth_method': raw_row.get('auth_method') or None,
+            'port': None,
+            'anon_accessible': False,
+            'scheme': None,
+            'title': raw_row.get('title') or None,
+        }
+
+        if host_type == 'F':
+            raw_port = raw_row.get('port')
+            prepared['port'] = self._coerce_int(raw_port, default=21, minimum=1)
+            if raw_port and prepared['port'] == 21 and raw_port not in ('21', '21.0'):
+                add_warning(f"Row {row_number}: invalid FTP port '{raw_port}'; using 21.")
+
+            prepared['anon_accessible'] = self._coerce_bool(
+                raw_row.get('anon_accessible') or raw_row.get('anonymous'),
+                default=False,
+            )
+
+        if host_type == 'H':
+            raw_scheme = (raw_row.get('scheme') or 'http').strip().lower()
+            if raw_scheme not in ('http', 'https'):
+                add_warning(f"Row {row_number}: invalid scheme '{raw_scheme}'; using http.")
+                raw_scheme = 'http'
+            prepared['scheme'] = raw_scheme
+
+            raw_port = raw_row.get('port')
+            default_port = 443 if raw_scheme == 'https' else 80
+            prepared['port'] = self._coerce_int(raw_port, default=default_port, minimum=1)
+            if raw_port and prepared['port'] == default_port and raw_port not in (str(default_port), f"{default_port}.0"):
+                add_warning(
+                    f"Row {row_number}: invalid HTTP port '{raw_port}'; using {default_port}."
+                )
+
+        return prepared
+
+    def _normalize_csv_column_name(self, key: str) -> str:
+        """Normalize CSV column names to lowercase snake_case."""
+        return key.strip().lower().replace('-', '_').replace(' ', '_')
+
+    def _normalize_host_type(self, raw_value: Optional[str]) -> Optional[str]:
+        """Map host type aliases to canonical S/F/H; default to S when blank."""
+        if raw_value is None:
+            return 'S'
+        value = str(raw_value).strip().upper()
+        if not value:
+            return 'S'
+
+        mapping = {
+            'S': 'S',
+            'SMB': 'S',
+            'F': 'F',
+            'FTP': 'F',
+            'H': 'H',
+            'HTTP': 'H',
+            'HTTPS': 'H',
+        }
+        return mapping.get(value)
+
+    def _coerce_db_timestamp(self, raw_value: Any, fallback: str) -> str:
+        """Normalize timestamps to canonical DB format, falling back safely."""
+        normalized = normalize_db_timestamp(raw_value)
+        if isinstance(normalized, str) and normalized.strip():
+            return normalized[:19]
+        return fallback
+
+    def _coerce_int(self, raw_value: Any, default: int, minimum: Optional[int] = None) -> int:
+        """Best-effort integer coercion with lower-bound guard."""
+        if raw_value is None:
+            return default
+        if isinstance(raw_value, str) and not raw_value.strip():
+            return default
+        try:
+            value = int(float(str(raw_value).strip()))
+        except Exception:
+            return default
+        if minimum is not None and value < minimum:
+            return default
+        return value
+
+    def _coerce_bool(self, raw_value: Any, default: bool = False) -> bool:
+        """Best-effort boolean coercion for CSV text values."""
+        if raw_value is None:
+            return default
+        if isinstance(raw_value, bool):
+            return raw_value
+        value = str(raw_value).strip().lower()
+        if not value:
+            return default
+        if value in {'1', 'true', 'yes', 'y', 'on'}:
+            return True
+        if value in {'0', 'false', 'no', 'n', 'off'}:
+            return False
+        return default
+
+    def _upsert_csv_smb_row(
+        self,
+        conn: sqlite3.Connection,
+        row: Dict[str, Any],
+        strategy: MergeConflictStrategy,
+    ) -> Tuple[int, int, int]:
+        """Upsert one SMB CSV row according to conflict strategy."""
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, last_seen FROM smb_servers WHERE ip_address = ?",
+            (row['ip_address'],),
+        )
+        current = cursor.fetchone()
+        if current is None:
+            cursor.execute("""
+                INSERT INTO smb_servers (
+                    ip_address, country, country_code, auth_method,
+                    shodan_data, first_seen, last_seen, scan_count, status, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                row['ip_address'],
+                row['country'],
+                row['country_code'],
+                row['auth_method'],
+                row['shodan_data'],
+                row['first_seen'],
+                row['last_seen'],
+                row['scan_count'],
+                row['status'],
+                row['notes'],
+            ))
+            return 1, 0, 0
+
+        current_last_seen = current['last_seen'] if isinstance(current, sqlite3.Row) else current[1]
+        source_time = self._parse_timestamp(row['last_seen'])
+        current_time = self._parse_timestamp(current_last_seen)
+        should_update = (
+            strategy == MergeConflictStrategy.KEEP_SOURCE
+            or (strategy == MergeConflictStrategy.KEEP_NEWER and source_time > current_time)
+        )
+        if not should_update:
+            return 0, 0, 1
+
+        cursor.execute("""
+            UPDATE smb_servers
+               SET country = ?,
+                   country_code = ?,
+                   auth_method = ?,
+                   shodan_data = ?,
+                   first_seen = ?,
+                   last_seen = ?,
+                   scan_count = ?,
+                   status = ?,
+                   notes = ?
+             WHERE ip_address = ?
+        """, (
+            row['country'],
+            row['country_code'],
+            row['auth_method'],
+            row['shodan_data'],
+            row['first_seen'],
+            row['last_seen'],
+            row['scan_count'],
+            row['status'],
+            row['notes'],
+            row['ip_address'],
+        ))
+        return 0, 1, 0
+
+    def _upsert_csv_ftp_row(
+        self,
+        conn: sqlite3.Connection,
+        row: Dict[str, Any],
+        strategy: MergeConflictStrategy,
+    ) -> Tuple[int, int, int]:
+        """Upsert one FTP CSV row according to conflict strategy."""
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, last_seen FROM ftp_servers WHERE ip_address = ?",
+            (row['ip_address'],),
+        )
+        current = cursor.fetchone()
+        if current is None:
+            cursor.execute("""
+                INSERT INTO ftp_servers (
+                    ip_address, country, country_code, port, anon_accessible,
+                    banner, shodan_data, first_seen, last_seen, scan_count, status, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                row['ip_address'],
+                row['country'],
+                row['country_code'],
+                row['port'],
+                1 if row['anon_accessible'] else 0,
+                row['banner'],
+                row['shodan_data'],
+                row['first_seen'],
+                row['last_seen'],
+                row['scan_count'],
+                row['status'],
+                row['notes'],
+            ))
+            return 1, 0, 0
+
+        current_last_seen = current['last_seen'] if isinstance(current, sqlite3.Row) else current[1]
+        source_time = self._parse_timestamp(row['last_seen'])
+        current_time = self._parse_timestamp(current_last_seen)
+        should_update = (
+            strategy == MergeConflictStrategy.KEEP_SOURCE
+            or (strategy == MergeConflictStrategy.KEEP_NEWER and source_time > current_time)
+        )
+        if not should_update:
+            return 0, 0, 1
+
+        cursor.execute("""
+            UPDATE ftp_servers
+               SET country = ?,
+                   country_code = ?,
+                   port = ?,
+                   anon_accessible = ?,
+                   banner = ?,
+                   shodan_data = ?,
+                   first_seen = ?,
+                   last_seen = ?,
+                   scan_count = ?,
+                   status = ?,
+                   notes = ?
+             WHERE ip_address = ?
+        """, (
+            row['country'],
+            row['country_code'],
+            row['port'],
+            1 if row['anon_accessible'] else 0,
+            row['banner'],
+            row['shodan_data'],
+            row['first_seen'],
+            row['last_seen'],
+            row['scan_count'],
+            row['status'],
+            row['notes'],
+            row['ip_address'],
+        ))
+        return 0, 1, 0
+
+    def _upsert_csv_http_row(
+        self,
+        conn: sqlite3.Connection,
+        row: Dict[str, Any],
+        strategy: MergeConflictStrategy,
+    ) -> Tuple[int, int, int]:
+        """Upsert one HTTP CSV row according to conflict strategy."""
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, last_seen FROM http_servers WHERE ip_address = ?",
+            (row['ip_address'],),
+        )
+        current = cursor.fetchone()
+        if current is None:
+            cursor.execute("""
+                INSERT INTO http_servers (
+                    ip_address, country, country_code, port, scheme, banner, title,
+                    shodan_data, first_seen, last_seen, scan_count, status, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                row['ip_address'],
+                row['country'],
+                row['country_code'],
+                row['port'],
+                row['scheme'] or 'http',
+                row['banner'],
+                row['title'],
+                row['shodan_data'],
+                row['first_seen'],
+                row['last_seen'],
+                row['scan_count'],
+                row['status'],
+                row['notes'],
+            ))
+            return 1, 0, 0
+
+        current_last_seen = current['last_seen'] if isinstance(current, sqlite3.Row) else current[1]
+        source_time = self._parse_timestamp(row['last_seen'])
+        current_time = self._parse_timestamp(current_last_seen)
+        should_update = (
+            strategy == MergeConflictStrategy.KEEP_SOURCE
+            or (strategy == MergeConflictStrategy.KEEP_NEWER and source_time > current_time)
+        )
+        if not should_update:
+            return 0, 0, 1
+
+        cursor.execute("""
+            UPDATE http_servers
+               SET country = ?,
+                   country_code = ?,
+                   port = ?,
+                   scheme = ?,
+                   banner = ?,
+                   title = ?,
+                   shodan_data = ?,
+                   first_seen = ?,
+                   last_seen = ?,
+                   scan_count = ?,
+                   status = ?,
+                   notes = ?
+             WHERE ip_address = ?
+        """, (
+            row['country'],
+            row['country_code'],
+            row['port'],
+            row['scheme'] or 'http',
+            row['banner'],
+            row['title'],
+            row['shodan_data'],
+            row['first_seen'],
+            row['last_seen'],
+            row['scan_count'],
+            row['status'],
+            row['notes'],
+            row['ip_address'],
+        ))
+        return 0, 1, 0
 
     # -------------------------------------------------------------------------
     # Backup Operations
@@ -275,8 +1192,14 @@ class DBToolsEngine:
         backup_name = f"{db_name}_backup_{timestamp}.db"
         backup_path = os.path.join(backup_dir, backup_name)
 
+        src_conn: Optional[sqlite3.Connection] = None
+        dst_conn: Optional[sqlite3.Connection] = None
         try:
-            shutil.copy2(self.current_db_path, backup_path)
+            # Use SQLite online backup API so WAL-mode commits are captured safely.
+            src_conn = sqlite3.connect(f"file:{self.current_db_path}?mode=ro", uri=True)
+            dst_conn = sqlite3.connect(backup_path)
+            src_conn.backup(dst_conn)
+            dst_conn.commit()
             return {
                 'success': True,
                 'backup_path': backup_path,
@@ -284,6 +1207,11 @@ class DBToolsEngine:
             }
         except Exception as e:
             return {'success': False, 'error': str(e)}
+        finally:
+            if dst_conn is not None:
+                dst_conn.close()
+            if src_conn is not None:
+                src_conn.close()
 
     def _check_disk_space(self, required_bytes: int, path: str) -> bool:
         """Check if sufficient disk space is available."""
@@ -357,7 +1285,103 @@ class DBToolsEngine:
             cur_conn.row_factory = sqlite3.Row
             cur_conn.execute("PRAGMA foreign_keys = ON")
 
+            ext_tables = {
+                row['name']
+                for row in ext_conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
+            cur_tables = {
+                row['name']
+                for row in cur_conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
+
+            current_schema_errors = self._validate_current_merge_schema(cur_conn)
+            if current_schema_errors:
+                result.errors.extend(current_schema_errors)
+                ext_conn.close()
+                cur_conn.close()
+                return result
+
+            for table_name, label in (
+                ("ftp_servers", "FTP server"),
+                ("http_servers", "HTTP server"),
+            ):
+                if table_name in ext_tables and table_name not in cur_tables:
+                    skipped_rows = ext_conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+                    if skipped_rows > 0:
+                        result.warnings.append(
+                            f"Target DB missing {table_name}; "
+                            f"{skipped_rows} {label} rows from source were skipped."
+                        )
+                elif table_name in ext_tables and table_name in cur_tables:
+                    required_columns = (
+                        REQUIRED_FTP_SERVER_COLUMNS if table_name == "ftp_servers"
+                        else REQUIRED_HTTP_SERVER_COLUMNS
+                    )
+                    target_columns = self._table_columns(cur_conn, table_name)
+                    missing_columns = sorted(required_columns - target_columns)
+                    if missing_columns:
+                        skipped_rows = ext_conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+                        if skipped_rows > 0:
+                            result.warnings.append(
+                                f"Target table {table_name} missing required columns "
+                                f"({', '.join(missing_columns)}); "
+                                f"{skipped_rows} {label} rows from source were skipped."
+                            )
+            for table_name, label, required_columns in (
+                ("share_credentials", "share credential", REQUIRED_SHARE_CREDENTIALS_TARGET_COLUMNS),
+                ("file_manifests", "file manifest", REQUIRED_FILE_MANIFEST_TARGET_COLUMNS),
+                ("vulnerabilities", "vulnerability", REQUIRED_VULNERABILITY_TARGET_COLUMNS),
+                ("failure_logs", "failure log", REQUIRED_FAILURE_LOG_TARGET_COLUMNS),
+            ):
+                if table_name in ext_tables and table_name not in cur_tables:
+                    skipped_rows = ext_conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+                    if skipped_rows > 0:
+                        result.warnings.append(
+                            f"Target DB missing {table_name}; "
+                            f"{skipped_rows} {label} rows from source were skipped."
+                        )
+                elif table_name in ext_tables and table_name in cur_tables:
+                    target_columns = self._table_columns(cur_conn, table_name)
+                    missing_columns = sorted(required_columns - target_columns)
+                    if missing_columns:
+                        skipped_rows = ext_conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+                        if skipped_rows > 0:
+                            result.warnings.append(
+                                f"Target table {table_name} missing required columns "
+                                f"({', '.join(missing_columns)}); "
+                                f"{skipped_rows} {label} rows from source were skipped."
+                            )
+            for table_name, label in (
+                ("ftp_access", "FTP access"),
+                ("http_access", "HTTP access"),
+            ):
+                if table_name in ext_tables and table_name not in cur_tables:
+                    skipped_rows = ext_conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+                    if skipped_rows > 0:
+                        result.warnings.append(
+                            f"Target DB missing {table_name}; "
+                            f"{skipped_rows} {label} rows from source were skipped."
+                        )
+                elif table_name in ext_tables and table_name in cur_tables:
+                    required_columns = (
+                        REQUIRED_FTP_ACCESS_TARGET_COLUMNS if table_name == "ftp_access"
+                        else REQUIRED_HTTP_ACCESS_TARGET_COLUMNS
+                    )
+                    target_columns = self._table_columns(cur_conn, table_name)
+                    missing_columns = sorted(required_columns - target_columns)
+                    if missing_columns:
+                        skipped_rows = ext_conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+                        if skipped_rows > 0:
+                            result.warnings.append(
+                                f"Target table {table_name} missing required columns "
+                                f"({', '.join(missing_columns)}); "
+                                f"{skipped_rows} {label} rows from source were skipped."
+                            )
+
             try:
+                # Keep the merge atomic: any failure rolls back all staged changes.
+                cur_conn.execute("BEGIN IMMEDIATE")
+
                 # Phase 2: Create import session
                 progress(8, "Creating import session...")
                 import_session_id = self._create_import_session(
@@ -365,40 +1389,59 @@ class DBToolsEngine:
                     os.path.basename(external_db_path)
                 )
 
-                # Phase 3: Merge servers
-                progress(10, "Merging servers...")
-                server_stats, id_mapping = self._merge_servers(
+                # Phase 3: Merge protocol server registries
+                progress(10, "Merging SMB servers...")
+                smb_stats, smb_id_mapping = self._merge_servers(
                     ext_conn, cur_conn, strategy, progress
                 )
-                result.servers_added = server_stats['added']
-                result.servers_updated = server_stats['updated']
-                result.servers_skipped = server_stats['skipped']
+                progress(30, "Merging FTP servers...")
+                ftp_stats, ftp_id_mapping = self._merge_ftp_servers(
+                    ext_conn, cur_conn, strategy
+                )
+                progress(40, "Merging HTTP servers...")
+                http_stats, http_id_mapping = self._merge_http_servers(
+                    ext_conn, cur_conn, strategy
+                )
+
+                result.servers_added = smb_stats['added'] + ftp_stats['added'] + http_stats['added']
+                result.servers_updated = smb_stats['updated'] + ftp_stats['updated'] + http_stats['updated']
+                result.servers_skipped = smb_stats['skipped'] + ftp_stats['skipped'] + http_stats['skipped']
 
                 # Phase 4: Import related data
-                progress(50, "Importing share access records...")
+                progress(50, "Importing SMB share access records...")
                 result.shares_imported = self._import_share_access(
-                    ext_conn, cur_conn, id_mapping, import_session_id
+                    ext_conn, cur_conn, smb_id_mapping, import_session_id
                 )
 
-                progress(60, "Importing share credentials...")
+                progress(58, "Importing FTP access records...")
+                result.shares_imported += self._import_ftp_access(
+                    ext_conn, cur_conn, ftp_id_mapping, import_session_id
+                )
+
+                progress(64, "Importing HTTP access records...")
+                result.shares_imported += self._import_http_access(
+                    ext_conn, cur_conn, http_id_mapping, import_session_id
+                )
+
+                progress(70, "Importing share credentials...")
                 result.credentials_imported = self._import_share_credentials(
-                    ext_conn, cur_conn, id_mapping, import_session_id
+                    ext_conn, cur_conn, smb_id_mapping, import_session_id
                 )
 
-                progress(70, "Importing file manifests...")
+                progress(78, "Importing file manifests...")
                 result.file_manifests_imported = self._import_file_manifests(
-                    ext_conn, cur_conn, id_mapping, import_session_id
+                    ext_conn, cur_conn, smb_id_mapping, import_session_id
                 )
 
-                progress(80, "Importing vulnerabilities...")
+                progress(84, "Importing vulnerabilities...")
                 result.vulnerabilities_imported = self._import_vulnerabilities(
-                    ext_conn, cur_conn, id_mapping, import_session_id
+                    ext_conn, cur_conn, smb_id_mapping, import_session_id
                 )
 
                 # Phase 5: Import failure logs
                 progress(90, "Importing failure logs...")
                 result.failure_logs_imported = self._import_failure_logs(
-                    ext_conn, cur_conn, id_mapping, import_session_id
+                    ext_conn, cur_conn, smb_id_mapping, import_session_id
                 )
 
                 # Phase 6: Finalize
@@ -412,6 +1455,9 @@ class DBToolsEngine:
                 result.success = True
                 progress(100, "Merge completed successfully")
 
+            except Exception:
+                cur_conn.rollback()
+                raise
             finally:
                 ext_conn.close()
                 cur_conn.close()
@@ -424,28 +1470,75 @@ class DBToolsEngine:
         return result
 
     def _create_import_session(self, conn: sqlite3.Connection, source_filename: str) -> int:
-        """Create a scan session record for the import operation."""
+        """
+        Create a scan session record for the import operation.
+
+        Uses runtime column detection for legacy compatibility with older
+        scan_sessions layouts.
+        """
         cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO scan_sessions (
-                tool_name, scan_type, status, notes, timestamp, started_at
-            ) VALUES (
-                'smbseek', 'db_import', 'running',
-                ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-            )
-        """, (f"Imported from: {source_filename}",))
+        columns = self._table_columns(conn, "scan_sessions")
+        if not columns:
+            raise RuntimeError("Current database missing required table: scan_sessions")
+
+        now_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        insert_values: Dict[str, Any] = {}
+        if "tool_name" in columns:
+            insert_values["tool_name"] = "smbseek"
+        if "scan_type" in columns:
+            insert_values["scan_type"] = "db_import"
+        if "status" in columns:
+            insert_values["status"] = "running"
+        if "notes" in columns:
+            insert_values["notes"] = f"Imported from: {source_filename}"
+        if "timestamp" in columns:
+            insert_values["timestamp"] = now_ts
+        if "started_at" in columns:
+            insert_values["started_at"] = now_ts
+
+        if not insert_values:
+            cursor.execute("INSERT INTO scan_sessions DEFAULT VALUES")
+            return cursor.lastrowid
+
+        cols = list(insert_values.keys())
+        placeholders = ", ".join(["?"] * len(cols))
+        cursor.execute(
+            f"INSERT INTO scan_sessions ({', '.join(cols)}) VALUES ({placeholders})",
+            tuple(insert_values[col] for col in cols),
+        )
         return cursor.lastrowid
 
     def _finalize_import_session(self, conn: sqlite3.Connection, session_id: int, total_targets: int):
-        """Update the import session with final statistics."""
-        conn.execute("""
-            UPDATE scan_sessions
-            SET status = 'completed',
-                completed_at = CURRENT_TIMESTAMP,
-                total_targets = ?,
-                successful_targets = ?
-            WHERE id = ?
-        """, (total_targets, total_targets, session_id))
+        """Update the import session with final statistics (legacy-column aware)."""
+        columns = self._table_columns(conn, "scan_sessions")
+        if not columns or "id" not in columns:
+            return
+
+        now_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        assignments: List[str] = []
+        values: List[Any] = []
+
+        if "status" in columns:
+            assignments.append("status = ?")
+            values.append("completed")
+        if "completed_at" in columns:
+            assignments.append("completed_at = ?")
+            values.append(now_ts)
+        if "total_targets" in columns:
+            assignments.append("total_targets = ?")
+            values.append(total_targets)
+        if "successful_targets" in columns:
+            assignments.append("successful_targets = ?")
+            values.append(total_targets)
+
+        if not assignments:
+            return
+
+        values.append(session_id)
+        conn.execute(
+            f"UPDATE scan_sessions SET {', '.join(assignments)} WHERE id = ?",
+            tuple(values),
+        )
 
     def _parse_timestamp(self, ts_str: Optional[str]) -> datetime:
         """Parse timestamp string, returning MIN_DATE for NULL/invalid."""
@@ -467,6 +1560,61 @@ class DBToolsEngine:
         except Exception:
             return MIN_DATE
 
+    def _table_exists(self, conn: sqlite3.Connection, table_name: str) -> bool:
+        """Return True if the given table exists in the database."""
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ? LIMIT 1",
+            (table_name,),
+        ).fetchone()
+        return row is not None
+
+    def _table_columns(self, conn: sqlite3.Connection, table_name: str) -> set[str]:
+        """Return the column-name set for a table, or empty set when absent."""
+        if not self._table_exists(conn, table_name):
+            return set()
+
+        rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+        if not rows:
+            return set()
+
+        first = rows[0]
+        if isinstance(first, sqlite3.Row):
+            return {row["name"] for row in rows}
+        return {row[1] for row in rows}
+
+    def _table_has_required_columns(
+        self,
+        conn: sqlite3.Connection,
+        table_name: str,
+        required_columns: set[str],
+    ) -> bool:
+        """Return True when a table exists and includes all required columns."""
+        columns = self._table_columns(conn, table_name)
+        if not columns:
+            return False
+        return required_columns.issubset(columns)
+
+    def _validate_current_merge_schema(self, conn: sqlite3.Connection) -> List[str]:
+        """Validate target DB core tables/columns required for merge writes."""
+        errors: List[str] = []
+        for table_name, required_columns in (
+            ("scan_sessions", REQUIRED_SCAN_SESSION_TARGET_COLUMNS),
+            ("smb_servers", REQUIRED_SMB_SERVER_TARGET_COLUMNS),
+            ("share_access", REQUIRED_SHARE_ACCESS_TARGET_COLUMNS),
+        ):
+            if not self._table_exists(conn, table_name):
+                errors.append(f"Current database missing required table: {table_name}")
+                continue
+
+            existing_columns = self._table_columns(conn, table_name)
+            missing_columns = sorted(required_columns - existing_columns)
+            if missing_columns:
+                errors.append(
+                    f"Current database table {table_name} missing required columns: "
+                    f"{', '.join(missing_columns)}"
+                )
+        return errors
+
     def _merge_servers(
         self,
         ext_conn: sqlite3.Connection,
@@ -485,15 +1633,33 @@ class DBToolsEngine:
 
         # Get all external servers
         ext_cursor = ext_conn.cursor()
-        ext_cursor.execute("""
-            SELECT id, ip_address, country, country_code, auth_method,
-                   shodan_data, first_seen, last_seen, scan_count, status, notes
-            FROM smb_servers
-            ORDER BY last_seen DESC
-        """)
+        ext_columns = self._table_columns(ext_conn, "smb_servers")
+
+        def _select_or_default(col: str, default_sql: str) -> str:
+            if col in ext_columns:
+                return col
+            return f"{default_sql} AS {col}"
+
+        select_parts = [
+            "id",
+            "ip_address",
+            _select_or_default("country", "NULL"),
+            _select_or_default("country_code", "NULL"),
+            _select_or_default("auth_method", "NULL"),
+            _select_or_default("shodan_data", "NULL"),
+            "first_seen",
+            "last_seen",
+            _select_or_default("scan_count", "1"),
+            _select_or_default("status", "'active'"),
+            _select_or_default("notes", "NULL"),
+        ]
+        ext_cursor.execute(
+            f"SELECT {', '.join(select_parts)} FROM smb_servers ORDER BY last_seen DESC"
+        )
         ext_servers = ext_cursor.fetchall()
 
         cur_cursor = cur_conn.cursor()
+        cur_columns = self._table_columns(cur_conn, "smb_servers")
         total = len(ext_servers)
 
         for i, ext_row in enumerate(ext_servers):
@@ -517,7 +1683,8 @@ class DBToolsEngine:
                 """, (
                     ip, ext_row['country'], ext_row['country_code'],
                     ext_row['auth_method'], ext_row['shodan_data'],
-                    ext_row['first_seen'], ext_row['last_seen'],
+                    normalize_db_timestamp(ext_row['first_seen']),
+                    normalize_db_timestamp(ext_row['last_seen']),
                     ext_row['scan_count'] or 1, ext_row['status'] or 'active',
                     ext_row['notes']
                 ))
@@ -537,34 +1704,246 @@ class DBToolsEngine:
                 )
 
                 if should_update:
-                    cur_cursor.execute("""
-                        UPDATE smb_servers SET
-                            last_seen = ?,
-                            auth_method = COALESCE(?, auth_method),
-                            country = COALESCE(?, country),
-                            country_code = COALESCE(?, country_code),
-                            scan_count = scan_count + ?,
-                            updated_at = CURRENT_TIMESTAMP
-                        WHERE id = ?
-                    """, (
-                        ext_row['last_seen'],
+                    assignments = [
+                        "last_seen = ?",
+                        "auth_method = COALESCE(?, auth_method)",
+                        "country = COALESCE(?, country)",
+                        "country_code = COALESCE(?, country_code)",
+                        "scan_count = scan_count + ?",
+                    ]
+                    if "updated_at" in cur_columns:
+                        assignments.append("updated_at = CURRENT_TIMESTAMP")
+
+                    values = [
+                        normalize_db_timestamp(ext_row['last_seen']),
                         ext_row['auth_method'],
                         ext_row['country'],
                         ext_row['country_code'],
                         ext_row['scan_count'] or 0,
-                        cur_id
-                    ))
+                        cur_id,
+                    ]
+                    cur_cursor.execute(
+                        f"UPDATE smb_servers SET {', '.join(assignments)} WHERE id = ?",
+                        tuple(values),
+                    )
                     stats['updated'] += 1
                 else:
                     stats['skipped'] += 1
 
-            # Batch commit and progress update
+            # Batch progress update (commit is managed by merge_database transaction)
             if (i + 1) % BATCH_SIZE == 0:
-                cur_conn.commit()
-                pct = 10 + int((i / total) * 40)  # 10-50% for server merge
+                pct = 10 + int(((i + 1) / total) * 40)  # 10-50% for server merge
                 progress(pct, f"Merged {i + 1}/{total} servers...")
 
-        cur_conn.commit()
+        return stats, id_mapping
+
+    def _merge_ftp_servers(
+        self,
+        ext_conn: sqlite3.Connection,
+        cur_conn: sqlite3.Connection,
+        strategy: MergeConflictStrategy,
+    ) -> Tuple[Dict[str, int], Dict[int, int]]:
+        """
+        Merge ftp_servers rows by ip_address.
+
+        Returns:
+            Tuple of (stats dict, id_mapping dict)
+        """
+        stats = {'added': 0, 'updated': 0, 'skipped': 0}
+        id_mapping: Dict[int, int] = {}
+
+        if not self._table_has_required_columns(ext_conn, "ftp_servers", REQUIRED_FTP_SERVER_COLUMNS):
+            return stats, id_mapping
+        if not self._table_has_required_columns(cur_conn, "ftp_servers", REQUIRED_FTP_SERVER_COLUMNS):
+            return stats, id_mapping
+
+        ext_cursor = ext_conn.cursor()
+        cur_cursor = cur_conn.cursor()
+        ext_cursor.execute("""
+            SELECT id, ip_address, country, country_code, port, anon_accessible,
+                   banner, shodan_data, first_seen, last_seen, scan_count, status, notes
+            FROM ftp_servers
+            ORDER BY last_seen DESC
+        """)
+        ext_rows = ext_cursor.fetchall()
+
+        for row in ext_rows:
+            ext_id = row['id']
+            ip = row['ip_address']
+            cur_cursor.execute(
+                "SELECT id, last_seen FROM ftp_servers WHERE ip_address = ?",
+                (ip,),
+            )
+            cur_row = cur_cursor.fetchone()
+
+            if cur_row is None:
+                cur_cursor.execute("""
+                    INSERT INTO ftp_servers (
+                        ip_address, country, country_code, port, anon_accessible,
+                        banner, shodan_data, first_seen, last_seen, scan_count, status, notes
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    ip,
+                    row['country'],
+                    row['country_code'],
+                    row['port'] if row['port'] is not None else 21,
+                    row['anon_accessible'] if row['anon_accessible'] is not None else 0,
+                    row['banner'],
+                    row['shodan_data'],
+                    normalize_db_timestamp(row['first_seen']),
+                    normalize_db_timestamp(row['last_seen']),
+                    row['scan_count'] or 1,
+                    row['status'] or 'active',
+                    row['notes'],
+                ))
+                id_mapping[ext_id] = cur_cursor.lastrowid
+                stats['added'] += 1
+                continue
+
+            cur_id = cur_row['id']
+            id_mapping[ext_id] = cur_id
+
+            ext_time = self._parse_timestamp(row['last_seen'])
+            cur_time = self._parse_timestamp(cur_row['last_seen'])
+            should_update = (
+                (strategy == MergeConflictStrategy.KEEP_NEWER and ext_time > cur_time) or
+                (strategy == MergeConflictStrategy.KEEP_SOURCE)
+            )
+            if not should_update:
+                stats['skipped'] += 1
+                continue
+
+            cur_cursor.execute("""
+                UPDATE ftp_servers SET
+                    last_seen = ?,
+                    country = COALESCE(?, country),
+                    country_code = COALESCE(?, country_code),
+                    port = COALESCE(?, port),
+                    anon_accessible = COALESCE(?, anon_accessible),
+                    banner = COALESCE(?, banner),
+                    status = COALESCE(?, status),
+                    scan_count = scan_count + ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            """, (
+                normalize_db_timestamp(row['last_seen']),
+                row['country'],
+                row['country_code'],
+                row['port'],
+                row['anon_accessible'],
+                row['banner'],
+                row['status'],
+                row['scan_count'] or 0,
+                cur_id,
+            ))
+            stats['updated'] += 1
+
+        return stats, id_mapping
+
+    def _merge_http_servers(
+        self,
+        ext_conn: sqlite3.Connection,
+        cur_conn: sqlite3.Connection,
+        strategy: MergeConflictStrategy,
+    ) -> Tuple[Dict[str, int], Dict[int, int]]:
+        """
+        Merge http_servers rows by ip_address.
+
+        Returns:
+            Tuple of (stats dict, id_mapping dict)
+        """
+        stats = {'added': 0, 'updated': 0, 'skipped': 0}
+        id_mapping: Dict[int, int] = {}
+
+        if not self._table_has_required_columns(ext_conn, "http_servers", REQUIRED_HTTP_SERVER_COLUMNS):
+            return stats, id_mapping
+        if not self._table_has_required_columns(cur_conn, "http_servers", REQUIRED_HTTP_SERVER_COLUMNS):
+            return stats, id_mapping
+
+        ext_cursor = ext_conn.cursor()
+        cur_cursor = cur_conn.cursor()
+        ext_cursor.execute("""
+            SELECT id, ip_address, country, country_code, port, scheme, banner, title,
+                   shodan_data, first_seen, last_seen, scan_count, status, notes
+            FROM http_servers
+            ORDER BY last_seen DESC
+        """)
+        ext_rows = ext_cursor.fetchall()
+
+        for row in ext_rows:
+            ext_id = row['id']
+            ip = row['ip_address']
+            cur_cursor.execute(
+                "SELECT id, last_seen FROM http_servers WHERE ip_address = ?",
+                (ip,),
+            )
+            cur_row = cur_cursor.fetchone()
+
+            if cur_row is None:
+                cur_cursor.execute("""
+                    INSERT INTO http_servers (
+                        ip_address, country, country_code, port, scheme, banner, title,
+                        shodan_data, first_seen, last_seen, scan_count, status, notes
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    ip,
+                    row['country'],
+                    row['country_code'],
+                    row['port'] if row['port'] is not None else 80,
+                    row['scheme'] or 'http',
+                    row['banner'],
+                    row['title'],
+                    row['shodan_data'],
+                    normalize_db_timestamp(row['first_seen']),
+                    normalize_db_timestamp(row['last_seen']),
+                    row['scan_count'] or 1,
+                    row['status'] or 'active',
+                    row['notes'],
+                ))
+                id_mapping[ext_id] = cur_cursor.lastrowid
+                stats['added'] += 1
+                continue
+
+            cur_id = cur_row['id']
+            id_mapping[ext_id] = cur_id
+
+            ext_time = self._parse_timestamp(row['last_seen'])
+            cur_time = self._parse_timestamp(cur_row['last_seen'])
+            should_update = (
+                (strategy == MergeConflictStrategy.KEEP_NEWER and ext_time > cur_time) or
+                (strategy == MergeConflictStrategy.KEEP_SOURCE)
+            )
+            if not should_update:
+                stats['skipped'] += 1
+                continue
+
+            cur_cursor.execute("""
+                UPDATE http_servers SET
+                    last_seen = ?,
+                    country = COALESCE(?, country),
+                    country_code = COALESCE(?, country_code),
+                    port = COALESCE(?, port),
+                    scheme = COALESCE(?, scheme),
+                    banner = COALESCE(?, banner),
+                    title = COALESCE(?, title),
+                    status = COALESCE(?, status),
+                    scan_count = scan_count + ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            """, (
+                normalize_db_timestamp(row['last_seen']),
+                row['country'],
+                row['country_code'],
+                row['port'],
+                row['scheme'],
+                row['banner'],
+                row['title'],
+                row['status'],
+                row['scan_count'] or 0,
+                cur_id,
+            ))
+            stats['updated'] += 1
+
         return stats, id_mapping
 
     def _import_share_access(
@@ -642,7 +2021,218 @@ class DBToolsEngine:
 
             imported += 1
 
-        cur_conn.commit()
+        return imported
+
+    def _import_ftp_access(
+        self,
+        ext_conn: sqlite3.Connection,
+        cur_conn: sqlite3.Connection,
+        id_mapping: Dict[int, int],
+        import_session_id: int,
+    ) -> int:
+        """
+        Import ftp_access summary rows with per-server latest-record deduplication.
+        """
+        if not id_mapping:
+            return 0
+        if not self._table_has_required_columns(ext_conn, "ftp_access", REQUIRED_FTP_ACCESS_COLUMNS):
+            return 0
+        if not self._table_has_required_columns(cur_conn, "ftp_access", REQUIRED_FTP_ACCESS_TARGET_COLUMNS):
+            return 0
+
+        imported = 0
+        ext_cursor = ext_conn.cursor()
+        cur_cursor = cur_conn.cursor()
+
+        cur_cursor.execute("SELECT id, server_id, test_timestamp FROM ftp_access ORDER BY id DESC")
+        existing_latest: Dict[int, Dict[str, Any]] = {}
+        for row in cur_cursor.fetchall():
+            server_id = row['server_id']
+            ts = row['test_timestamp']
+            prev = existing_latest.get(server_id)
+            if prev is None or self._parse_timestamp(ts) > self._parse_timestamp(prev['test_timestamp']):
+                existing_latest[server_id] = {'id': row['id'], 'test_timestamp': ts}
+
+        server_ids = tuple(id_mapping.keys())
+        placeholders = ','.join('?' * len(server_ids))
+        ext_cursor.execute(f"""
+            SELECT server_id, accessible, auth_status, root_listing_available, root_entry_count,
+                   error_message, test_timestamp, access_details
+            FROM ftp_access
+            WHERE server_id IN ({placeholders})
+            ORDER BY server_id, test_timestamp DESC, id DESC
+        """, server_ids)
+
+        for row in ext_cursor.fetchall():
+            new_server_id = id_mapping.get(row['server_id'])
+            if new_server_id is None:
+                continue
+
+            ext_time = self._parse_timestamp(row['test_timestamp'])
+            existing = existing_latest.get(new_server_id)
+            if existing is not None and ext_time <= self._parse_timestamp(existing['test_timestamp']):
+                continue
+
+            if existing is None:
+                cur_cursor.execute("""
+                    INSERT INTO ftp_access (
+                        server_id, session_id, accessible, auth_status, root_listing_available,
+                        root_entry_count, error_message, test_timestamp, access_details
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    new_server_id,
+                    import_session_id,
+                    row['accessible'],
+                    row['auth_status'],
+                    row['root_listing_available'],
+                    row['root_entry_count'],
+                    row['error_message'],
+                    row['test_timestamp'],
+                    row['access_details'],
+                ))
+                existing_latest[new_server_id] = {
+                    'id': cur_cursor.lastrowid,
+                    'test_timestamp': row['test_timestamp'],
+                }
+            else:
+                cur_cursor.execute("""
+                    UPDATE ftp_access SET
+                        session_id = ?,
+                        accessible = ?,
+                        auth_status = ?,
+                        root_listing_available = ?,
+                        root_entry_count = ?,
+                        error_message = ?,
+                        test_timestamp = ?,
+                        access_details = ?
+                    WHERE id = ?
+                """, (
+                    import_session_id,
+                    row['accessible'],
+                    row['auth_status'],
+                    row['root_listing_available'],
+                    row['root_entry_count'],
+                    row['error_message'],
+                    row['test_timestamp'],
+                    row['access_details'],
+                    existing['id'],
+                ))
+                existing_latest[new_server_id] = {
+                    'id': existing['id'],
+                    'test_timestamp': row['test_timestamp'],
+                }
+
+            imported += 1
+
+        return imported
+
+    def _import_http_access(
+        self,
+        ext_conn: sqlite3.Connection,
+        cur_conn: sqlite3.Connection,
+        id_mapping: Dict[int, int],
+        import_session_id: int,
+    ) -> int:
+        """
+        Import http_access summary rows with per-server latest-record deduplication.
+        """
+        if not id_mapping:
+            return 0
+        if not self._table_has_required_columns(ext_conn, "http_access", REQUIRED_HTTP_ACCESS_COLUMNS):
+            return 0
+        if not self._table_has_required_columns(cur_conn, "http_access", REQUIRED_HTTP_ACCESS_TARGET_COLUMNS):
+            return 0
+
+        imported = 0
+        ext_cursor = ext_conn.cursor()
+        cur_cursor = cur_conn.cursor()
+
+        cur_cursor.execute("SELECT id, server_id, test_timestamp FROM http_access ORDER BY id DESC")
+        existing_latest: Dict[int, Dict[str, Any]] = {}
+        for row in cur_cursor.fetchall():
+            server_id = row['server_id']
+            ts = row['test_timestamp']
+            prev = existing_latest.get(server_id)
+            if prev is None or self._parse_timestamp(ts) > self._parse_timestamp(prev['test_timestamp']):
+                existing_latest[server_id] = {'id': row['id'], 'test_timestamp': ts}
+
+        server_ids = tuple(id_mapping.keys())
+        placeholders = ','.join('?' * len(server_ids))
+        ext_cursor.execute(f"""
+            SELECT server_id, accessible, status_code, is_index_page, dir_count, file_count,
+                   tls_verified, error_message, access_details, test_timestamp
+            FROM http_access
+            WHERE server_id IN ({placeholders})
+            ORDER BY server_id, test_timestamp DESC, id DESC
+        """, server_ids)
+
+        for row in ext_cursor.fetchall():
+            new_server_id = id_mapping.get(row['server_id'])
+            if new_server_id is None:
+                continue
+
+            ext_time = self._parse_timestamp(row['test_timestamp'])
+            existing = existing_latest.get(new_server_id)
+            if existing is not None and ext_time <= self._parse_timestamp(existing['test_timestamp']):
+                continue
+
+            if existing is None:
+                cur_cursor.execute("""
+                    INSERT INTO http_access (
+                        server_id, session_id, accessible, status_code, is_index_page, dir_count,
+                        file_count, tls_verified, error_message, access_details, test_timestamp
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    new_server_id,
+                    import_session_id,
+                    row['accessible'],
+                    row['status_code'],
+                    row['is_index_page'],
+                    row['dir_count'],
+                    row['file_count'],
+                    row['tls_verified'],
+                    row['error_message'],
+                    row['access_details'],
+                    row['test_timestamp'],
+                ))
+                existing_latest[new_server_id] = {
+                    'id': cur_cursor.lastrowid,
+                    'test_timestamp': row['test_timestamp'],
+                }
+            else:
+                cur_cursor.execute("""
+                    UPDATE http_access SET
+                        session_id = ?,
+                        accessible = ?,
+                        status_code = ?,
+                        is_index_page = ?,
+                        dir_count = ?,
+                        file_count = ?,
+                        tls_verified = ?,
+                        error_message = ?,
+                        access_details = ?,
+                        test_timestamp = ?
+                    WHERE id = ?
+                """, (
+                    import_session_id,
+                    row['accessible'],
+                    row['status_code'],
+                    row['is_index_page'],
+                    row['dir_count'],
+                    row['file_count'],
+                    row['tls_verified'],
+                    row['error_message'],
+                    row['access_details'],
+                    row['test_timestamp'],
+                    existing['id'],
+                ))
+                existing_latest[new_server_id] = {
+                    'id': existing['id'],
+                    'test_timestamp': row['test_timestamp'],
+                }
+
+            imported += 1
+
         return imported
 
     def _import_share_credentials(
@@ -653,16 +2243,14 @@ class DBToolsEngine:
         import_session_id: int
     ) -> int:
         """Import share_credentials records (has unique index, use INSERT OR IGNORE)."""
+        if not self._table_has_required_columns(ext_conn, "share_credentials", REQUIRED_SHARE_CREDENTIALS_COLUMNS):
+            return 0
+        if not self._table_has_required_columns(cur_conn, "share_credentials", REQUIRED_SHARE_CREDENTIALS_TARGET_COLUMNS):
+            return 0
+
         imported = 0
         ext_cursor = ext_conn.cursor()
         cur_cursor = cur_conn.cursor()
-
-        # Check if table exists in external DB
-        ext_cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='share_credentials'"
-        )
-        if not ext_cursor.fetchone():
-            return 0
 
         server_ids = tuple(id_mapping.keys())
         if not server_ids:
@@ -694,7 +2282,6 @@ class DBToolsEngine:
             if cur_cursor.rowcount > 0:
                 imported += 1
 
-        cur_conn.commit()
         return imported
 
     def _import_file_manifests(
@@ -705,6 +2292,11 @@ class DBToolsEngine:
         import_session_id: int
     ) -> int:
         """Import file_manifests records with deduplication by (server_id, share_name, file_path)."""
+        if not self._table_has_required_columns(ext_conn, "file_manifests", REQUIRED_FILE_MANIFEST_COLUMNS):
+            return 0
+        if not self._table_has_required_columns(cur_conn, "file_manifests", REQUIRED_FILE_MANIFEST_TARGET_COLUMNS):
+            return 0
+
         imported = 0
         ext_cursor = ext_conn.cursor()
         cur_cursor = cur_conn.cursor()
@@ -762,7 +2354,6 @@ class DBToolsEngine:
                 ))
                 imported += 1
 
-        cur_conn.commit()
         return imported
 
     def _import_vulnerabilities(
@@ -773,6 +2364,11 @@ class DBToolsEngine:
         import_session_id: int
     ) -> int:
         """Import vulnerabilities records with deduplication by (server_id, vuln_type, cve_ids)."""
+        if not self._table_has_required_columns(ext_conn, "vulnerabilities", REQUIRED_VULNERABILITY_COLUMNS):
+            return 0
+        if not self._table_has_required_columns(cur_conn, "vulnerabilities", REQUIRED_VULNERABILITY_TARGET_COLUMNS):
+            return 0
+
         imported = 0
         ext_cursor = ext_conn.cursor()
         cur_cursor = cur_conn.cursor()
@@ -823,7 +2419,6 @@ class DBToolsEngine:
             ))
             imported += 1
 
-        cur_conn.commit()
         return imported
 
     def _import_failure_logs(
@@ -834,6 +2429,11 @@ class DBToolsEngine:
         import_session_id: int
     ) -> int:
         """Import failure_logs records (keyed by ip_address, not server_id)."""
+        if not self._table_has_required_columns(ext_conn, "failure_logs", REQUIRED_FAILURE_LOG_COLUMNS):
+            return 0
+        if not self._table_has_required_columns(cur_conn, "failure_logs", REQUIRED_FAILURE_LOG_TARGET_COLUMNS):
+            return 0
+
         imported = 0
         ext_cursor = ext_conn.cursor()
         cur_cursor = cur_conn.cursor()
@@ -891,7 +2491,6 @@ class DBToolsEngine:
                 ))
                 imported += 1
 
-        cur_conn.commit()
         return imported
 
     # -------------------------------------------------------------------------
@@ -991,56 +2590,106 @@ class DBToolsEngine:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
 
-            # Server counts
-            cursor.execute("SELECT COUNT(*) FROM smb_servers")
-            stats.total_servers = cursor.fetchone()[0]
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            existing_tables = {row['name'] for row in cursor.fetchall()}
+            column_cache: Dict[str, set[str]] = {}
 
-            cursor.execute("SELECT COUNT(*) FROM smb_servers WHERE status = 'active'")
-            stats.active_servers = cursor.fetchone()[0]
+            def has_table(name: str) -> bool:
+                return name in existing_tables
 
-            # Share counts
-            cursor.execute("SELECT COUNT(*) FROM share_access")
-            stats.total_shares = cursor.fetchone()[0]
+            def table_columns(name: str) -> set[str]:
+                if name not in column_cache:
+                    if not has_table(name):
+                        column_cache[name] = set()
+                    else:
+                        cursor.execute(f"PRAGMA table_info({name})")
+                        column_cache[name] = {row['name'] for row in cursor.fetchall()}
+                return column_cache[name]
 
-            cursor.execute("SELECT COUNT(*) FROM share_access WHERE accessible = 1")
-            stats.accessible_shares = cursor.fetchone()[0]
+            # Server counts across all protocol registries
+            for table_name in ("smb_servers", "ftp_servers", "http_servers"):
+                if not has_table(table_name):
+                    continue
+                columns = table_columns(table_name)
+                cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+                table_total = cursor.fetchone()[0]
+                stats.total_servers += table_total
+
+                if "status" in columns:
+                    cursor.execute(f"SELECT COUNT(*) FROM {table_name} WHERE status = 'active'")
+                    stats.active_servers += cursor.fetchone()[0]
+                else:
+                    # Legacy defensive fallback: treat rows as active when status is unavailable.
+                    stats.active_servers += table_total
+
+            # Access/share summary counts across SMB/FTP/HTTP access tables
+            access_table_specs = (
+                ("share_access", "accessible"),
+                ("ftp_access", "accessible"),
+                ("http_access", "accessible"),
+            )
+            for table_name, accessible_col in access_table_specs:
+                if not has_table(table_name):
+                    continue
+                columns = table_columns(table_name)
+                cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+                stats.total_shares += cursor.fetchone()[0]
+                if accessible_col in columns:
+                    cursor.execute(f"SELECT COUNT(*) FROM {table_name} WHERE {accessible_col} = 1")
+                    stats.accessible_shares += cursor.fetchone()[0]
 
             # Other counts
-            cursor.execute("SELECT COUNT(*) FROM vulnerabilities")
-            stats.total_vulnerabilities = cursor.fetchone()[0]
+            if has_table("vulnerabilities"):
+                cursor.execute("SELECT COUNT(*) FROM vulnerabilities")
+                stats.total_vulnerabilities = cursor.fetchone()[0]
 
-            cursor.execute("SELECT COUNT(*) FROM file_manifests")
-            stats.total_file_manifests = cursor.fetchone()[0]
+            if has_table("file_manifests"):
+                cursor.execute("SELECT COUNT(*) FROM file_manifests")
+                stats.total_file_manifests = cursor.fetchone()[0]
 
-            cursor.execute("SELECT COUNT(*) FROM scan_sessions")
-            stats.total_sessions = cursor.fetchone()[0]
+            if has_table("scan_sessions"):
+                cursor.execute("SELECT COUNT(*) FROM scan_sessions")
+                stats.total_sessions = cursor.fetchone()[0]
 
             # Check if share_credentials exists
-            cursor.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='share_credentials'"
-            )
-            if cursor.fetchone():
+            if has_table("share_credentials"):
                 cursor.execute("SELECT COUNT(*) FROM share_credentials")
                 stats.total_credentials = cursor.fetchone()[0]
 
-            # Date range
-            cursor.execute("SELECT MIN(first_seen) FROM smb_servers")
-            row = cursor.fetchone()
-            stats.oldest_record = row[0] if row and row[0] else None
+            # Date range across all protocol server registries
+            server_tables = [t for t in ("smb_servers", "ftp_servers", "http_servers") if has_table(t)]
+            if server_tables:
+                min_tables = [t for t in server_tables if "first_seen" in table_columns(t)]
+                if min_tables:
+                    min_parts = " UNION ALL ".join(
+                        f"SELECT MIN(first_seen) AS ts FROM {table_name}" for table_name in min_tables
+                    )
+                    cursor.execute(f"SELECT MIN(ts) FROM ({min_parts}) _mins WHERE ts IS NOT NULL")
+                    row = cursor.fetchone()
+                    stats.oldest_record = row[0] if row and row[0] else None
 
-            cursor.execute("SELECT MAX(last_seen) FROM smb_servers")
-            row = cursor.fetchone()
-            stats.newest_record = row[0] if row and row[0] else None
+                max_tables = [t for t in server_tables if "last_seen" in table_columns(t)]
+                if max_tables:
+                    max_parts = " UNION ALL ".join(
+                        f"SELECT MAX(last_seen) AS ts FROM {table_name}" for table_name in max_tables
+                    )
+                    cursor.execute(f"SELECT MAX(ts) FROM ({max_parts}) _maxs WHERE ts IS NOT NULL")
+                    row = cursor.fetchone()
+                    stats.newest_record = row[0] if row and row[0] else None
 
-            # Country distribution
-            cursor.execute("""
-                SELECT country, COUNT(*) as cnt
-                FROM smb_servers
-                WHERE country IS NOT NULL AND country != ''
-                GROUP BY country
-                ORDER BY cnt DESC
-            """)
-            stats.countries = {row['country']: row['cnt'] for row in cursor.fetchall()}
+                country_tables = [t for t in server_tables if "country" in table_columns(t)]
+                if country_tables:
+                    country_parts = " UNION ALL ".join(
+                        f"SELECT country AS country FROM {table_name}" for table_name in country_tables
+                    )
+                    cursor.execute(f"""
+                        SELECT country, COUNT(*) as cnt
+                        FROM ({country_parts}) _countries
+                        WHERE country IS NOT NULL AND country != ''
+                        GROUP BY country
+                        ORDER BY cnt DESC
+                    """)
+                    stats.countries = {row['country']: row['cnt'] for row in cursor.fetchall()}
 
             conn.close()
 
@@ -1133,7 +2782,7 @@ class DBToolsEngine:
         """
         preview = PurgePreview()
         cutoff = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        cutoff = cutoff.replace(day=cutoff.day - older_than_days if cutoff.day > older_than_days else 1)
+        cutoff = cutoff - timedelta(days=older_than_days)
         cutoff_str = cutoff.strftime('%Y-%m-%d')
         preview.cutoff_date = cutoff_str
 
@@ -1145,45 +2794,145 @@ class DBToolsEngine:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
 
-            # Count servers to delete
-            cursor.execute("""
-                SELECT COUNT(*) FROM smb_servers
-                WHERE date(last_seen) < date(?)
-            """, (cutoff_str,))
-            preview.servers_to_delete = cursor.fetchone()[0]
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            existing_tables = {row[0] for row in cursor.fetchall()}
+            column_cache: Dict[str, set[str]] = {}
 
-            if preview.servers_to_delete > 0:
-                # Get IDs of servers to delete
+            def has_table(name: str) -> bool:
+                return name in existing_tables
+
+            def table_columns(name: str) -> set[str]:
+                if name not in column_cache:
+                    if not has_table(name):
+                        column_cache[name] = set()
+                    else:
+                        cursor.execute(f"PRAGMA table_info({name})")
+                        column_cache[name] = {row['name'] for row in cursor.fetchall()}
+                return column_cache[name]
+
+            def has_columns(name: str, *columns: str) -> bool:
+                table_cols = table_columns(name)
+                return all(col in table_cols for col in columns)
+
+            # SMB-side purge counts
+            if has_columns("smb_servers", "id", "last_seen"):
                 cursor.execute("""
-                    SELECT id FROM smb_servers
+                    SELECT COUNT(*) FROM smb_servers
                     WHERE date(last_seen) < date(?)
                 """, (cutoff_str,))
-                server_ids = tuple(row['id'] for row in cursor.fetchall())
-                placeholders = ','.join('?' * len(server_ids))
+                preview.servers_to_delete += cursor.fetchone()[0]
 
-                # Count related records (CASCADE will delete these)
-                cursor.execute(f"SELECT COUNT(*) FROM share_access WHERE server_id IN ({placeholders})", server_ids)
-                preview.shares_to_delete = cursor.fetchone()[0]
+                if has_columns("share_access", "server_id"):
+                    cursor.execute("""
+                        SELECT COUNT(*) FROM share_access sa
+                        JOIN smb_servers s ON s.id = sa.server_id
+                        WHERE date(s.last_seen) < date(?)
+                    """, (cutoff_str,))
+                    preview.shares_to_delete += cursor.fetchone()[0]
 
-                # Check if share_credentials exists
-                cursor.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name='share_credentials'"
-                )
-                if cursor.fetchone():
-                    cursor.execute(f"SELECT COUNT(*) FROM share_credentials WHERE server_id IN ({placeholders})", server_ids)
-                    preview.credentials_to_delete = cursor.fetchone()[0]
+                if has_columns("share_credentials", "server_id"):
+                    cursor.execute("""
+                        SELECT COUNT(*) FROM share_credentials sc
+                        JOIN smb_servers s ON s.id = sc.server_id
+                        WHERE date(s.last_seen) < date(?)
+                    """, (cutoff_str,))
+                    preview.credentials_to_delete += cursor.fetchone()[0]
 
-                cursor.execute(f"SELECT COUNT(*) FROM file_manifests WHERE server_id IN ({placeholders})", server_ids)
-                preview.file_manifests_to_delete = cursor.fetchone()[0]
+                if has_columns("file_manifests", "server_id"):
+                    cursor.execute("""
+                        SELECT COUNT(*) FROM file_manifests fm
+                        JOIN smb_servers s ON s.id = fm.server_id
+                        WHERE date(s.last_seen) < date(?)
+                    """, (cutoff_str,))
+                    preview.file_manifests_to_delete += cursor.fetchone()[0]
 
-                cursor.execute(f"SELECT COUNT(*) FROM vulnerabilities WHERE server_id IN ({placeholders})", server_ids)
-                preview.vulnerabilities_to_delete = cursor.fetchone()[0]
+                if has_columns("vulnerabilities", "server_id"):
+                    cursor.execute("""
+                        SELECT COUNT(*) FROM vulnerabilities v
+                        JOIN smb_servers s ON s.id = v.server_id
+                        WHERE date(s.last_seen) < date(?)
+                    """, (cutoff_str,))
+                    preview.vulnerabilities_to_delete += cursor.fetchone()[0]
 
-                cursor.execute(f"SELECT COUNT(*) FROM host_user_flags WHERE server_id IN ({placeholders})", server_ids)
-                preview.user_flags_to_delete = cursor.fetchone()[0]
+                if has_columns("host_user_flags", "server_id"):
+                    cursor.execute("""
+                        SELECT COUNT(*) FROM host_user_flags uf
+                        JOIN smb_servers s ON s.id = uf.server_id
+                        WHERE date(s.last_seen) < date(?)
+                    """, (cutoff_str,))
+                    preview.user_flags_to_delete += cursor.fetchone()[0]
 
-                cursor.execute(f"SELECT COUNT(*) FROM host_probe_cache WHERE server_id IN ({placeholders})", server_ids)
-                preview.probe_cache_to_delete = cursor.fetchone()[0]
+                if has_columns("host_probe_cache", "server_id"):
+                    cursor.execute("""
+                        SELECT COUNT(*) FROM host_probe_cache pc
+                        JOIN smb_servers s ON s.id = pc.server_id
+                        WHERE date(s.last_seen) < date(?)
+                    """, (cutoff_str,))
+                    preview.probe_cache_to_delete += cursor.fetchone()[0]
+
+            # FTP-side purge counts
+            if has_columns("ftp_servers", "id", "last_seen"):
+                cursor.execute("""
+                    SELECT COUNT(*) FROM ftp_servers
+                    WHERE date(last_seen) < date(?)
+                """, (cutoff_str,))
+                preview.servers_to_delete += cursor.fetchone()[0]
+
+                if has_columns("ftp_access", "server_id"):
+                    cursor.execute("""
+                        SELECT COUNT(*) FROM ftp_access a
+                        JOIN ftp_servers f ON f.id = a.server_id
+                        WHERE date(f.last_seen) < date(?)
+                    """, (cutoff_str,))
+                    preview.shares_to_delete += cursor.fetchone()[0]
+
+                if has_columns("ftp_user_flags", "server_id"):
+                    cursor.execute("""
+                        SELECT COUNT(*) FROM ftp_user_flags uf
+                        JOIN ftp_servers f ON f.id = uf.server_id
+                        WHERE date(f.last_seen) < date(?)
+                    """, (cutoff_str,))
+                    preview.user_flags_to_delete += cursor.fetchone()[0]
+
+                if has_columns("ftp_probe_cache", "server_id"):
+                    cursor.execute("""
+                        SELECT COUNT(*) FROM ftp_probe_cache pc
+                        JOIN ftp_servers f ON f.id = pc.server_id
+                        WHERE date(f.last_seen) < date(?)
+                    """, (cutoff_str,))
+                    preview.probe_cache_to_delete += cursor.fetchone()[0]
+
+            # HTTP-side purge counts
+            if has_columns("http_servers", "id", "last_seen"):
+                cursor.execute("""
+                    SELECT COUNT(*) FROM http_servers
+                    WHERE date(last_seen) < date(?)
+                """, (cutoff_str,))
+                preview.servers_to_delete += cursor.fetchone()[0]
+
+                if has_columns("http_access", "server_id"):
+                    cursor.execute("""
+                        SELECT COUNT(*) FROM http_access a
+                        JOIN http_servers h ON h.id = a.server_id
+                        WHERE date(h.last_seen) < date(?)
+                    """, (cutoff_str,))
+                    preview.shares_to_delete += cursor.fetchone()[0]
+
+                if has_columns("http_user_flags", "server_id"):
+                    cursor.execute("""
+                        SELECT COUNT(*) FROM http_user_flags uf
+                        JOIN http_servers h ON h.id = uf.server_id
+                        WHERE date(h.last_seen) < date(?)
+                    """, (cutoff_str,))
+                    preview.user_flags_to_delete += cursor.fetchone()[0]
+
+                if has_columns("http_probe_cache", "server_id"):
+                    cursor.execute("""
+                        SELECT COUNT(*) FROM http_probe_cache pc
+                        JOIN http_servers h ON h.id = pc.server_id
+                        WHERE date(h.last_seen) < date(?)
+                    """, (cutoff_str,))
+                    preview.probe_cache_to_delete += cursor.fetchone()[0]
 
             conn.close()
 
@@ -1241,13 +2990,33 @@ class DBToolsEngine:
             conn.execute("PRAGMA foreign_keys = ON")
             cursor = conn.cursor()
 
-            # Delete servers (CASCADE handles related records)
-            cursor.execute("""
-                DELETE FROM smb_servers
-                WHERE date(last_seen) < date(?)
-            """, (preview.cutoff_date,))
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            existing_tables = {row[0] for row in cursor.fetchall()}
+            column_cache: Dict[str, set[str]] = {}
 
-            deleted = cursor.rowcount
+            def table_columns(table_name: str) -> set[str]:
+                if table_name not in column_cache:
+                    if table_name not in existing_tables:
+                        column_cache[table_name] = set()
+                    else:
+                        cursor.execute(f"PRAGMA table_info({table_name})")
+                        column_cache[table_name] = {row[1] for row in cursor.fetchall()}
+                return column_cache[table_name]
+
+            def has_columns(table_name: str, *columns: str) -> bool:
+                cols = table_columns(table_name)
+                return all(col in cols for col in columns)
+
+            deleted = 0
+            for table_name in ("smb_servers", "ftp_servers", "http_servers"):
+                if not has_columns(table_name, "last_seen"):
+                    continue
+                cursor.execute(
+                    f"DELETE FROM {table_name} WHERE date(last_seen) < date(?)",
+                    (preview.cutoff_date,),
+                )
+                deleted += max(cursor.rowcount, 0)
+
             conn.commit()
             conn.close()
 

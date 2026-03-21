@@ -67,7 +67,7 @@ class UIDispatcher:
         try:
             if not self._root.winfo_exists():
                 return
-        except tk.TclError:
+        except (tk.TclError, RuntimeError):
             return
         self._queue.put((callback, args, kwargs))
 
@@ -85,7 +85,7 @@ class UIDispatcher:
             if not self._root.winfo_exists():
                 self._running = False
                 return
-        except tk.TclError:
+        except (tk.TclError, RuntimeError):
             self._running = False
             return
 

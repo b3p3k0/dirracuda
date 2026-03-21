@@ -501,12 +501,12 @@ def parse_final_results(output: str) -> Dict:
         results["error"] = shodan_error_match.group(0).lstrip('✗❌ ').strip()
         return results
 
-    # Parse results section - updated patterns to match actual SMBSeek output format
+    # Parse results section - patterns accept both emoji and plain-text variants.
     patterns = {
-        # New patterns matching actual SMBSeek output format (with emoji prefixes)
-        "hosts_scanned": r'📊\s*Hosts Scanned:\s*(\d[\d,]*)',
-        "hosts_accessible": r'🔓\s*Hosts Accessible:\s*(\d[\d,]*)',
-        "accessible_shares": r'📁\s*Accessible Shares:\s*(\d[\d,]*)',
+        # New patterns matching current output format (emoji optional)
+        "hosts_scanned": r'(?:📊\s*)?Hosts Scanned:\s*(\d[\d,]*)',
+        "hosts_accessible": r'(?:🔓\s*)?Hosts Accessible:\s*(\d[\d,]*)',
+        "accessible_shares": r'(?:📁\s*)?Accessible (?:Shares|Directories):\s*(\d[\d,]*)',
 
         # Legacy patterns (for backward compatibility with older SMBSeek versions)
         "shodan_results": r'Shodan Results:\s*(\d[\d,]*)',
@@ -516,11 +516,14 @@ def parse_final_results(output: str) -> Dict:
         "session_id": r'session:\s*(\d+)'
     }
 
+    matched_stat_fields = set()
     for key, pattern in patterns.items():
         match = re.search(pattern, cleaned_output)
         if match:
             value = match.group(1).replace(',', '')  # Strip commas before int conversion
             results[key] = int(value) if value.isdigit() else value
+            if key in {"hosts_scanned", "hosts_accessible", "accessible_shares", "hosts_tested", "successful_auth"}:
+                matched_stat_fields.add(key)
 
     # Create compatibility mappings for backward compatibility and flexible field access
     # Map new format fields to legacy field names for existing code
@@ -541,9 +544,19 @@ def parse_final_results(output: str) -> Dict:
     if "shares_discovered" not in results:
         results["shares_discovered"] = results["accessible_shares"]
 
+    # Check for success indicators using cleaned output (emoji optional).
+    if ("SMBSeek security assessment completed successfully" in cleaned_output or
+        ("✓ Found" in cleaned_output and "accessible SMB servers" in cleaned_output) or
+        "✓ Discovery completed:" in cleaned_output or
+        "FTP scan completed successfully" in cleaned_output or
+        "HTTP scan completed successfully" in cleaned_output):
+        results["success"] = True
+
     # Add validation and debug logging for parsing results
     debug_enabled = os.getenv("XSMBSEEK_DEBUG_PARSING")
-    parsing_success = any(results[key] > 0 for key in ["hosts_scanned", "hosts_tested", "hosts_accessible", "successful_auth"])
+    parsing_success = bool(matched_stat_fields) or any(
+        results[key] > 0 for key in ["hosts_scanned", "hosts_tested", "hosts_accessible", "successful_auth"]
+    )
 
     if debug_enabled or not parsing_success:
         # Log parsing results for debugging
@@ -561,12 +574,6 @@ def parse_final_results(output: str) -> Dict:
                              for keyword in ['hosts', 'scanned', 'accessible', 'shares', 'found', 'results'])]
             if relevant_lines:
                 _logger.warning("Relevant output lines: %s", relevant_lines[:5])
-
-    # Check for success indicators using cleaned output
-    if ("🎉 SMBSeek security assessment completed successfully!" in cleaned_output or
-        ("✓ Found" in cleaned_output and "accessible SMB servers" in cleaned_output) or
-        "✓ Discovery completed:" in cleaned_output):
-        results["success"] = True
 
     # Fallback: also consider it success if we actually parsed scan results
     # This handles cases where CLI output format changed but data was parsed

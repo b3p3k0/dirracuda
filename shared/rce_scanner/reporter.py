@@ -15,7 +15,7 @@ Supports the verdict taxonomy:
 
 import logging
 from typing import Dict, List, Any, Optional
-from datetime import datetime
+from datetime import datetime, UTC
 
 from .verdicts import Verdict, verdict_to_rce_status, highest_severity_verdict
 
@@ -87,7 +87,10 @@ class RCEReporter:
             "matched_rules": self._format_matched_rules(matched_rules),
             "evidence": self._format_evidence(rule_engine_result.get("evidence", [])),
             "status": status,
-            "timestamp": rule_engine_result.get("timestamp", datetime.utcnow().isoformat() + "Z"),
+            "timestamp": rule_engine_result.get(
+                "timestamp",
+                datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            ),
             "analysis_metadata": {
                 "confidence": confidence_level,
                 "risk_level": risk_assessment,

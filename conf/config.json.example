@@ -146,6 +146,15 @@
       "hex_bytes_per_row": 16
     }
   },
+  "ftp_browser": {
+    "max_entries": 5000,
+    "max_depth": 12,
+    "max_path_length": 1024,
+    "max_file_bytes": 26214400,
+    "connect_timeout": 10,
+    "request_timeout": 15,
+    "quarantine_base": "~/.smbseek/quarantine"
+  },
   "gui_app": {
     "smbseek_path": ".",
     "database_path": null,
@@ -158,6 +167,49 @@
     "version": "1.0.0",
     "first_run": true,
     "github_repo": "https://github.com/b3p3k0/smbseek"
+  },
+  "ftp": {
+    "shodan": {
+      "query_components": {
+        "base_query": "port:21 \"230 Login successful\"",
+        "additional_exclusions": []
+      },
+      "query_limits": {
+        "max_results": 1000
+      }
+    },
+    "verification": {
+      "connect_timeout": 5,
+      "auth_timeout": 10,
+      "listing_timeout": 15
+    },
+    "discovery": {
+      "max_concurrent_hosts": 10
+    },
+    "access": {
+      "max_concurrent_hosts": 4
+    }
+  },
+  "http": {
+    "shodan": {
+      "query_limits": {
+        "max_results": 1000
+      }
+    },
+    "verification": {
+      "connect_timeout": 5,
+      "request_timeout": 10,
+      "subdir_timeout": 8,
+      "allow_insecure_tls": true,
+      "verify_http": true,
+      "verify_https": true
+    },
+    "discovery": {
+      "max_concurrent_hosts": 10
+    },
+    "access": {
+      "max_concurrent_hosts": 4
+    }
   },
   "rce": {
     "enabled_default": false,

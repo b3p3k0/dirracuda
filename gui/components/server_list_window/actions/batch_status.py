@@ -2,6 +2,7 @@
 Batch status and UI helpers for ServerListWindow.
 """
 
+import sqlite3
 import tkinter as tk
 from tkinter import messagebox, ttk, filedialog
 import time
@@ -16,6 +17,8 @@ from gui.components.server_list_window import table, filters
 from gui.utils import probe_cache
 from gui.utils.logging_config import get_logger
 from gui.components.pry_status_dialog import BatchStatusDialog
+from shared.config import get_standard_timestamp
+from shared.db_migrations import run_migrations
 
 _logger = get_logger("server_list_window.batch_status")
 
@@ -306,7 +309,7 @@ class ServerListWindowBatchStatusMixin:
                 # Continue even if migration logging fails
                 pass
 
-            now_ts = datetime.now().isoformat(timespec="seconds")
+            now_ts = get_standard_timestamp()
             conn = sqlite3.connect(db_path)
             conn.row_factory = sqlite3.Row
             cur = conn.cursor()
@@ -467,11 +470,15 @@ class ServerListWindowBatchStatusMixin:
             batch_active = self._is_batch_active()
             # Context menu items enabled when selection exists (batch ops don't block)
             selection_state = tk.NORMAL if has_selection else tk.DISABLED
-            self.context_menu.entryconfig(0, state=selection_state)  # Copy IP
-            self.context_menu.entryconfig(1, state=selection_state)  # Probe
-            self.context_menu.entryconfig(2, state=selection_state)  # Extract
-            self.context_menu.entryconfig(3, state=selection_state)  # Pry
-            self.context_menu.entryconfig(4, state=selection_state)  # Browse
+            selection_indices = getattr(self, "_selection_menu_indices", [])
+            if not selection_indices:
+                # Backward-compatible fallback for legacy menu layout.
+                selection_indices = [0, 1, 2, 3, 4]
+            for idx in selection_indices:
+                try:
+                    self.context_menu.entryconfig(idx, state=selection_state)
+                except Exception:
+                    pass
             # Delete (use stored index, not hardcoded)
             if self._delete_menu_index is not None:
                 delete_allowed = has_selection and not batch_active and not getattr(self, '_delete_in_progress', False)
@@ -616,44 +623,56 @@ class ServerListWindowBatchStatusMixin:
 
             for server in servers:
                 ip = server.get("ip_address")
-                status = server.get("probe_status") or self._determine_probe_status(ip)
+                host_type = server.get("host_type", "S")
+                # FTP and HTTP rows: use DB-supplied probe_status only — never call
+                # _determine_probe_status which reads the SMB file-based cache.
+                # The UNION ALL query already populates probe_status from probe_cache tables.
+                if host_type in ("F", "H"):
+                    status = server.get("probe_status") or "unprobed"
+                else:
+                    status = server.get("probe_status") or self._determine_probe_status(ip)
                 server["probe_status"] = status
                 server["probe_status_emoji"] = self._probe_status_to_emoji(status)
-                # Attach RCE status from database
-                rce_status = server.get("rce_status") or self._determine_rce_status(ip)
+                # Attach RCE status from database (protocol-aware)
+                rce_status = server.get("rce_status") or self._determine_rce_status(ip, host_type)
                 server["rce_status"] = rce_status
                 server["rce_status_emoji"] = self._rce_status_to_emoji(rce_status)
                 extracted_flag = server.get("extracted", 0)
                 server["extract_status_emoji"] = self._extract_status_to_emoji(extracted_flag)
 
-        def _determine_rce_status(self, ip_address: Optional[str]) -> str:
+        def _determine_rce_status(self, ip_address: Optional[str], host_type: str = "S") -> str:
             """Determine RCE status from database probe cache."""
             if not ip_address or not self.db_reader:
                 return 'not_run'
 
             try:
-                # Query host_probe_cache for rce_status
-                result = self.db_reader.get_rce_status(ip_address)
+                result = self.db_reader.get_rce_status_for_host(ip_address, host_type)
                 return result or 'not_run'
             except Exception:
                 return 'not_run'
 
-        def _handle_rce_status_update(self, ip_address: str, status: str) -> None:
+        def _handle_rce_status_update(self, ip_address: str, status: str, row_key: Optional[str] = None) -> None:
             """Handle RCE status update from probe/analysis."""
             if not ip_address:
                 return
 
             for server in self.all_servers:
-                if server.get("ip_address") == ip_address:
-                    server["rce_status"] = status
-                    server["rce_status_emoji"] = self._rce_status_to_emoji(status)
+                if row_key is not None:
+                    if server.get("row_key") == row_key:
+                        server["rce_status"] = status
+                        server["rce_status_emoji"] = self._rce_status_to_emoji(status)
+                else:
+                    # Legacy fallback: IP match, SMB rows only
+                    if server.get("ip_address") == ip_address and server.get("host_type", "S") == "S":
+                        server["rce_status"] = status
+                        server["rce_status_emoji"] = self._rce_status_to_emoji(status)
 
             if self._is_batch_active():
                 if not self._pending_table_refresh:
-                    self._pending_selection = self._get_selected_ips()
+                    self._pending_selection = self._get_selected_row_keys()
                 self._pending_table_refresh = True
             else:
-                selected_ips = self._get_selected_ips()
+                selected_ips = self._get_selected_row_keys()
                 self._apply_filters()
                 self._restore_selection(selected_ips)
 
@@ -710,7 +729,7 @@ class ServerListWindowBatchStatusMixin:
             except Exception:
                 return '○'
 
-        def _handle_probe_status_update(self, ip_address: str, status: str) -> None:
+        def _handle_probe_status_update(self, ip_address: str, status: str, row_key: Optional[str] = None) -> None:
             if not ip_address:
                 return
             if self.settings_manager:
@@ -718,58 +737,65 @@ class ServerListWindowBatchStatusMixin:
             self.probe_status_map[ip_address] = status
 
             for server in self.all_servers:
-                if server.get("ip_address") == ip_address:
-                    server["probe_status"] = status
-                    server["probe_status_emoji"] = self._probe_status_to_emoji(status)
+                if row_key is not None:
+                    if server.get("row_key") == row_key:
+                        server["probe_status"] = status
+                        server["probe_status_emoji"] = self._probe_status_to_emoji(status)
+                else:
+                    # Legacy fallback: IP match, SMB rows only
+                    if server.get("ip_address") == ip_address and server.get("host_type", "S") == "S":
+                        server["probe_status"] = status
+                        server["probe_status_emoji"] = self._probe_status_to_emoji(status)
 
             if self._is_batch_active():
                 if not self._pending_table_refresh:
-                    self._pending_selection = self._get_selected_ips()
+                    self._pending_selection = self._get_selected_row_keys()
                 self._pending_table_refresh = True
             else:
-                selected_ips = self._get_selected_ips()
+                selected_ips = self._get_selected_row_keys()
                 self._apply_filters()
                 self._restore_selection(selected_ips)
 
-        def _handle_extracted_update(self, ip_address: str) -> None:
+        def _handle_extracted_update(self, ip_address: str, row_key: Optional[str] = None, host_type: str = "S") -> None:
             """Mark host as extracted in-memory and persist to DB."""
             if not ip_address:
                 return
             if self.db_reader:
                 try:
-                    self.db_reader.upsert_extracted_flag(ip_address, True)
+                    self.db_reader.upsert_extracted_flag_for_host(ip_address, host_type, True)
                 except Exception:
                     pass
 
             for server in self.all_servers:
-                if server.get("ip_address") == ip_address:
-                    server["extracted"] = 1
-                    server["extract_status_emoji"] = self._extract_status_to_emoji(1)
+                if row_key is not None:
+                    if server.get("row_key") == row_key:
+                        server["extracted"] = 1
+                        server["extract_status_emoji"] = self._extract_status_to_emoji(1)
+                else:
+                    if server.get("ip_address") == ip_address and server.get("host_type", "S") == host_type:
+                        server["extracted"] = 1
+                        server["extract_status_emoji"] = self._extract_status_to_emoji(1)
 
             if self._is_batch_active():
                 if not self._pending_table_refresh:
-                    self._pending_selection = self._get_selected_ips()
+                    self._pending_selection = self._get_selected_row_keys()
                 self._pending_table_refresh = True
             else:
-                selected_ips = self._get_selected_ips()
+                selected_ips = self._get_selected_row_keys()
                 self._apply_filters()
                 self._restore_selection(selected_ips)
 
-        def _get_selected_ips(self) -> List[str]:
-            ips = []
-            for item in self.tree.selection():
-                values = self.tree.item(item)["values"]
-                if len(values) >= 6:
-                    ips.append(values[5])  # IP at index 5 (after fav/avoid/probe/rce/extracted)
-            return ips
+        def _get_selected_row_keys(self) -> List[str]:
+            """Return row_keys (iids) of currently selected tree rows."""
+            return list(self.tree.selection())  # item IDs == iids == row_keys
 
-        def _restore_selection(self, ip_addresses: List[str]) -> None:
-            if not ip_addresses:
+        def _restore_selection(self, row_keys: List[str]) -> None:
+            """Restore selection by row_key iids after a table refresh."""
+            if not row_keys:
                 return
-            for item in self.tree.get_children():
-                values = self.tree.item(item)["values"]
-                if len(values) >= 6 and values[5] in ip_addresses:
-                    self.tree.selection_add(item)
+            for rk in row_keys:
+                if self.tree.exists(rk):
+                    self.tree.selection_add(rk)
 
         def _toggle_mode(self) -> None:
             """Toggle between simple and advanced mode."""
@@ -816,11 +842,13 @@ class ServerListWindowBatchStatusMixin:
             self.country_listbox.delete(0, tk.END)
             self.country_code_list = []  # Reset mapping
 
-            if not self.db_reader:
-                return
-
-            # Get country breakdown (returns dict of code -> count)
-            country_breakdown = self.db_reader.get_country_breakdown()
+            # Derive country breakdown from already-loaded all_servers (unified S+F rows).
+            # Using db_reader.get_country_breakdown() would query smb_servers only and miss
+            # FTP-only countries.
+            from collections import Counter
+            country_breakdown = Counter(
+                s["country_code"] for s in self.all_servers if s.get("country_code")
+            )
 
             if not country_breakdown:
                 return  # Empty database
