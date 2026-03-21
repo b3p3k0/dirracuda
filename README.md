@@ -1,6 +1,6 @@
 # SMBSeek
 
-A GUI for finding exposed SMB shares, anonymous FTP, and HTTP directory listings, then auditing what's reachable.
+A GUI for finding exposed HTTP, FTP, and SMB directory listings, then auditing what's reachable.
 
 ---
 
@@ -56,6 +56,28 @@ Launch the GUI from your venv:
 
 ---
 
+## Dependencies
+
+### Python packages
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| shodan | ≥1.25.0 | Shodan API client — discovers SMB/FTP/HTTP candidates by country and filter |
+| smbprotocol | ≥1.10.0 | Pure-Python SMB2/3 implementation; fallback when `smbclient` is unavailable |
+| pyspnego | ≥0.8.0 | SPNEGO authentication support; required by smbprotocol |
+| impacket | ≥0.11.0 | SMB1/2/3 protocol library; powers the file browser and share navigation |
+| PyYAML | ≥6.0 | Loads RCE vulnerability signatures from `signatures/rce_smb/*.yaml` |
+| Pillow | ≥8.0.0 | Image rendering in the file viewer (PNG, JPEG, GIF, WebP, BMP, TIFF) |
+
+### System tools
+
+| Tool | Install | Purpose |
+|------|---------|---------|
+| tkinter | `apt install python3-tk` | GUI framework; required to run xSMBSeek |
+| smbclient | `apt install smbclient` | Primary SMB share enumeration; smbprotocol used as fallback if missing |
+
+---
+
 ## Using xSMBSeek
 
 ### Before You Start
@@ -78,6 +100,7 @@ The main window. From here you can:
 - Open the Server List to work with hosts you've found
 - Manage your database (import, export, merge, maintenance)
 - Edit configuration
+- Toggle **dark/light mode** with the 🌙/☀️ button in the top-right; your preference is saved automatically
 
 ### SMB Discovery
 
@@ -95,7 +118,7 @@ Only hosts that authenticate are stored. The method that succeeded is recorded a
 
 Results appear in the Server List.
 
-### FTP Discovery **(EXPERIMENTAL)**
+### FTP Discovery
 
 Triggered from **▶ Start Scan** with **FTP** selected. The scan runs as a separate `ftpseek` process and follows four verification steps for each candidate:
 
@@ -106,11 +129,9 @@ Triggered from **▶ Start Scan** with **FTP** selected. The scan runs as a sepa
 
 Only hosts that pass all four steps are stored as verified. Failures are recorded with a reason code (`connect_fail`, `auth_fail`, `list_fail`, `timeout`) so you can see exactly where each candidate dropped out. The scan summary reports candidate count vs. verified count.
 
-Results appear in the database alongside SMB records — the same IP can have both SMB and FTP entries without collision.
+Results are stored in the same host registry. The same IP can have SMB, FTP, and HTTP entries without collision.
 
-**FTP workflows are currently functional with some rough edges**
-
-### HTTP Discovery **(EXPERIMENTAL)**
+### HTTP Discovery
 
 Triggered from **▶ Start Scan** with **HTTP** selected. Uses a Shodan query for `http.title:"Index of /"` to find hosts serving Apache/nginx directory listings, then verifies each candidate:
 
@@ -118,9 +139,7 @@ Triggered from **▶ Start Scan** with **HTTP** selected. Uses a Shodan query fo
 2. Reachability check and directory-index validation (HTTP and HTTPS ports)
 3. Accessible listings stored as verified; failures recorded with a reason code
 
-Results appear in the database alongside SMB and FTP records. The browser window lets you navigate directory listings, view text files and images (`.png`, `.jpg`, `.jpeg`, `.gif`, `.bmp`, `.webp`, `.tif`, `.tiff`), and download files to quarantine at `~/.smbseek/quarantine/<ip>/<YYYYMMDD>/http_root/`.
-
-**HTTP workflows are currently functional with some rough edges**
+Results are stored in the same host registry as SMB and FTP records. The browser window lets you navigate directory listings, view text files and images (`.png`, `.jpg`, `.jpeg`, `.gif`, `.bmp`, `.webp`, `.tif`, `.tiff`), and download files to quarantine at `~/.smbseek/quarantine/<ip>/<YYYYMMDD>/http_root/`.
 
 Known limits:
 - No pre-flight file size guard (HTTP directory listings carry no size metadata; the viewer size cap still applies)
@@ -131,14 +150,21 @@ Known limits:
 ### Server List
 
 ![server list browser](img/servers.png)
- Shows discovered SMB hosts with IP, country, auth method, and share counts as well as status indicators and a favorite/avoid list.
+ Shows discovered hosts with IP, country, auth method, and share counts as well as status indicators and a favorite/avoid list.
 
-**Operations** (right-click a host or bottom row buttons):
+**Operations** (right-click a host or use the bottom-row buttons):
 
-- **Probe** — enumerate shares, detect ransomware indicators
-- **Browse** — read-only exploration of accessible shares
-- **Extract** — collect files with hard limits on count, size, and time
-- **Pry** — password audit against a specific user
+| Action | Description |
+|--------|-------------|
+| 📋 Copy IP | Copy selected server IP address(es) to clipboard |
+| 🔍 Probe Selected | Enumerate shares, detect ransomware indicators |
+| 📦 Extract Selected | Collect files with hard limits on count, size, and time |
+| 🔓 Pry Selected | Password audit against a specific user |
+| 🗂️ Browse Selected | Read-only exploration of accessible shares |
+| ⭐ Toggle Favorite | Mark/unmark selected servers as favorites |
+| 🚫 Toggle Avoid | Mark/unmark selected servers to avoid |
+| ⚠ Toggle Compromised | Mark/unmark selected servers as likely compromised |
+| 🗑️ Delete Selected | Remove selected servers from the database |
 
 ### Probing Shares
 
@@ -265,21 +291,22 @@ Both auto-restore your last-used template on startup.
 
 The CLI is useful for scripting and automation. The GUI uses the same backends.
 
-**SMB:**
-
 ```bash
+# SMB discovery
 ./smbseek --country US              # Discover US servers
 ./smbseek --country US,GB,CA        # Multiple countries
 ./smbseek --string "SIPR files"     # Search by keyword
 ./smbseek --verbose                 # Detailed output
-```
 
-**FTP:**
+# FTP discovery
+./ftpseek --country US
+./ftpseek --country US,GB,CA
+./ftpseek --verbose
 
-```bash
-./ftpseek --country US              # Discover anonymous FTP servers in the US
-./ftpseek --country US,GB,CA        # Multiple countries
-./ftpseek --verbose                 # Detailed output
+# HTTP discovery
+./httpseek --country US
+./httpseek --country US,GB,CA
+./httpseek --verbose
 ```
 
 ---
