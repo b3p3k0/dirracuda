@@ -542,6 +542,10 @@ class XSMBSeekGUI:
             self.config.set_database_path(db_path)
             self.config.save_config()
             self.settings_manager.set_database_path(db_path, validate=False)
+
+            # Apply persisted GUI theme before the first root window render.
+            preferred_theme = self.settings_manager.get_setting("interface.theme", "light")
+            get_theme().set_mode(preferred_theme)
             
         except Exception as e:
             raise RuntimeError(f"Failed to initialize settings manager: {e}")

@@ -162,6 +162,8 @@ class HttpBrowserWindow:
             wrap="word",
             state="normal",
         )
+        if self.theme:
+            self.theme.apply_to_widget(self.banner_text, "text_area")
         banner_vsb = ttk.Scrollbar(
             banner_text_frame, orient="vertical", command=self.banner_text.yview
         )
@@ -246,6 +248,8 @@ class HttpBrowserWindow:
             self.window, textvariable=self.status_var, anchor="w"
         )
         status_label.pack(fill=tk.X, padx=10, pady=(0, 5))
+        if self.theme:
+            self.theme.apply_theme_to_application(self.window)
 
     # ------------------------------------------------------------------
     # Navigation

@@ -59,6 +59,8 @@ def show_server_detail_popup(parent_window, server_data, theme, settings_manager
     text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
     text_widget = tk.Text(text_frame, wrap=tk.WORD, state=tk.DISABLED)
+    if theme:
+        theme.apply_to_widget(text_widget, "text_area")
     scrollbar = tk.Scrollbar(text_frame, orient="vertical", command=text_widget.yview)
     text_widget.configure(yscrollcommand=scrollbar.set)
 
@@ -113,13 +115,20 @@ def show_server_detail_popup(parent_window, server_data, theme, settings_manager
 
     # Notes editor
     notes_frame = tk.Frame(detail_window)
+    if theme:
+        theme.apply_to_widget(notes_frame, "main_window")
     notes_frame.pack(fill=tk.X, padx=10, pady=(5, 5))
-    tk.Label(notes_frame, text="Notes:").pack(anchor="w")
+    if theme:
+        notes_label = theme.create_styled_label(notes_frame, "Notes:", "body")
+    else:
+        notes_label = tk.Label(notes_frame, text="Notes:")
+    notes_label.pack(anchor="w")
     notes_text = tk.Text(notes_frame, height=3, wrap="word")
     current_notes = server_data.get("notes", "") or ""
     notes_text.insert("1.0", current_notes)
     notes_text.pack(fill=tk.X, expand=True)
-    theme.apply_to_widget(notes_text, "main_window")
+    if theme:
+        theme.apply_to_widget(notes_text, "text_area")
 
     def _persist_notes() -> None:
         """Persist notes without user interaction."""
@@ -232,6 +241,8 @@ def show_server_detail_popup(parent_window, server_data, theme, settings_manager
 
     # Ensure window is fully rendered before setting grab
     detail_window.update_idletasks()
+    if theme:
+        theme.apply_theme_to_application(detail_window)
     detail_window.grab_set()
 
     # Ensure dialog appears on top and gains focus (critical for VMs)

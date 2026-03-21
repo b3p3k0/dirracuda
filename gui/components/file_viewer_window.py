@@ -131,7 +131,8 @@ class FileViewerWindow:
             self.theme.apply_to_widget(toolbar, "main_window")
 
         # Mode selection
-        tk.Label(toolbar, text="Mode:").pack(side=tk.LEFT)
+        mode_label = tk.Label(toolbar, text="Mode:")
+        mode_label.pack(side=tk.LEFT)
         self.mode_var = tk.StringVar(value=self.current_mode)
 
         text_rb = tk.Radiobutton(
@@ -162,11 +163,21 @@ class FileViewerWindow:
         size_text = _format_file_size(self.file_size)
         if self.truncated:
             size_text += f" (showing {_format_file_size(len(self.content))})"
-        tk.Label(toolbar, text=f"Size: {size_text}").pack(side=tk.RIGHT)
+        size_label = tk.Label(toolbar, text=f"Size: {size_text}")
+        size_label.pack(side=tk.RIGHT)
+
+        if self.theme:
+            self.theme.apply_to_widget(mode_label, "label")
+            self.theme.apply_to_widget(text_rb, "checkbox")
+            self.theme.apply_to_widget(hex_rb, "checkbox")
+            self.theme.apply_to_widget(self.encoding_label, "label")
+            self.theme.apply_to_widget(size_label, "label")
 
         # --- Content area ---
         content_frame = tk.Frame(self.window)
         content_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        if self.theme:
+            self.theme.apply_to_widget(content_frame, "main_window")
 
         # Use a reliable monospace font - critical for hex view alignment
         mono_font = ("Courier", 11)  # Universal monospace, slightly larger for readability
@@ -201,6 +212,8 @@ class FileViewerWindow:
         self.status_var = tk.StringVar()
         status_label = tk.Label(self.window, textvariable=self.status_var, anchor="w")
         status_label.pack(fill=tk.X, padx=10, pady=(0, 5))
+        if self.theme:
+            self.theme.apply_to_widget(status_label, "status_bar")
 
         # --- Button bar ---
         button_frame = tk.Frame(self.window)
@@ -228,6 +241,9 @@ class FileViewerWindow:
         # Keyboard shortcuts
         self.window.bind("<Escape>", lambda e: self._on_close())
         self.window.bind("<Control-w>", lambda e: self._on_close())
+
+        if self.theme:
+            self.theme.apply_theme_to_application(self.window)
 
         # Ensure focus
         ensure_dialog_focus(self.window, self.parent)

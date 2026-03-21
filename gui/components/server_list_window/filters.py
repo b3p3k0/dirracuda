@@ -45,6 +45,7 @@ def create_filter_panel(parent, theme, filter_vars, callbacks):
         textvariable=filter_vars['search_text'],
         width=30
     )
+    theme.apply_to_widget(search_entry, "entry")
     search_entry.pack(side=tk.LEFT, padx=(0, 10))
     search_entry.bind("<KeyRelease>", lambda e: callbacks['on_search_changed']())
 
@@ -277,6 +278,7 @@ def create_filter_panel(parent, theme, filter_vars, callbacks):
         width=5,
         textvariable=filter_vars.get('country_filter_text')
     )
+    theme.apply_to_widget(country_filter_entry, "entry")
     country_filter_entry.pack(side=tk.LEFT, padx=(5, 0))
     country_filter_entry.bind('<KeyRelease>', lambda e: callbacks['on_country_filter_text_changed']())
 

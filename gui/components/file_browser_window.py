@@ -243,6 +243,8 @@ class FileBrowserWindow:
         self.status_var = tk.StringVar(value="Select a share to begin.")
         status = tk.Label(self.window, textvariable=self.status_var, anchor="w")
         status.pack(fill=tk.X, padx=10, pady=(0, 10))
+        if self.theme:
+            self.theme.apply_theme_to_application(self.window)
 
     # --- Navigation helpers -------------------------------------------
 

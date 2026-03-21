@@ -245,6 +245,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
 
         # Ensure window appears on top and gains focus (without forcing modal grab)
         ensure_dialog_focus(self.window, self.parent)
+        self.theme.apply_theme_to_application(self.window)
 
     def _prime_initial_render(self) -> None:
         """

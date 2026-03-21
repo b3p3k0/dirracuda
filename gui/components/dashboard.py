@@ -111,6 +111,11 @@ class DashboardWidget:
         self.progress_frame = None
         self.metrics_frame = None
         self.scan_button = None
+        self.servers_button = None
+        self.db_tools_button = None
+        self.config_button = None
+        self.about_button = None
+        self.theme_toggle_button = None
         self.status_bar = None
         self.update_time_label = None
         self.status_message = None
@@ -129,6 +134,8 @@ class DashboardWidget:
         self._log_placeholder_visible = True
         self.log_processing_job = None
         self.log_jump_button = None
+        self.copy_log_button = None
+        self.clear_log_button = None
         self.log_bg_color = self.theme.colors.get("log_bg", "#111418")
         self.log_fg_color = self.theme.colors.get("log_fg", "#f5f5f5")
         self.log_placeholder_color = self.theme.colors.get("log_placeholder", "#9ea4b3")
@@ -329,11 +336,19 @@ class DashboardWidget:
         # Line 2: Action buttons with natural sizing
         actions_frame = tk.Frame(header_frame)
         self.theme.apply_to_widget(actions_frame, "main_window")
-        actions_frame.pack(anchor=tk.W)
+        actions_frame.pack(fill=tk.X)
+
+        left_actions = tk.Frame(actions_frame)
+        self.theme.apply_to_widget(left_actions, "main_window")
+        left_actions.pack(side=tk.LEFT, anchor=tk.W)
+
+        right_actions = tk.Frame(actions_frame)
+        self.theme.apply_to_widget(right_actions, "main_window")
+        right_actions.pack(side=tk.RIGHT, anchor=tk.E)
 
         # Start Scan button (preserve state management)
         self.scan_button = tk.Button(
-            actions_frame,
+            left_actions,
             text="▶ Start Scan",
             command=self._handle_scan_button_click
         )
@@ -341,40 +356,108 @@ class DashboardWidget:
         self.scan_button.pack(side=tk.LEFT, padx=(0, 5))
 
         # Unified servers browser (SMB + FTP rows)
-        servers_button = tk.Button(
-            actions_frame,
+        self.servers_button = tk.Button(
+            left_actions,
             text="📋 Servers",
             command=lambda: self._open_drill_down("server_list")
         )
-        self.theme.apply_to_widget(servers_button, "button_secondary")
-        servers_button.pack(side=tk.LEFT, padx=(0, 5))
+        self.theme.apply_to_widget(self.servers_button, "button_secondary")
+        self.servers_button.pack(side=tk.LEFT, padx=(0, 5))
 
         # DB Tools button
-        db_tools_button = tk.Button(
-            actions_frame,
+        self.db_tools_button = tk.Button(
+            left_actions,
             text="\U0001F5C4 DB Tools",  # File cabinet emoji
             command=self._open_db_tools
         )
-        self.theme.apply_to_widget(db_tools_button, "button_secondary")
-        db_tools_button.pack(side=tk.LEFT, padx=(0, 5))
+        self.theme.apply_to_widget(self.db_tools_button, "button_secondary")
+        self.db_tools_button.pack(side=tk.LEFT, padx=(0, 5))
 
         # Config button (existing functionality)
-        config_button = tk.Button(
-            actions_frame,
+        self.config_button = tk.Button(
+            left_actions,
             text="⚙ Config",
             command=self._open_config_editor
         )
-        self.theme.apply_to_widget(config_button, "button_secondary")
-        config_button.pack(side=tk.LEFT)
+        self.theme.apply_to_widget(self.config_button, "button_secondary")
+        self.config_button.pack(side=tk.LEFT)
 
         # About button
-        about_button = tk.Button(
-            actions_frame,
+        self.about_button = tk.Button(
+            left_actions,
             text="❔ About",
             command=self._open_about_dialog
         )
-        self.theme.apply_to_widget(about_button, "button_secondary")
-        about_button.pack(side=tk.LEFT, padx=(8, 0))
+        self.theme.apply_to_widget(self.about_button, "button_secondary")
+        self.about_button.pack(side=tk.LEFT, padx=(8, 0))
+
+        # Theme toggle button (right-aligned)
+        self.theme_toggle_button = tk.Button(
+            right_actions,
+            text=self._theme_toggle_button_text(),
+            command=self._toggle_theme
+        )
+        self.theme.apply_to_widget(self.theme_toggle_button, "button_secondary")
+        self.theme_toggle_button.pack(side=tk.RIGHT)
+
+    def _theme_toggle_button_text(self) -> str:
+        """Return dashboard button label for switching to the opposite theme."""
+        return "☀️" if self.theme.get_mode() == "dark" else "🌙"
+
+    def _refresh_theme_cached_colors(self) -> None:
+        """Refresh dashboard-local color caches after a theme switch."""
+        self.log_bg_color = self.theme.colors.get("log_bg", "#111418")
+        self.log_fg_color = self.theme.colors.get("log_fg", "#f5f5f5")
+        self.log_placeholder_color = self.theme.colors.get("log_placeholder", "#9ea4b3")
+
+        for button in (
+            getattr(self, "servers_button", None),
+            getattr(self, "db_tools_button", None),
+            getattr(self, "config_button", None),
+            getattr(self, "about_button", None),
+            getattr(self, "theme_toggle_button", None),
+            getattr(self, "copy_log_button", None),
+            getattr(self, "clear_log_button", None),
+        ):
+            if button and button.winfo_exists():
+                self.theme.apply_to_widget(button, "button_secondary")
+
+        if self.log_jump_button and self.log_jump_button.winfo_exists():
+            self.theme.apply_to_widget(self.log_jump_button, "button_secondary")
+
+        if self.log_text_widget and self.log_text_widget.winfo_exists():
+            try:
+                self.log_text_widget.configure(
+                    bg=self.log_bg_color,
+                    fg=self.log_fg_color,
+                    insertbackground=self.log_fg_color,
+                )
+                self._configure_log_tags()
+                if self._log_placeholder_visible:
+                    self._render_log_placeholder()
+            except tk.TclError:
+                pass
+
+    def _toggle_theme(self) -> None:
+        """Toggle global light/dark mode and persist preference."""
+        try:
+            new_mode = self.theme.toggle_mode(root=self.parent)
+            if self.settings_manager:
+                self.settings_manager.set_setting("interface.theme", new_mode)
+
+            self._refresh_theme_cached_colors()
+            if self.theme_toggle_button and self.theme_toggle_button.winfo_exists():
+                self.theme_toggle_button.configure(text=self._theme_toggle_button_text())
+
+            # Re-apply scan button appearance in current state using updated palette.
+            self._update_scan_button_state(self.scan_button_state)
+        except Exception as exc:
+            _logger.error("Failed to toggle theme: %s", exc)
+            messagebox.showerror(
+                "Theme Error",
+                f"Failed to switch theme: {exc}",
+                parent=self.parent,
+            )
         
     
     def _build_progress_section(self) -> None:
@@ -473,21 +556,21 @@ class DashboardWidget:
         )
         button_frame.grid(row=0, column=1, rowspan=2, sticky="se", padx=(10, 0))
 
-        copy_button = tk.Button(
+        self.copy_log_button = tk.Button(
             button_frame,
             text="Copy All",
             command=self._copy_log_output
         )
-        self.theme.apply_to_widget(copy_button, "button_secondary")
-        copy_button.pack(side=tk.LEFT, padx=(0, 5))
+        self.theme.apply_to_widget(self.copy_log_button, "button_secondary")
+        self.copy_log_button.pack(side=tk.LEFT, padx=(0, 5))
 
-        clear_button = tk.Button(
+        self.clear_log_button = tk.Button(
             button_frame,
             text="Clear",
             command=self._clear_log_output
         )
-        self.theme.apply_to_widget(clear_button, "button_secondary")
-        clear_button.pack(side=tk.LEFT)
+        self.theme.apply_to_widget(self.clear_log_button, "button_secondary")
+        self.clear_log_button.pack(side=tk.LEFT)
     
     def _pixels_to_text_lines(self, pixels: int) -> int:
         """
@@ -2148,9 +2231,16 @@ class DashboardWidget:
             apply_theme_to_window(dialog)
 
         body = tk.Frame(dialog)
+        self.theme.apply_to_widget(body, "main_window")
         body.pack(padx=18, pady=16, fill=tk.BOTH, expand=True)
 
-        title = tk.Label(body, text="SMBSeek", font=(None, 14, "bold"))
+        title = tk.Label(
+            body,
+            text="SMBSeek",
+            font=(None, 14, "bold"),
+            bg=self.theme.colors["primary_bg"],
+            fg=self.theme.colors["text"],
+        )
         title.pack(anchor="w")
 
         blurb = (
@@ -2158,15 +2248,31 @@ class DashboardWidget:
             "authentication and demonstrate impact via safe, guided workflows.\n"
             "No warranty expressed or implied; use at your own risk."
         )
-        tk.Label(body, text=blurb, justify="left", anchor="w").pack(anchor="w", pady=(6, 10))
+        tk.Label(
+            body,
+            text=blurb,
+            justify="left",
+            anchor="w",
+            bg=self.theme.colors["primary_bg"],
+            fg=self.theme.colors["text"],
+        ).pack(anchor="w", pady=(6, 10))
 
-        link = tk.Label(body, text="GitHub: https://github.com/b3p3k0/smbseek", fg="#0066cc", cursor="hand2")
+        link = tk.Label(
+            body,
+            text="GitHub: https://github.com/b3p3k0/smbseek",
+            fg=self.theme.colors["accent"],
+            bg=self.theme.colors["primary_bg"],
+            cursor="hand2",
+        )
         link.pack(anchor="w")
         link.bind("<Button-1>", lambda e: webbrowser.open("https://github.com/b3p3k0/smbseek"))
 
         btn_frame = tk.Frame(body)
+        self.theme.apply_to_widget(btn_frame, "main_window")
         btn_frame.pack(fill=tk.X, pady=(12, 0))
-        tk.Button(btn_frame, text="Close", command=dialog.destroy).pack(side=tk.RIGHT)
+        close_button = tk.Button(btn_frame, text="Close", command=dialog.destroy)
+        self.theme.apply_to_widget(close_button, "button_secondary")
+        close_button.pack(side=tk.RIGHT)
 
         dialog.update_idletasks()
         dialog.lift()

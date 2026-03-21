@@ -117,6 +117,7 @@ class DBToolsDialog:
         self._create_notebook()
         self._create_progress_frame()
         self._create_button_frame()
+        self.theme.apply_theme_to_application(self.dialog)
 
         # Center dialog
         self._center_dialog()
@@ -183,6 +184,7 @@ class DBToolsDialog:
 
         self.import_path_var = tk.StringVar()
         path_entry = tk.Entry(path_frame, textvariable=self.import_path_var, width=50)
+        self.theme.apply_to_widget(path_entry, "entry")
         path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
 
         browse_btn = tk.Button(
@@ -761,6 +763,7 @@ class DBToolsDialog:
 
         self.purge_days_var = tk.StringVar(value="30")
         days_entry = tk.Entry(days_frame, textvariable=self.purge_days_var, width=5)
+        self.theme.apply_to_widget(days_entry, "entry")
         days_entry.pack(side=tk.LEFT, padx=5)
 
         days_suffix = self.theme.create_styled_label(days_frame, "days", "body")

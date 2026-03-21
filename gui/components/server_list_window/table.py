@@ -100,11 +100,13 @@ def create_server_table(parent, theme, callbacks):
     scrollbar_v = ttk.Scrollbar(
         table_frame,
         orient="vertical",
+        style="Vertical.TScrollbar",
         command=tree.yview
     )
     scrollbar_h = ttk.Scrollbar(
         table_frame,
         orient="horizontal",
+        style="Horizontal.TScrollbar",
         command=tree.xview
     )
 

@@ -506,6 +506,7 @@ class ServerListWindowBatchOperationsMixin:
         tk.Button(button_frame, text="Cancel", command=on_cancel).pack(side=tk.RIGHT, padx=5)
         tk.Button(button_frame, text="Start", command=on_start).pack(side=tk.RIGHT)
 
+        self.theme.apply_theme_to_application(dialog)
         dialog.wait_window()
         return result or None
 

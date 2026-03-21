@@ -137,6 +137,9 @@ class AppConfigDialog:
         # Initialize validation
         self._validate_all_paths()
 
+        # Normalize all default Tk children (LabelFrame title, entries, etc.).
+        self.theme.apply_theme_to_application(self.dialog)
+
         # Ensure dialog appears on top and gains focus (critical for VMs)
         ensure_dialog_focus(self.dialog, self.parent)
 
@@ -221,6 +224,10 @@ class AppConfigDialog:
         # Section frame
         section_frame = tk.LabelFrame(parent, text=title, font=("Arial", 12, "bold"))
         self.theme.apply_to_widget(section_frame, "card")
+        try:
+            section_frame.configure(fg=self.theme.colors["text"])
+        except tk.TclError:
+            pass
         section_frame.pack(fill=tk.X, pady=(0, 15), padx=5, ipady=10)
         
         # Description

@@ -331,6 +331,7 @@ class UnifiedScanDialog:
 
         self._refresh_template_toolbar()
         self._update_region_status()
+        self.theme.apply_theme_to_application(self.dialog)
         ensure_dialog_focus(self.dialog, self.parent)
 
     def _center_dialog(self) -> None:
@@ -684,7 +685,7 @@ class UnifiedScanDialog:
         help_link = tk.Label(
             heading_frame,
             text="Filter Reference",
-            fg="#0066cc",
+            fg=self.theme.colors["accent"],
             cursor="hand2",
             font=self.theme.fonts["small"],
         )
@@ -701,6 +702,7 @@ class UnifiedScanDialog:
             width=50,
             font=self.theme.fonts["body"],
         )
+        self.theme.apply_to_widget(self.custom_filters_entry, "entry")
         self.custom_filters_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
     def _create_country_option(self, parent: tk.Frame) -> None:
@@ -721,6 +723,7 @@ class UnifiedScanDialog:
             width=10,
             font=self.theme.fonts["body"],
         )
+        self.theme.apply_to_widget(self.country_entry, "entry")
         self.country_entry.pack(side=tk.LEFT)
 
         hint = self.theme.create_styled_label(
@@ -795,7 +798,14 @@ class UnifiedScanDialog:
         self.theme.apply_to_widget(row, "card")
         row.pack(fill=tk.X, pady=(5, 0))
 
-        tk.Entry(row, textvariable=self.max_results_var, width=8, font=self.theme.fonts["body"]).pack(side=tk.LEFT)
+        max_results_entry = tk.Entry(
+            row,
+            textvariable=self.max_results_var,
+            width=8,
+            font=self.theme.fonts["body"],
+        )
+        self.theme.apply_to_widget(max_results_entry, "entry")
+        max_results_entry.pack(side=tk.LEFT)
 
         hint = self.theme.create_styled_label(
             row,
