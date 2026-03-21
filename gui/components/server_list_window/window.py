@@ -80,6 +80,9 @@ class ServerListWindow(ServerListWindowActionsMixin):
     Acts as facade for clean external interface.
     """
     FILTER_TEMPLATE_PLACEHOLDER = "Select filter template..."
+    HINT_NO_DATABASE = "No database found. Select one in Config or run a scan."
+    HINT_EMPTY_DATABASE = "No servers in the database yet. Run a scan or import data."
+    HINT_FILTER_EMPTY = "No results to display. Try less restrictive filters."
 
     def __init__(self, parent: tk.Widget, db_reader: DatabaseReader,
                  window_data: Dict[str, Any] = None, settings_manager = None):
@@ -188,6 +191,9 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self._initial_load_after_id = None
         self._initial_load_started = False
         self._initial_map_bind_id = None
+        self._db_available = True
+        self._table_locked = False
+        self._empty_state_hint: Optional[str] = None
 
         # Window state
         self.is_advanced_mode = False
@@ -243,9 +249,25 @@ class ServerListWindow(ServerListWindowActionsMixin):
         # Bind events
         self._setup_event_handlers()
 
-        # Ensure window appears on top and gains focus (without forcing modal grab)
-        ensure_dialog_focus(self.window, self.parent)
+        # Ensure window appears on top/focused after it is actually mapped.
+        # Running focus/topmost choreography too early can cause first-open
+        # paint starvation on some window managers.
+        self.window.after(10, self._ensure_window_focus_when_mapped)
         self.theme.apply_theme_to_application(self.window)
+
+    def _ensure_window_focus_when_mapped(self) -> None:
+        """Apply focus/z-order helpers only after the window is mapped."""
+        if self.window is None:
+            return
+        try:
+            if not self.window.winfo_exists():
+                return
+            if not self.window.winfo_ismapped():
+                self.window.after(25, self._ensure_window_focus_when_mapped)
+                return
+            ensure_dialog_focus(self.window, self.parent)
+        except tk.TclError:
+            pass
 
     def _prime_initial_render(self) -> None:
         """
@@ -290,7 +312,8 @@ class ServerListWindow(ServerListWindowActionsMixin):
             return
         self._cancel_initial_data_load()
         try:
-            self._initial_load_after_id = self.window.after_idle(self._run_initial_data_load)
+            # Give the WM/compositor one paint frame before synchronous work.
+            self._initial_load_after_id = self.window.after(16, self._run_initial_data_load)
         except tk.TclError:
             self._initial_load_after_id = None
             self._run_initial_data_load()
@@ -310,16 +333,21 @@ class ServerListWindow(ServerListWindowActionsMixin):
         """Run deferred initial load if window still exists."""
         if self._initial_load_started:
             return
-        self._initial_load_started = True
-        self._initial_load_after_id = None
-        self._clear_initial_map_binding()
         if not self.window:
             return
         try:
             if not self.window.winfo_exists():
                 return
+            # Guard against starting data work before first visible paint; this
+            # can reintroduce first-open blank/transparent render on some WMs.
+            if (not self.window.winfo_ismapped()) or (not self.window.winfo_viewable()):
+                self._initial_load_after_id = self.window.after(50, self._run_initial_data_load)
+                return
         except tk.TclError:
             return
+        self._initial_load_started = True
+        self._initial_load_after_id = None
+        self._clear_initial_map_binding()
         self._load_data()
         # Force a repaint pass after the synchronous table population.
         try:
@@ -646,24 +674,72 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self._show_notes_tooltip(tooltip_text, event.x_root, event.y_root)
 
     def _create_table_overlay(self) -> None:
-        self.table_overlay = tk.Frame(self.table_frame, bg="#f0f0f0")
+        overlay_bg, overlay_fg = self._get_table_overlay_colors()
+        self.table_overlay = tk.Frame(self.table_frame, bg=overlay_bg)
         self.table_overlay.place_forget()
         self.table_overlay_label = tk.Label(
             self.table_overlay,
             text="Batch in progress… Server list locked",
-            bg="#f0f0f0",
-            fg="#555555"
+            bg=overlay_bg,
+            fg=overlay_fg,
+            justify=tk.CENTER,
+            wraplength=560,
         )
         self.table_overlay_label.pack(expand=True)
 
-    def _set_table_interaction_enabled(self, enabled: bool) -> None:
-        if not self.table_overlay:
+    def _get_table_overlay_colors(self) -> Tuple[str, str]:
+        """Return theme-aware (background, foreground) colors for table overlay hints."""
+        colors = getattr(self.theme, "colors", {}) or {}
+        overlay_bg = colors.get("secondary_bg", "#f0f0f0")
+        overlay_fg = colors.get("text_secondary", "#555555")
+        return overlay_bg, overlay_fg
+
+    def _set_empty_state_hint(self, message: Optional[str]) -> None:
+        """Set/clear table hint text shown when results are unavailable."""
+        self._empty_state_hint = message.strip() if message and message.strip() else None
+        self._update_table_overlay_state()
+
+    def _resolve_empty_state_hint(self) -> Optional[str]:
+        """
+        Resolve which helper hint should be shown for the current table state.
+
+        Priority order:
+        1. No database available at runtime
+        2. Database available but contains zero server rows
+        3. Database has rows but current filters hide all rows
+        """
+        if not self._db_available:
+            return self.HINT_NO_DATABASE
+        if not self.all_servers:
+            return self.HINT_EMPTY_DATABASE
+        if not self.filtered_servers:
+            return self.HINT_FILTER_EMPTY
+        return None
+
+    def _update_table_overlay_state(self) -> None:
+        """Render the table overlay for batch lock or empty-state hints."""
+        if not self.table_overlay or not self.table_overlay_label:
             return
-        if enabled:
+        overlay_bg, overlay_fg = self._get_table_overlay_colors()
+        self.table_overlay.configure(bg=overlay_bg)
+
+        overlay_message = None
+        if self._table_locked:
+            overlay_message = "Batch in progress… Server list locked"
+        elif self._empty_state_hint:
+            overlay_message = self._empty_state_hint
+
+        if not overlay_message:
             self.table_overlay.place_forget()
-        else:
-            self.table_overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
-            self.table_overlay.lift()
+            return
+
+        self.table_overlay_label.configure(text=overlay_message, bg=overlay_bg, fg=overlay_fg)
+        self.table_overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self.table_overlay.lift()
+
+    def _set_table_interaction_enabled(self, enabled: bool) -> None:
+        self._table_locked = not enabled
+        self._update_table_overlay_state()
 
     def _create_button_panel(self) -> None:
         """Create bottom button panel with actions."""
@@ -856,6 +932,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self.count_label.configure(
             text=f"Showing: {len(self.filtered_servers)} of {len(self.all_servers)} servers"
         )
+        self._set_empty_state_hint(self._resolve_empty_state_hint())
 
         self._update_action_buttons_state()
         self._persist_filter_preferences()
@@ -863,6 +940,16 @@ class ServerListWindow(ServerListWindowActionsMixin):
     def _load_data(self) -> None:
         """Load server data from database."""
         try:
+            self._db_available = bool(self.db_reader and self.db_reader.is_database_available())
+            if not self._db_available:
+                self.all_servers = []
+                self.filtered_servers = []
+                table.update_table_display(self.tree, self.filtered_servers, self.settings_manager)
+                self.count_label.configure(text="Total: 0 servers")
+                self._set_empty_state_hint(self.HINT_NO_DATABASE)
+                self._update_action_buttons_state()
+                return
+
             # Get last scan time from scan manager
             scan_manager = get_scan_manager()
             self.last_scan_time = scan_manager.get_last_scan_time()

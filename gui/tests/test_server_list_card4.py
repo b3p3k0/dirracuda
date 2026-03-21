@@ -63,6 +63,12 @@ def _import_window_module():
         "gui.components.batch_extract_dialog": {
             "BatchExtractSettingsDialog": type("BatchExtractSettingsDialog", (), {})
         },
+        "gui.components.server_list_window.details": {
+            "show_server_detail_popup": lambda *args, **kwargs: None
+        },
+        "gui.components.server_list_window.actions": {
+            "ServerListWindowActionsMixin": type("ServerListWindowActionsMixin", (), {})
+        },
     }
     sentinel = object()
     prior = {name: sys.modules.get(name, sentinel) for name in stubs}
@@ -405,3 +411,105 @@ class TestClickCallbackWiring:
         assert not hasattr(window_mod.ServerListWindow, "_on_avoid_toggle"), (
             "_on_avoid_toggle still exists — stale method not cleaned up"
         )
+
+
+# ---------------------------------------------------------------------------
+# Test 8: empty-state hint resolution (DB missing vs DB empty vs filter-empty)
+# ---------------------------------------------------------------------------
+
+class TestEmptyStateHints:
+    """Server list empty-state messaging should differentiate runtime scenarios."""
+
+    def _make_window_instance(self):
+        window_mod = _get_window()
+        win = window_mod.ServerListWindow.__new__(window_mod.ServerListWindow)
+        win._db_available = True
+        win.all_servers = []
+        win.filtered_servers = []
+        return window_mod, win
+
+    def test_hint_no_database_when_runtime_db_unavailable(self):
+        window_mod, win = self._make_window_instance()
+        win._db_available = False
+        win.all_servers = []
+        win.filtered_servers = []
+
+        hint = window_mod.ServerListWindow._resolve_empty_state_hint(win)
+        assert hint == window_mod.ServerListWindow.HINT_NO_DATABASE
+
+    def test_hint_empty_database_when_db_loaded_but_no_rows(self):
+        window_mod, win = self._make_window_instance()
+        win._db_available = True
+        win.all_servers = []
+        win.filtered_servers = []
+
+        hint = window_mod.ServerListWindow._resolve_empty_state_hint(win)
+        assert hint == window_mod.ServerListWindow.HINT_EMPTY_DATABASE
+
+    def test_hint_filter_empty_when_rows_exist_but_filters_hide_all(self):
+        window_mod, win = self._make_window_instance()
+        win._db_available = True
+        win.all_servers = [{"row_key": "S:1"}]
+        win.filtered_servers = []
+
+        hint = window_mod.ServerListWindow._resolve_empty_state_hint(win)
+        assert hint == window_mod.ServerListWindow.HINT_FILTER_EMPTY
+
+    def test_no_hint_when_filtered_rows_exist(self):
+        window_mod, win = self._make_window_instance()
+        win._db_available = True
+        win.all_servers = [{"row_key": "S:1"}]
+        win.filtered_servers = [{"row_key": "S:1"}]
+
+        hint = window_mod.ServerListWindow._resolve_empty_state_hint(win)
+        assert hint is None
+
+
+# ---------------------------------------------------------------------------
+# Test 9: initial deferred load must wait for mapped window
+# ---------------------------------------------------------------------------
+
+class TestInitialLoadMappingGuard:
+    """Initial data load should not start before the window is mapped."""
+
+    def _make_window_instance(self):
+        window_mod = _get_window()
+        win = window_mod.ServerListWindow.__new__(window_mod.ServerListWindow)
+        win._initial_load_started = False
+        win._initial_load_after_id = None
+        win._clear_initial_map_binding = MagicMock()
+        win._load_data = MagicMock()
+        return window_mod, win
+
+    def test_unmapped_window_requeues_without_loading(self):
+        window_mod, win = self._make_window_instance()
+        tk_window = MagicMock()
+        tk_window.winfo_exists.return_value = True
+        tk_window.winfo_ismapped.return_value = False
+        tk_window.after.return_value = "after-token"
+        win.window = tk_window
+
+        window_mod.ServerListWindow._run_initial_data_load(win)
+
+        assert win._initial_load_started is False
+        win._load_data.assert_not_called()
+        tk_window.after.assert_called_once()
+        delay_ms, callback = tk_window.after.call_args[0]
+        assert delay_ms == 50
+        assert callback == win._run_initial_data_load
+        assert win._initial_load_after_id == "after-token"
+
+    def test_mapped_window_runs_load_once(self):
+        window_mod, win = self._make_window_instance()
+        tk_window = MagicMock()
+        tk_window.winfo_exists.return_value = True
+        tk_window.winfo_ismapped.return_value = True
+        win.window = tk_window
+
+        window_mod.ServerListWindow._run_initial_data_load(win)
+
+        assert win._initial_load_started is True
+        win._clear_initial_map_binding.assert_called_once()
+        win._load_data.assert_called_once()
+        tk_window.update_idletasks.assert_called_once()
+        tk_window.update.assert_called_once()
