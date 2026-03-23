@@ -102,50 +102,15 @@ The main window. From here you can:
 - Edit configuration
 - Toggle **dark/light mode** with the 🌙/☀️ button in the top-right; your preference is saved automatically
 
-### SMB Discovery
+### Discovery
 
-Triggered from **▶ Start Scan** with **SMB** selected. The scan runs as a `smbseek` subprocess and tests candidates concurrently across a configurable thread pool:
+Triggered from **▶ Start Scan** with the protocol selected. All three follow the same pipeline: Shodan query → reachability check → protocol-specific verification. Only hosts that pass get stored; failures are recorded with a reason code so you can see exactly where each candidate dropped out. Scan summary shows Shodan candidates vs. verified count. The same host registry handles all three protocols — the same IP can carry SMB, FTP, and HTTP entries without collision.
 
-1. Shodan query for hosts with SMB auth disabled or running Samba, filtered by country and exclusion list
-2. Organization filtering — hosts belonging to excluded ISPs or hosting providers are dropped before any connection attempt
-3. Deduplication against the database — hosts scanned within the last 30 days are skipped by default (GUI uses this default behavior; CLI can override with `--rescan-all` or `--rescan-failed`)
-4. TCP reachability check on port 445
-5. Authentication test using three methods in sequence: Anonymous, Guest/blank, and Guest/Guest
+**SMB** (port 445) — default dork: `smb authentication: disabled product:"Samba"`. Applies two extra pre-connection filters: org filtering (drops excluded ISPs and hosting providers) and 30-day deduplication (CLI overrides: `--rescan-all`, `--rescan-failed`). Verification tries Anonymous, Guest/blank, and Guest/Guest in sequence; whichever succeeds is recorded alongside country and timestamp, so auth method drift shows up across rescans. Two security modes: **Cautious** (default) restricts to signed SMB2+/SMB3 and rejects SMB1; **Legacy** lifts those restrictions and tends to find more targets.
 
-Two security modes are available in the scan dialog (and via `--legacy` on the CLI): **Cautious** (default) restricts connections to signed SMB2+/SMB3 and rejects anything requiring unsigned sessions or SMB1; **Legacy** lifts those restrictions. Legacy tends to return more results — older hosts that have never been hardened or patched off SMB1 are exactly the ones worth finding.
+**FTP** (port 21) — default dork: `port:21 "230 Login successful"`. Verification includes anonymous login and root directory listing. Failure codes: `connect_fail`, `auth_fail`, `list_fail`, `timeout`.
 
-Only hosts that authenticate are stored. The method that succeeded is recorded alongside country, timestamp, and scan count — so you can track whether a host drifts from anonymous to guest access across rescans. The scan summary reports Shodan candidates vs. verified count.
-
-Results appear in the Server List.
-
-### FTP Discovery
-
-Triggered from **▶ Start Scan** with **FTP** selected. The scan runs as a separate `ftpseek` process and follows four verification steps for each candidate:
-
-1. Shodan query for port 21 hosts showing a successful anonymous login banner
-2. TCP reachability check on port 21
-3. Anonymous login attempt
-4. Root directory listing
-
-Only hosts that pass all four steps are stored as verified. Failures are recorded with a reason code (`connect_fail`, `auth_fail`, `list_fail`, `timeout`) so you can see exactly where each candidate dropped out. The scan summary reports candidate count vs. verified count.
-
-Results are stored in the same host registry. The same IP can have SMB, FTP, and HTTP entries without collision.
-
-### HTTP Discovery
-
-Triggered from **▶ Start Scan** with **HTTP** selected. Uses a Shodan query for `http.title:"Index of /"` to find hosts serving Apache/nginx directory listings, then verifies each candidate:
-
-1. Shodan query for HTTP/HTTPS directory-index hosts
-2. Reachability check and directory-index validation (HTTP and HTTPS ports)
-3. Accessible listings stored as verified; failures recorded with a reason code
-
-Results are stored in the same host registry as SMB and FTP records. The browser window lets you navigate directory listings, view text files and images (`.png`, `.jpg`, `.jpeg`, `.gif`, `.bmp`, `.webp`, `.tif`, `.tiff`), and download files to quarantine at `~/.smbseek/quarantine/<ip>/<YYYYMMDD>/http_root/`.
-
-Known limits:
-- No pre-flight file size guard (HTTP directory listings carry no size metadata; the viewer size cap still applies)
-- Animated GIFs render first frame only (PIL limitation)
-- HTTPS with mutual TLS not supported; insecure TLS allowed by default
-- Browser indexes one level deep; files in nested subdirectories require manual navigation
+**HTTP** — default dork: `http.title:"Index of /"`, checks both HTTP and HTTPS ports. The browser lets you navigate listings, view text files and images (`.png`, `.jpg`, `.jpeg`, `.gif`, `.bmp`, `.webp`, `.tif`, `.tiff`), and download to quarantine at `~/.smbseek/quarantine/<ip>/<YYYYMMDD>/http_root/`. Known limits: no file size pre-flight, animated GIFs show first frame only, no mutual TLS, one level deep without manual navigation.
 
 ### Server List
 
