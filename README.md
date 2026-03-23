@@ -293,20 +293,20 @@ The CLI is useful for scripting and automation. The GUI uses the same backends.
 
 ```bash
 # SMB discovery
-./smbseek --country US              # Discover US servers
-./smbseek --country US,GB,CA        # Multiple countries
-./smbseek --string "SIPR files"     # Search by keyword
-./smbseek --verbose                 # Detailed output
+./cli/smbseek.py --country US              # Discover US servers
+./cli/smbseek.py --country US,GB,CA        # Multiple countries
+./cli/smbseek.py --string "SIPR files"     # Search by keyword
+./cli/smbseek.py --verbose                 # Detailed output
 
 # FTP discovery
-./ftpseek --country US
-./ftpseek --country US,GB,CA
-./ftpseek --verbose
+./cli/ftpseek.py --country US
+./cli/ftpseek.py --country US,GB,CA
+./cli/ftpseek.py --verbose
 
 # HTTP discovery
-./httpseek --country US
-./httpseek --country US,GB,CA
-./httpseek --verbose
+./cli/httpseek.py --country US
+./cli/httpseek.py --country US,GB,CA
+./cli/httpseek.py --verbose
 ```
 
 ---

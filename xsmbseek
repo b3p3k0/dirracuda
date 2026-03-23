@@ -222,7 +222,7 @@ class XSMBSeekConfig:
             }
         
         # Check for main smbseek executable
-        main_script = smbseek_path / "smbseek"
+        main_script = smbseek_path / "cli" / "smbseek.py"
         if not main_script.exists():
             return {
                 'valid': False,
@@ -245,7 +245,7 @@ class XSMBSeekConfig:
         return {'valid': True}
 
 
-def show_smbseek_setup_dialog(parent=None, current_path: str = "./smbseek") -> Optional[str]:
+def show_smbseek_setup_dialog(parent=None, current_path: str = str(SCRIPT_DIR)) -> Optional[str]:
     """
     Show dialog for setting up SMBSeek path.
     
@@ -336,7 +336,7 @@ def show_smbseek_setup_dialog(parent=None, current_path: str = "./smbseek") -> O
         "2. If SMBSeek is already installed:",
         "   • Enter the path to your SMBSeek directory below",
         "   • Or click 'Browse' to select the directory",
-        "   • The directory should contain 'smbseek' executable"
+        "   • The directory should contain 'cli/smbseek.py' entrypoint"
     ]
     
     for instruction in instructions:
@@ -571,8 +571,9 @@ class XSMBSeekGUI:
     def _is_valid_checkout_backend(self, path: Path) -> bool:
         """Return True when path looks like a runnable smbseek checkout."""
         required = [
-            path / "smbseek",
-            path / "ftpseek",
+            path / "cli" / "smbseek.py",
+            path / "cli" / "ftpseek.py",
+            path / "cli" / "httpseek.py",
             path / "xsmbseek",
             path / "commands",
             path / "shared",

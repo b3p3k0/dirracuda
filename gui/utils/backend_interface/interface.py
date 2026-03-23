@@ -56,9 +56,9 @@ class BackendInterface:
         but allow complete override for different deployment scenarios.
         """
         self.backend_path = Path(backend_path).resolve()
-        self.cli_script = self.backend_path / "smbseek"
-        self.ftp_cli_script = self.backend_path / "ftpseek"
-        self.http_cli_script = self.backend_path / "httpseek"
+        self.cli_script = self.backend_path / "cli" / "smbseek.py"
+        self.ftp_cli_script = self.backend_path / "cli" / "ftpseek.py"
+        self.http_cli_script = self.backend_path / "cli" / "httpseek.py"
         self.config_path = self.backend_path / "conf" / "config.json"
         self.config_example_path = self.backend_path / "conf" / "config.json.example"
 
@@ -112,64 +112,35 @@ class BackendInterface:
         """Delegate backend validation to config helper."""
         return config.validate_backend(self)
 
-    def _build_cli_command(self, *args) -> List[str]:
-        """
-        Build CLI command with proper Python interpreter.
-
-        Uses the same Python interpreter that launched the GUI to ensure
-        subprocess commands inherit the correct environment and dependencies.
-
-        Args:
-            *args: CLI arguments to pass to SMBSeek script
-
-        Returns:
-            Command list with interpreter, script path, and arguments
-        """
+    def _build_script_command(self, script_path: Path, *args) -> List[str]:
+        """Build a CLI command for a seeker entrypoint using the GUI interpreter."""
         # Determine Python interpreter (same as GUI for environment consistency)
         interpreter = sys.executable
         if not interpreter:
             # Fallback chain for robustness
             interpreter = 'python3'  # Unix/Linux standard
 
-        # Ensure script path is string (currently Path object)
-        script_path = str(self.cli_script)
         cli_args = [str(arg) for arg in args]
         if "--config" not in cli_args:
             cli_args.extend(["--config", str(self.config_path)])
 
-        command_list = [interpreter, script_path, *cli_args]
+        command_list = [interpreter, str(script_path), *cli_args]
         if os.getenv("XSMBSEEK_DEBUG_SUBPROCESS"):
             # Log script and arg count only (avoid logging potential credentials)
             _logger.debug("CLI command: %s with %d args", script_path, len(args))
         return command_list
 
+    def _build_cli_command(self, *args) -> List[str]:
+        """Build CLI command with proper Python interpreter."""
+        return self._build_script_command(self.cli_script, *args)
+
     def _build_ftp_cli_command(self, *args) -> List[str]:
         """Build CLI command for ftpseek using same interpreter as GUI."""
-        interpreter = sys.executable or "python3"
-        cli_args = [str(arg) for arg in args]
-        if "--config" not in cli_args:
-            cli_args.extend(["--config", str(self.config_path)])
-
-        command_list = [interpreter, str(self.ftp_cli_script), *cli_args]
-        if os.getenv("XSMBSEEK_DEBUG_SUBPROCESS"):
-            _logger.debug(
-                "FTP CLI command: %s with %d args", str(self.ftp_cli_script), len(args)
-            )
-        return command_list
+        return self._build_script_command(self.ftp_cli_script, *args)
 
     def _build_http_cli_command(self, *args) -> List[str]:
         """Build CLI command for httpseek using same interpreter as GUI."""
-        interpreter = sys.executable or "python3"
-        cli_args = [str(arg) for arg in args]
-        if "--config" not in cli_args:
-            cli_args.extend(["--config", str(self.config_path)])
-
-        command_list = [interpreter, str(self.http_cli_script), *cli_args]
-        if os.getenv("XSMBSEEK_DEBUG_SUBPROCESS"):
-            _logger.debug(
-                "HTTP CLI command: %s with %d args", str(self.http_cli_script), len(args)
-            )
-        return command_list
+        return self._build_script_command(self.http_cli_script, *args)
 
     def _build_tool_command(self, script_name: str, *args) -> List[str]:
         """

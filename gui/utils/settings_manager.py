@@ -526,14 +526,16 @@ class SettingsManager:
             candidate_backend = Path.cwd()
             candidate_config = candidate_backend / "conf" / "config.json"
             candidate_db = candidate_backend / "smbseek.db"
-            candidate_smbseek = candidate_backend / "smbseek"
-            candidate_ftpseek = candidate_backend / "ftpseek"
+            candidate_smbseek = candidate_backend / "cli" / "smbseek.py"
+            candidate_ftpseek = candidate_backend / "cli" / "ftpseek.py"
+            candidate_httpseek = candidate_backend / "cli" / "httpseek.py"
 
             candidate_is_checkout = (
                 candidate_backend.exists()
                 and candidate_config.exists()
                 and candidate_smbseek.exists()
                 and candidate_ftpseek.exists()
+                and candidate_httpseek.exists()
             )
 
             # Nothing usable in cwd; keep existing settings as-is.
@@ -604,9 +606,9 @@ class SettingsManager:
                 return {'valid': False, 'message': 'Path is not a directory'}
             
             # Check for smbseek executable
-            smbseek_script = path_obj / "smbseek"
+            smbseek_script = path_obj / "cli" / "smbseek.py"
             if not smbseek_script.exists():
-                return {'valid': False, 'message': 'smbseek executable not found in directory'}
+                return {'valid': False, 'message': 'cli/smbseek.py not found in directory'}
 
             # Try to get version
             try:

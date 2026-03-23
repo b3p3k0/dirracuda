@@ -37,8 +37,8 @@ def test_http_post_scan_bulk_probe_uses_http_host_type_filter(monkeypatch):
     def _fake_run_background_fetch(title, message, fetch_fn):
         return fetch_fn(), None
 
-    monkeypatch.setattr("gui.components.dashboard.messagebox.showerror", lambda *a, **k: None)
-    monkeypatch.setattr("gui.components.dashboard.messagebox.showinfo", lambda *a, **k: None)
+    monkeypatch.setattr("gui.components.dashboard_bulk_ops.messagebox.showerror", lambda *a, **k: None)
+    monkeypatch.setattr("gui.components.dashboard_bulk_ops.messagebox.showinfo", lambda *a, **k: None)
 
     dash._get_servers_for_bulk_ops = _fake_get_servers_for_bulk_ops
     dash._run_background_fetch = _fake_run_background_fetch

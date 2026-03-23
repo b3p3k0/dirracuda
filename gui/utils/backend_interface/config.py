@@ -234,15 +234,25 @@ def validate_backend(interface) -> None:
         FileNotFoundError: If backend CLI script not found
         PermissionError: If backend not executable
     """
-    if not interface.cli_script.exists():
+    import os
+
+    scripts = [
+        interface.cli_script,
+        interface.ftp_cli_script,
+        interface.http_cli_script,
+    ]
+    missing = [script for script in scripts if not script.exists()]
+    if missing:
+        missing_list = ", ".join(str(script) for script in missing)
         raise FileNotFoundError(
-            f"Backend CLI not found at {interface.cli_script}. "
+            f"Backend CLI not found at: {missing_list}. "
             f"Ensure backend is properly installed."
         )
 
-    import os
-    if not os.access(interface.cli_script, os.X_OK):
+    non_executable = [script for script in scripts if not os.access(script, os.X_OK)]
+    if non_executable:
+        missing_list = ", ".join(str(script) for script in non_executable)
         raise PermissionError(
-            f"Backend CLI not executable: {interface.cli_script}. "
-            f"Run: chmod +x {interface.cli_script}"
+            f"Backend CLI not executable: {missing_list}. "
+            f"Run: chmod +x {' '.join(str(script) for script in non_executable)}"
         )

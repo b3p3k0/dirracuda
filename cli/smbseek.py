@@ -23,8 +23,11 @@ import re
 from typing import Optional, Set
 from typing import List
 
-# Add current directory to Python path for imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Add repository root to Python path for imports
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.dirname(_SCRIPT_DIR)
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
 from shared.utils import format_string_for_shodan
 
@@ -164,7 +167,7 @@ def detect_deprecated_usage(argv):
     if len(argv) > 1 and argv[1] in deprecated_subcommands:
         if argv[1] in {'collect', 'analyze', 'report', 'db'}:
             print(f"⚠️  DEPRECATED: '{argv[1]}' subcommand is no longer supported.")
-            print("   Use: ./smbseek.py --country US")
+            print("   Use: ./cli/smbseek.py --country US")
             return None  # Exit early with code 1
         else:
             warnings_issued.append(f"subcommand '{argv[1]}' is deprecated, use flags directly")

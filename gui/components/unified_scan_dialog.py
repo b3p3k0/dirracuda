@@ -10,7 +10,6 @@ Single entrypoint for SMB/FTP/HTTP scan launches. Supports:
 
 from __future__ import annotations
 
-import json
 import webbrowser
 import tkinter as tk
 from pathlib import Path
@@ -19,18 +18,30 @@ from typing import Any, Callable, Dict, Optional
 
 from gui.components.scan_dialog import ScanDialog
 from gui.components.scan_preflight import run_preflight
+from gui.components.unified_scan_options_mixin import (
+    _UnifiedScanDialogOptionsMixin,
+    _CONCURRENCY_UPPER,
+    _TIMEOUT_UPPER,
+)
+from gui.components.unified_scan_region_mixin import _UnifiedScanDialogRegionMixin
+from gui.components.unified_scan_template_mixin import _UnifiedScanDialogTemplateMixin
+from gui.components.unified_scan_validators import (
+    parse_and_validate_countries as _parse_and_validate_countries_fn,
+    parse_positive_int as _parse_positive_int_fn,
+    validate_integer_char as _validate_integer_char_fn,
+)
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.style import get_theme
 from gui.utils.template_store import TemplateStore
 
 REGIONS = ScanDialog.REGIONS
 
-_MAX_COUNTRIES = 100
-_CONCURRENCY_UPPER = 256
-_TIMEOUT_UPPER = 300
 
-
-class UnifiedScanDialog:
+class UnifiedScanDialog(
+    _UnifiedScanDialogTemplateMixin,
+    _UnifiedScanDialogRegionMixin,
+    _UnifiedScanDialogOptionsMixin,
+):
     """Modal dialog for configuring queued multi-protocol scan runs."""
 
     TEMPLATE_PLACEHOLDER_TEXT = "Select a template..."
@@ -96,183 +107,6 @@ class UnifiedScanDialog:
         self._load_config_defaults()
         self._load_initial_values()
         self._create_dialog()
-
-    # ------------------------------------------------------------------
-    # Defaults/load/persist
-    # ------------------------------------------------------------------
-
-    def _load_config_defaults(self) -> None:
-        """Load initial concurrency/timeout defaults from config file."""
-        config_data: Dict[str, Any] = {}
-        try:
-            with open(self.config_path, "r", encoding="utf-8") as fh:
-                config_data = json.load(fh)
-        except (FileNotFoundError, json.JSONDecodeError, PermissionError, OSError):
-            config_data = {}
-
-        if not isinstance(config_data, dict):
-            config_data = {}
-
-        discovery = config_data.get("discovery", {})
-        connection = config_data.get("connection", {})
-
-        try:
-            disc = int(discovery.get("max_concurrent_hosts", 10))
-        except Exception:
-            disc = 10
-        try:
-            timeout = int(connection.get("timeout", 10))
-        except Exception:
-            timeout = 10
-
-        self.shared_concurrency_var.set(str(max(1, disc)))
-        self.shared_timeout_var.set(str(max(1, timeout)))
-
-    def _load_initial_values(self) -> None:
-        """Load last-used values from settings manager."""
-        if self._settings_manager is None:
-            return
-
-        def _coerce_int(value: Any, default: int, minimum: int = 1) -> int:
-            try:
-                v = int(value)
-                return v if v >= minimum else default
-            except (TypeError, ValueError):
-                return default
-
-        def _coerce_bool(value: Any, default: bool = False) -> bool:
-            if isinstance(value, bool):
-                return value
-            if isinstance(value, (int, float)):
-                return bool(value)
-            if isinstance(value, str):
-                normalized = value.strip().lower()
-                if normalized in {"1", "true", "yes", "on"}:
-                    return True
-                if normalized in {"0", "false", "no", "off", ""}:
-                    return False
-            return default
-
-        try:
-            self.protocol_smb_var.set(
-                _coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.protocol_smb", True), True)
-            )
-            self.protocol_ftp_var.set(
-                _coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.protocol_ftp", True), True)
-            )
-            self.protocol_http_var.set(
-                _coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.protocol_http", True), True)
-            )
-
-            self.max_results_var.set(
-                _coerce_int(self._settings_manager.get_setting("unified_scan_dialog.max_shodan_results", 1000), 1000)
-            )
-            self.custom_filters_var.set(str(self._settings_manager.get_setting("unified_scan_dialog.custom_filters", "")))
-            self.country_var.set(str(self._settings_manager.get_setting("unified_scan_dialog.country_code", "")))
-
-            self.shared_concurrency_var.set(
-                str(_coerce_int(self._settings_manager.get_setting("unified_scan_dialog.shared_concurrency", 10), 10))
-            )
-            self.shared_timeout_var.set(
-                str(_coerce_int(self._settings_manager.get_setting("unified_scan_dialog.shared_timeout_seconds", 10), 10))
-            )
-
-            self.verbose_var.set(
-                _coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.verbose", False), False)
-            )
-            self.bulk_probe_enabled_var.set(
-                _coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.bulk_probe_enabled", False), False)
-            )
-            self.bulk_extract_enabled_var.set(
-                _coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.bulk_extract_enabled", False), False)
-            )
-            self.skip_indicator_extract_var.set(
-                _coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.bulk_extract_skip_indicators", True), True)
-            )
-            self.rce_enabled_var.set(
-                _coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.rce_enabled", False), False)
-            )
-
-            mode = str(self._settings_manager.get_setting("unified_scan_dialog.security_mode", "cautious")).strip().lower()
-            self.security_mode_var.set(mode if mode in {"cautious", "legacy"} else "cautious")
-
-            self.allow_insecure_tls_var.set(
-                _coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.allow_insecure_tls", True), True)
-            )
-
-            self.africa_var.set(_coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.region_africa", False), False))
-            self.asia_var.set(_coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.region_asia", False), False))
-            self.europe_var.set(_coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.region_europe", False), False))
-            self.north_america_var.set(
-                _coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.region_north_america", False), False)
-            )
-            self.oceania_var.set(_coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.region_oceania", False), False))
-            self.south_america_var.set(
-                _coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.region_south_america", False), False)
-            )
-        except Exception:
-            pass
-
-        # Safety: ensure at least one protocol remains selected.
-        if not (self.protocol_smb_var.get() or self.protocol_ftp_var.get() or self.protocol_http_var.get()):
-            self.protocol_smb_var.set(True)
-            self.protocol_ftp_var.set(True)
-            self.protocol_http_var.set(True)
-
-    def _persist_dialog_state(self) -> None:
-        """Best-effort persistence of dialog state."""
-        if self._settings_manager is None:
-            return
-
-        def _coerce_int(value: Any, minimum: int, maximum: int) -> Optional[int]:
-            try:
-                v = int(str(value).strip())
-            except (TypeError, ValueError):
-                return None
-            if v < minimum or v > maximum:
-                return None
-            return v
-
-        try:
-            self._settings_manager.set_setting("unified_scan_dialog.protocol_smb", bool(self.protocol_smb_var.get()))
-            self._settings_manager.set_setting("unified_scan_dialog.protocol_ftp", bool(self.protocol_ftp_var.get()))
-            self._settings_manager.set_setting("unified_scan_dialog.protocol_http", bool(self.protocol_http_var.get()))
-
-            max_results = _coerce_int(self.max_results_var.get(), 1, 1000)
-            if max_results is not None:
-                self._settings_manager.set_setting("unified_scan_dialog.max_shodan_results", max_results)
-
-            shared_concurrency = _coerce_int(self.shared_concurrency_var.get(), 1, _CONCURRENCY_UPPER)
-            if shared_concurrency is not None:
-                self._settings_manager.set_setting("unified_scan_dialog.shared_concurrency", shared_concurrency)
-
-            shared_timeout = _coerce_int(self.shared_timeout_var.get(), 1, _TIMEOUT_UPPER)
-            if shared_timeout is not None:
-                self._settings_manager.set_setting("unified_scan_dialog.shared_timeout_seconds", shared_timeout)
-
-            self._settings_manager.set_setting("unified_scan_dialog.custom_filters", self.custom_filters_var.get().strip())
-            self._settings_manager.set_setting("unified_scan_dialog.country_code", self.country_var.get().strip().upper())
-
-            self._settings_manager.set_setting("unified_scan_dialog.verbose", bool(self.verbose_var.get()))
-            self._settings_manager.set_setting("unified_scan_dialog.bulk_probe_enabled", bool(self.bulk_probe_enabled_var.get()))
-            self._settings_manager.set_setting("unified_scan_dialog.bulk_extract_enabled", bool(self.bulk_extract_enabled_var.get()))
-            self._settings_manager.set_setting("unified_scan_dialog.bulk_extract_skip_indicators", bool(self.skip_indicator_extract_var.get()))
-            self._settings_manager.set_setting("unified_scan_dialog.rce_enabled", bool(self.rce_enabled_var.get()))
-
-            mode = (self.security_mode_var.get() or "cautious").strip().lower()
-            if mode not in {"cautious", "legacy"}:
-                mode = "cautious"
-            self._settings_manager.set_setting("unified_scan_dialog.security_mode", mode)
-            self._settings_manager.set_setting("unified_scan_dialog.allow_insecure_tls", bool(self.allow_insecure_tls_var.get()))
-
-            self._settings_manager.set_setting("unified_scan_dialog.region_africa", bool(self.africa_var.get()))
-            self._settings_manager.set_setting("unified_scan_dialog.region_asia", bool(self.asia_var.get()))
-            self._settings_manager.set_setting("unified_scan_dialog.region_europe", bool(self.europe_var.get()))
-            self._settings_manager.set_setting("unified_scan_dialog.region_north_america", bool(self.north_america_var.get()))
-            self._settings_manager.set_setting("unified_scan_dialog.region_oceania", bool(self.oceania_var.get()))
-            self._settings_manager.set_setting("unified_scan_dialog.region_south_america", bool(self.south_america_var.get()))
-        except Exception:
-            pass
 
     # ------------------------------------------------------------------
     # Dialog construction
@@ -445,198 +279,6 @@ class UnifiedScanDialog:
         )
         self.theme.apply_to_widget(self.delete_template_button, "button_secondary")
         self.delete_template_button.pack(side=tk.LEFT)
-
-    # ------------------------------------------------------------------
-    # Template handling
-    # ------------------------------------------------------------------
-
-    def _refresh_template_toolbar(self, select_slug: Optional[str] = None) -> None:
-        if not self.template_dropdown:
-            return
-
-        templates = self.template_store.list_templates()
-        self._template_label_to_slug = {tpl.name: tpl.slug for tpl in templates}
-        values = [tpl.name for tpl in templates]
-
-        if not values:
-            self.template_dropdown.configure(state="disabled", values=["No templates saved"])
-            self.template_var.set("No templates saved")
-            self._selected_template_slug = None
-            self.delete_template_button.configure(state=tk.DISABLED)
-            return
-
-        placeholder = self.TEMPLATE_PLACEHOLDER_TEXT
-        display_values = [placeholder] + values
-        self.template_dropdown.configure(state="readonly", values=display_values)
-
-        slug_to_label = {tpl.slug: tpl.name for tpl in templates}
-        desired_slug = select_slug
-
-        if desired_slug and desired_slug in slug_to_label:
-            self.template_var.set(slug_to_label[desired_slug])
-            self._selected_template_slug = desired_slug
-            self.delete_template_button.configure(state=tk.NORMAL)
-        else:
-            self.template_var.set(placeholder)
-            self._selected_template_slug = None
-            self.delete_template_button.configure(state=tk.DISABLED)
-
-    def _handle_template_selected(self, _event=None) -> None:
-        label = self.template_var.get()
-        if label == self.TEMPLATE_PLACEHOLDER_TEXT:
-            self._selected_template_slug = None
-            self.delete_template_button.configure(state=tk.DISABLED)
-            return
-        slug = self._template_label_to_slug.get(label)
-        self._selected_template_slug = slug
-        if slug:
-            self._apply_template_by_slug(slug)
-            self.delete_template_button.configure(state=tk.NORMAL)
-
-    def _get_selected_template_name(self) -> Optional[str]:
-        label = self.template_var.get()
-        if label == self.TEMPLATE_PLACEHOLDER_TEXT:
-            return None
-        return label.strip() if label else None
-
-    def _prompt_save_template(self) -> None:
-        initial_name = self._get_selected_template_name()
-        name = simpledialog.askstring(
-            "Save Template",
-            "Template name:",
-            parent=self.dialog,
-            initialvalue=initial_name or "",
-        )
-        if not name:
-            return
-        name = name.strip()
-        if not name:
-            messagebox.showwarning("Save Template", "Template name cannot be empty.", parent=self.dialog)
-            return
-
-        slug = TemplateStore.slugify(name)
-        existing = self.template_store.load_template(slug)
-        if existing:
-            overwrite = messagebox.askyesno(
-                "Overwrite Template",
-                f"A template named '{name}' already exists. Overwrite it?",
-                parent=self.dialog,
-            )
-            if not overwrite:
-                return
-
-        form_state = self._capture_form_state()
-        template = self.template_store.save_template(name, form_state)
-        self._refresh_template_toolbar(select_slug=template.slug)
-        messagebox.showinfo("Template Saved", f"Template '{name}' saved.")
-
-    def _delete_selected_template(self) -> None:
-        slug = self._selected_template_slug
-        if not slug:
-            messagebox.showinfo("Delete Template", "No template selected.")
-            return
-
-        label = self.template_var.get()
-        confirmed = messagebox.askyesno(
-            "Delete Template",
-            f"Delete template '{label}'?",
-            parent=self.dialog,
-        )
-        if not confirmed:
-            return
-
-        deleted = self.template_store.delete_template(slug)
-        if deleted:
-            messagebox.showinfo("Template Deleted", f"Template '{label}' removed.")
-        else:
-            messagebox.showwarning("Delete Template", "Failed to delete template.", parent=self.dialog)
-
-        self._refresh_template_toolbar()
-
-    def _capture_form_state(self) -> Dict[str, Any]:
-        return {
-            "protocols": {
-                "smb": self.protocol_smb_var.get(),
-                "ftp": self.protocol_ftp_var.get(),
-                "http": self.protocol_http_var.get(),
-            },
-            "custom_filters": self.custom_filters_var.get(),
-            "country_code": self.country_var.get(),
-            "regions": {
-                "africa": self.africa_var.get(),
-                "asia": self.asia_var.get(),
-                "europe": self.europe_var.get(),
-                "north_america": self.north_america_var.get(),
-                "oceania": self.oceania_var.get(),
-                "south_america": self.south_america_var.get(),
-            },
-            "max_results": self.max_results_var.get(),
-            "shared_concurrency": self.shared_concurrency_var.get(),
-            "shared_timeout_seconds": self.shared_timeout_var.get(),
-            "verbose": self.verbose_var.get(),
-            "bulk_probe_enabled": self.bulk_probe_enabled_var.get(),
-            "bulk_extract_enabled": self.bulk_extract_enabled_var.get(),
-            "bulk_extract_skip_indicators": self.skip_indicator_extract_var.get(),
-            "rce_enabled": self.rce_enabled_var.get(),
-            "security_mode": self.security_mode_var.get(),
-            "allow_insecure_tls": self.allow_insecure_tls_var.get(),
-        }
-
-    def _apply_form_state(self, state: Dict[str, Any]) -> None:
-        protocols = state.get("protocols", {})
-        self.protocol_smb_var.set(bool(protocols.get("smb", True)))
-        self.protocol_ftp_var.set(bool(protocols.get("ftp", True)))
-        self.protocol_http_var.set(bool(protocols.get("http", True)))
-
-        self.custom_filters_var.set(state.get("custom_filters", ""))
-        self.country_var.set(state.get("country_code", ""))
-
-        regions = state.get("regions", {})
-        self.africa_var.set(bool(regions.get("africa", False)))
-        self.asia_var.set(bool(regions.get("asia", False)))
-        self.europe_var.set(bool(regions.get("europe", False)))
-        self.north_america_var.set(bool(regions.get("north_america", False)))
-        self.oceania_var.set(bool(regions.get("oceania", False)))
-        self.south_america_var.set(bool(regions.get("south_america", False)))
-
-        max_results = state.get("max_results")
-        if max_results is not None:
-            try:
-                self.max_results_var.set(int(max_results))
-            except (ValueError, tk.TclError):
-                pass
-
-        shared_conc = state.get("shared_concurrency")
-        if shared_conc is not None:
-            self.shared_concurrency_var.set(str(shared_conc))
-
-        shared_timeout = state.get("shared_timeout_seconds")
-        if shared_timeout is not None:
-            self.shared_timeout_var.set(str(shared_timeout))
-
-        self.verbose_var.set(bool(state.get("verbose", False)))
-        self.bulk_probe_enabled_var.set(bool(state.get("bulk_probe_enabled", False)))
-        self.bulk_extract_enabled_var.set(bool(state.get("bulk_extract_enabled", False)))
-        self.skip_indicator_extract_var.set(bool(state.get("bulk_extract_skip_indicators", True)))
-        self.rce_enabled_var.set(bool(state.get("rce_enabled", False)))
-
-        mode = str(state.get("security_mode", "cautious")).strip().lower()
-        self.security_mode_var.set(mode if mode in {"cautious", "legacy"} else "cautious")
-        self.allow_insecure_tls_var.set(bool(state.get("allow_insecure_tls", True)))
-
-        self._update_region_status()
-
-    def _apply_template_by_slug(self, slug: str, *, silent: bool = False) -> None:
-        template = self.template_store.load_template(slug)
-        if not template:
-            if not silent:
-                messagebox.showwarning("Template Missing", "Selected template could not be loaded.", parent=self.dialog)
-            self._refresh_template_toolbar()
-            return
-
-        self._apply_form_state(template.form_state)
-        self.template_store.set_last_used(slug)
-        self._selected_template_slug = slug
 
     # ------------------------------------------------------------------
     # Sections
@@ -1043,7 +685,7 @@ class UnifiedScanDialog:
     # ------------------------------------------------------------------
 
     def _validate_integer_input(self, proposed: str) -> bool:
-        return proposed == "" or proposed.isdigit()
+        return _validate_integer_char_fn(proposed)
 
     def _validate_country_input(self, *_args) -> None:
         raw = self.country_var.get()
@@ -1060,114 +702,10 @@ class UnifiedScanDialog:
             self.max_results_var.set(1000)
 
     def _parse_positive_int(self, value_str: str, field_name: str, *, minimum: int = 1, maximum: int) -> int:
-        if not value_str.strip():
-            raise ValueError(f"{field_name} is required.")
-        try:
-            v = int(value_str)
-        except ValueError as exc:
-            raise ValueError(f"{field_name} must be a whole number.") from exc
-        if v < minimum:
-            raise ValueError(f"{field_name} must be at least {minimum}.")
-        if v > maximum:
-            raise ValueError(f"{field_name} must be {maximum} or less.")
-        return v
+        return _parse_positive_int_fn(value_str, field_name, minimum=minimum, maximum=maximum)
 
     def _parse_and_validate_countries(self, country_input: str) -> tuple[list[str], str]:
-        if not country_input.strip():
-            return [], ""
-
-        codes = [c.strip().upper() for c in country_input.split(",")]
-        valid = []
-        for code in codes:
-            if not code:
-                continue
-            if len(code) < 2 or len(code) > 3:
-                return [], f"Invalid country code '{code}': must be 2-3 characters (e.g., US, GB, CA)"
-            if not code.isalpha():
-                return [], f"Invalid country code '{code}': must contain only letters (e.g., US, GB, CA)"
-            valid.append(code)
-
-        if not valid:
-            return [], "Please enter at least one valid country code"
-        return valid, ""
-
-    def _get_selected_region_countries(self) -> list[str]:
-        region_vars = [
-            ("Africa", self.africa_var),
-            ("Asia", self.asia_var),
-            ("Europe", self.europe_var),
-            ("North America", self.north_america_var),
-            ("Oceania", self.oceania_var),
-            ("South America", self.south_america_var),
-        ]
-        out = []
-        for name, var in region_vars:
-            if var.get():
-                out.extend(REGIONS[name])
-        return out
-
-    def _get_all_selected_countries(self, manual_input: str) -> tuple[list[str], str]:
-        manual, err = self._parse_and_validate_countries(manual_input)
-        if err:
-            return [], err
-
-        region = self._get_selected_region_countries()
-        all_countries = sorted(set(manual + region))
-
-        if len(all_countries) > _MAX_COUNTRIES:
-            return [], (
-                f"Too many countries selected ({len(all_countries)}). "
-                f"Maximum allowed: {_MAX_COUNTRIES}. Please reduce your selection."
-            )
-        return all_countries, ""
-
-    def _update_region_status(self) -> None:
-        if not self.region_status_label:
-            return
-
-        region_vars = [
-            ("Africa", self.africa_var),
-            ("Asia", self.asia_var),
-            ("Europe", self.europe_var),
-            ("North America", self.north_america_var),
-            ("Oceania", self.oceania_var),
-            ("South America", self.south_america_var),
-        ]
-        selected, total = [], 0
-        for name, var in region_vars:
-            if var.get():
-                selected.append(name)
-                total += len(REGIONS[name])
-
-        if selected:
-            text = f"{selected[0]} ({total} countries)" if len(selected) == 1 else f"{len(selected)} regions ({total} countries)"
-        else:
-            text = ""
-        self.region_status_label.configure(text=text)
-
-    def _select_all_regions(self) -> None:
-        for var in (
-            self.africa_var,
-            self.asia_var,
-            self.europe_var,
-            self.north_america_var,
-            self.oceania_var,
-            self.south_america_var,
-        ):
-            var.set(True)
-        self._update_region_status()
-
-    def _clear_all_regions(self) -> None:
-        for var in (
-            self.africa_var,
-            self.asia_var,
-            self.europe_var,
-            self.north_america_var,
-            self.oceania_var,
-            self.south_america_var,
-        ):
-            var.set(False)
-        self._update_region_status()
+        return _parse_and_validate_countries_fn(country_input)
 
     # ------------------------------------------------------------------
     # Build/start/cancel
