@@ -333,18 +333,8 @@ class BatchExtractSettingsDialog:
 
         row += 1
 
-        # Backend status note (italic, small font)
-        status_note = tk.Label(
-            parent,
-            text="Extension mode now applies during extract. In allow-only, add '<no extension>' to permit extensionless files.",
-            font=("TkDefaultFont", 8, "italic"),
-            fg=self.theme.colors["text_secondary"] if self.theme else "gray"
-        )
-        status_note.grid(row=row, column=0, columnspan=2, sticky="w", padx=(10, 0), pady=(0, 10))
-        row += 1
-
-        # Summary counts label (moved below radio buttons and note)
-        count_text = f"Included: {allowed_count} allowed    Excluded: {denied_count} denied"
+        # Summary counts label
+        count_text = f"{allowed_count} allowed / {denied_count} denied"
         self.extension_count_label = tk.Label(parent, text=count_text, justify="left")
         self.extension_count_label.grid(row=row, column=0, columnspan=2, sticky="w", pady=(5, 5))
         row += 1
@@ -480,7 +470,7 @@ class BatchExtractSettingsDialog:
             # Update summary count with new format
             allowed_count = len(included)
             denied_count = len(excluded)
-            count_text = f"Included: {allowed_count} allowed    Excluded: {denied_count} denied"
+            count_text = f"{allowed_count} allowed / {denied_count} denied"
             self.extension_count_label.config(text=count_text)
 
     def _open_config_editor(self):
