@@ -1606,13 +1606,23 @@ class DashboardWidget:
         self.theme.apply_to_widget(progress_dialog, "main_window")
 
         progress_label = tk.Label(progress_dialog, text=f"Probing 0/{len(servers)} servers...")
+        self.theme.apply_to_widget(progress_label, "label")
         progress_label.pack(pady=(18, 8))
 
-        progress_bar = ttk.Progressbar(progress_dialog, length=320, mode='determinate', maximum=len(servers))
+        progress_bar = ttk.Progressbar(
+            progress_dialog,
+            length=320,
+            mode='determinate',
+            maximum=len(servers),
+            style="SMBSeek.Horizontal.TProgressbar",
+        )
         progress_bar.pack(pady=(0, 10))
 
         cancel_button = tk.Button(progress_dialog, text="Cancel", command=lambda: cancel_event.set())
+        self.theme.apply_to_widget(cancel_button, "button_secondary")
         cancel_button.pack(pady=(0, 10))
+
+        self.theme.apply_theme_to_application(progress_dialog)
 
         # Ensure initial paint before heavy work
         progress_dialog.update_idletasks()

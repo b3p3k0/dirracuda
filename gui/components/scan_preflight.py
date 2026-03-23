@@ -54,6 +54,8 @@ class ProbeConfigDialog:
             self.theme.apply_to_widget(self.dialog, "main_window")
 
         frame = tk.Frame(self.dialog)
+        if self.theme:
+            self.theme.apply_to_widget(frame, "main_window")
         frame.pack(padx=20, pady=20)
 
         self._add_entry(frame, "Worker threads (max 8):", self.worker_var, 0)
@@ -62,6 +64,8 @@ class ProbeConfigDialog:
         self._add_entry(frame, "Share timeout (seconds):", self.timeout_var, 3)
 
         btn_frame = tk.Frame(frame)
+        if self.theme:
+            self.theme.apply_to_widget(btn_frame, "main_window")
         btn_frame.grid(row=4, column=0, columnspan=2, pady=(15, 0))
         save_btn = tk.Button(btn_frame, text="Save & Continue", command=self._save)
         disable_btn = tk.Button(btn_frame, text="Disable Probe", command=self._disable)
@@ -71,6 +75,9 @@ class ProbeConfigDialog:
                 self.theme.apply_to_widget(btn, "button_secondary")
             btn.pack(side=tk.LEFT, padx=5)
 
+        if self.theme:
+            self.theme.apply_theme_to_application(self.dialog)
+
         # Ensure dialog appears on top and gains focus (critical for VMs)
         ensure_dialog_focus(self.dialog, self.parent)
 
@@ -79,8 +86,13 @@ class ProbeConfigDialog:
         return self.result or {"status": "abort"}
 
     def _add_entry(self, parent, label, var, row):
-        tk.Label(parent, text=label).grid(row=row, column=0, sticky="w", pady=5)
-        tk.Entry(parent, textvariable=var, width=10).grid(row=row, column=1, sticky="w", pady=5)
+        label_widget = tk.Label(parent, text=label)
+        entry_widget = tk.Entry(parent, textvariable=var, width=10)
+        if self.theme:
+            self.theme.apply_to_widget(label_widget, "label")
+            self.theme.apply_to_widget(entry_widget, "entry")
+        label_widget.grid(row=row, column=0, sticky="w", pady=5)
+        entry_widget.grid(row=row, column=1, sticky="w", pady=5)
 
     def _save(self):
         try:
@@ -137,11 +149,18 @@ class SummaryDialog:
             self.theme.apply_to_widget(self.dialog, "main_window")
 
         frame = tk.Frame(self.dialog)
+        if self.theme:
+            self.theme.apply_to_widget(frame, "main_window")
         frame.pack(padx=20, pady=20)
 
-        tk.Label(frame, text="Confirm settings before launching the scan", font=("TkDefaultFont", 12, "bold")).pack(anchor="w")
+        heading_label = tk.Label(frame, text="Confirm settings before launching the scan", font=("TkDefaultFont", 12, "bold"))
+        if self.theme:
+            self.theme.apply_to_widget(heading_label, "label")
+        heading_label.pack(anchor="w")
 
         summary_text = tk.Text(frame, width=80, height=12, state="disabled")
+        if self.theme:
+            self.theme.apply_to_widget(summary_text, "text_area")
         summary_text.pack(pady=(10, 0))
         summary_text.config(state="normal")
         summary_text.insert("end", f"Base scan: {self.base_line}\n")
@@ -150,6 +169,8 @@ class SummaryDialog:
         summary_text.config(state="disabled")
 
         btn_frame = tk.Frame(frame)
+        if self.theme:
+            self.theme.apply_to_widget(btn_frame, "main_window")
         btn_frame.pack(pady=(15, 0))
         back_btn = tk.Button(btn_frame, text="Back to Scan", command=self._back)
         start_btn = tk.Button(btn_frame, text="Start Scan", command=self._start)
@@ -158,6 +179,9 @@ class SummaryDialog:
             self.theme.apply_to_widget(start_btn, "button_primary")
         back_btn.pack(side=tk.LEFT, padx=5)
         start_btn.pack(side=tk.LEFT, padx=5)
+
+        if self.theme:
+            self.theme.apply_theme_to_application(self.dialog)
 
         # Ensure dialog appears on top and gains focus (critical for VMs)
         ensure_dialog_focus(self.dialog, self.parent)

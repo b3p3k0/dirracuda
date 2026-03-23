@@ -281,6 +281,8 @@ class BatchExtractSettingsDialog:
 
         # Extension mode selector frame
         mode_frame = tk.Frame(parent)
+        if self.theme:
+            self.theme.apply_to_widget(mode_frame, "main_window")
         mode_frame.grid(row=row, column=0, columnspan=2, sticky="w", pady=(0, 10))
 
         # Heading label
@@ -312,9 +314,22 @@ class BatchExtractSettingsDialog:
         )
         radio_deny.grid(row=3, column=0, sticky="w", padx=(10, 0))
 
-        # Apply theme styling to heading only
+        # Apply theme styling to heading and radio controls
         if self.theme:
             self.theme.apply_to_widget(mode_heading, "label")
+            radio_style = {
+                "bg": self.theme.colors["primary_bg"],
+                "fg": self.theme.colors["text"],
+                "activebackground": self.theme.colors["primary_bg"],
+                "activeforeground": self.theme.colors["text"],
+                "highlightthickness": 0,
+                "selectcolor": self.theme.colors["secondary_bg"],
+            }
+            if self.theme.get_mode() == "dark":
+                # High-contrast fill makes selected state visible in dark mode.
+                radio_style["selectcolor"] = self.theme.colors["accent"]
+            for radio in (radio_all, radio_allow, radio_deny):
+                radio.configure(**radio_style)
 
         row += 1
 
