@@ -83,3 +83,30 @@ def test_build_probe_notes_rce_update_failure_silent():
         result={"rce_analysis": {"rce_status": "flagged"}, "ip_address": "192.168.1.1"},
     )
     assert "RCE: flagged" in result
+
+
+# --------------------------------------------------------------------------- #
+# Protocol labels                                                              #
+# --------------------------------------------------------------------------- #
+
+def test_protocol_label_from_host_type_maps_known_codes():
+    dash = DashboardWidget.__new__(DashboardWidget)
+    assert dash._protocol_label_from_host_type("S") == "SMB"
+    assert dash._protocol_label_from_host_type("F") == "FTP"
+    assert dash._protocol_label_from_host_type("H") == "HTTP"
+
+
+def test_protocol_label_from_host_type_unknown_fallback():
+    dash = DashboardWidget.__new__(DashboardWidget)
+    assert dash._protocol_label_from_host_type("") == "Unknown"
+    assert dash._protocol_label_from_host_type("X") == "Unknown"
+
+
+def test_protocol_label_for_result_prefers_explicit_protocol():
+    dash = DashboardWidget.__new__(DashboardWidget)
+    assert dash._protocol_label_for_result({"protocol": "ftp", "host_type": "S"}) == "FTP"
+
+
+def test_protocol_label_for_result_falls_back_to_host_type():
+    dash = DashboardWidget.__new__(DashboardWidget)
+    assert dash._protocol_label_for_result({"host_type": "H"}) == "HTTP"
