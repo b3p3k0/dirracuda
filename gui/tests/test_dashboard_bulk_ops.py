@@ -121,3 +121,73 @@ def test_get_servers_for_bulk_ops_probe_includes_zero_accessibility_rows_smb():
     assert len(result["probe"]) == 1
     assert result["probe"][0]["ip_address"] == "203.0.113.99"
     assert result["extract"] == []
+
+
+def test_get_servers_for_bulk_ops_probe_excludes_ftp_non_accessible_rows():
+    """FTP probe target selection should require anon_accessible truthy."""
+    dash = DashboardWidget.__new__(DashboardWidget)
+
+    class _StubReader:
+        def get_protocol_server_list(
+            self,
+            limit=5000,
+            offset=0,
+            country_filter=None,
+            recent_scan_only=True,
+        ):
+            return ([
+                {
+                    "ip_address": "203.0.113.10",
+                    "host_type": "F",
+                    "anon_accessible": 1,
+                    "accessible_shares": 0,
+                    "probe_status": "unprobed",
+                    "indicator_matches": 0,
+                },
+                {
+                    "ip_address": "203.0.113.11",
+                    "host_type": "F",
+                    "anon_accessible": 0,
+                    "accessible_shares": 0,
+                    "probe_status": "unprobed",
+                    "indicator_matches": 0,
+                },
+            ], 2)
+
+    dash.db_reader = _StubReader()
+    result = dash._get_servers_for_bulk_ops(skip_indicator_extract=True, host_type_filter="F")
+
+    probe_ips = {row["ip_address"] for row in result["probe"]}
+    assert probe_ips == {"203.0.113.10"}
+    assert result["extract"] == []
+
+
+def test_get_servers_for_bulk_ops_probe_includes_ftp_anon_accessible_with_zero_shares():
+    """FTP anon_accessible rows remain probe-eligible even when shares are zero."""
+    dash = DashboardWidget.__new__(DashboardWidget)
+
+    class _StubReader:
+        def get_protocol_server_list(
+            self,
+            limit=5000,
+            offset=0,
+            country_filter=None,
+            recent_scan_only=True,
+        ):
+            return ([
+                {
+                    "ip_address": "203.0.113.12",
+                    "host_type": "F",
+                    "anon_accessible": 1,
+                    "accessible_shares": 0,
+                    "probe_status": "unprobed",
+                    "indicator_matches": 0,
+                }
+            ], 1)
+
+    dash.db_reader = _StubReader()
+    result = dash._get_servers_for_bulk_ops(skip_indicator_extract=True, host_type_filter="F")
+
+    assert len(result["probe"]) == 1
+    assert result["probe"][0]["ip_address"] == "203.0.113.12"
+    assert result["extract"] == []

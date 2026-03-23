@@ -242,9 +242,22 @@ class _DashboardBulkOpsMixin:
                     continue
 
                 # Probe eligibility is protocol-row based (recent + active), not
-                # share-count based. HTTP/FTP rows may legitimately have zero
+                # share-count based. HTTP/SMB rows may legitimately have zero
                 # accessible_shares prior to first probe-cache sync.
-                result["probe"].append(server)
+                # FTP rows are probe-eligible only when anonymous access has
+                # already been verified by ftpseek.
+                probe_eligible = True
+                if server_host_type == "F":
+                    anon_accessible = server.get("anon_accessible")
+                    if isinstance(anon_accessible, str):
+                        probe_eligible = anon_accessible.strip().lower() in {
+                            "1", "true", "yes", "y", "on"
+                        }
+                    else:
+                        probe_eligible = bool(anon_accessible)
+
+                if probe_eligible:
+                    result["probe"].append(server)
 
                 accessible = (server.get("accessible_shares") or 0) > 0
                 if not accessible:
