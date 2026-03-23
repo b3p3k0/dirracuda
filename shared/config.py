@@ -323,7 +323,12 @@ class SMBSeekConfig:
     def get_http_config(self) -> Dict[str, Any]:
         """Get HTTP configuration section with defaults."""
         return self.get("http") or {
-            "shodan": {"query_limits": {"max_results": None}},
+            "shodan": {
+                "query_components": {
+                    "base_query": 'http.title:"Index of /"',
+                },
+                "query_limits": {"max_results": None},
+            },
             "verification": {
                 "connect_timeout": 5,
                 "request_timeout": 10,

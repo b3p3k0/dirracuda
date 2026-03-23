@@ -337,3 +337,38 @@ class TestRegionMixin:
         dlg._update_region_status()
         expected = f"Europe ({len(REGIONS['Europe'])} countries)"
         dlg.region_status_label.configure.assert_called_once_with(text=expected)
+
+
+class TestQueryEditorRouting:
+
+    def test_protocol_selection_renders_edit_queries_button(self, tk_root):
+        import tkinter as tk
+
+        dlg = _make_dialog(tk_root)
+        parent = tk.Frame(tk_root)
+        dlg._create_protocol_selection(parent)
+
+        def _iter_children(widget):
+            for child in widget.winfo_children():
+                yield child
+                yield from _iter_children(child)
+
+        buttons = [w for w in _iter_children(parent) if isinstance(w, tk.Button)]
+        assert any(btn.cget("text") == "Edit Queries" for btn in buttons)
+
+    def test_open_query_editor_prefers_query_callback(self, tk_root):
+        dlg = _make_dialog(tk_root)
+        dlg.query_editor_callback = MagicMock()
+
+        dlg._open_query_editor()
+
+        dlg.query_editor_callback.assert_called_once_with()
+
+    def test_open_query_editor_falls_back_to_config_editor(self, tk_root):
+        dlg = _make_dialog(tk_root)
+        dlg.query_editor_callback = None
+        dlg.config_editor_callback = MagicMock()
+
+        dlg._open_query_editor()
+
+        dlg.config_editor_callback.assert_called_once_with(str(dlg.config_path))

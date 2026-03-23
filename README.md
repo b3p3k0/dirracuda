@@ -265,6 +265,9 @@ Key sections:
 - `file_collection.*` — extraction limits
 - `file_browser.*` — browse mode limits
 - `connection.*` — timeouts and rate limiting
+- `shodan.query_components.base_query` — SMB baseline Shodan dork
+- `ftp.shodan.query_components.base_query` — FTP baseline Shodan dork
+- `http.shodan.query_components.base_query` — HTTP baseline Shodan dork
 - `ftp.shodan.query_limits.max_results` — cap on Shodan FTP candidates per scan
 - `ftp.verification.*` — per-step timeouts for FTP connect, auth, and listing (seconds)
 
@@ -275,7 +278,7 @@ Two additional files hold editable lists:
 
 These are separate so you can customize or share them without touching app settings.
 
-The GUI includes a built-in config editor for common settings.
+The GUI includes a built-in config editor for common settings. The Application Configuration dialog also exposes editable baseline SMB/FTP/HTTP dorks with per-row `Reset` (dialog-open value) and `Default` actions.
 
 ## Advanced
 

@@ -52,9 +52,16 @@ class AppConfigDialog:
     - Database path
     - Shodan API key
     - Quarantine directory (shared SMB/FTP/HTTP browser + extract default)
+    - Protocol baseline discovery dorks (SMB/FTP/HTTP)
     """
 
-    REQUIRED_FIELDS = ("smbseek", "database", "config", "quarantine")
+    DORK_DEFAULTS = {
+        "smb_dork": "smb authentication: disabled",
+        "ftp_dork": 'port:21 "230 Login successful"',
+        "http_dork": 'http.title:"Index of /"',
+    }
+    DORK_FIELDS = ("smb_dork", "ftp_dork", "http_dork")
+    REQUIRED_FIELDS = ("smbseek", "database", "config", "quarantine", "smb_dork", "ftp_dork", "http_dork")
     FIELD_LABELS = {
         "smbseek": "SMBSeek Root",
         "database": "Database File",
@@ -62,6 +69,9 @@ class AppConfigDialog:
         "api_key": "Shodan API Key",
         "quarantine": "Quarantine Directory",
         "wordlist": "Pry Wordlist Path",
+        "smb_dork": "SMB Base Query",
+        "ftp_dork": "FTP Base Query",
+        "http_dork": "HTTP Base Query",
     }
 
     def __init__(
@@ -85,6 +95,10 @@ class AppConfigDialog:
         self.api_key = ""
         self.quarantine_path = "~/.smbseek/quarantine"
         self.wordlist_path = ""
+        self.smb_dork = self.DORK_DEFAULTS["smb_dork"]
+        self.ftp_dork = self.DORK_DEFAULTS["ftp_dork"]
+        self.http_dork = self.DORK_DEFAULTS["http_dork"]
+        self._open_dork_values = self.DORK_DEFAULTS.copy()
 
         self.validation_results: Dict[str, Dict[str, Any]] = {
             "smbseek": {"valid": False, "message": ""},
@@ -93,6 +107,9 @@ class AppConfigDialog:
             "api_key": {"valid": False, "message": ""},
             "quarantine": {"valid": False, "message": ""},
             "wordlist": {"valid": False, "message": ""},
+            "smb_dork": {"valid": False, "message": ""},
+            "ftp_dork": {"valid": False, "message": ""},
+            "http_dork": {"valid": False, "message": ""},
         }
 
         self.dialog: Optional[tk.Toplevel] = None
@@ -104,6 +121,9 @@ class AppConfigDialog:
         self.api_key_var: Optional[tk.StringVar] = None
         self.quarantine_var: Optional[tk.StringVar] = None
         self.wordlist_var: Optional[tk.StringVar] = None
+        self.smb_dork_var: Optional[tk.StringVar] = None
+        self.ftp_dork_var: Optional[tk.StringVar] = None
+        self.http_dork_var: Optional[tk.StringVar] = None
 
         self._load_current_settings()
         self._create_dialog()
@@ -136,9 +156,10 @@ class AppConfigDialog:
             self.database_path = str(Path.cwd() / "smbseek.db")
 
         self._load_runtime_settings_from_config(self.config_path)
+        self._capture_open_dork_values()
 
     def _load_runtime_settings_from_config(self, config_path: str) -> None:
-        """Load API key, pry wordlist, and quarantine path from config.json."""
+        """Load runtime settings from config.json."""
         path_obj = Path(config_path).expanduser()
         if not path_obj.exists():
             return
@@ -162,6 +183,39 @@ class AppConfigDialog:
                 self.quarantine_path = candidate.strip()
                 break
 
+        self.smb_dork = str(
+            _get_nested(
+                config_data,
+                ("shodan", "query_components", "base_query"),
+                self.DORK_DEFAULTS["smb_dork"],
+            )
+            or self.DORK_DEFAULTS["smb_dork"]
+        )
+        self.ftp_dork = str(
+            _get_nested(
+                config_data,
+                ("ftp", "shodan", "query_components", "base_query"),
+                self.DORK_DEFAULTS["ftp_dork"],
+            )
+            or self.DORK_DEFAULTS["ftp_dork"]
+        )
+        self.http_dork = str(
+            _get_nested(
+                config_data,
+                ("http", "shodan", "query_components", "base_query"),
+                self.DORK_DEFAULTS["http_dork"],
+            )
+            or self.DORK_DEFAULTS["http_dork"]
+        )
+
+    def _capture_open_dork_values(self) -> None:
+        """Snapshot dork values at dialog open for per-row reset actions."""
+        self._open_dork_values = {
+            "smb_dork": self.smb_dork,
+            "ftp_dork": self.ftp_dork,
+            "http_dork": self.http_dork,
+        }
+
     # ------------------------------------------------------------------
     # UI
     # ------------------------------------------------------------------
@@ -169,8 +223,8 @@ class AppConfigDialog:
     def _create_dialog(self) -> None:
         self.dialog = tk.Toplevel(self.parent)
         self.dialog.title("SMBSeek - Application Configuration")
-        self.dialog.geometry("760x600")
-        self.dialog.minsize(720, 560)
+        self.dialog.geometry("760x700")
+        self.dialog.minsize(720, 660)
         self.theme.apply_to_widget(self.dialog, "main_window")
         self.dialog.transient(self.parent)
         self.dialog.grab_set()
@@ -215,6 +269,7 @@ class AppConfigDialog:
 
         self._create_compact_card(container, "Core Paths", ("smbseek", "database", "config"))
         self._create_compact_card(container, "Runtime Settings", ("api_key", "quarantine", "wordlist"))
+        self._create_dork_card(container)
 
         action_row = tk.Frame(container)
         self.theme.apply_to_widget(action_row, "main_window")
@@ -227,6 +282,21 @@ class AppConfigDialog:
         )
         self.theme.apply_to_widget(edit_button, "button_secondary")
         edit_button.pack(anchor=tk.W)
+
+    def _create_dork_card(self, parent: tk.Widget) -> None:
+        card = tk.Frame(parent, highlightthickness=1, bd=0)
+        self.theme.apply_to_widget(card, "card")
+        try:
+            card.configure(highlightbackground=self.theme.colors["border"], highlightcolor=self.theme.colors["border"])
+        except tk.TclError:
+            pass
+        card.pack(fill=tk.X, pady=(0, 10))
+
+        heading = self.theme.create_styled_label(card, "Discovery Dorks", "body")
+        heading.pack(anchor=tk.W, padx=12, pady=(10, 6))
+
+        for field in self.DORK_FIELDS:
+            self._create_dork_row(card, field)
 
     def _create_compact_card(self, parent: tk.Widget, title: str, fields: tuple[str, ...]) -> None:
         card = tk.Frame(parent, highlightthickness=1, bd=0)
@@ -279,23 +349,90 @@ class AppConfigDialog:
 
         variable.trace_add("write", lambda *_args, ft=field: self._validate_field(ft))
 
+    def _create_dork_row(self, parent: tk.Widget, field: str) -> None:
+        row = tk.Frame(parent)
+        self.theme.apply_to_widget(row, "card")
+        row.pack(fill=tk.X, padx=10, pady=(0, 8))
+
+        label = self.theme.create_styled_label(
+            row,
+            f"{self.FIELD_LABELS[field]}:",
+            "small",
+            fg=self.theme.colors["text_secondary"],
+        )
+        label.pack(side=tk.LEFT, padx=(0, 8))
+
+        variable = self._field_var(field)
+        entry = tk.Entry(row, textvariable=variable, font=("Arial", 10))
+        self.theme.apply_to_widget(entry, "entry")
+        entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
+
+        reset_button = tk.Button(
+            row,
+            text="Reset",
+            command=lambda ft=field: self._reset_dork_to_open(ft),
+        )
+        self.theme.apply_to_widget(reset_button, "button_secondary")
+        reset_button.pack(side=tk.LEFT, padx=(0, 6))
+
+        default_button = tk.Button(
+            row,
+            text="Default",
+            command=lambda ft=field: self._set_dork_default(ft),
+        )
+        self.theme.apply_to_widget(default_button, "button_secondary")
+        default_button.pack(side=tk.LEFT, padx=(0, 8))
+
+        status_label = tk.Label(row, text="", font=("Arial", 11, "bold"), width=2)
+        self.theme.apply_to_widget(status_label, "text")
+        status_label.pack(side=tk.RIGHT)
+        self.status_labels[field] = status_label
+
+        variable.trace_add("write", lambda *_args, ft=field: self._validate_field(ft))
+
+    def _reset_dork_to_open(self, field: str) -> None:
+        variable = self._field_var(field)
+        variable.set(self._open_dork_values.get(field, self.DORK_DEFAULTS[field]))
+
+    def _set_dork_default(self, field: str) -> None:
+        variable = self._field_var(field)
+        variable.set(self.DORK_DEFAULTS[field])
+
     def _field_var(self, field: str) -> tk.StringVar:
         if field == "smbseek":
-            self.smbseek_var = tk.StringVar(value=self.smbseek_path)
+            if self.smbseek_var is None:
+                self.smbseek_var = tk.StringVar(value=self.smbseek_path)
             return self.smbseek_var
         if field == "database":
-            self.database_var = tk.StringVar(value=self.database_path)
+            if self.database_var is None:
+                self.database_var = tk.StringVar(value=self.database_path)
             return self.database_var
         if field == "config":
-            self.config_var = tk.StringVar(value=self.config_path)
+            if self.config_var is None:
+                self.config_var = tk.StringVar(value=self.config_path)
             return self.config_var
         if field == "api_key":
-            self.api_key_var = tk.StringVar(value=self.api_key)
+            if self.api_key_var is None:
+                self.api_key_var = tk.StringVar(value=self.api_key)
             return self.api_key_var
+        if field == "smb_dork":
+            if self.smb_dork_var is None:
+                self.smb_dork_var = tk.StringVar(value=self.smb_dork)
+            return self.smb_dork_var
+        if field == "ftp_dork":
+            if self.ftp_dork_var is None:
+                self.ftp_dork_var = tk.StringVar(value=self.ftp_dork)
+            return self.ftp_dork_var
+        if field == "http_dork":
+            if self.http_dork_var is None:
+                self.http_dork_var = tk.StringVar(value=self.http_dork)
+            return self.http_dork_var
         if field == "wordlist":
-            self.wordlist_var = tk.StringVar(value=self.wordlist_path)
+            if self.wordlist_var is None:
+                self.wordlist_var = tk.StringVar(value=self.wordlist_path)
             return self.wordlist_var
-        self.quarantine_var = tk.StringVar(value=self.quarantine_path)
+        if self.quarantine_var is None:
+            self.quarantine_var = tk.StringVar(value=self.quarantine_path)
         return self.quarantine_var
 
     def _create_button_panel(self) -> None:
@@ -403,6 +540,24 @@ class AppConfigDialog:
             result = self._validate_api_key(self.api_key_var.get())
             self.validation_results["api_key"] = result
             self._update_status_label("api_key", result)
+            return
+
+        if field == "smb_dork":
+            result = self._validate_dork_query(self.smb_dork_var.get(), self.FIELD_LABELS["smb_dork"])
+            self.validation_results["smb_dork"] = result
+            self._update_status_label("smb_dork", result)
+            return
+
+        if field == "ftp_dork":
+            result = self._validate_dork_query(self.ftp_dork_var.get(), self.FIELD_LABELS["ftp_dork"])
+            self.validation_results["ftp_dork"] = result
+            self._update_status_label("ftp_dork", result)
+            return
+
+        if field == "http_dork":
+            result = self._validate_dork_query(self.http_dork_var.get(), self.FIELD_LABELS["http_dork"])
+            self.validation_results["http_dork"] = result
+            self._update_status_label("http_dork", result)
             return
 
         if field == "wordlist":
@@ -529,6 +684,12 @@ class AppConfigDialog:
             return {"valid": False, "message": "Wordlist path is not a file."}
         return {"valid": True, "message": "Wordlist file is valid."}
 
+    def _validate_dork_query(self, value: str, label: str) -> Dict[str, Any]:
+        query = str(value or "").strip()
+        if not query:
+            return {"valid": False, "message": f"{label} cannot be blank."}
+        return {"valid": True, "message": f"{label} is set."}
+
     def _update_status_label(self, field: str, result: Dict[str, Any]) -> None:
         label = self.status_labels.get(field)
         if not label:
@@ -542,7 +703,7 @@ class AppConfigDialog:
         label.config(text=symbol, fg=color)
 
     def _validate_all_fields(self) -> None:
-        for field in ("smbseek", "database", "config", "api_key", "quarantine", "wordlist"):
+        for field in ("smbseek", "database", "config", "api_key", "quarantine", "wordlist", "smb_dork", "ftp_dork", "http_dork"):
             self._validate_field(field)
 
     # ------------------------------------------------------------------
@@ -592,6 +753,9 @@ class AppConfigDialog:
         new_api_key = self.api_key_var.get().strip()
         new_quarantine = self.quarantine_var.get().strip()
         new_wordlist = self.wordlist_var.get().strip()
+        new_smb_dork = self.smb_dork_var.get().strip()
+        new_ftp_dork = self.ftp_dork_var.get().strip()
+        new_http_dork = self.http_dork_var.get().strip()
 
         old_smbseek = self.smbseek_path
         old_database = self.database_path
@@ -616,6 +780,9 @@ class AppConfigDialog:
                     new_api_key,
                     new_quarantine,
                     new_wordlist,
+                    new_smb_dork,
+                    new_ftp_dork,
+                    new_http_dork,
                 )
                 if not self.main_config.save_config():
                     raise RuntimeError("Failed to write config.json")
@@ -634,6 +801,9 @@ class AppConfigDialog:
                     new_api_key,
                     new_quarantine,
                     new_wordlist,
+                    new_smb_dork,
+                    new_ftp_dork,
+                    new_http_dork,
                 )
                 path_obj = Path(new_config_path).expanduser()
                 path_obj.parent.mkdir(parents=True, exist_ok=True)
@@ -645,6 +815,10 @@ class AppConfigDialog:
             self.api_key = new_api_key
             self.quarantine_path = new_quarantine
             self.wordlist_path = new_wordlist
+            self.smb_dork = new_smb_dork
+            self.ftp_dork = new_ftp_dork
+            self.http_dork = new_http_dork
+            self._capture_open_dork_values()
 
             # Refresh downstream interfaces whenever runtime-critical values changed.
             runtime_changed = (
@@ -706,9 +880,15 @@ class AppConfigDialog:
         api_key: str,
         quarantine_path: str,
         wordlist_path: str,
+        smb_dork: str,
+        ftp_dork: str,
+        http_dork: str,
     ) -> None:
         # Shodan API key drives scan processes.
         _set_nested(config_data, ("shodan", "api_key"), api_key)
+        _set_nested(config_data, ("shodan", "query_components", "base_query"), smb_dork)
+        _set_nested(config_data, ("ftp", "shodan", "query_components", "base_query"), ftp_dork)
+        _set_nested(config_data, ("http", "shodan", "query_components", "base_query"), http_dork)
 
         # Keep quarantine path aligned across browser and extract-adjacent sections.
         _set_nested(config_data, ("file_browser", "quarantine_root"), quarantine_path)

@@ -303,6 +303,7 @@ class _DashboardScanLifecycleMixin:
             scan_start_callback=self._start_unified_scan,
             settings_manager=getattr(self, "settings_manager", None),
             config_editor_callback=self._open_config_editor_from_scan,
+            query_editor_callback=self._open_config_editor,
         )
 
     def _open_config_editor_from_scan(self, config_path: str) -> None:

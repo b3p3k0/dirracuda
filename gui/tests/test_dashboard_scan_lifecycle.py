@@ -46,6 +46,7 @@ def _make_stub():
     dash._update_scan_button_state = MagicMock()
     dash._start_unified_scan = MagicMock()
     dash._open_config_editor_from_scan = MagicMock()
+    dash._open_config_editor = MagicMock()
     dash._run_post_scan_batch_operations = MagicMock()
     dash._handle_queued_scan_completion = MagicMock()
     return dash
