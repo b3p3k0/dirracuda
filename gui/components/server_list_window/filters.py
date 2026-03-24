@@ -170,6 +170,7 @@ def create_filter_panel(parent, theme, filter_vars, callbacks):
         variable=filter_vars['shares_filter'],
         command=callbacks['on_shares_filter_changed']
     )
+    theme.apply_to_widget(shares_filter_checkbox, "checkbox")
     shares_filter_checkbox.pack(anchor="w", pady=(0, 2))
 
     date_label = theme.create_styled_label(
