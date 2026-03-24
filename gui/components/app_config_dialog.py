@@ -104,6 +104,9 @@ class AppConfigDialog:
         self.api_key_var: Optional[tk.StringVar] = None
         self.quarantine_var: Optional[tk.StringVar] = None
         self.wordlist_var: Optional[tk.StringVar] = None
+        self.api_key_entry: Optional[tk.Entry] = None
+        self.api_key_toggle_btn: Optional[tk.Button] = None
+        self.api_key_masked = True
 
         self._load_current_settings()
         self._create_dialog()
@@ -174,6 +177,8 @@ class AppConfigDialog:
         self.theme.apply_to_widget(self.dialog, "main_window")
         self.dialog.transient(self.parent)
         self.dialog.grab_set()
+        # Default to masked every time the dialog is opened.
+        self.api_key_masked = True
 
         self._center_window()
         self._create_header()
@@ -261,6 +266,18 @@ class AppConfigDialog:
         entry = tk.Entry(row, textvariable=variable, font=("Arial", 10), show=show_mask)
         self.theme.apply_to_widget(entry, "entry")
         entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
+        if field == "api_key":
+            self.api_key_entry = entry
+            toggle_button = tk.Button(
+                row,
+                text="👁️",
+                width=3,
+                command=self._toggle_api_key_mask,
+            )
+            self.theme.apply_to_widget(toggle_button, "button_secondary")
+            toggle_button.pack(side=tk.LEFT, padx=(0, 8))
+            self.api_key_toggle_btn = toggle_button
+            self._update_api_key_mask_ui()
 
         browse_needed = field in {"smbseek", "database", "config", "quarantine", "wordlist"}
         if browse_needed:
@@ -278,6 +295,16 @@ class AppConfigDialog:
         self.status_labels[field] = status_label
 
         variable.trace_add("write", lambda *_args, ft=field: self._validate_field(ft))
+
+    def _update_api_key_mask_ui(self) -> None:
+        if self.api_key_entry:
+            self.api_key_entry.configure(show="*" if self.api_key_masked else "")
+        if self.api_key_toggle_btn:
+            self.api_key_toggle_btn.configure(text="👁️" if self.api_key_masked else "🕶️")
+
+    def _toggle_api_key_mask(self) -> None:
+        self.api_key_masked = not self.api_key_masked
+        self._update_api_key_mask_ui()
 
     def _field_var(self, field: str) -> tk.StringVar:
         if field == "smbseek":
