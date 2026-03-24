@@ -570,13 +570,20 @@ class ServerListWindowBatchStatusMixin:
             tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
             button_frame = tk.Frame(dialog)
+            self.theme.apply_to_widget(button_frame, "main_window")
             button_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
 
             def export_summary():
                 self._export_batch_summary(results, job_type, dialog)
 
-            tk.Button(button_frame, text="Save CSV", command=export_summary).pack(side=tk.RIGHT, padx=(0, 5))
-            tk.Button(button_frame, text="Close", command=dialog.destroy).pack(side=tk.RIGHT)
+            save_button = tk.Button(button_frame, text="Save CSV", command=export_summary)
+            close_button = tk.Button(button_frame, text="Close", command=dialog.destroy)
+            self.theme.apply_to_widget(save_button, "button_secondary")
+            self.theme.apply_to_widget(close_button, "button_secondary")
+            save_button.pack(side=tk.RIGHT, padx=(0, 5))
+            close_button.pack(side=tk.RIGHT)
+
+            self.theme.apply_theme_to_application(dialog)
 
         def _export_batch_summary(self, results: List[Dict[str, Any]], job_type: str, parent: tk.Toplevel) -> None:
             path = filedialog.asksaveasfilename(
