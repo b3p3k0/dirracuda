@@ -1394,6 +1394,8 @@ class SmbBrowserWindow(UnifiedBrowserCore):
         self.list_thread: Optional[threading.Thread] = None
         self.download_thread: Optional[threading.Thread] = None
         self.busy = False
+        self._at_virtual_root: bool = True
+        self._entering_share: bool = False
 
         self.navigator = SMBNavigator(
             allow_smb1=bool(self.config.get("allow_smb1", True)),
@@ -1407,11 +1409,7 @@ class SmbBrowserWindow(UnifiedBrowserCore):
         self.max_batch_files = int(self.config.get("max_batch_files", 50))
 
         self._build_window()
-        if self.shares:
-            self.share_var.set(self.shares[0])
-            self._on_share_changed()
-        else:
-            self._set_status("No accessible shares found for this host.")
+        self._go_to_virtual_root()
 
     # ------------------------------------------------------------------
     # Adapter hooks (satisfy UnifiedBrowserCore interface)
@@ -1483,14 +1481,6 @@ class SmbBrowserWindow(UnifiedBrowserCore):
         top_frame = tk.Frame(self.window)
         top_frame.pack(fill=tk.X, padx=10, pady=(10, 5))
 
-        tk.Label(top_frame, text="Share:").pack(side=tk.LEFT)
-        self.share_var = tk.StringVar()
-        self.share_select = ttk.Combobox(
-            top_frame, textvariable=self.share_var, state="readonly", values=self.shares
-        )
-        self.share_select.pack(side=tk.LEFT, padx=(5, 10))
-        self.share_select.bind("<<ComboboxSelected>>", lambda *_: self._on_share_changed())
-
         tk.Label(top_frame, text="Path:").pack(side=tk.LEFT)
         self.path_var = tk.StringVar(value="\\")
         self.path_label = tk.Label(top_frame, textvariable=self.path_var, anchor="w")
@@ -1537,7 +1527,7 @@ class SmbBrowserWindow(UnifiedBrowserCore):
         self._adapt_setup_treeview(tree_frame)
         self.tree.bind("<Double-1>", self._on_item_double_click)
 
-        self.status_var = tk.StringVar(value="Select a share to begin.")
+        self.status_var = tk.StringVar(value="Ready.")
         status = tk.Label(self.window, textvariable=self.status_var, anchor="w")
         status.pack(fill=tk.X, padx=10, pady=(0, 10))
         if self.theme:
@@ -1547,29 +1537,71 @@ class SmbBrowserWindow(UnifiedBrowserCore):
     # Navigation
     # ------------------------------------------------------------------
 
-    def _on_share_changed(self) -> None:
-        share = self.share_var.get()
-        if not share:
+    def _go_to_virtual_root(self, status_override: str = "") -> None:
+        self._at_virtual_root = True
+        self._entering_share = False
+        self._disconnect()
+        self.current_share = None
+        self.current_path = "\\"
+        self.pending_path = None
+        self.path_var.set("\\")
+        self._populate_virtual_root(status_override=status_override)
+        self._update_action_buttons()
+
+    def _populate_virtual_root(self, status_override: str = "") -> None:
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        unique_shares = sorted(set(self.shares))
+        for share_name in unique_shares:
+            self.tree.insert("", "end", values=(share_name, "dir", "", "", "", ""))
+        if status_override:
+            self._set_status(status_override)
+        elif unique_shares:
+            self._set_status(f"{len(unique_shares)} accessible share(s).")
+        else:
+            self._set_status("No accessible shares found for this host.")
+
+    def _enter_share(self, share_name: str) -> None:
+        if self.busy:
             return
         if self.share_credentials:
-            creds = self.share_credentials.get(share)
+            creds = self.share_credentials.get(share_name)
             if creds:
                 self.username = creds.get("username") or self.username
                 self.password = creds.get("password") or self.password
         self._disconnect()
-        self.current_share = share
+        self.current_share = share_name
+        self._at_virtual_root = False
+        self._entering_share = True
         self._set_path("\\")
+        self._update_action_buttons()
         self._refresh()
 
+    def _update_action_buttons(self) -> None:
+        if self.busy:
+            return  # busy state owns button enables; don't interfere
+        at_root = self._at_virtual_root
+        for btn in (self.btn_up, self.btn_view, self.btn_download):
+            if btn and btn.winfo_exists():
+                btn.configure(state=tk.DISABLED if at_root else tk.NORMAL)
+
     def _on_up(self) -> None:
+        if self._at_virtual_root:
+            return
         if self.current_path in ("\\", "/", ""):
+            self._go_to_virtual_root()
             return
         parts = [p for p in self.current_path.split("\\") if p]
         new_path = "\\" + "\\".join(parts[:-1]) if parts[:-1] else "\\"
         self._navigate_to(new_path)
 
     def _refresh(self) -> None:
-        if self.busy or not self.current_share:
+        if self.busy:
+            return
+        if self._at_virtual_root:
+            self._populate_virtual_root()
+            return
+        if not self.current_share:
             return
         self.pending_path = self.current_path
         self._start_list_thread(self.current_path)
@@ -1585,6 +1617,12 @@ class SmbBrowserWindow(UnifiedBrowserCore):
         values = item.get("values", [])
         name = values[0] if values else None
         type_label = values[1] if len(values) > 1 else None
+
+        if self._at_virtual_root:
+            if name:
+                self._enter_share(name)
+            return
+
         if type_label == "dir":
             target_path = self._join_path(self.current_path, name)
             self._navigate_to(target_path)
@@ -1599,7 +1637,10 @@ class SmbBrowserWindow(UnifiedBrowserCore):
 
     def _set_path(self, path: str) -> None:
         self.current_path = path
-        self.path_var.set(path)
+        if self._at_virtual_root or not self.current_share:
+            self.path_var.set(path)
+        else:
+            self.path_var.set(f"{self.current_share}{path}")
 
     # ------------------------------------------------------------------
     # Actions
@@ -2414,6 +2455,8 @@ class SmbBrowserWindow(UnifiedBrowserCore):
     # ------------------------------------------------------------------
 
     def _populate_entries(self, result, path: str) -> None:
+        self._entering_share = False
+        self._at_virtual_root = False
         for item in self.tree.get_children():
             self.tree.delete(item)
 
@@ -2459,11 +2502,20 @@ class SmbBrowserWindow(UnifiedBrowserCore):
                 btn.configure(state=state)
         if self.btn_cancel and self.btn_cancel.winfo_exists():
             self.btn_cancel.configure(state=tk.NORMAL if busy else tk.DISABLED)
+        if not busy:
+            self._update_action_buttons()  # re-apply virtual-root overrides after unbusy
 
     def _handle_list_error(self, attempted_path: str, err: Exception) -> None:
+        if self._entering_share:
+            self._entering_share = False
+            failed_share = self.current_share or attempted_path
+            error_msg = f"Cannot open '{failed_share}': {err}"
+            self._go_to_virtual_root(status_override=error_msg)
+            return
         if attempted_path != self.current_path:
             self.pending_path = None
-            self.path_var.set(self.current_path)
+            share_prefix = (self.current_share or "") if not self._at_virtual_root else ""
+            self.path_var.set(f"{share_prefix}{self.current_path}")
         self._set_status(f"Error listing {attempted_path}: {err}")
         if self._window_alive():
             messagebox.showerror("Browse error", f"{attempted_path}\n\n{err}", parent=self.window)
@@ -2574,6 +2626,10 @@ def open_ftp_http_browser(
         raise ValueError(f"open_ftp_http_browser: unsupported host_type {host_type!r}")
 
 
+def _normalize_share_name(name: str) -> str:
+    return name.strip().strip("\\/").strip()
+
+
 def open_smb_browser(
     parent,
     ip_address: str,
@@ -2591,7 +2647,22 @@ def open_smb_browser(
 
     Resolves banner from db_reader.get_smb_shodan_data() when available;
     falls back to empty string so SmbBrowserWindow shows its placeholder.
+    Re-queries accessible shares from DB when available (freshest source of
+    truth); falls back to caller-provided shares only on exception.
     """
+    if db_reader:
+        try:
+            rows = db_reader.get_accessible_shares(ip_address)
+            shares = [
+                n for r in rows
+                if (n := _normalize_share_name(r.get("share_name") or ""))
+            ]
+        except Exception:
+            pass  # exception only — keep caller-provided shares as fallback
+
+    # Normalize all sources uniformly — handles DB-exception and no-db_reader paths
+    shares = [n for s in shares if (n := _normalize_share_name(s))]
+
     shodan_raw = None
     if db_reader:
         try:

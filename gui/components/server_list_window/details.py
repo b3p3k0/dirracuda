@@ -194,9 +194,6 @@ def show_server_detail_popup(parent_window, server_data, theme, settings_manager
             seen.add(cleaned)
             cleaned_shares.append(cleaned)
         accessible_shares = cleaned_shares
-        if not accessible_shares:
-            messagebox.showinfo("Browse", "No accessible shares available for this host.")
-            return
 
         config_path = None
         if settings_manager:
