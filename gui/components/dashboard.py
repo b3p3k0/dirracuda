@@ -43,6 +43,7 @@ from gui.utils import (
     extract_runner,
 )
 from gui.utils.probe_cache_dispatch import get_probe_snapshot_path_for_host, dispatch_probe_run
+from gui.utils.probe_snapshot_summary import summarize_probe_snapshot
 from gui.utils.logging_config import get_logger
 from shared.quarantine import create_quarantine_dir
 
@@ -1986,15 +1987,10 @@ class DashboardWidget:
                 issue_detected = bool(analysis.get("is_suspicious"))
                 status = "issue" if issue_detected else "clean"
 
-                shares = snapshot.get("shares", [])
-                first_share = shares[0] if shares else {}
-                dir_names = [
-                    d.get("name")
-                    for d in first_share.get("directories", [])
-                    if isinstance(d, dict) and d.get("name")
-                ]
-                accessible_dirs_count = len(dir_names)
-                accessible_dirs_list = ",".join(dir_names)
+                probe_summary = summarize_probe_snapshot(snapshot)
+                display_entries = probe_summary["display_entries"]
+                accessible_dirs_count = len(display_entries)
+                accessible_dirs_list = ",".join(display_entries)
                 try:
                     snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type, port=port)
                 except TypeError:
@@ -2074,21 +2070,13 @@ class DashboardWidget:
                 issue_detected = bool(analysis.get("is_suspicious"))
                 status = "issue" if issue_detected else "clean"
 
-                shares = snapshot.get("shares", [])
-                first_share = shares[0] if shares else {}
-                dir_names = [
-                    d.get("name")
-                    for d in first_share.get("directories", [])
-                    if isinstance(d, dict) and d.get("name")
-                ]
-                root_files = first_share.get("root_files", [])
-                total_files = len(root_files) + sum(
-                    len(d.get("files", [])) for d in first_share.get("directories", [])
-                    if isinstance(d, dict)
-                )
+                probe_summary = summarize_probe_snapshot(snapshot)
+                dir_names = probe_summary["directory_names"]
+                display_entries = probe_summary["display_entries"]
+                total_files = int(probe_summary["total_file_count"])
                 total = len(dir_names) + total_files
                 accessible_dirs_count = len(dir_names)
-                accessible_dirs_list = ",".join(dir_names)
+                accessible_dirs_list = ",".join(display_entries)
                 try:
                     snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type, port=http_port)
                 except TypeError:

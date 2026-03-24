@@ -27,6 +27,10 @@ from gui.utils.probe_cache_dispatch import (
     get_probe_snapshot_path_for_host,
     dispatch_probe_run,
 )
+from gui.utils.probe_snapshot_summary import (
+    LOOSE_FILES_DISPLAY_TOKEN,
+    summarize_probe_snapshot,
+)
 from gui.utils.database_access import DatabaseReader
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.components.batch_extract_dialog import BatchExtractSettingsDialog
@@ -433,10 +437,7 @@ def _format_probe_section(probe_result: Optional[Dict[str, Any]]) -> str:
             lines.append(f"   Share: {share_name}")
             root_files = share.get("root_files", [])
             if root_files:
-                for file_name in root_files[:10]:
-                    lines.append(f"      • {file_name}")
-                if share.get("root_files_truncated"):
-                    lines.append("      … additional root files not shown")
+                lines.append(f"      • {LOOSE_FILES_DISPLAY_TOKEN}")
             directories = share.get("directories", [])
             if not directories:
                 if not root_files:
@@ -721,16 +722,11 @@ def _start_probe(
                 return
             analysis = probe_patterns.attach_indicator_analysis(result, indicator_patterns)
             if host_type == "F":
-                shares = result.get("shares", [])
-                first_share = shares[0] if shares else {}
-                dir_names = [
-                    d.get("name")
-                    for d in first_share.get("directories", [])
-                    if isinstance(d, dict) and d.get("name")
-                ]
-                server_data["total_shares"] = len(dir_names)
-                server_data["accessible_shares"] = len(dir_names)
-                server_data["accessible_shares_list"] = ",".join(dir_names)
+                probe_summary = summarize_probe_snapshot(result)
+                display_entries = probe_summary["display_entries"]
+                server_data["total_shares"] = len(display_entries)
+                server_data["accessible_shares"] = len(display_entries)
+                server_data["accessible_shares_list"] = ",".join(display_entries)
                 if db_accessor:
                     try:
                         try:
@@ -743,28 +739,20 @@ def _start_probe(
                             status='issue' if analysis.get("is_suspicious") else 'clean',
                             indicator_matches=len(analysis.get("matches", [])),
                             snapshot_path=snapshot_path,
-                            accessible_dirs_count=len(dir_names),
-                            accessible_dirs_list=",".join(dir_names),
+                            accessible_dirs_count=len(display_entries),
+                            accessible_dirs_list=",".join(display_entries),
                         )
                     except Exception:
                         pass
             elif host_type == "H":
-                shares = result.get("shares", [])
-                first_share = shares[0] if shares else {}
-                dir_names = [
-                    d.get("name")
-                    for d in first_share.get("directories", [])
-                    if isinstance(d, dict) and d.get("name")
-                ]
-                root_files = first_share.get("root_files", [])
-                total_files = len(root_files) + sum(
-                    len(d.get("files", [])) for d in first_share.get("directories", [])
-                    if isinstance(d, dict)
-                )
+                probe_summary = summarize_probe_snapshot(result)
+                dir_names = probe_summary["directory_names"]
+                display_entries = probe_summary["display_entries"]
+                total_files = int(probe_summary["total_file_count"])
                 total = len(dir_names) + total_files
                 server_data["total_shares"] = total
                 server_data["accessible_shares"] = total
-                server_data["accessible_shares_list"] = ",".join(dir_names)
+                server_data["accessible_shares_list"] = ",".join(display_entries)
                 if db_accessor:
                     try:
                         try:
@@ -778,7 +766,7 @@ def _start_probe(
                             indicator_matches=len(analysis.get("matches", [])),
                             snapshot_path=snapshot_path,
                             accessible_dirs_count=len(dir_names),
-                            accessible_dirs_list=",".join(dir_names),
+                            accessible_dirs_list=",".join(display_entries),
                             accessible_files_count=total_files,
                             protocol_server_id=_protocol_server_id,
                             port=_http_port,

@@ -461,6 +461,35 @@ def test_probe_ftp_row_runs_and_persists():
     stub.db_reader.upsert_probe_cache_for_host.assert_called_once()
 
 
+def test_probe_ftp_root_files_only_persists_loose_files_marker():
+    stub = _BatchMixinStub()
+    target = {
+        "ip_address": "1.2.3.4",
+        "host_type": "F",
+        "row_key": "F:8",
+        "shares": [],
+        "data": {"port": 21},
+    }
+
+    import gui.utils.ftp_probe_runner as fpr
+    import gui.utils.ftp_probe_cache as fpc
+    import gui.utils.probe_patterns as pp
+
+    fake_snapshot = {
+        "shares": [{"directories": [], "root_files": ["dump.sql"]}],
+    }
+    with patch.object(fpr, "run_ftp_probe", return_value=fake_snapshot), \
+         patch.object(fpc, "get_ftp_cache_path", return_value=Path("/tmp/fake_ftp_probe.json")), \
+         patch.object(pp, "attach_indicator_analysis", return_value={"is_suspicious": False, "matches": []}):
+        stub.db_reader.upsert_probe_cache_for_host = MagicMock()
+        result = stub._execute_probe_target("job-1", target, {}, threading.Event())
+
+    assert result["status"] == "success"
+    call_kwargs = stub.db_reader.upsert_probe_cache_for_host.call_args[1]
+    assert call_kwargs["accessible_dirs_count"] == 1
+    assert call_kwargs["accessible_dirs_list"] == "[[loose files]]"
+
+
 def test_probe_smb_row_returns_units_1(monkeypatch):
     """_execute_probe_target with host_type='S' returns units=1 regardless of share count."""
     stub = _BatchMixinStub()

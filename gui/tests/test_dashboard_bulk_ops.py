@@ -321,6 +321,39 @@ def test_probe_single_server_ftp_snapshot_path_from_dispatch(monkeypatch):
     assert call_kwargs["snapshot_path"] == "SENTINEL_FTP_PATH"
 
 
+def test_probe_single_server_ftp_root_files_only_sets_loose_files_marker(monkeypatch):
+    """FTP root-file-only snapshots should persist the loose-file display marker."""
+    import threading
+    dash = DashboardWidget.__new__(DashboardWidget)
+    dash.indicator_patterns = []
+    dash.db_reader = MagicMock()
+
+    minimal_snapshot = {"shares": [{"directories": [], "root_files": ["backup.tar"]}]}
+    monkeypatch.setattr(
+        "gui.components.dashboard.dispatch_probe_run",
+        lambda *a, **kw: minimal_snapshot,
+    )
+    monkeypatch.setattr(
+        "gui.components.dashboard.probe_patterns.attach_indicator_analysis",
+        lambda snap, patterns: {"is_suspicious": False, "matches": []},
+    )
+    monkeypatch.setattr(
+        "gui.components.dashboard.get_probe_snapshot_path_for_host",
+        lambda ip, ht: "SENTINEL_FTP_PATH",
+    )
+
+    result = dash._probe_single_server(
+        {"ip_address": "10.0.0.3", "host_type": "F", "port": 21},
+        max_dirs=2, max_files=5, timeout_seconds=3,
+        enable_rce=False, cancel_event=threading.Event(),
+    )
+
+    assert result["status"] == "success"
+    call_kwargs = dash.db_reader.upsert_probe_cache_for_host.call_args[1]
+    assert call_kwargs["accessible_dirs_count"] == 1
+    assert call_kwargs["accessible_dirs_list"] == "[[loose files]]"
+
+
 def test_probe_single_server_http_snapshot_path_from_dispatch(monkeypatch):
     """snapshot_path for H rows must come from probe_cache_dispatch."""
     import threading
@@ -352,3 +385,38 @@ def test_probe_single_server_http_snapshot_path_from_dispatch(monkeypatch):
     assert result["status"] == "success"
     call_kwargs = dash.db_reader.upsert_probe_cache_for_host.call_args[1]
     assert call_kwargs["snapshot_path"] == "SENTINEL_HTTP_PATH"
+
+
+def test_probe_single_server_http_root_files_only_sets_loose_files_marker(monkeypatch):
+    """HTTP root-file-only snapshots should expose marker in accessible_dirs_list."""
+    import threading
+    dash = DashboardWidget.__new__(DashboardWidget)
+    dash.indicator_patterns = []
+    dash.db_reader = MagicMock()
+    dash.db_reader.get_http_server_detail.return_value = {"port": 80, "scheme": "http"}
+
+    minimal_snapshot = {"shares": [{"directories": [], "root_files": ["index.html"]}]}
+    monkeypatch.setattr(
+        "gui.components.dashboard.dispatch_probe_run",
+        lambda *a, **kw: minimal_snapshot,
+    )
+    monkeypatch.setattr(
+        "gui.components.dashboard.probe_patterns.attach_indicator_analysis",
+        lambda snap, patterns: {"is_suspicious": False, "matches": []},
+    )
+    monkeypatch.setattr(
+        "gui.components.dashboard.get_probe_snapshot_path_for_host",
+        lambda ip, ht: "SENTINEL_HTTP_PATH",
+    )
+
+    result = dash._probe_single_server(
+        {"ip_address": "10.0.0.4", "host_type": "H"},
+        max_dirs=2, max_files=5, timeout_seconds=3,
+        enable_rce=False, cancel_event=threading.Event(),
+    )
+
+    assert result["status"] == "success"
+    call_kwargs = dash.db_reader.upsert_probe_cache_for_host.call_args[1]
+    assert call_kwargs["accessible_dirs_count"] == 0
+    assert call_kwargs["accessible_dirs_list"] == "[[loose files]]"
+    assert call_kwargs["accessible_files_count"] == 1
