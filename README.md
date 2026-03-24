@@ -110,7 +110,7 @@ Triggered from **▶ Start Scan** with the protocol selected. All three follow t
 
 **FTP** (port 21) — default dork: `port:21 "230 Login successful"`. Verification includes anonymous login and root directory listing. Failure codes: `connect_fail`, `auth_fail`, `list_fail`, `timeout`.
 
-**HTTP** — default dork: `http.title:"Index of /"`, checks both HTTP and HTTPS ports. The browser lets you navigate listings, view text files and images (`.png`, `.jpg`, `.jpeg`, `.gif`, `.bmp`, `.webp`, `.tif`, `.tiff`), and download to quarantine at `~/.smbseek/quarantine/<ip>/<YYYYMMDD>/http_root/`. Known limits: no file size pre-flight, animated GIFs show first frame only, no mutual TLS, one level deep without manual navigation.
+**HTTP** — default dork: `http.title:"Index of /"`, checks both HTTP and HTTPS ports.
 
 ### Server List
 

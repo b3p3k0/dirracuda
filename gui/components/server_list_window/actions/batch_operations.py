@@ -16,7 +16,6 @@ from typing import Dict, List, Any, Optional
 
 from gui.components.server_list_window import export, details, filters, table
 from gui.components.batch_extract_dialog import BatchExtractSettingsDialog
-from gui.components.file_browser_window import FileBrowserWindow
 from gui.components.pry_dialog import PryDialog
 from gui.utils import probe_cache, probe_patterns, probe_runner, extract_runner, pry_runner
 from gui.utils.logging_config import get_logger
@@ -561,8 +560,9 @@ class ServerListWindowBatchOperationsMixin:
             except (TypeError, ValueError):
                 port = 21
             banner = target.get("data", {}).get("banner")
-            from gui.components.ftp_browser_window import FtpBrowserWindow
-            FtpBrowserWindow(
+            from gui.components.unified_browser_window import open_ftp_http_browser
+            open_ftp_http_browser(
+                "F",
                 parent=self.window,
                 ip_address=ip_addr,
                 port=port,
@@ -579,8 +579,9 @@ class ServerListWindowBatchOperationsMixin:
             port = int((detail or {}).get("port") or 80)
             scheme = (detail or {}).get("scheme") or "http"
             banner = target.get("data", {}).get("banner")
-            from gui.components.http_browser_window import HttpBrowserWindow
-            HttpBrowserWindow(
+            from gui.components.unified_browser_window import open_ftp_http_browser
+            open_ftp_http_browser(
+                "H",
                 parent=self.window,
                 ip_address=ip_addr,
                 port=port,
@@ -629,7 +630,8 @@ class ServerListWindowBatchOperationsMixin:
         except Exception:
             share_creds = {}
 
-        FileBrowserWindow(
+        from gui.components.unified_browser_window import open_smb_browser
+        open_smb_browser(
             parent=self.window,
             ip_address=ip_addr,
             shares=share_names,

@@ -1,7 +1,7 @@
 """
 Unit tests for HTTP browser viewer integration (no Tk display required).
 
-Pattern after test_ftp_browser_window.py; factory function and mock shapes are
+Mirrors FTP browser test structure; factory function and mock shapes are
 the same but assertions use HTTP-specific URL format and 5-column treeview layout.
 """
 
@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from gui.components.http_browser_window import HttpBrowserWindow
+from gui.components.unified_browser_window import HttpBrowserWindow
 
 
 def _make_window() -> HttpBrowserWindow:
@@ -34,7 +34,7 @@ def test_open_viewer_uses_shared_file_viewer_and_save_callback_downloads():
     def _fake_open_file_viewer(**kwargs):
         captured.update(kwargs)
 
-    with patch("gui.components.http_browser_window.open_file_viewer", side_effect=_fake_open_file_viewer):
+    with patch("gui.components.unified_browser_window.open_file_viewer", side_effect=_fake_open_file_viewer):
         win._open_viewer("/pub/readme.txt", b"hello", 123)
 
     assert captured["file_path"] == "http://10.20.30.40:80/pub/readme.txt"
@@ -53,7 +53,7 @@ def test_open_image_viewer_uses_shared_image_viewer_and_save_callback_downloads(
     def _fake_open_image_viewer(**kwargs):
         captured.update(kwargs)
 
-    with patch("gui.components.http_browser_window.open_image_viewer", side_effect=_fake_open_image_viewer):
+    with patch("gui.components.unified_browser_window.open_image_viewer", side_effect=_fake_open_image_viewer):
         win._open_image_viewer("/media/logo.png", b"\x89PNG", 456, True, 2_000_000)
 
     assert captured["file_path"] == "http://10.20.30.40:80/media/logo.png"
@@ -69,8 +69,8 @@ def test_open_image_viewer_uses_shared_image_viewer_and_save_callback_downloads(
 def test_open_image_viewer_shows_error_when_viewer_raises():
     win = _make_window()
 
-    with patch("gui.components.http_browser_window.open_image_viewer", side_effect=RuntimeError("bad image")), patch(
-        "gui.components.http_browser_window.messagebox.showerror"
+    with patch("gui.components.unified_browser_window.open_image_viewer", side_effect=RuntimeError("bad image")), patch(
+        "gui.components.unified_browser_window.messagebox.showerror"
     ) as mock_showerror:
         win._open_image_viewer("/media/corrupt.png", b"bad", 99, False, 1_000)
 

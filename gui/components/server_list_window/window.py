@@ -25,7 +25,6 @@ from gui.utils.scan_manager import get_scan_manager
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.template_store import TemplateStore
 from gui.utils.logging_config import get_logger
-from gui.components.file_browser_window import FileBrowserWindow
 from gui.components.pry_dialog import PryDialog
 from gui.components.pry_status_dialog import BatchStatusDialog
 from shared.db_migrations import run_migrations

@@ -35,20 +35,14 @@ from gui.components.ftp_scan_dialog import show_ftp_scan_dialog
 from gui.components.http_scan_dialog import show_http_scan_dialog
 from gui.components.scan_results_dialog import show_scan_results_dialog
 from gui.utils.settings_manager import get_settings_manager
-from gui.utils.probe_runner import run_probe
-from gui.utils.extract_runner import run_extract
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.components import dashboard_logs
 from gui.utils import (
     probe_cache,
     probe_patterns,
-    probe_runner,
     extract_runner,
-    ftp_probe_runner,
-    ftp_probe_cache,
-    http_probe_runner,
-    http_probe_cache,
 )
+from gui.utils.probe_cache_dispatch import get_probe_snapshot_path_for_host, dispatch_probe_run
 from gui.utils.logging_config import get_logger
 from shared.quarantine import create_quarantine_dir
 
@@ -1718,17 +1712,14 @@ class DashboardWidget:
             except Exception:
                 port = 21
 
-            max_entries = max(1, int(max_dirs) * int(max_files))
             try:
-                snapshot = ftp_probe_runner.run_ftp_probe(
-                    ip_address,
-                    port=port,
-                    max_entries=max_entries,
+                snapshot = dispatch_probe_run(
+                    ip_address, host_type,
                     max_directories=int(max_dirs),
                     max_files=int(max_files),
-                    connect_timeout=int(timeout_seconds),
-                    request_timeout=int(timeout_seconds),
+                    timeout_seconds=int(timeout_seconds),
                     cancel_event=cancel_event,
+                    port=port,
                 )
                 analysis = probe_patterns.attach_indicator_analysis(snapshot, self.indicator_patterns)
                 issue_detected = bool(analysis.get("is_suspicious"))
@@ -1743,7 +1734,7 @@ class DashboardWidget:
                 ]
                 accessible_dirs_count = len(dir_names)
                 accessible_dirs_list = ",".join(dir_names)
-                snapshot_path = str(ftp_probe_cache.get_ftp_cache_path(ip_address))
+                snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type)
 
                 try:
                     if self.db_reader:
@@ -1781,21 +1772,13 @@ class DashboardWidget:
         # HTTP probe path
         elif host_type == "H":
             try:
-                detail = self.db_reader.get_http_server_detail(ip_address) if self.db_reader else None
-                port = int((detail or {}).get("port") or 80)
-                scheme = (detail or {}).get("scheme") or "http"
-                max_entries = max(1, int(max_dirs) * int(max_files))
-                snapshot = http_probe_runner.run_http_probe(
-                    ip_address,
-                    port=port,
-                    scheme=scheme,
-                    allow_insecure_tls=True,
-                    max_entries=max_entries,
+                snapshot = dispatch_probe_run(
+                    ip_address, host_type,
                     max_directories=int(max_dirs),
                     max_files=int(max_files),
-                    connect_timeout=int(timeout_seconds),
-                    request_timeout=int(timeout_seconds),
+                    timeout_seconds=int(timeout_seconds),
                     cancel_event=cancel_event,
+                    db_reader=self.db_reader,
                 )
                 analysis = probe_patterns.attach_indicator_analysis(snapshot, self.indicator_patterns)
                 issue_detected = bool(analysis.get("is_suspicious"))
@@ -1816,7 +1799,7 @@ class DashboardWidget:
                 total = len(dir_names) + total_files
                 accessible_dirs_count = len(dir_names)
                 accessible_dirs_list = ",".join(dir_names)
-                snapshot_path = str(http_probe_cache.get_http_cache_path(ip_address))
+                snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type)
 
                 try:
                     if self.db_reader:
@@ -1862,18 +1845,18 @@ class DashboardWidget:
         password = ""
 
         try:
-            result = probe_runner.run_probe(
-                ip_address,
-                shares,
+            result = dispatch_probe_run(
+                ip_address, host_type,
                 max_directories=max_dirs,
                 max_files=max_files,
                 timeout_seconds=timeout_seconds,
+                cancel_event=cancel_event,
+                shares=shares,
                 username=username,
                 password=password,
-                enable_rce_analysis=enable_rce,
-                cancel_event=cancel_event,
+                enable_rce=enable_rce,
                 allow_empty=True,
-                db_accessor=self.db_reader,
+                db_reader=self.db_reader,
             )
             # Persist probe snapshot to disk and DB (align with server list workflow)
             probe_cache.save_probe_result(ip_address, result)

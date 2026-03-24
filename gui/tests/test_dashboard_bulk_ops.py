@@ -121,3 +121,68 @@ def test_get_servers_for_bulk_ops_probe_includes_zero_accessibility_rows_smb():
     assert len(result["probe"]) == 1
     assert result["probe"][0]["ip_address"] == "203.0.113.99"
     assert result["extract"] == []
+
+
+def test_probe_single_server_ftp_snapshot_path_from_dispatch(monkeypatch):
+    """snapshot_path for F rows must come from probe_cache_dispatch."""
+    import threading
+    dash = DashboardWidget.__new__(DashboardWidget)
+    dash.indicator_patterns = []
+    dash.db_reader = MagicMock()
+
+    minimal_snapshot = {"shares": [{"directories": [], "root_files": []}]}
+    monkeypatch.setattr(
+        "gui.components.dashboard.dispatch_probe_run",
+        lambda *a, **kw: minimal_snapshot,
+    )
+    monkeypatch.setattr(
+        "gui.components.dashboard.probe_patterns.attach_indicator_analysis",
+        lambda snap, patterns: {"is_suspicious": False, "matches": []},
+    )
+    monkeypatch.setattr(
+        "gui.components.dashboard.get_probe_snapshot_path_for_host",
+        lambda ip, ht: "SENTINEL_FTP_PATH",
+    )
+
+    result = dash._probe_single_server(
+        {"ip_address": "10.0.0.1", "host_type": "F", "port": 21},
+        max_dirs=2, max_files=5, timeout_seconds=3,
+        enable_rce=False, cancel_event=threading.Event(),
+    )
+
+    assert result["status"] == "success"
+    call_kwargs = dash.db_reader.upsert_probe_cache_for_host.call_args[1]
+    assert call_kwargs["snapshot_path"] == "SENTINEL_FTP_PATH"
+
+
+def test_probe_single_server_http_snapshot_path_from_dispatch(monkeypatch):
+    """snapshot_path for H rows must come from probe_cache_dispatch."""
+    import threading
+    dash = DashboardWidget.__new__(DashboardWidget)
+    dash.indicator_patterns = []
+    dash.db_reader = MagicMock()
+    dash.db_reader.get_http_server_detail.return_value = {"port": 80, "scheme": "http"}
+
+    minimal_snapshot = {"shares": [{"directories": [], "root_files": []}]}
+    monkeypatch.setattr(
+        "gui.components.dashboard.dispatch_probe_run",
+        lambda *a, **kw: minimal_snapshot,
+    )
+    monkeypatch.setattr(
+        "gui.components.dashboard.probe_patterns.attach_indicator_analysis",
+        lambda snap, patterns: {"is_suspicious": False, "matches": []},
+    )
+    monkeypatch.setattr(
+        "gui.components.dashboard.get_probe_snapshot_path_for_host",
+        lambda ip, ht: "SENTINEL_HTTP_PATH",
+    )
+
+    result = dash._probe_single_server(
+        {"ip_address": "10.0.0.2", "host_type": "H"},
+        max_dirs=2, max_files=5, timeout_seconds=3,
+        enable_rce=False, cancel_event=threading.Event(),
+    )
+
+    assert result["status"] == "success"
+    call_kwargs = dash.db_reader.upsert_probe_cache_for_host.call_args[1]
+    assert call_kwargs["snapshot_path"] == "SENTINEL_HTTP_PATH"

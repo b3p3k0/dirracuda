@@ -25,7 +25,6 @@ from gui.utils.data_export_engine import get_export_engine
 from gui.utils.scan_manager import get_scan_manager
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.template_store import TemplateStore
-from gui.components.file_browser_window import FileBrowserWindow
 from gui.components.pry_dialog import PryDialog
 from gui.components.pry_status_dialog import BatchStatusDialog
 from shared.db_migrations import run_migrations
@@ -38,11 +37,8 @@ from gui.utils import (
     probe_runner,
     extract_runner,
     pry_runner,
-    ftp_probe_runner,
-    ftp_probe_cache,
-    http_probe_runner,
-    http_probe_cache,
 )
+from gui.utils.probe_cache_dispatch import get_probe_snapshot_path_for_host, dispatch_probe_run
 from shared.quarantine import create_quarantine_dir
 
 from .batch_operations import ServerListWindowBatchOperationsMixin
@@ -180,7 +176,7 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
 
     def _execute_probe_target(self, job_id: str, target: Dict[str, Any], options: Dict[str, Any], cancel_event: threading.Event) -> Dict[str, Any]:
         ip_address = target.get("ip_address")
-        host_type = target.get("host_type", "S")
+        host_type = str(target.get("host_type") or "S").strip().upper()
         row_key = target.get("row_key")
 
         if host_type == "F":
@@ -190,19 +186,13 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
             except Exception:
                 port = 21
             limits = options.get("limits", {}) or {}
-            max_entries = max(
-                1,
-                int(limits.get("max_directories", 3)) * int(limits.get("max_files", 5)),
-            )
-            snapshot = ftp_probe_runner.run_ftp_probe(
-                ip_address,
-                port=port,
-                max_entries=max_entries,
+            snapshot = dispatch_probe_run(
+                ip_address, host_type,
                 max_directories=int(limits.get("max_directories", 3)),
                 max_files=int(limits.get("max_files", 5)),
-                connect_timeout=int(limits.get("timeout_seconds", 10)),
-                request_timeout=int(limits.get("timeout_seconds", 10)),
+                timeout_seconds=int(limits.get("timeout_seconds", 10)),
                 cancel_event=cancel_event,
+                port=port,
             )
             analysis = probe_patterns.attach_indicator_analysis(snapshot, self.indicator_patterns)
             issue_detected = bool(analysis.get("is_suspicious"))
@@ -216,7 +206,7 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
             ]
             accessible_dirs_count = len(dir_names)
             accessible_dirs_list = ",".join(dir_names)
-            snapshot_path = str(ftp_probe_cache.get_ftp_cache_path(ip_address))
+            snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type)
 
             for server in self.all_servers:
                 if server.get("row_key") == row_key:
@@ -251,25 +241,14 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
             }
 
         if host_type == "H":
-            detail = self.db_reader.get_http_server_detail(ip_address) if self.db_reader else None
-            port = int((detail or {}).get("port") or 80)
-            scheme = (detail or {}).get("scheme") or "http"
             limits = options.get("limits", {}) or {}
-            max_entries = max(
-                1,
-                int(limits.get("max_directories", 3)) * int(limits.get("max_files", 5)),
-            )
-            snapshot = http_probe_runner.run_http_probe(
-                ip_address,
-                port=port,
-                scheme=scheme,
-                allow_insecure_tls=True,
-                max_entries=max_entries,
+            snapshot = dispatch_probe_run(
+                ip_address, host_type,
                 max_directories=int(limits.get("max_directories", 3)),
                 max_files=int(limits.get("max_files", 5)),
-                connect_timeout=int(limits.get("timeout_seconds", 10)),
-                request_timeout=int(limits.get("timeout_seconds", 10)),
+                timeout_seconds=int(limits.get("timeout_seconds", 10)),
                 cancel_event=cancel_event,
+                db_reader=self.db_reader,
             )
             analysis = probe_patterns.attach_indicator_analysis(snapshot, self.indicator_patterns)
             issue_detected = bool(analysis.get("is_suspicious"))
@@ -289,7 +268,7 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
             total = len(dir_names) + total_files
             accessible_dirs_count = len(dir_names)
             accessible_dirs_list = ",".join(dir_names)
-            snapshot_path = str(http_probe_cache.get_http_cache_path(ip_address))
+            snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type)
 
             for server in self.all_servers:
                 if server.get("row_key") == row_key:
@@ -335,18 +314,18 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
         username, password = details._derive_credentials(target.get("auth_method", ""))
 
         try:
-            result = probe_runner.run_probe(
-                ip_address,
-                shares,
+            result = dispatch_probe_run(
+                ip_address, host_type,
                 max_directories=max_dirs,
                 max_files=max_files,
                 timeout_seconds=timeout_seconds,
+                cancel_event=cancel_event,
+                shares=shares,
                 username=username,
                 password=password,
-                enable_rce_analysis=enable_rce,
-                cancel_event=cancel_event,
+                enable_rce=enable_rce,
                 allow_empty=True,
-                db_accessor=self.db_reader,
+                db_reader=self.db_reader,
             )
         except probe_runner.ProbeError as exc:
             status = "cancelled" if "cancel" in str(exc).lower() else "failed"

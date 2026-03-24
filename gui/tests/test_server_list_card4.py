@@ -57,7 +57,6 @@ def _import_window_module():
     # Stub only modules known to pull optional/runtime-heavy dependencies
     # (impacket, image stack, etc.) during import.
     stubs = {
-        "gui.components.file_browser_window": {"FileBrowserWindow": type("FileBrowserWindow", (), {})},
         "gui.components.pry_dialog": {"PryDialog": type("PryDialog", (), {})},
         "gui.components.pry_status_dialog": {"BatchStatusDialog": type("BatchStatusDialog", (), {})},
         "gui.components.batch_extract_dialog": {

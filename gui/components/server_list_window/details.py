@@ -21,12 +21,12 @@ from gui.utils import (
     probe_runner,
     probe_patterns,
     extract_runner,
-    ftp_probe_cache,
-    ftp_probe_runner,
-    http_probe_cache,
-    http_probe_runner,
 )
-from gui.utils.probe_runner import ProbeError
+from gui.utils.probe_cache_dispatch import (
+    load_probe_result_for_host,
+    get_probe_snapshot_path_for_host,
+    dispatch_probe_run,
+)
 from gui.utils.database_access import DatabaseReader
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.components.batch_extract_dialog import BatchExtractSettingsDialog
@@ -78,12 +78,7 @@ def show_server_detail_popup(parent_window, server_data, theme, settings_manager
     # Initial render (includes cached probe data if available)
     ip_address = server_data.get('ip_address', 'Unknown')
     host_type = server_data.get("host_type", "S")
-    if ip_address and host_type == "F":
-        cached_probe = ftp_probe_cache.load_ftp_probe_result(ip_address)
-    elif ip_address and host_type == "H":
-        cached_probe = http_probe_cache.load_http_probe_result(ip_address)
-    else:
-        cached_probe = probe_cache.load_probe_result(ip_address) if ip_address else None
+    cached_probe = load_probe_result_for_host(ip_address, host_type)
     if cached_probe and indicator_patterns:
         probe_patterns.attach_indicator_analysis(cached_probe, indicator_patterns)
     _render_server_details(text_widget, server_data, cached_probe)
@@ -170,8 +165,9 @@ def show_server_detail_popup(parent_window, server_data, theme, settings_manager
                 config_path = settings_manager.get_setting('backend.config_path', None)
                 if not config_path and hasattr(settings_manager, "get_smbseek_config_path"):
                     config_path = settings_manager.get_smbseek_config_path()
-            from gui.components.http_browser_window import HttpBrowserWindow
-            HttpBrowserWindow(
+            from gui.components.unified_browser_window import open_ftp_http_browser
+            open_ftp_http_browser(
+                "H",
                 parent=detail_window,
                 ip_address=ip_address,
                 port=port,
@@ -180,6 +176,8 @@ def show_server_detail_popup(parent_window, server_data, theme, settings_manager
                 config_path=config_path,
                 theme=theme,
                 settings_manager=settings_manager,
+                # banner intentionally omitted: current details path does not pass banner
+                # to HttpBrowserWindow; factory default (None) preserves that behavior.
             )
             return
 
@@ -206,21 +204,26 @@ def show_server_detail_popup(parent_window, server_data, theme, settings_manager
             if not config_path and hasattr(settings_manager, "get_smbseek_config_path"):
                 config_path = settings_manager.get_smbseek_config_path()
 
-        try:
-            from gui.components.file_browser_window import FileBrowserWindow
-        except ImportError:
-            from components.file_browser_window import FileBrowserWindow
-
-        FileBrowserWindow(
+        # Resolve a DatabaseReader for Shodan banner lookup (mirrors HTTP branch pattern).
+        # _open_browse_window is the fallback path; primary route is browse_callback.
+        _db = None
+        if settings_manager:
+            try:
+                _db = DatabaseReader(settings_manager.get_database_path())
+            except Exception:
+                pass
+        from gui.components.unified_browser_window import open_smb_browser
+        open_smb_browser(
             parent=detail_window,
             ip_address=server_data.get("ip_address", ""),
             shares=accessible_shares,
             auth_method=server_data.get("auth_method", ""),
             config_path=config_path,
-            db_reader=None,
+            db_reader=_db,
             theme=theme,
             settings_manager=settings_manager,
-            on_extracted=None if not settings_manager else getattr(parent_window, "_handle_extracted_update", None)
+            on_extracted=(None if not settings_manager
+                          else getattr(parent_window, "_handle_extracted_update", None)),
         )
 
     # Close button
@@ -619,7 +622,7 @@ def _start_probe(
     if probe_state.get("running"):
         return
 
-    host_type = server_data.get("host_type", "S")
+    host_type = str(server_data.get("host_type") or "S").strip().upper()
     ip_address = server_data.get('ip_address')
     if not ip_address:
         messagebox.showwarning("Probe Unavailable", "Server IP address is missing.", parent=detail_window)
@@ -659,57 +662,23 @@ def _start_probe(
                 except Exception:
                     db_accessor = None
 
+            _ftp_port = 21
             if host_type == "F":
-                port = 21
                 try:
-                    port = int(server_data.get("port") or 21)
+                    _ftp_port = int(server_data.get("port") or 21)
                 except Exception:
-                    port = 21
-                max_entries = max(
-                    1,
-                    int(config["max_directories"]) * int(config["max_files"]),
-                )
-                result = ftp_probe_runner.run_ftp_probe(
-                    ip_address,
-                    port=port,
-                    max_entries=max_entries,
-                    max_directories=int(config["max_directories"]),
-                    max_files=int(config["max_files"]),
-                    connect_timeout=int(config["timeout_seconds"]),
-                    request_timeout=int(config["timeout_seconds"]),
-                    cancel_event=cancel_event,
-                )
-            elif host_type == "H":
-                detail = db_accessor.get_http_server_detail(ip_address) if db_accessor else None
-                port = int((detail or {}).get("port") or 80)
-                scheme = (detail or {}).get("scheme") or "http"
-                max_entries = max(
-                    1,
-                    int(config["max_directories"]) * int(config["max_files"]),
-                )
-                result = http_probe_runner.run_http_probe(
-                    ip_address,
-                    port=port,
-                    scheme=scheme,
-                    allow_insecure_tls=True,
-                    max_entries=max_entries,
-                    max_directories=int(config["max_directories"]),
-                    max_files=int(config["max_files"]),
-                    connect_timeout=int(config["timeout_seconds"]),
-                    request_timeout=int(config["timeout_seconds"]),
-                    cancel_event=cancel_event,
-                )
-            else:
-                result = probe_runner.run_probe(
-                    ip_address,
-                    accessible_shares,
-                    max_directories=config["max_directories"],
-                    max_files=config["max_files"],
-                    timeout_seconds=config["timeout_seconds"],
-                    enable_rce_analysis=enable_rce,
-                    cancel_event=cancel_event,
-                    db_accessor=db_accessor,
-                )
+                    _ftp_port = 21
+            result = dispatch_probe_run(
+                ip_address, host_type,
+                max_directories=int(config["max_directories"]),
+                max_files=int(config["max_files"]),
+                timeout_seconds=int(config["timeout_seconds"]),
+                cancel_event=cancel_event,
+                port=_ftp_port,
+                db_reader=db_accessor,
+                shares=accessible_shares,
+                enable_rce=enable_rce,
+            )
             if cancel_event.is_set():
                 # Treat as cancelled; skip success callbacks
                 detail_window.after(0, lambda: status_var.set("Probe cancelled."))
@@ -733,7 +702,7 @@ def _start_probe(
                             "F",
                             status='issue' if analysis.get("is_suspicious") else 'clean',
                             indicator_matches=len(analysis.get("matches", [])),
-                            snapshot_path=str(ftp_probe_cache.get_ftp_cache_path(ip_address)),
+                            snapshot_path=get_probe_snapshot_path_for_host(ip_address, host_type),
                             accessible_dirs_count=len(dir_names),
                             accessible_dirs_list=",".join(dir_names),
                         )
@@ -763,7 +732,7 @@ def _start_probe(
                             "H",
                             status='issue' if analysis.get("is_suspicious") else 'clean',
                             indicator_matches=len(analysis.get("matches", [])),
-                            snapshot_path=str(http_probe_cache.get_http_cache_path(ip_address)),
+                            snapshot_path=get_probe_snapshot_path_for_host(ip_address, host_type),
                             accessible_dirs_count=len(dir_names),
                             accessible_dirs_list=",".join(dir_names),
                             accessible_files_count=total_files,

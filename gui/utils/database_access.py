@@ -1546,6 +1546,16 @@ class DatabaseReader:
             row = conn.execute(query, (ip_address,)).fetchone()
             return row["auth_method"] if row else None
 
+    def get_smb_shodan_data(self, ip_address: str) -> Optional[str]:
+        """Return the raw shodan_data JSON string for an SMB server by IP."""
+        query = "SELECT shodan_data FROM smb_servers WHERE ip_address = ? LIMIT 1"
+        try:
+            with self._get_connection() as conn:
+                row = conn.execute(query, (ip_address,)).fetchone()
+                return row["shodan_data"] if row else None
+        except Exception:
+            return None
+
     def get_accessible_shares(self, ip_address: str) -> List[Dict[str, Any]]:
         """
         Fetch accessible shares for the given server IP.

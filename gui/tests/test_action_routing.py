@@ -39,8 +39,6 @@ def _import_batch_mixins_isolated():
     sentinel = object()
     prior_modules = {}
     module_names = [
-        "gui.components.file_browser_window",
-        "gui.components.ftp_browser_window",
         "gui.components.pry_dialog",
         "gui.components.pry_status_dialog",
         "gui.components.batch_extract_dialog",
@@ -71,14 +69,6 @@ def _import_batch_mixins_isolated():
             sys.modules[name] = mod
 
         # Lightweight GUI stubs for optional runtime dependencies.
-        _stub_module(
-            "gui.components.file_browser_window",
-            {"FileBrowserWindow": type("FileBrowserWindow", (), {})},
-        )
-        _stub_module(
-            "gui.components.ftp_browser_window",
-            {"FtpBrowserWindow": type("FtpBrowserWindow", (), {})},
-        )
         _stub_module("gui.components.pry_dialog", {"PryDialog": type("PryDialog", (), {})})
         _stub_module(
             "gui.components.pry_status_dialog",
@@ -534,9 +524,7 @@ def test_browse_ftp_row_opens_ftp_browser():
         def __init__(self, **kwargs):
             ftp_instances.append(kwargs)
 
-    ftp_mod = types.ModuleType("gui.components.ftp_browser_window")
-    ftp_mod.FtpBrowserWindow = FakeFtpBrowserWindow
-    with patch.dict(sys.modules, {"gui.components.ftp_browser_window": ftp_mod}):
+    with patch("gui.components.unified_browser_window.FtpBrowserWindow", FakeFtpBrowserWindow):
         stub._launch_browse_workflow(target)
 
     # The import inside the function may use a different path — we use a side-channel check:
@@ -546,6 +534,97 @@ def test_browse_ftp_row_opens_ftp_browser():
     assert ftp_instances[0]["ip_address"] == "10.0.0.1"
     assert ftp_instances[0]["port"] == 2121
     assert ftp_instances[0]["banner"] == "vsftpd 3.0"
+
+
+def test_browse_http_row_opens_http_browser():
+    """_launch_browse_workflow with host_type='H' instantiates HttpBrowserWindow."""
+    stub = _BatchMixinStub()
+    stub.db_reader.get_http_server_detail.return_value = {"port": 8080, "scheme": "http"}
+    target = {
+        "ip_address": "10.0.0.2",
+        "host_type": "H",
+        "row_key": "H:4",
+        "auth_method": "",
+        "data": {"banner": "nginx/1.24"},
+    }
+
+    http_instances = []
+
+    class FakeHttpBrowserWindow:
+        def __init__(self, **kwargs):
+            http_instances.append(kwargs)
+
+    with patch("gui.components.unified_browser_window.HttpBrowserWindow", FakeHttpBrowserWindow):
+        stub._launch_browse_workflow(target)
+
+    assert len(http_instances) == 1
+    assert http_instances[0]["ip_address"] == "10.0.0.2"
+    assert http_instances[0]["port"] == 8080
+    assert http_instances[0]["scheme"] == "http"
+    assert http_instances[0]["banner"] == "nginx/1.24"
+
+
+def test_ftp_server_picker_browse_routes_via_factory(monkeypatch):
+    """_on_open_browser routes through open_ftp_http_browser, not FtpBrowserWindow directly."""
+    from gui.components.ftp_server_picker import FtpServerPickerDialog
+
+    picker = object.__new__(FtpServerPickerDialog)
+
+    class _FakeTree:
+        def selection(self):
+            return ["item1"]
+
+        def item(self, iid, key):
+            return ["10.0.0.5", "2121"]
+
+    picker.tree = _FakeTree()
+    picker._rows_by_item_id = {"item1": {"banner": "ProFTPD 1.3"}}
+    picker._dialog = None
+    picker._config_path = None
+    picker._db_reader = None
+    picker._theme = None
+    picker._settings_manager = None
+
+    calls = []
+    import gui.components.unified_browser_window as ubw
+    monkeypatch.setattr(ubw, "open_ftp_http_browser", lambda *a, **kw: calls.append((a, kw)))
+    picker._on_open_browser()
+
+    assert len(calls) == 1
+    args, kw = calls[0]
+    assert args[0] == "F"                  # routing intent
+    assert kw["ip_address"] == "10.0.0.5"
+    assert kw["port"] == 2121
+    assert kw["banner"] == "ProFTPD 1.3"
+
+
+def test_browse_smb_row_routes_via_open_smb_browser(monkeypatch):
+    """_launch_browse_workflow with host_type='S' calls open_smb_browser.
+
+    Verifies ip_address, shares, auth_method, and on_extracted are forwarded.
+    Primary runtime path: _launch_browse_workflow (not the details fallback).
+    """
+    stub = _BatchMixinStub()
+    stub.db_reader.get_accessible_shares.return_value = [{"share_name": "docs"}]
+    stub.db_reader.get_share_credentials.return_value = []
+    target = {
+        "ip_address": "10.0.0.3",
+        "host_type": "S",
+        "row_key": "S:5",
+        "auth_method": "anonymous",
+        "data": {},
+    }
+
+    calls = []
+    import gui.components.unified_browser_window as ubw
+    monkeypatch.setattr(ubw, "open_smb_browser", lambda *a, **kw: calls.append(kw))
+    stub._launch_browse_workflow(target)
+
+    assert len(calls) == 1
+    assert calls[0]["ip_address"] == "10.0.0.3"
+    assert calls[0]["shares"] == ["docs"]
+    assert calls[0]["auth_method"] == "anonymous"
+    assert calls[0]["on_extracted"] == stub._handle_extracted_update
 
 
 # ---------------------------------------------------------------------------
