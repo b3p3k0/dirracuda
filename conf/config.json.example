@@ -62,7 +62,7 @@
     "attempt_delay": 1.0,
     "max_attempts": 0
   },
-  "_note": "Global scans (no country filter) are performed when --country is not specified. To limit scans to specific countries, use: ./smbseek.py --country US,GB,CA",
+  "_note": "Global scans (no country filter) are performed when --country is not specified. To limit scans to specific countries, use: ./cli/smbseek.py --country US,GB,CA",
   "file_collection": {
     "max_files_per_target": 3,
     "max_total_size_mb": 500,

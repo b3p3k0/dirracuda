@@ -5,7 +5,7 @@ import argparse
 import sys
 from pathlib import Path
 
-_SCRIPT_DIR = Path(__file__).resolve().parent
+_SCRIPT_DIR = Path(__file__).resolve().parent.parent
 if str(_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPT_DIR))
 
@@ -54,8 +54,11 @@ def main() -> int:
         _cfg = load_config(args.config)
         _db_path = _cfg.get_database_path()
         run_migrations(_db_path)
-    except Exception:
-        pass
+    except Exception as mig_exc:
+        print(
+            f"Warning: failed to apply DB migrations before FTP scan: {mig_exc}",
+            file=sys.stderr,
+        )
 
     try:
         workflow = create_ftp_workflow(args)

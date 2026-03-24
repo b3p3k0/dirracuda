@@ -426,7 +426,7 @@ class AppConfigDialog:
         if not path_obj.is_dir():
             return {"valid": False, "message": "Path is not a directory."}
 
-        smbseek_script = path_obj / "smbseek"
+        smbseek_script = path_obj / "cli" / "smbseek.py"
         if not smbseek_script.exists():
             return {"valid": False, "message": "Missing smbseek executable."}
 

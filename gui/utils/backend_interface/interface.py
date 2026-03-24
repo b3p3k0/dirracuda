@@ -56,9 +56,9 @@ class BackendInterface:
         but allow complete override for different deployment scenarios.
         """
         self.backend_path = Path(backend_path).resolve()
-        self.cli_script = self.backend_path / "smbseek"
-        self.ftp_cli_script = self.backend_path / "ftpseek"
-        self.http_cli_script = self.backend_path / "httpseek"
+        self.cli_script = self.backend_path / "cli" / "smbseek.py"
+        self.ftp_cli_script = self.backend_path / "cli" / "ftpseek.py"
+        self.http_cli_script = self.backend_path / "cli" / "httpseek.py"
         self.config_path = self.backend_path / "conf" / "config.json"
         self.config_example_path = self.backend_path / "conf" / "config.json.example"
 

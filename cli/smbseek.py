@@ -23,8 +23,8 @@ import re
 from typing import Optional, Set
 from typing import List
 
-# Add current directory to Python path for imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Add repo root to Python path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared.utils import format_string_for_shodan
 
