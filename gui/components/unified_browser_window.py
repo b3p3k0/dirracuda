@@ -44,17 +44,28 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Tuple
 
 try:
-    from gui.components.file_viewer_window import open_file_viewer
-except ImportError:
-    from file_viewer_window import open_file_viewer  # type: ignore[no-redef]
-try:
-    from gui.components.image_viewer_window import open_image_viewer
-except ImportError:
-    from image_viewer_window import open_image_viewer  # type: ignore[no-redef]
-try:
     from gui.utils.dialog_helpers import ensure_dialog_focus
 except ImportError:
     from utils.dialog_helpers import ensure_dialog_focus  # type: ignore[no-redef]
+
+
+def open_file_viewer(*args: Any, **kwargs: Any) -> Any:
+    """Lazy-load file viewer to avoid import-time coupling in browser/probe paths."""
+    try:
+        from gui.components.file_viewer_window import open_file_viewer as _open_file_viewer
+    except ImportError:
+        from file_viewer_window import open_file_viewer as _open_file_viewer  # type: ignore[no-redef]
+    return _open_file_viewer(*args, **kwargs)
+
+
+def open_image_viewer(*args: Any, **kwargs: Any) -> Any:
+    """Lazy-load image viewer to avoid import-time failures when Pillow/ImageTk is unavailable."""
+    try:
+        from gui.components.image_viewer_window import open_image_viewer as _open_image_viewer
+    except ImportError:
+        from image_viewer_window import open_image_viewer as _open_image_viewer  # type: ignore[no-redef]
+    return _open_image_viewer(*args, **kwargs)
+
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tif", ".tiff"}
 

@@ -7,6 +7,7 @@ Features:
   size-limited bytes provided by the caller.
 - Fit-to-window scaling with resize handling.
 """
+from __future__ import annotations
 
 import io
 import tkinter as tk
