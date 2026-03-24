@@ -361,59 +361,76 @@ def test_smb_auth(op, ip: str, username: str, password: str) -> bool:
         op._connection_pool.return_connection(ip, connection, session)
 
 
+def _build_smbclient_probe_cmd(op, ip: str, extra_args: List[str]) -> List[str]:
+    """
+    Build smbclient probe command for discovery fallback.
+
+    Cautious mode keeps the probe on SMB2+/SMB3. Legacy mode leaves protocol
+    unrestricted so SMB1-capable targets can still be identified.
+    """
+    cmd = ["smbclient"]
+    if op.cautious_mode:
+        cmd.extend(["--max-protocol=SMB3", "--option=client min protocol=SMB2"])
+    cmd.extend(["-L", f"//{ip}"])
+    cmd.extend(extra_args)
+    return cmd
+
+
 def test_smb_alternative(op, ip: str) -> Optional[str]:
     """
     Alternative testing method using smbclient as fallback with caching.
     """
+    if not getattr(op, "smbclient_available", True):
+        return None
+
     if ip in op._smbclient_auth_cache:
         return op._smbclient_auth_cache[ip]
 
-    try:
-        smbclient_cmd = [
-            'smbclient',
-            f"//{ip}/IPC$",
-            '-U', '%',
-            '-m', 'SMB2',
-            '-c', 'exit'
-        ]
-        timeout = op.config.get_connection_timeout()
-        result = subprocess.run(
-            smbclient_cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout
-        )
+    timeout = op.config.get_connection_timeout()
+    test_commands = [
+        ("Anonymous", ["-N"]),
+        ("Guest/Blank", ["--user", "guest%"]),
+        ("Guest/Guest", ["--user", "guest%guest"]),
+    ]
+
+    for method_name, extra_args in test_commands:
+        smbclient_cmd = _build_smbclient_probe_cmd(op, ip, extra_args)
+        try:
+            result = subprocess.run(
+                smbclient_cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                stdin=subprocess.DEVNULL,
+            )
+        except subprocess.TimeoutExpired:
+            op.output.print_if_verbose(f"smbclient timeout for {ip} ({method_name})")
+            continue
+        except Exception as e:
+            op.output.print_if_verbose(f"smbclient error for {ip} ({method_name}): {e}")
+            continue
 
         stderr_output = result.stderr or ""
         stdout_output = result.stdout or ""
+        stderr_upper = stderr_output.upper()
+        stdout_upper = stdout_output.upper()
 
-        if result.returncode == 0:
-            op._smbclient_auth_cache[ip] = "Anonymous"
-            return "Anonymous"
+        if (
+            result.returncode == 0
+            or "SHARENAME" in stdout_upper
+            or "ANONYMOUS LOGIN SUCCESSFUL" in stdout_upper
+        ):
+            op._smbclient_auth_cache[ip] = method_name
+            return method_name
 
-        if "NT_STATUS_LOGON_FAILURE" in stderr_output or "NT_STATUS_ACCESS_DENIED" in stderr_output:
-            op._smbclient_auth_cache[ip] = None
-            return None
+        # Expected auth failure statuses still permit trying the remaining methods.
+        if "NT_STATUS_LOGON_FAILURE" in stderr_upper or "NT_STATUS_ACCESS_DENIED" in stderr_upper:
+            continue
+        if "STATUS_MORE_PROCESSING_REQUIRED" in stderr_upper:
+            continue
 
-        if "STATUS_MORE_PROCESSING_REQUIRED" in stderr_output:
-            op._smbclient_auth_cache[ip] = None
-            return None
-
-        if "Anonymous login successful" in stdout_output:
-            op._smbclient_auth_cache[ip] = "Anonymous"
-            return "Anonymous"
-
-        op._smbclient_auth_cache[ip] = None
-        return None
-
-    except subprocess.TimeoutExpired:
-        op.output.print_if_verbose(f"smbclient timeout for {ip}")
-        op._smbclient_auth_cache[ip] = None
-        return None
-    except Exception as e:
-        op.output.print_if_verbose(f"smbclient error for {ip}: {e}")
-        op._smbclient_auth_cache[ip] = None
-        return None
+    op._smbclient_auth_cache[ip] = None
+    return None
 
 
 def get_optimal_workers(op, total_hosts: int, max_concurrent: int) -> int:
