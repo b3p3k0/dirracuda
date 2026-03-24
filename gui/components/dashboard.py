@@ -1024,6 +1024,213 @@ class DashboardWidget:
         else:
             self._launch_next_queued_scan()
 
+    def _resolve_active_config_path(self) -> Optional[Path]:
+        """Resolve the effective config.json path used for scan launches."""
+        candidate = self.config_path
+        if not candidate and self.settings_manager:
+            candidate = self.settings_manager.get_setting('backend.config_path', None)
+            if not candidate:
+                try:
+                    candidate = self.settings_manager.get_smbseek_config_path()
+                except Exception:
+                    candidate = None
+        if not candidate:
+            return None
+        try:
+            return Path(str(candidate)).expanduser().resolve()
+        except Exception:
+            return None
+
+    def _read_shodan_api_key_from_config(self) -> str:
+        """Return shodan.api_key from active config, or empty string when absent/unreadable."""
+        config_path = self._resolve_active_config_path()
+        if not config_path or not config_path.exists():
+            return ""
+        try:
+            config_data = json.loads(config_path.read_text(encoding="utf-8"))
+            if not isinstance(config_data, dict):
+                return ""
+            shodan_cfg = config_data.get("shodan", {})
+            if not isinstance(shodan_cfg, dict):
+                return ""
+            return str(shodan_cfg.get("api_key", "") or "").strip()
+        except Exception as exc:
+            _logger.warning("Could not read Shodan API key from config: %s", exc)
+            return ""
+
+    def _persist_shodan_api_key_to_config(self, api_key: str) -> bool:
+        """Write shodan.api_key into the active config file."""
+        key = str(api_key or "").strip()
+        if not key:
+            return False
+
+        config_path = self._resolve_active_config_path()
+        if not config_path:
+            return False
+
+        try:
+            config_data: Dict[str, Any] = {}
+            if config_path.exists():
+                config_data = json.loads(config_path.read_text(encoding="utf-8"))
+                if not isinstance(config_data, dict):
+                    config_data = {}
+
+            shodan_cfg = config_data.get("shodan")
+            if not isinstance(shodan_cfg, dict):
+                shodan_cfg = {}
+                config_data["shodan"] = shodan_cfg
+            shodan_cfg["api_key"] = key
+
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_text(
+                json.dumps(config_data, indent=2, ensure_ascii=True) + "\n",
+                encoding="utf-8",
+            )
+            return True
+        except Exception as exc:
+            _logger.error("Failed to persist Shodan API key to config: %s", exc)
+            return False
+
+    def _prompt_for_shodan_api_key(self) -> Optional[str]:
+        """
+        Prompt the user to enter a Shodan API key.
+
+        Returns:
+            Trimmed API key string when saved, or None when cancelled.
+        """
+        dialog = tk.Toplevel(self.parent)
+        dialog.title("Shodan API Key Required")
+        dialog.geometry("540x220")
+        dialog.resizable(False, False)
+        dialog.transient(self.parent)
+        dialog.grab_set()
+        self.theme.apply_to_widget(dialog, "main_window")
+
+        container = tk.Frame(dialog)
+        self.theme.apply_to_widget(container, "main_window")
+        container.pack(fill=tk.BOTH, expand=True, padx=16, pady=14)
+
+        title_label = tk.Label(container, text="Shodan API Key Required", font=("TkDefaultFont", 11, "bold"))
+        self.theme.apply_to_widget(title_label, "label")
+        title_label.pack(anchor="w")
+
+        helper = tk.Label(
+            container,
+            text="A Shodan API key is required to start discovery scans. Enter your key to continue.",
+            justify="left",
+            wraplength=500,
+        )
+        self.theme.apply_to_widget(helper, "label")
+        helper.pack(anchor="w", pady=(8, 10))
+
+        key_row = tk.Frame(container)
+        self.theme.apply_to_widget(key_row, "main_window")
+        key_row.pack(fill=tk.X)
+
+        key_label = tk.Label(key_row, text="API Key:")
+        self.theme.apply_to_widget(key_label, "label")
+        key_label.pack(side=tk.LEFT, padx=(0, 8))
+
+        key_var = tk.StringVar()
+        key_entry = tk.Entry(key_row, textvariable=key_var, width=54)
+        self.theme.apply_to_widget(key_entry, "entry")
+        key_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        link_row = tk.Frame(container)
+        self.theme.apply_to_widget(link_row, "main_window")
+        link_row.pack(fill=tk.X, pady=(10, 0))
+
+        need_label = tk.Label(link_row, text="Need a key?")
+        self.theme.apply_to_widget(need_label, "label")
+        need_label.pack(side=tk.LEFT, padx=(0, 6))
+
+        link_label = tk.Label(
+            link_row,
+            text="https://account.shodan.io/register",
+            cursor="hand2",
+            font=("TkDefaultFont", 9, "underline"),
+            fg=self.theme.colors.get("accent", "#4da3ff"),
+        )
+        self.theme.apply_to_widget(link_label, "label")
+        link_label.configure(fg=self.theme.colors.get("accent", "#4da3ff"))
+        link_label.pack(side=tk.LEFT)
+        link_label.bind("<Button-1>", lambda _e: webbrowser.open("https://account.shodan.io/register"))
+
+        result: Dict[str, Optional[str]] = {"api_key": None}
+
+        def _cancel() -> None:
+            result["api_key"] = None
+            dialog.destroy()
+
+        def _save() -> None:
+            key_value = key_var.get().strip()
+            if not key_value:
+                messagebox.showerror("Missing API Key", "Please enter a Shodan API key.", parent=dialog)
+                return
+            result["api_key"] = key_value
+            dialog.destroy()
+
+        btn_row = tk.Frame(container)
+        self.theme.apply_to_widget(btn_row, "main_window")
+        btn_row.pack(fill=tk.X, pady=(14, 0))
+
+        cancel_btn = tk.Button(btn_row, text="Cancel", command=_cancel)
+        self.theme.apply_to_widget(cancel_btn, "button_secondary")
+        cancel_btn.pack(side=tk.RIGHT, padx=(8, 0))
+
+        save_btn = tk.Button(btn_row, text="Save & Continue", command=_save)
+        self.theme.apply_to_widget(save_btn, "button_primary")
+        save_btn.pack(side=tk.RIGHT)
+
+        key_entry.bind("<Return>", lambda _e: _save())
+        dialog.bind("<Escape>", lambda _e: _cancel())
+        key_entry.focus_set()
+
+        ensure_dialog_focus(dialog, self.parent)
+        dialog.protocol("WM_DELETE_WINDOW", _cancel)
+        self.parent.wait_window(dialog)
+        return result["api_key"]
+
+    def _ensure_shodan_api_key_for_scan(self, scan_options: Dict[str, Any]) -> bool:
+        """
+        Ensure scans have a persisted Shodan API key before launch.
+
+        If config key is missing:
+        - Use api_key_override when provided (persist and continue), or
+        - Prompt user for key (persist; abort when cancelled/failed).
+        """
+        if bool(getattr(self.backend_interface, "mock_mode", False)):
+            return True
+
+        configured_key = self._read_shodan_api_key_from_config()
+        if configured_key:
+            return True
+
+        override_key = str(scan_options.get("api_key_override") or "").strip()
+        if not override_key:
+            override_key = str(self._prompt_for_shodan_api_key() or "").strip()
+            if not override_key:
+                messagebox.showinfo(
+                    "Scan Cancelled",
+                    "Scan start was cancelled because no Shodan API key was provided.",
+                    parent=self.parent,
+                )
+                return False
+
+        if not self._persist_shodan_api_key_to_config(override_key):
+            messagebox.showerror(
+                "Configuration Error",
+                "Failed to save Shodan API key to config file.\n\n"
+                "Please check config file permissions and try again.",
+                parent=self.parent,
+            )
+            return False
+
+        # Ensure immediate run uses the newly provided key even before any
+        # backend config reload.
+        scan_options["api_key_override"] = override_key
+        return True
+
     def _start_new_scan(self, scan_options: dict) -> bool:
         """Start new scan with specified options."""
         try:
@@ -1031,6 +1238,9 @@ class DashboardWidget:
             self._check_external_scans()
             if self.scan_button_state != "idle":
                 return False  # External scan detected, don't proceed
+
+            if not self._ensure_shodan_api_key_for_scan(scan_options):
+                return False
 
             # Store scan options for post-scan batch operations
             self.current_scan_options = scan_options
@@ -2483,6 +2693,9 @@ class DashboardWidget:
         if self.scan_button_state != "idle":
             return False
 
+        if not self._ensure_shodan_api_key_for_scan(scan_options):
+            return False
+
         # BackendInterface expects a directory path; "." mirrors BackendInterface defaults.
         backend_path_obj = getattr(self.backend_interface, "backend_path", None)
         backend_path = str(backend_path_obj) if backend_path_obj else "."
@@ -2516,6 +2729,9 @@ class DashboardWidget:
         # Final race-condition check before acquiring scan lock.
         self._check_external_scans()
         if self.scan_button_state != "idle":
+            return False
+
+        if not self._ensure_shodan_api_key_for_scan(scan_options):
             return False
 
         # BackendInterface expects a directory path; "." mirrors BackendInterface defaults.
