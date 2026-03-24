@@ -2046,6 +2046,28 @@ class DatabaseReader:
 
         return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
+    def _normalize_iso_to_local_sql_timestamp(self, timestamp: Optional[str]) -> Optional[str]:
+        """
+        Convert an ISO-like timestamp string into local naive SQL datetime text.
+
+        SMB share_access rows are commonly written as local naive timestamps
+        (via datetime.now().isoformat()) in legacy write paths. This helper
+        normalizes scan window boundaries to that local-naive shape so cohort
+        filtering can match those rows reliably.
+        """
+        if not timestamp:
+            return None
+        try:
+            dt = datetime.fromisoformat(str(timestamp))
+        except (TypeError, ValueError):
+            return None
+
+        if dt.tzinfo is not None:
+            local_tz = datetime.now().astimezone().tzinfo or timezone.utc
+            dt = dt.astimezone(local_tz).replace(tzinfo=None)
+
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
+
     def get_protocol_scan_cohort_server_ids(
         self,
         host_type: Optional[str],
@@ -2068,6 +2090,8 @@ class DatabaseReader:
 
         start_utc = self._normalize_iso_to_utc_sql_timestamp(scan_start_time)
         end_utc = self._normalize_iso_to_utc_sql_timestamp(scan_end_time)
+        start_local = self._normalize_iso_to_local_sql_timestamp(scan_start_time)
+        end_local = self._normalize_iso_to_local_sql_timestamp(scan_end_time)
         if not start_utc or not end_utc:
             return set()
 
@@ -2084,21 +2108,29 @@ class DatabaseReader:
                   AND datetime(sa.test_timestamp) <= datetime(?)
             """
             sql_by_created_at = sql_by_test_ts.replace("sa.test_timestamp", "sa.created_at")
-            try:
-                with self._get_connection() as conn:
-                    rows = conn.execute(sql_by_test_ts, (start_utc, end_utc)).fetchall()
-            except sqlite3.OperationalError as exc:
-                msg = str(exc).lower()
-                if "no such column" in msg:
-                    try:
-                        with self._get_connection() as conn:
-                            rows = conn.execute(sql_by_created_at, (start_utc, end_utc)).fetchall()
-                    except sqlite3.OperationalError:
-                        return set()
-                elif "no such table" in msg:
-                    return set()
-                else:
-                    return set()
+
+            def _run_smb_window(start_ts: str, end_ts: str) -> list[sqlite3.Row]:
+                try:
+                    with self._get_connection() as conn:
+                        return conn.execute(sql_by_test_ts, (start_ts, end_ts)).fetchall()
+                except sqlite3.OperationalError as exc:
+                    msg = str(exc).lower()
+                    if "no such column" in msg:
+                        try:
+                            with self._get_connection() as conn:
+                                return conn.execute(sql_by_created_at, (start_ts, end_ts)).fetchall()
+                        except sqlite3.OperationalError:
+                            return []
+                    if "no such table" in msg:
+                        return []
+                    return []
+
+            # SMB compatibility: accept both UTC-like and local-naive scan windows.
+            # Legacy SMB write paths store local naive timestamps; newer paths can
+            # produce UTC-like values. Union both to avoid dropping valid hosts.
+            rows = _run_smb_window(start_utc, end_utc)
+            if start_local and end_local and (start_local != start_utc or end_local != end_utc):
+                rows.extend(_run_smb_window(start_local, end_local))
         else:
             # FTP/HTTP: cohort is hosts with an accessible stage-2 result in
             # this scan window.

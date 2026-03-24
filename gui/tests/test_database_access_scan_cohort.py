@@ -111,6 +111,33 @@ def test_scan_cohort_ids_smb_uses_accessible_share_window(monkeypatch):
         os.unlink(path)
 
 
+def test_scan_cohort_ids_smb_accepts_local_naive_access_timestamps(monkeypatch):
+    path = _make_db()
+    try:
+        conn = sqlite3.connect(path)
+        conn.execute(
+            "INSERT INTO smb_servers (id, ip_address, status, last_seen) VALUES (1,?,?,?)",
+            ("198.51.100.10", "active", "2026-03-24 14:05:00"),
+        )
+        # Simulate legacy/local SMB write path (datetime.now().isoformat() shape).
+        conn.execute(
+            "INSERT INTO share_access (server_id, accessible, test_timestamp) VALUES (1, 1, ?)",
+            ("2026-03-24T14:05:00",),
+        )
+        conn.commit()
+        conn.close()
+
+        reader = _reader(path, monkeypatch)
+        ids = reader.get_protocol_scan_cohort_server_ids(
+            "S",
+            "2026-03-24T14:00:00-04:00",
+            "2026-03-24T14:10:00-04:00",
+        )
+        assert ids == {1}
+    finally:
+        os.unlink(path)
+
+
 def test_scan_cohort_ids_ftp_excludes_stage1_reachability_rows(monkeypatch):
     path = _make_db()
     try:
