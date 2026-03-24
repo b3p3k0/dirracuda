@@ -301,12 +301,18 @@ def run_migrations(db_path: str) -> None:
             """
         )
 
+        # v_host_protocols can exist in legacy forms that reference
+        # main.http_servers. Drop it before any http_servers table rebuild so
+        # ALTER TABLE/RENAME during migration cannot fail on a transient missing
+        # table reference. View is recreated later in this function.
+        cur.execute("DROP VIEW IF EXISTS v_host_protocols")
+
         # --- HTTP sidecar tables (additive; SMB and FTP schemas untouched) ---
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS http_servers (
                 id           INTEGER  PRIMARY KEY AUTOINCREMENT,
-                ip_address   TEXT     NOT NULL UNIQUE,
+                ip_address   TEXT     NOT NULL,
                 host_type    TEXT     DEFAULT 'H',
                 country      TEXT,
                 country_code TEXT,
@@ -321,10 +327,12 @@ def run_migrations(db_path: str) -> None:
                 status       TEXT     DEFAULT 'active',
                 notes        TEXT,
                 updated_at   DATETIME,
-                created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+                created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(ip_address, port)
             )
             """
         )
+        _migrate_http_servers_to_endpoint_identity(cur)
 
         cur.execute(
             """
@@ -840,6 +848,144 @@ def _backfill_smb_servers_from_legacy_servers(cur: sqlite3.Cursor) -> None:
         ON CONFLICT(ip_address) DO NOTHING
         """
     )
+
+
+def _migrate_http_servers_to_endpoint_identity(cur: sqlite3.Cursor) -> None:
+    """
+    Migrate legacy http_servers schema (UNIQUE ip_address) to endpoint identity.
+
+    Legacy schema stores only one HTTP row per IP and cannot represent multiple
+    Shodan endpoints on the same host. New schema uses UNIQUE(ip_address, port).
+    """
+    cur.execute("PRAGMA table_info(http_servers)")
+    cols = [row[1] for row in cur.fetchall()]
+    if not cols:
+        return
+
+    cur.execute("PRAGMA index_list(http_servers)")
+    index_rows = cur.fetchall()
+    unique_indexes = set()
+    for idx in index_rows:
+        # PRAGMA index_list columns: seq, name, unique, origin, partial
+        idx_name = str(idx[1])
+        is_unique = int(idx[2]) == 1
+        if not is_unique:
+            continue
+        safe_idx_name = idx_name.replace('"', '""')
+        cur.execute(f'PRAGMA index_info("{safe_idx_name}")')
+        idx_cols = tuple(row[2] for row in cur.fetchall())
+        if idx_cols:
+            unique_indexes.add(idx_cols)
+
+    # Already endpoint-identity compliant.
+    if ("ip_address", "port") in unique_indexes:
+        return
+
+    def _expr(col: str, fallback: str) -> str:
+        return col if col in cols else fallback
+
+    cur.execute("PRAGMA foreign_keys")
+    fk_row = cur.fetchone()
+    fk_enabled = bool(fk_row and int(fk_row[0]) == 1)
+    if fk_enabled:
+        cur.execute("PRAGMA foreign_keys = OFF")
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS http_servers_new (
+            id           INTEGER  PRIMARY KEY AUTOINCREMENT,
+            ip_address   TEXT     NOT NULL,
+            host_type    TEXT     DEFAULT 'H',
+            country      TEXT,
+            country_code TEXT,
+            port         INTEGER  NOT NULL DEFAULT 80,
+            scheme       TEXT     DEFAULT 'http',
+            banner       TEXT,
+            title        TEXT,
+            shodan_data  TEXT,
+            first_seen   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            last_seen    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            scan_count   INTEGER  DEFAULT 1,
+            status       TEXT     DEFAULT 'active',
+            notes        TEXT,
+            updated_at   DATETIME,
+            created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(ip_address, port)
+        )
+        """
+    )
+
+    first_seen_expr = _expr("first_seen", "CURRENT_TIMESTAMP")
+    last_seen_expr = _expr("last_seen", first_seen_expr)
+    created_at_expr = _expr("created_at", first_seen_expr)
+
+    # Deduplicate endpoint collisions during migration so UNIQUE(ip_address, port)
+    # can always be installed, even on drifted schemas with accidental duplicates.
+    # We keep the most recently seen row per endpoint (tiebreaker: highest id).
+    cur.execute(
+        f"""
+        WITH ranked AS (
+            SELECT
+                id,
+                TRIM(ip_address) AS ip_address_norm,
+                COALESCE({_expr("host_type", "'H'")}, 'H') AS host_type_norm,
+                {_expr("country", "NULL")} AS country_norm,
+                {_expr("country_code", "NULL")} AS country_code_norm,
+                CAST(COALESCE({_expr("port", "80")}, 80) AS INTEGER) AS port_norm,
+                COALESCE({_expr("scheme", "'http'")}, 'http') AS scheme_norm,
+                {_expr("banner", "NULL")} AS banner_norm,
+                {_expr("title", "NULL")} AS title_norm,
+                {_expr("shodan_data", "NULL")} AS shodan_data_norm,
+                COALESCE({first_seen_expr}, CURRENT_TIMESTAMP) AS first_seen_norm,
+                COALESCE({last_seen_expr}, CURRENT_TIMESTAMP) AS last_seen_norm,
+                CAST(COALESCE({_expr("scan_count", "1")}, 1) AS INTEGER) AS scan_count_norm,
+                COALESCE({_expr("status", "'active'")}, 'active') AS status_norm,
+                {_expr("notes", "NULL")} AS notes_norm,
+                {_expr("updated_at", "NULL")} AS updated_at_norm,
+                COALESCE({created_at_expr}, CURRENT_TIMESTAMP) AS created_at_norm,
+                ROW_NUMBER() OVER (
+                    PARTITION BY TRIM(ip_address), CAST(COALESCE({_expr("port", "80")}, 80) AS INTEGER)
+                    ORDER BY
+                        COALESCE({last_seen_expr}, {first_seen_expr}, {created_at_expr}, CURRENT_TIMESTAMP) DESC,
+                        id DESC
+                ) AS rn
+            FROM http_servers
+            WHERE ip_address IS NOT NULL
+              AND TRIM(ip_address) <> ''
+        )
+        INSERT INTO http_servers_new (
+            id, ip_address, host_type, country, country_code, port, scheme,
+            banner, title, shodan_data, first_seen, last_seen, scan_count,
+            status, notes, updated_at, created_at
+        )
+        SELECT
+            id,
+            ip_address_norm,
+            host_type_norm,
+            country_norm,
+            country_code_norm,
+            port_norm,
+            scheme_norm,
+            banner_norm,
+            title_norm,
+            shodan_data_norm,
+            first_seen_norm,
+            last_seen_norm,
+            scan_count_norm,
+            status_norm,
+            notes_norm,
+            updated_at_norm,
+            created_at_norm
+        FROM ranked
+        WHERE rn = 1
+        """
+    )
+
+    cur.execute("DROP TABLE http_servers")
+    cur.execute("ALTER TABLE http_servers_new RENAME TO http_servers")
+
+    if fk_enabled:
+        cur.execute("PRAGMA foreign_keys = ON")
 
 
 __all__ = ["run_migrations"]

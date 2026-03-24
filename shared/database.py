@@ -983,10 +983,9 @@ class HttpPersistence:
             (ip_address, country, country_code, port, scheme,
              banner, title, shodan_data, last_seen, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-        ON CONFLICT(ip_address) DO UPDATE SET
+        ON CONFLICT(ip_address, port) DO UPDATE SET
             last_seen    = CURRENT_TIMESTAMP,
             scan_count   = http_servers.scan_count + 1,
-            port         = excluded.port,
             scheme       = excluded.scheme,
             banner       = excluded.banner,
             title        = excluded.title,
@@ -1006,6 +1005,9 @@ class HttpPersistence:
 
     def __init__(self, db_path: str) -> None:
         self.db_path = str(db_path)
+        # Enforce one-time/ongoing idempotent schema upgrades before HTTP writes.
+        # This prevents runtime ON CONFLICT errors when users open older DB files.
+        run_migrations(self.db_path)
 
     def upsert_http_server(
         self,
@@ -1022,7 +1024,7 @@ class HttpPersistence:
         Insert or update an http_servers row.
 
         Returns:
-            The authoritative server_id for this IP.
+            The authoritative server_id for this endpoint (ip+port).
         """
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
@@ -1030,7 +1032,8 @@ class HttpPersistence:
                 (ip, country, country_code, port, scheme, banner, title, shodan_data),
             )
             row = conn.execute(
-                "SELECT id FROM http_servers WHERE ip_address = ?", (ip,)
+                "SELECT id FROM http_servers WHERE ip_address = ? AND port = ?",
+                (ip, int(port)),
             ).fetchone()
             conn.commit()
             return row[0]
@@ -1096,7 +1099,8 @@ class HttpPersistence:
                     ),
                 )
                 row = conn.execute(
-                    "SELECT id FROM http_servers WHERE ip_address = ?", (o.ip,)
+                    "SELECT id FROM http_servers WHERE ip_address = ? AND port = ?",
+                    (o.ip, int(o.port)),
                 ).fetchone()
                 if row:
                     server_id = row[0]
@@ -1163,7 +1167,8 @@ class HttpPersistence:
                     ),
                 )
                 row = conn.execute(
-                    "SELECT id FROM http_servers WHERE ip_address = ?", (o.ip,)
+                    "SELECT id FROM http_servers WHERE ip_address = ? AND port = ?",
+                    (o.ip, int(o.port)),
                 ).fetchone()
                 if not row:
                     continue

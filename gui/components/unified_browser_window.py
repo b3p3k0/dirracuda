@@ -973,7 +973,7 @@ class HttpBrowserWindow(UnifiedBrowserCore):
         self._build_window()
 
         # Apply cached probe snapshot if available
-        self._apply_probe_snapshot(load_probe_result_for_host(ip_address, "H"))
+        self._apply_probe_snapshot(load_probe_result_for_host(ip_address, "H", port=port))
 
         # Start navigating to root
         self._navigate_to("/")

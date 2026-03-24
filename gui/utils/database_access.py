@@ -944,6 +944,62 @@ class DatabaseReader:
         self.cache.clear()
         self.cache_timestamps.clear()
 
+    def _resolve_protocol_server_id(
+        self,
+        cur: sqlite3.Cursor,
+        *,
+        ip_address: str,
+        host_type: str,
+        server_table: str,
+        protocol_server_id: Optional[int] = None,
+        port: Optional[int] = None,
+    ) -> Optional[int]:
+        """
+        Resolve authoritative server_id for protocol-aware writes.
+
+        Resolution order:
+        1. Explicit protocol_server_id (if present and exists)
+        2. HTTP endpoint key (ip + port) when host_type='H' and port is provided
+        3. Legacy fallback by ip_address (most recent row)
+        """
+        if protocol_server_id is not None:
+            try:
+                psid = int(protocol_server_id)
+            except (TypeError, ValueError):
+                psid = None
+            if psid is not None:
+                cur.execute(f"SELECT id FROM {server_table} WHERE id = ?", (psid,))
+                row = cur.fetchone()
+                if row:
+                    return int(row["id"])
+
+        if host_type == "H" and port is not None and ip_address:
+            try:
+                endpoint_port = int(port)
+            except (TypeError, ValueError):
+                endpoint_port = None
+            if endpoint_port is not None:
+                cur.execute(
+                    "SELECT id FROM http_servers WHERE ip_address = ? AND port = ? "
+                    "ORDER BY last_seen DESC, id DESC LIMIT 1",
+                    (ip_address, endpoint_port),
+                )
+                row = cur.fetchone()
+                if row:
+                    return int(row["id"])
+
+        if ip_address:
+            cur.execute(
+                f"SELECT id FROM {server_table} WHERE ip_address = ? "
+                "ORDER BY last_seen DESC, id DESC LIMIT 1",
+                (ip_address,),
+            )
+            row = cur.fetchone()
+            if row:
+                return int(row["id"])
+
+        return None
+
     # --- Write helpers for GUI flags/probe cache -------------------------
 
     def upsert_user_flags(self, ip_address: str, *, favorite: Optional[bool] = None,
@@ -967,7 +1023,9 @@ class DatabaseReader:
     def upsert_user_flags_for_host(self, ip_address: str, host_type: str, *,
                                     favorite: Optional[bool] = None,
                                     avoid: Optional[bool] = None,
-                                    notes: Optional[str] = None) -> None:
+                                    notes: Optional[str] = None,
+                                    protocol_server_id: Optional[int] = None,
+                                    port: Optional[int] = None) -> None:
         """Route favorite/avoid/notes write to SMB or FTP tables based on host_type.
 
         Args:
@@ -995,11 +1053,16 @@ class DatabaseReader:
         try:
             with self._get_connection() as conn:
                 cur = conn.cursor()
-                cur.execute(f"SELECT id FROM {server_table} WHERE ip_address = ?", (ip_address,))
-                row = cur.fetchone()
-                if not row:
+                server_id = self._resolve_protocol_server_id(
+                    cur,
+                    ip_address=ip_address,
+                    host_type=host_type,
+                    server_table=server_table,
+                    protocol_server_id=protocol_server_id,
+                    port=port,
+                )
+                if server_id is None:
                     return
-                server_id = row["id"]
                 cur.execute(
                     f"SELECT favorite, avoid, notes FROM {flags_table} WHERE server_id = ?",
                     (server_id,),
@@ -1042,7 +1105,9 @@ class DatabaseReader:
                                      snapshot_path: Optional[str] = None,
                                      accessible_dirs_count: Optional[int] = None,
                                      accessible_dirs_list: Optional[str] = None,
-                                     accessible_files_count: Optional[int] = None) -> None:
+                                     accessible_files_count: Optional[int] = None,
+                                     protocol_server_id: Optional[int] = None,
+                                     port: Optional[int] = None) -> None:
         """Route probe cache write to SMB, FTP, or HTTP tables based on host_type.
 
         Args:
@@ -1074,11 +1139,16 @@ class DatabaseReader:
         try:
             with self._get_connection() as conn:
                 cur = conn.cursor()
-                cur.execute(f"SELECT id FROM {server_table} WHERE ip_address = ?", (ip_address,))
-                row = cur.fetchone()
-                if not row:
+                server_id = self._resolve_protocol_server_id(
+                    cur,
+                    ip_address=ip_address,
+                    host_type=host_type,
+                    server_table=server_table,
+                    protocol_server_id=protocol_server_id,
+                    port=port,
+                )
+                if server_id is None:
                     return
-                server_id = row["id"]
                 if host_type == 'F':
                     cur.execute(
                         f"""
@@ -1158,7 +1228,9 @@ class DatabaseReader:
         self.clear_cache()
 
     def upsert_extracted_flag_for_host(self, ip_address: str, host_type: str,
-                                        extracted: bool = True) -> None:
+                                        extracted: bool = True,
+                                        protocol_server_id: Optional[int] = None,
+                                        port: Optional[int] = None) -> None:
         """Route extracted flag write to SMB or FTP tables based on host_type.
 
         Args:
@@ -1184,11 +1256,16 @@ class DatabaseReader:
         try:
             with self._get_connection() as conn:
                 cur = conn.cursor()
-                cur.execute(f"SELECT id FROM {server_table} WHERE ip_address = ?", (ip_address,))
-                row = cur.fetchone()
-                if not row:
+                server_id = self._resolve_protocol_server_id(
+                    cur,
+                    ip_address=ip_address,
+                    host_type=host_type,
+                    server_table=server_table,
+                    protocol_server_id=protocol_server_id,
+                    port=port,
+                )
+                if server_id is None:
                     return
-                server_id = row["id"]
                 cur.execute(
                     f"""
                     INSERT INTO {cache_table} (server_id, extracted, updated_at)
@@ -1211,7 +1288,9 @@ class DatabaseReader:
 
     def upsert_rce_status_for_host(self, ip_address: str, host_type: str,
                                     rce_status: str,
-                                    verdict_summary: Optional[str] = None) -> None:
+                                    verdict_summary: Optional[str] = None,
+                                    protocol_server_id: Optional[int] = None,
+                                    port: Optional[int] = None) -> None:
         """Route RCE analysis status write to SMB or FTP tables based on host_type.
 
         Args:
@@ -1242,11 +1321,16 @@ class DatabaseReader:
         try:
             with self._get_connection() as conn:
                 cur = conn.cursor()
-                cur.execute(f"SELECT id FROM {server_table} WHERE ip_address = ?", (ip_address,))
-                row = cur.fetchone()
-                if not row:
+                server_id = self._resolve_protocol_server_id(
+                    cur,
+                    ip_address=ip_address,
+                    host_type=host_type,
+                    server_table=server_table,
+                    protocol_server_id=protocol_server_id,
+                    port=port,
+                )
+                if server_id is None:
                     return
-                server_id = row["id"]
                 cur.execute(
                     f"""
                     INSERT INTO {cache_table} (server_id, rce_status, rce_verdict_summary, updated_at)
@@ -1349,12 +1433,16 @@ class DatabaseReader:
                 "error": str(e)
             }
 
-    def bulk_delete_rows(self, row_specs: List[Tuple[str, str]]) -> Dict[str, Any]:
+    def bulk_delete_rows(self, row_specs: List[Tuple]) -> Dict[str, Any]:
         """
-        Delete rows by (host_type, ip_address) pairs.
+        Delete rows by protocol row specs.
 
         'S' tuples → DELETE FROM smb_servers WHERE ip_address IN (...)
         'F' tuples → DELETE FROM ftp_servers WHERE ip_address IN (...)
+        'H' tuples may be either:
+          - (host_type, ip_address)               [legacy; deletes all HTTP endpoints for IP]
+          - (host_type, ip_address, port)         [endpoint-aware; deletes one HTTP row]
+
         No cross-protocol deletion possible by construction.
 
         Returns:
@@ -1367,9 +1455,33 @@ class DatabaseReader:
         if not row_specs:
             return {"deleted_count": 0, "deleted_ips": [], "deleted_smb_ips": [], "error": None}
 
-        smb_ips  = list({ip for ht, ip in row_specs if ht == "S" and ip})
-        ftp_ips  = list({ip for ht, ip in row_specs if ht == "F" and ip})
-        http_ips = list({ip for ht, ip in row_specs if ht == "H" and ip})
+        smb_set: Set[str] = set()
+        ftp_set: Set[str] = set()
+        http_specs: List[Tuple[str, Optional[int]]] = []
+        for spec in row_specs:
+            if not spec:
+                continue
+            ht = str(spec[0]).upper() if len(spec) > 0 else ""
+            ip = str(spec[1]).strip() if len(spec) > 1 and spec[1] else ""
+            if not ip:
+                continue
+            if ht == "S":
+                smb_set.add(ip)
+                continue
+            if ht == "F":
+                ftp_set.add(ip)
+                continue
+            if ht != "H":
+                continue
+            port = None
+            if len(spec) > 2 and spec[2] is not None:
+                try:
+                    port = int(spec[2])
+                except (TypeError, ValueError):
+                    port = None
+            http_specs.append((ip, port))
+        smb_ips = list(smb_set)
+        ftp_ips = list(ftp_set)
 
         total_deleted_count = 0
         all_deleted_ips: List[str] = []
@@ -1444,26 +1556,32 @@ class DatabaseReader:
                 error_parts.append(f"FTP delete error: {exc}")
 
         # --- HTTP delete ---
-        for i in range(0, len(http_ips), batch_size):
-            batch = http_ips[i:i + batch_size]
+        for ip, port in http_specs:
             try:
                 with self._get_connection() as conn:
                     cur = conn.cursor()
-                    placeholders = ','.join('?' * len(batch))
-                    cur.execute(
-                        f"SELECT ip_address FROM http_servers WHERE ip_address IN ({placeholders})",
-                        batch,
-                    )
-                    found_http = [row["ip_address"] for row in cur.fetchall()]
-                    if not found_http:
+                    if port is None:
+                        cur.execute(
+                            "SELECT id, ip_address FROM http_servers WHERE ip_address = ?",
+                            (ip,),
+                        )
+                    else:
+                        cur.execute(
+                            "SELECT id, ip_address FROM http_servers WHERE ip_address = ? AND port = ?",
+                            (ip, port),
+                        )
+                    rows = cur.fetchall()
+                    found_ids = [int(row["id"]) for row in rows]
+                    found_ips = [row["ip_address"] for row in rows]
+                    if not found_ids:
                         continue
-                    fp = ','.join('?' * len(found_http))
+                    placeholders = ','.join('?' * len(found_ids))
                     # http_user_flags and http_probe_cache CASCADE from http_servers
-                    cur.execute(f"DELETE FROM http_servers WHERE ip_address IN ({fp})", found_http)
+                    cur.execute(f"DELETE FROM http_servers WHERE id IN ({placeholders})", found_ids)
                     n = cur.rowcount
                     if n > 0:
                         conn.commit()
-                        _append_unique(found_http)
+                        _append_unique(found_ips)
                         total_deleted_count += n
             except sqlite3.OperationalError as exc:
                 if "no such table: http_servers" in str(exc).lower():
@@ -1760,22 +1878,49 @@ class DatabaseReader:
         except sqlite3.OperationalError:
             return 0
 
-    def get_http_server_detail(self, ip_address: str) -> Optional[Dict[str, Any]]:
+    def get_http_server_detail(
+        self,
+        ip_address: str,
+        *,
+        protocol_server_id: Optional[int] = None,
+        port: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
         """
-        Return {scheme, port} for the most-recently-seen http_servers row for ip_address.
+        Return HTTP endpoint detail for the requested row.
+
+        Resolution order:
+        1. protocol_server_id (authoritative per-row identity)
+        2. ip_address + port endpoint
+        3. most-recently-seen row for ip_address (legacy fallback)
 
         Returns None if no row found or HTTP tables are absent.
         Silently swallows all exceptions so missing HTTP tables are non-fatal.
         """
         try:
             with self._get_connection() as conn:
-                row = conn.execute(
-                    "SELECT scheme, port FROM http_servers WHERE ip_address = ? "
-                    "ORDER BY last_seen DESC LIMIT 1",
-                    (ip_address,)
-                ).fetchone()
+                if protocol_server_id is not None:
+                    row = conn.execute(
+                        "SELECT id, scheme, port FROM http_servers WHERE id = ?",
+                        (int(protocol_server_id),),
+                    ).fetchone()
+                elif port is not None:
+                    row = conn.execute(
+                        "SELECT id, scheme, port FROM http_servers WHERE ip_address = ? AND port = ? "
+                        "ORDER BY last_seen DESC, id DESC LIMIT 1",
+                        (ip_address, int(port)),
+                    ).fetchone()
+                else:
+                    row = conn.execute(
+                        "SELECT id, scheme, port FROM http_servers WHERE ip_address = ? "
+                        "ORDER BY last_seen DESC, id DESC LIMIT 1",
+                        (ip_address,),
+                    ).fetchone()
                 if row:
-                    return {"scheme": row[0] or "http", "port": int(row[1] or 80)}
+                    return {
+                        "protocol_server_id": int(row[0]),
+                        "scheme": row[1] or "http",
+                        "port": int(row[2] or 80),
+                    }
                 return None
         except Exception:
             return None

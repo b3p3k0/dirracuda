@@ -37,7 +37,7 @@ class HttpAccessOutcome:
     ip: str
     country: str
     country_code: str
-    port: int               # winning port (candidate port or canonical 80/443)
+    port: int               # winning port (always the Shodan-reported candidate port)
     scheme: str             # winning scheme ('http' or 'https')
     banner: str
     title: str              # Shodan title; overridden if live response has better title

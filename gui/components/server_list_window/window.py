@@ -1058,7 +1058,13 @@ class ServerListWindow(ServerListWindowActionsMixin):
         server[field] = new_value
 
         try:
-            self.db_reader.upsert_user_flags_for_host(ip, host_type, **{field: bool(new_value)})
+            self.db_reader.upsert_user_flags_for_host(
+                ip,
+                host_type,
+                protocol_server_id=server.get("protocol_server_id"),
+                port=server.get("port"),
+                **{field: bool(new_value)},
+            )
         except Exception as exc:
             _logger.warning("Flag toggle DB write failed for %s (%s): %s", row_key, field, exc)
             # Revert in-memory state

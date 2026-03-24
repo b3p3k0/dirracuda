@@ -177,5 +177,5 @@ def run_http_probe(
         "errors": errors,
     }
 
-    save_http_probe_result(ip, snapshot)
+    save_http_probe_result(ip, snapshot, port=port)
     return snapshot

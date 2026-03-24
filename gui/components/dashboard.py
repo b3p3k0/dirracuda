@@ -1773,7 +1773,10 @@ class DashboardWidget:
                 ]
                 accessible_dirs_count = len(dir_names)
                 accessible_dirs_list = ",".join(dir_names)
-                snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type)
+                try:
+                    snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type, port=port)
+                except TypeError:
+                    snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type)
 
                 try:
                     if self.db_reader:
@@ -1811,12 +1814,38 @@ class DashboardWidget:
         # HTTP probe path
         elif host_type == "H":
             try:
+                protocol_server_id = server.get("protocol_server_id")
+                try:
+                    http_port = int(server.get("port")) if server.get("port") is not None else None
+                except (TypeError, ValueError):
+                    http_port = None
+                http_scheme = server.get("scheme")
+                if self.db_reader and (http_scheme is None or http_port is None):
+                    detail = self.db_reader.get_http_server_detail(
+                        ip_address,
+                        protocol_server_id=protocol_server_id,
+                        port=http_port,
+                    )
+                    if http_port is None:
+                        try:
+                            http_port = int((detail or {}).get("port") or 80)
+                        except (TypeError, ValueError):
+                            http_port = 80
+                    if http_scheme is None:
+                        http_scheme = (detail or {}).get("scheme") or ("https" if http_port == 443 else "http")
+                if http_port is None:
+                    http_port = 80
+                if http_scheme is None:
+                    http_scheme = "https" if http_port == 443 else "http"
                 snapshot = dispatch_probe_run(
                     ip_address, host_type,
                     max_directories=int(max_dirs),
                     max_files=int(max_files),
                     timeout_seconds=int(timeout_seconds),
                     cancel_event=cancel_event,
+                    port=http_port,
+                    scheme=http_scheme,
+                    protocol_server_id=protocol_server_id,
                     db_reader=self.db_reader,
                 )
                 analysis = probe_patterns.attach_indicator_analysis(snapshot, self.indicator_patterns)
@@ -1838,7 +1867,10 @@ class DashboardWidget:
                 total = len(dir_names) + total_files
                 accessible_dirs_count = len(dir_names)
                 accessible_dirs_list = ",".join(dir_names)
-                snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type)
+                try:
+                    snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type, port=http_port)
+                except TypeError:
+                    snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type)
 
                 try:
                     if self.db_reader:
@@ -1851,6 +1883,8 @@ class DashboardWidget:
                             accessible_dirs_count=accessible_dirs_count,
                             accessible_dirs_list=accessible_dirs_list,
                             accessible_files_count=total_files,
+                            protocol_server_id=protocol_server_id,
+                            port=http_port,
                         )
                 except Exception:
                     pass

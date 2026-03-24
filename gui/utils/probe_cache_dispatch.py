@@ -23,6 +23,8 @@ _UNSET = object()
 def load_probe_result_for_host(
     ip_address: str,
     host_type: str,
+    *,
+    port: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
     """Return cached probe snapshot for ip_address/host_type, or None.
 
@@ -39,13 +41,17 @@ def load_probe_result_for_host(
     if _ht == "F":
         return ftp_probe_cache.load_ftp_probe_result(ip_address)
     if _ht == "H":
-        return http_probe_cache.load_http_probe_result(ip_address)
+        if port is None:
+            return http_probe_cache.load_http_probe_result(ip_address)
+        return http_probe_cache.load_http_probe_result(ip_address, port=port)
     return probe_cache.load_probe_result(ip_address)
 
 
 def get_probe_snapshot_path_for_host(
     ip_address: str,
     host_type: str,
+    *,
+    port: Optional[int] = None,
 ) -> Optional[str]:
     """Return cache file path string for ip_address/host_type, or None.
 
@@ -59,7 +65,9 @@ def get_probe_snapshot_path_for_host(
     if _ht == "F":
         return str(ftp_probe_cache.get_ftp_cache_path(ip_address))
     if _ht == "H":
-        return str(http_probe_cache.get_http_cache_path(ip_address))
+        if port is None:
+            return str(http_probe_cache.get_http_cache_path(ip_address))
+        return str(http_probe_cache.get_http_cache_path(ip_address, port=port))
     return None
 
 
@@ -71,8 +79,9 @@ def dispatch_probe_run(
     max_files: int,
     timeout_seconds: int,
     cancel_event,
-    port: int = 21,
+    port: Optional[int] = None,
     scheme: Optional[str] = None,
+    protocol_server_id: Optional[int] = None,
     db_reader=None,
     shares: Optional[List[str]] = None,
     username=_UNSET,
@@ -88,16 +97,20 @@ def dispatch_probe_run(
     host_type: 'S' = SMB, 'F' = FTP, 'H' = HTTP (coerced/uppercased).
     username/password: omit (leave as _UNSET) to let probe_runner use its own
         defaults (DEFAULT_USERNAME = "guest"). Pass explicit values to override.
-    port: FTP only — caller pre-extracts from server data. HTTP port is resolved
-        from db_reader.get_http_server_detail() when scheme is None.
+    port: caller-selected endpoint port (FTP or HTTP). When omitted for HTTP,
+        db_reader.get_http_server_detail() is used as fallback.
     """
     _ht = str(host_type or "S").strip().upper()
 
     if _ht == "F":
+        try:
+            ftp_port = int(port) if port is not None else 21
+        except (TypeError, ValueError):
+            ftp_port = 21
         max_entries = max(1, max_directories * max_files)
         return ftp_probe_runner.run_ftp_probe(
             ip_address,
-            port=port,
+            port=ftp_port,
             max_entries=max_entries,
             max_directories=max_directories,
             max_files=max_files,
@@ -107,14 +120,31 @@ def dispatch_probe_run(
         )
 
     if _ht == "H":
+        detail: Optional[Dict[str, Any]] = None
+        try:
+            http_port = int(port) if port is not None else None
+        except (TypeError, ValueError):
+            http_port = None
+
+        if db_reader and (scheme is None or http_port is None):
+            if protocol_server_id is None and http_port is None:
+                detail = db_reader.get_http_server_detail(ip_address)
+            else:
+                detail = db_reader.get_http_server_detail(
+                    ip_address,
+                    protocol_server_id=protocol_server_id,
+                    port=http_port,
+                )
+
+        if http_port is None:
+            http_port = int((detail or {}).get("port") or 80)
         if scheme is None:
-            _detail = db_reader.get_http_server_detail(ip_address) if db_reader else None
-            port = int((_detail or {}).get("port") or 80)
-            scheme = (_detail or {}).get("scheme") or "http"
+            scheme = (detail or {}).get("scheme") or ("https" if http_port == 443 else "http")
+
         max_entries = max(1, max_directories * max_files)
         return http_probe_runner.run_http_probe(
             ip_address,
-            port=port,
+            port=http_port,
             scheme=scheme,
             allow_insecure_tls=True,
             max_entries=max_entries,

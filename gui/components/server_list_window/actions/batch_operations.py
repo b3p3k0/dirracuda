@@ -223,6 +223,8 @@ class ServerListWindowBatchOperationsMixin:
                         accessible_dirs_count=None,
                         accessible_dirs_list=None,
                         accessible_files_count=None,
+                        protocol_server_id=server_data.get("protocol_server_id"),
+                        port=server_data.get("port"),
                     )
             except Exception as exc:
                 _logger.warning(
@@ -296,7 +298,15 @@ class ServerListWindowBatchOperationsMixin:
             ip = t.get("ip_address", "").strip()
             if ht not in ("S", "F", "H") or not ip:
                 continue
-            row_specs.append((ht, ip))
+            if ht == "H":
+                port_value = (t.get("data") or {}).get("port")
+                try:
+                    port = int(port_value) if port_value not in (None, "") else None
+                except (TypeError, ValueError):
+                    port = None
+                row_specs.append((ht, ip, port))
+            else:
+                row_specs.append((ht, ip))
 
         if not row_specs:
             messagebox.showwarning("No Valid Targets", "No valid server rows found to delete.", parent=self.window)
@@ -575,9 +585,22 @@ class ServerListWindowBatchOperationsMixin:
             return
 
         elif host_type == "H":
-            detail = self.db_reader.get_http_server_detail(ip_addr) if self.db_reader else None
-            port = int((detail or {}).get("port") or 80)
-            scheme = (detail or {}).get("scheme") or "http"
+            row_data = target.get("data", {}) or {}
+            row_psid = row_data.get("protocol_server_id")
+            row_port = row_data.get("port")
+            detail = (
+                self.db_reader.get_http_server_detail(
+                    ip_addr,
+                    protocol_server_id=row_psid,
+                    port=row_port,
+                )
+                if self.db_reader else None
+            )
+            try:
+                port = int((detail or {}).get("port") or row_port or 80)
+            except (TypeError, ValueError):
+                port = 80
+            scheme = (detail or {}).get("scheme") or ("https" if port == 443 else "http")
             banner = target.get("data", {}).get("banner")
             from gui.components.unified_browser_window import open_ftp_http_browser
             open_ftp_http_browser(
@@ -695,5 +718,7 @@ class ServerListWindowBatchOperationsMixin:
             "shares": self._parse_accessible_shares(server_data.get("accessible_shares_list")),
             "row_key": server_data.get("row_key"),
             "host_type": server_data.get("host_type", "S"),
+            "protocol_server_id": server_data.get("protocol_server_id"),
+            "port": server_data.get("port"),
             "data": server_data
         }

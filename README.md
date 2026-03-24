@@ -104,15 +104,13 @@ The main window. From here you can:
 
 ### Discovery
 
-Triggered from **▶ Start Scan** with the protocol selected. All three follow the same pipeline: Shodan query → reachability check → protocol-specific verification. Only hosts that pass get stored; failures are recorded with a reason code so you can see exactly where each candidate dropped out. Scan summary shows Shodan candidates vs. verified count. The same host registry handles all three protocols — the same IP can carry SMB, FTP, and HTTP entries without collision.
+Triggered from **▶ Start Scan** with the protocol selected. All three follow the same pipeline: Shodan query → reachability check → protocol-specific verification. Only hosts that pass get stored; failures are recorded with a reason code so you can see exactly where each candidate dropped out. Scan summary shows Shodan candidates vs. verified count. The same host registry handles all three protocols — the same IP can carry SMB, FTP, and multiple HTTP endpoint entries without collision.
 
 **SMB** (port 445) — default dork: `smb authentication: disabled product:"Samba"`. Applies two extra pre-connection filters: org filtering (drops excluded ISPs and hosting providers) and 30-day deduplication (CLI overrides: `--rescan-all`, `--rescan-failed`). Verification tries Anonymous, Guest/blank, and Guest/Guest in sequence; whichever succeeds is recorded alongside country and timestamp, so auth method drift shows up across rescans. Two security modes: **Cautious** (default) restricts to signed SMB2+/SMB3 and rejects SMB1; **Legacy** lifts those restrictions and tends to find more targets.
 
 **FTP** (port 21) — default dork: `port:21 "230 Login successful"`. Verification includes anonymous login and root directory listing. Failure codes: `connect_fail`, `auth_fail`, `list_fail`, `timeout`.
 
-**HTTP** — default dork: `http.title:"Index of /"`, checks both HTTP and HTTPS ports.
-
-**Post-scan bulk probe/extract scope** — when bulk probe or bulk extract is enabled from the scan flow, targets are limited to accessible hosts from the scan that just completed (same protocol). The app no longer widens that target set from "recent" database rows. Manual probe actions launched from Server List continue to use your explicit row selection and are unchanged.
+**HTTP** — default dork: `http.title:"Index of /"`. Verification stays locked to the exact Shodan hit endpoint (same IP + same port), and tests HTTP and/or HTTPS on that port based on your config toggles. No implicit fallback to canonical `80/443` is performed.
 
 **Post-scan bulk probe/extract scope** — when bulk probe or bulk extract is enabled from the scan flow, targets are limited to accessible hosts from the scan that just completed (same protocol). The app no longer widens that target set from "recent" database rows. Manual probe actions launched from Server List continue to use your explicit row selection and are unchanged.
 

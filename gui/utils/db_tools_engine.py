@@ -1097,9 +1097,13 @@ class DBToolsEngine:
     ) -> Tuple[int, int, int]:
         """Upsert one HTTP CSV row according to conflict strategy."""
         cursor = conn.cursor()
+        try:
+            endpoint_port = int(row.get('port') if row.get('port') not in (None, "") else 80)
+        except (TypeError, ValueError):
+            endpoint_port = 80
         cursor.execute(
-            "SELECT id, last_seen FROM http_servers WHERE ip_address = ?",
-            (row['ip_address'],),
+            "SELECT id, last_seen FROM http_servers WHERE ip_address = ? AND port = ?",
+            (row['ip_address'], endpoint_port),
         )
         current = cursor.fetchone()
         if current is None:
@@ -1112,7 +1116,7 @@ class DBToolsEngine:
                 row['ip_address'],
                 row['country'],
                 row['country_code'],
-                row['port'],
+                endpoint_port,
                 row['scheme'] or 'http',
                 row['banner'],
                 row['title'],
@@ -1149,11 +1153,11 @@ class DBToolsEngine:
                    scan_count = ?,
                    status = ?,
                    notes = ?
-             WHERE ip_address = ?
+             WHERE ip_address = ? AND port = ?
         """, (
             row['country'],
             row['country_code'],
-            row['port'],
+            endpoint_port,
             row['scheme'] or 'http',
             row['banner'],
             row['title'],
@@ -1164,6 +1168,7 @@ class DBToolsEngine:
             row['status'],
             row['notes'],
             row['ip_address'],
+            endpoint_port,
         ))
         return 0, 1, 0
 
@@ -1847,7 +1852,7 @@ class DBToolsEngine:
         strategy: MergeConflictStrategy,
     ) -> Tuple[Dict[str, int], Dict[int, int]]:
         """
-        Merge http_servers rows by ip_address.
+        Merge http_servers rows by endpoint (ip_address + port).
 
         Returns:
             Tuple of (stats dict, id_mapping dict)
@@ -1873,9 +1878,13 @@ class DBToolsEngine:
         for row in ext_rows:
             ext_id = row['id']
             ip = row['ip_address']
+            try:
+                endpoint_port = int(row['port']) if row['port'] is not None else 80
+            except (TypeError, ValueError):
+                endpoint_port = 80
             cur_cursor.execute(
-                "SELECT id, last_seen FROM http_servers WHERE ip_address = ?",
-                (ip,),
+                "SELECT id, last_seen FROM http_servers WHERE ip_address = ? AND port = ?",
+                (ip, endpoint_port),
             )
             cur_row = cur_cursor.fetchone()
 
@@ -1889,7 +1898,7 @@ class DBToolsEngine:
                     ip,
                     row['country'],
                     row['country_code'],
-                    row['port'] if row['port'] is not None else 80,
+                    endpoint_port,
                     row['scheme'] or 'http',
                     row['banner'],
                     row['title'],

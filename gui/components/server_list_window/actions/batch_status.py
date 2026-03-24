@@ -767,9 +767,30 @@ class ServerListWindowBatchStatusMixin:
             """Mark host as extracted in-memory and persist to DB."""
             if not ip_address:
                 return
+            target_server = None
+            for server in self.all_servers:
+                if row_key is not None:
+                    if server.get("row_key") == row_key:
+                        target_server = server
+                        break
+                elif server.get("ip_address") == ip_address and server.get("host_type", "S") == host_type:
+                    target_server = server
+                    break
             if self.db_reader:
                 try:
-                    self.db_reader.upsert_extracted_flag_for_host(ip_address, host_type, True)
+                    kw = {}
+                    psid = (target_server or {}).get("protocol_server_id")
+                    port = (target_server or {}).get("port")
+                    if psid is not None:
+                        kw["protocol_server_id"] = psid
+                    if port is not None:
+                        kw["port"] = port
+                    self.db_reader.upsert_extracted_flag_for_host(
+                        ip_address,
+                        host_type,
+                        True,
+                        **kw,
+                    )
                 except Exception:
                     pass
 

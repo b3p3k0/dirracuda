@@ -78,7 +78,11 @@ def show_server_detail_popup(parent_window, server_data, theme, settings_manager
     # Initial render (includes cached probe data if available)
     ip_address = server_data.get('ip_address', 'Unknown')
     host_type = server_data.get("host_type", "S")
-    cached_probe = load_probe_result_for_host(ip_address, host_type)
+    cached_probe = load_probe_result_for_host(
+        ip_address,
+        host_type,
+        port=(server_data.get("port") if str(host_type).upper() == "H" else None),
+    )
     if cached_probe and indicator_patterns:
         probe_patterns.attach_indicator_analysis(cached_probe, indicator_patterns)
     _render_server_details(text_widget, server_data, cached_probe)
@@ -138,6 +142,8 @@ def show_server_detail_popup(parent_window, server_data, theme, settings_manager
                         server_data.get("ip_address", ""),
                         server_data.get("host_type", "S"),
                         notes=new_notes,
+                        protocol_server_id=server_data.get("protocol_server_id"),
+                        port=server_data.get("port"),
                     )
                 except Exception:
                     pass
@@ -157,9 +163,21 @@ def show_server_detail_popup(parent_window, server_data, theme, settings_manager
                     _db = DatabaseReader(settings_manager.get_database_path())
                 except Exception:
                     pass
-            detail = _db.get_http_server_detail(ip_address) if _db else None
-            port = int((detail or {}).get("port") or 80)
-            scheme = (detail or {}).get("scheme") or "http"
+            row_psid = server_data.get("protocol_server_id")
+            row_port = server_data.get("port")
+            detail = (
+                _db.get_http_server_detail(
+                    ip_address,
+                    protocol_server_id=row_psid,
+                    port=row_port,
+                )
+                if _db else None
+            )
+            try:
+                port = int((detail or {}).get("port") or row_port or 80)
+            except (TypeError, ValueError):
+                port = 80
+            scheme = (detail or {}).get("scheme") or ("https" if port == 443 else "http")
             config_path = None
             if settings_manager:
                 config_path = settings_manager.get_setting('backend.config_path', None)
@@ -665,13 +683,34 @@ def _start_probe(
                     _ftp_port = int(server_data.get("port") or 21)
                 except Exception:
                     _ftp_port = 21
+            _http_port = None
+            _http_scheme = None
+            _protocol_server_id = server_data.get("protocol_server_id")
+            if host_type == "H":
+                try:
+                    _http_port = int(server_data.get("port")) if server_data.get("port") is not None else None
+                except (TypeError, ValueError):
+                    _http_port = None
+                _detail = (
+                    db_accessor.get_http_server_detail(
+                        ip_address,
+                        protocol_server_id=_protocol_server_id,
+                        port=_http_port,
+                    )
+                    if db_accessor else None
+                )
+                if _http_port is None:
+                    _http_port = int((_detail or {}).get("port") or 80)
+                _http_scheme = (_detail or {}).get("scheme") or ("https" if _http_port == 443 else "http")
             result = dispatch_probe_run(
                 ip_address, host_type,
                 max_directories=int(config["max_directories"]),
                 max_files=int(config["max_files"]),
                 timeout_seconds=int(config["timeout_seconds"]),
                 cancel_event=cancel_event,
-                port=_ftp_port,
+                port=_ftp_port if host_type == "F" else _http_port,
+                scheme=_http_scheme,
+                protocol_server_id=_protocol_server_id,
                 db_reader=db_accessor,
                 shares=accessible_shares,
                 enable_rce=enable_rce,
@@ -694,12 +733,16 @@ def _start_probe(
                 server_data["accessible_shares_list"] = ",".join(dir_names)
                 if db_accessor:
                     try:
+                        try:
+                            snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type, port=_ftp_port)
+                        except TypeError:
+                            snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type)
                         db_accessor.upsert_probe_cache_for_host(
                             ip_address,
                             "F",
                             status='issue' if analysis.get("is_suspicious") else 'clean',
                             indicator_matches=len(analysis.get("matches", [])),
-                            snapshot_path=get_probe_snapshot_path_for_host(ip_address, host_type),
+                            snapshot_path=snapshot_path,
                             accessible_dirs_count=len(dir_names),
                             accessible_dirs_list=",".join(dir_names),
                         )
@@ -724,15 +767,21 @@ def _start_probe(
                 server_data["accessible_shares_list"] = ",".join(dir_names)
                 if db_accessor:
                     try:
+                        try:
+                            snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type, port=_http_port)
+                        except TypeError:
+                            snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type)
                         db_accessor.upsert_probe_cache_for_host(
                             ip_address,
                             "H",
                             status='issue' if analysis.get("is_suspicious") else 'clean',
                             indicator_matches=len(analysis.get("matches", [])),
-                            snapshot_path=get_probe_snapshot_path_for_host(ip_address, host_type),
+                            snapshot_path=snapshot_path,
                             accessible_dirs_count=len(dir_names),
                             accessible_dirs_list=",".join(dir_names),
                             accessible_files_count=total_files,
+                            protocol_server_id=_protocol_server_id,
+                            port=_http_port,
                         )
                     except Exception:
                         pass
@@ -1041,6 +1090,8 @@ def _start_extract(
                                 ip_address,
                                 server_data.get("host_type", "S"),
                                 extracted=True,
+                                protocol_server_id=server_data.get("protocol_server_id"),
+                                port=server_data.get("port"),
                             )
                     server_data["extracted"] = 1
                     server_data["extract_status_emoji"] = "✔"
