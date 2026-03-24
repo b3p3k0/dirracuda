@@ -360,7 +360,7 @@ class UnifiedScanDialog:
         self.theme.create_styled_label(frame, "Start Scan", "heading").pack(anchor="w")
         self.theme.create_styled_label(
             frame,
-            "Launch SMB, FTP, and HTTP scans from one dialog. Selected protocols run sequentially.",
+            "Launch SMB, FTP, and HTTP scans from one dialog. Selected protocols run sequentially and stop on first failure.",
             "body",
             fg=self.theme.colors["text_secondary"],
         ).pack(anchor="w", pady=(5, 0))
@@ -664,7 +664,7 @@ class UnifiedScanDialog:
 
         info = self.theme.create_styled_label(
             container,
-            "Selected protocols run sequentially in one queue.",
+            "Selected protocols run sequentially in one queue and stop on first failure.",
             "small",
             fg=self.theme.colors["text_secondary"],
         )

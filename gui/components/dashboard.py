@@ -951,6 +951,26 @@ class DashboardWidget:
             return bool(self._start_http_scan(scan_options))
         return False
 
+    def _abort_queued_scan_on_failure(
+        self,
+        protocol: str,
+        reason: str,
+        *,
+        title: str = "Protocol Scan Failed",
+    ) -> None:
+        """Abort remaining queued protocol scans after a failure."""
+        remaining = [p.upper() for p in self._queued_scan_protocols if p]
+        skipped_text = ", ".join(remaining) if remaining else "None"
+
+        self._queued_scan_failures.append({"protocol": protocol, "reason": reason})
+        self._clear_queued_scan_state()
+        messagebox.showwarning(
+            title,
+            f"{protocol.upper()} scan failed. Remaining queued scans were not started.\n\n"
+            f"Reason: {reason}\n"
+            f"Skipped protocols: {skipped_text}",
+        )
+
     def _launch_next_queued_scan(self) -> None:
         """Start the next protocol in queue, if any remain."""
         if not self._queued_scan_active:
@@ -976,17 +996,12 @@ class DashboardWidget:
 
         started = self._start_protocol_scan(protocol, scan_options)
         if not started:
-            self._queued_scan_failures.append(
-                {"protocol": protocol, "reason": "failed to start"}
+            self._abort_queued_scan_on_failure(
+                protocol,
+                "failed to start",
+                title="Protocol Start Failed",
             )
-            messagebox.showwarning(
-                "Protocol Start Failed",
-                f"{protocol.upper()} scan failed to start. Continuing to next protocol.",
-            )
-            try:
-                self.parent.after(150, self._launch_next_queued_scan)
-            except tk.TclError:
-                pass
+            return
 
     def _handle_queued_scan_completion(self, results: Dict[str, Any]) -> None:
         """Handle queue continuation after each protocol scan completes."""
@@ -1010,11 +1025,8 @@ class DashboardWidget:
         failed = status in {"failed", "error"} or (not success and bool(error))
         if failed:
             reason = error or status or "unknown error"
-            self._queued_scan_failures.append({"protocol": protocol, "reason": reason})
-            messagebox.showwarning(
-                "Protocol Scan Failed",
-                f"{protocol.upper()} scan failed but the queue will continue.\n\nReason: {reason}",
-            )
+            self._abort_queued_scan_on_failure(protocol, reason)
+            return
 
         if self._queued_scan_protocols:
             try:
