@@ -1036,7 +1036,7 @@ class DashboardWidget:
             self.current_scan_options = scan_options
 
             # Get backend path for external SMBSeek installation
-            backend_path = getattr(self.backend_interface, "backend_path", "./smbseek")
+            backend_path = getattr(self.backend_interface, "backend_path", ".")
             backend_path = str(backend_path)
 
             # Start scan via scan manager with new options
@@ -1071,7 +1071,7 @@ class DashboardWidget:
                     error_details.append(f"• Backend path not found: {backend_path}")
                 
                 # Check if SMBSeek executable exists
-                smbseek_cli = os.path.join(backend_path, "smbseek")
+                smbseek_cli = os.path.join(backend_path, "cli", "smbseek.py")
                 if not os.path.exists(smbseek_cli):
                     error_details.append(f"• SMBSeek CLI not found: {smbseek_cli}")
                 
@@ -1364,6 +1364,8 @@ class DashboardWidget:
                 return self._get_servers_for_bulk_ops(
                     skip_indicator_extract=scan_options.get("bulk_extract_skip_indicators", True),
                     host_type_filter=host_type_filter,
+                    scan_start_time=scan_results.get("start_time"),
+                    scan_end_time=scan_results.get("end_time"),
                 )
 
             servers_for_ops, fetch_error = self._run_background_fetch(
@@ -1464,11 +1466,16 @@ class DashboardWidget:
         self,
         skip_indicator_extract: bool = True,
         host_type_filter: Optional[str] = None,
+        scan_start_time: Optional[str] = None,
+        scan_end_time: Optional[str] = None,
     ) -> Dict[str, List[Dict[str, Any]]]:
         """
         Gather servers eligible for bulk probe and extract.
 
-        Probe: any recent active row in the selected protocol
+        Probe:
+          - Post-scan path: accessible rows from the immediate prior scan only
+            (when scan_start_time + scan_end_time are provided)
+          - Other callers: recent active rows in selected protocol
         Extract: accessible_shares > 0 AND (no indicators) unless toggle disabled
         """
         result = {"probe": [], "extract": []}
@@ -1491,14 +1498,46 @@ class DashboardWidget:
                     recent_scan_only=True,
                 )
 
+            scan_cohort_ids: Optional[set[int]] = None
+            if (
+                host_type_filter in {"S", "F", "H"}
+                and scan_start_time
+                and scan_end_time
+                and hasattr(self.db_reader, "get_protocol_scan_cohort_server_ids")
+            ):
+                try:
+                    scan_cohort_ids = set(
+                        self.db_reader.get_protocol_scan_cohort_server_ids(
+                            host_type_filter,
+                            scan_start_time,
+                            scan_end_time,
+                        )
+                    )
+                except Exception as exc:
+                    _logger.warning(
+                        "Scan cohort filter unavailable for protocol %s: %s",
+                        host_type_filter,
+                        exc,
+                    )
+                    # Avoid widening post-scan probe scope on errors.
+                    scan_cohort_ids = set()
+
             for server in servers:
                 server_host_type = (server.get("host_type") or "S").upper()
                 if host_type_filter and server_host_type != host_type_filter:
                     continue
 
-                # Probe eligibility is protocol-row based (recent + active), not
-                # share-count based. HTTP/FTP rows may legitimately have zero
-                # accessible_shares prior to first probe-cache sync.
+                if scan_cohort_ids is not None:
+                    try:
+                        server_id = int(server.get("protocol_server_id"))
+                    except (TypeError, ValueError):
+                        continue
+                    if server_id not in scan_cohort_ids:
+                        continue
+
+                # Probe eligibility remains row-based (not share-count based).
+                # Optional scan-cohort filtering above narrows post-scan runs to
+                # immediate prior scan results only.
                 result["probe"].append(server)
 
                 accessible = (server.get("accessible_shares") or 0) > 0

@@ -13,10 +13,10 @@ import sqlite3
 import threading
 import time
 import json
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Tuple, Set
 from pathlib import Path
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 try:
     from error_codes import get_error, format_error_message
 except ImportError:
@@ -1878,6 +1878,128 @@ class DatabaseReader:
                     limit, offset, country_filter, recent_scan_only
                 )
             raise
+
+    def _normalize_iso_to_utc_sql_timestamp(self, timestamp: Optional[str]) -> Optional[str]:
+        """
+        Convert an ISO-like timestamp string into SQLite UTC datetime text.
+
+        ScanManager stores scan start/end values via ``datetime.now().isoformat()``
+        (local time, usually naive). FTP access rows are written by SQLite
+        ``CURRENT_TIMESTAMP`` (UTC). This normalizes GUI times to UTC so we can
+        safely filter the just-finished scan window.
+        """
+        if not timestamp:
+            return None
+        try:
+            dt = datetime.fromisoformat(str(timestamp))
+        except (TypeError, ValueError):
+            return None
+
+        if dt.tzinfo is None:
+            local_tz = datetime.now().astimezone().tzinfo or timezone.utc
+            dt = dt.replace(tzinfo=local_tz)
+
+        return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+    def get_protocol_scan_cohort_server_ids(
+        self,
+        host_type: Optional[str],
+        scan_start_time: Optional[str],
+        scan_end_time: Optional[str],
+    ) -> Set[int]:
+        """
+        Return protocol server IDs belonging to a single scan window.
+
+        This is used by dashboard post-scan bulk probe/extract flows to ensure
+        targets come only from accessible hosts in the immediately completed
+        scan, not from broader "recent row" windows.
+        """
+        if self.mock_mode:
+            return set()
+
+        proto = (host_type or "").strip().upper()
+        if proto not in {"S", "F", "H"}:
+            return set()
+
+        start_utc = self._normalize_iso_to_utc_sql_timestamp(scan_start_time)
+        end_utc = self._normalize_iso_to_utc_sql_timestamp(scan_end_time)
+        if not start_utc or not end_utc:
+            return set()
+
+        # SMB: cohort is hosts with at least one accessible share test record
+        # in this scan window.
+        if proto == "S":
+            sql_by_test_ts = """
+                SELECT DISTINCT s.id AS server_id
+                FROM smb_servers s
+                INNER JOIN share_access sa ON sa.server_id = s.id
+                WHERE s.status = 'active'
+                  AND COALESCE(sa.accessible, 0) = 1
+                  AND datetime(sa.test_timestamp) >= datetime(?)
+                  AND datetime(sa.test_timestamp) <= datetime(?)
+            """
+            sql_by_created_at = sql_by_test_ts.replace("sa.test_timestamp", "sa.created_at")
+            try:
+                with self._get_connection() as conn:
+                    rows = conn.execute(sql_by_test_ts, (start_utc, end_utc)).fetchall()
+            except sqlite3.OperationalError as exc:
+                msg = str(exc).lower()
+                if "no such column" in msg:
+                    try:
+                        with self._get_connection() as conn:
+                            rows = conn.execute(sql_by_created_at, (start_utc, end_utc)).fetchall()
+                    except sqlite3.OperationalError:
+                        return set()
+                elif "no such table" in msg:
+                    return set()
+                else:
+                    return set()
+        else:
+            # FTP/HTTP: cohort is hosts with an accessible stage-2 result in
+            # this scan window.
+            if proto == "F":
+                access_table = "ftp_access"
+                server_table = "ftp_servers"
+            else:
+                access_table = "http_access"
+                server_table = "http_servers"
+
+            sql_by_test_ts = f"""
+                SELECT DISTINCT a.server_id
+                FROM {access_table} a
+                INNER JOIN {server_table} s ON s.id = a.server_id
+                WHERE s.status = 'active'
+                  AND COALESCE(a.accessible, 0) = 1
+                  AND datetime(a.test_timestamp) >= datetime(?)
+                  AND datetime(a.test_timestamp) <= datetime(?)
+            """
+            sql_by_created_at = sql_by_test_ts.replace("a.test_timestamp", "a.created_at")
+
+            try:
+                with self._get_connection() as conn:
+                    rows = conn.execute(sql_by_test_ts, (start_utc, end_utc)).fetchall()
+            except sqlite3.OperationalError as exc:
+                msg = str(exc).lower()
+                # Legacy schema fallback if test_timestamp is absent.
+                if "no such column" in msg:
+                    try:
+                        with self._get_connection() as conn:
+                            rows = conn.execute(sql_by_created_at, (start_utc, end_utc)).fetchall()
+                    except sqlite3.OperationalError:
+                        return set()
+                # Protocol tables missing on older databases.
+                elif "no such table" in msg:
+                    return set()
+                else:
+                    return set()
+
+        ids: Set[int] = set()
+        for row in rows:
+            try:
+                ids.add(int(row["server_id"]))
+            except (TypeError, ValueError, KeyError):
+                continue
+        return ids
 
     def _build_union_sql(self, smb_where: str, ftp_where: str) -> str:
         """Return the UNION ALL query string for both protocol halves."""

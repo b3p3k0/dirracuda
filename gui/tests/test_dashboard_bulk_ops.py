@@ -26,9 +26,16 @@ def test_http_post_scan_bulk_probe_uses_http_host_type_filter(monkeypatch):
 
     captured = {}
 
-    def _fake_get_servers_for_bulk_ops(skip_indicator_extract=True, host_type_filter=None):
+    def _fake_get_servers_for_bulk_ops(
+        skip_indicator_extract=True,
+        host_type_filter=None,
+        scan_start_time=None,
+        scan_end_time=None,
+    ):
         captured["skip_indicator_extract"] = skip_indicator_extract
         captured["host_type_filter"] = host_type_filter
+        captured["scan_start_time"] = scan_start_time
+        captured["scan_end_time"] = scan_end_time
         return {
             "probe": [{"ip_address": "203.0.113.10", "host_type": "H"}],
             "extract": [],
@@ -52,14 +59,173 @@ def test_http_post_scan_bulk_probe_uses_http_host_type_filter(monkeypatch):
         {
             "protocol": "http",
             "hosts_scanned": 1,
+            "start_time": "2026-03-24T14:00:00",
+            "end_time": "2026-03-24T14:10:00",
         },
     )
 
     assert captured["host_type_filter"] == "H"
+    assert captured["scan_start_time"] == "2026-03-24T14:00:00"
+    assert captured["scan_end_time"] == "2026-03-24T14:10:00"
     dash._execute_batch_probe.assert_called_once()
     probe_targets = dash._execute_batch_probe.call_args[0][0]
     assert len(probe_targets) == 1
     assert probe_targets[0]["host_type"] == "H"
+
+
+def test_get_servers_for_bulk_ops_filters_to_immediate_scan_window_ftp():
+    """FTP post-scan probe targets must be constrained to the immediate scan cohort."""
+    dash = DashboardWidget.__new__(DashboardWidget)
+
+    class _StubReader:
+        def get_protocol_server_list(
+            self,
+            limit=5000,
+            offset=0,
+            country_filter=None,
+            recent_scan_only=True,
+        ):
+            return ([
+                {
+                    "ip_address": "203.0.113.11",
+                    "host_type": "F",
+                    "protocol_server_id": 11,
+                    "accessible_shares": 0,
+                    "probe_status": "unprobed",
+                    "indicator_matches": 0,
+                },
+                {
+                    "ip_address": "203.0.113.22",
+                    "host_type": "F",
+                    "protocol_server_id": 22,
+                    "accessible_shares": 0,
+                    "probe_status": "unprobed",
+                    "indicator_matches": 0,
+                },
+                {
+                    "ip_address": "203.0.113.33",
+                    "host_type": "F",
+                    "protocol_server_id": 33,
+                    "accessible_shares": 0,
+                    "probe_status": "unprobed",
+                    "indicator_matches": 0,
+                },
+            ], 3)
+
+        def get_protocol_scan_cohort_server_ids(self, host_type, scan_start_time, scan_end_time):
+            assert host_type == "F"
+            assert scan_start_time == "2026-03-24T14:00:00"
+            assert scan_end_time == "2026-03-24T14:10:00"
+            return {22, 33}
+
+    dash.db_reader = _StubReader()
+    result = dash._get_servers_for_bulk_ops(
+        skip_indicator_extract=True,
+        host_type_filter="F",
+        scan_start_time="2026-03-24T14:00:00",
+        scan_end_time="2026-03-24T14:10:00",
+    )
+
+    assert [r["ip_address"] for r in result["probe"]] == ["203.0.113.22", "203.0.113.33"]
+    assert result["extract"] == []
+
+
+def test_get_servers_for_bulk_ops_filters_to_immediate_scan_window_smb():
+    """SMB post-scan probe targets must be constrained to the immediate scan cohort."""
+    dash = DashboardWidget.__new__(DashboardWidget)
+
+    class _StubReader:
+        def get_protocol_server_list(
+            self,
+            limit=5000,
+            offset=0,
+            country_filter=None,
+            recent_scan_only=True,
+        ):
+            return ([
+                {
+                    "ip_address": "198.51.100.11",
+                    "host_type": "S",
+                    "protocol_server_id": 11,
+                    "accessible_shares": 0,
+                    "probe_status": "unprobed",
+                    "indicator_matches": 0,
+                },
+                {
+                    "ip_address": "198.51.100.22",
+                    "host_type": "S",
+                    "protocol_server_id": 22,
+                    "accessible_shares": 0,
+                    "probe_status": "unprobed",
+                    "indicator_matches": 0,
+                },
+            ], 2)
+
+        def get_protocol_scan_cohort_server_ids(self, host_type, scan_start_time, scan_end_time):
+            assert host_type == "S"
+            assert scan_start_time == "2026-03-24T15:00:00"
+            assert scan_end_time == "2026-03-24T15:10:00"
+            return {22}
+
+    dash.db_reader = _StubReader()
+    result = dash._get_servers_for_bulk_ops(
+        skip_indicator_extract=True,
+        host_type_filter="S",
+        scan_start_time="2026-03-24T15:00:00",
+        scan_end_time="2026-03-24T15:10:00",
+    )
+
+    assert [r["ip_address"] for r in result["probe"]] == ["198.51.100.22"]
+    assert result["extract"] == []
+
+
+def test_get_servers_for_bulk_ops_filters_to_immediate_scan_window_http():
+    """HTTP post-scan probe targets must be constrained to the immediate scan cohort."""
+    dash = DashboardWidget.__new__(DashboardWidget)
+
+    class _StubReader:
+        def get_protocol_server_list(
+            self,
+            limit=5000,
+            offset=0,
+            country_filter=None,
+            recent_scan_only=True,
+        ):
+            return ([
+                {
+                    "ip_address": "203.0.113.41",
+                    "host_type": "H",
+                    "protocol_server_id": 41,
+                    "accessible_shares": 0,
+                    "probe_status": "unprobed",
+                    "indicator_matches": 0,
+                },
+                {
+                    "ip_address": "203.0.113.42",
+                    "host_type": "H",
+                    "protocol_server_id": 42,
+                    "accessible_shares": 0,
+                    "probe_status": "unprobed",
+                    "indicator_matches": 0,
+                },
+            ], 2)
+
+        def get_protocol_scan_cohort_server_ids(self, host_type, scan_start_time, scan_end_time):
+            assert host_type == "H"
+            assert scan_start_time == "2026-03-24T16:00:00"
+            assert scan_end_time == "2026-03-24T16:10:00"
+            return {41}
+
+    dash.db_reader = _StubReader()
+    result = dash._get_servers_for_bulk_ops(
+        skip_indicator_extract=True,
+        host_type_filter="H",
+        scan_start_time="2026-03-24T16:00:00",
+        scan_end_time="2026-03-24T16:10:00",
+    )
+
+    assert [r["ip_address"] for r in result["probe"]] == ["203.0.113.41"]
+    assert result["extract"] == []
 
 
 def test_get_servers_for_bulk_ops_probe_includes_zero_accessibility_rows():

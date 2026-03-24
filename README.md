@@ -112,6 +112,10 @@ Triggered from **▶ Start Scan** with the protocol selected. All three follow t
 
 **HTTP** — default dork: `http.title:"Index of /"`, checks both HTTP and HTTPS ports.
 
+**Post-scan bulk probe/extract scope** — when bulk probe or bulk extract is enabled from the scan flow, targets are limited to accessible hosts from the scan that just completed (same protocol). The app no longer widens that target set from "recent" database rows. Manual probe actions launched from Server List continue to use your explicit row selection and are unchanged.
+
+**Post-scan bulk probe/extract scope** — when bulk probe or bulk extract is enabled from the scan flow, targets are limited to accessible hosts from the scan that just completed (same protocol). The app no longer widens that target set from "recent" database rows. Manual probe actions launched from Server List continue to use your explicit row selection and are unchanged.
+
 ### Server List
 
 ![server list browser](img/servers.png)
@@ -258,20 +262,20 @@ The CLI is useful for scripting and automation. The GUI uses the same backends.
 
 ```bash
 # SMB discovery
-./smbseek --country US              # Discover US servers
-./smbseek --country US,GB,CA        # Multiple countries
-./smbseek --string "SIPR files"     # Search by keyword
-./smbseek --verbose                 # Detailed output
+./cli/smbseek.py --country US              # Discover US servers
+./cli/smbseek.py --country US,GB,CA        # Multiple countries
+./cli/smbseek.py --string "SIPR files"     # Search by keyword
+./cli/smbseek.py --verbose                 # Detailed output
 
 # FTP discovery
-./ftpseek --country US
-./ftpseek --country US,GB,CA
-./ftpseek --verbose
+./cli/ftpseek.py --country US
+./cli/ftpseek.py --country US,GB,CA
+./cli/ftpseek.py --verbose
 
 # HTTP discovery
-./httpseek --country US
-./httpseek --country US,GB,CA
-./httpseek --verbose
+./cli/httpseek.py --country US
+./cli/httpseek.py --country US,GB,CA
+./cli/httpseek.py --verbose
 ```
 
 ---
