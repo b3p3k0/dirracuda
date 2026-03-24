@@ -304,4 +304,4 @@ If you're unsure whether something is authorized, it probably isn't. When in dou
 
 **Wordlists** from [SecLists](https://github.com/danielmiessler/SecLists) (MIT)
 
-Licensed under MIT. See `LICENSE` and `licenses/` for details.
+Licensed under GNU GPL v3. See `LICENSE.md` and `licenses/` for details.
