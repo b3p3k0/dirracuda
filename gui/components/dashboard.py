@@ -1,5 +1,5 @@
 """
-SMBSeek Mission Control Dashboard
+Dirracuda Mission Control Dashboard
 
 Implements the main dashboard with all critical information in a single view.
 Provides key metrics cards, progress display, top findings, and summary breakdowns
@@ -34,6 +34,7 @@ from gui.components.unified_scan_dialog import show_unified_scan_dialog
 from gui.components.ftp_scan_dialog import show_ftp_scan_dialog
 from gui.components.http_scan_dialog import show_http_scan_dialog
 from gui.components.scan_results_dialog import show_scan_results_dialog
+from gui.components.batch_summary_dialog import show_batch_summary_dialog
 from gui.utils.settings_manager import get_settings_manager
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.components import dashboard_logs
@@ -52,7 +53,7 @@ _logger = get_logger("dashboard")
 
 class DashboardWidget:
     """
-    Main dashboard displaying key SMBSeek metrics and status.
+    Main dashboard displaying key Dirracuda metrics and status.
     
     Implements mission control pattern with:
     - Key metrics cards (clickable for drill-down)
@@ -323,7 +324,7 @@ class DashboardWidget:
         # Line 1: Title only
         title_label = self.theme.create_styled_label(
             header_frame,
-            "SMBSeek Security Toolkit",
+            "Dirracuda",
             "title"
         )
         title_label.pack(anchor=tk.W, pady=(0, 5))
@@ -2392,68 +2393,18 @@ class DashboardWidget:
 
     def _show_batch_summary(self, results: List[Dict[str, Any]], job_type: Optional[str] = None) -> None:
         """Show summary dialog for batch operations."""
-        dialog = tk.Toplevel(self.parent)
-        title = f"{(job_type or 'Batch').title()} Operations Summary"
-        dialog.title(title)
-        dialog.geometry("700x515")
-        dialog.transient(self.parent)
-        self.theme.apply_to_widget(dialog, "main_window")
-        dialog.grab_set()
-
-        tk.Label(dialog, text=f"{title} Complete", font=("TkDefaultFont", 12, "bold")).pack(pady=10)
-
-        # Create treeview for results
-        tree_frame = tk.Frame(dialog)
-        tree_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
-        tree = ttk.Treeview(tree_frame, columns=("IP", "Action", "Status", "Notes"), show="headings", height=15)
-        tree.heading("IP", text="IP Address")
-        tree.heading("Action", text="Operation")
-        tree.heading("Status", text="Status")
-        tree.heading("Notes", text="Notes")
-
-        tree.column("IP", width=120)
-        tree.column("Action", width=80)
-        tree.column("Status", width=80)
-        tree.column("Notes", width=380)
-
-        scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=tree.yview)
-        tree.configure(yscrollcommand=scrollbar.set)
-
-        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-        # Populate results
-        success_count = 0
-        failed_count = 0
-        for result in results:
-            status = result.get("status", "unknown")
-            if status == "success":
-                success_count += 1
-            elif status in ("failed", "error"):
-                failed_count += 1
-
-            tree.insert("", tk.END, values=(
-                result.get("ip_address", ""),
-                result.get("action", ""),
-                status,
-                result.get("notes", "")
-            ))
-
-        # Summary stats
-        stats_label = tk.Label(
-            dialog,
-            text=f"Total: {len(results)} | Success: {success_count} | Failed: {failed_count}",
-            font=("TkDefaultFont", 10)
+        show_batch_summary_dialog(
+            parent=self.parent,
+            theme=self.theme,
+            job_type=job_type or "batch",
+            results=results,
+            title_suffix="Batch Summary",
+            geometry="700x400",
+            show_export=True,
+            show_stats=False,
+            wait=True,
+            modal=True,
         )
-        stats_label.pack(pady=5)
-
-        # Close button
-        close_button = tk.Button(dialog, text="Close", command=dialog.destroy)
-        close_button.pack(pady=10)
-
-        # Block until closed to preserve display sequencing
-        self.parent.wait_window(dialog)
 
     def _show_scan_results(self, results: Dict[str, Any]) -> None:
         """Show scan results dialog."""
@@ -2515,7 +2466,7 @@ class DashboardWidget:
 
     def _open_about_dialog(self) -> None:
         dialog = tk.Toplevel(self.parent)
-        dialog.title("About SMBSeek")
+        dialog.title("About Dirracuda")
         dialog.transient(self.parent)
         dialog.grab_set()
         if self.theme:
@@ -2527,7 +2478,7 @@ class DashboardWidget:
 
         title = tk.Label(
             body,
-            text="SMBSeek",
+            text="Dirracuda",
             font=(None, 14, "bold"),
             bg=self.theme.colors["primary_bg"],
             fg=self.theme.colors["text"],
@@ -2535,8 +2486,8 @@ class DashboardWidget:
         title.pack(anchor="w")
 
         blurb = (
-            "SMBSeek helps defensive analysts find SMB servers with weak \n"
-            "authentication and demonstrate impact via safe, guided workflows.\n"
+            "Dirracuda helps defensive analysts find exposed servers (SMB, FTP, HTTP)\n"
+            "with weak authentication and demonstrate impact via safe, guided workflows.\n"
             "No warranty expressed or implied; use at your own risk."
         )
         tk.Label(
@@ -2550,13 +2501,13 @@ class DashboardWidget:
 
         link = tk.Label(
             body,
-            text="GitHub: https://github.com/b3p3k0/smbseek",
+            text="GitHub: https://github.com/b3p3k0/dirracuda",
             fg=self.theme.colors["accent"],
             bg=self.theme.colors["primary_bg"],
             cursor="hand2",
         )
         link.pack(anchor="w")
-        link.bind("<Button-1>", lambda e: webbrowser.open("https://github.com/b3p3k0/smbseek"))
+        link.bind("<Button-1>", lambda e: webbrowser.open("https://github.com/b3p3k0/dirracuda"))
 
         btn_frame = tk.Frame(body)
         self.theme.apply_to_widget(btn_frame, "main_window")

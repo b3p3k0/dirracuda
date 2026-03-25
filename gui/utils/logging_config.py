@@ -1,4 +1,4 @@
-"""Logging configuration for SMBSeek GUI.
+"""Logging configuration for Dirracuda.
 
 Provides a centralized logging setup with:
 - Default WARNING level (silent under normal operation)

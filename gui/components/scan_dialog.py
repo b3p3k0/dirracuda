@@ -1,5 +1,5 @@
 """
-SMBSeek Scan Dialog
+Dirracuda Scan Dialog
 
 Modal dialog for configuring and starting new SMB security scans.
 Provides simple interface for country selection and configuration management.

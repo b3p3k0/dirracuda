@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMBSeek GUI - Legacy Entry Point
+Dirracuda - Legacy Entry Point
 
 DEPRECATED: This module is maintained for backward compatibility only.
 Prefer ./xsmbseek as the supported GUI entry point.
@@ -44,7 +44,7 @@ from gui.utils.scan_manager import get_scan_manager
 
 class SMBSeekGUI:
     """
-    Main SMBSeek GUI application.
+    Main Dirracuda application.
     
     Coordinates between dashboard, backend interface, and drill-down windows.
     Handles application lifecycle, error recovery, and user interactions.
@@ -55,7 +55,7 @@ class SMBSeekGUI:
     
     def __init__(self, mock_mode: bool = False, config_path: Optional[str] = None, backend_path: Optional[str] = None):
         """
-        Initialize SMBSeek GUI application.
+        Initialize Dirracuda application.
         
         Args:
             mock_mode: Whether to use mock data for testing
@@ -202,7 +202,7 @@ class SMBSeekGUI:
             if not self.mock_mode and not self.backend_interface.is_backend_available():
                 response = messagebox.askyesno(
                     "Backend Not Available",
-                    "SMBSeek backend is not accessible. Would you like to continue in mock mode for testing?",
+                    "Dirracuda backend is not accessible. Would you like to continue in mock mode for testing?",
                     icon="warning"
                 )
                 if response:
@@ -295,7 +295,7 @@ class SMBSeekGUI:
     def _create_main_window(self) -> None:
         """Create and configure main application window."""
         self.root = tk.Tk()
-        self.root.title("SMBSeek Security Toolkit")
+        self.root.title("Dirracuda")
         self.root.geometry("800x250")
         self.root.minsize(800, 240)
         
@@ -408,11 +408,11 @@ class SMBSeekGUI:
         self.dashboard.enable_mock_mode()
         
         # Update window title to indicate mock mode
-        self.root.title("SMBSeek Security Toolkit (Mock Mode)")
+        self.root.title("Dirracuda (Mock Mode)")
     
     def _handle_initialization_error(self, error: Exception) -> None:
         """Handle application initialization errors."""
-        error_message = f"Failed to initialize SMBSeek GUI: {error}"
+        error_message = f"Failed to initialize Dirracuda: {error}"
         
         # Try to show error in GUI if possible
         try:
@@ -585,7 +585,7 @@ def main():
     print("Warning: gui/main.py is deprecated. Use ./xsmbseek instead.", file=sys.stderr)
 
     parser = argparse.ArgumentParser(
-        description="SMBSeek GUI - Graphical interface for SMBSeek security toolkit"
+        description="Dirracuda"
     )
     parser.add_argument(
         "--mock",
@@ -605,7 +605,7 @@ def main():
     parser.add_argument(
         "--version",
         action="version",
-        version="SMBSeek GUI 1.0.0"
+        version="Dirracuda 1.0.0"
     )
     
     args = parser.parse_args()

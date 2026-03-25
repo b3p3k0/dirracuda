@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-SMBSeek GUI Demo Script
+Dirracuda Demo Script
 
-Demonstrates the key features of the SMBSeek GUI in mock mode.
+Demonstrates the key features of Dirracuda in mock mode.
 This script shows the dashboard functionality and component integration.
 """
 
@@ -15,7 +15,7 @@ from main import SMBSeekGUI
 
 def run_demo():
     """Run GUI demo with simulated interactions."""
-    print("🚀 Starting SMBSeek GUI Demo...")
+    print("🚀 Starting Dirracuda GUI Demo...")
     print("📊 Dashboard will show mock security data")
     print("⏱  Demo will run for 30 seconds then auto-close")
     print("💡 You can interact with the GUI during this time")
@@ -40,7 +40,7 @@ def run_demo():
         
         # Show demo info
         app.root.after(1000, lambda: messagebox.showinfo(
-            "SMBSeek GUI Demo",
+            "Dirracuda Demo",
             "🎯 Demo Features:\n\n"
             "✓ Mission Control Dashboard\n"
             "✓ Key Security Metrics\n"

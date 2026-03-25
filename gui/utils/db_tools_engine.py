@@ -1,5 +1,5 @@
 """
-SMBSeek GUI - Database Tools Engine
+Dirracuda - Database Tools Engine
 
 Business logic for database management operations including import/merge,
 export/backup, statistics, and maintenance. Separated from UI for testability.
@@ -184,7 +184,7 @@ class CSVImportResult:
 
 class DBToolsEngine:
     """
-    Database tools engine for SMBSeek GUI.
+    Database tools engine for Dirracuda.
 
     Provides business logic for:
     - Schema validation

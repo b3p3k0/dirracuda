@@ -1,5 +1,5 @@
 """
-SMBSeek Unified Workflow
+Dirracuda Unified Workflow
 
 Orchestrates the complete discovery → access workflow with centralized session management.
 Replaces the multi-command interface with a single streamlined pipeline.
@@ -33,7 +33,7 @@ class WorkflowSummary:
 
 class UnifiedWorkflow:
     """
-    Unified SMBSeek workflow orchestrator.
+    Unified Dirracuda workflow orchestrator.
 
     Executes discovery → access pipeline with single session tracking
     and provides structured summary output.
@@ -82,7 +82,7 @@ class UnifiedWorkflow:
             self.output.print_if_verbose(f"Created workflow session {self.session_id}")
 
             # Execute workflow steps
-            self.output.header("SMBSeek Unified Security Assessment")
+            self.output.header("Dirracuda Security Assessment")
 
             # Display security mode banner
             if self.cautious_mode:

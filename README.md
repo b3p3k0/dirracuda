@@ -1,6 +1,7 @@
-# SMBSeek
+# Dirracuda
+#### (formerly SMBSeek)
 
-A GUI for finding exposed HTTP, FTP, and SMB directory listings, then auditing what's reachable.
+A GUI for finding exposed directory listings across multiple protocols, then auditing what's reachable.
 
 ---
 
@@ -24,8 +25,8 @@ sudo pacman -S tk smbclient python-virtualenv
 Then:
 
 ```bash
-git clone https://github.com/b3p3k0/smbseek
-cd smbseek
+git clone https://github.com/b3p3k0/dirracuda
+cd dirracuda
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
@@ -73,21 +74,21 @@ Launch the GUI from your venv:
 
 | Tool | Install | Purpose |
 |------|---------|---------|
-| tkinter | `apt install python3-tk` | GUI framework; required to run xSMBSeek |
+| tkinter | `apt install python3-tk` | GUI framework; required to run Dirracuda |
 | smbclient | `apt install smbclient` | Primary SMB share enumeration; smbprotocol used as fallback if missing |
 
 ---
 
-## Using xSMBSeek
+## Using Dirracuda
 
 ### Before You Start
 
 You're connecting to machines you don't control. A few baseline precautions before you scan:
 
 - **VPN** — don't scan from your real IP address
-- **VM** — run xSMBSeek inside a virtual machine, especially if you plan to browse or extract files; unknown hosts can serve malicious content
+- **VM** — run Dirracuda inside a virtual machine, especially if you plan to browse or extract files; unknown hosts can serve malicious content
 - **Network isolation** — keep the VM on an isolated network segment, not bridged directly to your LAN
-- **Don't open extracted files on your host** — quarantine defaults to `~/.smbseek/quarantine/` inside the VM for a reason; treat everything you pull as untrusted
+- **Don't open extracted files on your host** — quarantine defaults to `~/.dirracuda/quarantine/` inside the VM for a reason; treat everything you pull as untrusted
 - **Don't run as root** — that's dumb
 
 ### Dashboard
@@ -141,7 +142,7 @@ Read-only directory enumeration that previews accessible shares without download
 
 **RCE vulnerability analysis:** Optionally scans for SMB vulnerabilities using passive heuristics. Covers 8 CVEs including EternalBlue (MS17-010), SMBGhost (CVE-2020-0796), ZeroLogon (CVE-2020-1472), and PrintNightmare (CVE-2021-34527). Returns a risk score (0-100) with verdicts: confirmed, likely, or not vulnerable. Signatures live in `signatures/rce_smb/` as editable YAML files. **NOTE: this feature is still under development; don't trust results until verified with alternative measures.**
 
-Results are cached in `~/.smbseek/probes/` and reloaded automatically. Configure probe limits in `conf/config.json` under `file_browser` settings.
+Results are cached in `~/.dirracuda/probes/` and reloaded automatically. Configure probe limits in `conf/config.json` under `file_browser` settings.
 
 ### Browsing Shares
 
@@ -154,7 +155,7 @@ The viewer auto-detects file types: text files display with an encoding selector
 
 Files over the specified maximum (default: 5 MB) trigger a warning—you can bump that limit in `conf/config.json` under `file_browser.viewer.max_view_size_mb`, or click "Ignore Once" to load anyway (hard cap: 1 GB).
 
-Downloads land in quarantine (`~/.smbseek/quarantine/`). The browser never writes to remote systems.
+Downloads land in quarantine (`~/.dirracuda/quarantine/`). The browser never writes to remote systems.
 
 ### Extracting Files
 
@@ -194,7 +195,7 @@ Opened via **DB Tools** on the dashboard. Four tabs:
 
 Three conflict strategies are available in both paths: **Keep Newer** (default — picks whichever record has the more recent `last_seen`), **Keep Source**, and **Keep Current**. Auto-backup fires before import/merge unless you disable it.
 
-**Export & Backup** — **Export** runs `VACUUM INTO` to produce a clean, defragmented copy at a path you choose. **Quick Backup** drops a timestamped copy (`smbseek_backup_YYYYMMDD_HHMMSS.db`) next to the main database file.
+**Export & Backup** — **Export** runs `VACUUM INTO` to produce a clean, defragmented copy at a path you choose. **Quick Backup** drops a timestamped copy (`dirracuda_backup_YYYYMMDD_HHMMSS.db`) next to the main database file.
 
 **Statistics** — server and share counts, database size, date range, and a top-10 country breakdown. Read-only; won't lock the database.
 
@@ -248,9 +249,9 @@ The GUI includes a built-in config editor for common settings.
 
 ### Templates
 
-**Scan templates** save your unified scan configuration — protocol selection, country/region filters, Shodan filters, max results, shared concurrency/timeout, and SMB/HTTP protocol-specific toggles. Click "Save Current" in the Start Scan dialog. Templates live in `~/.smbseek/templates/` as JSON files you can edit directly.
+**Scan templates** save your unified scan configuration — protocol selection, country/region filters, Shodan filters, max results, shared concurrency/timeout, and SMB/HTTP protocol-specific toggles. Click "Save Current" in the Start Scan dialog. Templates live in `~/.dirracuda/templates/` as JSON files you can edit directly.
 
-**Filter templates** save your server list filters — search text, date range, countries, checkboxes. Click "Save Filters" in the advanced filter panel. Stored in `~/.smbseek/filter_templates/`.
+**Filter templates** save your server list filters — search text, date range, countries, checkboxes. Click "Save Filters" in the advanced filter panel. Stored in `~/.dirracuda/filter_templates/`.
 
 Both auto-restore your last-used template on startup.
 
@@ -280,11 +281,9 @@ The CLI is useful for scripting and automation. The GUI uses the same backends.
 
 ## Development
 
-This started as a collection of crude bash scripts I've written over 30+ years of networking and security work — dorks, one-liners for poking at SMB shares, checking for open FTP, that sort of thing. At some point it made sense to turn them into something with a GUI and a database, but the undertaking was far outside my skillset. I understand programming and logic but get lost in the sauce of syntax and structure.
+This started as a collection of crude bash and python scripts I've written over 30+ years of networking and security work — dorks, one-liners for poking at servers, that sort of thing. At some point it made sense to turn them into something with a GUI and a database, but the undertaking was far outside my skillset. I understand fundamentals of programming and logic but get lost in the sauce of syntax and structure.
 
 Part of the goal here is finding out how far AI-assisted development can actually go. The answer, in my experience, is pretty far. I bring domain knowledge, the spec, and the judgment call on what matters; the AI handles implementation, consistency, and the parts that would otherwise be tedious. 
-
-It works well - I'd still be struggling to learn the basics of tkinter if I did this the old fashioned way. With a little patience and foundational knowledge, AI tools can help build complex and functional software.
 
 ---
 

@@ -1,5 +1,5 @@
 """
-SMBSeek Configuration Management
+Dirracuda Configuration Management
 
 Centralized configuration loading and management for the unified CLI.
 Handles the reorganized configuration structure while maintaining compatibility.
@@ -102,7 +102,7 @@ def normalize_db_timestamp(ts_str: str) -> str:
 
 class SMBSeekConfig:
     """
-    Centralized configuration management for SMBSeek.
+    Centralized configuration management for Dirracuda.
     
     Loads and manages configuration from JSON files with sensible defaults
     and the new reorganized structure.
@@ -608,7 +608,7 @@ class SMBSeekConfig:
 
 def load_config(config_file: Optional[str] = None) -> SMBSeekConfig:
     """
-    Convenience function to load SMBSeek configuration.
+    Convenience function to load Dirracuda configuration.
     
     Args:
         config_file: Path to configuration file

@@ -1,1 +1,1 @@
-# SMBSeek GUI Utilities Package
+# Dirracuda GUI Utilities Package

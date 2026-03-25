@@ -32,7 +32,7 @@ def ensure_config_exists(interface) -> None:
             # Copy example config
             shutil.copy2(interface.config_example_path, interface.config_path)
         else:
-            raise RuntimeError(f"SMBSeek configuration template not found at {interface.config_example_path}")
+            raise RuntimeError(f"Dirracuda configuration template not found at {interface.config_example_path}")
 
 
 def validate_config(interface) -> Dict[str, Any]:

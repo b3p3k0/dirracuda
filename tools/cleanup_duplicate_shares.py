@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-SMBSeek Database Cleanup: Remove Duplicate Share Entries
+Dirracuda Database Cleanup: Remove Duplicate Share Entries
 
-This script performs a one-time cleanup of the SMBSeek database to remove
+This script performs a one-time cleanup of the Dirracuda database to remove
 duplicate share entries per server, keeping only the most recent scan results.
 
 This addresses the share counting discrepancies where servers were rescanned
@@ -448,7 +448,7 @@ class DatabaseCleanup:
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="Clean up duplicate share entries from SMBSeek database"
+        description="Clean up duplicate share entries from Dirracuda database"
     )
     parser.add_argument(
         "--database", 
@@ -476,7 +476,7 @@ def main():
             config = load_config()
             db_path = config.get_database_path()
         
-        print(f"🗄️  SMBSeek Database Cleanup: Remove Duplicate Share Entries")
+        print(f"🗄️  Dirracuda Database Cleanup: Remove Duplicate Share Entries")
         print(f"Database: {db_path}")
         
         if not os.path.exists(db_path):

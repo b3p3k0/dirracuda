@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMBSeek Database Maintenance Utilities
+Dirracuda Database Maintenance Utilities
 Database backup, cleanup, optimization, and maintenance operations
 """
 
@@ -20,7 +20,7 @@ from db_manager import DatabaseManager, SMBSeekDataAccessLayer
 
 class SMBSeekDatabaseMaintenance:
     """
-    Database maintenance utilities for SMBSeek SQLite database.
+    Database maintenance utilities for Dirracuda SQLite database.
     
     Provides backup, cleanup, optimization, and health check operations.
     """
@@ -413,7 +413,7 @@ class SMBSeekDatabaseMaintenance:
 def main():
     """Main function for command-line usage."""
     parser = argparse.ArgumentParser(
-        description="SMBSeek database maintenance utilities",
+        description="Dirracuda database maintenance utilities",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

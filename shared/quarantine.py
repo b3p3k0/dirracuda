@@ -20,7 +20,7 @@ def _ensure_root(root: Path) -> Path:
     notice = root / "README.txt"
     if not notice.exists():
         notice.write_text(
-            "This directory stores quarantined SMBSeek artifacts."
+            "This directory stores quarantined Dirracuda artifacts."
             " Inspect contents in an isolated environment before promoting them.",
             encoding='utf-8'
         )

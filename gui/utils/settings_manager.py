@@ -1,7 +1,7 @@
 """
-SMBSeek GUI - Settings Manager
+Dirracuda - Settings Manager
 
-Global settings management for SMBSeek GUI including user preferences,
+Global settings management for Dirracuda including user preferences,
 interface modes, and persistent configuration storage.
 
 Design Decision: Centralized settings management allows consistent behavior
@@ -24,7 +24,7 @@ _logger = get_logger("settings_manager")
 
 class SettingsManager:
     """
-    Global settings manager for SMBSeek GUI.
+    Global settings manager for Dirracuda.
     
     Handles user preferences, interface modes, window positions,
     and other persistent application settings.

@@ -1,5 +1,5 @@
 """
-Default GUI settings for SMBSeek.
+Default GUI settings for Dirracuda.
 
 Separated from SettingsManager to keep the manager implementation concise.
 """

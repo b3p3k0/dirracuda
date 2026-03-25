@@ -1,7 +1,7 @@
 """
-SMBSeek Application Configuration Dialog
+Dirracuda Application Configuration Dialog
 
-Compact configuration dialog for managing xsmbseek integration settings.
+Compact configuration dialog for managing Dirracuda integration settings.
 This includes backend paths plus runtime settings that should propagate
 to scan, browse, and extract workflows.
 """
@@ -56,9 +56,9 @@ class AppConfigDialog:
 
     REQUIRED_FIELDS = ("smbseek", "database", "config", "quarantine")
     FIELD_LABELS = {
-        "smbseek": "SMBSeek Root",
+        "smbseek": "Dirracuda Root",
         "database": "Database File",
-        "config": "SMBSeek Config",
+        "config": "Dirracuda Config",
         "api_key": "Shodan API Key",
         "quarantine": "Quarantine Directory",
         "wordlist": "Pry Wordlist Path",
@@ -171,7 +171,7 @@ class AppConfigDialog:
 
     def _create_dialog(self) -> None:
         self.dialog = tk.Toplevel(self.parent)
-        self.dialog.title("SMBSeek - Application Configuration")
+        self.dialog.title("Dirracuda - Application Configuration")
         self.dialog.geometry("760x600")
         self.dialog.minsize(720, 560)
         self.theme.apply_to_widget(self.dialog, "main_window")
@@ -227,7 +227,7 @@ class AppConfigDialog:
 
         edit_button = tk.Button(
             action_row,
-            text="Edit SMBSeek Config...",
+            text="Edit Dirracuda Config...",
             command=self._open_smbseek_config_editor,
         )
         self.theme.apply_to_widget(edit_button, "button_secondary")
@@ -347,7 +347,7 @@ class AppConfigDialog:
         if field == "smbseek" and self.smbseek_var:
             initial = os.path.dirname(self.smbseek_var.get()) or initial
             selected = filedialog.askdirectory(
-                title="Select SMBSeek Installation Directory",
+                title="Select Dirracuda Installation Directory",
                 initialdir=initial,
             )
             if selected:
@@ -368,7 +368,7 @@ class AppConfigDialog:
         if field == "config" and self.config_var:
             initial = os.path.dirname(self.config_var.get()) or initial
             selected = filedialog.askopenfilename(
-                title="Select SMBSeek Configuration File",
+                title="Select Dirracuda Configuration File",
                 initialdir=initial,
                 filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
             )

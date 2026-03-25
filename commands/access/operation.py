@@ -1,5 +1,5 @@
 """
-SMBSeek Access Operations
+Dirracuda Access Operations
 
 Share access verification split into cohesive helpers to reduce file size
 while keeping the public API stable.

@@ -1,5 +1,5 @@
 """
-SMBSeek Backend Interface
+Dirracuda Backend Interface
 
 Provides subprocess wrapper for CLI commands with output parsing and progress tracking.
 Implements complete backend isolation without any code modifications.
@@ -33,7 +33,7 @@ _logger = get_logger("backend_interface")
 
 class BackendInterface:
     """
-    Interface for communicating with SMBSeek backend via subprocess calls.
+    Interface for communicating with Dirracuda backend via subprocess calls.
 
     Provides methods for executing CLI commands, parsing output, and tracking
     progress for long-running operations. All communication is through the

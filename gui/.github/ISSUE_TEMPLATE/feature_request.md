@@ -1,6 +1,6 @@
 ---
 name: Feature request
-about: Suggest an idea for the SMBSeek GUI
+about: Suggest an idea for Dirracuda
 title: '[FEATURE] '
 labels: enhancement
 assignees: ''

@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 """
-xsmbseek - GUI Frontend for SMBSeek Security Toolkit
+Dirracuda - GUI
 
-A cross-platform graphical interface for the SMBSeek security toolkit.
+A cross-platform graphical interface for the Dirracuda security toolkit.
 Provides mission control dashboard with drill-down capabilities for detailed analysis.
 
-This is a standalone frontend that works with SMBSeek as an external dependency.
+This is a standalone frontend that works with Dirracuda as an external dependency.
 
 Usage:
     xsmbseek [--mock] [--config CONFIG_FILE] [--smbseek-path PATH] [--database-path PATH]
 
 Requirements:
-    - SMBSeek toolkit (https://github.com/b3p3k0/smbseek)
+    - Dirracuda (https://github.com/b3p3k0/dirracuda)
     - Python 3.6+
     - tkinter (usually included with Python)
 
-Author: xsmbseek development team
+Author: Dirracuda development team
 Version: 1.0.0
 """
 
@@ -257,7 +257,7 @@ def show_smbseek_setup_dialog(parent=None, current_path: str = "./smbseek") -> O
         Selected path or None if cancelled
     """
     dialog = tk.Toplevel(parent) if parent else tk.Tk()
-    dialog.title("SMBSeek Setup Required")
+    dialog.title("Dirracuda Setup Required")
     dialog.geometry("600x550")
     dialog.resizable(True, True)
     
@@ -271,7 +271,7 @@ def show_smbseek_setup_dialog(parent=None, current_path: str = "./smbseek") -> O
     def on_browse():
         """Browse for SMBSeek directory."""
         path = filedialog.askdirectory(
-            title="Select SMBSeek Installation Directory",
+            title="Select Dirracuda Installation Directory",
             initialdir=current_path if os.path.exists(current_path) else "."
         )
         if path:
@@ -279,8 +279,8 @@ def show_smbseek_setup_dialog(parent=None, current_path: str = "./smbseek") -> O
     
     def on_github():
         """Open SMBSeek GitHub repository."""
-        webbrowser.open("https://github.com/b3p3k0/smbseek")
-    
+        webbrowser.open("https://github.com/b3p3k0/dirracuda")
+
     def on_ok():
         """Validate and accept the selected path."""
         nonlocal result
@@ -619,7 +619,7 @@ class XSMBSeekGUI:
     def _create_main_window(self) -> None:
         """Create and configure main application window."""
         self.root = tk.Tk()
-        self.root.title("xsmbseek - SMBSeek GUI Frontend")
+        self.root.title("Dirracuda")
         
         # Force canonical geometry; users may enlarge but not shrink below this
         self.root.geometry(WINDOW_GEOMETRY)
@@ -636,7 +636,7 @@ class XSMBSeekGUI:
         
         # Update window title to show SMBSeek path
         smbseek_path = self.config.get_smbseek_path()
-        self.root.title(f"xsmbseek - SMBSeek GUI Frontend ({smbseek_path.name})")
+        self.root.title(f"Dirracuda ({smbseek_path.name})")
 
         # Initialize thread-safe UI dispatcher for worker callbacks
         # Must happen after root is created but before dashboard (which uses scan_manager)
@@ -939,8 +939,8 @@ def main():
     """Main entry point for xsmbseek GUI."""
     parser = argparse.ArgumentParser(
         prog='xsmbseek',
-        description="xsmbseek - GUI Frontend for SMBSeek Security Toolkit",
-        epilog="For more information, visit: https://github.com/b3p3k0/smbseek"
+        description="Dirracuda - GUI",
+        epilog="For more information, visit: https://github.com/b3p3k0/dirracuda"
     )
     
     parser.add_argument(
@@ -953,14 +953,14 @@ def main():
         "--config",
         type=str,
         metavar="FILE",
-        help="Path to xsmbseek configuration file (default: ./conf/config.json)"
+        help="Path to Dirracuda configuration file (default: ./conf/config.json)"
     )
     
     parser.add_argument(
         "--smbseek-path",
         type=str,
         metavar="PATH",
-        help="Path to SMBSeek installation directory (overrides config)"
+        help="Path to Dirracuda installation directory (overrides config)"
     )
     
     parser.add_argument(

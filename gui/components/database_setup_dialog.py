@@ -1,5 +1,5 @@
 """
-SMBSeek GUI - Database Setup Dialog
+Dirracuda - Database Setup Dialog
 
 Professional database initialization dialog providing three user-friendly options
 when the database is missing or invalid. Ensures graceful startup experience
@@ -79,7 +79,7 @@ class DatabaseSetupDialog:
         else:
             self.dialog = tk.Tk()
         
-        self.dialog.title("SMBSeek - Database Setup")
+        self.dialog.title("Dirracuda - Database Setup")
         self.dialog.geometry("700x560")
         self.dialog.resizable(True, True)
         self.dialog.minsize(650, 520)  # Prevent dialog from becoming too small
@@ -145,7 +145,7 @@ class DatabaseSetupDialog:
         # Option 1: Import Database
         self._create_option_card(
             "📁 Import Existing Database",
-            "Select an existing SMBSeek database file\nfrom a previous scan or shared by colleagues.",
+            "Select an existing Dirracuda database file\nfrom a previous scan or shared by colleagues.",
             self._on_import_option,
             0
         )
@@ -161,7 +161,7 @@ class DatabaseSetupDialog:
         # Option 3: Exit
         self._create_option_card(
             "❌ Exit Application",
-            "Close SMBSeek GUI without\nsetting up a database.",
+            "Close Dirracuda without\nsetting up a database.",
             self._on_exit_option,
             2
         )
@@ -315,7 +315,7 @@ class DatabaseSetupDialog:
         initial_dir = "./smbseek" if os.path.exists("./smbseek") else "."
         
         filename = filedialog.askopenfilename(
-            title="Select SMBSeek Database File",
+            title="Select Dirracuda Database File",
             filetypes=filetypes,
             initialdir=initial_dir
         )
@@ -353,7 +353,7 @@ class DatabaseSetupDialog:
         """Handle exit application option."""
         # Confirm exit
         if messagebox.askyesno(
-            "Exit SMBSeek",
+            "Exit Dirracuda",
             "Are you sure you want to exit without setting up a database?"
         ):
             self.result = None
@@ -412,7 +412,7 @@ class DatabaseSetupDialog:
             # Success - provide comprehensive database information
             success_message = f"Database imported successfully!\n\n"
             success_message += f"📊 **Database Summary:**\n"
-            success_message += f"• Compatibility: {analysis['compatibility_level'].title()} SMBSeek database\n"
+            success_message += f"• Compatibility: {analysis['compatibility_level'].title()} Dirracuda database\n"
             success_message += f"• Total tables: {analysis['schema_info']['total_tables']}\n"
             success_message += f"• Total records: {analysis['schema_info']['total_records']:,}\n\n"
             

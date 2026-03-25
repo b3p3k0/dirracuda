@@ -1,5 +1,5 @@
 """
-Read-only image viewer for xsmbseek.
+Read-only image viewer for Dirracuda.
 
 Features:
 - Displays common raster formats (JPEG/PNG/GIF/WebP/BMP/TIFF) using Pillow.

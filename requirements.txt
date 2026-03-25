@@ -1,4 +1,4 @@
-# SMBSeek Unified Toolkit Dependencies
+# Dirracuda Dependencies
 # Combined dependencies for CLI and GUI components
 
 # Core networking and SMB libraries (CLI)

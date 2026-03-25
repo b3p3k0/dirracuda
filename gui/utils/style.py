@@ -1,5 +1,5 @@
 """
-SMBSeek GUI Styling and Theme Management
+Dirracuda GUI Styling and Theme Management
 
 Provides consistent styling, colors, and theme management across all GUI components.
 Implements cross-platform styling with accessibility considerations.

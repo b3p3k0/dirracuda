@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMBSeek Database Enhancement: Add Share Summary View
+Dirracuda Database Enhancement: Add Share Summary View
 
 This script safely adds a new database view (v_host_share_summary) that provides
 complete share discovery and accessibility information per host. This enhancement
@@ -226,7 +226,7 @@ def test_view_functionality(conn: sqlite3.Connection) -> bool:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Add share summary view to SMBSeek database")
+    parser = argparse.ArgumentParser(description="Add share summary view to Dirracuda database")
     parser.add_argument("--database", type=str, help="Path to database file (default: smbseek.db)")
     parser.add_argument("--dry-run", action="store_true", help="Show what would be done without making changes")
     parser.add_argument("--force", action="store_true", help="Proceed even if view already exists")
@@ -243,12 +243,12 @@ def main():
         except:
             db_path = "smbseek.db"
     
-    print(f"SMBSeek Share Summary View Enhancement")
+    print(f"Dirracuda Share Summary View Enhancement")
     print(f"Database: {os.path.abspath(db_path)}")
     
     if not os.path.exists(db_path):
         print(f"❌ Database file not found: {db_path}")
-        print("Make sure you've run SMBSeek at least once to create the database.")
+        print("Make sure you've run Dirracuda at least once to create the database.")
         return 1
     
     try:

@@ -1,5 +1,5 @@
 """
-SMBSeek Discover Package
+Dirracuda Discover Package
 
 Provides discovery orchestration plus supporting helpers for Shodan queries,
 host filtering, and SMB authentication testing. This package replaces the

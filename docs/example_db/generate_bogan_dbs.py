@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generate bogan test databases for SMBSeek import testing.
+Generate bogan test databases for Dirracuda import testing.
 
 Creates two SQLite databases with synthetic data:
 - smbseek_bogan_sm.db: 25 servers (small dataset)

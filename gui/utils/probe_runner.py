@@ -19,7 +19,7 @@ except ImportError:  # pragma: no cover - handled at runtime
 
 DEFAULT_USERNAME = "guest"
 DEFAULT_PASSWORD = ""
-DEFAULT_CLIENT_NAME = "xsmbseek-probe"
+DEFAULT_CLIENT_NAME = "dirracuda-probe"
 
 
 class ProbeError(RuntimeError):

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMBSeek Database Migration: Add Share Uniqueness Constraint
+Dirracuda Database Migration: Add Share Uniqueness Constraint
 
 This script adds a UNIQUE constraint to the share_access table to prevent
 duplicate share entries per server. This migration is part of fixing the
@@ -271,7 +271,7 @@ def main():
             config = load_config()
             db_path = config.get_database_path()
         
-        print(f"🗄️  SMBSeek Database Migration: Add Share Uniqueness Constraint")
+        print(f"🗄️  Dirracuda Database Migration: Add Share Uniqueness Constraint")
         print(f"Database: {db_path}")
         
         if not os.path.exists(db_path):

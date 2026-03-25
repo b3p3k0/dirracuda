@@ -1,5 +1,5 @@
 """
-SMBSeek Scan Manager
+Dirracuda Scan Manager
 
 Manages SMB security scan operations with lock file coordination,
 progress tracking, and graceful error handling.
@@ -220,7 +220,7 @@ class ScanManager:
             "scan_type": scan_type,
             "country": country,
             "process_id": os.getpid(),
-            "created_by": "SMBSeek GUI"
+            "created_by": "Dirracuda"
         }
         
         try:

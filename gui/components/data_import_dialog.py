@@ -1,5 +1,5 @@
 """
-SMBSeek GUI - Data Import Dialog
+Dirracuda - Data Import Dialog
 
 Interactive dialog for importing CSV/JSON data files with validation and preview.
 Supports the team collaboration workflow where colleagues share exported data.
@@ -79,7 +79,7 @@ class DataImportDialog:
     def _create_dialog(self) -> None:
         """Create and configure the import dialog."""
         self.dialog = tk.Toplevel(self.parent)
-        self.dialog.title("SMBSeek - Import Data")
+        self.dialog.title("Dirracuda - Import Data")
         self.dialog.geometry("800x600")
         self.dialog.minsize(600, 500)
         
@@ -125,7 +125,7 @@ class DataImportDialog:
         
         desc_label = self.theme.create_styled_label(
             header_frame,
-            "Import CSV/JSON data files exported from SMBSeek or shared by colleagues.",
+            "Import CSV/JSON data files exported from Dirracuda or shared by colleagues.",
             "body"
         )
         desc_label.pack(anchor=tk.W, pady=(5, 0))

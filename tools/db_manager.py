@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMBSeek Database Manager
+Dirracuda Database Manager
 Centralized database connection and operations management for SQLite backend
 """
 
@@ -25,10 +25,10 @@ REQUIRED_TABLES = {"smb_servers", "scan_sessions"}
 
 class DatabaseManager:
     """
-    Thread-safe SQLite database manager for SMBSeek toolkit.
-    
+    Thread-safe SQLite database manager for Dirracuda toolkit.
+
     Provides connection management, schema initialization, and common database operations.
-    Follows the established SMBSeek architecture patterns.
+    Follows the established Dirracuda architecture patterns.
     """
     
     def __init__(self, db_path: str = "smbseek.db", config: Optional[Dict] = None):
@@ -238,9 +238,9 @@ class DatabaseManager:
 
 class SMBSeekDataAccessLayer:
     """
-    High-level data access layer for SMBSeek operations.
-    
-    Provides domain-specific database operations following SMBSeek data patterns.
+    High-level data access layer for Dirracuda operations.
+
+    Provides domain-specific database operations following Dirracuda data patterns.
     """
     
     def __init__(self, db_manager: DatabaseManager):

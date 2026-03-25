@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMBSeek Database Query Utility
+Dirracuda Database Query Utility
 Basic database queries and reporting for SQLite database
 """
 
@@ -189,7 +189,7 @@ def query_top_shares(db_path: str):
 def main():
     """Main function for command-line usage."""
     parser = argparse.ArgumentParser(
-        description="Query SMBSeek SQLite database",
+        description="Query Dirracuda SQLite database",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

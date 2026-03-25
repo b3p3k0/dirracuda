@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMBSeek - Unified Security Toolkit
+Dirracuda - Unified Security Toolkit
 
 A defensive security toolkit for identifying and analyzing SMB servers
 with weak authentication. Simplified single-command interface for

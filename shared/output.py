@@ -1,8 +1,8 @@
 """
-SMBSeek Shared Output and Reporting
+Dirracuda Shared Output and Reporting
 
 Consistent output formatting, executive reporting, and display utilities
-for the unified SMBSeek CLI.
+for the unified Dirracuda CLI.
 """
 
 import os
@@ -19,7 +19,7 @@ sys.path.insert(0, tools_path)
 
 class SMBSeekOutput:
     """
-    Unified output management for SMBSeek CLI.
+    Unified output management for Dirracuda CLI.
     
     Provides consistent formatting, color management, and executive reporting
     across all command modules.
@@ -116,7 +116,7 @@ class SMBSeekOutput:
         Args:
             summary: WorkflowSummary instance with scan results
         """
-        self.header("SMBSeek Scan Summary")
+        self.header("Dirracuda Scan Summary")
 
         # Display query used
         if hasattr(summary, 'shodan_query') and summary.shodan_query:
@@ -146,7 +146,7 @@ class SMBSeekOutput:
 
 class SMBSeekReporter:
     """
-    Executive reporting functionality for SMBSeek.
+    Executive reporting functionality for Dirracuda.
     
     Generates executive summaries, detailed reports, and intelligence
     assessments from database data.
@@ -358,7 +358,7 @@ class SMBSeekReporter:
     
     def print_executive_summary(self, summary: Dict[str, Any]):
         """Print formatted executive summary to console."""
-        self.output.header("SMBSeek Executive Summary")
+        self.output.header("Dirracuda Executive Summary")
         
         # Overview
         self.output.subheader("Security Overview")

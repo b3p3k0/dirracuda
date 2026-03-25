@@ -1,5 +1,5 @@
 """
-SMBSeek Scan Results Dialog
+Dirracuda Scan Results Dialog
 
 Displays scan completion results with summary statistics and navigation options.
 Handles successful, interrupted, and failed scan scenarios with appropriate messaging.

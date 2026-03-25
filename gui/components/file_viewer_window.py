@@ -1,5 +1,5 @@
 """
-Read-only file viewer for xsmbseek with text and hex display modes.
+Read-only file viewer for Dirracuda with text and hex display modes.
 
 Capabilities:
 - View file contents in text mode with encoding selection

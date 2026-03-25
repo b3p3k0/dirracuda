@@ -1,5 +1,5 @@
 """
-SMBSeek Discover Operations
+Dirracuda Discover Operations
 
 Discovery and authentication testing split into cohesive helper modules to
 reduce individual file size while keeping the public API stable.

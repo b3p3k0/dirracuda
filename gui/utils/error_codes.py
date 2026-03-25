@@ -1,5 +1,5 @@
 """
-SMBSeek GUI - Centralized Error Code System
+Dirracuda - Centralized Error Code System
 
 Provides unique error codes for all application errors to enable efficient
 troubleshooting and user support. Error codes follow hierarchical numbering:
@@ -139,19 +139,19 @@ class ErrorRegistry:
         self.errors["VAL001"] = ErrorCode(
             "VAL001", ErrorCategory.VALIDATION,
             "Database missing required core tables. Found: {tables_found}",
-            "Use a complete SMBSeek database with smb_servers and scan_sessions tables"
+            "Use a complete Dirracuda database with smb_servers and scan_sessions tables"
         )
         
         self.errors["VAL002"] = ErrorCode(
             "VAL002", ErrorCategory.VALIDATION,
             "Database schema incompatible. Compatibility: {compatibility_level}",
-            "Import only compatible SMBSeek databases or convert the schema"
+            "Import only compatible Dirracuda databases or convert the schema"
         )
         
         self.errors["VAL003"] = ErrorCode(
             "VAL003", ErrorCategory.VALIDATION,
             "Invalid table structure in {table}: {error}",
-            "Verify the database was created by SMBSeek toolkit"
+            "Verify the database was created by Dirracuda"
         )
         
         # Data validation errors

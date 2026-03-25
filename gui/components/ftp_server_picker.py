@@ -1,5 +1,5 @@
 """
-FTP server picker dialog for xsmbseek.
+FTP server picker dialog for Dirracuda.
 
 Presents a filterable list of discovered FTP servers from the database
 and opens a browser window for the selected server. Stays open so the operator can

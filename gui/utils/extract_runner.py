@@ -1,5 +1,5 @@
 """
-File extraction helper for the xsmbseek GUI.
+File extraction helper for the Dirracuda GUI.
 
 Reuses impacket.smbconnection to download a limited number of files from
 anonymous/guest-accessible shares while respecting configurable safety limits.
@@ -23,7 +23,7 @@ except ImportError:  # pragma: no cover - handled upstream
     SMBConnection = None
     SessionError = Exception
 
-DEFAULT_CLIENT_NAME = "xsmbseek-extract"
+DEFAULT_CLIENT_NAME = "dirracuda-extract"
 
 
 class ExtractError(RuntimeError):

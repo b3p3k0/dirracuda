@@ -1,5 +1,5 @@
 """
-Lightweight, idempotent database migrations for SMBSeek.
+Lightweight, idempotent database migrations for Dirracuda.
 
 Currently installs:
 - share_credentials: stores per-share credentials discovered via Pry (or future sources).

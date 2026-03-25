@@ -1,5 +1,5 @@
 """
-SMBSeek Shared Database Operations
+Dirracuda Shared Database Operations
 
 Enhanced database operations for the unified CLI including new host filtering,
 workflow management, and intelligent scanning logic.
@@ -22,7 +22,7 @@ from shared.db_migrations import run_migrations
 
 class SMBSeekWorkflowDatabase:
     """
-    Enhanced database operations for SMBSeek unified CLI workflow.
+    Enhanced database operations for Dirracuda unified CLI workflow.
     
     Provides intelligent host filtering, workflow tracking, and database
     operations optimized for the new unified interface.

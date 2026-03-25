@@ -1,5 +1,5 @@
 """
-SMBSeek GUI - Database Tools Dialog
+Dirracuda - Database Tools Dialog
 
 Modal dialog providing database management capabilities including import/merge,
 export/backup, statistics, and maintenance operations.
@@ -274,7 +274,7 @@ class DBToolsDialog:
         ]
 
         filename = filedialog.askopenfilename(
-            title="Select SMBSeek Database or CSV to Import",
+            title="Select Dirracuda Database or CSV to Import",
             filetypes=filetypes,
             initialdir=os.path.dirname(self.db_path) or "."
         )

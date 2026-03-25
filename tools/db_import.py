@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMBSeek Database Import Utilities
+Dirracuda Database Import Utilities
 Import existing CSV and JSON data files into SQLite database
 """
 
@@ -19,7 +19,7 @@ from db_manager import DatabaseManager, SMBSeekDataAccessLayer
 
 class SMBSeekDataImporter:
     """
-    Import utility for migrating existing SMBSeek data files to SQLite database.
+    Import utility for migrating existing Dirracuda data files to SQLite database.
     
     Supports importing:
     - ip_record.csv files (scan results)
@@ -532,7 +532,7 @@ class SMBSeekDataImporter:
 def main():
     """Main function for command-line usage."""
     parser = argparse.ArgumentParser(
-        description="Import SMBSeek data files into SQLite database",
+        description="Import Dirracuda data files into SQLite database",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

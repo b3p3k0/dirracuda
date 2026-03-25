@@ -1,5 +1,5 @@
 """
-SMBSeek Database Access Layer
+Dirracuda Database Access Layer
 
 Provides read-only access to the SQLite database with connection management,
 caching, and thread-safe operations. Designed for GUI dashboard updates
@@ -25,9 +25,9 @@ except ImportError:
 
 class DatabaseReader:
     """
-    Read-only database access for SMBSeek GUI.
-    
-    Provides efficient, thread-safe access to the SMBSeek database with
+    Read-only database access for Dirracuda.
+
+    Provides efficient, thread-safe access to the Dirracuda database with
     connection pooling, retry logic, and caching for dashboard updates.
     
     Design Pattern: Read-only with connection management to handle
