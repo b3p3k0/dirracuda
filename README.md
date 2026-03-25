@@ -33,12 +33,6 @@ pip install -r requirements.txt
 cp conf/config.json.example conf/config.json
 ```
 
-Optionally: 
-
-```bash
-cp smbseek.db.example smbseek.db
-```
-
 Edit `conf/config.json` (or launch a new scan from the dashboard) and add your Shodan API key (requires paid membership):
 
 ```json
