@@ -812,6 +812,7 @@ class DBToolsDialog:
         self.stats_labels['details'] = self.theme.create_styled_label(
             info_frame, "Loading...", "body"
         )
+        self.stats_labels['details'].config(justify=tk.LEFT, anchor=tk.W)
         self.stats_labels['details'].pack(anchor=tk.W, padx=10, pady=10)
 
         # Country distribution
@@ -822,7 +823,29 @@ class DBToolsDialog:
         self.stats_labels['countries'] = self.theme.create_styled_label(
             country_frame, "Loading...", "body"
         )
+        self.stats_labels['countries'].config(justify=tk.LEFT, anchor=tk.W, wraplength=620)
         self.stats_labels['countries'].pack(anchor=tk.W, padx=10, pady=10)
+
+    def _format_country_distribution(self, countries: dict[str, int], limit: int = 5) -> str:
+        """
+        Format country distribution as an ordered top-N list with percentages.
+
+        Percentage denominator is the total across all country-attributed records,
+        not just the displayed top N.
+        """
+        if not countries:
+            return "No country data available"
+
+        total = sum(countries.values())
+        if total <= 0:
+            return "No country data available"
+
+        lines = []
+        for idx, (country, count) in enumerate(list(countries.items())[:limit], start=1):
+            pct = (count / total) * 100
+            lines.append(f"{idx}. {country}: {count:,} ({pct:.1f}%)")
+
+        return "\n".join(lines)
 
     def _refresh_stats(self) -> None:
         """Refresh database statistics."""
@@ -852,18 +875,9 @@ class DBToolsDialog:
             )
             self.stats_labels['details'].config(text=details_text)
 
-            # Format country distribution (top 10)
-            if stats.countries:
-                top_countries = list(stats.countries.items())[:10]
-                country_text = " | ".join(
-                    f"{country}: {count:,}" for country, count in top_countries
-                )
-                if len(stats.countries) > 10:
-                    country_text += f" | ... ({len(stats.countries) - 10} more)"
-            else:
-                country_text = "No country data available"
-
-            self.stats_labels['countries'].config(text=country_text)
+            self.stats_labels['countries'].config(
+                text=self._format_country_distribution(stats.countries, limit=5)
+            )
 
         except Exception as e:
             _logger.warning("Failed to refresh stats: %s", e)
