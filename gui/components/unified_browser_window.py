@@ -589,7 +589,11 @@ class FtpBrowserWindow(UnifiedBrowserCore):
 
     def _populate_treeview(self, list_result) -> None:
         self.tree.delete(*self.tree.get_children())
-        for entry in list_result.entries:
+        sorted_entries = sorted(
+            list_result.entries,
+            key=lambda e: (0 if e.is_dir else 1, e.name.casefold()),
+        )
+        for entry in sorted_entries:
             type_label = "dir" if entry.is_dir else "file"
             size_str = "" if entry.is_dir else _format_file_size(entry.size)
             modified_str = ""
@@ -1042,7 +1046,14 @@ class HttpBrowserWindow(UnifiedBrowserCore):
         """Insert entries into treeview; populate _path_map with iid -> abs_path."""
         self.tree.delete(*self.tree.get_children())
         self._path_map.clear()
-        for entry in list_result.entries:
+        sorted_entries = sorted(
+            list_result.entries,
+            key=lambda e: (
+                0 if e.is_dir else 1,
+                (PurePosixPath(e.name.rstrip("/")).name or e.name).casefold(),
+            ),
+        )
+        for entry in sorted_entries:
             abs_path = entry.name  # Entry.name holds the full abs path
             display_name = PurePosixPath(abs_path.rstrip("/")).name or abs_path
             type_label = "dir" if entry.is_dir else "file"

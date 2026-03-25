@@ -7,11 +7,29 @@ the same but assertions use HTTP-specific URL format and 5-column treeview layou
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from gui.components.unified_browser_window import HttpBrowserWindow
+
+
+class _CaptureTree:
+    def __init__(self):
+        self.rows = []
+        self._iid = 0
+
+    def get_children(self):
+        return tuple(range(len(self.rows)))
+
+    def delete(self, *_items):
+        self.rows.clear()
+
+    def insert(self, _parent, _index, values):
+        self._iid += 1
+        self.rows.append(values)
+        return f"item-{self._iid}"
 
 
 def _make_window() -> HttpBrowserWindow:
@@ -123,3 +141,22 @@ def test_on_view_uses_text_limits_and_dispatches_view_thread():
     assert kw["is_image"] is False
     # max_image_pixels passed through but ignored when is_image=False
     assert kw["max_image_pixels"] == 20_000_000
+
+
+def test_populate_treeview_sorts_dirs_then_files_alphabetically():
+    win = _make_window()
+    win.tree = _CaptureTree()
+    win._path_map = {}
+    list_result = SimpleNamespace(
+        entries=[
+            SimpleNamespace(name="/zeta.txt", is_dir=False, size=0, modified_time=None),
+            SimpleNamespace(name="/Beta/", is_dir=True, size=0, modified_time=None),
+            SimpleNamespace(name="/alpha.txt", is_dir=False, size=0, modified_time=None),
+            SimpleNamespace(name="/aardvark/", is_dir=True, size=0, modified_time=None),
+        ]
+    )
+
+    win._populate_treeview(list_result)
+
+    assert [row[0] for row in win.tree.rows] == ["aardvark", "Beta", "alpha.txt", "zeta.txt"]
+    assert [row[1] for row in win.tree.rows] == ["dir", "dir", "file", "file"]
