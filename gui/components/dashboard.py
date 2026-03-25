@@ -1297,7 +1297,7 @@ class DashboardWidget:
                 # Check if SMBSeek executable exists
                 smbseek_cli = os.path.join(backend_path, "cli", "smbseek.py")
                 if not os.path.exists(smbseek_cli):
-                    error_details.append(f"• SMBSeek CLI not found: {smbseek_cli}")
+                    error_details.append(f"• Dirracuda CLI not found: {smbseek_cli}")
                 
                 # Check scan manager state
                 if self.scan_manager.is_scanning:
@@ -1310,7 +1310,7 @@ class DashboardWidget:
                 
                 if error_details:
                     detailed_msg = "Failed to start scan. Issues detected:\n\n" + "\n".join(error_details)
-                    detailed_msg += "\n\nPlease ensure SMBSeek is properly installed and configured."
+                    detailed_msg += "\n\nPlease ensure Dirracuda is properly installed and configured."
                 else:
                     detailed_msg = "Failed to start scan. Another scan may already be running."
                 
@@ -1324,7 +1324,7 @@ class DashboardWidget:
                 detailed_msg = (
                     f"Backend interface error: {error_msg}\n\n"
                     "This usually indicates:\n"
-                    "• SMBSeek backend is not installed or not in expected location\n"
+                    "• Dirracuda backend is not installed or not in expected location\n"
                     "• Backend CLI is not executable\n"
                     "• Configuration file is missing\n\n"
                     "Please ensure the backend is properly installed and configured."
@@ -1454,7 +1454,7 @@ class DashboardWidget:
                         has_bulk_ops = self.current_scan_options and is_finished and has_new_hosts and (bulk_probe_enabled or bulk_extract_enabled)
 
                         # Debug output for bulk ops decision
-                        if os.getenv("XSMBSEEK_DEBUG_PARSING"):
+                        if os.getenv("XSMBSEEK_DEBUG_PARSING") or os.getenv("DIRRACUDA_DEBUG_PARSING"):
                             _logger.debug("Bulk ops decision: status=%s, success=%s, is_finished=%s",
                                         status, success, is_finished)
                             _logger.debug("hosts_scanned=%d, has_new_hosts=%s",

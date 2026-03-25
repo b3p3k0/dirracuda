@@ -1,7 +1,7 @@
 """
 Cache helpers for HTTP probe snapshots.
 
-Snapshots are stored as JSON files under ~/.smbseek/http_probes/.
+Snapshots are stored as JSON files under ~/.dirracuda/http_probes/.
 When port is provided, filename is endpoint-specific: <ip>_<port>.json.
 When port is omitted, legacy filename remains: <ip>.json.
 The format mirrors the FTP probe snapshot so probe_patterns.py works unchanged.
@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-HTTP_CACHE_DIR = Path.home() / ".smbseek" / "http_probes"
+HTTP_CACHE_DIR = Path.home() / ".dirracuda" / "http_probes"
 
 
 def _sanitize_ip(ip: str) -> str:

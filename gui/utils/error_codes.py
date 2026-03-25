@@ -216,7 +216,7 @@ class ErrorRegistry:
         self.errors["CFG011"] = ErrorCode(
             "CFG011", ErrorCategory.CONFIG,
             "Backend executable not found: {path}",
-            "Ensure SMBSeek backend is properly installed"
+            "Ensure Dirracuda backend is properly installed"
         )
     
     def _register_ui_errors(self):

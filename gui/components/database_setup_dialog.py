@@ -24,6 +24,7 @@ from gui.utils.database_access import DatabaseReader
 from gui.utils.error_codes import get_error, format_error_message
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.logging_config import get_logger
+from shared.db_path_resolution import auto_detect_database_path
 
 _logger = get_logger("database_setup_dialog")
 
@@ -50,7 +51,9 @@ class DatabaseSetupDialog:
         """
         self.parent = parent
         self.initial_db_path = initial_db_path
-        self.config_path = config_path or "./smbseek/conf/config.json"
+        default_config = (Path.cwd() / "conf" / "config.json").resolve(strict=False)
+        self.config_path = str(Path(config_path).expanduser().resolve(strict=False)) if config_path else str(default_config)
+        self.backend_path = str(self._resolve_backend_path())
         self.theme = get_theme()
         
         # Dialog result
@@ -70,6 +73,16 @@ class DatabaseSetupDialog:
         
         # Create dialog
         self._create_dialog()
+
+    def _resolve_backend_path(self) -> Path:
+        """Derive backend root from config path; fallback to cwd."""
+        try:
+            cfg = Path(self.config_path).expanduser().resolve(strict=False)
+            if cfg.parent.name == "conf":
+                return cfg.parent.parent
+        except Exception:
+            pass
+        return Path.cwd().resolve(strict=False)
     
     def _create_dialog(self) -> None:
         """Create and configure the setup dialog."""
@@ -312,7 +325,8 @@ class DatabaseSetupDialog:
             ("All files", "*.*")
         ]
         
-        initial_dir = "./smbseek" if os.path.exists("./smbseek") else "."
+        backend_dir = Path(self.backend_path).expanduser().resolve(strict=False)
+        initial_dir = str(backend_dir) if backend_dir.exists() else "."
         
         filename = filedialog.askopenfilename(
             title="Select Dirracuda Database File",
@@ -490,9 +504,10 @@ class DatabaseSetupDialog:
             })
             
             # Check backend interface
-            backend = BackendInterface("./smbseek")
+            backend = BackendInterface(self.backend_path)
+            backend.config_path = Path(self.config_path).expanduser().resolve(strict=False)
             if not backend.is_backend_available():
-                raise RuntimeError("SMBSeek backend not available")
+                raise RuntimeError("Dirracuda backend not available")
             
             self.operation_queue.put({
                 'type': 'progress',
@@ -513,7 +528,7 @@ class DatabaseSetupDialog:
             )
             
             if result.get('success'):
-                db_path = result.get('database_path', './smbseek/smbseek.db')
+                db_path = result.get('database_path', str(auto_detect_database_path(Path(self.backend_path))))
                 self.operation_queue.put({
                     'type': 'complete',
                     'success': True,

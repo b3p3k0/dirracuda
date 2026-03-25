@@ -127,8 +127,9 @@ class SMBSeekOutput:
         self.print_if_not_quiet(f"🔓 Hosts Accessible: {getattr(summary, 'hosts_accessible', 0)}")
         self.print_if_not_quiet(f"📁 Accessible Shares: {getattr(summary, 'accessible_shares', 0)}")
 
-        # Display database location
-        self.print_if_not_quiet(f"💾 Results saved to: smbseek.db")
+        # Display database location (dynamic path keeps GUI/parser-independent output accurate)
+        db_path = self.config.get_database_path() if self.config else "dirracuda.db"
+        self.print_if_not_quiet(f"💾 Results saved to: {db_path}")
 
         # Success indicator
         if getattr(summary, 'accessible_shares', 0) > 0:

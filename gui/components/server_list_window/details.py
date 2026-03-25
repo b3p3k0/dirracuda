@@ -1165,7 +1165,7 @@ def _load_file_collection_config(settings_manager) -> Dict[str, Any]:
 
 
 def _default_extract_path(ip_address: Optional[str]) -> str:
-    base_dir = Path.home() / ".smbseek" / "quarantine"
+    base_dir = Path.home() / ".dirracuda" / "quarantine"
     return str(base_dir)
 
 

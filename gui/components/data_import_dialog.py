@@ -52,7 +52,7 @@ class DataImportDialog:
         self.theme = get_theme()
         
         # Get database path from the database reader
-        self.db_path = getattr(db_reader, 'db_path', '../backend/smbseek.db')
+        self.db_path = getattr(db_reader, 'db_path', '../backend/dirracuda.db')
         self.import_engine = get_import_engine(self.db_path)
         
         # Dialog state

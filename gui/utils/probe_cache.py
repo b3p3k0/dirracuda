@@ -1,7 +1,7 @@
 """
 Probe result caching utilities.
 
-Stores probe snapshots per IP under ~/.smbseek/probes so the GUI can
+Stores probe snapshots per IP under ~/.dirracuda/probes so the GUI can
 reuse previous runs without talking to the backend again.
 """
 
@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-CACHE_DIR = Path.home() / ".smbseek" / "probes"
+CACHE_DIR = Path.home() / ".dirracuda" / "probes"
 
 
 def _sanitize_ip(ip_address: str) -> str:

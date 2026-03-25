@@ -336,7 +336,7 @@ class ServerListWindowBatchStatusMixin:
                     INSERT INTO scan_sessions (tool_name, scan_type, status, started_at, completed_at, total_targets, successful_targets, failed_targets, notes)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    ("xsmbseek", "pry", "completed", now_ts, now_ts, 1, 1, 0, f"Pry credential stored for {ip_address}"),
+                    ("dirracuda", "pry", "completed", now_ts, now_ts, 1, 1, 0, f"Pry credential stored for {ip_address}"),
                 )
                 session_id = cur.lastrowid
 

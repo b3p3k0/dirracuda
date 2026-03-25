@@ -133,7 +133,7 @@ DEFAULT_GUI_SETTINGS = {
         'mock_mode': False,
         'backend_path': '.',
         'config_path': './conf/config.json',
-        'database_path': './smbseek.db',
+        'database_path': './dirracuda.db',
         'last_database_path': '',
         'database_validated': False
     },

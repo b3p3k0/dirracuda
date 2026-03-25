@@ -1489,7 +1489,7 @@ class DBToolsEngine:
         now_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         insert_values: Dict[str, Any] = {}
         if "tool_name" in columns:
-            insert_values["tool_name"] = "smbseek"
+            insert_values["tool_name"] = "db_import"
         if "scan_type" in columns:
             insert_values["scan_type"] = "db_import"
         if "status" in columns:

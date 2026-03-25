@@ -1,7 +1,7 @@
 """
 Cache helpers for FTP probe snapshots.
 
-Snapshots are stored as JSON files under ~/.smbseek/ftp_probes/<ip>.json.
+Snapshots are stored as JSON files under ~/.dirracuda/ftp_probes/<ip>.json.
 The format mirrors the SMB probe snapshot so probe_patterns.py works unchanged.
 """
 
@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-FTP_CACHE_DIR = Path.home() / ".smbseek" / "ftp_probes"
+FTP_CACHE_DIR = Path.home() / ".dirracuda" / "ftp_probes"
 
 
 def _sanitize_ip(ip: str) -> str:

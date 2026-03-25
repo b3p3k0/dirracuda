@@ -27,6 +27,7 @@ from . import progress
 from . import mock_operations
 from . import error_parser
 from ..logging_config import get_logger
+from shared.db_path_resolution import resolve_database_path
 
 _logger = get_logger("backend_interface")
 
@@ -112,6 +113,26 @@ class BackendInterface:
         """Delegate backend validation to config helper."""
         return config.validate_backend(self)
 
+    def _resolve_effective_database_path(self, config_data: Optional[Dict[str, Any]] = None) -> Path:
+        """
+        Resolve effective DB path for CLI/tool parity.
+        """
+        persisted_paths = []
+        cfg = config_data if isinstance(config_data, dict) else self._load_config(str(self.config_path))
+        if isinstance(cfg, dict):
+            gui = cfg.get("gui_app", {})
+            db_cfg = cfg.get("database", {})
+            persisted_paths.extend([
+                gui.get("database_path") if isinstance(gui, dict) else None,
+                db_cfg.get("path") if isinstance(db_cfg, dict) else None,
+            ])
+
+        return resolve_database_path(
+            backend_path=self.backend_path,
+            cli_database_path=None,
+            persisted_paths=persisted_paths,
+        )
+
     def _build_cli_command(self, *args) -> List[str]:
         """
         Build CLI command with proper Python interpreter.
@@ -138,7 +159,7 @@ class BackendInterface:
             cli_args.extend(["--config", str(self.config_path)])
 
         command_list = [interpreter, script_path, *cli_args]
-        if os.getenv("XSMBSEEK_DEBUG_SUBPROCESS"):
+        if os.getenv("XSMBSEEK_DEBUG_SUBPROCESS") or os.getenv("DIRRACUDA_DEBUG_SUBPROCESS"):
             # Log script and arg count only (avoid logging potential credentials)
             _logger.debug("CLI command: %s with %d args", script_path, len(args))
         return command_list
@@ -151,7 +172,7 @@ class BackendInterface:
             cli_args.extend(["--config", str(self.config_path)])
 
         command_list = [interpreter, str(self.ftp_cli_script), *cli_args]
-        if os.getenv("XSMBSEEK_DEBUG_SUBPROCESS"):
+        if os.getenv("XSMBSEEK_DEBUG_SUBPROCESS") or os.getenv("DIRRACUDA_DEBUG_SUBPROCESS"):
             _logger.debug(
                 "FTP CLI command: %s with %d args", str(self.ftp_cli_script), len(args)
             )
@@ -165,7 +186,7 @@ class BackendInterface:
             cli_args.extend(["--config", str(self.config_path)])
 
         command_list = [interpreter, str(self.http_cli_script), *cli_args]
-        if os.getenv("XSMBSEEK_DEBUG_SUBPROCESS"):
+        if os.getenv("XSMBSEEK_DEBUG_SUBPROCESS") or os.getenv("DIRRACUDA_DEBUG_SUBPROCESS"):
             _logger.debug(
                 "HTTP CLI command: %s with %d args", str(self.http_cli_script), len(args)
             )
@@ -191,7 +212,7 @@ class BackendInterface:
         script_path = str(self.backend_path / "tools" / script_name)
 
         command_list = [interpreter, script_path, *args]
-        if os.getenv("XSMBSEEK_DEBUG_SUBPROCESS"):
+        if os.getenv("XSMBSEEK_DEBUG_SUBPROCESS") or os.getenv("DIRRACUDA_DEBUG_SUBPROCESS"):
             # Log script and arg count only (avoid logging potential credentials)
             _logger.debug("Tool command: %s with %d args", script_name, len(args))
         return command_list
@@ -537,7 +558,8 @@ class BackendInterface:
             cmd = self._build_tool_command(
                 "db_query.py",
                 "--recent", str(recent_hours),
-                "--count-only"
+                "--count-only",
+                "--db-path", str(self._resolve_effective_database_path()),
             )
             
             result = subprocess.run(
@@ -584,7 +606,12 @@ class BackendInterface:
                 }
             }
         
-        cmd = self._build_tool_command("db_query.py", "--summary")
+        cmd = self._build_tool_command(
+            "db_query.py",
+            "--summary",
+            "--db-path",
+            str(self._resolve_effective_database_path()),
+        )
         
         try:
             result = subprocess.run(
@@ -644,8 +671,8 @@ class BackendInterface:
             # Run the scan using existing run_scan method
             scan_result = self.run_scan(countries, progress_callback)
             
-            # Determine database path
-            db_path = os.path.join(self.backend_path, "smbseek.db")
+            # Determine database path from the same config context used by subprocess scan.
+            db_path = str(self._resolve_effective_database_path(config))
             
             # Enhance result with database information
             result = {

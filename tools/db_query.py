@@ -9,7 +9,7 @@ import json
 import argparse
 import sys
 from datetime import datetime
-from db_manager import DatabaseManager, SMBSeekDataAccessLayer
+from db_manager import DatabaseManager, SMBSeekDataAccessLayer, resolve_tool_database_path
 
 
 def query_server_summary(db_path: str):
@@ -200,8 +200,11 @@ Examples:
         """
     )
     
-    parser.add_argument("--db-path", default="smbseek.db",
-                       help="SQLite database path (default: smbseek.db)")
+    parser.add_argument(
+        "--db-path",
+        default=None,
+        help="SQLite database path (default: auto-detect dirracuda.db then smbseek.db)",
+    )
     parser.add_argument("--summary", action="store_true",
                        help="Show server summary")
     parser.add_argument("--vulnerabilities", action="store_true",
@@ -226,27 +229,29 @@ Examples:
         # Default to summary
         args.summary = True
     
+    effective_db_path = resolve_tool_database_path(args.db_path)
+
     try:
         if args.all:
-            query_server_summary(args.db_path)
-            query_vulnerability_summary(args.db_path)
-            query_scan_statistics(args.db_path, args.days)
-            query_country_distribution(args.db_path)
-            query_auth_methods(args.db_path)
-            query_top_shares(args.db_path)
+            query_server_summary(effective_db_path)
+            query_vulnerability_summary(effective_db_path)
+            query_scan_statistics(effective_db_path, args.days)
+            query_country_distribution(effective_db_path)
+            query_auth_methods(effective_db_path)
+            query_top_shares(effective_db_path)
         else:
             if args.summary:
-                query_server_summary(args.db_path)
+                query_server_summary(effective_db_path)
             if args.vulnerabilities:
-                query_vulnerability_summary(args.db_path)
+                query_vulnerability_summary(effective_db_path)
             if args.statistics:
-                query_scan_statistics(args.db_path, args.days)
+                query_scan_statistics(effective_db_path, args.days)
             if args.countries:
-                query_country_distribution(args.db_path)
+                query_country_distribution(effective_db_path)
             if args.auth:
-                query_auth_methods(args.db_path)
+                query_auth_methods(effective_db_path)
             if args.shares:
-                query_top_shares(args.db_path)
+                query_top_shares(effective_db_path)
         
         return 0
         

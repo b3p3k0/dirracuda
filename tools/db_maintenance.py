@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, List
 import glob
 
-from db_manager import DatabaseManager, SMBSeekDataAccessLayer
+from db_manager import DatabaseManager, SMBSeekDataAccessLayer, resolve_tool_database_path
 
 
 class SMBSeekDatabaseMaintenance:
@@ -25,7 +25,7 @@ class SMBSeekDatabaseMaintenance:
     Provides backup, cleanup, optimization, and health check operations.
     """
     
-    def __init__(self, db_path: str = "smbseek.db", config: Optional[Dict] = None):
+    def __init__(self, db_path: Optional[str] = None, config: Optional[Dict] = None):
         """
         Initialize database maintenance utility.
         
@@ -33,9 +33,9 @@ class SMBSeekDatabaseMaintenance:
             db_path: Path to SQLite database
             config: Configuration dictionary
         """
-        self.db_path = db_path
+        self.db_path = resolve_tool_database_path(db_path)
         self.config = config or {}
-        self.db_manager = DatabaseManager(db_path, config)
+        self.db_manager = DatabaseManager(self.db_path, config)
         self.dal = SMBSeekDataAccessLayer(self.db_manager)
         self.logger = logging.getLogger(__name__)
         
@@ -425,8 +425,11 @@ Examples:
         """
     )
     
-    parser.add_argument("--db-path", default="smbseek.db",
-                       help="SQLite database path (default: smbseek.db)")
+    parser.add_argument(
+        "--db-path",
+        default=None,
+        help="SQLite database path (default: auto-detect dirracuda.db then smbseek.db)",
+    )
     parser.add_argument("--backup", action="store_true",
                        help="Create database backup")
     parser.add_argument("--vacuum", action="store_true",

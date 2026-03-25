@@ -44,7 +44,7 @@
     "exclusion_file": "conf/exclusion_list.json"
   },
   "database": {
-    "path": "smbseek.db",
+    "path": "dirracuda.db",
     "backup_enabled": true,
     "backup_directory": "db_backups",
     "max_backup_files": 30
@@ -130,7 +130,7 @@
     "download_worker_count": 2,
     "download_large_file_mb": 25,
     "max_download_size_mb": 25,
-    "quarantine_root": "~/.smbseek/quarantine",
+    "quarantine_root": "~/.dirracuda/quarantine",
     "max_batch_files": 50,
     "folder_download": {
       "max_depth": 5,
@@ -153,10 +153,11 @@
     "max_file_bytes": 26214400,
     "connect_timeout": 10,
     "request_timeout": 15,
-    "quarantine_base": "~/.smbseek/quarantine"
+    "quarantine_base": "~/.dirracuda/quarantine"
   },
   "gui_app": {
-    "smbseek_path": ".",
+    "backend_path": ".",
+    "_note_legacy": "smbseek_path was the pre-F1 name for backend_path; auto-migrated on first launch",
     "database_path": null,
     "theme": "default",
     "window_geometry": "800x250",
@@ -166,7 +167,7 @@
     "enable_debug_timeouts": false,
     "version": "1.0.0",
     "first_run": true,
-    "github_repo": "https://github.com/b3p3k0/smbseek"
+    "github_repo": "https://github.com/b3p3k0/dirracuda"
   },
   "ftp": {
     "shodan": {
@@ -226,7 +227,7 @@
       "enabled": true
     },
     "logging": {
-      "jsonl_path": "~/.smbseek/logs/rce_analysis.jsonl"
+      "jsonl_path": "~/.dirracuda/logs/rce_analysis.jsonl"
     },
     "intrusive_mode_enabled": false
   }

@@ -26,6 +26,7 @@ import sys
 
 from gui.utils.backend_interface import BackendInterface
 from gui.utils.logging_config import get_logger
+from shared.db_path_resolution import resolve_database_path
 
 _logger = get_logger("scan_manager")
 
@@ -827,13 +828,33 @@ class ScanManager:
             # Import here to avoid circular dependencies
             from gui.utils.database_access import DatabaseReader
 
-            # Try to get backend path for database location
+            # Try to get backend path for database location.
             backend_path = getattr(self.backend_interface, 'backend_path', None)
-            if not backend_path:
+            if backend_path is None:
                 return None
 
-            db_path = os.path.join(backend_path, "smbseek.db")
-            if not os.path.exists(db_path):
+            persisted_paths = []
+            config_path = getattr(self.backend_interface, 'config_path', None)
+            if config_path:
+                try:
+                    cfg_path = Path(config_path).expanduser().resolve(strict=False)
+                    if cfg_path.exists():
+                        config_data = json.loads(cfg_path.read_text(encoding='utf-8'))
+                        gui_data = config_data.get("gui_app", {}) if isinstance(config_data, dict) else {}
+                        db_cfg = config_data.get("database", {}) if isinstance(config_data, dict) else {}
+                        persisted_paths.extend([
+                            gui_data.get("database_path") if isinstance(gui_data, dict) else None,
+                            db_cfg.get("path") if isinstance(db_cfg, dict) else None,
+                        ])
+                except Exception:
+                    pass
+
+            db_path = resolve_database_path(
+                backend_path=backend_path,
+                cli_database_path=None,
+                persisted_paths=persisted_paths,
+            )
+            if not db_path.exists():
                 return None
 
             # Create database reader and get recent statistics

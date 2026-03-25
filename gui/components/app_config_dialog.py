@@ -16,6 +16,11 @@ from typing import Any, Callable, Dict, Optional
 
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.style import get_theme
+from shared.db_path_resolution import (
+    auto_detect_database_path,
+    normalize_database_path,
+    resolve_database_path,
+)
 
 
 def _ensure_dict(value: Any) -> Dict[str, Any]:
@@ -83,7 +88,7 @@ class AppConfigDialog:
         self.config_path = ""
         self.database_path = ""
         self.api_key = ""
-        self.quarantine_path = "~/.smbseek/quarantine"
+        self.quarantine_path = "~/.dirracuda/quarantine"
         self.wordlist_path = ""
 
         self.validation_results: Dict[str, Dict[str, Any]] = {
@@ -128,15 +133,18 @@ class AppConfigDialog:
                 "backend.config_path",
                 str(Path(self.smbseek_path) / "conf" / "config.json"),
             )
-            db_path = self.settings_manager.get_setting("backend.database_path")
-            if db_path and db_path != "../backend/smbseek.db":
-                self.database_path = db_path
-            else:
-                self.database_path = str(Path(self.smbseek_path) / "smbseek.db")
+            self.database_path = str(resolve_database_path(
+                backend_path=self.smbseek_path,
+                cli_database_path=None,
+                persisted_paths=[
+                    self.settings_manager.get_setting("backend.last_database_path", ""),
+                    self.settings_manager.get_setting("backend.database_path", ""),
+                ],
+            ))
         else:
             self.smbseek_path = str(Path.cwd())
             self.config_path = str(Path.cwd() / "conf" / "config.json")
-            self.database_path = str(Path.cwd() / "smbseek.db")
+            self.database_path = str(auto_detect_database_path(Path.cwd()))
 
         self._load_runtime_settings_from_config(self.config_path)
 
@@ -409,8 +417,12 @@ class AppConfigDialog:
                 derived_config = str(Path(self.smbseek_var.get()) / "conf" / "config.json")
                 if self.config_var and (not self.config_var.get() or "conf/config.json" in self.config_var.get()):
                     self.config_var.set(derived_config)
-                derived_db = str(Path(self.smbseek_var.get()) / "smbseek.db")
-                if self.database_var and (not self.database_var.get() or self.database_var.get().endswith("smbseek.db")):
+                derived_db = str(auto_detect_database_path(Path(self.smbseek_var.get())))
+                if self.database_var and (
+                    not self.database_var.get()
+                    or self.database_var.get().endswith("smbseek.db")
+                    or self.database_var.get().endswith("dirracuda.db")
+                ):
                     self.database_var.set(derived_db)
             return
 
@@ -455,7 +467,7 @@ class AppConfigDialog:
 
         smbseek_script = path_obj / "cli" / "smbseek.py"
         if not smbseek_script.exists():
-            return {"valid": False, "message": "Missing smbseek executable."}
+            return {"valid": False, "message": "Missing Dirracuda executable."}
 
         try:
             result = subprocess.run(
@@ -465,18 +477,26 @@ class AppConfigDialog:
                 timeout=5,
             )
             if result.returncode != 0:
-                return {"valid": False, "message": "smbseek executable failed version check."}
+                return {"valid": False, "message": "Dirracuda executable failed version check."}
         except (subprocess.TimeoutExpired, FileNotFoundError, PermissionError, OSError):
-            return {"valid": True, "message": "smbseek found; version check skipped."}
+            return {"valid": True, "message": "Dirracuda found; version check skipped."}
 
-        return {"valid": True, "message": "Valid SMBSeek installation."}
+        return {"valid": True, "message": "Valid Dirracuda installation."}
 
     def _validate_database_path(self, path: str) -> Dict[str, Any]:
         path = str(path or "").strip()
         if not path:
             return {"valid": False, "message": "Database path is required."}
 
-        path_obj = Path(path).expanduser()
+        backend_path = (
+            self.smbseek_var.get().strip()
+            if self.smbseek_var is not None
+            else self.smbseek_path
+        )
+        path_obj = normalize_database_path(path, backend_path or Path.cwd())
+        if path_obj is None:
+            return {"valid": False, "message": "Database path is invalid."}
+
         if not path_obj.exists():
             if not path_obj.parent.exists():
                 return {"valid": False, "message": "Parent directory does not exist."}
@@ -625,10 +645,15 @@ class AppConfigDialog:
         old_config_path = self.config_path
 
         try:
+            normalized_database = normalize_database_path(new_database, new_smbseek)
+            if normalized_database is None:
+                raise ValueError("Invalid database path.")
+            normalized_database_str = str(normalized_database)
+
             # Persist GUI-side path pointers.
             if self.settings_manager:
                 self.settings_manager.set_backend_path(new_smbseek, validate=False)
-                self.settings_manager.set_database_path(new_database, validate=False)
+                self.settings_manager.set_database_path(normalized_database_str, validate=False)
                 self.settings_manager.set_setting("backend.config_path", new_config_path)
                 # Keeps on-demand extract defaults aligned with shared quarantine.
                 self.settings_manager.set_setting("extract.last_directory", new_quarantine)
@@ -637,7 +662,7 @@ class AppConfigDialog:
             if self.main_config and hasattr(self.main_config, "set_config_path"):
                 self.main_config.set_config_path(new_config_path)
                 self.main_config.set_smbseek_path(new_smbseek)
-                self.main_config.set_database_path(new_database)
+                self.main_config.set_database_path(normalized_database_str)
                 self._apply_runtime_settings(
                     self.main_config.config,
                     new_api_key,
@@ -652,10 +677,11 @@ class AppConfigDialog:
                     fallback_from=old_config_path,
                 )
                 gui_app = _ensure_dict(config_data.get("gui_app"))
-                gui_app["smbseek_path"] = new_smbseek
-                gui_app["database_path"] = new_database
+                gui_app["backend_path"] = new_smbseek
+                gui_app.pop("smbseek_path", None)
+                gui_app["database_path"] = normalized_database_str
                 config_data["gui_app"] = gui_app
-                _set_nested(config_data, ("database", "path"), new_database)
+                _set_nested(config_data, ("database", "path"), normalized_database_str)
                 self._apply_runtime_settings(
                     config_data,
                     new_api_key,
@@ -667,7 +693,7 @@ class AppConfigDialog:
                 path_obj.write_text(json.dumps(config_data, indent=2), encoding="utf-8")
 
             self.smbseek_path = new_smbseek
-            self.database_path = new_database
+            self.database_path = normalized_database_str
             self.config_path = new_config_path
             self.api_key = new_api_key
             self.quarantine_path = new_quarantine
@@ -676,7 +702,7 @@ class AppConfigDialog:
             # Refresh downstream interfaces whenever runtime-critical values changed.
             runtime_changed = (
                 old_smbseek != new_smbseek
-                or old_database != new_database
+                or old_database != normalized_database_str
                 or old_config_path != new_config_path
             )
             if self.refresh_callback and runtime_changed:

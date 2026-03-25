@@ -505,7 +505,9 @@ def _import_legacy_settings(cur: sqlite3.Cursor) -> None:
     Safe to run multiple times; skips if data already present.
     """
     try:
-        settings_path = Path.home() / ".smbseek" / "gui_settings.json"
+        settings_path = Path.home() / ".dirracuda" / "gui_settings.json"
+        if not settings_path.exists():
+            settings_path = Path.home() / ".smbseek" / "gui_settings.json"
         if not settings_path.exists():
             return
         data = json.loads(settings_path.read_text(encoding="utf-8"))
@@ -574,7 +576,7 @@ def _ensure_core_smb_tables(cur: sqlite3.Cursor) -> None:
         """
         CREATE TABLE IF NOT EXISTS scan_sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tool_name TEXT DEFAULT 'smbseek',
+            tool_name TEXT DEFAULT 'dirracuda',
             scan_type TEXT NOT NULL DEFAULT 'smbseek_unified',
             timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             started_at DATETIME DEFAULT CURRENT_TIMESTAMP,

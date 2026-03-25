@@ -17,7 +17,7 @@ DROP TABLE IF EXISTS scan_sessions;
 -- Core scan session tracking
 CREATE TABLE scan_sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tool_name TEXT DEFAULT 'smbseek',
+    tool_name TEXT DEFAULT 'dirracuda',
     scan_type TEXT NOT NULL,
     timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     started_at DATETIME DEFAULT CURRENT_TIMESTAMP,

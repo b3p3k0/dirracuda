@@ -78,7 +78,10 @@ class UnifiedWorkflow:
             self.database.show_database_status()
 
             # Create single scan session for entire workflow
-            self.session_id = self.database.create_session('smbseek_unified')
+            self.session_id = self.database.create_session(
+                'dirracuda',
+                scan_type='smbseek_unified'
+            )
             self.output.print_if_verbose(f"Created workflow session {self.session_id}")
 
             # Execute workflow steps

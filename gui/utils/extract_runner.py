@@ -278,12 +278,12 @@ def _check_cancel(cancel_event: Optional[Event]) -> None:
 
 def write_extract_log(summary: Dict[str, Any]) -> Path:
     """
-    Persist extraction summary under ~/.smbseek/extract_logs.
+    Persist extraction summary under ~/.dirracuda/extract_logs.
 
     Returns:
         Path to the log file on disk.
     """
-    logs_dir = Path.home() / ".smbseek" / "extract_logs"
+    logs_dir = Path.home() / ".dirracuda" / "extract_logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
 
     timestamp = summary.get("finished_at") or summary.get("started_at") or _utcnow()

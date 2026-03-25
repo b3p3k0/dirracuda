@@ -97,7 +97,7 @@ def _load_ftp_browser_config(config_path: Optional[str]) -> Dict:
         "max_file_bytes": 26_214_400,   # 25 MB
         "connect_timeout": 10,
         "request_timeout": 15,
-        "quarantine_base": "~/.smbseek/quarantine",
+        "quarantine_base": "~/.dirracuda/quarantine",
         "viewer": {
             "max_view_size_mb": 5,
             "max_image_size_mb": 15,
@@ -120,7 +120,7 @@ def _load_http_browser_config(config_path: Optional[str]) -> Dict:
         "max_file_bytes": 26_214_400,   # 25 MB
         "connect_timeout": 10,
         "request_timeout": 15,
-        "quarantine_base": "~/.smbseek/quarantine",
+        "quarantine_base": "~/.dirracuda/quarantine",
         "viewer": {
             "max_view_size_mb": 5,
             "max_image_size_mb": 15,
@@ -150,7 +150,7 @@ def _load_smb_browser_config(config_path: Optional[str]) -> Dict:
         "download_large_file_mb": 25,
         "max_download_size_mb": 25,
         "max_batch_files": 50,
-        "quarantine_root": "~/.smbseek/quarantine",
+        "quarantine_root": "~/.dirracuda/quarantine",
         "viewer": {
             "max_view_size_mb": 5,
             "max_image_size_mb": 15,

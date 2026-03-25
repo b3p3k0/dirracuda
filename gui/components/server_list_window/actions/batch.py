@@ -434,7 +434,7 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                 "notes": "No accessible shares"
             }
 
-        base_path = Path(options.get("download_path", str(Path.home() / ".smbseek" / "quarantine"))).expanduser()
+        base_path = Path(options.get("download_path", str(Path.home() / ".dirracuda" / "quarantine"))).expanduser()
         try:
             quarantine_dir = create_quarantine_dir(ip_address, purpose="extract", base_path=base_path)
         except Exception as exc:

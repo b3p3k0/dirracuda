@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Union
 
-_DEFAULT_ROOT = Path.home() / ".smbseek" / "quarantine"
+_DEFAULT_ROOT = Path.home() / ".dirracuda" / "quarantine"
 
 
 def _sanitize_label(value: str) -> str:

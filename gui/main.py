@@ -3,14 +3,14 @@
 Dirracuda - Legacy Entry Point
 
 DEPRECATED: This module is maintained for backward compatibility only.
-Prefer ./xsmbseek as the supported GUI entry point.
+Prefer ./dirracuda as the supported GUI entry point.
 
 This module provides SMBSeekGUI for backward compatibility but delegates
-all scan operations to the unified ScanManager path established in xsmbseek.
+all scan operations to the unified ScanManager path established in dirracuda.
 Direct invocation via `python gui/main.py` is deprecated.
 
 Usage:
-    ./xsmbseek [--mock]                    # Preferred
+    ./dirracuda [--mock]                   # Preferred
     python gui/main.py [--mock] [--config] # Legacy (deprecated)
 """
 
@@ -582,7 +582,7 @@ class SMBSeekGUI:
 
 def main():
     """Main entry point for SMBSeek GUI (deprecated)."""
-    print("Warning: gui/main.py is deprecated. Use ./xsmbseek instead.", file=sys.stderr)
+    print("Warning: gui/main.py is deprecated. Use ./dirracuda instead.", file=sys.stderr)
 
     parser = argparse.ArgumentParser(
         description="Dirracuda"

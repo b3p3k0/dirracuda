@@ -8,7 +8,7 @@ Provides mission control dashboard with drill-down capabilities for detailed ana
 This is a standalone frontend that works with Dirracuda as an external dependency.
 
 Usage:
-    xsmbseek [--mock] [--config CONFIG_FILE] [--smbseek-path PATH] [--database-path PATH]
+    dirracuda [--mock] [--config CONFIG_FILE] [--smbseek-path PATH] [--database-path PATH]
 
 Requirements:
     - Dirracuda (https://github.com/b3p3k0/dirracuda)
@@ -29,6 +29,11 @@ import shutil
 from pathlib import Path
 import webbrowser
 from typing import Dict, Any, Optional
+from shared.db_path_resolution import (
+    auto_detect_database_path,
+    normalize_database_path,
+    resolve_database_path,
+)
 
 # Ensure we're working with absolute paths regardless of where user runs the script
 # resolve() handles symlinks; idempotent insertion ensures gui package is importable
@@ -41,9 +46,9 @@ GUI_DIR = SCRIPT_DIR / "gui"
 # Initialize GUI logging early (before other GUI imports)
 from gui.utils.logging_config import setup_gui_logging, get_logger
 setup_gui_logging()
-_logger = get_logger("xsmbseek")
+_logger = get_logger("dirracuda")
 
-# Canonical window sizing for the xsmbseek frontend
+# Canonical window sizing for the Dirracuda frontend
 WINDOW_WIDTH = 1200
 WINDOW_HEIGHT = 745
 WINDOW_GEOMETRY = f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}"
@@ -52,7 +57,7 @@ WINDOW_GEOMETRY = f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}"
 from gui.utils.ui_dispatcher import UIDispatcher
 from gui.utils.scan_manager import get_scan_manager
 
-# Configuration manager for xsmbseek settings
+# Configuration manager for Dirracuda settings
 class XSMBSeekConfig:
     """Manages GUI settings stored within conf/config.json."""
 
@@ -81,11 +86,22 @@ class XSMBSeekConfig:
             config[self.GUI_SECTION] = self._default_gui_section()
             self._write_config(config)
 
+        # F1: one-time silent migration of gui_app.smbseek_path → backend_path
+        gui = config.get(self.GUI_SECTION)
+        if isinstance(gui, dict) and "smbseek_path" in gui and not gui.get("backend_path"):
+            gui["backend_path"] = gui.pop("smbseek_path")
+            _logger.warning("One-time migration: gui_app.smbseek_path → backend_path")
+            try:
+                self._write_config(config)
+            except Exception as e:
+                _logger.warning("Could not persist migration (config may be read-only): %s", e)
+                # In-memory migration is already done; app continues normally.
+
         return config
     
     def _default_gui_section(self) -> Dict[str, Any]:
         return {
-            "smbseek_path": ".",
+            "backend_path": ".",
             "database_path": None,
             "theme": "default",
             "window_geometry": "800x250",
@@ -95,13 +111,16 @@ class XSMBSeekConfig:
             "enable_debug_timeouts": False,
             "version": "1.0.0",
             "first_run": True,
-            "github_repo": "https://github.com/b3p3k0/smbseek"
+            "github_repo": "https://github.com/b3p3k0/dirracuda"
         }
 
     def _ensure_gui_section(self) -> Dict[str, Any]:
-        if self.GUI_SECTION not in self.config:
+        if not isinstance(self.config.get(self.GUI_SECTION), dict):
             self.config[self.GUI_SECTION] = self._default_gui_section()
-            self._write_config(self.config)
+            try:
+                self._write_config(self.config)
+            except Exception as e:
+                _logger.warning("Could not persist gui_app defaults (config may be read-only): %s", e)
         return self.config[self.GUI_SECTION]
 
     def _write_config(self, data: Dict[str, Any]) -> None:
@@ -121,7 +140,8 @@ class XSMBSeekConfig:
     
     def get_smbseek_path(self) -> Path:
         """Get absolute path to SMBSeek installation."""
-        path_str = self._ensure_gui_section().get("smbseek_path", ".")
+        gui = self._ensure_gui_section()
+        path_str = gui.get("backend_path") or gui.get("smbseek_path", ".")
         path = Path(path_str)
         
         if path.is_absolute():
@@ -131,43 +151,29 @@ class XSMBSeekConfig:
             return (SCRIPT_DIR / path).resolve()
     
     def set_smbseek_path(self, path: str) -> None:
-        """Set SMBSeek installation path."""
-        self._ensure_gui_section()["smbseek_path"] = path
+        """Set SMBSeek installation path. Writes canonical backend_path; removes legacy key."""
+        gui = self._ensure_gui_section()
+        gui["backend_path"] = str(path)
+        gui.pop("smbseek_path", None)
     
     def get_database_path(self) -> Optional[Path]:
         """
         Get effective database path used by both GUI reads and CLI writes.
 
-        Resolution order:
-        1) if both keys exist and disagree, prefer the one that already exists
-        2) if neither exists (or both exist), prefer legacy gui_app.database_path
-           for backward compatibility
-        3) top-level config ``database.path`` (shared SMB/FTP runtime source)
-        4) default ``<smbseek_path>/smbseek.db``
+        All relative candidates are resolved against backend_path, never CWD.
         """
-        def _resolve_db(raw: Optional[str]) -> Optional[Path]:
-            if not raw:
-                return None
-            candidate = Path(str(raw)).expanduser()
-            return candidate if candidate.is_absolute() else (self.get_smbseek_path() / candidate).resolve()
-
+        backend_path = self.get_smbseek_path()
+        gui = self._ensure_gui_section()
         db_cfg = self.config.get("database", {})
-        shared = _resolve_db(db_cfg.get("path")) if isinstance(db_cfg, dict) else None
-        legacy = _resolve_db(self._ensure_gui_section().get("database_path"))
-
-        if legacy and shared and legacy != shared:
-            if legacy.exists() and not shared.exists():
-                return legacy
-            if shared.exists() and not legacy.exists():
-                return shared
-            return legacy
-
-        if legacy:
-            return legacy
-        if shared:
-            return shared
-
-        return self.get_smbseek_path() / "smbseek.db"
+        persisted = [
+            gui.get("database_path"),
+            db_cfg.get("path") if isinstance(db_cfg, dict) else None,
+        ]
+        return resolve_database_path(
+            backend_path=backend_path,
+            cli_database_path=None,
+            persisted_paths=persisted,
+        )
     
     def set_database_path(self, path: Optional[str]) -> None:
         """
@@ -176,13 +182,19 @@ class XSMBSeekConfig:
         Keeping both keys aligned prevents drift where GUI reads one DB while
         smbseek/ftpseek write to another.
         """
-        self._ensure_gui_section()["database_path"] = path
+        backend_path = self.get_smbseek_path()
+        if path:
+            normalized = normalize_database_path(path, backend_path)
+            if normalized is None:
+                normalized = auto_detect_database_path(backend_path)
+        else:
+            normalized = auto_detect_database_path(backend_path)
+
+        normalized_str = str(normalized)
+        self._ensure_gui_section()["database_path"] = normalized_str
         if not isinstance(self.config.get("database"), dict):
             self.config["database"] = {}
-        if path:
-            self.config["database"]["path"] = path
-        else:
-            self.config["database"]["path"] = "smbseek.db"
+        self.config["database"]["path"] = normalized_str
 
     def get_config_path(self) -> Path:
         """Return the underlying configuration file path."""
@@ -218,7 +230,7 @@ class XSMBSeekConfig:
         if not smbseek_path.exists():
             return {
                 'valid': False,
-                'error': f"SMBSeek directory not found at: {smbseek_path}"
+                'error': f"Dirracuda directory not found at: {smbseek_path}"
             }
         
         # Check for main smbseek executable
@@ -226,7 +238,7 @@ class XSMBSeekConfig:
         if not main_script.exists():
             return {
                 'valid': False,
-                'error': f"SMBSeek executable not found at: {main_script}"
+                'error': f"Dirracuda executable not found at: {main_script}"
             }
         
         # Check for essential directories
@@ -245,7 +257,7 @@ class XSMBSeekConfig:
         return {'valid': True}
 
 
-def show_smbseek_setup_dialog(parent=None, current_path: str = "./smbseek") -> Optional[str]:
+def show_smbseek_setup_dialog(parent=None, current_path: str = ".") -> Optional[str]:
     """
     Show dialog for setting up SMBSeek path.
     
@@ -286,7 +298,7 @@ def show_smbseek_setup_dialog(parent=None, current_path: str = "./smbseek") -> O
         nonlocal result
         path = path_var.get().strip()
         if not path:
-            messagebox.showerror("Error", "Please specify a path to SMBSeek")
+            messagebox.showerror("Error", "Please specify a path to Dirracuda")
             return
         
         # Validate the path
@@ -295,7 +307,7 @@ def show_smbseek_setup_dialog(parent=None, current_path: str = "./smbseek") -> O
         validation = config.validate_smbseek_installation()
         
         if not validation['valid']:
-            messagebox.showerror("Invalid SMBSeek Installation", validation['error'])
+            messagebox.showerror("Invalid Dirracuda Installation", validation['error'])
             return
         
         result = path
@@ -313,13 +325,13 @@ def show_smbseek_setup_dialog(parent=None, current_path: str = "./smbseek") -> O
     
     ttk.Label(
         header_frame,
-        text="SMBSeek Installation Required",
+        text="Dirracuda Installation Required",
         font=("TkDefaultFont", 12, "bold")
     ).pack(anchor="w")
     
     ttk.Label(
         header_frame,
-        text="xsmbseek requires the SMBSeek security toolkit to function.",
+        text="Dirracuda requires the Dirracuda backend toolkit to function.",
         wraplength=550
     ).pack(anchor="w", pady=(5, 0))
     
@@ -328,13 +340,13 @@ def show_smbseek_setup_dialog(parent=None, current_path: str = "./smbseek") -> O
     instructions_frame.pack(fill="x", padx=20, pady=10)
     
     instructions = [
-        "1. If you haven't installed SMBSeek yet:",
-        "   • Click 'Open SMBSeek Repository' below",
+        "1. If you haven't installed Dirracuda yet:",
+        "   • Click 'Open Dirracuda Repository' below",
         "   • Follow the installation instructions",
         "   • Come back to this dialog",
         "",
-        "2. If SMBSeek is already installed:",
-        "   • Enter the path to your SMBSeek directory below",
+        "2. If Dirracuda is already installed:",
+        "   • Enter the path to your Dirracuda directory below",
         "   • Or click 'Browse' to select the directory",
         "   • The directory should contain the cli/ subdirectory with seeker scripts"
     ]
@@ -343,7 +355,7 @@ def show_smbseek_setup_dialog(parent=None, current_path: str = "./smbseek") -> O
         ttk.Label(instructions_frame, text=instruction, justify="left").pack(anchor="w")
     
     # Path selection
-    path_frame = ttk.LabelFrame(dialog, text="SMBSeek Path", padding=10)
+    path_frame = ttk.LabelFrame(dialog, text="Dirracuda Path", padding=10)
     path_frame.pack(fill="x", padx=20, pady=10)
     
     path_var = tk.StringVar(value=current_path)
@@ -360,7 +372,7 @@ def show_smbseek_setup_dialog(parent=None, current_path: str = "./smbseek") -> O
     
     ttk.Button(
         button_frame,
-        text="Open SMBSeek Repository",
+        text="Open Dirracuda Repository",
         command=on_github
     ).pack(side="left")
     
@@ -416,11 +428,12 @@ class XSMBSeekGUI:
             database_path: Optional path to database file
         """
         self.mock_mode = mock_mode
+        self.cli_database_path = database_path
         
         # Initialize configuration system
         # Configuration Architecture:
         # - self.config (XSMBSeekConfig) manages GUI settings inside conf/config.json
-        # - self.settings_manager (SettingsManager) manages ~/.smbseek/gui_settings.json
+        # - self.settings_manager (SettingsManager) manages ~/.dirracuda/gui_settings.json
         # These work together but maintain separate responsibilities
         self.config = XSMBSeekConfig(config_path)
         
@@ -495,7 +508,7 @@ class XSMBSeekGUI:
         
         Initializes two separate configuration systems:
         1. XSMBSeekConfig: Manages GUI settings in conf/config.json (paths, metadata)
-        2. SettingsManager: Manages ~/.smbseek/gui_settings.json (GUI preferences)
+        2. SettingsManager: Manages ~/.dirracuda/gui_settings.json (GUI preferences)
         
         The systems work together but maintain separate concerns for modularity.
         XSMBSeekConfig handles application-level configuration while SettingsManager
@@ -524,42 +537,44 @@ class XSMBSeekGUI:
             # Re-validate
             validation = self.config.validate_smbseek_installation()
             if not validation['valid']:
-                raise RuntimeError(f"SMBSeek validation failed after setup: {validation['error']}")
+                raise RuntimeError(f"Dirracuda validation failed after setup: {validation['error']}")
         
         # Initialize backend interface with configured path
         try:
             self.backend_interface = BackendInterface(str(self.config.get_smbseek_path()))
             self.backend_interface.config_path = self.config.get_config_path().expanduser().resolve()
         except Exception as e:
-            raise RuntimeError(f"Failed to initialize SMBSeek interface: {e}")
+            raise RuntimeError(f"Failed to initialize Dirracuda interface: {e}")
         
-        # Initialize database reader
-        try:
-            db_path = self.config.get_database_path()
-            self.db_reader = DatabaseReader(str(db_path))
-            _logger.info(
-                "Runtime paths | backend=%s | config=%s | db=%s",
-                self.config.get_smbseek_path(),
-                self.config.get_config_path(),
-                db_path,
-            )
-        except Exception as e:
-            raise RuntimeError(f"Failed to initialize database reader: {e}")
-        
-        # Initialize settings manager (GUI preferences in ~/.smbseek/)
+        # Initialize settings manager (GUI preferences in ~/.dirracuda/)
         # Note: This is separate from self.config (XSMBSeekConfig) which manages conf/config.json
         try:
-            self.settings_manager = get_settings_manager()  # Use default ~/.smbseek/ directory
+            from shared.path_migration import legacy_user_data_needs_migration, migrate_user_data_root
+
+            if legacy_user_data_needs_migration():
+                if not self._confirm_user_data_migration():
+                    _logger.info("User cancelled user-data migration (~/.smbseek -> ~/.dirracuda)")
+                    sys.exit(0)
+                if not migrate_user_data_root():
+                    raise RuntimeError("Failed to migrate user data from ~/.smbseek to ~/.dirracuda")
+
+            self.settings_manager = get_settings_manager()  # Use default ~/.dirracuda/ directory
             
             # Sync SMBSeek path from XSMBSeekConfig to SettingsManager for GUI consistency
             smbseek_path = str(self.config.get_smbseek_path())
             self.settings_manager.set_backend_path(smbseek_path)
             self.settings_manager.set_setting("backend.config_path", str(self.config.get_config_path()))
-            db_path = str(self.config.get_database_path())
-            # Normalize both config keys to the same resolved DB path for CLI/GUI parity.
-            self.config.set_database_path(db_path)
-            self.config.save_config()
-            self.settings_manager.set_database_path(db_path, validate=False)
+            resolved_db_path = self._resolve_runtime_database_path()
+            self._sync_database_path_to_stores(resolved_db_path)
+
+            # Initialize database reader after DB path is resolved and synced.
+            self.db_reader = DatabaseReader(str(resolved_db_path))
+            _logger.info(
+                "Runtime paths | backend=%s | config=%s | db=%s",
+                self.config.get_smbseek_path(),
+                self.config.get_config_path(),
+                resolved_db_path,
+            )
 
             # Apply persisted GUI theme before the first root window render.
             preferred_theme = self.settings_manager.get_setting("interface.theme", "light")
@@ -569,12 +584,12 @@ class XSMBSeekGUI:
             raise RuntimeError(f"Failed to initialize settings manager: {e}")
 
     def _is_valid_checkout_backend(self, path: Path) -> bool:
-        """Return True when path looks like a runnable smbseek checkout."""
+        """Return True when path looks like a runnable Dirracuda checkout."""
         required = [
             path / "cli" / "smbseek.py",
             path / "cli" / "ftpseek.py",
             path / "cli" / "httpseek.py",
-            path / "xsmbseek",
+            path / "dirracuda",
             path / "commands",
             path / "shared",
             path / "conf" / "config.json",
@@ -605,7 +620,7 @@ class XSMBSeekGUI:
 
             self.config.set_smbseek_path(str(checkout_backend))
             if db_path is None or db_under_old_backend or not db_path.exists():
-                self.config.set_database_path(str(checkout_backend / "smbseek.db"))
+                self.config.set_database_path(str(auto_detect_database_path(checkout_backend)))
 
             self.config.save_config()
             _logger.info(
@@ -615,6 +630,50 @@ class XSMBSeekGUI:
             )
         except Exception as exc:
             _logger.warning("Unable to auto-align backend paths: %s", exc)
+
+    def _resolve_runtime_database_path(self) -> Path:
+        """
+        Resolve DB path using deterministic precedence.
+
+        Order:
+        1) explicit CLI --database-path
+        2) persisted settings/config paths
+        3) backend auto-detect (dirracuda.db, smbseek.db)
+        4) backend/dirracuda.db
+        """
+        backend_path = self.config.get_smbseek_path()
+        persisted_paths = []
+
+        if self.settings_manager:
+            persisted_paths.extend([
+                self.settings_manager.get_setting("backend.last_database_path", ""),
+                self.settings_manager.get_setting("backend.database_path", ""),
+            ])
+
+        gui = self.config.config.get("gui_app", {})
+        db_cfg = self.config.config.get("database", {})
+        persisted_paths.extend([
+            gui.get("database_path") if isinstance(gui, dict) else None,
+            db_cfg.get("path") if isinstance(db_cfg, dict) else None,
+        ])
+
+        return resolve_database_path(
+            backend_path=backend_path,
+            cli_database_path=self.cli_database_path,
+            persisted_paths=persisted_paths,
+        )
+
+    def _sync_database_path_to_stores(self, db_path: Path) -> None:
+        """
+        Persist one exact absolute normalized DB path string to all stores.
+        """
+        resolved = db_path.resolve(strict=False)
+        resolved_str = str(resolved)
+        self.config.set_database_path(resolved_str)
+        self.config.save_config()
+
+        if self.settings_manager:
+            self.settings_manager.set_database_path(resolved_str, validate=False)
     
     def _create_main_window(self) -> None:
         """Create and configure main application window."""
@@ -745,10 +804,37 @@ class XSMBSeekGUI:
         # Update window title to indicate mock mode
         current_title = self.root.title()
         self.root.title(f"{current_title} - Mock Mode")
+
+    def _confirm_user_data_migration(self) -> bool:
+        """Ask user for one-time migration from ~/.smbseek to ~/.dirracuda."""
+        prompt = (
+            "Legacy user data directory detected:\n\n"
+            "~/.smbseek\n\n"
+            "Dirracuda now uses:\n"
+            "~/.dirracuda\n\n"
+            "Migrate now?"
+        )
+        root = tk.Tk()
+        root.withdraw()
+        try:
+            choice = messagebox.askyesnocancel(
+                "Dirracuda Data Migration",
+                prompt,
+                icon="warning",
+            )
+            return choice is True
+        except tk.TclError as exc:
+            _logger.warning("Could not show migration prompt: %s", exc)
+            return False
+        finally:
+            try:
+                root.destroy()
+            except Exception:
+                pass
     
     def _handle_initialization_error(self, error: Exception) -> None:
         """Handle application initialization errors."""
-        error_message = f"Failed to initialize xsmbseek: {error}"
+        error_message = f"Failed to initialize {os.path.basename(sys.argv[0])}: {error}"
         
         # Try to show error in GUI if possible
         try:
@@ -767,7 +853,7 @@ class XSMBSeekGUI:
         # This will be implemented in Phase 3
         messagebox.showinfo(
             "Settings",
-            "xsmbseek settings dialog will be implemented in the next phase.\\n\\n"
+            "Dirracuda settings dialog will be implemented in the next phase.\\n\\n"
             "For now, you can edit conf/config.json manually."
         )
     
@@ -860,10 +946,11 @@ class XSMBSeekGUI:
             self.backend_interface = BackendInterface(str(self.config.get_smbseek_path()))
             self.backend_interface.config_path = self.config.get_config_path().expanduser().resolve()
 
-            # Reinitialize database reader with updated effective path.
-            db_path = self.config.get_database_path()
-            self.db_reader = DatabaseReader(str(db_path))
-            _logger.info("Refreshed DB connection | db=%s", db_path)
+            # Resolve and sync DB path before reconnecting readers/subprocess consumers.
+            resolved_db_path = self._resolve_runtime_database_path()
+            self._sync_database_path_to_stores(resolved_db_path)
+            self.db_reader = DatabaseReader(str(resolved_db_path))
+            _logger.info("Refreshed DB connection | db=%s", resolved_db_path)
             
             # Update dashboard dependencies with refreshed interfaces.
             if self.dashboard:
@@ -876,7 +963,7 @@ class XSMBSeekGUI:
             if self.settings_manager:
                 self.settings_manager.set_backend_path(str(self.config.get_smbseek_path()))
                 self.settings_manager.set_setting("backend.config_path", str(self.config.get_config_path()))
-                self.settings_manager.set_database_path(str(db_path), validate=False)
+                self.settings_manager.set_database_path(str(resolved_db_path), validate=False)
                 
         except Exception as e:
             messagebox.showerror(
@@ -936,9 +1023,10 @@ class XSMBSeekGUI:
 
 
 def main():
-    """Main entry point for xsmbseek GUI."""
+    """Main entry point for Dirracuda GUI."""
+    _prog = os.path.basename(sys.argv[0])
     parser = argparse.ArgumentParser(
-        prog='xsmbseek',
+        prog=_prog,
         description="Dirracuda - GUI",
         epilog="For more information, visit: https://github.com/b3p3k0/dirracuda"
     )
@@ -957,7 +1045,8 @@ def main():
     )
     
     parser.add_argument(
-        "--smbseek-path",
+        "--smbseek-path", "--backend-path",
+        dest="backend_path",
         type=str,
         metavar="PATH",
         help="Path to Dirracuda installation directory (overrides config)"
@@ -979,7 +1068,7 @@ def main():
     parser.add_argument(
         "--version",
         action="version",
-        version="xsmbseek 1.0.0"
+        version=f"{_prog} 1.0.0"
     )
     
     args = parser.parse_args()
@@ -992,7 +1081,7 @@ def main():
         app = XSMBSeekGUI(
             mock_mode=args.mock,
             config_path=args.config,
-            smbseek_path=getattr(args, 'smbseek_path', None),
+            smbseek_path=args.backend_path,
             database_path=getattr(args, 'database_path', None)
         )
         app.run()

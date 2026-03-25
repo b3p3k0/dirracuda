@@ -10,17 +10,34 @@ import os
 import logging
 from datetime import datetime
 import sys
+from pathlib import Path
 
 # Add shared directory to path
 shared_path = os.path.join(os.path.dirname(__file__), '..', 'shared')
 sys.path.insert(0, shared_path)
 
 from config import get_standard_timestamp
+try:
+    from shared.db_path_resolution import resolve_database_path
+except ImportError:
+    from db_path_resolution import resolve_database_path
 from contextlib import contextmanager
 from typing import Dict, List, Optional, Any, Union
 import threading
 
 REQUIRED_TABLES = {"smb_servers", "scan_sessions"}
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+
+
+def resolve_tool_database_path(raw_path: Optional[str] = None) -> str:
+    """Resolve DB path with backend-rooted semantics and legacy auto-detect."""
+    return str(
+        resolve_database_path(
+            backend_path=BACKEND_ROOT,
+            cli_database_path=raw_path,
+            persisted_paths=[],
+        )
+    )
 
 
 class DatabaseManager:
@@ -31,7 +48,7 @@ class DatabaseManager:
     Follows the established Dirracuda architecture patterns.
     """
     
-    def __init__(self, db_path: str = "smbseek.db", config: Optional[Dict] = None):
+    def __init__(self, db_path: Optional[str] = None, config: Optional[Dict] = None):
         """
         Initialize database manager.
         
@@ -39,18 +56,18 @@ class DatabaseManager:
             db_path: Path to SQLite database file
             config: Configuration dictionary (optional)
         """
-        self.db_path = db_path
+        self.db_path = resolve_tool_database_path(db_path)
         self.config = config or {}
         self._local = threading.local()
         self.logger = logging.getLogger(__name__)
         
         # Ensure database directory exists
-        db_dir = os.path.dirname(os.path.abspath(db_path))
+        db_dir = os.path.dirname(os.path.abspath(self.db_path))
         if not os.path.exists(db_dir):
             os.makedirs(db_dir, exist_ok=True)
         
         # Initialize or validate database file
-        if not os.path.exists(db_path):
+        if not os.path.exists(self.db_path):
             self.initialize_database()
         else:
             schema_state = self._inspect_schema_state()

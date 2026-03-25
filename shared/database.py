@@ -260,10 +260,15 @@ class SMBSeekWorkflowDatabase:
         Returns:
             Session ID
         """
+        tool_name = session_data.get('tool_name', 'dirracuda')
+        scan_type = session_data.get('scan_type')
+        if scan_type is None:
+            scan_type = 'smbseek_unified' if tool_name == 'dirracuda' else tool_name
+
         session_id = self.dal.create_scan_session(
-            tool_name=session_data.get('tool_name', 'smbseek'),
+            tool_name=tool_name,
             config_snapshot=session_data,
-            scan_type=session_data.get('scan_type', session_data.get('tool_name', 'smbseek'))
+            scan_type=scan_type
         )
 
         # Map legacy keys to schema column names and update session with actual metrics
@@ -293,26 +298,28 @@ class SMBSeekWorkflowDatabase:
 
         return session_id
     
-    def create_session(self, tool_name: str) -> int:
+    def create_session(self, tool_name: str, scan_type: Optional[str] = None) -> int:
         """
         Create a new scan session for database storage.
         
         Args:
             tool_name: Name of the tool creating the session
+            scan_type: Optional scan type label; defaults to tool_name
             
         Returns:
             Session ID
         """
+        effective_scan_type = scan_type if scan_type is not None else tool_name
         session_data = {
             'tool_name': tool_name,
-            'scan_type': tool_name,
+            'scan_type': effective_scan_type,
             'timestamp': datetime.now().isoformat(),
             'config_snapshot': self.config.config if hasattr(self.config, 'config') else None
         }
         return self.dal.create_scan_session(
             tool_name=tool_name,
             config_snapshot=session_data,
-            scan_type=tool_name
+            scan_type=effective_scan_type
         )
     
     def get_recent_activity_summary(self, days: int = 7) -> Dict:

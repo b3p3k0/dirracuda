@@ -207,7 +207,7 @@ The tool performs two main operations:
   1. Discovery: Query Shodan and test SMB authentication
   2. Share Access: Enumerate accessible shares on authenticated hosts
 
-Results are automatically saved to smbseek.db database.
+Results are automatically saved to the configured database (default: dirracuda.db).
 
 Documentation: docs/USER_GUIDE.md
 """

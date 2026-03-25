@@ -189,14 +189,14 @@ class SMBSeekConfig:
                 "max_depth": 12,
                 "max_path_length": 240,
                 "download_chunk_mb": 4,
-                "quarantine_root": "~/.smbseek/quarantine"
+                "quarantine_root": "~/.dirracuda/quarantine"
             },
                 "security": {
                     "ransomware_indicators_path": "conf/ransomware_indicators.json",
                     "exclusion_file": "conf/exclusion_list.json"
                 },
             "database": {
-                "path": "smbseek.db",
+                "path": "dirracuda.db",
                 "backup_enabled": True,
                 "backup_directory": "db_backups",
                 "max_backup_files": 30
@@ -348,7 +348,7 @@ class SMBSeekConfig:
 
     def get_database_path(self) -> str:
         """Get database file path."""
-        return self.get("database", "path", "smbseek.db")
+        return self.get("database", "path", "dirracuda.db")
     
     def should_rescan_host(self, last_seen_days: int) -> bool:
         """
@@ -558,7 +558,7 @@ class SMBSeekConfig:
             },
             "ms17_010": {"enabled": True},
             "smbghost": {"enabled": True},
-            "logging": {"jsonl_path": "~/.smbseek/logs/rce_analysis.jsonl"},
+            "logging": {"jsonl_path": "~/.dirracuda/logs/rce_analysis.jsonl"},
             "intrusive_mode_enabled": False
         }
         user_rce = self.config.get("rce", {})
@@ -594,7 +594,7 @@ class SMBSeekConfig:
     def get_rce_logging_path(self) -> str:
         """Get JSONL logging path for RCE analysis results."""
         return self.get_rce_config().get("logging", {}).get(
-            "jsonl_path", "~/.smbseek/logs/rce_analysis.jsonl"
+            "jsonl_path", "~/.dirracuda/logs/rce_analysis.jsonl"
         )
 
     def is_ms17_010_enabled(self) -> bool:

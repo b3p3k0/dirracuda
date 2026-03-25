@@ -14,7 +14,7 @@ from typing import Dict, List, Optional, Any
 import logging
 import glob
 
-from db_manager import DatabaseManager, SMBSeekDataAccessLayer
+from db_manager import DatabaseManager, SMBSeekDataAccessLayer, resolve_tool_database_path
 
 
 class SMBSeekDataImporter:
@@ -30,7 +30,7 @@ class SMBSeekDataImporter:
     - vulnerability_report_*.json files (vulnerability data)
     """
     
-    def __init__(self, db_path: str = "smbseek.db", config: Optional[Dict] = None):
+    def __init__(self, db_path: Optional[str] = None, config: Optional[Dict] = None):
         """
         Initialize data importer.
         
@@ -38,7 +38,7 @@ class SMBSeekDataImporter:
             db_path: Path to SQLite database
             config: Configuration dictionary
         """
-        self.db_manager = DatabaseManager(db_path, config)
+        self.db_manager = DatabaseManager(resolve_tool_database_path(db_path), config)
         self.dal = SMBSeekDataAccessLayer(self.db_manager)
         self.logger = logging.getLogger(__name__)
         
@@ -551,8 +551,11 @@ Examples:
                        help="Import specific JSON file")
     parser.add_argument("--all", action="store_true",
                        help="Import all supported files from current directory")
-    parser.add_argument("--db-path", default="smbseek.db",
-                       help="SQLite database path (default: smbseek.db)")
+    parser.add_argument(
+        "--db-path",
+        default=None,
+        help="SQLite database path (default: auto-detect dirracuda.db then smbseek.db)",
+    )
     parser.add_argument("--verbose", "-v", action="store_true",
                        help="Enable verbose logging")
     

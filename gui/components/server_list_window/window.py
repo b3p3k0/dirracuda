@@ -169,7 +169,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
         try:
             self.filter_template_store = TemplateStore(
                 settings_manager=None,
-                base_dir=Path.home() / ".smbseek" / "filter_templates",
+                base_dir=Path.home() / ".dirracuda" / "filter_templates",
                 seed_dir=None
             )
         except Exception as exc:

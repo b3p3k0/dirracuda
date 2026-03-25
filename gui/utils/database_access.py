@@ -34,7 +34,7 @@ class DatabaseReader:
     database locks when backend is writing during scans.
     """
     
-    def __init__(self, db_path: str = "../backend/smbseek.db", cache_duration: int = 5):
+    def __init__(self, db_path: str = "../backend/dirracuda.db", cache_duration: int = 5):
         """
         Initialize database reader.
         
@@ -187,20 +187,20 @@ class DatabaseReader:
                 if len(core_tables_present) >= 2:  # At least 2 core tables
                     if len(actual_tables & expected_tables) == len(expected_tables):
                         analysis['compatibility_level'] = 'full'
-                        analysis['import_recommendation'] = 'Full SMBSeek database - ready for import'
+                        analysis['import_recommendation'] = 'Full Dirracuda database - ready for import'
                     elif len(core_tables_present) == len(schema_def['core_tables']):
                         analysis['compatibility_level'] = 'partial'
-                        analysis['import_recommendation'] = 'Partial SMBSeek database - core data available'
+                        analysis['import_recommendation'] = 'Partial Dirracuda database - core data available'
                         if len(data_tables_present) > 0:
                             analysis['import_recommendation'] += f' with {len(data_tables_present)} additional data tables'
                     else:
                         analysis['compatibility_level'] = 'minimal'
-                        analysis['import_recommendation'] = 'Basic SMBSeek database - limited functionality'
-                    
+                        analysis['import_recommendation'] = 'Basic Dirracuda database - limited functionality'
+
                     analysis['valid'] = True
                 else:
                     analysis['compatibility_level'] = 'none'
-                    analysis['import_recommendation'] = 'Not a compatible SMBSeek database'
+                    analysis['import_recommendation'] = 'Not a compatible Dirracuda database'
                     error_info = get_error("VAL001", {"tables_found": list(core_tables_present)})
                     analysis['errors'].append(error_info['full_message'])
                 

@@ -999,12 +999,17 @@ class TestMergeOperations:
         assert result.success is True
 
         conn = sqlite3.connect(populated_db)
+        conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM scan_sessions WHERE scan_type = 'db_import'")
+        cursor.execute(
+            "SELECT tool_name, scan_type FROM scan_sessions WHERE scan_type = 'db_import'"
+        )
         import_session = cursor.fetchone()
         conn.close()
 
         assert import_session is not None
+        assert import_session["tool_name"] == "db_import"
+        assert import_session["scan_type"] == "db_import"
 
     def test_merge_succeeds_with_legacy_target_scan_sessions_columns(self, external_db):
         """Merge handles legacy target scan_sessions schemas with minimal columns."""
@@ -2022,6 +2027,40 @@ class TestStatistics:
             assert stats.newest_record == '2024-04-20 00:00:00'
             assert stats.countries.get('United States') == 2
             assert stats.countries.get('Germany') == 1
+        finally:
+            try:
+                os.unlink(db_path)
+            except Exception:
+                pass
+
+    def test_stats_counts_mixed_legacy_and_canonical_session_labels(self):
+        """Statistics include both legacy and canonical SMB session labels."""
+        with tempfile.NamedTemporaryFile(suffix='.db', delete=False) as f:
+            db_path = f.name
+
+        try:
+            run_migrations(db_path)
+            conn = sqlite3.connect(db_path)
+            cur = conn.cursor()
+            cur.execute(
+                """
+                INSERT INTO scan_sessions (tool_name, scan_type, status, total_targets, successful_targets, failed_targets)
+                VALUES ('smbseek', 'discover', 'completed', 1, 1, 0)
+                """
+            )
+            cur.execute(
+                """
+                INSERT INTO scan_sessions (tool_name, scan_type, status, total_targets, successful_targets, failed_targets)
+                VALUES ('dirracuda', 'smbseek_unified', 'completed', 1, 1, 0)
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            engine = DBToolsEngine(db_path)
+            stats = engine.get_database_stats()
+
+            assert stats.total_sessions == 2
         finally:
             try:
                 os.unlink(db_path)
