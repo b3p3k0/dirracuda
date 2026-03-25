@@ -1,7 +1,7 @@
 # Dirracuda
 #### (formerly SMBSeek)
 
-A GUI for finding exposed directory listings across multiple protocols, then auditing what's reachable.
+A GUI for finding and categorizing open directory listings across multiple protocols, then auditing what's reachable.
 
 ---
 
@@ -39,7 +39,7 @@ Optionally:
 cp smbseek.db.example smbseek.db
 ```
 
-Edit `conf/config.json` and add your Shodan API key (requires paid membership):
+Edit `conf/config.json` (or launch a new scan from the dashboard) and add your Shodan API key (requires paid membership):
 
 ```json
 {
@@ -52,7 +52,7 @@ Edit `conf/config.json` and add your Shodan API key (requires paid membership):
 Launch the GUI from your venv:
 
 ```bash
-./xsmbseek
+./dirracuda
 ```
 
 ---
@@ -63,7 +63,7 @@ Launch the GUI from your venv:
 
 | Package | Version | Purpose |
 |---------|---------|---------|
-| shodan | ≥1.25.0 | Shodan API client — discovers SMB/FTP/HTTP candidates by country and filter |
+| shodan | ≥1.25.0 | Shodan API client — discovers scan candidates by country and filter |
 | smbprotocol | ≥1.10.0 | Pure-Python SMB2/3 implementation; fallback when `smbclient` is unavailable |
 | pyspnego | ≥0.8.0 | SPNEGO authentication support; required by smbprotocol |
 | impacket | ≥0.11.0 | SMB1/2/3 protocol library; powers the file browser and share navigation |
@@ -89,7 +89,8 @@ You're connecting to machines you don't control. A few baseline precautions befo
 - **VM** — run Dirracuda inside a virtual machine, especially if you plan to browse or extract files; unknown hosts can serve malicious content
 - **Network isolation** — keep the VM on an isolated network segment, not bridged directly to your LAN
 - **Don't open extracted files on your host** — quarantine defaults to `~/.dirracuda/quarantine/` inside the VM for a reason; treat everything you pull as untrusted
-- **Don't run as root** — that's dumb
+- **Audit the source code** - I'm not a threat actor, but I could be. Don't just clone and run things from Github all willy-nilly
+- **Don't run as root** — that's just silly!
 
 ### Dashboard
 
@@ -97,21 +98,21 @@ You're connecting to machines you don't control. A few baseline precautions befo
 
 The main window. From here you can:
 
-- Launch SMB/FTP/HTTP discovery from one **▶ Start Scan** button — pick one protocol or queue multiple protocols in sequence from the same dialog
-- Open the Server List to work with hosts you've found
+- Launch discovery from one **▶ Start Scan** button — pick one protocol or queue multiple protocols in sequence from the same dialog
+- Open the Server List Browser to work with hosts you've found
 - Manage your database (import, export, merge, maintenance)
 - Edit configuration
-- Toggle **dark/light mode** with the 🌙/☀️ button in the top-right; your preference is saved automatically
+- Toggle dark/light mode with the 🌙/☀️ button in the top-right
 
 ### Discovery
 
-Triggered from **▶ Start Scan** with the protocol selected. All three follow the same pipeline: Shodan query → reachability check → protocol-specific verification. Only hosts that pass get stored; failures are recorded with a reason code so you can see exactly where each candidate dropped out. Scan summary shows Shodan candidates vs. verified count. The same host registry handles all three protocols — the same IP can carry SMB, FTP, and multiple HTTP endpoint entries without collision.
+Triggered from **▶ Start Scan** with the protocol(s) selected. All three follow the same pipeline: Shodan query → reachability check → protocol-specific verification. Only hosts that pass get stored; failures are recorded with a reason code so you can see exactly where each candidate dropped out. Scan summary shows Shodan candidates vs. verified count. The same host registry handles all three protocols — the same IP can carry SMB, FTP, and multiple HTTP endpoint entries without collision.
 
-**SMB** (port 445) — default dork: `smb authentication: disabled product:"Samba"`. Applies two extra pre-connection filters: org filtering (drops excluded ISPs and hosting providers) and 30-day deduplication (CLI overrides: `--rescan-all`, `--rescan-failed`). Verification tries Anonymous, Guest/blank, and Guest/Guest in sequence; whichever succeeds is recorded alongside country and timestamp, so auth method drift shows up across rescans. Two security modes: **Cautious** (default) restricts to signed SMB2+/SMB3 and rejects SMB1; **Legacy** lifts those restrictions and tends to find more targets.
+**SMB** — default dork: `smb authentication: disabled product:"Samba"`. Applies two extra pre-connection filters: org filtering (drops excluded ISPs and hosting providers) and 30-day deduplication (CLI overrides: `--rescan-all`, `--rescan-failed`). Verification tries Anonymous, Guest/blank, and Guest/Guest in sequence; whichever succeeds is recorded alongside country and timestamp, so auth method drift shows up across rescans. Two security modes: **Cautious** (default) restricts to signed SMB2+/SMB3 and rejects SMB1; **Legacy** lifts those restrictions and tends to find more targets. 
 
-**FTP** (port 21) — default dork: `port:21 "230 Login successful"`. Verification includes anonymous login and root directory listing. Failure codes: `connect_fail`, `auth_fail`, `list_fail`, `timeout`.
+**FTP** — default dork: `port:21 "230 Login successful"`. Verification includes anonymous login and root directory listing. Failure codes: `connect_fail`, `auth_fail`, `list_fail`, `timeout`.
 
-**HTTP** — default dork: `http.title:"Index of /"`. Verification stays locked to the exact Shodan hit endpoint (same IP + same port), and tests HTTP and/or HTTPS on that port based on your config toggles. No implicit fallback to canonical `80/443` is performed.
+**HTTP** — default dork: `http.title:"Index of /"`. Verification stays locked to the exact Shodan hit endpoint (same IP + same port), and tests HTTP and/or HTTPS on that port based on your config toggles.
 
 **Post-scan bulk probe/extract scope** — when bulk probe or bulk extract is enabled from the scan flow, targets are limited to accessible hosts from the scan that just completed (same protocol). The app no longer widens that target set from "recent" database rows. Manual probe actions launched from Server List continue to use your explicit row selection and are unchanged.
 
@@ -124,7 +125,7 @@ Triggered from **▶ Start Scan** with the protocol selected. All three follow t
 
 | Action | Description |
 |--------|-------------|
-| 📋 Copy IP | Copy selected server IP address(es) to clipboard |
+| 📋 Copy IP | Copy selected server IP address to clipboard |
 | 🔍 Probe Selected | Enumerate shares, detect ransomware indicators |
 | 📦 Extract Selected | Collect files with hard limits on count, size, and time |
 | 🔓 Pry Selected | Password audit against a specific user |
@@ -140,7 +141,7 @@ Read-only directory enumeration that previews accessible shares without download
 
 **Ransomware detection:** Filenames are matched against 25+ known ransom-note patterns (WannaCry, Hive, STOP/Djvu, etc.). Matches flag the server with a red indicator in the list view.
 
-**RCE vulnerability analysis:** Optionally scans for SMB vulnerabilities using passive heuristics. Covers 8 CVEs including EternalBlue (MS17-010), SMBGhost (CVE-2020-0796), ZeroLogon (CVE-2020-1472), and PrintNightmare (CVE-2021-34527). Returns a risk score (0-100) with verdicts: confirmed, likely, or not vulnerable. Signatures live in `signatures/rce_smb/` as editable YAML files. **NOTE: this feature is still under development; don't trust results until verified with alternative measures.**
+**RCE vulnerability analysis:** **NOTE: this feature is still under development; don't trust results until verified with alternative measures.** Optionally scans for SMB vulnerabilities using passive heuristics. Covers 8 CVEs including EternalBlue (MS17-010), SMBGhost (CVE-2020-0796), ZeroLogon (CVE-2020-1472), and PrintNightmare (CVE-2021-34527). Returns a risk score (0-100) with verdicts: confirmed, likely, or not vulnerable. Signatures live in `signatures/rce_smb/` as editable YAML files. 
 
 Results are cached in `~/.dirracuda/probes/` and reloaded automatically. Configure probe limits in `conf/config.json` under `file_browser` settings.
 
@@ -166,12 +167,13 @@ Automated file collection with configurable limits:
 - Max total size
 - Max runtime
 - Max directory depth
+- File extension filtering
 
 All extracted files land in quarantine. The defaults are conservative — check `conf/config.json` if you need to adjust them.
 
 ### Pry (Password Audit)
 
-Tests passwords from a wordlist against a single host/share/user. Optionally tries username-as-password first.
+Tests passwords from a wordlist against a single SMB host/share/user. Optionally tries username-as-password first.
 
 To use it, download a wordlist (we recommend [SecLists](https://github.com/danielmiessler/SecLists)) and set the path in config:
 
@@ -209,7 +211,7 @@ Required column:
 - `ip_address`
 
 Optional columns:
-- `host_type` (`S`, `F`, `H`; aliases `SMB`, `FTP`, `HTTP`; default is `S`)
+- `host_type` (`S`, `F`, `H`; aliases `SMB`, `FTP`, `HTTP`)
 - `country`, `country_code`, `auth_method`, `first_seen`, `last_seen`, `scan_count`, `status`, `notes`, `shodan_data`
 - `port`, `anon_accessible`, `banner` (FTP/HTTP rows)
 - `scheme`, `title` (HTTP rows)
@@ -218,7 +220,7 @@ Behavior notes:
 - One CSV row maps to one protocol host row.
 - `S` rows write to `smb_servers`, `F` to `ftp_servers`, `H` to `http_servers`.
 - If the current DB lacks a protocol table/columns (legacy DB shape), those protocol rows are skipped and shown in preview warnings.
-- CSV import does not create share/file/vulnerability/failure records; it imports host registries only.
+- CSV import does not create share/file/vulnerability/failure records; it imports host registries only. Hosts can be scanned from the Server LIst Browser to populate these fields.
 
 ---
 
@@ -289,11 +291,13 @@ Part of the goal here is finding out how far AI-assisted development can actuall
 
 ## Legal & Ethics
 
-You should only scan networks you own or have explicit permission to test. Unauthorized access is illegal in most jurisdictions—full stop.
+**I am not a lawyer and this is not legal advice**
 
-That said: security research matters. Curiosity about how systems work isn't malicious, and understanding vulnerabilities is how we fix them. This tool exists because improperly secured data is a real problem worth studying. Use it to learn, to audit, to improve defenses and responsibly disclose. Don't use it to steal data or harm systems you have no business touching.
+You should only scan networks you own or have explicit permission to test. Unauthorized access is illegal in most jurisdictions — full stop.
 
-If you're unsure whether something is authorized, it probably isn't. When in doubt, get it in writing.
+That said: security research matters. Curiosity about how systems work isn't malicious, and understanding vulnerabilities is how we fix them. This tool exists because improperly secured data is a real problem worth studying. Use it to learn, to audit, to improve defenses and responsibly disclose. Don't be a dick.
+
+If you're unsure whether something is authorized, it probably isn't. When in doubt, get it in writing (or learn how to cover your trail).
 
 ---
 
