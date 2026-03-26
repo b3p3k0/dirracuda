@@ -154,6 +154,27 @@ def test_probe_share_read_normalizes_status_on_error(monkeypatch):
     assert "Share not found" in result["error"]
 
 
+def test_probe_share_read_infers_timeout_from_generic_error(monkeypatch):
+    adapter = SMBAdapter()
+
+    def _fake_query(**_kwargs):
+        raise RuntimeError("socket timed out while listing root")
+
+    monkeypatch.setattr(adapter, "_query_share_entries_impacket", _fake_query)
+
+    result = adapter.probe_share_read(
+        "10.0.0.14",
+        share_name="Public",
+        username="guest",
+        password="",
+        cautious_mode=False,
+    )
+
+    assert result["accessible"] is False
+    assert result["status_code"] == "TIMEOUT"
+    assert "timed out" in result["error"].lower()
+
+
 def test_extract_status_code_handles_nt_and_plain_status():
     adapter = SMBAdapter()
     assert adapter._extract_status_code("NT_STATUS_LOGON_FAILURE") == "NT_STATUS_LOGON_FAILURE"

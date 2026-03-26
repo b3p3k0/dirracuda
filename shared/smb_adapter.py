@@ -173,13 +173,16 @@ class SMBAdapter:
             }
         except Exception as exc:
             message = str(exc)
-            status = self._extract_status_code(message) or "ERROR"
+            status = self._coerce_status_code(message)
+            error = self._friendly_error_from_status(status)
+            if status == "ERROR" and message:
+                error = message
             return {
                 "success": False,
                 "backend": "impacket",
                 "shares": [],
                 "status_code": status,
-                "error": message,
+                "error": error,
             }
 
     def probe_share_read(
@@ -216,14 +219,17 @@ class SMBAdapter:
             }
         except Exception as exc:
             message = str(exc)
-            status = self._extract_status_code(message) or "ERROR"
+            status = self._coerce_status_code(message)
+            error = self._friendly_error_from_status(status)
+            if status == "ERROR" and message:
+                error = message
             return {
                 "share_name": share_name,
                 "accessible": False,
                 "backend": "impacket",
                 "entry_count": 0,
                 "status_code": status,
-                "error": self._friendly_error_from_status(status),
+                "error": error,
             }
 
     def _query_shares_impacket(
@@ -467,6 +473,28 @@ class SMBAdapter:
         if status_code == "TIMEOUT":
             return "Connection timed out"
         return f"SMB protocol error ({status_code})"
+
+    def _coerce_status_code(self, message: str) -> str:
+        extracted = self._extract_status_code(message)
+        if extracted:
+            return extracted
+
+        lower = (message or "").lower()
+        if "timed out" in lower or "timeout" in lower:
+            return "TIMEOUT"
+        if "connection refused" in lower:
+            return "NT_STATUS_CONNECTION_REFUSED"
+        if "host unreachable" in lower:
+            return "NT_STATUS_HOST_UNREACHABLE"
+        if "network unreachable" in lower or "no route to host" in lower:
+            return "NT_STATUS_NETWORK_UNREACHABLE"
+        if "bad network name" in lower or "share not found" in lower:
+            return "NT_STATUS_BAD_NETWORK_NAME"
+        if "access denied" in lower:
+            return "NT_STATUS_ACCESS_DENIED"
+        if "logon failure" in lower or "authentication failed" in lower:
+            return "NT_STATUS_LOGON_FAILURE"
+        return "ERROR"
 
 
 __all__ = [

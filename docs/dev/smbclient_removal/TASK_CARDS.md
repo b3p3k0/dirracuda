@@ -154,6 +154,9 @@ HI test needed:
 
 ## Card S4: Access Share-Read Testing Cutover + Error Normalization
 
+Status:
+- Completed (2026-03-26)
+
 Issue:
 - Share access checks currently depend on `smbclient //host/share -c ls` and textual `NT_STATUS` parsing.
 
