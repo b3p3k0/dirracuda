@@ -41,6 +41,9 @@ HI test needed:
 
 ## Card S1: Pure-Python SMB Adapter Layer (Code)
 
+Status:
+- Completed (2026-03-26)
+
 Issue:
 - SMB logic is duplicated and transport-specific details leak into operations, making cutover risky.
 
