@@ -35,7 +35,7 @@ class _AdapterRecorder:
 def _make_op(cautious_mode: bool):
     return SimpleNamespace(
         cautious_mode=cautious_mode,
-        _smbclient_auth_cache={},
+        _auth_method_cache={},
         config=_MockConfig(),
         output=SimpleNamespace(print_if_verbose=lambda *_args, **_kwargs: None),
         shodan_host_metadata={},
@@ -47,7 +47,7 @@ def test_smb_alternative_passes_cautious_mode_to_adapter(monkeypatch):
     op = _make_op(cautious_mode=True)
     adapter = _AdapterRecorder({"success": False, "auth_method": None})
 
-    monkeypatch.setattr(auth, "check_smbclient_availability", lambda: True)
+    monkeypatch.setattr(auth, "check_transport_availability", lambda: True)
     monkeypatch.setattr(auth, "get_smb_adapter", lambda _op: adapter)
 
     auth.test_smb_alternative(op, "10.50.60.70")
@@ -59,7 +59,7 @@ def test_legacy_mode_uses_adapter_success_method(monkeypatch):
     op = _make_op(cautious_mode=False)
     adapter = _AdapterRecorder({"success": True, "auth_method": "Guest/Guest"})
 
-    monkeypatch.setattr(auth, "check_smbclient_availability", lambda: True)
+    monkeypatch.setattr(auth, "check_transport_availability", lambda: True)
     monkeypatch.setattr(auth, "get_smb_adapter", lambda _op: adapter)
 
     result = auth.test_smb_alternative(op, "10.50.60.71")
@@ -74,7 +74,7 @@ def test_single_host_uses_adapter_result_and_country_fallback(monkeypatch):
     adapter = _AdapterRecorder({"success": True, "auth_method": "Anonymous"})
 
     monkeypatch.setattr(auth, "check_port", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(auth, "check_smbclient_availability", lambda: True)
+    monkeypatch.setattr(auth, "check_transport_availability", lambda: True)
     monkeypatch.setattr(auth, "get_smb_adapter", lambda _op: adapter)
 
     result = auth.test_single_host(op, ip, country="GB")

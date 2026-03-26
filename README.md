@@ -9,17 +9,17 @@ A GUI for finding and categorizing open directory listings across multiple proto
 
 ## Setup
 
-You'll need Python 3.8+ (3.10+ recommended), Tkinter, and smbclient:
+You'll need Python 3.8+ (3.10+ recommended) and Tkinter:
 
 ```bash
 # Ubuntu/Debian
-sudo apt install python3-tk smbclient python3-venv
+sudo apt install python3-tk python3-venv
 
 # Fedora/RHEL
-sudo dnf install python3-tkinter samba-client python3-virtualenv
+sudo dnf install python3-tkinter python3-virtualenv
 
 # Arch
-sudo pacman -S tk smbclient python-virtualenv
+sudo pacman -S tk python-virtualenv
 ```
 
 Then:
@@ -58,9 +58,9 @@ Launch the GUI from your venv:
 | Package | Version | Purpose |
 |---------|---------|---------|
 | shodan | ≥1.25.0 | Shodan API client — discovers scan candidates by country and filter |
-| smbprotocol | ≥1.10.0 | Pure-Python SMB2/3 implementation; fallback when `smbclient` is unavailable |
+| smbprotocol | ≥1.10.0 | Pure-Python SMB2/3 transport for cautious-mode sessions |
 | pyspnego | ≥0.8.0 | SPNEGO authentication support; required by smbprotocol |
-| impacket | ≥0.11.0 | SMB1/2/3 protocol library; powers the file browser and share navigation |
+| impacket | ≥0.11.0 | SMB1/2/3 transport for legacy compatibility, share enumeration, and browser operations |
 | PyYAML | ≥6.0 | Loads RCE vulnerability signatures from `signatures/rce_smb/*.yaml` |
 | Pillow | ≥8.0.0 | Image rendering in the file viewer (PNG, JPEG, GIF, WebP, BMP, TIFF) |
 
@@ -69,7 +69,6 @@ Launch the GUI from your venv:
 | Tool | Install | Purpose |
 |------|---------|---------|
 | tkinter | `apt install python3-tk` | GUI framework; required to run Dirracuda |
-| smbclient | `apt install smbclient` | Primary SMB share enumeration; smbprotocol used as fallback if missing |
 
 ---
 

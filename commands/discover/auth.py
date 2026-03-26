@@ -12,12 +12,11 @@ import random
 from .smb_support import Connection, Session, SMBException
 
 
-def check_smbclient_availability() -> bool:
+def check_transport_availability() -> bool:
     """
     Backward-compatible transport availability check.
 
-    This now validates pure-Python SMB adapter availability instead of checking
-    for a system smbclient binary.
+    Validate that pure-Python SMB transport dependencies are importable.
     """
     try:
         from shared.smb_adapter import SMBAdapter  # noqa: F401
@@ -364,11 +363,11 @@ def test_smb_alternative(op, ip: str) -> Optional[str]:
     This keeps the original method contract but routes probing through the SMB
     adapter (`smbprotocol` first, `impacket` fallback in legacy mode).
     """
-    if not check_smbclient_availability():
+    if not check_transport_availability():
         return None
 
-    if ip in op._smbclient_auth_cache:
-        return op._smbclient_auth_cache[ip]
+    if ip in op._auth_method_cache:
+        return op._auth_method_cache[ip]
 
     adapter = get_smb_adapter(op)
     result = adapter.probe_authentication(
@@ -378,7 +377,7 @@ def test_smb_alternative(op, ip: str) -> Optional[str]:
     )
     method = result.get("auth_method") if result.get("success") else None
 
-    op._smbclient_auth_cache[ip] = method
+    op._auth_method_cache[ip] = method
     return method
 
 

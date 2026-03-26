@@ -35,7 +35,6 @@ def _make_op(cautious_mode: bool):
         config=_MockConfig(),
         output=SimpleNamespace(print_if_verbose=lambda *_args, **_kwargs: None),
         _smb_adapter=None,
-        smbclient_available=False,  # should not block pure-Python enumeration
     )
 
 

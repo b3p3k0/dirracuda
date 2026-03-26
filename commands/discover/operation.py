@@ -46,7 +46,7 @@ class DiscoverOperation:
         self._host_lookup_cache = {}
         self._auth_rate_lock = threading.Lock()
         self._last_auth_attempt = 0
-        self._smbclient_auth_cache = {}
+        self._auth_method_cache = {}
         self._connection_pool = SMBConnectionPool(max_connections_per_host=1, idle_timeout=60)
 
         try:
@@ -58,8 +58,8 @@ class DiscoverOperation:
 
         self.exclusions = host_filter.load_exclusions(self)
 
-        self.smbclient_available = auth.check_smbclient_availability()
-        if not self.smbclient_available:
+        self.transport_available = auth.check_transport_availability()
+        if not self.transport_available:
             self.output.print_if_verbose(
                 "SMB adapter unavailable; install required Python SMB libraries "
                 "(smbprotocol/impacket) for discovery authentication"
@@ -88,7 +88,7 @@ class DiscoverOperation:
 
         self.shodan_host_metadata = {}
         self._host_lookup_cache = {}
-        self._smbclient_auth_cache = {}
+        self._auth_method_cache = {}
 
         if force_hosts is None:
             force_hosts = set()
@@ -210,8 +210,8 @@ class DiscoverOperation:
     def _load_exclusions(self) -> List[str]:
         return host_filter.load_exclusions(self)
 
-    def _check_smbclient_availability(self) -> bool:
-        return auth.check_smbclient_availability()
+    def _check_transport_availability(self) -> bool:
+        return auth.check_transport_availability()
 
     def _throttled_auth_wait(self) -> None:
         return auth.throttled_auth_wait(self)

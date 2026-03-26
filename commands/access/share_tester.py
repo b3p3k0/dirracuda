@@ -1,7 +1,7 @@
 import re
 from typing import Optional
 
-from shared.smb_adapter import SMBAdapter, SMB_STATUS_HINTS
+from shared.smb_adapter import SMBAdapter
 
 
 def test_share_access(op, ip, share_name, username, password):
@@ -120,74 +120,6 @@ def _build_error_message(status_code: str, error_message: Optional[str]) -> Opti
     if status_code == "TIMEOUT":
         return error_message or "Connection timed out"
     return error_message or f"SMB protocol error ({status_code})"
-
-
-def _format_smbclient_error(result):
-    """
-    Legacy formatter kept for compatibility with operation wrappers.
-    """
-    def _clean(stream: Optional[str]) -> str:
-        if not stream:
-            return ""
-        return stream.strip().rstrip("~").strip()
-
-    stderr_trimmed = _clean(result.stderr)
-    stdout_trimmed = _clean(result.stdout)
-
-    if stderr_trimmed and stdout_trimmed:
-        combined_output = f"{stderr_trimmed} | {stdout_trimmed}"
-    elif stderr_trimmed:
-        combined_output = stderr_trimmed
-    elif stdout_trimmed:
-        combined_output = stdout_trimmed
-    else:
-        combined_output = ""
-
-    if not combined_output:
-        return (f"smbclient exited with code {result.returncode} and produced no output", "")
-
-    nt_status_match = re.search(r'(NT_STATUS_[A-Z_]+)', combined_output)
-
-    if nt_status_match and nt_status_match.group(1) == 'NT_STATUS_ACCESS_DENIED':
-        combined_lower = combined_output.lower()
-        if 'tree connect failed' in combined_lower and 'anonymous login successful' in combined_lower:
-            friendly_msg = 'Access denied - share does not allow anonymous/guest browsing (NT_STATUS_ACCESS_DENIED)'
-            return (friendly_msg, None)
-
-    if nt_status_match and nt_status_match.group(1) == 'NT_STATUS_LOGON_FAILURE':
-        combined_lower = combined_output.lower()
-        if 'tree connect failed' in combined_lower:
-            friendly_msg = 'Authentication failed for this share'
-            return (friendly_msg, None)
-
-    if nt_status_match:
-        status_code = nt_status_match.group(1)
-        hint = SMB_STATUS_HINTS.get(status_code, "SMB protocol error")
-
-        if status_code in ('NT_STATUS_IO_TIMEOUT', 'NT_STATUS_CONNECTION_REFUSED',
-                           'NT_STATUS_HOST_UNREACHABLE', 'NT_STATUS_NETWORK_UNREACHABLE'):
-            ip_match = re.search(r"Connection to\s+([^\s)]+)", combined_output)
-            target = ip_match.group(1) if ip_match else "target host"
-            friendly_msg = f"{hint} while reaching {target}"
-            return (friendly_msg, None)
-
-        if status_code == 'NT_STATUS_BAD_NETWORK_NAME':
-            friendly_msg = "Share not found on server"
-            return (friendly_msg, None)
-
-        start_pos = max(0, nt_status_match.start() - 80)
-        end_pos = min(len(combined_output), nt_status_match.end() + 80)
-        context = combined_output[start_pos:end_pos]
-
-        if len(context) > 160:
-            context = context[:157] + "..."
-
-        friendly_msg = f"{hint} ({status_code}) - {context}"
-        raw_ctx = combined_output if combined_output != friendly_msg else None
-        return (friendly_msg, raw_ctx)
-    else:
-        trimmed_output = combined_output[:160] + "..." if len(combined_output) > 160 else combined_output
-        return (f"smbclient error: {trimmed_output}", combined_output)
 
 
 def _extract_nt_status(message: str) -> Optional[str]:

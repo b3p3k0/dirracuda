@@ -42,7 +42,7 @@ class _StubAdapter:
 def _make_op(*, cautious_mode: bool):
     return SimpleNamespace(
         cautious_mode=cautious_mode,
-        _smbclient_auth_cache={},
+        _auth_method_cache={},
         config=_MockConfig(),
         output=SimpleNamespace(print_if_verbose=lambda *_args, **_kwargs: None),
         shodan_host_metadata={},
@@ -53,9 +53,9 @@ def _make_op(*, cautious_mode: bool):
 def test_smb_alternative_uses_cache_without_adapter(monkeypatch):
     op = _make_op(cautious_mode=False)
     ip = "10.20.30.40"
-    op._smbclient_auth_cache[ip] = "Guest/Blank"
+    op._auth_method_cache[ip] = "Guest/Blank"
 
-    monkeypatch.setattr(auth, "check_smbclient_availability", lambda: True)
+    monkeypatch.setattr(auth, "check_transport_availability", lambda: True)
 
     def _should_not_call(*_args, **_kwargs):
         raise AssertionError("get_smb_adapter should not be called for cached hosts")
@@ -70,7 +70,7 @@ def test_smb_alternative_populates_cache_from_adapter(monkeypatch):
     ip = "10.20.30.41"
     adapter = _StubAdapter({"success": True, "auth_method": "Guest/Guest"})
 
-    monkeypatch.setattr(auth, "check_smbclient_availability", lambda: True)
+    monkeypatch.setattr(auth, "check_transport_availability", lambda: True)
     monkeypatch.setattr(auth, "get_smb_adapter", lambda _op: adapter)
 
     first = auth.test_smb_alternative(op, ip)
@@ -78,7 +78,7 @@ def test_smb_alternative_populates_cache_from_adapter(monkeypatch):
 
     assert first == "Guest/Guest"
     assert second == "Guest/Guest"
-    assert op._smbclient_auth_cache[ip] == "Guest/Guest"
+    assert op._auth_method_cache[ip] == "Guest/Guest"
     assert len(adapter.calls) == 1
 
 
@@ -87,17 +87,17 @@ def test_smb_alternative_returns_none_on_failed_probe(monkeypatch):
     ip = "10.20.30.42"
     adapter = _StubAdapter({"success": False, "auth_method": None})
 
-    monkeypatch.setattr(auth, "check_smbclient_availability", lambda: True)
+    monkeypatch.setattr(auth, "check_transport_availability", lambda: True)
     monkeypatch.setattr(auth, "get_smb_adapter", lambda _op: adapter)
 
     assert auth.test_smb_alternative(op, ip) is None
-    assert op._smbclient_auth_cache[ip] is None
+    assert op._auth_method_cache[ip] is None
     assert adapter.calls[0]["cautious_mode"] is True
 
 
 def test_smb_alternative_skips_when_transport_unavailable(monkeypatch):
     op = _make_op(cautious_mode=False)
-    monkeypatch.setattr(auth, "check_smbclient_availability", lambda: False)
+    monkeypatch.setattr(auth, "check_transport_availability", lambda: False)
     assert auth.test_smb_alternative(op, "10.20.30.43") is None
 
 

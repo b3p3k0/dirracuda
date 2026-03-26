@@ -34,8 +34,6 @@ class AccessOperation:
     SMB share access verification operation.
     """
 
-    SMB_STATUS_HINTS = share_tester.SMB_STATUS_HINTS
-
     def __init__(self, config, output, database, session_id, cautious_mode=False, check_rce=False):
         self.config = config
         self.output = output
@@ -44,36 +42,14 @@ class AccessOperation:
         self.cautious_mode = cautious_mode
         self.check_rce = check_rce
 
-        self.smbclient_available = self.check_smbclient_availability()
-        if not self.smbclient_available:
-            self.output.print_if_verbose("smbclient unavailable; share enumeration will be limited.")
-
         self.results = []
         self.total_targets = 0
-
-    def check_smbclient_availability(self):
-        return share_enumerator.check_smbclient_availability()
-
-    def _build_smbclient_cmd(self, operation_type, target, username="", password="", **kwargs):
-        return share_enumerator.build_smbclient_cmd(self, operation_type, target, username, password, **kwargs)
-
-    def _execute_with_fallback(self, cmd, **kwargs):
-        return share_enumerator.execute_with_fallback(self, cmd, **kwargs)
 
     def enumerate_shares(self, ip, username, password):
         return share_enumerator.enumerate_shares(self, ip, username, password)
 
-    def _is_section_header(self, line):
-        return share_enumerator._is_section_header(self, line)
-
-    def parse_share_list(self, smbclient_output):
-        return share_enumerator.parse_share_list(self, smbclient_output)
-
     def test_share_access(self, ip, share_name, username, password):
         return share_tester.test_share_access(self, ip, share_name, username, password)
-
-    def _format_smbclient_error(self, result):
-        return share_tester._format_smbclient_error(result)
 
     def _extract_nt_status(self, message: str) -> Optional[str]:
         return share_tester._extract_nt_status(message)

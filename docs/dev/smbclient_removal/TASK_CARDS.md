@@ -189,6 +189,9 @@ HI test needed:
 
 ## Card S5: Hard Cutover Cleanup (Code + Docs)
 
+Status:
+- Completed (2026-03-26)
+
 Issue:
 - After migration, dead `smbclient` code paths and legacy labels can linger and reintroduce drift.
 
