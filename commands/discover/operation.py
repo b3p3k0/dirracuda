@@ -60,7 +60,10 @@ class DiscoverOperation:
 
         self.smbclient_available = auth.check_smbclient_availability()
         if not self.smbclient_available:
-            self.output.print_if_verbose("smbclient unavailable; authentication will use smbprotocol only")
+            self.output.print_if_verbose(
+                "SMB adapter unavailable; install required Python SMB libraries "
+                "(smbprotocol/impacket) for discovery authentication"
+            )
 
         self.stats = {
             'shodan_results': 0,

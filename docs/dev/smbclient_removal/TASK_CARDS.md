@@ -79,6 +79,9 @@ HI test needed:
 
 ## Card S2: Discovery Cutover (Remove `smbclient` Fallback)
 
+Status:
+- Completed (2026-03-26)
+
 Issue:
 - Discovery currently falls back to `smbclient -L` when `smbprotocol` auth fails.
 

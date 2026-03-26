@@ -1,4 +1,3 @@
-import subprocess
 import sys
 import types
 from types import SimpleNamespace
@@ -20,124 +19,107 @@ class _MockConfig:
     def get_connection_timeout(self) -> int:
         return self._timeout
 
+    def get(self, *_args, **_kwargs):
+        return 10
 
-def _make_op(*, cautious_mode: bool, smbclient_available: bool = True):
+
+class _StubAdapter:
+    def __init__(self, response: dict) -> None:
+        self.response = response
+        self.calls = []
+
+    def probe_authentication(self, ip, cautious_mode, timeout_seconds):
+        self.calls.append(
+            {
+                "ip": ip,
+                "cautious_mode": cautious_mode,
+                "timeout_seconds": timeout_seconds,
+            }
+        )
+        return self.response
+
+
+def _make_op(*, cautious_mode: bool):
     return SimpleNamespace(
         cautious_mode=cautious_mode,
-        smbclient_available=smbclient_available,
         _smbclient_auth_cache={},
         config=_MockConfig(),
         output=SimpleNamespace(print_if_verbose=lambda *_args, **_kwargs: None),
+        shodan_host_metadata={},
+        _connection_pool=SimpleNamespace(return_connection=lambda *_args, **_kwargs: None),
     )
 
 
-def test_smb_alternative_tries_all_combos_and_returns_matching_method(monkeypatch):
-    op = _make_op(cautious_mode=False)
-    ip = "10.20.30.40"
-    calls = []
-
-    def _fake_run(cmd, **_kwargs):
-        calls.append(cmd)
-        if len(calls) < 3:
-            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="NT_STATUS_LOGON_FAILURE")
-        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-    monkeypatch.setattr(auth.subprocess, "run", _fake_run)
-
-    result = auth.test_smb_alternative(op, ip)
-
-    assert result == "Guest/Guest"
-    assert op._smbclient_auth_cache[ip] == "Guest/Guest"
-    assert calls == [
-        ["smbclient", "-L", f"//{ip}", "-N"],
-        ["smbclient", "-L", f"//{ip}", "--user", "guest%"],
-        ["smbclient", "-L", f"//{ip}", "--user", "guest%guest"],
-    ]
-
-
-def test_smb_alternative_uses_cache_without_subprocess(monkeypatch):
+def test_smb_alternative_uses_cache_without_adapter(monkeypatch):
     op = _make_op(cautious_mode=False)
     ip = "10.20.30.40"
     op._smbclient_auth_cache[ip] = "Guest/Blank"
 
-    def _should_not_run(*_args, **_kwargs):
-        raise AssertionError("subprocess.run should not be called for cached hosts")
+    monkeypatch.setattr(auth, "check_smbclient_availability", lambda: True)
 
-    monkeypatch.setattr(auth.subprocess, "run", _should_not_run)
+    def _should_not_call(*_args, **_kwargs):
+        raise AssertionError("get_smb_adapter should not be called for cached hosts")
+
+    monkeypatch.setattr(auth, "get_smb_adapter", _should_not_call)
 
     assert auth.test_smb_alternative(op, ip) == "Guest/Blank"
 
 
-def test_smb_alternative_cautious_mode_enforces_smb2_plus_flags(monkeypatch):
+def test_smb_alternative_populates_cache_from_adapter(monkeypatch):
+    op = _make_op(cautious_mode=False)
+    ip = "10.20.30.41"
+    adapter = _StubAdapter({"success": True, "auth_method": "Guest/Guest"})
+
+    monkeypatch.setattr(auth, "check_smbclient_availability", lambda: True)
+    monkeypatch.setattr(auth, "get_smb_adapter", lambda _op: adapter)
+
+    first = auth.test_smb_alternative(op, ip)
+    second = auth.test_smb_alternative(op, ip)
+
+    assert first == "Guest/Guest"
+    assert second == "Guest/Guest"
+    assert op._smbclient_auth_cache[ip] == "Guest/Guest"
+    assert len(adapter.calls) == 1
+
+
+def test_smb_alternative_returns_none_on_failed_probe(monkeypatch):
     op = _make_op(cautious_mode=True)
-    ip = "10.20.30.40"
-    captured = []
+    ip = "10.20.30.42"
+    adapter = _StubAdapter({"success": False, "auth_method": None})
 
-    def _fake_run(cmd, **_kwargs):
-        captured.append(cmd)
-        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+    monkeypatch.setattr(auth, "check_smbclient_availability", lambda: True)
+    monkeypatch.setattr(auth, "get_smb_adapter", lambda _op: adapter)
 
-    monkeypatch.setattr(auth.subprocess, "run", _fake_run)
-
-    result = auth.test_smb_alternative(op, ip)
-
-    assert result == "Anonymous"
-    assert captured[0] == [
-        "smbclient",
-        "--max-protocol=SMB3",
-        "--option=client min protocol=SMB2",
-        "-L",
-        f"//{ip}",
-        "-N",
-    ]
+    assert auth.test_smb_alternative(op, ip) is None
+    assert op._smbclient_auth_cache[ip] is None
+    assert adapter.calls[0]["cautious_mode"] is True
 
 
-def test_smb_alternative_legacy_mode_does_not_force_smb2_plus_flags(monkeypatch):
+def test_smb_alternative_skips_when_transport_unavailable(monkeypatch):
     op = _make_op(cautious_mode=False)
-    ip = "10.20.30.40"
-    captured = []
-
-    def _fake_run(cmd, **_kwargs):
-        captured.append(cmd)
-        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-    monkeypatch.setattr(auth.subprocess, "run", _fake_run)
-
-    result = auth.test_smb_alternative(op, ip)
-
-    assert result == "Anonymous"
-    assert captured[0] == ["smbclient", "-L", f"//{ip}", "-N"]
-    assert "--max-protocol=SMB3" not in captured[0]
-    assert "--option=client min protocol=SMB2" not in captured[0]
+    monkeypatch.setattr(auth, "check_smbclient_availability", lambda: False)
+    assert auth.test_smb_alternative(op, "10.20.30.43") is None
 
 
-def test_smb_alternative_treats_sharename_output_as_success(monkeypatch):
+def test_single_host_returns_auth_without_smbclient_suffix(monkeypatch):
     op = _make_op(cautious_mode=False)
-    ip = "10.20.30.40"
+    ip = "10.20.30.44"
+    op.shodan_host_metadata[ip] = {"country_name": "USA", "country_code": "US"}
 
-    def _fake_run(cmd, **_kwargs):
-        return subprocess.CompletedProcess(
-            cmd,
-            1,
-            stdout="Sharename       Type      Comment\n---------       ----      -------\n",
-            stderr="NT_STATUS_ACCESS_DENIED",
-        )
+    monkeypatch.setattr(auth, "check_port", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(auth, "test_smb_alternative", lambda *_args, **_kwargs: "Guest/Blank")
 
-    monkeypatch.setattr(auth.subprocess, "run", _fake_run)
+    result = auth.test_single_host(op, ip, country="USA")
 
-    result = auth.test_smb_alternative(op, ip)
-
-    assert result == "Anonymous"
-    assert op._smbclient_auth_cache[ip] == "Anonymous"
+    assert result is not None
+    assert result["auth_method"] == "Guest/Blank"
+    assert "(smbclient)" not in result["auth_method"]
 
 
-def test_smb_alternative_skips_when_smbclient_unavailable(monkeypatch):
-    op = _make_op(cautious_mode=False, smbclient_available=False)
+def test_single_host_returns_none_when_probe_fails(monkeypatch):
+    op = _make_op(cautious_mode=False)
 
-    def _should_not_run(*_args, **_kwargs):
-        raise AssertionError("subprocess.run should not be called when smbclient is unavailable")
+    monkeypatch.setattr(auth, "check_port", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(auth, "test_smb_alternative", lambda *_args, **_kwargs: None)
 
-    monkeypatch.setattr(auth.subprocess, "run", _should_not_run)
-
-    assert auth.test_smb_alternative(op, "10.20.30.40") is None
-
+    assert auth.test_single_host(op, "10.20.30.45") is None
