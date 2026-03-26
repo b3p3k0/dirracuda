@@ -118,6 +118,9 @@ HI test needed:
 
 ## Card S3: Access Share Enumeration Cutover (No CLI Parsing)
 
+Status:
+- Completed (2026-03-26)
+
 Issue:
 - Access phase enumerates shares by parsing `smbclient -L` output text, which is brittle and subprocess-dependent.
 
