@@ -142,7 +142,7 @@ Results are cached in `~/.dirracuda/probes/` and reloaded automatically. Configu
 ### Browsing Shares
 
 ![file browser](img/browse.png)
-Read-only navigation through SMB shares. Double-click directories to descend, files to preview. You can also select a file and click **View**.
+Read-only navigation available shares. Double-click directories to descend, files to preview.
 
 The viewer auto-detects file types: text files display with an encoding selector (UTF-8, Latin-1, etc.), binary files switch to hex mode, and images (PNG, JPEG, GIF, WebP, BMP, TIFF) render with fit-to-window scaling.
 
@@ -279,7 +279,7 @@ The CLI is useful for scripting and automation. The GUI uses the same backends.
 
 This started as a collection of crude bash and python scripts I've written over 30+ years of networking and security work — dorks, one-liners for poking at servers, that sort of thing. At some point it made sense to turn them into something with a GUI and a database, but the undertaking was far outside my skillset. I understand fundamentals of programming and logic but get lost in the sauce of syntax and structure.
 
-Part of the goal here is finding out how far AI-assisted development can actually go. The answer, in my experience, is pretty far. I bring domain knowledge, the spec, and the judgment call on what matters; the AI handles implementation, consistency, and the parts that would otherwise be tedious. 
+Part of the goal here is finding out how far AI-assisted development can actually go. The answer, in my experience, is pretty far. 
 
 ---
 
