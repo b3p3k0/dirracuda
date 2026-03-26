@@ -5,13 +5,10 @@ This directory is the dedicated workspace for the pure-Python SMB migration.
 ## Active Artifacts
 
 1. `TASK_CARDS.md` - End-to-end execution cards (one-card-at-a-time model)
-
-## Planned Artifacts
-
-1. `CONTRACT_MATRIX.md` - Current SMB callsites and replacement contract map
-2. `RISK_REGISTER.md` - Migration risks, mitigations, rollback triggers
-3. `S6_VALIDATION_REPORT.md` - Final automated/manual validation evidence
-4. `S6_ROLLBACK_RUNBOOK.md` - Rollback procedure and recovery expectations
+2. `CONTRACT_MATRIX.md` - SMB callsites and replacement contract map
+3. `RISK_REGISTER.md` - Migration risks, mitigations, rollback triggers
+4. `S6_VALIDATION_REPORT.md` - Final automated/manual validation evidence
+5. `S6_ROLLBACK_RUNBOOK.md` - Rollback procedure and recovery expectations
 
 ## Working Rules
 

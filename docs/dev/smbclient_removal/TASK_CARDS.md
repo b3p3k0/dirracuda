@@ -228,6 +228,9 @@ HI test needed:
 
 ## Card S6: Full Validation + Rollback Drill
 
+Status:
+- Completed (2026-03-26)
+
 Issue:
 - Transport migration needs explicit proof that cautious/legacy contracts still hold and can be rolled back safely.
 
