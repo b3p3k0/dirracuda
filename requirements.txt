@@ -14,10 +14,7 @@ python-dateutil>=2.8.0   # Date parsing utilities
 impacket>=0.11.0         # SMB probe enumeration support
 pyasn1>=0.6.3            # Security fix: avoid vulnerable recursion DoS in <=0.6.2
 pyOpenSSL>=26.0.0        # Security fix: reject oversized DTLS cookie callback values
-
-# Testing framework
-pytest>=7.0.0            # Testing framework
-pytest-cov>=4.0.0        # Coverage reporting
+requests>=2.33.0         # Security fix: avoid predictable temp extraction path in <2.33.0
 
 # Database and data handling (included in Python standard library)
 # sqlite3 - built-in
