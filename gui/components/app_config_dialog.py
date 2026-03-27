@@ -16,6 +16,7 @@ from typing import Any, Callable, Dict, Optional
 
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.style import get_theme
+from gui.utils.wordlist_path import normalize_wordlist_path
 from shared.db_path_resolution import (
     auto_detect_database_path,
     normalize_database_path,
@@ -160,7 +161,8 @@ class AppConfigDialog:
             return
 
         self.api_key = str(_get_nested(config_data, ("shodan", "api_key"), "") or "")
-        self.wordlist_path = str(_get_nested(config_data, ("pry", "wordlist_path"), "") or "")
+        raw_wordlist = str(_get_nested(config_data, ("pry", "wordlist_path"), "") or "")
+        self.wordlist_path = normalize_wordlist_path(raw_wordlist, config_path=path_obj)
 
         quarantine_candidates = [
             _get_nested(config_data, ("file_browser", "quarantine_root"), ""),
@@ -592,6 +594,15 @@ class AppConfigDialog:
         for field in ("smbseek", "database", "config", "api_key", "quarantine", "wordlist"):
             self._validate_field(field)
 
+    def _messagebox_parent(self) -> tk.Widget:
+        dialog = self.dialog
+        try:
+            if dialog is not None and int(dialog.winfo_exists()) == 1:
+                return dialog
+        except Exception:
+            pass
+        return self.parent
+
     # ------------------------------------------------------------------
     # Save behavior
     # ------------------------------------------------------------------
@@ -606,17 +617,29 @@ class AppConfigDialog:
     def _open_smbseek_config_editor(self) -> None:
         config_path = self.config_var.get().strip() if self.config_var else ""
         if not config_path:
-            messagebox.showwarning("No Configuration File", "Please specify a configuration file path first.")
+            messagebox.showwarning(
+                "No Configuration File",
+                "Please specify a configuration file path first.",
+                parent=self._messagebox_parent(),
+            )
             return
 
         if not self.config_editor_callback:
-            messagebox.showinfo("Configuration Editor", "Configuration editor callback not available.")
+            messagebox.showinfo(
+                "Configuration Editor",
+                "Configuration editor callback not available.",
+                parent=self._messagebox_parent(),
+            )
             return
 
         try:
             self.config_editor_callback(config_path)
         except Exception as exc:
-            messagebox.showerror("Configuration Editor Error", f"Failed to open configuration editor:\n{exc}")
+            messagebox.showerror(
+                "Configuration Editor Error",
+                f"Failed to open configuration editor:\n{exc}",
+                parent=self._messagebox_parent(),
+            )
 
     def _validate_and_save(self) -> bool:
         self._validate_all_fields()
@@ -630,6 +653,7 @@ class AppConfigDialog:
             messagebox.showerror(
                 "Configuration Validation Failed",
                 f"Please fix the following issues before saving:\n\n{details}",
+                parent=self._messagebox_parent(),
             )
             return False
 
@@ -713,12 +737,14 @@ class AppConfigDialog:
                     "Configuration Saved",
                     "Settings were saved, but Shodan API key is empty.\n"
                     "Discovery scans will fail until a valid key is set.",
+                    parent=self._messagebox_parent(),
                 )
             if not self.validation_results["wordlist"]["valid"]:
                 messagebox.showwarning(
                     "Configuration Saved",
                     "Settings were saved, but the Pry wordlist path is invalid.\n"
                     "Pry operations may fail until this path is corrected.",
+                    parent=self._messagebox_parent(),
                 )
 
             return True
@@ -726,6 +752,7 @@ class AppConfigDialog:
             messagebox.showerror(
                 "Configuration Save Failed",
                 f"Failed to save configuration:\n{exc}\n\nPlease check your settings and try again.",
+                parent=self._messagebox_parent(),
             )
             return False
 
@@ -782,4 +809,8 @@ def open_app_config_dialog(
     try:
         AppConfigDialog(parent, settings_manager, config_editor_callback, main_config, refresh_callback)
     except Exception as exc:
-        messagebox.showerror("Configuration Dialog Error", f"Failed to open configuration dialog:\n{exc}")
+        messagebox.showerror(
+            "Configuration Dialog Error",
+            f"Failed to open configuration dialog:\n{exc}",
+            parent=parent,
+        )

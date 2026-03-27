@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 
 from gui.utils.dialog_helpers import ensure_dialog_focus
+from gui.utils.wordlist_path import normalize_wordlist_path
 
 
 class PryDialog:
@@ -238,6 +239,11 @@ class PryDialog:
                 defaults["max_attempts"] = int(pry_cfg.get("max_attempts", defaults["max_attempts"]))
             except Exception:
                 pass
+
+        defaults["wordlist_path"] = normalize_wordlist_path(
+            defaults.get("wordlist_path", ""),
+            config_path=self.config_path,
+        )
 
         return defaults
 

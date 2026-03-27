@@ -55,7 +55,7 @@
     "executive_summary": true
   },
   "pry": {
-    "wordlist_path": "conf/wordlists/rockyou.txt",
+    "wordlist_path": "",
     "user_as_pass": true,
     "stop_on_lockout": true,
     "verbose": false,

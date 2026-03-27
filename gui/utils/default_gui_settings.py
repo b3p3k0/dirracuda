@@ -107,7 +107,7 @@ DEFAULT_GUI_SETTINGS = {
         'batch_max_workers': 3
     },
     'pry': {
-        'wordlist_path': 'conf/wordlists/rockyou.txt',
+        'wordlist_path': '',
         'user_as_pass': True,
         'stop_on_lockout': True,
         'verbose': False,
