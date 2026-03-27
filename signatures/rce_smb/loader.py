@@ -5,7 +5,6 @@ YAML signature loading and parsing functionality.
 Handles file discovery, YAML parsing, and validation orchestration.
 """
 
-import os
 import yaml
 import logging
 from pathlib import Path
@@ -15,6 +14,7 @@ from dataclasses import dataclass
 from .validator import SignatureValidator, ValidationError
 
 logger = logging.getLogger(__name__)
+DEFAULT_SIGNATURES_DIR = Path(__file__).resolve().parents[2] / "conf" / "signatures" / "rce_smb"
 
 
 @dataclass
@@ -80,12 +80,10 @@ class SignatureLoader:
 
         Args:
             signatures_dir: Directory containing signature YAML files.
-                          Defaults to signatures/rce_smb in project root.
+                          Defaults to conf/signatures/rce_smb in project root.
         """
         if signatures_dir is None:
-            # Default to package directory
-            package_dir = Path(__file__).parent
-            self.signatures_dir = package_dir
+            self.signatures_dir = DEFAULT_SIGNATURES_DIR
         else:
             self.signatures_dir = Path(signatures_dir)
 
@@ -104,10 +102,16 @@ class SignatureLoader:
             SignatureLoadError: If signatures directory doesn't exist
         """
         if not self.signatures_dir.exists():
-            raise SignatureLoadError(f"Signatures directory not found: {self.signatures_dir}")
+            raise SignatureLoadError(
+                f"Signatures directory not found: {self.signatures_dir}. "
+                "Expected RCE signature YAML files under conf/signatures/rce_smb."
+            )
 
         if not self.signatures_dir.is_dir():
-            raise SignatureLoadError(f"Signatures path is not a directory: {self.signatures_dir}")
+            raise SignatureLoadError(
+                f"Signatures path is not a directory: {self.signatures_dir}. "
+                "Expected RCE signature YAML files under conf/signatures/rce_smb."
+            )
 
         # Find YAML files
         yaml_patterns = ["*.yaml", "*.yml"]
