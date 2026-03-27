@@ -28,7 +28,6 @@ from gui.utils.probe_cache_dispatch import (
     dispatch_probe_run,
 )
 from gui.utils.probe_snapshot_summary import (
-    LOOSE_FILES_DISPLAY_TOKEN,
     summarize_probe_snapshot,
 )
 from gui.utils.database_access import DatabaseReader
@@ -435,9 +434,29 @@ def _format_probe_section(probe_result: Optional[Dict[str, Any]]) -> str:
         for share in shares:
             share_name = share.get("share", "Unknown Share")
             lines.append(f"   Share: {share_name}")
-            root_files = share.get("root_files", [])
+            root_files_raw = share.get("root_files", [])
+            root_files: List[str] = []
+            for item in root_files_raw:
+                if isinstance(item, str):
+                    name = item.strip()
+                elif isinstance(item, dict):
+                    name = str(
+                        item.get("name")
+                        or item.get("file_name")
+                        or item.get("file")
+                        or ""
+                    ).strip()
+                else:
+                    name = str(item).strip()
+                if name:
+                    root_files.append(name)
+
             if root_files:
-                lines.append(f"      • {LOOSE_FILES_DISPLAY_TOKEN}")
+                lines.append("      Root files:")
+                for file_name in root_files:
+                    lines.append(f"         • {file_name}")
+                if share.get("root_files_truncated"):
+                    lines.append("         … additional root files not shown")
             directories = share.get("directories", [])
             if not directories:
                 if not root_files:
@@ -487,8 +506,12 @@ def _format_probe_section(probe_result: Optional[Dict[str, Any]]) -> str:
     if errors:
         lines.append("\n   ⚠ Probe Errors:")
         for err in errors:
-            share = err.get("share", "Unknown share")
-            message = err.get("message", "Unknown error")
+            if isinstance(err, dict):
+                share = err.get("share", "Unknown share")
+                message = err.get("message", "Unknown error")
+            else:
+                share = "Unknown share"
+                message = str(err)
             lines.append(f"      {share}: {message}")
 
     lines.append("")
