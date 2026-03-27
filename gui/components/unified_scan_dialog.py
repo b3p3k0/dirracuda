@@ -58,6 +58,7 @@ class UnifiedScanDialog:
         self.custom_filters_entry = None
         self.template_dropdown = None
         self.delete_template_button = None
+        self.max_results_entry = None
 
         # Protocol selections (default: all enabled)
         self.protocol_smb_var = tk.BooleanVar(value=True)
@@ -75,7 +76,7 @@ class UnifiedScanDialog:
         self.south_america_var = tk.BooleanVar(value=False)
 
         # Shared runtime settings
-        self.max_results_var = tk.IntVar(value=1000)
+        self.max_results_var = tk.StringVar(value="1000")
         self.shared_concurrency_var = tk.StringVar(value="10")
         self.shared_timeout_var = tk.StringVar(value="10")
         self.verbose_var = tk.BooleanVar(value=False)
@@ -165,7 +166,7 @@ class UnifiedScanDialog:
             )
 
             self.max_results_var.set(
-                _coerce_int(self._settings_manager.get_setting("unified_scan_dialog.max_shodan_results", 1000), 1000)
+                str(_coerce_int(self._settings_manager.get_setting("unified_scan_dialog.max_shodan_results", 1000), 1000))
             )
             self.custom_filters_var.set(str(self._settings_manager.get_setting("unified_scan_dialog.custom_filters", "")))
             self.country_var.set(str(self._settings_manager.get_setting("unified_scan_dialog.country_code", "")))
@@ -323,7 +324,6 @@ class UnifiedScanDialog:
         self.dialog.bind("<Return>", lambda _e: self._start())
         self.dialog.bind("<Escape>", lambda _e: self._cancel())
         self.country_var.trace_add("write", self._validate_country_input)
-        self.max_results_var.trace_add("write", self._validate_max_results)
 
         target_entry = self.custom_filters_entry or self.country_entry
         if target_entry:
@@ -601,10 +601,7 @@ class UnifiedScanDialog:
 
         max_results = state.get("max_results")
         if max_results is not None:
-            try:
-                self.max_results_var.set(int(max_results))
-            except (ValueError, tk.TclError):
-                pass
+            self.max_results_var.set(str(max_results))
 
         shared_conc = state.get("shared_concurrency")
         if shared_conc is not None:
@@ -806,6 +803,7 @@ class UnifiedScanDialog:
         )
         self.theme.apply_to_widget(max_results_entry, "entry")
         max_results_entry.pack(side=tk.LEFT)
+        self.max_results_entry = max_results_entry
 
         hint = self.theme.create_styled_label(
             row,
@@ -1051,14 +1049,6 @@ class UnifiedScanDialog:
         if upper != raw:
             self.country_var.set(upper)
 
-    def _validate_max_results(self, *_args) -> None:
-        try:
-            v = self.max_results_var.get()
-            if not (1 <= v <= 1000):
-                self.max_results_var.set(max(1, min(1000, v)))
-        except tk.TclError:
-            self.max_results_var.set(1000)
-
     def _parse_positive_int(self, value_str: str, field_name: str, *, minimum: int = 1, maximum: int) -> int:
         if not value_str.strip():
             raise ValueError(f"{field_name} is required.")
@@ -1071,6 +1061,30 @@ class UnifiedScanDialog:
         if v > maximum:
             raise ValueError(f"{field_name} must be {maximum} or less.")
         return v
+
+    def _parse_max_results(self, value_str: str) -> int:
+        raw = str(value_str or "").strip()
+        if not raw:
+            raise ValueError("Max Shodan Results is required.")
+        try:
+            value = int(raw)
+        except ValueError as exc:
+            raise ValueError("Max Shodan Results must be a whole number.") from exc
+        if value <= 0:
+            raise ValueError("Max Shodan Results must be greater than 0.")
+        if value > 1000:
+            raise ValueError("Max Shodan Results must be 1000 or less.")
+        return value
+
+    def _focus_max_results_entry(self) -> None:
+        entry = getattr(self, "max_results_entry", None)
+        if not entry:
+            return
+        try:
+            entry.focus_set()
+            entry.select_range(0, tk.END)
+        except Exception:
+            pass
 
     def _parse_and_validate_countries(self, country_input: str) -> tuple[list[str], str]:
         if not country_input.strip():
@@ -1174,6 +1188,8 @@ class UnifiedScanDialog:
     # ------------------------------------------------------------------
 
     def _build_scan_request(self) -> Dict[str, Any]:
+        max_shodan_results = self._parse_max_results(self.max_results_var.get())
+
         shared_concurrency = self._parse_positive_int(
             self.shared_concurrency_var.get().strip(),
             "Backend concurrency",
@@ -1213,7 +1229,7 @@ class UnifiedScanDialog:
         return {
             "protocols": protocols,
             "country": country_param,
-            "max_shodan_results": int(self.max_results_var.get()),
+            "max_shodan_results": max_shodan_results,
             "custom_filters": self.custom_filters_var.get().strip(),
             "shared_concurrency": shared_concurrency,
             "shared_timeout_seconds": shared_timeout,
@@ -1232,6 +1248,8 @@ class UnifiedScanDialog:
             scan_request = self._build_scan_request()
         except ValueError as exc:
             messagebox.showerror("Invalid Input", str(exc), parent=self.dialog)
+            if "Max Shodan Results" in str(exc):
+                self._focus_max_results_entry()
             return
 
         protocol_label = ", ".join(p.upper() for p in scan_request["protocols"])
