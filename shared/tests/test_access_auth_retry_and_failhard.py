@@ -140,6 +140,7 @@ def test_execute_aborts_on_fatal_access_error(monkeypatch):
     hosts = [{"ip_address": "10.99.99.12", "country": "US", "auth_method": "Anonymous"}]
     op = _make_operation(hosts)
 
+    monkeypatch.setattr("commands.access.operation.SMB_AVAILABLE", True)
     monkeypatch.setattr("commands.access.operation.share_enumerator.preflight_access_backend", lambda _op: None)
     monkeypatch.setattr(op, "process_target", lambda *_args, **_kwargs: (_ for _ in ()).throw(FatalAccessError("fatal backend failure")))
 

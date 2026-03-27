@@ -1,7 +1,7 @@
 from typing import Any, Dict, List
 
 
-_FATAL_STATUSES = {"ERROR", "DEPENDENCY_MISSING"}
+_FATAL_STATUSES = {"DEPENDENCY_MISSING", "NORMALIZATION_ERROR"}
 
 
 def _get_smb_adapter(op):

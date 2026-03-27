@@ -68,6 +68,7 @@ def test_probe_authentication_does_not_use_impacket_in_cautious(monkeypatch):
 
 def test_list_shares_normalizes_response(monkeypatch):
     adapter = SMBAdapter()
+    monkeypatch.setattr(adapter, "ensure_backend_available", lambda *_args, **_kwargs: None)
 
     def _fake_query(**_kwargs):
         return [
@@ -94,6 +95,7 @@ def test_list_shares_normalizes_response(monkeypatch):
 
 def test_list_shares_normalizes_object_backed_rows(monkeypatch):
     adapter = SMBAdapter()
+    monkeypatch.setattr(adapter, "ensure_backend_available", lambda *_args, **_kwargs: None)
 
     class _ShareInfoLike:
         def __init__(self, netname: str, share_type: int, remark: str) -> None:
@@ -129,6 +131,7 @@ def test_list_shares_normalizes_object_backed_rows(monkeypatch):
 
 def test_probe_share_read_marks_empty_share_inaccessible(monkeypatch):
     adapter = SMBAdapter()
+    monkeypatch.setattr(adapter, "ensure_backend_available", lambda *_args, **_kwargs: None)
 
     def _fake_query(**_kwargs):
         return [".", ".."]
@@ -149,6 +152,7 @@ def test_probe_share_read_marks_empty_share_inaccessible(monkeypatch):
 
 def test_probe_share_read_marks_nonempty_share_accessible(monkeypatch):
     adapter = SMBAdapter()
+    monkeypatch.setattr(adapter, "ensure_backend_available", lambda *_args, **_kwargs: None)
 
     def _fake_query(**_kwargs):
         return [".", "..", "readme.txt"]
@@ -170,6 +174,7 @@ def test_probe_share_read_marks_nonempty_share_accessible(monkeypatch):
 
 def test_probe_share_read_normalizes_status_on_error(monkeypatch):
     adapter = SMBAdapter()
+    monkeypatch.setattr(adapter, "ensure_backend_available", lambda *_args, **_kwargs: None)
 
     def _fake_query(**_kwargs):
         raise RuntimeError("Server returned STATUS_BAD_NETWORK_NAME while listing path")
@@ -191,6 +196,7 @@ def test_probe_share_read_normalizes_status_on_error(monkeypatch):
 
 def test_probe_share_read_infers_timeout_from_generic_error(monkeypatch):
     adapter = SMBAdapter()
+    monkeypatch.setattr(adapter, "ensure_backend_available", lambda *_args, **_kwargs: None)
 
     def _fake_query(**_kwargs):
         raise RuntimeError("socket timed out while listing root")
@@ -234,3 +240,34 @@ def test_list_shares_marks_missing_impacket_as_dependency_error(monkeypatch):
     assert result["success"] is False
     assert result["status_code"] == "DEPENDENCY_MISSING"
     assert "dependency" in result["error"].lower()
+
+
+def test_list_shares_marks_normalization_error(monkeypatch):
+    adapter = SMBAdapter()
+    monkeypatch.setattr(adapter, "ensure_backend_available", lambda *_args, **_kwargs: None)
+
+    class _BrokenShareInfo:
+        def __getitem__(self, key):
+            if key == "shi1_type":
+                return "not-an-int"
+            if key == "shi1_netname":
+                return "Public"
+            if key == "shi1_remark":
+                return "Main"
+            raise KeyError(key)
+
+    def _fake_query(**_kwargs):
+        return [_BrokenShareInfo()]
+
+    monkeypatch.setattr(adapter, "_query_shares_impacket", _fake_query)
+
+    result = adapter.list_shares(
+        "10.0.0.17",
+        username="guest",
+        password="",
+        cautious_mode=False,
+    )
+
+    assert result["success"] is False
+    assert result["status_code"] == "NORMALIZATION_ERROR"
+    assert "normalization failed" in result["error"].lower()

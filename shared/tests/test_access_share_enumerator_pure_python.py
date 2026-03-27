@@ -71,7 +71,7 @@ def test_enumerate_shares_returns_empty_on_adapter_failure(monkeypatch):
     assert shares == []
 
 
-def test_enumerate_shares_detailed_marks_error_as_fatal(monkeypatch):
+def test_enumerate_shares_detailed_keeps_generic_error_nonfatal(monkeypatch):
     op = _make_op(cautious_mode=False)
     adapter = _AdapterStub({"success": False, "status_code": "ERROR", "error": "adapter bug", "shares": []})
 
@@ -80,8 +80,28 @@ def test_enumerate_shares_detailed_marks_error_as_fatal(monkeypatch):
     result = share_enumerator.enumerate_shares_detailed(op, "10.20.30.60", "guest", "")
 
     assert result["success"] is False
-    assert result["fatal"] is True
+    assert result["fatal"] is False
     assert result["status_code"] == "ERROR"
+
+
+def test_enumerate_shares_detailed_marks_normalization_error_fatal(monkeypatch):
+    op = _make_op(cautious_mode=False)
+    adapter = _AdapterStub(
+        {
+            "success": False,
+            "status_code": "NORMALIZATION_ERROR",
+            "error": "SMB adapter normalization failed",
+            "shares": [],
+        }
+    )
+
+    monkeypatch.setattr(share_enumerator, "_get_smb_adapter", lambda _op: adapter)
+
+    result = share_enumerator.enumerate_shares_detailed(op, "10.20.30.62", "guest", "")
+
+    assert result["success"] is False
+    assert result["fatal"] is True
+    assert result["status_code"] == "NORMALIZATION_ERROR"
 
 
 def test_enumerate_shares_detailed_keeps_access_denied_nonfatal(monkeypatch):

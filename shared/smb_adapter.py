@@ -164,7 +164,16 @@ class SMBAdapter:
                 cautious_mode=cautious_mode,
                 timeout=timeout,
             )
-            shares = [self._normalize_share_row(row) for row in rows]
+            try:
+                shares = [self._normalize_share_row(row) for row in rows]
+            except Exception as exc:
+                return {
+                    "success": False,
+                    "backend": "impacket",
+                    "shares": [],
+                    "status_code": "NORMALIZATION_ERROR",
+                    "error": f"SMB adapter normalization failed: {exc}",
+                }
             return {
                 "success": True,
                 "backend": "impacket",
