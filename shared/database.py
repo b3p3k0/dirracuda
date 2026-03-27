@@ -396,8 +396,8 @@ class SMBSeekWorkflowDatabase:
                 SELECT DISTINCT s.ip_address, s.country, s.auth_method, s.last_seen,
                        GROUP_CONCAT(sa.share_name) as accessible_shares
                 FROM smb_servers s
-                LEFT JOIN share_access sa ON s.id = sa.server_id
-                WHERE s.auth_method IS NOT NULL AND (sa.accessible = 1 OR sa.accessible IS NULL)
+                LEFT JOIN share_access sa ON s.id = sa.server_id AND sa.accessible = 1
+                WHERE s.auth_method IS NOT NULL
             """
 
             params = []

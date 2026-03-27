@@ -11,7 +11,7 @@ import os
 import socket
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Set, List, Dict, Optional, Any
 
@@ -23,10 +23,15 @@ if PROJECT_ROOT not in sys.path:
 from shared.config import load_config, get_standard_timestamp  # noqa: F401 (retained for compatibility)
 from shared.database import create_workflow_database  # noqa: F401
 from shared.output import create_output_manager  # noqa: F401
+from shared.smb_adapter import AUTH_METHODS_DEFAULT
 
 from .models import AccessResult
 from .smb_support import SMB_AVAILABLE
 from . import share_enumerator, share_tester, rce_analyzer
+
+
+class FatalAccessError(RuntimeError):
+    """Non-recoverable access-phase error that should abort the scan."""
 
 
 class AccessOperation:
@@ -48,6 +53,9 @@ class AccessOperation:
     def enumerate_shares(self, ip, username, password):
         return share_enumerator.enumerate_shares(self, ip, username, password)
 
+    def enumerate_shares_detailed(self, ip, username, password):
+        return share_enumerator.enumerate_shares_detailed(self, ip, username, password)
+
     def test_share_access(self, ip, share_name, username, password):
         return share_tester.test_share_access(self, ip, share_name, username, password)
 
@@ -62,7 +70,17 @@ class AccessOperation:
         Execute the access verification operation.
         """
         if not SMB_AVAILABLE:
-            raise RuntimeError("SMB libraries not available. Install with: pip install smbprotocol pyspnego")
+            raise RuntimeError(
+                "SMB libraries not available. Install with: pip install smbprotocol impacket pyspnego"
+            )
+
+        try:
+            share_enumerator.preflight_access_backend(self)
+        except Exception as e:
+            raise RuntimeError(
+                f"SMB access backend unavailable: {e}. "
+                "Install dependencies in the active runtime with: pip install -r requirements.txt"
+            ) from e
 
         self.output.print_if_verbose("Starting share access verification...")
 
@@ -107,11 +125,16 @@ class AccessOperation:
                 future = executor.submit(self.process_target, host, host_position)
                 future_to_metadata[future] = (index, host_position)
 
-            for future in future_to_metadata:
+            for future in as_completed(future_to_metadata):
                 index, _host_position = future_to_metadata[future]
                 try:
                     result = future.result()
                     results_by_index[index] = result
+                except FatalAccessError as e:
+                    for pending in future_to_metadata:
+                        if pending is not future:
+                            pending.cancel()
+                    raise RuntimeError(str(e)) from e
                 except Exception as e:
                     host = authenticated_hosts[index]
                     error_result = {
@@ -143,15 +166,19 @@ class AccessOperation:
         """Parse authentication method string to extract credentials."""
         auth_lower = auth_method_str.lower()
 
-        if 'anonymous' in auth_lower:
-            return "", ""
+        if 'guest/guest' in auth_lower:
+            return "guest", "guest"
         elif 'guest/blank' in auth_lower or 'guest/' in auth_lower:
             return "guest", ""
-        elif 'guest/guest' in auth_lower:
-            return "guest", "guest"
+        elif 'anonymous' in auth_lower:
+            return "", ""
         else:
             self.output.print_if_verbose(f"Unknown auth method '{auth_method_str}', defaulting to guest/guest")
             return "guest", "guest"
+
+    def auth_attempt_sequence(self):
+        """Try stronger auth paths first; stop after first successful share enumeration."""
+        return list(AUTH_METHODS_DEFAULT)
 
     def process_target(self, host_record, host_position):
         """Process a single host target for share access testing."""
@@ -161,9 +188,6 @@ class AccessOperation:
 
         host_label = f"Host {host_position}/{self.total_targets}"
         self.output.info(f"[{host_position}/{self.total_targets}] Testing {ip} ({country})...")
-
-        username, password = self.parse_auth_method(auth_method)
-        self.output.info(f"Using auth: {username}/{password if password else '[blank]'}")
 
         target_result = {
             'ip_address': ip,
@@ -182,7 +206,32 @@ class AccessOperation:
                 target_result['error'] = 'Port 445 not accessible'
                 return target_result
 
-            shares = self.enumerate_shares(ip, username, password)
+            shares = []
+            selected_username = ""
+            selected_password = ""
+            auth_attempts = self.auth_attempt_sequence()
+
+            for method_name, username, password in auth_attempts:
+                self.output.info(
+                    f"Using auth: {username}/{password if password else '[blank]'} ({method_name})"
+                )
+                enum_result = self.enumerate_shares_detailed(ip, username, password)
+                status_code = str(enum_result.get("status_code") or "ERROR")
+                enum_error = str(enum_result.get("error") or "")
+
+                if enum_result.get("fatal"):
+                    raise FatalAccessError(
+                        f"Fatal SMB share enumeration failure on {ip}: "
+                        f"{enum_error or status_code}"
+                    )
+
+                if enum_result.get("success"):
+                    shares = enum_result.get("shares", [])
+                    selected_username = username
+                    selected_password = password
+                    target_result['auth_method'] = method_name
+                    break
+
             target_result['shares_found'] = shares
 
             if not shares:
@@ -194,7 +243,7 @@ class AccessOperation:
             self.output.success(f"Found {len(shares)} shares to test on {ip}")
 
             for i, share_name in enumerate(shares, 1):
-                access_result = self.test_share_access(ip, share_name, username, password)
+                access_result = self.test_share_access(ip, share_name, selected_username, selected_password)
                 target_result['share_details'].append(access_result)
 
                 if access_result['accessible']:
@@ -241,6 +290,8 @@ class AccessOperation:
             if self.check_rce:
                 self._analyze_rce_vulnerabilities(target_result)
 
+        except FatalAccessError:
+            raise
         except Exception as e:
             self.output.error(f"Error testing target {ip}: {str(e)[:50]}")
             target_result['error'] = str(e)

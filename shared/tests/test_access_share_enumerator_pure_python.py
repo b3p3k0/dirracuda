@@ -71,6 +71,39 @@ def test_enumerate_shares_returns_empty_on_adapter_failure(monkeypatch):
     assert shares == []
 
 
+def test_enumerate_shares_detailed_marks_error_as_fatal(monkeypatch):
+    op = _make_op(cautious_mode=False)
+    adapter = _AdapterStub({"success": False, "status_code": "ERROR", "error": "adapter bug", "shares": []})
+
+    monkeypatch.setattr(share_enumerator, "_get_smb_adapter", lambda _op: adapter)
+
+    result = share_enumerator.enumerate_shares_detailed(op, "10.20.30.60", "guest", "")
+
+    assert result["success"] is False
+    assert result["fatal"] is True
+    assert result["status_code"] == "ERROR"
+
+
+def test_enumerate_shares_detailed_keeps_access_denied_nonfatal(monkeypatch):
+    op = _make_op(cautious_mode=False)
+    adapter = _AdapterStub(
+        {
+            "success": False,
+            "status_code": "NT_STATUS_ACCESS_DENIED",
+            "error": "Access denied",
+            "shares": [],
+        }
+    )
+
+    monkeypatch.setattr(share_enumerator, "_get_smb_adapter", lambda _op: adapter)
+
+    result = share_enumerator.enumerate_shares_detailed(op, "10.20.30.61", "guest", "")
+
+    assert result["success"] is False
+    assert result["fatal"] is False
+    assert result["status_code"] == "NT_STATUS_ACCESS_DENIED"
+
+
 def test_enumerate_shares_passes_cautious_mode_to_adapter(monkeypatch):
     op = _make_op(cautious_mode=True)
     adapter = _AdapterStub({"success": True, "shares": []})

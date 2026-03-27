@@ -327,16 +327,24 @@ class SMBSeekDataAccessLayer:
         
         if result:
             server_id = result[0]['id']
-            # Update last_seen and scan_count using direct SQL to increment
+            # Update scan freshness and refresh metadata when new values are provided.
             query = """
                 UPDATE smb_servers 
-                SET last_seen = ?, scan_count = scan_count + 1, updated_at = ?
+                SET last_seen = ?,
+                    scan_count = scan_count + 1,
+                    updated_at = ?,
+                    country = COALESCE(?, country),
+                    country_code = COALESCE(?, country_code),
+                    auth_method = COALESCE(?, auth_method)
                 WHERE id = ?
             """
             timestamp = get_standard_timestamp()
             self.db.execute_query(query, (
                 timestamp,
                 timestamp,
+                country,
+                country_code,
+                auth_method,
                 server_id
             ))
             return server_id

@@ -19,7 +19,7 @@ def test_probe_authentication_prefers_smbprotocol(monkeypatch):
 
     assert result["success"] is True
     assert result["backend"] == "smbprotocol"
-    assert result["auth_method"] == "Anonymous"
+    assert result["auth_method"] == "Guest/Guest"
     assert impacket_calls["count"] == 0
 
 
@@ -89,6 +89,41 @@ def test_list_shares_normalizes_response(monkeypatch):
     assert result["shares"][0]["is_disk"] is True
     assert result["shares"][0]["is_admin"] is False
     assert result["shares"][1]["name"] == "IPC$"
+    assert result["shares"][1]["is_admin"] is True
+
+
+def test_list_shares_normalizes_object_backed_rows(monkeypatch):
+    adapter = SMBAdapter()
+
+    class _ShareInfoLike:
+        def __init__(self, netname: str, share_type: int, remark: str) -> None:
+            self._data = {
+                "shi1_netname": netname,
+                "shi1_type": share_type,
+                "shi1_remark": remark,
+            }
+
+        def __getitem__(self, key):
+            return self._data[key]
+
+    def _fake_query(**_kwargs):
+        return [
+            _ShareInfoLike("Public\x00", 0, "Main\x00"),
+            _ShareInfoLike("IPC$\x00", 3, "IPC\x00"),
+        ]
+
+    monkeypatch.setattr(adapter, "_query_shares_impacket", _fake_query)
+
+    result = adapter.list_shares(
+        "10.0.0.15",
+        username="guest",
+        password="",
+        cautious_mode=False,
+    )
+
+    assert result["success"] is True
+    assert [s["name"] for s in result["shares"]] == ["Public", "IPC$"]
+    assert result["shares"][0]["is_disk"] is True
     assert result["shares"][1]["is_admin"] is True
 
 
@@ -179,3 +214,23 @@ def test_extract_status_code_handles_nt_and_plain_status():
     adapter = SMBAdapter()
     assert adapter._extract_status_code("NT_STATUS_LOGON_FAILURE") == "NT_STATUS_LOGON_FAILURE"
     assert adapter._extract_status_code("status_access_denied") == "NT_STATUS_ACCESS_DENIED"
+
+
+def test_list_shares_marks_missing_impacket_as_dependency_error(monkeypatch):
+    adapter = SMBAdapter()
+
+    def _missing_backend(_backend):
+        raise RuntimeError("Missing required SMB backend dependency: impacket (No module named 'impacket')")
+
+    monkeypatch.setattr(adapter, "ensure_backend_available", _missing_backend)
+
+    result = adapter.list_shares(
+        "10.0.0.16",
+        username="guest",
+        password="",
+        cautious_mode=False,
+    )
+
+    assert result["success"] is False
+    assert result["status_code"] == "DEPENDENCY_MISSING"
+    assert "dependency" in result["error"].lower()

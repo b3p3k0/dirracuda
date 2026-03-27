@@ -14,9 +14,9 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 
 AUTH_METHODS_DEFAULT: Tuple[Tuple[str, str, str], ...] = (
-    ("Anonymous", "", ""),
-    ("Guest/Blank", "guest", ""),
     ("Guest/Guest", "guest", "guest"),
+    ("Guest/Blank", "guest", ""),
+    ("Anonymous", "", ""),
 )
 
 
@@ -156,6 +156,7 @@ class SMBAdapter:
         timeout = self._resolve_timeout(timeout_seconds)
 
         try:
+            self.ensure_backend_available("impacket")
             rows = self._query_shares_impacket(
                 ip_address=ip_address,
                 username=username,
@@ -199,6 +200,7 @@ class SMBAdapter:
         timeout = self._resolve_timeout(timeout_seconds)
 
         try:
+            self.ensure_backend_available("impacket")
             names = self._query_share_entries_impacket(
                 ip_address=ip_address,
                 share_name=share_name,
@@ -291,6 +293,7 @@ class SMBAdapter:
         allow_smb1: bool,
         timeout: int,
     ):
+        self.ensure_backend_available("impacket")
         from impacket.smbconnection import SMBConnection, SMB_DIALECT  # type: ignore
         from impacket.smb3structs import SMB2_DIALECT_002  # type: ignore
 
@@ -369,7 +372,7 @@ class SMBAdapter:
 
         except Exception as exc:
             message = str(exc)
-            return False, message, self._extract_status_code(message)
+            return False, message, self._coerce_status_code(message)
         finally:
             if session is not None:
                 try:
@@ -406,7 +409,7 @@ class SMBAdapter:
             return True, None, None
         except Exception as exc:
             message = str(exc)
-            return False, message, self._extract_status_code(message)
+            return False, message, self._coerce_status_code(message)
         finally:
             self._close_impacket_session(conn)
 
@@ -432,9 +435,9 @@ class SMBAdapter:
         return max(1, int(timeout_seconds))
 
     def _normalize_share_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
-        name = self._trim_trailing_nul(str(row.get("shi1_netname", "")))
-        comment = self._trim_trailing_nul(str(row.get("shi1_remark", "")))
-        share_type = int(row.get("shi1_type", 0))
+        name = self._trim_trailing_nul(str(self._row_value(row, "shi1_netname", "")))
+        comment = self._trim_trailing_nul(str(self._row_value(row, "shi1_remark", "")))
+        share_type = int(self._row_value(row, "shi1_type", 0) or 0)
 
         return {
             "name": name,
@@ -447,6 +450,48 @@ class SMBAdapter:
     @staticmethod
     def _trim_trailing_nul(value: str) -> str:
         return value.rstrip("\x00").strip()
+
+    @staticmethod
+    def _row_value(row: Any, key: str, default: Any) -> Any:
+        if isinstance(row, dict):
+            return row.get(key, default)
+
+        try:
+            return row[key]
+        except Exception:
+            pass
+
+        if hasattr(row, key):
+            return getattr(row, key)
+
+        return default
+
+    def ensure_backend_available(self, backend: str = "impacket") -> None:
+        if backend == "impacket":
+            self._ensure_impacket_available()
+            return
+        if backend == "smbprotocol":
+            self._ensure_smbprotocol_available()
+            return
+        raise ValueError(f"Unknown SMB backend: {backend}")
+
+    def _ensure_impacket_available(self) -> None:
+        try:
+            from impacket.smbconnection import SMBConnection  # noqa: F401  # type: ignore
+            from impacket.smb3structs import SMB2_DIALECT_002  # noqa: F401  # type: ignore
+        except Exception as exc:
+            raise RuntimeError(
+                f"Missing required SMB backend dependency: impacket ({exc})"
+            ) from exc
+
+    def _ensure_smbprotocol_available(self) -> None:
+        try:
+            from smbprotocol.connection import Connection  # noqa: F401  # type: ignore
+            from smbprotocol.session import Session  # noqa: F401  # type: ignore
+        except Exception as exc:
+            raise RuntimeError(
+                f"Missing required SMB backend dependency: smbprotocol ({exc})"
+            ) from exc
 
     def _extract_status_code(self, message: str) -> Optional[str]:
         if not message:
@@ -466,6 +511,8 @@ class SMBAdapter:
             return "SMB protocol error"
         if status_code in SMB_STATUS_HINTS:
             return SMB_STATUS_HINTS[status_code]
+        if status_code == "DEPENDENCY_MISSING":
+            return "Missing required Python SMB dependency"
         if status_code == "ACCESS_DENIED":
             return "Access denied - insufficient permissions"
         if status_code == "BAD_NETWORK_NAME":
@@ -480,6 +527,10 @@ class SMBAdapter:
             return extracted
 
         lower = (message or "").lower()
+        if "no module named 'impacket'" in lower or "dependency: impacket" in lower:
+            return "DEPENDENCY_MISSING"
+        if "no module named 'smbprotocol'" in lower or "dependency: smbprotocol" in lower:
+            return "DEPENDENCY_MISSING"
         if "timed out" in lower or "timeout" in lower:
             return "TIMEOUT"
         if "connection refused" in lower:
