@@ -153,7 +153,48 @@ The viewer auto-detects file types: text files display with an encoding selector
 
 Files over the specified maximum (default: 5 MB) trigger a warning—you can bump that limit in `conf/config.json` under `file_browser.viewer.max_view_size_mb`, or click "Ignore Once" to load anyway (hard cap: 1 GB).
 
-Downloads land in quarantine (`~/.dirracuda/quarantine/`). The browser never writes to remote systems.
+Downloads are staged in quarantine (`~/.dirracuda/quarantine/`). When ClamAV is enabled, downloaded files are post-processed by verdict (clean files promoted to extracted, infected files moved to known-bad). The browser never writes to remote systems.
+
+#### Optional tmpfs quarantine (Linux)
+
+Dirracuda can stage quarantine files in RAM-backed `tmpfs` instead of disk.
+
+- Mountpoint is fixed to `~/.dirracuda/quarantine_tmpfs`
+- Linux only (controls are disabled on non-Linux platforms)
+- If mount/setup fails, Dirracuda falls back to the configured disk quarantine path and shows one warning per app session
+
+To pre-mount at boot, add an `/etc/fstab` entry like the one below (replace `<USER>`), then run `sudo mount -a`.
+Dirracuda will reuse this mount when tmpfs mode is enabled.
+
+```fstab
+tmpfs  /home/<USER>/.dirracuda/quarantine_tmpfs  tmpfs  noexec,nosuid,nodev,size=512M,noswap  0  0
+```
+
+Enable in **App Config**:
+
+- Check `Use memory (tmpfs) for quarantine`
+- Set `Max size (MB)` (default `512`)
+
+Or set in `conf/config.json`:
+
+```json
+{
+  "quarantine": {
+    "use_tmpfs": true,
+    "tmpfs_size_mb": 512
+  }
+}
+```
+
+Manual setup notes (Linux):
+
+```bash
+# Validate mount appears after starting Dirracuda with tmpfs enabled
+mount | grep -F "$HOME/.dirracuda/quarantine_tmpfs"
+
+# Inspect current tmpfs usage
+df -h "$HOME/.dirracuda/quarantine_tmpfs"
+```
 
 ### Extracting Files
 
@@ -168,11 +209,16 @@ Automated file collection with configurable limits:
 
 All extracted files land in quarantine. The defaults are conservative — check `conf/config.json` if you need to adjust them.
 
-#### Optional ClamAV scanning (bulk extract)
+#### Optional ClamAV scanning (bulk extract + browser downloads)
 
 ClamAV integration is optional and off by default.
 
-When enabled, bulk extract paths (`Dashboard` post-scan bulk extract and `Server List` batch extract) scan each downloaded file and then route it by verdict:
+When enabled, ClamAV post-processes files downloaded via:
+
+- Bulk extract paths (`Dashboard` post-scan bulk extract and `Server List` batch extract)
+- Browser/manual file downloads (SMB/FTP/HTTP browser windows)
+
+Each file is scanned and then routed by verdict:
 
 - **clean** → moved to `~/.dirracuda/extracted/<host>/<date>/<share>/...`
 - **infected** → moved to `~/.dirracuda/quarantine/<known_bad_subdir>/<host>/<date>/<share>/...` (default subdir: `known_bad`)
@@ -190,7 +236,7 @@ Configure it from **App Config → ClamAV Settings**:
 Notes:
 
 - The results dialog supports **Mute until restart**.
-- Browser/manual downloads are not part of this phase; this integration currently applies to bulk extract flows.
+- One completion popup is shown per session (ClamAV results dialog if shown, otherwise a single fallback completion popup).
 
 ### Pry (Password Audit)
 

@@ -9,6 +9,7 @@ to scan, browse, and extract workflows.
 import json
 import os
 import subprocess
+import sys
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox
@@ -26,6 +27,9 @@ from shared.db_path_resolution import (
 
 _CLAMAV_TRUE = frozenset(("true", "yes", "1"))
 _CLAMAV_BACKENDS = frozenset(("auto", "clamdscan", "clamscan"))
+_TMPFS_SIZE_MIN_MB = 64
+_TMPFS_SIZE_MAX_MB = 4096
+_TMPFS_SIZE_DEFAULT_MB = 512
 
 
 def _coerce_bool_cfg(value: Any, default: bool) -> bool:
@@ -35,6 +39,18 @@ def _coerce_bool_cfg(value: Any, default: bool) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in _CLAMAV_TRUE
+
+
+def _coerce_int_cfg(value: Any, default: int, *, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    if parsed < minimum:
+        return minimum
+    if parsed > maximum:
+        return maximum
+    return parsed
 
 
 def _ensure_dict(value: Any) -> Dict[str, Any]:
@@ -104,6 +120,9 @@ class AppConfigDialog:
         self.api_key = ""
         self.quarantine_path = "~/.dirracuda/quarantine"
         self.wordlist_path = ""
+        self.quarantine_tmpfs_enabled = False
+        self.quarantine_tmpfs_size_mb = _TMPFS_SIZE_DEFAULT_MB
+        self._tmpfs_supported_platform = sys.platform.startswith("linux")
 
         self.validation_results: Dict[str, Dict[str, Any]] = {
             "smbseek": {"valid": False, "message": ""},
@@ -123,6 +142,8 @@ class AppConfigDialog:
         self.api_key_var: Optional[tk.StringVar] = None
         self.quarantine_var: Optional[tk.StringVar] = None
         self.wordlist_var: Optional[tk.StringVar] = None
+        self.quarantine_entry_widget: Optional[tk.Entry] = None
+        self.quarantine_browse_button: Optional[tk.Button] = None
         self.api_key_entry: Optional[tk.Entry] = None
         self.api_key_toggle_btn: Optional[tk.Button] = None
         self.api_key_masked = True
@@ -140,6 +161,10 @@ class AppConfigDialog:
         self.clamav_extracted_root_var: Optional[tk.StringVar] = None
         self.clamav_known_bad_subdir_var: Optional[tk.StringVar] = None
         self.clamav_show_results_var: Optional[tk.BooleanVar] = None
+        self.quarantine_tmpfs_enabled_var: Optional[tk.BooleanVar] = None
+        self.quarantine_tmpfs_size_var: Optional[tk.StringVar] = None
+        self.quarantine_tmpfs_size_entry: Optional[tk.Entry] = None
+        self.quarantine_tmpfs_note_label: Optional[tk.Label] = None
 
         self._load_current_settings()
         self._create_dialog()
@@ -202,6 +227,19 @@ class AppConfigDialog:
                 self.quarantine_path = candidate.strip()
                 break
 
+        quarantine_cfg = config_data.get("quarantine")
+        if isinstance(quarantine_cfg, dict):
+            self.quarantine_tmpfs_enabled = _coerce_bool_cfg(quarantine_cfg.get("use_tmpfs"), False)
+            self.quarantine_tmpfs_size_mb = _coerce_int_cfg(
+                quarantine_cfg.get("tmpfs_size_mb"),
+                _TMPFS_SIZE_DEFAULT_MB,
+                minimum=_TMPFS_SIZE_MIN_MB,
+                maximum=_TMPFS_SIZE_MAX_MB,
+            )
+        else:
+            self.quarantine_tmpfs_enabled = False
+            self.quarantine_tmpfs_size_mb = _TMPFS_SIZE_DEFAULT_MB
+
         clamav_raw = config_data.get("clamav")
         if isinstance(clamav_raw, dict):
             self.clamav_enabled = _coerce_bool_cfg(clamav_raw.get("enabled"), False)
@@ -224,7 +262,7 @@ class AppConfigDialog:
     def _create_dialog(self) -> None:
         self.dialog = tk.Toplevel(self.parent)
         self.dialog.title("Dirracuda - Application Configuration")
-        self.dialog.geometry("760x800")
+        self.dialog.geometry("760x900")
         self.dialog.minsize(720, 680)
         self.theme.apply_to_widget(self.dialog, "main_window")
         self.dialog.transient(self.parent)
@@ -272,7 +310,9 @@ class AppConfigDialog:
 
         self._create_compact_card(container, "Core Paths", ("smbseek", "database", "config"))
         self._create_compact_card(container, "Runtime Settings", ("api_key", "quarantine", "wordlist"))
+        self._create_tmpfs_card(container)
         self._create_clamav_card(container)
+        self._sync_quarantine_controls_for_tmpfs()
 
         action_row = tk.Frame(container)
         self.theme.apply_to_widget(action_row, "main_window")
@@ -300,6 +340,111 @@ class AppConfigDialog:
 
         for field in fields:
             self._create_field_row(card, field)
+
+    def _create_tmpfs_card(self, parent: tk.Widget) -> None:
+        card = tk.Frame(parent, highlightthickness=1, bd=0)
+        self.theme.apply_to_widget(card, "card")
+        try:
+            card.configure(
+                highlightbackground=self.theme.colors["border"],
+                highlightcolor=self.theme.colors["border"],
+            )
+        except tk.TclError:
+            pass
+        card.pack(fill=tk.X, pady=(0, 10))
+
+        heading = self.theme.create_styled_label(card, "In-Memory Quarantine (tmpfs)", "body")
+        heading.pack(anchor=tk.W, padx=12, pady=(10, 6))
+
+        row1 = tk.Frame(card)
+        self.theme.apply_to_widget(row1, "card")
+        row1.pack(fill=tk.X, padx=10, pady=(0, 6))
+        self.quarantine_tmpfs_enabled_var = tk.BooleanVar(value=self.quarantine_tmpfs_enabled)
+        cb_tmpfs = tk.Checkbutton(
+            row1,
+            text="Use memory (tmpfs) for quarantine",
+            variable=self.quarantine_tmpfs_enabled_var,
+            command=self._sync_quarantine_controls_for_tmpfs,
+        )
+        self.theme.apply_to_widget(cb_tmpfs, "checkbox")
+        cb_tmpfs.pack(anchor=tk.W)
+
+        row2 = tk.Frame(card)
+        self.theme.apply_to_widget(row2, "card")
+        row2.pack(fill=tk.X, padx=10, pady=(0, 6))
+        lbl_size = self.theme.create_styled_label(
+            row2,
+            "Max size (MB):",
+            "small",
+            fg=self.theme.colors["text_secondary"],
+        )
+        lbl_size.pack(side=tk.LEFT, padx=(0, 8))
+        self.quarantine_tmpfs_size_var = tk.StringVar(value=str(self.quarantine_tmpfs_size_mb))
+        self.quarantine_tmpfs_size_entry = tk.Entry(
+            row2,
+            textvariable=self.quarantine_tmpfs_size_var,
+            font=("Arial", 10),
+            width=8,
+        )
+        self.theme.apply_to_widget(self.quarantine_tmpfs_size_entry, "entry")
+        self.quarantine_tmpfs_size_entry.pack(side=tk.LEFT)
+        size_hint = self.theme.create_styled_label(
+            row2,
+            f"Range {_TMPFS_SIZE_MIN_MB}-{_TMPFS_SIZE_MAX_MB}",
+            "small",
+            fg=self.theme.colors["text_secondary"],
+        )
+        size_hint.pack(side=tk.LEFT, padx=(6, 0))
+
+        self.quarantine_tmpfs_note_label = self.theme.create_styled_label(
+            card,
+            "",
+            "small",
+            fg=self.theme.colors["text_secondary"],
+        )
+        self.quarantine_tmpfs_note_label.pack(anchor=tk.W, padx=12, pady=(0, 10))
+
+        if not self._tmpfs_supported_platform:
+            if self.quarantine_tmpfs_enabled_var:
+                self.quarantine_tmpfs_enabled_var.set(False)
+            try:
+                cb_tmpfs.configure(state=tk.DISABLED)
+            except tk.TclError:
+                pass
+            try:
+                self.quarantine_tmpfs_size_entry.configure(state=tk.DISABLED)
+            except tk.TclError:
+                pass
+
+    def _sync_quarantine_controls_for_tmpfs(self) -> None:
+        tmpfs_enabled = bool(self.quarantine_tmpfs_enabled_var.get()) if self.quarantine_tmpfs_enabled_var else False
+        if not self._tmpfs_supported_platform:
+            tmpfs_enabled = False
+
+        quarantine_state = tk.DISABLED if tmpfs_enabled else tk.NORMAL
+        for widget in (self.quarantine_entry_widget, self.quarantine_browse_button):
+            if widget is None:
+                continue
+            try:
+                widget.configure(state=quarantine_state)
+            except tk.TclError:
+                pass
+
+        if self.quarantine_tmpfs_size_entry is not None:
+            size_state = tk.NORMAL if (tmpfs_enabled and self._tmpfs_supported_platform) else tk.DISABLED
+            try:
+                self.quarantine_tmpfs_size_entry.configure(state=size_state)
+            except tk.TclError:
+                pass
+
+        if self.quarantine_tmpfs_note_label is not None:
+            if not self._tmpfs_supported_platform:
+                note = "tmpfs quarantine is available on Linux only; this setting is disabled here."
+            elif tmpfs_enabled:
+                note = "Quarantine directory selection is disabled while tmpfs mode is enabled."
+            else:
+                note = "When enabled, quarantine writes route to ~/.dirracuda/quarantine_tmpfs."
+            self.quarantine_tmpfs_note_label.configure(text=note)
 
     def _create_clamav_card(self, parent: tk.Widget) -> None:
         card = tk.Frame(parent, highlightthickness=1, bd=0)
@@ -421,6 +566,8 @@ class AppConfigDialog:
         entry = tk.Entry(row, textvariable=variable, font=("Arial", 10), show=show_mask)
         self.theme.apply_to_widget(entry, "entry")
         entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
+        if field == "quarantine":
+            self.quarantine_entry_widget = entry
         if field == "api_key":
             self.api_key_entry = entry
             toggle_button = tk.Button(
@@ -443,6 +590,8 @@ class AppConfigDialog:
             )
             self.theme.apply_to_widget(browse_button, "button_secondary")
             browse_button.pack(side=tk.LEFT, padx=(0, 8))
+            if field == "quarantine":
+                self.quarantine_browse_button = browse_button
 
         status_label = tk.Label(row, text="", font=("Arial", 11, "bold"), width=2)
         self.theme.apply_to_widget(status_label, "text")
@@ -841,6 +990,33 @@ class AppConfigDialog:
             "show_results": bool(_show_var.get()) if _show_var else True,
         }
 
+        tmpfs_enabled_var = getattr(self, "quarantine_tmpfs_enabled_var", None)
+        tmpfs_size_var = getattr(self, "quarantine_tmpfs_size_var", None)
+        tmpfs_supported_platform = getattr(self, "_tmpfs_supported_platform", sys.platform.startswith("linux"))
+        tmpfs_enabled = bool(tmpfs_enabled_var.get()) if tmpfs_enabled_var else False
+        if not tmpfs_supported_platform:
+            tmpfs_enabled = False
+        try:
+            tmpfs_size_mb = int(tmpfs_size_var.get()) if tmpfs_size_var else _TMPFS_SIZE_DEFAULT_MB
+        except (TypeError, ValueError):
+            messagebox.showerror(
+                "Configuration Validation Failed",
+                f"tmpfs size must be an integer between {_TMPFS_SIZE_MIN_MB} and {_TMPFS_SIZE_MAX_MB} MB.",
+                parent=self._messagebox_parent(),
+            )
+            return False
+        if tmpfs_size_mb < _TMPFS_SIZE_MIN_MB or tmpfs_size_mb > _TMPFS_SIZE_MAX_MB:
+            messagebox.showerror(
+                "Configuration Validation Failed",
+                f"tmpfs size must be between {_TMPFS_SIZE_MIN_MB} and {_TMPFS_SIZE_MAX_MB} MB.",
+                parent=self._messagebox_parent(),
+            )
+            return False
+        new_quarantine_tmpfs = {
+            "use_tmpfs": tmpfs_enabled,
+            "tmpfs_size_mb": tmpfs_size_mb,
+        }
+
         old_smbseek = self.smbseek_path
         old_database = self.database_path
         old_config_path = self.config_path
@@ -870,6 +1046,7 @@ class AppConfigDialog:
                     new_quarantine,
                     new_wordlist,
                     clamav_settings=new_clamav,
+                    quarantine_tmpfs_settings=new_quarantine_tmpfs,
                 )
                 if not self.main_config.save_config():
                     raise RuntimeError("Failed to write config.json")
@@ -890,6 +1067,7 @@ class AppConfigDialog:
                     new_quarantine,
                     new_wordlist,
                     clamav_settings=new_clamav,
+                    quarantine_tmpfs_settings=new_quarantine_tmpfs,
                 )
                 path_obj = Path(new_config_path).expanduser()
                 path_obj.parent.mkdir(parents=True, exist_ok=True)
@@ -901,6 +1079,8 @@ class AppConfigDialog:
             self.api_key = new_api_key
             self.quarantine_path = new_quarantine
             self.wordlist_path = new_wordlist
+            self.quarantine_tmpfs_enabled = tmpfs_enabled
+            self.quarantine_tmpfs_size_mb = tmpfs_size_mb
 
             # Refresh downstream interfaces whenever runtime-critical values changed.
             runtime_changed = (
@@ -966,6 +1146,7 @@ class AppConfigDialog:
         quarantine_path: str,
         wordlist_path: str,
         clamav_settings: Optional[Dict[str, Any]] = None,
+        quarantine_tmpfs_settings: Optional[Dict[str, Any]] = None,
     ) -> None:
         # Shodan API key drives scan processes.
         _set_nested(config_data, ("shodan", "api_key"), api_key)
@@ -984,6 +1165,10 @@ class AppConfigDialog:
             _set_nested(config_data, ("clamav", "extracted_root"), clamav_settings["extracted_root"])
             _set_nested(config_data, ("clamav", "known_bad_subdir"), clamav_settings["known_bad_subdir"])
             _set_nested(config_data, ("clamav", "show_results"), clamav_settings["show_results"])
+
+        if quarantine_tmpfs_settings is not None:
+            _set_nested(config_data, ("quarantine", "use_tmpfs"), quarantine_tmpfs_settings["use_tmpfs"])
+            _set_nested(config_data, ("quarantine", "tmpfs_size_mb"), quarantine_tmpfs_settings["tmpfs_size_mb"])
 
 
 def open_app_config_dialog(

@@ -191,10 +191,14 @@ class SMBSeekConfig:
                 "download_chunk_mb": 4,
                 "quarantine_root": "~/.dirracuda/quarantine"
             },
-                "security": {
-                    "ransomware_indicators_path": "conf/ransomware_indicators.json",
-                    "exclusion_file": "conf/exclusion_list.json"
-                },
+            "quarantine": {
+                "use_tmpfs": False,
+                "tmpfs_size_mb": 512
+            },
+            "security": {
+                "ransomware_indicators_path": "conf/ransomware_indicators.json",
+                "exclusion_file": "conf/exclusion_list.json"
+            },
             "database": {
                 "path": "dirracuda.db",
                 "backup_enabled": True,
@@ -624,6 +628,22 @@ class SMBSeekConfig:
         if not isinstance(user_clamav, dict):
             return defaults
         return self._deep_merge(defaults, user_clamav)
+
+    def get_quarantine_config(self) -> Dict[str, Any]:
+        """Get quarantine runtime config with tmpfs defaults merged."""
+        defaults = {
+            "use_tmpfs": False,
+            "tmpfs_size_mb": 512,
+        }
+        user_quarantine = self.config.get("quarantine", {})
+        if not isinstance(user_quarantine, dict):
+            return defaults
+        merged = self._deep_merge(defaults, user_quarantine)
+        try:
+            merged["tmpfs_size_mb"] = int(merged.get("tmpfs_size_mb", 512))
+        except (TypeError, ValueError):
+            merged["tmpfs_size_mb"] = 512
+        return merged
 
 
 def load_config(config_file: Optional[str] = None) -> SMBSeekConfig:

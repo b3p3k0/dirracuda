@@ -155,6 +155,10 @@
     "request_timeout": 15,
     "quarantine_base": "~/.dirracuda/quarantine"
   },
+  "quarantine": {
+    "use_tmpfs": false,
+    "tmpfs_size_mb": 512
+  },
   "gui_app": {
     "backend_path": ".",
     "_note_legacy": "smbseek_path was the pre-F1 name for backend_path; auto-migrated on first launch",

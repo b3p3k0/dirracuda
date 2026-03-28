@@ -34,6 +34,13 @@ from gui.components.app_config_dialog import open_app_config_dialog
 from gui.components.data_import_dialog import open_data_import_dialog
 from gui.components.database_setup_dialog import show_database_setup_dialog
 from shared.db_migrations import run_migrations
+from shared.tmpfs_quarantine import (
+    bootstrap_tmpfs_quarantine,
+    cleanup_tmpfs_quarantine,
+    consume_tmpfs_startup_warning,
+    get_tmpfs_runtime_state,
+    tmpfs_has_quarantined_files,
+)
 from gui.utils.database_access import DatabaseReader
 from gui.utils.backend_interface import BackendInterface
 from gui.utils.style import get_theme, apply_theme_to_window
@@ -107,6 +114,7 @@ class SMBSeekGUI:
         # Thread-safe UI dispatcher (initialized after root creation)
         self.ui_dispatcher = None
         self.scan_manager = None
+        self._pending_tmpfs_startup_warning: Optional[str] = None
 
         self._initialize_application()
         
@@ -160,6 +168,7 @@ class SMBSeekGUI:
         try:
             self._setup_backend_interfaces()
             self._create_main_window()
+            self._bootstrap_tmpfs_runtime()
             self._setup_scan_manager()
             self._create_dashboard()
             self._setup_event_handlers()
@@ -508,6 +517,58 @@ class SMBSeekGUI:
         if self.dashboard:
             self.dashboard._refresh_dashboard_data()
 
+    def _bootstrap_tmpfs_runtime(self) -> None:
+        """Initialize tmpfs quarantine runtime and show one-time fallback warning."""
+        try:
+            state = bootstrap_tmpfs_quarantine(config_path=self.config_path)
+            print(
+                "tmpfs bootstrap:",
+                {
+                    "use_tmpfs": state.get("use_tmpfs"),
+                    "tmpfs_active": state.get("tmpfs_active"),
+                    "effective_root": state.get("effective_root"),
+                    "fallback_reason": state.get("fallback_reason"),
+                },
+            )
+            warning = consume_tmpfs_startup_warning()
+            if warning:
+                self._pending_tmpfs_startup_warning = warning
+                self._schedule_tmpfs_startup_warning_dialog()
+        except Exception as exc:
+            print(f"tmpfs bootstrap warning: {exc}")
+
+    def _schedule_tmpfs_startup_warning_dialog(self) -> None:
+        """Queue tmpfs fallback warning for idle time after root is alive."""
+        if not self._pending_tmpfs_startup_warning or self.root is None:
+            return
+        try:
+            if not self.root.winfo_exists():
+                return
+            self.root.after_idle(self._show_pending_tmpfs_startup_warning)
+        except tk.TclError:
+            return
+
+    def _show_pending_tmpfs_startup_warning(self) -> None:
+        """Show queued tmpfs warning only when window is mapped and valid."""
+        warning = self._pending_tmpfs_startup_warning
+        if not warning or self.root is None:
+            return
+        try:
+            if not self.root.winfo_exists():
+                self._pending_tmpfs_startup_warning = None
+                return
+            if not self.root.winfo_ismapped():
+                self.root.after(50, self._show_pending_tmpfs_startup_warning)
+                return
+            self._pending_tmpfs_startup_warning = None
+            messagebox.showwarning(
+                "tmpfs Quarantine Fallback",
+                warning,
+                parent=self.root,
+            )
+        except tk.TclError:
+            self._pending_tmpfs_startup_warning = None
+
     def _toggle_interface_mode(self) -> None:
         """Toggle between simple and advanced interface modes."""
         new_mode = self.settings_manager.toggle_interface_mode()
@@ -535,6 +596,7 @@ class SMBSeekGUI:
     
     def _on_closing(self) -> None:
         """Handle application closing."""
+        self._pending_tmpfs_startup_warning = None
         # Check for active scans via scan_manager
         if self.scan_manager and self.scan_manager.is_scanning:
             response = messagebox.askyesno(
@@ -546,6 +608,22 @@ class SMBSeekGUI:
                 return
             # User confirmed exit during scan - interrupt it
             self.scan_manager.interrupt_scan()
+
+        try:
+            state = get_tmpfs_runtime_state()
+            if state.get("tmpfs_active") and tmpfs_has_quarantined_files():
+                proceed = messagebox.askyesno(
+                    "In-Memory Quarantine Will Be Lost",
+                    "There are quarantined files stored in memory (tmpfs).\n\n"
+                    "Closing now will permanently delete them.\n\n"
+                    "Do you want to continue?",
+                    icon="warning",
+                    parent=self.root,
+                )
+                if not proceed:
+                    return
+        except Exception as exc:
+            print(f"tmpfs close-warning check failed: {exc}")
 
         # Clean up and exit
         try:
@@ -567,6 +645,12 @@ class SMBSeekGUI:
         except Exception as e:
             print(f"Cleanup error: {e}")
         finally:
+            try:
+                cleanup_result = cleanup_tmpfs_quarantine()
+                if not cleanup_result.get("ok", False):
+                    print(f"tmpfs cleanup warning: {cleanup_result.get('message')}")
+            except Exception as exc:
+                print(f"tmpfs cleanup exception: {exc}")
             self.root.destroy()
     
     def run(self) -> None:

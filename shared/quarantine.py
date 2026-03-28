@@ -6,6 +6,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Union
 
+from shared.tmpfs_quarantine import resolve_effective_quarantine_root
+
 _DEFAULT_ROOT = Path.home() / ".dirracuda" / "quarantine"
 
 
@@ -28,7 +30,7 @@ def _ensure_root(root: Path) -> Path:
 
 
 def _host_root(base_path: Optional[Union[str, Path]], ip_address: Optional[str]) -> Path:
-    root = Path(base_path).expanduser() if base_path else _DEFAULT_ROOT
+    root = resolve_effective_quarantine_root(base_path=base_path if base_path else _DEFAULT_ROOT)
     root = _ensure_root(root)
     safe_ip = _sanitize_label(ip_address or "host")
     host_dir = root / safe_ip

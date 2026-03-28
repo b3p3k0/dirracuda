@@ -34,6 +34,13 @@ from shared.db_path_resolution import (
     normalize_database_path,
     resolve_database_path,
 )
+from shared.tmpfs_quarantine import (
+    bootstrap_tmpfs_quarantine,
+    cleanup_tmpfs_quarantine,
+    consume_tmpfs_startup_warning,
+    get_tmpfs_runtime_state,
+    tmpfs_has_quarantined_files,
+)
 
 # Ensure we're working with absolute paths regardless of where user runs the script
 # resolve() handles symlinks; idempotent insertion ensures gui package is importable
@@ -358,7 +365,7 @@ def show_smbseek_setup_dialog(parent=None, current_path: str = ".") -> Optional[
     path_frame = ttk.LabelFrame(dialog, text="Dirracuda Path", padding=10)
     path_frame.pack(fill="x", padx=20, pady=10)
     
-    path_var = tk.StringVar(value=current_path)
+    path_var = tk.StringVar(master=dialog, value=current_path)
     
     path_entry_frame = ttk.Frame(path_frame)
     path_entry_frame.pack(fill="x")
@@ -456,6 +463,7 @@ class XSMBSeekGUI:
 
         # Scan manager reference (initialized via get_scan_manager)
         self.scan_manager = None
+        self._pending_tmpfs_startup_warning: Optional[str] = None
 
         self._initialize_application()
         
@@ -493,6 +501,7 @@ class XSMBSeekGUI:
         try:
             self._setup_smbseek_integration()
             self._create_main_window()
+            self._bootstrap_tmpfs_runtime()
             self._create_dashboard()
             self._setup_event_handlers()
             
@@ -938,6 +947,56 @@ class XSMBSeekGUI:
         """Manually refresh dashboard data."""
         if self.dashboard:
             self.dashboard._refresh_dashboard_data()
+
+    def _bootstrap_tmpfs_runtime(self) -> None:
+        """Initialize tmpfs quarantine runtime and surface fallback warning once."""
+        try:
+            state = bootstrap_tmpfs_quarantine(config_path=self.config.get_config_path())
+            _logger.info(
+                "tmpfs bootstrap | use_tmpfs=%s active=%s effective_root=%s fallback=%s",
+                state.get("use_tmpfs"),
+                state.get("tmpfs_active"),
+                state.get("effective_root"),
+                state.get("fallback_reason"),
+            )
+            warning = consume_tmpfs_startup_warning()
+            if warning:
+                self._pending_tmpfs_startup_warning = warning
+                self._schedule_tmpfs_startup_warning_dialog()
+        except Exception as exc:
+            _logger.warning("tmpfs bootstrap failed: %s", exc)
+
+    def _schedule_tmpfs_startup_warning_dialog(self) -> None:
+        """Queue tmpfs fallback warning after Tk has entered idle processing."""
+        if not self._pending_tmpfs_startup_warning or self.root is None:
+            return
+        try:
+            if not self.root.winfo_exists():
+                return
+            self.root.after_idle(self._show_pending_tmpfs_startup_warning)
+        except tk.TclError:
+            return
+
+    def _show_pending_tmpfs_startup_warning(self) -> None:
+        """Show one queued tmpfs warning only when the root window is alive/mapped."""
+        warning = self._pending_tmpfs_startup_warning
+        if not warning or self.root is None:
+            return
+        try:
+            if not self.root.winfo_exists():
+                self._pending_tmpfs_startup_warning = None
+                return
+            if not self.root.winfo_ismapped():
+                self.root.after(50, self._show_pending_tmpfs_startup_warning)
+                return
+            self._pending_tmpfs_startup_warning = None
+            messagebox.showwarning(
+                "tmpfs Quarantine Fallback",
+                warning,
+                parent=self.root,
+            )
+        except tk.TclError:
+            self._pending_tmpfs_startup_warning = None
     
     def _refresh_database_connection(self) -> None:
         """Refresh database connection after configuration changes."""
@@ -964,6 +1023,9 @@ class XSMBSeekGUI:
                 self.settings_manager.set_backend_path(str(self.config.get_smbseek_path()))
                 self.settings_manager.set_setting("backend.config_path", str(self.config.get_config_path()))
                 self.settings_manager.set_database_path(str(resolved_db_path), validate=False)
+
+            # Re-evaluate tmpfs settings after config changes.
+            self._bootstrap_tmpfs_runtime()
                 
         except Exception as e:
             messagebox.showerror(
@@ -974,6 +1036,7 @@ class XSMBSeekGUI:
     
     def _on_closing(self) -> None:
         """Handle application closing."""
+        self._pending_tmpfs_startup_warning = None
         # Check for active scans via scan_manager
         if self.scan_manager and self.scan_manager.is_scanning:
             response = messagebox.askyesno(
@@ -985,6 +1048,23 @@ class XSMBSeekGUI:
                 return
             # User confirmed exit during scan - interrupt it
             self.scan_manager.interrupt_scan()
+
+        # tmpfs data-loss confirmation gate.
+        try:
+            tmpfs_state = get_tmpfs_runtime_state()
+            if tmpfs_state.get("tmpfs_active") and tmpfs_has_quarantined_files():
+                proceed = messagebox.askyesno(
+                    "In-Memory Quarantine Will Be Lost",
+                    "There are quarantined files stored in memory (tmpfs).\n\n"
+                    "Closing now will permanently delete them.\n\n"
+                    "Do you want to continue?",
+                    icon="warning",
+                    parent=self.root,
+                )
+                if not proceed:
+                    return
+        except Exception as exc:
+            _logger.warning("tmpfs close warning check failed: %s", exc)
         
         # Persist any pending configuration changes (geometry is fixed by design)
         self.config.save_config()
@@ -1009,6 +1089,12 @@ class XSMBSeekGUI:
         except Exception as e:
             _logger.warning("Cleanup error: %s", e)
         finally:
+            try:
+                cleanup_result = cleanup_tmpfs_quarantine()
+                if not cleanup_result.get("ok", False):
+                    _logger.warning("tmpfs cleanup warning: %s", cleanup_result.get("message"))
+            except Exception as exc:
+                _logger.warning("tmpfs cleanup exception: %s", exc)
             self.root.destroy()
     
     def run(self) -> None:
