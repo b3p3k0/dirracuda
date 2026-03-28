@@ -66,6 +66,7 @@ def _bare_dialog() -> AppConfigDialog:
     dlg.clamav_extracted_root = "~/.dirracuda/extracted"
     dlg.clamav_known_bad_subdir = "known_bad"
     dlg.clamav_show_results = True
+    dlg.clamav_auto_promote_clean = False
 
     dlg.clamav_enabled_var = None
     dlg.clamav_backend_var = None
@@ -73,6 +74,7 @@ def _bare_dialog() -> AppConfigDialog:
     dlg.clamav_extracted_root_var = None
     dlg.clamav_known_bad_subdir_var = None
     dlg.clamav_show_results_var = None
+    dlg.clamav_auto_promote_clean_var = None
     return dlg
 
 
@@ -94,6 +96,10 @@ def _load_clamav(dlg: AppConfigDialog, config_data: Dict[str, Any]) -> None:
         )
         dlg.clamav_known_bad_subdir = str(clamav_raw.get("known_bad_subdir", "known_bad"))
         dlg.clamav_show_results = _coerce_bool_cfg(clamav_raw.get("show_results"), True)
+        dlg.clamav_auto_promote_clean = _coerce_bool_cfg(
+            clamav_raw.get("auto_promote_clean_files"),
+            False,
+        )
 
 
 def _apply(dlg: AppConfigDialog, config_data: Dict[str, Any], clamav: Optional[Dict] = None) -> None:
@@ -151,6 +157,7 @@ class TestLoadClamavSection:
             "extracted_root": "/tmp/extracted",
             "known_bad_subdir": "bad",
             "show_results": False,
+            "auto_promote_clean_files": True,
         }})
         assert dlg.clamav_enabled is True
         assert dlg.clamav_backend == "clamscan"
@@ -158,6 +165,7 @@ class TestLoadClamavSection:
         assert dlg.clamav_extracted_root == "/tmp/extracted"
         assert dlg.clamav_known_bad_subdir == "bad"
         assert dlg.clamav_show_results is False
+        assert dlg.clamav_auto_promote_clean is True
 
     def test_missing_clamav_key_keeps_defaults(self):
         dlg = _bare_dialog()
@@ -168,6 +176,7 @@ class TestLoadClamavSection:
         assert dlg.clamav_extracted_root == "~/.dirracuda/extracted"
         assert dlg.clamav_known_bad_subdir == "known_bad"
         assert dlg.clamav_show_results is True
+        assert dlg.clamav_auto_promote_clean is False
 
     def test_clamav_null_keeps_defaults(self):
         dlg = _bare_dialog()
@@ -200,6 +209,16 @@ class TestLoadClamavSection:
         dlg = _bare_dialog()
         _load_clamav(dlg, {"clamav": {"enabled": True}})
         assert dlg.clamav_show_results is True
+
+    def test_auto_promote_clean_missing_key_defaults_false(self):
+        dlg = _bare_dialog()
+        _load_clamav(dlg, {"clamav": {"enabled": True}})
+        assert dlg.clamav_auto_promote_clean is False
+
+    def test_auto_promote_clean_string_true(self):
+        dlg = _bare_dialog()
+        _load_clamav(dlg, {"clamav": {"auto_promote_clean_files": "1"}})
+        assert dlg.clamav_auto_promote_clean is True
 
     def test_timeout_non_int_coercion(self):
         dlg = _bare_dialog()
@@ -241,6 +260,7 @@ class TestApplyRuntimeSettings:
             "extracted_root": "/tmp/clean",
             "known_bad_subdir": "bad",
             "show_results": False,
+            "auto_promote_clean_files": True,
         }
         base.update(overrides)
         return base
@@ -255,6 +275,7 @@ class TestApplyRuntimeSettings:
         assert cfg["clamav"]["extracted_root"] == "/tmp/clean"
         assert cfg["clamav"]["known_bad_subdir"] == "bad"
         assert cfg["clamav"]["show_results"] is False
+        assert cfg["clamav"]["auto_promote_clean_files"] is True
 
     def test_creates_missing_clamav_section(self):
         dlg = _bare_dialog()

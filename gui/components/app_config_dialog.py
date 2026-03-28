@@ -154,6 +154,7 @@ class AppConfigDialog:
         self.clamav_extracted_root: str = "~/.dirracuda/extracted"
         self.clamav_known_bad_subdir: str = "known_bad"
         self.clamav_show_results: bool = True
+        self.clamav_auto_promote_clean: bool = False
 
         self.clamav_enabled_var: Optional[tk.BooleanVar] = None
         self.clamav_backend_var: Optional[tk.StringVar] = None
@@ -161,6 +162,7 @@ class AppConfigDialog:
         self.clamav_extracted_root_var: Optional[tk.StringVar] = None
         self.clamav_known_bad_subdir_var: Optional[tk.StringVar] = None
         self.clamav_show_results_var: Optional[tk.BooleanVar] = None
+        self.clamav_auto_promote_clean_var: Optional[tk.BooleanVar] = None
         self.quarantine_tmpfs_enabled_var: Optional[tk.BooleanVar] = None
         self.quarantine_tmpfs_size_var: Optional[tk.StringVar] = None
         self.quarantine_tmpfs_size_entry: Optional[tk.Entry] = None
@@ -254,6 +256,10 @@ class AppConfigDialog:
             )
             self.clamav_known_bad_subdir = str(clamav_raw.get("known_bad_subdir", "known_bad"))
             self.clamav_show_results = _coerce_bool_cfg(clamav_raw.get("show_results"), True)
+            self.clamav_auto_promote_clean = _coerce_bool_cfg(
+                clamav_raw.get("auto_promote_clean_files"),
+                False,
+            )
 
     # ------------------------------------------------------------------
     # UI
@@ -461,14 +467,23 @@ class AppConfigDialog:
         heading = self.theme.create_styled_label(card, "ClamAV Settings", "body")
         heading.pack(anchor=tk.W, padx=12, pady=(10, 6))
 
-        # Row 1 — Enable checkbox
+        # Row 1 — Enable + clean-promotion checkboxes
         row1 = tk.Frame(card)
         self.theme.apply_to_widget(row1, "card")
         row1.pack(fill=tk.X, padx=10, pady=(0, 6))
         self.clamav_enabled_var = tk.BooleanVar(value=self.clamav_enabled)
         cb_enable = tk.Checkbutton(row1, text="Enable ClamAV scanning", variable=self.clamav_enabled_var)
         self.theme.apply_to_widget(cb_enable, "checkbox")
-        cb_enable.pack(anchor=tk.W)
+        cb_enable.pack(side=tk.LEFT)
+
+        self.clamav_auto_promote_clean_var = tk.BooleanVar(value=self.clamav_auto_promote_clean)
+        cb_promote_clean = tk.Checkbutton(
+            row1,
+            text="Automatically promote clean files",
+            variable=self.clamav_auto_promote_clean_var,
+        )
+        self.theme.apply_to_widget(cb_promote_clean, "checkbox")
+        cb_promote_clean.pack(side=tk.LEFT, padx=(14, 0))
 
         # Row 2 — Backend selector
         row2 = tk.Frame(card)
@@ -981,6 +996,7 @@ class AppConfigDialog:
         _root_var = getattr(self, "clamav_extracted_root_var", None)
         _kb_var = getattr(self, "clamav_known_bad_subdir_var", None)
         _show_var = getattr(self, "clamav_show_results_var", None)
+        _promote_clean_var = getattr(self, "clamav_auto_promote_clean_var", None)
         new_clamav = {
             "enabled": bool(_enabled_var.get()) if _enabled_var else False,
             "backend": _raw_backend if _raw_backend in _CLAMAV_BACKENDS else "auto",
@@ -988,6 +1004,7 @@ class AppConfigDialog:
             "extracted_root": (_root_var.get().strip() if _root_var else "") or "~/.dirracuda/extracted",
             "known_bad_subdir": (_kb_var.get().strip() if _kb_var else "") or "known_bad",
             "show_results": bool(_show_var.get()) if _show_var else True,
+            "auto_promote_clean_files": bool(_promote_clean_var.get()) if _promote_clean_var else False,
         }
 
         tmpfs_enabled_var = getattr(self, "quarantine_tmpfs_enabled_var", None)
@@ -1024,6 +1041,7 @@ class AppConfigDialog:
         old_clamav_backend = str(getattr(self, "clamav_backend", "auto")).strip().lower()
         if old_clamav_backend not in _CLAMAV_BACKENDS:
             old_clamav_backend = "auto"
+        old_clamav_auto_promote_clean = bool(getattr(self, "clamav_auto_promote_clean", False))
         old_tmpfs_enabled = bool(getattr(self, "quarantine_tmpfs_enabled", False))
         try:
             old_tmpfs_size_mb = int(getattr(self, "quarantine_tmpfs_size_mb", _TMPFS_SIZE_DEFAULT_MB))
@@ -1088,6 +1106,7 @@ class AppConfigDialog:
             self.api_key = new_api_key
             self.quarantine_path = new_quarantine
             self.wordlist_path = new_wordlist
+            self.clamav_auto_promote_clean = new_clamav["auto_promote_clean_files"]
             self.quarantine_tmpfs_enabled = tmpfs_enabled
             self.quarantine_tmpfs_size_mb = tmpfs_size_mb
 
@@ -1100,6 +1119,7 @@ class AppConfigDialog:
             status_changed = (
                 old_clamav_enabled != new_clamav["enabled"]
                 or old_clamav_backend != new_clamav["backend"]
+                or old_clamav_auto_promote_clean != new_clamav["auto_promote_clean_files"]
                 or old_tmpfs_enabled != tmpfs_enabled
                 or old_tmpfs_size_mb != tmpfs_size_mb
             )
@@ -1180,6 +1200,11 @@ class AppConfigDialog:
             _set_nested(config_data, ("clamav", "extracted_root"), clamav_settings["extracted_root"])
             _set_nested(config_data, ("clamav", "known_bad_subdir"), clamav_settings["known_bad_subdir"])
             _set_nested(config_data, ("clamav", "show_results"), clamav_settings["show_results"])
+            _set_nested(
+                config_data,
+                ("clamav", "auto_promote_clean_files"),
+                clamav_settings["auto_promote_clean_files"],
+            )
 
         if quarantine_tmpfs_settings is not None:
             _set_nested(config_data, ("quarantine", "use_tmpfs"), quarantine_tmpfs_settings["use_tmpfs"])

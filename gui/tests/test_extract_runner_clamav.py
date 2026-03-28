@@ -108,6 +108,14 @@ def test_sanitize_enabled_bool_false():
     assert _sanitize_clamav_config({"enabled": False})["enabled"] is False
 
 
+def test_sanitize_auto_promote_clean_defaults_false():
+    assert _sanitize_clamav_config({"enabled": True})["auto_promote_clean_files"] is False
+
+
+def test_sanitize_auto_promote_clean_string_true():
+    assert _sanitize_clamav_config({"enabled": True, "auto_promote_clean_files": "1"})["auto_promote_clean_files"] is True
+
+
 def test_sanitize_timeout_clamped_to_minimum_zero():
     assert _sanitize_clamav_config({"enabled": True, "timeout_seconds": 0})["timeout_seconds"] == 1
 
@@ -208,7 +216,8 @@ def test_enabled_clean_verdict_updates_summary(tmp_path, monkeypatch):
         allowed_extensions=[], denied_extensions=[],
         delay_seconds=0, connection_timeout=5,
         clamav_config={"enabled": True, "backend": "clamscan",
-                       "extracted_root": str(tmp_path / "extracted")},
+                       "extracted_root": str(tmp_path / "extracted"),
+                       "auto_promote_clean_files": True},
     )
 
     cv = summary["clamav"]
@@ -616,6 +625,7 @@ def _run_extract_c4(tmp_path, monkeypatch, verdict: str, **extra_clamav):
         "enabled": True,
         "backend": "clamscan",
         "extracted_root": str(tmp_path / "extracted"),
+        "auto_promote_clean_files": True,
         **extra_clamav,
     }
     summary = run_extract(
@@ -643,6 +653,21 @@ def test_c4_clean_file_promoted_to_extracted(tmp_path, monkeypatch):
     assert summary["files"][0]["saved_to"] == str(target)
 
 
+def test_c4_clean_file_stays_in_quarantine_when_auto_promote_disabled(tmp_path, monkeypatch):
+    summary, download_dir = _run_extract_c4(
+        tmp_path,
+        monkeypatch,
+        "clean",
+        auto_promote_clean_files=False,
+    )
+    cv = summary["clamav"]
+    assert cv["clean"] == 1
+    assert cv["promoted"] == 0
+    expected = download_dir / "pub" / "a.txt"
+    assert expected.exists()
+    assert summary["files"][0]["saved_to"] == str(expected)
+
+
 def test_c4_infected_file_moved_to_known_bad(tmp_path, monkeypatch):
     summary, download_dir = _run_extract_c4(tmp_path, monkeypatch, "infected")
     cv = summary["clamav"]
@@ -652,6 +677,21 @@ def test_c4_infected_file_moved_to_known_bad(tmp_path, monkeypatch):
     assert target.exists(), f"expected file at {target}"
     assert not (download_dir / "pub" / "a.txt").exists()
     assert summary["files"][0]["saved_to"] == str(target)
+
+
+def test_c4_infected_file_still_moves_to_known_bad_when_auto_promote_disabled(tmp_path, monkeypatch):
+    summary, download_dir = _run_extract_c4(
+        tmp_path,
+        monkeypatch,
+        "infected",
+        auto_promote_clean_files=False,
+    )
+    cv = summary["clamav"]
+    assert cv["infected"] == 1
+    assert cv["known_bad_moved"] == 1
+    target = tmp_path / "quarantine" / "known_bad" / "1.2.3.4" / "20260328" / "pub" / "a.txt"
+    assert target.exists(), f"expected file at {target}"
+    assert not (download_dir / "pub" / "a.txt").exists()
 
 
 def test_c4_error_verdict_stays_in_quarantine(tmp_path, monkeypatch):
@@ -689,7 +729,8 @@ def test_c4_move_failure_recorded_in_error_items(tmp_path, monkeypatch):
         allowed_extensions=[], denied_extensions=[],
         delay_seconds=0, connection_timeout=5,
         clamav_config={"enabled": True, "backend": "clamscan",
-                       "extracted_root": str(tmp_path / "extracted")},
+                       "extracted_root": str(tmp_path / "extracted"),
+                       "auto_promote_clean_files": True},
     )
     cv = summary["clamav"]
     assert cv["clean"] == 1
@@ -726,7 +767,8 @@ def test_c4_resolve_raises_caught_in_accumulator(tmp_path, monkeypatch):
         allowed_extensions=[], denied_extensions=[],
         delay_seconds=0, connection_timeout=5,
         clamav_config={"enabled": True, "backend": "clamscan",
-                       "extracted_root": str(tmp_path / "extracted")},
+                       "extracted_root": str(tmp_path / "extracted"),
+                       "auto_promote_clean_files": True},
     )
     cv = summary["clamav"]
     # Scan counter still increments (inner try/except prevents outer-seam bypass)
@@ -763,7 +805,8 @@ def test_c4_collision_resolved(tmp_path, monkeypatch):
         allowed_extensions=[], denied_extensions=[],
         delay_seconds=0, connection_timeout=5,
         clamav_config={"enabled": True, "backend": "clamscan",
-                       "extracted_root": str(tmp_path / "extracted")},
+                       "extracted_root": str(tmp_path / "extracted"),
+                       "auto_promote_clean_files": True},
     )
     cv = summary["clamav"]
     assert cv["promoted"] == 1

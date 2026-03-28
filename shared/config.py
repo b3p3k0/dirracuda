@@ -623,6 +623,7 @@ class SMBSeekConfig:
             "extracted_root": "~/.dirracuda/extracted",
             "known_bad_subdir": "known_bad",
             "show_results": True,
+            "auto_promote_clean_files": False,
         }
         user_clamav = self.config.get("clamav", {})
         if not isinstance(user_clamav, dict):

@@ -59,6 +59,11 @@ def _sanitize_clamav_config(raw: Any) -> Dict[str, Any]:
         timeout = max(1, int(raw.get("timeout_seconds", 60)))
     except (TypeError, ValueError):
         timeout = 60
+    auto_promote_raw = raw.get("auto_promote_clean_files", False)
+    if isinstance(auto_promote_raw, bool):
+        auto_promote_clean = auto_promote_raw
+    else:
+        auto_promote_clean = str(auto_promote_raw).strip().lower() in _ENABLED_TRUE
     return {
         "enabled": enabled,
         "backend": str(raw.get("backend", "auto")),
@@ -67,6 +72,7 @@ def _sanitize_clamav_config(raw: Any) -> Dict[str, Any]:
         "timeout_seconds": timeout,
         "extracted_root": str(raw.get("extracted_root", "~/.dirracuda/extracted")),
         "known_bad_subdir": str(raw.get("known_bad_subdir", "known_bad")),
+        "auto_promote_clean_files": auto_promote_clean,
     }
 
 
@@ -83,6 +89,7 @@ def build_clamav_post_processor(
     return moved=False with error set; the file stays in quarantine.
     """
     scanner = scanner_from_config(clamav_cfg)
+    auto_promote_clean = bool(clamav_cfg.get("auto_promote_clean_files", False))
 
     def _scan(inp: PostProcessInput) -> PostProcessResult:
         result = scanner.scan_file(inp.file_path)
@@ -101,6 +108,16 @@ def build_clamav_post_processor(
             verdict, destination = "infected", "known_bad"
         else:
             verdict, destination = "clean", "extracted"
+
+        if verdict == "clean" and not auto_promote_clean:
+            return PostProcessResult(
+                final_path=inp.file_path,
+                verdict="clean",
+                moved=False,
+                destination="quarantine",
+                metadata=result,
+                error=None,
+            )
 
         if promotion_cfg is None:
             return PostProcessResult(

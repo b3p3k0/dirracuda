@@ -222,7 +222,8 @@
     "timeout_seconds": 60,
     "extracted_root": "~/.dirracuda/extracted",
     "known_bad_subdir": "known_bad",
-    "show_results": true
+    "show_results": true,
+    "auto_promote_clean_files": false
   },
   "rce": {
     "enabled_default": false,
