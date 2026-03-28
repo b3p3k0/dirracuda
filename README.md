@@ -219,7 +219,7 @@ Behavior notes:
 - One CSV row maps to one protocol host row.
 - `S` rows write to `smb_servers`, `F` to `ftp_servers`, `H` to `http_servers`.
 - If the current DB lacks a protocol table/columns (legacy DB shape), those protocol rows are skipped and shown in preview warnings.
-- CSV import does not create share/file/vulnerability/failure records; it imports host registries only. Hosts can be scanned from the Server LIst Browser to populate these fields.
+- CSV import does not create share/file/vulnerability/failure records; it imports host registries only. Imported hosts can be probed from the Server List Browser to populate these fields.
 
 ---
 
