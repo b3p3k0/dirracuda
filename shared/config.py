@@ -605,6 +605,26 @@ class SMBSeekConfig:
         """Check if SMBGhost exposure check is enabled."""
         return self.get_rce_config().get("smbghost", {}).get("enabled", True)
 
+    def get_clamav_config(self) -> Dict[str, Any]:
+        """
+        Get ClamAV configuration with defaults merged.
+
+        Returns:
+            Full ClamAV configuration section with safe defaults applied.
+        """
+        defaults = {
+            "enabled": False,
+            "backend": "auto",
+            "timeout_seconds": 60,
+            "extracted_root": "~/.dirracuda/extracted",
+            "known_bad_subdir": "known_bad",
+            "show_results": True,
+        }
+        user_clamav = self.config.get("clamav", {})
+        if not isinstance(user_clamav, dict):
+            return defaults
+        return self._deep_merge(defaults, user_clamav)
+
 
 def load_config(config_file: Optional[str] = None) -> SMBSeekConfig:
     """

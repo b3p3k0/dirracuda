@@ -168,6 +168,30 @@ Automated file collection with configurable limits:
 
 All extracted files land in quarantine. The defaults are conservative — check `conf/config.json` if you need to adjust them.
 
+#### Optional ClamAV scanning (bulk extract)
+
+ClamAV integration is optional and off by default.
+
+When enabled, bulk extract paths (`Dashboard` post-scan bulk extract and `Server List` batch extract) scan each downloaded file and then route it by verdict:
+
+- **clean** → moved to `~/.dirracuda/extracted/<host>/<date>/<share>/...`
+- **infected** → moved to `~/.dirracuda/quarantine/<known_bad_subdir>/<host>/<date>/<share>/...` (default subdir: `known_bad`)
+- **scanner error/timeout/missing binary** → file stays in quarantine; extract continues (fail-open)
+
+Configure it from **App Config → ClamAV Settings**:
+
+- Enable/disable scanning
+- Backend: `auto`, `clamdscan`, or `clamscan`
+- Scanner timeout (seconds)
+- Extracted root path
+- Known-bad subfolder name
+- Show/hide post-extract ClamAV results dialog
+
+Notes:
+
+- The results dialog supports **Mute until restart**.
+- Browser/manual downloads are not part of this phase; this integration currently applies to bulk extract flows.
+
 ### Pry (Password Audit)
 
 Tests passwords from a wordlist against a single SMB host/share/user. Optionally tries username-as-password first.
@@ -234,6 +258,7 @@ Key sections:
 - `shodan.api_key` — required for discovery scans (SMB/FTP/HTTP)
 - `pry.*` — wordlist path, delays, lockout behavior
 - `file_collection.*` — extraction limits
+- `clamav.*` — optional post-extract scan/routing behavior
 - `file_browser.*` — browse mode limits
 - `connection.*` — timeouts and rate limiting
 - `ftp.shodan.query_limits.max_results` — cap on Shodan FTP candidates per scan

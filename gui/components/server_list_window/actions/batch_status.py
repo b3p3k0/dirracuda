@@ -128,6 +128,9 @@ class ServerListWindowBatchStatusMixin:
             self._set_table_interaction_enabled(True)
             if results and show_summary:
                 self._show_batch_summary(job_type, results)
+                if job_type == "extract":
+                    _clamav_cfg = job.get("options", {}).get("clamav_config", {})
+                    self._maybe_show_clamav_dialog(results, _clamav_cfg, wait=False, modal=False)
             # Close the status pop-out once the summary is shown
             if dlg:
                 try:
@@ -548,6 +551,35 @@ class ServerListWindowBatchStatusMixin:
                 wait=False,
                 modal=False,
             )
+
+        def _maybe_show_clamav_dialog(
+            self,
+            results: List[Dict[str, Any]],
+            clamav_cfg: Dict[str, Any],
+            *,
+            wait: bool = False,
+            modal: bool = False,
+        ) -> None:
+            """Show ClamAV results dialog if conditions are met. Fail-safe."""
+            try:
+                from gui.components.clamav_results_dialog import (
+                    should_show_clamav_dialog,
+                    show_clamav_results_dialog,
+                )
+                from gui.utils import session_flags
+                if should_show_clamav_dialog("extract", results, clamav_cfg):
+                    def _mute() -> None:
+                        session_flags.set_flag(session_flags.CLAMAV_MUTE_KEY)
+                    show_clamav_results_dialog(
+                        parent=self.window,
+                        theme=self.theme,
+                        results=results,
+                        on_mute=_mute,
+                        wait=wait,
+                        modal=modal,
+                    )
+            except Exception:
+                pass
 
         def _flush_pending_refresh(self) -> None:
             if not self._pending_table_refresh:

@@ -435,6 +435,7 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
             }
 
         base_path = Path(options.get("download_path", str(Path.home() / ".dirracuda" / "quarantine"))).expanduser()
+        clamav_cfg: dict = options.get("clamav_config") or {}
         try:
             quarantine_dir = create_quarantine_dir(ip_address, purpose="extract", base_path=base_path)
         except Exception as exc:
@@ -475,7 +476,8 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                 connection_timeout=options["connection_timeout"],
                 extension_mode=options.get("extension_mode"),
                 progress_callback=progress_cb,
-                cancel_event=cancel_event
+                cancel_event=cancel_event,
+                clamav_config=clamav_cfg,
             )
             log_path = extract_runner.write_extract_log(summary)
         except extract_runner.ExtractError as exc:
@@ -507,7 +509,8 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
             "ip_address": ip_address,
             "action": "extract",
             "status": "success",
-            "notes": ", ".join(note_parts)
+            "notes": ", ".join(note_parts),
+            "clamav": summary.get("clamav", {"enabled": False}),
         }
 
     def _execute_pry_target(self, job_id: str, target: Dict[str, Any], options: Dict[str, Any], cancel_event: threading.Event) -> Dict[str, Any]:

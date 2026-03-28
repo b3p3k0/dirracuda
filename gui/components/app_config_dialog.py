@@ -24,6 +24,19 @@ from shared.db_path_resolution import (
 )
 
 
+_CLAMAV_TRUE = frozenset(("true", "yes", "1"))
+_CLAMAV_BACKENDS = frozenset(("auto", "clamdscan", "clamscan"))
+
+
+def _coerce_bool_cfg(value: Any, default: bool) -> bool:
+    """Coerce a JSON bool-like value to bool, returning default for None/missing."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in _CLAMAV_TRUE
+
+
 def _ensure_dict(value: Any) -> Dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
@@ -114,6 +127,20 @@ class AppConfigDialog:
         self.api_key_toggle_btn: Optional[tk.Button] = None
         self.api_key_masked = True
 
+        self.clamav_enabled: bool = False
+        self.clamav_backend: str = "auto"
+        self.clamav_timeout: int = 60
+        self.clamav_extracted_root: str = "~/.dirracuda/extracted"
+        self.clamav_known_bad_subdir: str = "known_bad"
+        self.clamav_show_results: bool = True
+
+        self.clamav_enabled_var: Optional[tk.BooleanVar] = None
+        self.clamav_backend_var: Optional[tk.StringVar] = None
+        self.clamav_timeout_var: Optional[tk.StringVar] = None
+        self.clamav_extracted_root_var: Optional[tk.StringVar] = None
+        self.clamav_known_bad_subdir_var: Optional[tk.StringVar] = None
+        self.clamav_show_results_var: Optional[tk.BooleanVar] = None
+
         self._load_current_settings()
         self._create_dialog()
 
@@ -175,6 +202,21 @@ class AppConfigDialog:
                 self.quarantine_path = candidate.strip()
                 break
 
+        clamav_raw = config_data.get("clamav")
+        if isinstance(clamav_raw, dict):
+            self.clamav_enabled = _coerce_bool_cfg(clamav_raw.get("enabled"), False)
+            raw_backend = str(clamav_raw.get("backend", "auto")).strip().lower()
+            self.clamav_backend = raw_backend if raw_backend in _CLAMAV_BACKENDS else "auto"
+            try:
+                self.clamav_timeout = max(1, int(clamav_raw.get("timeout_seconds", 60)))
+            except (TypeError, ValueError):
+                self.clamav_timeout = 60
+            self.clamav_extracted_root = str(
+                clamav_raw.get("extracted_root", "~/.dirracuda/extracted")
+            )
+            self.clamav_known_bad_subdir = str(clamav_raw.get("known_bad_subdir", "known_bad"))
+            self.clamav_show_results = _coerce_bool_cfg(clamav_raw.get("show_results"), True)
+
     # ------------------------------------------------------------------
     # UI
     # ------------------------------------------------------------------
@@ -182,8 +224,8 @@ class AppConfigDialog:
     def _create_dialog(self) -> None:
         self.dialog = tk.Toplevel(self.parent)
         self.dialog.title("Dirracuda - Application Configuration")
-        self.dialog.geometry("760x600")
-        self.dialog.minsize(720, 560)
+        self.dialog.geometry("760x800")
+        self.dialog.minsize(720, 680)
         self.theme.apply_to_widget(self.dialog, "main_window")
         self.dialog.transient(self.parent)
         self.dialog.grab_set()
@@ -230,6 +272,7 @@ class AppConfigDialog:
 
         self._create_compact_card(container, "Core Paths", ("smbseek", "database", "config"))
         self._create_compact_card(container, "Runtime Settings", ("api_key", "quarantine", "wordlist"))
+        self._create_clamav_card(container)
 
         action_row = tk.Frame(container)
         self.theme.apply_to_widget(action_row, "main_window")
@@ -257,6 +300,108 @@ class AppConfigDialog:
 
         for field in fields:
             self._create_field_row(card, field)
+
+    def _create_clamav_card(self, parent: tk.Widget) -> None:
+        card = tk.Frame(parent, highlightthickness=1, bd=0)
+        self.theme.apply_to_widget(card, "card")
+        try:
+            card.configure(
+                highlightbackground=self.theme.colors["border"],
+                highlightcolor=self.theme.colors["border"],
+            )
+        except tk.TclError:
+            pass
+        card.pack(fill=tk.X, pady=(0, 10))
+
+        heading = self.theme.create_styled_label(card, "ClamAV Settings", "body")
+        heading.pack(anchor=tk.W, padx=12, pady=(10, 6))
+
+        # Row 1 — Enable checkbox
+        row1 = tk.Frame(card)
+        self.theme.apply_to_widget(row1, "card")
+        row1.pack(fill=tk.X, padx=10, pady=(0, 6))
+        self.clamav_enabled_var = tk.BooleanVar(value=self.clamav_enabled)
+        cb_enable = tk.Checkbutton(row1, text="Enable ClamAV scanning", variable=self.clamav_enabled_var)
+        self.theme.apply_to_widget(cb_enable, "checkbox")
+        cb_enable.pack(anchor=tk.W)
+
+        # Row 2 — Backend selector
+        row2 = tk.Frame(card)
+        self.theme.apply_to_widget(row2, "card")
+        row2.pack(fill=tk.X, padx=10, pady=(0, 6))
+        lbl_backend = self.theme.create_styled_label(
+            row2, "Backend:", "small", fg=self.theme.colors["text_secondary"]
+        )
+        lbl_backend.pack(side=tk.LEFT, padx=(0, 8))
+        self.clamav_backend_var = tk.StringVar(value=self.clamav_backend)
+        opt_backend = tk.OptionMenu(row2, self.clamav_backend_var, "auto", "clamdscan", "clamscan")
+        self.theme.apply_to_widget(opt_backend, "button_secondary")
+        opt_backend.pack(side=tk.LEFT)
+
+        # Row 3 — Timeout
+        row3 = tk.Frame(card)
+        self.theme.apply_to_widget(row3, "card")
+        row3.pack(fill=tk.X, padx=10, pady=(0, 6))
+        lbl_timeout = self.theme.create_styled_label(
+            row3, "Timeout:", "small", fg=self.theme.colors["text_secondary"]
+        )
+        lbl_timeout.pack(side=tk.LEFT, padx=(0, 8))
+        self.clamav_timeout_var = tk.StringVar(value=str(self.clamav_timeout))
+        entry_timeout = tk.Entry(row3, textvariable=self.clamav_timeout_var, font=("Arial", 10), width=6)
+        self.theme.apply_to_widget(entry_timeout, "entry")
+        entry_timeout.pack(side=tk.LEFT)
+        lbl_sec = self.theme.create_styled_label(
+            row3, "seconds", "small", fg=self.theme.colors["text_secondary"]
+        )
+        lbl_sec.pack(side=tk.LEFT, padx=(6, 0))
+
+        # Row 4 — Extracted root path with browse
+        row4 = tk.Frame(card)
+        self.theme.apply_to_widget(row4, "card")
+        row4.pack(fill=tk.X, padx=10, pady=(0, 6))
+        lbl_root = self.theme.create_styled_label(
+            row4, "Extracted root:", "small", fg=self.theme.colors["text_secondary"]
+        )
+        lbl_root.pack(side=tk.LEFT, padx=(0, 8))
+        self.clamav_extracted_root_var = tk.StringVar(value=self.clamav_extracted_root)
+        entry_root = tk.Entry(
+            row4, textvariable=self.clamav_extracted_root_var, font=("Arial", 10)
+        )
+        self.theme.apply_to_widget(entry_root, "entry")
+        entry_root.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
+        browse_root = tk.Button(
+            row4,
+            text="Browse...",
+            command=lambda: self._browse_path("clamav_extracted_root"),
+        )
+        self.theme.apply_to_widget(browse_root, "button_secondary")
+        browse_root.pack(side=tk.LEFT)
+
+        # Row 5 — Known-bad subfolder name
+        row5 = tk.Frame(card)
+        self.theme.apply_to_widget(row5, "card")
+        row5.pack(fill=tk.X, padx=10, pady=(0, 6))
+        lbl_kb = self.theme.create_styled_label(
+            row5, "Known-bad subfolder:", "small", fg=self.theme.colors["text_secondary"]
+        )
+        lbl_kb.pack(side=tk.LEFT, padx=(0, 8))
+        self.clamav_known_bad_subdir_var = tk.StringVar(value=self.clamav_known_bad_subdir)
+        entry_kb = tk.Entry(
+            row5, textvariable=self.clamav_known_bad_subdir_var, font=("Arial", 10)
+        )
+        self.theme.apply_to_widget(entry_kb, "entry")
+        entry_kb.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # Row 6 — Show results dialog checkbox
+        row6 = tk.Frame(card)
+        self.theme.apply_to_widget(row6, "card")
+        row6.pack(fill=tk.X, padx=10, pady=(0, 10))
+        self.clamav_show_results_var = tk.BooleanVar(value=self.clamav_show_results)
+        cb_show = tk.Checkbutton(
+            row6, text="Show results dialog after extract", variable=self.clamav_show_results_var
+        )
+        self.theme.apply_to_widget(cb_show, "checkbox")
+        cb_show.pack(anchor=tk.W)
 
     def _create_field_row(self, parent: tk.Widget, field: str) -> None:
         row = tk.Frame(parent)
@@ -408,6 +553,18 @@ class AppConfigDialog:
             )
             if selected:
                 self.wordlist_var.set(selected)
+            return
+
+        if field == "clamav_extracted_root" and self.clamav_extracted_root_var:
+            initial = str(
+                Path(self.clamav_extracted_root_var.get()).expanduser().parent
+            ) or initial
+            selected = filedialog.askdirectory(
+                title="Select Extracted Files Root",
+                initialdir=initial,
+            )
+            if selected:
+                self.clamav_extracted_root_var.set(selected)
 
     def _validate_field(self, field: str) -> None:
         if field == "smbseek":
@@ -664,6 +821,26 @@ class AppConfigDialog:
         new_quarantine = self.quarantine_var.get().strip()
         new_wordlist = self.wordlist_var.get().strip()
 
+        _timeout_var = getattr(self, "clamav_timeout_var", None)
+        try:
+            _clamav_timeout = max(1, int(_timeout_var.get())) if _timeout_var else 60
+        except (TypeError, ValueError):
+            _clamav_timeout = 60
+        _backend_var = getattr(self, "clamav_backend_var", None)
+        _raw_backend = _backend_var.get().strip().lower() if _backend_var else "auto"
+        _enabled_var = getattr(self, "clamav_enabled_var", None)
+        _root_var = getattr(self, "clamav_extracted_root_var", None)
+        _kb_var = getattr(self, "clamav_known_bad_subdir_var", None)
+        _show_var = getattr(self, "clamav_show_results_var", None)
+        new_clamav = {
+            "enabled": bool(_enabled_var.get()) if _enabled_var else False,
+            "backend": _raw_backend if _raw_backend in _CLAMAV_BACKENDS else "auto",
+            "timeout_seconds": _clamav_timeout,
+            "extracted_root": (_root_var.get().strip() if _root_var else "") or "~/.dirracuda/extracted",
+            "known_bad_subdir": (_kb_var.get().strip() if _kb_var else "") or "known_bad",
+            "show_results": bool(_show_var.get()) if _show_var else True,
+        }
+
         old_smbseek = self.smbseek_path
         old_database = self.database_path
         old_config_path = self.config_path
@@ -692,6 +869,7 @@ class AppConfigDialog:
                     new_api_key,
                     new_quarantine,
                     new_wordlist,
+                    clamav_settings=new_clamav,
                 )
                 if not self.main_config.save_config():
                     raise RuntimeError("Failed to write config.json")
@@ -711,6 +889,7 @@ class AppConfigDialog:
                     new_api_key,
                     new_quarantine,
                     new_wordlist,
+                    clamav_settings=new_clamav,
                 )
                 path_obj = Path(new_config_path).expanduser()
                 path_obj.parent.mkdir(parents=True, exist_ok=True)
@@ -786,6 +965,7 @@ class AppConfigDialog:
         api_key: str,
         quarantine_path: str,
         wordlist_path: str,
+        clamav_settings: Optional[Dict[str, Any]] = None,
     ) -> None:
         # Shodan API key drives scan processes.
         _set_nested(config_data, ("shodan", "api_key"), api_key)
@@ -796,6 +976,14 @@ class AppConfigDialog:
         _set_nested(config_data, ("http_browser", "quarantine_base"), quarantine_path)
         _set_nested(config_data, ("file_collection", "quarantine_base"), quarantine_path)
         _set_nested(config_data, ("pry", "wordlist_path"), wordlist_path)
+
+        if clamav_settings is not None:
+            _set_nested(config_data, ("clamav", "enabled"), clamav_settings["enabled"])
+            _set_nested(config_data, ("clamav", "backend"), clamav_settings["backend"])
+            _set_nested(config_data, ("clamav", "timeout_seconds"), clamav_settings["timeout_seconds"])
+            _set_nested(config_data, ("clamav", "extracted_root"), clamav_settings["extracted_root"])
+            _set_nested(config_data, ("clamav", "known_bad_subdir"), clamav_settings["known_bad_subdir"])
+            _set_nested(config_data, ("clamav", "show_results"), clamav_settings["show_results"])
 
 
 def open_app_config_dialog(

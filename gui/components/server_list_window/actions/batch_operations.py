@@ -5,6 +5,7 @@ Handles probe, extract, browse, pry, delete, and batch job lifecycle logic.
 Extracted from batch.py to shrink file size while preserving behavior.
 """
 
+import json
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, simpledialog
 from concurrent.futures import ThreadPoolExecutor, Future
@@ -12,6 +13,7 @@ from datetime import datetime
 import threading
 import csv
 import os
+from pathlib import Path
 from typing import Dict, List, Any, Optional
 
 from gui.components.server_list_window import export, details, filters, table
@@ -551,6 +553,16 @@ class ServerListWindowBatchOperationsMixin:
 
         if not dialog_config:
             return
+
+        # Load clamav config once before futures start (not per-target).
+        clamav_cfg: Dict[str, Any] = {}
+        if config_path and Path(config_path).exists():
+            try:
+                _cfg_data = json.loads(Path(config_path).read_text(encoding="utf-8"))
+                clamav_cfg = _cfg_data.get("clamav", {})
+            except Exception:
+                pass
+        dialog_config["clamav_config"] = clamav_cfg
 
         self._start_batch_job("extract", targets, dialog_config)
 

@@ -212,6 +212,14 @@
       "max_concurrent_hosts": 4
     }
   },
+  "clamav": {
+    "enabled": false,
+    "backend": "auto",
+    "timeout_seconds": 60,
+    "extracted_root": "~/.dirracuda/extracted",
+    "known_bad_subdir": "known_bad",
+    "show_results": true
+  },
   "rce": {
     "enabled_default": false,
     "safe_active_budget": {

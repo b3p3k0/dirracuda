@@ -1635,6 +1635,7 @@ class DashboardWidget:
 
             # Run batch operations (record summaries per op, show in LIFO order)
             summary_stack: List[Tuple[str, List[Dict[str, Any]]]] = []
+            extract_results: List[Dict[str, Any]] = []
 
             if bulk_probe_enabled:
                 probe_results = self._execute_batch_probe(probe_targets)
@@ -1657,6 +1658,10 @@ class DashboardWidget:
                 job_type, results = summary_stack.pop()
                 if show_dialogs and results:
                     self._show_batch_summary(results, job_type=job_type)
+
+            if show_dialogs and extract_results:
+                _clamav_cfg = self._load_clamav_config()
+                self._maybe_show_clamav_dialog(extract_results, _clamav_cfg, wait=True, modal=True)
 
             # After bulk operations, show the deferred scan summary
             if show_dialogs:
@@ -2218,6 +2223,7 @@ class DashboardWidget:
         included_extensions: List[str] = []
         excluded_extensions: List[str] = []
         quarantine_base_path: Optional[Path] = None
+        clamav_cfg: Dict[str, Any] = {}
         config_path = self.settings_manager.get_setting('backend.config_path', None) if self.settings_manager else None
         if config_path and Path(config_path).exists():
             try:
@@ -2233,6 +2239,7 @@ class DashboardWidget:
                 )
                 if quarantine_candidate:
                     quarantine_base_path = Path(str(quarantine_candidate)).expanduser()
+                clamav_cfg = config_data.get("clamav", {})
             except Exception:
                 pass
 
@@ -2276,7 +2283,8 @@ class DashboardWidget:
                     included_extensions,
                     excluded_extensions,
                     quarantine_base_path,
-                    cancel_event
+                    cancel_event,
+                    clamav_cfg,
                 )
                 futures.append((server, future))
 
@@ -2302,7 +2310,8 @@ class DashboardWidget:
                                  max_time: int, max_files: int, extension_mode: str,
                                  included_extensions: List[str], excluded_extensions: List[str],
                                  quarantine_base_path: Optional[Path],
-                                 cancel_event: threading.Event) -> Dict[str, Any]:
+                                 cancel_event: threading.Event,
+                                 clamav_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Extract files from a single server."""
         if cancel_event.is_set():
             return {
@@ -2362,7 +2371,8 @@ class DashboardWidget:
                 connection_timeout=30,
                 extension_mode=extension_mode,
                 progress_callback=None,
-                cancel_event=cancel_event
+                cancel_event=cancel_event,
+                clamav_config=clamav_config,
             )
 
             files = summary["totals"].get("files_downloaded", 0)
@@ -2380,7 +2390,8 @@ class DashboardWidget:
                 "ip_address": ip_address,
                 "action": "extract",
                 "status": "success",
-                "notes": f"{files} file(s), {size_mb:.1f} MB"
+                "notes": f"{files} file(s), {size_mb:.1f} MB",
+                "clamav": summary.get("clamav", {"enabled": False}),
             }
         except Exception as e:
             status = "cancelled" if "cancel" in str(e).lower() else "failed"
@@ -2405,6 +2416,46 @@ class DashboardWidget:
             wait=True,
             modal=True,
         )
+
+    def _load_clamav_config(self) -> Dict[str, Any]:
+        """Read the clamav section from conf/config.json. Returns {} on any error."""
+        config_path = self.settings_manager.get_setting('backend.config_path', None) if self.settings_manager else None
+        if not config_path:
+            return {}
+        try:
+            config_data = json.loads(Path(config_path).read_text(encoding="utf-8"))
+            return config_data.get("clamav", {})
+        except Exception:
+            return {}
+
+    def _maybe_show_clamav_dialog(
+        self,
+        results: List[Dict[str, Any]],
+        clamav_cfg: Dict[str, Any],
+        *,
+        wait: bool = False,
+        modal: bool = False,
+    ) -> None:
+        """Show ClamAV results dialog if conditions are met. Fail-safe."""
+        try:
+            from gui.components.clamav_results_dialog import (
+                should_show_clamav_dialog,
+                show_clamav_results_dialog,
+            )
+            from gui.utils import session_flags
+            if should_show_clamav_dialog("extract", results, clamav_cfg):
+                def _mute() -> None:
+                    session_flags.set_flag(session_flags.CLAMAV_MUTE_KEY)
+                show_clamav_results_dialog(
+                    parent=self.parent,
+                    theme=self.theme,
+                    results=results,
+                    on_mute=_mute,
+                    wait=wait,
+                    modal=modal,
+                )
+        except Exception:
+            pass
 
     def _show_scan_results(self, results: Dict[str, Any]) -> None:
         """Show scan results dialog."""
