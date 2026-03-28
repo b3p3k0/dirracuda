@@ -99,6 +99,8 @@ The main window. From here you can:
 
 ### Discovery
 
+![start new scan dialog](img/scan.png)
+
 Triggered from **▶ Start Scan** with the protocol(s) selected. All three follow the same pipeline: Shodan query → reachability check → protocol-specific verification. Only hosts that pass get stored; failures are recorded with a reason code so you can see exactly where each candidate dropped out. Scan summary shows Shodan candidates vs. verified count. The same host registry handles all three protocols — the same IP can carry SMB, FTP, and multiple HTTP endpoint entries without collision.
 
 **SMB** — default dork: `smb authentication: disabled product:"Samba"`. Applies two extra pre-connection filters: org filtering (drops excluded ISPs and hosting providers) and 30-day deduplication (CLI overrides: `--rescan-all`, `--rescan-failed`). Verification tries Anonymous, Guest/blank, and Guest/Guest in sequence; whichever succeeds is recorded alongside country and timestamp, so auth method drift shows up across rescans. Two security modes: **Cautious** (default) restricts to signed SMB2+/SMB3 and rejects SMB1; **Legacy** lifts those restrictions and tends to find more targets. 
@@ -129,6 +131,8 @@ Triggered from **▶ Start Scan** with the protocol(s) selected. All three follo
 | 🗑️ Delete Selected | Remove selected servers from the database |
 
 ### Probing Shares
+
+![bulk probe](img/probe.png)
 
 Read-only directory enumeration that previews accessible shares without downloading files. Probing collects root files, subdirectories, and file listings for each accessible share (with configurable limits on depth and breadth).
 
@@ -182,6 +186,8 @@ Pry includes lockout detection and configurable delays between attempts. That sa
 
 ### DB Tools
 
+![db dialog](img/db.png)
+
 Opened via **DB Tools** on the dashboard. Four tabs:
 
 **Import & Merge** — supports two source types:
@@ -218,6 +224,8 @@ Behavior notes:
 ---
 
 ## Configuration
+
+![config](img/config.png)
 
 App settings are stored in `conf/config.json`. The example file (`conf/config.json.example`) documents every option.
 
@@ -278,7 +286,7 @@ The CLI is useful for scripting and automation. The GUI uses the same backends.
 
 This started as a collection of crude bash and python scripts I've written over 30+ years of networking and security work — dorks, one-liners for poking at servers, that sort of thing. At some point it made sense to turn them into something with a GUI and a database, but the undertaking was far outside my skillset. I understand fundamentals of programming and logic but get lost in the sauce of syntax and structure.
 
-Part of the goal here is finding out how far AI-assisted development can actually go. The answer, in my experience, is pretty far. 
+Fortunately AI has gotten good enough to generate functional code with proper oversight. Claude and Codex were extensively used to bring everything together and grow this from a handful of rough scripts to a full workflow manager.
 
 ---
 
