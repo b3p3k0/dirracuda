@@ -69,6 +69,8 @@ Launch the GUI from your venv:
 | Tool | Install | Purpose |
 |------|---------|---------|
 | tkinter | `apt install python3-tk` | GUI framework; required to run Dirracuda |
+| ClamAV (`clamscan` / `clamdscan`) | `apt install clamav clamav-daemon` | Optional post-download malware scan step for bulk extract and browser downloads |
+| tmpfs (Linux) | built into the Linux kernel (`mount -t tmpfs ...`) | Optional RAM-backed quarantine path at `~/.dirracuda/quarantine_tmpfs`; app falls back to disk quarantine if tmpfs is unavailable |
 
 ---
 
