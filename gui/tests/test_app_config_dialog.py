@@ -21,6 +21,14 @@ class _Var:
         return self._value
 
 
+class _BoolVar:
+    def __init__(self, value: bool) -> None:
+        self._value = value
+
+    def get(self) -> bool:
+        return self._value
+
+
 class _DialogWidget:
     def __init__(self, exists: bool = True) -> None:
         self._exists = exists
@@ -133,6 +141,72 @@ def test_validate_and_save_exception_uses_dialog_parent(monkeypatch):
     assert dlg._validate_and_save() is False
     assert len(calls) == 1
     assert calls[0][1]["parent"] is dlg.dialog
+
+
+def test_validate_and_save_refreshes_when_only_clamav_settings_change(monkeypatch):
+    dlg = _build_dialog(_base_validation())
+    dlg.main_config = _MainConfigStub()
+
+    dlg.clamav_enabled = False
+    dlg.clamav_backend = "auto"
+    dlg.quarantine_tmpfs_enabled = False
+    dlg.quarantine_tmpfs_size_mb = 512
+    dlg._tmpfs_supported_platform = True
+
+    dlg.clamav_enabled_var = _BoolVar(True)
+    dlg.clamav_backend_var = _Var("auto")
+    dlg.clamav_timeout_var = _Var("60")
+    dlg.clamav_extracted_root_var = _Var("~/.dirracuda/extracted")
+    dlg.clamav_known_bad_subdir_var = _Var("known_bad")
+    dlg.clamav_show_results_var = _BoolVar(True)
+    dlg.quarantine_tmpfs_enabled_var = _BoolVar(False)
+    dlg.quarantine_tmpfs_size_var = _Var("512")
+
+    refresh_calls = []
+    dlg.refresh_callback = lambda: refresh_calls.append(True)
+
+    monkeypatch.setattr(
+        "gui.components.app_config_dialog.normalize_database_path",
+        lambda *_args, **_kwargs: Path("/tmp/smbseek.db"),
+    )
+    monkeypatch.setattr("gui.components.app_config_dialog.messagebox.showwarning", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("gui.components.app_config_dialog.messagebox.showerror", lambda *_args, **_kwargs: None)
+
+    assert dlg._validate_and_save() is True
+    assert len(refresh_calls) == 1
+
+
+def test_validate_and_save_refreshes_when_only_tmpfs_settings_change(monkeypatch):
+    dlg = _build_dialog(_base_validation())
+    dlg.main_config = _MainConfigStub()
+
+    dlg.clamav_enabled = False
+    dlg.clamav_backend = "auto"
+    dlg.quarantine_tmpfs_enabled = False
+    dlg.quarantine_tmpfs_size_mb = 512
+    dlg._tmpfs_supported_platform = True
+
+    dlg.clamav_enabled_var = _BoolVar(False)
+    dlg.clamav_backend_var = _Var("auto")
+    dlg.clamav_timeout_var = _Var("60")
+    dlg.clamav_extracted_root_var = _Var("~/.dirracuda/extracted")
+    dlg.clamav_known_bad_subdir_var = _Var("known_bad")
+    dlg.clamav_show_results_var = _BoolVar(True)
+    dlg.quarantine_tmpfs_enabled_var = _BoolVar(True)
+    dlg.quarantine_tmpfs_size_var = _Var("512")
+
+    refresh_calls = []
+    dlg.refresh_callback = lambda: refresh_calls.append(True)
+
+    monkeypatch.setattr(
+        "gui.components.app_config_dialog.normalize_database_path",
+        lambda *_args, **_kwargs: Path("/tmp/smbseek.db"),
+    )
+    monkeypatch.setattr("gui.components.app_config_dialog.messagebox.showwarning", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("gui.components.app_config_dialog.messagebox.showerror", lambda *_args, **_kwargs: None)
+
+    assert dlg._validate_and_save() is True
+    assert len(refresh_calls) == 1
 
 
 def test_open_app_config_dialog_failure_uses_parent(monkeypatch):

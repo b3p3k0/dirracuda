@@ -1020,6 +1020,15 @@ class AppConfigDialog:
         old_smbseek = self.smbseek_path
         old_database = self.database_path
         old_config_path = self.config_path
+        old_clamav_enabled = bool(getattr(self, "clamav_enabled", False))
+        old_clamav_backend = str(getattr(self, "clamav_backend", "auto")).strip().lower()
+        if old_clamav_backend not in _CLAMAV_BACKENDS:
+            old_clamav_backend = "auto"
+        old_tmpfs_enabled = bool(getattr(self, "quarantine_tmpfs_enabled", False))
+        try:
+            old_tmpfs_size_mb = int(getattr(self, "quarantine_tmpfs_size_mb", _TMPFS_SIZE_DEFAULT_MB))
+        except (TypeError, ValueError):
+            old_tmpfs_size_mb = _TMPFS_SIZE_DEFAULT_MB
 
         try:
             normalized_database = normalize_database_path(new_database, new_smbseek)
@@ -1088,7 +1097,13 @@ class AppConfigDialog:
                 or old_database != normalized_database_str
                 or old_config_path != new_config_path
             )
-            if self.refresh_callback and runtime_changed:
+            status_changed = (
+                old_clamav_enabled != new_clamav["enabled"]
+                or old_clamav_backend != new_clamav["backend"]
+                or old_tmpfs_enabled != tmpfs_enabled
+                or old_tmpfs_size_mb != tmpfs_size_mb
+            )
+            if self.refresh_callback and (runtime_changed or status_changed):
                 self.refresh_callback()
 
             if not self.validation_results["api_key"]["valid"]:

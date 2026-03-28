@@ -47,6 +47,7 @@ from gui.utils.probe_cache_dispatch import get_probe_snapshot_path_for_host, dis
 from gui.utils.probe_snapshot_summary import summarize_probe_snapshot
 from gui.utils.logging_config import get_logger
 from shared.quarantine import create_quarantine_dir
+from shared.tmpfs_quarantine import get_tmpfs_runtime_state
 
 _logger = get_logger("dashboard")
 
@@ -118,7 +119,16 @@ class DashboardWidget:
         
         # Progress tracking
         self.current_progress_summary = ""
-        self.status_text = tk.StringVar(value="Loading dashboard summary...")
+        # Bind vars to explicit parent to avoid reliance on Tk default-root state.
+        self.status_text = tk.StringVar(master=self.parent, value="Loading dashboard summary...")
+        self.clamav_status_text = tk.StringVar(
+            master=self.parent,
+            value="✖ ClamAV integration active <auto>",
+        )
+        self.tmpfs_status_text = tk.StringVar(
+            master=self.parent,
+            value=f"✖ tmpfs activated <{Path.home() / '.dirracuda' / 'quarantine_tmpfs'}>",
+        )
         self._status_static_mode = True  # Keep status label static post-initialization
         self._status_summary_initialized = False
 
@@ -524,6 +534,30 @@ class DashboardWidget:
         footer.columnconfigure(0, weight=1)
         footer.columnconfigure(1, weight=0)
 
+        clamav_status_label = tk.Label(
+            footer,
+            textvariable=self.clamav_status_text,
+            anchor="w",
+            justify="left",
+            bg=self.theme.colors["card_bg"],
+            fg=self.theme.colors["text_secondary"],
+            font=self.theme.fonts["status"],
+            wraplength=520,
+        )
+        clamav_status_label.grid(row=0, column=0, sticky="w")
+
+        tmpfs_status_label = tk.Label(
+            footer,
+            textvariable=self.tmpfs_status_text,
+            anchor="w",
+            justify="left",
+            bg=self.theme.colors["card_bg"],
+            fg=self.theme.colors["text_secondary"],
+            font=self.theme.fonts["status"],
+            wraplength=520,
+        )
+        tmpfs_status_label.grid(row=1, column=0, sticky="w", pady=(2, 0))
+
         status_summary_label = tk.Label(
             footer,
             textvariable=self.status_text,
@@ -534,7 +568,7 @@ class DashboardWidget:
             font=self.theme.fonts["status"],
             wraplength=520
         )
-        status_summary_label.grid(row=0, column=0, sticky="w")
+        status_summary_label.grid(row=2, column=0, sticky="w", pady=(4, 0))
 
         self.update_time_label = tk.Label(
             footer,
@@ -544,13 +578,13 @@ class DashboardWidget:
             fg=self.theme.colors["text_secondary"],
             font=self.theme.fonts["status"]
         )
-        self.update_time_label.grid(row=1, column=0, sticky="w", pady=(4, 0))
+        self.update_time_label.grid(row=3, column=0, sticky="w", pady=(4, 0))
 
         button_frame = tk.Frame(
             footer,
             bg=self.theme.colors["card_bg"]
         )
-        button_frame.grid(row=0, column=1, rowspan=2, sticky="se", padx=(10, 0))
+        button_frame.grid(row=0, column=1, rowspan=4, sticky="se", padx=(10, 0))
 
         self.copy_log_button = tk.Button(
             button_frame,
@@ -628,6 +662,8 @@ class DashboardWidget:
         across all dashboard components and handles errors gracefully.
         """
         try:
+            self._update_runtime_status_display()
+
             # Get dashboard summary
             summary = self.db_reader.get_dashboard_summary()
             
@@ -641,6 +677,50 @@ class DashboardWidget:
             
         except Exception as e:
             self._handle_refresh_error(e)
+
+    @staticmethod
+    def _coerce_bool(value: Any) -> bool:
+        """Convert mixed config values to bool with safe defaults."""
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return False
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def _normalize_clamav_backend(value: Any) -> str:
+        """Normalize backend mode to one of auto/clamdscan/clamscan."""
+        backend = str(value or "auto").strip().lower()
+        return backend if backend in {"auto", "clamdscan", "clamscan"} else "auto"
+
+    def _compose_runtime_status_lines(
+        self,
+        clamav_cfg: Optional[Dict[str, Any]] = None,
+        tmpfs_state: Optional[Dict[str, Any]] = None,
+    ) -> tuple[str, str]:
+        """Build ClamAV/tmpfs status lines shown below console output."""
+        clamav_cfg = clamav_cfg if isinstance(clamav_cfg, dict) else self._load_clamav_config()
+        tmpfs_state = tmpfs_state if isinstance(tmpfs_state, dict) else get_tmpfs_runtime_state()
+
+        clamav_enabled = self._coerce_bool(clamav_cfg.get("enabled", False))
+        clamav_backend = self._normalize_clamav_backend(clamav_cfg.get("backend", "auto"))
+        clamav_icon = "✔" if clamav_enabled else "✖"
+        clamav_line = f"{clamav_icon} ClamAV integration active <{clamav_backend}>"
+
+        tmpfs_active = bool(tmpfs_state.get("tmpfs_active", False))
+        mountpoint = str(tmpfs_state.get("mountpoint") or (Path.home() / ".dirracuda" / "quarantine_tmpfs"))
+        tmpfs_icon = "✔" if tmpfs_active else "✖"
+        tmpfs_line = f"{tmpfs_icon} tmpfs activated <{mountpoint}>"
+        return clamav_line, tmpfs_line
+
+    def _update_runtime_status_display(self) -> None:
+        """Refresh runtime status rows for ClamAV and tmpfs."""
+        try:
+            clamav_line, tmpfs_line = self._compose_runtime_status_lines()
+            self.clamav_status_text.set(clamav_line)
+            self.tmpfs_status_text.set(tmpfs_line)
+        except Exception as exc:
+            _logger.debug("Failed to refresh runtime status rows: %s", exc)
 
     def _refresh_after_scan_completion(self) -> None:
         """

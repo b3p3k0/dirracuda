@@ -1011,13 +1011,6 @@ class XSMBSeekGUI:
             self.db_reader = DatabaseReader(str(resolved_db_path))
             _logger.info("Refreshed DB connection | db=%s", resolved_db_path)
             
-            # Update dashboard dependencies with refreshed interfaces.
-            if self.dashboard:
-                self.dashboard.backend_interface = self.backend_interface
-                self.dashboard.db_reader = self.db_reader
-                self.dashboard.config_path = str(self.config.get_config_path())
-                self.dashboard._refresh_dashboard_data()
-
             # Keep GUI settings aligned with current backend root.
             if self.settings_manager:
                 self.settings_manager.set_backend_path(str(self.config.get_smbseek_path()))
@@ -1026,6 +1019,13 @@ class XSMBSeekGUI:
 
             # Re-evaluate tmpfs settings after config changes.
             self._bootstrap_tmpfs_runtime()
+
+            # Refresh dashboard after runtime state has been fully reloaded.
+            if self.dashboard:
+                self.dashboard.backend_interface = self.backend_interface
+                self.dashboard.db_reader = self.db_reader
+                self.dashboard.config_path = str(self.config.get_config_path())
+                self.dashboard._refresh_dashboard_data()
                 
         except Exception as e:
             messagebox.showerror(
