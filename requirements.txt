@@ -15,7 +15,7 @@ impacket>=0.11.0         # SMB probe enumeration support
 pyasn1>=0.6.3            # Security fix: avoid vulnerable recursion DoS in <=0.6.2
 pyOpenSSL>=26.0.0        # Security fix: reject oversized DTLS cookie callback values
 cryptography>=46.0.6     # Security fix: name constraints peer-name validation bypass in <46.0.6
-requests>=2.33.0         # Security fix: avoid predictable temp extraction path in <2.33.0
+requests>=2.33.0,<3.0.0  # Security fix: avoid predictable temp extraction path in <2.33.0
 
 # Database and data handling (included in Python standard library)
 # sqlite3 - built-in
