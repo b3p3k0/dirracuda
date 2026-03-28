@@ -134,7 +134,30 @@ CREATE TABLE IF NOT EXISTS ftp_probe_cache (
 """
 
 
-def _make_db(smb: bool = True, ftp: bool = True) -> str:
+_HTTP_SCHEMA = """
+CREATE TABLE IF NOT EXISTS http_servers (
+    id              INTEGER  PRIMARY KEY AUTOINCREMENT,
+    ip_address      TEXT     NOT NULL,
+    host_type       TEXT     DEFAULT 'H',
+    country         TEXT,
+    country_code    TEXT,
+    port            INTEGER  NOT NULL DEFAULT 80,
+    scheme          TEXT     DEFAULT 'http',
+    banner          TEXT,
+    title           TEXT,
+    first_seen      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_seen       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    scan_count      INTEGER  DEFAULT 1,
+    status          TEXT     DEFAULT 'active',
+    notes           TEXT,
+    updated_at      DATETIME,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(ip_address, port)
+);
+"""
+
+
+def _make_db(smb: bool = True, ftp: bool = True, http: bool = False) -> str:
     """Create a temp SQLite DB with the requested tables. Returns db path."""
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
@@ -143,6 +166,8 @@ def _make_db(smb: bool = True, ftp: bool = True) -> str:
         conn.executescript(_SMB_SCHEMA)
     if ftp:
         conn.executescript(_FTP_SCHEMA)
+    if http:
+        conn.executescript(_HTTP_SCHEMA)
     conn.commit()
     conn.close()
     return path
@@ -606,6 +631,142 @@ def test_rce_invalid_status_normalized_to_unknown(monkeypatch):
         conn.close()
 
         assert row is not None and row[0] == "unknown"
+    finally:
+        os.unlink(path)
+
+
+# ---------------------------------------------------------------------------
+# Manual protocol row upsert helper
+# ---------------------------------------------------------------------------
+
+
+def test_manual_upsert_inserts_smb_ftp_http_rows(monkeypatch):
+    """Manual upsert inserts one row per protocol and returns canonical row metadata."""
+    path = _make_db(smb=True, ftp=True, http=True)
+    try:
+        reader = _reader(path, monkeypatch)
+
+        smb = reader.upsert_manual_server_record({
+            "host_type": "S",
+            "ip_address": "1.2.3.4",
+            "country": "United States",
+            "country_code": "us",
+            "auth_method": "anonymous",
+        })
+        ftp = reader.upsert_manual_server_record({
+            "host_type": "F",
+            "ip_address": "2.3.4.5",
+            "country_code": "GB",
+            "port": 2121,
+        })
+        http = reader.upsert_manual_server_record({
+            "host_type": "H",
+            "ip_address": "3.4.5.6",
+            "port": 8080,
+            "scheme": "https",
+            "banner": "nginx",
+            "title": "Index of /",
+        })
+
+        conn = sqlite3.connect(path)
+        smb_row = conn.execute(
+            "SELECT country_code, auth_method FROM smb_servers WHERE ip_address='1.2.3.4'"
+        ).fetchone()
+        ftp_row = conn.execute(
+            "SELECT port FROM ftp_servers WHERE ip_address='2.3.4.5'"
+        ).fetchone()
+        http_row = conn.execute(
+            "SELECT scheme, banner, title FROM http_servers WHERE ip_address='3.4.5.6' AND port=8080"
+        ).fetchone()
+        conn.close()
+
+        assert smb["operation"] == "insert" and smb["row_key"].startswith("S:")
+        assert ftp["operation"] == "insert" and ftp["row_key"].startswith("F:")
+        assert http["operation"] == "insert" and http["row_key"].startswith("H:")
+        assert smb_row == ("US", "anonymous")
+        assert ftp_row == (2121,)
+        assert http_row == ("https", "nginx", "Index of /")
+    finally:
+        os.unlink(path)
+
+
+def test_manual_upsert_updates_existing_identity(monkeypatch):
+    """Second upsert on same SMB identity updates optional fields and reports operation=update."""
+    path = _make_db(smb=True, ftp=True, http=True)
+    try:
+        reader = _reader(path, monkeypatch)
+        reader.upsert_manual_server_record({
+            "host_type": "S",
+            "ip_address": "10.10.10.10",
+            "country": "Old Country",
+            "country_code": "US",
+            "auth_method": "guest",
+        })
+
+        result = reader.upsert_manual_server_record({
+            "host_type": "S",
+            "ip_address": "10.10.10.10",
+            "country": "New Country",
+            "auth_method": "anonymous",
+        })
+
+        conn = sqlite3.connect(path)
+        row = conn.execute(
+            "SELECT country, country_code, auth_method, status FROM smb_servers WHERE ip_address='10.10.10.10'"
+        ).fetchone()
+        conn.close()
+
+        assert result["operation"] == "update"
+        assert row == ("New Country", "US", "anonymous", "active")
+    finally:
+        os.unlink(path)
+
+
+def test_manual_upsert_http_same_ip_different_ports_create_distinct_rows(monkeypatch):
+    """HTTP upsert identity is endpoint-based: same IP + different port yields two rows."""
+    path = _make_db(smb=True, ftp=True, http=True)
+    try:
+        reader = _reader(path, monkeypatch)
+        first = reader.upsert_manual_server_record({
+            "host_type": "H",
+            "ip_address": "8.8.8.8",
+            "port": 80,
+            "scheme": "http",
+        })
+        second = reader.upsert_manual_server_record({
+            "host_type": "H",
+            "ip_address": "8.8.8.8",
+            "port": 443,
+            "scheme": "https",
+        })
+
+        conn = sqlite3.connect(path)
+        count = conn.execute(
+            "SELECT COUNT(*) FROM http_servers WHERE ip_address='8.8.8.8'"
+        ).fetchone()[0]
+        conn.close()
+
+        assert first["operation"] == "insert"
+        assert second["operation"] == "insert"
+        assert count == 2
+    finally:
+        os.unlink(path)
+
+
+@pytest.mark.parametrize(
+    "payload, expected",
+    [
+        ({"host_type": "S", "ip_address": "not-an-ip"}, "Invalid ip_address"),
+        ({"host_type": "H", "ip_address": "1.2.3.4", "port": "abc"}, "HTTP port"),
+        ({"host_type": "X", "ip_address": "1.2.3.4"}, "host_type must be one of"),
+    ],
+)
+def test_manual_upsert_invalid_inputs_reject_cleanly(monkeypatch, payload, expected):
+    path = _make_db(smb=True, ftp=True, http=True)
+    try:
+        reader = _reader(path, monkeypatch)
+        with pytest.raises(ValueError, match=expected):
+            reader.upsert_manual_server_record(payload)
     finally:
         os.unlink(path)
 

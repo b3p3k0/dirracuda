@@ -151,6 +151,7 @@ class _StubTree:
     def __init__(self):
         self._selection = []
         self._items = {}
+        self._focused = None
 
     def selection(self):
         return list(self._selection)
@@ -161,6 +162,25 @@ class _StubTree:
     def selection_add(self, iid):
         if iid not in self._selection:
             self._selection.append(iid)
+
+    def selection_set(self, iids):
+        if isinstance(iids, (list, tuple, set)):
+            self._selection = list(iids)
+        else:
+            self._selection = [iids]
+
+    def selection_remove(self, iids):
+        if isinstance(iids, (list, tuple, set)):
+            remove_set = set(iids)
+        else:
+            remove_set = {iids}
+        self._selection = [iid for iid in self._selection if iid not in remove_set]
+
+    def focus(self, iid):
+        self._focused = iid
+
+    def see(self, iid):
+        self._focused = iid
 
 
 class _StubSettingsManager:
@@ -425,6 +445,68 @@ def test_delete_ftp_only_does_not_clear_smb_probe_cache():
         stub._run_delete_operation([("F", "9.9.9.9")])
 
     assert cleared_ips == [], "No probe cache clear for FTP-only delete"
+
+
+# ---------------------------------------------------------------------------
+# _on_add_record
+# ---------------------------------------------------------------------------
+
+
+def test_add_record_success_refreshes_and_selects_visible_row():
+    mock_db = MagicMock()
+    mock_db.upsert_manual_server_record.return_value = {
+        "host_type": "S",
+        "protocol_server_id": 42,
+        "row_key": "S:42",
+        "operation": "insert",
+    }
+    stub = _BatchMixinStub(db_reader=mock_db)
+    stub.tree._items = {"S:42": True}
+    stub._show_add_record_dialog = MagicMock(return_value={
+        "host_type": "S",
+        "ip_address": "1.2.3.4",
+    })
+    stub._load_data = MagicMock()
+    stub._apply_filters = MagicMock()
+    stub._set_status = MagicMock()
+
+    stub._on_add_record()
+
+    mock_db.upsert_manual_server_record.assert_called_once_with({
+        "host_type": "S",
+        "ip_address": "1.2.3.4",
+    })
+    mock_db.clear_cache.assert_called_once()
+    stub._load_data.assert_called_once()
+    stub._apply_filters.assert_called_once_with(force=True)
+    assert stub.tree.selection() == ["S:42"]
+    assert "SMB record insert" in stub._set_status.call_args[0][0]
+
+
+def test_add_record_hidden_by_filters_sets_explicit_note():
+    mock_db = MagicMock()
+    mock_db.upsert_manual_server_record.return_value = {
+        "host_type": "F",
+        "protocol_server_id": 7,
+        "row_key": "F:7",
+        "operation": "update",
+    }
+    stub = _BatchMixinStub(db_reader=mock_db)
+    stub.tree._items = {}  # row not visible in current filtered table
+    stub._show_add_record_dialog = MagicMock(return_value={
+        "host_type": "F",
+        "ip_address": "5.6.7.8",
+    })
+    stub._load_data = MagicMock()
+    stub._apply_filters = MagicMock()
+    stub._set_status = MagicMock()
+
+    stub._on_add_record()
+
+    stub._apply_filters.assert_called_once_with(force=True)
+    status_msg = stub._set_status.call_args[0][0]
+    assert "hidden by current filters" in status_msg
+    assert "Shares > 0" in status_msg
 
 
 # ---------------------------------------------------------------------------

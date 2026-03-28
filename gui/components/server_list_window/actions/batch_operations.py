@@ -6,6 +6,7 @@ Extracted from batch.py to shrink file size while preserving behavior.
 """
 
 import json
+import ipaddress
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, simpledialog
 from concurrent.futures import ThreadPoolExecutor, Future
@@ -30,6 +31,256 @@ class ServerListWindowBatchOperationsMixin:
     """
     Batch action handlers shared by the server list window.
     """
+    def _on_add_record(self) -> None:
+        """Open manual-add dialog and upsert one protocol row into the active database."""
+        if not self.db_reader:
+            messagebox.showerror("Database Unavailable", "No database is configured for this session.", parent=self.window)
+            return
+
+        payload = self._show_add_record_dialog()
+        if not payload:
+            return
+
+        try:
+            result = self.db_reader.upsert_manual_server_record(payload)
+        except Exception as exc:
+            messagebox.showerror(
+                "Add Record Failed",
+                f"Unable to save record:\n{exc}",
+                parent=self.window,
+            )
+            return
+
+        # Refresh data under current filter state.
+        self.db_reader.clear_cache()
+        self._load_data()
+        self._apply_filters(force=True)
+
+        row_key = result.get("row_key")
+        operation = str(result.get("operation") or "upserted").lower()
+        host_type = str(result.get("host_type") or payload.get("host_type") or "").upper()
+        ip_address = str(payload.get("ip_address") or "").strip()
+        type_label = {"S": "SMB", "F": "FTP", "H": "HTTP"}.get(host_type, host_type or "Host")
+
+        if row_key and self.tree and self.tree.exists(row_key):
+            try:
+                self.tree.selection_set((row_key,))
+                self.tree.focus(row_key)
+                self.tree.see(row_key)
+            except Exception:
+                pass
+            self._set_status(f"{type_label} record {operation}: {ip_address}")
+            return
+
+        hidden_note = (
+            f"{type_label} record {operation}: {ip_address}. "
+            f"The row is hidden by current filters (for example, Shares > 0)."
+        )
+        self._set_status(hidden_note)
+
+    def _show_add_record_dialog(self) -> Optional[Dict[str, Any]]:
+        """
+        Show modal dialog for adding one protocol record.
+
+        Returns normalized payload dict when Save succeeds, else None.
+        """
+        dialog = tk.Toplevel(self.window)
+        dialog.title("Add Record")
+        dialog.transient(self.window)
+        dialog.grab_set()
+        self.theme.apply_to_widget(dialog, "main_window")
+
+        form = tk.Frame(dialog)
+        self.theme.apply_to_widget(form, "main_window")
+        form.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
+
+        type_var = tk.StringVar(value="SMB")
+        ip_var = tk.StringVar(value="")
+        country_var = tk.StringVar(value="")
+        country_code_var = tk.StringVar(value="")
+        auth_method_var = tk.StringVar(value="")
+        port_var = tk.StringVar(value="")
+        scheme_var = tk.StringVar(value="http")
+        banner_var = tk.StringVar(value="")
+        title_var = tk.StringVar(value="")
+
+        row = 0
+        tk.Label(form, text="Type:").grid(row=row, column=0, sticky="w", padx=(0, 8), pady=4)
+        type_combo = ttk.Combobox(form, width=16, state="readonly", values=["SMB", "FTP", "HTTP"], textvariable=type_var)
+        type_combo.grid(row=row, column=1, sticky="w", pady=4)
+        row += 1
+
+        tk.Label(form, text="IP Address:").grid(row=row, column=0, sticky="w", padx=(0, 8), pady=4)
+        ip_entry = tk.Entry(form, width=28, textvariable=ip_var)
+        self.theme.apply_to_widget(ip_entry, "entry")
+        ip_entry.grid(row=row, column=1, sticky="w", pady=4)
+        row += 1
+
+        tk.Label(form, text="Country:").grid(row=row, column=0, sticky="w", padx=(0, 8), pady=4)
+        country_entry = tk.Entry(form, width=28, textvariable=country_var)
+        self.theme.apply_to_widget(country_entry, "entry")
+        country_entry.grid(row=row, column=1, sticky="w", pady=4)
+        row += 1
+
+        tk.Label(form, text="Country Code:").grid(row=row, column=0, sticky="w", padx=(0, 8), pady=4)
+        country_code_entry = tk.Entry(form, width=28, textvariable=country_code_var)
+        self.theme.apply_to_widget(country_code_entry, "entry")
+        country_code_entry.grid(row=row, column=1, sticky="w", pady=4)
+        row += 1
+
+        tk.Label(form, text="Auth Method:").grid(row=row, column=0, sticky="w", padx=(0, 8), pady=4)
+        auth_method_entry = tk.Entry(form, width=28, textvariable=auth_method_var)
+        self.theme.apply_to_widget(auth_method_entry, "entry")
+        auth_method_entry.grid(row=row, column=1, sticky="w", pady=4)
+        row += 1
+
+        tk.Label(form, text="Port:").grid(row=row, column=0, sticky="w", padx=(0, 8), pady=4)
+        port_entry = tk.Entry(form, width=28, textvariable=port_var)
+        self.theme.apply_to_widget(port_entry, "entry")
+        port_entry.grid(row=row, column=1, sticky="w", pady=4)
+        row += 1
+
+        tk.Label(form, text="Scheme:").grid(row=row, column=0, sticky="w", padx=(0, 8), pady=4)
+        scheme_combo = ttk.Combobox(form, width=16, state="readonly", values=["http", "https"], textvariable=scheme_var)
+        scheme_combo.grid(row=row, column=1, sticky="w", pady=4)
+        row += 1
+
+        tk.Label(form, text="Banner:").grid(row=row, column=0, sticky="w", padx=(0, 8), pady=4)
+        banner_entry = tk.Entry(form, width=28, textvariable=banner_var)
+        self.theme.apply_to_widget(banner_entry, "entry")
+        banner_entry.grid(row=row, column=1, sticky="w", pady=4)
+        row += 1
+
+        tk.Label(form, text="Title:").grid(row=row, column=0, sticky="w", padx=(0, 8), pady=4)
+        title_entry = tk.Entry(form, width=28, textvariable=title_var)
+        self.theme.apply_to_widget(title_entry, "entry")
+        title_entry.grid(row=row, column=1, sticky="w", pady=4)
+
+        for label in form.grid_slaves(column=0):
+            self.theme.apply_to_widget(label, "body")
+
+        def _update_field_states(*_args):
+            selected = (type_var.get() or "SMB").strip().upper()
+            is_smb = selected == "SMB"
+            is_http = selected == "HTTP"
+            is_ftp_or_http = selected in {"FTP", "HTTP"}
+
+            auth_method_entry.configure(state=(tk.NORMAL if is_smb else tk.DISABLED))
+            port_entry.configure(state=(tk.NORMAL if is_ftp_or_http else tk.DISABLED))
+            scheme_combo.configure(state=("readonly" if is_http else tk.DISABLED))
+            banner_entry.configure(state=(tk.NORMAL if is_http else tk.DISABLED))
+            title_entry.configure(state=(tk.NORMAL if is_http else tk.DISABLED))
+
+        type_var.trace_add("write", _update_field_states)
+        _update_field_states()
+
+        result_payload: Dict[str, Any] = {}
+
+        def _save() -> None:
+            raw_payload = {
+                "host_type": type_var.get(),
+                "ip_address": ip_var.get(),
+                "country": country_var.get(),
+                "country_code": country_code_var.get(),
+                "auth_method": auth_method_var.get(),
+                "port": port_var.get(),
+                "scheme": scheme_var.get(),
+                "banner": banner_var.get(),
+                "title": title_var.get(),
+            }
+            try:
+                normalized = self._normalize_manual_record_input(raw_payload)
+            except ValueError as exc:
+                messagebox.showerror("Invalid Record", str(exc), parent=dialog)
+                return
+            result_payload.update(normalized)
+            dialog.destroy()
+
+        def _cancel() -> None:
+            dialog.destroy()
+
+        buttons = tk.Frame(form)
+        self.theme.apply_to_widget(buttons, "main_window")
+        buttons.grid(row=row + 1, column=0, columnspan=2, sticky="e", pady=(10, 0))
+
+        cancel_btn = tk.Button(buttons, text="Cancel", command=_cancel)
+        self.theme.apply_to_widget(cancel_btn, "button_secondary")
+        cancel_btn.pack(side=tk.RIGHT, padx=(8, 0))
+
+        save_btn = tk.Button(buttons, text="Save", command=_save)
+        self.theme.apply_to_widget(save_btn, "button_primary")
+        save_btn.pack(side=tk.RIGHT)
+
+        self.theme.apply_theme_to_application(dialog)
+        ip_entry.focus_set()
+        dialog.wait_window()
+        return result_payload or None
+
+    def _normalize_manual_record_input(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate and normalize manual-record dialog payload for DB writes."""
+        type_value = str(payload.get("host_type") or "").strip().upper()
+        type_map = {"SMB": "S", "FTP": "F", "HTTP": "H", "S": "S", "F": "F", "H": "H"}
+        host_type = type_map.get(type_value)
+        if host_type not in {"S", "F", "H"}:
+            raise ValueError("Type must be one of SMB, FTP, or HTTP.")
+
+        ip_raw = str(payload.get("ip_address") or "").strip()
+        if not ip_raw:
+            raise ValueError("IP Address is required.")
+        try:
+            ip_address = str(ipaddress.ip_address(ip_raw))
+        except ValueError as exc:
+            raise ValueError(f"Invalid IP Address: {ip_raw}") from exc
+
+        def _blank_to_none(value: Any) -> Optional[str]:
+            text = str(value).strip() if value is not None else ""
+            return text if text else None
+
+        country = _blank_to_none(payload.get("country"))
+        country_code = _blank_to_none(payload.get("country_code"))
+        if country_code is not None:
+            country_code = country_code.upper()
+            if len(country_code) != 2 or not country_code.isalpha():
+                raise ValueError("Country Code must be a 2-letter code (for example, US).")
+
+        auth_method = _blank_to_none(payload.get("auth_method")) if host_type == "S" else None
+
+        port: Optional[int] = None
+        if host_type in {"F", "H"}:
+            port_raw = str(payload.get("port") or "").strip()
+            if not port_raw:
+                port = 21 if host_type == "F" else 80
+            else:
+                try:
+                    port = int(port_raw)
+                except ValueError as exc:
+                    raise ValueError("Port must be a number between 1 and 65535.") from exc
+                if port < 1 or port > 65535:
+                    raise ValueError("Port must be a number between 1 and 65535.")
+
+        scheme: Optional[str] = None
+        banner: Optional[str] = None
+        title: Optional[str] = None
+        if host_type == "H":
+            scheme_value = str(payload.get("scheme") or "http").strip().lower()
+            if scheme_value not in {"http", "https"}:
+                raise ValueError("Scheme must be either http or https.")
+            scheme = scheme_value
+            banner = _blank_to_none(payload.get("banner"))
+            title = _blank_to_none(payload.get("title"))
+
+        return {
+            "host_type": host_type,
+            "ip_address": ip_address,
+            "country": country,
+            "country_code": country_code,
+            "auth_method": auth_method,
+            "port": port,
+            "scheme": scheme,
+            "banner": banner,
+            "title": title,
+        }
+
     def _on_copy_ip(self) -> None:
         """Copy selected host IP address(es) to clipboard."""
         self._hide_context_menu()

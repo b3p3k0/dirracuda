@@ -109,7 +109,7 @@ Triggered from **▶ Start Scan** with the protocol(s) selected. All three follo
 
 **HTTP** — default dork: `http.title:"Index of /"`. Verification stays locked to the exact Shodan hit endpoint (same IP + same port), and tests HTTP and/or HTTPS on that port based on your config toggles.
 
-**Post-scan bulk probe/extract scope** — when bulk probe or bulk extract is enabled from the scan flow, targets are limited to accessible hosts from the scan that just completed (same protocol). The app no longer widens that target set from "recent" database rows. Manual probe actions launched from Server List continue to use your explicit row selection and are unchanged.
+**Post-scan bulk probe/extract scope** — when bulk probe or bulk extract is enabled from the scan flow, targets are limited to accessible hosts from the scan that just completed (same protocol). Manual probe actions launched from Server List continue to use your explicit row selection and are unchanged.
 
 ### Server List
 
@@ -129,6 +129,8 @@ Triggered from **▶ Start Scan** with the protocol(s) selected. All three follo
 | 🚫 Toggle Avoid | Mark/unmark selected servers to avoid |
 | ⚠ Toggle Compromised | Mark/unmark selected servers as likely compromised |
 | 🗑️ Delete Selected | Remove selected servers from the database |
+
+Server List also includes an **Add Record** control (next to `Advanced`) for manually inserting one SMB/FTP/HTTP host row into the active database. Save keeps your current filters unchanged. If the newly added row does not appear, it is usually hidden by an active filter (most commonly `Shares > 0`). Inserted records can then be probed and investigated from the GUI.
 
 ### Probing Shares
 

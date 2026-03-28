@@ -13,6 +13,7 @@ import sqlite3
 import threading
 import time
 import json
+import ipaddress
 from typing import Dict, List, Optional, Any, Tuple, Set
 from pathlib import Path
 from contextlib import contextmanager
@@ -1351,6 +1352,198 @@ class DatabaseReader:
                 return
             raise
         self.clear_cache()
+
+    def upsert_manual_server_record(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Upsert one manually-entered protocol row into the active database.
+
+        Conflict identity:
+        - SMB:  ip_address
+        - FTP:  ip_address
+        - HTTP: (ip_address, port)
+
+        Returns:
+            Dict with host_type, protocol_server_id, row_key, operation.
+        """
+        if not isinstance(payload, dict):
+            raise ValueError("Manual record payload must be a dictionary.")
+
+        host_type = str(payload.get("host_type") or "").strip().upper()
+        if host_type not in {"S", "F", "H"}:
+            raise ValueError("host_type must be one of: S, F, H.")
+
+        ip_raw = str(payload.get("ip_address") or "").strip()
+        if not ip_raw:
+            raise ValueError("ip_address is required.")
+        try:
+            ip_address = str(ipaddress.ip_address(ip_raw))
+        except ValueError as exc:
+            raise ValueError(f"Invalid ip_address: {ip_raw}") from exc
+
+        def _blank_to_none(value: Any) -> Optional[str]:
+            text = str(value).strip() if value is not None else ""
+            return text if text else None
+
+        country = _blank_to_none(payload.get("country"))
+        country_code = _blank_to_none(payload.get("country_code"))
+        if country_code is not None:
+            country_code = country_code.upper()
+            if len(country_code) != 2 or not country_code.isalpha():
+                raise ValueError("country_code must be a 2-letter alphabetic code.")
+
+        operation = "insert"
+        protocol_server_id: Optional[int] = None
+
+        with self._get_connection() as conn:
+            cur = conn.cursor()
+
+            if host_type == "S":
+                auth_method = _blank_to_none(payload.get("auth_method"))
+                existing = cur.execute(
+                    "SELECT id FROM smb_servers WHERE ip_address = ?",
+                    (ip_address,),
+                ).fetchone()
+                operation = "update" if existing else "insert"
+
+                cur.execute(
+                    """
+                    INSERT INTO smb_servers
+                        (ip_address, country, country_code, auth_method, last_seen, status)
+                    VALUES
+                        (?, ?, ?, ?, CURRENT_TIMESTAMP, 'active')
+                    ON CONFLICT(ip_address) DO UPDATE SET
+                        country=COALESCE(excluded.country, smb_servers.country),
+                        country_code=COALESCE(excluded.country_code, smb_servers.country_code),
+                        auth_method=COALESCE(excluded.auth_method, smb_servers.auth_method),
+                        status='active',
+                        last_seen=CURRENT_TIMESTAMP
+                    """,
+                    (ip_address, country, country_code, auth_method),
+                )
+                row = cur.execute(
+                    "SELECT id FROM smb_servers WHERE ip_address = ?",
+                    (ip_address,),
+                ).fetchone()
+                protocol_server_id = int(row["id"]) if row else None
+
+            elif host_type == "F":
+                port_raw = payload.get("port")
+                port: Optional[int] = None
+                if port_raw not in (None, ""):
+                    try:
+                        port = int(port_raw)
+                    except (TypeError, ValueError) as exc:
+                        raise ValueError("FTP port must be an integer between 1 and 65535.") from exc
+                    if port < 1 or port > 65535:
+                        raise ValueError("FTP port must be an integer between 1 and 65535.")
+
+                existing = cur.execute(
+                    "SELECT id FROM ftp_servers WHERE ip_address = ?",
+                    (ip_address,),
+                ).fetchone()
+                operation = "update" if existing else "insert"
+
+                if port is None:
+                    cur.execute(
+                        """
+                        INSERT INTO ftp_servers
+                            (ip_address, country, country_code, last_seen, status)
+                        VALUES
+                            (?, ?, ?, CURRENT_TIMESTAMP, 'active')
+                        ON CONFLICT(ip_address) DO UPDATE SET
+                            country=COALESCE(excluded.country, ftp_servers.country),
+                            country_code=COALESCE(excluded.country_code, ftp_servers.country_code),
+                            status='active',
+                            last_seen=CURRENT_TIMESTAMP
+                        """,
+                        (ip_address, country, country_code),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO ftp_servers
+                            (ip_address, country, country_code, port, last_seen, status)
+                        VALUES
+                            (?, ?, ?, ?, CURRENT_TIMESTAMP, 'active')
+                        ON CONFLICT(ip_address) DO UPDATE SET
+                            country=COALESCE(excluded.country, ftp_servers.country),
+                            country_code=COALESCE(excluded.country_code, ftp_servers.country_code),
+                            port=excluded.port,
+                            status='active',
+                            last_seen=CURRENT_TIMESTAMP
+                        """,
+                        (ip_address, country, country_code, port),
+                    )
+
+                row = cur.execute(
+                    "SELECT id FROM ftp_servers WHERE ip_address = ?",
+                    (ip_address,),
+                ).fetchone()
+                protocol_server_id = int(row["id"]) if row else None
+
+            else:  # host_type == "H"
+                port_raw = payload.get("port")
+                if port_raw in (None, ""):
+                    port = 80
+                else:
+                    try:
+                        port = int(port_raw)
+                    except (TypeError, ValueError) as exc:
+                        raise ValueError("HTTP port must be an integer between 1 and 65535.") from exc
+                if port < 1 or port > 65535:
+                    raise ValueError("HTTP port must be an integer between 1 and 65535.")
+
+                scheme = _blank_to_none(payload.get("scheme"))
+                if scheme is None:
+                    scheme = "http"
+                scheme = scheme.lower()
+                if scheme not in {"http", "https"}:
+                    raise ValueError("HTTP scheme must be either 'http' or 'https'.")
+
+                banner = _blank_to_none(payload.get("banner"))
+                title = _blank_to_none(payload.get("title"))
+
+                existing = cur.execute(
+                    "SELECT id FROM http_servers WHERE ip_address = ? AND port = ?",
+                    (ip_address, port),
+                ).fetchone()
+                operation = "update" if existing else "insert"
+
+                cur.execute(
+                    """
+                    INSERT INTO http_servers
+                        (ip_address, country, country_code, port, scheme, banner, title, last_seen, status)
+                    VALUES
+                        (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 'active')
+                    ON CONFLICT(ip_address, port) DO UPDATE SET
+                        country=COALESCE(excluded.country, http_servers.country),
+                        country_code=COALESCE(excluded.country_code, http_servers.country_code),
+                        scheme=COALESCE(excluded.scheme, http_servers.scheme),
+                        banner=COALESCE(excluded.banner, http_servers.banner),
+                        title=COALESCE(excluded.title, http_servers.title),
+                        status='active',
+                        last_seen=CURRENT_TIMESTAMP
+                    """,
+                    (ip_address, country, country_code, port, scheme, banner, title),
+                )
+                row = cur.execute(
+                    "SELECT id FROM http_servers WHERE ip_address = ? AND port = ?",
+                    (ip_address, port),
+                ).fetchone()
+                protocol_server_id = int(row["id"]) if row else None
+
+            if protocol_server_id is None:
+                raise RuntimeError("Unable to resolve protocol_server_id after upsert.")
+
+            conn.commit()
+
+        self.clear_cache()
+        return {
+            "host_type": host_type,
+            "protocol_server_id": protocol_server_id,
+            "row_key": f"{host_type}:{protocol_server_id}",
+            "operation": operation,
+        }
 
     def bulk_delete_servers(self, ip_addresses: List[str]) -> Dict[str, Any]:
         """

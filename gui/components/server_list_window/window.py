@@ -141,6 +141,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self.selection_label = None
         self.status_label = None
         self.mode_button = None
+        self.add_record_button = None
         self.show_all_button = None
         self.context_menu = None
         self.probe_button = None
@@ -465,6 +466,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
             'on_clear_search': self._clear_search,
             'on_reset_filters': self._reset_filters,
             'on_toggle_mode': self._toggle_mode,
+            'on_add_record': self._on_add_record,
             'on_filter_template_selected': self._on_filter_template_selected,
             'on_save_filter_template': self._on_save_filter_template,
             'on_delete_filter_template': self._on_delete_filter_template
@@ -488,6 +490,8 @@ class ServerListWindow(ServerListWindowActionsMixin):
         # Capture mode toggle reference from filter panel
         if 'mode_button' in self.filter_widgets:
             self.mode_button = self.filter_widgets['mode_button']
+        if 'add_record_button' in self.filter_widgets:
+            self.add_record_button = self.filter_widgets['add_record_button']
 
         # Disable favorites/avoid checkboxes if no settings manager
         if not self.settings_manager:
