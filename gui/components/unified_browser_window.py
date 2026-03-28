@@ -103,12 +103,14 @@ def _load_ftp_browser_config(config_path: Optional[str]) -> Dict:
             "max_image_size_mb": 15,
             "max_image_pixels": 20_000_000,
         },
+        "clamav": {},
     }
     if not config_path:
         return defaults
     try:
         data = json.loads(Path(config_path).read_text(encoding="utf-8"))
         defaults.update(data.get("ftp_browser", {}))
+        defaults["clamav"] = data.get("clamav", {})
     except Exception:
         pass
     return defaults
@@ -126,12 +128,14 @@ def _load_http_browser_config(config_path: Optional[str]) -> Dict:
             "max_image_size_mb": 15,
             "max_image_pixels": 20_000_000,
         },
+        "clamav": {},
     }
     if not config_path:
         return defaults
     try:
         data = json.loads(Path(config_path).read_text(encoding="utf-8"))
         defaults.update(data.get("http_browser", {}))
+        defaults["clamav"] = data.get("clamav", {})
     except Exception:
         pass
     return defaults
@@ -158,12 +162,14 @@ def _load_smb_browser_config(config_path: Optional[str]) -> Dict:
             "default_encoding": "utf-8",
             "hex_bytes_per_row": 16,
         },
+        "clamav": {},
     }
     if not config_path:
         return defaults
     try:
         data = json.loads(Path(config_path).read_text(encoding="utf-8"))
         defaults.update(data.get("file_browser", {}))
+        defaults["clamav"] = data.get("clamav", {})
     except Exception:
         pass
     return defaults
@@ -437,16 +443,77 @@ class UnifiedBrowserCore:
         )
         self._download_thread.start()
 
-    def _on_download_done(self, success: int, total: int, quarantine_path: str) -> None:
+    def _on_download_done(
+        self,
+        success: int,
+        total: int,
+        quarantine_path: str,
+        clamav_accum: Optional[Dict[str, Any]] = None,
+    ) -> None:
         self.busy = False
         self._set_buttons_busy(False)
         self.btn_cancel.config(state=tk.DISABLED)
+        if clamav_accum and clamav_accum.get("enabled"):
+            promoted = int(clamav_accum.get("promoted", 0) or 0)
+            infected = int(clamav_accum.get("infected", 0) or 0)
+            status_parts = [f"Downloaded {success}/{total} file(s)"]
+            if promoted:
+                status_parts.append(f"{promoted} clean -> extracted")
+            if infected:
+                status_parts.append(f"{infected} infected -> known_bad")
+            status_text = ", ".join(status_parts)
+            self._set_status(status_text)
+            shown = self._maybe_show_clamav_dialog(clamav_accum)
+            if not shown and success > 0:
+                messagebox.showinfo("Download complete", status_text)
+            return
+
         self._set_status(f"Downloaded {success}/{total} file(s) \u2192 {quarantine_path}")
         if success > 0:
             messagebox.showinfo(
                 "Download complete",
                 f"Downloaded {success}/{total} file(s) to quarantine:\n{quarantine_path}",
             )
+
+    def _maybe_show_clamav_dialog(self, clamav_accum: Optional[Dict[str, Any]]) -> bool:
+        """Show ClamAV results dialog and return True iff shown."""
+        try:
+            if not clamav_accum:
+                return False
+            if int(clamav_accum.get("files_scanned", 0) or 0) <= 0:
+                return False
+            from gui.components.clamav_results_dialog import (
+                should_show_clamav_dialog,
+                show_clamav_results_dialog,
+            )
+            from gui.utils import session_flags
+            clamav_cfg = self.config.get("clamav", {}) if isinstance(self.config, dict) else {}
+            results = [{"clamav": clamav_accum, "ip_address": self.ip_address}]
+            if not should_show_clamav_dialog("extract", results, clamav_cfg):
+                return False
+            show_clamav_results_dialog(
+                parent=self.window,
+                theme=self.theme,
+                results=results,
+                on_mute=lambda: session_flags.set_flag(session_flags.CLAMAV_MUTE_KEY),
+            )
+            return True
+        except Exception:
+            return False
+
+    def _on_smb_download_done(
+        self,
+        summary_msg: str,
+        clamav_accum: Optional[Dict[str, Any]],
+    ) -> None:
+        """Main-thread SMB completion handler with one-popup policy."""
+        shown = (
+            self._maybe_show_clamav_dialog(clamav_accum)
+            if (clamav_accum and clamav_accum.get("enabled"))
+            else False
+        )
+        if not shown and self._window_alive():
+            messagebox.showinfo("Download complete", summary_msg, parent=self.window)
 
     # ------------------------------------------------------------------
     # Status and button helpers
@@ -786,7 +853,12 @@ class FtpBrowserWindow(UnifiedBrowserCore):
         self._start_download_thread(file_list)
 
     def _download_thread_fn(self, file_list: List) -> None:
+        from gui.utils.extract_runner import (
+            build_browser_download_clamav_setup,
+            update_browser_clamav_accum,
+        )
         from shared.ftp_browser import FtpCancelledError, FtpFileTooLargeError
+        from shared.quarantine_postprocess import PostProcessInput
         from shared.quarantine import build_quarantine_path, log_quarantine_event
         quarantine_dir = build_quarantine_path(
             ip_address=self.ip_address,
@@ -794,8 +866,19 @@ class FtpBrowserWindow(UnifiedBrowserCore):
             base_path=Path(self.config["quarantine_base"]).expanduser(),
             purpose="ftp",
         )
+        _pp, clamav_accum, _init_err = build_browser_download_clamav_setup(
+            self.config.get("clamav", {}),
+            self.ip_address,
+            quarantine_dir,
+            "ftp_root",
+        )
+        if _init_err:
+            try:
+                self.window.after(0, self._set_status, _init_err)
+            except tk.TclError:
+                pass
         success_count = 0
-        for remote_path, _ in file_list:
+        for remote_path, file_size in file_list:
             if self._cancel_event.is_set():
                 break
             filename = PurePosixPath(remote_path).name
@@ -819,6 +902,29 @@ class FtpBrowserWindow(UnifiedBrowserCore):
                     quarantine_dir,
                     f"Downloaded {remote_path} -> {result.saved_path}",
                 )
+                if _pp is not None and clamav_accum is not None:
+                    try:
+                        _pp_result = _pp(PostProcessInput(
+                            file_path=Path(result.saved_path),
+                            ip_address=self.ip_address,
+                            share="ftp_root",
+                            rel_display=remote_path,
+                            file_size=int(file_size or 0),
+                        ))
+                        update_browser_clamav_accum(clamav_accum, _pp_result, remote_path)
+                    except Exception as exc:
+                        clamav_accum["errors"] += 1
+                        clamav_accum["error_items"].append({
+                            "path": remote_path,
+                            "error": str(exc),
+                        })
+                        try:
+                            log_quarantine_event(
+                                quarantine_dir,
+                                f"clamav post-process error for {remote_path}: {exc}",
+                            )
+                        except Exception:
+                            pass
                 success_count += 1
             except FtpCancelledError:
                 try:
@@ -856,6 +962,7 @@ class FtpBrowserWindow(UnifiedBrowserCore):
                 success_count,
                 len(file_list),
                 str(quarantine_dir),
+                clamav_accum,
             )
         except tk.TclError:
             pass
@@ -1212,7 +1319,12 @@ class HttpBrowserWindow(UnifiedBrowserCore):
         self._start_download_thread([(p, 0) for p in file_list])
 
     def _download_thread_fn(self, file_list) -> None:
+        from gui.utils.extract_runner import (
+            build_browser_download_clamav_setup,
+            update_browser_clamav_accum,
+        )
         from shared.http_browser import HttpCancelledError, HttpFileTooLargeError
+        from shared.quarantine_postprocess import PostProcessInput
         from shared.quarantine import build_quarantine_path, log_quarantine_event
         quarantine_dir = build_quarantine_path(
             ip_address=self.ip_address,
@@ -1220,8 +1332,19 @@ class HttpBrowserWindow(UnifiedBrowserCore):
             base_path=Path(self.config["quarantine_base"]).expanduser(),
             purpose="http",
         )
+        _pp, clamav_accum, _init_err = build_browser_download_clamav_setup(
+            self.config.get("clamav", {}),
+            self.ip_address,
+            quarantine_dir,
+            "http_root",
+        )
+        if _init_err:
+            try:
+                self.window.after(0, self._set_status, _init_err)
+            except tk.TclError:
+                pass
         success_count = 0
-        for remote_path, _ in file_list:
+        for remote_path, file_size in file_list:
             if self._cancel_event.is_set():
                 break
             filename = PurePosixPath(remote_path).name or remote_path
@@ -1243,6 +1366,29 @@ class HttpBrowserWindow(UnifiedBrowserCore):
                     quarantine_dir,
                     f"Downloaded {remote_path} -> {result.saved_path}",
                 )
+                if _pp is not None and clamav_accum is not None:
+                    try:
+                        _pp_result = _pp(PostProcessInput(
+                            file_path=Path(result.saved_path),
+                            ip_address=self.ip_address,
+                            share="http_root",
+                            rel_display=remote_path,
+                            file_size=int(file_size or 0),
+                        ))
+                        update_browser_clamav_accum(clamav_accum, _pp_result, remote_path)
+                    except Exception as exc:
+                        clamav_accum["errors"] += 1
+                        clamav_accum["error_items"].append({
+                            "path": remote_path,
+                            "error": str(exc),
+                        })
+                        try:
+                            log_quarantine_event(
+                                quarantine_dir,
+                                f"clamav post-process error for {remote_path}: {exc}",
+                            )
+                        except Exception:
+                            pass
                 success_count += 1
             except HttpCancelledError:
                 try:
@@ -1279,6 +1425,7 @@ class HttpBrowserWindow(UnifiedBrowserCore):
                 success_count,
                 len(file_list),
                 str(quarantine_dir),
+                clamav_accum,
             )
         except tk.TclError:
             pass
@@ -2042,6 +2189,11 @@ class SmbBrowserWindow(UnifiedBrowserCore):
         remote_dirs: List[str],
         folder_limits: Optional[Dict[str, Any]],
     ) -> None:
+        from gui.utils.extract_runner import (
+            build_browser_download_clamav_setup,
+            update_browser_clamav_accum,
+        )
+        from shared.quarantine_postprocess import PostProcessInput
         from shared.smb_browser import SMBNavigator
         from shared.quarantine import build_quarantine_path, log_quarantine_event
 
@@ -2058,6 +2210,15 @@ class SmbBrowserWindow(UnifiedBrowserCore):
                     self.current_share,
                     base_path=self.config.get("quarantine_root"),
                 )
+                _pp, clamav_accum, _init_err = build_browser_download_clamav_setup(
+                    self.config.get("clamav", {}),
+                    self.ip_address,
+                    Path(dest_dir),
+                    self.current_share or "share",
+                )
+                if _init_err:
+                    self._safe_after(0, lambda msg=_init_err: self._set_status(msg))
+                clamav_lock = threading.Lock()
 
                 q_small: queue.Queue = queue.Queue(maxsize=200)
                 q_large: queue.Queue = queue.Queue(maxsize=200)
@@ -2225,6 +2386,38 @@ class SmbBrowserWindow(UnifiedBrowserCore):
                                 )
                             except Exception:
                                 pass
+                            if _pp is not None and clamav_accum is not None:
+                                try:
+                                    _pp_result = _pp(PostProcessInput(
+                                        file_path=Path(result.saved_path),
+                                        ip_address=self.ip_address,
+                                        share=self.current_share or "share",
+                                        rel_display=remote_path.lstrip("/"),
+                                        file_size=int(_size or 0),
+                                    ))
+                                    with clamav_lock:
+                                        update_browser_clamav_accum(
+                                            clamav_accum,
+                                            _pp_result,
+                                            remote_path.lstrip("/"),
+                                        )
+                                except Exception as exc:
+                                    with clamav_lock:
+                                        clamav_accum["errors"] += 1
+                                        clamav_accum["error_items"].append({
+                                            "path": remote_path.lstrip("/"),
+                                            "error": str(exc),
+                                        })
+                                    try:
+                                        log_quarantine_event(
+                                            Path(dest_dir).parent.parent,
+                                            (
+                                                "clamav post-process error for "
+                                                f"{self.current_share}{remote_path}: {exc}"
+                                            ),
+                                        )
+                                    except Exception:
+                                        pass
                             completed += 1
                         except Exception as e:
                             friendly = self._map_download_error(e)
@@ -2269,6 +2462,14 @@ class SmbBrowserWindow(UnifiedBrowserCore):
                     if total_errors:
                         combined = errors + expand_errors
                         err_text = "\n".join(f"{p}: {err}" for p, err in combined[:5])
+                        if clamav_accum and clamav_accum.get("enabled"):
+                            err_text += (
+                                "\n\nClamAV totals: "
+                                f"scanned={int(clamav_accum.get('files_scanned', 0) or 0)}, "
+                                f"clean={int(clamav_accum.get('clean', 0) or 0)}, "
+                                f"infected={int(clamav_accum.get('infected', 0) or 0)}, "
+                                f"errors={int(clamav_accum.get('errors', 0) or 0)}"
+                            )
                         self._safe_after(
                             0,
                             lambda: messagebox.showwarning("Download issues", err_text, parent=self.window)
@@ -2278,9 +2479,7 @@ class SmbBrowserWindow(UnifiedBrowserCore):
                     else:
                         self._safe_after(
                             0,
-                            lambda: messagebox.showinfo("Download complete", summary_msg, parent=self.window)
-                            if self._window_alive()
-                            else None,
+                            lambda msg=summary_msg, av=clamav_accum: self._on_smb_download_done(msg, av),
                         )
             except Exception as e:
                 self._safe_after(0, lambda err=e: self._set_status(f"Download failed: {err}"))

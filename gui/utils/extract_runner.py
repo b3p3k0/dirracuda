@@ -524,6 +524,54 @@ def _build_promotion_config(
     )
 
 
+def build_browser_download_clamav_setup(
+    clamav_cfg_raw: Any,
+    ip_address: str,
+    quarantine_dir: Path,
+    share_name: str,
+) -> Tuple[Optional[PostProcessorFn], Optional[Dict[str, Any]], Optional[str]]:
+    """Build browser-download ClamAV setup in a fail-open form.
+
+    Returns:
+      (post_processor, accum, error_msg)
+      - enabled+ok: (fn, dict, None)
+      - disabled:   (None, None, None)
+      - init error: (None, None, "ClamAV init failed: ...")
+    """
+    _ = share_name  # kept for contract clarity and future shape validation
+    try:
+        safe_cfg = _sanitize_clamav_config(clamav_cfg_raw)
+        if not safe_cfg.get("enabled"):
+            return None, None, None
+        download_dir = Path(quarantine_dir).parent
+        prom_cfg = _build_promotion_config(ip_address, download_dir, safe_cfg)
+        pp = build_clamav_post_processor(safe_cfg, promotion_cfg=prom_cfg)
+        accum = {
+            "enabled": True,
+            "backend_used": None,
+            "files_scanned": 0,
+            "clean": 0,
+            "infected": 0,
+            "errors": 0,
+            "promoted": 0,
+            "known_bad_moved": 0,
+            "infected_items": [],
+            "error_items": [],
+        }
+        return pp, accum, None
+    except Exception as exc:
+        return None, None, f"ClamAV init failed: {exc}"
+
+
+def update_browser_clamav_accum(
+    accum: Dict[str, Any],
+    pp_result: PostProcessResult,
+    rel_display: str,
+) -> None:
+    """Public wrapper around the internal accumulator update helper."""
+    _update_clamav_accum(accum, pp_result, rel_display)
+
+
 def _check_cancel(cancel_event: Optional[Event]) -> None:
     if cancel_event and cancel_event.is_set():
         raise ExtractError("Extraction cancelled")
