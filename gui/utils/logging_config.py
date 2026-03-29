@@ -1,4 +1,4 @@
-"""Logging configuration for SMBSeek GUI.
+"""Logging configuration for Dirracuda.
 
 Provides a centralized logging setup with:
 - Default WARNING level (silent under normal operation)
@@ -12,7 +12,7 @@ import os
 import sys
 
 # Named logger for GUI subsystem
-GUI_LOGGER_NAME = "smbseek_gui"
+GUI_LOGGER_NAME = "dirracuda_gui"
 
 
 def setup_gui_logging() -> logging.Logger:
@@ -31,7 +31,8 @@ def setup_gui_logging() -> logging.Logger:
     level = logging.WARNING
 
     # Honor existing env vars for debug
-    if os.getenv("XSMBSEEK_DEBUG_SUBPROCESS") or os.getenv("XSMBSEEK_DEBUG_PARSING"):
+    if (os.getenv("XSMBSEEK_DEBUG_SUBPROCESS") or os.getenv("DIRRACUDA_DEBUG_SUBPROCESS")
+            or os.getenv("XSMBSEEK_DEBUG_PARSING") or os.getenv("DIRRACUDA_DEBUG_PARSING")):
         level = logging.DEBUG
 
     logger.setLevel(level)
@@ -62,7 +63,7 @@ def get_logger(name: str) -> logging.Logger:
         name: Module name (typically __name__ or a descriptive string)
 
     Returns:
-        A logger instance under the smbseek_gui namespace
+        A logger instance under the dirracuda_gui namespace
     """
     logger = logging.getLogger(f"{GUI_LOGGER_NAME}.{name}")
     if not logger.handlers and not logging.getLogger(GUI_LOGGER_NAME).handlers:

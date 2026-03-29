@@ -1,5 +1,5 @@
 """
-SMBSeek Access Package
+Dirracuda Access Package
 
 Provides share access verification with helpers split into cohesive modules.
 Public API preserved for existing imports.

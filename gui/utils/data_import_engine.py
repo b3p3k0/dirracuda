@@ -1,5 +1,5 @@
 """
-SMBSeek GUI - Data Import Engine
+Dirracuda - Data Import Engine
 
 Centralized data import system supporting CSV/JSON formats for team collaboration.
 Provides database write capabilities with conflict resolution and data validation.
@@ -31,7 +31,7 @@ _TS_FIELDS = frozenset({
 
 class DataImportEngine:
     """
-    Centralized data import engine for SMBSeek GUI.
+    Centralized data import engine for Dirracuda.
     
     Handles importing data from CSV/JSON formats with database write capabilities.
     Provides validation, conflict resolution, and progress feedback for team

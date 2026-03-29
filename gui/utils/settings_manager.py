@@ -1,7 +1,7 @@
 """
-SMBSeek GUI - Settings Manager
+Dirracuda - Settings Manager
 
-Global settings management for SMBSeek GUI including user preferences,
+Global settings management for Dirracuda including user preferences,
 interface modes, and persistent configuration storage.
 
 Design Decision: Centralized settings management allows consistent behavior
@@ -18,13 +18,18 @@ from datetime import datetime
 
 from gui.utils.default_gui_settings import DEFAULT_GUI_SETTINGS
 from gui.utils.logging_config import get_logger
+from shared.db_path_resolution import (
+    auto_detect_database_path,
+    normalize_database_path,
+    resolve_database_path,
+)
 
 _logger = get_logger("settings_manager")
 
 
 class SettingsManager:
     """
-    Global settings manager for SMBSeek GUI.
+    Global settings manager for Dirracuda.
     
     Handles user preferences, interface modes, window positions,
     and other persistent application settings.
@@ -35,12 +40,12 @@ class SettingsManager:
         Initialize settings manager.
         
         Args:
-            settings_dir: Directory to store settings files (default: ~/.smbseek)
+            settings_dir: Directory to store settings files (default: ~/.dirracuda)
         """
         # Default settings directory
         if settings_dir is None:
             home_dir = Path.home()
-            self.settings_dir = home_dir / '.smbseek'
+            self.settings_dir = home_dir / '.dirracuda'
         else:
             self.settings_dir = Path(settings_dir)
         
@@ -426,11 +431,16 @@ class SettingsManager:
         Returns:
             Database path (last used if available, otherwise default)
         """
-        last_db = self.get_setting('backend.last_database_path', '')
-        if last_db and os.path.exists(last_db):
-            return last_db
-        else:
-            return self.get_setting('backend.database_path', '../backend/smbseek.db')
+        backend_path = self.get_backend_path()
+        resolved = resolve_database_path(
+            backend_path=backend_path,
+            cli_database_path=None,
+            persisted_paths=[
+                self.get_setting('backend.last_database_path', ''),
+                self.get_setting('backend.database_path', ''),
+            ],
+        )
+        return str(resolved)
     
     def set_database_path(self, db_path: str, validate: bool = True) -> bool:
         """
@@ -443,12 +453,18 @@ class SettingsManager:
         Returns:
             True if set successfully (and validated if requested)
         """
-        if validate and not os.path.exists(db_path):
+        normalized = normalize_database_path(db_path, self.get_backend_path())
+        if normalized is None:
             return False
+
+        if validate and not normalized.exists():
+            return False
+
+        normalized_str = str(normalized)
         
         # Set both current and last database paths
-        success1 = self.set_setting('backend.database_path', db_path)
-        success2 = self.set_setting('backend.last_database_path', db_path)
+        success1 = self.set_setting('backend.database_path', normalized_str)
+        success2 = self.set_setting('backend.last_database_path', normalized_str)
         success3 = self.set_setting('backend.database_validated', validate)
         
         return success1 and success2 and success3
@@ -521,11 +537,11 @@ class SettingsManager:
         try:
             backend_path = Path(self.get_backend_path()).expanduser()
             config_path = Path(self.get_setting('backend.config_path', '')).expanduser()
-            db_path = Path(self.get_setting('backend.database_path', '')).expanduser()
+            db_path = normalize_database_path(self.get_setting('backend.database_path', ''), backend_path)
 
             candidate_backend = Path.cwd()
             candidate_config = candidate_backend / "conf" / "config.json"
-            candidate_db = candidate_backend / "smbseek.db"
+            candidate_db = auto_detect_database_path(candidate_backend)
             candidate_smbseek = candidate_backend / "cli" / "smbseek.py"
             candidate_ftpseek = candidate_backend / "cli" / "ftpseek.py"
             candidate_httpseek = candidate_backend / "cli" / "httpseek.py"
@@ -558,7 +574,7 @@ class SettingsManager:
             if not (backend_exists and config_exists):
                 self.set_backend_path(str(candidate_backend), validate=False)
                 self.set_setting('backend.config_path', str(candidate_config))
-                if not db_path.exists():
+                if db_path is None or not db_path.exists():
                     self.set_database_path(str(candidate_db), validate=False)
                 return
 
@@ -568,11 +584,11 @@ class SettingsManager:
                 self.set_setting('backend.config_path', str(candidate_config))
 
                 # Repoint DB if it is missing or still tied to old backend root.
-                db_missing = not db_path.exists()
+                db_missing = (db_path is None) or (not db_path.exists())
                 db_under_old_backend = False
-                if not db_missing:
+                if not db_missing and db_path is not None:
                     try:
-                        db_under_old_backend = str(db_path.resolve()).startswith(str(backend_resolved))
+                        db_under_old_backend = str(db_path.resolve(strict=False)).startswith(str(backend_resolved))
                     except Exception:
                         db_under_old_backend = str(db_path).startswith(str(backend_path))
                 if db_missing or db_under_old_backend:
@@ -608,7 +624,7 @@ class SettingsManager:
             # Check for smbseek executable
             smbseek_script = path_obj / "cli" / "smbseek.py"
             if not smbseek_script.exists():
-                return {'valid': False, 'message': 'cli/smbseek.py not found in directory'}
+                return {'valid': False, 'message': 'Dirracuda executable not found in directory'}
 
             # Try to get version
             try:
@@ -620,11 +636,11 @@ class SettingsManager:
                 )
                 if result.returncode == 0:
                     version = result.stdout.strip()
-                    return {'valid': True, 'message': f'Valid SMBSeek installation ({version})'}
+                    return {'valid': True, 'message': f'Valid Dirracuda installation ({version})'}
                 else:
-                    return {'valid': True, 'message': 'SMBSeek installation found (version check failed)'}
+                    return {'valid': True, 'message': 'Dirracuda installation found (version check failed)'}
             except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
-                return {'valid': True, 'message': 'SMBSeek installation found (version check failed)'}
+                return {'valid': True, 'message': 'Dirracuda installation found (version check failed)'}
                 
         except Exception as e:
             return {'valid': False, 'message': f'Validation error: {str(e)}'}
@@ -639,39 +655,44 @@ class SettingsManager:
         smbseek_path = self.get_backend_path()
         return str(Path(smbseek_path) / "conf" / "config.json")
     
-    def set_smbseek_paths(self, smbseek_path: str, config_path: Optional[str] = None, 
+    def set_backend_paths(self, backend_path: str, config_path: Optional[str] = None,
                          db_path: Optional[str] = None) -> bool:
         """
-        Set SMBSeek-related paths atomically.
-        
+        Set backend-related paths atomically (canonical method, F1+).
+
         Args:
-            smbseek_path: Path to SMBSeek installation
-            config_path: Path to config file (optional, will be derived if not provided)
-            db_path: Path to database file (optional, will be derived if not provided)
-            
+            backend_path: Path to backend installation directory
+            config_path: Path to config file (optional, derived if not provided)
+            db_path: Path to database file (optional, derived if not provided)
+
         Returns:
             True if all paths set successfully
         """
         try:
-            # Derive paths if not provided
-            smbseek_pathobj = Path(smbseek_path)
-            
+            path_obj = Path(backend_path)
+
             if config_path is None:
-                config_path = str(smbseek_pathobj / "conf" / "config.json")
-            
+                config_path = str(path_obj / "conf" / "config.json")
+
             if db_path is None:
-                db_path = str(smbseek_pathobj / "smbseek.db")
-            
-            # Set all paths
-            success1 = self.set_backend_path(smbseek_path)
+                db_path = str(auto_detect_database_path(path_obj))
+
+            success1 = self.set_backend_path(backend_path)
             success2 = self.set_setting('backend.config_path', config_path)
-            success3 = self.set_database_path(db_path)
-            
+            success3 = self.set_database_path(db_path, validate=False)
+
             return success1 and success2 and success3
-            
+
         except Exception as e:
-            _logger.error("Error setting SMBSeek paths: %s", e)
+            _logger.error("Error setting backend paths: %s", e)
             return False
+
+    def set_smbseek_paths(self, smbseek_path: str, config_path: Optional[str] = None,
+                         db_path: Optional[str] = None) -> bool:
+        """
+        Backward-compat wrapper; delegates to set_backend_paths().
+        """
+        return self.set_backend_paths(smbseek_path, config_path, db_path)
     
     def get_statistics(self) -> Dict[str, Any]:
         """

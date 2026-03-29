@@ -91,3 +91,47 @@ def test_validate_db_import_new_source_reenables_merge_button():
     assert dlg.merge_button.state == tk.NORMAL
     assert dlg.merge_button.text == "Start Merge"
     assert "validated successfully" in dlg.import_status_label.text.lower()
+
+
+def test_format_country_distribution_top5_ordered_with_percentages():
+    dlg = DBToolsDialog.__new__(DBToolsDialog)
+    countries = {
+        "US": 50,
+        "DE": 30,
+        "GB": 10,
+        "CA": 5,
+        "FR": 3,
+        "JP": 2,
+    }
+
+    text = dlg._format_country_distribution(countries, limit=5)
+    lines = text.splitlines()
+
+    assert len(lines) == 5
+    assert lines[0] == "1. US: 50 (50.0%)"
+    assert lines[1] == "2. DE: 30 (30.0%)"
+    assert lines[2] == "3. GB: 10 (10.0%)"
+    assert lines[3] == "4. CA: 5 (5.0%)"
+    assert lines[4] == "5. FR: 3 (3.0%)"
+    assert "JP" not in text
+
+
+def test_format_country_distribution_uses_all_countries_as_denominator():
+    dlg = DBToolsDialog.__new__(DBToolsDialog)
+    countries = {
+        "US": 49,
+        "DE": 30,
+        "GB": 10,
+        "CA": 5,
+        "FR": 4,
+        "JP": 2,
+    }
+
+    text = dlg._format_country_distribution(countries, limit=5)
+    # Total is 100 including JP; FR should be 4.0% (not 4.1% from top-5 subtotal of 98)
+    assert "5. FR: 4 (4.0%)" in text
+
+
+def test_format_country_distribution_empty():
+    dlg = DBToolsDialog.__new__(DBToolsDialog)
+    assert dlg._format_country_distribution({}, limit=5) == "No country data available"

@@ -31,7 +31,7 @@ class RceJsonlLogger:
                       Supports ~ expansion for home directory.
         """
         if log_path is None:
-            log_path = "~/.smbseek/logs/rce_analysis.jsonl"
+            log_path = "~/.dirracuda/logs/rce_analysis.jsonl"
 
         self.path = Path(log_path).expanduser()
         self._ensure_directory()

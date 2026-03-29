@@ -17,7 +17,7 @@ DROP TABLE IF EXISTS scan_sessions;
 -- Core scan session tracking
 CREATE TABLE scan_sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tool_name TEXT DEFAULT 'smbseek',
+    tool_name TEXT DEFAULT 'dirracuda',
     scan_type TEXT NOT NULL,
     timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -319,10 +319,10 @@ CREATE TABLE IF NOT EXISTS ftp_probe_cache (
 
 -- HTTP sidecar tables (additive; parallel to FTP sidecar; SMB and FTP schemas untouched)
 
--- HTTP server registry — one row per IP, host_type='H'
+-- HTTP server registry — one row per endpoint (ip + port), host_type='H'
 CREATE TABLE IF NOT EXISTS http_servers (
     id           INTEGER  PRIMARY KEY AUTOINCREMENT,
-    ip_address   TEXT     NOT NULL UNIQUE,
+    ip_address   TEXT     NOT NULL,
     host_type    TEXT     DEFAULT 'H',
     country      TEXT,
     country_code TEXT,
@@ -337,7 +337,8 @@ CREATE TABLE IF NOT EXISTS http_servers (
     status       TEXT     DEFAULT 'active',
     notes        TEXT,
     updated_at   DATETIME,
-    created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+    created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(ip_address, port)
 );
 
 CREATE INDEX IF NOT EXISTS idx_http_servers_ip      ON http_servers(ip_address);

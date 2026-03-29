@@ -1,6 +1,7 @@
-# SMBSeek
+# Dirracuda
+#### (formerly SMBSeek)
 
-A GUI for finding exposed HTTP, FTP, and SMB directory listings, then auditing what's reachable.
+A GUI for finding and categorizing open directory listings across multiple protocols, then auditing what's reachable.
 
 ---
 
@@ -8,37 +9,31 @@ A GUI for finding exposed HTTP, FTP, and SMB directory listings, then auditing w
 
 ## Setup
 
-You'll need Python 3.8+ (3.10+ recommended), Tkinter, and smbclient:
+You'll need Python 3.8+ (3.10+ recommended) and Tkinter:
 
 ```bash
 # Ubuntu/Debian
-sudo apt install python3-tk smbclient python3-venv
+sudo apt install python3-tk python3-venv
 
 # Fedora/RHEL
-sudo dnf install python3-tkinter samba-client python3-virtualenv
+sudo dnf install python3-tkinter python3-virtualenv
 
 # Arch
-sudo pacman -S tk smbclient python-virtualenv
+sudo pacman -S tk python-virtualenv
 ```
 
 Then:
 
 ```bash
-git clone https://github.com/b3p3k0/smbseek
-cd smbseek
+git clone https://github.com/b3p3k0/dirracuda
+cd dirracuda
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 cp conf/config.json.example conf/config.json
 ```
 
-Optionally: 
-
-```bash
-cp smbseek.db.example smbseek.db
-```
-
-Edit `conf/config.json` and add your Shodan API key (requires paid membership):
+Edit `conf/config.json` (or launch a new scan from the dashboard) and add your Shodan API key (requires paid membership):
 
 ```json
 {
@@ -51,7 +46,7 @@ Edit `conf/config.json` and add your Shodan API key (requires paid membership):
 Launch the GUI from your venv:
 
 ```bash
-./xsmbseek
+./dirracuda
 ```
 
 ---
@@ -62,33 +57,35 @@ Launch the GUI from your venv:
 
 | Package | Version | Purpose |
 |---------|---------|---------|
-| shodan | ≥1.25.0 | Shodan API client — discovers SMB/FTP/HTTP candidates by country and filter |
-| smbprotocol | ≥1.10.0 | Pure-Python SMB2/3 implementation; fallback when `smbclient` is unavailable |
+| shodan | ≥1.25.0 | Shodan API client — discovers scan candidates by country and filter |
+| smbprotocol | ≥1.10.0 | Pure-Python SMB2/3 transport for cautious-mode sessions |
 | pyspnego | ≥0.8.0 | SPNEGO authentication support; required by smbprotocol |
-| impacket | ≥0.11.0 | SMB1/2/3 protocol library; powers the file browser and share navigation |
-| PyYAML | ≥6.0 | Loads RCE vulnerability signatures from `signatures/rce_smb/*.yaml` |
+| impacket | ≥0.11.0 | SMB1/2/3 transport for legacy compatibility, share enumeration, and browser operations |
+| PyYAML | ≥6.0 | Loads RCE vulnerability signatures from `conf/signatures/rce_smb/*.yaml` |
 | Pillow | ≥8.0.0 | Image rendering in the file viewer (PNG, JPEG, GIF, WebP, BMP, TIFF) |
 
 ### System tools
 
 | Tool | Install | Purpose |
 |------|---------|---------|
-| tkinter | `apt install python3-tk` | GUI framework; required to run xSMBSeek |
-| smbclient | `apt install smbclient` | Primary SMB share enumeration; smbprotocol used as fallback if missing |
+| tkinter | `apt install python3-tk` | GUI framework; required to run Dirracuda |
+| ClamAV (`clamscan` / `clamdscan`) | `apt install clamav clamav-daemon` | Optional post-download malware scan step for bulk extract and browser downloads |
+| tmpfs (Linux) | built into the Linux kernel (`mount -t tmpfs ...`) | Optional RAM-backed quarantine path at `~/.dirracuda/quarantine_tmpfs`; app falls back to disk quarantine if tmpfs is unavailable |
 
 ---
 
-## Using xSMBSeek
+## Using Dirracuda
 
 ### Before You Start
 
 You're connecting to machines you don't control. A few baseline precautions before you scan:
 
 - **VPN** — don't scan from your real IP address
-- **VM** — run xSMBSeek inside a virtual machine, especially if you plan to browse or extract files; unknown hosts can serve malicious content
+- **VM** — run Dirracuda inside a virtual machine, especially if you plan to browse or extract files; unknown hosts can serve malicious content
 - **Network isolation** — keep the VM on an isolated network segment, not bridged directly to your LAN
-- **Don't open extracted files on your host** — quarantine defaults to `~/.smbseek/quarantine/` inside the VM for a reason; treat everything you pull as untrusted
-- **Don't run as root** — that's dumb
+- **Don't open extracted files on your host** — quarantine defaults to `~/.dirracuda/quarantine/` inside the VM for a reason; treat everything you pull as untrusted
+- **Audit the source code** - I'm not a threat actor, but I could be. Don't just clone and run things from Github all willy-nilly
+- **Don't run as root** — that's just silly!
 
 ### Dashboard
 
@@ -96,56 +93,25 @@ You're connecting to machines you don't control. A few baseline precautions befo
 
 The main window. From here you can:
 
-- Launch SMB/FTP/HTTP discovery from one **▶ Start Scan** button — pick one protocol or queue multiple protocols in sequence from the same dialog
-- Open the Server List to work with hosts you've found
+- Launch discovery from one **▶ Start Scan** button — pick one protocol or queue multiple protocols in sequence from the same dialog
+- Open the Server List Browser to work with hosts you've found
 - Manage your database (import, export, merge, maintenance)
 - Edit configuration
-- Toggle **dark/light mode** with the 🌙/☀️ button in the top-right; your preference is saved automatically
+- Toggle dark/light mode with the 🌙/☀️ button in the top-right
 
-### SMB Discovery
+### Discovery
 
-Triggered from **▶ Start Scan** with **SMB** selected. The scan runs as a `smbseek` subprocess and tests candidates concurrently across a configurable thread pool:
+![start new scan dialog](img/scan.png)
 
-1. Shodan query for hosts with SMB auth disabled or running Samba, filtered by country and exclusion list
-2. Organization filtering — hosts belonging to excluded ISPs or hosting providers are dropped before any connection attempt
-3. Deduplication against the database — hosts scanned within the last 30 days are skipped by default (GUI uses this default behavior; CLI can override with `--rescan-all` or `--rescan-failed`)
-4. TCP reachability check on port 445
-5. Authentication test using three methods in sequence: Anonymous, Guest/blank, and Guest/Guest
+Triggered from **▶ Start Scan** with the protocol(s) selected. All three follow the same pipeline: Shodan query → reachability check → protocol-specific verification. Only hosts that pass get stored; failures are recorded with a reason code so you can see exactly where each candidate dropped out. Scan summary shows Shodan candidates vs. verified count. The same host registry handles all three protocols — the same IP can carry SMB, FTP, and multiple HTTP endpoint entries without collision.
 
-Two security modes are available in the scan dialog (and via `--legacy` on the CLI): **Cautious** (default) restricts connections to signed SMB2+/SMB3 and rejects anything requiring unsigned sessions or SMB1; **Legacy** lifts those restrictions. Legacy tends to return more results — older hosts that have never been hardened or patched off SMB1 are exactly the ones worth finding.
+**SMB** — default dork: `smb authentication: disabled product:"Samba"`. Applies two extra pre-connection filters: org filtering (drops excluded ISPs and hosting providers) and 30-day deduplication (CLI overrides: `--rescan-all`, `--rescan-failed`). Verification tries Anonymous, Guest/blank, and Guest/Guest in sequence; whichever succeeds is recorded alongside country and timestamp, so auth method drift shows up across rescans. Two security modes: **Cautious** (default) restricts to signed SMB2+/SMB3 and rejects SMB1; **Legacy** lifts those restrictions and tends to find more targets. 
 
-Only hosts that authenticate are stored. The method that succeeded is recorded alongside country, timestamp, and scan count — so you can track whether a host drifts from anonymous to guest access across rescans. The scan summary reports Shodan candidates vs. verified count.
+**FTP** — default dork: `port:21 "230 Login successful"`. Verification includes anonymous login and root directory listing. Failure codes: `connect_fail`, `auth_fail`, `list_fail`, `timeout`.
 
-Results appear in the Server List.
+**HTTP** — default dork: `http.title:"Index of /"`. Verification stays locked to the exact Shodan hit endpoint (same IP + same port), and tests HTTP and/or HTTPS on that port based on your config toggles.
 
-### FTP Discovery
-
-Triggered from **▶ Start Scan** with **FTP** selected. The scan runs as a separate `ftpseek` process and follows four verification steps for each candidate:
-
-1. Shodan query for port 21 hosts showing a successful anonymous login banner
-2. TCP reachability check on port 21
-3. Anonymous login attempt
-4. Root directory listing
-
-Only hosts that pass all four steps are stored as verified. Failures are recorded with a reason code (`connect_fail`, `auth_fail`, `list_fail`, `timeout`) so you can see exactly where each candidate dropped out. The scan summary reports candidate count vs. verified count.
-
-Results are stored in the same host registry. The same IP can have SMB, FTP, and HTTP entries without collision.
-
-### HTTP Discovery
-
-Triggered from **▶ Start Scan** with **HTTP** selected. Uses a Shodan query for `http.title:"Index of /"` to find hosts serving Apache/nginx directory listings, then verifies each candidate:
-
-1. Shodan query for HTTP/HTTPS directory-index hosts
-2. Reachability check and directory-index validation (HTTP and HTTPS ports)
-3. Accessible listings stored as verified; failures recorded with a reason code
-
-Results are stored in the same host registry as SMB and FTP records. The browser window lets you navigate directory listings, view text files and images (`.png`, `.jpg`, `.jpeg`, `.gif`, `.bmp`, `.webp`, `.tif`, `.tiff`), and download files to quarantine at `~/.smbseek/quarantine/<ip>/<YYYYMMDD>/http_root/`.
-
-Known limits:
-- No pre-flight file size guard (HTTP directory listings carry no size metadata; the viewer size cap still applies)
-- Animated GIFs render first frame only (PIL limitation)
-- HTTPS with mutual TLS not supported; insecure TLS allowed by default
-- Browser indexes one level deep; files in nested subdirectories require manual navigation
+**Post-scan bulk probe/extract scope** — when bulk probe or bulk extract is enabled from the scan flow, targets are limited to accessible hosts from the scan that just completed (same protocol). Manual probe actions launched from Server List continue to use your explicit row selection and are unchanged.
 
 ### Server List
 
@@ -156,7 +122,7 @@ Known limits:
 
 | Action | Description |
 |--------|-------------|
-| 📋 Copy IP | Copy selected server IP address(es) to clipboard |
+| 📋 Copy IP | Copy selected server IP address to clipboard |
 | 🔍 Probe Selected | Enumerate shares, detect ransomware indicators |
 | 📦 Extract Selected | Collect files with hard limits on count, size, and time |
 | 🔓 Pry Selected | Password audit against a specific user |
@@ -166,20 +132,24 @@ Known limits:
 | ⚠ Toggle Compromised | Mark/unmark selected servers as likely compromised |
 | 🗑️ Delete Selected | Remove selected servers from the database |
 
+Server List also includes an **Add Record** control (next to `Advanced`) for manually inserting one SMB/FTP/HTTP host row into the active database. Save keeps your current filters unchanged. If the newly added row does not appear, it is usually hidden by an active filter (most commonly `Shares > 0`). Inserted records can then be probed and investigated from the GUI.
+
 ### Probing Shares
+
+![bulk probe](img/probe.png)
 
 Read-only directory enumeration that previews accessible shares without downloading files. Probing collects root files, subdirectories, and file listings for each accessible share (with configurable limits on depth and breadth).
 
 **Ransomware detection:** Filenames are matched against 25+ known ransom-note patterns (WannaCry, Hive, STOP/Djvu, etc.). Matches flag the server with a red indicator in the list view.
 
-**RCE vulnerability analysis:** Optionally scans for SMB vulnerabilities using passive heuristics. Covers 8 CVEs including EternalBlue (MS17-010), SMBGhost (CVE-2020-0796), ZeroLogon (CVE-2020-1472), and PrintNightmare (CVE-2021-34527). Returns a risk score (0-100) with verdicts: confirmed, likely, or not vulnerable. Signatures live in `signatures/rce_smb/` as editable YAML files. **NOTE: this feature is still under development; don't trust results until verified with alternative measures.**
+**RCE vulnerability analysis:** **NOTE: this feature is still under development; don't trust results until verified with alternative measures.** Optionally scans for SMB vulnerabilities using passive heuristics. Covers 8 CVEs including EternalBlue (MS17-010), SMBGhost (CVE-2020-0796), ZeroLogon (CVE-2020-1472), and PrintNightmare (CVE-2021-34527). Returns a risk score (0-100) with verdicts: confirmed, likely, or not vulnerable. Signatures live in `conf/signatures/rce_smb/` as editable YAML files. 
 
-Results are cached in `~/.smbseek/probes/` and reloaded automatically. Configure probe limits in `conf/config.json` under `file_browser` settings.
+Results are cached in `~/.dirracuda/probes/` and reloaded automatically. Configure probe limits in `conf/config.json` under `file_browser` settings.
 
 ### Browsing Shares
 
 ![file browser](img/browse.png)
-Read-only navigation through SMB shares. Double-click directories to descend, files to preview. You can also select a file and click **View**.
+Read-only navigation available shares. Double-click directories to descend, files to preview.
 
 The viewer auto-detects file types: text files display with an encoding selector (UTF-8, Latin-1, etc.), binary files switch to hex mode, and images (PNG, JPEG, GIF, WebP, BMP, TIFF) render with fit-to-window scaling.
 
@@ -187,7 +157,48 @@ The viewer auto-detects file types: text files display with an encoding selector
 
 Files over the specified maximum (default: 5 MB) trigger a warning—you can bump that limit in `conf/config.json` under `file_browser.viewer.max_view_size_mb`, or click "Ignore Once" to load anyway (hard cap: 1 GB).
 
-Downloads land in quarantine (`~/.smbseek/quarantine/`). The browser never writes to remote systems.
+Downloads are staged in quarantine (`~/.dirracuda/quarantine/`). When ClamAV is enabled, downloaded files are post-processed by verdict (clean files promoted to extracted, infected files moved to known-bad). The browser never writes to remote systems.
+
+#### Optional tmpfs quarantine (Linux)
+
+Dirracuda can stage quarantine files in RAM-backed `tmpfs` instead of disk.
+
+- Mountpoint is fixed to `~/.dirracuda/quarantine_tmpfs`
+- Linux only (controls are disabled on non-Linux platforms)
+- If mount/setup fails, Dirracuda falls back to the configured disk quarantine path and shows one warning per app session
+
+To pre-mount at boot, add an `/etc/fstab` entry like the one below (replace `<USER>`), then run `sudo mount -a`.
+Dirracuda will reuse this mount when tmpfs mode is enabled.
+
+```fstab
+tmpfs  /home/<USER>/.dirracuda/quarantine_tmpfs  tmpfs  noexec,nosuid,nodev,size=512M,noswap  0  0
+```
+
+Enable in **App Config**:
+
+- Check `Use memory (tmpfs) for quarantine`
+- Set `Max size (MB)` (default `512`)
+
+Or set in `conf/config.json`:
+
+```json
+{
+  "quarantine": {
+    "use_tmpfs": true,
+    "tmpfs_size_mb": 512
+  }
+}
+```
+
+Manual setup notes (Linux):
+
+```bash
+# Validate mount appears after starting Dirracuda with tmpfs enabled
+mount | grep -F "$HOME/.dirracuda/quarantine_tmpfs"
+
+# Inspect current tmpfs usage
+df -h "$HOME/.dirracuda/quarantine_tmpfs"
+```
 
 ### Extracting Files
 
@@ -198,12 +209,42 @@ Automated file collection with configurable limits:
 - Max total size
 - Max runtime
 - Max directory depth
+- File extension filtering
 
 All extracted files land in quarantine. The defaults are conservative — check `conf/config.json` if you need to adjust them.
 
+#### Optional ClamAV scanning (bulk extract + browser downloads)
+
+ClamAV integration is optional and off by default.
+
+When enabled, ClamAV post-processes files downloaded via:
+
+- Bulk extract paths (`Dashboard` post-scan bulk extract and `Server List` batch extract)
+- Browser/manual file downloads (SMB/FTP/HTTP browser windows)
+
+Each file is scanned and then routed by verdict:
+
+- **clean** → moved to `~/.dirracuda/extracted/<host>/<date>/<share>/...`
+- **infected** → moved to `~/.dirracuda/quarantine/<known_bad_subdir>/<host>/<date>/<share>/...` (default subdir: `known_bad`)
+- **scanner error/timeout/missing binary** → file stays in quarantine; extract continues (fail-open)
+
+Configure it from **App Config → ClamAV Settings**:
+
+- Enable/disable scanning
+- Backend: `auto`, `clamdscan`, or `clamscan`
+- Scanner timeout (seconds)
+- Extracted root path
+- Known-bad subfolder name
+- Show/hide post-extract ClamAV results dialog
+
+Notes:
+
+- The results dialog supports **Mute until restart**.
+- One completion popup is shown per session (ClamAV results dialog if shown, otherwise a single fallback completion popup).
+
 ### Pry (Password Audit)
 
-Tests passwords from a wordlist against a single host/share/user. Optionally tries username-as-password first.
+Tests passwords from a wordlist against a single SMB host/share/user. Optionally tries username-as-password first.
 
 To use it, download a wordlist (we recommend [SecLists](https://github.com/danielmiessler/SecLists)) and set the path in config:
 
@@ -219,6 +260,8 @@ Pry includes lockout detection and configurable delays between attempts. That sa
 
 ### DB Tools
 
+![db dialog](img/db.png)
+
 Opened via **DB Tools** on the dashboard. Four tabs:
 
 **Import & Merge** — supports two source types:
@@ -227,7 +270,7 @@ Opened via **DB Tools** on the dashboard. Four tabs:
 
 Three conflict strategies are available in both paths: **Keep Newer** (default — picks whichever record has the more recent `last_seen`), **Keep Source**, and **Keep Current**. Auto-backup fires before import/merge unless you disable it.
 
-**Export & Backup** — **Export** runs `VACUUM INTO` to produce a clean, defragmented copy at a path you choose. **Quick Backup** drops a timestamped copy (`smbseek_backup_YYYYMMDD_HHMMSS.db`) next to the main database file.
+**Export & Backup** — **Export** runs `VACUUM INTO` to produce a clean, defragmented copy at a path you choose. **Quick Backup** drops a timestamped copy (`dirracuda_backup_YYYYMMDD_HHMMSS.db`) next to the main database file.
 
 **Statistics** — server and share counts, database size, date range, and a top-10 country breakdown. Read-only; won't lock the database.
 
@@ -241,7 +284,7 @@ Required column:
 - `ip_address`
 
 Optional columns:
-- `host_type` (`S`, `F`, `H`; aliases `SMB`, `FTP`, `HTTP`; default is `S`)
+- `host_type` (`S`, `F`, `H`; aliases `SMB`, `FTP`, `HTTP`)
 - `country`, `country_code`, `auth_method`, `first_seen`, `last_seen`, `scan_count`, `status`, `notes`, `shodan_data`
 - `port`, `anon_accessible`, `banner` (FTP/HTTP rows)
 - `scheme`, `title` (HTTP rows)
@@ -250,11 +293,13 @@ Behavior notes:
 - One CSV row maps to one protocol host row.
 - `S` rows write to `smb_servers`, `F` to `ftp_servers`, `H` to `http_servers`.
 - If the current DB lacks a protocol table/columns (legacy DB shape), those protocol rows are skipped and shown in preview warnings.
-- CSV import does not create share/file/vulnerability/failure records; it imports host registries only.
+- CSV import does not create share/file/vulnerability/failure records; it imports host registries only. Imported hosts can be probed from the Server List Browser to populate these fields.
 
 ---
 
 ## Configuration
+
+![config](img/config.png)
 
 App settings are stored in `conf/config.json`. The example file (`conf/config.json.example`) documents every option.
 
@@ -263,11 +308,9 @@ Key sections:
 - `shodan.api_key` — required for discovery scans (SMB/FTP/HTTP)
 - `pry.*` — wordlist path, delays, lockout behavior
 - `file_collection.*` — extraction limits
+- `clamav.*` — optional post-extract scan/routing behavior
 - `file_browser.*` — browse mode limits
 - `connection.*` — timeouts and rate limiting
-- `shodan.query_components.base_query` — SMB baseline Shodan dork
-- `ftp.shodan.query_components.base_query` — FTP baseline Shodan dork
-- `http.shodan.query_components.base_query` — HTTP baseline Shodan dork
 - `ftp.shodan.query_limits.max_results` — cap on Shodan FTP candidates per scan
 - `ftp.verification.*` — per-step timeouts for FTP connect, auth, and listing (seconds)
 
@@ -278,15 +321,15 @@ Two additional files hold editable lists:
 
 These are separate so you can customize or share them without touching app settings.
 
-The GUI includes a built-in config editor for common settings. The Application Configuration dialog also exposes editable baseline SMB/FTP/HTTP dorks with per-row `Reset` (dialog-open value) and `Default` actions.
+The GUI includes a built-in config editor for common settings.
 
 ## Advanced
 
 ### Templates
 
-**Scan templates** save your unified scan configuration — protocol selection, country/region filters, Shodan filters, max results, shared concurrency/timeout, and SMB/HTTP protocol-specific toggles. Click "Save Current" in the Start Scan dialog. Templates live in `~/.smbseek/templates/` as JSON files you can edit directly.
+**Scan templates** save your unified scan configuration — protocol selection, country/region filters, Shodan filters, max results, shared concurrency/timeout, and SMB/HTTP protocol-specific toggles. Click "Save Current" in the Start Scan dialog. Templates live in `~/.dirracuda/templates/` as JSON files you can edit directly.
 
-**Filter templates** save your server list filters — search text, date range, countries, checkboxes. Click "Save Filters" in the advanced filter panel. Stored in `~/.smbseek/filter_templates/`.
+**Filter templates** save your server list filters — search text, date range, countries, checkboxes. Click "Save Filters" in the advanced filter panel. Stored in `~/.dirracuda/filter_templates/`.
 
 Both auto-restore your last-used template on startup.
 
@@ -316,21 +359,21 @@ The CLI is useful for scripting and automation. The GUI uses the same backends.
 
 ## Development
 
-This started as a collection of crude bash scripts I've written over 30+ years of networking and security work — dorks, one-liners for poking at SMB shares, checking for open FTP, that sort of thing. At some point it made sense to turn them into something with a GUI and a database, but the undertaking was far outside my skillset. I understand programming and logic but get lost in the sauce of syntax and structure.
+This started as a collection of crude bash and python scripts I've written over 30+ years of networking and security work — dorks, one-liners for poking at servers, that sort of thing. At some point it made sense to turn them into something with a GUI and a database, but the undertaking was far outside my skillset. I understand fundamentals of programming and logic but get lost in the sauce of syntax and structure.
 
-Part of the goal here is finding out how far AI-assisted development can actually go. The answer, in my experience, is pretty far. I bring domain knowledge, the spec, and the judgment call on what matters; the AI handles implementation, consistency, and the parts that would otherwise be tedious. 
-
-It works well - I'd still be struggling to learn the basics of tkinter if I did this the old fashioned way. With a little patience and foundational knowledge, AI tools can help build complex and functional software.
+Fortunately AI has gotten good enough to generate functional code with proper oversight. Claude and Codex were extensively used to bring everything together and grow this from a handful of rough scripts to a full workflow manager.
 
 ---
 
 ## Legal & Ethics
 
-You should only scan networks you own or have explicit permission to test. Unauthorized access is illegal in most jurisdictions—full stop.
+**I am not a lawyer and this is not legal advice**
 
-That said: security research matters. Curiosity about how systems work isn't malicious, and understanding vulnerabilities is how we fix them. This tool exists because improperly secured data is a real problem worth studying. Use it to learn, to audit, to improve defenses and responsibly disclose. Don't use it to steal data or harm systems you have no business touching.
+You should only scan networks you own or have explicit permission to test. Unauthorized access is illegal in most jurisdictions — full stop.
 
-If you're unsure whether something is authorized, it probably isn't. When in doubt, get it in writing.
+That said: security research matters. Curiosity about how systems work isn't malicious, and understanding vulnerabilities is how we fix them. This tool exists because improperly secured data is a real problem worth studying. Use it to learn, to audit, to improve defenses and responsibly disclose. Don't be a dick.
+
+If you're unsure whether something is authorized, it probably isn't. When in doubt, get it in writing (or learn how to cover your trail).
 
 ---
 
@@ -340,4 +383,4 @@ If you're unsure whether something is authorized, it probably isn't. When in dou
 
 **Wordlists** from [SecLists](https://github.com/danielmiessler/SecLists) (MIT)
 
-Licensed under MIT. See `LICENSE` and `licenses/` for details.
+Licensed under GNU GPL v3. See `LICENSE.md` and `licenses/` for details.

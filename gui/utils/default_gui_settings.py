@@ -1,5 +1,5 @@
 """
-Default GUI settings for SMBSeek.
+Default GUI settings for Dirracuda.
 
 Separated from SettingsManager to keep the manager implementation concise.
 """
@@ -107,7 +107,7 @@ DEFAULT_GUI_SETTINGS = {
         'batch_max_workers': 3
     },
     'pry': {
-        'wordlist_path': 'conf/wordlists/rockyou.txt',
+        'wordlist_path': '',
         'user_as_pass': True,
         'stop_on_lockout': True,
         'verbose': False,
@@ -133,7 +133,7 @@ DEFAULT_GUI_SETTINGS = {
         'mock_mode': False,
         'backend_path': '.',
         'config_path': './conf/config.json',
-        'database_path': './smbseek.db',
+        'database_path': './dirracuda.db',
         'last_database_path': '',
         'database_validated': False
     },

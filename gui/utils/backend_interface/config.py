@@ -32,7 +32,7 @@ def ensure_config_exists(interface) -> None:
             # Copy example config
             shutil.copy2(interface.config_example_path, interface.config_path)
         else:
-            raise RuntimeError(f"SMBSeek configuration template not found at {interface.config_example_path}")
+            raise RuntimeError(f"Dirracuda configuration template not found at {interface.config_example_path}")
 
 
 def validate_config(interface) -> Dict[str, Any]:
@@ -234,25 +234,15 @@ def validate_backend(interface) -> None:
         FileNotFoundError: If backend CLI script not found
         PermissionError: If backend not executable
     """
-    import os
-
-    scripts = [
-        interface.cli_script,
-        interface.ftp_cli_script,
-        interface.http_cli_script,
-    ]
-    missing = [script for script in scripts if not script.exists()]
-    if missing:
-        missing_list = ", ".join(str(script) for script in missing)
+    if not interface.cli_script.exists():
         raise FileNotFoundError(
-            f"Backend CLI not found at: {missing_list}. "
+            f"Backend CLI not found at {interface.cli_script}. "
             f"Ensure backend is properly installed."
         )
 
-    non_executable = [script for script in scripts if not os.access(script, os.X_OK)]
-    if non_executable:
-        missing_list = ", ".join(str(script) for script in non_executable)
+    import os
+    if not os.access(interface.cli_script, os.X_OK):
         raise PermissionError(
-            f"Backend CLI not executable: {missing_list}. "
-            f"Run: chmod +x {' '.join(str(script) for script in non_executable)}"
+            f"Backend CLI not executable: {interface.cli_script}. "
+            f"Run: chmod +x {interface.cli_script}"
         )

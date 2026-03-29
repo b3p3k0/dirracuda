@@ -1,5 +1,5 @@
 """
-SMBSeek Scan Manager
+Dirracuda Scan Manager
 
 Manages SMB security scan operations with lock file coordination,
 progress tracking, and graceful error handling.
@@ -26,14 +26,12 @@ import sys
 
 from gui.utils.backend_interface import BackendInterface
 from gui.utils.logging_config import get_logger
-from gui.utils.scan_lock_manager import ScanLockManager
-from gui.utils.scan_progress import detect_scan_phase, enhance_progress_message
-from gui.utils.scan_manager_protocol_mixin import _ScanManagerProtocolMixin
+from shared.db_path_resolution import resolve_database_path
 
 _logger = get_logger("scan_manager")
 
 
-class ScanManager(_ScanManagerProtocolMixin):
+class ScanManager:
     """
     Manages SMB security scan operations.
     
@@ -67,56 +65,179 @@ class ScanManager(_ScanManagerProtocolMixin):
             self.gui_dir = Path(__file__).parent.parent
         
         self.lock_file = self.gui_dir / ".scan_lock"
-
-        # Lock file coordination (delegates to ScanLockManager)
-        self.lock_manager = ScanLockManager(self.gui_dir)
-
+        
         # Scan state
         self.current_scan = None
         self.scan_start_time = None
         self.scan_thread = None
         self.is_scanning = False
-
+        
         # Backend interface
         self.backend_interface = None
-
+        
         # Progress tracking
         self.progress_callback = None
         self.last_progress_update = None
-
+        
         # Results tracking
         self.scan_results = {}
         self.log_callback = None
-
-        # Lock startup cleanup is handled by ScanLockManager.__init__
+        
+        # Clean up any stale lock files on startup
+        self._cleanup_stale_locks()
+        
+        # Also initialize backend interface cleanup if backend_interface is available
+        self._initialize_backend_lock_cleanup()
+    
+    def _process_exists(self, pid: int) -> bool:
+        """
+        Check if process with given PID exists.
+        
+        Args:
+            pid: Process ID to check
+            
+        Returns:
+            True if process exists, False otherwise
+        """
+        if psutil:
+            return psutil.pid_exists(pid)
+        else:
+            # Fallback method using os
+            try:
+                os.kill(pid, 0)
+                return True
+            except (OSError, ProcessLookupError):
+                return False
+    
+    def _cleanup_stale_locks(self) -> None:
+        """Clean up stale lock files from previous sessions."""
+        if self.lock_file.exists():
+            try:
+                # Read lock file metadata
+                with open(self.lock_file, 'r') as f:
+                    lock_data = json.load(f)
+                
+                # Check if process is still running
+                pid = lock_data.get('process_id')
+                if pid and self._process_exists(pid):
+                    # Process still exists, lock is valid
+                    return
+                
+                # Process doesn't exist, remove stale lock
+                self.lock_file.unlink()
+                
+            except (json.JSONDecodeError, FileNotFoundError, KeyError):
+                # Invalid or corrupted lock file, remove it
+                if self.lock_file.exists():
+                    self.lock_file.unlink()
+    
+    def _initialize_backend_lock_cleanup(self) -> None:
+        """
+        Initialize backend interface lock cleanup for coordination.
+        
+        Ensures that both GUI and backend lock files are cleaned up
+        as recommended by backend team integration guidelines.
+        """
+        try:
+            # Clean up any additional lock patterns that might exist
+            lock_patterns = [
+                ".scan_lock",
+                ".access_lock", 
+                ".discovery_lock",
+                ".collection_lock"
+            ]
+            
+            for pattern in lock_patterns:
+                lock_path = self.gui_dir / pattern
+                if lock_path.exists():
+                    try:
+                        # Check if lock file contains process information
+                        with open(lock_path, 'r') as f:
+                            lock_data = json.load(f)
+                        
+                        # Check if process is still running
+                        pid = lock_data.get('process_id')
+                        if pid and self._process_exists(pid):
+                            # Process still exists, lock is valid
+                            continue
+                        
+                        # Process doesn't exist, remove stale lock
+                        lock_path.unlink()
+                        
+                    except (json.JSONDecodeError, FileNotFoundError, KeyError):
+                        # Invalid or corrupted lock file, remove it
+                        if lock_path.exists():
+                            lock_path.unlink()
+                            
+        except Exception:
+            # Non-critical cleanup failure - continue without error
+            pass
     
     def is_scan_active(self) -> bool:
         """
         Check if a scan is currently active.
-
+        
         Returns:
             True if scan is active, False otherwise
         """
-        return self.is_scanning or self.lock_manager.is_lock_file_active()
-
+        if self.is_scanning:
+            return True
+        
+        if not self.lock_file.exists():
+            return False
+        
+        try:
+            with open(self.lock_file, 'r') as f:
+                lock_data = json.load(f)
+            
+            # Check if process is still running
+            pid = lock_data.get('process_id')
+            if pid and self._process_exists(pid):
+                return True
+            else:
+                # Stale lock file
+                self.lock_file.unlink()
+                return False
+                
+        except (json.JSONDecodeError, FileNotFoundError, KeyError):
+            return False
+    
     def create_lock_file(self, country: Optional[str] = None, scan_type: str = "complete") -> bool:
         """
         Create scan lock file with metadata.
-
+        
         Args:
             country: Country code for scan (None for global)
             scan_type: Type of scan being performed
-
+            
         Returns:
             True if lock created successfully, False if scan already active
         """
-        if self.is_scan_active():   # preserves in-memory guard via self.is_scanning
+        if self.is_scan_active():
             return False
-        return self.lock_manager.create_lock_file(country, scan_type)
-
+        
+        lock_data = {
+            "start_time": datetime.now().isoformat(),
+            "scan_type": scan_type,
+            "country": country,
+            "process_id": os.getpid(),
+            "created_by": "Dirracuda"
+        }
+        
+        try:
+            with open(self.lock_file, 'w') as f:
+                json.dump(lock_data, f, indent=2)
+            return True
+        except Exception:
+            return False
+    
     def remove_lock_file(self) -> None:
         """Remove scan lock file."""
-        self.lock_manager.remove_lock_file()
+        try:
+            if self.lock_file.exists():
+                self.lock_file.unlink()
+        except Exception:
+            pass
     
     def start_scan(self, scan_options: dict, backend_path: str,
                   progress_callback: Callable[[float, str, str], None],
@@ -343,10 +464,10 @@ class ScanManager(_ScanManagerProtocolMixin):
                     percentage = last_percentage
         
         # Simple phase detection based on message content (don't re-parse extensively)
-        phase = detect_scan_phase(message)
-
+        phase = self._detect_scan_phase(message)
+        
         # Enhance message with activity indicators for better user feedback
-        enhanced_message = enhance_progress_message(message, percentage, phase, self.last_progress_update)
+        enhanced_message = self._enhance_progress_message(message, percentage, phase)
         
         # Update progress with enhanced information
         self._update_progress(percentage, enhanced_message, phase)
@@ -359,6 +480,96 @@ class ScanManager(_ScanManagerProtocolMixin):
             "timestamp": datetime.now().isoformat(),
             "backend_message": message  # Store original for debugging
         }
+    
+    def _detect_scan_phase(self, message: str) -> str:
+        """
+        Simple phase detection from backend message.
+        
+        Backend interface has already done sophisticated parsing, so we only
+        need basic phase detection for UI display purposes.
+        
+        Args:
+            message: Progress message from backend interface
+            
+        Returns:
+            Detected phase name
+        """
+        message_lower = message.lower()
+        
+        # Simple keyword-based phase detection (SMBSeek 3.0 three-phase model)
+        if any(keyword in message_lower for keyword in ['complete', 'finished', 'done']):
+            return "completed"
+
+        scoreboard_message = (
+            ("testing hosts" in message_lower or "testing recent hosts" in message_lower)
+            and ("success:" in message_lower or "failed:" in message_lower)
+        ) or "auth results" in message_lower
+        if scoreboard_message:
+            return "access_testing"
+
+        error_indicators = [
+            'error:', ' error', 'critical', 'fatal', 'exception', 'traceback',
+            'scan failed', 'failed to', 'failed due', 'failure', ' aborted', ' terminated'
+        ]
+        if any(indicator in message_lower for indicator in error_indicators):
+            return "error"
+
+        if any(keyword in message_lower for keyword in ['auth', 'access', 'testing', 'login', 'shares', 'enum']):
+            return "access_testing"  # Combined access testing and enumeration
+        elif any(keyword in message_lower for keyword in ['discover', 'shodan', 'query', 'search']):
+            return "discovery"
+        elif any(keyword in message_lower for keyword in ['initializ', 'start', 'begin']):
+            return "initialization"
+        else:
+            return "scanning"  # Default fallback
+    
+    def _enhance_progress_message(self, message: str, percentage: float, phase: str) -> str:
+        """
+        Enhance progress message with additional context and user feedback.
+        
+        Args:
+            message: Original message from backend interface
+            percentage: Current progress percentage
+            phase: Detected scan phase
+            
+        Returns:
+            Enhanced message for better user experience
+        """
+        # Add activity indicator to show system is working
+        activity_indicators = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+        indicator_index = int((percentage // 2) % len(activity_indicators))
+        activity_indicator = activity_indicators[indicator_index]
+        
+        # Add phase-specific prefixes for clarity (SMBSeek 3.0 three-phase model)
+        phase_prefixes = {
+            "initialization": "🚀 Starting",
+            "discovery": "🔍 Discovering",
+            "authentication": "🔐 Testing Authentication",
+            "access_testing": "⚡ Testing Access",
+            "completed": "✅ Complete",
+            "error": "❌ Error",
+            "scanning": "⚡ Scanning"
+        }
+        
+        prefix = phase_prefixes.get(phase, "⚡ Processing")
+        
+        # Enhance message with context
+        if percentage < 100 and phase not in ["completed", "error"]:
+            # Add activity indicator and percentage for active scans
+            enhanced = f"{activity_indicator} {prefix}: {message} ({percentage:.0f}%)"
+        else:
+            # Simpler format for completed/error states
+            enhanced = f"{prefix}: {message}"
+        
+        # Add time-based activity for very long phases
+        if hasattr(self, 'last_progress_update') and self.last_progress_update:
+            last_time = self.last_progress_update.get("timestamp")
+            if last_time:
+                time_diff = (datetime.now() - datetime.fromisoformat(last_time)).total_seconds()
+                if time_diff > 60 and percentage < 100:  # More than 1 minute in same phase
+                    enhanced += f" (running {time_diff/60:.0f}m)"
+        
+        return enhanced
     
     def _update_progress(self, percentage: float, status: str, phase: str) -> None:
         """
@@ -617,13 +828,33 @@ class ScanManager(_ScanManagerProtocolMixin):
             # Import here to avoid circular dependencies
             from gui.utils.database_access import DatabaseReader
 
-            # Try to get backend path for database location
+            # Try to get backend path for database location.
             backend_path = getattr(self.backend_interface, 'backend_path', None)
-            if not backend_path:
+            if backend_path is None:
                 return None
 
-            db_path = os.path.join(backend_path, "smbseek.db")
-            if not os.path.exists(db_path):
+            persisted_paths = []
+            config_path = getattr(self.backend_interface, 'config_path', None)
+            if config_path:
+                try:
+                    cfg_path = Path(config_path).expanduser().resolve(strict=False)
+                    if cfg_path.exists():
+                        config_data = json.loads(cfg_path.read_text(encoding='utf-8'))
+                        gui_data = config_data.get("gui_app", {}) if isinstance(config_data, dict) else {}
+                        db_cfg = config_data.get("database", {}) if isinstance(config_data, dict) else {}
+                        persisted_paths.extend([
+                            gui_data.get("database_path") if isinstance(gui_data, dict) else None,
+                            db_cfg.get("path") if isinstance(db_cfg, dict) else None,
+                        ])
+                except Exception:
+                    pass
+
+            db_path = resolve_database_path(
+                backend_path=backend_path,
+                cli_database_path=None,
+                persisted_paths=persisted_paths,
+            )
+            if not db_path.exists():
                 return None
 
             # Create database reader and get recent statistics
@@ -665,6 +896,313 @@ class ScanManager(_ScanManagerProtocolMixin):
             # Any error in database fallback should not crash the scan
             return None
 
+    def start_ftp_scan(
+        self,
+        scan_options: dict,
+        backend_path: str,
+        progress_callback: Callable,
+        log_callback: Optional[Callable[[str], None]] = None,
+        config_path: Optional[str] = None,
+    ) -> bool:
+        """
+        Start an FTP scan in a background thread.
+
+        Shares the same lock/state mechanism as start_scan() so only one
+        protocol scan can run at a time. SMB behaviour is unchanged.
+
+        Args:
+            scan_options: Dict with optional 'country' key.
+            backend_path: Path to SMBSeek installation directory.
+            progress_callback: Called with (percentage, status, phase).
+            log_callback: Called with raw stdout lines for log streaming.
+            config_path: Optional absolute/relative config file to force for CLI runs.
+
+        Returns:
+            True if scan started, False if already scanning or lock failed.
+        """
+        if self.is_scan_active():
+            return False
+
+        country = scan_options.get("country")
+        if not self.create_lock_file(country, "ftp"):
+            return False
+
+        try:
+            self.backend_interface = BackendInterface(backend_path)
+            if config_path:
+                self.backend_interface.config_path = Path(config_path).expanduser().resolve()
+            self.is_scanning = True
+            self.scan_start_time = datetime.now()
+            self.progress_callback = progress_callback
+            self.log_callback = log_callback
+            self.scan_results = {
+                "start_time": self.scan_start_time.isoformat(),
+                "country": country,
+                "scan_options": scan_options,
+                "status": "running",
+                "protocol": "ftp",
+            }
+
+            self.scan_thread = threading.Thread(
+                target=self._ftp_scan_worker,
+                args=(scan_options,),
+                daemon=True,
+            )
+            self.scan_thread.start()
+            return True
+
+        except Exception as exc:
+            self.is_scanning = False
+            self.remove_lock_file()
+            self._update_progress(0, f"Failed to start FTP scan: {exc}", "error")
+            return False
+
+    def _ftp_scan_worker(self, scan_options: dict) -> None:
+        """
+        Worker thread for FTP scan execution.
+
+        Mirrors _scan_worker() structure exactly:
+        - try: build config_overrides from scan_options, execute under
+               _temporary_config_override (if any), _process_scan_results()
+        - except: _handle_scan_error()
+        - finally: _cleanup_scan() — always runs
+
+        Progress updates go through _update_progress() for thread-safe UI
+        dispatch via ui_dispatcher.
+        """
+        try:
+            country_raw = scan_options.get("country") or ""
+            countries = [c.strip() for c in country_raw.split(",") if c.strip()]
+
+            self._update_progress(5, "Initializing FTP scan...", "initialization")
+
+            # Build runtime config overrides from dialog options.
+            config_overrides = {}
+
+            # Shodan API key (shared global path, same as SMB).
+            api_key = scan_options.get("api_key_override")
+            if api_key:
+                config_overrides["shodan"] = {"api_key": api_key}
+
+            # FTP Shodan query limits.
+            max_results = scan_options.get("max_shodan_results")
+            if max_results is not None:
+                (config_overrides
+                 .setdefault("ftp", {})
+                 .setdefault("shodan", {})
+                 .setdefault("query_limits", {})
+                 )["max_results"] = max_results
+
+            # FTP discovery concurrency (key matches SMB naming convention).
+            disc_conc = scan_options.get("discovery_max_concurrent_hosts")
+            if disc_conc is not None:
+                config_overrides.setdefault("ftp", {}).setdefault("discovery", {})[
+                    "max_concurrent_hosts"
+                ] = disc_conc
+
+            # FTP access concurrency.
+            acc_conc = scan_options.get("access_max_concurrent_hosts")
+            if acc_conc is not None:
+                config_overrides.setdefault("ftp", {}).setdefault("access", {})[
+                    "max_concurrent_hosts"
+                ] = acc_conc
+
+            # FTP timeouts.
+            verif_overrides = {}
+            for key in ("connect_timeout", "auth_timeout", "listing_timeout"):
+                val = scan_options.get(key)
+                if val is not None:
+                    verif_overrides[key] = val
+            if verif_overrides:
+                config_overrides.setdefault("ftp", {})["verification"] = verif_overrides
+
+            verbose = bool(scan_options.get("verbose", False))
+            custom_filters = scan_options.get("custom_filters", "")
+
+            if config_overrides:
+                self._update_progress(7, "Applying configuration overrides...", "initialization")
+                with self.backend_interface._temporary_config_override(config_overrides):
+                    result = self.backend_interface.run_ftp_scan(
+                        countries=countries,
+                        progress_callback=self._handle_backend_progress,
+                        log_callback=self._handle_backend_log_line,
+                        filters=custom_filters,
+                        verbose=verbose,
+                    )
+            else:
+                result = self.backend_interface.run_ftp_scan(
+                    countries=countries,
+                    progress_callback=self._handle_backend_progress,
+                    log_callback=self._handle_backend_log_line,
+                    filters=custom_filters,
+                    verbose=verbose,
+                )
+
+            self._process_scan_results(result)
+
+        except Exception as exc:
+            self._handle_scan_error(exc)
+
+        finally:
+            self._cleanup_scan()
+
+    def start_http_scan(
+        self,
+        scan_options: dict,
+        backend_path: str,
+        progress_callback: Callable,
+        log_callback: Optional[Callable[[str], None]] = None,
+        config_path: Optional[str] = None,
+    ) -> bool:
+        """
+        Start an HTTP scan in a background thread.
+
+        Shares the same lock/state mechanism as start_scan() and start_ftp_scan()
+        so only one protocol scan can run at a time. SMB and FTP behaviour unchanged.
+
+        Args:
+            scan_options: Dict from HttpScanDialog._build_scan_options().
+            backend_path: Path to SMBSeek installation directory.
+            progress_callback: Called with (percentage, status, phase).
+            log_callback: Called with raw stdout lines for log streaming.
+            config_path: Optional absolute/relative config file to force for CLI runs.
+
+        Returns:
+            True if scan started, False if already scanning or lock failed.
+        """
+        if self.is_scan_active():
+            return False
+
+        country = scan_options.get("country")
+        if not self.create_lock_file(country, "http"):
+            return False
+
+        try:
+            self.backend_interface = BackendInterface(backend_path)
+            if config_path:
+                self.backend_interface.config_path = Path(config_path).expanduser().resolve()
+            self.is_scanning = True
+            self.scan_start_time = datetime.now()
+            self.progress_callback = progress_callback
+            self.log_callback = log_callback
+            self.scan_results = {
+                "start_time": self.scan_start_time.isoformat(),
+                "country": country,
+                "scan_options": scan_options,
+                "status": "running",
+                "protocol": "http",
+            }
+
+            self.scan_thread = threading.Thread(
+                target=self._http_scan_worker,
+                args=(scan_options,),
+                daemon=True,
+            )
+            self.scan_thread.start()
+            return True
+
+        except Exception as exc:
+            self.is_scanning = False
+            self.remove_lock_file()
+            self._update_progress(0, f"Failed to start HTTP scan: {exc}", "error")
+            return False
+
+    def _http_scan_worker(self, scan_options: dict) -> None:
+        """
+        Worker thread for HTTP scan execution.
+
+        Mirrors _ftp_scan_worker() structure exactly:
+        - try: build config_overrides from scan_options, execute under
+               _temporary_config_override (if any), _process_scan_results()
+        - except: _handle_scan_error()
+        - finally: _cleanup_scan() — always runs
+        """
+        try:
+            country_raw = scan_options.get("country") or ""
+            countries = [c.strip() for c in country_raw.split(",") if c.strip()]
+
+            self._update_progress(5, "Initializing HTTP scan...", "initialization")
+
+            # Build runtime config overrides from dialog options.
+            config_overrides = {}
+
+            # Shodan API key (shared global path, same as SMB/FTP).
+            api_key = scan_options.get("api_key_override")
+            if api_key:
+                config_overrides["shodan"] = {"api_key": api_key}
+
+            # HTTP Shodan query limits.
+            max_results = scan_options.get("max_shodan_results")
+            if max_results is not None:
+                (config_overrides
+                 .setdefault("http", {})
+                 .setdefault("shodan", {})
+                 .setdefault("query_limits", {})
+                 )["max_results"] = max_results
+
+            # HTTP discovery concurrency.
+            disc_conc = scan_options.get("discovery_max_concurrent_hosts")
+            if disc_conc is not None:
+                config_overrides.setdefault("http", {}).setdefault("discovery", {})[
+                    "max_concurrent_hosts"
+                ] = disc_conc
+
+            # HTTP access concurrency.
+            acc_conc = scan_options.get("access_max_concurrent_hosts")
+            if acc_conc is not None:
+                config_overrides.setdefault("http", {}).setdefault("access", {})[
+                    "max_concurrent_hosts"
+                ] = acc_conc
+
+            # HTTP verification timeouts (no auth_timeout — HTTP has no auth step).
+            verif_overrides = {}
+            for key in ("connect_timeout", "request_timeout", "subdir_timeout"):
+                val = scan_options.get(key)
+                if val is not None:
+                    verif_overrides[key] = val
+            if verif_overrides:
+                config_overrides.setdefault("http", {})["verification"] = verif_overrides
+
+            # TLS / verification flags (pass-through; no behavior in Card 2).
+            for key in ("verify_http", "verify_https", "allow_insecure_tls"):
+                val = scan_options.get(key)
+                if val is not None:
+                    config_overrides.setdefault("http", {}).setdefault("verification", {})[key] = val
+
+            # Bulk probe (pass-through only; no behavior in Card 2).
+            bulk = scan_options.get("bulk_probe_enabled")
+            if bulk is not None:
+                config_overrides.setdefault("http", {})["bulk_probe_enabled"] = bulk
+
+            verbose = bool(scan_options.get("verbose", False))
+            custom_filters = scan_options.get("custom_filters", "")
+
+            if config_overrides:
+                self._update_progress(7, "Applying configuration overrides...", "initialization")
+                with self.backend_interface._temporary_config_override(config_overrides):
+                    result = self.backend_interface.run_http_scan(
+                        countries=countries,
+                        progress_callback=self._handle_backend_progress,
+                        log_callback=self._handle_backend_log_line,
+                        filters=custom_filters,
+                        verbose=verbose,
+                    )
+            else:
+                result = self.backend_interface.run_http_scan(
+                    countries=countries,
+                    progress_callback=self._handle_backend_progress,
+                    log_callback=self._handle_backend_log_line,
+                    filters=custom_filters,
+                    verbose=verbose,
+                )
+
+            self._process_scan_results(result)
+
+        except Exception as exc:
+            self._handle_scan_error(exc)
+
+        finally:
+            self._cleanup_scan()
 
 
 # Global scan manager instance

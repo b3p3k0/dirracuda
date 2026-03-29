@@ -1,29 +1,82 @@
 #!/usr/bin/env python3
 """HTTP server discovery and assessment — CLI entry point."""
 
-from pathlib import Path
+import argparse
 import sys
+from pathlib import Path
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+_SCRIPT_DIR = Path(__file__).resolve().parent.parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
 
-from shared.cli_bootstrap import create_common_seek_parser, run_standard_seek_cli
 from shared.http_workflow import create_http_workflow
 from commands.http.models import HttpDiscoveryError
 
 
-def create_parser():
-    return create_common_seek_parser(
+def create_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
         prog="httpseek",
         description="HTTP server discovery and assessment",
     )
+    parser.add_argument(
+        "--country", metavar="CODE", default=None,
+        help="ISO 3166-1 alpha-2 country code(s), comma-separated (e.g. US,GB)",
+    )
+    parser.add_argument(
+        "--config", metavar="FILE", default=None,
+        help="Path to config file (default: conf/config.json)",
+    )
+    parser.add_argument(
+        "--filter",
+        metavar="QUERY",
+        default="",
+        help="Additional Shodan filter query to append (raw syntax).",
+    )
+    parser.add_argument("--verbose", "-v", action="store_true", default=False)
+    parser.add_argument("--quiet", "-q", action="store_true", default=False)
+    parser.add_argument("--no-colors", action="store_true", default=False)
+    return parser
 
 
 def main() -> int:
     parser = create_parser()
     args = parser.parse_args()
-    return run_standard_seek_cli(args, create_http_workflow, HttpDiscoveryError)
+
+    if args.verbose and args.quiet:
+        print("Error: Cannot use both --quiet and --verbose options")
+        return 1
+
+    # Ensure schema migrations are applied before any workflow runs.
+    # Best-effort: mirrors the pattern in ftpseek.
+    try:
+        from shared.config import load_config
+        from shared.db_migrations import run_migrations
+        _cfg = load_config(args.config)
+        _db_path = _cfg.get_database_path()
+        run_migrations(_db_path)
+    except Exception as mig_exc:
+        print(
+            f"Warning: failed to apply DB migrations before HTTP scan: {mig_exc}",
+            file=sys.stderr,
+        )
+
+    try:
+        workflow = create_http_workflow(args)
+        workflow.run(args)
+    except KeyboardInterrupt:
+        print("\nScan interrupted by user.", file=sys.stderr)
+        sys.exit(130)
+    except HttpDiscoveryError as exc:
+        print(f"✗  {exc}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+    return 0
 
 
 if __name__ == "__main__":

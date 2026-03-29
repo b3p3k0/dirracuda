@@ -1,6 +1,5 @@
 import concurrent.futures
 import socket
-import subprocess
 import threading
 import time
 import uuid
@@ -13,13 +12,31 @@ import random
 from .smb_support import Connection, Session, SMBException
 
 
-def check_smbclient_availability() -> bool:
-    """Check if smbclient command is available on the system."""
+def check_transport_availability() -> bool:
+    """
+    Backward-compatible transport availability check.
+
+    Validate that pure-Python SMB transport dependencies are importable.
+    """
     try:
-        result = subprocess.run(['smbclient', '--help'], capture_output=True, timeout=5)
-        return result.returncode == 0
-    except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
+        from shared.smb_adapter import SMBAdapter  # noqa: F401
+        return True
+    except Exception:
         return False
+
+
+def get_smb_adapter(op):
+    """Return or lazily create an SMBAdapter bound to current operation."""
+    adapter = getattr(op, "_smb_adapter", None)
+    if adapter is not None:
+        return adapter
+
+    from shared.smb_adapter import SMBAdapter
+
+    timeout = op.config.get_connection_timeout()
+    adapter = SMBAdapter(timeout_seconds=timeout)
+    setattr(op, "_smb_adapter", adapter)
+    return adapter
 
 
 def throttled_auth_wait(op) -> None:
@@ -252,42 +269,20 @@ def test_single_host(op, ip: str, country=None) -> Optional[Dict]:
     if not check_port(op, ip, 445):
         return None
 
-    auth_methods = [
-        ("Anonymous", "", ""),
-        ("Guest/Blank", "guest", ""),
-        ("Guest/Guest", "guest", "guest")
-    ]
+    auth_method = test_smb_alternative(op, ip)
+    if auth_method:
+        metadata = op.shodan_host_metadata.get(ip, {})
+        country_name = metadata.get('country_name') or country or 'Unknown'
+        country_code = metadata.get('country_code')
 
-    for method_name, username, password in auth_methods:
-        if test_smb_auth(op, ip, username, password):
-            metadata = op.shodan_host_metadata.get(ip, {})
-            country_name = metadata.get('country_name') or country or 'Unknown'
-            country_code = metadata.get('country_code')
-
-            return {
-                'ip_address': ip,
-                'country': country_name,
-                'country_code': country_code,
-                'auth_method': method_name,
-                'timestamp': datetime.now().isoformat(),
-                'status': 'accessible'
-            }
-
-    if op.smbclient_available:
-        fallback_result = test_smb_alternative(op, ip)
-        if fallback_result:
-            metadata = op.shodan_host_metadata.get(ip, {})
-            country_name = metadata.get('country_name') or country or 'Unknown'
-            country_code = metadata.get('country_code')
-
-            return {
-                'ip_address': ip,
-                'country': country_name,
-                'country_code': country_code,
-                'auth_method': f"{fallback_result} (smbclient)",
-                'timestamp': datetime.now().isoformat(),
-                'status': 'accessible'
-            }
+        return {
+            'ip_address': ip,
+            'country': country_name,
+            'country_code': country_code,
+            'auth_method': auth_method,
+            'timestamp': datetime.now().isoformat(),
+            'status': 'accessible'
+        }
 
     return None
 
@@ -363,57 +358,27 @@ def test_smb_auth(op, ip: str, username: str, password: str) -> bool:
 
 def test_smb_alternative(op, ip: str) -> Optional[str]:
     """
-    Alternative testing method using smbclient as fallback with caching.
+    Pure-Python auth probe with caching.
+
+    This keeps the original method contract but routes probing through the SMB
+    adapter (`smbprotocol` first, `impacket` fallback in legacy mode).
     """
-    if ip in op._smbclient_auth_cache:
-        return op._smbclient_auth_cache[ip]
-
-    try:
-        smbclient_cmd = [
-            'smbclient',
-            f"//{ip}/IPC$",
-            '-U', '%',
-            '-m', 'SMB2',
-            '-c', 'exit'
-        ]
-        timeout = op.config.get_connection_timeout()
-        result = subprocess.run(
-            smbclient_cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout
-        )
-
-        stderr_output = result.stderr or ""
-        stdout_output = result.stdout or ""
-
-        if result.returncode == 0:
-            op._smbclient_auth_cache[ip] = "Anonymous"
-            return "Anonymous"
-
-        if "NT_STATUS_LOGON_FAILURE" in stderr_output or "NT_STATUS_ACCESS_DENIED" in stderr_output:
-            op._smbclient_auth_cache[ip] = None
-            return None
-
-        if "STATUS_MORE_PROCESSING_REQUIRED" in stderr_output:
-            op._smbclient_auth_cache[ip] = None
-            return None
-
-        if "Anonymous login successful" in stdout_output:
-            op._smbclient_auth_cache[ip] = "Anonymous"
-            return "Anonymous"
-
-        op._smbclient_auth_cache[ip] = None
+    if not check_transport_availability():
         return None
 
-    except subprocess.TimeoutExpired:
-        op.output.print_if_verbose(f"smbclient timeout for {ip}")
-        op._smbclient_auth_cache[ip] = None
-        return None
-    except Exception as e:
-        op.output.print_if_verbose(f"smbclient error for {ip}: {e}")
-        op._smbclient_auth_cache[ip] = None
-        return None
+    if ip in op._auth_method_cache:
+        return op._auth_method_cache[ip]
+
+    adapter = get_smb_adapter(op)
+    result = adapter.probe_authentication(
+        ip,
+        cautious_mode=op.cautious_mode,
+        timeout_seconds=op.config.get_connection_timeout(),
+    )
+    method = result.get("auth_method") if result.get("success") else None
+
+    op._auth_method_cache[ip] = method
+    return method
 
 
 def get_optimal_workers(op, total_hosts: int, max_concurrent: int) -> int:

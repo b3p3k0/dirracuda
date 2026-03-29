@@ -25,7 +25,6 @@ from gui.utils.scan_manager import get_scan_manager
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.template_store import TemplateStore
 from gui.utils.logging_config import get_logger
-from gui.components.file_browser_window import FileBrowserWindow
 from gui.components.pry_dialog import PryDialog
 from gui.components.pry_status_dialog import BatchStatusDialog
 from shared.db_migrations import run_migrations
@@ -142,6 +141,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self.selection_label = None
         self.status_label = None
         self.mode_button = None
+        self.add_record_button = None
         self.show_all_button = None
         self.context_menu = None
         self.probe_button = None
@@ -170,7 +170,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
         try:
             self.filter_template_store = TemplateStore(
                 settings_manager=None,
-                base_dir=Path.home() / ".smbseek" / "filter_templates",
+                base_dir=Path.home() / ".dirracuda" / "filter_templates",
                 seed_dir=None
             )
         except Exception as exc:
@@ -466,6 +466,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
             'on_clear_search': self._clear_search,
             'on_reset_filters': self._reset_filters,
             'on_toggle_mode': self._toggle_mode,
+            'on_add_record': self._on_add_record,
             'on_filter_template_selected': self._on_filter_template_selected,
             'on_save_filter_template': self._on_save_filter_template,
             'on_delete_filter_template': self._on_delete_filter_template
@@ -489,6 +490,8 @@ class ServerListWindow(ServerListWindowActionsMixin):
         # Capture mode toggle reference from filter panel
         if 'mode_button' in self.filter_widgets:
             self.mode_button = self.filter_widgets['mode_button']
+        if 'add_record_button' in self.filter_widgets:
+            self.add_record_button = self.filter_widgets['add_record_button']
 
         # Disable favorites/avoid checkboxes if no settings manager
         if not self.settings_manager:
@@ -1059,7 +1062,13 @@ class ServerListWindow(ServerListWindowActionsMixin):
         server[field] = new_value
 
         try:
-            self.db_reader.upsert_user_flags_for_host(ip, host_type, **{field: bool(new_value)})
+            self.db_reader.upsert_user_flags_for_host(
+                ip,
+                host_type,
+                protocol_server_id=server.get("protocol_server_id"),
+                port=server.get("port"),
+                **{field: bool(new_value)},
+            )
         except Exception as exc:
             _logger.warning("Flag toggle DB write failed for %s (%s): %s", row_key, field, exc)
             # Revert in-memory state

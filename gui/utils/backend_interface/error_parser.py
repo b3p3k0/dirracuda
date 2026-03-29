@@ -29,15 +29,20 @@ def extract_error_details(full_output: str, cmd: List[str]) -> str:
             'ModuleNotFoundError: No module named "smbprotocol"',
             "ModuleNotFoundError: No module named 'pyspnego'",
             'ModuleNotFoundError: No module named "pyspnego"',
+            "ModuleNotFoundError: No module named 'impacket'",
+            'ModuleNotFoundError: No module named "impacket"',
             "No module named 'smbprotocol'",
             'No module named "smbprotocol"',
             "No module named 'pyspnego'",
-            'No module named "pyspnego"'
+            'No module named "pyspnego"',
+            "No module named 'impacket'",
+            'No module named "impacket"'
         )
         if any(substring in line_clean for substring in missing_dependency_substrings):
             friendly_message = (
-                "SMBSeek backend is missing required SMB libraries (smbprotocol). "
-                "This usually happens when the xsmbseek GUI runs outside the project "
+                "Dirracuda backend is missing required SMB libraries "
+                "(smbprotocol/impacket/pyspnego). "
+                "This usually happens when Dirracuda runs outside the project "
                 "virtual environment. Activate the venv (e.g., `source venv/bin/activate`) "
                 "or install the dependencies with `pip install -r requirements.txt`.\n"
                 f"Backend output: {line_clean}"

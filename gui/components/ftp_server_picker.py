@@ -1,8 +1,8 @@
 """
-FTP server picker dialog for xsmbseek.
+FTP server picker dialog for Dirracuda.
 
 Presents a filterable list of discovered FTP servers from the database
-and opens FtpBrowserWindow on selection. Stays open so the operator can
+and opens a browser window for the selected server. Stays open so the operator can
 browse multiple servers simultaneously.
 """
 
@@ -177,8 +177,9 @@ class FtpServerPickerDialog:
         selected_row = self._rows_by_item_id.get(sel[0], {})
         full_banner = str(selected_row.get("banner") or "")
 
-        from gui.components.ftp_browser_window import FtpBrowserWindow
-        FtpBrowserWindow(
+        from gui.components.unified_browser_window import open_ftp_http_browser
+        open_ftp_http_browser(
+            "F",
             parent=self._dialog,
             ip_address=ip,
             port=port,

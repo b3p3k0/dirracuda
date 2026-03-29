@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMBSeek Database Import Utilities
+Dirracuda Database Import Utilities
 Import existing CSV and JSON data files into SQLite database
 """
 
@@ -14,12 +14,12 @@ from typing import Dict, List, Optional, Any
 import logging
 import glob
 
-from db_manager import DatabaseManager, SMBSeekDataAccessLayer
+from db_manager import DatabaseManager, SMBSeekDataAccessLayer, resolve_tool_database_path
 
 
 class SMBSeekDataImporter:
     """
-    Import utility for migrating existing SMBSeek data files to SQLite database.
+    Import utility for migrating existing Dirracuda data files to SQLite database.
     
     Supports importing:
     - ip_record.csv files (scan results)
@@ -30,7 +30,7 @@ class SMBSeekDataImporter:
     - vulnerability_report_*.json files (vulnerability data)
     """
     
-    def __init__(self, db_path: str = "smbseek.db", config: Optional[Dict] = None):
+    def __init__(self, db_path: Optional[str] = None, config: Optional[Dict] = None):
         """
         Initialize data importer.
         
@@ -38,7 +38,7 @@ class SMBSeekDataImporter:
             db_path: Path to SQLite database
             config: Configuration dictionary
         """
-        self.db_manager = DatabaseManager(db_path, config)
+        self.db_manager = DatabaseManager(resolve_tool_database_path(db_path), config)
         self.dal = SMBSeekDataAccessLayer(self.db_manager)
         self.logger = logging.getLogger(__name__)
         
@@ -532,7 +532,7 @@ class SMBSeekDataImporter:
 def main():
     """Main function for command-line usage."""
     parser = argparse.ArgumentParser(
-        description="Import SMBSeek data files into SQLite database",
+        description="Import Dirracuda data files into SQLite database",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -551,8 +551,11 @@ Examples:
                        help="Import specific JSON file")
     parser.add_argument("--all", action="store_true",
                        help="Import all supported files from current directory")
-    parser.add_argument("--db-path", default="smbseek.db",
-                       help="SQLite database path (default: smbseek.db)")
+    parser.add_argument(
+        "--db-path",
+        default=None,
+        help="SQLite database path (default: auto-detect dirracuda.db then smbseek.db)",
+    )
     parser.add_argument("--verbose", "-v", action="store_true",
                        help="Enable verbose logging")
     

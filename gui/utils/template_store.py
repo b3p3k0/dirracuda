@@ -2,7 +2,7 @@
 Template storage utility for ScanDialog presets.
 
 Provides lightweight save/load/delete helpers backed by JSON files stored
-in the user's ~/.smbseek/templates directory. Seeds that directory with
+in the user's ~/.dirracuda/templates directory. Seeds that directory with
 curated defaults shipped in the repo and remembers the last-used template
 via SettingsManager when available.
 """
@@ -22,7 +22,7 @@ from gui.utils.logging_config import get_logger
 _logger = get_logger("template_store")
 
 
-TEMPLATE_DIRNAME = ".smbseek/templates"
+TEMPLATE_DIRNAME = ".dirracuda/templates"
 # Repo layout: gui/utils/template_store.py → ../../templates/default_scan_templates
 DEFAULT_SEED_DIR = Path(__file__).resolve().parents[2] / "templates" / "default_scan_templates"
 

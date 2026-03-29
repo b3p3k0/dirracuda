@@ -1,5 +1,5 @@
 """
-SMBSeek Configuration Management
+Dirracuda Configuration Management
 
 Centralized configuration loading and management for the unified CLI.
 Handles the reorganized configuration structure while maintaining compatibility.
@@ -102,7 +102,7 @@ def normalize_db_timestamp(ts_str: str) -> str:
 
 class SMBSeekConfig:
     """
-    Centralized configuration management for SMBSeek.
+    Centralized configuration management for Dirracuda.
     
     Loads and manages configuration from JSON files with sensible defaults
     and the new reorganized structure.
@@ -189,14 +189,18 @@ class SMBSeekConfig:
                 "max_depth": 12,
                 "max_path_length": 240,
                 "download_chunk_mb": 4,
-                "quarantine_root": "~/.smbseek/quarantine"
+                "quarantine_root": "~/.dirracuda/quarantine"
             },
-                "security": {
-                    "ransomware_indicators_path": "conf/ransomware_indicators.json",
-                    "exclusion_file": "conf/exclusion_list.json"
-                },
+            "quarantine": {
+                "use_tmpfs": False,
+                "tmpfs_size_mb": 512
+            },
+            "security": {
+                "ransomware_indicators_path": "conf/ransomware_indicators.json",
+                "exclusion_file": "conf/exclusion_list.json"
+            },
             "database": {
-                "path": "smbseek.db",
+                "path": "dirracuda.db",
                 "backup_enabled": True,
                 "backup_directory": "db_backups",
                 "max_backup_files": 30
@@ -323,12 +327,7 @@ class SMBSeekConfig:
     def get_http_config(self) -> Dict[str, Any]:
         """Get HTTP configuration section with defaults."""
         return self.get("http") or {
-            "shodan": {
-                "query_components": {
-                    "base_query": 'http.title:"Index of /"',
-                },
-                "query_limits": {"max_results": None},
-            },
+            "shodan": {"query_limits": {"max_results": None}},
             "verification": {
                 "connect_timeout": 5,
                 "request_timeout": 10,
@@ -353,7 +352,7 @@ class SMBSeekConfig:
 
     def get_database_path(self) -> str:
         """Get database file path."""
-        return self.get("database", "path", "smbseek.db")
+        return self.get("database", "path", "dirracuda.db")
     
     def should_rescan_host(self, last_seen_days: int) -> bool:
         """
@@ -563,7 +562,7 @@ class SMBSeekConfig:
             },
             "ms17_010": {"enabled": True},
             "smbghost": {"enabled": True},
-            "logging": {"jsonl_path": "~/.smbseek/logs/rce_analysis.jsonl"},
+            "logging": {"jsonl_path": "~/.dirracuda/logs/rce_analysis.jsonl"},
             "intrusive_mode_enabled": False
         }
         user_rce = self.config.get("rce", {})
@@ -599,7 +598,7 @@ class SMBSeekConfig:
     def get_rce_logging_path(self) -> str:
         """Get JSONL logging path for RCE analysis results."""
         return self.get_rce_config().get("logging", {}).get(
-            "jsonl_path", "~/.smbseek/logs/rce_analysis.jsonl"
+            "jsonl_path", "~/.dirracuda/logs/rce_analysis.jsonl"
         )
 
     def is_ms17_010_enabled(self) -> bool:
@@ -610,10 +609,47 @@ class SMBSeekConfig:
         """Check if SMBGhost exposure check is enabled."""
         return self.get_rce_config().get("smbghost", {}).get("enabled", True)
 
+    def get_clamav_config(self) -> Dict[str, Any]:
+        """
+        Get ClamAV configuration with defaults merged.
+
+        Returns:
+            Full ClamAV configuration section with safe defaults applied.
+        """
+        defaults = {
+            "enabled": False,
+            "backend": "auto",
+            "timeout_seconds": 60,
+            "extracted_root": "~/.dirracuda/extracted",
+            "known_bad_subdir": "known_bad",
+            "show_results": True,
+            "auto_promote_clean_files": False,
+        }
+        user_clamav = self.config.get("clamav", {})
+        if not isinstance(user_clamav, dict):
+            return defaults
+        return self._deep_merge(defaults, user_clamav)
+
+    def get_quarantine_config(self) -> Dict[str, Any]:
+        """Get quarantine runtime config with tmpfs defaults merged."""
+        defaults = {
+            "use_tmpfs": False,
+            "tmpfs_size_mb": 512,
+        }
+        user_quarantine = self.config.get("quarantine", {})
+        if not isinstance(user_quarantine, dict):
+            return defaults
+        merged = self._deep_merge(defaults, user_quarantine)
+        try:
+            merged["tmpfs_size_mb"] = int(merged.get("tmpfs_size_mb", 512))
+        except (TypeError, ValueError):
+            merged["tmpfs_size_mb"] = 512
+        return merged
+
 
 def load_config(config_file: Optional[str] = None) -> SMBSeekConfig:
     """
-    Convenience function to load SMBSeek configuration.
+    Convenience function to load Dirracuda configuration.
     
     Args:
         config_file: Path to configuration file

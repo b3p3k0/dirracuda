@@ -137,7 +137,7 @@ def execute_with_progress(interface, cmd: List[str],
 
         # Parse final results for normal completion
         full_output = "\n".join(output_lines)
-        if os.getenv("XSMBSEEK_DEBUG_SUBPROCESS"):
+        if os.getenv("XSMBSEEK_DEBUG_SUBPROCESS") or os.getenv("DIRRACUDA_DEBUG_SUBPROCESS"):
             _logger.debug("CLI output start")
             _logger.debug("%s", full_output)
             _logger.debug("CLI output end")

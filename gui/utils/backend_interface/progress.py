@@ -553,7 +553,7 @@ def parse_final_results(output: str) -> Dict:
         results["success"] = True
 
     # Add validation and debug logging for parsing results
-    debug_enabled = os.getenv("XSMBSEEK_DEBUG_PARSING")
+    debug_enabled = os.getenv("XSMBSEEK_DEBUG_PARSING") or os.getenv("DIRRACUDA_DEBUG_PARSING")
     parsing_success = bool(matched_stat_fields) or any(
         results[key] > 0 for key in ["hosts_scanned", "hosts_tested", "hosts_accessible", "successful_auth"]
     )

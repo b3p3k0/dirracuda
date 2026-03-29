@@ -104,6 +104,15 @@ def create_filter_panel(parent, theme, filter_vars, callbacks):
     theme.apply_to_widget(mode_button, "button_secondary")
     mode_button.pack(side=tk.RIGHT)
 
+    add_record_button = tk.Button(
+        search_frame,
+        text="Add Record",
+        command=callbacks['on_add_record']
+    )
+    theme.apply_to_widget(add_record_button, "button_secondary")
+    # Right-packed after mode_button so this appears immediately to its left.
+    add_record_button.pack(side=tk.RIGHT, padx=(0, 8))
+
     # Show all results toggle (if callback provided)
     show_all_button = None
     if 'on_show_all_toggle' in callbacks:
@@ -170,6 +179,7 @@ def create_filter_panel(parent, theme, filter_vars, callbacks):
         variable=filter_vars['shares_filter'],
         command=callbacks['on_shares_filter_changed']
     )
+    theme.apply_to_widget(shares_filter_checkbox, "checkbox")
     shares_filter_checkbox.pack(anchor="w", pady=(0, 2))
 
     date_label = theme.create_styled_label(
@@ -297,6 +307,7 @@ def create_filter_panel(parent, theme, filter_vars, callbacks):
         'protocol_http_checkbox': protocol_http_checkbox,
         'country_listbox': country_listbox,
         'reset_button': reset_button,
+        'add_record_button': add_record_button,
         'mode_button': mode_button,
         'filter_template_dropdown': template_dropdown,
         'filter_template_save_button': save_button,

@@ -1,4 +1,4 @@
-# Contributing to SMBSeek GUI
+# Contributing to Dirracuda
 
 ## Development Setup
 

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-SMBSeek Database Command - DEPRECATED
+Dirracuda Database Command - DEPRECATED
 
-This command has been deprecated in SMBSeek 3.0.0.
+This command has been deprecated in Dirracuda 3.0.0.
 Database operations have been removed from the main CLI.
 
-Use the main SMBSeek command for discovery and share enumeration:
-    ./cli/smbseek.py --country US
+Use the main Dirracuda command for discovery and share enumeration:
+    ./smbseek.py --country US
 
 For database operations, use the tools directly:
     python tools/db_query.py --summary
@@ -19,7 +19,7 @@ import sys
 def main():
     """Main entry point for deprecated database command."""
     print("⚠️  DEPRECATED: database command is no longer supported.")
-    print("   Use: ./cli/smbseek.py --country US  (includes discovery + share enumeration)")
+    print("   Use: ./smbseek.py --country US  (includes discovery + share enumeration)")
     print("   For database operations, use tools directly:")
     print("     python tools/db_query.py --summary")
     print("     python tools/db_maintenance.py --backup")

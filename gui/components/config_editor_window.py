@@ -1,7 +1,7 @@
 """
-SMBSeek Simple Configuration Editor Window
+Dirracuda Configuration Editor Window
 
-Simple text editor-like interface for SMBSeek configuration files.
+Simple text editor-like interface for Dirracuda configuration files.
 Provides basic open, save, and cancel functionality with JSON validation.
 
 Design Decision: Simple text editor approach for direct configuration editing
@@ -62,7 +62,7 @@ class SimpleConfigEditorWindow:
     def _create_window(self) -> None:
         """Create the configuration editor window."""
         self.window = tk.Toplevel(self.parent)
-        self.window.title("SMBSeek - Configuration Editor")
+        self.window.title("Dirracuda - Configuration Editor")
         self.window.geometry("800x700")
         self.window.minsize(600, 400)
         

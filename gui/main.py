@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-SMBSeek GUI - Legacy Entry Point
+Dirracuda - Legacy Entry Point
 
 DEPRECATED: This module is maintained for backward compatibility only.
-Prefer ./xsmbseek as the supported GUI entry point.
+Prefer ./dirracuda as the supported GUI entry point.
 
 This module provides SMBSeekGUI for backward compatibility but delegates
-all scan operations to the unified ScanManager path established in xsmbseek.
+all scan operations to the unified ScanManager path established in dirracuda.
 Direct invocation via `python gui/main.py` is deprecated.
 
 Usage:
-    ./xsmbseek [--mock]                    # Preferred
+    ./dirracuda [--mock]                   # Preferred
     python gui/main.py [--mock] [--config] # Legacy (deprecated)
 """
 
@@ -34,6 +34,13 @@ from gui.components.app_config_dialog import open_app_config_dialog
 from gui.components.data_import_dialog import open_data_import_dialog
 from gui.components.database_setup_dialog import show_database_setup_dialog
 from shared.db_migrations import run_migrations
+from shared.tmpfs_quarantine import (
+    bootstrap_tmpfs_quarantine,
+    cleanup_tmpfs_quarantine,
+    consume_tmpfs_startup_warning,
+    get_tmpfs_runtime_state,
+    tmpfs_has_quarantined_files,
+)
 from gui.utils.database_access import DatabaseReader
 from gui.utils.backend_interface import BackendInterface
 from gui.utils.style import get_theme, apply_theme_to_window
@@ -44,7 +51,7 @@ from gui.utils.scan_manager import get_scan_manager
 
 class SMBSeekGUI:
     """
-    Main SMBSeek GUI application.
+    Main Dirracuda application.
     
     Coordinates between dashboard, backend interface, and drill-down windows.
     Handles application lifecycle, error recovery, and user interactions.
@@ -55,7 +62,7 @@ class SMBSeekGUI:
     
     def __init__(self, mock_mode: bool = False, config_path: Optional[str] = None, backend_path: Optional[str] = None):
         """
-        Initialize SMBSeek GUI application.
+        Initialize Dirracuda application.
         
         Args:
             mock_mode: Whether to use mock data for testing
@@ -107,6 +114,7 @@ class SMBSeekGUI:
         # Thread-safe UI dispatcher (initialized after root creation)
         self.ui_dispatcher = None
         self.scan_manager = None
+        self._pending_tmpfs_startup_warning: Optional[str] = None
 
         self._initialize_application()
         
@@ -160,6 +168,7 @@ class SMBSeekGUI:
         try:
             self._setup_backend_interfaces()
             self._create_main_window()
+            self._bootstrap_tmpfs_runtime()
             self._setup_scan_manager()
             self._create_dashboard()
             self._setup_event_handlers()
@@ -202,7 +211,7 @@ class SMBSeekGUI:
             if not self.mock_mode and not self.backend_interface.is_backend_available():
                 response = messagebox.askyesno(
                     "Backend Not Available",
-                    "SMBSeek backend is not accessible. Would you like to continue in mock mode for testing?",
+                    "Dirracuda backend is not accessible. Would you like to continue in mock mode for testing?",
                     icon="warning"
                 )
                 if response:
@@ -295,7 +304,7 @@ class SMBSeekGUI:
     def _create_main_window(self) -> None:
         """Create and configure main application window."""
         self.root = tk.Tk()
-        self.root.title("SMBSeek Security Toolkit")
+        self.root.title("Dirracuda")
         self.root.geometry("800x250")
         self.root.minsize(800, 240)
         
@@ -408,11 +417,11 @@ class SMBSeekGUI:
         self.dashboard.enable_mock_mode()
         
         # Update window title to indicate mock mode
-        self.root.title("SMBSeek Security Toolkit (Mock Mode)")
+        self.root.title("Dirracuda (Mock Mode)")
     
     def _handle_initialization_error(self, error: Exception) -> None:
         """Handle application initialization errors."""
-        error_message = f"Failed to initialize SMBSeek GUI: {error}"
+        error_message = f"Failed to initialize Dirracuda: {error}"
         
         # Try to show error in GUI if possible
         try:
@@ -508,6 +517,58 @@ class SMBSeekGUI:
         if self.dashboard:
             self.dashboard._refresh_dashboard_data()
 
+    def _bootstrap_tmpfs_runtime(self) -> None:
+        """Initialize tmpfs quarantine runtime and show one-time fallback warning."""
+        try:
+            state = bootstrap_tmpfs_quarantine(config_path=self.config_path)
+            print(
+                "tmpfs bootstrap:",
+                {
+                    "use_tmpfs": state.get("use_tmpfs"),
+                    "tmpfs_active": state.get("tmpfs_active"),
+                    "effective_root": state.get("effective_root"),
+                    "fallback_reason": state.get("fallback_reason"),
+                },
+            )
+            warning = consume_tmpfs_startup_warning()
+            if warning:
+                self._pending_tmpfs_startup_warning = warning
+                self._schedule_tmpfs_startup_warning_dialog()
+        except Exception as exc:
+            print(f"tmpfs bootstrap warning: {exc}")
+
+    def _schedule_tmpfs_startup_warning_dialog(self) -> None:
+        """Queue tmpfs fallback warning for idle time after root is alive."""
+        if not self._pending_tmpfs_startup_warning or self.root is None:
+            return
+        try:
+            if not self.root.winfo_exists():
+                return
+            self.root.after_idle(self._show_pending_tmpfs_startup_warning)
+        except tk.TclError:
+            return
+
+    def _show_pending_tmpfs_startup_warning(self) -> None:
+        """Show queued tmpfs warning only when window is mapped and valid."""
+        warning = self._pending_tmpfs_startup_warning
+        if not warning or self.root is None:
+            return
+        try:
+            if not self.root.winfo_exists():
+                self._pending_tmpfs_startup_warning = None
+                return
+            if not self.root.winfo_ismapped():
+                self.root.after(50, self._show_pending_tmpfs_startup_warning)
+                return
+            self._pending_tmpfs_startup_warning = None
+            messagebox.showwarning(
+                "tmpfs Quarantine Fallback",
+                warning,
+                parent=self.root,
+            )
+        except tk.TclError:
+            self._pending_tmpfs_startup_warning = None
+
     def _toggle_interface_mode(self) -> None:
         """Toggle between simple and advanced interface modes."""
         new_mode = self.settings_manager.toggle_interface_mode()
@@ -535,6 +596,7 @@ class SMBSeekGUI:
     
     def _on_closing(self) -> None:
         """Handle application closing."""
+        self._pending_tmpfs_startup_warning = None
         # Check for active scans via scan_manager
         if self.scan_manager and self.scan_manager.is_scanning:
             response = messagebox.askyesno(
@@ -546,6 +608,22 @@ class SMBSeekGUI:
                 return
             # User confirmed exit during scan - interrupt it
             self.scan_manager.interrupt_scan()
+
+        try:
+            state = get_tmpfs_runtime_state()
+            if state.get("tmpfs_active") and tmpfs_has_quarantined_files():
+                proceed = messagebox.askyesno(
+                    "In-Memory Quarantine Will Be Lost",
+                    "There are quarantined files stored in memory (tmpfs).\n\n"
+                    "Closing now will permanently delete them.\n\n"
+                    "Do you want to continue?",
+                    icon="warning",
+                    parent=self.root,
+                )
+                if not proceed:
+                    return
+        except Exception as exc:
+            print(f"tmpfs close-warning check failed: {exc}")
 
         # Clean up and exit
         try:
@@ -567,6 +645,12 @@ class SMBSeekGUI:
         except Exception as e:
             print(f"Cleanup error: {e}")
         finally:
+            try:
+                cleanup_result = cleanup_tmpfs_quarantine()
+                if not cleanup_result.get("ok", False):
+                    print(f"tmpfs cleanup warning: {cleanup_result.get('message')}")
+            except Exception as exc:
+                print(f"tmpfs cleanup exception: {exc}")
             self.root.destroy()
     
     def run(self) -> None:
@@ -582,10 +666,10 @@ class SMBSeekGUI:
 
 def main():
     """Main entry point for SMBSeek GUI (deprecated)."""
-    print("Warning: gui/main.py is deprecated. Use ./xsmbseek instead.", file=sys.stderr)
+    print("Warning: gui/main.py is deprecated. Use ./dirracuda instead.", file=sys.stderr)
 
     parser = argparse.ArgumentParser(
-        description="SMBSeek GUI - Graphical interface for SMBSeek security toolkit"
+        description="Dirracuda"
     )
     parser.add_argument(
         "--mock",
@@ -605,7 +689,7 @@ def main():
     parser.add_argument(
         "--version",
         action="version",
-        version="SMBSeek GUI 1.0.0"
+        version="Dirracuda 1.0.0"
     )
     
     args = parser.parse_args()

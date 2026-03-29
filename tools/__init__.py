@@ -1,7 +1,7 @@
 """
-SMBSeek Tools Module
+Dirracuda Tools Module
 
-This module contains all SMBSeek security analysis tools and database utilities.
+This module contains all Dirracuda security analysis tools and database utilities.
 
 SMB Tools:
 - smb_scan: Primary scanner for discovering SMB servers with weak authentication
@@ -23,4 +23,4 @@ Usage:
 """
 
 __version__ = "1.0.0"
-__author__ = "SMBSeek Development Team"
+__author__ = "Dirracuda Development Team"

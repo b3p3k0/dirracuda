@@ -1,5 +1,5 @@
 """
-SMBSeek Scan Results Dialog
+Dirracuda Scan Results Dialog
 
 Displays scan completion results with summary statistics and navigation options.
 Handles successful, interrupted, and failed scan scenarios with appropriate messaging.
@@ -353,7 +353,7 @@ class ScanResultsDialog:
         # Add backend availability check
         if "backend" in error_msg.lower() or "not found" in error_msg.lower():
             details_text += (
-                "This error suggests the SMBSeek backend may not be available or properly installed. "
+                "This error suggests the Dirracuda backend may not be available or properly installed. "
                 "Please ensure you have the latest version of the backend toolkit."
             )
             
@@ -364,7 +364,7 @@ class ScanResultsDialog:
             
             link_label = self.theme.create_styled_label(
                 link_frame,
-                "Get the latest SMBSeek backend:",
+                "Get the latest Dirracuda backend:",
                 "body"
             )
             link_label.pack(anchor="w")
@@ -372,7 +372,7 @@ class ScanResultsDialog:
             github_button = tk.Button(
                 link_frame,
                 text="🔗 Visit GitHub Repository",
-                command=lambda: webbrowser.open("https://github.com/b3p3k0/smbseek"),
+                command=lambda: webbrowser.open("https://github.com/b3p3k0/dirracuda"),
                 relief="flat",
                 borderwidth=0
             )

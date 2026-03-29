@@ -1,5 +1,5 @@
 """
-File extraction helper for the xsmbseek GUI.
+File extraction helper for the Dirracuda GUI.
 
 Reuses impacket.smbconnection to download a limited number of files from
 anonymous/guest-accessible shares while respecting configurable safety limits.
@@ -10,12 +10,21 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 from threading import Event
 
 from shared.quarantine import log_quarantine_event
+from shared.clamav_scanner import scanner_from_config
+from shared.quarantine_postprocess import PostProcessInput, PostProcessorFn, PostProcessResult
+from shared.quarantine_promotion import (
+    PromotionConfig,
+    _sanitize_segment as _promo_sanitize_segment,
+    resolve_promotion_dest,
+    safe_move,
+)
 
 try:  # pragma: no cover - runtime dependency
     from impacket.smbconnection import SMBConnection, SessionError
@@ -23,11 +32,171 @@ except ImportError:  # pragma: no cover - handled upstream
     SMBConnection = None
     SessionError = Exception
 
-DEFAULT_CLIENT_NAME = "xsmbseek-extract"
+DEFAULT_CLIENT_NAME = "dirracuda-extract"
 
 
 class ExtractError(RuntimeError):
     """Raised when extraction cannot proceed."""
+
+
+# ---------------------------------------------------------------------------
+# ClamAV integration helpers
+# ---------------------------------------------------------------------------
+
+_ENABLED_TRUE = frozenset(("true", "yes", "1"))
+
+
+def _sanitize_clamav_config(raw: Any) -> Dict[str, Any]:
+    """Return a safe clamav config dict. Never raises; returns {} (disabled) on bad input."""
+    if not isinstance(raw, dict):
+        return {}
+    enabled_raw = raw.get("enabled", False)
+    if isinstance(enabled_raw, bool):
+        enabled = enabled_raw
+    else:
+        enabled = str(enabled_raw).strip().lower() in _ENABLED_TRUE
+    try:
+        timeout = max(1, int(raw.get("timeout_seconds", 60)))
+    except (TypeError, ValueError):
+        timeout = 60
+    auto_promote_raw = raw.get("auto_promote_clean_files", False)
+    if isinstance(auto_promote_raw, bool):
+        auto_promote_clean = auto_promote_raw
+    else:
+        auto_promote_clean = str(auto_promote_raw).strip().lower() in _ENABLED_TRUE
+    return {
+        "enabled": enabled,
+        "backend": str(raw.get("backend", "auto")),
+        "clamscan_path": str(raw.get("clamscan_path", "clamscan")),
+        "clamdscan_path": str(raw.get("clamdscan_path", "clamdscan")),
+        "timeout_seconds": timeout,
+        "extracted_root": str(raw.get("extracted_root", "~/.dirracuda/extracted")),
+        "known_bad_subdir": str(raw.get("known_bad_subdir", "known_bad")),
+        "auto_promote_clean_files": auto_promote_clean,
+    }
+
+
+def build_clamav_post_processor(
+    clamav_cfg: Dict[str, Any],
+    promotion_cfg: Optional[PromotionConfig] = None,
+) -> PostProcessorFn:
+    """Return a PostProcessorFn that scans each file with ClamAV.
+
+    Expects a sanitized config dict (use _sanitize_clamav_config first).
+    When promotion_cfg is provided, clean files are moved to the extracted root
+    and infected files are moved to the known_bad subtree. moved=True on
+    successful move. Move failures (including unexpected path-shape errors)
+    return moved=False with error set; the file stays in quarantine.
+    """
+    scanner = scanner_from_config(clamav_cfg)
+    auto_promote_clean = bool(clamav_cfg.get("auto_promote_clean_files", False))
+
+    def _scan(inp: PostProcessInput) -> PostProcessResult:
+        result = scanner.scan_file(inp.file_path)
+
+        if result.verdict == "error":
+            return PostProcessResult(
+                final_path=inp.file_path,
+                verdict="error",
+                moved=False,
+                destination="quarantine",
+                metadata=result,
+                error=result.error,
+            )
+
+        if result.verdict == "infected":
+            verdict, destination = "infected", "known_bad"
+        else:
+            verdict, destination = "clean", "extracted"
+
+        if verdict == "clean" and not auto_promote_clean:
+            return PostProcessResult(
+                final_path=inp.file_path,
+                verdict="clean",
+                moved=False,
+                destination="quarantine",
+                metadata=result,
+                error=None,
+            )
+
+        if promotion_cfg is None:
+            return PostProcessResult(
+                final_path=inp.file_path,
+                verdict=verdict,
+                moved=False,
+                destination=destination,
+                metadata=result,
+                error=None,
+            )
+
+        try:
+            dest = resolve_promotion_dest(verdict, inp.file_path, inp.share, promotion_cfg)
+            if dest is None:
+                return PostProcessResult(
+                    final_path=inp.file_path,
+                    verdict=verdict,
+                    moved=False,
+                    destination=destination,
+                    metadata=result,
+                    error=None,
+                )
+            actual = safe_move(inp.file_path, dest)
+            return PostProcessResult(
+                final_path=actual,
+                verdict=verdict,
+                moved=True,
+                destination=destination,
+                metadata=result,
+                error=None,
+            )
+        except Exception as exc:
+            return PostProcessResult(
+                final_path=inp.file_path,
+                verdict=verdict,
+                moved=False,
+                destination=destination,
+                metadata=result,
+                error=f"move failed: {exc}",
+            )
+
+    return _scan
+
+
+def _update_clamav_accum(
+    accum: Dict[str, Any], result: PostProcessResult, rel_display: str
+) -> None:
+    """Update the clamav summary accumulator in-place from a single PostProcessResult."""
+    if result.verdict == "skipped":
+        return
+    accum["files_scanned"] += 1
+    if accum["backend_used"] is None and result.metadata is not None:
+        accum["backend_used"] = getattr(result.metadata, "backend_used", None)
+    if result.verdict == "clean":
+        accum["clean"] += 1
+        if result.moved:
+            accum["promoted"] += 1
+        elif result.error is not None:
+            accum["errors"] += 1
+            accum["error_items"].append({"path": rel_display, "error": result.error})
+    elif result.verdict == "infected":
+        accum["infected"] += 1
+        if result.moved:
+            accum["known_bad_moved"] += 1
+        elif result.error is not None:
+            accum["errors"] += 1
+            accum["error_items"].append({"path": rel_display, "error": result.error})
+        sig = getattr(result.metadata, "signature", None) if result.metadata else None
+        accum["infected_items"].append({
+            "path": rel_display,
+            "signature": sig,
+            "moved_to": str(result.final_path),
+        })
+    elif result.verdict == "error":
+        accum["errors"] += 1
+        accum["error_items"].append({
+            "path": rel_display,
+            "error": result.error or "unknown",
+        })
 
 
 def run_extract(
@@ -49,6 +218,8 @@ def run_extract(
     extension_mode: Optional[str] = None,
     progress_callback: Optional[Callable[[str, int, Optional[int]], None]] = None,
     cancel_event: Optional[Event] = None,
+    post_processor: Optional[PostProcessorFn] = None,
+    clamav_config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Download files from accessible shares while enforcing guardrails.
@@ -117,6 +288,43 @@ def run_extract(
         "timed_out": False,
         "stop_reason": None,
     }
+
+    # ClamAV setup: explicit post_processor wins; clamav_config only activates without one.
+    _active_pp = post_processor
+    clamav_accum: Optional[Dict[str, Any]] = None
+
+    if post_processor is None and clamav_config is not None:
+        _safe_cfg = _sanitize_clamav_config(clamav_config)
+        if _safe_cfg.get("enabled"):
+            try:
+                _prom_cfg = _build_promotion_config(ip_address, download_dir, _safe_cfg)
+                _active_pp = build_clamav_post_processor(_safe_cfg, promotion_cfg=_prom_cfg)
+                clamav_accum = {
+                    "enabled": True,
+                    "backend_used": None,
+                    "files_scanned": 0,
+                    "clean": 0,
+                    "infected": 0,
+                    "errors": 0,
+                    "promoted": 0,
+                    "known_bad_moved": 0,
+                    "infected_items": [],
+                    "error_items": [],
+                }
+            except Exception as _init_exc:
+                # Fail open: record init error; no scanning; extraction proceeds normally.
+                clamav_accum = {
+                    "enabled": True,
+                    "backend_used": None,
+                    "files_scanned": 0,
+                    "clean": 0,
+                    "infected": 0,
+                    "errors": 1,
+                    "promoted": 0,
+                    "known_bad_moved": 0,
+                    "infected_items": [],
+                    "error_items": [{"path": "(clamav-init)", "error": str(_init_exc)}],
+                }
 
     start_time = time.time()
     total_bytes = 0
@@ -232,15 +440,45 @@ def run_extract(
 
                 total_files += 1
                 total_bytes += file_size
+
+                # Post-processing seam — fail-open; original dest_path used if processor raises
+                final_path = dest_path
+                if _active_pp is not None:
+                    try:
+                        _pp_inp = PostProcessInput(
+                            file_path=dest_path,
+                            ip_address=ip_address,
+                            share=share,
+                            rel_display=rel_display,
+                            file_size=file_size,
+                        )
+                        _pp_result = _active_pp(_pp_inp)
+                        final_path = _pp_result.final_path
+                        if clamav_accum is not None:
+                            _update_clamav_accum(clamav_accum, _pp_result, rel_display)
+                    except Exception as _pp_exc:
+                        summary["errors"].append({
+                            "share": share,
+                            "path": rel_display,
+                            "message": f"post_processor error (file kept in quarantine): {_pp_exc}",
+                        })
+                        if clamav_accum is not None:
+                            clamav_accum["errors"] += 1
+                            clamav_accum["error_items"].append({
+                                "path": rel_display,
+                                "error": str(_pp_exc),
+                            })
+                        # final_path stays as dest_path
+
                 summary["files"].append({
                     "share": share,
                     "path": rel_display,
                     "size": file_size,
-                    "saved_to": str(dest_path)
+                    "saved_to": str(final_path)
                 })
                 try:
                     host_dir = download_dir.parent
-                    log_quarantine_event(host_dir, f"extracted {share}/{rel_display} -> {dest_path}")
+                    log_quarantine_event(host_dir, f"extracted {share}/{rel_display} -> {final_path}")
                 except Exception:
                     pass
 
@@ -267,8 +505,88 @@ def run_extract(
     summary["totals"]["files_downloaded"] = total_files
     summary["totals"]["bytes_downloaded"] = total_bytes
     summary["finished_at"] = _utcnow()
+    summary["clamav"] = clamav_accum if clamav_accum is not None else {"enabled": False}
 
     return summary
+
+
+_DATE8_RE = re.compile(r"^\d{8}$")
+_DEFAULT_QUARANTINE_ROOT = Path.home() / ".dirracuda" / "quarantine"
+
+
+def _build_promotion_config(
+    ip_address: str,
+    download_dir: Path,
+    sanitized_cfg: Dict[str, Any],
+) -> PromotionConfig:
+    """Build a PromotionConfig with validated/fallback date, quarantine_root, and subdir."""
+    date_str = download_dir.name
+    if not _DATE8_RE.match(date_str):
+        date_str = _dt.datetime.utcnow().strftime("%Y%m%d")
+
+    candidate = download_dir.parent.parent
+    if candidate == candidate.parent:  # reached filesystem root
+        candidate = _DEFAULT_QUARANTINE_ROOT
+
+    raw_subdir = sanitized_cfg["known_bad_subdir"]
+    known_bad_subdir = _promo_sanitize_segment(raw_subdir, fallback="known_bad") or "known_bad"
+
+    return PromotionConfig(
+        ip_address=ip_address,
+        date_str=date_str,
+        quarantine_root=candidate,
+        extracted_root=Path(sanitized_cfg["extracted_root"]).expanduser(),
+        known_bad_subdir=known_bad_subdir,
+        download_dir=download_dir,
+    )
+
+
+def build_browser_download_clamav_setup(
+    clamav_cfg_raw: Any,
+    ip_address: str,
+    quarantine_dir: Path,
+    share_name: str,
+) -> Tuple[Optional[PostProcessorFn], Optional[Dict[str, Any]], Optional[str]]:
+    """Build browser-download ClamAV setup in a fail-open form.
+
+    Returns:
+      (post_processor, accum, error_msg)
+      - enabled+ok: (fn, dict, None)
+      - disabled:   (None, None, None)
+      - init error: (None, None, "ClamAV init failed: ...")
+    """
+    _ = share_name  # kept for contract clarity and future shape validation
+    try:
+        safe_cfg = _sanitize_clamav_config(clamav_cfg_raw)
+        if not safe_cfg.get("enabled"):
+            return None, None, None
+        download_dir = Path(quarantine_dir).parent
+        prom_cfg = _build_promotion_config(ip_address, download_dir, safe_cfg)
+        pp = build_clamav_post_processor(safe_cfg, promotion_cfg=prom_cfg)
+        accum = {
+            "enabled": True,
+            "backend_used": None,
+            "files_scanned": 0,
+            "clean": 0,
+            "infected": 0,
+            "errors": 0,
+            "promoted": 0,
+            "known_bad_moved": 0,
+            "infected_items": [],
+            "error_items": [],
+        }
+        return pp, accum, None
+    except Exception as exc:
+        return None, None, f"ClamAV init failed: {exc}"
+
+
+def update_browser_clamav_accum(
+    accum: Dict[str, Any],
+    pp_result: PostProcessResult,
+    rel_display: str,
+) -> None:
+    """Public wrapper around the internal accumulator update helper."""
+    _update_clamav_accum(accum, pp_result, rel_display)
 
 
 def _check_cancel(cancel_event: Optional[Event]) -> None:
@@ -278,12 +596,12 @@ def _check_cancel(cancel_event: Optional[Event]) -> None:
 
 def write_extract_log(summary: Dict[str, Any]) -> Path:
     """
-    Persist extraction summary under ~/.smbseek/extract_logs.
+    Persist extraction summary under ~/.dirracuda/extract_logs.
 
     Returns:
         Path to the log file on disk.
     """
-    logs_dir = Path.home() / ".smbseek" / "extract_logs"
+    logs_dir = Path.home() / ".dirracuda" / "extract_logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
 
     timestamp = summary.get("finished_at") or summary.get("started_at") or _utcnow()

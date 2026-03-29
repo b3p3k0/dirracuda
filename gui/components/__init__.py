@@ -1,1 +1,1 @@
-# SMBSeek GUI Components Package
+# Dirracuda GUI Components Package

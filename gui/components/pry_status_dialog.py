@@ -52,32 +52,56 @@ class BatchStatusDialog:
     # Layout helpers -----------------------------------------------------
     def _build_layout(self) -> None:
         main = tk.Frame(self.window)
+        if self.theme:
+            self.theme.apply_to_widget(main, "main_window")
         main.pack(fill=tk.BOTH, expand=True, padx=14, pady=12)
 
         for label_text, var in self.field_vars.items():
             row_frame = tk.Frame(main)
+            if self.theme:
+                self.theme.apply_to_widget(row_frame, "main_window")
             row_frame.pack(fill=tk.X, pady=2)
-            tk.Label(row_frame, text=label_text, width=14, anchor="w").pack(side=tk.LEFT)
+            field_label = tk.Label(row_frame, text=label_text, width=14, anchor="w")
+            if self.theme:
+                self.theme.apply_to_widget(field_label, "label")
+            field_label.pack(side=tk.LEFT)
             ttk.Label(row_frame, textvariable=var).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         row_frame = tk.Frame(main)
+        if self.theme:
+            self.theme.apply_to_widget(row_frame, "main_window")
         row_frame.pack(fill=tk.X, pady=2)
-        tk.Label(row_frame, text="Progress", width=14, anchor="w").pack(side=tk.LEFT)
+        progress_label = tk.Label(row_frame, text="Progress", width=14, anchor="w")
+        if self.theme:
+            self.theme.apply_to_widget(progress_label, "label")
+        progress_label.pack(side=tk.LEFT)
         ttk.Label(row_frame, textvariable=self.progress_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         row_frame = tk.Frame(main)
+        if self.theme:
+            self.theme.apply_to_widget(row_frame, "main_window")
         row_frame.pack(fill=tk.X, pady=2)
-        tk.Label(row_frame, text="Status", width=14, anchor="w").pack(side=tk.LEFT)
+        status_label = tk.Label(row_frame, text="Status", width=14, anchor="w")
+        if self.theme:
+            self.theme.apply_to_widget(status_label, "label")
+        status_label.pack(side=tk.LEFT)
         ttk.Label(row_frame, textvariable=self.status_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         event_frame = tk.Frame(main)
+        if self.theme:
+            self.theme.apply_to_widget(event_frame, "main_window")
         event_frame.pack(fill=tk.X, pady=(8, 4))
-        tk.Label(event_frame, text="Last event", anchor="w").pack(side=tk.TOP, anchor="w")
+        event_label = tk.Label(event_frame, text="Last event", anchor="w")
+        if self.theme:
+            self.theme.apply_to_widget(event_label, "label")
+        event_label.pack(side=tk.TOP, anchor="w")
         ttk.Label(event_frame, textvariable=self.last_event_var, wraplength=420, justify="left", width=70).pack(
             side=tk.TOP, anchor="w", fill=tk.X, expand=True
         )
 
         btn_frame = tk.Frame(main)
+        if self.theme:
+            self.theme.apply_to_widget(btn_frame, "main_window")
         btn_frame.pack(fill=tk.X, pady=(10, 0))
         self._hide_button = tk.Button(btn_frame, text="Hide", command=self.hide)
         self._cancel_button = tk.Button(btn_frame, text="Cancel", command=self.on_cancel)
@@ -86,6 +110,9 @@ class BatchStatusDialog:
             self.theme.apply_to_widget(self._cancel_button, "button_primary")
         self._cancel_button.pack(side=tk.RIGHT, padx=(6, 0))
         self._hide_button.pack(side=tk.RIGHT, padx=(0, 6))
+
+        if self.theme:
+            self.theme.apply_theme_to_application(self.window)
 
     # Public API ---------------------------------------------------------
     def show(self) -> None:

@@ -38,7 +38,7 @@ def mock_initialization_scan(progress_callback: Optional[Callable[[float, str], 
 
     return {
         'success': True,
-        'database_path': '../backend/smbseek.db',
+        'database_path': '../backend/dirracuda.db',
         'servers_found': 25,
         'scan_result': {
             'success': True,

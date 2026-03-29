@@ -4,16 +4,16 @@ Batch status and UI helpers for ServerListWindow.
 
 import sqlite3
 import tkinter as tk
-from tkinter import messagebox, ttk, filedialog
+from tkinter import messagebox
 import time
 import platform
 import json
 import threading
-import csv
 from concurrent.futures import Future
 from typing import Dict, Any, Optional, List
 
 from gui.components.server_list_window import table, filters
+from gui.components.batch_summary_dialog import show_batch_summary_dialog
 from gui.utils import probe_cache
 from gui.utils.logging_config import get_logger
 from gui.components.pry_status_dialog import BatchStatusDialog
@@ -128,6 +128,9 @@ class ServerListWindowBatchStatusMixin:
             self._set_table_interaction_enabled(True)
             if results and show_summary:
                 self._show_batch_summary(job_type, results)
+                if job_type == "extract":
+                    _clamav_cfg = job.get("options", {}).get("clamav_config", {})
+                    self._maybe_show_clamav_dialog(results, _clamav_cfg, wait=False, modal=False)
             # Close the status pop-out once the summary is shown
             if dlg:
                 try:
@@ -336,7 +339,7 @@ class ServerListWindowBatchStatusMixin:
                     INSERT INTO scan_sessions (tool_name, scan_type, status, started_at, completed_at, total_targets, successful_targets, failed_targets, notes)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    ("xsmbseek", "pry", "completed", now_ts, now_ts, 1, 1, 0, f"Pry credential stored for {ip_address}"),
+                    ("dirracuda", "pry", "completed", now_ts, now_ts, 1, 1, 0, f"Pry credential stored for {ip_address}"),
                 )
                 session_id = cur.lastrowid
 
@@ -536,70 +539,47 @@ class ServerListWindowBatchStatusMixin:
             self._remove_context_dismiss_handlers()
 
         def _show_batch_summary(self, job_type: str, results: List[Dict[str, Any]]) -> None:
-            dialog = tk.Toplevel(self.window)
-            dialog.title(f"{job_type.title()} Batch Summary")
-            dialog.geometry("700x400")
-            dialog.transient(self.window)
-            self.theme.apply_to_widget(dialog, "main_window")
-
-            columns = ("ip", "action", "status", "notes")
-            tree = ttk.Treeview(dialog, columns=columns, show="headings")
-            headings = {
-                "ip": "IP Address",
-                "action": "Action",
-                "status": "Result",
-                "notes": "Notes"
-            }
-            for col in columns:
-                tree.heading(col, text=headings[col])
-                width = 130 if col != "notes" else 360
-                tree.column(col, width=width, anchor="w")
-
-            for entry in results:
-                tree.insert(
-                    "",
-                    "end",
-                    values=(
-                        entry.get("ip_address", "-"),
-                        entry.get("action", job_type).title(),
-                        entry.get("status", "unknown").title(),
-                        entry.get("notes", "")
-                    )
-                )
-
-            tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
-            button_frame = tk.Frame(dialog)
-            button_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
-
-            def export_summary():
-                self._export_batch_summary(results, job_type, dialog)
-
-            tk.Button(button_frame, text="Save CSV", command=export_summary).pack(side=tk.RIGHT, padx=(0, 5))
-            tk.Button(button_frame, text="Close", command=dialog.destroy).pack(side=tk.RIGHT)
-
-        def _export_batch_summary(self, results: List[Dict[str, Any]], job_type: str, parent: tk.Toplevel) -> None:
-            path = filedialog.asksaveasfilename(
-                parent=parent,
-                title="Save Batch Summary",
-                defaultextension=".csv",
-                filetypes=[("CSV Files", "*.csv"), ("All Files", "*.*")]
+            show_batch_summary_dialog(
+                parent=self.window,
+                theme=self.theme,
+                job_type=job_type,
+                results=results,
+                title_suffix="Batch Summary",
+                geometry="700x400",
+                show_export=True,
+                show_stats=False,
+                wait=False,
+                modal=False,
             )
-            if not path:
-                return
 
-            with open(path, "w", newline="", encoding="utf-8") as csv_file:
-                writer = csv.writer(csv_file)
-                writer.writerow(["ip_address", "action", "status", "notes"])
-                for entry in results:
-                    writer.writerow([
-                        entry.get("ip_address", ""),
-                        entry.get("action", job_type),
-                        entry.get("status", ""),
-                        entry.get("notes", "")
-                    ])
-
-            messagebox.showinfo("Summary Saved", f"Saved batch summary to {path}", parent=parent)
+        def _maybe_show_clamav_dialog(
+            self,
+            results: List[Dict[str, Any]],
+            clamav_cfg: Dict[str, Any],
+            *,
+            wait: bool = False,
+            modal: bool = False,
+        ) -> None:
+            """Show ClamAV results dialog if conditions are met. Fail-safe."""
+            try:
+                from gui.components.clamav_results_dialog import (
+                    should_show_clamav_dialog,
+                    show_clamav_results_dialog,
+                )
+                from gui.utils import session_flags
+                if should_show_clamav_dialog("extract", results, clamav_cfg):
+                    def _mute() -> None:
+                        session_flags.set_flag(session_flags.CLAMAV_MUTE_KEY)
+                    show_clamav_results_dialog(
+                        parent=self.window,
+                        theme=self.theme,
+                        results=results,
+                        on_mute=_mute,
+                        wait=wait,
+                        modal=modal,
+                    )
+            except Exception:
+                pass
 
         def _flush_pending_refresh(self) -> None:
             if not self._pending_table_refresh:
@@ -760,9 +740,30 @@ class ServerListWindowBatchStatusMixin:
             """Mark host as extracted in-memory and persist to DB."""
             if not ip_address:
                 return
+            target_server = None
+            for server in self.all_servers:
+                if row_key is not None:
+                    if server.get("row_key") == row_key:
+                        target_server = server
+                        break
+                elif server.get("ip_address") == ip_address and server.get("host_type", "S") == host_type:
+                    target_server = server
+                    break
             if self.db_reader:
                 try:
-                    self.db_reader.upsert_extracted_flag_for_host(ip_address, host_type, True)
+                    kw = {}
+                    psid = (target_server or {}).get("protocol_server_id")
+                    port = (target_server or {}).get("port")
+                    if psid is not None:
+                        kw["protocol_server_id"] = psid
+                    if port is not None:
+                        kw["port"] = port
+                    self.db_reader.upsert_extracted_flag_for_host(
+                        ip_address,
+                        host_type,
+                        True,
+                        **kw,
+                    )
                 except Exception:
                     pass
 

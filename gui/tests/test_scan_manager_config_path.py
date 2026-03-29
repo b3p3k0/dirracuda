@@ -3,7 +3,6 @@
 from pathlib import Path
 
 from gui.utils import scan_manager as sm_mod
-from gui.utils import scan_manager_protocol_mixin as mixin_mod
 
 
 class _DummyBackendInterface:
@@ -55,36 +54,14 @@ def test_start_scan_applies_explicit_config_path(monkeypatch, tmp_path):
 
 def test_start_ftp_scan_applies_explicit_config_path(monkeypatch, tmp_path):
     sm = _make_scan_manager(tmp_path)
-    # start_ftp_scan lives in the mixin module; patch there so monkeypatch intercepts.
-    monkeypatch.setattr(mixin_mod, "BackendInterface", _DummyBackendInterface)
-    monkeypatch.setattr(mixin_mod.threading, "Thread", _DummyThread)
+    monkeypatch.setattr(sm_mod, "BackendInterface", _DummyBackendInterface)
+    monkeypatch.setattr(sm_mod.threading, "Thread", _DummyThread)
 
     cfg = tmp_path / "conf" / "config.json"
     cfg.parent.mkdir(parents=True, exist_ok=True)
     cfg.write_text("{}", encoding="utf-8")
 
     started = sm.start_ftp_scan(
-        scan_options={"country": None},
-        backend_path=str(tmp_path),
-        progress_callback=lambda *_: None,
-        config_path=str(cfg),
-    )
-
-    assert started is True
-    assert sm.backend_interface.config_path == cfg.resolve()
-
-
-def test_start_http_scan_applies_explicit_config_path(monkeypatch, tmp_path):
-    sm = _make_scan_manager(tmp_path)
-    # start_http_scan lives in the mixin module; patch there so monkeypatch intercepts.
-    monkeypatch.setattr(mixin_mod, "BackendInterface", _DummyBackendInterface)
-    monkeypatch.setattr(mixin_mod.threading, "Thread", _DummyThread)
-
-    cfg = tmp_path / "conf" / "config.json"
-    cfg.parent.mkdir(parents=True, exist_ok=True)
-    cfg.write_text("{}", encoding="utf-8")
-
-    started = sm.start_http_scan(
         scan_options={"country": None},
         backend_path=str(tmp_path),
         progress_callback=lambda *_: None,

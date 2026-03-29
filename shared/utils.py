@@ -1,5 +1,5 @@
 """
-Shared utility functions for SMBSeek toolkit.
+Shared utility functions for Dirracuda toolkit.
 
 Contains common utility functions used across multiple modules.
 """

@@ -1,5 +1,5 @@
 """
-SMBSeek Backend Interface
+Dirracuda Backend Interface
 
 Provides subprocess wrapper for CLI commands with output parsing and progress tracking.
 Implements complete backend isolation without any code modifications.
@@ -27,13 +27,14 @@ from . import progress
 from . import mock_operations
 from . import error_parser
 from ..logging_config import get_logger
+from shared.db_path_resolution import resolve_database_path
 
 _logger = get_logger("backend_interface")
 
 
 class BackendInterface:
     """
-    Interface for communicating with SMBSeek backend via subprocess calls.
+    Interface for communicating with Dirracuda backend via subprocess calls.
 
     Provides methods for executing CLI commands, parsing output, and tracking
     progress for long-running operations. All communication is through the
@@ -112,35 +113,84 @@ class BackendInterface:
         """Delegate backend validation to config helper."""
         return config.validate_backend(self)
 
-    def _build_script_command(self, script_path: Path, *args) -> List[str]:
-        """Build a CLI command for a seeker entrypoint using the GUI interpreter."""
+    def _resolve_effective_database_path(self, config_data: Optional[Dict[str, Any]] = None) -> Path:
+        """
+        Resolve effective DB path for CLI/tool parity.
+        """
+        persisted_paths = []
+        cfg = config_data if isinstance(config_data, dict) else self._load_config(str(self.config_path))
+        if isinstance(cfg, dict):
+            gui = cfg.get("gui_app", {})
+            db_cfg = cfg.get("database", {})
+            persisted_paths.extend([
+                gui.get("database_path") if isinstance(gui, dict) else None,
+                db_cfg.get("path") if isinstance(db_cfg, dict) else None,
+            ])
+
+        return resolve_database_path(
+            backend_path=self.backend_path,
+            cli_database_path=None,
+            persisted_paths=persisted_paths,
+        )
+
+    def _build_cli_command(self, *args) -> List[str]:
+        """
+        Build CLI command with proper Python interpreter.
+
+        Uses the same Python interpreter that launched the GUI to ensure
+        subprocess commands inherit the correct environment and dependencies.
+
+        Args:
+            *args: CLI arguments to pass to SMBSeek script
+
+        Returns:
+            Command list with interpreter, script path, and arguments
+        """
         # Determine Python interpreter (same as GUI for environment consistency)
         interpreter = sys.executable
         if not interpreter:
             # Fallback chain for robustness
             interpreter = 'python3'  # Unix/Linux standard
 
+        # Ensure script path is string (currently Path object)
+        script_path = str(self.cli_script)
         cli_args = [str(arg) for arg in args]
         if "--config" not in cli_args:
             cli_args.extend(["--config", str(self.config_path)])
 
-        command_list = [interpreter, str(script_path), *cli_args]
-        if os.getenv("XSMBSEEK_DEBUG_SUBPROCESS"):
+        command_list = [interpreter, script_path, *cli_args]
+        if os.getenv("XSMBSEEK_DEBUG_SUBPROCESS") or os.getenv("DIRRACUDA_DEBUG_SUBPROCESS"):
             # Log script and arg count only (avoid logging potential credentials)
             _logger.debug("CLI command: %s with %d args", script_path, len(args))
         return command_list
 
-    def _build_cli_command(self, *args) -> List[str]:
-        """Build CLI command with proper Python interpreter."""
-        return self._build_script_command(self.cli_script, *args)
-
     def _build_ftp_cli_command(self, *args) -> List[str]:
         """Build CLI command for ftpseek using same interpreter as GUI."""
-        return self._build_script_command(self.ftp_cli_script, *args)
+        interpreter = sys.executable or "python3"
+        cli_args = [str(arg) for arg in args]
+        if "--config" not in cli_args:
+            cli_args.extend(["--config", str(self.config_path)])
+
+        command_list = [interpreter, str(self.ftp_cli_script), *cli_args]
+        if os.getenv("XSMBSEEK_DEBUG_SUBPROCESS") or os.getenv("DIRRACUDA_DEBUG_SUBPROCESS"):
+            _logger.debug(
+                "FTP CLI command: %s with %d args", str(self.ftp_cli_script), len(args)
+            )
+        return command_list
 
     def _build_http_cli_command(self, *args) -> List[str]:
         """Build CLI command for httpseek using same interpreter as GUI."""
-        return self._build_script_command(self.http_cli_script, *args)
+        interpreter = sys.executable or "python3"
+        cli_args = [str(arg) for arg in args]
+        if "--config" not in cli_args:
+            cli_args.extend(["--config", str(self.config_path)])
+
+        command_list = [interpreter, str(self.http_cli_script), *cli_args]
+        if os.getenv("XSMBSEEK_DEBUG_SUBPROCESS") or os.getenv("DIRRACUDA_DEBUG_SUBPROCESS"):
+            _logger.debug(
+                "HTTP CLI command: %s with %d args", str(self.http_cli_script), len(args)
+            )
+        return command_list
 
     def _build_tool_command(self, script_name: str, *args) -> List[str]:
         """
@@ -162,7 +212,7 @@ class BackendInterface:
         script_path = str(self.backend_path / "tools" / script_name)
 
         command_list = [interpreter, script_path, *args]
-        if os.getenv("XSMBSEEK_DEBUG_SUBPROCESS"):
+        if os.getenv("XSMBSEEK_DEBUG_SUBPROCESS") or os.getenv("DIRRACUDA_DEBUG_SUBPROCESS"):
             # Log script and arg count only (avoid logging potential credentials)
             _logger.debug("Tool command: %s with %d args", script_name, len(args))
         return command_list
@@ -508,7 +558,8 @@ class BackendInterface:
             cmd = self._build_tool_command(
                 "db_query.py",
                 "--recent", str(recent_hours),
-                "--count-only"
+                "--count-only",
+                "--db-path", str(self._resolve_effective_database_path()),
             )
             
             result = subprocess.run(
@@ -555,7 +606,12 @@ class BackendInterface:
                 }
             }
         
-        cmd = self._build_tool_command("db_query.py", "--summary")
+        cmd = self._build_tool_command(
+            "db_query.py",
+            "--summary",
+            "--db-path",
+            str(self._resolve_effective_database_path()),
+        )
         
         try:
             result = subprocess.run(
@@ -615,8 +671,8 @@ class BackendInterface:
             # Run the scan using existing run_scan method
             scan_result = self.run_scan(countries, progress_callback)
             
-            # Determine database path
-            db_path = os.path.join(self.backend_path, "smbseek.db")
+            # Determine database path from the same config context used by subprocess scan.
+            db_path = str(self._resolve_effective_database_path(config))
             
             # Enhance result with database information
             result = {

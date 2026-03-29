@@ -1,5 +1,5 @@
 """
-SMBSeek GUI - Data Export Engine
+Dirracuda - Data Export Engine
 
 Centralized data export system supporting multiple formats for team collaboration.
 Handles CSV and JSON exports with consistent formatting and metadata.
@@ -20,7 +20,7 @@ import os
 
 class DataExportEngine:
     """
-    Centralized data export engine for SMBSeek GUI.
+    Centralized data export engine for Dirracuda.
     
     Provides consistent export functionality across all application components
     with support for CSV, JSON, and compressed formats. Includes metadata
@@ -220,7 +220,7 @@ class DataExportEngine:
                 'data_type': data_type,
                 'format': export_format,
                 'record_count': record_count,
-                'tool': 'SMBSeek GUI',
+                'tool': 'Dirracuda',
                 'version': '1.0.0'
             },
             'data_schema': {
@@ -268,7 +268,7 @@ class DataExportEngine:
             
             # Write metadata as comments if included
             if metadata:
-                writer.writerow([f"# SMBSeek Export - {metadata['export_info']['timestamp']}"])
+                writer.writerow([f"# Dirracuda Export - {metadata['export_info']['timestamp']}"])
                 writer.writerow([f"# Data Type: {data_type}"])
                 writer.writerow([f"# Records: {len(data)}"])
                 if metadata.get('filters_applied'):

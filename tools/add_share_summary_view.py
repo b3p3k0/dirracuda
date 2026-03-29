@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMBSeek Database Enhancement: Add Share Summary View
+Dirracuda Database Enhancement: Add Share Summary View
 
 This script safely adds a new database view (v_host_share_summary) that provides
 complete share discovery and accessibility information per host. This enhancement
@@ -17,10 +17,36 @@ import sqlite3
 import argparse
 import os
 import sys
+from pathlib import Path
 
 # Add shared directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'shared'))
 from config import load_config
+try:
+    from shared.db_path_resolution import resolve_database_path
+except ImportError:
+    from db_path_resolution import resolve_database_path
+
+
+def resolve_cli_database_path(explicit_path: str | None) -> str:
+    """Resolve DB path using backend-rooted semantics and legacy auto-detect."""
+    backend_root = Path(__file__).resolve().parents[1]
+    persisted_paths = []
+
+    if not explicit_path:
+        try:
+            config = load_config()
+            persisted_paths.append(config.get_database_path())
+        except Exception:
+            persisted_paths = []
+
+    return str(
+        resolve_database_path(
+            backend_path=backend_root,
+            cli_database_path=explicit_path,
+            persisted_paths=persisted_paths,
+        )
+    )
 
 
 def check_database_compatibility(conn: sqlite3.Connection) -> bool:
@@ -226,29 +252,25 @@ def test_view_functionality(conn: sqlite3.Connection) -> bool:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Add share summary view to SMBSeek database")
-    parser.add_argument("--database", type=str, help="Path to database file (default: smbseek.db)")
+    parser = argparse.ArgumentParser(description="Add share summary view to Dirracuda database")
+    parser.add_argument(
+        "--database",
+        type=str,
+        help="Path to database file (default: auto-detect dirracuda.db then smbseek.db)",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Show what would be done without making changes")
     parser.add_argument("--force", action="store_true", help="Proceed even if view already exists")
     args = parser.parse_args()
     
     # Determine database path
-    if args.database:
-        db_path = args.database
-    else:
-        # Try to load from config, fallback to default
-        try:
-            config = load_config()
-            db_path = config.get_database_path()
-        except:
-            db_path = "smbseek.db"
+    db_path = resolve_cli_database_path(args.database)
     
-    print(f"SMBSeek Share Summary View Enhancement")
+    print(f"Dirracuda Share Summary View Enhancement")
     print(f"Database: {os.path.abspath(db_path)}")
     
     if not os.path.exists(db_path):
         print(f"❌ Database file not found: {db_path}")
-        print("Make sure you've run SMBSeek at least once to create the database.")
+        print("Make sure you've run Dirracuda at least once to create the database.")
         return 1
     
     try:

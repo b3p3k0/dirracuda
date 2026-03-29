@@ -1,5 +1,5 @@
 """
-SMBSeek GUI - Database Setup Dialog
+Dirracuda - Database Setup Dialog
 
 Professional database initialization dialog providing three user-friendly options
 when the database is missing or invalid. Ensures graceful startup experience
@@ -24,9 +24,9 @@ from gui.utils.database_access import DatabaseReader
 from gui.utils.error_codes import get_error, format_error_message
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.logging_config import get_logger
+from shared.db_path_resolution import auto_detect_database_path
 
 _logger = get_logger("database_setup_dialog")
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class DatabaseSetupDialog:
@@ -51,7 +51,9 @@ class DatabaseSetupDialog:
         """
         self.parent = parent
         self.initial_db_path = initial_db_path
-        self.config_path = config_path or str(_PROJECT_ROOT / "conf" / "config.json")
+        default_config = (Path.cwd() / "conf" / "config.json").resolve(strict=False)
+        self.config_path = str(Path(config_path).expanduser().resolve(strict=False)) if config_path else str(default_config)
+        self.backend_path = str(self._resolve_backend_path())
         self.theme = get_theme()
         
         # Dialog result
@@ -71,6 +73,16 @@ class DatabaseSetupDialog:
         
         # Create dialog
         self._create_dialog()
+
+    def _resolve_backend_path(self) -> Path:
+        """Derive backend root from config path; fallback to cwd."""
+        try:
+            cfg = Path(self.config_path).expanduser().resolve(strict=False)
+            if cfg.parent.name == "conf":
+                return cfg.parent.parent
+        except Exception:
+            pass
+        return Path.cwd().resolve(strict=False)
     
     def _create_dialog(self) -> None:
         """Create and configure the setup dialog."""
@@ -80,7 +92,7 @@ class DatabaseSetupDialog:
         else:
             self.dialog = tk.Tk()
         
-        self.dialog.title("SMBSeek - Database Setup")
+        self.dialog.title("Dirracuda - Database Setup")
         self.dialog.geometry("700x560")
         self.dialog.resizable(True, True)
         self.dialog.minsize(650, 520)  # Prevent dialog from becoming too small
@@ -146,7 +158,7 @@ class DatabaseSetupDialog:
         # Option 1: Import Database
         self._create_option_card(
             "📁 Import Existing Database",
-            "Select an existing SMBSeek database file\nfrom a previous scan or shared by colleagues.",
+            "Select an existing Dirracuda database file\nfrom a previous scan or shared by colleagues.",
             self._on_import_option,
             0
         )
@@ -162,7 +174,7 @@ class DatabaseSetupDialog:
         # Option 3: Exit
         self._create_option_card(
             "❌ Exit Application",
-            "Close SMBSeek GUI without\nsetting up a database.",
+            "Close Dirracuda without\nsetting up a database.",
             self._on_exit_option,
             2
         )
@@ -313,10 +325,11 @@ class DatabaseSetupDialog:
             ("All files", "*.*")
         ]
         
-        initial_dir = str(_PROJECT_ROOT) if _PROJECT_ROOT.exists() else "."
+        backend_dir = Path(self.backend_path).expanduser().resolve(strict=False)
+        initial_dir = str(backend_dir) if backend_dir.exists() else "."
         
         filename = filedialog.askopenfilename(
-            title="Select SMBSeek Database File",
+            title="Select Dirracuda Database File",
             filetypes=filetypes,
             initialdir=initial_dir
         )
@@ -354,7 +367,7 @@ class DatabaseSetupDialog:
         """Handle exit application option."""
         # Confirm exit
         if messagebox.askyesno(
-            "Exit SMBSeek",
+            "Exit Dirracuda",
             "Are you sure you want to exit without setting up a database?"
         ):
             self.result = None
@@ -413,7 +426,7 @@ class DatabaseSetupDialog:
             # Success - provide comprehensive database information
             success_message = f"Database imported successfully!\n\n"
             success_message += f"📊 **Database Summary:**\n"
-            success_message += f"• Compatibility: {analysis['compatibility_level'].title()} SMBSeek database\n"
+            success_message += f"• Compatibility: {analysis['compatibility_level'].title()} Dirracuda database\n"
             success_message += f"• Total tables: {analysis['schema_info']['total_tables']}\n"
             success_message += f"• Total records: {analysis['schema_info']['total_records']:,}\n\n"
             
@@ -491,9 +504,10 @@ class DatabaseSetupDialog:
             })
             
             # Check backend interface
-            backend = BackendInterface(str(_PROJECT_ROOT))
+            backend = BackendInterface(self.backend_path)
+            backend.config_path = Path(self.config_path).expanduser().resolve(strict=False)
             if not backend.is_backend_available():
-                raise RuntimeError("SMBSeek backend not available")
+                raise RuntimeError("Dirracuda backend not available")
             
             self.operation_queue.put({
                 'type': 'progress',
@@ -514,7 +528,7 @@ class DatabaseSetupDialog:
             )
             
             if result.get('success'):
-                db_path = result.get('database_path', str(_PROJECT_ROOT / 'smbseek.db'))
+                db_path = result.get('database_path', str(auto_detect_database_path(Path(self.backend_path))))
                 self.operation_queue.put({
                     'type': 'complete',
                     'success': True,

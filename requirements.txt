@@ -1,4 +1,4 @@
-# SMBSeek Unified Toolkit Dependencies
+# Dirracuda Dependencies
 # Combined dependencies for CLI and GUI components
 
 # Core networking and SMB libraries (CLI)
@@ -14,10 +14,11 @@ python-dateutil>=2.8.0   # Date parsing utilities
 impacket>=0.11.0         # SMB probe enumeration support
 pyasn1>=0.6.3            # Security fix: avoid vulnerable recursion DoS in <=0.6.2
 pyOpenSSL>=26.0.0        # Security fix: reject oversized DTLS cookie callback values
-
-# Testing framework
-pytest>=7.0.0            # Testing framework
-pytest-cov>=4.0.0        # Coverage reporting
+cryptography==46.0.6     # Security fix: pin patched version to prevent transitive resolution to 46.0.5
+requests>=2.33.0,<3.0.0  # Security fix: avoid predictable temp extraction path in <2.33.0
+# Pygments is intentionally not included in runtime requirements.
+# Current advisory for <=2.19.2 has no patched release; project runtime does not import it.
+# Keep Pygments/pytest limited to isolated local test environments.
 
 # Database and data handling (included in Python standard library)
 # sqlite3 - built-in

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMBSeek Database Manager
+Dirracuda Database Manager
 Centralized database connection and operations management for SQLite backend
 """
 
@@ -10,28 +10,45 @@ import os
 import logging
 from datetime import datetime
 import sys
+from pathlib import Path
 
 # Add shared directory to path
 shared_path = os.path.join(os.path.dirname(__file__), '..', 'shared')
 sys.path.insert(0, shared_path)
 
 from config import get_standard_timestamp
+try:
+    from shared.db_path_resolution import resolve_database_path
+except ImportError:
+    from db_path_resolution import resolve_database_path
 from contextlib import contextmanager
 from typing import Dict, List, Optional, Any, Union
 import threading
 
 REQUIRED_TABLES = {"smb_servers", "scan_sessions"}
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+
+
+def resolve_tool_database_path(raw_path: Optional[str] = None) -> str:
+    """Resolve DB path with backend-rooted semantics and legacy auto-detect."""
+    return str(
+        resolve_database_path(
+            backend_path=BACKEND_ROOT,
+            cli_database_path=raw_path,
+            persisted_paths=[],
+        )
+    )
 
 
 class DatabaseManager:
     """
-    Thread-safe SQLite database manager for SMBSeek toolkit.
-    
+    Thread-safe SQLite database manager for Dirracuda toolkit.
+
     Provides connection management, schema initialization, and common database operations.
-    Follows the established SMBSeek architecture patterns.
+    Follows the established Dirracuda architecture patterns.
     """
     
-    def __init__(self, db_path: str = "smbseek.db", config: Optional[Dict] = None):
+    def __init__(self, db_path: Optional[str] = None, config: Optional[Dict] = None):
         """
         Initialize database manager.
         
@@ -39,18 +56,18 @@ class DatabaseManager:
             db_path: Path to SQLite database file
             config: Configuration dictionary (optional)
         """
-        self.db_path = db_path
+        self.db_path = resolve_tool_database_path(db_path)
         self.config = config or {}
         self._local = threading.local()
         self.logger = logging.getLogger(__name__)
         
         # Ensure database directory exists
-        db_dir = os.path.dirname(os.path.abspath(db_path))
+        db_dir = os.path.dirname(os.path.abspath(self.db_path))
         if not os.path.exists(db_dir):
             os.makedirs(db_dir, exist_ok=True)
         
         # Initialize or validate database file
-        if not os.path.exists(db_path):
+        if not os.path.exists(self.db_path):
             self.initialize_database()
         else:
             schema_state = self._inspect_schema_state()
@@ -238,9 +255,9 @@ class DatabaseManager:
 
 class SMBSeekDataAccessLayer:
     """
-    High-level data access layer for SMBSeek operations.
-    
-    Provides domain-specific database operations following SMBSeek data patterns.
+    High-level data access layer for Dirracuda operations.
+
+    Provides domain-specific database operations following Dirracuda data patterns.
     """
     
     def __init__(self, db_manager: DatabaseManager):
@@ -310,16 +327,24 @@ class SMBSeekDataAccessLayer:
         
         if result:
             server_id = result[0]['id']
-            # Update last_seen and scan_count using direct SQL to increment
+            # Update scan freshness and refresh metadata when new values are provided.
             query = """
                 UPDATE smb_servers 
-                SET last_seen = ?, scan_count = scan_count + 1, updated_at = ?
+                SET last_seen = ?,
+                    scan_count = scan_count + 1,
+                    updated_at = ?,
+                    country = COALESCE(?, country),
+                    country_code = COALESCE(?, country_code),
+                    auth_method = COALESCE(?, auth_method)
                 WHERE id = ?
             """
             timestamp = get_standard_timestamp()
             self.db.execute_query(query, (
                 timestamp,
                 timestamp,
+                country,
+                country_code,
+                auth_method,
                 server_id
             ))
             return server_id

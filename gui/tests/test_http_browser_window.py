@@ -1,17 +1,35 @@
 """
 Unit tests for HTTP browser viewer integration (no Tk display required).
 
-Pattern after test_ftp_browser_window.py; factory function and mock shapes are
+Mirrors FTP browser test structure; factory function and mock shapes are
 the same but assertions use HTTP-specific URL format and 5-column treeview layout.
 """
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from gui.components.http_browser_window import HttpBrowserWindow
+from gui.components.unified_browser_window import HttpBrowserWindow
+
+
+class _CaptureTree:
+    def __init__(self):
+        self.rows = []
+        self._iid = 0
+
+    def get_children(self):
+        return tuple(range(len(self.rows)))
+
+    def delete(self, *_items):
+        self.rows.clear()
+
+    def insert(self, _parent, _index, values):
+        self._iid += 1
+        self.rows.append(values)
+        return f"item-{self._iid}"
 
 
 def _make_window() -> HttpBrowserWindow:
@@ -34,7 +52,7 @@ def test_open_viewer_uses_shared_file_viewer_and_save_callback_downloads():
     def _fake_open_file_viewer(**kwargs):
         captured.update(kwargs)
 
-    with patch("gui.components.http_browser_window.open_file_viewer", side_effect=_fake_open_file_viewer):
+    with patch("gui.components.unified_browser_window.open_file_viewer", side_effect=_fake_open_file_viewer):
         win._open_viewer("/pub/readme.txt", b"hello", 123)
 
     assert captured["file_path"] == "http://10.20.30.40:80/pub/readme.txt"
@@ -53,7 +71,7 @@ def test_open_image_viewer_uses_shared_image_viewer_and_save_callback_downloads(
     def _fake_open_image_viewer(**kwargs):
         captured.update(kwargs)
 
-    with patch("gui.components.http_browser_window.open_image_viewer", side_effect=_fake_open_image_viewer):
+    with patch("gui.components.unified_browser_window.open_image_viewer", side_effect=_fake_open_image_viewer):
         win._open_image_viewer("/media/logo.png", b"\x89PNG", 456, True, 2_000_000)
 
     assert captured["file_path"] == "http://10.20.30.40:80/media/logo.png"
@@ -69,8 +87,8 @@ def test_open_image_viewer_uses_shared_image_viewer_and_save_callback_downloads(
 def test_open_image_viewer_shows_error_when_viewer_raises():
     win = _make_window()
 
-    with patch("gui.components.http_browser_window.open_image_viewer", side_effect=RuntimeError("bad image")), patch(
-        "gui.components.http_browser_window.messagebox.showerror"
+    with patch("gui.components.unified_browser_window.open_image_viewer", side_effect=RuntimeError("bad image")), patch(
+        "gui.components.unified_browser_window.messagebox.showerror"
     ) as mock_showerror:
         win._open_image_viewer("/media/corrupt.png", b"bad", 99, False, 1_000)
 
@@ -123,3 +141,22 @@ def test_on_view_uses_text_limits_and_dispatches_view_thread():
     assert kw["is_image"] is False
     # max_image_pixels passed through but ignored when is_image=False
     assert kw["max_image_pixels"] == 20_000_000
+
+
+def test_populate_treeview_sorts_dirs_then_files_alphabetically():
+    win = _make_window()
+    win.tree = _CaptureTree()
+    win._path_map = {}
+    list_result = SimpleNamespace(
+        entries=[
+            SimpleNamespace(name="/zeta.txt", is_dir=False, size=0, modified_time=None),
+            SimpleNamespace(name="/Beta/", is_dir=True, size=0, modified_time=None),
+            SimpleNamespace(name="/alpha.txt", is_dir=False, size=0, modified_time=None),
+            SimpleNamespace(name="/aardvark/", is_dir=True, size=0, modified_time=None),
+        ]
+    )
+
+    win._populate_treeview(list_result)
+
+    assert [row[0] for row in win.tree.rows] == ["aardvark", "Beta", "alpha.txt", "zeta.txt"]
+    assert [row[1] for row in win.tree.rows] == ["dir", "dir", "file", "file"]

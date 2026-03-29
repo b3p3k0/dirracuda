@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMBSeek - Unified Security Toolkit
+Dirracuda - Unified Security Toolkit
 
 A defensive security toolkit for identifying and analyzing SMB servers
 with weak authentication. Simplified single-command interface for
@@ -23,11 +23,8 @@ import re
 from typing import Optional, Set
 from typing import List
 
-# Add repository root to Python path for imports
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_REPO_ROOT = os.path.dirname(_SCRIPT_DIR)
-if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)
+# Add repo root to Python path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared.utils import format_string_for_shodan
 
@@ -167,7 +164,7 @@ def detect_deprecated_usage(argv):
     if len(argv) > 1 and argv[1] in deprecated_subcommands:
         if argv[1] in {'collect', 'analyze', 'report', 'db'}:
             print(f"⚠️  DEPRECATED: '{argv[1]}' subcommand is no longer supported.")
-            print("   Use: ./cli/smbseek.py --country US")
+            print("   Use: ./smbseek.py --country US")
             return None  # Exit early with code 1
         else:
             warnings_issued.append(f"subcommand '{argv[1]}' is deprecated, use flags directly")
@@ -210,7 +207,7 @@ The tool performs two main operations:
   1. Discovery: Query Shodan and test SMB authentication
   2. Share Access: Enumerate accessible shares on authenticated hosts
 
-Results are automatically saved to smbseek.db database.
+Results are automatically saved to the configured database (default: dirracuda.db).
 
 Documentation: docs/USER_GUIDE.md
 """

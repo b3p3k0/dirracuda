@@ -200,20 +200,15 @@ def run_access_stage(workflow: "HttpWorkflow", candidates: List[HttpCandidate]) 
         ip = candidate.ip
         shodan_data_str = json.dumps(candidate.shodan_data)
 
-        # Build attempt list: candidate port first (both enabled protocols), then
-        # canonical supplemental ports (deduped, order-preserving).
-        # This ensures non-standard ports (8080, 8443, etc.) are tried before
-        # falling back to 80/443, and HTTPS is always attempted on non-443 ports
-        # when verify_https=True regardless of Shodan's inferred scheme.
+        # Build attempt list on the Shodan-reported endpoint only.
+        # We never fall back to canonical 80/443 unless Shodan itself returned
+        # those ports. This keeps verification, browse, and probe behavior locked
+        # to the exact search hit endpoint.
         attempts_to_try: List[Tuple[str, int]] = []
         if verify_http:
             attempts_to_try.append(("http", candidate.port))
         if verify_https:
             attempts_to_try.append(("https", candidate.port))
-        if verify_http and ("http", 80) not in attempts_to_try:
-            attempts_to_try.append(("http", 80))
-        if verify_https and ("https", 443) not in attempts_to_try:
-            attempts_to_try.append(("https", 443))
 
         if not attempts_to_try:
             return HttpAccessOutcome(
