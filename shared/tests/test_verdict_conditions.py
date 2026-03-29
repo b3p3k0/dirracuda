@@ -1,5 +1,5 @@
-from signatures.rce_smb.rules import RuleEngine
-from signatures.rce_smb.loader import SignatureLoader
+from shared.signatures.rce_smb.rules import RuleEngine
+from shared.signatures.rce_smb.loader import SignatureLoader
 
 
 def test_all_signature_verdict_conditions_parse():

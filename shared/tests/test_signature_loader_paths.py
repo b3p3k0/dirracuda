@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from signatures.rce_smb.loader import (
+from shared.signatures.rce_smb.loader import (
     DEFAULT_SIGNATURES_DIR,
     SignatureLoadError,
     SignatureLoader,

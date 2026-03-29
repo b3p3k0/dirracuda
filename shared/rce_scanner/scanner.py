@@ -5,15 +5,10 @@ Main API for RCE vulnerability scanning. Orchestrates fact collection,
 signature evaluation, scoring, and reporting for defensive analysis.
 """
 
-import sys
-import os
 import logging
 from typing import Dict, Any, Optional
 
-# Add signatures package to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-
-from signatures.rce_smb import SignatureLoader, RuleEngine
+from shared.signatures.rce_smb import SignatureLoader, RuleEngine
 from .fact_collector import FactCollector
 from .scorer import RCEScorer
 from .reporter import RCEReporter
