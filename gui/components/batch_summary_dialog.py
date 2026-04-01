@@ -19,6 +19,7 @@ def show_batch_summary_dialog(
     title_suffix: str = "Batch Summary",
     geometry: str = "700x400",
     show_export: bool = True,
+    show_protocol: bool = False,
     show_stats: bool = False,
     wait: bool = False,
     modal: bool = False,
@@ -35,18 +36,11 @@ def show_batch_summary_dialog(
     if theme:
         theme.apply_to_widget(dialog, "main_window")
 
-    columns = ("ip", "action", "status", "notes")
+    columns, headings, widths = _resolve_summary_columns(show_protocol=show_protocol)
     tree = ttk.Treeview(dialog, columns=columns, show="headings", height=15)
-    headings = {
-        "ip": "IP Address",
-        "action": "Action",
-        "status": "Result",
-        "notes": "Notes",
-    }
     for col in columns:
         tree.heading(col, text=headings[col])
-        width = 130 if col != "notes" else 360
-        tree.column(col, width=width, anchor="w")
+        tree.column(col, width=widths[col], anchor="w")
 
     success_count = 0
     failed_count = 0
@@ -59,12 +53,7 @@ def show_batch_summary_dialog(
         tree.insert(
             "",
             "end",
-            values=(
-                entry.get("ip_address", "-"),
-                str(entry.get("action", job_type or "batch")).title(),
-                status.title(),
-                entry.get("notes", ""),
-            ),
+            values=_build_summary_row(entry, job_type=job_type, status=status, show_protocol=show_protocol),
         )
 
     tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -88,7 +77,7 @@ def show_batch_summary_dialog(
         save_button = tk.Button(
             button_frame,
             text="Save CSV",
-            command=lambda: _export_batch_summary(results, job_type, dialog),
+            command=lambda: _export_batch_summary(results, job_type, dialog, show_protocol=show_protocol),
         )
         if theme:
             theme.apply_to_widget(save_button, "button_secondary")
@@ -108,7 +97,74 @@ def show_batch_summary_dialog(
     return dialog
 
 
-def _export_batch_summary(results: List[Dict[str, Any]], job_type: str, parent: tk.Toplevel) -> None:
+def _resolve_summary_columns(*, show_protocol: bool) -> tuple[tuple[str, ...], Dict[str, str], Dict[str, int]]:
+    """Resolve treeview columns, headings, and widths for summary dialog."""
+    if show_protocol:
+        columns = ("ip", "protocol", "action", "status", "notes")
+        headings = {
+            "ip": "IP Address",
+            "protocol": "Protocol",
+            "action": "Action",
+            "status": "Result",
+            "notes": "Notes",
+        }
+        widths = {
+            "ip": 130,
+            "protocol": 90,
+            "action": 90,
+            "status": 90,
+            "notes": 340,
+        }
+        return columns, headings, widths
+
+    columns = ("ip", "action", "status", "notes")
+    headings = {
+        "ip": "IP Address",
+        "action": "Action",
+        "status": "Result",
+        "notes": "Notes",
+    }
+    widths = {
+        "ip": 130,
+        "action": 130,
+        "status": 130,
+        "notes": 360,
+    }
+    return columns, headings, widths
+
+
+def _build_summary_row(
+    entry: Dict[str, Any],
+    *,
+    job_type: str,
+    status: str,
+    show_protocol: bool,
+) -> tuple[Any, ...]:
+    """Build treeview row values for batch summary."""
+    base = (
+        entry.get("ip_address", "-"),
+        str(entry.get("action", job_type or "batch")).title(),
+        status.title(),
+        entry.get("notes", ""),
+    )
+    if not show_protocol:
+        return base
+    return (
+        entry.get("ip_address", "-"),
+        entry.get("protocol", ""),
+        str(entry.get("action", job_type or "batch")).title(),
+        status.title(),
+        entry.get("notes", ""),
+    )
+
+
+def _export_batch_summary(
+    results: List[Dict[str, Any]],
+    job_type: str,
+    parent: tk.Toplevel,
+    *,
+    show_protocol: bool = False,
+) -> None:
     """Persist batch summary rows to CSV."""
     path = filedialog.asksaveasfilename(
         parent=parent,
@@ -121,15 +177,29 @@ def _export_batch_summary(results: List[Dict[str, Any]], job_type: str, parent: 
 
     with open(path, "w", newline="", encoding="utf-8") as csv_file:
         writer = csv.writer(csv_file)
-        writer.writerow(["ip_address", "action", "status", "notes"])
+        if show_protocol:
+            writer.writerow(["ip_address", "protocol", "action", "status", "notes"])
+        else:
+            writer.writerow(["ip_address", "action", "status", "notes"])
         for entry in results:
-            writer.writerow(
-                [
-                    entry.get("ip_address", ""),
-                    entry.get("action", job_type),
-                    entry.get("status", ""),
-                    entry.get("notes", ""),
-                ]
-            )
+            if show_protocol:
+                writer.writerow(
+                    [
+                        entry.get("ip_address", ""),
+                        entry.get("protocol", ""),
+                        entry.get("action", job_type),
+                        entry.get("status", ""),
+                        entry.get("notes", ""),
+                    ]
+                )
+            else:
+                writer.writerow(
+                    [
+                        entry.get("ip_address", ""),
+                        entry.get("action", job_type),
+                        entry.get("status", ""),
+                        entry.get("notes", ""),
+                    ]
+                )
 
     messagebox.showinfo("Summary Saved", f"Saved batch summary to {path}", parent=parent)

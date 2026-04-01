@@ -1,10 +1,29 @@
 """Regression tests for dashboard post-scan bulk operation routing."""
 
 import sys
+import types
 from pathlib import Path
 from unittest.mock import MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+# Lightweight impacket stub for environments where dependency is unavailable.
+if "impacket" not in sys.modules:
+    impacket_mod = types.ModuleType("impacket")
+    impacket_smb_mod = types.ModuleType("impacket.smb")
+    impacket_smb_mod.SMB2_DIALECT_002 = object()
+    impacket_smbconn_mod = types.ModuleType("impacket.smbconnection")
+    impacket_smbconn_mod.SMBConnection = object
+
+    class _SessionError(Exception):
+        pass
+
+    impacket_smbconn_mod.SessionError = _SessionError
+    impacket_mod.smb = impacket_smb_mod
+
+    sys.modules["impacket"] = impacket_mod
+    sys.modules["impacket.smb"] = impacket_smb_mod
+    sys.modules["impacket.smbconnection"] = impacket_smbconn_mod
 
 from gui.components.dashboard import DashboardWidget
 
@@ -90,6 +109,7 @@ def test_get_servers_for_bulk_ops_filters_to_immediate_scan_window_ftp():
                     "ip_address": "203.0.113.11",
                     "host_type": "F",
                     "protocol_server_id": 11,
+                    "anon_accessible": 0,
                     "accessible_shares": 0,
                     "probe_status": "unprobed",
                     "indicator_matches": 0,
@@ -98,6 +118,7 @@ def test_get_servers_for_bulk_ops_filters_to_immediate_scan_window_ftp():
                     "ip_address": "203.0.113.22",
                     "host_type": "F",
                     "protocol_server_id": 22,
+                    "anon_accessible": 1,
                     "accessible_shares": 0,
                     "probe_status": "unprobed",
                     "indicator_matches": 0,
@@ -106,6 +127,7 @@ def test_get_servers_for_bulk_ops_filters_to_immediate_scan_window_ftp():
                     "ip_address": "203.0.113.33",
                     "host_type": "F",
                     "protocol_server_id": 33,
+                    "anon_accessible": 1,
                     "accessible_shares": 0,
                     "probe_status": "unprobed",
                     "indicator_matches": 0,
@@ -287,6 +309,108 @@ def test_get_servers_for_bulk_ops_probe_includes_zero_accessibility_rows_smb():
     assert len(result["probe"]) == 1
     assert result["probe"][0]["ip_address"] == "203.0.113.99"
     assert result["extract"] == []
+
+
+def test_get_servers_for_bulk_ops_probe_excludes_ftp_non_accessible_rows():
+    """FTP probe target selection should require anon_accessible truthy."""
+    dash = DashboardWidget.__new__(DashboardWidget)
+
+    class _StubReader:
+        def get_protocol_server_list(
+            self,
+            limit=5000,
+            offset=0,
+            country_filter=None,
+            recent_scan_only=True,
+        ):
+            return ([
+                {
+                    "ip_address": "203.0.113.10",
+                    "host_type": "F",
+                    "anon_accessible": 1,
+                    "accessible_shares": 0,
+                    "probe_status": "unprobed",
+                    "indicator_matches": 0,
+                },
+                {
+                    "ip_address": "203.0.113.11",
+                    "host_type": "F",
+                    "anon_accessible": 0,
+                    "accessible_shares": 0,
+                    "probe_status": "unprobed",
+                    "indicator_matches": 0,
+                },
+            ], 2)
+
+    dash.db_reader = _StubReader()
+    result = dash._get_servers_for_bulk_ops(skip_indicator_extract=True, host_type_filter="F")
+
+    probe_ips = {row["ip_address"] for row in result["probe"]}
+    assert probe_ips == {"203.0.113.10"}
+    assert result["extract"] == []
+
+
+def test_get_servers_for_bulk_ops_probe_includes_ftp_anon_accessible_with_zero_shares():
+    """FTP anon_accessible rows remain probe-eligible even when shares are zero."""
+    dash = DashboardWidget.__new__(DashboardWidget)
+
+    class _StubReader:
+        def get_protocol_server_list(
+            self,
+            limit=5000,
+            offset=0,
+            country_filter=None,
+            recent_scan_only=True,
+        ):
+            return ([
+                {
+                    "ip_address": "203.0.113.12",
+                    "host_type": "F",
+                    "anon_accessible": 1,
+                    "accessible_shares": 0,
+                    "probe_status": "unprobed",
+                    "indicator_matches": 0,
+                }
+            ], 1)
+
+    dash.db_reader = _StubReader()
+    result = dash._get_servers_for_bulk_ops(skip_indicator_extract=True, host_type_filter="F")
+
+    assert len(result["probe"]) == 1
+    assert result["probe"][0]["ip_address"] == "203.0.113.12"
+    assert result["extract"] == []
+
+
+def test_protocol_label_helpers():
+    dash = DashboardWidget.__new__(DashboardWidget)
+    assert dash._protocol_label_from_host_type("S") == "SMB"
+    assert dash._protocol_label_from_host_type("F") == "FTP"
+    assert dash._protocol_label_from_host_type("H") == "HTTP"
+    assert dash._protocol_label_from_host_type("X") == "Unknown"
+    assert dash._protocol_label_for_result({"protocol": "ftp", "host_type": "S"}) == "FTP"
+    assert dash._protocol_label_for_result({"host_type": "H"}) == "HTTP"
+
+
+def test_extract_single_server_skipped_includes_protocol_label():
+    import threading
+    dash = DashboardWidget.__new__(DashboardWidget)
+
+    result = dash._extract_single_server(
+        {"ip_address": "198.51.100.10", "host_type": "F", "accessible_shares": 0},
+        max_file_mb=10,
+        max_total_mb=100,
+        max_time=5,
+        max_files=5,
+        extension_mode="download_all",
+        included_extensions=[],
+        excluded_extensions=[],
+        quarantine_base_path=None,
+        cancel_event=threading.Event(),
+        clamav_config={},
+    )
+
+    assert result["status"] == "skipped"
+    assert result["protocol"] == "FTP"
 
 
 def test_probe_single_server_ftp_snapshot_path_from_dispatch(monkeypatch):

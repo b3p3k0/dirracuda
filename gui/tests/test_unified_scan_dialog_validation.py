@@ -9,6 +9,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+import gui.components.unified_scan_dialog as unified_scan_dialog
 from gui.components.unified_scan_dialog import UnifiedScanDialog
 
 
@@ -122,3 +123,70 @@ def test_start_valid_max_results_invokes_callback(monkeypatch):
 
 def test_no_live_max_results_clamp_method_exists():
     assert not hasattr(UnifiedScanDialog, "_validate_max_results")
+
+
+def test_open_query_editor_prefers_query_callback():
+    dlg = UnifiedScanDialog.__new__(UnifiedScanDialog)
+    calls = {"query": 0}
+    dlg.query_editor_callback = lambda: calls.__setitem__("query", calls["query"] + 1)
+    dlg._open_config_editor = lambda: (_ for _ in ()).throw(AssertionError("fallback should not run"))
+    dlg.dialog = object()
+
+    dlg._open_query_editor()
+
+    assert calls["query"] == 1
+
+
+def test_open_query_editor_falls_back_to_config_editor():
+    dlg = UnifiedScanDialog.__new__(UnifiedScanDialog)
+    calls = {"fallback": 0}
+    dlg.query_editor_callback = None
+    dlg._open_config_editor = lambda: calls.__setitem__("fallback", calls["fallback"] + 1)
+    dlg.dialog = object()
+
+    dlg._open_query_editor()
+
+    assert calls["fallback"] == 1
+
+
+def test_open_query_editor_shows_error_on_callback_exception(monkeypatch):
+    dlg = UnifiedScanDialog.__new__(UnifiedScanDialog)
+    dlg.query_editor_callback = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
+    calls = {"fallback": 0, "error": 0}
+    dlg._open_config_editor = lambda: calls.__setitem__("fallback", calls["fallback"] + 1)
+    dlg.dialog = object()
+
+    monkeypatch.setattr(
+        "gui.components.unified_scan_dialog.messagebox.showerror",
+        lambda *args, **kwargs: calls.__setitem__("error", calls["error"] + 1),
+    )
+
+    dlg._open_query_editor()
+
+    assert calls["error"] == 1
+    assert calls["fallback"] == 0
+
+
+def test_show_unified_scan_dialog_passes_query_editor_callback(monkeypatch):
+    captured = {}
+
+    class _DialogStub:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def show(self):
+            return "start"
+
+    monkeypatch.setattr("gui.components.unified_scan_dialog.UnifiedScanDialog", _DialogStub)
+
+    result = unified_scan_dialog.show_unified_scan_dialog(
+        parent=object(),
+        config_path="/tmp/config.json",
+        scan_start_callback=lambda _req: None,
+        settings_manager=None,
+        config_editor_callback=lambda _path: None,
+        query_editor_callback=lambda: None,
+    )
+
+    assert result == "start"
+    assert callable(captured["query_editor_callback"])
