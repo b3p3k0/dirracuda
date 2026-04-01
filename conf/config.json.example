@@ -197,6 +197,9 @@
   },
   "http": {
     "shodan": {
+      "query_components": {
+        "base_query": "http.title:\"Index of /\""
+      },
       "query_limits": {
         "max_results": 1000
       }

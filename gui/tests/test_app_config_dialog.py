@@ -71,6 +71,9 @@ def _build_dialog(validation_results: dict, *, parent=None, dialog=None) -> AppC
     dlg.api_key_var = _Var("APIKEY")
     dlg.quarantine_var = _Var("/tmp/quarantine")
     dlg.wordlist_var = _Var("/tmp/wordlist.txt")
+    dlg.smb_dork_var = _Var("smb authentication: disabled")
+    dlg.ftp_dork_var = _Var('port:21 "230 Login successful"')
+    dlg.http_dork_var = _Var('http.title:"Index of /"')
 
     dlg.smbseek_path = "/tmp/backend"
     dlg.database_path = "/tmp/smbseek.db"
@@ -78,6 +81,14 @@ def _build_dialog(validation_results: dict, *, parent=None, dialog=None) -> AppC
     dlg.api_key = "APIKEY"
     dlg.quarantine_path = "/tmp/quarantine"
     dlg.wordlist_path = ""
+    dlg.smb_dork = "smb authentication: disabled"
+    dlg.ftp_dork = 'port:21 "230 Login successful"'
+    dlg.http_dork = 'http.title:"Index of /"'
+    dlg._open_dork_values = {
+        "smb_dork": dlg.smb_dork,
+        "ftp_dork": dlg.ftp_dork,
+        "http_dork": dlg.http_dork,
+    }
 
     dlg._validate_all_fields = lambda: None
     return dlg
@@ -91,6 +102,9 @@ def _base_validation(*, api_key_valid=True, wordlist_valid=True) -> dict:
         "api_key": {"valid": api_key_valid, "message": ""},
         "quarantine": {"valid": True, "message": ""},
         "wordlist": {"valid": wordlist_valid, "message": ""},
+        "smb_dork": {"valid": True, "message": ""},
+        "ftp_dork": {"valid": True, "message": ""},
+        "http_dork": {"valid": True, "message": ""},
     }
 
 
