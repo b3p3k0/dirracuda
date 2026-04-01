@@ -42,12 +42,14 @@ class UnifiedScanDialog:
         scan_start_callback: Callable[[Dict[str, Any]], None],
         settings_manager: Optional[Any] = None,
         config_editor_callback: Optional[Callable[[str], None]] = None,
+        query_editor_callback: Optional[Callable[[], None]] = None,
     ) -> None:
         self.parent = parent
         self.config_path = Path(config_path).resolve()
         self.scan_start_callback = scan_start_callback
         self._settings_manager = settings_manager
         self.config_editor_callback = config_editor_callback
+        self.query_editor_callback = query_editor_callback
         self.theme = get_theme()
         self.template_store = TemplateStore(settings_manager=settings_manager)
 
@@ -659,6 +661,15 @@ class UnifiedScanDialog:
             self.theme.apply_to_widget(cb, "checkbox")
             cb.pack(side=tk.LEFT, padx=(10, 12), pady=2)
 
+        edit_queries_btn = tk.Button(
+            row,
+            text="Edit Queries",
+            command=self._open_query_editor,
+            font=self.theme.fonts["small"],
+        )
+        self.theme.apply_to_widget(edit_queries_btn, "button_secondary")
+        edit_queries_btn.pack(side=tk.RIGHT, padx=(0, 10))
+
         info = self.theme.create_styled_label(
             container,
             "Selected protocols run sequentially in one queue and stop on first failure.",
@@ -1019,6 +1030,21 @@ class UnifiedScanDialog:
                 parent=self.dialog,
             )
 
+    def _open_query_editor(self) -> None:
+        """Open query manager from protocol section, falling back to config editor."""
+        if self.query_editor_callback:
+            try:
+                self.query_editor_callback()
+                return
+            except Exception as exc:
+                messagebox.showerror(
+                    "Query Editor Error",
+                    f"Failed to open query editor:\n{exc}",
+                    parent=self.dialog,
+                )
+                return
+        self._open_config_editor()
+
     def _create_button_panel(self) -> None:
         frame = tk.Frame(self.dialog)
         self.theme.apply_to_widget(frame, "main_window")
@@ -1286,6 +1312,7 @@ def show_unified_scan_dialog(
     scan_start_callback: Callable[[Dict[str, Any]], None],
     settings_manager: Optional[Any] = None,
     config_editor_callback: Optional[Callable[[str], None]] = None,
+    query_editor_callback: Optional[Callable[[], None]] = None,
 ) -> Optional[str]:
     """Show the unified scan launch dialog modally."""
     dialog = UnifiedScanDialog(
@@ -1294,5 +1321,6 @@ def show_unified_scan_dialog(
         scan_start_callback=scan_start_callback,
         settings_manager=settings_manager,
         config_editor_callback=config_editor_callback,
+        query_editor_callback=query_editor_callback,
     )
     return dialog.show()

@@ -894,6 +894,7 @@ class DashboardWidget:
             scan_start_callback=self._start_unified_scan,
             settings_manager=getattr(self, "settings_manager", None),
             config_editor_callback=self._open_config_editor_from_scan,
+            query_editor_callback=self._open_config_editor,
         )
     
     def _open_config_editor_from_scan(self, config_path: str) -> None:
@@ -1725,6 +1726,7 @@ class DashboardWidget:
                 if not extract_targets:
                     summary_stack.append(("extract", [{
                         "ip_address": "",
+                        "protocol": self._protocol_label_from_host_type(host_type_filter),
                         "action": "extract",
                         "status": "skipped",
                         "notes": "All accessible hosts were flagged with indicators; extract skipped."
@@ -1847,7 +1849,18 @@ class DashboardWidget:
                 # Probe eligibility remains row-based (not share-count based).
                 # Optional scan-cohort filtering above narrows post-scan runs to
                 # immediate prior scan results only.
-                result["probe"].append(server)
+                probe_eligible = True
+                if server_host_type == "F":
+                    anon_accessible = server.get("anon_accessible")
+                    if isinstance(anon_accessible, str):
+                        probe_eligible = anon_accessible.strip().lower() in {
+                            "1", "true", "yes", "y", "on"
+                        }
+                    else:
+                        probe_eligible = bool(anon_accessible)
+
+                if probe_eligible:
+                    result["probe"].append(server)
 
                 accessible = (server.get("accessible_shares") or 0) > 0
                 if not accessible:
@@ -2016,6 +2029,7 @@ class DashboardWidget:
                         except Exception as e:
                             result = {
                                 "ip_address": server.get("ip_address"),
+                                "protocol": self._protocol_label_from_host_type(server.get("host_type")),
                                 "action": "probe",
                                 "status": "failed",
                                 "notes": str(e)
@@ -2042,9 +2056,11 @@ class DashboardWidget:
     def _probe_single_server(self, server: Dict[str, Any], max_dirs: int, max_files: int,
                               timeout_seconds: int, enable_rce: bool, cancel_event: threading.Event) -> Dict[str, Any]:
         """Probe a single server (SMB or FTP)."""
+        protocol_label = self._protocol_label_from_host_type(server.get("host_type"))
         if cancel_event.is_set():
             return {
                 "ip_address": server.get("ip_address"),
+                "protocol": protocol_label,
                 "action": "probe",
                 "status": "cancelled",
                 "notes": "Cancelled"
@@ -2052,6 +2068,7 @@ class DashboardWidget:
 
         ip_address = server.get("ip_address")
         host_type = (server.get("host_type") or "S").upper()
+        protocol_label = self._protocol_label_from_host_type(host_type)
 
         # FTP probe path
         if host_type == "F":
@@ -2102,6 +2119,7 @@ class DashboardWidget:
 
                 return {
                     "ip_address": ip_address,
+                    "protocol": protocol_label,
                     "action": "probe",
                     "status": "success",
                     "notes": ", ".join(notes),
@@ -2110,6 +2128,7 @@ class DashboardWidget:
                 status = "cancelled" if "cancel" in str(e).lower() else "failed"
                 return {
                     "ip_address": ip_address,
+                    "protocol": protocol_label,
                     "action": "probe",
                     "status": status,
                     "notes": str(e)
@@ -2191,6 +2210,7 @@ class DashboardWidget:
 
                 return {
                     "ip_address": ip_address,
+                    "protocol": protocol_label,
                     "action": "probe",
                     "status": "success",
                     "notes": ", ".join(notes_h),
@@ -2199,6 +2219,7 @@ class DashboardWidget:
                 status = "cancelled" if "cancel" in str(e).lower() else "failed"
                 return {
                     "ip_address": ip_address,
+                    "protocol": protocol_label,
                     "action": "probe",
                     "status": status,
                     "notes": str(e)
@@ -2254,6 +2275,7 @@ class DashboardWidget:
 
             return {
                 "ip_address": ip_address,
+                "protocol": protocol_label,
                 "action": "probe",
                 "status": "success",
                 "notes": self._build_probe_notes(len(shares), enable_rce, issue_detected, analysis, result)
@@ -2262,10 +2284,27 @@ class DashboardWidget:
             status = "cancelled" if "cancel" in str(e).lower() else "failed"
             return {
                 "ip_address": ip_address,
+                "protocol": protocol_label,
                 "action": "probe",
                 "status": status,
                 "notes": str(e)
             }
+
+    def _protocol_label_from_host_type(self, host_type: Optional[str]) -> str:
+        """Map protocol host_type code to user-facing protocol label."""
+        code = str(host_type or "").strip().upper()
+        return {
+            "S": "SMB",
+            "F": "FTP",
+            "H": "HTTP",
+        }.get(code, "Unknown")
+
+    def _protocol_label_for_result(self, result: Dict[str, Any]) -> str:
+        """Resolve protocol label from result payload for summary display."""
+        explicit = str(result.get("protocol") or "").strip().upper()
+        if explicit:
+            return explicit
+        return self._protocol_label_from_host_type(result.get("host_type"))
 
     def _build_probe_notes(self, share_count: int, enable_rce: bool, issue_detected: bool, analysis: Dict[str, Any], result: Dict[str, Any]) -> str:
         notes: List[str] = []
@@ -2377,6 +2416,7 @@ class DashboardWidget:
                 except Exception as e:
                     results.append({
                         "ip_address": server.get("ip_address"),
+                        "protocol": self._protocol_label_from_host_type(server.get("host_type")),
                         "action": "extract",
                         "status": "failed",
                         "notes": str(e)
@@ -2393,9 +2433,11 @@ class DashboardWidget:
                                  cancel_event: threading.Event,
                                  clamav_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Extract files from a single server."""
+        protocol_label = self._protocol_label_from_host_type(server.get("host_type"))
         if cancel_event.is_set():
             return {
                 "ip_address": server.get("ip_address"),
+                "protocol": protocol_label,
                 "action": "extract",
                 "status": "cancelled",
                 "notes": "Cancelled"
@@ -2408,6 +2450,7 @@ class DashboardWidget:
         if not shares:
             return {
                 "ip_address": ip_address,
+                "protocol": protocol_label,
                 "action": "extract",
                 "status": "skipped",
                 "notes": "No accessible shares"
@@ -2423,6 +2466,7 @@ class DashboardWidget:
         except Exception as e:
             return {
                 "ip_address": ip_address,
+                "protocol": protocol_label,
                 "action": "extract",
                 "status": "failed",
                 "notes": f"Quarantine error: {e}"
@@ -2468,6 +2512,7 @@ class DashboardWidget:
 
             return {
                 "ip_address": ip_address,
+                "protocol": protocol_label,
                 "action": "extract",
                 "status": "success",
                 "notes": f"{files} file(s), {size_mb:.1f} MB",
@@ -2477,6 +2522,7 @@ class DashboardWidget:
             status = "cancelled" if "cancel" in str(e).lower() else "failed"
             return {
                 "ip_address": ip_address,
+                "protocol": protocol_label,
                 "action": "extract",
                 "status": status,
                 "notes": str(e)
@@ -2484,14 +2530,21 @@ class DashboardWidget:
 
     def _show_batch_summary(self, results: List[Dict[str, Any]], job_type: Optional[str] = None) -> None:
         """Show summary dialog for batch operations."""
+        normalized_results: List[Dict[str, Any]] = []
+        for row in results:
+            normalized = dict(row)
+            normalized["protocol"] = self._protocol_label_for_result(normalized)
+            normalized_results.append(normalized)
+
         show_batch_summary_dialog(
             parent=self.parent,
             theme=self.theme,
             job_type=job_type or "batch",
-            results=results,
+            results=normalized_results,
             title_suffix="Batch Summary",
-            geometry="700x400",
+            geometry="780x400",
             show_export=True,
+            show_protocol=True,
             show_stats=False,
             wait=True,
             modal=True,
