@@ -2,7 +2,6 @@
 HTTP Shodan query helpers (Card 4).
 
 Mirrors commands/ftp/shodan_query.py but targets HTTP open-directory servers.
-Base query is locked: http.title:"Index of /"
 Raises HttpDiscoveryError on API failure so the CLI boundary can exit(1)
 without the success marker being emitted.
 """
@@ -15,7 +14,8 @@ from commands.http.models import HttpCandidate, HttpDiscoveryError
 if TYPE_CHECKING:
     from shared.http_workflow import HttpWorkflow
 
-# Locked base query — not overridable in Card 4.
+# Fallback base query for legacy configs that do not define
+# http.shodan.query_components.base_query.
 _BASE_QUERY = 'http.title:"Index of /"'
 
 
@@ -116,10 +116,8 @@ def build_http_query(
 ) -> str:
     """
     Assemble a Shodan query string for HTTP open-directory discovery.
-
-    Base query is locked: http.title:"Index of /"
     """
-    parts = [_BASE_QUERY]
+    parts = [_resolve_http_base_query(workflow)]
 
     if custom_filters:
         parts.append(custom_filters)
@@ -131,3 +129,11 @@ def build_http_query(
             parts.append(f"country:{','.join(countries)}")
 
     return " ".join(parts)
+
+
+def _resolve_http_base_query(workflow: "HttpWorkflow") -> str:
+    """Resolve HTTP base query from config with backward-compatible fallback."""
+    http_cfg = workflow.config.get_http_config()
+    query_components = http_cfg.get("shodan", {}).get("query_components", {})
+    base_query = str(query_components.get("base_query", _BASE_QUERY) or "").strip()
+    return base_query or _BASE_QUERY

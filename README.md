@@ -76,7 +76,6 @@ Launch the GUI from your venv:
 
 ## Using Dirracuda
 
-**NOTE:** This README covers installation and basic workflow use. For deatils on the implementation, please see the [technical reference](docs/TECHNICAL_REFERENCE.md).
 ### Before You Start
 
 You're connecting to machines you don't control. A few baseline precautions before you scan:
@@ -362,14 +361,7 @@ The CLI is useful for scripting and automation. The GUI uses the same backends.
 
 This started as a collection of crude bash and python scripts I've written over 30+ years of networking and security work — dorks, one-liners for poking at servers, that sort of thing. At some point it made sense to turn them into something with a GUI and a database, but the undertaking was far outside my skillset. I understand fundamentals of programming and logic but get lost in the sauce of syntax and structure.
 
-Fortunately AI has gotten good enough to generate functional code with proper oversight. Claude and Codex were extensively used to bring everything together and grow this from a handful of rough scripts to a full workflow manager. I've recently begun commiting planning products to the [development branch](https://github.com/b3p3k0/dirracuda/tree/development/docs/dev) 
-
-Tested on:
-
-- Ubuntu Desktop 24.04.4 LTS
-- Ubuntu Desktop 25.10
-- ParrotOS Security 7.1
-- Kali 2026.1
+Fortunately AI has gotten good enough to generate functional code with proper oversight. Claude and Codex were extensively used to bring everything together and grow this from a handful of rough scripts to a full workflow manager.
 
 ---
 
