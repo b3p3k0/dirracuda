@@ -19,7 +19,7 @@ import pytest
 
 from shared.db_migrations import run_migrations
 from shared.database import FtpPersistence
-from commands.ftp.models import FtpAccessOutcome
+from commands.ftp.models import FtpAccessOutcome, FtpCandidate
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -465,3 +465,67 @@ def test_access_batch_persists_ftp_visible_share_fields(tmp_path):
         assert row == (2, "pub,incoming")
     finally:
         conn.close()
+
+
+def test_filter_recent_candidates_policy(tmp_path):
+    """Recent success is skipped; recent failure/no-history and old success are scanned."""
+    db = tmp_path / "test.db"
+    _make_baseline_db(db)
+    run_migrations(str(db))
+
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.executescript(
+            """
+            INSERT INTO ftp_servers (id, ip_address, port, last_seen)
+            VALUES (1, '198.51.100.1', 21, datetime('now'));
+            INSERT INTO ftp_servers (id, ip_address, port, last_seen)
+            VALUES (2, '198.51.100.2', 21, datetime('now'));
+            INSERT INTO ftp_servers (id, ip_address, port, last_seen)
+            VALUES (3, '198.51.100.3', 21, datetime('now', '-45 days'));
+            INSERT INTO ftp_servers (id, ip_address, port, last_seen)
+            VALUES (4, '198.51.100.4', 21, datetime('now'));
+
+            INSERT INTO ftp_access (server_id, session_id, accessible, auth_status,
+                                    root_listing_available, root_entry_count,
+                                    error_message, access_details)
+            VALUES (1, NULL, 1, 'anonymous', 1, 1, '', '{}');
+            INSERT INTO ftp_access (server_id, session_id, accessible, auth_status,
+                                    root_listing_available, root_entry_count,
+                                    error_message, access_details)
+            VALUES (2, NULL, 0, 'auth_fail', 0, 0, 'fail', '{}');
+            INSERT INTO ftp_access (server_id, session_id, accessible, auth_status,
+                                    root_listing_available, root_entry_count,
+                                    error_message, access_details)
+            VALUES (3, NULL, 1, 'anonymous', 1, 1, '', '{}');
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    persistence = FtpPersistence(str(db))
+    candidates = [
+        FtpCandidate(ip="198.51.100.1", port=21, banner="", country="US", country_code="US", shodan_data={}),
+        FtpCandidate(ip="198.51.100.2", port=21, banner="", country="US", country_code="US", shodan_data={}),
+        FtpCandidate(ip="198.51.100.3", port=21, banner="", country="US", country_code="US", shodan_data={}),
+        FtpCandidate(ip="198.51.100.4", port=21, banner="", country="US", country_code="US", shodan_data={}),
+        FtpCandidate(ip="198.51.100.5", port=21, banner="", country="US", country_code="US", shodan_data={}),
+    ]
+
+    filtered, stats = persistence.filter_recent_candidates(candidates, rescan_after_days=30)
+    filtered_ips = [c.ip for c in filtered]
+
+    assert filtered_ips == [
+        "198.51.100.2",  # recent failure
+        "198.51.100.3",  # old enough
+        "198.51.100.4",  # recent with no access history -> retry
+        "198.51.100.5",  # new
+    ]
+    assert stats["total"] == 5
+    assert stats["known"] == 4
+    assert stats["new"] == 1
+    assert stats["skipped_recent"] == 1
+    assert stats["retried_recent_failures"] == 2
+    assert stats["old_enough"] == 1
+    assert stats["to_scan"] == 4

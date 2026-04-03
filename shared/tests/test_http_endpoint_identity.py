@@ -10,6 +10,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from commands.http.models import HttpCandidate
 from shared.database import HttpPersistence
 from shared.db_migrations import run_migrations
 
@@ -290,3 +291,77 @@ def test_http_persistence_upsert_tracks_endpoints_per_ip(tmp_path):
 
     assert count == 2
     assert int(scan_count_8080) == 2
+
+
+def test_http_filter_recent_candidates_uses_endpoint_identity(tmp_path):
+    db = tmp_path / "http_filter.db"
+    run_migrations(str(db))
+
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.executescript(
+            """
+            INSERT INTO http_servers (id, ip_address, port, scheme, last_seen)
+            VALUES (1, '203.0.113.50', 8080, 'http', datetime('now'));
+            INSERT INTO http_servers (id, ip_address, port, scheme, last_seen)
+            VALUES (2, '203.0.113.50', 8443, 'https', datetime('now'));
+            INSERT INTO http_servers (id, ip_address, port, scheme, last_seen)
+            VALUES (3, '203.0.113.51', 8080, 'http', datetime('now', '-40 days'));
+            INSERT INTO http_servers (id, ip_address, port, scheme, last_seen)
+            VALUES (4, '203.0.113.52', 8080, 'http', datetime('now'));
+
+            INSERT INTO http_access (server_id, session_id, accessible, status_code, is_index_page,
+                                     dir_count, file_count, tls_verified, error_message, access_details)
+            VALUES (1, NULL, 1, 200, 1, 1, 1, 0, '', '{}');
+            INSERT INTO http_access (server_id, session_id, accessible, status_code, is_index_page,
+                                     dir_count, file_count, tls_verified, error_message, access_details)
+            VALUES (2, NULL, 0, 500, 0, 0, 0, 0, 'fail', '{}');
+            INSERT INTO http_access (server_id, session_id, accessible, status_code, is_index_page,
+                                     dir_count, file_count, tls_verified, error_message, access_details)
+            VALUES (3, NULL, 1, 200, 1, 1, 1, 0, '', '{}');
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    persistence = HttpPersistence(str(db))
+    candidates = [
+        HttpCandidate(
+            ip="203.0.113.50", port=8080, scheme="http", banner="", title="",
+            country="US", country_code="US", shodan_data={}
+        ),
+        HttpCandidate(
+            ip="203.0.113.50", port=8443, scheme="https", banner="", title="",
+            country="US", country_code="US", shodan_data={}
+        ),
+        HttpCandidate(
+            ip="203.0.113.51", port=8080, scheme="http", banner="", title="",
+            country="US", country_code="US", shodan_data={}
+        ),
+        HttpCandidate(
+            ip="203.0.113.52", port=8080, scheme="http", banner="", title="",
+            country="US", country_code="US", shodan_data={}
+        ),
+        HttpCandidate(
+            ip="203.0.113.53", port=8080, scheme="http", banner="", title="",
+            country="US", country_code="US", shodan_data={}
+        ),
+    ]
+
+    filtered, stats = persistence.filter_recent_candidates(candidates, rescan_after_days=30)
+    filtered_endpoints = [(c.ip, c.port) for c in filtered]
+
+    assert filtered_endpoints == [
+        ("203.0.113.50", 8443),  # recent failure endpoint retried
+        ("203.0.113.51", 8080),  # old enough
+        ("203.0.113.52", 8080),  # recent with no access history -> retry
+        ("203.0.113.53", 8080),  # new endpoint
+    ]
+    assert stats["total"] == 5
+    assert stats["known"] == 4
+    assert stats["new"] == 1
+    assert stats["skipped_recent"] == 1
+    assert stats["retried_recent_failures"] == 2
+    assert stats["old_enough"] == 1
+    assert stats["to_scan"] == 4

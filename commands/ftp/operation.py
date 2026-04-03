@@ -75,6 +75,27 @@ def run_discover_stage(workflow: "FtpWorkflow") -> Tuple[List[FtpCandidate], int
     if shodan_total == 0:
         return [], 0
 
+    rescan_after_days = workflow.config.get("workflow", "rescan_after_days", 30)
+    persistence = FtpPersistence(workflow.db_path)
+    candidates, filter_stats = persistence.filter_recent_candidates(
+        candidates,
+        rescan_after_days=rescan_after_days,
+    )
+    out.info(
+        "Recent-host filtering: "
+        f"{filter_stats['total']} total, "
+        f"{filter_stats['new']} new, "
+        f"{filter_stats['old_enough']} old enough, "
+        f"{filter_stats['retried_recent_failures']} recent failures retried, "
+        f"{filter_stats['skipped_recent']} recent successes skipped, "
+        f"{filter_stats['to_scan']} to scan"
+    )
+
+    shodan_total = len(candidates)
+    if shodan_total == 0:
+        out.info("No FTP hosts require scanning after recent-host filtering.")
+        return [], 0
+
     out.info(f"Checking port reachability for {shodan_total} hosts...")
 
     reachable: List[FtpCandidate] = []
@@ -148,7 +169,7 @@ def run_discover_stage(workflow: "FtpWorkflow") -> Tuple[List[FtpCandidate], int
         out.warning(summary_msg)
 
     if port_failed_outcomes:
-        FtpPersistence(workflow.db_path).persist_discovery_outcomes_batch(port_failed_outcomes)
+        persistence.persist_discovery_outcomes_batch(port_failed_outcomes)
 
     return reachable, shodan_total
 
