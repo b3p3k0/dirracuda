@@ -14,7 +14,7 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import List
+from typing import List, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -44,6 +44,20 @@ def _expected_progress_reports(total: int, batch_size: int = 10) -> int:
         1 for i in range(1, total + 1)
         if i == 1 or i == total or i % batch_size == 0
     )
+
+
+def _default_filter_stats(total: int, to_scan: Optional[int] = None) -> dict:
+    if to_scan is None:
+        to_scan = total
+    return {
+        "total": total,
+        "new": total,
+        "known": 0,
+        "skipped_recent": 0,
+        "retried_recent_failures": 0,
+        "old_enough": 0,
+        "to_scan": to_scan,
+    }
 
 
 def _make_workflow(
@@ -93,6 +107,10 @@ class TestDiscoverStage:
             patch("commands.ftp.operation.port_check", side_effect=port_check_side_effect),
             patch("commands.ftp.operation.FtpPersistence") as mock_persist,
         ):
+            mock_persist.return_value.filter_recent_candidates.return_value = (
+                candidates,
+                _default_filter_stats(len(candidates)),
+            )
             reachable, shodan_total = run_discover_stage(wf)
         return reachable, shodan_total, raw_calls, info_calls, mock_persist
 
@@ -190,9 +208,13 @@ class TestDiscoverStage:
         with (
             patch("commands.ftp.operation.query_ftp_shodan", return_value=candidates),
             patch("commands.ftp.operation.port_check", return_value=(True, "ok")),
-            patch("commands.ftp.operation.FtpPersistence"),
+            patch("commands.ftp.operation.FtpPersistence") as mock_persist,
             patch("commands.ftp.operation.ThreadPoolExecutor", side_effect=_patched_tpe),
         ):
+            mock_persist.return_value.filter_recent_candidates.return_value = (
+                candidates,
+                _default_filter_stats(len(candidates)),
+            )
             run_discover_stage(wf)
 
         assert captured == [3]
@@ -212,8 +234,12 @@ class TestDiscoverStage:
         with (
             patch("commands.ftp.operation.query_ftp_shodan", return_value=candidates),
             patch("commands.ftp.operation.port_check", return_value=(True, "ok")),
-            patch("commands.ftp.operation.FtpPersistence"),
+            patch("commands.ftp.operation.FtpPersistence") as mock_persist,
         ):
+            mock_persist.return_value.filter_recent_candidates.return_value = (
+                candidates,
+                _default_filter_stats(len(candidates)),
+            )
             run_discover_stage(wf)
         assert wf.output.success.call_count == 1
         assert wf.output.warning.call_count == 0
@@ -228,10 +254,100 @@ class TestDiscoverStage:
                 "commands.ftp.operation.port_check",
                 side_effect=[(True, "ok"), (False, "timeout"), (True, "ok")],
             ),
-            patch("commands.ftp.operation.FtpPersistence"),
+            patch("commands.ftp.operation.FtpPersistence") as mock_persist,
         ):
+            mock_persist.return_value.filter_recent_candidates.return_value = (
+                candidates,
+                _default_filter_stats(len(candidates)),
+            )
             run_discover_stage(wf)
         assert wf.output.warning.call_count == 1
+
+    def test_discover_stage_respects_filtered_subset(self):
+        candidates = [_make_candidate(f"198.51.100.{i}") for i in range(4)]
+        filtered = [candidates[0], candidates[2]]
+        wf, _, _ = _make_workflow(candidates)
+
+        with (
+            patch("commands.ftp.operation.query_ftp_shodan", return_value=candidates),
+            patch("commands.ftp.operation.port_check", return_value=(True, "ok")) as port_check_mock,
+            patch("commands.ftp.operation.FtpPersistence") as mock_persist,
+        ):
+            mock_persist.return_value.filter_recent_candidates.return_value = (
+                filtered,
+                {
+                    "total": 4,
+                    "new": 1,
+                    "known": 3,
+                    "skipped_recent": 2,
+                    "retried_recent_failures": 1,
+                    "old_enough": 0,
+                    "to_scan": 2,
+                },
+            )
+            reachable, total = run_discover_stage(wf)
+
+        assert total == 2
+        assert [c.ip for c in reachable] == [c.ip for c in filtered]
+        tested_ips = [call.args[0] for call in port_check_mock.call_args_list]
+        assert tested_ips == [c.ip for c in filtered]
+
+    def test_discover_stage_skips_all_recent_successes(self):
+        candidates = [_make_candidate(f"203.0.113.{i}") for i in range(3)]
+        wf, _, info_calls = _make_workflow(candidates)
+
+        with (
+            patch("commands.ftp.operation.query_ftp_shodan", return_value=candidates),
+            patch("commands.ftp.operation.port_check") as port_check_mock,
+            patch("commands.ftp.operation.FtpPersistence") as mock_persist,
+        ):
+            mock_persist.return_value.filter_recent_candidates.return_value = (
+                [],
+                {
+                    "total": 3,
+                    "new": 0,
+                    "known": 3,
+                    "skipped_recent": 3,
+                    "retried_recent_failures": 0,
+                    "old_enough": 0,
+                    "to_scan": 0,
+                },
+            )
+            reachable, total = run_discover_stage(wf)
+
+        assert reachable == []
+        assert total == 0
+        port_check_mock.assert_not_called()
+        assert any("No FTP hosts require scanning" in line for line in info_calls)
+
+    def test_discover_stage_retries_recent_failures(self):
+        candidates = [_make_candidate(f"192.0.2.{i}") for i in range(3)]
+        filtered = [candidates[1]]
+        wf, _, _ = _make_workflow(candidates)
+
+        with (
+            patch("commands.ftp.operation.query_ftp_shodan", return_value=candidates),
+            patch("commands.ftp.operation.port_check", return_value=(True, "ok")) as port_check_mock,
+            patch("commands.ftp.operation.FtpPersistence") as mock_persist,
+        ):
+            mock_persist.return_value.filter_recent_candidates.return_value = (
+                filtered,
+                {
+                    "total": 3,
+                    "new": 0,
+                    "known": 3,
+                    "skipped_recent": 2,
+                    "retried_recent_failures": 1,
+                    "old_enough": 0,
+                    "to_scan": 1,
+                },
+            )
+            reachable, total = run_discover_stage(wf)
+
+        assert total == 1
+        assert [c.ip for c in reachable] == [candidates[1].ip]
+        tested_ips = [call.args[0] for call in port_check_mock.call_args_list]
+        assert tested_ips == [candidates[1].ip]
 
 
 # ---------------------------------------------------------------------------
