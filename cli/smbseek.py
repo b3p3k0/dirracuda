@@ -156,7 +156,7 @@ def validate_custom_filters(filters: Optional[str]) -> str:
 def detect_deprecated_usage(argv):
     """Detect and handle deprecated subcommand usage"""
     deprecated_subcommands = {'run', 'discover', 'access', 'collect', 'analyze', 'report', 'db'}
-    deprecated_flags = {'--download', '--max-files', '--recent', '--pause-between-steps'}
+    deprecated_flags = {'--download', '--max-files', '--rescan-all', '--rescan-failed', '--recent', '--pause-between-steps'}
 
     warnings_issued = []
 
@@ -252,16 +252,6 @@ Documentation: docs/USER_GUIDE.md
         action='append',
         metavar='IPS',
         help='Force scanning of specific hosts (comma-separated IPs) even if recently processed or previously failed'
-    )
-    parser.add_argument(
-        '--rescan-all',
-        action='store_true',
-        help='Rescan all discovered hosts, bypassing recent-scan skip logic'
-    )
-    parser.add_argument(
-        '--rescan-failed',
-        action='store_true',
-        help='Include previously failed hosts in this scan'
     )
     parser.add_argument(
         '--cautious',

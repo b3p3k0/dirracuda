@@ -43,6 +43,7 @@ class DiscoverOperation:
         self.cautious_mode = cautious_mode
 
         self.shodan_host_metadata = {}
+        self._host_lookup_cache = {}
         self._auth_rate_lock = threading.Lock()
         self._last_auth_attempt = 0
         self._auth_method_cache = {}
@@ -86,6 +87,7 @@ class DiscoverOperation:
             raise RuntimeError("Shodan API not available")
 
         self.shodan_host_metadata = {}
+        self._host_lookup_cache = {}
         self._auth_method_cache = {}
 
         if force_hosts is None:
@@ -118,10 +120,10 @@ class DiscoverOperation:
             )
 
         self.output.print_if_verbose(
-            f"DEBUG: Using query-level exclusions only - shodan_host_metadata type: {type(self.shodan_host_metadata)}, "
+            f"DEBUG: Before exclusions - shodan_host_metadata type: {type(self.shodan_host_metadata)}, "
             f"len: {len(self.shodan_host_metadata) if isinstance(self.shodan_host_metadata, dict) else 'N/A'}"
         )
-        filtered_results = shodan_results
+        filtered_results = self._apply_exclusions(shodan_results)
 
         hosts_to_scan, filter_stats = self.database.get_new_hosts_filter(
             filtered_results,

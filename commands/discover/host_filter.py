@@ -50,11 +50,11 @@ def apply_exclusions(op, ip_addresses: Set[str]) -> Set[str]:
 
 def should_exclude_ip(op, ip: str) -> bool:
     """
-    Check if IP should be excluded based on organization metadata.
-
-    This path is intentionally metadata-only and does not perform per-IP
-    Shodan API lookups.
+    Check if IP should be excluded based on organization using cached metadata.
     """
+    if not op.shodan_api:
+        return False
+
     if not isinstance(op.shodan_host_metadata, dict):
         op.output.error(
             f"CRITICAL: shodan_host_metadata corrupted - expected dict, got {type(op.shodan_host_metadata)}: "
@@ -66,18 +66,59 @@ def should_exclude_ip(op, ip: str) -> bool:
     org_normalized = metadata.get('org_normalized')
     isp_normalized = metadata.get('isp_normalized')
 
-    if not org_normalized and isinstance(metadata.get('org'), str):
-        org_normalized = metadata.get('org', '').lower()
-    if not isp_normalized and isinstance(metadata.get('isp'), str):
-        isp_normalized = metadata.get('isp', '').lower()
+    if org_normalized is not None and isp_normalized is not None:
+        for pattern in op.exclusion_patterns:
+            if pattern in org_normalized or pattern in isp_normalized:
+                return True
+        return False
 
-    org_normalized = org_normalized if isinstance(org_normalized, str) else ''
-    isp_normalized = isp_normalized if isinstance(isp_normalized, str) else ''
+    if ip in op._host_lookup_cache:
+        cached_result = op._host_lookup_cache[ip]
+        if cached_result is None:
+            return False
 
-    for pattern in op.exclusion_patterns:
-        if pattern in org_normalized or pattern in isp_normalized:
-            return True
-    return False
+        org_normalized = cached_result.get('org_normalized', '')
+        isp_normalized = cached_result.get('isp_normalized', '')
+
+        for pattern in op.exclusion_patterns:
+            if pattern in org_normalized or pattern in isp_normalized:
+                return True
+        return False
+
+    try:
+        host_info = op.shodan_api.host(ip)
+        org = host_info.get('org', '')
+        isp = host_info.get('isp', '')
+
+        org_normalized = org.lower() if isinstance(org, str) else ''
+        isp_normalized = isp.lower() if isinstance(isp, str) else ''
+
+        api_result = {
+            'org': org,
+            'isp': isp,
+            'org_normalized': org_normalized,
+            'isp_normalized': isp_normalized
+        }
+        op._host_lookup_cache[ip] = api_result
+
+        if not isinstance(op.shodan_host_metadata, dict):
+            op.output.error(
+                f"CRITICAL: shodan_host_metadata corrupted during API call processing - expected dict, got "
+                f"{type(op.shodan_host_metadata)}: {op.shodan_host_metadata}"
+            )
+            op.shodan_host_metadata = {}
+
+        metadata = op.shodan_host_metadata.setdefault(ip, {})
+        metadata.update(api_result)
+
+        for pattern in op.exclusion_patterns:
+            if pattern in org_normalized or pattern in isp_normalized:
+                return True
+        return False
+
+    except Exception:
+        op._host_lookup_cache[ip] = None
+        return False
 
 
 def load_exclusions(op) -> List[str]:

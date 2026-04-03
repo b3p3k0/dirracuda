@@ -98,6 +98,7 @@ def test_single_host_concurrent(op, ip: str, country=None) -> Dict:
     Thread-safe wrapper for test_single_host that returns structured results.
     """
     try:
+        throttled_auth_wait(op)
         result = test_single_host(op, ip, country)
 
         if result:
