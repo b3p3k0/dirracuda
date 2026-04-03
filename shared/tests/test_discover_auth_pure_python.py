@@ -82,3 +82,30 @@ def test_single_host_uses_adapter_result_and_country_fallback(monkeypatch):
     assert result["ip_address"] == ip
     assert result["country"] == "GB"
     assert result["auth_method"] == "Anonymous"
+
+
+def test_concurrent_single_host_does_not_call_throttle_gate(monkeypatch):
+    op = _make_op(cautious_mode=False)
+
+    def _fail_if_called(*_args, **_kwargs):
+        raise AssertionError("throttled_auth_wait must not be called in concurrent path")
+
+    monkeypatch.setattr(auth, "throttled_auth_wait", _fail_if_called)
+    monkeypatch.setattr(
+        auth,
+        "test_single_host",
+        lambda *_args, **_kwargs: {
+            "ip_address": "10.50.60.73",
+            "country": "US",
+            "country_code": "US",
+            "auth_method": "Anonymous",
+            "timestamp": "2026-01-01T00:00:00",
+            "status": "accessible",
+        },
+    )
+
+    result = auth.test_single_host_concurrent(op, "10.50.60.73", country="US")
+
+    assert result["success"] is True
+    assert result["failed"] is False
+    assert result["result"]["ip_address"] == "10.50.60.73"
