@@ -2,6 +2,66 @@ import shodan
 from typing import Set, Optional, Tuple, List
 
 
+SHODAN_PAGE_SIZE = 100
+MAX_SHODAN_PAGES = 200
+SHODAN_RESULT_FIELDS = [
+    "ip_str",
+    "location.country_name",
+    "location.country_code",
+    "org",
+    "isp",
+]
+
+
+def _collect_shodan_matches(op, query: str, max_results: int) -> List[dict]:
+    """
+    Fetch Shodan matches in smaller pages to avoid large one-shot payload stalls.
+    """
+    try:
+        target = int(max_results)
+    except (TypeError, ValueError):
+        target = 1000
+
+    if target <= 0:
+        target = 1000
+
+    matches: List[dict] = []
+    page = 1
+
+    while len(matches) < target and page <= MAX_SHODAN_PAGES:
+        try:
+            response = op.shodan_api.search(
+                query,
+                page=page,
+                minify=False,
+                fields=SHODAN_RESULT_FIELDS,
+            )
+        except shodan.APIError as e:
+            err_text = str(e).lower()
+            if ("unable to parse json response" in err_text or "search cursor timed out" in err_text) and matches:
+                op.output.warning(
+                    f"Shodan API paging interrupted on page {page} ({e}); using "
+                    f"{len(matches)} results collected so far"
+                )
+                break
+            raise
+
+        page_matches = response.get("matches", [])
+        if not isinstance(page_matches, list) or not page_matches:
+            break
+
+        remaining = target - len(matches)
+        matches.extend(page_matches[:remaining])
+
+        if len(page_matches) < SHODAN_PAGE_SIZE:
+            break
+
+        page += 1
+
+    op.output.print_if_verbose(f"Shodan paging fetched {len(matches)} matches across {page} page(s)")
+    return matches
+
+
 def query_shodan(op, country: Optional[str] = None, custom_filters: Optional[str] = None) -> Tuple[Set[str], str]:
     """
     Query Shodan for SMB servers in specified country.
@@ -28,11 +88,13 @@ def query_shodan(op, country: Optional[str] = None, custom_filters: Optional[str
 
         shodan_config = op.config.get_shodan_config()
         max_results = shodan_config['query_limits']['max_results']
-        results = op.shodan_api.search(query, limit=max_results)
+        matches = _collect_shodan_matches(op, query, max_results)
 
         ip_addresses = set()
-        for result in results['matches']:
-            ip = result['ip_str']
+        for result in matches:
+            ip = result.get('ip_str')
+            if not isinstance(ip, str) or not ip:
+                continue
             ip_addresses.add(ip)
 
             location = result.get('location', {})
@@ -101,15 +163,8 @@ def build_targeted_query(op, countries: List[str], custom_filters: Optional[str]
             country_filter = f'country:{country_codes}'
         query_parts.append(country_filter)
 
-    org_exclusions = []
-    if query_config.get("use_organization_exclusions", True):
-        for org in op.exclusions:
-            escaped_org = org.replace('"', '\\"')
-            org_exclusions.append(f'-org:"{escaped_org}"')
-
     additional_exclusions = query_config.get("additional_exclusions", ['-"DSL"'])
 
-    query_parts.extend(org_exclusions)
     query_parts.extend(additional_exclusions)
 
     final_query = ' '.join(query_parts)
