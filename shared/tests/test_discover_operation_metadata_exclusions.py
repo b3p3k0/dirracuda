@@ -83,11 +83,12 @@ class _DiscoverOperationHarness:
 
     def _apply_exclusions(self, ip_addresses):
         self.apply_exclusions_called = True
-        raise AssertionError("_apply_exclusions must be skipped in query-only exclusion mode")
+        assert set(ip_addresses) == {"10.10.10.1", "10.10.10.2", "10.10.10.3"}
+        return {"10.10.10.1", "10.10.10.3"}
 
     def _test_smb_authentication(self, ip_addresses, country=None):
         _ = country
-        assert set(ip_addresses) == {"10.10.10.1", "10.10.10.2", "10.10.10.3"}
+        assert set(ip_addresses) == {"10.10.10.1", "10.10.10.3"}
         return []
 
     def _save_to_database(self, successful_hosts, country=None):
@@ -95,12 +96,12 @@ class _DiscoverOperationHarness:
         return set()
 
 
-def test_execute_skips_local_exclusion_pass(monkeypatch):
+def test_execute_applies_local_exclusion_pass_before_db_filter(monkeypatch):
     monkeypatch.setattr(discover_operation, "SMB_AVAILABLE", True)
     op = _DiscoverOperationHarness()
 
     result = op.execute(country="US", rescan_all=False, rescan_failed=False, force_hosts=set(), custom_filters="")
 
-    assert op.apply_exclusions_called is False
-    assert op.database.filter_input == {"10.10.10.1", "10.10.10.2", "10.10.10.3"}
-    assert result.total_hosts == 3
+    assert op.apply_exclusions_called is True
+    assert op.database.filter_input == {"10.10.10.1", "10.10.10.3"}
+    assert result.total_hosts == 2

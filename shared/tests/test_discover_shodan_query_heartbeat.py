@@ -202,8 +202,8 @@ def test_query_shodan_keeps_partial_results_when_cursor_times_out(monkeypatch):
     assert any("paging interrupted" in msg.lower() for msg in op.output.warning_messages)
 
 
-def test_build_targeted_query_keeps_org_exclusions():
+def test_build_targeted_query_does_not_embed_org_exclusions():
     op = _OpStub()
     query = shodan_query.build_targeted_query(op, countries=["US"], custom_filters="")
 
-    assert '-org:"Acme ISP"' in query
+    assert '-org:"Acme ISP"' not in query
