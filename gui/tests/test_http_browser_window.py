@@ -6,6 +6,7 @@ the same but assertions use HTTP-specific URL format and 5-column treeview layou
 """
 
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -13,6 +14,24 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from gui.components.unified_browser_window import HttpBrowserWindow
+
+
+class _IntVar:
+    """Minimal IntVar stub — .get() returns a fixed int."""
+    def __init__(self, value):
+        self._value = value
+
+    def get(self):
+        return self._value
+
+
+class _NoopThread:
+    """Prevents real thread creation in init-load tests."""
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def start(self):
+        pass
 
 
 class _CaptureTree:
@@ -160,3 +179,122 @@ def test_populate_treeview_sorts_dirs_then_files_alphabetically():
 
     assert [row[0] for row in win.tree.rows] == ["aardvark", "Beta", "alpha.txt", "zeta.txt"]
     assert [row[1] for row in win.tree.rows] == ["dir", "dir", "file", "file"]
+
+
+# ---------------------------------------------------------------------------
+# Tuning hook and persistence tests
+# ---------------------------------------------------------------------------
+
+def test_adapt_large_file_tuning_enabled_is_false_for_http():
+    win = HttpBrowserWindow.__new__(HttpBrowserWindow)
+    assert win._adapt_large_file_tuning_enabled() is False
+
+
+def _make_http_with_settings(worker_count=None, large_mb=None):
+    """Construct HttpBrowserWindow with a mock settings_manager, no Tk/threads."""
+    sm = MagicMock()
+    defaults = {}
+    if worker_count is not None:
+        defaults["file_browser.download_worker_count"] = worker_count
+    if large_mb is not None:
+        defaults["file_browser.download_large_file_mb"] = large_mb
+    sm.get_setting.side_effect = lambda k, d: defaults.get(k, d)
+    with patch.multiple(
+        "gui.components.unified_browser_window.HttpBrowserWindow",
+        _build_window=MagicMock(),
+        _navigate_to=MagicMock(),
+        _run_probe_background=MagicMock(),
+        _apply_probe_snapshot=MagicMock(),
+    ), patch("shared.http_browser.HttpNavigator"), \
+       patch("gui.components.unified_browser_window.threading.Thread", _NoopThread), \
+       patch("gui.utils.probe_cache_dispatch.load_probe_result_for_host", return_value=None):
+        win = HttpBrowserWindow(
+            parent=MagicMock(), ip_address="1.2.3.4", settings_manager=sm
+        )
+    return win
+
+
+def test_init_loads_worker_count_from_settings_manager():
+    win = _make_http_with_settings(worker_count=3)
+    assert win.download_workers == 3
+
+
+def test_init_clamps_worker_count_to_max_3():
+    win = _make_http_with_settings(worker_count=99)
+    assert win.download_workers == 3
+
+
+def test_init_clamps_worker_count_to_min_1():
+    win = _make_http_with_settings(worker_count=0)
+    assert win.download_workers == 1
+
+
+def test_init_loads_large_file_mb_from_settings_manager():
+    win = _make_http_with_settings(large_mb=50)
+    assert win.download_large_mb == 50
+
+
+def test_init_clamps_large_file_mb_to_min_1():
+    win = _make_http_with_settings(large_mb=0)
+    assert win.download_large_mb == 1
+
+
+def test_persist_tuning_writes_correct_settings_keys():
+    win = HttpBrowserWindow.__new__(HttpBrowserWindow)
+    win.workers_var = _IntVar(2)
+    win.large_mb_var = _IntVar(30)
+    win.download_workers = 2
+    win.download_large_mb = 30
+    sm = MagicMock()
+    win.settings_manager = sm
+
+    win._persist_tuning()
+
+    calls = {c.args[0]: c.args[1] for c in sm.set_setting.call_args_list}
+    assert calls["file_browser.download_worker_count"] == 2
+    assert calls["file_browser.download_large_file_mb"] == 30
+
+
+def test_build_window_renders_large_spinbox_disabled_with_note():
+    win = HttpBrowserWindow.__new__(HttpBrowserWindow)
+    win.download_workers = 2
+    win.download_large_mb = 25
+    win.settings_manager = None
+    win.theme = None
+    win.parent = MagicMock()
+    win._server_banner = ""
+    win._cancel_event = threading.Event()
+    win.ip_address = "1.2.3.4"
+    win.port = 80
+    win.scheme = "http"
+
+    captured_spinboxes = []
+    captured_label_texts = []
+
+    def _fake_spinbox(*_args, **kwargs):
+        captured_spinboxes.append(kwargs)
+        return MagicMock()
+
+    def _fake_label(*_args, **kwargs):
+        captured_label_texts.append(kwargs.get("text", ""))
+        return MagicMock()
+
+    with patch("gui.components.unified_browser_window.tk.Toplevel", return_value=MagicMock()), \
+         patch("gui.components.unified_browser_window.tk.Frame", return_value=MagicMock()), \
+         patch("gui.components.unified_browser_window.tk.Text", return_value=MagicMock()), \
+         patch("gui.components.unified_browser_window.tk.Button", return_value=MagicMock()), \
+         patch("gui.components.unified_browser_window.tk.StringVar", return_value=MagicMock()), \
+         patch("gui.components.unified_browser_window.tk.IntVar", return_value=MagicMock()), \
+         patch("gui.components.unified_browser_window.ttk.Scrollbar", return_value=MagicMock()), \
+         patch("gui.components.unified_browser_window.ttk.Treeview", return_value=MagicMock()), \
+         patch("gui.components.unified_browser_window.tk.Spinbox", side_effect=_fake_spinbox), \
+         patch("gui.components.unified_browser_window.tk.Label", side_effect=_fake_label):
+        win._build_window()
+
+    # Large spinbox: from_=1, to=1024 — must be DISABLED
+    large_spins = [c for c in captured_spinboxes if c.get("to") == 1024]
+    assert len(large_spins) == 1
+    assert large_spins[0].get("state") == "disabled"
+
+    # Explanatory note label must be present
+    assert any("not active" in t for t in captured_label_texts)

@@ -70,14 +70,22 @@ def _make_core_stub() -> UnifiedBrowserCore:
 def _make_ftp_window(tmp_path: Path) -> FtpBrowserWindow:
     win = FtpBrowserWindow.__new__(FtpBrowserWindow)
     win.ip_address = "10.20.30.40"
+    win.port = 21
     win.window = MagicMock()
     win.window.after = _immediate_after
     win.theme = None
-    win.config = {"quarantine_base": str(tmp_path / "q"), "clamav": {"enabled": True}}
+    base_config = _load_ftp_browser_config(None)
+    base_config["quarantine_base"] = str(tmp_path / "q")
+    base_config["clamav"] = {"enabled": True}
+    win.config = base_config
     win._cancel_event = threading.Event()
     win._set_status = MagicMock()
     win._on_download_done = MagicMock()
     win._navigator = MagicMock()
+    win.download_workers = 1
+    win.download_large_mb = 25
+    win.workers_var = _Var(1)
+    win.large_mb_var = _Var(25)
     return win
 
 
@@ -87,11 +95,18 @@ def _make_http_window(tmp_path: Path) -> HttpBrowserWindow:
     win.window = MagicMock()
     win.window.after = _immediate_after
     win.theme = None
-    win.config = {"quarantine_base": str(tmp_path / "q"), "clamav": {"enabled": True}}
+    base_config = _load_http_browser_config(None)
+    base_config["quarantine_base"] = str(tmp_path / "q")
+    base_config["clamav"] = {"enabled": True}
+    win.config = base_config
     win._cancel_event = threading.Event()
     win._set_status = MagicMock()
     win._on_download_done = MagicMock()
     win._navigator = MagicMock()
+    win.download_workers = 1
+    win.download_large_mb = 25
+    win.workers_var = _Var(1)
+    win.large_mb_var = _Var(25)
     return win
 
 
@@ -292,11 +307,14 @@ class TestFtpHttpDownloadWiring:
                 error=None,
             )
 
-        win._navigator.download_file.return_value = SimpleNamespace(saved_path=saved)
-        with patch("shared.quarantine.build_quarantine_path", return_value=qdir), patch(
-            "gui.utils.extract_runner.build_browser_download_clamav_setup",
-            return_value=(_pp, accum, None),
-        ), patch("gui.utils.extract_runner.update_browser_clamav_accum") as upd:
+        mock_nav = MagicMock()
+        mock_nav.download_file.return_value = SimpleNamespace(saved_path=saved)
+        with patch("shared.quarantine.build_quarantine_path", return_value=qdir), \
+             patch("gui.utils.extract_runner.build_browser_download_clamav_setup",
+                   return_value=(_pp, accum, None)), \
+             patch("gui.utils.extract_runner.update_browser_clamav_accum") as upd, \
+             patch("shared.ftp_browser.FtpNavigator", return_value=mock_nav), \
+             patch("gui.components.unified_browser_window.threading.Thread", _ImmediateThread):
             win._download_thread_fn([("/a.txt", 10)])
 
         assert upd.call_count == 1
@@ -308,11 +326,13 @@ class TestFtpHttpDownloadWiring:
         win = _make_ftp_window(tmp_path)
         qdir = tmp_path / "q" / "host" / "20260328" / "ftp_root"
         saved = qdir / "a.txt"
-        win._navigator.download_file.return_value = SimpleNamespace(saved_path=saved)
-        with patch("shared.quarantine.build_quarantine_path", return_value=qdir), patch(
-            "gui.utils.extract_runner.build_browser_download_clamav_setup",
-            return_value=(None, None, None),
-        ):
+        mock_nav = MagicMock()
+        mock_nav.download_file.return_value = SimpleNamespace(saved_path=saved)
+        with patch("shared.quarantine.build_quarantine_path", return_value=qdir), \
+             patch("gui.utils.extract_runner.build_browser_download_clamav_setup",
+                   return_value=(None, None, None)), \
+             patch("shared.ftp_browser.FtpNavigator", return_value=mock_nav), \
+             patch("gui.components.unified_browser_window.threading.Thread", _ImmediateThread):
             win._download_thread_fn([("/a.txt", 10)])
 
         args = win._on_download_done.call_args.args
@@ -327,11 +347,14 @@ class TestFtpHttpDownloadWiring:
         def _pp(_inp):
             raise RuntimeError("pp boom")
 
-        win._navigator.download_file.return_value = SimpleNamespace(saved_path=saved)
-        with patch("shared.quarantine.build_quarantine_path", return_value=qdir), patch(
-            "gui.utils.extract_runner.build_browser_download_clamav_setup",
-            return_value=(_pp, accum, None),
-        ), patch("shared.quarantine.log_quarantine_event") as log_evt:
+        mock_nav = MagicMock()
+        mock_nav.download_file.return_value = SimpleNamespace(saved_path=saved)
+        with patch("shared.quarantine.build_quarantine_path", return_value=qdir), \
+             patch("gui.utils.extract_runner.build_browser_download_clamav_setup",
+                   return_value=(_pp, accum, None)), \
+             patch("shared.quarantine.log_quarantine_event") as log_evt, \
+             patch("shared.ftp_browser.FtpNavigator", return_value=mock_nav), \
+             patch("gui.components.unified_browser_window.threading.Thread", _ImmediateThread):
             win._download_thread_fn([("/a.txt", 10)])
 
         assert accum["errors"] == 1
@@ -507,3 +530,125 @@ class TestSmbWorkerWiring:
         msg = warn.call_args.args[1]
         assert "ClamAV totals" in msg
         assert win._on_smb_download_done.call_count == 0
+
+
+# ---------------------------------------------------------------------------
+# C2 runtime behavior tests
+# ---------------------------------------------------------------------------
+
+import queue as _queue_module  # noqa: E402 — used in _drain_paths
+
+
+class _NoStartThread:
+    """Captures threading.Thread instances without actually starting them."""
+    _instances: list = []
+
+    def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+        self._target = target
+        self._args = args
+        _NoStartThread._instances.append(self)
+
+    def start(self):
+        pass
+
+    def join(self):
+        pass
+
+
+def _drain_paths(q) -> set:
+    """Drain a queue of (path, size) tuples and return the set of paths."""
+    paths = set()
+    while True:
+        try:
+            paths.add(q.get_nowait()[0])
+        except _queue_module.Empty:
+            break
+    return paths
+
+
+class TestC2RuntimeBehavior:
+    def test_ftp_worker_count_starts_correct_thread_count(self, tmp_path):
+        """download_workers=2 → 2 small workers + 1 large worker = 3 threads."""
+        _NoStartThread._instances.clear()
+        win = _make_ftp_window(tmp_path)
+        win.download_workers = 2
+        win.workers_var = _Var(2)
+        with patch("shared.quarantine.build_quarantine_path", return_value=tmp_path / "q"), \
+             patch("gui.utils.extract_runner.build_browser_download_clamav_setup",
+                   return_value=(None, None, None)), \
+             patch("shared.ftp_browser.FtpNavigator"), \
+             patch("gui.components.unified_browser_window.threading.Thread", _NoStartThread):
+            win._download_thread_fn([])
+        assert len(_NoStartThread._instances) == 3
+
+    def test_ftp_large_file_threshold_routes_to_correct_queues(self, tmp_path):
+        """Files above threshold go to q_large; others go to q_small."""
+        _NoStartThread._instances.clear()
+        win = _make_ftp_window(tmp_path)
+        win.download_workers = 1
+        win.workers_var = _Var(1)
+        win.download_large_mb = 10
+        win.large_mb_var = _Var(10)
+        file_list = [("/large.bin", 15 * 1024 * 1024), ("/small.txt", 100)]
+        with patch("shared.quarantine.build_quarantine_path", return_value=tmp_path / "q"), \
+             patch("gui.utils.extract_runner.build_browser_download_clamav_setup",
+                   return_value=(None, None, None)), \
+             patch("shared.ftp_browser.FtpNavigator"), \
+             patch("gui.components.unified_browser_window.threading.Thread", _NoStartThread):
+            win._download_thread_fn(file_list)
+
+        # worker_count=1 → exactly 2 threads: 1 small + 1 large
+        assert len(_NoStartThread._instances) == 2, (
+            f"Expected 2 consumer threads, got {len(_NoStartThread._instances)}"
+        )
+        q_small = _NoStartThread._instances[0]._args[0]
+        q_large = _NoStartThread._instances[-1]._args[0]
+        assert q_small is not q_large
+
+        assert _drain_paths(q_large) == {"/large.bin"}
+        assert _drain_paths(q_small) == {"/small.txt"}
+
+    def test_http_worker_count_starts_correct_thread_count(self, tmp_path):
+        """download_workers=2 → 2 consumer threads (single queue)."""
+        _NoStartThread._instances.clear()
+        win = _make_http_window(tmp_path)
+        win.download_workers = 2
+        win.workers_var = _Var(2)
+        with patch("shared.quarantine.build_quarantine_path", return_value=tmp_path / "q"), \
+             patch("gui.utils.extract_runner.build_browser_download_clamav_setup",
+                   return_value=(None, None, None)), \
+             patch("gui.components.unified_browser_window.threading.Thread", _NoStartThread):
+            win._download_thread_fn([])
+        assert len(_NoStartThread._instances) == 2
+
+    def test_http_no_large_file_routing_all_files_in_one_queue(self, tmp_path):
+        """HTTP uses a single queue regardless of file size; no large-file split."""
+        _NoStartThread._instances.clear()
+        win = _make_http_window(tmp_path)
+        win.download_workers = 1
+        win.workers_var = _Var(1)
+        win.download_large_mb = 10
+        win.large_mb_var = _Var(10)
+        file_list = [("/large.bin", 15 * 1024 * 1024), ("/small.txt", 100)]
+
+        captured_queues: list = []
+        original_queue = _queue_module.Queue
+
+        def _capturing_queue(*args, **kwargs):
+            q = original_queue(*args, **kwargs)
+            captured_queues.append(q)
+            return q
+
+        with patch("shared.quarantine.build_quarantine_path", return_value=tmp_path / "q"), \
+             patch("gui.utils.extract_runner.build_browser_download_clamav_setup",
+                   return_value=(None, None, None)), \
+             patch("gui.components.unified_browser_window.queue.Queue",
+                   side_effect=_capturing_queue), \
+             patch("gui.components.unified_browser_window.threading.Thread", _NoStartThread):
+            win._download_thread_fn(file_list)
+
+        # worker_count=1 → exactly 1 consumer thread
+        assert len(_NoStartThread._instances) == 1
+        # Exactly 1 queue created (no q_large; HTTP has no large-file routing)
+        assert len(captured_queues) == 1
+        assert _drain_paths(captured_queues[0]) == {"/large.bin", "/small.txt"}

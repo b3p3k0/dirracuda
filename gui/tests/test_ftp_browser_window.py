@@ -12,6 +12,24 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from gui.components.unified_browser_window import FtpBrowserWindow
 
 
+class _IntVar:
+    """Minimal IntVar stub — .get() returns a fixed int."""
+    def __init__(self, value):
+        self._value = value
+
+    def get(self):
+        return self._value
+
+
+class _NoopThread:
+    """Prevents real thread creation in init-load tests."""
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def start(self):
+        pass
+
+
 class _CaptureTree:
     def __init__(self):
         self.rows = []
@@ -133,3 +151,74 @@ def test_populate_treeview_sorts_dirs_then_files_alphabetically():
 
     assert [row[0] for row in win.tree.rows] == ["aardvark", "beta", "Alpha.txt", "zeta.txt"]
     assert [row[1] for row in win.tree.rows] == ["dir", "dir", "file", "file"]
+
+
+# ---------------------------------------------------------------------------
+# Tuning hook and persistence tests
+# ---------------------------------------------------------------------------
+
+def test_adapt_large_file_tuning_enabled_is_true_for_ftp():
+    win = FtpBrowserWindow.__new__(FtpBrowserWindow)
+    assert win._adapt_large_file_tuning_enabled() is True
+
+
+def _make_ftp_with_settings(worker_count=None, large_mb=None):
+    """Construct FtpBrowserWindow with a mock settings_manager, no Tk/threads."""
+    sm = MagicMock()
+    defaults = {}
+    if worker_count is not None:
+        defaults["file_browser.download_worker_count"] = worker_count
+    if large_mb is not None:
+        defaults["file_browser.download_large_file_mb"] = large_mb
+    sm.get_setting.side_effect = lambda k, d: defaults.get(k, d)
+    with patch.multiple(
+        "gui.components.unified_browser_window.FtpBrowserWindow",
+        _build_window=MagicMock(),
+        _navigate_to=MagicMock(),
+        _run_probe_background=MagicMock(),
+        _apply_probe_snapshot=MagicMock(),
+    ), patch("gui.components.unified_browser_window.threading.Thread", _NoopThread), \
+       patch("gui.utils.probe_cache_dispatch.load_probe_result_for_host", return_value=None):
+        win = FtpBrowserWindow(parent=MagicMock(), ip_address="1.2.3.4", settings_manager=sm)
+    return win
+
+
+def test_init_loads_worker_count_from_settings_manager():
+    win = _make_ftp_with_settings(worker_count=3)
+    assert win.download_workers == 3
+
+
+def test_init_clamps_worker_count_to_max_3():
+    win = _make_ftp_with_settings(worker_count=99)
+    assert win.download_workers == 3
+
+
+def test_init_clamps_worker_count_to_min_1():
+    win = _make_ftp_with_settings(worker_count=0)
+    assert win.download_workers == 1
+
+
+def test_init_loads_large_file_mb_from_settings_manager():
+    win = _make_ftp_with_settings(large_mb=50)
+    assert win.download_large_mb == 50
+
+
+def test_init_clamps_large_file_mb_to_min_1():
+    win = _make_ftp_with_settings(large_mb=0)
+    assert win.download_large_mb == 1
+
+
+def test_persist_tuning_writes_correct_settings_keys():
+    win = FtpBrowserWindow.__new__(FtpBrowserWindow)
+    win.workers_var = _IntVar(2)
+    win.large_mb_var = _IntVar(30)
+    win.download_workers = 2
+    win.download_large_mb = 30
+    sm = MagicMock()
+    win.settings_manager = sm
+
+    win._persist_tuning()
+
+    calls = {c.args[0]: c.args[1] for c in sm.set_setting.call_args_list}
+    assert calls["file_browser.download_worker_count"] == 2
+    assert calls["file_browser.download_large_file_mb"] == 30

@@ -159,6 +159,8 @@ Files over the specified maximum (default: 5 MB) trigger a warning—you can bum
 
 Downloads are staged in quarantine (`~/.dirracuda/quarantine/`). When ClamAV is enabled, downloaded files are post-processed by verdict (clean files promoted to extracted, infected files moved to known-bad). The browser never writes to remote systems.
 
+Download concurrency is configurable in the browser UI via the worker-count control (1–3 workers, default 2); the value is persisted in GUI settings under `file_browser.download_worker_count`. For SMB and FTP, a large-file threshold (persisted under `file_browser.download_large_file_mb`) routes files above that size to a dedicated worker. HTTP downloads use worker concurrency only — large-file routing is not active for HTTP in the current release. The large-file control is visible in the HTTP browser but disabled with an explanatory note.
+
 #### Optional tmpfs quarantine (Linux)
 
 Dirracuda can stage quarantine files in RAM-backed `tmpfs` instead of disk.
@@ -309,7 +311,7 @@ Key sections:
 - `pry.*` — wordlist path, delays, lockout behavior
 - `file_collection.*` — extraction limits
 - `clamav.*` — optional post-extract scan/routing behavior
-- `file_browser.*` — browse mode limits
+- `file_browser.*` — browse mode limits (depth, entries, chunk size, quarantine root); download tuning — `download_worker_count` (1–3) and `download_large_file_mb` — is user-controlled in the browser UI and persisted in GUI settings, not read from this config file
 - `connection.*` — timeouts and rate limiting
 - `ftp.shodan.query_limits.max_results` — cap on Shodan FTP candidates per scan
 - `ftp.verification.*` — per-step timeouts for FTP connect, auth, and listing (seconds)

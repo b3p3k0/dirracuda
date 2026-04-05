@@ -238,6 +238,10 @@ class UnifiedBrowserCore:
         """Create self.tree (Treeview) and its scrollbar inside tree_frame."""
         raise NotImplementedError
 
+    def _adapt_large_file_tuning_enabled(self) -> bool:
+        """Return True if large-file threshold spinbox should be active. HTTP overrides to False."""
+        return True
+
     # ------------------------------------------------------------------
     # UI construction
     # ------------------------------------------------------------------
@@ -317,6 +321,38 @@ class UnifiedBrowserCore:
             self.btn_cancel,
         ):
             btn.pack(side=tk.LEFT, padx=5)
+
+        # Download tuning strip (FTP/HTTP; SMB overrides _build_window entirely)
+        tuning_frame = tk.Frame(self.window)
+        tuning_frame.pack(fill=tk.X, padx=10, pady=(0, 5))
+        tk.Label(tuning_frame, text="Workers").pack(side=tk.LEFT, padx=(0, 4))
+        self.workers_var = tk.IntVar(value=self.download_workers)
+        workers_spin = tk.Spinbox(
+            tuning_frame, from_=1, to=3, width=3, textvariable=self.workers_var,
+            command=self._persist_tuning,
+        )
+        workers_spin.pack(side=tk.LEFT)
+        workers_spin.bind("<FocusOut>", lambda _e: self._persist_tuning())
+        workers_spin.bind("<Return>",   lambda _e: self._persist_tuning())
+
+        tk.Label(tuning_frame, text="Large files limit (MB)").pack(side=tk.LEFT, padx=(10, 4))
+        self.large_mb_var = tk.IntVar(value=self.download_large_mb)
+        _large_enabled = self._adapt_large_file_tuning_enabled()
+        large_spin = tk.Spinbox(
+            tuning_frame, from_=1, to=1024, width=5, textvariable=self.large_mb_var,
+            command=self._persist_tuning,
+            state=tk.NORMAL if _large_enabled else tk.DISABLED,
+        )
+        large_spin.pack(side=tk.LEFT)
+        large_spin.bind("<FocusOut>", lambda _e: self._persist_tuning())
+        large_spin.bind("<Return>",   lambda _e: self._persist_tuning())
+
+        if not _large_enabled:
+            # No fg= override; apply_theme_to_application() handles consistent styling
+            tk.Label(
+                tuning_frame,
+                text="(HTTP large-file split not active in this version)",
+            ).pack(side=tk.LEFT, padx=(6, 0))
 
         # Treeview (protocol-specific columns via adapter hook)
         tree_frame = tk.Frame(self.window)
@@ -519,6 +555,19 @@ class UnifiedBrowserCore:
     # Status and button helpers
     # ------------------------------------------------------------------
 
+    def _persist_tuning(self) -> None:
+        try:
+            self.download_workers = max(1, min(3, int(self.workers_var.get())))
+            self.download_large_mb = max(1, int(self.large_mb_var.get()))
+        except Exception:
+            return
+        if self.settings_manager:
+            try:
+                self.settings_manager.set_setting("file_browser.download_worker_count", self.download_workers)
+                self.settings_manager.set_setting("file_browser.download_large_file_mb", self.download_large_mb)
+            except Exception:
+                pass
+
     def _set_status(self, msg: str) -> None:
         """Set status bar text. Must be called on the main thread."""
         try:
@@ -569,6 +618,20 @@ class FtpBrowserWindow(UnifiedBrowserCore):
         self._nav_thread: Optional[threading.Thread] = None
         self._download_thread: Optional[threading.Thread] = None
         self.busy: bool = False
+
+        # Download tuning
+        self.download_workers = 2
+        self.download_large_mb = 25
+        if self.settings_manager:
+            try:
+                self.download_workers = max(1, min(3, int(self.settings_manager.get_setting(
+                    "file_browser.download_worker_count", self.download_workers
+                ))))
+                self.download_large_mb = max(1, int(self.settings_manager.get_setting(
+                    "file_browser.download_large_file_mb", self.download_large_mb
+                )))
+            except Exception:
+                pass
 
         self._build_window()
 
@@ -857,7 +920,7 @@ class FtpBrowserWindow(UnifiedBrowserCore):
             build_browser_download_clamav_setup,
             update_browser_clamav_accum,
         )
-        from shared.ftp_browser import FtpCancelledError, FtpFileTooLargeError
+        from shared.ftp_browser import FtpCancelledError, FtpFileTooLargeError, FtpNavigator
         from shared.quarantine_postprocess import PostProcessInput
         from shared.quarantine import build_quarantine_path, log_quarantine_event
         quarantine_dir = build_quarantine_path(
@@ -877,89 +940,160 @@ class FtpBrowserWindow(UnifiedBrowserCore):
                 self.window.after(0, self._set_status, _init_err)
             except tk.TclError:
                 pass
-        success_count = 0
+
+        try:
+            worker_count = max(1, min(3, int(self.workers_var.get() or self.download_workers)))
+            large_threshold_bytes = max(1, int(self.large_mb_var.get() or self.download_large_mb)) * 1024 * 1024
+        except Exception:
+            worker_count = max(1, min(3, self.download_workers))
+            large_threshold_bytes = max(1, self.download_large_mb) * 1024 * 1024
+
+        q_small: queue.Queue = queue.Queue()
+        q_large: queue.Queue = queue.Queue()
         for remote_path, file_size in file_list:
+            if file_size and file_size > large_threshold_bytes:
+                q_large.put((remote_path, file_size))
+            else:
+                q_small.put((remote_path, file_size))
+
+        success_count_ref = [0]
+        clamav_lock = threading.Lock()
+
+        def consumer(target_q: queue.Queue) -> None:
             if self._cancel_event.is_set():
-                break
-            filename = PurePosixPath(remote_path).name
-            try:
-                self.window.after(0, self._set_status, f"Downloading {filename}...")
-            except tk.TclError:
                 return
             try:
-                result = self._navigator.download_file(  # type: ignore[union-attr]
-                    remote_path=remote_path,
-                    dest_dir=quarantine_dir,
-                    progress_callback=lambda done, total: (
-                        self.window.after(
-                            0,
-                            self._set_status,
-                            f"Downloading... {done // 1024} KB",
-                        )
-                    ),
-                )
-                log_quarantine_event(
-                    quarantine_dir,
-                    f"Downloaded {remote_path} -> {result.saved_path}",
-                )
-                if _pp is not None and clamav_accum is not None:
-                    try:
-                        _pp_result = _pp(PostProcessInput(
-                            file_path=Path(result.saved_path),
-                            ip_address=self.ip_address,
-                            share="ftp_root",
-                            rel_display=remote_path,
-                            file_size=int(file_size or 0),
-                        ))
-                        update_browser_clamav_accum(clamav_accum, _pp_result, remote_path)
-                    except Exception as exc:
-                        clamav_accum["errors"] += 1
-                        clamav_accum["error_items"].append({
-                            "path": remote_path,
-                            "error": str(exc),
-                        })
-                        try:
-                            log_quarantine_event(
-                                quarantine_dir,
-                                f"clamav post-process error for {remote_path}: {exc}",
-                            )
-                        except Exception:
-                            pass
-                success_count += 1
-            except FtpCancelledError:
-                try:
-                    self.window.after(0, self._set_status, "Download cancelled.")
-                except tk.TclError:
-                    pass
-                break
-            except FtpFileTooLargeError as exc:
-                # Safety-net: pre-flight should catch this first
-                try:
-                    self.window.after(
-                        0, self._set_status, f"Skipped (too large): {filename}"
-                    )
-                except tk.TclError:
-                    pass
-            except FileExistsError:
-                try:
-                    self.window.after(
-                        0, self._set_status, f"Skipped (already exists): {filename}"
-                    )
-                except tk.TclError:
-                    pass
+                item = target_q.get_nowait()
+            except queue.Empty:
+                return
+
+            nav = FtpNavigator(
+                connect_timeout=float(self.config["connect_timeout"]),
+                request_timeout=float(self.config["request_timeout"]),
+                max_entries=int(self.config["max_entries"]),
+                max_depth=int(self.config["max_depth"]),
+                max_path_length=int(self.config["max_path_length"]),
+                max_file_bytes=int(self.config["max_file_bytes"]),
+            )
+            nav._cancel_event = self._cancel_event
+            try:
+                nav.connect(self.ip_address, self.port)
             except Exception as exc:
                 try:
                     self.window.after(
-                        0, self._set_status, f"Error downloading {filename}: {exc}"
+                        0, self._set_status, f"FTP connect failed: {exc}"
                     )
                 except tk.TclError:
                     pass
+                return
+
+            try:
+                while True:
+                    remote_path, file_size = item
+                    if self._cancel_event.is_set():
+                        break
+                    filename = PurePosixPath(remote_path).name
+                    try:
+                        self.window.after(0, self._set_status, f"Downloading {filename}...")
+                    except tk.TclError:
+                        return
+                    try:
+                        result = nav.download_file(
+                            remote_path=remote_path,
+                            dest_dir=quarantine_dir,
+                            progress_callback=lambda done, total: (
+                                self.window.after(
+                                    0,
+                                    self._set_status,
+                                    f"Downloading... {done // 1024} KB",
+                                )
+                            ),
+                        )
+                        log_quarantine_event(
+                            quarantine_dir,
+                            f"Downloaded {remote_path} -> {result.saved_path}",
+                        )
+                        if _pp is not None and clamav_accum is not None:
+                            try:
+                                _pp_result = _pp(PostProcessInput(
+                                    file_path=Path(result.saved_path),
+                                    ip_address=self.ip_address,
+                                    share="ftp_root",
+                                    rel_display=remote_path,
+                                    file_size=int(file_size or 0),
+                                ))
+                                with clamav_lock:
+                                    update_browser_clamav_accum(clamav_accum, _pp_result, remote_path)
+                            except Exception as exc:
+                                with clamav_lock:
+                                    clamav_accum["errors"] += 1
+                                    clamav_accum["error_items"].append({
+                                        "path": remote_path,
+                                        "error": str(exc),
+                                    })
+                                try:
+                                    log_quarantine_event(
+                                        quarantine_dir,
+                                        f"clamav post-process error for {remote_path}: {exc}",
+                                    )
+                                except Exception:
+                                    pass
+                        with clamav_lock:
+                            success_count_ref[0] += 1
+                    except FtpCancelledError:
+                        try:
+                            self.window.after(0, self._set_status, "Download cancelled.")
+                        except tk.TclError:
+                            pass
+                        return
+                    except FtpFileTooLargeError:
+                        try:
+                            self.window.after(
+                                0, self._set_status, f"Skipped (too large): {filename}"
+                            )
+                        except tk.TclError:
+                            pass
+                    except FileExistsError:
+                        try:
+                            self.window.after(
+                                0, self._set_status, f"Skipped (already exists): {filename}"
+                            )
+                        except tk.TclError:
+                            pass
+                    except Exception as exc:
+                        try:
+                            self.window.after(
+                                0, self._set_status, f"Error downloading {filename}: {exc}"
+                            )
+                        except tk.TclError:
+                            pass
+                    # Claim next item only after finishing current one
+                    if self._cancel_event.is_set():
+                        break
+                    try:
+                        item = target_q.get_nowait()
+                    except queue.Empty:
+                        break
+            finally:
+                try:
+                    nav.disconnect()
+                except Exception:
+                    pass
+
+        consumer_threads = []
+        for _ in range(worker_count):
+            consumer_threads.append(threading.Thread(target=consumer, args=(q_small,), daemon=True))
+        consumer_threads.append(threading.Thread(target=consumer, args=(q_large,), daemon=True))
+        for t in consumer_threads:
+            t.start()
+        for t in consumer_threads:
+            t.join()
 
         try:
             self.window.after(
                 0,
                 self._on_download_done,
-                success_count,
+                success_count_ref[0],
                 len(file_list),
                 str(quarantine_dir),
                 clamav_accum,
@@ -1081,6 +1215,20 @@ class HttpBrowserWindow(UnifiedBrowserCore):
         # Maps treeview iid -> absolute path for safe routing
         self._path_map: Dict[str, str] = {}
 
+        # Download tuning
+        self.download_workers = 2
+        self.download_large_mb = 25
+        if self.settings_manager:
+            try:
+                self.download_workers = max(1, min(3, int(self.settings_manager.get_setting(
+                    "file_browser.download_worker_count", self.download_workers
+                ))))
+                self.download_large_mb = max(1, int(self.settings_manager.get_setting(
+                    "file_browser.download_large_file_mb", self.download_large_mb
+                )))
+            except Exception:
+                pass
+
         self._build_window()
 
         # Apply cached probe snapshot if available
@@ -1105,6 +1253,9 @@ class HttpBrowserWindow(UnifiedBrowserCore):
 
     def _adapt_banner_placeholder(self) -> str:
         return "(No HTTP banner available)"
+
+    def _adapt_large_file_tuning_enabled(self) -> bool:
+        return False
 
     def _adapt_setup_treeview(self, tree_frame: tk.Frame) -> None:
         # Treeview — name col shows basename; abs_path in hidden path_raw col
@@ -1343,86 +1494,126 @@ class HttpBrowserWindow(UnifiedBrowserCore):
                 self.window.after(0, self._set_status, _init_err)
             except tk.TclError:
                 pass
-        success_count = 0
-        for remote_path, file_size in file_list:
+
+        try:
+            worker_count = max(1, min(3, int(self.workers_var.get() or self.download_workers)))
+        except Exception:
+            worker_count = max(1, min(3, self.download_workers))
+
+        q: queue.Queue = queue.Queue()
+        for item in file_list:
+            q.put(item)
+
+        success_count_ref = [0]
+        clamav_lock = threading.Lock()
+
+        def consumer() -> None:
             if self._cancel_event.is_set():
-                break
-            filename = PurePosixPath(remote_path).name or remote_path
-            try:
-                self.window.after(0, self._set_status, f"Downloading {filename}...")
-            except tk.TclError:
                 return
             try:
-                result = self._navigator.download_file(
-                    remote_path=remote_path,
-                    dest_dir=quarantine_dir,
-                    progress_callback=lambda done, total: (
-                        self.window.after(
-                            0, self._set_status, f"Downloading... {done // 1024} KB"
-                        )
-                    ),
-                )
-                log_quarantine_event(
-                    quarantine_dir,
-                    f"Downloaded {remote_path} -> {result.saved_path}",
-                )
-                if _pp is not None and clamav_accum is not None:
-                    try:
-                        _pp_result = _pp(PostProcessInput(
-                            file_path=Path(result.saved_path),
-                            ip_address=self.ip_address,
-                            share="http_root",
-                            rel_display=remote_path,
-                            file_size=int(file_size or 0),
-                        ))
-                        update_browser_clamav_accum(clamav_accum, _pp_result, remote_path)
-                    except Exception as exc:
-                        clamav_accum["errors"] += 1
-                        clamav_accum["error_items"].append({
-                            "path": remote_path,
-                            "error": str(exc),
-                        })
-                        try:
-                            log_quarantine_event(
-                                quarantine_dir,
-                                f"clamav post-process error for {remote_path}: {exc}",
+                item = q.get_nowait()
+            except queue.Empty:
+                return
+
+            while True:
+                remote_path, file_size = item
+                if self._cancel_event.is_set():
+                    break
+                filename = PurePosixPath(remote_path).name or remote_path
+                try:
+                    self.window.after(0, self._set_status, f"Downloading {filename}...")
+                except tk.TclError:
+                    return
+                try:
+                    result = self._navigator.download_file(
+                        remote_path=remote_path,
+                        dest_dir=quarantine_dir,
+                        progress_callback=lambda done, total: (
+                            self.window.after(
+                                0, self._set_status, f"Downloading... {done // 1024} KB"
                             )
-                        except Exception:
-                            pass
-                success_count += 1
-            except HttpCancelledError:
-                try:
-                    self.window.after(0, self._set_status, "Download cancelled.")
-                except tk.TclError:
-                    pass
-                break
-            except HttpFileTooLargeError:
-                try:
-                    self.window.after(
-                        0, self._set_status, f"Skipped (too large): {filename}"
+                        ),
                     )
-                except tk.TclError:
-                    pass
-            except FileExistsError:
-                try:
-                    self.window.after(
-                        0, self._set_status, f"Skipped (already exists): {filename}"
+                    log_quarantine_event(
+                        quarantine_dir,
+                        f"Downloaded {remote_path} -> {result.saved_path}",
                     )
-                except tk.TclError:
-                    pass
-            except Exception as exc:
+                    if _pp is not None and clamav_accum is not None:
+                        try:
+                            _pp_result = _pp(PostProcessInput(
+                                file_path=Path(result.saved_path),
+                                ip_address=self.ip_address,
+                                share="http_root",
+                                rel_display=remote_path,
+                                file_size=int(file_size or 0),
+                            ))
+                            with clamav_lock:
+                                update_browser_clamav_accum(clamav_accum, _pp_result, remote_path)
+                        except Exception as exc:
+                            with clamav_lock:
+                                clamav_accum["errors"] += 1
+                                clamav_accum["error_items"].append({
+                                    "path": remote_path,
+                                    "error": str(exc),
+                                })
+                            try:
+                                log_quarantine_event(
+                                    quarantine_dir,
+                                    f"clamav post-process error for {remote_path}: {exc}",
+                                )
+                            except Exception:
+                                pass
+                    with clamav_lock:
+                        success_count_ref[0] += 1
+                except HttpCancelledError:
+                    try:
+                        self.window.after(0, self._set_status, "Download cancelled.")
+                    except tk.TclError:
+                        pass
+                    return
+                except HttpFileTooLargeError:
+                    try:
+                        self.window.after(
+                            0, self._set_status, f"Skipped (too large): {filename}"
+                        )
+                    except tk.TclError:
+                        pass
+                except FileExistsError:
+                    try:
+                        self.window.after(
+                            0, self._set_status, f"Skipped (already exists): {filename}"
+                        )
+                    except tk.TclError:
+                        pass
+                except Exception as exc:
+                    try:
+                        self.window.after(
+                            0, self._set_status, f"Error downloading {filename}: {exc}"
+                        )
+                    except tk.TclError:
+                        pass
+                # Claim next item only after finishing current one
+                if self._cancel_event.is_set():
+                    break
                 try:
-                    self.window.after(
-                        0, self._set_status, f"Error downloading {filename}: {exc}"
-                    )
-                except tk.TclError:
-                    pass
+                    item = q.get_nowait()
+                except queue.Empty:
+                    break
+
+        consumer_threads = [
+            threading.Thread(target=consumer, daemon=True)
+            for _ in range(worker_count)
+        ]
+        for t in consumer_threads:
+            t.start()
+        for t in consumer_threads:
+            t.join()
 
         try:
             self.window.after(
                 0,
                 self._on_download_done,
-                success_count,
+                success_count_ref[0],
                 len(file_list),
                 str(quarantine_dir),
                 clamav_accum,
