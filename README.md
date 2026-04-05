@@ -1,5 +1,6 @@
+![banner](img/dirricuda_banner_trans.png)
+
 # Dirracuda
-#### (formerly SMBSeek)
 
 A GUI for finding and categorizing open directory listings across multiple protocols, then auditing what's reachable.
 
@@ -26,6 +27,16 @@ Then:
 
 ```bash
 git clone https://github.com/b3p3k0/dirracuda
+```
+
+Or for the latest development (experimental features and brand new bugs!) version:
+
+```bash
+git clone https://github.com/b3p3k0/dirracuda -b development --single-branch
+```
+
+Then:
+```bash
 cd dirracuda
 python3 -m venv venv
 source venv/bin/activate
