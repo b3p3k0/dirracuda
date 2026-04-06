@@ -238,7 +238,7 @@ When enabled, ClamAV post-processes files downloaded via:
 
 Each file is scanned and then routed by verdict:
 
-- **clean** → moved to `~/.dirracuda/extracted/<host>/<date>/<share>/...`
+- **clean** → moved to `~/.dirracuda/extracted/<host>/<date>/<share>/...`if "auto promote" is enabled, else left in place for user to manually process
 - **infected** → moved to `~/.dirracuda/quarantine/<known_bad_subdir>/<host>/<date>/<share>/...` (default subdir: `known_bad`)
 - **scanner error/timeout/missing binary** → file stays in quarantine; extract continues (fail-open)
 
