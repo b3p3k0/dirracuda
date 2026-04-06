@@ -413,7 +413,7 @@ def run_ingest(options: IngestOptions, db_path: Optional[Path] = None) -> Ingest
     except (sqlite3.Error, OSError) as e:
         return _error_result(options, replace_cache_done, error=str(e))
 
-    now_str = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    now_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
     # --- Fetch (no write connection open yet) ---
     try:

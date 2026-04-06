@@ -29,7 +29,7 @@ from experimental.redseek.service import IngestOptions, IngestResult, run_ingest
 # Helpers
 # ---------------------------------------------------------------------------
 
-_NOW = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+_NOW = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _make_raw_post(

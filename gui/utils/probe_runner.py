@@ -80,7 +80,7 @@ def run_probe(
 
     snapshot = {
         "ip_address": ip_address,
-        "run_at": _dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "run_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
         "limits": {
             "max_directories": max_directories,
             "max_files": max_files,

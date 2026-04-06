@@ -27,7 +27,7 @@ from experimental.redseek.store import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-_NOW = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+_NOW = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 REQUIRED_TABLES = {"reddit_posts", "reddit_targets", "reddit_ingest_state"}
 

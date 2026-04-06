@@ -115,7 +115,7 @@ def scan_rce_indicators(host_ctx: Dict[str, Any]) -> Dict[str, Any]:
 
 def _generate_insufficient_data_report(host_ctx: Dict[str, Any]) -> Dict[str, Any]:
     """Generate report for cases with insufficient data."""
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     return {
         "score": 0,
@@ -123,7 +123,7 @@ def _generate_insufficient_data_report(host_ctx: Dict[str, Any]) -> Dict[str, An
         "matched_rules": [],
         "evidence": ["Insufficient telemetry data for comprehensive analysis"],
         "status": "insufficient-data",
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "analysis_metadata": {
             "confidence": "low confidence",
             "risk_level": "low",

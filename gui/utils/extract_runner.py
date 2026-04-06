@@ -522,7 +522,7 @@ def _build_promotion_config(
     """Build a PromotionConfig with validated/fallback date, quarantine_root, and subdir."""
     date_str = download_dir.name
     if not _DATE8_RE.match(date_str):
-        date_str = _dt.datetime.utcnow().strftime("%Y%m%d")
+        date_str = _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%d")
 
     candidate = download_dir.parent.parent
     if candidate == candidate.parent:  # reached filesystem root
@@ -765,7 +765,7 @@ def _time_exceeded(start: float, max_seconds: int) -> bool:
 
 
 def _utcnow() -> str:
-    return _dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    return _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _is_access_denied(exc: Exception) -> bool:
