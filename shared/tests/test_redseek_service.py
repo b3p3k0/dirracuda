@@ -23,7 +23,7 @@ from experimental.redseek.store import (
     open_connection,
     save_ingest_state,
 )
-from experimental.redseek.service import IngestOptions, IngestResult, run_ingest
+from experimental.redseek.service import IngestOptions, IngestResult, _make_preview_note, run_ingest
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -512,3 +512,92 @@ def test_ingest_result_fields_populated(tmp_path):
     assert isinstance(result.replace_cache_done, bool)
     assert isinstance(result.rate_limited, bool)
     assert result.pages_fetched == 1
+
+
+# ---------------------------------------------------------------------------
+# _make_preview_note — D-A2 unit coverage
+# ---------------------------------------------------------------------------
+
+def test_preview_note_title_and_body():
+    note = _make_preview_note("Check this out http://example.com", "More detail here")
+    assert note == "T:Check this out http://example.com | B:More detail here"
+
+
+def test_preview_note_body_omitted_when_none():
+    note = _make_preview_note("http://example.com shares", None)
+    assert note == "T:http://example.com shares"
+    assert "B:" not in note
+
+
+def test_preview_note_body_omitted_when_empty():
+    note = _make_preview_note("http://example.com", "")
+    assert note == "T:http://example.com"
+    assert "B:" not in note
+
+
+def test_preview_note_120_char_truncation():
+    long_title = "A" * 130
+    long_body = "B" * 130
+    note = _make_preview_note(long_title, long_body)
+    assert note == f"T:{'A' * 120} | B:{'B' * 120}"
+
+
+def test_preview_note_whitespace_normalized():
+    note = _make_preview_note("  lots   of   spaces  ", "line1\nline2\ttab")
+    assert note == "T:lots of spaces | B:line1 line2 tab"
+
+
+def test_preview_note_title_only_when_body_empty():
+    note = _make_preview_note("http://example.com", "   ")
+    assert note == "T:http://example.com"
+
+
+def test_preview_note_none_when_both_empty():
+    assert _make_preview_note(None, None) is None
+    assert _make_preview_note("", "") is None
+
+
+# ---------------------------------------------------------------------------
+# Preview note integration — stored in DB via run_ingest
+# ---------------------------------------------------------------------------
+
+def _get_target_notes(db):
+    conn = sqlite3.connect(str(db))
+    rows = conn.execute("SELECT notes FROM reddit_targets").fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
+
+def test_preview_note_stored_in_db_new_mode(tmp_path):
+    db = tmp_path / "test.db"
+    posts = [_make_raw_post("p1", title="http://example.com/files", selftext="body text here")]
+    with patch("experimental.redseek.service.fetch_posts", return_value=_make_fetch(posts)):
+        run_ingest(_make_opts(sort="new", parse_body=True), db_path=db)
+
+    notes = _get_target_notes(db)
+    assert len(notes) >= 1
+    assert notes[0].startswith("T:")
+    assert "B:body text here" in notes[0]
+
+
+def test_preview_note_body_omitted_when_parse_body_false(tmp_path):
+    db = tmp_path / "test.db"
+    posts = [_make_raw_post("p1", title="http://example.com/files", selftext="this body should not appear")]
+    with patch("experimental.redseek.service.fetch_posts", return_value=_make_fetch(posts)):
+        run_ingest(_make_opts(sort="new", parse_body=False), db_path=db)
+
+    notes = _get_target_notes(db)
+    assert len(notes) >= 1
+    assert "B:" not in notes[0]
+
+
+def test_preview_note_stored_in_db_top_mode(tmp_path):
+    db = tmp_path / "test.db"
+    posts = [_make_raw_post("p1", title="http://example.com/files", selftext="top body")]
+    with patch("experimental.redseek.service.fetch_posts", return_value=_make_fetch(posts)):
+        run_ingest(_make_opts(sort="top", parse_body=True), db_path=db)
+
+    notes = _get_target_notes(db)
+    assert len(notes) >= 1
+    assert "T:" in notes[0]
+    assert "B:top body" in notes[0]

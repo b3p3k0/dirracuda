@@ -30,6 +30,17 @@ class _NoopThread:
         pass
 
 
+class _ImmediateThread:
+    """Runs thread target synchronously for deterministic unit tests."""
+
+    def __init__(self, target=None, *args, **kwargs):
+        self._target = target
+
+    def start(self):
+        if self._target:
+            self._target()
+
+
 class _CaptureTree:
     def __init__(self):
         self.rows = []
@@ -133,6 +144,32 @@ def test_on_view_uses_image_limits_and_dispatches_view_thread():
         max_image_pixels=123456,
         size_raw=1024,
     )
+
+
+def test_start_view_thread_read_error_is_parented_to_active_window():
+    win = _make_window()
+    win._navigator = MagicMock()
+    win._navigator.read_file.side_effect = TimeoutError("read failed: timed out")
+    win.window.after.side_effect = lambda _delay, func, *args: func(*args)
+
+    with patch("gui.components.unified_browser_window.threading.Thread", _ImmediateThread), patch(
+        "gui.components.unified_browser_window.messagebox.showerror"
+    ) as mock_showerror:
+        win._start_view_thread(
+            remote_path="/pub/big.txt",
+            display_name="big.txt",
+            max_bytes=1024,
+            is_image=False,
+            max_image_pixels=20_000_000,
+            size_raw=0,
+        )
+
+    mock_showerror.assert_called_once()
+    args, kwargs = mock_showerror.call_args
+    assert args[0] == "View Error"
+    assert "Could not read file:" in args[1]
+    assert "read failed: timed out" in args[1]
+    assert kwargs["parent"] is win.window
 
 
 def test_populate_treeview_sorts_dirs_then_files_alphabetically():

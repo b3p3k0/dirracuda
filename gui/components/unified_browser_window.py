@@ -457,7 +457,9 @@ class UnifiedBrowserCore:
                     self.window.after(
                         0,
                         lambda exc=exc: messagebox.showerror(
-                            "View Error", f"Could not read file:\n{exc}"
+                            "View Error",
+                            f"Could not read file:\n{exc}",
+                            parent=self.window,
                         ),
                     )
                 except tk.TclError:
@@ -501,7 +503,7 @@ class UnifiedBrowserCore:
             self._set_status(status_text)
             shown = self._maybe_show_clamav_dialog(clamav_accum)
             if not shown and success > 0:
-                messagebox.showinfo("Download complete", status_text)
+                messagebox.showinfo("Download complete", status_text, parent=self.window)
             return
 
         self._set_status(f"Downloaded {success}/{total} file(s) \u2192 {quarantine_path}")
@@ -509,6 +511,7 @@ class UnifiedBrowserCore:
             messagebox.showinfo(
                 "Download complete",
                 f"Downloaded {success}/{total} file(s) to quarantine:\n{quarantine_path}",
+                parent=self.window,
             )
 
     def _maybe_show_clamav_dialog(self, clamav_accum: Optional[Dict[str, Any]]) -> bool:
@@ -777,15 +780,15 @@ class FtpBrowserWindow(UnifiedBrowserCore):
         if not sel:
             return
         if len(sel) > 1:
-            messagebox.showinfo("View", "Select only one file to view.")
+            messagebox.showinfo("View", "Select only one file to view.", parent=self.window)
             return
         vals = self.tree.item(sel[0], "values")
         name, type_label = vals[0], vals[1]
         if type_label != "file":
-            messagebox.showinfo("View", "Select a file (not a directory) to view.")
+            messagebox.showinfo("View", "Select a file (not a directory) to view.", parent=self.window)
             return
         if self._navigator is None:
-            messagebox.showinfo("View", "Not connected.")
+            messagebox.showinfo("View", "Not connected.", parent=self.window)
             return
 
         remote_path = str(PurePosixPath(self._current_path) / name)
@@ -809,6 +812,7 @@ class FtpBrowserWindow(UnifiedBrowserCore):
             messagebox.showerror(
                 "View Error",
                 f"{name} is {_format_file_size(size_raw)}, exceeding the {limit_mb} MB view limit.",
+                parent=self.window,
             )
             return
 
@@ -879,7 +883,7 @@ class FtpBrowserWindow(UnifiedBrowserCore):
             return
         sel = self.tree.selection()
         if not sel:
-            messagebox.showinfo("Download", "Select one or more files to download.")
+            messagebox.showinfo("Download", "Select one or more files to download.", parent=self.window)
             return
 
         file_list: List = []
@@ -896,6 +900,7 @@ class FtpBrowserWindow(UnifiedBrowserCore):
                     "Download",
                     f"'{name}' is a directory. Folder download is not supported in this version.\n\n"
                     "Select individual files to download.",
+                    parent=self.window,
                 )
                 return
             if size_raw and size_raw > limit:
@@ -905,6 +910,7 @@ class FtpBrowserWindow(UnifiedBrowserCore):
                     f"{name} is {size_mb:.1f} MB, exceeding the "
                     f"{limit // (1024 * 1024)} MB limit.\n\n"
                     f"Adjust ftp_browser.max_file_bytes in config to change this limit.",
+                    parent=self.window,
                 )
                 return
             remote_path = str(PurePosixPath(self._current_path) / name)
@@ -1175,6 +1181,7 @@ class HttpBrowserWindow(UnifiedBrowserCore):
         ip_address: str,
         port: int = 80,
         scheme: str = "http",
+        initial_path: Optional[str] = None,
         banner: Optional[str] = None,
         config_path: Optional[str] = None,
         db_reader=None,
@@ -1187,6 +1194,7 @@ class HttpBrowserWindow(UnifiedBrowserCore):
         self.ip_address = ip_address
         self.port = port
         self.scheme = scheme
+        self._initial_path = self._normalize_initial_path(initial_path)
         self.db_reader = db_reader
         self.theme = theme
         self.settings_manager = settings_manager
@@ -1234,8 +1242,8 @@ class HttpBrowserWindow(UnifiedBrowserCore):
         # Apply cached probe snapshot if available
         self._apply_probe_snapshot(load_probe_result_for_host(ip_address, "H", port=port))
 
-        # Start navigating to root
-        self._navigate_to("/")
+        # Start navigating to configured initial path (defaults to root).
+        self._navigate_to(self._initial_path)
 
         # Start background probe in a daemon thread
         t = threading.Thread(target=self._run_probe_background, daemon=True)
@@ -1282,6 +1290,16 @@ class HttpBrowserWindow(UnifiedBrowserCore):
         self.tree.configure(yscrollcommand=vsb.set)
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
         self.tree.pack(fill=tk.BOTH, expand=True)
+
+    @staticmethod
+    def _normalize_initial_path(path: Optional[str]) -> str:
+        """Normalize configured startup path for first HTTP navigation."""
+        if not path:
+            return "/"
+        cleaned = str(path).strip()
+        if not cleaned:
+            return "/"
+        return f"/{cleaned.lstrip('/')}"
 
     # ------------------------------------------------------------------
     # Navigation
@@ -1357,18 +1375,18 @@ class HttpBrowserWindow(UnifiedBrowserCore):
         if not sel:
             return
         if len(sel) > 1:
-            messagebox.showinfo("View", "Select only one file to view.")
+            messagebox.showinfo("View", "Select only one file to view.", parent=self.window)
             return
         iid = sel[0]
         vals = self.tree.item(iid, "values")
         type_label = vals[1]
         if type_label != "file":
-            messagebox.showinfo("View", "Select a file (not a directory) to view.")
+            messagebox.showinfo("View", "Select a file (not a directory) to view.", parent=self.window)
             return
 
         abs_path = self._path_map.get(iid, "")
         if not abs_path:
-            messagebox.showinfo("View", "Path not found.")
+            messagebox.showinfo("View", "Path not found.", parent=self.window)
             return
 
         display_name = vals[0]
@@ -1446,7 +1464,7 @@ class HttpBrowserWindow(UnifiedBrowserCore):
             return
         sel = self.tree.selection()
         if not sel:
-            messagebox.showinfo("Download", "Select one or more files to download.")
+            messagebox.showinfo("Download", "Select one or more files to download.", parent=self.window)
             return
 
         file_list = []
@@ -1458,6 +1476,7 @@ class HttpBrowserWindow(UnifiedBrowserCore):
                     "Download",
                     f"'{vals[0]}' is a directory. Folder download is not supported.\n\n"
                     "Select individual files to download.",
+                    parent=self.window,
                 )
                 return
             abs_path = self._path_map.get(iid, "")
@@ -2999,6 +3018,7 @@ def open_ftp_http_browser(
     ip_address: str,
     port: int,
     *,
+    initial_path=None,
     banner=None,
     scheme=None,
     config_path=None,
@@ -3028,6 +3048,7 @@ def open_ftp_http_browser(
             ip_address=ip_address,
             port=port,
             scheme=scheme,
+            initial_path=initial_path,
             banner=banner,
             config_path=config_path,
             db_reader=db_reader,

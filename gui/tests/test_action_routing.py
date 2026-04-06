@@ -509,6 +509,136 @@ def test_add_record_hidden_by_filters_sets_explicit_note():
     assert "Shares > 0" in status_msg
 
 
+def test_add_record_probe_enabled_runs_before_upsert_and_persists_cache():
+    mock_db = MagicMock()
+    upsert_result = {
+        "host_type": "H",
+        "protocol_server_id": 99,
+        "row_key": "H:99",
+        "operation": "insert",
+    }
+    mock_db.upsert_manual_server_record.return_value = upsert_result
+    stub = _BatchMixinStub(db_reader=mock_db)
+    stub.tree._items = {"H:99": True}
+    stub._show_add_record_dialog = MagicMock(return_value={
+        "host_type": "H",
+        "ip_address": "1.2.3.4",
+        "port": 80,
+        "scheme": "http",
+        "_probe_before_add": True,
+    })
+    call_order: list[str] = []
+    stub._run_manual_add_probe = MagicMock(side_effect=lambda payload: (
+        call_order.append("probe"),
+        {
+            "status": "clean",
+            "indicator_matches": 0,
+            "snapshot_path": "/tmp/snap.json",
+            "accessible_dirs_count": 1,
+            "accessible_dirs_list": "/",
+            "accessible_files_count": 0,
+            "port": 80,
+        },
+    )[1])
+
+    def _upsert(payload):
+        call_order.append("upsert")
+        return upsert_result
+    mock_db.upsert_manual_server_record.side_effect = _upsert
+
+    stub._on_add_record()
+
+    assert call_order == ["probe", "upsert"]
+    stub._run_manual_add_probe.assert_called_once()
+    called_payload = stub._run_manual_add_probe.call_args[0][0]
+    assert "_probe_before_add" not in called_payload
+    mock_db.upsert_probe_cache_for_host.assert_called_once()
+    kwargs = mock_db.upsert_probe_cache_for_host.call_args.kwargs
+    assert kwargs["status"] == "clean"
+    assert kwargs["protocol_server_id"] == 99
+
+
+def test_add_record_probe_disabled_skips_probe():
+    mock_db = MagicMock()
+    mock_db.upsert_manual_server_record.return_value = {
+        "host_type": "S",
+        "protocol_server_id": 42,
+        "row_key": "S:42",
+        "operation": "insert",
+    }
+    stub = _BatchMixinStub(db_reader=mock_db)
+    stub.tree._items = {"S:42": True}
+    stub._show_add_record_dialog = MagicMock(return_value={
+        "host_type": "S",
+        "ip_address": "1.2.3.4",
+        "_probe_before_add": False,
+    })
+    stub._run_manual_add_probe = MagicMock()
+
+    stub._on_add_record()
+
+    stub._run_manual_add_probe.assert_not_called()
+    mock_db.upsert_probe_cache_for_host.assert_not_called()
+    mock_db.upsert_manual_server_record.assert_called_once_with({
+        "host_type": "S",
+        "ip_address": "1.2.3.4",
+    })
+
+
+def test_add_record_probe_failure_warns_and_still_saves(monkeypatch):
+    mock_db = MagicMock()
+    mock_db.upsert_manual_server_record.return_value = {
+        "host_type": "F",
+        "protocol_server_id": 7,
+        "row_key": "F:7",
+        "operation": "insert",
+    }
+    stub = _BatchMixinStub(db_reader=mock_db)
+    stub.tree._items = {"F:7": True}
+    stub._show_add_record_dialog = MagicMock(return_value={
+        "host_type": "F",
+        "ip_address": "5.6.7.8",
+        "port": 21,
+        "_probe_before_add": True,
+    })
+    stub._run_manual_add_probe = MagicMock(side_effect=RuntimeError("timed out"))
+    warnings = []
+    monkeypatch.setattr(
+        "tkinter.messagebox.showwarning",
+        lambda *a, **k: warnings.append((a, k)),
+    )
+
+    stub._on_add_record()
+
+    assert len(warnings) == 1
+    mock_db.upsert_manual_server_record.assert_called_once()
+    mock_db.upsert_probe_cache_for_host.assert_not_called()
+
+
+def test_add_record_probe_flag_not_passed_to_db_payload():
+    mock_db = MagicMock()
+    mock_db.upsert_manual_server_record.return_value = {
+        "host_type": "H",
+        "protocol_server_id": 3,
+        "row_key": "H:3",
+        "operation": "insert",
+    }
+    stub = _BatchMixinStub(db_reader=mock_db)
+    stub.tree._items = {"H:3": True}
+    stub._show_add_record_dialog = MagicMock(return_value={
+        "host_type": "H",
+        "ip_address": "9.8.7.6",
+        "port": 8080,
+        "scheme": "http",
+        "_probe_before_add": False,
+    })
+
+    stub._on_add_record()
+
+    sent = mock_db.upsert_manual_server_record.call_args[0][0]
+    assert "_probe_before_add" not in sent
+
+
 # ---------------------------------------------------------------------------
 # _execute_probe_target
 # ---------------------------------------------------------------------------
@@ -570,6 +700,63 @@ def test_probe_ftp_root_files_only_persists_loose_files_marker():
     call_kwargs = stub.db_reader.upsert_probe_cache_for_host.call_args[1]
     assert call_kwargs["accessible_dirs_count"] == 1
     assert call_kwargs["accessible_dirs_list"] == "[[loose files]]"
+
+
+def test_probe_http_row_uses_probe_hints_from_http_detail(monkeypatch):
+    stub = _BatchMixinStub()
+    target = {
+        "ip_address": "67.205.33.18",
+        "host_type": "H",
+        "row_key": "H:11",
+        "shares": [],
+        "data": {},
+    }
+    stub.all_servers = [
+        {
+            "row_key": "H:11",
+            "host_type": "H",
+            "ip_address": "67.205.33.18",
+        }
+    ]
+    stub.db_reader.get_http_server_detail.return_value = {
+        "port": 443,
+        "scheme": "https",
+        "probe_host": "www.bound2burst.net",
+        "probe_path": "/movies/",
+    }
+    stub.db_reader.upsert_probe_cache_for_host = MagicMock()
+
+    dispatch_calls = []
+
+    monkeypatch.setitem(
+        stub._execute_probe_target.__globals__,
+        "dispatch_probe_run",
+        lambda *a, **kw: (
+            dispatch_calls.append((a, kw)) or {"shares": [{"directories": [], "root_files": []}]}
+        ),
+    )
+
+    import gui.utils.probe_patterns as pp
+    monkeypatch.setattr(
+        pp,
+        "attach_indicator_analysis",
+        lambda _r, _p: {"is_suspicious": False, "matches": []},
+    )
+    monkeypatch.setitem(
+        stub._execute_probe_target.__globals__,
+        "summarize_probe_snapshot",
+        lambda _snap: {"directory_names": [], "display_entries": [], "total_file_count": 0},
+    )
+
+    result = stub._execute_probe_target("job-1", target, {"limits": {}}, threading.Event())
+
+    assert result["status"] == "success"
+    assert dispatch_calls
+    kwargs = dispatch_calls[0][1]
+    assert kwargs["port"] == 443
+    assert kwargs["scheme"] == "https"
+    assert kwargs["request_host"] == "www.bound2burst.net"
+    assert kwargs["start_path"] == "/movies/"
 
 
 def test_probe_smb_row_returns_units_1(monkeypatch):

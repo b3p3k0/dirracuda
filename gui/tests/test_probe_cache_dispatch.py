@@ -245,6 +245,8 @@ def test_dispatch_http_explicit_scheme_skips_db_lookup():
     kw = http_m.run_http_probe.call_args.kwargs
     assert kw["port"] == 8080
     assert kw["scheme"] == "https"
+    assert kw["request_host"] is None
+    assert kw["start_path"] == "/"
     assert kw["allow_insecure_tls"] is True
     assert kw["cancel_event"] is cancel
 
@@ -253,7 +255,12 @@ def test_dispatch_http_scheme_none_resolves_from_db_reader():
     """HTTP with scheme=None: port/scheme resolved from db_reader."""
     cancel = _threading.Event()
     db_mock = _MagicMock()
-    db_mock.get_http_server_detail.return_value = {"port": 443, "scheme": "https"}
+    db_mock.get_http_server_detail.return_value = {
+        "port": 443,
+        "scheme": "https",
+        "probe_host": "example.com",
+        "probe_path": "/movies/",
+    }
     with patch("gui.utils.probe_cache_dispatch.http_probe_runner") as http_m:
         http_m.run_http_probe.return_value = _FAKE_HTTP_SNAP
         dispatch_probe_run(
@@ -268,6 +275,33 @@ def test_dispatch_http_scheme_none_resolves_from_db_reader():
     kw = http_m.run_http_probe.call_args.kwargs
     assert kw["port"] == 443
     assert kw["scheme"] == "https"
+    assert kw["request_host"] == "example.com"
+    assert kw["start_path"] == "/movies/"
+
+
+def test_dispatch_http_explicit_hints_forwarded():
+    cancel = _threading.Event()
+    db_mock = _MagicMock()
+    with patch("gui.utils.probe_cache_dispatch.http_probe_runner") as http_m:
+        http_m.run_http_probe.return_value = _FAKE_HTTP_SNAP
+        dispatch_probe_run(
+            _IP, "H",
+            max_directories=3,
+            max_files=5,
+            timeout_seconds=10,
+            cancel_event=cancel,
+            port=8443,
+            scheme="https",
+            request_host="www.example.com",
+            start_path="/movies/",
+            db_reader=db_mock,
+        )
+    db_mock.get_http_server_detail.assert_not_called()
+    kw = http_m.run_http_probe.call_args.kwargs
+    assert kw["port"] == 8443
+    assert kw["scheme"] == "https"
+    assert kw["request_host"] == "www.example.com"
+    assert kw["start_path"] == "/movies/"
 
 
 def test_dispatch_smb_omitted_creds_not_forwarded():

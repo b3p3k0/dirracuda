@@ -246,16 +246,24 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                 if target.get("protocol_server_id") is not None
                 else (target.get("data") or {}).get("protocol_server_id")
             )
+            target_data = target.get("data") or {}
             try:
                 http_port = int(
                     target.get("port")
                     if target.get("port") is not None
-                    else (target.get("data") or {}).get("port")
+                    else target_data.get("port")
                 )
             except (TypeError, ValueError):
                 http_port = None
-            http_scheme = (target.get("data") or {}).get("scheme")
-            if self.db_reader and (http_scheme is None or http_port is None):
+            http_scheme = target_data.get("scheme")
+            http_request_host = target_data.get("probe_host")
+            http_start_path = target_data.get("probe_path")
+            if self.db_reader and (
+                http_scheme is None
+                or http_port is None
+                or http_request_host is None
+                or http_start_path is None
+            ):
                 detail = self.db_reader.get_http_server_detail(
                     ip_address,
                     protocol_server_id=protocol_server_id,
@@ -268,10 +276,17 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                         http_port = 80
                 if http_scheme is None:
                     http_scheme = (detail or {}).get("scheme") or ("https" if http_port == 443 else "http")
+                if http_request_host is None:
+                    http_request_host = (detail or {}).get("probe_host") or None
+                if http_start_path is None:
+                    http_start_path = (detail or {}).get("probe_path") or "/"
             if http_port is None:
                 http_port = 80
             if http_scheme is None:
                 http_scheme = "https" if http_port == 443 else "http"
+            http_start_path = str(http_start_path or "/").split("?", 1)[0].split("#", 1)[0].strip() or "/"
+            if not http_start_path.startswith("/"):
+                http_start_path = "/" + http_start_path.lstrip("/")
             snapshot = dispatch_probe_run(
                 ip_address, host_type,
                 max_directories=int(limits.get("max_directories", 3)),
@@ -280,6 +295,8 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                 cancel_event=cancel_event,
                 port=http_port,
                 scheme=http_scheme,
+                request_host=http_request_host,
+                start_path=http_start_path,
                 protocol_server_id=protocol_server_id,
                 db_reader=self.db_reader,
             )

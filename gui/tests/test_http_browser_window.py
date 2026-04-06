@@ -214,6 +214,37 @@ def _make_http_with_settings(worker_count=None, large_mb=None):
     return win
 
 
+def test_init_navigates_to_initial_path_when_provided():
+    with patch.object(HttpBrowserWindow, "_build_window"), \
+         patch.object(HttpBrowserWindow, "_run_probe_background"), \
+         patch.object(HttpBrowserWindow, "_apply_probe_snapshot"), \
+         patch.object(HttpBrowserWindow, "_navigate_to") as mock_nav, \
+         patch("shared.http_browser.HttpNavigator"), \
+         patch("gui.components.unified_browser_window.threading.Thread", _NoopThread), \
+         patch("gui.utils.probe_cache_dispatch.load_probe_result_for_host", return_value=None):
+        HttpBrowserWindow(
+            parent=MagicMock(),
+            ip_address="1.2.3.4",
+            initial_path="/movies/",
+        )
+    mock_nav.assert_called_once_with("/movies/")
+
+
+def test_init_navigates_to_root_when_initial_path_missing():
+    with patch.object(HttpBrowserWindow, "_build_window"), \
+         patch.object(HttpBrowserWindow, "_run_probe_background"), \
+         patch.object(HttpBrowserWindow, "_apply_probe_snapshot"), \
+         patch.object(HttpBrowserWindow, "_navigate_to") as mock_nav, \
+         patch("shared.http_browser.HttpNavigator"), \
+         patch("gui.components.unified_browser_window.threading.Thread", _NoopThread), \
+         patch("gui.utils.probe_cache_dispatch.load_probe_result_for_host", return_value=None):
+        HttpBrowserWindow(
+            parent=MagicMock(),
+            ip_address="1.2.3.4",
+        )
+    mock_nav.assert_called_once_with("/")
+
+
 def test_init_loads_worker_count_from_settings_manager():
     win = _make_http_with_settings(worker_count=3)
     assert win.download_workers == 3

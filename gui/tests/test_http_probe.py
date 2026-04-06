@@ -190,3 +190,89 @@ def test_directory_listing_limits_subdirs_and_files_independently(tmp_path, monk
     assert directory["subdirectories_truncated"] is True
     assert len(directory["files"]) == 2
     assert directory["files_truncated"] is True
+
+
+def test_start_path_used_for_initial_listing_request(tmp_path, monkeypatch):
+    monkeypatch.setattr("gui.utils.http_probe_cache.HTTP_CACHE_DIR", tmp_path)
+
+    request_calls = []
+
+    def _fake_request(ip, port, scheme, allow_insecure_tls, timeout, path="/", request_host=None):
+        request_calls.append(
+            {
+                "ip": ip,
+                "path": path,
+                "request_host": request_host,
+            }
+        )
+        return 200, b"<body>", False, None
+
+    with patch("gui.utils.http_probe_runner.try_http_request", side_effect=_fake_request), \
+         patch("gui.utils.http_probe_runner.validate_index_page", return_value=True), \
+         patch("gui.utils.http_probe_runner._parse_dir_entries", return_value=([], [])):
+        snapshot = run_http_probe(
+            "127.0.0.1",
+            port=443,
+            scheme="https",
+            request_host="example.com",
+            start_path="/movies/",
+        )
+
+    assert request_calls
+    assert request_calls[0]["path"] == "/movies/"
+    assert request_calls[0]["request_host"] == "example.com"
+    assert snapshot["start_path"] == "/movies/"
+
+
+def test_start_path_falls_back_to_root_once(tmp_path, monkeypatch):
+    monkeypatch.setattr("gui.utils.http_probe_cache.HTTP_CACHE_DIR", tmp_path)
+
+    request_calls = []
+
+    def _fake_request(ip, port, scheme, allow_insecure_tls, timeout, path="/", request_host=None):
+        request_calls.append(path)
+        return 200, b"<body>", False, None
+
+    with patch("gui.utils.http_probe_runner.try_http_request", side_effect=_fake_request), \
+         patch("gui.utils.http_probe_runner.validate_index_page", side_effect=[False, True]), \
+         patch("gui.utils.http_probe_runner._parse_dir_entries", return_value=([], [])):
+        snapshot = run_http_probe(
+            "127.0.0.1",
+            port=80,
+            scheme="http",
+            start_path="/movies/",
+        )
+
+    assert request_calls[:2] == ["/movies/", "/"]
+    assert snapshot["errors"] == []
+    assert snapshot["start_path"] == "/"
+
+
+def test_https_retry_uses_request_host_authority_when_ip_attempt_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr("gui.utils.http_probe_cache.HTTP_CACHE_DIR", tmp_path)
+
+    request_calls = []
+
+    def _fake_request(ip, port, scheme, allow_insecure_tls, timeout, path="/", request_host=None):
+        request_calls.append((ip, path, request_host))
+        if len(request_calls) == 1:
+            return 0, b"", False, "connect_fail"
+        return 200, b"<body>", False, None
+
+    with patch("gui.utils.http_probe_runner.try_http_request", side_effect=_fake_request), \
+         patch("gui.utils.http_probe_runner.validate_index_page", return_value=True), \
+         patch("gui.utils.http_probe_runner._parse_dir_entries", return_value=([], [])):
+        snapshot = run_http_probe(
+            "67.205.33.18",
+            port=443,
+            scheme="https",
+            request_host="www.bound2burst.net",
+            start_path="/movies/",
+        )
+
+    assert request_calls[0][0] == "67.205.33.18"
+    assert request_calls[0][1] == "/movies/"
+    assert request_calls[0][2] == "www.bound2burst.net"
+    assert request_calls[1][0] == "www.bound2burst.net"
+    assert request_calls[1][1] == "/movies/"
+    assert snapshot["errors"] == []

@@ -1500,6 +1500,15 @@ class DatabaseReader:
                 if scheme not in {"http", "https"}:
                     raise ValueError("HTTP scheme must be either 'http' or 'https'.")
 
+                probe_host = _blank_to_none(payload.get("probe_host"))
+                probe_path = _blank_to_none(payload.get("probe_path"))
+                if probe_path is not None:
+                    probe_path = probe_path.split("?", 1)[0].split("#", 1)[0].strip()
+                    if not probe_path:
+                        probe_path = "/"
+                    elif not probe_path.startswith("/"):
+                        probe_path = "/" + probe_path.lstrip("/")
+
                 banner = _blank_to_none(payload.get("banner"))
                 title = _blank_to_none(payload.get("title"))
 
@@ -1512,19 +1521,34 @@ class DatabaseReader:
                 cur.execute(
                     """
                     INSERT INTO http_servers
-                        (ip_address, country, country_code, port, scheme, banner, title, last_seen, status)
+                        (
+                            ip_address, country, country_code, port, scheme,
+                            probe_host, probe_path, banner, title, last_seen, status
+                        )
                     VALUES
-                        (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 'active')
+                        (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 'active')
                     ON CONFLICT(ip_address, port) DO UPDATE SET
                         country=COALESCE(excluded.country, http_servers.country),
                         country_code=COALESCE(excluded.country_code, http_servers.country_code),
                         scheme=COALESCE(excluded.scheme, http_servers.scheme),
+                        probe_host=COALESCE(excluded.probe_host, http_servers.probe_host),
+                        probe_path=COALESCE(excluded.probe_path, http_servers.probe_path),
                         banner=COALESCE(excluded.banner, http_servers.banner),
                         title=COALESCE(excluded.title, http_servers.title),
                         status='active',
                         last_seen=CURRENT_TIMESTAMP
                     """,
-                    (ip_address, country, country_code, port, scheme, banner, title),
+                    (
+                        ip_address,
+                        country,
+                        country_code,
+                        port,
+                        scheme,
+                        probe_host,
+                        probe_path,
+                        banner,
+                        title,
+                    ),
                 )
                 row = cur.execute(
                     "SELECT id FROM http_servers WHERE ip_address = ? AND port = ?",
@@ -2093,18 +2117,20 @@ class DatabaseReader:
             with self._get_connection() as conn:
                 if protocol_server_id is not None:
                     row = conn.execute(
-                        "SELECT id, scheme, port FROM http_servers WHERE id = ?",
+                        "SELECT id, scheme, port, probe_host, probe_path FROM http_servers WHERE id = ?",
                         (int(protocol_server_id),),
                     ).fetchone()
                 elif port is not None:
                     row = conn.execute(
-                        "SELECT id, scheme, port FROM http_servers WHERE ip_address = ? AND port = ? "
+                        "SELECT id, scheme, port, probe_host, probe_path FROM http_servers "
+                        "WHERE ip_address = ? AND port = ? "
                         "ORDER BY last_seen DESC, id DESC LIMIT 1",
                         (ip_address, int(port)),
                     ).fetchone()
                 else:
                     row = conn.execute(
-                        "SELECT id, scheme, port FROM http_servers WHERE ip_address = ? "
+                        "SELECT id, scheme, port, probe_host, probe_path FROM http_servers "
+                        "WHERE ip_address = ? "
                         "ORDER BY last_seen DESC, id DESC LIMIT 1",
                         (ip_address,),
                     ).fetchone()
@@ -2113,6 +2139,8 @@ class DatabaseReader:
                         "protocol_server_id": int(row[0]),
                         "scheme": row[1] or "http",
                         "port": int(row[2] or 80),
+                        "probe_host": row[3] or None,
+                        "probe_path": row[4] or None,
                     }
                 return None
         except Exception:

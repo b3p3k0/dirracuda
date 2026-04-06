@@ -22,7 +22,9 @@ that sort/filter never desynchronises selection from _row_by_iid.
 """
 
 import sqlite3
+import socket
 import webbrowser
+import ipaddress
 from pathlib import Path
 from tkinter import messagebox
 from typing import Optional
@@ -30,6 +32,7 @@ import tkinter as tk
 from tkinter import ttk
 
 import experimental.redseek.store as store
+from gui.components.unified_browser_window import open_ftp_http_browser
 from gui.utils.style import get_theme
 from experimental.redseek import explorer_bridge
 from experimental.redseek.models import RedditTarget
@@ -100,10 +103,16 @@ class RedditBrowserWindow:
     Row identity is stable across sort/filter via _row_by_iid.
     """
 
-    def __init__(self, parent: tk.Widget, db_path: Optional[Path] = None) -> None:
+    def __init__(
+        self,
+        parent: tk.Widget,
+        db_path: Optional[Path] = None,
+        add_record_callback=None,
+    ) -> None:
         self.parent = parent
         self.db_path = db_path
         self.theme = get_theme()
+        self._add_record_callback = add_record_callback
 
         # Row data store — keyed by iid (str(target.id))
         self._row_by_iid: dict[str, dict] = {}
@@ -112,6 +121,8 @@ class RedditBrowserWindow:
         # Sort state — column key ("target", "proto", …), not dict key
         self._sort_col: Optional[str] = None
         self._sort_reverse: bool = False
+        self._context_menu_visible: bool = False
+        self._context_menu_bindings: list[tuple[tk.Widget, str, str]] = []
 
         self.window = tk.Toplevel(parent)
         self._build_window()
@@ -165,6 +176,27 @@ class RedditBrowserWindow:
 
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Context menu (right-click)
+        self._context_menu = tk.Menu(self.window, tearoff=0)
+        self._context_menu.add_command(
+            label="Copy IP/Host",
+            command=self._on_copy_host,
+        )
+        self._context_menu.add_command(
+            label="Open in Explorer",
+            command=self._on_context_open_explorer,
+        )
+        self._context_menu.add_command(
+            label="Open in system browser",
+            command=self._on_context_open_system_browser,
+        )
+        self._context_menu.add_separator()
+        self._context_menu.add_command(
+            label="Add to dirracuda DB",
+            command=self._on_add_to_db,
+        )
+        self.tree.bind("<Button-3>", self._on_right_click)
 
         # Status label
         self.status_var = tk.StringVar(value="")
@@ -306,12 +338,12 @@ class RedditBrowserWindow:
     # Action handlers
     # ------------------------------------------------------------------
 
-    def _on_open_explorer(self) -> None:
+    def _selected_target(self) -> Optional[RedditTarget]:
+        """Return selected row as RedditTarget, or None if nothing selected."""
         row = self._selected_row()
         if row is None:
-            messagebox.showinfo("No selection", "Select a row first.", parent=self.window)
-            return
-        target = RedditTarget(
+            return None
+        return RedditTarget(
             id=row["id"],
             post_id=row["post_id"],
             target_raw=row["target_raw"],
@@ -323,7 +355,28 @@ class RedditBrowserWindow:
             created_at=row["created_at"],
             dedupe_key=row["dedupe_key"],
         )
-        explorer_bridge.open_target(target, self.window)
+
+    def _on_open_explorer(self) -> None:
+        target = self._selected_target()
+        if target is None:
+            messagebox.showinfo("No selection", "Select a row first.", parent=self.window)
+            return
+        def _factory(scheme: str, host: str, port: int, *, start_path: str = "/") -> None:
+            host_type = "F" if scheme == "ftp" else "H"
+            open_ftp_http_browser(
+                host_type, self.window, host, port,
+                initial_path=start_path,
+                scheme=scheme if host_type == "H" else None,
+            )
+
+        explorer_bridge.open_target(target, self.window, browser_factory=_factory)
+
+    def _on_open_system_browser(self) -> None:
+        target = self._selected_target()
+        if target is None:
+            messagebox.showinfo("No selection", "Select a row first.", parent=self.window)
+            return
+        explorer_bridge.open_target_system_browser(target, self.window)
 
     def _on_open_reddit_post(self) -> None:
         row = self._selected_row()
@@ -360,10 +413,203 @@ class RedditBrowserWindow:
             return
         self._load_rows()
 
+    def _on_right_click(self, event) -> str:
+        if self._context_menu_visible:
+            self._hide_context_menu()
+        iid = self.tree.identify_row(event.y)
+        if not iid:
+            return "break"
+        self.tree.selection_set(iid)
+        try:
+            self._context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self._context_menu.grab_release()
+        self._context_menu_visible = True
+        self._install_context_dismiss_handlers()
+        return "break"
+
+    def _install_context_dismiss_handlers(self) -> None:
+        self._remove_context_dismiss_handlers()
+        for widget in (self.window, self.tree):
+            for sequence in ("<Button-1>", "<Button-3>"):
+                bind_id = widget.bind(sequence, self._handle_context_dismiss_click, add="+")
+                if bind_id:
+                    self._context_menu_bindings.append((widget, sequence, bind_id))
+
+    def _remove_context_dismiss_handlers(self) -> None:
+        if not self._context_menu_bindings:
+            return
+        for widget, sequence, bind_id in self._context_menu_bindings:
+            try:
+                widget.unbind(sequence, bind_id)
+            except Exception:
+                pass
+        self._context_menu_bindings = []
+
+    def _handle_context_dismiss_click(self, event=None):
+        self._hide_context_menu()
+
+    def _hide_context_menu(self) -> None:
+        if not self._context_menu_visible:
+            return
+        try:
+            self._context_menu.unpost()
+        except Exception:
+            pass
+        self._context_menu_visible = False
+        self._remove_context_dismiss_handlers()
+
+    def _on_copy_host(self) -> None:
+        self._hide_context_menu()
+        row = self._selected_row()
+        if row is None:
+            return
+        host = str(row.get("host") or "").strip()
+        if not host:
+            return
+        try:
+            self.window.clipboard_clear()
+            self.window.clipboard_append(host)
+        except tk.TclError:
+            pass
+
+    def _on_context_open_explorer(self) -> None:
+        self._hide_context_menu()
+        self._on_open_explorer()
+
+    def _on_context_open_system_browser(self) -> None:
+        self._hide_context_menu()
+        self._on_open_system_browser()
+
+    def _build_prefill(self, row: dict) -> Optional[dict]:
+        """
+        Build Add Record prefill payload from a Reddit target row.
+
+        Maps protocol to host_type/scheme; extracts port from URL (D1: host:port only).
+        Returns None for unsupported protocols.
+        """
+        from urllib.parse import urlparse
+        protocol = (row.get("protocol") or "").lower().strip()
+        if protocol in ("http", "https"):
+            host_type, scheme = "H", protocol
+        elif protocol == "ftp":
+            host_type, scheme = "F", None
+        else:
+            return None
+
+        port = None
+        url = row.get("target_normalized") or ""
+        if url:
+            try:
+                port = urlparse(url).port  # None when not explicit in URL
+            except Exception:
+                port = None
+        # Fallback: handle bare host:port form with no scheme (e.g. "192.168.1.1:8080")
+        if port is None and url and "://" not in url:
+            segment = url.split("/")[0]
+            if ":" in segment:
+                try:
+                    port = int(segment.rsplit(":", 1)[1])
+                except (ValueError, IndexError):
+                    port = None
+
+        prefill = {
+            "host_type": host_type,
+            "host": row.get("host") or "",
+            "port": port,
+            "scheme": scheme,
+        }
+        if host_type == "H":
+            parsed = None
+            try:
+                parse_target = url if "://" in url else f"{scheme or 'http'}://{url}"
+                parsed = urlparse(parse_target) if parse_target else None
+            except Exception:
+                parsed = None
+            probe_host_hint = (parsed.hostname if parsed is not None else None) or str(row.get("host") or "").strip()
+            probe_path_hint = (parsed.path if parsed is not None else "") or "/"
+            probe_path_hint = probe_path_hint.split("?", 1)[0].split("#", 1)[0].strip() or "/"
+            if not probe_path_hint.startswith("/"):
+                probe_path_hint = "/" + probe_path_hint.lstrip("/")
+            prefill["_probe_host_hint"] = probe_host_hint
+            prefill["_probe_path_hint"] = probe_path_hint
+        return prefill
+
+    def _resolve_prefill_host_ipv4(self, prefill: dict) -> tuple[str, bool]:
+        """
+        Resolve prefill host to IPv4 for Reddit promotion.
+
+        Returns (host_to_use, was_resolved). If resolution fails or is not needed,
+        host_to_use is the original host and was_resolved=False.
+        """
+        host = str(prefill.get("host") or "").strip()
+        if not host:
+            return host, False
+
+        # Literal IP values are already valid inputs for Add Record.
+        try:
+            ipaddress.ip_address(host)
+            return host, False
+        except ValueError:
+            pass
+
+        try:
+            infos = socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM)
+        except OSError:
+            return host, False
+
+        for info in infos:
+            sockaddr = info[4] if len(info) > 4 else None
+            if isinstance(sockaddr, tuple) and sockaddr:
+                candidate = str(sockaddr[0]).strip()
+                if candidate:
+                    return candidate, True
+
+        return host, False
+
+    def _on_add_to_db(self) -> None:
+        self._hide_context_menu()
+        if self._add_record_callback is None:
+            messagebox.showinfo(
+                "Not available",
+                "Open this window from the Servers window to use 'Add to dirracuda DB'.",
+                parent=self.window,
+            )
+            return
+        row = self._selected_row()
+        if row is None:
+            messagebox.showinfo("No selection", "Select a row first.", parent=self.window)
+            return
+        prefill = self._build_prefill(row)
+        if prefill is None:
+            messagebox.showinfo(
+                "Cannot promote",
+                f"Protocol '{row.get('protocol')}' is not supported for DB promotion.",
+                parent=self.window,
+            )
+            return
+        prefill["_promotion_source"] = "reddit_browser"
+        resolved_host, was_resolved = self._resolve_prefill_host_ipv4(prefill)
+        if not was_resolved and resolved_host != "" and resolved_host == str(prefill.get("host") or "").strip():
+            try:
+                ipaddress.ip_address(resolved_host)
+            except ValueError:
+                messagebox.showwarning(
+                    "Host Resolution Failed",
+                    (
+                        f"Could not resolve '{resolved_host}' to an IPv4 address.\n"
+                        "You can still continue, but Save may fail until an IP address is entered."
+                    ),
+                    parent=self.window,
+                )
+        prefill["host"] = resolved_host
+        self._add_record_callback(prefill)
+
 
 def show_reddit_browser_window(
     parent: tk.Widget,
     db_path: Optional[Path] = None,
+    add_record_callback=None,
 ) -> None:
     """Open the Reddit Post DB browser window."""
-    RedditBrowserWindow(parent, db_path)
+    RedditBrowserWindow(parent, db_path, add_record_callback=add_record_callback)

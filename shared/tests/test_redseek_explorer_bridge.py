@@ -17,7 +17,15 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from experimental.redseek.explorer_bridge import _ask_protocol, _infer_url, open_target
+from experimental.redseek.explorer_bridge import (
+    _ask_protocol,
+    _infer_url,
+    _parse_for_internal,
+    _show_fallback_dialog,
+    open_target_system_browser,
+    open_target,
+    resolve_target_url,
+)
 from experimental.redseek.models import RedditTarget
 
 
@@ -139,11 +147,17 @@ class TestAskProtocol:
 
 class TestOpenTarget:
 
-    def test_known_url_opens_directly(self):
+    # -- renamed from test_known_url_opens_directly --
+    # Retains proof that URL inference works; asserts new internal-first behavior.
+    def test_known_url_no_factory_shows_fallback(self):
         t = _target(target_normalized="https://example.com/files/")
-        with patch("experimental.redseek.explorer_bridge.webbrowser.open") as mock_open:
+        with patch("experimental.redseek.explorer_bridge._show_fallback_dialog", return_value="cancel") as mock_dlg, \
+             patch("experimental.redseek.explorer_bridge.webbrowser.open") as mock_open:
             open_target(t, MagicMock())
-        mock_open.assert_called_once_with("https://example.com/files/")
+        mock_dlg.assert_called_once()
+        _, call_url, _ = mock_dlg.call_args[0]
+        assert call_url == "https://example.com/files/"
+        mock_open.assert_not_called()
 
     def test_unknown_target_calls_ask_protocol(self):
         t = _target(host="bare.host", target_normalized="bare.host")
@@ -159,9 +173,118 @@ class TestOpenTarget:
             open_target(t, MagicMock())
         mock_open.assert_not_called()
 
-    def test_prompt_protocol_constructs_url(self):
+    # -- renamed from test_prompt_protocol_constructs_url --
+    # Retains proof that host/port construction is correct; asserts new factory path.
+    def test_prompt_protocol_then_internal_launch(self):
         t = _target(host="bare.host", target_normalized="bare.host")
+        factory = MagicMock()
         with patch("experimental.redseek.explorer_bridge._ask_protocol", return_value="http"), \
              patch("experimental.redseek.explorer_bridge.webbrowser.open") as mock_open:
+            open_target(t, MagicMock(), browser_factory=factory)
+        factory.assert_called_once_with("http", "bare.host", 80, start_path="/")
+        mock_open.assert_not_called()
+
+    def test_internal_launch_success(self):
+        t = _target(target_normalized="ftp://files.example.com")
+        factory = MagicMock()
+        with patch("experimental.redseek.explorer_bridge._show_fallback_dialog") as mock_dlg, \
+             patch("experimental.redseek.explorer_bridge.webbrowser.open") as mock_open:
+            open_target(t, MagicMock(), browser_factory=factory)
+        factory.assert_called_once_with("ftp", "files.example.com", 21, start_path="/")
+        mock_dlg.assert_not_called()
+        mock_open.assert_not_called()
+
+    def test_internal_launch_success_passes_subpath_for_http(self):
+        t = _target(target_normalized="https://example.com/movies/")
+        factory = MagicMock()
+        with patch("experimental.redseek.explorer_bridge._show_fallback_dialog") as mock_dlg, \
+             patch("experimental.redseek.explorer_bridge.webbrowser.open") as mock_open:
+            open_target(t, MagicMock(), browser_factory=factory)
+        factory.assert_called_once_with("https", "example.com", 443, start_path="/movies/")
+        mock_dlg.assert_not_called()
+        mock_open.assert_not_called()
+
+    def test_no_factory_shows_fallback(self):
+        t = _target(target_normalized="http://example.com")
+        with patch("experimental.redseek.explorer_bridge._show_fallback_dialog", return_value="cancel") as mock_dlg:
             open_target(t, MagicMock())
-        mock_open.assert_called_once_with("http://bare.host")
+        mock_dlg.assert_called_once()
+        _, _, reason = mock_dlg.call_args[0]
+        assert "not available" in reason.lower()
+
+    def test_factory_failure_shows_fallback(self):
+        t = _target(target_normalized="http://example.com")
+        factory = MagicMock(side_effect=RuntimeError("conn refused"))
+        with patch("experimental.redseek.explorer_bridge._show_fallback_dialog", return_value="cancel") as mock_dlg:
+            open_target(t, MagicMock(), browser_factory=factory)
+        mock_dlg.assert_called_once()
+        _, _, reason = mock_dlg.call_args[0]
+        assert "conn refused" in reason
+
+    def test_fallback_browser_opens_url(self):
+        t = _target(target_normalized="http://example.com")
+        with patch("experimental.redseek.explorer_bridge._show_fallback_dialog", return_value="browser"), \
+             patch("experimental.redseek.explorer_bridge.webbrowser.open") as mock_open:
+            open_target(t, MagicMock())
+        mock_open.assert_called_once_with("http://example.com")
+
+    def test_fallback_copy_uses_clipboard(self):
+        t = _target(target_normalized="http://example.com")
+        parent = MagicMock()
+        with patch("experimental.redseek.explorer_bridge._show_fallback_dialog", return_value="copy"):
+            open_target(t, parent)
+        parent.clipboard_clear.assert_called_once()
+        parent.clipboard_append.assert_called_once_with("http://example.com")
+
+    def test_fallback_cancel_is_silent(self):
+        t = _target(target_normalized="http://example.com")
+        parent = MagicMock()
+        with patch("experimental.redseek.explorer_bridge._show_fallback_dialog", return_value="cancel"), \
+             patch("experimental.redseek.explorer_bridge.webbrowser.open") as mock_open:
+            open_target(t, parent)
+        mock_open.assert_not_called()
+        parent.clipboard_clear.assert_not_called()
+        parent.clipboard_append.assert_not_called()
+
+    def test_unsupported_scheme_shows_fallback(self):
+        # protocol="smb" + host triggers Rule 2 of _infer_url -> "smb://fileserver"
+        t = _target(protocol="smb", host="fileserver", target_normalized="fileserver")
+        with patch("experimental.redseek.explorer_bridge._show_fallback_dialog", return_value="cancel") as mock_dlg, \
+             patch("experimental.redseek.explorer_bridge.webbrowser.open") as mock_open:
+            open_target(t, MagicMock())
+        mock_dlg.assert_called_once()
+        _, _, reason = mock_dlg.call_args[0]
+        assert "ftp" in reason.lower() or "http" in reason.lower()
+        mock_open.assert_not_called()
+
+
+class TestSystemBrowserHelpers:
+
+    def test_resolve_target_url_known_scheme(self):
+        t = _target(target_normalized="https://example.com/a")
+        assert resolve_target_url(t, MagicMock()) == "https://example.com/a"
+
+    def test_resolve_target_url_prompt_cancel_returns_none(self):
+        t = _target(target_normalized="bare.host", host="bare.host")
+        with patch("experimental.redseek.explorer_bridge._ask_protocol", return_value=None):
+            assert resolve_target_url(t, MagicMock()) is None
+
+    def test_open_target_system_browser_opens_known_url(self):
+        t = _target(target_normalized="http://example.com")
+        with patch("experimental.redseek.explorer_bridge.webbrowser.open") as mock_open:
+            open_target_system_browser(t, MagicMock())
+        mock_open.assert_called_once_with("http://example.com")
+
+    def test_open_target_system_browser_prompt_then_open(self):
+        t = _target(target_normalized="bare.host", host="bare.host")
+        with patch("experimental.redseek.explorer_bridge._ask_protocol", return_value="https"), \
+             patch("experimental.redseek.explorer_bridge.webbrowser.open") as mock_open:
+            open_target_system_browser(t, MagicMock())
+        mock_open.assert_called_once_with("https://bare.host")
+
+    def test_open_target_system_browser_cancel_silent(self):
+        t = _target(target_normalized="bare.host", host="bare.host")
+        with patch("experimental.redseek.explorer_bridge._ask_protocol", return_value=None), \
+             patch("experimental.redseek.explorer_bridge.webbrowser.open") as mock_open:
+            open_target_system_browser(t, MagicMock())
+        mock_open.assert_not_called()

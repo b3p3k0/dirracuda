@@ -130,6 +130,24 @@ def _extract_post_meta(raw: dict) -> Optional[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Preview note helper (D-A2)
+# ---------------------------------------------------------------------------
+
+def _make_preview_note(title: Optional[str], body: Optional[str]) -> Optional[str]:
+    def _norm(s: Optional[str]) -> str:
+        return " ".join((s or "").split())[:120]
+
+    title_p = _norm(title)
+    body_p = _norm(body)
+    parts = []
+    if title_p:
+        parts.append(f"T:{title_p}")
+    if body_p:
+        parts.append(f"B:{body_p}")
+    return " | ".join(parts) if parts else None
+
+
+# ---------------------------------------------------------------------------
 # Mode workers
 # ---------------------------------------------------------------------------
 
@@ -216,6 +234,12 @@ def _run_new(
                 last_seen_at=now_str,
             )
             upsert_post(conn, post_obj)
+            preview_note = _make_preview_note(
+                meta["title"],
+                meta["selftext"] if options.parse_body else None,
+            )
+            for t in targets:
+                t.notes = preview_note
             before = conn.total_changes
             upsert_targets(conn, targets)
             actually_inserted = conn.total_changes - before
@@ -326,6 +350,12 @@ def _run_top(
                 last_seen_at=now_str,
             )
             upsert_post(conn, post_obj)
+            preview_note = _make_preview_note(
+                meta["title"],
+                meta["selftext"] if options.parse_body else None,
+            )
+            for t in targets:
+                t.notes = preview_note
             before = conn.total_changes
             upsert_targets(conn, targets)
             actually_inserted = conn.total_changes - before

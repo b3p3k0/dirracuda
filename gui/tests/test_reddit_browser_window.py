@@ -95,6 +95,10 @@ class _CaptureTree:
     def __init__(self):
         self._items: list[tuple[str, list]] = []  # [(iid, values), ...]
         self._selection: tuple[str, ...] = ()
+        self._row_for_y: dict[int, str] = {}
+        self._bind_counter: int = 0
+        self.bind_calls: list[tuple[str, object, object, str]] = []
+        self.unbind_calls: list[tuple[str, str | None]] = []
 
     def get_children(self) -> tuple:
         return tuple(iid for iid, _ in self._items)
@@ -121,25 +125,67 @@ class _CaptureTree:
     def set_selection(self, iid: str) -> None:
         self._selection = (iid,)
 
+    def selection_set(self, iid: str) -> None:
+        self._selection = (iid,)
+
+    def set_identify_row(self, y: int, iid: str) -> None:
+        self._row_for_y[y] = iid
+
+    def identify_row(self, y: int) -> str:
+        return self._row_for_y.get(y, "")
+
+    def bind(self, sequence, callback=None, add=None):
+        self._bind_counter += 1
+        bind_id = f"tree-bind-{self._bind_counter}"
+        self.bind_calls.append((sequence, callback, add, bind_id))
+        return bind_id
+
+    def unbind(self, sequence, bind_id=None):
+        self.unbind_calls.append((sequence, bind_id))
+
     @property
     def visible_iids(self) -> list[str]:
         return [iid for iid, _ in self._items]
 
 
+class _BindWidget:
+    """Minimal widget stub with bind/unbind tracking."""
+
+    def __init__(self) -> None:
+        self._bind_counter = 0
+        self.bind_calls: list[tuple[str, object, object, str]] = []
+        self.unbind_calls: list[tuple[str, str | None]] = []
+        self.clipboard_clear = MagicMock()
+        self.clipboard_append = MagicMock()
+
+    def bind(self, sequence, callback=None, add=None):
+        self._bind_counter += 1
+        bind_id = f"win-bind-{self._bind_counter}"
+        self.bind_calls.append((sequence, callback, add, bind_id))
+        return bind_id
+
+    def unbind(self, sequence, bind_id=None):
+        self.unbind_calls.append((sequence, bind_id))
+
+
 def _make_win(monkeypatch=None) -> RedditBrowserWindow:
     """Build a RedditBrowserWindow without constructing any Tk widgets."""
     win = RedditBrowserWindow.__new__(RedditBrowserWindow)
-    win.parent = MagicMock()
+    win.parent = _BindWidget()
     win.db_path = None
     win.theme = MagicMock()
     win._row_by_iid = {}
     win._all_rows = []
     win._sort_col = None
     win._sort_reverse = False
-    win.window = MagicMock()
+    win.window = _BindWidget()
     win.tree = _CaptureTree()
+    win._context_menu = MagicMock()
+    win._context_menu_visible = False
+    win._context_menu_bindings = []
     win.status_var = _StrVar()
     win._filter_var = _StrVar()
+    win._add_record_callback = None
     return win
 
 
@@ -443,7 +489,7 @@ class TestActionHandlers:
         open_target_calls = []
         monkeypatch.setattr(
             "gui.components.reddit_browser_window.explorer_bridge.open_target",
-            lambda t, p: open_target_calls.append(t),
+            lambda t, p, **kw: open_target_calls.append(t),
         )
         win._on_open_explorer()
         assert len(show_info_calls) == 1
@@ -463,14 +509,416 @@ class TestActionHandlers:
         win._row_by_iid["7"] = row
         win.tree.set_selection("7")
         captured = []
+        open_calls = []
         monkeypatch.setattr(
             "gui.components.reddit_browser_window.explorer_bridge.open_target",
-            lambda t, p: captured.append(t),
+            lambda t, p, **kw: captured.append((t, kw)),
+        )
+        monkeypatch.setattr(
+            "gui.components.reddit_browser_window.open_ftp_http_browser",
+            lambda *args, **kwargs: open_calls.append((args, kwargs)),
         )
         win._on_open_explorer()
         assert len(captured) == 1
-        t = captured[0]
+        t, kw = captured[0]
         assert isinstance(t, RedditTarget)
         assert t.id == 7
         assert t.target_normalized == "http://test.com"
         assert t.host == "test.com"
+        factory = kw.get("browser_factory")
+        assert callable(factory)
+        factory("https", "test.com", 443, start_path="/movies/")
+        assert len(open_calls) == 1
+        args, kwargs = open_calls[0]
+        assert args[0] == "H"
+        assert args[1] is win.window
+        assert args[2] == "test.com"
+        assert args[3] == 443
+        assert kwargs["initial_path"] == "/movies/"
+        assert kwargs["scheme"] == "https"
+
+    def test_open_system_browser_no_selection(self, monkeypatch):
+        win = _make_win()
+        show_info_calls = []
+        monkeypatch.setattr(
+            "gui.components.reddit_browser_window.messagebox.showinfo",
+            lambda *a, **k: show_info_calls.append(a),
+        )
+        bridge_calls = []
+        monkeypatch.setattr(
+            "gui.components.reddit_browser_window.explorer_bridge.open_target_system_browser",
+            lambda t, p: bridge_calls.append((t, p)),
+        )
+        win._on_open_system_browser()
+        assert len(show_info_calls) == 1
+        assert bridge_calls == []
+
+    def test_open_system_browser_calls_bridge_with_target(self, monkeypatch):
+        win = _make_win()
+        row = _make_raw_row(
+            9,
+            target_normalized="http://sys.example",
+            protocol="http",
+            host="sys.example",
+            target_raw="http://sys.example",
+            dedupe_key="dk9",
+            post_id="post9",
+        )
+        win._row_by_iid["9"] = row
+        win.tree.set_selection("9")
+        bridge_calls = []
+        monkeypatch.setattr(
+            "gui.components.reddit_browser_window.explorer_bridge.open_target_system_browser",
+            lambda t, p: bridge_calls.append((t, p)),
+        )
+        win._on_open_system_browser()
+        assert len(bridge_calls) == 1
+        target, parent = bridge_calls[0]
+        assert isinstance(target, RedditTarget)
+        assert target.id == 9
+        assert target.host == "sys.example"
+        assert parent is win.window
+
+
+# ---------------------------------------------------------------------------
+# Group E — _build_prefill and _on_add_to_db
+# ---------------------------------------------------------------------------
+
+class TestAddToDb:
+
+    def test_build_prefill_http(self):
+        win = _make_win()
+        row = _make_raw_row(1, protocol="http", host="example.com",
+                            target_normalized="http://example.com/files/")
+        result = win._build_prefill(row)
+        assert result is not None
+        assert result["host_type"] == "H"
+        assert result["host"] == "example.com"
+        assert result["port"] is None
+        assert result["scheme"] == "http"
+        assert result["_probe_host_hint"] == "example.com"
+        assert result["_probe_path_hint"] == "/files/"
+
+    def test_build_prefill_https_with_explicit_port(self):
+        win = _make_win()
+        row = _make_raw_row(1, protocol="https", host="example.com",
+                            target_normalized="https://example.com:8443/files/")
+        result = win._build_prefill(row)
+        assert result is not None
+        assert result["host_type"] == "H"
+        assert result["host"] == "example.com"
+        assert result["port"] == 8443
+        assert result["scheme"] == "https"
+        assert result["_probe_host_hint"] == "example.com"
+        assert result["_probe_path_hint"] == "/files/"
+
+    def test_build_prefill_ftp(self):
+        win = _make_win()
+        row = _make_raw_row(1, protocol="ftp", host="example.com",
+                            target_normalized="ftp://example.com/pub/")
+        result = win._build_prefill(row)
+        assert result == {"host_type": "F", "host": "example.com", "port": None, "scheme": None}
+
+    def test_build_prefill_ftp_with_port(self):
+        win = _make_win()
+        row = _make_raw_row(1, protocol="ftp", host="example.com",
+                            target_normalized="ftp://example.com:2121/")
+        result = win._build_prefill(row)
+        assert result is not None
+        assert result["port"] == 2121
+        assert result["host_type"] == "F"
+
+    def test_build_prefill_bare_host_port_form(self):
+        win = _make_win()
+        row = _make_raw_row(1, protocol="http", host="1.2.3.4",
+                            target_normalized="1.2.3.4:8080")
+        result = win._build_prefill(row)
+        assert result is not None
+        assert result["port"] == 8080
+        assert result["_probe_host_hint"] == "1.2.3.4"
+        assert result["_probe_path_hint"] == "/"
+
+    def test_build_prefill_unknown_protocol_returns_none(self):
+        win = _make_win()
+        row = _make_raw_row(1, protocol="smb", host="example.com",
+                            target_normalized="smb://example.com/share")
+        assert win._build_prefill(row) is None
+
+    def test_on_add_to_db_no_callback_shows_info(self, monkeypatch):
+        win = _make_win()
+        win._add_record_callback = None
+        info_calls = []
+        monkeypatch.setattr(
+            "gui.components.reddit_browser_window.messagebox.showinfo",
+            lambda *a, **k: info_calls.append(a),
+        )
+        win._on_add_to_db()
+        assert len(info_calls) == 1
+
+    def test_on_add_to_db_no_selection_shows_info(self, monkeypatch):
+        win = _make_win()
+        win._add_record_callback = MagicMock()
+        info_calls = []
+        monkeypatch.setattr(
+            "gui.components.reddit_browser_window.messagebox.showinfo",
+            lambda *a, **k: info_calls.append(a),
+        )
+        win._on_add_to_db()
+        assert len(info_calls) == 1
+        win._add_record_callback.assert_not_called()
+
+    def test_on_add_to_db_unknown_protocol_shows_info(self, monkeypatch):
+        win = _make_win()
+        win._add_record_callback = MagicMock()
+        row = _make_raw_row(1, protocol="smb", host="example.com")
+        win._row_by_iid["1"] = row
+        win.tree.set_selection("1")
+        info_calls = []
+        monkeypatch.setattr(
+            "gui.components.reddit_browser_window.messagebox.showinfo",
+            lambda *a, **k: info_calls.append(a),
+        )
+        win._on_add_to_db()
+        assert len(info_calls) == 1
+        win._add_record_callback.assert_not_called()
+
+    def test_on_add_to_db_calls_callback_with_correct_prefill(self, monkeypatch):
+        win = _make_win()
+        captured = []
+        win._add_record_callback = lambda p: captured.append(p)
+        row = _make_raw_row(1, protocol="http", host="1.2.3.4",
+                            target_normalized="http://1.2.3.4/files/")
+        win._row_by_iid["1"] = row
+        win.tree.set_selection("1")
+        win._on_add_to_db()
+        assert len(captured) == 1
+        assert captured[0]["host_type"] == "H"
+        assert captured[0]["host"] == "1.2.3.4"
+        assert captured[0]["scheme"] == "http"
+        assert captured[0]["port"] is None
+        assert captured[0]["_promotion_source"] == "reddit_browser"
+        assert captured[0]["_probe_host_hint"] == "1.2.3.4"
+        assert captured[0]["_probe_path_hint"] == "/files/"
+
+    def test_on_add_to_db_resolves_domain_to_ipv4_before_callback(self, monkeypatch):
+        win = _make_win()
+        captured = []
+        win._add_record_callback = lambda p: captured.append(p)
+        row = _make_raw_row(
+            1,
+            protocol="http",
+            host="example.com",
+            target_normalized="http://example.com/files/",
+        )
+        win._row_by_iid["1"] = row
+        win.tree.set_selection("1")
+
+        monkeypatch.setattr(
+            "gui.components.reddit_browser_window.socket.getaddrinfo",
+            lambda *a, **k: [
+                (2, 1, 6, "", ("93.184.216.34", 0)),
+                (2, 1, 6, "", ("93.184.216.35", 0)),
+            ],
+        )
+
+        warn_calls = []
+        monkeypatch.setattr(
+            "gui.components.reddit_browser_window.messagebox.showwarning",
+            lambda *a, **k: warn_calls.append(a),
+        )
+
+        win._on_add_to_db()
+
+        assert len(captured) == 1
+        assert captured[0]["host"] == "93.184.216.34"
+        assert captured[0]["_promotion_source"] == "reddit_browser"
+        assert captured[0]["_probe_host_hint"] == "example.com"
+        assert captured[0]["_probe_path_hint"] == "/files/"
+        assert warn_calls == []
+
+    def test_on_add_to_db_resolution_failure_keeps_host_and_warns(self, monkeypatch):
+        win = _make_win()
+        captured = []
+        win._add_record_callback = lambda p: captured.append(p)
+        row = _make_raw_row(
+            1,
+            protocol="http",
+            host="unknown.example.invalid",
+            target_normalized="http://unknown.example.invalid/files/",
+        )
+        win._row_by_iid["1"] = row
+        win.tree.set_selection("1")
+
+        def _raise(*_args, **_kwargs):
+            raise OSError("name or service not known")
+
+        monkeypatch.setattr(
+            "gui.components.reddit_browser_window.socket.getaddrinfo",
+            _raise,
+        )
+
+        warn_calls = []
+        monkeypatch.setattr(
+            "gui.components.reddit_browser_window.messagebox.showwarning",
+            lambda *a, **k: warn_calls.append((a, k)),
+        )
+
+        win._on_add_to_db()
+
+        assert len(captured) == 1
+        assert captured[0]["host"] == "unknown.example.invalid"
+        assert captured[0]["_promotion_source"] == "reddit_browser"
+        assert captured[0]["_probe_host_hint"] == "unknown.example.invalid"
+        assert captured[0]["_probe_path_hint"] == "/files/"
+        assert len(warn_calls) == 1
+        assert "Host Resolution Failed" in warn_calls[0][0][0]
+
+    def test_on_add_to_db_literal_ip_skips_dns_lookup(self, monkeypatch):
+        win = _make_win()
+        captured = []
+        win._add_record_callback = lambda p: captured.append(p)
+        row = _make_raw_row(
+            1,
+            protocol="http",
+            host="1.2.3.4",
+            target_normalized="http://1.2.3.4/files/",
+        )
+        win._row_by_iid["1"] = row
+        win.tree.set_selection("1")
+
+        dns_calls = []
+        monkeypatch.setattr(
+            "gui.components.reddit_browser_window.socket.getaddrinfo",
+            lambda *a, **k: dns_calls.append((a, k)),
+        )
+
+        win._on_add_to_db()
+
+        assert len(captured) == 1
+        assert captured[0]["host"] == "1.2.3.4"
+        assert captured[0]["_probe_host_hint"] == "1.2.3.4"
+        assert captured[0]["_probe_path_hint"] == "/files/"
+        assert dns_calls == []
+
+
+# ---------------------------------------------------------------------------
+# Group F — context menu lifecycle
+# ---------------------------------------------------------------------------
+
+class TestContextMenuLifecycle:
+
+    def test_right_click_row_shows_menu_and_marks_visible(self):
+        win = _make_win()
+        win.tree.set_identify_row(10, "1")
+        event = SimpleNamespace(y=10, x_root=320, y_root=210)
+
+        result = win._on_right_click(event)
+
+        assert result == "break"
+        win._context_menu.tk_popup.assert_called_once_with(320, 210)
+        win._context_menu.grab_release.assert_called_once()
+        assert win._context_menu_visible is True
+        assert len(win._context_menu_bindings) == 4
+
+    def test_dismiss_click_hides_menu_and_cleans_handlers(self):
+        win = _make_win()
+        win.tree.set_identify_row(10, "1")
+        event = SimpleNamespace(y=10, x_root=320, y_root=210)
+        win._on_right_click(event)
+
+        win._handle_context_dismiss_click()
+
+        win._context_menu.unpost.assert_called_once()
+        assert win._context_menu_visible is False
+        assert win._context_menu_bindings == []
+        assert len(win.window.unbind_calls) == 2
+        assert len(win.tree.unbind_calls) == 2
+
+    def test_right_click_empty_space_hides_existing_menu_and_does_not_reopen(self):
+        win = _make_win()
+        win.tree.set_identify_row(10, "1")
+        show_event = SimpleNamespace(y=10, x_root=320, y_root=210)
+        win._on_right_click(show_event)
+
+        win._context_menu.tk_popup.reset_mock()
+        win._context_menu.unpost.reset_mock()
+
+        empty_event = SimpleNamespace(y=99, x_root=500, y_root=500)
+        result = win._on_right_click(empty_event)
+
+        assert result == "break"
+        win._context_menu.unpost.assert_called_once()
+        win._context_menu.tk_popup.assert_not_called()
+        assert win._context_menu_visible is False
+
+    def test_on_add_to_db_hides_menu_before_dispatch(self):
+        win = _make_win()
+        captured = []
+        win._add_record_callback = lambda p: captured.append(p)
+        row = _make_raw_row(
+            1,
+            protocol="http",
+            host="1.2.3.4",
+            target_normalized="http://1.2.3.4/files/",
+        )
+        win._row_by_iid["1"] = row
+        win.tree.set_selection("1")
+        win.tree.set_identify_row(10, "1")
+        show_event = SimpleNamespace(y=10, x_root=320, y_root=210)
+        win._on_right_click(show_event)
+        win._context_menu.unpost.reset_mock()
+
+        win._on_add_to_db()
+
+        win._context_menu.unpost.assert_called_once()
+        assert win._context_menu_visible is False
+        assert len(captured) == 1
+
+    def test_copy_host_copies_selected_host_to_clipboard(self):
+        win = _make_win()
+        row = _make_raw_row(1, host="10.0.0.5")
+        win._row_by_iid["1"] = row
+        win.tree.set_selection("1")
+        win._on_copy_host()
+        win.window.clipboard_clear.assert_called_once()
+        win.window.clipboard_append.assert_called_once_with("10.0.0.5")
+
+    def test_copy_host_no_selection_is_noop(self):
+        win = _make_win()
+        win._on_copy_host()
+        win.window.clipboard_clear.assert_not_called()
+        win.window.clipboard_append.assert_not_called()
+
+    def test_context_open_explorer_hides_menu_then_dispatches(self, monkeypatch):
+        win = _make_win()
+        row = _make_raw_row(1, protocol="http", host="example.com")
+        win._row_by_iid["1"] = row
+        win.tree.set_selection("1")
+        win.tree.set_identify_row(10, "1")
+        show_event = SimpleNamespace(y=10, x_root=320, y_root=210)
+        win._on_right_click(show_event)
+        win._context_menu.unpost.reset_mock()
+        called = []
+        monkeypatch.setattr(win, "_on_open_explorer", lambda: called.append(True))
+
+        win._on_context_open_explorer()
+
+        win._context_menu.unpost.assert_called_once()
+        assert called == [True]
+
+    def test_context_open_system_browser_hides_menu_then_dispatches(self, monkeypatch):
+        win = _make_win()
+        row = _make_raw_row(1, protocol="http", host="example.com")
+        win._row_by_iid["1"] = row
+        win.tree.set_selection("1")
+        win.tree.set_identify_row(10, "1")
+        show_event = SimpleNamespace(y=10, x_root=320, y_root=210)
+        win._on_right_click(show_event)
+        win._context_menu.unpost.reset_mock()
+        called = []
+        monkeypatch.setattr(win, "_on_open_system_browser", lambda: called.append(True))
+
+        win._on_context_open_system_browser()
+
+        win._context_menu.unpost.assert_called_once()
+        assert called == [True]

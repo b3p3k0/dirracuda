@@ -513,6 +513,26 @@ class TestInitialLoadMappingGuard:
         tk_window.update_idletasks.assert_called_once()
         tk_window.update.assert_called_once()
 
+    def test_mapped_not_viewable_still_runs_load_after_nudge(self):
+        """
+        Regression guard for first-paint stall on some WMs where winfo_viewable()
+        stays false until user interaction (e.g. moving the titlebar).
+        """
+        window_mod, win = self._make_window_instance()
+        tk_window = MagicMock()
+        tk_window.winfo_exists.return_value = True
+        tk_window.winfo_ismapped.return_value = True
+        tk_window.winfo_viewable.return_value = False
+        win.window = tk_window
+        win._prime_initial_render = MagicMock()
+
+        window_mod.ServerListWindow._run_initial_data_load(win)
+
+        assert win._initial_load_started is True
+        win._prime_initial_render.assert_called_once()
+        win._clear_initial_map_binding.assert_called_once()
+        win._load_data.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # Test 10: mapped-focus helper should nudge first paint without topmost tricks
@@ -553,3 +573,330 @@ class TestMappedFocusPaintNudge:
         tk_window.focus_set.assert_called_once()
         tk_window.after_idle.assert_called_once_with(win._prime_initial_render)
         tk_window.after.assert_called_once_with(33, win._prime_initial_render)
+
+
+# ---------------------------------------------------------------------------
+# Card V2-3: _run_add_record extraction and open_add_record_dialog wiring
+# ---------------------------------------------------------------------------
+
+from pathlib import Path as _Path
+
+
+def _import_batch_ops_mixin():
+    """
+    Import ServerListWindowBatchOperationsMixin in isolation (no heavy GUI deps).
+    Same pattern as _import_table_module / _import_filters_module above.
+    """
+    sentinel = object()
+    module_names = [
+        "gui.components.server_list_window",
+        "gui.components.server_list_window.export",
+        "gui.components.server_list_window.details",
+        "gui.components.server_list_window.filters",
+        "gui.components.server_list_window.table",
+        "gui.components.server_list_window.actions",
+        "gui.components.server_list_window.actions.batch_operations",
+        "gui.components.pry_dialog",
+        "gui.components.pry_status_dialog",
+        "gui.components.batch_extract_dialog",
+    ]
+    prior = {name: sys.modules.get(name, sentinel) for name in module_names}
+    slw_dir = _Path(__file__).resolve().parents[1] / "components" / "server_list_window"
+    actions_dir = slw_dir / "actions"
+
+    try:
+        for name in module_names:
+            sys.modules.pop(name, None)
+
+        for name, attrs in (
+            ("gui.components.pry_dialog", {"PryDialog": type("PryDialog", (), {})}),
+            ("gui.components.pry_status_dialog", {"BatchStatusDialog": type("BatchStatusDialog", (), {})}),
+            ("gui.components.batch_extract_dialog", {"BatchExtractSettingsDialog": type("BatchExtractSettingsDialog", (), {})}),
+        ):
+            mod = types.ModuleType(name)
+            for k, v in attrs.items():
+                setattr(mod, k, v)
+            sys.modules[name] = mod
+
+        slw_pkg = types.ModuleType("gui.components.server_list_window")
+        slw_pkg.__path__ = [str(slw_dir)]
+        sys.modules["gui.components.server_list_window"] = slw_pkg
+        for sub in ("export", "details", "filters", "table"):
+            m = types.ModuleType(f"gui.components.server_list_window.{sub}")
+            sys.modules[f"gui.components.server_list_window.{sub}"] = m
+            setattr(slw_pkg, sub, m)
+
+        actions_pkg = types.ModuleType("gui.components.server_list_window.actions")
+        actions_pkg.__path__ = [str(actions_dir)]
+        sys.modules["gui.components.server_list_window.actions"] = actions_pkg
+
+        mod = importlib.import_module(
+            "gui.components.server_list_window.actions.batch_operations"
+        )
+        return mod.ServerListWindowBatchOperationsMixin
+    finally:
+        for name, prev in prior.items():
+            if prev is sentinel:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = prev
+
+
+_BatchOpsMixin = None
+
+
+def _get_batch_ops_mixin():
+    global _BatchOpsMixin
+    if _BatchOpsMixin is None:
+        _BatchOpsMixin = _import_batch_ops_mixin()
+    return _BatchOpsMixin
+
+
+class _MinimalBatchStub:
+    """Concrete stub for ServerListWindowBatchOperationsMixin tests."""
+
+    def __init__(self, db_reader=None):
+        Mixin = _get_batch_ops_mixin()
+
+        class _Concrete(Mixin):
+            pass
+
+        self._obj = _Concrete.__new__(_Concrete)
+        self._obj.window = MagicMock()
+        self._obj.tree = MagicMock()
+        self._obj.tree.exists = MagicMock(return_value=False)
+        self._obj.db_reader = db_reader if db_reader is not None else MagicMock()
+        self._obj.theme = MagicMock()
+        self._obj._load_data = MagicMock()
+        self._obj._apply_filters = MagicMock()
+        self._obj._set_status = MagicMock()
+
+    @property
+    def obj(self):
+        return self._obj
+
+
+class TestRunAddRecordDelegation:
+    """_on_add_record must delegate to _run_add_record; _run_add_record carries all logic."""
+
+    def test_on_add_record_delegates_to_run_add_record(self):
+        stub = _MinimalBatchStub()
+        obj = stub.obj
+        called_with = []
+        obj._run_add_record = lambda **kw: called_with.append(kw)
+        obj._on_add_record()
+        assert called_with == [{}]
+
+    def test_run_add_record_no_db_shows_error(self, monkeypatch):
+        stub = _MinimalBatchStub(db_reader=None)
+        obj = stub.obj
+        obj.db_reader = None
+        errors = []
+        monkeypatch.setattr("tkinter.messagebox.showerror", lambda *a, **k: errors.append(a))
+        obj._run_add_record()
+        assert len(errors) == 1
+        assert "Database" in errors[0][0]
+
+    def test_run_add_record_cancel_skips_db_write(self, monkeypatch):
+        stub = _MinimalBatchStub()
+        obj = stub.obj
+        obj._show_add_record_dialog = MagicMock(return_value=None)
+        obj._run_add_record()
+        obj.db_reader.upsert_manual_server_record.assert_not_called()
+
+    def test_run_add_record_passes_prefill_to_dialog(self, monkeypatch):
+        stub = _MinimalBatchStub()
+        obj = stub.obj
+        prefill = {"host_type": "H", "host": "1.2.3.4", "port": 80, "scheme": "http"}
+        obj.db_reader.upsert_manual_server_record.return_value = {
+            "row_key": "H:1", "operation": "insert", "host_type": "H",
+        }
+        dialog_calls = []
+
+        def _fake_dialog(prefill=None):
+            dialog_calls.append(prefill)
+            return {"host_type": "H", "ip_address": "1.2.3.4", "port": 80, "scheme": "http"}
+
+        obj._show_add_record_dialog = _fake_dialog
+        obj._run_add_record(prefill=prefill)
+        assert dialog_calls == [prefill]
+
+    def test_run_add_record_probe_enabled_calls_probe_helper_and_persists(self):
+        stub = _MinimalBatchStub()
+        obj = stub.obj
+        obj._show_add_record_dialog = MagicMock(return_value={
+            "host_type": "H",
+            "ip_address": "1.2.3.4",
+            "port": 80,
+            "scheme": "http",
+            "_probe_before_add": True,
+        })
+        obj._run_manual_add_probe = MagicMock(return_value={
+            "status": "clean",
+            "indicator_matches": 0,
+            "snapshot_path": "/tmp/http_probe.json",
+            "accessible_dirs_count": 1,
+            "accessible_dirs_list": "/",
+            "accessible_files_count": 0,
+            "port": 80,
+        })
+        obj.db_reader.upsert_manual_server_record.return_value = {
+            "row_key": "H:1", "operation": "insert", "host_type": "H", "protocol_server_id": 1,
+        }
+
+        obj._run_add_record()
+
+        obj._run_manual_add_probe.assert_called_once()
+        obj.db_reader.upsert_probe_cache_for_host.assert_called_once()
+
+    def test_run_add_record_strips_probe_flag_before_db_upsert(self):
+        stub = _MinimalBatchStub()
+        obj = stub.obj
+        obj._show_add_record_dialog = MagicMock(return_value={
+            "host_type": "S",
+            "ip_address": "1.2.3.4",
+            "_probe_before_add": False,
+        })
+        obj.db_reader.upsert_manual_server_record.return_value = {
+            "row_key": "S:1", "operation": "insert", "host_type": "S", "protocol_server_id": 1,
+        }
+
+        obj._run_add_record()
+
+        sent_payload = obj.db_reader.upsert_manual_server_record.call_args[0][0]
+        assert "_probe_before_add" not in sent_payload
+
+
+class TestRedditPromotionNotice:
+    """Reddit-origin promotion shows a muteable notice; manual add flow does not."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_flags(self):
+        from gui.utils import session_flags
+        session_flags.clear_flag(session_flags.REDDIT_PROMOTION_NOTICE_MUTE_KEY)
+        yield
+        session_flags.clear_flag(session_flags.REDDIT_PROMOTION_NOTICE_MUTE_KEY)
+
+    def test_run_add_record_reddit_promotion_shows_notice(self):
+        stub = _MinimalBatchStub()
+        obj = stub.obj
+        obj._show_add_record_dialog = MagicMock(return_value={
+            "host_type": "H",
+            "ip_address": "1.2.3.4",
+            "port": 80,
+            "scheme": "http",
+        })
+        obj.db_reader.upsert_manual_server_record.return_value = {
+            "row_key": "H:9",
+            "operation": "insert",
+            "host_type": "H",
+        }
+        obj._maybe_show_reddit_promotion_notice = MagicMock()
+
+        obj._run_add_record(prefill={
+            "host_type": "H",
+            "host": "1.2.3.4",
+            "port": 80,
+            "scheme": "http",
+            "_promotion_source": "reddit_browser",
+        })
+
+        obj._maybe_show_reddit_promotion_notice.assert_called_once()
+
+    def test_run_add_record_manual_add_does_not_show_notice(self):
+        stub = _MinimalBatchStub()
+        obj = stub.obj
+        obj._show_add_record_dialog = MagicMock(return_value={
+            "host_type": "S",
+            "ip_address": "1.2.3.4",
+        })
+        obj.db_reader.upsert_manual_server_record.return_value = {
+            "row_key": "S:9",
+            "operation": "insert",
+            "host_type": "S",
+        }
+        obj._maybe_show_reddit_promotion_notice = MagicMock()
+
+        obj._on_add_record()
+
+        obj._maybe_show_reddit_promotion_notice.assert_not_called()
+
+    def test_notice_mute_button_sets_session_flag(self, monkeypatch):
+        stub = _MinimalBatchStub()
+        obj = stub.obj
+
+        from gui.utils import session_flags
+        btn_commands = {}
+        module_path = _get_batch_ops_mixin().__module__
+        module = importlib.import_module(module_path)
+
+        class _FakeDialog:
+            def title(self, *_): pass
+            def transient(self, *_): pass
+            def grab_set(self): pass
+            def protocol(self, *_): pass
+            def wait_window(self): pass
+            def destroy(self): pass
+            def update_idletasks(self): pass
+            def lift(self, *_): pass
+            def focus_force(self): pass
+            def attributes(self, *_): pass
+
+        class _FakeWidget:
+            def __init__(self, *_args, **kwargs):
+                self._command = kwargs.get("command")
+                self._text = kwargs.get("text")
+                if self._text and self._command:
+                    btn_commands[self._text] = self._command
+            def pack(self, *_, **__): pass
+
+        monkeypatch.setattr(module.tk, "Toplevel", lambda *_a, **_k: _FakeDialog())
+        monkeypatch.setattr(module.tk, "Frame", lambda *_a, **_k: _FakeWidget())
+        monkeypatch.setattr(module.tk, "Label", lambda *_a, **_k: _FakeWidget())
+        monkeypatch.setattr(module.tk, "Button", lambda *_a, **_k: _FakeWidget(*_a, **_k))
+        monkeypatch.setattr(module, "ensure_dialog_focus", lambda *_a, **_k: None)
+
+        obj._maybe_show_reddit_promotion_notice()
+        assert "Mute for this session" in btn_commands
+        btn_commands["Mute for this session"]()
+        assert session_flags.get_flag(session_flags.REDDIT_PROMOTION_NOTICE_MUTE_KEY) is True
+
+    def test_notice_skipped_when_muted(self, monkeypatch):
+        stub = _MinimalBatchStub()
+        obj = stub.obj
+
+        from gui.utils import session_flags
+        session_flags.set_flag(session_flags.REDDIT_PROMOTION_NOTICE_MUTE_KEY)
+        module_path = _get_batch_ops_mixin().__module__
+        module = importlib.import_module(module_path)
+
+        calls = []
+        monkeypatch.setattr(
+            module.tk,
+            "Toplevel",
+            lambda *_a, **_k: calls.append(True),
+        )
+
+        obj._maybe_show_reddit_promotion_notice()
+        assert calls == []
+
+
+class TestOpenAddRecordDialogMethod:
+    """ServerListWindow.open_add_record_dialog is a public entrypoint for external callers."""
+
+    def _make_win_instance(self):
+        window_mod = _get_window()
+        win = window_mod.ServerListWindow.__new__(window_mod.ServerListWindow)
+        win._run_add_record = MagicMock()
+        return win
+
+    def test_open_add_record_dialog_calls_run_add_record(self):
+        win = self._make_win_instance()
+        win.open_add_record_dialog()
+        win._run_add_record.assert_called_once_with(prefill=None)
+
+    def test_open_add_record_dialog_passes_prefill(self):
+        win = self._make_win_instance()
+        prefill = {"host_type": "F", "host": "1.2.3.4", "port": 21, "scheme": None}
+        win.open_add_record_dialog(prefill=prefill)
+        win._run_add_record.assert_called_once_with(prefill=prefill)

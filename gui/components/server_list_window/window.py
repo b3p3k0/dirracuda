@@ -346,11 +346,20 @@ class ServerListWindow(ServerListWindowActionsMixin):
         try:
             if not self.window.winfo_exists():
                 return
-            # Guard against starting data work before first visible paint; this
-            # can reintroduce first-open blank/transparent render on some WMs.
-            if (not self.window.winfo_ismapped()) or (not self.window.winfo_viewable()):
+            # Guard against starting data work before first map. Some window
+            # managers may report winfo_viewable() late (until an expose/move),
+            # which can stall load and look like a blank/frozen first paint.
+            if not self.window.winfo_ismapped():
                 self._initial_load_after_id = self.window.after(50, self._run_initial_data_load)
                 return
+            # If mapped but not yet viewable, nudge a repaint once and continue.
+            # This avoids waiting forever for a viewable transition on WMs that
+            # only emit it after user interaction (e.g., titlebar move).
+            try:
+                if not self.window.winfo_viewable():
+                    self._prime_initial_render()
+            except tk.TclError:
+                pass
         except tk.TclError:
             return
         self._initial_load_started = True
@@ -433,10 +442,17 @@ class ServerListWindow(ServerListWindowActionsMixin):
         reddit_browser_button = tk.Button(
             header_frame,
             text="Reddit Post DB (EXP)",
-            command=lambda: show_reddit_browser_window(parent=self.window),
+            command=lambda: show_reddit_browser_window(
+                parent=self.window,
+                add_record_callback=self.open_add_record_dialog,
+            ),
         )
         self.theme.apply_to_widget(reddit_browser_button, "button_secondary")
         reddit_browser_button.pack(side=tk.RIGHT)
+
+    def open_add_record_dialog(self, prefill=None) -> None:
+        """Public entrypoint for external callers (e.g. Reddit browser) to open Add Record."""
+        self._run_add_record(prefill=prefill)
 
     def _create_filter_panel(self) -> None:
         """Create filtering controls panel using filters module."""
