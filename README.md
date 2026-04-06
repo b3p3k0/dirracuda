@@ -362,7 +362,6 @@ Known limitations:
 - Rate limiting may interrupt runs (HTTP 429 aborts the current run)
 - Some posts contain no usable targets
 - Data quality depends entirely on user-submitted content
-- It's flaky AF tbh I did it in a day while I was on shrooms
 
 ## Advanced
 
