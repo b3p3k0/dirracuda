@@ -68,7 +68,7 @@ Launch the GUI from your venv:
 
 | Package | Version | Purpose |
 |---------|---------|---------|
-| shodan | ≥1.25.0 | Shodan API client — discovers scan candidates by country and filter |
+| shodan | ≥1.25.0 | Shodan API client - discovers scan candidates by country and filter |
 | smbprotocol | ≥1.10.0 | Pure-Python SMB2/3 transport for cautious-mode sessions |
 | pyspnego | ≥0.8.0 | SPNEGO authentication support; required by smbprotocol |
 | impacket | ≥0.11.0 | SMB1/2/3 transport for legacy compatibility, share enumeration, and browser operations |
@@ -91,12 +91,12 @@ Launch the GUI from your venv:
 
 You're connecting to machines you don't control. A few baseline precautions before you scan:
 
-- **VPN** — don't scan from your real IP address
-- **VM** — run Dirracuda inside a virtual machine, especially if you plan to browse or extract files; unknown hosts can serve malicious content
-- **Network isolation** — keep the VM on an isolated network segment, not bridged directly to your LAN
-- **Don't open extracted files on your host** — quarantine defaults to `~/.dirracuda/quarantine/` inside the VM for a reason; treat everything you pull as untrusted
+- **VPN** - don't scan from your real IP address
+- **VM** - run Dirracuda inside a virtual machine, especially if you plan to browse or extract files; unknown hosts can serve malicious content
+- **Network isolation** - keep the VM on an isolated network segment, not bridged directly to your LAN
+- **Don't open extracted files on your host** - quarantine defaults to `~/.dirracuda/quarantine/` inside the VM for a reason; treat everything you pull as untrusted
 - **Audit the source code** - I'm not a threat actor, but I could be. Don't just clone and run things from Github all willy-nilly
-- **Don't run as root** — that's just silly!
+- **Don't run as root** - that's just silly!
 
 ### Dashboard
 
@@ -104,7 +104,7 @@ You're connecting to machines you don't control. A few baseline precautions befo
 
 The main window. From here you can:
 
-- Launch discovery from one **▶ Start Scan** button — pick one protocol or queue multiple protocols in sequence from the same dialog
+- Launch discovery from one **▶ Start Scan** button - pick one protocol or queue multiple protocols in sequence from the same dialog
 - Open the Server List Browser to work with hosts you've found
 - Manage your database (import, export, merge, maintenance)
 - Edit configuration
@@ -114,15 +114,15 @@ The main window. From here you can:
 
 ![start new scan dialog](img/scan.png)
 
-Triggered from **▶ Start Scan** with the protocol(s) selected. All three follow the same pipeline: Shodan query → reachability check → protocol-specific verification. Only hosts that pass get stored; failures are recorded with a reason code so you can see exactly where each candidate dropped out. Scan summary shows Shodan candidates vs. verified count. The same host registry handles all three protocols — the same IP can carry SMB, FTP, and multiple HTTP endpoint entries without collision.
+Triggered from **▶ Start Scan** with the protocol(s) selected. All three follow the same pipeline: Shodan query → reachability check → protocol-specific verification. Only hosts that pass get stored; failures are recorded with a reason code so you can see exactly where each candidate dropped out. Scan summary shows Shodan candidates vs. verified count. The same host registry handles all three protocols - the same IP can carry SMB, FTP, and multiple HTTP endpoint entries without collision.
 
-**SMB** — default dork: `smb authentication: disabled product:"Samba"`. Applies two extra pre-connection filters: org filtering (drops excluded ISPs and hosting providers) and 30-day deduplication (CLI overrides: `--rescan-all`, `--rescan-failed`). Verification tries Anonymous, Guest/blank, and Guest/Guest in sequence; whichever succeeds is recorded alongside country and timestamp, so auth method drift shows up across rescans. Two security modes: **Cautious** (default) restricts to signed SMB2+/SMB3 and rejects SMB1; **Legacy** lifts those restrictions and tends to find more targets. 
+**SMB** - default dork: `smb authentication: disabled product:"Samba"`. Applies two extra pre-connection filters: org filtering (drops excluded ISPs and hosting providers) and 30-day deduplication (CLI overrides: `--rescan-all`, `--rescan-failed`). Verification tries Anonymous, Guest/blank, and Guest/Guest in sequence; whichever succeeds is recorded alongside country and timestamp, so auth method drift shows up across rescans. Two security modes: **Cautious** (default) restricts to signed SMB2+/SMB3 and rejects SMB1; **Legacy** lifts those restrictions and tends to find more targets. 
 
-**FTP** — default dork: `port:21 "230 Login successful"`. Verification includes anonymous login and root directory listing. Failure codes: `connect_fail`, `auth_fail`, `list_fail`, `timeout`.
+**FTP** - default dork: `port:21 "230 Login successful"`. Verification includes anonymous login and root directory listing. Failure codes: `connect_fail`, `auth_fail`, `list_fail`, `timeout`.
 
-**HTTP** — default dork: `http.title:"Index of /"`. Verification stays locked to the exact Shodan hit endpoint (same IP + same port), and tests HTTP and/or HTTPS on that port based on your config toggles.
+**HTTP** - default dork: `http.title:"Index of /"`. Verification stays locked to the exact Shodan hit endpoint (same IP + same port), and tests HTTP and/or HTTPS on that port based on your config toggles.
 
-**Post-scan bulk probe/extract scope** — when bulk probe or bulk extract is enabled from the scan flow, targets are limited to accessible hosts from the scan that just completed (same protocol). Manual probe actions launched from Server List continue to use your explicit row selection and are unchanged.
+**Post-scan bulk probe/extract scope** - when bulk probe or bulk extract is enabled from the scan flow, targets are limited to accessible hosts from the scan that just completed (same protocol). Manual probe actions launched from Server List continue to use your explicit row selection and are unchanged.
 
 ### Server List
 
@@ -166,11 +166,11 @@ The viewer auto-detects file types: text files display with an encoding selector
 
 ![image viewer](img/pic_view.png)
 
-Files over the specified maximum (default: 5 MB) trigger a warning—you can bump that limit in `conf/config.json` under `file_browser.viewer.max_view_size_mb`, or click "Ignore Once" to load anyway (hard cap: 1 GB).
+Files over the specified maximum (default: 5 MB) trigger a warning-you can bump that limit in `conf/config.json` under `file_browser.viewer.max_view_size_mb`, or click "Ignore Once" to load anyway (hard cap: 1 GB).
 
 Downloads are staged in quarantine (`~/.dirracuda/quarantine/`). When ClamAV is enabled, downloaded files are post-processed by verdict (clean files promoted to extracted, infected files moved to known-bad). The browser never writes to remote systems.
 
-Download concurrency is configurable in the browser UI via the worker-count control (1–3 workers, default 2); the value is persisted in GUI settings under `file_browser.download_worker_count`. For SMB and FTP, a large-file threshold (persisted under `file_browser.download_large_file_mb`) routes files above that size to a dedicated worker. HTTP downloads use worker concurrency only — large-file routing is not active for HTTP in the current release. The large-file control is visible in the HTTP browser but disabled with an explanatory note.
+Download concurrency is configurable in the browser UI via the worker-count control (1–3 workers, default 2); the value is persisted in GUI settings under `file_browser.download_worker_count`. For SMB and FTP, a large-file threshold (persisted under `file_browser.download_large_file_mb`) routes files above that size to a dedicated worker. HTTP downloads use worker concurrency only - large-file routing is not active for HTTP in the current release. The large-file control is visible in the HTTP browser but disabled with an explanatory note.
 
 #### Optional tmpfs quarantine (Linux)
 
@@ -224,7 +224,7 @@ Automated file collection with configurable limits:
 - Max directory depth
 - File extension filtering
 
-All extracted files land in quarantine. The defaults are conservative — check `conf/config.json` if you need to adjust them.
+All extracted files land in quarantine. The defaults are conservative - check `conf/config.json` if you need to adjust them.
 
 #### Optional ClamAV scanning (bulk extract + browser downloads)
 
@@ -269,7 +269,7 @@ To use it, download a wordlist (we recommend [SecLists](https://github.com/danie
 }
 ```
 
-Pry includes lockout detection and configurable delays between attempts. That said, **this feature exists mostly as a novelty/proof of concept** — dedicated tools like Hydra or CrackMapExec will serve you better for serious password auditing.
+Pry includes lockout detection and configurable delays between attempts. That said, **this feature exists mostly as a novelty/proof of concept** - dedicated tools like Hydra or CrackMapExec will serve you better for serious password auditing.
 
 ### DB Tools
 
@@ -277,17 +277,17 @@ Pry includes lockout detection and configurable delays between attempts. That sa
 
 Opened via **DB Tools** on the dashboard. Four tabs:
 
-**Import & Merge** — supports two source types:
+**Import & Merge** - supports two source types:
 - External `.db` merge: merge by IP into current DB (includes shares, credentials, file manifests, vulnerabilities, failure logs).
 - CSV host import: import protocol server rows only (SMB/FTP/HTTP registries), using the same conflict strategies.
 
-Three conflict strategies are available in both paths: **Keep Newer** (default — picks whichever record has the more recent `last_seen`), **Keep Source**, and **Keep Current**. Auto-backup fires before import/merge unless you disable it.
+Three conflict strategies are available in both paths: **Keep Newer** (default - picks whichever record has the more recent `last_seen`), **Keep Source**, and **Keep Current**. Auto-backup fires before import/merge unless you disable it.
 
-**Export & Backup** — **Export** runs `VACUUM INTO` to produce a clean, defragmented copy at a path you choose. **Quick Backup** drops a timestamped copy (`dirracuda_backup_YYYYMMDD_HHMMSS.db`) next to the main database file.
+**Export & Backup** - **Export** runs `VACUUM INTO` to produce a clean, defragmented copy at a path you choose. **Quick Backup** drops a timestamped copy (`dirracuda_backup_YYYYMMDD_HHMMSS.db`) next to the main database file.
 
-**Statistics** — server and share counts, database size, date range, and a top-10 country breakdown. Read-only; won't lock the database.
+**Statistics** - server and share counts, database size, date range, and a top-10 country breakdown. Read-only; won't lock the database.
 
-**Maintenance** — Vacuum/optimize, integrity check, and age-based purge. The purge shows a full cascade preview before deleting — servers not seen within N days (default: 30) plus all associated shares, credentials, file manifests, vulnerabilities, and cached probe data.
+**Maintenance** - Vacuum/optimize, integrity check, and age-based purge. The purge shows a full cascade preview before deleting - servers not seen within N days (default: 30) plus all associated shares, credentials, file manifests, vulnerabilities, and cached probe data.
 
 ### CSV Host Import Standard
 
@@ -318,31 +318,58 @@ App settings are stored in `conf/config.json`. The example file (`conf/config.js
 
 Key sections:
 
-- `shodan.api_key` — required for discovery scans (SMB/FTP/HTTP)
-- `pry.*` — wordlist path, delays, lockout behavior
-- `file_collection.*` — extraction limits
-- `clamav.*` — optional post-extract scan/routing behavior
-- `file_browser.*` — browse mode limits (depth, entries, chunk size, quarantine root); download tuning — `download_worker_count` (1–3) and `download_large_file_mb` — is user-controlled in the browser UI and persisted in GUI settings, not read from this config file
-- `connection.*` — timeouts and rate limiting
-- `ftp.shodan.query_limits.max_results` — cap on Shodan FTP candidates per scan
-- `ftp.verification.*` — per-step timeouts for FTP connect, auth, and listing (seconds)
+- `shodan.api_key` - required for discovery scans (SMB/FTP/HTTP)
+- `pry.*` - wordlist path, delays, lockout behavior
+- `file_collection.*` - extraction limits
+- `clamav.*` - optional post-extract scan/routing behavior
+- `file_browser.*` - browse mode limits (depth, entries, chunk size, quarantine root); download tuning - `download_worker_count` (1–3) and `download_large_file_mb` - is user-controlled in the browser UI and persisted in GUI settings, not read from this config file
+- `connection.*` - timeouts and rate limiting
+- `ftp.shodan.query_limits.max_results` - cap on Shodan FTP candidates per scan
+- `ftp.verification.*` - per-step timeouts for FTP connect, auth, and listing (seconds)
 
 Two additional files hold editable lists:
 
-- `conf/exclusion_list.json` — Organizations to skip during Shodan queries (hosting providers, ISPs you don't care about etc.). Add entries to the `organizations` array.
-- `conf/ransomware_indicators.json` — Filename patterns checked during probe. Matches flag a server as likely compromised.
+- `conf/exclusion_list.json` - Organizations to skip during Shodan queries (hosting providers, ISPs you don't care about etc.). Add entries to the `organizations` array.
+- `conf/ransomware_indicators.json` - Filename patterns checked during probe. Matches flag a server as likely compromised.
 
 These are separate so you can customize or share them without touching app settings.
 
 The GUI includes a built-in config editor for common settings.
 
+## Experimental Features
+
+### Reddit Ingestion (redseek)
+
+Dirracuda can ingest posts from `r/opendirectories` as a feed source for analyst review. This is separate from SMB/FTP/HTTP scanning and performs no automatic probing or extraction.
+
+Access points:
+- Dashboard → `▶ Start Scan` dialog → `Reddit Grab (EXP)` (ingest)
+- Dashboard → `📋 Servers` window → `Reddit Post DB (EXP)` (review/open actions)
+
+Data is stored in a sidecar database at `~/.dirracuda/reddit_od.db` and does not write to the main Dirracuda DB tables.
+
+Disclaimer:
+
+> Dirracuda's Reddit ingestion feature uses publicly accessible JSON endpoints to retrieve posts from `r/opendirectories`.
+> No authentication is required, and only publicly available data is accessed.
+> This method is not part of Reddit's official API and may change or break at any time.
+> Treat all ingested data as unverified and potentially unsafe.
+
+Known limitations:
+- Reddit JSON endpoints are unofficial and may change without notice
+- Data availability is limited and not a complete historical archive
+- Rate limiting may interrupt runs (HTTP 429 aborts the current run)
+- Some posts contain no usable targets
+- Data quality depends entirely on user-submitted content
+- It's flaky AF tbh I did it in a day while I was on shrooms
+
 ## Advanced
 
 ### Templates
 
-**Scan templates** save your unified scan configuration — protocol selection, country/region filters, Shodan filters, max results, shared concurrency/timeout, and SMB/HTTP protocol-specific toggles. Click "Save Current" in the Start Scan dialog. Templates live in `~/.dirracuda/templates/` as JSON files you can edit directly.
+**Scan templates** save your unified scan configuration - protocol selection, country/region filters, Shodan filters, max results, shared concurrency/timeout, and SMB/HTTP protocol-specific toggles. Click "Save Current" in the Start Scan dialog. Templates live in `~/.dirracuda/templates/` as JSON files you can edit directly.
 
-**Filter templates** save your server list filters — search text, date range, countries, checkboxes. Click "Save Filters" in the advanced filter panel. Stored in `~/.dirracuda/filter_templates/`.
+**Filter templates** save your server list filters - search text, date range, countries, checkboxes. Click "Save Filters" in the advanced filter panel. Stored in `~/.dirracuda/filter_templates/`.
 
 Both auto-restore your last-used template on startup.
 
@@ -372,9 +399,9 @@ The CLI is useful for scripting and automation. The GUI uses the same backends.
 
 ## Development
 
-This started as a collection of crude bash and python scripts I've written over 30+ years of networking and security work — dorks, one-liners for poking at servers, that sort of thing. At some point it made sense to turn them into something with a GUI and a database, but the undertaking was far outside my skillset. I understand fundamentals of programming and logic but get lost in the sauce of syntax and structure.
+This started as a collection of crude bash and python scripts I've written over 30+ years of networking and security work - dorks, one-liners for poking at servers, that sort of thing. At some point it made sense to turn them into something with a GUI and a database, but the undertaking was far outside my skillset. I understand fundamentals of programming and logic but get lost in the sauce of syntax and structure.
 
-Fortunately AI has gotten good enough to generate functional code with proper oversight. Claude and Codex were extensively used to bring everything together and grow this from a handful of rough scripts to a full workflow manager.
+Fortunately AI has gotten good enough to generate functional code with proper oversight. Claude and Codex were extensively used to bring everything together and grow this from a handful of rough scripts to a full workflow manager. You can review much of the architecture and planning docs in the development branch if you're curious.
 
 ---
 
@@ -382,7 +409,7 @@ Fortunately AI has gotten good enough to generate functional code with proper ov
 
 **I am not a lawyer and this is not legal advice**
 
-You should only scan networks you own or have explicit permission to test. Unauthorized access is illegal in most jurisdictions — full stop.
+You should only scan networks you own or have explicit permission to test. Unauthorized access is illegal in most jurisdictions - full stop.
 
 That said: security research matters. Curiosity about how systems work isn't malicious, and understanding vulnerabilities is how we fix them. This tool exists because improperly secured data is a real problem worth studying. Use it to learn, to audit, to improve defenses and responsibly disclose. Don't be a dick.
 

@@ -512,3 +512,44 @@ class TestInitialLoadMappingGuard:
         win._load_data.assert_called_once()
         tk_window.update_idletasks.assert_called_once()
         tk_window.update.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Test 10: mapped-focus helper should nudge first paint without topmost tricks
+# ---------------------------------------------------------------------------
+
+class TestMappedFocusPaintNudge:
+    """First-open render should be nudged once mapped to avoid blank window."""
+
+    def _make_window_instance(self):
+        window_mod = _get_window()
+        win = window_mod.ServerListWindow.__new__(window_mod.ServerListWindow)
+        win._prime_initial_render = MagicMock()
+        return window_mod, win
+
+    def test_unmapped_window_requeues_focus_check(self):
+        window_mod, win = self._make_window_instance()
+        tk_window = MagicMock()
+        tk_window.winfo_exists.return_value = True
+        tk_window.winfo_ismapped.return_value = False
+        win.window = tk_window
+
+        window_mod.ServerListWindow._ensure_window_focus_when_mapped(win)
+
+        tk_window.after.assert_called_once_with(25, win._ensure_window_focus_when_mapped)
+        tk_window.lift.assert_not_called()
+        tk_window.focus_set.assert_not_called()
+
+    def test_mapped_window_applies_lightweight_focus_and_repaint_nudges(self):
+        window_mod, win = self._make_window_instance()
+        tk_window = MagicMock()
+        tk_window.winfo_exists.return_value = True
+        tk_window.winfo_ismapped.return_value = True
+        win.window = tk_window
+
+        window_mod.ServerListWindow._ensure_window_focus_when_mapped(win)
+
+        tk_window.lift.assert_called_once()
+        tk_window.focus_set.assert_called_once()
+        tk_window.after_idle.assert_called_once_with(win._prime_initial_render)
+        tk_window.after.assert_called_once_with(33, win._prime_initial_render)

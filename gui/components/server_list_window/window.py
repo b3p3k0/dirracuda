@@ -22,11 +22,11 @@ from gui.utils.database_access import DatabaseReader
 from gui.utils.style import get_theme
 from gui.utils.data_export_engine import get_export_engine
 from gui.utils.scan_manager import get_scan_manager
-from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.template_store import TemplateStore
 from gui.utils.logging_config import get_logger
 from gui.components.pry_dialog import PryDialog
 from gui.components.pry_status_dialog import BatchStatusDialog
+from gui.components.reddit_browser_window import show_reddit_browser_window
 from shared.db_migrations import run_migrations
 
 _logger = get_logger("server_list_window")
@@ -265,7 +265,15 @@ class ServerListWindow(ServerListWindowActionsMixin):
             if not self.window.winfo_ismapped():
                 self.window.after(25, self._ensure_window_focus_when_mapped)
                 return
-            ensure_dialog_focus(self.window, self.parent)
+            # Keep this modeless window focus path lightweight.
+            # Aggressive topmost/focus-force choreography can re-trigger
+            # first-open no-paint behavior on some window managers.
+            self.window.lift()
+            self.window.focus_set()
+            # Nudge one immediate repaint and one delayed repaint frame so
+            # first render is visible without requiring manual titlebar move.
+            self.window.after_idle(self._prime_initial_render)
+            self.window.after(33, self._prime_initial_render)
         except tk.TclError:
             pass
 
@@ -421,14 +429,14 @@ class ServerListWindow(ServerListWindowActionsMixin):
         )
         self.count_label.pack(side=tk.LEFT, padx=(20, 0))
 
-        # Close button
-        close_button = tk.Button(
+        # Experimental Reddit browser entrypoint
+        reddit_browser_button = tk.Button(
             header_frame,
-            text="✕ Close",
-            command=self._close_window
+            text="Reddit Post DB (EXP)",
+            command=lambda: show_reddit_browser_window(parent=self.window),
         )
-        self.theme.apply_to_widget(close_button, "button_secondary")
-        close_button.pack(side=tk.RIGHT)
+        self.theme.apply_to_widget(reddit_browser_button, "button_secondary")
+        reddit_browser_button.pack(side=tk.RIGHT)
 
     def _create_filter_panel(self) -> None:
         """Create filtering controls panel using filters module."""
