@@ -7,7 +7,8 @@ preserving behavior.
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog, simpledialog
+from tkinter import ttk, filedialog, simpledialog
+from gui.utils import safe_messagebox as messagebox
 from datetime import datetime
 import sqlite3
 from pathlib import Path
@@ -634,35 +635,7 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
         }
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     # Probe status helpers
-
 
 
     # (status helpers moved to batch_status.py)

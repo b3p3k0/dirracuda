@@ -14,7 +14,8 @@ Options:
 """
 
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import ttk
+from gui.utils import safe_messagebox as messagebox
 from typing import Callable
 
 from gui.utils.style import get_theme

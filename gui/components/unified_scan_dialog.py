@@ -14,7 +14,8 @@ import json
 import webbrowser
 import tkinter as tk
 from pathlib import Path
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk, simpledialog
+from gui.utils import safe_messagebox as messagebox
 from typing import Any, Callable, Dict, Optional
 
 from gui.components.scan_dialog import ScanDialog

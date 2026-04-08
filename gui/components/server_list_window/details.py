@@ -6,7 +6,8 @@ Self-contained UI components with passed data dependencies.
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, filedialog
+from gui.utils import safe_messagebox as messagebox
 import subprocess
 import platform
 import threading

@@ -26,10 +26,10 @@ import socket
 import webbrowser
 import ipaddress
 from pathlib import Path
-from tkinter import messagebox
 from typing import Optional
 import tkinter as tk
 from tkinter import ttk
+from gui.utils import safe_messagebox as messagebox
 
 import experimental.redseek.store as store
 from gui.components.unified_browser_window import open_ftp_http_browser

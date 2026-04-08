@@ -38,7 +38,8 @@ import queue
 import threading
 import time
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
+from gui.utils import safe_messagebox as messagebox
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Tuple
@@ -87,6 +88,20 @@ def _format_file_size(size_bytes: int) -> str:
     if unit_index == 0:
         return f"{int(size)} B"
     return f"{size:.1f} {units[unit_index]}"
+
+
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+    return default
 
 
 def _load_ftp_browser_config(config_path: Optional[str]) -> Dict:
@@ -347,6 +362,24 @@ class UnifiedBrowserCore:
         large_spin.bind("<FocusOut>", lambda _e: self._persist_tuning())
         large_spin.bind("<Return>",   lambda _e: self._persist_tuning())
 
+        self.show_download_success_var = tk.IntVar(
+            value=1
+            if _coerce_bool(
+                getattr(self, "show_download_success_dialog", True),
+                True,
+            )
+            else 0
+        )
+        show_success_check = tk.Checkbutton(
+            tuning_frame,
+            text="Show download completion popup",
+            variable=self.show_download_success_var,
+            command=self._persist_tuning,
+        )
+        if self.theme:
+            self.theme.apply_to_widget(show_success_check, "checkbox")
+        show_success_check.pack(side=tk.LEFT, padx=(10, 0))
+
         if not _large_enabled:
             # No fg= override; apply_theme_to_application() handles consistent styling
             tk.Label(
@@ -502,12 +535,16 @@ class UnifiedBrowserCore:
             status_text = ", ".join(status_parts)
             self._set_status(status_text)
             shown = self._maybe_show_clamav_dialog(clamav_accum)
-            if not shown and success > 0:
+            if (
+                not shown
+                and success > 0
+                and self._show_download_success_popup_enabled()
+            ):
                 messagebox.showinfo("Download complete", status_text, parent=self.window)
             return
 
         self._set_status(f"Downloaded {success}/{total} file(s) \u2192 {quarantine_path}")
-        if success > 0:
+        if success > 0 and self._show_download_success_popup_enabled():
             messagebox.showinfo(
                 "Download complete",
                 f"Downloaded {success}/{total} file(s) to quarantine:\n{quarantine_path}",
@@ -551,8 +588,18 @@ class UnifiedBrowserCore:
             if (clamav_accum and clamav_accum.get("enabled"))
             else False
         )
-        if not shown and self._window_alive():
+        if (
+            not shown
+            and self._window_alive()
+            and self._show_download_success_popup_enabled()
+        ):
             messagebox.showinfo("Download complete", summary_msg, parent=self.window)
+
+    def _show_download_success_popup_enabled(self) -> bool:
+        return _coerce_bool(
+            getattr(self, "show_download_success_dialog", True),
+            True,
+        )
 
     # ------------------------------------------------------------------
     # Status and button helpers
@@ -562,12 +609,27 @@ class UnifiedBrowserCore:
         try:
             self.download_workers = max(1, min(3, int(self.workers_var.get())))
             self.download_large_mb = max(1, int(self.large_mb_var.get()))
+            popup_var = getattr(self, "show_download_success_var", None)
+            if popup_var is not None:
+                self.show_download_success_dialog = _coerce_bool(
+                    popup_var.get(),
+                    True,
+                )
+            else:
+                self.show_download_success_dialog = _coerce_bool(
+                    getattr(self, "show_download_success_dialog", True),
+                    True,
+                )
         except Exception:
             return
         if self.settings_manager:
             try:
                 self.settings_manager.set_setting("file_browser.download_worker_count", self.download_workers)
                 self.settings_manager.set_setting("file_browser.download_large_file_mb", self.download_large_mb)
+                self.settings_manager.set_setting(
+                    "file_browser.show_download_success_dialog",
+                    self.show_download_success_dialog,
+                )
             except Exception:
                 pass
 
@@ -625,6 +687,7 @@ class FtpBrowserWindow(UnifiedBrowserCore):
         # Download tuning
         self.download_workers = 2
         self.download_large_mb = 25
+        self.show_download_success_dialog = True
         if self.settings_manager:
             try:
                 self.download_workers = max(1, min(3, int(self.settings_manager.get_setting(
@@ -633,6 +696,13 @@ class FtpBrowserWindow(UnifiedBrowserCore):
                 self.download_large_mb = max(1, int(self.settings_manager.get_setting(
                     "file_browser.download_large_file_mb", self.download_large_mb
                 )))
+                self.show_download_success_dialog = _coerce_bool(
+                    self.settings_manager.get_setting(
+                        "file_browser.show_download_success_dialog",
+                        self.show_download_success_dialog,
+                    ),
+                    self.show_download_success_dialog,
+                )
             except Exception:
                 pass
 
@@ -1226,6 +1296,7 @@ class HttpBrowserWindow(UnifiedBrowserCore):
         # Download tuning
         self.download_workers = 2
         self.download_large_mb = 25
+        self.show_download_success_dialog = True
         if self.settings_manager:
             try:
                 self.download_workers = max(1, min(3, int(self.settings_manager.get_setting(
@@ -1234,6 +1305,13 @@ class HttpBrowserWindow(UnifiedBrowserCore):
                 self.download_large_mb = max(1, int(self.settings_manager.get_setting(
                     "file_browser.download_large_file_mb", self.download_large_mb
                 )))
+                self.show_download_success_dialog = _coerce_bool(
+                    self.settings_manager.get_setting(
+                        "file_browser.show_download_success_dialog",
+                        self.show_download_success_dialog,
+                    ),
+                    self.show_download_success_dialog,
+                )
             except Exception:
                 pass
 
@@ -1751,6 +1829,7 @@ class SmbBrowserWindow(UnifiedBrowserCore):
         self.download_workers = int(self.config.get("download_worker_count", 2) or 2)
         self.download_workers = max(1, min(3, self.download_workers))
         self.download_large_mb = int(self.config.get("download_large_file_mb", 25) or 25)
+        self.show_download_success_dialog = True
         if self.settings_manager:
             try:
                 self.download_workers = int(self.settings_manager.get_setting(
@@ -1759,6 +1838,13 @@ class SmbBrowserWindow(UnifiedBrowserCore):
                 self.download_large_mb = int(self.settings_manager.get_setting(
                     "file_browser.download_large_file_mb", self.download_large_mb
                 ))
+                self.show_download_success_dialog = _coerce_bool(
+                    self.settings_manager.get_setting(
+                        "file_browser.show_download_success_dialog",
+                        self.show_download_success_dialog,
+                    ),
+                    self.show_download_success_dialog,
+                )
                 self.download_workers = max(1, min(3, self.download_workers))
             except Exception:
                 pass
@@ -1899,6 +1985,24 @@ class SmbBrowserWindow(UnifiedBrowserCore):
             command=self._persist_tuning,
         )
         large_spin.pack(side=tk.LEFT)
+
+        self.show_download_success_var = tk.IntVar(
+            value=1
+            if _coerce_bool(
+                getattr(self, "show_download_success_dialog", True),
+                True,
+            )
+            else 0
+        )
+        show_success_check = tk.Checkbutton(
+            tuning_frame,
+            text="Show download completion popup",
+            variable=self.show_download_success_var,
+            command=self._persist_tuning,
+        )
+        if self.theme:
+            self.theme.apply_to_widget(show_success_check, "checkbox")
+        show_success_check.pack(side=tk.LEFT, padx=(10, 0))
 
         # Treeview (protocol-specific columns via adapter hook)
         tree_frame = tk.Frame(self.window)
@@ -2991,12 +3095,27 @@ class SmbBrowserWindow(UnifiedBrowserCore):
         try:
             self.download_workers = max(1, min(3, int(self.workers_var.get())))
             self.download_large_mb = max(1, int(self.large_mb_var.get()))
+            popup_var = getattr(self, "show_download_success_var", None)
+            if popup_var is not None:
+                self.show_download_success_dialog = _coerce_bool(
+                    popup_var.get(),
+                    True,
+                )
+            else:
+                self.show_download_success_dialog = _coerce_bool(
+                    getattr(self, "show_download_success_dialog", True),
+                    True,
+                )
         except Exception:
             return
         if self.settings_manager:
             try:
                 self.settings_manager.set_setting("file_browser.download_worker_count", self.download_workers)
                 self.settings_manager.set_setting("file_browser.download_large_file_mb", self.download_large_mb)
+                self.settings_manager.set_setting(
+                    "file_browser.show_download_success_dialog",
+                    self.show_download_success_dialog,
+                )
             except Exception:
                 pass
 

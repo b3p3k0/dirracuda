@@ -9,7 +9,8 @@ validation feedback before committing changes to the database.
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, filedialog
+from gui.utils import safe_messagebox as messagebox
 from typing import Dict, List, Any, Optional, Callable
 import os
 import sys

@@ -6,7 +6,8 @@ Uses callback pattern for event delegation to prevent tight coupling.
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
+from gui.utils import safe_messagebox as messagebox
 from datetime import datetime
 from typing import Dict, List, Any, Callable, Optional, Tuple
 import re

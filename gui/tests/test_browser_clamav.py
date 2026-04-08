@@ -61,6 +61,7 @@ def _make_core_stub() -> UnifiedBrowserCore:
     c._set_status = MagicMock()
     c._window_alive = MagicMock(return_value=True)
     c._maybe_show_clamav_dialog = MagicMock(return_value=False)
+    c.show_download_success_dialog = True
     c.config = {"clamav": {"enabled": True, "show_results": True}}
     c.theme = None
     c.ip_address = "1.2.3.4"
@@ -226,6 +227,13 @@ class TestCoreDialogBehavior:
         args, _kwargs = m.call_args
         assert "to quarantine" in args[1]
 
+    def test_on_download_done_suppressed_when_pref_disabled(self):
+        core = _make_core_stub()
+        core.show_download_success_dialog = False
+        with patch("gui.components.unified_browser_window.messagebox.showinfo") as m:
+            UnifiedBrowserCore._on_download_done(core, 1, 1, "/tmp/q", None)
+        assert m.call_count == 0
+
     def test_maybe_show_dialog_muted_returns_false(self):
         core = _make_core_stub()
         session_flags.set_flag(session_flags.CLAMAV_MUTE_KEY, True)
@@ -268,6 +276,14 @@ class TestCoreDialogBehavior:
         with patch("gui.components.unified_browser_window.messagebox.showinfo") as m:
             UnifiedBrowserCore._on_smb_download_done(core, "ok", {"enabled": True, "files_scanned": 1})
         assert m.call_count == 1
+
+    def test_on_smb_download_done_suppressed_when_pref_disabled(self):
+        core = _make_core_stub()
+        core.show_download_success_dialog = False
+        core._maybe_show_clamav_dialog.return_value = False
+        with patch("gui.components.unified_browser_window.messagebox.showinfo") as m:
+            UnifiedBrowserCore._on_smb_download_done(core, "ok", {"enabled": True, "files_scanned": 1})
+        assert m.call_count == 0
 
 
 class TestFtpHttpDownloadWiring:

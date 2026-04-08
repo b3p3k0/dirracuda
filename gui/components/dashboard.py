@@ -10,9 +10,10 @@ while drill-down buttons allow detailed exploration without losing overview cont
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
 import webbrowser
 import tkinter.font as tkfont
+from gui.utils import safe_messagebox as messagebox
 import threading
 import time
 import json
@@ -1505,7 +1506,7 @@ class DashboardWidget:
                     if results and results.get("status") == "cancelled":
                         # Show lightweight info message for cancelled scan
                         try:
-                            import tkinter.messagebox as msgbox
+                            from gui.utils import safe_messagebox as msgbox
                             msgbox.showinfo(
                                 "Scan Cancelled",
                                 "Scan was cancelled by user request."

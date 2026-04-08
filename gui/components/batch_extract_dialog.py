@@ -11,7 +11,8 @@ consistent extension filter display across both workflows.
 """
 
 import tkinter as tk
-from tkinter import filedialog, messagebox, simpledialog
+from tkinter import filedialog, simpledialog
+from gui.utils import safe_messagebox as messagebox
 import json
 from pathlib import Path
 from typing import Dict, List, Any, Optional

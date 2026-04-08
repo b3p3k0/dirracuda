@@ -8,7 +8,8 @@ Extracted from batch.py to shrink file size while preserving behavior.
 import json
 import ipaddress
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog, simpledialog
+from tkinter import ttk, filedialog, simpledialog
+from gui.utils import safe_messagebox as messagebox
 from concurrent.futures import ThreadPoolExecutor, Future
 from datetime import datetime
 import threading

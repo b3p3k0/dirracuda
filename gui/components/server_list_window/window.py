@@ -6,7 +6,8 @@ Maintains all shared state and coordinates between components.
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog, simpledialog
+from tkinter import ttk, filedialog, simpledialog
+from gui.utils import safe_messagebox as messagebox
 from datetime import datetime
 import sqlite3
 from pathlib import Path

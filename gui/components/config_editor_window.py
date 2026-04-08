@@ -9,7 +9,8 @@ without the complexity of form-based interfaces.
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, filedialog
+from gui.utils import safe_messagebox as messagebox
 import json
 import os
 from pathlib import Path
