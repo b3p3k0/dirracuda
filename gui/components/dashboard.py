@@ -339,7 +339,7 @@ class DashboardWidget:
         # Line 1: Title only
         title_label = self.theme.create_styled_label(
             header_frame,
-            "Dirracuda ><(((°>",
+            "Dirracuda      ><(((°>",
             "title"
         )
         title_label.pack(anchor=tk.W, pady=(0, 5))
