@@ -6,7 +6,8 @@ for the server list window.
 """
 
 import tkinter as tk
-from tkinter import messagebox, simpledialog
+from tkinter import simpledialog
+from gui.utils import safe_messagebox as messagebox
 from typing import Dict, Any, Optional
 
 from gui.components.server_list_window import filters, table

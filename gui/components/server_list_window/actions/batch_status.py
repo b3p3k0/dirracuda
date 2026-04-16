@@ -4,7 +4,6 @@ Batch status and UI helpers for ServerListWindow.
 
 import sqlite3
 import tkinter as tk
-from tkinter import messagebox
 import time
 import platform
 import json
@@ -14,6 +13,7 @@ from typing import Dict, Any, Optional, List
 
 from gui.components.server_list_window import table, filters
 from gui.components.batch_summary_dialog import show_batch_summary_dialog
+from gui.utils import safe_messagebox as messagebox
 from gui.utils import probe_cache
 from gui.utils.logging_config import get_logger
 from gui.components.pry_status_dialog import BatchStatusDialog

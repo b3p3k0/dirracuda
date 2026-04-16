@@ -6,7 +6,8 @@ Self-contained UI components with passed data dependencies.
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, filedialog
+from gui.utils import safe_messagebox as messagebox
 import subprocess
 import platform
 import threading
@@ -709,6 +710,8 @@ def _start_probe(
                     _ftp_port = 21
             _http_port = None
             _http_scheme = None
+            _http_request_host = None
+            _http_start_path = None
             _protocol_server_id = server_data.get("protocol_server_id")
             if host_type == "H":
                 try:
@@ -726,6 +729,11 @@ def _start_probe(
                 if _http_port is None:
                     _http_port = int((_detail or {}).get("port") or 80)
                 _http_scheme = (_detail or {}).get("scheme") or ("https" if _http_port == 443 else "http")
+                _http_request_host = (server_data.get("probe_host") or (_detail or {}).get("probe_host") or None)
+                _http_start_path = (server_data.get("probe_path") or (_detail or {}).get("probe_path") or "/")
+                _http_start_path = str(_http_start_path).split("?", 1)[0].split("#", 1)[0].strip() or "/"
+                if not _http_start_path.startswith("/"):
+                    _http_start_path = "/" + _http_start_path.lstrip("/")
             result = dispatch_probe_run(
                 ip_address, host_type,
                 max_directories=int(config["max_directories"]),
@@ -734,6 +742,8 @@ def _start_probe(
                 cancel_event=cancel_event,
                 port=_ftp_port if host_type == "F" else _http_port,
                 scheme=_http_scheme,
+                request_host=_http_request_host,
+                start_path=_http_start_path,
                 protocol_server_id=_protocol_server_id,
                 db_reader=db_accessor,
                 shares=accessible_shares,

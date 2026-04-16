@@ -10,7 +10,8 @@ and guides users through database setup with appropriate feedback.
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, filedialog
+from gui.utils import safe_messagebox as messagebox
 import os
 import sys
 import threading

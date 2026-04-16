@@ -18,7 +18,8 @@ Differences from FtpScanDialog:
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
+from gui.utils import safe_messagebox as messagebox
 import json
 import webbrowser
 from pathlib import Path

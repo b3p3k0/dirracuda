@@ -14,7 +14,8 @@ import queue
 import threading
 from pathlib import Path
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog
+from gui.utils import safe_messagebox as messagebox
 from typing import Callable, Optional
 
 from gui.utils.style import get_theme

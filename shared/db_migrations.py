@@ -318,6 +318,8 @@ def run_migrations(db_path: str) -> None:
                 country_code TEXT,
                 port         INTEGER  NOT NULL DEFAULT 80,
                 scheme       TEXT     DEFAULT 'http',
+                probe_host   TEXT,
+                probe_path   TEXT,
                 banner       TEXT,
                 title        TEXT,
                 shodan_data  TEXT,
@@ -381,6 +383,11 @@ def run_migrations(db_path: str) -> None:
             "UPDATE http_servers SET host_type = 'H' "
             "WHERE host_type IS NULL OR TRIM(host_type) = ''"
         )
+        # V2-8: optional HTTP probe hint fields (host/path for vhost/subpath probing).
+        if "probe_host" not in http_cols:
+            cur.execute("ALTER TABLE http_servers ADD COLUMN probe_host TEXT")
+        if "probe_path" not in http_cols:
+            cur.execute("ALTER TABLE http_servers ADD COLUMN probe_path TEXT")
 
         # --- HTTP state tables (parallel to host_user_flags / host_probe_cache) ---
         cur.execute(
@@ -902,6 +909,8 @@ def _migrate_http_servers_to_endpoint_identity(cur: sqlite3.Cursor) -> None:
             country_code TEXT,
             port         INTEGER  NOT NULL DEFAULT 80,
             scheme       TEXT     DEFAULT 'http',
+            probe_host   TEXT,
+            probe_path   TEXT,
             banner       TEXT,
             title        TEXT,
             shodan_data  TEXT,
@@ -935,6 +944,8 @@ def _migrate_http_servers_to_endpoint_identity(cur: sqlite3.Cursor) -> None:
                 {_expr("country_code", "NULL")} AS country_code_norm,
                 CAST(COALESCE({_expr("port", "80")}, 80) AS INTEGER) AS port_norm,
                 COALESCE({_expr("scheme", "'http'")}, 'http') AS scheme_norm,
+                {_expr("probe_host", "NULL")} AS probe_host_norm,
+                {_expr("probe_path", "NULL")} AS probe_path_norm,
                 {_expr("banner", "NULL")} AS banner_norm,
                 {_expr("title", "NULL")} AS title_norm,
                 {_expr("shodan_data", "NULL")} AS shodan_data_norm,
@@ -957,7 +968,7 @@ def _migrate_http_servers_to_endpoint_identity(cur: sqlite3.Cursor) -> None:
         )
         INSERT INTO http_servers_new (
             id, ip_address, host_type, country, country_code, port, scheme,
-            banner, title, shodan_data, first_seen, last_seen, scan_count,
+            probe_host, probe_path, banner, title, shodan_data, first_seen, last_seen, scan_count,
             status, notes, updated_at, created_at
         )
         SELECT
@@ -968,6 +979,8 @@ def _migrate_http_servers_to_endpoint_identity(cur: sqlite3.Cursor) -> None:
             country_code_norm,
             port_norm,
             scheme_norm,
+            probe_host_norm,
+            probe_path_norm,
             banner_norm,
             title_norm,
             shodan_data_norm,

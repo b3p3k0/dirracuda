@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Union
 
@@ -39,7 +39,7 @@ def _host_root(base_path: Optional[Union[str, Path]], ip_address: Optional[str])
 
 
 def _date_bucket(now: Optional[datetime] = None) -> str:
-    now = now or datetime.utcnow()
+    now = now or datetime.now(timezone.utc)
     return now.strftime("%Y%m%d")
 
 
@@ -89,7 +89,7 @@ def log_quarantine_event(host_dir: Path, message: str) -> None:
     """Append a simple activity line to the host's activity.log."""
     try:
         log_file = host_dir / "activity.log"
-        timestamp = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
         log_file.parent.mkdir(parents=True, exist_ok=True)
         with log_file.open("a", encoding="utf-8") as fh:
             fh.write(f"{timestamp} {message}\n")

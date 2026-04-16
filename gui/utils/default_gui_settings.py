@@ -124,7 +124,8 @@ DEFAULT_GUI_SETTINGS = {
         'extension_mode': 'allow_only'
     },
     'file_browser': {
-        'folder_limits': {}
+        'folder_limits': {},
+        'show_download_success_dialog': True
     },
     'templates': {
         'last_used': None

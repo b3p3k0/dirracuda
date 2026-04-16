@@ -7,7 +7,7 @@ This script shows the dashboard functionality and component integration.
 """
 
 import tkinter as tk
-from tkinter import messagebox
+from gui.utils import safe_messagebox as messagebox
 import time
 import threading
 from main import SMBSeekGUI

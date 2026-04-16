@@ -6,7 +6,8 @@ All operations use explicit dependency injection to avoid tight coupling.
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, filedialog
+from gui.utils import safe_messagebox as messagebox
 from datetime import datetime
 from typing import Dict, List, Any
 

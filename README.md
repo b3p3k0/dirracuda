@@ -238,7 +238,7 @@ When enabled, ClamAV post-processes files downloaded via:
 
 Each file is scanned and then routed by verdict:
 
-- **clean** → moved to `~/.dirracuda/extracted/<host>/<date>/<share>/...`if "auto promote" is enabled, else left in place for user to manually process
+- **clean** → moved to `~/.dirracuda/extracted/<host>/<date>/<share>/...`
 - **infected** → moved to `~/.dirracuda/quarantine/<known_bad_subdir>/<host>/<date>/<share>/...` (default subdir: `known_bad`)
 - **scanner error/timeout/missing binary** → file stays in quarantine; extract continues (fail-open)
 
@@ -337,13 +337,7 @@ These are separate so you can customize or share them without touching app setti
 
 The GUI includes a built-in config editor for common settings.
 
-## Known Issues
-
-- **Server List Browser window doesn't fill** - grab the title bar and give it a shake, this is a timing condition that is mostly resolved but still may crop up
-- **Interface appears unresponsive** - some dialogs pop under their parent window, blocking action and creating the appearance of a lock. try moving the windows and looking for a stray dialog. again, mostly adressed but may reappear
-
 ## Experimental Features
-_(Available in [development branch](https://github.com/b3p3k0/dirracuda/tree/development))_
 
 ### Reddit Ingestion (redseek)
 
