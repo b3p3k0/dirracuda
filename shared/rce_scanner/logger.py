@@ -7,7 +7,7 @@ Each line is a self-contained JSON record with full evidence.
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -57,7 +57,7 @@ class RceJsonlLogger:
             True if log was written successfully
         """
         record = {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "ip": ip,
             "verdict": report.get("verdict"),
             "rce_status": report.get("rce_status"),
@@ -103,7 +103,7 @@ class RceJsonlLogger:
             True if log was written successfully
         """
         record = {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "ip": ip,
             "verdict": "error",
             "rce_status": "not_run",
@@ -131,7 +131,7 @@ class RceJsonlLogger:
             True if log was written successfully
         """
         record = {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "record_type": "batch_summary",
             "session_id": session_id,
             "total_hosts": total_hosts,
@@ -181,7 +181,7 @@ class RceJsonlLogger:
                 return False
 
             # Create rotated filename with timestamp
-            timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
             rotated_path = self.path.with_suffix(f".{timestamp}.jsonl")
 
             self.path.rename(rotated_path)

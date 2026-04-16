@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import io
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
 from typing import Optional, Callable
+
+from gui.utils import safe_messagebox as messagebox
 
 try:
     from PIL import Image, ImageTk

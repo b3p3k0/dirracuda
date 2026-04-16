@@ -12,7 +12,8 @@ import subprocess
 import sys
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox
+from tkinter import filedialog
+from gui.utils import safe_messagebox as messagebox
 from typing import Any, Callable, Dict, Optional
 
 from gui.utils.dialog_helpers import ensure_dialog_focus

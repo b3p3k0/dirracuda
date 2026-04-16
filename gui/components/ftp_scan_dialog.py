@@ -10,7 +10,8 @@ Uses the same region map and country validation logic as ScanDialog.
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk, simpledialog
+from gui.utils import safe_messagebox as messagebox
 import json
 import webbrowser
 from pathlib import Path

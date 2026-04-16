@@ -8,7 +8,8 @@ Extracted from batch.py to shrink file size while preserving behavior.
 import json
 import ipaddress
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog, simpledialog
+from tkinter import ttk, filedialog, simpledialog
+from gui.utils import safe_messagebox as messagebox
 from concurrent.futures import ThreadPoolExecutor, Future
 from datetime import datetime
 import threading
@@ -20,7 +21,10 @@ from typing import Dict, List, Any, Optional
 from gui.components.server_list_window import export, details, filters, table
 from gui.components.batch_extract_dialog import BatchExtractSettingsDialog
 from gui.components.pry_dialog import PryDialog
-from gui.utils import probe_cache, probe_patterns, probe_runner, extract_runner, pry_runner
+from gui.utils import probe_cache, probe_patterns, probe_runner, extract_runner, pry_runner, session_flags
+from gui.utils.probe_cache_dispatch import get_probe_snapshot_path_for_host, dispatch_probe_run
+from gui.utils.probe_snapshot_summary import summarize_probe_snapshot
+from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.logging_config import get_logger
 from shared.quarantine import create_quarantine_dir
 
@@ -33,13 +37,41 @@ class ServerListWindowBatchOperationsMixin:
     """
     def _on_add_record(self) -> None:
         """Open manual-add dialog and upsert one protocol row into the active database."""
+        self._run_add_record()
+
+    def _run_add_record(self, prefill: Optional[Dict[str, Any]] = None) -> None:
+        """
+        Shared Add Record logic, optionally prefilled from an external source.
+
+        prefill schema: {"host_type": "H"|"F", "host": str, "port": int|None,
+                         "scheme": "http"|"https"|None}
+        """
         if not self.db_reader:
             messagebox.showerror("Database Unavailable", "No database is configured for this session.", parent=self.window)
             return
 
-        payload = self._show_add_record_dialog()
+        payload = self._show_add_record_dialog(prefill=prefill)
         if not payload:
             return
+        probe_before_add = bool(payload.pop("_probe_before_add", False))
+        probe_result: Optional[Dict[str, Any]] = None
+
+        if probe_before_add:
+            try:
+                probe_result = self._run_manual_add_probe(payload)
+            except Exception as exc:
+                messagebox.showwarning(
+                    "Probe Failed",
+                    (
+                        f"Probe failed before adding:\n{exc}\n\n"
+                        "The record will still be added."
+                    ),
+                    parent=self.window,
+                )
+
+        is_reddit_promotion = bool(
+            prefill and prefill.get("_promotion_source") == "reddit_browser"
+        )
 
         try:
             result = self.db_reader.upsert_manual_server_record(payload)
@@ -50,6 +82,12 @@ class ServerListWindowBatchOperationsMixin:
                 parent=self.window,
             )
             return
+
+        if probe_result:
+            try:
+                self._persist_manual_add_probe_result(payload, result, probe_result)
+            except Exception as exc:
+                _logger.warning("Failed to persist pre-add probe cache: %s", exc)
 
         # Refresh data under current filter state.
         self.db_reader.clear_cache()
@@ -70,6 +108,8 @@ class ServerListWindowBatchOperationsMixin:
             except Exception:
                 pass
             self._set_status(f"{type_label} record {operation}: {ip_address}")
+            if is_reddit_promotion:
+                self._maybe_show_reddit_promotion_notice()
             return
 
         hidden_note = (
@@ -77,8 +117,227 @@ class ServerListWindowBatchOperationsMixin:
             f"The row is hidden by current filters (for example, Shares > 0)."
         )
         self._set_status(hidden_note)
+        if is_reddit_promotion:
+            self._maybe_show_reddit_promotion_notice()
 
-    def _show_add_record_dialog(self) -> Optional[Dict[str, Any]]:
+    def _run_manual_add_probe(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Run a probe for a manual-add payload and return probe persistence data.
+
+        Raises on probe failure; caller decides whether to continue add flow.
+        """
+        host_type = str(payload.get("host_type") or "").strip().upper()
+        ip_address = str(payload.get("ip_address") or "").strip()
+        if host_type not in {"S", "F", "H"} or not ip_address:
+            raise ValueError("Probe requires valid host_type and ip_address.")
+
+        limits = details._load_probe_config(self.settings_manager)
+        cancel_event = threading.Event()
+        indicator_patterns = self.indicator_patterns if self.indicator_patterns is not None else []
+
+        max_directories = int(limits.get("max_directories", 3))
+        max_files = int(limits.get("max_files", 5))
+        timeout_seconds = int(limits.get("timeout_seconds", 10))
+
+        if host_type == "F":
+            try:
+                ftp_port = int(payload.get("port") or 21)
+            except (TypeError, ValueError):
+                ftp_port = 21
+            snapshot = dispatch_probe_run(
+                ip_address,
+                host_type,
+                max_directories=max_directories,
+                max_files=max_files,
+                timeout_seconds=timeout_seconds,
+                cancel_event=cancel_event,
+                port=ftp_port,
+            )
+            analysis = probe_patterns.attach_indicator_analysis(snapshot, indicator_patterns)
+            probe_summary = summarize_probe_snapshot(snapshot)
+            display_entries = probe_summary["display_entries"]
+            try:
+                snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type, port=ftp_port)
+            except TypeError:
+                snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type)
+            return {
+                "host_type": host_type,
+                "ip_address": ip_address,
+                "status": "issue" if analysis.get("is_suspicious") else "clean",
+                "indicator_matches": len(analysis.get("matches", [])),
+                "snapshot_path": snapshot_path,
+                "accessible_dirs_count": len(display_entries),
+                "accessible_dirs_list": ",".join(display_entries),
+                "accessible_files_count": None,
+                "port": ftp_port,
+            }
+
+        if host_type == "H":
+            try:
+                http_port = int(payload.get("port") or 80)
+            except (TypeError, ValueError):
+                http_port = 80
+            scheme = str(payload.get("scheme") or ("https" if http_port == 443 else "http")).strip().lower()
+            if scheme not in {"http", "https"}:
+                scheme = "https" if http_port == 443 else "http"
+            request_host = str(payload.get("probe_host") or "").strip() or None
+            start_path = str(payload.get("probe_path") or "").strip() or "/"
+            start_path = start_path.split("?", 1)[0].split("#", 1)[0].strip() or "/"
+            if not start_path.startswith("/"):
+                start_path = "/" + start_path.lstrip("/")
+            snapshot = dispatch_probe_run(
+                ip_address,
+                host_type,
+                max_directories=max_directories,
+                max_files=max_files,
+                timeout_seconds=timeout_seconds,
+                cancel_event=cancel_event,
+                port=http_port,
+                scheme=scheme,
+                db_reader=self.db_reader,
+                request_host=request_host,
+                start_path=start_path,
+            )
+            analysis = probe_patterns.attach_indicator_analysis(snapshot, indicator_patterns)
+            probe_summary = summarize_probe_snapshot(snapshot)
+            dir_names = probe_summary["directory_names"]
+            display_entries = probe_summary["display_entries"]
+            total_files = int(probe_summary["total_file_count"])
+            try:
+                snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type, port=http_port)
+            except TypeError:
+                snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type)
+            return {
+                "host_type": host_type,
+                "ip_address": ip_address,
+                "status": "issue" if analysis.get("is_suspicious") else "clean",
+                "indicator_matches": len(analysis.get("matches", [])),
+                "snapshot_path": snapshot_path,
+                "accessible_dirs_count": len(dir_names),
+                "accessible_dirs_list": ",".join(display_entries),
+                "accessible_files_count": total_files,
+                "port": http_port,
+            }
+
+        # SMB probe path
+        snapshot = dispatch_probe_run(
+            ip_address,
+            host_type,
+            max_directories=max_directories,
+            max_files=max_files,
+            timeout_seconds=timeout_seconds,
+            cancel_event=cancel_event,
+            shares=[],
+            allow_empty=True,
+            db_reader=self.db_reader,
+        )
+        probe_cache.save_probe_result(ip_address, snapshot)
+        analysis = probe_patterns.attach_indicator_analysis(snapshot, indicator_patterns)
+        snapshot_path = (
+            probe_cache.get_probe_result_path(ip_address)
+            if hasattr(probe_cache, "get_probe_result_path")
+            else None
+        )
+        return {
+            "host_type": host_type,
+            "ip_address": ip_address,
+            "status": "issue" if analysis.get("is_suspicious") else "clean",
+            "indicator_matches": len(analysis.get("matches", [])),
+            "snapshot_path": snapshot_path,
+            "accessible_dirs_count": None,
+            "accessible_dirs_list": None,
+            "accessible_files_count": None,
+            "port": None,
+        }
+
+    def _persist_manual_add_probe_result(
+        self,
+        payload: Dict[str, Any],
+        upsert_result: Dict[str, Any],
+        probe_result: Dict[str, Any],
+    ) -> None:
+        """Persist pre-add probe results into protocol probe-cache tables."""
+        host_type = str(payload.get("host_type") or "").strip().upper()
+        ip_address = str(payload.get("ip_address") or "").strip()
+        if host_type not in {"S", "F", "H"} or not ip_address:
+            return
+
+        kwargs: Dict[str, Any] = {
+            "status": str(probe_result.get("status") or "clean"),
+            "indicator_matches": int(probe_result.get("indicator_matches") or 0),
+            "snapshot_path": probe_result.get("snapshot_path"),
+        }
+
+        if host_type == "F":
+            kwargs["accessible_dirs_count"] = probe_result.get("accessible_dirs_count")
+            kwargs["accessible_dirs_list"] = probe_result.get("accessible_dirs_list")
+            if upsert_result.get("protocol_server_id") is not None:
+                kwargs["protocol_server_id"] = upsert_result.get("protocol_server_id")
+        elif host_type == "H":
+            kwargs["accessible_dirs_count"] = probe_result.get("accessible_dirs_count")
+            kwargs["accessible_dirs_list"] = probe_result.get("accessible_dirs_list")
+            kwargs["accessible_files_count"] = probe_result.get("accessible_files_count")
+            if upsert_result.get("protocol_server_id") is not None:
+                kwargs["protocol_server_id"] = upsert_result.get("protocol_server_id")
+            kwargs["port"] = probe_result.get("port")
+
+        self.db_reader.upsert_probe_cache_for_host(ip_address, host_type, **kwargs)
+
+    def _maybe_show_reddit_promotion_notice(self) -> None:
+        """
+        Show a one-per-session informational notice for Reddit-driven promotion.
+        """
+        if session_flags.get_flag(session_flags.REDDIT_PROMOTION_NOTICE_MUTE_KEY):
+            return
+
+        dialog = tk.Toplevel(self.window)
+        dialog.title("Record Added")
+        dialog.transient(self.window)
+        dialog.grab_set()
+        self.theme.apply_to_widget(dialog, "main_window")
+
+        body = tk.Frame(dialog, padx=12, pady=10)
+        self.theme.apply_to_widget(body, "main_window")
+        body.pack(fill=tk.BOTH, expand=True)
+
+        msg = tk.Label(
+            body,
+            text=(
+                "Record added.\n\n"
+                "NOTE: it may be hidden by active filters in Server List Browser "
+                "(for example, Shares > 0)."
+            ),
+            justify=tk.LEFT,
+            wraplength=420,
+        )
+        self.theme.apply_to_widget(msg, "body")
+        msg.pack(fill=tk.X)
+
+        buttons = tk.Frame(body)
+        self.theme.apply_to_widget(buttons, "main_window")
+        buttons.pack(fill=tk.X, pady=(12, 0))
+
+        def _on_mute() -> None:
+            session_flags.set_flag(session_flags.REDDIT_PROMOTION_NOTICE_MUTE_KEY)
+            dialog.destroy()
+
+        def _on_ok() -> None:
+            dialog.destroy()
+
+        mute_btn = tk.Button(buttons, text="Mute for this session", command=_on_mute)
+        self.theme.apply_to_widget(mute_btn, "button_secondary")
+        mute_btn.pack(side=tk.LEFT)
+
+        ok_btn = tk.Button(buttons, text="OK", command=_on_ok)
+        self.theme.apply_to_widget(ok_btn, "button_secondary")
+        ok_btn.pack(side=tk.RIGHT)
+
+        dialog.protocol("WM_DELETE_WINDOW", _on_ok)
+        self.theme.apply_theme_to_application(dialog)
+        ensure_dialog_focus(dialog, self.window)
+        dialog.wait_window()
+
+    def _show_add_record_dialog(self, prefill: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
         """
         Show modal dialog for adding one protocol record.
 
@@ -103,6 +362,32 @@ class ServerListWindowBatchOperationsMixin:
         scheme_var = tk.StringVar(value="http")
         banner_var = tk.StringVar(value="")
         title_var = tk.StringVar(value="")
+        probe_before_default = True
+        if self.settings_manager:
+            try:
+                raw_probe_before = self.settings_manager.get_setting(
+                    "server_list.add_record_probe_before_add",
+                    True,
+                )
+                if isinstance(raw_probe_before, str):
+                    probe_before_default = raw_probe_before.strip().lower() in {
+                        "1", "true", "yes", "on",
+                    }
+                else:
+                    probe_before_default = bool(raw_probe_before)
+            except Exception:
+                probe_before_default = True
+        probe_before_add_var = tk.BooleanVar(value=probe_before_default)
+
+        # Apply prefill values before building the grid so field states render correctly.
+        if prefill:
+            host_type_val = prefill.get("host_type", "")
+            type_var.set({"H": "HTTP", "F": "FTP"}.get(host_type_val, "SMB"))
+            ip_var.set(str(prefill.get("host") or ""))
+            if prefill.get("port") is not None:
+                port_var.set(str(prefill["port"]))
+            if prefill.get("scheme") in ("http", "https"):
+                scheme_var.set(prefill["scheme"])
 
         row = 0
         tk.Label(form, text="Type:").grid(row=row, column=0, sticky="w", padx=(0, 8), pady=4)
@@ -115,6 +400,26 @@ class ServerListWindowBatchOperationsMixin:
         self.theme.apply_to_widget(ip_entry, "entry")
         ip_entry.grid(row=row, column=1, sticky="w", pady=4)
         row += 1
+
+        # Domain-host guidance: shown when prefill supplies a non-IP host.
+        # Existing _normalize_manual_record_input validation will reject it on Save —
+        # this label is informational only; no bypass of IP validation.
+        if prefill and prefill.get("host"):
+            try:
+                ipaddress.ip_address(str(prefill["host"]))
+            except ValueError:
+                note = tk.Label(
+                    form,
+                    text=(
+                        "Note: host appears to be a domain name.\n"
+                        "The database requires an IP address — Save will\n"
+                        "fail until an IP is entered."
+                    ),
+                    justify=tk.LEFT,
+                )
+                self.theme.apply_to_widget(note, "body")
+                note.grid(row=row, column=0, columnspan=2, sticky="w", pady=(0, 4))
+                row += 1
 
         tk.Label(form, text="Country:").grid(row=row, column=0, sticky="w", padx=(0, 8), pady=4)
         country_entry = tk.Entry(form, width=28, textvariable=country_var)
@@ -155,6 +460,16 @@ class ServerListWindowBatchOperationsMixin:
         title_entry = tk.Entry(form, width=28, textvariable=title_var)
         self.theme.apply_to_widget(title_entry, "entry")
         title_entry.grid(row=row, column=1, sticky="w", pady=4)
+        row += 1
+
+        probe_before_add_cb = tk.Checkbutton(
+            form,
+            text="Probe host before adding",
+            variable=probe_before_add_var,
+        )
+        self.theme.apply_to_widget(probe_before_add_cb, "body")
+        probe_before_add_cb.grid(row=row, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        row += 1
 
         for label in form.grid_slaves(column=0):
             self.theme.apply_to_widget(label, "body")
@@ -193,6 +508,26 @@ class ServerListWindowBatchOperationsMixin:
             except ValueError as exc:
                 messagebox.showerror("Invalid Record", str(exc), parent=dialog)
                 return
+            if normalized.get("host_type") == "H" and prefill:
+                probe_host_hint = str(prefill.get("_probe_host_hint") or "").strip()
+                if probe_host_hint:
+                    normalized["probe_host"] = probe_host_hint
+                probe_path_hint = str(prefill.get("_probe_path_hint") or "").strip()
+                if probe_path_hint:
+                    probe_path_hint = probe_path_hint.split("?", 1)[0].split("#", 1)[0].strip() or "/"
+                    if not probe_path_hint.startswith("/"):
+                        probe_path_hint = "/" + probe_path_hint.lstrip("/")
+                    normalized["probe_path"] = probe_path_hint
+            probe_before_add = bool(probe_before_add_var.get())
+            if self.settings_manager:
+                try:
+                    self.settings_manager.set_setting(
+                        "server_list.add_record_probe_before_add",
+                        probe_before_add,
+                    )
+                except Exception:
+                    pass
+            normalized["_probe_before_add"] = probe_before_add
             result_payload.update(normalized)
             dialog.destroy()
 
@@ -201,7 +536,7 @@ class ServerListWindowBatchOperationsMixin:
 
         buttons = tk.Frame(form)
         self.theme.apply_to_widget(buttons, "main_window")
-        buttons.grid(row=row + 1, column=0, columnspan=2, sticky="e", pady=(10, 0))
+        buttons.grid(row=row, column=0, columnspan=2, sticky="e", pady=(10, 0))
 
         cancel_btn = tk.Button(buttons, text="Cancel", command=_cancel)
         self.theme.apply_to_widget(cancel_btn, "button_secondary")

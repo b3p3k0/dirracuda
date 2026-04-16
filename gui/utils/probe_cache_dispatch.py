@@ -81,6 +81,8 @@ def dispatch_probe_run(
     cancel_event,
     port: Optional[int] = None,
     scheme: Optional[str] = None,
+    request_host: Optional[str] = None,
+    start_path: Optional[str] = None,
     protocol_server_id: Optional[int] = None,
     db_reader=None,
     shares: Optional[List[str]] = None,
@@ -99,6 +101,8 @@ def dispatch_probe_run(
         defaults (DEFAULT_USERNAME = "guest"). Pass explicit values to override.
     port: caller-selected endpoint port (FTP or HTTP). When omitted for HTTP,
         db_reader.get_http_server_detail() is used as fallback.
+    request_host/start_path: optional HTTP probe hints. When omitted for HTTP,
+        db_reader.get_http_server_detail() may provide probe_host/probe_path.
     """
     _ht = str(host_type or "S").strip().upper()
 
@@ -140,12 +144,21 @@ def dispatch_probe_run(
             http_port = int((detail or {}).get("port") or 80)
         if scheme is None:
             scheme = (detail or {}).get("scheme") or ("https" if http_port == 443 else "http")
+        if request_host is None:
+            request_host = (detail or {}).get("probe_host") or None
+        if start_path is None:
+            start_path = (detail or {}).get("probe_path") or "/"
+        start_path = str(start_path or "/").split("?", 1)[0].split("#", 1)[0].strip() or "/"
+        if not start_path.startswith("/"):
+            start_path = "/" + start_path.lstrip("/")
 
         max_entries = max(1, max_directories * max_files)
         return http_probe_runner.run_http_probe(
             ip_address,
             port=http_port,
             scheme=scheme,
+            request_host=request_host,
+            start_path=start_path,
             allow_insecure_tls=True,
             max_entries=max_entries,
             max_directories=max_directories,

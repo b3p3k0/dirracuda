@@ -56,6 +56,8 @@ def run_http_probe(
     ip: str,
     port: int = 80,
     scheme: str = "http",
+    request_host: Optional[str] = None,
+    start_path: str = "/",
     allow_insecure_tls: bool = True,
     max_entries: int = 5000,
     max_directories: Optional[int] = None,
@@ -66,7 +68,7 @@ def run_http_probe(
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> dict:
     """
-    Walk the HTTP root (one level deep) and return a probe snapshot dict.
+    Walk an HTTP listing path (one level deep) and return a probe snapshot dict.
 
     root_files and directories[].files contain basename strings (not dicts).
     directories[].name contains the basename without trailing slash.
@@ -84,80 +86,156 @@ def run_http_probe(
     directory_limit = max(1, int(max_directories)) if max_directories is not None else max(1, int(max_entries))
     file_limit = max(1, int(max_files)) if max_files is not None else max(1, int(max_entries))
 
-    # Fetch root "/"
-    status_code, body, _tls_verified, reason = try_http_request(
-        ip, port, scheme, allow_insecure_tls, float(request_timeout), path="/"
-    )
+    scheme_norm = str(scheme or "http").strip().lower() or "http"
+    request_host_norm = str(request_host or "").strip() or None
+    start_path_norm = str(start_path or "/").split("?", 1)[0].split("#", 1)[0].strip() or "/"
+    if not start_path_norm.startswith("/"):
+        start_path_norm = "/" + start_path_norm.lstrip("/")
 
+    paths_to_try = [start_path_norm]
+    if start_path_norm != "/":
+        paths_to_try.append("/")
+
+    active_connect_host = ip
+    active_request_host = request_host_norm
+    listing_path = start_path_norm
     root_is_valid = False
-    if reason:
-        errors.append({"share": "http_root", "message": f"root fetch failed: {reason}"})
-    elif not validate_index_page(body, status_code):
-        errors.append({"share": "http_root", "message": "root is not a directory index"})
-    else:
+    file_abs_paths: List[str] = []
+    last_error_message: Optional[str] = None
+
+    def _attempt_listing(
+        path: str,
+        *,
+        connect_host: str,
+        host_override: Optional[str],
+    ) -> tuple[bool, List[str], List[str], Optional[str]]:
+        status_code, body, _tls_verified, reason = try_http_request(
+            connect_host,
+            port,
+            scheme_norm,
+            allow_insecure_tls,
+            float(request_timeout),
+            path=path,
+            request_host=host_override,
+        )
+        if reason:
+            return False, [], [], f"{path} fetch failed: {reason}"
+        if not validate_index_page(body, status_code):
+            return False, [], [], f"{path} is not a directory index"
         try:
-            all_dir_abs_paths, file_abs_paths = _parse_dir_entries(body, current_path="/")
-            root_is_valid = True
+            dirs, files = _parse_dir_entries(body, current_path=path)
         except Exception as exc:
-            errors.append({"share": "http_root", "message": f"parse error at /: {exc}"})
-        else:
-            # root_files: basenames of files at /
-            all_root_file_names = [PurePosixPath(p).name for p in file_abs_paths]
-            root_files = all_root_file_names[:file_limit]
-            root_files_truncated = len(all_root_file_names) > file_limit
+            return False, [], [], f"parse error at {path}: {exc}"
+        return True, dirs, files, None
 
-            # One level deep: list each top-level directory
-            for dir_abs_path in all_dir_abs_paths[:directory_limit]:
-                if cancel_event is not None and cancel_event.is_set():
-                    break
+    for candidate_path in paths_to_try:
+        success, dirs, files, err_msg = _attempt_listing(
+            candidate_path,
+            connect_host=ip,
+            host_override=request_host_norm,
+        )
+        if success:
+            root_is_valid = True
+            listing_path = candidate_path
+            all_dir_abs_paths = dirs
+            file_abs_paths = files
+            active_connect_host = ip
+            active_request_host = request_host_norm
+            break
+        last_error_message = err_msg
 
-                dir_display_name = PurePosixPath(dir_abs_path.rstrip("/")).name
-                if progress_callback is not None:
-                    progress_callback(f"Listing {dir_abs_path}...")
+        # HTTPS virtual hosts can require SNI/authority matching the requested host.
+        if (
+            scheme_norm == "https"
+            and request_host_norm
+            and request_host_norm != ip
+        ):
+            success, dirs, files, err_msg = _attempt_listing(
+                candidate_path,
+                connect_host=request_host_norm,
+                host_override=request_host_norm,
+            )
+            if success:
+                root_is_valid = True
+                listing_path = candidate_path
+                all_dir_abs_paths = dirs
+                file_abs_paths = files
+                active_connect_host = request_host_norm
+                active_request_host = request_host_norm
+                break
+            last_error_message = err_msg
 
-                try:
-                    sub_status, sub_body, _tls, sub_reason = try_http_request(
-                        ip, port, scheme, allow_insecure_tls, float(request_timeout),
-                        path=dir_abs_path,
-                    )
+    if not root_is_valid:
+        errors.append(
+            {
+                "share": "http_root",
+                "message": last_error_message or f"{start_path_norm} is not a directory index",
+            }
+        )
+    else:
+        all_root_file_names = [PurePosixPath(p).name for p in file_abs_paths]
+        root_files = all_root_file_names[:file_limit]
+        root_files_truncated = len(all_root_file_names) > file_limit
 
-                    if sub_reason or not validate_index_page(sub_body, sub_status):
-                        directories.append({
-                            "name": dir_display_name,
-                            "subdirectories": [],
-                            "subdirectories_truncated": False,
-                            "files": [],
-                            "files_truncated": False,
-                        })
-                        continue
+        # One level deep: list each top-level directory
+        for dir_abs_path in all_dir_abs_paths[:directory_limit]:
+            if cancel_event is not None and cancel_event.is_set():
+                break
 
-                    sub_dir_paths, sub_file_paths = _parse_dir_entries(
-                        sub_body, current_path=dir_abs_path
-                    )
-                    sub_file_names = [PurePosixPath(p).name for p in sub_file_paths]
-                    sub_dir_names = [
-                        PurePosixPath(p.rstrip("/")).name for p in sub_dir_paths
-                    ]
+            dir_display_name = PurePosixPath(dir_abs_path.rstrip("/")).name
+            if progress_callback is not None:
+                progress_callback(f"Listing {dir_abs_path}...")
 
+            try:
+                sub_status, sub_body, _tls, sub_reason = try_http_request(
+                    active_connect_host,
+                    port,
+                    scheme_norm,
+                    allow_insecure_tls,
+                    float(request_timeout),
+                    path=dir_abs_path,
+                    request_host=active_request_host,
+                )
+
+                if sub_reason or not validate_index_page(sub_body, sub_status):
                     directories.append({
                         "name": dir_display_name,
-                        "subdirectories": sub_dir_names[:file_limit],
-                        "subdirectories_truncated": len(sub_dir_names) > file_limit,
-                        "files": sub_file_names[:file_limit],
-                        "files_truncated": len(sub_file_names) > file_limit,
+                        "subdirectories": [],
+                        "subdirectories_truncated": False,
+                        "files": [],
+                        "files_truncated": False,
                     })
+                    continue
 
-                except Exception as sub_exc:
-                    errors.append({
-                        "share": "http_root",
-                        "message": f"{dir_abs_path}: {sub_exc}",
-                    })
+                sub_dir_paths, sub_file_paths = _parse_dir_entries(
+                    sub_body, current_path=dir_abs_path
+                )
+                sub_file_names = [PurePosixPath(p).name for p in sub_file_paths]
+                sub_dir_names = [
+                    PurePosixPath(p.rstrip("/")).name for p in sub_dir_paths
+                ]
+
+                directories.append({
+                    "name": dir_display_name,
+                    "subdirectories": sub_dir_names[:file_limit],
+                    "subdirectories_truncated": len(sub_dir_names) > file_limit,
+                    "files": sub_file_names[:file_limit],
+                    "files_truncated": len(sub_file_names) > file_limit,
+                })
+
+            except Exception as sub_exc:
+                errors.append({
+                    "share": "http_root",
+                    "message": f"{dir_abs_path}: {sub_exc}",
+                })
 
     snapshot = {
         "ip_address": ip,
         "port": port,
-        "scheme": scheme,
+        "scheme": scheme_norm,
         "protocol": "http",
+        "request_host": request_host_norm,
+        "start_path": listing_path,
         "run_at": datetime.now(timezone.utc).isoformat(),
         "limits": {
             "max_entries": max_entries,

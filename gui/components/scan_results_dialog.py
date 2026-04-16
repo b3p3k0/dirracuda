@@ -9,13 +9,14 @@ and provides clear options for viewing detailed results or returning to main int
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
 import webbrowser
 from datetime import datetime, timedelta
 from typing import Dict, Any, Callable, Optional
 import sys
 import os
 
+from gui.utils import safe_messagebox as messagebox
 from gui.utils.style import get_theme
 from gui.utils.dialog_helpers import ensure_dialog_focus
 

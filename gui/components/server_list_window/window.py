@@ -6,7 +6,8 @@ Maintains all shared state and coordinates between components.
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog, simpledialog
+from tkinter import ttk, filedialog, simpledialog
+from gui.utils import safe_messagebox as messagebox
 from datetime import datetime
 import sqlite3
 from pathlib import Path
@@ -22,11 +23,11 @@ from gui.utils.database_access import DatabaseReader
 from gui.utils.style import get_theme
 from gui.utils.data_export_engine import get_export_engine
 from gui.utils.scan_manager import get_scan_manager
-from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.template_store import TemplateStore
 from gui.utils.logging_config import get_logger
 from gui.components.pry_dialog import PryDialog
 from gui.components.pry_status_dialog import BatchStatusDialog
+from gui.components.reddit_browser_window import show_reddit_browser_window
 from shared.db_migrations import run_migrations
 
 _logger = get_logger("server_list_window")
@@ -265,7 +266,15 @@ class ServerListWindow(ServerListWindowActionsMixin):
             if not self.window.winfo_ismapped():
                 self.window.after(25, self._ensure_window_focus_when_mapped)
                 return
-            ensure_dialog_focus(self.window, self.parent)
+            # Keep this modeless window focus path lightweight.
+            # Aggressive topmost/focus-force choreography can re-trigger
+            # first-open no-paint behavior on some window managers.
+            self.window.lift()
+            self.window.focus_set()
+            # Nudge one immediate repaint and one delayed repaint frame so
+            # first render is visible without requiring manual titlebar move.
+            self.window.after_idle(self._prime_initial_render)
+            self.window.after(33, self._prime_initial_render)
         except tk.TclError:
             pass
 
@@ -338,11 +347,20 @@ class ServerListWindow(ServerListWindowActionsMixin):
         try:
             if not self.window.winfo_exists():
                 return
-            # Guard against starting data work before first visible paint; this
-            # can reintroduce first-open blank/transparent render on some WMs.
-            if (not self.window.winfo_ismapped()) or (not self.window.winfo_viewable()):
+            # Guard against starting data work before first map. Some window
+            # managers may report winfo_viewable() late (until an expose/move),
+            # which can stall load and look like a blank/frozen first paint.
+            if not self.window.winfo_ismapped():
                 self._initial_load_after_id = self.window.after(50, self._run_initial_data_load)
                 return
+            # If mapped but not yet viewable, nudge a repaint once and continue.
+            # This avoids waiting forever for a viewable transition on WMs that
+            # only emit it after user interaction (e.g., titlebar move).
+            try:
+                if not self.window.winfo_viewable():
+                    self._prime_initial_render()
+            except tk.TclError:
+                pass
         except tk.TclError:
             return
         self._initial_load_started = True
@@ -421,14 +439,21 @@ class ServerListWindow(ServerListWindowActionsMixin):
         )
         self.count_label.pack(side=tk.LEFT, padx=(20, 0))
 
-        # Close button
-        close_button = tk.Button(
+        # Experimental Reddit browser entrypoint
+        reddit_browser_button = tk.Button(
             header_frame,
-            text="✕ Close",
-            command=self._close_window
+            text="Reddit Post DB (EXP)",
+            command=lambda: show_reddit_browser_window(
+                parent=self.window,
+                add_record_callback=self.open_add_record_dialog,
+            ),
         )
-        self.theme.apply_to_widget(close_button, "button_secondary")
-        close_button.pack(side=tk.RIGHT)
+        self.theme.apply_to_widget(reddit_browser_button, "button_secondary")
+        reddit_browser_button.pack(side=tk.RIGHT)
+
+    def open_add_record_dialog(self, prefill=None) -> None:
+        """Public entrypoint for external callers (e.g. Reddit browser) to open Add Record."""
+        self._run_add_record(prefill=prefill)
 
     def _create_filter_panel(self) -> None:
         """Create filtering controls panel using filters module."""

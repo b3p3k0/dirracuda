@@ -14,7 +14,8 @@ import json
 import webbrowser
 import tkinter as tk
 from pathlib import Path
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk, simpledialog
+from gui.utils import safe_messagebox as messagebox
 from typing import Any, Callable, Dict, Optional
 
 from gui.components.scan_dialog import ScanDialog
@@ -43,6 +44,7 @@ class UnifiedScanDialog:
         settings_manager: Optional[Any] = None,
         config_editor_callback: Optional[Callable[[str], None]] = None,
         query_editor_callback: Optional[Callable[[], None]] = None,
+        reddit_grab_callback: Optional[Callable[[], None]] = None,
     ) -> None:
         self.parent = parent
         self.config_path = Path(config_path).resolve()
@@ -50,6 +52,7 @@ class UnifiedScanDialog:
         self._settings_manager = settings_manager
         self.config_editor_callback = config_editor_callback
         self.query_editor_callback = query_editor_callback
+        self.reddit_grab_callback = reddit_grab_callback
         self.theme = get_theme()
         self.template_store = TemplateStore(settings_manager=settings_manager)
 
@@ -1050,6 +1053,15 @@ class UnifiedScanDialog:
         self.theme.apply_to_widget(frame, "main_window")
         frame.pack(fill=tk.X, padx=20, pady=(5, 15))
 
+        if self.reddit_grab_callback is not None:
+            exp_btn = tk.Button(
+                frame,
+                text="Reddit Grab (EXP)",
+                command=self._open_reddit_grab,
+            )
+            self.theme.apply_to_widget(exp_btn, "button_secondary")
+            exp_btn.pack(side=tk.LEFT)
+
         btns = tk.Frame(frame)
         self.theme.apply_to_widget(btns, "main_window")
         btns.pack(side=tk.RIGHT)
@@ -1061,6 +1073,15 @@ class UnifiedScanDialog:
         start_btn = tk.Button(btns, text="Start Scan", command=self._start)
         self.theme.apply_to_widget(start_btn, "button_primary")
         start_btn.pack(side=tk.LEFT)
+
+    def _open_reddit_grab(self) -> None:
+        """Close this dialog and open the Reddit Grab flow via callback."""
+        if not self.reddit_grab_callback:
+            return
+        self._persist_dialog_state()
+        self.result = "cancel"
+        self.dialog.destroy()
+        self.reddit_grab_callback()
 
     # ------------------------------------------------------------------
     # Validation
@@ -1313,6 +1334,7 @@ def show_unified_scan_dialog(
     settings_manager: Optional[Any] = None,
     config_editor_callback: Optional[Callable[[str], None]] = None,
     query_editor_callback: Optional[Callable[[], None]] = None,
+    reddit_grab_callback: Optional[Callable[[], None]] = None,
 ) -> Optional[str]:
     """Show the unified scan launch dialog modally."""
     dialog = UnifiedScanDialog(
@@ -1322,5 +1344,6 @@ def show_unified_scan_dialog(
         settings_manager=settings_manager,
         config_editor_callback=config_editor_callback,
         query_editor_callback=query_editor_callback,
+        reddit_grab_callback=reddit_grab_callback,
     )
     return dialog.show()

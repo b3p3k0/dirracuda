@@ -5,7 +5,8 @@ Scan pre-flight controller and configuration dialogs.
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import messagebox, filedialog
+from tkinter import filedialog
+from gui.utils import safe_messagebox as messagebox
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 import sys

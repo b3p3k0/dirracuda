@@ -11,7 +11,7 @@ import socket
 import ssl
 import urllib.error
 import urllib.request
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 
 # ---------------------------------------------------------------------------
@@ -50,6 +50,7 @@ def try_http_request(
     allow_insecure_tls: bool = True,
     timeout: float = 10.0,
     path: str = "/",
+    request_host: Optional[str] = None,
 ) -> Tuple[int, str, bool, str]:
     """
     Perform a single HTTP GET request.
@@ -73,7 +74,11 @@ def try_http_request(
       urllib.error.HTTPError (subclass of URLError) must be caught first.
       socket.timeout / TimeoutError must be caught before OSError.
     """
-    url = f"{scheme}://{ip}:{port}{path}"
+    authority = str(ip or "").strip()
+    normalized_path = str(path or "/").strip() or "/"
+    if not normalized_path.startswith("/"):
+        normalized_path = "/" + normalized_path
+    url = f"{scheme}://{authority}:{port}{normalized_path}"
 
     ctx: ssl.SSLContext | None = None
     tls_verified = False
@@ -89,7 +94,19 @@ def try_http_request(
             # default ctx verifies cert; tls_verified=True on success
             tls_verified = True  # optimistic; cleared on SSLError
 
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    headers = {"User-Agent": "Mozilla/5.0"}
+    host_header = str(request_host or "").strip()
+    if host_header:
+        if (
+            ":" not in host_header
+            and not (host_header.startswith("[") and host_header.endswith("]"))
+        ):
+            default_port = 443 if scheme == "https" else 80
+            if port != default_port:
+                host_header = f"{host_header}:{port}"
+        headers["Host"] = host_header
+
+    req = urllib.request.Request(url, headers=headers)
 
     try:
         with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:

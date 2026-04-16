@@ -9,7 +9,8 @@ while directing users to configuration editor for advanced settings.
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from tkinter import ttk, simpledialog
+from gui.utils import safe_messagebox as messagebox
 import os
 import sys
 import json
