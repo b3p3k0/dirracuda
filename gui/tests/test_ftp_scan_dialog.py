@@ -448,6 +448,18 @@ class TestDashboardFtpWiring:
 
         mock_dialog.assert_called_once()
 
+    def test_http_button_opens_dialog(self):
+        """HTTP button click in idle state → show_http_scan_dialog called."""
+        import gui.components.dashboard as dash_module
+        from gui.components.dashboard import DashboardWidget
+
+        mock_self = self._make_dashboard_mock("idle")
+
+        with patch.object(dash_module, "show_http_scan_dialog") as mock_dialog:
+            DashboardWidget._handle_http_scan_button_click(mock_self)
+
+        mock_dialog.assert_called_once()
+
     def test_ftp_button_not_opened_when_scanning(self):
         """FTP button click while scanning → dialog NOT opened."""
         import gui.components.dashboard as dash_module

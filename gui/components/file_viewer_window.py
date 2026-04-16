@@ -24,6 +24,11 @@ try:
 except ImportError:
     from utils.dialog_helpers import ensure_dialog_focus
 
+try:
+    from gui.utils.filesize import _format_file_size
+except ImportError:
+    from utils.filesize import _format_file_size  # type: ignore[no-redef]
+
 
 ENCODINGS = ["utf-8", "ascii", "latin-1", "utf-16", "windows-1252"]
 HEX_BYTES_PER_ROW = 16
@@ -49,21 +54,6 @@ def is_binary_content(data: bytes, sample_size: int = 8192) -> bool:
     # Check for high ratio of non-printable ASCII (excluding tab, newline, carriage return)
     non_printable = sum(1 for b in sample if b < 32 and b not in (9, 10, 13))
     return non_printable / max(len(sample), 1) > 0.1
-
-
-def _format_file_size(size_bytes: int) -> str:
-    """Convert bytes to human-readable format."""
-    if size_bytes == 0:
-        return "0 B"
-    units = ["B", "KB", "MB", "GB", "TB"]
-    unit_index = 0
-    size = float(size_bytes)
-    while size >= 1024 and unit_index < len(units) - 1:
-        size /= 1024
-        unit_index += 1
-    if unit_index == 0:
-        return f"{int(size)} B"
-    return f"{size:.1f} {units[unit_index]}"
 
 
 class FileViewerWindow:
