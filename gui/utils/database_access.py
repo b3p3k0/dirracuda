@@ -63,6 +63,12 @@ class DatabaseReader:
             self._ensure_rce_columns()
         except Exception:
             pass
+
+        # Ensure legacy HTTP optional columns exist on older/minimal schemas.
+        try:
+            self._ensure_http_columns()
+        except Exception:
+            pass
         
         # Mock mode for testing
         self.mock_mode = False
@@ -88,6 +94,33 @@ class DatabaseReader:
                 altered = True
             if "rce_verdict_summary" not in columns:
                 conn.execute("ALTER TABLE host_probe_cache ADD COLUMN rce_verdict_summary TEXT")
+                altered = True
+
+            if altered:
+                conn.commit()
+
+    def _ensure_http_columns(self) -> None:
+        """
+        Best-effort migration to add legacy optional HTTP columns if missing.
+
+        Some minimal/older schemas define http_servers without probe_host/probe_path.
+        This helper is idempotent and safe to run at startup.
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.cursor()
+            table_row = cur.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='http_servers'"
+            ).fetchone()
+            if not table_row:
+                return
+
+            cols = [row[1] for row in cur.execute("PRAGMA table_info(http_servers)").fetchall()]
+            altered = False
+            if "probe_host" not in cols:
+                cur.execute("ALTER TABLE http_servers ADD COLUMN probe_host TEXT")
+                altered = True
+            if "probe_path" not in cols:
+                cur.execute("ALTER TABLE http_servers ADD COLUMN probe_path TEXT")
                 altered = True
 
             if altered:
@@ -1518,38 +1551,58 @@ class DatabaseReader:
                 ).fetchone()
                 operation = "update" if existing else "insert"
 
-                cur.execute(
-                    """
-                    INSERT INTO http_servers
+                def _upsert_http() -> None:
+                    cur.execute(
+                        """
+                        INSERT INTO http_servers
+                            (
+                                ip_address, country, country_code, port, scheme,
+                                probe_host, probe_path, banner, title, last_seen, status
+                            )
+                        VALUES
+                            (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 'active')
+                        ON CONFLICT(ip_address, port) DO UPDATE SET
+                            country=COALESCE(excluded.country, http_servers.country),
+                            country_code=COALESCE(excluded.country_code, http_servers.country_code),
+                            scheme=COALESCE(excluded.scheme, http_servers.scheme),
+                            probe_host=COALESCE(excluded.probe_host, http_servers.probe_host),
+                            probe_path=COALESCE(excluded.probe_path, http_servers.probe_path),
+                            banner=COALESCE(excluded.banner, http_servers.banner),
+                            title=COALESCE(excluded.title, http_servers.title),
+                            status='active',
+                            last_seen=CURRENT_TIMESTAMP
+                        """,
                         (
-                            ip_address, country, country_code, port, scheme,
-                            probe_host, probe_path, banner, title, last_seen, status
-                        )
-                    VALUES
-                        (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 'active')
-                    ON CONFLICT(ip_address, port) DO UPDATE SET
-                        country=COALESCE(excluded.country, http_servers.country),
-                        country_code=COALESCE(excluded.country_code, http_servers.country_code),
-                        scheme=COALESCE(excluded.scheme, http_servers.scheme),
-                        probe_host=COALESCE(excluded.probe_host, http_servers.probe_host),
-                        probe_path=COALESCE(excluded.probe_path, http_servers.probe_path),
-                        banner=COALESCE(excluded.banner, http_servers.banner),
-                        title=COALESCE(excluded.title, http_servers.title),
-                        status='active',
-                        last_seen=CURRENT_TIMESTAMP
-                    """,
-                    (
-                        ip_address,
-                        country,
-                        country_code,
-                        port,
-                        scheme,
-                        probe_host,
-                        probe_path,
-                        banner,
-                        title,
-                    ),
-                )
+                            ip_address,
+                            country,
+                            country_code,
+                            port,
+                            scheme,
+                            probe_host,
+                            probe_path,
+                            banner,
+                            title,
+                        ),
+                    )
+
+                try:
+                    _upsert_http()
+                except sqlite3.OperationalError as exc:
+                    msg = str(exc).lower()
+                    missing_probe_cols = (
+                        "no column named probe_host" in msg
+                        or "no such column: http_servers.probe_host" in msg
+                        or "no such column: excluded.probe_host" in msg
+                        or "no column named probe_path" in msg
+                        or "no such column: http_servers.probe_path" in msg
+                        or "no such column: excluded.probe_path" in msg
+                    )
+                    if not missing_probe_cols:
+                        raise
+                    # One best-effort schema repair + one retry for legacy/minimal schemas.
+                    self._ensure_http_columns()
+                    _upsert_http()
+
                 row = cur.execute(
                     "SELECT id FROM http_servers WHERE ip_address = ? AND port = ?",
                     (ip_address, port),
