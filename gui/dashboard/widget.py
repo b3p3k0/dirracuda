@@ -34,6 +34,7 @@ from gui.components.ftp_scan_dialog import show_ftp_scan_dialog
 from gui.components.http_scan_dialog import show_http_scan_dialog
 from gui.components.reddit_grab_dialog import show_reddit_grab_dialog
 from experimental.redseek.service import IngestOptions, IngestResult, run_ingest
+from gui.components import dashboard_experimental
 from gui.components.scan_results_dialog import show_scan_results_dialog
 from gui.components.batch_summary_dialog import show_batch_summary_dialog
 from gui.utils.settings_manager import get_settings_manager
@@ -144,9 +145,11 @@ class DashboardWidget:
         self.scan_button = None
         self.servers_button = None
         self.db_tools_button = None
+        self.experimental_button = None
         self.config_button = None
         self.about_button = None
         self.theme_toggle_button = None
+        self._server_list_getter = None
         self.status_bar = None
         self.update_time_label = None
         self.status_message = None
@@ -415,6 +418,15 @@ class DashboardWidget:
         self.theme.apply_to_widget(self.db_tools_button, "button_secondary")
         self.db_tools_button.pack(side=tk.LEFT, padx=(0, 5))
 
+        # Experimental features dialog
+        self.experimental_button = tk.Button(
+            left_actions,
+            text="⚗ Experimental",
+            command=self._handle_experimental_button_click,
+        )
+        self.theme.apply_to_widget(self.experimental_button, "button_secondary")
+        self.experimental_button.pack(side=tk.LEFT, padx=(0, 5))
+
         # Config button (existing functionality)
         self.config_button = tk.Button(
             left_actions,
@@ -455,6 +467,7 @@ class DashboardWidget:
         for button in (
             getattr(self, "servers_button", None),
             getattr(self, "db_tools_button", None),
+            getattr(self, "experimental_button", None),
             getattr(self, "config_button", None),
             getattr(self, "about_button", None),
             getattr(self, "theme_toggle_button", None),
@@ -879,7 +892,6 @@ class DashboardWidget:
             settings_manager=getattr(self, "settings_manager", None),
             config_editor_callback=self._open_config_editor_from_scan,
             query_editor_callback=self._open_config_editor,
-            reddit_grab_callback=self._handle_reddit_grab_button_click,
         )
 
     def _open_config_editor_from_scan(self, config_path: str) -> None:
@@ -1218,6 +1230,16 @@ class DashboardWidget:
 
     def _show_scan_results(self, results: Dict[str, Any]) -> None:
         dashboard_batch_ops.show_scan_results(self, results)
+
+    def set_server_list_getter(self, getter) -> None:
+        """Register a callable that returns the active ServerListWindow or None."""
+        dashboard_experimental.set_server_list_getter(self, getter)
+
+    def _handle_experimental_button_click(self) -> None:
+        dashboard_experimental.handle_experimental_button_click(self)
+
+    def _open_reddit_post_db(self) -> None:
+        dashboard_experimental.open_reddit_post_db(self)
 
     def _open_config_editor(self) -> None:
         """Open application configuration dialog."""

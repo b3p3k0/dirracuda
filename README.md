@@ -105,7 +105,7 @@ You're connecting to machines you don't control. A few baseline precautions befo
 The main window. From here you can:
 
 - Launch discovery from one **▶ Start Scan** button - pick one protocol or queue multiple protocols in sequence from the same dialog
-- Ingest Reddit open-directory posts via `Reddit Grab (EXP)` in the Start Scan dialog; review them via `Reddit Post DB (EXP)` in the Servers window (see [Experimental Features](#experimental-features))
+- Access experimental features (Reddit ingestion, future modules) via the `⚗ Experimental` button in the dashboard header (see [Experimental Features](#experimental-features))
 - Open the Server List Browser to work with hosts you've found
 - Manage your database (import, export, merge, maintenance)
 - Edit configuration
@@ -344,8 +344,8 @@ The GUI includes a built-in config editor for common settings.
 Dirracuda can ingest posts from `r/opendirectories` as a feed source for analyst review. This is separate from SMB/FTP/HTTP scanning and performs no automatic probing or extraction.
 
 Access points:
-- Dashboard → `▶ Start Scan` dialog → `Reddit Grab (EXP)` (ingest)
-- Dashboard → `📋 Servers` window → `Reddit Post DB (EXP)` (review/open actions)
+- Dashboard → `⚗ Experimental` → Reddit tab → `Open Reddit Grab` (ingest)
+- Dashboard → `⚗ Experimental` → Reddit tab → `Open Reddit Post DB` (review/open actions)
 
 Data is stored in a sidecar database at `~/.dirracuda/reddit_od.db` and does not write to the main Dirracuda DB tables unless a host is manually promoted by the user.
 

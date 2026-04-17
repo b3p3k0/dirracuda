@@ -1053,15 +1053,6 @@ class UnifiedScanDialog:
         self.theme.apply_to_widget(frame, "main_window")
         frame.pack(fill=tk.X, padx=20, pady=(5, 15))
 
-        if self.reddit_grab_callback is not None:
-            exp_btn = tk.Button(
-                frame,
-                text="Reddit Grab (EXP)",
-                command=self._open_reddit_grab,
-            )
-            self.theme.apply_to_widget(exp_btn, "button_secondary")
-            exp_btn.pack(side=tk.LEFT)
-
         btns = tk.Frame(frame)
         self.theme.apply_to_widget(btns, "main_window")
         btns.pack(side=tk.RIGHT)

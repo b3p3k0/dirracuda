@@ -794,6 +794,9 @@ class XSMBSeekGUI:
         self.dashboard.set_drill_down_callback(self._open_drill_down_window)
         self.dashboard.set_config_editor_callback(self._open_config_editor_direct)
         self.dashboard.set_size_enforcement_callback(self._enforce_window_size)
+        self.dashboard.set_server_list_getter(
+            lambda: self.drill_down_windows.get('server_list')
+        )
     
     def _setup_event_handlers(self) -> None:
         """Setup application-wide event handlers."""

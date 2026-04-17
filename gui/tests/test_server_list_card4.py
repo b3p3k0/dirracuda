@@ -900,3 +900,63 @@ class TestOpenAddRecordDialogMethod:
         prefill = {"host_type": "F", "host": "1.2.3.4", "port": 21, "scheme": None}
         win.open_add_record_dialog(prefill=prefill)
         win._run_add_record.assert_called_once_with(prefill=prefill)
+
+
+# ---------------------------------------------------------------------------
+# C3 guard: _create_header must not route any command to show_reddit_browser_window
+# ---------------------------------------------------------------------------
+
+class TestHeaderCommandsDoNotOpenRedditBrowser:
+    """
+    Regression guard: after legacy button removal (C2), no header button command
+    may route to show_reddit_browser_window.
+
+    The test captures ALL button commands created during _create_header, invokes
+    each one, and asserts that show_reddit_browser_window was never called.
+    This is non-trivially true: if the button were re-added, invoking its command
+    would populate browser_calls and fail the assertion.
+    """
+
+    def test_create_header_button_commands_do_not_open_reddit_browser(self, monkeypatch):
+        window_mod = _get_window()
+        browser_calls = []
+
+        # Inject function into module namespace (raising=False since import was removed in C2).
+        # If the button is re-added and its lambda references this name, invocation will
+        # populate browser_calls and the assertion will fail.
+        monkeypatch.setattr(
+            window_mod, "show_reddit_browser_window",
+            lambda **kw: browser_calls.append(kw),
+            raising=False,
+        )
+
+        button_commands = []
+
+        class CommandCapturingButton:
+            def __init__(self, parent=None, command=None, **kw):
+                if command is not None:
+                    button_commands.append(command)
+            def pack(self, **kw): pass
+            def configure(self, **kw): pass
+            def config(self, **kw): pass
+            def grid(self, **kw): pass
+
+        monkeypatch.setattr(window_mod.tk, "Button", CommandCapturingButton)
+        monkeypatch.setattr(window_mod.tk, "Frame", lambda *a, **kw: MagicMock())
+
+        win = window_mod.ServerListWindow.__new__(window_mod.ServerListWindow)
+        win.window = MagicMock()
+        win.theme = MagicMock()
+        win.theme.apply_to_widget = lambda w, s: None
+
+        win._create_header()
+
+        # Invoke every captured command — exercise all header button actions
+        for cmd in button_commands:
+            try:
+                cmd()
+            except Exception:
+                pass
+
+        # None of the header button commands may route to show_reddit_browser_window
+        assert browser_calls == []

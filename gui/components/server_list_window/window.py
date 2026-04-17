@@ -27,7 +27,6 @@ from gui.utils.template_store import TemplateStore
 from gui.utils.logging_config import get_logger
 from gui.components.pry_dialog import PryDialog
 from gui.components.pry_status_dialog import BatchStatusDialog
-from gui.components.reddit_browser_window import show_reddit_browser_window
 from shared.db_migrations import run_migrations
 
 _logger = get_logger("server_list_window")
@@ -438,18 +437,6 @@ class ServerListWindow(ServerListWindowActionsMixin):
             "body"
         )
         self.count_label.pack(side=tk.LEFT, padx=(20, 0))
-
-        # Experimental Reddit browser entrypoint
-        reddit_browser_button = tk.Button(
-            header_frame,
-            text="Reddit Post DB (EXP)",
-            command=lambda: show_reddit_browser_window(
-                parent=self.window,
-                add_record_callback=self.open_add_record_dialog,
-            ),
-        )
-        self.theme.apply_to_widget(reddit_browser_button, "button_secondary")
-        reddit_browser_button.pack(side=tk.RIGHT)
 
     def open_add_record_dialog(self, prefill=None) -> None:
         """Public entrypoint for external callers (e.g. Reddit browser) to open Add Record."""

@@ -59,3 +59,30 @@ def test_show_quick_scan_dialog_passes_query_editor_callback(monkeypatch):
 
     assert captured["config_editor_callback"] == dash._open_config_editor_from_scan
     assert captured["query_editor_callback"] == dash._open_config_editor
+
+
+def test_show_quick_scan_dialog_does_not_pass_reddit_grab_callback(monkeypatch):
+    captured = {}
+
+    def _fake_show_unified_scan_dialog(**kwargs):
+        captured.update(kwargs)
+        return None
+
+    monkeypatch.setattr(
+        "gui.components.dashboard.show_unified_scan_dialog",
+        _fake_show_unified_scan_dialog,
+    )
+    monkeypatch.setattr("gui.components.dashboard.messagebox.showwarning", lambda *_a, **_k: None)
+
+    dash = DashboardWidget.__new__(DashboardWidget)
+    dash.parent = object()
+    dash.config_path = "/tmp/config.json"
+    dash.scan_manager = _ScanManagerStub()
+    dash.settings_manager = object()
+    dash._start_unified_scan = lambda _request: None
+    dash.config_editor_callback = lambda _path: None
+
+    dash._show_quick_scan_dialog()
+
+    # Key must be absent entirely — not merely None — after C2 legacy removal.
+    assert "reddit_grab_callback" not in captured
