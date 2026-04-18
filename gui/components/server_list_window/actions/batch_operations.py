@@ -310,7 +310,7 @@ class ServerListWindowBatchOperationsMixin:
             justify=tk.LEFT,
             wraplength=420,
         )
-        self.theme.apply_to_widget(msg, "body")
+        self.theme.apply_to_widget(msg, "label")
         msg.pack(fill=tk.X)
 
         buttons = tk.Frame(body)
@@ -417,7 +417,7 @@ class ServerListWindowBatchOperationsMixin:
                     ),
                     justify=tk.LEFT,
                 )
-                self.theme.apply_to_widget(note, "body")
+                self.theme.apply_to_widget(note, "label")
                 note.grid(row=row, column=0, columnspan=2, sticky="w", pady=(0, 4))
                 row += 1
 
@@ -467,12 +467,12 @@ class ServerListWindowBatchOperationsMixin:
             text="Probe host before adding",
             variable=probe_before_add_var,
         )
-        self.theme.apply_to_widget(probe_before_add_cb, "body")
+        self.theme.apply_to_widget(probe_before_add_cb, "checkbox")
         probe_before_add_cb.grid(row=row, column=0, columnspan=2, sticky="w", pady=(4, 0))
         row += 1
 
         for label in form.grid_slaves(column=0):
-            self.theme.apply_to_widget(label, "body")
+            self.theme.apply_to_widget(label, "label")
 
         def _update_field_states(*_args):
             selected = (type_var.get() or "SMB").strip().upper()
