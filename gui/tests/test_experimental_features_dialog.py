@@ -159,7 +159,7 @@ def test_open_reddit_post_db_with_live_server_window(monkeypatch):
 
 
 def test_open_reddit_post_db_fallback_when_no_server_window(monkeypatch):
-    """Getter=None path attempts recovery once, then falls back to widget.parent."""
+    """Getter=None path falls back to widget.parent without opening Server List."""
     dash = _make_dash()
     dash._server_list_getter = MagicMock(return_value=None)
     dash._open_drill_down = MagicMock()
@@ -175,8 +175,8 @@ def test_open_reddit_post_db_fallback_when_no_server_window(monkeypatch):
     assert len(calls) == 1
     assert calls[0]["parent"] is dash.parent
     assert calls[0]["add_record_callback"] is None
-    dash._open_drill_down.assert_called_once_with("server_list")
-    assert dash._server_list_getter.call_count == 2
+    dash._open_drill_down.assert_not_called()
+    assert dash._server_list_getter.call_count == 1
 
 
 def test_open_reddit_post_db_treats_dead_window_as_none(monkeypatch):
@@ -196,25 +196,21 @@ def test_open_reddit_post_db_treats_dead_window_as_none(monkeypatch):
     dashboard_experimental.open_reddit_post_db(dash)
 
     assert len(calls) == 1
+    assert calls[0]["parent"] is dash.parent
     assert calls[0]["add_record_callback"] is None
+    dash._open_drill_down.assert_not_called()
 
 
-def test_open_reddit_post_db_fallback_when_open_drill_down_raises(monkeypatch):
-    """Recovery errors are logged; browser still opens via fallback parent."""
+def test_open_reddit_post_db_does_not_open_server_list_on_fallback(monkeypatch):
+    """Fallback path must not open Server List as a side effect."""
     dash = _make_dash()
     dash._server_list_getter = MagicMock(return_value=None)
-    dash._open_drill_down = MagicMock(side_effect=RuntimeError("boom"))
+    dash._open_drill_down = MagicMock()
 
     calls = []
-    log_warnings = []
     monkeypatch.setattr(
         "gui.components.dashboard_experimental.show_reddit_browser_window",
         lambda **kw: calls.append(kw),
-    )
-    monkeypatch.setattr(
-        dashboard_experimental._logger,
-        "warning",
-        lambda msg, *args: log_warnings.append(msg % args if args else msg),
     )
 
     dashboard_experimental.open_reddit_post_db(dash)
@@ -222,8 +218,7 @@ def test_open_reddit_post_db_fallback_when_open_drill_down_raises(monkeypatch):
     assert len(calls) == 1
     assert calls[0]["parent"] is dash.parent
     assert calls[0]["add_record_callback"] is None
-    dash._open_drill_down.assert_called_once_with("server_list")
-    assert any("unable to open server list window" in msg for msg in log_warnings)
+    dash._open_drill_down.assert_not_called()
 
 
 def test_open_reddit_post_db_fallback_when_getter_raises(monkeypatch):
@@ -255,8 +250,8 @@ def test_open_reddit_post_db_fallback_when_getter_raises(monkeypatch):
     assert len(calls) == 1
     assert calls[0]["parent"] is dash.parent
     assert calls[0]["add_record_callback"] is None
-    dash._open_drill_down.assert_called_once_with("server_list")
-    assert getter_calls["count"] == 2
+    dash._open_drill_down.assert_not_called()
+    assert getter_calls["count"] == 1
     assert any("server list getter failed" in msg for msg in log_warnings)
 
 

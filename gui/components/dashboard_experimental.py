@@ -37,10 +37,9 @@ def handle_experimental_button_click(widget) -> None:
 def open_reddit_post_db(widget) -> None:
     """Open the Reddit Post DB browser, wiring add_record_callback when possible.
 
-    Resolution order:
+    Resolution order (single pass; no side-effect window opens):
     1. Call _server_list_getter() if set; accept result if window is live.
-    2. If None or dead: call _open_drill_down("server_list") once, then re-check.
-    3. If still None: open browser without add_record_callback (fallback).
+    2. If None/dead/error: open browser without add_record_callback (fallback).
        The browser's own "Not available" message handles the UX.
 
     Parent window:
@@ -66,30 +65,17 @@ def open_reddit_post_db(widget) -> None:
 # ---------------------------------------------------------------------------
 
 def _resolve_server_window(widget):
-    """Return a live ServerListWindow instance or None."""
+    """Return a live ServerListWindow instance or None (single getter pass)."""
     getter = getattr(widget, "_server_list_getter", None)
 
-    server_window = _safe_get_server_window(getter, source="initial")
+    server_window = _safe_get_server_window(getter)
     if server_window is not None and not _window_is_live(server_window):
         server_window = None
-
-    if server_window is None:
-        # Attempt to open / surface the server list window once.
-        try:
-            widget._open_drill_down("server_list")
-        except Exception as exc:
-            _logger.warning(
-                "Experimental Reddit Post DB fallback: unable to open server list window: %s",
-                exc,
-            )
-        server_window = _safe_get_server_window(getter, source="post-open")
-        if server_window is not None and not _window_is_live(server_window):
-            server_window = None
 
     return server_window
 
 
-def _safe_get_server_window(getter, source: str):
+def _safe_get_server_window(getter):
     """Call server-list getter safely; return None on failure."""
     if getter is None:
         return None
@@ -97,8 +83,7 @@ def _safe_get_server_window(getter, source: str):
         return getter()
     except Exception as exc:
         _logger.warning(
-            "Experimental Reddit Post DB fallback: server list getter failed (%s): %s",
-            source,
+            "Experimental Reddit Post DB fallback: server list getter failed: %s",
             exc,
         )
         return None

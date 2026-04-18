@@ -75,15 +75,15 @@ class RedditGrabDialog:
         self.dialog.grab_set()
         self.dialog.protocol("WM_DELETE_WINDOW", self._on_cancel)
 
-        self.theme.apply_to_widget(self.dialog, "dialog")
+        self.theme.apply_to_widget(self.dialog, "main_window")
 
         outer = tk.Frame(self.dialog, padx=16, pady=14)
-        self.theme.apply_to_widget(outer, "dialog")
+        self.theme.apply_to_widget(outer, "main_window")
         outer.pack(fill=tk.BOTH, expand=True)
 
         # Options grid
         grid = tk.Frame(outer)
-        self.theme.apply_to_widget(grid, "dialog")
+        self.theme.apply_to_widget(grid, "main_window")
         grid.pack(fill=tk.X)
 
         def _label(row: int, text: str) -> None:
@@ -160,7 +160,7 @@ class RedditGrabDialog:
         # Checkboxes (rows 5-7)
         def _check(row: int, text: str, var: tk.BooleanVar) -> None:
             cb = tk.Checkbutton(grid, text=text, variable=var, anchor=tk.W)
-            self.theme.apply_to_widget(cb, "checkbutton")
+            self.theme.apply_to_widget(cb, "checkbox")
             cb.grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=2)
 
         _check(5, "Parse body", self.parse_body_var)
@@ -169,7 +169,7 @@ class RedditGrabDialog:
 
         # Buttons
         btn_frame = tk.Frame(outer)
-        self.theme.apply_to_widget(btn_frame, "dialog")
+        self.theme.apply_to_widget(btn_frame, "main_window")
         btn_frame.pack(fill=tk.X, pady=(14, 0))
 
         run_btn = tk.Button(btn_frame, text="Run Grab", command=self._on_run)

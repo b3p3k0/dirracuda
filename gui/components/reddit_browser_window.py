@@ -367,6 +367,7 @@ class RedditBrowserWindow:
                 host_type, self.window, host, port,
                 initial_path=start_path,
                 scheme=scheme if host_type == "H" else None,
+                theme=self.theme,
             )
 
         explorer_bridge.open_target(target, self.window, browser_factory=_factory)

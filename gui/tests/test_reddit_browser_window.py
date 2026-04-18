@@ -536,6 +536,7 @@ class TestActionHandlers:
         assert args[3] == 443
         assert kwargs["initial_path"] == "/movies/"
         assert kwargs["scheme"] == "https"
+        assert kwargs["theme"] is win.theme
 
     def test_open_system_browser_no_selection(self, monkeypatch):
         win = _make_win()
