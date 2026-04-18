@@ -7,7 +7,7 @@ All tests mock urllib.request.urlopen. No real network calls.
 
 import json
 import urllib.error
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
@@ -176,12 +176,28 @@ def test_fetch_page_filters_non_t3_children():
 # fetch_page — URL construction
 # ---------------------------------------------------------------------------
 
-def test_fetch_page_top_sort_includes_t_week():
+def test_fetch_page_top_sort_default_window_is_week():
     resp = _mock_resp(_make_payload([]))
     with patch("urllib.request.urlopen", return_value=resp) as mock_open:
         fetch_page("top")
     req = mock_open.call_args[0][0]
     assert "t=week" in req.full_url
+
+
+@pytest.mark.parametrize("window", ["hour", "day", "week", "month", "year", "all"])
+def test_fetch_page_top_sort_includes_correct_t_param(window):
+    resp = _mock_resp(_make_payload([]))
+    with patch("urllib.request.urlopen", return_value=resp) as mock_open:
+        fetch_page("top", top_window=window)
+    req = mock_open.call_args[0][0]
+    assert f"t={window}" in req.full_url
+
+
+def test_fetch_posts_passes_top_window_to_fetch_page():
+    with patch("experimental.redseek.client.fetch_page") as mock_fp:
+        mock_fp.return_value = PageResult(posts=[], next_after=None)
+        fetch_posts("top", max_pages=1, top_window="month")
+    mock_fp.assert_called_once_with(sort="top", after=None, timeout=ANY, top_window="month")
 
 
 def test_fetch_page_new_sort_does_not_include_t_week():
@@ -190,6 +206,14 @@ def test_fetch_page_new_sort_does_not_include_t_week():
         fetch_page("new")
     req = mock_open.call_args[0][0]
     assert "t=week" not in req.full_url
+
+
+def test_fetch_page_new_sort_does_not_emit_t_param():
+    resp = _mock_resp(_make_payload([]))
+    with patch("urllib.request.urlopen", return_value=resp) as mock_open:
+        fetch_page("new")
+    req = mock_open.call_args[0][0]
+    assert "t=" not in req.full_url
 
 
 def test_fetch_page_after_param_included_in_url():
@@ -335,3 +359,208 @@ def test_fetch_posts_aggregates_posts_across_pages():
     assert result.pages_fetched == 2
     assert len(result.posts) == 3
     assert [p["id"] for p in result.posts] == ["p1", "p2", "p3"]
+
+
+# ---------------------------------------------------------------------------
+# fetch_search_page — URL construction
+# ---------------------------------------------------------------------------
+
+from experimental.redseek.client import fetch_search_page, fetch_search_posts  # noqa: E402
+
+
+def test_fetch_search_page_includes_restrict_sr_1():
+    resp = _mock_resp(_make_payload([]))
+    with patch("urllib.request.urlopen", return_value=resp) as mock_open:
+        fetch_search_page("ftp files", "new")
+    req = mock_open.call_args[0][0]
+    assert "restrict_sr=1" in req.full_url
+
+
+def test_fetch_search_page_includes_query_param():
+    resp = _mock_resp(_make_payload([]))
+    with patch("urllib.request.urlopen", return_value=resp) as mock_open:
+        fetch_search_page("ftp files", "new")
+    req = mock_open.call_args[0][0]
+    assert "q=ftp+files" in req.full_url or "q=ftp%20files" in req.full_url
+
+
+def test_fetch_search_page_includes_sort_param():
+    resp = _mock_resp(_make_payload([]))
+    with patch("urllib.request.urlopen", return_value=resp) as mock_open:
+        fetch_search_page("music", "new")
+    req = mock_open.call_args[0][0]
+    assert "sort=new" in req.full_url
+
+
+def test_fetch_search_page_sort_top_includes_t_param():
+    resp = _mock_resp(_make_payload([]))
+    with patch("urllib.request.urlopen", return_value=resp) as mock_open:
+        fetch_search_page("music", "top", top_window="month")
+    req = mock_open.call_args[0][0]
+    assert "t=month" in req.full_url
+
+
+def test_fetch_search_page_sort_new_excludes_t_param():
+    resp = _mock_resp(_make_payload([]))
+    with patch("urllib.request.urlopen", return_value=resp) as mock_open:
+        fetch_search_page("music", "new")
+    req = mock_open.call_args[0][0]
+    # "sort=new" ends in "t=" so we check for "&t=" (the time-window param always follows "&")
+    assert "&t=" not in req.full_url
+
+
+def test_fetch_search_page_after_param_included():
+    resp = _mock_resp(_make_payload([]))
+    with patch("urllib.request.urlopen", return_value=resp) as mock_open:
+        fetch_search_page("music", "new", after="t3_xyz")
+    req = mock_open.call_args[0][0]
+    assert "after=t3_xyz" in req.full_url
+
+
+def test_fetch_search_page_no_after_on_first_page():
+    resp = _mock_resp(_make_payload([]))
+    with patch("urllib.request.urlopen", return_value=resp) as mock_open:
+        fetch_search_page("music", "new", after=None)
+    req = mock_open.call_args[0][0]
+    assert "after" not in req.full_url
+
+
+def test_fetch_search_page_uses_search_endpoint():
+    resp = _mock_resp(_make_payload([]))
+    with patch("urllib.request.urlopen", return_value=resp) as mock_open:
+        fetch_search_page("music", "new")
+    req = mock_open.call_args[0][0]
+    assert "/search.json" in req.full_url
+
+
+# ---------------------------------------------------------------------------
+# fetch_search_page — error handling
+# ---------------------------------------------------------------------------
+
+def test_fetch_search_page_429_raises_rate_limit_error():
+    with patch("urllib.request.urlopen", side_effect=_http_error(429)):
+        with pytest.raises(RateLimitError):
+            fetch_search_page("query", "new")
+
+
+def test_fetch_search_page_503_raises_fetch_error():
+    with patch("urllib.request.urlopen", side_effect=_http_error(503)):
+        with pytest.raises(FetchError, match="HTTP 503"):
+            fetch_search_page("query", "new")
+
+
+# ---------------------------------------------------------------------------
+# fetch_search_posts — input validation
+# ---------------------------------------------------------------------------
+
+def test_fetch_search_posts_invalid_sort_raises_value_error():
+    with pytest.raises(ValueError, match="sort"):
+        fetch_search_posts("query", "hot")
+
+
+def test_fetch_search_posts_max_pages_zero_raises_value_error():
+    with pytest.raises(ValueError, match="max_pages"):
+        fetch_search_posts("query", "new", max_pages=0)
+
+
+def test_fetch_search_posts_max_pages_four_raises_value_error():
+    with pytest.raises(ValueError, match="max_pages"):
+        fetch_search_posts("query", "new", max_pages=4)
+
+
+# ---------------------------------------------------------------------------
+# fetch_search_posts — 429 propagation
+# ---------------------------------------------------------------------------
+
+def test_fetch_search_posts_propagates_rate_limit_error():
+    with patch("urllib.request.urlopen", side_effect=_http_error(429)):
+        with pytest.raises(RateLimitError):
+            fetch_search_posts("query", "new", max_pages=1)
+
+
+# ---------------------------------------------------------------------------
+# fetch_search_posts — max_pages cap
+# ---------------------------------------------------------------------------
+
+def test_fetch_search_posts_max_pages_cap_enforced():
+    call_count = 0
+
+    def side_effect(req, timeout=20):
+        nonlocal call_count
+        call_count += 1
+        body = _make_payload([{"id": f"p{call_count}"}], after="cursor")
+        return _mock_resp(body)
+
+    with patch("urllib.request.urlopen", side_effect=side_effect):
+        with patch("experimental.redseek.client.time.sleep"):
+            result = fetch_search_posts("query", "new", max_pages=2)
+
+    assert call_count == 2
+    assert result.pages_fetched == 2
+
+
+# ---------------------------------------------------------------------------
+# fetch_user_page — URL construction
+# ---------------------------------------------------------------------------
+
+from experimental.redseek.client import fetch_user_page, fetch_user_posts  # noqa: E402
+
+
+def test_fetch_user_page_includes_type_link():
+    resp = _mock_resp(_make_payload([]))
+    with patch("urllib.request.urlopen", return_value=resp) as mock_open:
+        fetch_user_page("testuser", "new")
+    req = mock_open.call_args[0][0]
+    assert "type=link" in req.full_url
+
+
+def test_fetch_user_page_includes_restrict_sr_1():
+    resp = _mock_resp(_make_payload([]))
+    with patch("urllib.request.urlopen", return_value=resp) as mock_open:
+        fetch_user_page("testuser", "new")
+    req = mock_open.call_args[0][0]
+    assert "restrict_sr=1" in req.full_url
+
+
+def test_fetch_user_page_includes_author_query():
+    resp = _mock_resp(_make_payload([]))
+    with patch("urllib.request.urlopen", return_value=resp) as mock_open:
+        fetch_user_page("testuser", "new")
+    req = mock_open.call_args[0][0]
+    # q param contains author:testuser subreddit:opendirectories (URL-encoded)
+    assert "author%3Atestuser" in req.full_url or "author:testuser" in req.full_url
+    assert "subreddit%3Aopendirectories" in req.full_url or "subreddit:opendirectories" in req.full_url
+
+
+def test_fetch_user_page_top_window_included():
+    resp = _mock_resp(_make_payload([]))
+    with patch("urllib.request.urlopen", return_value=resp) as mock_open:
+        fetch_user_page("testuser", "top", top_window="month")
+    req = mock_open.call_args[0][0]
+    assert "t=month" in req.full_url
+
+
+def test_fetch_user_page_new_omits_t_param():
+    resp = _mock_resp(_make_payload([]))
+    with patch("urllib.request.urlopen", return_value=resp) as mock_open:
+        fetch_user_page("testuser", "new")
+    req = mock_open.call_args[0][0]
+    assert "&t=" not in req.full_url
+
+
+def test_fetch_user_page_uses_search_endpoint():
+    resp = _mock_resp(_make_payload([]))
+    with patch("urllib.request.urlopen", return_value=resp) as mock_open:
+        fetch_user_page("testuser", "new")
+    req = mock_open.call_args[0][0]
+    assert "/r/opendirectories/search.json" in req.full_url
+
+
+# ---------------------------------------------------------------------------
+# fetch_user_posts — 429 propagation
+# ---------------------------------------------------------------------------
+
+def test_fetch_user_posts_propagates_rate_limit_error():
+    with patch("urllib.request.urlopen", side_effect=_http_error(429)):
+        with pytest.raises(RateLimitError):
+            fetch_user_posts("testuser", "new", max_pages=1)

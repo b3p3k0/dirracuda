@@ -255,6 +255,22 @@ class TestClickHandlerGuards:
 
         assert warned == []
 
+    def test_passes_settings_manager_to_dialog(self, monkeypatch):
+        """settings_manager from dashboard is forwarded to show_reddit_grab_dialog."""
+        dash = _make_dash()
+        dash.settings_manager = MagicMock()
+        kwargs_seen = {}
+
+        monkeypatch.setattr(dash, "_check_external_scans", lambda: None, raising=False)
+        monkeypatch.setattr(
+            "gui.components.dashboard.show_reddit_grab_dialog",
+            lambda **kw: kwargs_seen.update(kw),
+        )
+
+        dash._handle_reddit_grab_button_click()
+
+        assert kwargs_seen.get("settings_manager") is dash.settings_manager
+
 
 # ---------------------------------------------------------------------------
 # Group C — worker exception path always schedules done callback

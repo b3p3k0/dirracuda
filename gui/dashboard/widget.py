@@ -1444,6 +1444,7 @@ class DashboardWidget:
         _d('show_reddit_grab_dialog')(
             parent=self.parent,
             grab_start_callback=self._handle_reddit_grab_start,
+            settings_manager=getattr(self, "settings_manager", None),
         )
 
     def _handle_reddit_grab_start(self, options: IngestOptions) -> None:

@@ -339,15 +339,46 @@ The GUI includes a built-in config editor for common settings.
 
 ## Experimental Features
 
+Experimental work is grouped under the permanent `⚗ Experimental` button in the dashboard header (`DB Tools` → `⚗ Experimental` → `Config`).
+
+The dialog is modeless and tab-based. Right now it has:
+- `Reddit`
+- `placeholder` (scaffold tab for future modules)
+
+On first open, the dialog shows an experimental warning banner. If you check **Don't show this notice again**, Dirracuda writes `experimental.warning_dismissed=true` to `~/.dirracuda/gui_settings.json`.
+
 ### Reddit Ingestion (redseek)
 
-Dirracuda can ingest posts from `r/opendirectories` as a feed source for analyst review. This is separate from SMB/FTP/HTTP scanning and performs no automatic probing or extraction.
+redseek ingests submissions from `r/opendirectories` into a sidecar DB (`~/.dirracuda/reddit_od.db`) for analyst review. It is separate from SMB/FTP/HTTP scanning and does not auto-probe or auto-extract anything.
 
 Access points:
-- Dashboard → `⚗ Experimental` → Reddit tab → `Open Reddit Grab` (ingest)
-- Dashboard → `⚗ Experimental` → Reddit tab → `Open Reddit Post DB` (review/open actions)
+- Dashboard → `⚗ Experimental` → `Reddit` tab → `Open Reddit Grab` (ingest)
+- Dashboard → `⚗ Experimental` → `Reddit` tab → `Open Reddit Post DB` (review/open actions)
 
-Data is stored in a sidecar database at `~/.dirracuda/reddit_od.db` and does not write to the main Dirracuda DB tables unless a host is manually promoted by the user.
+Ingest modes in `Reddit Grab`:
+
+| Mode | Endpoint | Required input | Notes |
+|------|----------|----------------|-------|
+| `feed` | `/r/opendirectories/{sort}.json` | none | Default mode |
+| `search` | `/r/opendirectories/search.json` with `restrict_sr=1` | query | Subreddit-scoped keyword search |
+| `user` | `/r/opendirectories/search.json` with `q=author:<user> subreddit:opendirectories`, `restrict_sr=1`, `type=link` | username | Service still runtime-checks subreddit and author before writes |
+
+Sort options:
+- `new`
+- `top` with window `hour`, `day`, `week`, `month`, `year`, or `all`
+
+Only submissions are ingested. Comments/replies are not ingested.
+
+Dialog input persistence:
+- Last-used `Reddit Grab` inputs persist across opens/restarts in `~/.dirracuda/gui_settings.json` under `reddit_grab.*` keys:
+  - `mode`, `sort`, `top_window`, `query`, `username`, `max_posts`
+  - `parse_body`, `include_nsfw`, `replace_cache`
+
+Promotion flow:
+- `Open Reddit Post DB` supports `Add to dirracuda DB` from the row context menu.
+- If that action shows **Not available**, open the Server List once and reopen Reddit Post DB (the add-record callback comes from the live Server List window).
+
+redseek data does not write to main Dirracuda DB tables unless a host is manually promoted.
 
 Disclaimer:
 

@@ -16,6 +16,7 @@ from unittest.mock import patch
 import pytest
 
 from experimental.redseek.client import FetchError, FetchResult, RateLimitError
+import experimental.redseek.service as _svc
 from experimental.redseek.models import RedditIngestState
 from experimental.redseek.store import (
     get_ingest_state,
@@ -61,6 +62,10 @@ def _make_opts(
     include_nsfw: bool = True,
     replace_cache: bool = False,
     max_pages: int = 1,
+    top_window: str = "week",
+    mode: str = "feed",
+    query: str = "",
+    username: str = "",
 ) -> IngestOptions:
     return IngestOptions(
         sort=sort,
@@ -69,6 +74,10 @@ def _make_opts(
         include_nsfw=include_nsfw,
         replace_cache=replace_cache,
         max_pages=max_pages,
+        top_window=top_window,
+        mode=mode,
+        query=query,
+        username=username,
     )
 
 
@@ -351,7 +360,7 @@ def test_top_updates_scrape_time_only(tmp_path):
     assert result.error is None
 
     with open_connection(db) as conn:
-        state = get_ingest_state(conn, "opendirectories", "top")
+        state = get_ingest_state(conn, "opendirectories", "top:week")
 
     assert state is not None
     assert state.last_scrape_time is not None
@@ -601,3 +610,516 @@ def test_preview_note_stored_in_db_top_mode(tmp_path):
     assert len(notes) >= 1
     assert "T:" in notes[0]
     assert "B:top body" in notes[0]
+
+
+# ---------------------------------------------------------------------------
+# top window — state key + legacy migration
+# ---------------------------------------------------------------------------
+
+def test_top_state_key_uses_window_prefix(tmp_path):
+    """State is saved under 'top:<window>', not the legacy 'top' key."""
+    db = tmp_path / "test.db"
+    posts = [_make_raw_post("p1")]
+    with patch("experimental.redseek.service.fetch_posts", return_value=_make_fetch(posts)):
+        result = run_ingest(_make_opts(sort="top"), db_path=db)
+
+    assert result.error is None
+    with open_connection(db) as conn:
+        assert get_ingest_state(conn, "opendirectories", "top:week") is not None
+        assert get_ingest_state(conn, "opendirectories", "top") is None
+
+
+def test_top_non_week_state_key_uses_correct_prefix(tmp_path):
+    """Non-week windows are keyed as 'top:<window>' and never touch the legacy key."""
+    db = tmp_path / "test.db"
+    posts = [_make_raw_post("p1")]
+    with patch("experimental.redseek.service.fetch_posts", return_value=_make_fetch(posts)):
+        result = run_ingest(_make_opts(sort="top", top_window="month"), db_path=db)
+
+    assert result.error is None
+    with open_connection(db) as conn:
+        assert get_ingest_state(conn, "opendirectories", "top:month") is not None
+        assert get_ingest_state(conn, "opendirectories", "top") is None
+
+
+def test_top_week_fallback_copies_legacy_to_new_key(tmp_path):
+    """When top:week absent and legacy 'top' exists, migration copies row to 'top:week'."""
+    db = tmp_path / "test.db"
+    init_db(db)
+    with open_connection(db) as conn:
+        save_ingest_state(conn, RedditIngestState(
+            subreddit="opendirectories",
+            sort_mode="top",
+            last_post_created_utc=None,
+            last_post_id=None,
+            last_scrape_time="2025-01-01 00:00:00",
+        ))
+        conn.commit()
+
+    posts = [_make_raw_post("p1")]
+    with patch("experimental.redseek.service.fetch_posts", return_value=_make_fetch(posts)):
+        result = run_ingest(_make_opts(sort="top"), db_path=db)
+
+    assert result.error is None
+    with open_connection(db) as conn:
+        new_state = get_ingest_state(conn, "opendirectories", "top:week")
+        legacy_state = get_ingest_state(conn, "opendirectories", "top")
+    assert new_state is not None
+    assert legacy_state is not None  # tombstone, not deleted
+
+
+def test_top_week_migration_skipped_when_new_key_already_exists(tmp_path, monkeypatch):
+    """Migration write is skipped when top:week already present — only main save fires."""
+    import experimental.redseek.service as svc
+
+    save_calls: list = []
+    real_save = svc.save_ingest_state
+
+    def tracking_save(conn, state):
+        save_calls.append(state.sort_mode)
+        return real_save(conn, state)
+
+    monkeypatch.setattr(svc, "save_ingest_state", tracking_save)
+
+    db = tmp_path / "test.db"
+    init_db(db)
+    with open_connection(db) as conn:
+        save_ingest_state(conn, RedditIngestState(
+            subreddit="opendirectories",
+            sort_mode="top",
+            last_post_created_utc=None,
+            last_post_id=None,
+            last_scrape_time="2025-01-01 00:00:00",
+        ))
+        save_ingest_state(conn, RedditIngestState(
+            subreddit="opendirectories",
+            sort_mode="top:week",
+            last_post_created_utc=None,
+            last_post_id=None,
+            last_scrape_time="2025-06-01 00:00:00",
+        ))
+        conn.commit()
+
+    posts = [_make_raw_post("p1")]
+    with patch("experimental.redseek.service.fetch_posts", return_value=_make_fetch(posts)):
+        result = run_ingest(_make_opts(sort="top"), db_path=db)
+
+    assert result.error is None
+    assert save_calls.count("top:week") == 1  # exactly one write: the main save
+
+
+def test_top_non_week_no_legacy_fallback(tmp_path, monkeypatch):
+    """For non-week windows, get_ingest_state is never called with the legacy 'top' key."""
+    import experimental.redseek.service as svc
+
+    queried: list = []
+    real_get = svc.get_ingest_state
+
+    def tracking_get(conn, subreddit, sort_mode):
+        queried.append(sort_mode)
+        return real_get(conn, subreddit, sort_mode)
+
+    monkeypatch.setattr(svc, "get_ingest_state", tracking_get)
+
+    db = tmp_path / "test.db"
+    posts = [_make_raw_post("p1")]
+    with patch("experimental.redseek.service.fetch_posts", return_value=_make_fetch(posts)):
+        result = run_ingest(_make_opts(sort="top", top_window="month"), db_path=db)
+
+    assert result.error is None
+    assert "top" not in queried   # legacy key never queried for non-week windows
+
+
+# ---------------------------------------------------------------------------
+# search mode — validation
+# ---------------------------------------------------------------------------
+
+def test_search_mode_unknown_mode_returns_error(tmp_path):
+    db = tmp_path / "test.db"
+    result = run_ingest(_make_opts(mode="rss"), db_path=db)
+    assert result.error is not None
+    assert "rss" in result.error
+
+
+def test_search_mode_empty_query_returns_error(tmp_path):
+    db = tmp_path / "test.db"
+    result = run_ingest(_make_opts(mode="search", query=""), db_path=db)
+    assert result.error is not None
+    assert "query" in result.error.lower()
+
+
+def test_search_mode_whitespace_only_query_returns_error(tmp_path):
+    db = tmp_path / "test.db"
+    result = run_ingest(_make_opts(mode="search", query="   "), db_path=db)
+    assert result.error is not None
+    assert "query" in result.error.lower()
+
+
+# ---------------------------------------------------------------------------
+# search mode — happy path and dedupe
+# ---------------------------------------------------------------------------
+
+def test_search_mode_ingests_posts(tmp_path):
+    db = tmp_path / "test.db"
+    posts = [_make_raw_post("p1"), _make_raw_post("p2")]
+    with patch("experimental.redseek.service.fetch_search_posts", return_value=_make_fetch(posts)):
+        result = run_ingest(_make_opts(mode="search", query="ftp files"), db_path=db)
+
+    assert result.error is None
+    assert result.posts_stored == 2
+    assert result.stopped_by_cursor is False
+
+
+def test_search_mode_dedupe_second_run(tmp_path):
+    db = tmp_path / "test.db"
+    posts = [_make_raw_post("p1"), _make_raw_post("p2")]
+    fetch = _make_fetch(posts)
+
+    with patch("experimental.redseek.service.fetch_search_posts", return_value=fetch):
+        r1 = run_ingest(_make_opts(mode="search", query="ftp files"), db_path=db)
+    with patch("experimental.redseek.service.fetch_search_posts", return_value=fetch):
+        r2 = run_ingest(_make_opts(mode="search", query="ftp files"), db_path=db)
+
+    assert r1.error is None
+    assert r2.error is None
+    assert _row_counts(db)["posts"] == 2   # no duplicates
+
+
+# ---------------------------------------------------------------------------
+# search mode — state key
+# ---------------------------------------------------------------------------
+
+def test_search_mode_state_key_sort_new(tmp_path):
+    """State saved as search:new:na:<normalized_query>."""
+    db = tmp_path / "test.db"
+    posts = [_make_raw_post("p1")]
+    with patch("experimental.redseek.service.fetch_search_posts", return_value=_make_fetch(posts)):
+        result = run_ingest(_make_opts(mode="search", query="FTP  Files"), db_path=db)
+
+    assert result.error is None
+    with open_connection(db) as conn:
+        state = get_ingest_state(conn, "opendirectories", "search:new:na:ftp files")
+    assert state is not None
+    assert state.last_scrape_time is not None
+    assert state.last_post_created_utc is None   # no cursor fields for search
+
+
+def test_search_mode_state_key_sort_top_includes_window(tmp_path):
+    """State saved as search:top:<window>:<normalized_query>."""
+    db = tmp_path / "test.db"
+    posts = [_make_raw_post("p1")]
+    with patch("experimental.redseek.service.fetch_search_posts", return_value=_make_fetch(posts)):
+        result = run_ingest(
+            _make_opts(mode="search", sort="top", top_window="week", query="music"),
+            db_path=db,
+        )
+
+    assert result.error is None
+    with open_connection(db) as conn:
+        state = get_ingest_state(conn, "opendirectories", "search:top:week:music")
+    assert state is not None
+
+
+def test_search_mode_different_sort_produces_distinct_state_keys(tmp_path):
+    """search:new:na:q and search:top:week:q are distinct state rows."""
+    db = tmp_path / "test.db"
+    posts = [_make_raw_post("p1")]
+    fetch = _make_fetch(posts)
+
+    with patch("experimental.redseek.service.fetch_search_posts", return_value=fetch):
+        run_ingest(_make_opts(mode="search", sort="new", query="music"), db_path=db)
+    with patch("experimental.redseek.service.fetch_search_posts", return_value=fetch):
+        run_ingest(_make_opts(mode="search", sort="top", top_window="week", query="music"), db_path=db)
+
+    with open_connection(db) as conn:
+        assert get_ingest_state(conn, "opendirectories", "search:new:na:music") is not None
+        assert get_ingest_state(conn, "opendirectories", "search:top:week:music") is not None
+
+
+# ---------------------------------------------------------------------------
+# search mode — result fields
+# ---------------------------------------------------------------------------
+
+def test_search_mode_result_sort_matches_options_sort(tmp_path):
+    """IngestResult.sort reflects options.sort (not a 'search' literal)."""
+    db = tmp_path / "test.db"
+    posts = [_make_raw_post("p1")]
+    with patch("experimental.redseek.service.fetch_search_posts", return_value=_make_fetch(posts)):
+        result = run_ingest(_make_opts(mode="search", sort="new", query="q"), db_path=db)
+    assert result.sort == "new"
+
+
+def test_search_mode_rate_limit_returns_clean_result(tmp_path):
+    db = tmp_path / "test.db"
+    with patch(
+        "experimental.redseek.service.fetch_search_posts",
+        side_effect=RateLimitError("429"),
+    ):
+        result = run_ingest(_make_opts(mode="search", query="ftp"), db_path=db)
+
+    assert result.rate_limited is True
+    assert result.error == "HTTP 429"
+    assert result.posts_stored == 0
+
+
+# ---------------------------------------------------------------------------
+# search mode — dispatch guards
+# ---------------------------------------------------------------------------
+
+def test_search_mode_calls_fetch_search_posts_not_fetch_posts(tmp_path, monkeypatch):
+    """mode=search must use fetch_search_posts, never fetch_posts."""
+    db = tmp_path / "test.db"
+    feed_called = []
+    search_called = []
+
+    monkeypatch.setattr(
+        _svc, "fetch_posts",
+        lambda *a, **kw: feed_called.append(True) or _make_fetch([]),
+    )
+    monkeypatch.setattr(
+        _svc, "fetch_search_posts",
+        lambda *a, **kw: search_called.append(True) or _make_fetch([]),
+    )
+
+    run_ingest(_make_opts(mode="search", query="ftp"), db_path=db)
+
+    assert search_called == [True]
+    assert feed_called == []
+
+
+def test_feed_mode_calls_fetch_posts_not_fetch_search_posts(tmp_path, monkeypatch):
+    """mode=feed must use fetch_posts, never fetch_search_posts."""
+    db = tmp_path / "test.db"
+    feed_called = []
+    search_called = []
+
+    monkeypatch.setattr(
+        _svc, "fetch_posts",
+        lambda *a, **kw: feed_called.append(True) or _make_fetch([]),
+    )
+    monkeypatch.setattr(
+        _svc, "fetch_search_posts",
+        lambda *a, **kw: search_called.append(True) or _make_fetch([]),
+    )
+
+    run_ingest(_make_opts(mode="feed", sort="new"), db_path=db)
+
+    assert feed_called == [True]
+    assert search_called == []
+
+
+# ---------------------------------------------------------------------------
+# user mode — validation
+# ---------------------------------------------------------------------------
+
+def test_user_mode_empty_username_returns_error():
+    result = run_ingest(_make_opts(mode="user", username=""))
+    assert result.error == "username is required for user mode"
+    assert result.posts_stored == 0
+
+
+def test_user_mode_whitespace_only_username_returns_error():
+    result = run_ingest(_make_opts(mode="user", username="   "))
+    assert result.error == "username is required for user mode"
+    assert result.posts_stored == 0
+
+
+def test_user_mode_username_with_space_returns_error():
+    result = run_ingest(_make_opts(mode="user", username="bad user"))
+    assert result.error is not None
+    assert "invalid username" in result.error
+
+
+# ---------------------------------------------------------------------------
+# user mode — fetch dispatch
+# ---------------------------------------------------------------------------
+
+def test_user_mode_calls_fetch_user_posts(tmp_path, monkeypatch):
+    """mode=user must call fetch_user_posts with the normalized username."""
+    db = tmp_path / "test.db"
+    calls = []
+
+    def fake_fetch_user(username, sort, **kw):
+        calls.append({"username": username, "sort": sort, **kw})
+        return _make_fetch([])
+
+    monkeypatch.setattr(_svc, "fetch_user_posts", fake_fetch_user)
+    run_ingest(_make_opts(mode="user", username="testuser"), db_path=db)
+
+    assert len(calls) == 1
+    assert calls[0]["username"] == "testuser"
+    assert calls[0]["sort"] == "new"
+
+
+def test_user_mode_u_prefix_normalization(tmp_path, monkeypatch):
+    """u/foo should be normalized to foo before passing to fetch_user_posts."""
+    db = tmp_path / "test.db"
+    calls = []
+
+    def fake_fetch_user(username, sort, **kw):
+        calls.append(username)
+        return _make_fetch([])
+
+    monkeypatch.setattr(_svc, "fetch_user_posts", fake_fetch_user)
+    run_ingest(_make_opts(mode="user", username="u/testuser"), db_path=db)
+
+    assert calls == ["testuser"]
+
+
+def test_user_mode_top_window_passthrough(tmp_path, monkeypatch):
+    """sort=top + top_window=month must be forwarded to fetch_user_posts."""
+    db = tmp_path / "test.db"
+    calls = []
+
+    def fake_fetch_user(username, sort, **kw):
+        calls.append({"sort": sort, "top_window": kw.get("top_window")})
+        return _make_fetch([])
+
+    monkeypatch.setattr(_svc, "fetch_user_posts", fake_fetch_user)
+    run_ingest(_make_opts(mode="user", username="foo", sort="top", top_window="month"), db_path=db)
+
+    assert calls[0]["sort"] == "top"
+    assert calls[0]["top_window"] == "month"
+
+
+# ---------------------------------------------------------------------------
+# user mode — runtime guards
+# ---------------------------------------------------------------------------
+
+def _make_raw_user_post(
+    post_id: str,
+    author: str = "testuser",
+    subreddit: str = "opendirectories",
+    created_utc: float = 1_700_000_000.0,
+    title: str = "No URL",
+    selftext: str = "",
+    over_18: bool = False,
+) -> dict:
+    return {
+        "id": post_id,
+        "created_utc": created_utc,
+        "title": title,
+        "author": author,
+        "selftext": selftext,
+        "over_18": over_18,
+        "subreddit": subreddit,
+    }
+
+
+def test_user_mode_basic_stores_matching_post(tmp_path, monkeypatch):
+    """Post with matching subreddit and author is written to DB."""
+    db = tmp_path / "test.db"
+    post = _make_raw_user_post("abc123", author="testuser", subreddit="opendirectories")
+    monkeypatch.setattr(_svc, "fetch_user_posts", lambda *a, **kw: _make_fetch([post]))
+
+    result = run_ingest(_make_opts(mode="user", username="testuser"), db_path=db)
+
+    assert result.posts_stored == 1
+    assert result.error is None
+
+
+def test_user_mode_skips_wrong_subreddit(tmp_path, monkeypatch):
+    """Post with subreddit != opendirectories must be skipped and not written."""
+    db = tmp_path / "test.db"
+    post = _make_raw_user_post("abc123", author="testuser", subreddit="pics")
+    monkeypatch.setattr(_svc, "fetch_user_posts", lambda *a, **kw: _make_fetch([post]))
+
+    result = run_ingest(_make_opts(mode="user", username="testuser"), db_path=db)
+
+    assert result.posts_stored == 0
+    assert result.posts_skipped == 1
+
+    conn = open_connection(db)
+    rows = conn.execute("SELECT post_id FROM reddit_posts").fetchall()
+    conn.close()
+    assert rows == []
+
+
+def test_user_mode_skips_wrong_author(tmp_path, monkeypatch):
+    """Post whose author != requested username must be skipped and not written."""
+    db = tmp_path / "test.db"
+    post = _make_raw_user_post("abc123", author="someoneelse", subreddit="opendirectories")
+    monkeypatch.setattr(_svc, "fetch_user_posts", lambda *a, **kw: _make_fetch([post]))
+
+    result = run_ingest(_make_opts(mode="user", username="testuser"), db_path=db)
+
+    assert result.posts_stored == 0
+    assert result.posts_skipped == 1
+
+    conn = open_connection(db)
+    rows = conn.execute("SELECT post_id FROM reddit_posts").fetchall()
+    conn.close()
+    assert rows == []
+
+
+def test_user_mode_case_insensitive_guard(tmp_path, monkeypatch):
+    """Guards must be case-insensitive: OpenDirectories / FOO match."""
+    db = tmp_path / "test.db"
+    post = _make_raw_user_post("abc123", author="FOO", subreddit="OpenDirectories")
+    monkeypatch.setattr(_svc, "fetch_user_posts", lambda *a, **kw: _make_fetch([post]))
+
+    result = run_ingest(_make_opts(mode="user", username="foo"), db_path=db)
+
+    assert result.posts_stored == 1
+    assert result.posts_skipped == 0
+
+
+# ---------------------------------------------------------------------------
+# user mode — state key
+# ---------------------------------------------------------------------------
+
+def test_user_mode_state_key_format(tmp_path, monkeypatch):
+    """State row must be saved under user:<sort>:<window>:<username>."""
+    db = tmp_path / "test.db"
+    monkeypatch.setattr(_svc, "fetch_user_posts", lambda *a, **kw: _make_fetch([]))
+
+    run_ingest(_make_opts(mode="user", username="testuser", sort="new"), db_path=db)
+
+    conn = open_connection(db)
+    rows = conn.execute(
+        "SELECT sort_mode FROM reddit_ingest_state WHERE subreddit='opendirectories'"
+    ).fetchall()
+    conn.close()
+    keys = [r[0] for r in rows]
+    assert any(k.startswith("user:new:na:testuser") for k in keys)
+
+
+def test_user_mode_state_key_top_includes_window(tmp_path, monkeypatch):
+    """State key for sort=top must include the top window."""
+    db = tmp_path / "test.db"
+    monkeypatch.setattr(_svc, "fetch_user_posts", lambda *a, **kw: _make_fetch([]))
+
+    run_ingest(_make_opts(mode="user", username="testuser", sort="top", top_window="month"), db_path=db)
+
+    conn = open_connection(db)
+    rows = conn.execute(
+        "SELECT sort_mode FROM reddit_ingest_state WHERE subreddit='opendirectories'"
+    ).fetchall()
+    conn.close()
+    keys = [r[0] for r in rows]
+    assert any(k.startswith("user:top:month:testuser") for k in keys)
+
+
+# ---------------------------------------------------------------------------
+# user mode — guard robustness (non-string subreddit/author)
+# ---------------------------------------------------------------------------
+
+def test_user_mode_nonstring_subreddit_and_author_does_not_raise(tmp_path, monkeypatch):
+    """Guards must not raise when subreddit or author is None or a non-string truthy value."""
+    db = tmp_path / "test.db"
+    posts = [
+        # Post 1: falsy non-string (None)
+        {"id": "p1", "created_utc": 1_700_000_000.0, "title": "t", "selftext": "",
+         "over_18": False, "subreddit": None, "author": None},
+        # Post 2: truthy non-string (int)
+        {"id": "p2", "created_utc": 1_700_000_001.0, "title": "t", "selftext": "",
+         "over_18": False, "subreddit": 123, "author": 456},
+    ]
+    monkeypatch.setattr(_svc, "fetch_user_posts", lambda *a, **kw: _make_fetch(posts))
+
+    result = run_ingest(_make_opts(mode="user", username="testuser"), db_path=db)
+
+    assert isinstance(result, IngestResult)
+    assert result.error is None
+    assert result.posts_stored == 0
+    assert result.posts_skipped == 2
