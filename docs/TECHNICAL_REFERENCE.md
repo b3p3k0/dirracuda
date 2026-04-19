@@ -74,7 +74,7 @@ Dirracuda scans for internet-accessible servers exposing open or weakly-authenti
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-For SMB/FTP/HTTP scan flows, the GUI invokes CLI scripts as subprocesses via `gui/utils/backend_interface/interface.py` and parses stdout for progress data. Experimental Reddit ingestion (`experimental/redseek`) is an in-process path launched from the dashboard on a background thread.
+For SMB/FTP/HTTP scan flows, the GUI invokes CLI scripts as subprocesses via `gui/utils/backend_interface/interface.py` and parses stdout for progress data. Experimental SearXNG dorking (`experimental/se_dork`) and Reddit ingestion (`experimental/redseek`) are in-process paths launched from the dashboard on background threads.
 
 ### 1.2 Core Workflow Flowchart
 
@@ -108,8 +108,8 @@ This shape applies to all three protocols. Protocol-specific differences are cov
 | `commands/ftp/` | FTP discovery and access stages | `shodan_query.py`, `verifier.py`, `operation.py`, `models.py` |
 | `commands/http/` | HTTP discovery and access stages (parallel to FTP) | `shodan_query.py`, `verifier.py`, `operation.py`, `models.py` |
 | `shared/` | Protocol-agnostic utilities shared by CLI and GUI | See §2.1 |
-| `experimental/redseek/` | Reddit ingestion pipeline (client fetch, parse, sidecar persistence) | `client.py`, `service.py`, `parser.py`, `store.py` |
 | `experimental/se_dork/` | SearXNG dork search pipeline (client, service, store, classifier, models) | `client.py`, `service.py`, `store.py`, `classifier.py`, `models.py` |
+| `experimental/redseek/` | Reddit ingestion pipeline (client fetch, parse, sidecar persistence) | `client.py`, `service.py`, `parser.py`, `store.py` |
 | `gui/components/` | Tkinter windows and dialogs | `dashboard.py`, `unified_scan_dialog.py`, `server_list_window/`, `db_tools_dialog.py`, `*_browser_window.py` |
 | `gui/utils/` | GUI infrastructure | `ui_dispatcher.py`, `scan_manager.py`, `backend_interface/`, `probe_runner.py`, `extract_runner.py`, `settings_manager.py` |
 | `tools/` | Database management utilities | `db_manager.py`, `db_schema.sql`, `db_maintenance.py`, `db_migrations.py`* |
@@ -193,6 +193,12 @@ The GUI maintains a separation between application config and user preferences:
 
 Config resolution order for GUI settings: CLI arg → `gui_settings.json` value → `conf/config.json` fallback. This prevents app updates from resetting window positions or scan templates.
 
+SearXNG Dorking experimental UI settings persisted in `gui_settings.json`:
+
+- `se_dork.instance_url`
+- `se_dork.query`
+- `se_dork.max_results`
+
 Reddit experimental UI settings currently persisted in `gui_settings.json`:
 
 - `experimental.warning_dismissed`
@@ -205,12 +211,6 @@ Reddit experimental UI settings currently persisted in `gui_settings.json`:
 - `reddit_grab.parse_body`
 - `reddit_grab.include_nsfw`
 - `reddit_grab.replace_cache`
-
-SearXNG Dorking experimental UI settings persisted in `gui_settings.json`:
-
-- `se_dork.instance_url`
-- `se_dork.query`
-- `se_dork.max_results`
 
 ---
 
@@ -581,7 +581,19 @@ WHERE ip_address = '1.2.3.4';
 
 **`commands/ftp/operation.py` and equivalent HTTP file use `FtpPersistence` / `HttpPersistence`** (also in `shared/database.py`) which connect directly to the DB path without going through `SMBSeekWorkflowDatabase`.
 
-### 5.5 Reddit Sidecar Database (`~/.dirracuda/reddit_od.db`)
+### 5.5 SearXNG Dork Sidecar Database (`~/.dirracuda/se_dork.db`)
+
+The SearXNG Dorking module (`experimental/se_dork`) writes to a separate SQLite database. It does not share tables with `dirracuda.db`.
+
+Tables:
+- `dork_runs` — one row per dork search run (`run_id` PK), with `instance_url`, `query`, `max_results`, `fetched_count`, `deduped_count`, `verified_count`, `status`, `error_message`, `started_at`, `finished_at`
+- `dork_results` — one row per candidate URL per run (`result_id` PK), FK `run_id → dork_runs(run_id)`; deduped per run on `UNIQUE(run_id, url_normalized)`; stores `url`, `url_normalized`, `title`, `snippet`, `source_engine`, `source_engines_json`, `verdict`, `reason_code`, `http_status`, `checked_at`
+
+Verdict values: `OPEN_INDEX`, `MAYBE`, `NOISE`, `ERROR`.
+
+URL normalization (`store.normalize_url`): scheme and netloc lowercased; path case preserved; trailing slash stripped from path; query string and fragment dropped.
+
+### 5.6 Reddit Sidecar Database (`~/.dirracuda/reddit_od.db`)
 
 The Reddit module (`experimental/redseek`) writes to a separate SQLite database. It does not share tables with `dirracuda.db`.
 
@@ -597,18 +609,6 @@ Current `sort_mode` keys:
 - `user:<sort>:<window_or_na>:<normalized_username>`
 
 Compatibility note: legacy `top` state is migrated to `top:week` on first week-top run; legacy row is left in place.
-
-### 5.6 SearXNG Dork Sidecar Database (`~/.dirracuda/se_dork.db`)
-
-The SearXNG Dorking module (`experimental/se_dork`) writes to a separate SQLite database. It does not share tables with `dirracuda.db`.
-
-Tables:
-- `dork_runs` — one row per dork search run (`run_id` PK), with `instance_url`, `query`, `max_results`, `fetched_count`, `deduped_count`, `verified_count`, `status`, `error_message`, `started_at`, `finished_at`
-- `dork_results` — one row per candidate URL per run (`result_id` PK), FK `run_id → dork_runs(run_id)`; deduped per run on `UNIQUE(run_id, url_normalized)`; stores `url`, `url_normalized`, `title`, `snippet`, `source_engine`, `source_engines_json`, `verdict`, `reason_code`, `http_status`, `checked_at`
-
-Verdict values: `OPEN_INDEX`, `MAYBE`, `NOISE`, `ERROR`.
-
-URL normalization (`store.normalize_url`): scheme and netloc lowercased; path case preserved; trailing slash stripped from path; query string and fragment dropped.
 
 ---
 
@@ -633,11 +633,11 @@ dirracuda
    │    ├─ FTP tab
    │    └─ HTTP tab
    ├─ ExperimentalFeaturesDialog (gui/components/experimental_features_dialog.py)
-   │    ├─ Reddit tab (gui/components/experimental_features/reddit_tab.py)
-   │    │    ├─ RedditGrabDialog (gui/components/reddit_grab_dialog.py)
-   │    │    └─ RedditBrowserWindow (gui/components/reddit_browser_window.py)
-   │    └─ SearXNG Dorking tab (gui/components/experimental_features/se_dork_tab.py)
-   │         └─ SeDorkBrowserWindow (gui/components/se_dork_browser_window.py)
+   │    ├─ SearXNG Dorking tab (gui/components/experimental_features/se_dork_tab.py)
+   │    │    └─ SeDorkBrowserWindow (gui/components/se_dork_browser_window.py)
+   │    └─ Reddit tab (gui/components/experimental_features/reddit_tab.py)
+   │         ├─ RedditGrabDialog (gui/components/reddit_grab_dialog.py)
+   │         └─ RedditBrowserWindow (gui/components/reddit_browser_window.py)
    ├─ DBToolsDialog (gui/components/db_tools_dialog.py)
    │    └─ DBToolsEngine (gui/utils/db_tools_engine.py)
    └─ [config editor, scan dialogs, browser windows, extract dialogs]
@@ -663,7 +663,7 @@ Internally: `schedule()` pushes `(callback, args, kwargs)` to a `queue.Queue`. T
 5. Cancellation: `ProcessRunner` sends SIGTERM and waits for graceful exit
 6. `--mock` mode substitutes `MockOperations` for the subprocess, enabling GUI testing without a real backend
 
-Reddit ingestion does not use this subprocess path. `DashboardWidget` starts a thread and calls `experimental.redseek.service.run_ingest()` directly, then marshals completion back to Tk via `parent.after(...)`.
+SearXNG dorking and Reddit ingestion do not use this subprocess path. `DashboardWidget` starts threads and calls `experimental.se_dork.service.run_dork_search()` or `experimental.redseek.service.run_ingest()` directly, then marshals completion back to Tk via `parent.after(...)`.
 
 ### 6.4 Dashboard Controls
 
@@ -672,7 +672,7 @@ Reddit ingestion does not use this subprocess path. `DashboardWidget` starts a t
 | Start Scan | Opens `UnifiedScanDialog` (protocol selector + scan options) |
 | Server List | Opens `ServerListWindow` with SMB / FTP / HTTP tabs |
 | DB Tools | Opens `DBToolsDialog` |
-| Experimental | Opens `ExperimentalFeaturesDialog` (`Reddit` + `SearXNG Dorking` tabs) |
+| Experimental | Opens `ExperimentalFeaturesDialog` (`SearXNG Dorking` + `Reddit` tabs) |
 | Configuration | Opens config editor |
 | Dark/Light toggle | Switches ttkthemes theme; persisted in `gui_settings.json` |
 
@@ -723,40 +723,17 @@ Backed by `gui/utils/db_tools_engine.py`. Capabilities:
 - **Statistics** — server count by country, protocol breakdown
 - **Maintenance** — SQLite VACUUM, integrity check (`PRAGMA integrity_check`), cascade-deletion preview before purging old sessions
 
-### 6.9 Experimental Features and Reddit Module
+### 6.9 Experimental Features (SearXNG and Reddit)
 
 `ExperimentalFeaturesDialog` is a modeless tab host opened from the dashboard `Experimental` button. Tabs are registry-driven (`gui/components/experimental_features/registry.py`), so adding/removing experimental modules is a registry edit, not dialog shell surgery.
 
 Current tabs:
-- `Reddit`
 - `SearXNG Dorking`
+- `Reddit`
 
 Warning banner behavior:
 - First open shows a warning banner with a "Don't show this notice again" checkbox
 - Dismissal writes `experimental.warning_dismissed=true` immediately (not deferred to dialog close)
-
-Reddit ingest entry path:
-
-```
-Dashboard -> Experimental tab -> Open Reddit Grab
-  -> RedditGrabDialog -> run_ingest(options) on worker thread
-  -> result dialog (counts, dedupe, rate-limit errors)
-```
-
-Reddit Post DB entry path:
-
-```
-Dashboard -> Experimental tab -> Open Reddit Post DB
-  -> RedditBrowserWindow (reads ~/.dirracuda/reddit_od.db)
-  -> optional "Add to dirracuda DB" action if ServerListWindow callback is available
-```
-
-Reddit modes exposed in `RedditGrabDialog`:
-- `feed` — fetches `/r/opendirectories/{new|top}.json`
-- `search` — fetches `/r/opendirectories/search.json` with user query and `restrict_sr=1`
-- `user` — fetches subreddit-scoped author query with `type=link`; service runtime-guards subreddit+author before writes
-
-Top windows for `sort=top`: `hour`, `day`, `week`, `month`, `year`, `all`.
 
 SearXNG Dorking entry path:
 
@@ -783,6 +760,29 @@ Dashboard -> Experimental tab -> Open Results DB
 SearXNG preflight checks (`experimental/se_dork/client.py`):
 1. GET `/config` — reachability probe
 2. GET `/search?q=hello&format=json` — JSON capability check; HTTP 403 maps to `INSTANCE_FORMAT_FORBIDDEN` (fix: enable `search.formats: [json]` in SearXNG `settings.yml`)
+
+Reddit ingest entry path:
+
+```
+Dashboard -> Experimental tab -> Open Reddit Grab
+  -> RedditGrabDialog -> run_ingest(options) on worker thread
+  -> result dialog (counts, dedupe, rate-limit errors)
+```
+
+Reddit Post DB entry path:
+
+```
+Dashboard -> Experimental tab -> Open Reddit Post DB
+  -> RedditBrowserWindow (reads ~/.dirracuda/reddit_od.db)
+  -> optional "Add to dirracuda DB" action if ServerListWindow callback is available
+```
+
+Reddit modes exposed in `RedditGrabDialog`:
+- `feed` — fetches `/r/opendirectories/{new|top}.json`
+- `search` — fetches `/r/opendirectories/search.json` with user query and `restrict_sr=1`
+- `user` — fetches subreddit-scoped author query with `type=link`; service runtime-guards subreddit+author before writes
+
+Top windows for `sort=top`: `hour`, `day`, `week`, `month`, `year`, `all`.
 
 ---
 

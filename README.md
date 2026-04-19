@@ -105,7 +105,7 @@ You're connecting to machines you don't control. A few baseline precautions befo
 The main window. From here you can:
 
 - Launch discovery from one **▶ Start Scan** button - pick one protocol or queue multiple protocols in sequence from the same dialog
-- Access experimental features (Reddit ingestion, future modules) via the `⚗ Experimental` button in the dashboard header (see [Experimental Features](#experimental-features))
+- Access experimental features (SearXNG dorking and Reddit ingestion) via the `⚗ Experimental` button in the dashboard header (see [Experimental Features](#experimental-features))
 - Open the Server List Browser to work with hosts you've found
 - Manage your database (import, export, merge, maintenance)
 - Edit configuration
@@ -342,57 +342,10 @@ The GUI includes a built-in config editor for common settings.
 Experimental work is grouped under the permanent `⚗ Experimental` button in the dashboard header.
 
 The dialog is modeless and tab-based. Current tabs:
-- `Reddit`
 - `SearXNG Dorking`
+- `Reddit`
 
 On first open, the dialog shows an experimental warning banner. If you check **Don't show this notice again**, Dirracuda writes `experimental.warning_dismissed=true` to `~/.dirracuda/gui_settings.json`.
-
-### Reddit Ingestion (redseek)
-
-redseek ingests submissions from `r/opendirectories` into a sidecar DB (`~/.dirracuda/reddit_od.db`) for analyst review. It is separate from SMB/FTP/HTTP scanning and does not auto-probe or auto-extract anything.
-
-Access points:
-- Dashboard → `⚗ Experimental` → `Reddit` tab → `Open Reddit Grab` (ingest)
-- Dashboard → `⚗ Experimental` → `Reddit` tab → `Open Reddit Post DB` (review/open actions)
-
-Ingest modes in `Reddit Grab`:
-
-| Mode | Endpoint | Required input | Notes |
-|------|----------|----------------|-------|
-| `feed` | `/r/opendirectories/{sort}.json` | none | Default mode |
-| `search` | `/r/opendirectories/search.json` with `restrict_sr=1` | query | Subreddit-scoped keyword search |
-| `user` | `/r/opendirectories/search.json` with `q=author:<user> subreddit:opendirectories`, `restrict_sr=1`, `type=link` | username | Service still runtime-checks subreddit and author before writes |
-
-Sort options:
-- `new`
-- `top` with window `hour`, `day`, `week`, `month`, `year`, or `all`
-
-Only submissions are ingested. Comments/replies are not ingested.
-
-Dialog input persistence:
-- Last-used `Reddit Grab` inputs persist across opens/restarts in `~/.dirracuda/gui_settings.json` under `reddit_grab.*` keys:
-  - `mode`, `sort`, `top_window`, `query`, `username`, `max_posts`
-  - `parse_body`, `include_nsfw`, `replace_cache`
-
-Promotion flow:
-- `Open Reddit Post DB` supports `Add to dirracuda DB` from the row context menu.
-- If that action shows **Not available**, open the Server List once and reopen Reddit Post DB (the add-record callback comes from the live Server List window).
-
-redseek data does not write to main Dirracuda DB tables unless a host is manually promoted.
-
-Disclaimer:
-
-> Dirracuda's Reddit ingestion feature uses publicly accessible JSON endpoints to retrieve posts from `r/opendirectories`.
-> No authentication is required, and only publicly available data is accessed.
-> This method is not part of Reddit's official API and may change or break at any time.
-> Treat all ingested data as unverified and potentially unsafe.
-
-Known limitations:
-- Reddit JSON endpoints are unofficial and may change without notice
-- Data availability is limited and not a complete historical archive
-- Rate limiting may interrupt runs (HTTP 429 aborts the current run)
-- Some posts contain no usable targets
-- Data quality depends entirely on user-submitted content
 
 ### SearXNG Dorking
 
@@ -453,6 +406,53 @@ PY
 Expected: HTTP 200, `Content-Type: application/json`, non-empty `results` for broad queries.
 
 SearXNG dork data does not write to main Dirracuda DB tables unless a host is manually promoted.
+
+### Reddit Ingestion (redseek)
+
+redseek ingests submissions from `r/opendirectories` into a sidecar DB (`~/.dirracuda/reddit_od.db`) for analyst review. It is separate from SMB/FTP/HTTP scanning and does not auto-probe or auto-extract anything.
+
+Access points:
+- Dashboard → `⚗ Experimental` → `Reddit` tab → `Open Reddit Grab` (ingest)
+- Dashboard → `⚗ Experimental` → `Reddit` tab → `Open Reddit Post DB` (review/open actions)
+
+Ingest modes in `Reddit Grab`:
+
+| Mode | Endpoint | Required input | Notes |
+|------|----------|----------------|-------|
+| `feed` | `/r/opendirectories/{sort}.json` | none | Default mode |
+| `search` | `/r/opendirectories/search.json` with `restrict_sr=1` | query | Subreddit-scoped keyword search |
+| `user` | `/r/opendirectories/search.json` with `q=author:<user> subreddit:opendirectories`, `restrict_sr=1`, `type=link` | username | Service still runtime-checks subreddit and author before writes |
+
+Sort options:
+- `new`
+- `top` with window `hour`, `day`, `week`, `month`, `year`, or `all`
+
+Only submissions are ingested. Comments/replies are not ingested.
+
+Dialog input persistence:
+- Last-used `Reddit Grab` inputs persist across opens/restarts in `~/.dirracuda/gui_settings.json` under `reddit_grab.*` keys:
+  - `mode`, `sort`, `top_window`, `query`, `username`, `max_posts`
+  - `parse_body`, `include_nsfw`, `replace_cache`
+
+Promotion flow:
+- `Open Reddit Post DB` supports `Add to dirracuda DB` from the row context menu.
+- If that action shows **Not available**, open the Server List once and reopen Reddit Post DB (the add-record callback comes from the live Server List window).
+
+redseek data does not write to main Dirracuda DB tables unless a host is manually promoted.
+
+Disclaimer:
+
+> Dirracuda's Reddit ingestion feature uses publicly accessible JSON endpoints to retrieve posts from `r/opendirectories`.
+> No authentication is required, and only publicly available data is accessed.
+> This method is not part of Reddit's official API and may change or break at any time.
+> Treat all ingested data as unverified and potentially unsafe.
+
+Known limitations:
+- Reddit JSON endpoints are unofficial and may change without notice
+- Data availability is limited and not a complete historical archive
+- Rate limiting may interrupt runs (HTTP 429 aborts the current run)
+- Some posts contain no usable targets
+- Data quality depends entirely on user-submitted content
 
 ## Advanced
 

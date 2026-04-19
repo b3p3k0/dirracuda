@@ -368,10 +368,10 @@ def test_dismiss_does_not_write_false_on_uncheck(monkeypatch):
 # C1 — Tab registry assertions
 # ---------------------------------------------------------------------------
 
-def test_registry_contains_searxng_dorking_tab():
+def test_registry_contains_searxng_tab():
     from gui.components.experimental_features.registry import _get_features
     labels = [f.label for f in _get_features()]
-    assert "SearXNG Dorking" in labels
+    assert "SearXNG" in labels
 
 
 def test_registry_does_not_contain_placeholder_tab():
@@ -390,6 +390,14 @@ def test_registry_se_dork_feature_id():
     from gui.components.experimental_features.registry import _get_features
     ids = [f.feature_id for f in _get_features()]
     assert "se_dork" in ids
+
+
+def test_registry_orders_se_dork_before_reddit():
+    from gui.components.experimental_features.registry import _get_features
+
+    features = _get_features()
+    assert features[0].feature_id == "se_dork"
+    assert features[1].feature_id == "reddit"
 
 
 # ---------------------------------------------------------------------------

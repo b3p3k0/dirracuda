@@ -16,7 +16,7 @@ from typing import Any, Optional
 
 from gui.utils.style import get_theme
 
-_DEFAULT_INSTANCE_URL = "http://192.168.1.20:8090"
+_DEFAULT_INSTANCE_URL = "http://your.searxng.server:port"
 _DEFAULT_QUERY = 'site:* intitle:"index of /"'
 _DEFAULT_MAX_RESULTS = "50"
 _DEFAULT_BULK_PROBE_ENABLED = False
