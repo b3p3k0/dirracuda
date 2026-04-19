@@ -15,6 +15,7 @@ import os
 import sys
 import time
 import tkinter as tk
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from gui.utils import safe_messagebox as _fallback_msgbox
@@ -37,6 +38,90 @@ def _mb():
     return _fallback_msgbox
 
 
+def _to_int(value: Any) -> int:
+    """Best-effort integer coercion for scan metric aggregation."""
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _parse_iso(ts: Any) -> Optional[datetime]:
+    """Parse ISO timestamp string to datetime, returning None on failure."""
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(str(ts))
+    except Exception:
+        return None
+
+
+def _merge_queued_scan_results(results_list: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Build a combined multi-protocol scan summary payload.
+
+    Aggregation policy:
+      - hosts_scanned / accessible_hosts / shares_found: summed across protocols
+      - start_time / end_time: earliest start and latest end
+      - duration_seconds: wall-clock elapsed between earliest start and latest end
+      - protocol: "multi"
+      - protocols: ordered protocol list in completion order (deduped)
+    """
+    merged: Dict[str, Any] = {
+        "status": "completed",
+        "success": True,
+        "protocol": "multi",
+        "protocols": [],
+        "hosts_scanned": 0,
+        "accessible_hosts": 0,
+        "shares_found": 0,
+    }
+
+    starts: List[datetime] = []
+    ends: List[datetime] = []
+    seen_protocols = set()
+    ordered_protocols: List[str] = []
+
+    for row in results_list:
+        protocol = str(row.get("protocol") or "").strip().lower()
+        if protocol and protocol not in seen_protocols:
+            seen_protocols.add(protocol)
+            ordered_protocols.append(protocol)
+
+        merged["hosts_scanned"] += _to_int(row.get("hosts_scanned"))
+        merged["accessible_hosts"] += _to_int(row.get("accessible_hosts"))
+        merged["shares_found"] += _to_int(row.get("shares_found"))
+
+        start_dt = _parse_iso(row.get("start_time"))
+        end_dt = _parse_iso(row.get("end_time"))
+        if start_dt is not None:
+            starts.append(start_dt)
+        if end_dt is not None:
+            ends.append(end_dt)
+
+    merged["protocols"] = ordered_protocols
+
+    if starts:
+        first_start = min(starts)
+        merged["start_time"] = first_start.isoformat()
+    if ends:
+        last_end = max(ends)
+        merged["end_time"] = last_end.isoformat()
+    if starts and ends:
+        merged["duration_seconds"] = max(0.0, (max(ends) - min(starts)).total_seconds())
+    else:
+        merged["duration_seconds"] = float(
+            sum(float(row.get("duration_seconds") or 0.0) for row in results_list)
+        )
+
+    protocol_display = ", ".join(p.upper() for p in ordered_protocols) or "selected protocols"
+    merged["summary_message"] = (
+        f"Queued scan completed across {protocol_display}: "
+        f"{merged['accessible_hosts']}/{merged['hosts_scanned']} hosts accessible."
+    )
+    return merged
+
+
 # ── Queue / multi-protocol lifecycle ─────────────────────────────────────────
 
 def clear_queued_scan_state(dash) -> None:
@@ -46,6 +131,8 @@ def clear_queued_scan_state(dash) -> None:
     dash._queued_scan_common_options = None
     dash._queued_scan_current_protocol = None
     dash._queued_scan_failures = []
+    dash._queued_scan_results = []
+    dash._queued_scan_batch_rows = {"probe": [], "extract": []}
 
 
 def start_unified_scan(dash, scan_request: dict) -> None:
@@ -80,6 +167,8 @@ def start_unified_scan(dash, scan_request: dict) -> None:
     dash._queued_scan_common_options = dict(scan_request)
     dash._queued_scan_current_protocol = None
     dash._queued_scan_failures = []
+    dash._queued_scan_results = []
+    dash._queued_scan_batch_rows = {"probe": [], "extract": []}
     dash._launch_next_queued_scan()
 
 
@@ -257,13 +346,45 @@ def handle_queued_scan_completion(dash, results: Dict[str, Any]) -> None:
         dash._abort_queued_scan_on_failure(protocol, reason)
         return
 
+    # Success path: record per-protocol results for final aggregate dialog.
+    recorded = dict(results)
+    recorded["protocol"] = protocol
+    if not isinstance(getattr(dash, "_queued_scan_results", None), list):
+        dash._queued_scan_results = []
+    dash._queued_scan_results.append(recorded)
+
+    payload = results.get("_batch_summary_payload") or {}
+    if isinstance(payload, dict):
+        if not isinstance(getattr(dash, "_queued_scan_batch_rows", None), dict):
+            dash._queued_scan_batch_rows = {"probe": [], "extract": []}
+        for job_type in ("probe", "extract"):
+            rows = payload.get(job_type) or []
+            if rows:
+                dash._queued_scan_batch_rows.setdefault(job_type, [])
+                dash._queued_scan_batch_rows[job_type].extend([dict(r) for r in rows])
+
     if dash._queued_scan_protocols:
         try:
             dash.parent.after(150, dash._launch_next_queued_scan)
         except tk.TclError:
             pass
     else:
-        dash._launch_next_queued_scan()
+        # Queue complete: show combined summaries + combined scan results.
+        combined_probe = list((dash._queued_scan_batch_rows or {}).get("probe", []))
+        combined_extract = list((dash._queued_scan_batch_rows or {}).get("extract", []))
+        if combined_probe:
+            dash._show_batch_summary(combined_probe, job_type="probe")
+        if combined_extract:
+            dash._show_batch_summary(combined_extract, job_type="extract")
+
+        combined_results = _merge_queued_scan_results(getattr(dash, "_queued_scan_results", []))
+        dash._show_scan_results(combined_results)
+        try:
+            dash.parent.after(5000, dash._reset_scan_status)
+        except Exception:
+            pass
+
+        dash._clear_queued_scan_state()
 
 
 # ── Pre-scan checks ───────────────────────────────────────────────────────────
@@ -599,7 +720,7 @@ def monitor_scan_completion(dash) -> None:
             if not dash.scan_manager.is_scanning:
                 # Get results first to check status
                 results = dash.scan_manager.get_scan_results()
-                queue_has_more = dash._queued_scan_active and bool(dash._queued_scan_protocols)
+                is_queued_run = bool(dash._queued_scan_active)
 
                 # Reset button state to idle
                 dash._update_scan_button_state("idle")
@@ -654,18 +775,20 @@ def monitor_scan_completion(dash) -> None:
 
                     if has_bulk_ops:
                         dash._pending_scan_results = results
-                        dash._run_post_scan_batch_operations(
+                        batch_payload = dash._run_post_scan_batch_operations(
                             dash.current_scan_options,
                             results,
-                            schedule_reset=not queue_has_more,
-                            show_dialogs=not queue_has_more,
+                            schedule_reset=not is_queued_run,
+                            show_dialogs=not is_queued_run,
                         )
+                        if is_queued_run and isinstance(results, dict):
+                            results["_batch_summary_payload"] = batch_payload or {}
                     else:
-                        # For queued multi-protocol runs, suppress intermediate summaries
-                        # so the next protocol can start automatically.
-                        if not queue_has_more:
+                        # For queued multi-protocol runs, suppress per-protocol
+                        # summaries and show one aggregate summary at queue end.
+                        if not is_queued_run:
                             dash._show_scan_results(results)
-                        if not queue_has_more:
+                        if not is_queued_run:
                             try:
                                 dash.parent.after(5000, dash._reset_scan_status)
                             except tk.TclError:
@@ -681,7 +804,7 @@ def monitor_scan_completion(dash) -> None:
                     _logger.warning("Dashboard refresh error after scan: %s", e)
                     # Continue anyway
 
-                if dash._queued_scan_active and results:
+                if is_queued_run and results:
                     dash._handle_queued_scan_completion(results)
             else:
                 # Check again in 1 second

@@ -1137,8 +1137,8 @@ class DashboardWidget:
         *,
         schedule_reset: bool = True,
         show_dialogs: bool = True,
-    ) -> None:
-        dashboard_batch_ops.run_post_scan_batch_operations(
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        return dashboard_batch_ops.run_post_scan_batch_operations(
             self, scan_options, scan_results,
             schedule_reset=schedule_reset, show_dialogs=show_dialogs,
         )

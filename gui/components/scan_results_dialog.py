@@ -59,22 +59,49 @@ class ScanResultsDialog:
 
     def _is_ftp_scan(self) -> bool:
         """Return True when rendering results for an FTP scan."""
-        return self.protocol == "ftp"
+        return self.protocol == "ftp" and not self._is_multi_scan()
+
+    def _is_multi_scan(self) -> bool:
+        """Return True when rendering combined multi-protocol queue results."""
+        if self.protocol == "multi":
+            return True
+        protocols = self.scan_results.get("protocols") or []
+        return isinstance(protocols, list) and len(protocols) > 1
+
+    def _ordered_protocols(self) -> list[str]:
+        """Return ordered normalized protocol list for display."""
+        protocols = self.scan_results.get("protocols") or []
+        if not isinstance(protocols, list):
+            return []
+        ordered: list[str] = []
+        seen = set()
+        for item in protocols:
+            value = str(item or "").strip().lower()
+            if value and value not in seen:
+                seen.add(value)
+                ordered.append(value)
+        return ordered
 
     def _success_subtitle(self) -> str:
         """Protocol-aware success subtitle text."""
+        if self._is_multi_scan():
+            return "Multi-protocol scan queue has finished successfully."
         if self._is_ftp_scan():
             return "FTP scan has finished successfully."
         return "SMB security scan has finished successfully."
 
     def _shares_label(self) -> str:
         """Protocol-aware label for the final summary metric."""
+        if self._is_multi_scan():
+            return "Resources Found:"
         if self._is_ftp_scan():
             return "Directories Found:"
         return "Shares Found:"
 
     def _access_phrase(self) -> str:
         """Protocol-aware phrase describing successful access."""
+        if self._is_multi_scan():
+            return "resources"
         if self._is_ftp_scan():
             return "accessible FTP directories"
         return "accessible SMB shares"
@@ -301,9 +328,18 @@ class ScanResultsDialog:
             )
 
         if self.scan_results.get('shares_found', 0) > 0:
-            share_term = "directories" if self._is_ftp_scan() else "shares"
+            if self._is_multi_scan():
+                share_term = "resources"
+            else:
+                share_term = "directories" if self._is_ftp_scan() else "shares"
             details_text += f"\n\nFound {self.scan_results.get('shares_found', 0)} total {share_term} "
             details_text += "available for further analysis."
+
+        if self._is_multi_scan():
+            protocols = self._ordered_protocols()
+            if protocols:
+                proto_display = ", ".join(p.upper() for p in protocols)
+                details_text += f"\n\nProtocols: {proto_display}"
 
         details_label = self.theme.create_styled_label(
             parent,
