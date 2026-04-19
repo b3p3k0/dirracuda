@@ -342,70 +342,50 @@ The GUI includes a built-in config editor for common settings.
 Experimental work is grouped under the permanent `⚗ Experimental` button in the dashboard header.
 
 The dialog is modeless and tab-based. Current tabs:
-- `SearXNG Dorking`
+- `SearXNG`
 - `Reddit`
 
 On first open, the dialog shows an experimental warning banner. If you check **Don't show this notice again**, Dirracuda writes `experimental.warning_dismissed=true` to `~/.dirracuda/gui_settings.json`.
 
-### SearXNG Dorking
+### SearXNG
 
-Runs dork queries against a self-hosted SearXNG instance, classifies candidate URLs as open directory listings, and stores results in a sidecar DB for review.
+Use this tab to run open-directory dork queries against your own SearXNG server, keep confirmed open indexes, and review/promote the results.
 
-Access points:
-- Dashboard → `⚗ Experimental` → `SearXNG Dorking` tab → `Test` (preflight check)
-- Dashboard → `⚗ Experimental` → `SearXNG Dorking` tab → `Run` (execute dork search)
-- Dashboard → `⚗ Experimental` → `SearXNG Dorking` tab → `Open Results DB` (browse and promote)
+Quick start:
+1. Dashboard → `⚗ Experimental` → `SearXNG` tab.
+2. Fill in your server and query.
+3. Click `Test` to confirm the server is reachable and JSON search is enabled.
+4. Click `Run` to collect results.
+5. Click `Open Results DB` to review, probe, and promote hosts.
 
-Tab inputs (all persisted across opens and restarts):
-- **Instance URL** — URL of your SearXNG instance (default: `http://192.168.1.20:8090`)
-- **Query** — dork query string (default: `site:* intitle:"index of /"`)
-- **Max results** — upper cap on results fetched per run (default: 50, max: 500)
+Inputs (persisted across opens/restarts):
+- **SearXNG Server** — server URL (default placeholder: `http://your.searxng.server:port`)
+- **Query** — dork query (default: `site:* intitle:"index of /"`)
+- **Max results** — fetch cap per run (default 50, max 500)
+- **Run Probe on Results** — optional bulk probe pass for retained results
 
-**Test Instance** runs a two-step preflight: reachability check against `/config`, then a JSON capability check against `/search?q=hello&format=json`. Both must return HTTP 200 with valid JSON. The status area shows a clear pass/fail with a reason code.
+What each action does:
+- **Test** checks server reachability and JSON search support.
+- **Run** executes the query, keeps only confirmed open-index results, and updates status with fetched/stored counts. If probe is enabled, the status line also shows probe totals (`✔/✖/○`).
+- **Open Results DB** opens the results browser backed by `~/.dirracuda/se_dork.db`.
 
-**Run** fetches results, deduplicates by normalized URL per run, and classifies each candidate using the existing HTTP verifier path. Results are written to `~/.dirracuda/se_dork.db`. The status area shows fetched and stored counts on completion.
+Results browser:
+- Columns: `URL`, `Probed`, `Probe Preview`, `Checked`
+- Actions: `Copy URL`, `Open in Explorer`, `Open in system browser`, `Probe Selected` / `Probe URL`, `Add to dirracuda DB`
+- Promotion note: if `Add to dirracuda DB` shows **Not available**, open Server List once and reopen Results DB (the add-record callback comes from the live Server List window).
 
-Verdicts assigned per URL:
-- `OPEN_INDEX` — HTTP 200 with confirmed open-directory index page
-- `MAYBE` — HTTP 200 without index tag, or HTTP 3xx redirect
-- `NOISE` — unsupported scheme, or HTTP 4xx/5xx
-- `ERROR` — network or parse failure
+#### SearXNG `format=json` and 403 troubleshooting
 
-**Open Results DB** opens the dork results browser. Columns: URL, Verdict, Reason, HTTP Status, Checked At. Row actions: Copy URL, Open in system browser, Add to dirracuda DB.
-
-Promotion flow:
-- `Add to dirracuda DB` from the row context menu promotes a result to the main HTTP host registry.
-- If that action shows **Not available**, open the Server List once and reopen Results DB (the add-record callback comes from the live Server List window).
-
-#### SearXNG setup: `format=json` and the 403 error
-
-SearXNG disables non-HTML output formats by default. If `/search?format=json` returns `403`, enable JSON output in your SearXNG `settings.yml`:
+If `Test` fails with a 403 on `format=json`, enable JSON output in your SearXNG `settings.yml`:
 
 ```yaml
 search:
   formats:
     - html
     - json
-    - csv
-    - rss
 ```
 
-Restart SearXNG after changing `settings.yml`, then re-run **Test Instance** to confirm.
-
-Validate the fix on the SearXNG host:
-
-```bash
-curl -sS -D - 'http://127.0.0.1:8090/search?q=hello&format=json' -o /tmp/sx.json | head -n 20
-python3 - <<'PY'
-import json
-j=json.load(open('/tmp/sx.json'))
-print('results_len=', len(j.get('results', [])))
-PY
-```
-
-Expected: HTTP 200, `Content-Type: application/json`, non-empty `results` for broad queries.
-
-SearXNG dork data does not write to main Dirracuda DB tables unless a host is manually promoted.
+Then restart SearXNG and run `Test` again.
 
 ### Reddit Ingestion (redseek)
 
