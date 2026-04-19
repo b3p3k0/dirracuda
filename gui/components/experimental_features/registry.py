@@ -29,7 +29,7 @@ class ExperimentalFeature:
 def _get_features() -> List[ExperimentalFeature]:
     """Return the ordered list of registered experimental features."""
     from gui.components.experimental_features.reddit_tab import build_reddit_tab
-    from gui.components.experimental_features.placeholder_tab import build_placeholder_tab
+    from gui.components.experimental_features.se_dork_tab import build_se_dork_tab
 
     return [
         ExperimentalFeature(
@@ -38,9 +38,9 @@ def _get_features() -> List[ExperimentalFeature]:
             build_tab=build_reddit_tab,
         ),
         ExperimentalFeature(
-            feature_id="placeholder",
-            label="placeholder",
-            build_tab=build_placeholder_tab,
+            feature_id="se_dork",
+            label="SearXNG Dorking",
+            build_tab=build_se_dork_tab,
         ),
     ]
 

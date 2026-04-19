@@ -135,6 +135,7 @@ def _make_dash():
     dash.parent = MagicMock()
     dash._server_list_getter = None
     dash._open_drill_down = MagicMock()
+    dash.settings_manager = MagicMock()
     return dash
 
 
@@ -361,3 +362,156 @@ def test_dismiss_does_not_write_false_on_uncheck(monkeypatch):
     d.dismiss_var.set(False)
     false_writes = [c for c in sm.set_setting.call_args_list if c.args[1] is False]
     assert false_writes == []
+
+
+# ---------------------------------------------------------------------------
+# C1 — Tab registry assertions
+# ---------------------------------------------------------------------------
+
+def test_registry_contains_searxng_dorking_tab():
+    from gui.components.experimental_features.registry import _get_features
+    labels = [f.label for f in _get_features()]
+    assert "SearXNG Dorking" in labels
+
+
+def test_registry_does_not_contain_placeholder_tab():
+    from gui.components.experimental_features.registry import _get_features
+    labels = [f.label for f in _get_features()]
+    assert "placeholder" not in labels
+
+
+def test_registry_reddit_tab_unchanged():
+    from gui.components.experimental_features.registry import _get_features
+    labels = [f.label for f in _get_features()]
+    assert "Reddit" in labels
+
+
+def test_registry_se_dork_feature_id():
+    from gui.components.experimental_features.registry import _get_features
+    ids = [f.feature_id for f in _get_features()]
+    assert "se_dork" in ids
+
+
+# ---------------------------------------------------------------------------
+# C4 — open_se_dork_results_db path resolution
+# ---------------------------------------------------------------------------
+
+
+def test_open_se_dork_results_db_with_live_server_window(monkeypatch):
+    """When server window is live, browser opens with server window and callback."""
+    dash = _make_dash()
+    mock_win = MagicMock()
+    mock_win.window.winfo_exists.return_value = True
+    dash._server_list_getter = lambda: mock_win
+
+    calls = []
+    monkeypatch.setattr(
+        "gui.components.dashboard_experimental.show_se_dork_browser_window",
+        lambda **kw: calls.append(kw),
+    )
+
+    dashboard_experimental.open_se_dork_results_db(dash)
+
+    assert len(calls) == 1
+    assert calls[0]["parent"] is mock_win.window
+    assert calls[0]["add_record_callback"] is mock_win.open_add_record_dialog
+    assert calls[0]["settings_manager"] is dash.settings_manager
+
+
+def test_open_se_dork_results_db_fallback_when_no_server_window(monkeypatch):
+    """Getter=None → fallback to widget.parent with add_record_callback=None."""
+    dash = _make_dash()
+    dash._server_list_getter = None
+
+    calls = []
+    monkeypatch.setattr(
+        "gui.components.dashboard_experimental.show_se_dork_browser_window",
+        lambda **kw: calls.append(kw),
+    )
+
+    dashboard_experimental.open_se_dork_results_db(dash)
+
+    assert len(calls) == 1
+    assert calls[0]["parent"] is dash.parent
+    assert calls[0]["add_record_callback"] is None
+    assert calls[0]["settings_manager"] is dash.settings_manager
+
+
+def test_open_se_dork_results_db_treats_dead_window_as_none(monkeypatch):
+    """Dead window (winfo_exists=False) treated as None → fallback."""
+    dash = _make_dash()
+    mock_win = MagicMock()
+    mock_win.window.winfo_exists.return_value = False
+    dash._server_list_getter = lambda: mock_win
+
+    calls = []
+    monkeypatch.setattr(
+        "gui.components.dashboard_experimental.show_se_dork_browser_window",
+        lambda **kw: calls.append(kw),
+    )
+
+    dashboard_experimental.open_se_dork_results_db(dash)
+
+    assert len(calls) == 1
+    assert calls[0]["parent"] is dash.parent
+    assert calls[0]["add_record_callback"] is None
+    assert calls[0]["settings_manager"] is dash.settings_manager
+
+
+def test_open_se_dork_results_db_fallback_when_getter_raises(monkeypatch):
+    """Getter exceptions are swallowed and converted to fallback path."""
+    dash = _make_dash()
+
+    def _boom():
+        raise RuntimeError("getter boom")
+
+    dash._server_list_getter = _boom
+
+    calls = []
+    monkeypatch.setattr(
+        "gui.components.dashboard_experimental.show_se_dork_browser_window",
+        lambda **kw: calls.append(kw),
+    )
+
+    dashboard_experimental.open_se_dork_results_db(dash)
+
+    assert len(calls) == 1
+    assert calls[0]["parent"] is dash.parent
+    assert calls[0]["add_record_callback"] is None
+    assert calls[0]["settings_manager"] is dash.settings_manager
+
+
+# ---------------------------------------------------------------------------
+# C4 — se_dork_tab._open_results_browser wiring
+# ---------------------------------------------------------------------------
+
+
+def test_se_dork_tab_open_results_invokes_context_callback():
+    """_open_results_browser calls the context callback when present."""
+    from gui.components.experimental_features.se_dork_tab import SeDorkTab
+
+    called = []
+    tab = SeDorkTab.__new__(SeDorkTab)
+    tab._context = {"open_se_dork_results_db": lambda: called.append(True)}
+    tab._open_results_browser()
+    assert called == [True]
+
+
+def test_se_dork_tab_fallback_opens_browser_when_no_results_callback(monkeypatch):
+    """When context has no open_se_dork_results_db, browser opens with callback=None."""
+    from gui.components.experimental_features.se_dork_tab import SeDorkTab
+
+    calls = []
+    monkeypatch.setattr(
+        "gui.components.se_dork_browser_window.show_se_dork_browser_window",
+        lambda *a, **kw: calls.append(kw),
+    )
+
+    tab = SeDorkTab.__new__(SeDorkTab)
+    tab._context = {}
+    tab.frame = MagicMock()
+    tab._open_results_browser()
+
+    assert len(calls) == 1
+    assert calls[0].get("add_record_callback") is None
+    assert calls[0].get("settings_manager") is None

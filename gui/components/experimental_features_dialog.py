@@ -69,7 +69,8 @@ class ExperimentalFeaturesDialog:
         notebook.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
 
         from gui.components.experimental_features.registry import build_all_tabs
-        build_all_tabs(notebook, context)
+        tab_context = {**context, "settings_manager": settings_manager}
+        build_all_tabs(notebook, tab_context)
 
         btn_frame = tk.Frame(outer)
         self._theme.apply_to_widget(btn_frame, "main_window")

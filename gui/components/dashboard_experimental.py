@@ -12,6 +12,7 @@ Patch path for show_reddit_browser_window in tests:
 """
 
 from gui.components.reddit_browser_window import show_reddit_browser_window
+from gui.components.se_dork_browser_window import show_se_dork_browser_window
 from gui.utils.logging_config import get_logger
 
 _logger = get_logger("dashboard")
@@ -29,6 +30,7 @@ def handle_experimental_button_click(widget) -> None:
     context = {
         "reddit_grab_callback": widget._handle_reddit_grab_button_click,
         "open_reddit_post_db": widget._open_reddit_post_db,
+        "open_se_dork_results_db": lambda: open_se_dork_results_db(widget),
         "parent": widget.parent,
     }
     show_experimental_features_dialog(widget.parent, context, widget.settings_manager)
@@ -57,6 +59,28 @@ def open_reddit_post_db(widget) -> None:
         show_reddit_browser_window(
             parent=widget.parent,
             add_record_callback=None,
+        )
+
+
+def open_se_dork_results_db(widget) -> None:
+    """Open the SE Dork results browser, wiring add_record_callback when possible.
+
+    Resolution order: same as open_reddit_post_db — single-pass _resolve_server_window().
+    Patch path for tests: gui.components.dashboard_experimental.show_se_dork_browser_window
+    """
+    server_window = _resolve_server_window(widget)
+
+    if server_window is not None:
+        show_se_dork_browser_window(
+            parent=server_window.window,
+            add_record_callback=server_window.open_add_record_dialog,
+            settings_manager=getattr(widget, "settings_manager", None),
+        )
+    else:
+        show_se_dork_browser_window(
+            parent=widget.parent,
+            add_record_callback=None,
+            settings_manager=getattr(widget, "settings_manager", None),
         )
 
 
