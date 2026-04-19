@@ -73,6 +73,32 @@ def _d(name: str) -> Any:
     )
 
 
+# ── Dialog lifecycle helpers ─────────────────────────────────────────────────
+
+def _safe_destroy_dialog(dialog: Any) -> None:
+    """Best-effort dialog teardown with grab release and existence checks."""
+    if dialog is None:
+        return
+
+    try:
+        dialog.grab_release()
+    except Exception:
+        pass
+
+    try:
+        exists = bool(dialog.winfo_exists()) if hasattr(dialog, "winfo_exists") else True
+    except Exception:
+        exists = True
+
+    if not exists:
+        return
+
+    try:
+        dialog.destroy()
+    except Exception:
+        pass
+
+
 # ── Pure helpers ──────────────────────────────────────────────────────────────
 
 def protocol_label_from_host_type(host_type: Optional[str]) -> str:
@@ -94,7 +120,7 @@ def run_post_scan_batch_operations(
     *,
     schedule_reset: bool = True,
     show_dialogs: bool = True,
-) -> None:
+) -> Dict[str, List[Dict[str, Any]]]:
     """Run bulk probe/extract operations after scan completion.
 
     Called when:
@@ -105,6 +131,10 @@ def run_post_scan_batch_operations(
 
     Will show info dialog if no accessible servers are found.
     """
+    summary_payload: Dict[str, List[Dict[str, Any]]] = {
+        "probe": [],
+        "extract": [],
+    }
     try:
         # Check if any bulk operations are enabled
         bulk_probe_enabled = scan_options.get('bulk_probe_enabled', False)
@@ -118,7 +148,7 @@ def run_post_scan_batch_operations(
                     dash.parent.after(5000, dash._reset_scan_status)
                 except tk.TclError:
                     pass
-            return  # No bulk operations requested
+            return summary_payload  # No bulk operations requested
 
         # Skip bulk if scan failed or produced no hosts (use tolerant metrics)
         host_metric = max(
@@ -134,7 +164,7 @@ def run_post_scan_batch_operations(
                     dash.parent.after(5000, dash._reset_scan_status)
                 except tk.TclError:
                     pass
-            return
+            return summary_payload
 
         # Query database for eligible servers in the active protocol (keep UI responsive)
         scan_protocol = str(scan_results.get("protocol") or "").strip().lower()
@@ -171,7 +201,7 @@ def run_post_scan_batch_operations(
                     dash.parent.after(5000, dash._reset_scan_status)
                 except tk.TclError:
                     pass
-            return
+            return summary_payload
 
         probe_targets = servers_for_ops.get("probe") if isinstance(servers_for_ops, dict) else []
         extract_targets = servers_for_ops.get("extract") if isinstance(servers_for_ops, dict) else []
@@ -190,7 +220,7 @@ def run_post_scan_batch_operations(
                     dash.parent.after(5000, dash._reset_scan_status)
                 except tk.TclError:
                     pass
-            return
+            return summary_payload
 
         # Run batch operations (record summaries per op, show in LIFO order)
         summary_stack: List[Tuple[str, List[Dict[str, Any]]]] = []
@@ -198,19 +228,23 @@ def run_post_scan_batch_operations(
 
         if bulk_probe_enabled:
             probe_results = dash._execute_batch_probe(probe_targets)
+            summary_payload["probe"] = list(probe_results)
             summary_stack.append(("probe", probe_results))
 
         if bulk_extract_enabled:
             if not extract_targets:
-                summary_stack.append(("extract", [{
+                skipped_extract = [{
                     "ip_address": "",
                     "protocol": dash._protocol_label_from_host_type(host_type_filter),
                     "action": "extract",
                     "status": "skipped",
                     "notes": "All accessible hosts were flagged with indicators; extract skipped."
-                }]))
+                }]
+                summary_payload["extract"] = list(skipped_extract)
+                summary_stack.append(("extract", skipped_extract))
             else:
                 extract_results = dash._execute_batch_extract(extract_targets)
+                summary_payload["extract"] = list(extract_results)
                 summary_stack.append(("extract", extract_results))
 
         # Present summaries in LIFO order
@@ -231,6 +265,7 @@ def run_post_scan_batch_operations(
                 dash.parent.after(5000, dash._reset_scan_status)
             except tk.TclError:
                 pass
+        return summary_payload
 
     except Exception as e:
         if show_dialogs:
@@ -250,6 +285,7 @@ def run_post_scan_batch_operations(
                 dash.parent.after(5000, dash._reset_scan_status)
         except Exception:
             pass
+        return summary_payload
 
 
 def get_servers_for_bulk_ops(
@@ -373,37 +409,63 @@ def run_background_fetch(
         (result, error_message_or_None)
     """
     result_container = {"result": None, "error": None, "done": False}
+    dialog = None
+    progress = None
 
-    dialog = _d("tk").Toplevel(dash.parent)
-    dialog.title(title)
-    dialog.geometry("380x140")
-    dialog.transient(dash.parent)
-    dialog.grab_set()
-    dash.theme.apply_to_widget(dialog, "main_window")
+    try:
+        dialog = _d("tk").Toplevel(dash.parent)
+        dialog.title(title)
+        dialog.geometry("380x140")
+        dialog.transient(dash.parent)
+        dialog.grab_set()
+        dash.theme.apply_to_widget(dialog, "main_window")
 
-    label = _d("tk").Label(dialog, text=message)
-    label.pack(pady=(20, 10))
+        label = _d("tk").Label(dialog, text=message)
+        label.pack(pady=(20, 10))
 
-    progress = _d("ttk").Progressbar(dialog, mode="indeterminate", length=260)
-    progress.pack(pady=(0, 10))
-    progress.start(10)
+        progress = _d("ttk").Progressbar(dialog, mode="indeterminate", length=260)
+        progress.pack(pady=(0, 10))
+        progress.start(10)
 
-    dialog.update_idletasks()
+        dialog.update_idletasks()
 
-    def worker():
+        # This dialog has no cancel path; keep it modal until fetch completes.
         try:
-            result_container["result"] = fetch_fn()
-        except Exception as exc:  # pragma: no cover - best-effort guard
-            result_container["error"] = str(exc)
-        finally:
-            result_container["done"] = True
+            dialog.protocol("WM_DELETE_WINDOW", lambda: None)
+        except Exception:
+            pass
+
+        def close_dialog():
             try:
-                dialog.after(0, dialog.destroy)
+                if progress is not None:
+                    progress.stop()
             except Exception:
                 pass
+            _safe_destroy_dialog(dialog)
 
-    _d("threading").Thread(target=worker, daemon=True).start()
-    dash.parent.wait_window(dialog)
+        def poll_done():
+            if result_container["done"]:
+                close_dialog()
+                return
+            try:
+                dialog.after(80, poll_done)
+            except Exception:
+                close_dialog()
+
+        def worker():
+            try:
+                result_container["result"] = fetch_fn()
+            except Exception as exc:  # pragma: no cover - best-effort guard
+                result_container["error"] = str(exc)
+            finally:
+                result_container["done"] = True
+
+        _d("threading").Thread(target=worker, daemon=True).start()
+        dialog.after(80, poll_done)
+        dash.parent.wait_window(dialog)
+    finally:
+        _safe_destroy_dialog(dialog)
+
     return result_container["result"], result_container["error"]
 
 
@@ -426,36 +488,9 @@ def execute_batch_probe(dash, servers: List[Dict[str, Any]]) -> List[Dict[str, A
 
     results: List[Dict[str, Any]] = []
     cancel_event = _d("threading").Event()
-
-    # Create progress dialog quickly, then hand work to background thread
-    progress_dialog = _d("tk").Toplevel(dash.parent)
-    progress_dialog.title("Bulk Probe Progress")
-    progress_dialog.geometry("420x170")
-    progress_dialog.transient(dash.parent)
-    progress_dialog.grab_set()
-    dash.theme.apply_to_widget(progress_dialog, "main_window")
-
-    progress_label = _d("tk").Label(progress_dialog, text=f"Probing 0/{len(servers)} servers...")
-    dash.theme.apply_to_widget(progress_label, "label")
-    progress_label.pack(pady=(18, 8))
-
-    progress_bar = _d("ttk").Progressbar(
-        progress_dialog,
-        length=320,
-        mode='determinate',
-        maximum=len(servers),
-        style="SMBSeek.Horizontal.TProgressbar",
-    )
-    progress_bar.pack(pady=(0, 10))
-
-    cancel_button = _d("tk").Button(progress_dialog, text="Cancel", command=lambda: cancel_event.set())
-    dash.theme.apply_to_widget(cancel_button, "button_secondary")
-    cancel_button.pack(pady=(0, 10))
-
-    dash.theme.apply_theme_to_application(progress_dialog)
-
-    # Ensure initial paint before heavy work
-    progress_dialog.update_idletasks()
+    progress_dialog = None
+    progress_label = None
+    progress_bar = None
 
     # Shared state for UI updates from worker
     state = {
@@ -466,20 +501,40 @@ def execute_batch_probe(dash, servers: List[Dict[str, Any]]) -> List[Dict[str, A
         "error": None
     }
 
+    def cleanup_progress_dialog():
+        nonlocal progress_dialog
+        dialog = progress_dialog
+        if dialog is None:
+            return
+        _safe_destroy_dialog(dialog)
+        if getattr(dash, "_bulk_probe_progress_dialog", None) is dialog:
+            setattr(dash, "_bulk_probe_progress_dialog", None)
+        progress_dialog = None
+
     def ui_tick():
         """Periodic UI refresher to keep dialog responsive."""
+        if progress_dialog is None:
+            return
+
+        if state["done"]:
+            cleanup_progress_dialog()
+            return
+
         try:
             progress_label.config(text=f"Probing {state['completed']}/{state['total']} servers...")
             progress_bar['value'] = state['completed']
             progress_dialog.update_idletasks()
         except tk.TclError:
-            return  # Dialog closed
+            cleanup_progress_dialog()
+            return
 
-        if not state["done"]:
-            progress_dialog.after(150, ui_tick)
+        progress_dialog.after(150, ui_tick)
 
     def worker():
-        """Run probes off the UI thread and report completion order."""
+        """Run probes off the UI thread and report completion order.
+
+        Tk calls are intentionally forbidden here; UI teardown runs via ui_tick().
+        """
         try:
             with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="probe-batch") as executor:
                 future_to_server = {
@@ -515,17 +570,67 @@ def execute_batch_probe(dash, servers: List[Dict[str, Any]]) -> List[Dict[str, A
             state["error"] = str(exc)
         finally:
             state["done"] = True
-            try:
-                progress_dialog.after(0, progress_dialog.destroy)
-            except Exception:
-                pass
 
-    # Start background worker and UI tick
-    _d("threading").Thread(target=worker, daemon=True).start()
-    progress_dialog.after(150, ui_tick)
+    # If a stale dialog survived a prior run, clean it before opening a new one.
+    stale_dialog = getattr(dash, "_bulk_probe_progress_dialog", None)
+    if stale_dialog is not None:
+        _safe_destroy_dialog(stale_dialog)
+        if getattr(dash, "_bulk_probe_progress_dialog", None) is stale_dialog:
+            setattr(dash, "_bulk_probe_progress_dialog", None)
 
-    # Block until dialog destroyed (worker sets done then destroys dialog)
-    dash.parent.wait_window(progress_dialog)
+    try:
+        # Create progress dialog quickly, then hand work to background thread.
+        progress_dialog = _d("tk").Toplevel(dash.parent)
+        setattr(dash, "_bulk_probe_progress_dialog", progress_dialog)
+
+        progress_dialog.title("Bulk Probe Progress")
+        progress_dialog.geometry("420x170")
+        progress_dialog.transient(dash.parent)
+        progress_dialog.grab_set()
+        dash.theme.apply_to_widget(progress_dialog, "main_window")
+
+        progress_label = _d("tk").Label(progress_dialog, text=f"Probing 0/{len(servers)} servers...")
+        dash.theme.apply_to_widget(progress_label, "label")
+        progress_label.pack(pady=(18, 8))
+
+        progress_bar = _d("ttk").Progressbar(
+            progress_dialog,
+            length=320,
+            mode='determinate',
+            maximum=len(servers),
+            style="SMBSeek.Horizontal.TProgressbar",
+        )
+        progress_bar.pack(pady=(0, 10))
+
+        def request_cancel():
+            cancel_event.set()
+
+        cancel_button = _d("tk").Button(progress_dialog, text="Cancel", command=request_cancel)
+        dash.theme.apply_to_widget(cancel_button, "button_secondary")
+        cancel_button.pack(pady=(0, 10))
+
+        # Clicking window close should behave the same as pressing Cancel.
+        try:
+            progress_dialog.protocol("WM_DELETE_WINDOW", request_cancel)
+        except Exception:
+            pass
+
+        dash.theme.apply_theme_to_application(progress_dialog)
+
+        # Ensure initial paint before heavy work.
+        progress_dialog.update_idletasks()
+
+        # Start background worker and UI tick.
+        _d("threading").Thread(target=worker, daemon=True).start()
+        progress_dialog.after(150, ui_tick)
+
+        # Block until dialog is closed by ui_tick() completion path.
+        dash.parent.wait_window(progress_dialog)
+    finally:
+        if not state["done"]:
+            cancel_event.set()
+        cleanup_progress_dialog()
+
     return results
 
 

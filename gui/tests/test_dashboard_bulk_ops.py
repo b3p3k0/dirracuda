@@ -33,6 +33,173 @@ class _StubParent:
         return None
 
 
+class _FakeTheme:
+    def apply_to_widget(self, *_args, **_kwargs):
+        return None
+
+    def apply_theme_to_application(self, *_args, **_kwargs):
+        return None
+
+
+class _FakeSettingsManager:
+    def get_setting(self, _key, default=None):
+        return default
+
+
+class _FakeParentModal:
+    def after(self, _ms, _fn, *_args):
+        return None
+
+    def wait_window(self, _dialog):
+        return None
+
+
+class _FakeWidget:
+    def __init__(self, *_args, **kwargs):
+        self.command = kwargs.get("command")
+        self.text = kwargs.get("text", "")
+
+    def pack(self, *_args, **_kwargs):
+        return None
+
+    def config(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+    configure = config
+
+
+class _FakeProgressbar(_FakeWidget):
+    def __init__(self, *_args, **kwargs):
+        super().__init__(*_args, **kwargs)
+        self.value = 0
+        self.started = False
+        self.stopped = False
+
+    def __setitem__(self, key, value):
+        setattr(self, key, value)
+
+    def start(self, *_args, **_kwargs):
+        self.started = True
+
+    def stop(self):
+        self.stopped = True
+
+
+class _FakeDialog:
+    created = []
+
+    def __init__(self, *_args, **_kwargs):
+        self.exists = True
+        self.protocol_handlers = {}
+        self.after_callbacks = []
+        self.destroy_calls = 0
+        self.grab_release_calls = 0
+        _FakeDialog.created.append(self)
+
+    def title(self, *_args, **_kwargs):
+        return None
+
+    def geometry(self, *_args, **_kwargs):
+        return None
+
+    def transient(self, *_args, **_kwargs):
+        return None
+
+    def grab_set(self):
+        return None
+
+    def grab_release(self):
+        self.grab_release_calls += 1
+
+    def protocol(self, name, callback):
+        self.protocol_handlers[name] = callback
+
+    def update_idletasks(self):
+        return None
+
+    def after(self, _ms, callback, *args):
+        self.after_callbacks.append(getattr(callback, "__name__", repr(callback)))
+        callback(*args)
+        return len(self.after_callbacks)
+
+    def winfo_exists(self):
+        return 1 if self.exists else 0
+
+    def destroy(self):
+        self.destroy_calls += 1
+        self.exists = False
+
+    def trigger_close(self):
+        callback = self.protocol_handlers.get("WM_DELETE_WINDOW")
+        if callback:
+            callback()
+
+
+class _FakeEvent:
+    def __init__(self):
+        self._is_set = False
+
+    def set(self):
+        self._is_set = True
+
+    def is_set(self):
+        return self._is_set
+
+
+class _FakeEventFactory:
+    def __init__(self):
+        self.instances = []
+
+    def __call__(self):
+        instance = _FakeEvent()
+        self.instances.append(instance)
+        return instance
+
+
+class _ImmediateThread:
+    def __init__(self, target=None, daemon=False):
+        self._target = target
+        self.daemon = daemon
+
+    def start(self):
+        if self._target:
+            self._target()
+
+
+def _make_probe_test_dash() -> DashboardWidget:
+    dash = DashboardWidget.__new__(DashboardWidget)
+    dash.parent = _FakeParentModal()
+    dash.theme = _FakeTheme()
+    dash.settings_manager = _FakeSettingsManager()
+    dash.current_scan_options = {}
+    dash._probe_single_server = lambda server, *_args, **_kwargs: {
+        "ip_address": server.get("ip_address"),
+        "protocol": "SMB",
+        "action": "probe",
+        "status": "success",
+        "notes": "ok",
+    }
+    dash._protocol_label_from_host_type = lambda _host_type: "SMB"
+    return dash
+
+
+def _patch_fake_probe_dialog_stack(monkeypatch):
+    _FakeDialog.created.clear()
+    event_factory = _FakeEventFactory()
+
+    monkeypatch.setattr("gui.components.dashboard.tk.Toplevel", _FakeDialog)
+    monkeypatch.setattr("gui.components.dashboard.tk.Label", _FakeWidget)
+    monkeypatch.setattr("gui.components.dashboard.tk.Button", _FakeWidget)
+    monkeypatch.setattr("gui.components.dashboard.ttk.Progressbar", _FakeProgressbar)
+    monkeypatch.setattr(
+        "gui.components.dashboard.threading",
+        types.SimpleNamespace(Thread=_ImmediateThread, Event=event_factory),
+    )
+
+    return event_factory
+
+
 def test_http_post_scan_bulk_probe_uses_http_host_type_filter(monkeypatch):
     """HTTP scans must gather H rows (not SMB S rows) for post-scan bulk probe."""
     dash = DashboardWidget.__new__(DashboardWidget)
@@ -544,3 +711,77 @@ def test_probe_single_server_http_root_files_only_sets_loose_files_marker(monkey
     assert call_kwargs["accessible_dirs_count"] == 0
     assert call_kwargs["accessible_dirs_list"] == "[[loose files]]"
     assert call_kwargs["accessible_files_count"] == 1
+
+
+def test_execute_batch_probe_destroys_stale_progress_dialog_before_new_run(monkeypatch):
+    """A stale Bulk Probe dialog handle must be cleaned before creating a new one."""
+    _patch_fake_probe_dialog_stack(monkeypatch)
+    dash = _make_probe_test_dash()
+
+    stale_dialog = _FakeDialog()
+    dash._bulk_probe_progress_dialog = stale_dialog
+
+    results = dash._execute_batch_probe([{"ip_address": "198.51.100.1", "host_type": "S"}])
+
+    assert results and results[0]["status"] == "success"
+    assert stale_dialog.destroy_calls == 1
+    assert stale_dialog.grab_release_calls >= 1
+    assert dash._bulk_probe_progress_dialog is None
+
+
+def test_execute_batch_probe_wm_delete_window_maps_to_cancel(monkeypatch):
+    """Window close action should map to the same cancel event as the Cancel button."""
+    event_factory = _patch_fake_probe_dialog_stack(monkeypatch)
+    dash = _make_probe_test_dash()
+
+    dash._execute_batch_probe([{"ip_address": "198.51.100.2", "host_type": "S"}])
+
+    assert len(event_factory.instances) == 1
+    cancel_event = event_factory.instances[0]
+    assert cancel_event.is_set() is False
+
+    dialog = _FakeDialog.created[-1]
+    dialog.trigger_close()
+    assert cancel_event.is_set() is True
+
+
+def test_execute_batch_probe_completion_path_avoids_worker_destroy_after(monkeypatch):
+    """Probe completion should close dialog without scheduling dialog.destroy via after()."""
+    _patch_fake_probe_dialog_stack(monkeypatch)
+    dash = _make_probe_test_dash()
+
+    dash._execute_batch_probe([{"ip_address": "198.51.100.3", "host_type": "S"}])
+
+    dialog = _FakeDialog.created[-1]
+    assert "ui_tick" in dialog.after_callbacks
+    assert "destroy" not in dialog.after_callbacks
+    assert dialog.destroy_calls >= 1
+
+
+def test_run_background_fetch_closes_via_ui_poll_without_destroy_after(monkeypatch):
+    """Background fetch modal should close from UI poll path, not worker-thread after()."""
+    _FakeDialog.created.clear()
+    monkeypatch.setattr("gui.components.dashboard.tk.Toplevel", _FakeDialog)
+    monkeypatch.setattr("gui.components.dashboard.tk.Label", _FakeWidget)
+    monkeypatch.setattr("gui.components.dashboard.ttk.Progressbar", _FakeProgressbar)
+    monkeypatch.setattr(
+        "gui.components.dashboard.threading",
+        types.SimpleNamespace(Thread=_ImmediateThread),
+    )
+
+    dash = DashboardWidget.__new__(DashboardWidget)
+    dash.parent = _FakeParentModal()
+    dash.theme = _FakeTheme()
+
+    result, error = dash._run_background_fetch(
+        title="Preparing",
+        message="Loading servers...",
+        fetch_fn=lambda: {"ok": True},
+    )
+
+    assert result == {"ok": True}
+    assert error is None
+    dialog = _FakeDialog.created[-1]
+    assert "poll_done" in dialog.after_callbacks
+    assert "destroy" not in dialog.after_callbacks
+    assert dialog.destroy_calls >= 1
