@@ -12,6 +12,7 @@ Usage:
 context keys (all optional — missing keys disable the relevant action):
     reddit_grab_callback    : callable() — launch Reddit Grab dialog
     open_reddit_post_db     : callable() — launch Reddit Post DB browser
+    open_dorkbook           : callable() — launch Dorkbook window
     parent                  : tk.Widget  — dashboard parent (informational)
 """
 

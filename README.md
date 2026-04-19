@@ -344,6 +344,7 @@ Experimental work is grouped under the permanent `⚗ Experimental` button in th
 The dialog is modeless and tab-based. Current tabs:
 - `SearXNG`
 - `Reddit`
+- `Dorkbook`
 
 On first open, the dialog shows an experimental warning banner. If you check **Don't show this notice again**, Dirracuda writes `experimental.warning_dismissed=true` to `~/.dirracuda/gui_settings.json`.
 
@@ -433,6 +434,28 @@ Known limitations:
 - Rate limiting may interrupt runs (HTTP 429 aborts the current run)
 - Some posts contain no usable targets
 - Data quality depends entirely on user-submitted content
+
+### Dorkbook
+
+Dorkbook is a protocol-aware notebook for reusable dork recipes.
+
+Quick start:
+1. Dashboard → `⚗ Experimental` → `Dorkbook` tab.
+2. Click `Open Dorkbook`.
+3. Use `SMB` / `FTP` / `HTTP` tabs to manage recipes.
+
+Behavior:
+- Sidecar DB path: `~/.dirracuda/dorkbook.db`
+- Built-ins are read-only (italicized) and seeded one per protocol
+- Custom rows support `Add`, `Edit`, `Delete`, `Copy`
+- Right-click menu mirrors the same row actions
+- Search filters the current protocol tab only
+- Copy places query text only on clipboard
+- Delete confirmation can be muted until app restart via checkbox
+
+Persistence:
+- Dorkbook window geometry is restored between runs
+- Last active Dorkbook protocol tab is restored on reopen
 
 ## Advanced
 

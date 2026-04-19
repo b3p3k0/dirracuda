@@ -35,6 +35,7 @@ if "impacket" not in sys.modules:
 import tkinter as tk
 
 from gui.components.experimental_features.reddit_tab import RedditTab
+from gui.components.experimental_features.dorkbook_tab import DorkbookTab
 from gui.components.dashboard import DashboardWidget
 import gui.components.dashboard_experimental as dashboard_experimental
 
@@ -122,6 +123,22 @@ def test_reddit_tab_silent_when_no_post_db_callback():
     tab = RedditTab.__new__(RedditTab)
     tab._context = {}
     tab._invoke_open_reddit_post_db()  # must not raise
+
+
+def test_dorkbook_callback_invoked_from_tab():
+    """_invoke_open_dorkbook must call the context callback."""
+    opened = []
+    tab = DorkbookTab.__new__(DorkbookTab)
+    tab._context = {"open_dorkbook": lambda: opened.append(True)}
+    tab._invoke_open_dorkbook()
+    assert opened == [True]
+
+
+def test_dorkbook_tab_silent_when_no_callback():
+    """Missing callback should be a no-op, not an exception."""
+    tab = DorkbookTab.__new__(DorkbookTab)
+    tab._context = {}
+    tab._invoke_open_dorkbook()
 
 
 # ---------------------------------------------------------------------------
@@ -386,6 +403,12 @@ def test_registry_reddit_tab_unchanged():
     assert "Reddit" in labels
 
 
+def test_registry_contains_dorkbook_tab():
+    from gui.components.experimental_features.registry import _get_features
+    labels = [f.label for f in _get_features()]
+    assert "Dorkbook" in labels
+
+
 def test_registry_se_dork_feature_id():
     from gui.components.experimental_features.registry import _get_features
     ids = [f.feature_id for f in _get_features()]
@@ -398,6 +421,13 @@ def test_registry_orders_se_dork_before_reddit():
     features = _get_features()
     assert features[0].feature_id == "se_dork"
     assert features[1].feature_id == "reddit"
+
+
+def test_registry_dorkbook_after_reddit():
+    from gui.components.experimental_features.registry import _get_features
+
+    features = _get_features()
+    assert features[2].feature_id == "dorkbook"
 
 
 # ---------------------------------------------------------------------------
@@ -486,6 +516,21 @@ def test_open_se_dork_results_db_fallback_when_getter_raises(monkeypatch):
     assert len(calls) == 1
     assert calls[0]["parent"] is dash.parent
     assert calls[0]["add_record_callback"] is None
+    assert calls[0]["settings_manager"] is dash.settings_manager
+
+
+def test_open_dorkbook_forwards_parent_and_settings_manager(monkeypatch):
+    dash = _make_dash()
+    calls = []
+    monkeypatch.setattr(
+        "gui.components.dashboard_experimental.show_dorkbook_window",
+        lambda **kw: calls.append(kw),
+    )
+
+    dashboard_experimental.open_dorkbook(dash)
+
+    assert len(calls) == 1
+    assert calls[0]["parent"] is dash.parent
     assert calls[0]["settings_manager"] is dash.settings_manager
 
 

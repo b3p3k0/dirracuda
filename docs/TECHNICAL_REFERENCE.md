@@ -74,7 +74,7 @@ Dirracuda scans for internet-accessible servers exposing open or weakly-authenti
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-For SMB/FTP/HTTP scan flows, the GUI invokes CLI scripts as subprocesses via `gui/utils/backend_interface/interface.py` and parses stdout for progress data. Experimental SearXNG dorking (`experimental/se_dork`) and Reddit ingestion (`experimental/redseek`) are in-process paths launched from the dashboard on background threads.
+For SMB/FTP/HTTP scan flows, the GUI invokes CLI scripts as subprocesses via `gui/utils/backend_interface/interface.py` and parses stdout for progress data. Experimental SearXNG dorking (`experimental/se_dork`), Reddit ingestion (`experimental/redseek`), and Dorkbook recipe management (`experimental/dorkbook`) are in-process paths launched from the dashboard.
 
 ### 1.2 Core Workflow Flowchart
 
@@ -110,6 +110,7 @@ This shape applies to all three protocols. Protocol-specific differences are cov
 | `shared/` | Protocol-agnostic utilities shared by CLI and GUI | See §2.1 |
 | `experimental/se_dork/` | SearXNG dork search pipeline (client, service, store, classifier, models) | `client.py`, `service.py`, `store.py`, `classifier.py`, `models.py` |
 | `experimental/redseek/` | Reddit ingestion pipeline (client fetch, parse, sidecar persistence) | `client.py`, `service.py`, `parser.py`, `store.py` |
+| `experimental/dorkbook/` | Dorkbook sidecar persistence for reusable protocol dorks | `models.py`, `store.py` |
 | `gui/components/` | Tkinter windows and dialogs | `dashboard.py`, `unified_scan_dialog.py`, `server_list_window/`, `db_tools_dialog.py`, `*_browser_window.py` |
 | `gui/utils/` | GUI infrastructure | `ui_dispatcher.py`, `scan_manager.py`, `backend_interface/`, `probe_runner.py`, `extract_runner.py`, `settings_manager.py` |
 | `tools/` | Database management utilities | `db_manager.py`, `db_schema.sql`, `db_maintenance.py`, `db_migrations.py`* |
@@ -211,6 +212,11 @@ Reddit experimental UI settings currently persisted in `gui_settings.json`:
 - `reddit_grab.parse_body`
 - `reddit_grab.include_nsfw`
 - `reddit_grab.replace_cache`
+
+Dorkbook UI settings currently persisted in `gui_settings.json`:
+
+- `windows.dorkbook.geometry`
+- `dorkbook.active_protocol_tab`
 
 ---
 
@@ -610,6 +616,28 @@ Current `sort_mode` keys:
 
 Compatibility note: legacy `top` state is migrated to `top:week` on first week-top run; legacy row is left in place.
 
+### 5.7 Dorkbook Sidecar Database (`~/.dirracuda/dorkbook.db`)
+
+The Dorkbook module (`experimental/dorkbook`) writes to a separate SQLite database. It does not share tables with `dirracuda.db`.
+
+Tables:
+- `dorkbook_entries` — protocol-scoped recipes keyed by `entry_id`
+
+Core columns:
+- `protocol` (`SMB|FTP|HTTP`)
+- `nickname` (optional)
+- `query` (required)
+- `query_normalized` (trimmed query for duplicate guard)
+- `notes` (optional)
+- `row_kind` (`builtin|custom`)
+- `builtin_key` (stable key for shipped built-ins)
+- `created_at`, `updated_at`
+
+Constraints:
+- `UNIQUE(protocol, query_normalized)` blocks exact trimmed duplicates per protocol
+- `UNIQUE(builtin_key)` supports built-in upsert/refresh
+- Built-ins are read-only in UI/store mutation paths
+
 ---
 
 ## 6. Graphical User Interface
@@ -633,6 +661,8 @@ dirracuda
    │    ├─ FTP tab
    │    └─ HTTP tab
    ├─ ExperimentalFeaturesDialog (gui/components/experimental_features_dialog.py)
+   │    ├─ Dorkbook tab (gui/components/experimental_features/dorkbook_tab.py)
+   │    │    └─ DorkbookWindow (gui/components/dorkbook_window.py)
    │    ├─ SearXNG Dorking tab (gui/components/experimental_features/se_dork_tab.py)
    │    │    └─ SeDorkBrowserWindow (gui/components/se_dork_browser_window.py)
    │    └─ Reddit tab (gui/components/experimental_features/reddit_tab.py)
@@ -663,7 +693,7 @@ Internally: `schedule()` pushes `(callback, args, kwargs)` to a `queue.Queue`. T
 5. Cancellation: `ProcessRunner` sends SIGTERM and waits for graceful exit
 6. `--mock` mode substitutes `MockOperations` for the subprocess, enabling GUI testing without a real backend
 
-SearXNG dorking and Reddit ingestion do not use this subprocess path. `DashboardWidget` starts threads and calls `experimental.se_dork.service.run_dork_search()` or `experimental.redseek.service.run_ingest()` directly, then marshals completion back to Tk via `parent.after(...)`.
+SearXNG dorking, Reddit ingestion, and Dorkbook do not use this subprocess path. `DashboardWidget` dispatches these features in-process through their GUI modules and service/store layers.
 
 ### 6.4 Dashboard Controls
 
@@ -672,7 +702,7 @@ SearXNG dorking and Reddit ingestion do not use this subprocess path. `Dashboard
 | Start Scan | Opens `UnifiedScanDialog` (protocol selector + scan options) |
 | Server List | Opens `ServerListWindow` with SMB / FTP / HTTP tabs |
 | DB Tools | Opens `DBToolsDialog` |
-| Experimental | Opens `ExperimentalFeaturesDialog` (`SearXNG Dorking` + `Reddit` tabs) |
+| Experimental | Opens `ExperimentalFeaturesDialog` (`Dorkbook`, `SearXNG Dorking`, `Reddit` tabs) |
 | Configuration | Opens config editor |
 | Dark/Light toggle | Switches ttkthemes theme; persisted in `gui_settings.json` |
 
@@ -723,17 +753,32 @@ Backed by `gui/utils/db_tools_engine.py`. Capabilities:
 - **Statistics** — server count by country, protocol breakdown
 - **Maintenance** — SQLite VACUUM, integrity check (`PRAGMA integrity_check`), cascade-deletion preview before purging old sessions
 
-### 6.9 Experimental Features (SearXNG and Reddit)
+### 6.9 Experimental Features (Dorkbook, SearXNG, Reddit)
 
 `ExperimentalFeaturesDialog` is a modeless tab host opened from the dashboard `Experimental` button. Tabs are registry-driven (`gui/components/experimental_features/registry.py`), so adding/removing experimental modules is a registry edit, not dialog shell surgery.
 
 Current tabs:
+- `Dorkbook`
 - `SearXNG Dorking`
 - `Reddit`
 
 Warning banner behavior:
 - First open shows a warning banner with a "Don't show this notice again" checkbox
 - Dismissal writes `experimental.warning_dismissed=true` immediately (not deferred to dialog close)
+
+Dorkbook entry path:
+
+```text
+Dashboard -> Experimental tab -> Open Dorkbook
+  -> DorkbookWindow (reads/writes ~/.dirracuda/dorkbook.db)
+  -> singleton modeless window (focus existing on repeated open)
+```
+
+Per-tab behavior:
+- Protocol tabs: SMB / FTP / HTTP
+- Actions: Add, Copy, Edit, Delete + matching right-click menu
+- Built-ins are seeded/read-only and italicized
+- Delete confirmation can be muted for the current app session
 
 SearXNG Dorking entry path:
 
