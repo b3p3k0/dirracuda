@@ -26,6 +26,8 @@ import sys
 import os
 import json
 import shutil
+import getpass
+import random
 from pathlib import Path
 import webbrowser
 from typing import Dict, Any, Optional
@@ -59,6 +61,64 @@ _logger = get_logger("dirracuda")
 WINDOW_WIDTH = 1200
 WINDOW_HEIGHT = 745
 WINDOW_GEOMETRY = f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}"
+
+LEET_MOTD_LINES = (
+    "Hack the Planet!",
+    "Would you like to play a game?",
+    "A strange game. The only winning move is not to play.",
+    "Curiosity is not a crime.",
+    "This is our world now... the world of the electron and the switch.",
+    "Wake up, $USER...",
+    "Follow the white rabbit.",
+    "It's a UNIX system! I know this!",
+)
+
+
+def _sanitize_single_line_printable(value: Any, fallback: str = "") -> str:
+    text = "" if value is None else str(value)
+    text = text.replace("\r", " ").replace("\n", " ")
+    text = "".join(ch for ch in text if ch.isprintable())
+    text = " ".join(text.split()).strip()
+    return text or fallback
+
+
+def _resolve_motd_user() -> str:
+    candidates = [os.getenv("USER"), os.getenv("USERNAME")]
+    try:
+        candidates.append(getpass.getuser())
+    except Exception:
+        candidates.append(None)
+
+    for candidate in candidates:
+        resolved = _sanitize_single_line_printable(candidate)
+        if resolved:
+            return resolved
+    return "operator"
+
+
+def _render_1337_motd(
+    lines: Optional[Any] = None,
+    chooser: Optional[Any] = None,
+    username: Optional[str] = None,
+) -> str:
+    pool = tuple(lines) if lines is not None else LEET_MOTD_LINES
+    if not pool:
+        return ""
+
+    pick = chooser or random.choice
+    template = _sanitize_single_line_printable(
+        pick(pool),
+        fallback="Welcome, $USER.",
+    )
+    motd_user = (
+        _sanitize_single_line_printable(username, fallback="operator")
+        if username is not None
+        else _resolve_motd_user()
+    )
+    return _sanitize_single_line_printable(
+        template.replace("$USER", motd_user),
+        fallback=f"Welcome, {motd_user}.",
+    )
 
 # Thread-safe UI dispatcher for worker callbacks
 from gui.utils.ui_dispatcher import UIDispatcher
@@ -423,8 +483,14 @@ class XSMBSeekGUI:
     This version works with SMBSeek as an external configurable dependency.
     """
     
-    def __init__(self, mock_mode: bool = False, config_path: Optional[str] = None, 
-                 smbseek_path: Optional[str] = None, database_path: Optional[str] = None):
+    def __init__(
+        self,
+        mock_mode: bool = False,
+        config_path: Optional[str] = None,
+        smbseek_path: Optional[str] = None,
+        database_path: Optional[str] = None,
+        pry_unlocked: bool = False,
+    ):
         """
         Initialize xsmbseek GUI application.
         
@@ -436,6 +502,7 @@ class XSMBSeekGUI:
         """
         self.mock_mode = mock_mode
         self.cli_database_path = database_path
+        self._pry_unlocked = bool(pry_unlocked)
         
         # Initialize configuration system
         # Configuration Architecture:
@@ -888,7 +955,9 @@ class XSMBSeekGUI:
                     existing_window.restore_and_focus()
                 else:
                     # Create new window and track it
-                    window = open_server_list_window(self.root, self.db_reader, data, self.settings_manager)
+                    window_data = dict(data or {})
+                    window_data["_pry_unlocked"] = self._pry_unlocked
+                    window = open_server_list_window(self.root, self.db_reader, window_data, self.settings_manager)
                     self.drill_down_windows['server_list'] = window
             elif window_type == "config_editor":
                 # Open SMBSeek configuration editor
@@ -900,12 +969,17 @@ class XSMBSeekGUI:
                     self.settings_manager,
                     self._open_config_editor_direct,
                     self.config,  # Pass main config so changes get saved to conf/config.json
-                    self._refresh_database_connection  # Refresh database connection after changes
+                    self._refresh_database_connection,  # Refresh database connection after changes
+                    show_pry_controls=self._pry_unlocked,
                 )
             elif window_type == "data_import":
                 open_data_import_dialog(self.root, self.db_reader)
             elif window_type == "recent_activity":
-                server_window = ServerListWindow(self.root, self.db_reader)
+                server_window = ServerListWindow(
+                    self.root,
+                    self.db_reader,
+                    {"_pry_unlocked": self._pry_unlocked},
+                )
                 server_window.apply_recent_discoveries_filter()
             else:
                 # For other window types, show placeholder message
@@ -1154,6 +1228,15 @@ def main():
         help="Enable debug output"
     )
 
+    # Easter egg: pry is intentionally hidden unless this startup flag is present.
+    parser.add_argument(
+        "--1337",
+        dest="pry_unlocked",
+        action="store_true",
+        default=False,
+        help=argparse.SUPPRESS,
+    )
+
     parser.add_argument(
         "--version",
         action="version",
@@ -1161,6 +1244,12 @@ def main():
     )
     
     args = parser.parse_args()
+
+    pry_unlocked = bool(getattr(args, "pry_unlocked", False))
+    if pry_unlocked:
+        motd = _render_1337_motd()
+        if motd:
+            print(motd)
 
     # Set debug environment variable if requested
     if args.debug:
@@ -1171,7 +1260,8 @@ def main():
             mock_mode=args.mock,
             config_path=args.config,
             smbseek_path=args.backend_path,
-            database_path=getattr(args, 'database_path', None)
+            database_path=getattr(args, 'database_path', None),
+            pry_unlocked=pry_unlocked,
         )
         app.run()
     except KeyboardInterrupt:
