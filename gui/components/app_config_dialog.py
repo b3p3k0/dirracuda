@@ -301,7 +301,7 @@ class AppConfigDialog:
     def _create_dialog(self) -> None:
         self.dialog = tk.Toplevel(self.parent)
         self.dialog.title("Dirracuda - Application Configuration")
-        self.dialog.geometry("760x1080")
+        self.dialog.geometry("760x860")
         self.dialog.minsize(720, 680)
         self.theme.apply_to_widget(self.dialog, "main_window")
         self.dialog.transient(self.parent)
