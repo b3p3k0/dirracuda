@@ -62,6 +62,7 @@ def _build_dialog(validation_results: dict, *, parent=None, dialog=None) -> AppC
     dlg.config_editor_callback = None
     dlg.main_config = None
     dlg.refresh_callback = None
+    dlg.show_pry_controls = True
 
     dlg.validation_results = validation_results
 
@@ -140,6 +141,29 @@ def test_validate_and_save_wordlist_warning_uses_dialog_parent(monkeypatch):
     assert dlg._validate_and_save() is True
     assert len(warning_calls) == 1
     assert warning_calls[0][1]["parent"] is dlg.dialog
+
+
+def test_validate_and_save_skips_wordlist_warning_when_pry_controls_hidden(monkeypatch):
+    dlg = _build_dialog(_base_validation(api_key_valid=True, wordlist_valid=False))
+    dlg.show_pry_controls = False
+    dlg.wordlist_var = None
+    dlg.wordlist_path = "/tmp/persisted_wordlist.txt"
+    dlg.main_config = _MainConfigStub()
+
+    monkeypatch.setattr(
+        "gui.components.app_config_dialog.normalize_database_path",
+        lambda *_args, **_kwargs: Path("/tmp/smbseek.db"),
+    )
+
+    warning_calls = []
+    monkeypatch.setattr(
+        "gui.components.app_config_dialog.messagebox.showwarning",
+        lambda *args, **kwargs: warning_calls.append((args, kwargs)),
+    )
+    monkeypatch.setattr("gui.components.app_config_dialog.messagebox.showerror", lambda *_args, **_kwargs: None)
+
+    assert dlg._validate_and_save() is True
+    assert warning_calls == []
 
 
 def test_validate_and_save_exception_uses_dialog_parent(monkeypatch):

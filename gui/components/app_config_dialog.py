@@ -116,12 +116,14 @@ class AppConfigDialog:
         config_editor_callback: Optional[Callable[[str], None]] = None,
         main_config=None,
         refresh_callback: Optional[Callable[[], None]] = None,
+        show_pry_controls: bool = False,
     ):
         self.parent = parent
         self.settings_manager = settings_manager
         self.config_editor_callback = config_editor_callback
         self.main_config = main_config
         self.refresh_callback = refresh_callback
+        self.show_pry_controls = bool(show_pry_controls)
         self.theme = get_theme()
 
         self.smbseek_path = ""
@@ -369,8 +371,8 @@ class AppConfigDialog:
         container.pack(fill=tk.BOTH, expand=True, padx=18, pady=(0, 8))
 
         self._create_compact_card(container, "Core Paths", ("smbseek", "database", "config"))
-        self._create_compact_card(container, "Runtime Settings", ("api_key", "quarantine", "wordlist"))
-        self._create_dork_card(container)
+        runtime_fields = ("api_key", "quarantine", "wordlist") if self.show_pry_controls else ("api_key", "quarantine")
+        self._create_compact_card(container, "Runtime Settings", runtime_fields)
         self._create_tmpfs_card(container)
         self._create_clamav_card(container)
         self._sync_quarantine_controls_for_tmpfs()
@@ -926,7 +928,8 @@ class AppConfigDialog:
             return
 
         if field == "wordlist":
-            result = self._validate_wordlist_path(self.wordlist_var.get())
+            value = self.wordlist_var.get() if self.wordlist_var else self.wordlist_path
+            result = self._validate_wordlist_path(value)
             self.validation_results["wordlist"] = result
             self._update_status_label("wordlist", result)
             return
@@ -1076,7 +1079,10 @@ class AppConfigDialog:
         label.config(text=symbol, fg=color)
 
     def _validate_all_fields(self) -> None:
-        for field in ("smbseek", "database", "config", "api_key", "quarantine", "wordlist", "smb_dork", "ftp_dork", "http_dork"):
+        fields = ["smbseek", "database", "config", "api_key", "quarantine"]
+        if self.show_pry_controls:
+            fields.append("wordlist")
+        for field in fields:
             self._validate_field(field)
 
     def _messagebox_parent(self) -> tk.Widget:
@@ -1147,30 +1153,10 @@ class AppConfigDialog:
         new_config_path = self.config_var.get().strip()
         new_api_key = self.api_key_var.get().strip()
         new_quarantine = self.quarantine_var.get().strip()
-        new_wordlist = self.wordlist_var.get().strip()
-        smb_dork_var = getattr(self, "smb_dork_var", None)
-        ftp_dork_var = getattr(self, "ftp_dork_var", None)
-        http_dork_var = getattr(self, "http_dork_var", None)
-        new_smb_dork = (
-            smb_dork_var.get().strip()
-            if smb_dork_var is not None
-            else str(getattr(self, "smb_dork", self.DORK_DEFAULTS["smb_dork"])).strip()
-        )
-        new_ftp_dork = (
-            ftp_dork_var.get().strip()
-            if ftp_dork_var is not None
-            else str(getattr(self, "ftp_dork", self.DORK_DEFAULTS["ftp_dork"])).strip()
-        )
-        new_http_dork = (
-            http_dork_var.get().strip()
-            if http_dork_var is not None
-            else str(getattr(self, "http_dork", self.DORK_DEFAULTS["http_dork"])).strip()
-        )
-        new_dork_settings = {
-            "smb_dork": new_smb_dork,
-            "ftp_dork": new_ftp_dork,
-            "http_dork": new_http_dork,
-        }
+        if self.show_pry_controls and self.wordlist_var is not None:
+            new_wordlist = self.wordlist_var.get().strip()
+        else:
+            new_wordlist = self.wordlist_path
 
         _timeout_var = getattr(self, "clamav_timeout_var", None)
         try:
@@ -1259,7 +1245,6 @@ class AppConfigDialog:
                     new_api_key,
                     new_quarantine,
                     new_wordlist,
-                    dork_settings=new_dork_settings,
                     clamav_settings=new_clamav,
                     quarantine_tmpfs_settings=new_quarantine_tmpfs,
                 )
@@ -1281,7 +1266,6 @@ class AppConfigDialog:
                     new_api_key,
                     new_quarantine,
                     new_wordlist,
-                    dork_settings=new_dork_settings,
                     clamav_settings=new_clamav,
                     quarantine_tmpfs_settings=new_quarantine_tmpfs,
                 )
@@ -1295,10 +1279,6 @@ class AppConfigDialog:
             self.api_key = new_api_key
             self.quarantine_path = new_quarantine
             self.wordlist_path = new_wordlist
-            self.smb_dork = new_smb_dork
-            self.ftp_dork = new_ftp_dork
-            self.http_dork = new_http_dork
-            self._capture_open_dork_values()
             self.clamav_auto_promote_clean = new_clamav["auto_promote_clean_files"]
             self.quarantine_tmpfs_enabled = tmpfs_enabled
             self.quarantine_tmpfs_size_mb = tmpfs_size_mb
@@ -1326,7 +1306,7 @@ class AppConfigDialog:
                     "Discovery scans will fail until a valid key is set.",
                     parent=self._messagebox_parent(),
                 )
-            if not self.validation_results["wordlist"]["valid"]:
+            if self.show_pry_controls and not self.validation_results["wordlist"]["valid"]:
                 messagebox.showwarning(
                     "Configuration Saved",
                     "Settings were saved, but the Pry wordlist path is invalid.\n"
@@ -1416,10 +1396,18 @@ def open_app_config_dialog(
     config_editor_callback: Optional[Callable[[str], None]] = None,
     main_config=None,
     refresh_callback: Optional[Callable[[], None]] = None,
+    show_pry_controls: bool = False,
 ) -> None:
     """Open application configuration dialog."""
     try:
-        AppConfigDialog(parent, settings_manager, config_editor_callback, main_config, refresh_callback)
+        AppConfigDialog(
+            parent,
+            settings_manager,
+            config_editor_callback,
+            main_config,
+            refresh_callback,
+            show_pry_controls=show_pry_controls,
+        )
     except Exception as exc:
         messagebox.showerror(
             "Configuration Dialog Error",

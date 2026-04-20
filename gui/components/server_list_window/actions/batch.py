@@ -50,6 +50,9 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
     def _start_batch_job(self, job_type: str, targets: List[Dict[str, Any]], options: Dict[str, Any]) -> None:
         if not targets:
             return
+        if job_type == "pry" and not getattr(self, "_pry_unlocked", False):
+            messagebox.showwarning("Pry Disabled", "Pry is disabled for this session.")
+            return
 
         # Enforce max concurrent jobs
         if len(self.active_jobs) >= 3:

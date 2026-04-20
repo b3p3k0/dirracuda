@@ -650,6 +650,13 @@ class ServerListWindowBatchOperationsMixin:
 
     def _on_pry_selected(self) -> None:
         self._hide_context_menu()
+        if not getattr(self, "_pry_unlocked", False):
+            messagebox.showwarning(
+                "Pry Disabled",
+                "Pry is disabled for this session.",
+                parent=self.window,
+            )
+            return
         targets = self._build_selected_targets()
         ftp_targets = [t for t in targets if t.get("host_type") == "F"]
         if ftp_targets:

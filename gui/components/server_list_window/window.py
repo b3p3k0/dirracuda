@@ -98,6 +98,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self.db_reader = db_reader
         self.theme = get_theme()
         self.window_data = window_data or {}
+        self._pry_unlocked = bool(self.window_data.get("_pry_unlocked", False))
         self.settings_manager = settings_manager
         self.probe_status_map = {}
         self.ransomware_indicators = []
@@ -562,7 +563,8 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self.context_menu.add_separator()
         _add_selection_command("🔍 Probe Selected", self._on_probe_selected)
         _add_selection_command("📦 Extract Selected", self._on_extract_selected)
-        _add_selection_command("🔓 Pry Selected", self._on_pry_selected)
+        if self._pry_unlocked:
+            _add_selection_command("🔓 Pry Selected", self._on_pry_selected)
         _add_selection_command("🗂️ Browse Selected", self._on_file_browser_selected)
         self.context_menu.add_separator()
         _add_selection_command("⭐ Toggle Favorite", self._on_mark_favorite_selected)
@@ -833,14 +835,20 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self.theme.apply_to_widget(self.browser_button, "button_secondary")
         self.browser_button.pack(side=tk.LEFT, padx=(0, 8))
 
-        self.pry_button = tk.Button(
-            button_container,
-            text="🔓 Pry Selected",
-            command=self._on_pry_selected,
-            state=tk.DISABLED
-        )
-        self.theme.apply_to_widget(self.pry_button, "button_secondary")
-        self.pry_button.pack(side=tk.LEFT, padx=(0, 8))
+        if self._pry_unlocked:
+            self.pry_button = tk.Button(
+                button_container,
+                text="🔓 Pry Selected",
+                command=self._on_pry_selected,
+                state=tk.DISABLED
+            )
+            self.theme.apply_to_widget(self.pry_button, "button_secondary")
+            self.pry_button.pack(side=tk.LEFT, padx=(0, 8))
+        else:
+            pry_spacer = tk.Frame(button_container, width=120)
+            self.theme.apply_to_widget(pry_spacer, "main_window")
+            pry_spacer.pack(side=tk.LEFT, padx=(0, 8))
+            pry_spacer.pack_propagate(False)
 
         self.delete_button = tk.Button(
             button_container,

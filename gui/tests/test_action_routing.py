@@ -238,6 +238,7 @@ class _BatchMixinStub(ServerListWindowBatchMixin):
         self.mode_button = MagicMock()
         self.search_text = MagicMock()
         self.country_listbox = None
+        self._pry_unlocked = True
 
     def _apply_filters(self, force=False):
         pass
@@ -1016,6 +1017,49 @@ def test_pry_blocked_for_ftp_row():
     assert len(warning_shown) == 1, "Warning dialog must be shown"
     assert "Pry" in warning_shown[0]
     assert pry_started == [], "Pry must not be launched for FTP rows"
+
+
+def test_pry_blocked_when_session_locked():
+    """_on_pry_selected returns early when pry is locked for the session."""
+    stub = _BatchMixinStub()
+    stub._pry_unlocked = False
+    stub.filtered_servers = [
+        {"ip_address": "1.2.3.4", "host_type": "S", "row_key": "S:1", "auth_method": "anonymous"}
+    ]
+    stub.tree._items = {"S:1": True}
+    stub.tree._selection = ["S:1"]
+
+    warnings = []
+    pry_started = []
+    with patch(
+        "gui.components.server_list_window.actions.batch_operations.messagebox.showwarning",
+        side_effect=lambda title, _msg, **_kw: warnings.append(title),
+    ):
+        with patch.object(stub, "_start_batch_job", side_effect=lambda *a, **kw: pry_started.append((a, kw))):
+            stub._on_pry_selected()
+
+    assert warnings == ["Pry Disabled"]
+    assert pry_started == []
+
+
+def test_start_batch_job_pry_blocked_when_session_locked():
+    """_start_batch_job hard-gates pry when unlock flag is not active."""
+    stub = _BatchMixinStub()
+    stub._pry_unlocked = False
+
+    warnings = []
+    with patch(
+        "gui.components.server_list_window.actions.batch.messagebox.showwarning",
+        side_effect=lambda title, _msg, **_kw: warnings.append(title),
+    ):
+        stub._start_batch_job(
+            "pry",
+            [{"ip_address": "1.2.3.4", "host_type": "S", "row_key": "S:1"}],
+            {},
+        )
+
+    assert warnings == ["Pry Disabled"]
+    assert stub.active_jobs == {}
 
 
 # ---------------------------------------------------------------------------
