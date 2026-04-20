@@ -1,7 +1,7 @@
 """
 FTP Scan Dialog
 
-Modal dialog for configuring and starting FTP scans.
+Single-instance, non-blocking dialog for configuring and starting FTP scans.
 Styled consistently with the SMB ScanDialog.
 
 Design: Compact two-column layout covering FTP-specific parameters
@@ -32,7 +32,7 @@ _TIMEOUT_UPPER = 300
 
 class FtpScanDialog:
     """
-    Modal dialog for configuring and starting FTP scans.
+    Single-instance, non-blocking dialog for configuring and starting FTP scans.
 
     Collects FTP-specific launch parameters and passes a scan_options dict
     to scan_start_callback on Start.  All runtime overrides (concurrency,
@@ -307,7 +307,6 @@ class FtpScanDialog:
         self.dialog.resizable(True, True)
         self.theme.apply_to_widget(self.dialog, "main_window")
         self.dialog.transient(self.parent)
-        self.dialog.grab_set()
         self._center_dialog()
 
         # Scrollable content
@@ -1300,6 +1299,26 @@ class FtpScanDialog:
         self.parent.wait_window(self.dialog)
         return self.result
 
+    def focus_dialog(self) -> None:
+        """Bring the existing dialog instance to front."""
+        try:
+            self.dialog.deiconify()
+            ensure_dialog_focus(self.dialog, self.parent)
+        except Exception:
+            pass
+
+
+_ACTIVE_FTP_SCAN_DIALOG: Optional[FtpScanDialog] = None
+
+
+def _dialog_instance_is_live(instance: Optional[FtpScanDialog]) -> bool:
+    if instance is None:
+        return False
+    try:
+        return bool(instance.dialog.winfo_exists())
+    except Exception:
+        return False
+
 
 def show_ftp_scan_dialog(
     parent: tk.Widget,
@@ -1309,11 +1328,16 @@ def show_ftp_scan_dialog(
     config_editor_callback: Optional[Callable[[str], None]] = None,
 ) -> Optional[str]:
     """
-    Show the FTP scan configuration dialog modally.
+    Show the FTP scan configuration dialog as a single-instance window.
 
     Calls scan_start_callback(scan_options) when user presses Start.
     Returns "start", "cancel", or None.
     """
+    global _ACTIVE_FTP_SCAN_DIALOG
+    if _dialog_instance_is_live(_ACTIVE_FTP_SCAN_DIALOG):
+        _ACTIVE_FTP_SCAN_DIALOG.focus_dialog()
+        return None
+
     dialog = FtpScanDialog(
         parent,
         config_path,
@@ -1321,4 +1345,9 @@ def show_ftp_scan_dialog(
         settings_manager,
         config_editor_callback=config_editor_callback,
     )
-    return dialog.show()
+    _ACTIVE_FTP_SCAN_DIALOG = dialog
+    try:
+        return dialog.show()
+    finally:
+        if _ACTIVE_FTP_SCAN_DIALOG is dialog:
+            _ACTIVE_FTP_SCAN_DIALOG = None

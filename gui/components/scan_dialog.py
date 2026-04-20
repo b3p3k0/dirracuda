@@ -1,10 +1,10 @@
 """
 Dirracuda Scan Dialog
 
-Modal dialog for configuring and starting new SMB security scans.
+Single-instance, non-blocking dialog for configuring and starting new SMB security scans.
 Provides simple interface for country selection and configuration management.
 
-Design Decision: Simple modal approach focuses on essential parameters
+Design Decision: Simple windowed approach focuses on essential parameters
 while directing users to configuration editor for advanced settings.
 """
 
@@ -28,7 +28,7 @@ from gui.components.scan_preflight import run_preflight
 
 class ScanDialog:
     """
-    Modal dialog for configuring and starting SMB scans.
+    Single-instance, non-blocking dialog for configuring and starting SMB scans.
 
     Provides interface for:
     - Optional country selection (global scan if empty)
@@ -36,7 +36,7 @@ class ScanDialog:
     - Configuration file path display and editing
     - Scan initiation with validation and complete options dict
 
-    Design Pattern: Simple modal with clear call-to-action flow
+    Design Pattern: Single-instance window with clear call-to-action flow
     that integrates with existing configuration and scan systems.
     Callback contract provides complete scan options dict to ensure
     compatibility with ScanManager expectations.
@@ -161,9 +161,8 @@ class ScanDialog:
         # Apply theme
         self.theme.apply_to_widget(self.dialog, "main_window")
         
-        # Make modal
+        # Keep tied to dashboard parent, but do not app-lock with grab_set().
         self.dialog.transient(self.parent)
-        self.dialog.grab_set()
         
         # Center dialog
         self._center_dialog()
@@ -2039,6 +2038,14 @@ class ScanDialog:
         self._persist_quick_settings()
         self.result = "cancel"
         self.dialog.destroy()
+
+    def focus_dialog(self) -> None:
+        """Bring the existing dialog instance to front."""
+        try:
+            self.dialog.deiconify()
+            ensure_dialog_focus(self.dialog, self.parent)
+        except Exception:
+            pass
     
     def show(self) -> Optional[str]:
         """
@@ -2058,7 +2065,7 @@ def show_scan_dialog(parent: tk.Widget, config_path: str,
                     backend_interface: Optional[Any] = None,
                     settings_manager: Optional[Any] = None) -> Optional[str]:
     """
-    Show scan configuration dialog.
+    Show scan configuration dialog as a single-instance window.
 
     Args:
         parent: Parent widget
@@ -2071,6 +2078,28 @@ def show_scan_dialog(parent: tk.Widget, config_path: str,
     Returns:
         Dialog result ("start", "cancel", or None)
     """
+    global _ACTIVE_SCAN_DIALOG
+    if _dialog_instance_is_live(_ACTIVE_SCAN_DIALOG):
+        _ACTIVE_SCAN_DIALOG.focus_dialog()
+        return None
+
     dialog = ScanDialog(parent, config_path, config_editor_callback, scan_start_callback,
                        backend_interface, settings_manager)
-    return dialog.show()
+    _ACTIVE_SCAN_DIALOG = dialog
+    try:
+        return dialog.show()
+    finally:
+        if _ACTIVE_SCAN_DIALOG is dialog:
+            _ACTIVE_SCAN_DIALOG = None
+
+
+_ACTIVE_SCAN_DIALOG: Optional[ScanDialog] = None
+
+
+def _dialog_instance_is_live(instance: Optional[ScanDialog]) -> bool:
+    if instance is None:
+        return False
+    try:
+        return bool(instance.dialog.winfo_exists())
+    except Exception:
+        return False

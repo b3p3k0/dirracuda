@@ -19,6 +19,7 @@ from gui.utils import safe_messagebox as messagebox
 from typing import Any, Callable, Dict, Optional
 
 from gui.components.scan_dialog import ScanDialog
+from gui.components.scan_dork_editor_dialog import show_scan_dork_editor_dialog
 from gui.components.scan_preflight import run_preflight
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.style import get_theme
@@ -32,7 +33,7 @@ _TIMEOUT_UPPER = 300
 
 
 class UnifiedScanDialog:
-    """Modal dialog for configuring queued multi-protocol scan runs."""
+    """Single-instance, non-blocking dialog for queued multi-protocol scan runs."""
 
     TEMPLATE_PLACEHOLDER_TEXT = "Select a template..."
 
@@ -291,7 +292,6 @@ class UnifiedScanDialog:
         self.dialog.resizable(True, True)
         self.theme.apply_to_widget(self.dialog, "main_window")
         self.dialog.transient(self.parent)
-        self.dialog.grab_set()
         self._center_dialog()
 
         wrapper = tk.Frame(self.dialog, bg=self.theme.colors["primary_bg"])
@@ -1034,19 +1034,45 @@ class UnifiedScanDialog:
             )
 
     def _open_query_editor(self) -> None:
-        """Open query manager from protocol section, falling back to config editor."""
-        if self.query_editor_callback:
+        """Open non-blocking discovery dork editor with defensive fallback."""
+        try:
+            show_scan_dork_editor_dialog(
+                parent=self.dialog,
+                config_path=str(self.config_path),
+                settings_manager=self._settings_manager,
+            )
+            return
+        except Exception as editor_exc:
+            if self.query_editor_callback:
+                try:
+                    self.query_editor_callback()
+                    return
+                except Exception as callback_exc:
+                    messagebox.showerror(
+                        "Query Editor Error",
+                        (
+                            "Failed to open discovery dork editor:\n"
+                            f"{editor_exc}\n\n"
+                            "Fallback query editor also failed:\n"
+                            f"{callback_exc}"
+                        ),
+                        parent=self.dialog,
+                    )
+                    return
+
+            messagebox.showwarning(
+                "Discovery Dorks Unavailable",
+                (
+                    "Failed to open discovery dork editor.\n"
+                    f"Reason: {editor_exc}\n\n"
+                    "Falling back to Application Configuration."
+                ),
+                parent=self.dialog,
+            )
             try:
-                self.query_editor_callback()
+                self._open_config_editor()
+            except Exception:
                 return
-            except Exception as exc:
-                messagebox.showerror(
-                    "Query Editor Error",
-                    f"Failed to open query editor:\n{exc}",
-                    parent=self.dialog,
-                )
-                return
-        self._open_config_editor()
 
     def _create_button_panel(self) -> None:
         frame = tk.Frame(self.dialog)
@@ -1317,6 +1343,26 @@ class UnifiedScanDialog:
         self.parent.wait_window(self.dialog)
         return self.result
 
+    def focus_dialog(self) -> None:
+        """Bring the existing dialog instance to front."""
+        try:
+            self.dialog.deiconify()
+            ensure_dialog_focus(self.dialog, self.parent)
+        except Exception:
+            pass
+
+
+_ACTIVE_UNIFIED_SCAN_DIALOG: Optional[UnifiedScanDialog] = None
+
+
+def _dialog_instance_is_live(instance: Optional[UnifiedScanDialog]) -> bool:
+    if instance is None:
+        return False
+    try:
+        return bool(instance.dialog.winfo_exists())
+    except Exception:
+        return False
+
 
 def show_unified_scan_dialog(
     parent: tk.Widget,
@@ -1327,7 +1373,12 @@ def show_unified_scan_dialog(
     query_editor_callback: Optional[Callable[[], None]] = None,
     reddit_grab_callback: Optional[Callable[[], None]] = None,
 ) -> Optional[str]:
-    """Show the unified scan launch dialog modally."""
+    """Show the unified scan launch dialog as a single-instance window."""
+    global _ACTIVE_UNIFIED_SCAN_DIALOG
+    if _dialog_instance_is_live(_ACTIVE_UNIFIED_SCAN_DIALOG):
+        _ACTIVE_UNIFIED_SCAN_DIALOG.focus_dialog()
+        return None
+
     dialog = UnifiedScanDialog(
         parent=parent,
         config_path=config_path,
@@ -1337,4 +1388,9 @@ def show_unified_scan_dialog(
         query_editor_callback=query_editor_callback,
         reddit_grab_callback=reddit_grab_callback,
     )
-    return dialog.show()
+    _ACTIVE_UNIFIED_SCAN_DIALOG = dialog
+    try:
+        return dialog.show()
+    finally:
+        if _ACTIVE_UNIFIED_SCAN_DIALOG is dialog:
+            _ACTIVE_UNIFIED_SCAN_DIALOG = None

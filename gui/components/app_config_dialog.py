@@ -16,6 +16,10 @@ from tkinter import filedialog
 from gui.utils import safe_messagebox as messagebox
 from typing import Any, Callable, Dict, Optional
 
+from gui.components.discovery_dork_config import (
+    DORK_DEFAULTS as SHARED_DORK_DEFAULTS,
+    read_discovery_dorks,
+)
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.style import get_theme
 from gui.utils.wordlist_path import normalize_wordlist_path
@@ -90,13 +94,9 @@ class AppConfigDialog:
     - Quarantine directory (shared SMB/FTP/HTTP browser + extract default)
     """
 
-    DORK_DEFAULTS = {
-        "smb_dork": "smb authentication: disabled",
-        "ftp_dork": 'port:21 "230 Login successful"',
-        "http_dork": 'http.title:"Index of /"',
-    }
-    DORK_FIELDS = ("smb_dork", "ftp_dork", "http_dork")
-    REQUIRED_FIELDS = ("smbseek", "database", "config", "quarantine", "smb_dork", "ftp_dork", "http_dork")
+    DORK_DEFAULTS = dict(SHARED_DORK_DEFAULTS)
+    DORK_FIELDS = tuple(DORK_DEFAULTS.keys())
+    REQUIRED_FIELDS = ("smbseek", "database", "config", "quarantine")
     FIELD_LABELS = {
         "smbseek": "Dirracuda Root",
         "database": "Database File",
@@ -147,9 +147,6 @@ class AppConfigDialog:
             "api_key": {"valid": False, "message": ""},
             "quarantine": {"valid": False, "message": ""},
             "wordlist": {"valid": False, "message": ""},
-            "smb_dork": {"valid": False, "message": ""},
-            "ftp_dork": {"valid": False, "message": ""},
-            "http_dork": {"valid": False, "message": ""},
         }
 
         self.dialog: Optional[tk.Toplevel] = None
@@ -283,30 +280,10 @@ class AppConfigDialog:
                 False,
             )
 
-        self.smb_dork = str(
-            _get_nested(
-                config_data,
-                ("shodan", "query_components", "base_query"),
-                self.DORK_DEFAULTS["smb_dork"],
-            )
-            or self.DORK_DEFAULTS["smb_dork"]
-        )
-        self.ftp_dork = str(
-            _get_nested(
-                config_data,
-                ("ftp", "shodan", "query_components", "base_query"),
-                self.DORK_DEFAULTS["ftp_dork"],
-            )
-            or self.DORK_DEFAULTS["ftp_dork"]
-        )
-        self.http_dork = str(
-            _get_nested(
-                config_data,
-                ("http", "shodan", "query_components", "base_query"),
-                self.DORK_DEFAULTS["http_dork"],
-            )
-            or self.DORK_DEFAULTS["http_dork"]
-        )
+        dorks = read_discovery_dorks(config_data)
+        self.smb_dork = dorks["smb_dork"]
+        self.ftp_dork = dorks["ftp_dork"]
+        self.http_dork = dorks["http_dork"]
         self._capture_open_dork_values()
 
     def _capture_open_dork_values(self) -> None:
@@ -909,24 +886,6 @@ class AppConfigDialog:
             self._update_status_label("api_key", result)
             return
 
-        if field == "smb_dork":
-            result = self._validate_dork_query(self.smb_dork_var.get(), self.FIELD_LABELS["smb_dork"])
-            self.validation_results["smb_dork"] = result
-            self._update_status_label("smb_dork", result)
-            return
-
-        if field == "ftp_dork":
-            result = self._validate_dork_query(self.ftp_dork_var.get(), self.FIELD_LABELS["ftp_dork"])
-            self.validation_results["ftp_dork"] = result
-            self._update_status_label("ftp_dork", result)
-            return
-
-        if field == "http_dork":
-            result = self._validate_dork_query(self.http_dork_var.get(), self.FIELD_LABELS["http_dork"])
-            self.validation_results["http_dork"] = result
-            self._update_status_label("http_dork", result)
-            return
-
         if field == "wordlist":
             value = self.wordlist_var.get() if self.wordlist_var else self.wordlist_path
             result = self._validate_wordlist_path(value)
@@ -1059,12 +1018,6 @@ class AppConfigDialog:
         if not path_obj.is_file():
             return {"valid": False, "message": "Wordlist path is not a file."}
         return {"valid": True, "message": "Wordlist file is valid."}
-
-    def _validate_dork_query(self, value: str, label: str) -> Dict[str, Any]:
-        query = str(value or "").strip()
-        if not query:
-            return {"valid": False, "message": f"{label} cannot be blank."}
-        return {"valid": True, "message": f"{label} is set."}
 
     def _update_status_label(self, field: str, result: Dict[str, Any]) -> None:
         label = self.status_labels.get(field)
@@ -1353,17 +1306,11 @@ class AppConfigDialog:
         api_key: str,
         quarantine_path: str,
         wordlist_path: str,
-        dork_settings: Optional[Dict[str, str]] = None,
         clamav_settings: Optional[Dict[str, Any]] = None,
         quarantine_tmpfs_settings: Optional[Dict[str, Any]] = None,
     ) -> None:
         # Shodan API key drives scan processes.
         _set_nested(config_data, ("shodan", "api_key"), api_key)
-
-        if dork_settings is not None:
-            _set_nested(config_data, ("shodan", "query_components", "base_query"), dork_settings["smb_dork"])
-            _set_nested(config_data, ("ftp", "shodan", "query_components", "base_query"), dork_settings["ftp_dork"])
-            _set_nested(config_data, ("http", "shodan", "query_components", "base_query"), dork_settings["http_dork"])
 
         # Keep quarantine path aligned across browser and extract-adjacent sections.
         _set_nested(config_data, ("file_browser", "quarantine_root"), quarantine_path)

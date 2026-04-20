@@ -31,6 +31,7 @@ from gui.utils.session_flags import (
     set_flag,
 )
 from gui.utils.style import get_theme
+from gui.components.scan_dork_editor_dialog import populate_discovery_dork_from_dorkbook
 
 _WINDOW_INSTANCE = None
 
@@ -80,6 +81,16 @@ def _is_builtin_row(row: Optional[dict]) -> bool:
 def _clipboard_payload_for_row(row: dict) -> str:
     """v1 copy semantics: query text only."""
     return str(row.get("query") or "")
+
+
+def _normalize_scan_query_config_path(config_path: Optional[Any]) -> Optional[str]:
+    raw = str(config_path or "").strip()
+    if not raw:
+        return None
+    try:
+        return str(Path(raw).expanduser())
+    except Exception:
+        return None
 
 
 class _EntryEditorDialog:
@@ -265,10 +276,12 @@ class DorkbookWindow:
         *,
         settings_manager=None,
         db_path: Optional[Path] = None,
+        scan_query_config_path: Optional[str] = None,
     ) -> None:
         self.parent = parent
         self.settings_manager = settings_manager
         self.db_path = db_path
+        self._scan_query_config_path = _normalize_scan_query_config_path(scan_query_config_path)
         self.theme = get_theme()
 
         self._tab_by_protocol: dict[str, dict] = {}
@@ -365,6 +378,7 @@ class DorkbookWindow:
 
         tree.bind("<<TreeviewSelect>>", lambda _e: self._on_selection_changed(protocol))
         tree.bind("<Button-3>", lambda e: self._on_right_click(protocol, e))
+        tree.bind("<Double-1>", lambda e: self._on_tree_double_click(protocol, e))
 
         status_var = tk.StringVar(value="")
         status_label = tk.Label(frame, textvariable=status_var, anchor="w")
@@ -384,6 +398,15 @@ class DorkbookWindow:
         copy_btn.pack(side=tk.LEFT, padx=(0, 6))
         copy_btn.configure(state=tk.DISABLED)
 
+        use_btn = tk.Button(
+            btn_row,
+            text="Use in Discovery Dorks",
+            command=lambda: self._on_use_in_discovery_dorks(protocol),
+        )
+        self.theme.apply_to_widget(use_btn, "button_secondary")
+        use_btn.pack(side=tk.LEFT, padx=(0, 6))
+        use_btn.configure(state=tk.DISABLED)
+
         edit_btn = tk.Button(btn_row, text="Edit", command=lambda: self._on_edit(protocol))
         self.theme.apply_to_widget(edit_btn, "button_secondary")
         delete_btn = tk.Button(btn_row, text="Delete", command=lambda: self._on_delete(protocol))
@@ -399,6 +422,7 @@ class DorkbookWindow:
             "row_by_iid": row_by_iid,
             "status_var": status_var,
             "copy_btn": copy_btn,
+            "use_btn": use_btn,
             "edit_btn": edit_btn,
             "delete_btn": delete_btn,
             "edit_delete_visible": False,
@@ -483,10 +507,12 @@ class DorkbookWindow:
         tab = self._tab_by_protocol[protocol]
         if row is None:
             tab["copy_btn"].configure(state=tk.DISABLED)
+            tab["use_btn"].configure(state=tk.DISABLED)
             self._hide_edit_delete_buttons(protocol)
             return
 
         tab["copy_btn"].configure(state=tk.NORMAL)
+        tab["use_btn"].configure(state=tk.NORMAL)
         if _is_builtin_row(row):
             self._hide_edit_delete_buttons(protocol)
         else:
@@ -502,6 +528,7 @@ class DorkbookWindow:
             return
 
         menu.add_command(label="Copy", command=lambda: self._on_copy(protocol))
+        menu.add_command(label="Use in Discovery Dorks", command=lambda: self._on_use_in_discovery_dorks(protocol))
         if not _is_builtin_row(row):
             menu.add_command(label="Edit", command=lambda: self._on_edit(protocol))
             menu.add_command(label="Delete", command=lambda: self._on_delete(protocol))
@@ -524,6 +551,17 @@ class DorkbookWindow:
             tab["context_menu"].tk_popup(event.x_root, event.y_root)
         finally:
             tab["context_menu"].grab_release()
+
+    def _on_tree_double_click(self, protocol: str, event) -> None:
+        tab = self._tab_by_protocol[protocol]
+        tree = tab["tree"]
+        row_iid = tree.identify_row(event.y)
+        if not row_iid:
+            return
+        tree.selection_set(row_iid)
+        tree.focus(row_iid)
+        self._set_action_visibility(protocol, self._selected_row(protocol))
+        self._on_use_in_discovery_dorks(protocol)
 
     def _show_entry_editor(
         self,
@@ -596,6 +634,69 @@ class DorkbookWindow:
         self.window.clipboard_clear()
         self.window.clipboard_append(payload)
         self._tab_by_protocol[protocol]["status_var"].set("Copied query to clipboard.")
+
+    def update_scan_query_context(self, scan_query_config_path: Optional[str]) -> None:
+        normalized = _normalize_scan_query_config_path(scan_query_config_path)
+        if normalized:
+            self._scan_query_config_path = normalized
+
+    def _resolve_scan_query_config_path(self) -> Optional[str]:
+        if self._scan_query_config_path:
+            return self._scan_query_config_path
+        if self.settings_manager is None:
+            return None
+        try:
+            candidate = str(self.settings_manager.get_setting("backend.config_path", "") or "").strip()
+        except Exception:
+            candidate = ""
+        if not candidate and hasattr(self.settings_manager, "get_smbseek_config_path"):
+            try:
+                candidate = str(self.settings_manager.get_smbseek_config_path() or "").strip()
+            except Exception:
+                candidate = ""
+        return _normalize_scan_query_config_path(candidate)
+
+    def _on_use_in_discovery_dorks(self, protocol: str) -> None:
+        row = self._selected_row(protocol)
+        if row is None:
+            return
+        query = str(row.get("query") or "").strip()
+        if not query:
+            messagebox.showwarning(
+                "Cannot Use Dork",
+                "Selected row has no query text.",
+                parent=self.window,
+            )
+            return
+
+        config_path = self._resolve_scan_query_config_path()
+        if not config_path:
+            messagebox.showwarning(
+                "Discovery Dorks Context Missing",
+                "No scan config context is available.\nOpen Start Scan -> Edit Queries first, then try again.",
+                parent=self.window,
+            )
+            return
+
+        try:
+            populate_discovery_dork_from_dorkbook(
+                parent=self.window,
+                config_path=config_path,
+                protocol=protocol,
+                query=query,
+                settings_manager=self.settings_manager,
+            )
+        except Exception as exc:
+            messagebox.showerror(
+                "Use Dork Failed",
+                f"Could not populate Discovery Dorks editor:\n{exc}",
+                parent=self.window,
+            )
+            return
+
+        self._tab_by_protocol[protocol]["status_var"].set(
+            f"Loaded {protocol} query into Discovery Dorks editor. Click Save there to persist."
+        )
 
     def _on_edit(self, protocol: str) -> None:
         row = self._selected_row(protocol)
@@ -727,10 +828,12 @@ def show_dorkbook_window(
     *,
     settings_manager=None,
     db_path: Optional[Path] = None,
+    scan_query_config_path: Optional[str] = None,
 ) -> None:
     """Open singleton Dorkbook window or focus existing one."""
     global _WINDOW_INSTANCE
     if _window_instance_is_live(_WINDOW_INSTANCE):
+        _WINDOW_INSTANCE.update_scan_query_context(scan_query_config_path)
         _WINDOW_INSTANCE.focus_window()
         return
 
@@ -739,6 +842,7 @@ def show_dorkbook_window(
             parent,
             settings_manager=settings_manager,
             db_path=db_path,
+            scan_query_config_path=scan_query_config_path,
         )
     except Exception as exc:
         _WINDOW_INSTANCE = None
