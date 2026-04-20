@@ -318,7 +318,8 @@ The success marker is only emitted on the non-error path; its absence signals fa
 
 Structurally identical to FTP. Implementation lives in `commands/http/operation.py`.
 
-**Shodan dork:** `http.title:"Index of /"` — locked in `commands/http/shodan_query.py`, not user-overridable.
+**Shodan dork:** defaults to `http.title:"Index of /"` from `http.shodan.query_components.base_query` in `conf/config.json`.
+Operators can edit SMB/FTP/HTTP discovery dorks from `Start Scan -> Edit Queries` (Discovery Dorks editor).
 
 **Verifier** checks both HTTP and HTTPS on the discovered port; `allow_insecure_tls` controls whether TLS cert errors are fatal. `is_index_page` flag on `http_access` records rows distinguishes confirmed open-directory indexes from other accessible responses.
 
@@ -650,6 +651,8 @@ Constraints:
 dirracuda
 └─ Dirracuda GUI (gui/components/dashboard.py)
    ├─ UnifiedScanDialog (gui/components/unified_scan_dialog.py)
+   │    ├─ ScanDorkEditorDialog (gui/components/scan_dork_editor_dialog.py)
+   │    │    └─ Open Dorkbook -> DorkbookWindow (singleton/modeless)
    │    └─ ScanManager (gui/utils/scan_manager.py)
    │         └─ BackendInterface (gui/utils/backend_interface/interface.py)
    │              ├─ ProcessRunner   — subprocess lifecycle
@@ -774,11 +777,28 @@ Dashboard -> Experimental tab -> Open Dorkbook
   -> singleton modeless window (focus existing on repeated open)
 ```
 
+Discovery Dorks editor path:
+
+```text
+Dashboard -> Start Scan -> Edit Queries
+  -> ScanDorkEditorDialog (singleton modeless editor)
+  -> Save writes only SMB/FTP/HTTP base-query keys
+  -> Open Dorkbook button opens/focuses DorkbookWindow
+```
+
 Per-tab behavior:
 - Protocol tabs: SMB / FTP / HTTP
-- Actions: Add, Copy, Edit, Delete + matching right-click menu
+- Actions: Add, Copy, Use in Discovery Dorks, Edit, Delete
+- Right-click menu mirrors the same row actions
+- Double-click row is an alias of "Use in Discovery Dorks"
 - Built-ins are seeded/read-only and italicized
 - Delete confirmation can be muted for the current app session
+- "Use in Discovery Dorks" populates the protocol-matched editor field as unsaved/manual-save state
+- If no scan-config context is available, use-action warns and performs no write
+
+Integration seam:
+- `DorkbookWindow` routes all use-actions through `populate_discovery_dork_from_dorkbook(...)`
+- The seam opens/focuses `ScanDorkEditorDialog` and updates the matched field only; config is unchanged until explicit Save
 
 SearXNG Dorking entry path:
 
