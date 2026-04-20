@@ -146,7 +146,6 @@ Changes there are manual-save only.
 | 📋 Copy IP | Copy selected server IP address to clipboard |
 | 🔍 Probe Selected | Enumerate shares, detect ransomware indicators |
 | 📦 Extract Selected | Collect files with hard limits on count, size, and time |
-| 🔓 Pry Selected | Password audit against a specific user |
 | 🗂️ Browse Selected | Read-only exploration of accessible shares |
 | ⭐ Toggle Favorite | Mark/unmark selected servers as favorites |
 | 🚫 Toggle Avoid | Mark/unmark selected servers to avoid |
@@ -265,22 +264,6 @@ Notes:
 - The results dialog supports **Mute until restart**.
 - One completion popup is shown per session (ClamAV results dialog if shown, otherwise a single fallback completion popup).
 
-### Pry (Password Audit)
-
-Tests passwords from a wordlist against a single SMB host/share/user. Optionally tries username-as-password first.
-
-To use it, download a wordlist (we recommend [SecLists](https://github.com/danielmiessler/SecLists)) and set the path in config:
-
-```json
-{
-  "pry": {
-    "wordlist_path": "/path/to/SecLists/Passwords/Leaked-Databases/rockyou.txt"
-  }
-}
-```
-
-Pry includes lockout detection and configurable delays between attempts. That said, **this feature exists mostly as a novelty/proof of concept** - dedicated tools like Hydra or CrackMapExec will serve you better for serious password auditing.
-
 ### DB Tools
 
 ![db dialog](img/db.png)
@@ -329,7 +312,6 @@ App settings are stored in `conf/config.json`. The example file (`conf/config.js
 Key sections:
 
 - `shodan.api_key` - required for discovery scans (SMB/FTP/HTTP)
-- `pry.*` - wordlist path, delays, lockout behavior
 - `file_collection.*` - extraction limits
 - `clamav.*` - optional post-extract scan/routing behavior
 - `file_browser.*` - browse mode limits (depth, entries, chunk size, quarantine root); download tuning - `download_worker_count` (1–3) and `download_large_file_mb` - is user-controlled in the browser UI and persisted in GUI settings, not read from this config file
@@ -526,9 +508,5 @@ If you're unsure whether something is authorized, it probably isn't. When in dou
 ---
 
 ## Acknowledgements
-
-**Pry password logic** derived from [mmcbrute](https://github.com/giMini/mmcbrute) (BSD-3-Clause)
-
-**Wordlists** from [SecLists](https://github.com/danielmiessler/SecLists) (MIT)
 
 Licensed under GNU GPL v3. See `LICENSE.md` and `licenses/` for details.
