@@ -10,6 +10,25 @@ A GUI for finding and categorizing open directory listings across multiple proto
 
 ## Setup
 
+```bash
+git clone https://github.com/b3p3k0/dirracuda
+cd dirracuda
+```
+
+Or for the latest development (experimental features and brand new bugs!) version:
+
+```bash
+git clone https://github.com/b3p3k0/dirracuda -b development --single-branch
+cd dirracuda
+```
+Optionally, run the interactive installer (designed for Ubuntu 24.04 LTS+ )— it handles dependencies, venv, config, and optional extras:
+
+```bash
+bash install.sh
+```
+
+**Manual setup** (other distros, or if you prefer to do it yourself):
+
 You'll need Python 3.8+ (3.10+ recommended) and Tkinter:
 
 ```bash
@@ -24,20 +43,7 @@ sudo pacman -S tk python-virtualenv
 ```
 
 Then:
-
 ```bash
-git clone https://github.com/b3p3k0/dirracuda
-```
-
-Or for the latest development (experimental features and brand new bugs!) version:
-
-```bash
-git clone https://github.com/b3p3k0/dirracuda -b development --single-branch
-```
-
-Then:
-```bash
-cd dirracuda
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
@@ -105,7 +111,7 @@ You're connecting to machines you don't control. A few baseline precautions befo
 The main window. From here you can:
 
 - Launch discovery from one **▶ Start Scan** button - pick one protocol or queue multiple protocols in sequence from the same dialog
-- Access experimental features (SearXNG dorking and Reddit ingestion) via the `⚗ Experimental` button in the dashboard header (see [Experimental Features](#experimental-features))
+- Access experimental features (SearXNG dorking, Reddit ingestion, and Dorkbook) via the `⚗ Experimental` button in the dashboard header (see [Experimental Features](#experimental-features))
 - Open the Server List Browser to work with hosts you've found
 - Manage your database (import, export, merge, maintenance)
 - Edit configuration
@@ -122,6 +128,9 @@ Triggered from **▶ Start Scan** with the protocol(s) selected. All three follo
 **FTP** - default dork: `port:21 "230 Login successful"`. Verification includes anonymous login and root directory listing. Failure codes: `connect_fail`, `auth_fail`, `list_fail`, `timeout`.
 
 **HTTP** - default dork: `http.title:"Index of /"`. Verification stays locked to the exact Shodan hit endpoint (same IP + same port), and tests HTTP and/or HTTPS on that port based on your config toggles.
+
+`Edit Queries` in Start Scan opens the modeless `Discovery Dorks` editor (single-instance) for SMB/FTP/HTTP base queries.
+Changes there are manual-save only.
 
 **Post-scan bulk probe/extract scope** - when bulk probe or bulk extract is enabled from the scan flow, targets are limited to accessible hosts from the scan that just completed (same protocol). Manual probe actions launched from Server List continue to use your explicit row selection and are unchanged.
 
@@ -447,15 +456,20 @@ Quick start:
 Behavior:
 - Sidecar DB path: `~/.dirracuda/dorkbook.db`
 - Built-ins are read-only (italicized) and seeded one per protocol
-- Custom rows support `Add`, `Edit`, `Delete`, `Copy`
+- Custom rows support `Add`, `Copy`, `Use in Discovery Dorks`, `Edit`, `Delete`
+- `Use in Discovery Dorks` is available from button, right-click menu, and row double-click
+- `Use in Discovery Dorks` populates the protocol-matched field in Discovery Dorks editor as an unsaved/manual-save change
 - Right-click menu mirrors the same row actions
 - Search filters the current protocol tab only
 - Copy places query text only on clipboard
+- If no scan config context is available, `Use in Discovery Dorks` shows a warning and does not write
 - Delete confirmation can be muted until app restart via checkbox
 
 Persistence:
 - Dorkbook window geometry is restored between runs
 - Last active Dorkbook protocol tab is restored on reopen
+
+Discovery dorks are edited via `Start Scan -> Edit Queries` (Discovery Dorks editor), not from App Config UI.
 
 ## Advanced
 
