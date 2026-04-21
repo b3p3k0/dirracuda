@@ -415,7 +415,7 @@ def test_delete_ftp_row_does_not_delete_smb_sibling():
 
 
 def test_mixed_selection_delete_partitions_by_protocol():
-    """S+F row_specs → bulk_delete_rows receives both; SMB probe cache cleared only for SMB."""
+    """S+F row_specs → bulk_delete_rows receives both; no legacy file cache clear side effects."""
     mock_db = MagicMock()
     mock_db.bulk_delete_rows.return_value = {
         "deleted_count": 2,
@@ -429,7 +429,7 @@ def test_mixed_selection_delete_partitions_by_protocol():
     with patch("gui.utils.probe_cache.clear_probe_result", side_effect=lambda ip: cleared_ips.append(ip)):
         stub._run_delete_operation([("S", "1.2.3.4"), ("F", "5.6.7.8")])
 
-    assert cleared_ips == ["1.2.3.4"], "Only SMB IP should have probe cache cleared"
+    assert cleared_ips == [], "Delete flow should not clear legacy probe cache files"
 
 
 def test_delete_ftp_only_does_not_clear_smb_probe_cache():

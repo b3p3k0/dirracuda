@@ -34,7 +34,6 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import tkinter as tk  # annotations + tk.TclError only — use _d("tk")/_d("ttk") for widget construction
 
 from gui.utils import safe_messagebox as _fallback_msgbox
-from gui.utils import probe_cache
 from gui.utils.logging_config import get_logger
 from gui.utils.probe_snapshot_summary import summarize_probe_snapshot
 from gui.components.scan_results_dialog import show_scan_results_dialog
@@ -719,18 +718,20 @@ def probe_single_server(
             accessible_dirs_count = len(display_entries)
             accessible_dirs_list = ",".join(display_entries)
             try:
-                snapshot_path = _d("get_probe_snapshot_path_for_host")(ip_address, host_type, port=port)
-            except TypeError:
-                snapshot_path = _d("get_probe_snapshot_path_for_host")(ip_address, host_type)
-
-            try:
                 if dash.db_reader:
+                    snapshot_id = dash.db_reader.upsert_probe_snapshot_for_host(
+                        ip_address,
+                        "F",
+                        snapshot,
+                        port=port,
+                    )
                     dash.db_reader.upsert_probe_cache_for_host(
                         ip_address,
                         "F",
                         status=status,
                         indicator_matches=len(analysis.get("matches", [])),
-                        snapshot_path=snapshot_path,
+                        snapshot_path=None,
+                        latest_snapshot_id=snapshot_id,
                         accessible_dirs_count=accessible_dirs_count,
                         accessible_dirs_list=accessible_dirs_list,
                     )
@@ -807,18 +808,21 @@ def probe_single_server(
             accessible_dirs_count = len(dir_names)
             accessible_dirs_list = ",".join(display_entries)
             try:
-                snapshot_path = _d("get_probe_snapshot_path_for_host")(ip_address, host_type, port=http_port)
-            except TypeError:
-                snapshot_path = _d("get_probe_snapshot_path_for_host")(ip_address, host_type)
-
-            try:
                 if dash.db_reader:
+                    snapshot_id = dash.db_reader.upsert_probe_snapshot_for_host(
+                        ip_address,
+                        "H",
+                        snapshot,
+                        protocol_server_id=protocol_server_id,
+                        port=http_port,
+                    )
                     dash.db_reader.upsert_probe_cache_for_host(
                         ip_address,
                         "H",
                         status=status,
                         indicator_matches=len(analysis.get("matches", [])),
-                        snapshot_path=snapshot_path,
+                        snapshot_path=None,
+                        latest_snapshot_id=snapshot_id,
                         accessible_dirs_count=accessible_dirs_count,
                         accessible_dirs_list=accessible_dirs_list,
                         accessible_files_count=total_files,
@@ -872,27 +876,24 @@ def probe_single_server(
             allow_empty=True,
             db_reader=dash.db_reader,
         )
-        # Persist probe snapshot to disk and DB (align with server list workflow)
-        probe_cache.save_probe_result(ip_address, result)
-        snapshot_path = None
-        try:
-            if hasattr(probe_cache, "get_probe_result_path"):
-                snapshot_path = probe_cache.get_probe_result_path(ip_address)
-        except Exception:
-            snapshot_path = None
-
         # Attach ransomware indicator analysis (mirror server list behavior)
         analysis = _d("probe_patterns").attach_indicator_analysis(result, dash.indicator_patterns)
         issue_detected = bool(analysis.get("is_suspicious"))
 
         try:
             if dash.db_reader:
+                snapshot_id = dash.db_reader.upsert_probe_snapshot_for_host(
+                    ip_address,
+                    "S",
+                    result,
+                )
                 dash.db_reader.upsert_probe_cache_for_host(
                     ip_address,
                     "S",
                     status="issue" if issue_detected else "clean",
                     indicator_matches=len(analysis.get("matches", [])),
-                    snapshot_path=snapshot_path
+                    snapshot_path=None,
+                    latest_snapshot_id=snapshot_id,
                 )
         except Exception:
             pass

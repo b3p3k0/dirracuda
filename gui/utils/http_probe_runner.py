@@ -48,7 +48,6 @@ from pathlib import PurePosixPath
 from typing import Callable, List, Optional
 
 from commands.http.verifier import try_http_request, validate_index_page
-from gui.utils.http_probe_cache import save_http_probe_result
 from shared.http_browser import _parse_dir_entries
 
 
@@ -74,7 +73,6 @@ def run_http_probe(
     directories[].name contains the basename without trailing slash.
     errors contains dicts {"share": "http_root", "message": str}.
 
-    The snapshot is also persisted to http_probe_cache for later retrieval.
     Errors are non-fatal: collected in snapshot["errors"] and returned.
     """
     errors: List[dict] = []
@@ -255,5 +253,4 @@ def run_http_probe(
         "errors": errors,
     }
 
-    save_http_probe_result(ip, snapshot, port=port)
     return snapshot

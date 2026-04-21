@@ -14,7 +14,6 @@ from typing import Dict, Any, Optional, List
 from gui.components.server_list_window import table, filters
 from gui.components.batch_summary_dialog import show_batch_summary_dialog
 from gui.utils import safe_messagebox as messagebox
-from gui.utils import probe_cache
 from gui.components.running_tasks_window import RunningTasksWindow
 from gui.utils.running_tasks import RunningTaskSnapshot, get_running_task_registry
 from gui.utils.logging_config import get_logger
@@ -715,26 +714,11 @@ class ServerListWindowBatchStatusMixin:
             self._pending_selection = []
 
         def _attach_probe_status(self, servers: List[Dict[str, Any]]) -> None:
-            if not self.settings_manager:
-                for server in servers:
-                    server["probe_status"] = 'unprobed'
-                    server["probe_status_emoji"] = self._probe_status_to_emoji('unprobed')
-                    server["rce_status"] = 'not_run'
-                    server["rce_status_emoji"] = self._rce_status_to_emoji('not_run')
-                    server["extracted"] = server.get("extracted", 0) or 0
-                    server["extract_status_emoji"] = self._extract_status_to_emoji(server.get("extracted", 0))
-                return
-
             for server in servers:
                 ip = server.get("ip_address")
-                host_type = server.get("host_type", "S")
-                # FTP and HTTP rows: use DB-supplied probe_status only — never call
-                # _determine_probe_status which reads the SMB file-based cache.
-                # The UNION ALL query already populates probe_status from probe_cache tables.
-                if host_type in ("F", "H"):
-                    status = server.get("probe_status") or "unprobed"
-                else:
-                    status = server.get("probe_status") or self._determine_probe_status(ip)
+                host_type = str(server.get("host_type") or "S").upper()
+                # DB-authoritative for all protocols. Fallback only when row lacks probe_status.
+                status = server.get("probe_status") or self._determine_probe_status(ip, host_type)
                 server["probe_status"] = status
                 server["probe_status_emoji"] = self._probe_status_to_emoji(status)
                 # Attach RCE status from database (protocol-aware)
@@ -780,28 +764,44 @@ class ServerListWindowBatchStatusMixin:
                 self._apply_filters()
                 self._restore_selection(selected_ips)
 
-        def _determine_probe_status(self, ip_address: Optional[str]) -> str:
+        def _determine_probe_status(self, ip_address: Optional[str], host_type: str = "S") -> str:
             if not ip_address:
                 return 'unprobed'
-
-            cached_result = probe_cache.load_probe_result(ip_address)
-            derived_status = 'unprobed'
-            if cached_result:
-                if self.indicator_patterns:
-                    analysis = probe_patterns.attach_indicator_analysis(cached_result, self.indicator_patterns)
-                else:
-                    analysis = {"is_suspicious": False}
-                if analysis.get('is_suspicious'):
-                    derived_status = 'issue'
-                else:
-                    derived_status = 'clean'
-
-            stored_status = self.settings_manager.get_probe_status(ip_address)
-            status = derived_status if derived_status != 'unprobed' else stored_status
-
-            if status != stored_status:
-                self.settings_manager.set_probe_status(ip_address, status)
-
+            host_type = str(host_type or "S").upper()
+            if host_type not in ("S", "F", "H"):
+                host_type = "S"
+            if not self.db_reader:
+                return self.probe_status_map.get(ip_address, "unprobed")
+            if host_type == "S":
+                query = (
+                    "SELECT COALESCE(pc.status, 'unprobed') AS status "
+                    "FROM host_probe_cache pc "
+                    "JOIN smb_servers s ON s.id = pc.server_id "
+                    "WHERE s.ip_address = ? "
+                    "ORDER BY datetime(s.last_seen) DESC, s.id DESC LIMIT 1"
+                )
+            elif host_type == "F":
+                query = (
+                    "SELECT COALESCE(pc.status, 'unprobed') AS status "
+                    "FROM ftp_probe_cache pc "
+                    "JOIN ftp_servers s ON s.id = pc.server_id "
+                    "WHERE s.ip_address = ? "
+                    "ORDER BY datetime(s.last_seen) DESC, s.id DESC LIMIT 1"
+                )
+            else:
+                query = (
+                    "SELECT COALESCE(pc.status, 'unprobed') AS status "
+                    "FROM http_probe_cache pc "
+                    "JOIN http_servers s ON s.id = pc.server_id "
+                    "WHERE s.ip_address = ? "
+                    "ORDER BY datetime(s.last_seen) DESC, s.id DESC LIMIT 1"
+                )
+            try:
+                with self.db_reader._get_connection() as conn:
+                    row = conn.execute(query, (ip_address,)).fetchone()
+                status = (row["status"] if row and row["status"] else "unprobed")
+            except Exception:
+                status = self.probe_status_map.get(ip_address, "unprobed")
             self.probe_status_map[ip_address] = status
             return status
 
@@ -836,8 +836,6 @@ class ServerListWindowBatchStatusMixin:
         def _handle_probe_status_update(self, ip_address: str, status: str, row_key: Optional[str] = None) -> None:
             if not ip_address:
                 return
-            if self.settings_manager:
-                self.settings_manager.set_probe_status(ip_address, status)
             self.probe_status_map[ip_address] = status
 
             for server in self.all_servers:

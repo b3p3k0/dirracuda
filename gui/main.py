@@ -21,6 +21,7 @@ import argparse
 import sys
 import os
 import time
+import threading
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -49,6 +50,10 @@ from gui.utils.style import get_theme, apply_theme_to_window
 from gui.utils.settings_manager import get_settings_manager
 from gui.utils.ui_dispatcher import UIDispatcher
 from gui.utils.scan_manager import get_scan_manager
+from gui.utils.db_unification import (
+    apply_probe_cleanup_choice,
+    run_startup_db_unification,
+)
 
 
 class SMBSeekGUI:
@@ -117,6 +122,8 @@ class SMBSeekGUI:
         self.ui_dispatcher = None
         self.scan_manager = None
         self._pending_tmpfs_startup_warning: Optional[str] = None
+        self._db_unification_running = False
+        self._pending_db_unification_error: Optional[str] = None
 
         self._initialize_application()
         
@@ -173,6 +180,7 @@ class SMBSeekGUI:
             self._bootstrap_tmpfs_runtime()
             self._setup_scan_manager()
             self._create_dashboard()
+            self._start_db_unification_tasks()
             self._setup_event_handlers()
             
             if self.mock_mode:
@@ -480,6 +488,89 @@ class SMBSeekGUI:
         """Manually refresh dashboard data."""
         if self.dashboard:
             self.dashboard._refresh_dashboard_data()
+
+    def _start_db_unification_tasks(self) -> None:
+        """Run startup DB unification in background (legacy entrypoint parity)."""
+        if self.mock_mode:
+            return
+        if self._db_unification_running:
+            return
+        db_path = str(getattr(self.db_reader, "db_path", "") or "").strip()
+        if not db_path or self.root is None:
+            return
+        self._db_unification_running = True
+        worker = threading.Thread(
+            target=self._run_db_unification_worker,
+            args=(db_path,),
+            daemon=True,
+            name="db-unification-startup",
+        )
+        worker.start()
+
+    def _run_db_unification_worker(self, db_path: str) -> None:
+        try:
+            result = run_startup_db_unification(db_path)
+        except Exception as exc:
+            result = {
+                "success": False,
+                "errors": [str(exc)],
+                "probe_backfill": {},
+                "sidecar_import": {},
+                "prompt_cleanup": False,
+            }
+        if self.root is None:
+            return
+        try:
+            self.root.after(0, self._handle_db_unification_result, result)
+        except tk.TclError:
+            self._db_unification_running = False
+
+    def _handle_db_unification_result(self, result: Dict[str, Any]) -> None:
+        self._db_unification_running = False
+        if self.root is None or not self.root.winfo_exists():
+            return
+
+        try:
+            if result.get("prompt_cleanup"):
+                keep_files = messagebox.askyesno(
+                    "Probe Cache Cleanup",
+                    "Legacy probe cache files were imported into dirracuda.db.\n\n"
+                    "Keep old local cache files for safety?\n\n"
+                    "Yes = keep files.\n"
+                    "No = discard old cache files now.",
+                    icon="question",
+                    default=messagebox.YES,
+                    parent=self.root,
+                )
+                apply_probe_cleanup_choice(self.db_reader, keep_files=bool(keep_files))
+        except Exception:
+            pass
+
+        if result.get("success"):
+            return
+
+        error_text = "; ".join(str(e) for e in (result.get("errors") or []) if e) or "Unknown startup migration failure."
+        self._pending_db_unification_error = error_text
+        try:
+            if self.dashboard and hasattr(self.dashboard, "_show_status_bar"):
+                self.dashboard._show_status_bar(
+                    "DB unification warning: startup migration failed. Retry available."
+                )
+        except Exception:
+            pass
+        try:
+            retry = messagebox.askretrycancel(
+                "Startup Data Migration Warning",
+                "Dirracuda could not complete startup data migration.\n\n"
+                f"Details: {error_text}\n\n"
+                "You can continue using the app. Retry now?",
+                icon="warning",
+                parent=self.root,
+            )
+        except Exception:
+            retry = False
+        if retry:
+            self._start_db_unification_tasks()
 
     def _bootstrap_tmpfs_runtime(self) -> None:
         """Initialize tmpfs quarantine runtime and show one-time fallback warning."""

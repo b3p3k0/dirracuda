@@ -33,14 +33,13 @@ from gui.components.server_list_window import export, details, filters, table
 from gui.components.batch_extract_dialog import BatchExtractSettingsDialog
 from .batch_status import ServerListWindowBatchStatusMixin
 from gui.utils import (
-    probe_cache,
     probe_patterns,
     probe_runner,
     extract_runner,
     protocol_extract_runner,
     pry_runner,
 )
-from gui.utils.probe_cache_dispatch import get_probe_snapshot_path_for_host, dispatch_probe_run
+from gui.utils.probe_cache_dispatch import dispatch_probe_run
 from gui.utils.probe_snapshot_summary import summarize_probe_snapshot
 from shared.quarantine import create_quarantine_dir
 
@@ -209,11 +208,6 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
             display_entries = probe_summary["display_entries"]
             accessible_dirs_count = len(display_entries)
             accessible_dirs_list = ",".join(display_entries)
-            try:
-                snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type, port=port)
-            except TypeError:
-                snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type)
-
             for server in self.all_servers:
                 if server.get("row_key") == row_key:
                     server["total_shares"] = accessible_dirs_count
@@ -223,12 +217,19 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
 
             self._handle_probe_status_update(ip_address, status, row_key=row_key)
             try:
+                snapshot_id = self.db_reader.upsert_probe_snapshot_for_host(
+                    ip_address,
+                    host_type,
+                    snapshot,
+                    port=port,
+                )
                 self.db_reader.upsert_probe_cache_for_host(
                     ip_address,
                     host_type,
                     status=status,
                     indicator_matches=len(analysis.get("matches", [])),
-                    snapshot_path=snapshot_path,
+                    snapshot_path=None,
+                    latest_snapshot_id=snapshot_id,
                     accessible_dirs_count=accessible_dirs_count,
                     accessible_dirs_list=accessible_dirs_list,
                 )
@@ -317,11 +318,6 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
             total = len(dir_names) + total_files
             accessible_dirs_count = len(dir_names)
             accessible_dirs_list = ",".join(display_entries)
-            try:
-                snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type, port=http_port)
-            except TypeError:
-                snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type)
-
             for server in self.all_servers:
                 if server.get("row_key") == row_key:
                     server["total_shares"] = total
@@ -331,12 +327,20 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
 
             self._handle_probe_status_update(ip_address, status, row_key=row_key)
             try:
+                snapshot_id = self.db_reader.upsert_probe_snapshot_for_host(
+                    ip_address,
+                    host_type,
+                    snapshot,
+                    protocol_server_id=protocol_server_id,
+                    port=http_port,
+                )
                 self.db_reader.upsert_probe_cache_for_host(
                     ip_address,
                     host_type,
                     status=status,
                     indicator_matches=len(analysis.get("matches", [])),
-                    snapshot_path=snapshot_path,
+                    snapshot_path=None,
+                    latest_snapshot_id=snapshot_id,
                     accessible_dirs_count=accessible_dirs_count,
                     accessible_dirs_list=accessible_dirs_list,
                     accessible_files_count=total_files,
@@ -394,17 +398,22 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
         if cancel_event.is_set():
             raise probe_runner.ProbeError("Probe cancelled")
 
-        probe_cache.save_probe_result(ip_address, result)
         analysis = probe_patterns.attach_indicator_analysis(result, self.indicator_patterns)
         issue_detected = bool(analysis.get("is_suspicious"))
         self._handle_probe_status_update(ip_address, 'issue' if issue_detected else 'clean', row_key=row_key)
         try:
+            snapshot_id = self.db_reader.upsert_probe_snapshot_for_host(
+                ip_address,
+                host_type,
+                result,
+            )
             self.db_reader.upsert_probe_cache_for_host(
                 ip_address,
                 host_type,
                 status='issue' if issue_detected else 'clean',
                 indicator_matches=len(analysis.get("matches", [])),
-                snapshot_path=probe_cache.get_probe_result_path(ip_address) if hasattr(probe_cache, "get_probe_result_path") else None
+                snapshot_path=None,
+                latest_snapshot_id=snapshot_id,
             )
         except Exception:
             pass
@@ -591,7 +600,18 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                     cancel_event=cancel_event,
                     clamav_config=clamav_cfg,
                 )
-            log_path = extract_runner.write_extract_log(summary)
+            try:
+                log_path = extract_runner.write_extract_log(
+                    summary,
+                    db_path=str(getattr(self.db_reader, "db_path", "") or ""),
+                    ip_address=ip_address,
+                    host_type=host_type,
+                    protocol_server_id=target.get("protocol_server_id"),
+                    port=(target.get("data") or {}).get("port"),
+                )
+            except TypeError:
+                # Test doubles may still provide the legacy single-arg signature.
+                log_path = extract_runner.write_extract_log(summary)
         except extract_runner.ExtractError as exc:
             status = "cancelled" if "cancel" in str(exc).lower() else "failed"
             return {

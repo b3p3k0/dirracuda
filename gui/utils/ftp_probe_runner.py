@@ -39,7 +39,6 @@ from datetime import datetime, timezone
 from typing import Callable, List, Optional
 
 from shared.ftp_browser import FtpNavigator
-from gui.utils.ftp_probe_cache import save_ftp_probe_result
 
 
 def run_ftp_probe(
@@ -60,7 +59,6 @@ def run_ftp_probe(
     so that probe_patterns._iter_snapshot_paths() can use them directly.
     directories[].subdirectories contain immediate subdirectory names only.
 
-    The snapshot is also persisted to the ftp_probe_cache for later retrieval.
     Errors are non-fatal: they are collected in snapshot["errors"] and returned.
     """
     errors: List[str] = []
@@ -152,5 +150,4 @@ def run_ftp_probe(
         "errors": errors,
     }
 
-    save_ftp_probe_result(ip, snapshot)
     return snapshot

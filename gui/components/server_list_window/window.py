@@ -223,11 +223,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self._prime_initial_render()
         self._schedule_initial_data_load()
 
-        if self.settings_manager:
-            self.probe_status_map = self.settings_manager.get_probe_status_map()
-            self._load_indicator_patterns()
-        else:
-            self._load_indicator_patterns()
+        self._load_indicator_patterns()
 
     def _create_window(self) -> None:
         """Create the server list window."""

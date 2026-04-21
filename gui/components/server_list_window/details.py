@@ -18,14 +18,12 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Sequence, Tuple
 
 from gui.utils import (
-    probe_cache,
     probe_runner,
     probe_patterns,
     extract_runner,
 )
 from gui.utils.probe_cache_dispatch import (
     load_probe_result_for_host,
-    get_probe_snapshot_path_for_host,
     dispatch_probe_run,
 )
 from gui.utils.probe_snapshot_summary import (
@@ -762,16 +760,19 @@ def _start_probe(
                 server_data["accessible_shares_list"] = ",".join(display_entries)
                 if db_accessor:
                     try:
-                        try:
-                            snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type, port=_ftp_port)
-                        except TypeError:
-                            snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type)
+                        snapshot_id = db_accessor.upsert_probe_snapshot_for_host(
+                            ip_address,
+                            host_type,
+                            result,
+                            port=_ftp_port,
+                        )
                         db_accessor.upsert_probe_cache_for_host(
                             ip_address,
                             "F",
                             status='issue' if analysis.get("is_suspicious") else 'clean',
                             indicator_matches=len(analysis.get("matches", [])),
-                            snapshot_path=snapshot_path,
+                            snapshot_path=None,
+                            latest_snapshot_id=snapshot_id,
                             accessible_dirs_count=len(display_entries),
                             accessible_dirs_list=",".join(display_entries),
                         )
@@ -788,16 +789,20 @@ def _start_probe(
                 server_data["accessible_shares_list"] = ",".join(display_entries)
                 if db_accessor:
                     try:
-                        try:
-                            snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type, port=_http_port)
-                        except TypeError:
-                            snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type)
+                        snapshot_id = db_accessor.upsert_probe_snapshot_for_host(
+                            ip_address,
+                            host_type,
+                            result,
+                            protocol_server_id=_protocol_server_id,
+                            port=_http_port,
+                        )
                         db_accessor.upsert_probe_cache_for_host(
                             ip_address,
                             "H",
                             status='issue' if analysis.get("is_suspicious") else 'clean',
                             indicator_matches=len(analysis.get("matches", [])),
-                            snapshot_path=snapshot_path,
+                            snapshot_path=None,
+                            latest_snapshot_id=snapshot_id,
                             accessible_dirs_count=len(dir_names),
                             accessible_dirs_list=",".join(display_entries),
                             accessible_files_count=total_files,
@@ -807,7 +812,23 @@ def _start_probe(
                     except Exception:
                         pass
             else:
-                probe_cache.save_probe_result(ip_address, result)
+                if db_accessor:
+                    try:
+                        snapshot_id = db_accessor.upsert_probe_snapshot_for_host(
+                            ip_address,
+                            host_type,
+                            result,
+                        )
+                        db_accessor.upsert_probe_cache_for_host(
+                            ip_address,
+                            "S",
+                            status='issue' if analysis.get("is_suspicious") else 'clean',
+                            indicator_matches=len(analysis.get("matches", [])),
+                            snapshot_path=None,
+                            latest_snapshot_id=snapshot_id,
+                        )
+                    except Exception:
+                        pass
             issue_detected = bool(analysis.get("is_suspicious"))
             rce_status = None
             if host_type == "S" and enable_rce:
@@ -1090,7 +1111,29 @@ def _start_extract(
                 extension_mode=extract_config.get("extension_mode"),
                 progress_callback=thread_progress
             )
-            log_path = extract_runner.write_extract_log(summary)
+            db_path = None
+            if settings_manager:
+                try:
+                    db_path = settings_manager.get_database_path() if hasattr(settings_manager, "get_database_path") else None
+                except Exception:
+                    db_path = None
+                if not db_path and hasattr(settings_manager, "get_setting"):
+                    try:
+                        db_path = settings_manager.get_setting('backend.database_path', None)
+                    except Exception:
+                        db_path = None
+            try:
+                log_path = extract_runner.write_extract_log(
+                    summary,
+                    db_path=str(db_path or ""),
+                    ip_address=ip_address,
+                    host_type=server_data.get("host_type", "S"),
+                    protocol_server_id=server_data.get("protocol_server_id"),
+                    port=server_data.get("port"),
+                )
+            except TypeError:
+                # Test doubles may still expose the legacy single-arg signature.
+                log_path = extract_runner.write_extract_log(summary)
 
             def on_success():
                 extract_state["running"] = False

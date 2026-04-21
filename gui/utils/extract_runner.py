@@ -594,13 +594,41 @@ def _check_cancel(cancel_event: Optional[Event]) -> None:
         raise ExtractError("Extraction cancelled")
 
 
-def write_extract_log(summary: Dict[str, Any]) -> Path:
+def write_extract_log(
+    summary: Dict[str, Any],
+    *,
+    db_path: Optional[str] = None,
+    ip_address: Optional[str] = None,
+    host_type: str = "S",
+    protocol_server_id: Optional[int] = None,
+    port: Optional[int] = None,
+) -> Path:
     """
-    Persist extraction summary under ~/.dirracuda/extract_logs.
+    Persist extraction summary metadata into main DB when db_path is available.
+    Falls back to legacy file logs when DB persistence is unavailable.
 
     Returns:
-        Path to the log file on disk.
+        DB marker path (preferred) or legacy filesystem path.
     """
+    if db_path:
+        try:
+            from gui.utils.database_access import DatabaseReader
+
+            reader = DatabaseReader(str(db_path))
+            summary_id = reader.upsert_extract_run_summary(
+                summary,
+                ip_address=ip_address,
+                host_type=host_type,
+                protocol_server_id=protocol_server_id,
+                port=port,
+                source="extract_runner",
+            )
+            if summary_id is not None:
+                return Path(f"db_extract_run_summary_{summary_id}.json")
+        except Exception:
+            # Fall through to legacy file persistence.
+            pass
+
     logs_dir = Path.home() / ".dirracuda" / "extract_logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
 

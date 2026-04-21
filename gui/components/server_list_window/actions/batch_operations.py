@@ -21,8 +21,8 @@ from typing import Dict, List, Any, Optional
 from gui.components.server_list_window import export, details, filters, table
 from gui.components.batch_extract_dialog import BatchExtractSettingsDialog
 from gui.components.pry_dialog import PryDialog
-from gui.utils import probe_cache, probe_patterns, probe_runner, extract_runner, pry_runner, session_flags
-from gui.utils.probe_cache_dispatch import get_probe_snapshot_path_for_host, dispatch_probe_run
+from gui.utils import probe_patterns, probe_runner, extract_runner, pry_runner, session_flags
+from gui.utils.probe_cache_dispatch import dispatch_probe_run
 from gui.utils.probe_snapshot_summary import summarize_probe_snapshot
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.logging_config import get_logger
@@ -156,16 +156,13 @@ class ServerListWindowBatchOperationsMixin:
             analysis = probe_patterns.attach_indicator_analysis(snapshot, indicator_patterns)
             probe_summary = summarize_probe_snapshot(snapshot)
             display_entries = probe_summary["display_entries"]
-            try:
-                snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type, port=ftp_port)
-            except TypeError:
-                snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type)
             return {
                 "host_type": host_type,
                 "ip_address": ip_address,
                 "status": "issue" if analysis.get("is_suspicious") else "clean",
                 "indicator_matches": len(analysis.get("matches", [])),
-                "snapshot_path": snapshot_path,
+                "snapshot_path": None,
+                "snapshot_payload": snapshot,
                 "accessible_dirs_count": len(display_entries),
                 "accessible_dirs_list": ",".join(display_entries),
                 "accessible_files_count": None,
@@ -203,16 +200,13 @@ class ServerListWindowBatchOperationsMixin:
             dir_names = probe_summary["directory_names"]
             display_entries = probe_summary["display_entries"]
             total_files = int(probe_summary["total_file_count"])
-            try:
-                snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type, port=http_port)
-            except TypeError:
-                snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type)
             return {
                 "host_type": host_type,
                 "ip_address": ip_address,
                 "status": "issue" if analysis.get("is_suspicious") else "clean",
                 "indicator_matches": len(analysis.get("matches", [])),
-                "snapshot_path": snapshot_path,
+                "snapshot_path": None,
+                "snapshot_payload": snapshot,
                 "accessible_dirs_count": len(dir_names),
                 "accessible_dirs_list": ",".join(display_entries),
                 "accessible_files_count": total_files,
@@ -231,19 +225,14 @@ class ServerListWindowBatchOperationsMixin:
             allow_empty=True,
             db_reader=self.db_reader,
         )
-        probe_cache.save_probe_result(ip_address, snapshot)
         analysis = probe_patterns.attach_indicator_analysis(snapshot, indicator_patterns)
-        snapshot_path = (
-            probe_cache.get_probe_result_path(ip_address)
-            if hasattr(probe_cache, "get_probe_result_path")
-            else None
-        )
         return {
             "host_type": host_type,
             "ip_address": ip_address,
             "status": "issue" if analysis.get("is_suspicious") else "clean",
             "indicator_matches": len(analysis.get("matches", [])),
-            "snapshot_path": snapshot_path,
+            "snapshot_path": None,
+            "snapshot_payload": snapshot,
             "accessible_dirs_count": None,
             "accessible_dirs_list": None,
             "accessible_files_count": None,
@@ -267,6 +256,21 @@ class ServerListWindowBatchOperationsMixin:
             "indicator_matches": int(probe_result.get("indicator_matches") or 0),
             "snapshot_path": probe_result.get("snapshot_path"),
         }
+        snapshot_payload = probe_result.get("snapshot_payload")
+        snapshot_id = None
+        if isinstance(snapshot_payload, dict):
+            try:
+                snapshot_id = self.db_reader.upsert_probe_snapshot_for_host(
+                    ip_address,
+                    host_type,
+                    snapshot_payload,
+                    protocol_server_id=upsert_result.get("protocol_server_id"),
+                    port=probe_result.get("port"),
+                    source="manual_add_probe",
+                )
+            except Exception:
+                snapshot_id = None
+        kwargs["latest_snapshot_id"] = snapshot_id
 
         if host_type == "F":
             kwargs["accessible_dirs_count"] = probe_result.get("accessible_dirs_count")
@@ -950,15 +954,6 @@ class ServerListWindowBatchOperationsMixin:
         """Background thread worker for delete operation."""
         try:
             results = self.db_reader.bulk_delete_rows(row_specs)
-
-            # Clear file-based probe cache only for SMB-deleted IPs.
-            # Probe cache is IP-keyed; clearing on FTP-only delete would
-            # also wipe the SMB probe cache for the same IP.
-            for ip in results.get("deleted_smb_ips", []):
-                try:
-                    probe_cache.clear_probe_result(ip)
-                except Exception:
-                    pass
 
             return results
 

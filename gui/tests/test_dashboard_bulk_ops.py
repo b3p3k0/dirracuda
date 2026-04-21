@@ -691,7 +691,7 @@ def test_extract_single_server_http_resolves_endpoint_metadata(monkeypatch, tmp_
 
 
 def test_probe_single_server_ftp_snapshot_path_from_dispatch(monkeypatch):
-    """snapshot_path for F rows must come from probe_cache_dispatch."""
+    """FTP probe persistence should not depend on legacy snapshot_path values."""
     import threading
     dash = DashboardWidget.__new__(DashboardWidget)
     dash.indicator_patterns = []
@@ -719,7 +719,7 @@ def test_probe_single_server_ftp_snapshot_path_from_dispatch(monkeypatch):
 
     assert result["status"] == "success"
     call_kwargs = dash.db_reader.upsert_probe_cache_for_host.call_args[1]
-    assert call_kwargs["snapshot_path"] == "SENTINEL_FTP_PATH"
+    assert call_kwargs["snapshot_path"] is None
 
 
 def test_probe_single_server_ftp_root_files_only_sets_loose_files_marker(monkeypatch):
@@ -756,7 +756,7 @@ def test_probe_single_server_ftp_root_files_only_sets_loose_files_marker(monkeyp
 
 
 def test_probe_single_server_http_snapshot_path_from_dispatch(monkeypatch):
-    """snapshot_path for H rows must come from probe_cache_dispatch."""
+    """HTTP probe persistence should not depend on legacy snapshot_path values."""
     import threading
     dash = DashboardWidget.__new__(DashboardWidget)
     dash.indicator_patterns = []
@@ -785,7 +785,7 @@ def test_probe_single_server_http_snapshot_path_from_dispatch(monkeypatch):
 
     assert result["status"] == "success"
     call_kwargs = dash.db_reader.upsert_probe_cache_for_host.call_args[1]
-    assert call_kwargs["snapshot_path"] == "SENTINEL_HTTP_PATH"
+    assert call_kwargs["snapshot_path"] is None
 
 
 def test_probe_single_server_http_root_files_only_sets_loose_files_marker(monkeypatch):
