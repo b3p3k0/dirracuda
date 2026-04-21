@@ -268,7 +268,9 @@ def build_log_viewer(dashboard) -> None:
 
     base_log_lines = 10
     extra_log_height_px = 300  # 150px original bump + 150px new request
-    expanded_lines = base_log_lines + dashboard._pixels_to_text_lines(extra_log_height_px)
+    line_converter = getattr(dashboard, "_pixels_to_text_lines", None)
+    extra_lines = line_converter(extra_log_height_px) if callable(line_converter) else max(1, extra_log_height_px // 14)
+    expanded_lines = base_log_lines + int(extra_lines)
     dashboard.log_text_widget = tk.Text(
         text_frame,
         height=expanded_lines,
@@ -292,4 +294,3 @@ def build_log_viewer(dashboard) -> None:
 
     dashboard._configure_log_tags()
     dashboard._render_log_placeholder()
-

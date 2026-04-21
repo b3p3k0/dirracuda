@@ -147,6 +147,8 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
             )
             job_record["dialog"] = dialog
 
+        self._register_batch_running_task(job_id)
+
         for target in targets:
             future = executor.submit(self._run_batch_task, job_id, job_type, target, options, cancel_event)
             job_record["futures"].append((target, future))

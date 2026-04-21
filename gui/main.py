@@ -20,6 +20,7 @@ from gui.utils import safe_messagebox as messagebox
 import argparse
 import sys
 import os
+import time
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -306,8 +307,7 @@ class SMBSeekGUI:
         """Create and configure main application window."""
         self.root = tk.Tk()
         self.root.title("Dirracuda")
-        self.root.geometry("800x250")
-        self.root.minsize(800, 240)
+        self.root.geometry("700x250")
         
         # Apply theme
         apply_theme_to_window(self.root)
@@ -326,19 +326,10 @@ class SMBSeekGUI:
 
     def _center_window(self) -> None:
         """
-        Center the main window on screen using fixed dimensions.
-        
-        Forces window to maintain intended 800x250 size instead of
-        auto-sizing based on content. This ensures consistent compact
-        layout across different screen configurations.
-        
-        Design Decision: Fixed dimensions prevent tkinter's automatic
-        content-based sizing from overriding our intended compact layout.
+        Center the main window on screen using current tuning defaults.
         """
-        # Force our intended dimensions instead of querying auto-sized dimensions
-        # This prevents tkinter from expanding the window based on content
-        target_width = 800   # Intended width for dashboard
-        target_height = 250  # Intended height with expanded text progress area
+        target_width = 700
+        target_height = 250
         
         # Calculate center position based on intended dimensions
         screen_width = self.root.winfo_screenwidth()
@@ -346,48 +337,17 @@ class SMBSeekGUI:
         x = (screen_width // 2) - (target_width // 2)
         y = (screen_height // 2) - (target_height // 2)
         
-        # Force our intended dimensions and center position
+        # Set initial geometry and centered position.
         self.root.geometry(f"{target_width}x{target_height}+{x}+{y}")
     
     def _enforce_window_size(self) -> None:
         """
-        Enforce minimum window size constraints while respecting user preferences.
-        
-        This method ensures the window doesn't shrink below minimum requirements
-        but allows users to manually resize larger without forcing back to defaults.
-        Implements industry-standard UX behavior for window management.
+        Temporary no-op while dashboard sizing is being tuned.
+
+        We intentionally do not enforce minimum dimensions so the user can
+        freely drag/resize the window during layout calibration.
         """
-        min_width = 800
-        min_height = 240
-        
-        # Get current geometry
-        current_geometry = self.root.geometry()
-        if 'x' in current_geometry and '+' in current_geometry:
-            # Parse current dimensions and position
-            size_part = current_geometry.split('+')[0]
-            pos_part = current_geometry[len(size_part):]
-            
-            current_width, current_height = map(int, size_part.split('x'))
-            
-            # Only enforce minimum constraints - respect user's larger choices
-            needs_adjustment = False
-            new_width = current_width
-            new_height = current_height
-            
-            if current_width < min_width:
-                new_width = min_width
-                needs_adjustment = True
-                
-            if current_height < min_height:
-                new_height = min_height
-                needs_adjustment = True
-            
-            # Only adjust if window is below minimum - preserve user's larger sizing
-            if needs_adjustment:
-                self.root.geometry(f"{new_width}x{new_height}{pos_part}")
-        else:
-            # Fallback: ensure minimum size without forcing position
-            self.root.minsize(min_width, min_height)
+        return
     
     def _create_dashboard(self) -> None:
         """Create main dashboard widget."""
@@ -601,17 +561,79 @@ class SMBSeekGUI:
     def _on_closing(self) -> None:
         """Handle application closing."""
         self._pending_tmpfs_startup_warning = None
-        # Check for active scans via scan_manager
-        if self.scan_manager and self.scan_manager.is_scanning:
+        dashboard = self.dashboard
+        has_active_work = False
+        try:
+            if dashboard and hasattr(dashboard, "has_active_or_queued_work"):
+                has_active_work = bool(dashboard.has_active_or_queued_work())
+            elif self.scan_manager and self.scan_manager.is_scanning:
+                has_active_work = True
+        except Exception:
+            has_active_work = bool(self.scan_manager and self.scan_manager.is_scanning)
+
+        if has_active_work:
             response = messagebox.askyesno(
-                "Scan in Progress",
-                "A scan is currently running. Are you sure you want to exit?",
-                icon="warning"
+                "Tasks in Progress",
+                "A scan is running or scans/tasks are queued.\n\n"
+                "Stop all running and queued tasks and exit?",
+                icon="warning",
+                parent=self.root,
             )
             if not response:
                 return
-            # User confirmed exit during scan - interrupt it
-            self.scan_manager.interrupt_scan()
+
+            # Graceful cancel request.
+            try:
+                if dashboard and hasattr(dashboard, "request_cancel_active_or_queued_work"):
+                    dashboard.request_cancel_active_or_queued_work()
+                elif self.scan_manager and self.scan_manager.is_scanning:
+                    self.scan_manager.interrupt_scan()
+            except Exception:
+                pass
+
+            # Wait briefly for cancellation, then retry once with forceful termination.
+            start = time.time()
+            retried = False
+            while (time.time() - start) < 6.0:
+                try:
+                    if self.root and self.root.winfo_exists():
+                        self.root.update_idletasks()
+                        self.root.update()
+                except tk.TclError:
+                    break
+
+                try:
+                    if dashboard and hasattr(dashboard, "has_active_or_queued_work"):
+                        still_active = bool(dashboard.has_active_or_queued_work())
+                    else:
+                        still_active = bool(self.scan_manager and self.scan_manager.is_scanning)
+                except Exception:
+                    still_active = bool(self.scan_manager and self.scan_manager.is_scanning)
+
+                if not still_active:
+                    break
+
+                elapsed = time.time() - start
+                if (not retried) and elapsed >= 3.0:
+                    retried = True
+                    try:
+                        if dashboard and hasattr(dashboard, "request_cancel_active_or_queued_work"):
+                            dashboard.request_cancel_active_or_queued_work()
+                        if dashboard and hasattr(dashboard, "force_terminate_active_work"):
+                            dashboard.force_terminate_active_work()
+                        elif self.scan_manager and self.scan_manager.is_scanning:
+                            self.scan_manager.interrupt_scan()
+                    except Exception:
+                        pass
+                time.sleep(0.10)
+
+            # Emergency path: force terminate without additional prompt.
+            try:
+                if dashboard and hasattr(dashboard, "has_active_or_queued_work"):
+                    if dashboard.has_active_or_queued_work() and hasattr(dashboard, "force_terminate_active_work"):
+                        dashboard.force_terminate_active_work()
+            except Exception:
+                pass
 
         try:
             state = get_tmpfs_runtime_state()
@@ -636,6 +658,12 @@ class SMBSeekGUI:
                 try:
                     window.destroy()
                 except:
+                    pass
+
+            if dashboard and hasattr(dashboard, "teardown_dashboard_monitors"):
+                try:
+                    dashboard.teardown_dashboard_monitors()
+                except Exception:
                     pass
 
             # Clean up backend interfaces

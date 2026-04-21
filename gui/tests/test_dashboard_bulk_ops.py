@@ -118,6 +118,18 @@ class _FakeDialog:
     def update_idletasks(self):
         return None
 
+    def withdraw(self):
+        return None
+
+    def deiconify(self):
+        return None
+
+    def lift(self):
+        return None
+
+    def focus_force(self):
+        return None
+
     def after(self, _ms, callback, *args):
         self.after_callbacks.append(getattr(callback, "__name__", repr(callback)))
         callback(*args)
@@ -827,20 +839,20 @@ def test_execute_batch_probe_destroys_stale_progress_dialog_before_new_run(monke
     assert dash._bulk_probe_progress_dialog is None
 
 
-def test_execute_batch_probe_wm_delete_window_maps_to_cancel(monkeypatch):
-    """Window close action should map to the same cancel event as the Cancel button."""
+def test_execute_batch_probe_wm_delete_window_hides_without_cancel(monkeypatch):
+    """Window close should hide monitor dialog but not cancel active probe job."""
     event_factory = _patch_fake_probe_dialog_stack(monkeypatch)
     dash = _make_probe_test_dash()
 
     dash._execute_batch_probe([{"ip_address": "198.51.100.2", "host_type": "S"}])
 
-    assert len(event_factory.instances) == 1
+    assert len(event_factory.instances) >= 1
     cancel_event = event_factory.instances[0]
     assert cancel_event.is_set() is False
 
     dialog = _FakeDialog.created[-1]
     dialog.trigger_close()
-    assert cancel_event.is_set() is True
+    assert cancel_event.is_set() is False
 
 
 def test_execute_batch_probe_completion_path_avoids_worker_destroy_after(monkeypatch):

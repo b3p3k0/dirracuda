@@ -28,6 +28,7 @@ import json
 import shutil
 import getpass
 import random
+import time
 from pathlib import Path
 import webbrowser
 from typing import Dict, Any, Optional
@@ -57,9 +58,10 @@ from gui.utils.logging_config import setup_gui_logging, get_logger
 setup_gui_logging()
 _logger = get_logger("dirracuda")
 
-# Canonical window sizing for the Dirracuda frontend
-WINDOW_WIDTH = 1200
-WINDOW_HEIGHT = 745
+# Canonical startup sizing for the Dirracuda frontend
+# (tuning phase: allow free resize after launch)
+WINDOW_WIDTH = 700
+WINDOW_HEIGHT = 270
 WINDOW_GEOMETRY = f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}"
 
 LEET_MOTD_LINES = (
@@ -756,9 +758,8 @@ class XSMBSeekGUI:
         self.root = tk.Tk()
         self.root.title("Dirracuda")
         
-        # Force canonical geometry; users may enlarge but not shrink below this
+        # Set startup geometry only; keep resize unconstrained during tuning.
         self.root.geometry(WINDOW_GEOMETRY)
-        self.root.minsize(WINDOW_WIDTH, WINDOW_HEIGHT)
         
         # Apply theme
         apply_theme_to_window(self.root)
@@ -782,17 +783,8 @@ class XSMBSeekGUI:
 
     def _center_window(self) -> None:
         """
-        Center the main window on screen using fixed dimensions.
-        
-        Forces window to maintain intended 1200x745 size instead of
-        auto-sizing based on content. This ensures consistent compact
-        layout across different screen configurations.
-        
-        Design Decision: Fixed dimensions prevent tkinter's automatic
-        content-based sizing from overriding our intended compact layout.
+        Center the main window on screen using current startup defaults.
         """
-        # Force our intended dimensions instead of querying auto-sized dimensions
-        # This prevents tkinter from expanding the window based on content
         target_width = WINDOW_WIDTH
         target_height = WINDOW_HEIGHT
         
@@ -802,48 +794,17 @@ class XSMBSeekGUI:
         x = (screen_width // 2) - (target_width // 2)
         y = (screen_height // 2) - (target_height // 2)
         
-        # Force our intended dimensions and center position
+        # Set startup geometry and centered position.
         self.root.geometry(f"{target_width}x{target_height}+{x}+{y}")
     
     def _enforce_window_size(self) -> None:
         """
-        Enforce minimum window size constraints while respecting user preferences.
-        
-        This method ensures the window doesn't shrink below minimum requirements
-        but allows users to manually resize larger without forcing back to defaults.
-        Implements industry-standard UX behavior for window management.
+        Temporary no-op while dashboard dimensions are being tuned.
+
+        Intentional: disable minimum-size enforcement so users can freely drag
+        and resize the dashboard during layout calibration.
         """
-        min_width = WINDOW_WIDTH
-        min_height = WINDOW_HEIGHT
-        
-        # Get current geometry
-        current_geometry = self.root.geometry()
-        if 'x' in current_geometry and '+' in current_geometry:
-            # Parse current dimensions and position
-            size_part = current_geometry.split('+')[0]
-            pos_part = current_geometry[len(size_part):]
-            
-            current_width, current_height = map(int, size_part.split('x'))
-            
-            # Only enforce minimum constraints - respect user's larger choices
-            needs_adjustment = False
-            new_width = current_width
-            new_height = current_height
-            
-            if current_width < min_width:
-                new_width = min_width
-                needs_adjustment = True
-                
-            if current_height < min_height:
-                new_height = min_height
-                needs_adjustment = True
-            
-            # Only adjust if window is below minimum - preserve user's larger sizing
-            if needs_adjustment:
-                self.root.geometry(f"{new_width}x{new_height}{pos_part}")
-        else:
-            # Fallback: ensure minimum size without forcing position
-            self.root.minsize(min_width, min_height)
+        return
     
     def _create_dashboard(self) -> None:
         """Create main dashboard widget."""
@@ -1114,17 +1075,76 @@ class XSMBSeekGUI:
     def _on_closing(self) -> None:
         """Handle application closing."""
         self._pending_tmpfs_startup_warning = None
-        # Check for active scans via scan_manager
-        if self.scan_manager and self.scan_manager.is_scanning:
+        dashboard = self.dashboard
+        has_active_work = False
+        try:
+            if dashboard and hasattr(dashboard, "has_active_or_queued_work"):
+                has_active_work = bool(dashboard.has_active_or_queued_work())
+            elif self.scan_manager and self.scan_manager.is_scanning:
+                has_active_work = True
+        except Exception:
+            has_active_work = bool(self.scan_manager and self.scan_manager.is_scanning)
+
+        if has_active_work:
             response = messagebox.askyesno(
-                "Scan in Progress",
-                "A scan is currently running. Are you sure you want to exit?",
-                icon="warning"
+                "Tasks in Progress",
+                "A scan is running or scans/tasks are queued.\n\n"
+                "Stop all running and queued tasks and exit?",
+                icon="warning",
+                parent=self.root,
             )
             if not response:
                 return
-            # User confirmed exit during scan - interrupt it
-            self.scan_manager.interrupt_scan()
+
+            try:
+                if dashboard and hasattr(dashboard, "request_cancel_active_or_queued_work"):
+                    dashboard.request_cancel_active_or_queued_work()
+                elif self.scan_manager and self.scan_manager.is_scanning:
+                    self.scan_manager.interrupt_scan()
+            except Exception:
+                pass
+
+            start = time.time()
+            retried = False
+            while (time.time() - start) < 6.0:
+                try:
+                    if self.root and self.root.winfo_exists():
+                        self.root.update_idletasks()
+                        self.root.update()
+                except tk.TclError:
+                    break
+
+                try:
+                    if dashboard and hasattr(dashboard, "has_active_or_queued_work"):
+                        still_active = bool(dashboard.has_active_or_queued_work())
+                    else:
+                        still_active = bool(self.scan_manager and self.scan_manager.is_scanning)
+                except Exception:
+                    still_active = bool(self.scan_manager and self.scan_manager.is_scanning)
+
+                if not still_active:
+                    break
+
+                elapsed = time.time() - start
+                if (not retried) and elapsed >= 3.0:
+                    retried = True
+                    try:
+                        if dashboard and hasattr(dashboard, "request_cancel_active_or_queued_work"):
+                            dashboard.request_cancel_active_or_queued_work()
+                        if dashboard and hasattr(dashboard, "force_terminate_active_work"):
+                            dashboard.force_terminate_active_work()
+                        elif self.scan_manager and self.scan_manager.is_scanning:
+                            self.scan_manager.interrupt_scan()
+                    except Exception:
+                        pass
+                time.sleep(0.10)
+
+            try:
+                if dashboard and hasattr(dashboard, "has_active_or_queued_work"):
+                    if dashboard.has_active_or_queued_work() and hasattr(dashboard, "force_terminate_active_work"):
+                        dashboard.force_terminate_active_work()
+            except Exception:
+                pass
 
         # tmpfs data-loss confirmation gate.
         try:
@@ -1153,6 +1173,12 @@ class XSMBSeekGUI:
                 try:
                     window.destroy()
                 except:
+                    pass
+
+            if dashboard and hasattr(dashboard, "teardown_dashboard_monitors"):
+                try:
+                    dashboard.teardown_dashboard_monitors()
+                except Exception:
                     pass
             
             # Clean up backend interfaces

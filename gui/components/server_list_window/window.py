@@ -150,6 +150,8 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self.pry_button = None
         self.browser_button = None
         self.stop_button = None
+        self.running_tasks_button = None
+        self.running_tasks_window = None
         self.delete_button = None
         self._selection_menu_indices: List[int] = []  # Selection-dependent context menu entries
         self._delete_menu_index = None  # Store context menu index
@@ -159,6 +161,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self.pry_status_button = None
         self.batch_status_dialog = None
         self._stop_button_original_style = None
+        self._running_tasks_subscribed = False
         self._context_menu_visible = False
         self._context_menu_bindings = []
         self._notes_tooltip = None
@@ -783,16 +786,6 @@ class ServerListWindow(ServerListWindowActionsMixin):
         )
         self.status_label.pack(anchor="w")
 
-        # Hidden by default; becomes visible to reopen batch status dialog
-        self.pry_status_button = tk.Button(
-            info_container,
-            text="Show Task Status",
-            command=self._show_pry_status_dialog
-        )
-        self.theme.apply_to_widget(self.pry_status_button, "button_secondary")
-        self.pry_status_button.pack(anchor="w", pady=(4, 0))
-        self.pry_status_button.pack_forget()
-
         # Right side - action buttons
         button_container = tk.Frame(self.button_frame)
         self.theme.apply_to_widget(button_container, "main_window")
@@ -861,21 +854,15 @@ class ServerListWindow(ServerListWindowActionsMixin):
         # Double padding before delete for visual separation; standard after
         self.delete_button.pack(side=tk.LEFT, padx=(16, 8))
 
-        self.stop_button = tk.Button(
+        self.running_tasks_button = tk.Button(
             button_container,
-            text="⏹ Stop Batch",
-            command=self._stop_active_batch,
+            text="Running Tasks (0)",
+            command=self._open_running_tasks_window,
             state=tk.DISABLED
         )
-        self.theme.apply_to_widget(self.stop_button, "button_secondary")
-        self.stop_button.pack(side=tk.LEFT, padx=(0, 20))
-        self._stop_button_original_style = {
-            "bg": self.stop_button.cget("bg"),
-            "fg": self.stop_button.cget("fg"),
-            "activebackground": self.stop_button.cget("activebackground"),
-            "activeforeground": self.stop_button.cget("activeforeground"),
-            "text": self.stop_button.cget("text")
-        }
+        self.theme.apply_to_widget(self.running_tasks_button, "button_secondary")
+        self.running_tasks_button.pack(side=tk.LEFT, padx=(0, 20))
+        self._initialize_running_tasks_button()
 
         self._update_action_buttons_state()
 

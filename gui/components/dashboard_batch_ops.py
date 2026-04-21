@@ -488,9 +488,11 @@ def execute_batch_probe(dash, servers: List[Dict[str, Any]]) -> List[Dict[str, A
 
     results: List[Dict[str, Any]] = []
     cancel_event = _d("threading").Event()
+    done_event = _d("threading").Event()
     progress_dialog = None
     progress_label = None
     progress_bar = None
+    task_id: Optional[str] = None
 
     # Shared state for UI updates from worker
     state = {
@@ -498,7 +500,7 @@ def execute_batch_probe(dash, servers: List[Dict[str, Any]]) -> List[Dict[str, A
         "total": len(servers),
         "results": results,
         "done": False,
-        "error": None
+        "error": None,
     }
 
     def cleanup_progress_dialog():
@@ -511,12 +513,27 @@ def execute_batch_probe(dash, servers: List[Dict[str, Any]]) -> List[Dict[str, A
             setattr(dash, "_bulk_probe_progress_dialog", None)
         progress_dialog = None
 
+    def reopen_monitor_dialog() -> None:
+        if progress_dialog is None:
+            return
+        try:
+            progress_dialog.deiconify()
+            progress_dialog.lift()
+            progress_dialog.focus_force()
+        except Exception:
+            return
+
+    def request_cancel() -> None:
+        cancel_event.set()
+
     def ui_tick():
         """Periodic UI refresher to keep dialog responsive."""
         if progress_dialog is None:
             return
 
         if state["done"]:
+            if task_id and hasattr(dash, "_remove_running_task"):
+                dash._remove_running_task(task_id)
             cleanup_progress_dialog()
             return
 
@@ -524,7 +541,15 @@ def execute_batch_probe(dash, servers: List[Dict[str, Any]]) -> List[Dict[str, A
             progress_label.config(text=f"Probing {state['completed']}/{state['total']} servers...")
             progress_bar['value'] = state['completed']
             progress_dialog.update_idletasks()
+            if task_id and hasattr(dash, "_update_running_task"):
+                dash._update_running_task(
+                    task_id,
+                    state="running",
+                    progress=f"{state['completed']}/{state['total']} targets",
+                )
         except tk.TclError:
+            if task_id and hasattr(dash, "_remove_running_task"):
+                dash._remove_running_task(task_id)
             cleanup_progress_dialog()
             return
 
@@ -570,6 +595,7 @@ def execute_batch_probe(dash, servers: List[Dict[str, Any]]) -> List[Dict[str, A
             state["error"] = str(exc)
         finally:
             state["done"] = True
+            done_event.set()
 
     # If a stale dialog survived a prior run, clean it before opening a new one.
     stale_dialog = getattr(dash, "_bulk_probe_progress_dialog", None)
@@ -586,7 +612,6 @@ def execute_batch_probe(dash, servers: List[Dict[str, Any]]) -> List[Dict[str, A
         progress_dialog.title("Bulk Probe Progress")
         progress_dialog.geometry("420x170")
         progress_dialog.transient(dash.parent)
-        progress_dialog.grab_set()
         dash.theme.apply_to_widget(progress_dialog, "main_window")
 
         progress_label = _d("tk").Label(progress_dialog, text=f"Probing 0/{len(servers)} servers...")
@@ -602,18 +627,25 @@ def execute_batch_probe(dash, servers: List[Dict[str, Any]]) -> List[Dict[str, A
         )
         progress_bar.pack(pady=(0, 10))
 
-        def request_cancel():
-            cancel_event.set()
-
         cancel_button = _d("tk").Button(progress_dialog, text="Cancel", command=request_cancel)
         dash.theme.apply_to_widget(cancel_button, "button_secondary")
         cancel_button.pack(pady=(0, 10))
 
-        # Clicking window close should behave the same as pressing Cancel.
+        # Window close hides monitor; task continues and can be reopened.
         try:
-            progress_dialog.protocol("WM_DELETE_WINDOW", request_cancel)
+            progress_dialog.protocol("WM_DELETE_WINDOW", lambda dialog=progress_dialog: dialog.withdraw())
         except Exception:
             pass
+
+        if hasattr(dash, "_register_running_task"):
+            task_id = dash._register_running_task(
+                task_type="probe",
+                name="Post-scan Probe Batch",
+                state="running",
+                progress=f"0/{len(servers)} targets",
+                reopen_callback=reopen_monitor_dialog,
+                cancel_callback=request_cancel,
+            )
 
         dash.theme.apply_theme_to_application(progress_dialog)
 
@@ -626,9 +658,13 @@ def execute_batch_probe(dash, servers: List[Dict[str, Any]]) -> List[Dict[str, A
 
         # Block until dialog is closed by ui_tick() completion path.
         dash.parent.wait_window(progress_dialog)
+        if not state["done"]:
+            done_event.wait(timeout=5.0)
     finally:
         if not state["done"]:
             cancel_event.set()
+        if task_id and hasattr(dash, "_remove_running_task"):
+            dash._remove_running_task(task_id)
         cleanup_progress_dialog()
 
     return results
@@ -959,70 +995,166 @@ def execute_batch_extract(dash, servers: List[Dict[str, Any]]) -> List[Dict[str,
         except Exception:
             pass
 
-    results = []
+    results: List[Dict[str, Any]] = []
     cancel_event = _d("threading").Event()
+    done_event = _d("threading").Event()
+    progress_dialog = None
+    progress_label = None
+    progress_bar = None
+    task_id: Optional[str] = None
 
-    # Create progress dialog
-    progress_dialog = _d("tk").Toplevel(dash.parent)
-    progress_dialog.title("Bulk Extract Progress")
-    progress_dialog.geometry("400x150")
-    progress_dialog.transient(dash.parent)
-    progress_dialog.grab_set()
-    dash.theme.apply_to_widget(progress_dialog, "main_window")
+    state = {
+        "completed": 0,
+        "total": len(servers),
+        "done": False,
+        "error": None,
+    }
 
-    progress_label = _d("tk").Label(progress_dialog, text=f"Extracting from 0/{len(servers)} servers...")
-    progress_label.pack(pady=20)
+    def cleanup_progress_dialog():
+        nonlocal progress_dialog
+        dialog = progress_dialog
+        if dialog is None:
+            return
+        _safe_destroy_dialog(dialog)
+        progress_dialog = None
 
-    progress_bar = _d("ttk").Progressbar(progress_dialog, length=300, mode='determinate', maximum=len(servers))
-    progress_bar.pack(pady=10)
+    def reopen_monitor_dialog() -> None:
+        if progress_dialog is None:
+            return
+        try:
+            progress_dialog.deiconify()
+            progress_dialog.lift()
+            progress_dialog.focus_force()
+        except Exception:
+            return
 
-    cancel_button = _d("tk").Button(progress_dialog, text="Cancel", command=lambda: cancel_event.set())
-    cancel_button.pack(pady=10)
+    def request_cancel() -> None:
+        cancel_event.set()
 
-    def update_progress(completed_count):
-        progress_label.config(text=f"Extracting from {completed_count}/{len(servers)} servers...")
-        progress_bar['value'] = completed_count
-        progress_dialog.update()
+    def ui_tick():
+        if progress_dialog is None:
+            return
+        if state["done"]:
+            if task_id and hasattr(dash, "_remove_running_task"):
+                dash._remove_running_task(task_id)
+            cleanup_progress_dialog()
+            return
+        try:
+            progress_label.config(text=f"Extracting from {state['completed']}/{state['total']} servers...")
+            progress_bar['value'] = state['completed']
+            progress_dialog.update_idletasks()
+            if task_id and hasattr(dash, "_update_running_task"):
+                dash._update_running_task(
+                    task_id,
+                    state="running",
+                    progress=f"{state['completed']}/{state['total']} targets",
+                )
+        except tk.TclError:
+            if task_id and hasattr(dash, "_remove_running_task"):
+                dash._remove_running_task(task_id)
+            cleanup_progress_dialog()
+            return
+        progress_dialog.after(150, ui_tick)
 
-    # Run extract operations with ThreadPoolExecutor
-    with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="extract-batch") as executor:
-        futures = []
-        for server in servers:
-            server_payload = dict(server)
-            server_payload["_http_allow_insecure_tls"] = bool(http_allow_insecure_tls)
-            future = executor.submit(
-                dash._extract_single_server,
-                server_payload,
-                max_file_mb,
-                max_total_mb,
-                max_time,
-                max_files,
-                extension_mode,
-                included_extensions,
-                excluded_extensions,
-                quarantine_base_path,
-                cancel_event,
-                clamav_cfg,
+    def worker():
+        try:
+            with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="extract-batch") as executor:
+                future_to_server = {}
+                for server in servers:
+                    server_payload = dict(server)
+                    server_payload["_http_allow_insecure_tls"] = bool(http_allow_insecure_tls)
+                    future = executor.submit(
+                        dash._extract_single_server,
+                        server_payload,
+                        max_file_mb,
+                        max_total_mb,
+                        max_time,
+                        max_files,
+                        extension_mode,
+                        included_extensions,
+                        excluded_extensions,
+                        quarantine_base_path,
+                        cancel_event,
+                        clamav_cfg,
+                    )
+                    future_to_server[future] = server
+
+                for future in as_completed(future_to_server):
+                    server = future_to_server[future]
+                    if cancel_event.is_set():
+                        break
+                    try:
+                        result = future.result(timeout=max_time + 30)
+                    except Exception as exc:
+                        result = {
+                            "ip_address": server.get("ip_address"),
+                            "protocol": dash._protocol_label_from_host_type(server.get("host_type")),
+                            "action": "extract",
+                            "status": "failed",
+                            "notes": str(exc),
+                        }
+                    results.append(result)
+                    state["completed"] = len(results)
+        except Exception as exc:
+            state["error"] = str(exc)
+        finally:
+            state["done"] = True
+            done_event.set()
+
+    try:
+        progress_dialog = _d("tk").Toplevel(dash.parent)
+        progress_dialog.title("Bulk Extract Progress")
+        progress_dialog.geometry("420x170")
+        progress_dialog.transient(dash.parent)
+        dash.theme.apply_to_widget(progress_dialog, "main_window")
+
+        progress_label = _d("tk").Label(progress_dialog, text=f"Extracting from 0/{len(servers)} servers...")
+        dash.theme.apply_to_widget(progress_label, "label")
+        progress_label.pack(pady=(18, 8))
+
+        progress_bar = _d("ttk").Progressbar(
+            progress_dialog,
+            length=320,
+            mode='determinate',
+            maximum=len(servers),
+            style="SMBSeek.Horizontal.TProgressbar",
+        )
+        progress_bar.pack(pady=(0, 10))
+
+        cancel_button = _d("tk").Button(progress_dialog, text="Cancel", command=request_cancel)
+        dash.theme.apply_to_widget(cancel_button, "button_secondary")
+        cancel_button.pack(pady=(0, 10))
+
+        try:
+            progress_dialog.protocol("WM_DELETE_WINDOW", lambda dialog=progress_dialog: dialog.withdraw())
+        except Exception:
+            pass
+
+        if hasattr(dash, "_register_running_task"):
+            task_id = dash._register_running_task(
+                task_type="extract",
+                name="Post-scan Extract Batch",
+                state="running",
+                progress=f"0/{len(servers)} targets",
+                reopen_callback=reopen_monitor_dialog,
+                cancel_callback=request_cancel,
             )
-            futures.append((server, future))
 
-        for server, future in futures:
-            if cancel_event.is_set():
-                break
-            try:
-                result = future.result(timeout=max_time + 30)
-                results.append(result)
-            except Exception as e:
-                results.append({
-                    "ip_address": server.get("ip_address"),
-                    "protocol": dash._protocol_label_from_host_type(server.get("host_type")),
-                    "action": "extract",
-                    "status": "failed",
-                    "notes": str(e)
-                })
-            update_progress(len(results))
+        dash.theme.apply_theme_to_application(progress_dialog)
+        progress_dialog.update_idletasks()
 
-    progress_dialog.destroy()
+        _d("threading").Thread(target=worker, daemon=True).start()
+        progress_dialog.after(150, ui_tick)
+        dash.parent.wait_window(progress_dialog)
+        if not state["done"]:
+            done_event.wait(timeout=5.0)
+    finally:
+        if not state["done"]:
+            cancel_event.set()
+        if task_id and hasattr(dash, "_remove_running_task"):
+            dash._remove_running_task(task_id)
+        cleanup_progress_dialog()
+
     return results
 
 

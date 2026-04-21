@@ -46,6 +46,17 @@ def _to_int(value: Any) -> int:
         return 0
 
 
+def _call_dashboard_hook(dash, method_name: str, *args, **kwargs) -> None:
+    """Invoke optional DashboardWidget hook when present (test-safe)."""
+    method = getattr(dash, method_name, None)
+    if not callable(method):
+        return
+    try:
+        method(*args, **kwargs)
+    except Exception:
+        return
+
+
 def _parse_iso(ts: Any) -> Optional[datetime]:
     """Parse ISO timestamp string to datetime, returning None on failure."""
     if not ts:
@@ -133,6 +144,7 @@ def clear_queued_scan_state(dash) -> None:
     dash._queued_scan_failures = []
     dash._queued_scan_results = []
     dash._queued_scan_batch_rows = {"probe": [], "extract": []}
+    dash._queued_scan_total = 0
 
 
 def start_unified_scan(dash, scan_request: dict) -> None:
@@ -166,9 +178,11 @@ def start_unified_scan(dash, scan_request: dict) -> None:
     dash._queued_scan_protocols = list(protocols)
     dash._queued_scan_common_options = dict(scan_request)
     dash._queued_scan_current_protocol = None
+    dash._queued_scan_total = len(protocols)
     dash._queued_scan_failures = []
     dash._queued_scan_results = []
     dash._queued_scan_batch_rows = {"probe": [], "extract": []}
+    _call_dashboard_hook(dash, "_set_scan_task_queued", protocols, scan_request.get("country"))
     dash._launch_next_queued_scan()
 
 
@@ -280,6 +294,7 @@ def abort_queued_scan_on_failure(
 
     dash._queued_scan_failures.append({"protocol": protocol, "reason": reason})
     dash._clear_queued_scan_state()
+    _call_dashboard_hook(dash, "_clear_scan_task")
     _mb().showwarning(
         title,
         f"{protocol.upper()} scan failed. Remaining queued scans were not started.\n\n"
@@ -304,6 +319,7 @@ def launch_next_queued_scan(dash) -> None:
                 "One or more protocol scans failed:\n\n" + "\n".join(lines),
             )
         dash._clear_queued_scan_state()
+        _call_dashboard_hook(dash, "_clear_scan_task")
         return
 
     protocol = dash._queued_scan_protocols.pop(0)
@@ -334,6 +350,7 @@ def handle_queued_scan_completion(dash, results: Dict[str, Any]) -> None:
     # User cancellation stops the queue.
     if status == "cancelled":
         dash._clear_queued_scan_state()
+        _call_dashboard_hook(dash, "_clear_scan_task")
         _mb().showinfo(
             "Queued Scans Cancelled",
             "Scan queue cancelled by user. Remaining protocols were not started.",
@@ -344,6 +361,7 @@ def handle_queued_scan_completion(dash, results: Dict[str, Any]) -> None:
     if failed:
         reason = error or status or "unknown error"
         dash._abort_queued_scan_on_failure(protocol, reason)
+        _call_dashboard_hook(dash, "_clear_scan_task")
         return
 
     # Success path: record per-protocol results for final aggregate dialog.
@@ -364,6 +382,7 @@ def handle_queued_scan_completion(dash, results: Dict[str, Any]) -> None:
                 dash._queued_scan_batch_rows[job_type].extend([dict(r) for r in rows])
 
     if dash._queued_scan_protocols:
+        _call_dashboard_hook(dash, "_set_scan_task_waiting_next")
         try:
             dash.parent.after(150, dash._launch_next_queued_scan)
         except tk.TclError:
@@ -385,6 +404,7 @@ def handle_queued_scan_completion(dash, results: Dict[str, Any]) -> None:
             pass
 
         dash._clear_queued_scan_state()
+        _call_dashboard_hook(dash, "_clear_scan_task")
 
 
 # ── Pre-scan checks ───────────────────────────────────────────────────────────
@@ -501,8 +521,11 @@ def start_new_scan(dash, scan_options: dict) -> bool:
         )
 
         if success:
+            _call_dashboard_hook(dash, "_show_scan_output_dialog", "SMB", scan_options.get("country"))
+
             # Reset viewer and note which scan is running
             dash._reset_log_output(scan_options.get('country'))
+            _call_dashboard_hook(dash, "_set_scan_task_running", "SMB", scan_options.get("country"))
 
             # Update button state to scanning
             dash._update_scan_button_state("scanning")
@@ -597,7 +620,9 @@ def start_ftp_scan(dash, scan_options: dict) -> bool:
 
     if started:
         dash.current_scan_options = scan_options
+        _call_dashboard_hook(dash, "_show_scan_output_dialog", "FTP", scan_options.get("country"))
         dash._reset_log_output(scan_options.get("country"))
+        _call_dashboard_hook(dash, "_set_scan_task_running", "FTP", scan_options.get("country"))
         dash._update_scan_button_state("scanning")
         dash._show_scan_progress(scan_options.get("country"))
         dash._monitor_scan_completion()
@@ -636,7 +661,9 @@ def start_http_scan(dash, scan_options: dict) -> bool:
 
     if started:
         dash.current_scan_options = scan_options
+        _call_dashboard_hook(dash, "_show_scan_output_dialog", "HTTP", scan_options.get("country"))
         dash._reset_log_output(scan_options.get("country"))
+        _call_dashboard_hook(dash, "_set_scan_task_running", "HTTP", scan_options.get("country"))
         dash._update_scan_button_state("scanning")
         dash._show_scan_progress(scan_options.get("country"))
         dash._monitor_scan_completion()
@@ -806,6 +833,11 @@ def monitor_scan_completion(dash) -> None:
 
                 if is_queued_run and results:
                     dash._handle_queued_scan_completion(results)
+                elif is_queued_run and not results:
+                    dash._clear_queued_scan_state()
+                    _call_dashboard_hook(dash, "_clear_scan_task")
+                else:
+                    _call_dashboard_hook(dash, "_clear_scan_task")
             else:
                 # Check again in 1 second
                 try:

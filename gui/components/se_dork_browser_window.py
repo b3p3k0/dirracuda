@@ -33,6 +33,7 @@ from tkinter import ttk
 
 from gui.components.unified_browser_window import open_ftp_http_browser
 from gui.components.pry_status_dialog import BatchStatusDialog
+from gui.utils.running_tasks import get_running_task_registry
 from gui.utils import safe_messagebox as messagebox
 from gui.utils.style import get_theme
 
@@ -402,6 +403,8 @@ class SeDorkBrowserWindow:
         total_rows = len(rows)
         cancel_requested = {"value": False}
         cancel_event = threading.Event()
+        task_registry = get_running_task_registry()
+        task_id: Optional[str] = None
 
         def _request_cancel() -> None:
             cancel_requested["value"] = True
@@ -420,6 +423,14 @@ class SeDorkBrowserWindow:
         )
         status_dialog.update_progress(0, total_rows, "Starting probe run…")
         status_dialog.show()
+        task_id = task_registry.create_task(
+            task_type="probe",
+            name="SE Dork Probe Batch",
+            state="running",
+            progress=f"0/{total_rows} targets",
+            reopen_callback=status_dialog.show,
+            cancel_callback=_request_cancel,
+        )
 
         config_path = self._resolve_probe_config_path()
         worker_count = self._resolve_probe_worker_count()
@@ -487,6 +498,14 @@ class SeDorkBrowserWindow:
                                 f"{row.get('url', '')}: {outcome.probe_error}"
                             )
                         processed_count += 1
+                        if task_id:
+                            task_registry.update_task(
+                                task_id,
+                                state="running",
+                                progress=f"{processed_count}/{total_rows} targets",
+                                reopen_callback=status_dialog.show,
+                                cancel_callback=_request_cancel,
+                            )
                         status_dialog.update_progress(
                             processed_count,
                             total_rows,
@@ -517,6 +536,8 @@ class SeDorkBrowserWindow:
         except Exception as exc:
             status_dialog.mark_finished("failed", str(exc))
             status_dialog.show()
+            if task_id:
+                task_registry.remove_task(task_id)
             messagebox.showinfo(
                 "Probe failed",
                 f"Could not probe selected URL: {exc}",
@@ -556,6 +577,8 @@ class SeDorkBrowserWindow:
         existing = [iid for iid in selected_iids if iid and self.tree.exists(iid)]
         if existing:
             self.tree.selection_set(*existing)
+        if task_id:
+            task_registry.remove_task(task_id)
 
     # ------------------------------------------------------------------
     # Promotion: Add to dirracuda DB
