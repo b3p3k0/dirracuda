@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from .validator import SignatureValidator, ValidationError
 
 logger = logging.getLogger(__name__)
-DEFAULT_SIGNATURES_DIR = Path(__file__).resolve().parents[2] / "conf" / "signatures" / "rce_smb"
+DEFAULT_SIGNATURES_DIR = Path(__file__).resolve().parents[3] / "conf" / "signatures" / "rce_smb"
 
 
 @dataclass
