@@ -934,6 +934,7 @@ def execute_batch_extract(dash, servers: List[Dict[str, Any]]) -> List[Dict[str,
     excluded_extensions: List[str] = []
     quarantine_base_path: Optional[Path] = None
     clamav_cfg: Dict[str, Any] = {}
+    http_allow_insecure_tls = True
     config_path = dash.settings_manager.get_setting('backend.config_path', None) if dash.settings_manager else None
     if config_path and Path(config_path).exists():
         try:
@@ -950,6 +951,11 @@ def execute_batch_extract(dash, servers: List[Dict[str, Any]]) -> List[Dict[str,
             if quarantine_candidate:
                 quarantine_base_path = Path(str(quarantine_candidate)).expanduser()
             clamav_cfg = config_data.get("clamav", {})
+            http_allow_insecure_tls = bool(
+                config_data.get("http", {})
+                .get("verification", {})
+                .get("allow_insecure_tls", True)
+            )
         except Exception:
             pass
 
@@ -982,9 +988,11 @@ def execute_batch_extract(dash, servers: List[Dict[str, Any]]) -> List[Dict[str,
     with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="extract-batch") as executor:
         futures = []
         for server in servers:
+            server_payload = dict(server)
+            server_payload["_http_allow_insecure_tls"] = bool(http_allow_insecure_tls)
             future = executor.submit(
                 dash._extract_single_server,
-                server,
+                server_payload,
                 max_file_mb,
                 max_total_mb,
                 max_time,
@@ -1031,9 +1039,14 @@ def extract_single_server(
     quarantine_base_path: Optional[Path],
     cancel_event: threading.Event,
     clamav_config: Optional[Dict[str, Any]] = None,
+    http_allow_insecure_tls: bool = True,
 ) -> Dict[str, Any]:
     """Extract files from a single server."""
-    protocol_label = dash._protocol_label_from_host_type(server.get("host_type"))
+    host_type = str(server.get("host_type") or "S").upper()
+    protocol_label = dash._protocol_label_from_host_type(host_type)
+    allow_insecure_tls = bool(
+        server.get("_http_allow_insecure_tls", http_allow_insecure_tls)
+    )
     if cancel_event.is_set():
         return {
             "ip_address": server.get("ip_address"),
@@ -1044,17 +1057,6 @@ def extract_single_server(
         }
 
     ip_address = server.get("ip_address")
-    raw_shares = server.get("accessible_shares_list") or server.get("accessible_shares") or ""
-    shares = [s.strip() for s in str(raw_shares).split(",") if s.strip()]
-
-    if not shares:
-        return {
-            "ip_address": ip_address,
-            "protocol": protocol_label,
-            "action": "extract",
-            "status": "skipped",
-            "notes": "No accessible shares"
-        }
 
     # Create quarantine directory
     try:
@@ -1072,32 +1074,139 @@ def extract_single_server(
             "notes": f"Quarantine error: {e}"
         }
 
-    # Derive credentials
-    auth_method = server.get("auth_method", "")
-    username = "" if "anonymous" in auth_method.lower() else "guest"
-    password = ""
+    ftp_port: Optional[int] = None
+    http_port: Optional[int] = None
+    protocol_server_id = server.get("protocol_server_id")
 
     try:
-        summary = _d("extract_runner").run_extract(
-            ip_address,
-            shares,
-            download_dir=quarantine_dir,
-            username=username,
-            password=password,
-            max_total_bytes=max_total_mb * 1024 * 1024,
-            max_file_bytes=max_file_mb * 1024 * 1024,
-            max_file_count=max_files,
-            max_seconds=max_time,
-            max_depth=3,
-            allowed_extensions=included_extensions,
-            denied_extensions=excluded_extensions,
-            delay_seconds=0,
-            connection_timeout=30,
-            extension_mode=extension_mode,
-            progress_callback=None,
-            cancel_event=cancel_event,
-            clamav_config=clamav_config,
-        )
+        if host_type == "F":
+            try:
+                ftp_port = int(server.get("port")) if server.get("port") is not None else 21
+            except (TypeError, ValueError):
+                ftp_port = 21
+            summary = _d("protocol_extract_runner").run_ftp_extract(
+                ip_address,
+                port=ftp_port,
+                download_dir=quarantine_dir,
+                max_total_bytes=max_total_mb * 1024 * 1024,
+                max_file_bytes=max_file_mb * 1024 * 1024,
+                max_file_count=max_files,
+                max_seconds=max_time,
+                max_depth=3,
+                allowed_extensions=included_extensions,
+                denied_extensions=excluded_extensions,
+                delay_seconds=0,
+                connection_timeout=30,
+                extension_mode=extension_mode,
+                progress_callback=None,
+                cancel_event=cancel_event,
+                clamav_config=clamav_config,
+            )
+        elif host_type == "H":
+            try:
+                http_port = int(server.get("port")) if server.get("port") is not None else None
+            except (TypeError, ValueError):
+                http_port = None
+
+            http_scheme = server.get("scheme")
+            request_host = server.get("probe_host")
+            start_path = server.get("probe_path")
+
+            if dash.db_reader and (
+                http_scheme is None
+                or http_port is None
+                or request_host is None
+                or start_path is None
+            ):
+                detail = dash.db_reader.get_http_server_detail(
+                    ip_address,
+                    protocol_server_id=protocol_server_id,
+                    port=http_port,
+                )
+                if detail:
+                    if http_port is None:
+                        try:
+                            http_port = int(detail.get("port") or 80)
+                        except (TypeError, ValueError):
+                            http_port = 80
+                    if http_scheme is None:
+                        http_scheme = detail.get("scheme")
+                    if request_host is None:
+                        request_host = detail.get("probe_host")
+                    if start_path is None:
+                        start_path = detail.get("probe_path")
+
+            if http_port is None:
+                http_port = 80
+            if not isinstance(http_scheme, str) or http_scheme.strip().lower() not in {"http", "https"}:
+                http_scheme = "https" if http_port == 443 else "http"
+            else:
+                http_scheme = http_scheme.strip().lower()
+
+            request_host_norm = str(request_host or "").strip() or None
+            start_path_norm = str(start_path or "/").split("?", 1)[0].split("#", 1)[0].strip() or "/"
+            if not start_path_norm.startswith("/"):
+                start_path_norm = "/" + start_path_norm.lstrip("/")
+
+            summary = _d("protocol_extract_runner").run_http_extract(
+                ip_address,
+                port=http_port,
+                scheme=http_scheme,
+                request_host=request_host_norm,
+                start_path=start_path_norm,
+                allow_insecure_tls=allow_insecure_tls,
+                download_dir=quarantine_dir,
+                max_total_bytes=max_total_mb * 1024 * 1024,
+                max_file_bytes=max_file_mb * 1024 * 1024,
+                max_file_count=max_files,
+                max_seconds=max_time,
+                max_depth=3,
+                allowed_extensions=included_extensions,
+                denied_extensions=excluded_extensions,
+                delay_seconds=0,
+                connection_timeout=30,
+                extension_mode=extension_mode,
+                progress_callback=None,
+                cancel_event=cancel_event,
+                clamav_config=clamav_config,
+            )
+        else:
+            raw_shares = server.get("accessible_shares_list") or server.get("accessible_shares") or ""
+            shares = [s.strip() for s in str(raw_shares).split(",") if s.strip()]
+            if not shares:
+                return {
+                    "ip_address": ip_address,
+                    "protocol": protocol_label,
+                    "action": "extract",
+                    "status": "skipped",
+                    "notes": "No accessible shares"
+                }
+
+            # Derive credentials
+            auth_method = server.get("auth_method", "")
+            username = "" if "anonymous" in auth_method.lower() else "guest"
+            password = ""
+
+            summary = _d("extract_runner").run_extract(
+                ip_address,
+                shares,
+                download_dir=quarantine_dir,
+                username=username,
+                password=password,
+                max_total_bytes=max_total_mb * 1024 * 1024,
+                max_file_bytes=max_file_mb * 1024 * 1024,
+                max_file_count=max_files,
+                max_seconds=max_time,
+                max_depth=3,
+                allowed_extensions=included_extensions,
+                denied_extensions=excluded_extensions,
+                delay_seconds=0,
+                connection_timeout=30,
+                extension_mode=extension_mode,
+                progress_callback=None,
+                cancel_event=cancel_event,
+                clamav_config=clamav_config,
+            )
 
         files = summary["totals"].get("files_downloaded", 0)
         bytes_downloaded = summary["totals"].get("bytes_downloaded", 0)
@@ -1106,7 +1215,22 @@ def extract_single_server(
         # Mark host as extracted (one-way flag)
         try:
             if dash.db_reader:
-                dash.db_reader.upsert_extracted_flag(ip_address, True)
+                if hasattr(dash.db_reader, "upsert_extracted_flag_for_host"):
+                    kwargs: Dict[str, Any] = {}
+                    if protocol_server_id is not None:
+                        kwargs["protocol_server_id"] = protocol_server_id
+                    if host_type == "F" and ftp_port is not None:
+                        kwargs["port"] = ftp_port
+                    if host_type == "H" and http_port is not None:
+                        kwargs["port"] = http_port
+                    dash.db_reader.upsert_extracted_flag_for_host(
+                        ip_address,
+                        host_type,
+                        True,
+                        **kwargs,
+                    )
+                else:
+                    dash.db_reader.upsert_extracted_flag(ip_address, True)
         except Exception:
             pass
 

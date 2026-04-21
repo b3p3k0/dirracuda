@@ -558,12 +558,35 @@ def test_protocol_label_helpers():
     assert dash._protocol_label_for_result({"host_type": "H"}) == "HTTP"
 
 
-def test_extract_single_server_skipped_includes_protocol_label():
+def test_extract_single_server_ftp_routes_protocol_runner(monkeypatch, tmp_path):
     import threading
+
     dash = DashboardWidget.__new__(DashboardWidget)
+    dash.db_reader = MagicMock()
+    dash.db_reader.upsert_extracted_flag_for_host = MagicMock()
+
+    monkeypatch.setattr(
+        "gui.components.dashboard.create_quarantine_dir",
+        lambda ip, purpose, base_path=None: tmp_path / ip / "20260421",
+    )
+
+    captured = {}
+
+    def _fake_run_ftp_extract(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return {
+            "totals": {"files_downloaded": 2, "bytes_downloaded": 1048576},
+            "clamav": {"enabled": False},
+        }
+
+    monkeypatch.setattr(
+        "gui.components.dashboard.protocol_extract_runner.run_ftp_extract",
+        _fake_run_ftp_extract,
+    )
 
     result = dash._extract_single_server(
-        {"ip_address": "198.51.100.10", "host_type": "F", "accessible_shares": 0},
+        {"ip_address": "198.51.100.10", "host_type": "F", "port": 2121, "protocol_server_id": 77},
         max_file_mb=10,
         max_total_mb=100,
         max_time=5,
@@ -576,8 +599,83 @@ def test_extract_single_server_skipped_includes_protocol_label():
         clamav_config={},
     )
 
-    assert result["status"] == "skipped"
+    assert result["status"] == "success"
     assert result["protocol"] == "FTP"
+    assert "2 file(s), 1.0 MB" in result["notes"]
+    assert captured["args"][0] == "198.51.100.10"
+    assert captured["kwargs"]["port"] == 2121
+    dash.db_reader.upsert_extracted_flag_for_host.assert_called_once()
+    args, kwargs = dash.db_reader.upsert_extracted_flag_for_host.call_args
+    assert args[:3] == ("198.51.100.10", "F", True)
+    assert kwargs["protocol_server_id"] == 77
+    assert kwargs["port"] == 2121
+
+
+def test_extract_single_server_http_resolves_endpoint_metadata(monkeypatch, tmp_path):
+    import threading
+
+    dash = DashboardWidget.__new__(DashboardWidget)
+    dash.db_reader = MagicMock()
+    dash.db_reader.get_http_server_detail.return_value = {
+        "port": 443,
+        "scheme": "https",
+        "probe_host": "cdn.example.org",
+        "probe_path": "/public/",
+    }
+    dash.db_reader.upsert_extracted_flag_for_host = MagicMock()
+
+    monkeypatch.setattr(
+        "gui.components.dashboard.create_quarantine_dir",
+        lambda ip, purpose, base_path=None: tmp_path / ip / "20260421",
+    )
+
+    captured = {}
+
+    def _fake_run_http_extract(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return {
+            "totals": {"files_downloaded": 1, "bytes_downloaded": 2048},
+            "clamav": {"enabled": False},
+        }
+
+    monkeypatch.setattr(
+        "gui.components.dashboard.protocol_extract_runner.run_http_extract",
+        _fake_run_http_extract,
+    )
+
+    result = dash._extract_single_server(
+        {
+            "ip_address": "203.0.113.7",
+            "host_type": "H",
+            "protocol_server_id": 91,
+            "_http_allow_insecure_tls": False,
+        },
+        max_file_mb=10,
+        max_total_mb=100,
+        max_time=5,
+        max_files=5,
+        extension_mode="download_all",
+        included_extensions=[],
+        excluded_extensions=[],
+        quarantine_base_path=None,
+        cancel_event=threading.Event(),
+        clamav_config={},
+    )
+
+    assert result["status"] == "success"
+    assert result["protocol"] == "HTTP"
+    assert captured["args"][0] == "203.0.113.7"
+    assert captured["kwargs"]["port"] == 443
+    assert captured["kwargs"]["scheme"] == "https"
+    assert captured["kwargs"]["request_host"] == "cdn.example.org"
+    assert captured["kwargs"]["start_path"] == "/public/"
+    assert captured["kwargs"]["allow_insecure_tls"] is False
+    dash.db_reader.upsert_extracted_flag_for_host.assert_called_once()
+    args, kwargs = dash.db_reader.upsert_extracted_flag_for_host.call_args
+    assert args[:3] == ("203.0.113.7", "H", True)
+    assert kwargs["protocol_server_id"] == 91
+    assert kwargs["port"] == 443
 
 
 def test_probe_single_server_ftp_snapshot_path_from_dispatch(monkeypatch):

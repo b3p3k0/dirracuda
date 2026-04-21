@@ -11,7 +11,7 @@ Covers:
 - _handle_extracted_update: row_key match; uses upsert_extracted_flag_for_host
 - delete routing: SMB-only, FTP-only, mixed; probe cache cleared for SMB only
 - _execute_probe_target: F row runs FTP probe/units=1; S row returns units=1
-- _execute_extract_target: F row returns skipped
+- _execute_extract_target: F/H rows route through protocol extract runner
 - _launch_browse_workflow: F row opens FtpBrowserWindow, not FileBrowserWindow
 - probe progress per-target invariant: mixed S+F batch completes correctly
 - _attach_probe_status: F row uses DB value, never calls _determine_probe_status
@@ -793,12 +793,120 @@ def test_probe_smb_row_returns_units_1(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_extract_ftp_row_returns_skipped():
+def test_extract_ftp_row_routes_protocol_runner(monkeypatch, tmp_path):
     stub = _BatchMixinStub()
-    target = {"ip_address": "1.2.3.4", "host_type": "F", "row_key": "F:7", "shares": []}
-    result = stub._execute_extract_target("job-1", target, {}, threading.Event())
-    assert result["status"] == "skipped"
-    assert "FTP" in result["notes"]
+    target = {"ip_address": "1.2.3.4", "host_type": "F", "row_key": "F:7", "shares": [], "port": 2121}
+    options = {
+        "download_path": str(tmp_path),
+        "clamav_config": {},
+        "http_allow_insecure_tls": True,
+        "max_total_size_mb": 10,
+        "max_file_size_mb": 5,
+        "max_files_per_target": 3,
+        "max_time_seconds": 10,
+        "max_directory_depth": 2,
+        "included_extensions": [],
+        "excluded_extensions": [],
+        "download_delay_seconds": 0,
+        "connection_timeout": 5,
+        "extension_mode": "download_all",
+    }
+    monkeypatch.setattr(
+        "gui.components.server_list_window.actions.batch.create_quarantine_dir",
+        lambda ip, purpose, base_path: tmp_path / ip / "20260421",
+    )
+    monkeypatch.setattr(
+        "gui.components.server_list_window.actions.batch.extract_runner.write_extract_log",
+        lambda summary: tmp_path / "extract_log.json",
+    )
+
+    captured = {}
+
+    def _fake_run_ftp_extract(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return {
+            "totals": {"files_downloaded": 1, "bytes_downloaded": 512},
+            "timed_out": False,
+            "stop_reason": None,
+            "clamav": {"enabled": False},
+        }
+
+    monkeypatch.setattr(
+        "gui.components.server_list_window.actions.batch.protocol_extract_runner.run_ftp_extract",
+        _fake_run_ftp_extract,
+    )
+
+    result = stub._execute_extract_target("job-1", target, options, threading.Event())
+    assert result["status"] == "success"
+    assert captured["args"][0] == "1.2.3.4"
+    assert captured["kwargs"]["port"] == 2121
+
+
+def test_extract_http_row_routes_protocol_runner(monkeypatch, tmp_path):
+    stub = _BatchMixinStub()
+    stub.db_reader.get_http_server_detail.return_value = {
+        "port": 443,
+        "scheme": "https",
+        "probe_host": "files.example.org",
+        "probe_path": "/dump/",
+    }
+    target = {
+        "ip_address": "5.6.7.8",
+        "host_type": "H",
+        "row_key": "H:9",
+        "protocol_server_id": 9,
+        "data": {},
+    }
+    options = {
+        "download_path": str(tmp_path),
+        "clamav_config": {},
+        "http_allow_insecure_tls": False,
+        "max_total_size_mb": 10,
+        "max_file_size_mb": 5,
+        "max_files_per_target": 3,
+        "max_time_seconds": 10,
+        "max_directory_depth": 2,
+        "included_extensions": [],
+        "excluded_extensions": [],
+        "download_delay_seconds": 0,
+        "connection_timeout": 5,
+        "extension_mode": "download_all",
+    }
+    monkeypatch.setattr(
+        "gui.components.server_list_window.actions.batch.create_quarantine_dir",
+        lambda ip, purpose, base_path: tmp_path / ip / "20260421",
+    )
+    monkeypatch.setattr(
+        "gui.components.server_list_window.actions.batch.extract_runner.write_extract_log",
+        lambda summary: tmp_path / "extract_log.json",
+    )
+
+    captured = {}
+
+    def _fake_run_http_extract(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return {
+            "totals": {"files_downloaded": 2, "bytes_downloaded": 2048},
+            "timed_out": False,
+            "stop_reason": None,
+            "clamav": {"enabled": False},
+        }
+
+    monkeypatch.setattr(
+        "gui.components.server_list_window.actions.batch.protocol_extract_runner.run_http_extract",
+        _fake_run_http_extract,
+    )
+
+    result = stub._execute_extract_target("job-1", target, options, threading.Event())
+    assert result["status"] == "success"
+    assert captured["args"][0] == "5.6.7.8"
+    assert captured["kwargs"]["port"] == 443
+    assert captured["kwargs"]["scheme"] == "https"
+    assert captured["kwargs"]["request_host"] == "files.example.org"
+    assert captured["kwargs"]["start_path"] == "/dump/"
+    assert captured["kwargs"]["allow_insecure_tls"] is False
 
 
 # ---------------------------------------------------------------------------

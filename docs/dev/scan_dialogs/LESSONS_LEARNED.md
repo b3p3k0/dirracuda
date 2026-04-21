@@ -13,3 +13,4 @@ Date: 2026-04-20
 7. Keep discovery-dork config paths/defaults/validation in one shared helper so App Config and scan-time editors cannot drift.
 8. Route all Dorkbook-to-scan population through one explicit scan-editor API (`populate_discovery_dork_from_dorkbook`) to avoid split logic.
 9. Keep Dorkbook population manual-save only; never auto-write config on row use actions.
+10. In shared batch operations, never assume SMB-only behavior; branch explicitly by host type (`S`/`F`/`H`) for extract/probe state writes and runtime routing.

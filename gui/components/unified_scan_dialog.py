@@ -936,7 +936,7 @@ class UnifiedScanDialog:
 
         extract_hint = self.theme.create_styled_label(
             container,
-            "Bulk extract currently supports SMB shares only.",
+            "Bulk extract supports SMB, FTP, and HTTP/HTTPS hosts.",
             "small",
             fg=self.theme.colors["text_secondary"],
         )

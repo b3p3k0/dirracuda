@@ -1149,13 +1149,20 @@ class ServerListWindowBatchOperationsMixin:
 
         # Load clamav config once before futures start (not per-target).
         clamav_cfg: Dict[str, Any] = {}
+        http_allow_insecure_tls = True
         if config_path and Path(config_path).exists():
             try:
                 _cfg_data = json.loads(Path(config_path).read_text(encoding="utf-8"))
                 clamav_cfg = _cfg_data.get("clamav", {})
+                http_allow_insecure_tls = bool(
+                    _cfg_data.get("http", {})
+                    .get("verification", {})
+                    .get("allow_insecure_tls", True)
+                )
             except Exception:
                 pass
         dialog_config["clamav_config"] = clamav_cfg
+        dialog_config["http_allow_insecure_tls"] = http_allow_insecure_tls
 
         self._start_batch_job("extract", targets, dialog_config)
 
