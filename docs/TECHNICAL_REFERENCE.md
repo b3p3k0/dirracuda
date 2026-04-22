@@ -60,14 +60,16 @@ Dirracuda scans for internet-accessible servers exposing open or weakly-authenti
 
 ┌─────────────────────────────────────────────────────────────────────┐
 │  GUI Layer                                                          │
-│  dirracuda (entry point)                                            │
-│    └─ gui/components/dashboard.py                                  │
-│         ├─ unified_scan_dialog.py → scan_manager.py               │
-│         │                            └─ backend_interface/         │
-│         │                                (subprocess → CLI)        │
-│         ├─ server_list_window/ (SMB / FTP / HTTP tabs)             │
-│         ├─ db_tools_dialog.py                                      │
-│         └─ [config editor, browser windows, extract dialogs]       │
+│  dirracuda (authoritative entry point)                              │
+│    └─ gui/components/dashboard.py (compat shim)                     │
+│         └─ gui/dashboard/widget.py (DashboardWidget implementation) │
+│              ├─ unified_scan_dialog.py → scan_manager.py           │
+│              │                            └─ backend_interface/     │
+│              │                                (subprocess → CLI)    │
+│              ├─ server_list_window/ (SMB / FTP / HTTP tabs)         │
+│              ├─ running_tasks_window.py                             │
+│              ├─ db_tools_dialog.py                                  │
+│              └─ [config editor, browser windows, extract dialogs]   │
 │  gui/utils/ui_dispatcher.py  (thread-safe Tk marshaling)          │
 │  gui/utils/settings_manager.py  (persists ~/.dirracuda/            │
 │                                  gui_settings.json)                │
@@ -111,7 +113,7 @@ This shape applies to all three protocols. Protocol-specific differences are cov
 | `experimental/se_dork/` | SearXNG dork search pipeline (client, service, store, classifier, models) | `client.py`, `service.py`, `store.py`, `classifier.py`, `models.py` |
 | `experimental/redseek/` | Reddit ingestion pipeline (client fetch, parse, sidecar persistence) | `client.py`, `service.py`, `parser.py`, `store.py` |
 | `experimental/dorkbook/` | Dorkbook sidecar persistence for reusable protocol dorks | `models.py`, `store.py` |
-| `gui/components/` | Tkinter windows and dialogs | `dashboard.py`, `unified_scan_dialog.py`, `server_list_window/`, `db_tools_dialog.py`, `*_browser_window.py` |
+| `gui/components/`, `gui/dashboard/` | Tkinter windows/dialogs plus dashboard shim+implementation | `gui/components/dashboard.py` (compat shim), `gui/dashboard/widget.py`, `unified_scan_dialog.py`, `server_list_window/`, `running_tasks_window.py`, `db_tools_dialog.py`, `*_browser_window.py` |
 | `gui/utils/` | GUI infrastructure | `ui_dispatcher.py`, `scan_manager.py`, `backend_interface/`, `probe_runner.py`, `extract_runner.py`, `settings_manager.py` |
 | `tools/` | Database management utilities | `db_manager.py`, `db_schema.sql`, `db_maintenance.py`, `db_migrations.py`* |
 | `signatures/rce_smb/` | YAML CVE signature definitions | `*.yaml` |
@@ -417,6 +419,7 @@ erDiagram
         datetime last_probe_at
         int indicator_matches
         text snapshot_path
+        int latest_snapshot_id
     }
 
     share_credentials {
@@ -472,7 +475,10 @@ erDiagram
         text status
         datetime last_probe_at
         int indicator_matches
+        text snapshot_path
+        int latest_snapshot_id
         int accessible_dirs_count
+        text accessible_dirs_list
         int extracted
         text rce_status
     }
@@ -513,10 +519,88 @@ erDiagram
         text status
         datetime last_probe_at
         int indicator_matches
+        text snapshot_path
+        int latest_snapshot_id
         int accessible_dirs_count
+        text accessible_dirs_list
         int accessible_files_count
         int extracted
         text rce_status
+    }
+
+    probe_snapshots {
+        int id PK
+        text snapshot_hash UK
+        text host_type
+        text ip_address
+        int port
+        int protocol_server_id
+        datetime run_at
+        text source
+        text raw_snapshot_json
+        datetime created_at
+    }
+
+    probe_snapshot_entries {
+        int id PK
+        int snapshot_id FK
+        text share_name
+        text entry_kind
+        text path
+        text parent_path
+        bool is_truncated
+        text metadata_json
+    }
+
+    probe_snapshot_errors {
+        int id PK
+        int snapshot_id FK
+        text share_name
+        text message
+    }
+
+    probe_snapshot_rce {
+        int id PK
+        int snapshot_id FK
+        text rce_status
+        text verdict_summary
+        text analysis_json
+    }
+
+    extract_run_summaries {
+        int id PK
+        text ip_address
+        text host_type
+        int protocol_server_id
+        int port
+        datetime started_at
+        datetime finished_at
+        text stop_reason
+        bool timed_out
+        int files_downloaded
+        int bytes_downloaded
+        int files_skipped
+        int errors_count
+        text clamav_summary_json
+        text summary_json
+        text source
+        datetime created_at
+    }
+
+    app_migration_state {
+        text key PK
+        text value
+        datetime updated_at
+    }
+
+    app_migration_reports {
+        int id PK
+        text migration_name
+        text source
+        text item_key
+        text reason_code
+        text detail
+        datetime created_at
     }
 
     smb_servers ||--o{ share_access : "server_id"
@@ -537,6 +621,9 @@ erDiagram
     http_servers ||--o| http_user_flags : "server_id"
     http_servers ||--o| http_probe_cache : "server_id"
     scan_sessions ||--o{ http_access : "session_id (nullable)"
+    probe_snapshots ||--o{ probe_snapshot_entries : "snapshot_id"
+    probe_snapshots ||--o{ probe_snapshot_errors : "snapshot_id"
+    probe_snapshots ||--o{ probe_snapshot_rce : "snapshot_id"
 ```
 
 ### 5.2 Schema Notes
@@ -562,6 +649,15 @@ WHERE ip_address = '1.2.3.4';
 - `ftpseek` — `cli/ftpseek.py`
 - `httpseek` — `cli/httpseek.py`
 
+**Probe snapshot unification (current behavior):**
+- New probe snapshots are stored in normalized DB tables (`probe_snapshots` + child tables), not new local JSON cache files.
+- `host_probe_cache` / `ftp_probe_cache` / `http_probe_cache` keep `snapshot_path` for compatibility and now also track `latest_snapshot_id`.
+- Probe reads use DB-first resolution with file fallback when no DB snapshot is attached yet.
+
+**Startup migration orchestration (GUI startup):**
+- Canonical entrypoint `dirracuda` (and parity path `gui/main.py`) runs background startup unification via `gui/utils/db_unification.py`.
+- Includes idempotent legacy probe-cache backfill, targeted sidecar host-entity import, one-time keep/discard prompt for old cache files, and non-blocking warning+retry on migration failure.
+
 ### 5.3 Views
 
 | View | Purpose |
@@ -584,13 +680,16 @@ WHERE ip_address = '1.2.3.4';
 **`shared/db_migrations.py`:**
 - `run_migrations()` is called on every CLI startup
 - Migrations are additive only (all use `IF NOT EXISTS` guards); no destructive migrations
-- FTP and HTTP sidecar tables were added as separate migrations to leave the SMB schema untouched
+- Protocol-specific tables and additive extensions are introduced incrementally to preserve compatibility with older DB shapes
+- Current migrations also provision probe snapshot normalization tables, app migration metadata/report tables, and extraction summary tables
 
 **`commands/ftp/operation.py` and equivalent HTTP file use `FtpPersistence` / `HttpPersistence`** (also in `shared/database.py`) which connect directly to the DB path without going through `SMBSeekWorkflowDatabase`.
 
 ### 5.5 SearXNG Dork Sidecar Database (`~/.dirracuda/se_dork.db`)
 
-The SearXNG Dorking module (`experimental/se_dork`) writes to a separate SQLite database. It does not share tables with `dirracuda.db`.
+The SearXNG Dorking module (`experimental/se_dork`) writes runtime workflow data to a separate SQLite database.
+
+Dirracuda now also supports one-time targeted startup import of resolvable host entities from this sidecar into `dirracuda.db` for shareability/portability. Sidecar tables remain authoritative for SearXNG module internals.
 
 Tables:
 - `dork_runs` — one row per dork search run (`run_id` PK), with `instance_url`, `query`, `max_results`, `fetched_count`, `deduped_count`, `verified_count`, `status`, `error_message`, `started_at`, `finished_at`
@@ -602,7 +701,9 @@ URL normalization (`store.normalize_url`): scheme and netloc lowercased; path ca
 
 ### 5.6 Reddit Sidecar Database (`~/.dirracuda/reddit_od.db`)
 
-The Reddit module (`experimental/redseek`) writes to a separate SQLite database. It does not share tables with `dirracuda.db`.
+The Reddit module (`experimental/redseek`) writes runtime workflow data to a separate SQLite database.
+
+Dirracuda now also supports one-time targeted startup import of resolvable host entities from this sidecar into `dirracuda.db` for shareability/portability. Sidecar tables remain authoritative for Reddit module internals.
 
 Tables:
 - `reddit_posts` — one row per Reddit post (`post_id` PK), with `source_sort` values `new`, `top`, `search`, or `user`
@@ -619,7 +720,7 @@ Compatibility note: legacy `top` state is migrated to `top:week` on first week-t
 
 ### 5.7 Dorkbook Sidecar Database (`~/.dirracuda/dorkbook.db`)
 
-The Dorkbook module (`experimental/dorkbook`) writes to a separate SQLite database. It does not share tables with `dirracuda.db`.
+The Dorkbook module (`experimental/dorkbook`) writes to a separate SQLite database and remains sidecar-only (no automatic startup import into `dirracuda.db`).
 
 Tables:
 - `dorkbook_entries` — protocol-scoped recipes keyed by `entry_id`
@@ -645,11 +746,11 @@ Constraints:
 
 ### 6.1 Entry Point and Component Hierarchy
 
-`dirracuda` is the authoritative GUI entry point. `gui/main.py` is a deprecated legacy entry point; it prints a deprecation warning and redirects.
+`dirracuda` is the authoritative GUI entry point. `gui/main.py` remains a deprecated legacy entry path for backward compatibility, but is still maintained with startup/close-flow parity.
 
 ```
 dirracuda
-└─ Dirracuda GUI (gui/components/dashboard.py)
+└─ Dirracuda GUI (gui/components/dashboard.py shim -> gui/dashboard/widget.py)
    ├─ UnifiedScanDialog (gui/components/unified_scan_dialog.py)
    │    ├─ ScanDorkEditorDialog (gui/components/scan_dork_editor_dialog.py)
    │    │    └─ Open Dorkbook -> DorkbookWindow (singleton/modeless)
@@ -673,6 +774,8 @@ dirracuda
    │         └─ RedditBrowserWindow (gui/components/reddit_browser_window.py)
    ├─ DBToolsDialog (gui/components/db_tools_dialog.py)
    │    └─ DBToolsEngine (gui/utils/db_tools_engine.py)
+   ├─ RunningTasksWindow (gui/components/running_tasks_window.py)
+   │    └─ RunningTaskRegistry (gui/utils/running_tasks.py, process-wide)
    └─ [config editor, scan dialogs, browser windows, extract dialogs]
 ```
 
@@ -708,6 +811,7 @@ SearXNG dorking, Reddit ingestion, and Dorkbook do not use this subprocess path.
 | Experimental | Opens `ExperimentalFeaturesDialog` (`Dorkbook`, `SearXNG Dorking`, `Reddit` tabs) |
 | Configuration | Opens config editor |
 | Dark/Light toggle | Switches ttkthemes theme; persisted in `gui_settings.json` |
+| Running Tasks | Opens non-modal task manager for active/queued work; supports monitor reopen via double-click |
 
 ### 6.5 Server List
 
@@ -716,12 +820,14 @@ Displays hosts from `smb_servers`, `ftp_servers`, `http_servers` in separate tab
 | Action | Backend |
 |--------|---------|
 | Copy IP | Clipboard |
-| Probe | `probe_runner.py` (SMB) / `ftp_probe_runner.py` / `http_probe_runner.py` — runs a quick directory listing; result cached in `host_probe_cache` / `ftp_probe_cache` / `http_probe_cache` |
+| Probe | `probe_runner.py` (SMB) / `ftp_probe_runner.py` / `http_probe_runner.py` — runs a quick directory listing; summary status persists in `*_probe_cache`, full snapshots persist in normalized `probe_snapshots` tables and are linked by `latest_snapshot_id` |
 | Browse | Opens `SMBBrowserWindow` / `FtpBrowserWindow` / `HttpBrowserWindow` via `smb_browser.py` / `ftp_browser.py` / `http_browser.py` |
 | Extract | `extract_runner.py` — downloads files per `file_collection` limits; optional ClamAV scan post-extract |
 | Pry | `pry_runner.py` — wordlist-based password audit; stores found credentials in `share_credentials` |
 | Favorite / Avoid / Compromised | Sets flags in `host_user_flags` / `ftp_user_flags` / `http_user_flags` |
 | Delete | Cascades via FK `ON DELETE CASCADE` |
+
+Long-running monitor dialogs (scan/probe/extract and related batch jobs) are non-modal and integrated with the shared Running Tasks registry. Hiding a monitor does not cancel work; active/queued tasks remain reopenable through Running Tasks.
 
 ### 6.6 File Browser
 
@@ -907,13 +1013,13 @@ The FTP and HTTP modules were added without touching the SMB codebase. The patte
 
 2. **Workflow** — create `shared/<proto>_workflow.py` with `<Proto>Workflow` and `create_<proto>_workflow(args)` factory mirroring `shared/ftp_workflow.py`
 
-3. **Database sidecar** — add `<proto>_servers`, `<proto>_access`, `<proto>_user_flags`, `<proto>_probe_cache` tables to `tools/db_schema.sql` using `CREATE TABLE IF NOT EXISTS`. Add a migration in `shared/db_migrations.py`.
+3. **Database protocol tables** — add `<proto>_servers`, `<proto>_access`, `<proto>_user_flags`, `<proto>_probe_cache` tables to `tools/db_schema.sql` using `CREATE TABLE IF NOT EXISTS`. Add additive migrations in `shared/db_migrations.py` (and include normalized snapshot support where applicable).
 
 4. **Persistence class** — add `<Proto>Persistence` to `shared/database.py` following `FtpPersistence`
 
 5. **CLI entry point** — `cli/<proto>seek.py` with argparse and `create_<proto>_workflow().run(args)`
 
-6. **GUI** — new scan dialog (`gui/components/<proto>_scan_dialog.py`), browser window (`gui/components/<proto>_browser_window.py`), probe runner (`gui/utils/<proto>_probe_runner.py`), probe cache helper (`gui/utils/<proto>_probe_cache.py`); add a tab to `ServerListWindow`
+6. **GUI** — new scan dialog (`gui/components/<proto>_scan_dialog.py`), browser window (`gui/components/<proto>_browser_window.py`), probe runner (`gui/utils/<proto>_probe_runner.py`), and dispatch/load integration (`gui/utils/probe_cache_dispatch.py`) with DB-first snapshot persistence; add a tab to `ServerListWindow`
 
 ### 8.2 Adding RCE Signatures
 

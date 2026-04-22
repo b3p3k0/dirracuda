@@ -116,6 +116,7 @@ The main window. From here you can:
 - Manage your database (import, export, merge, maintenance)
 - Edit configuration
 - Toggle dark/light mode with the 🌙/☀️ button in the top-right
+- Open **Running Tasks** to monitor active/queued work and reopen hidden monitor dialogs (scan/probe/extract)
 
 ### Discovery
 
@@ -164,7 +165,9 @@ Read-only directory enumeration that previews accessible shares without download
 
 **RCE vulnerability analysis:** **NOTE: this feature is still under development; don't trust results until verified with alternative measures.** Optionally scans for SMB vulnerabilities using passive heuristics. Covers 8 CVEs including EternalBlue (MS17-010), SMBGhost (CVE-2020-0796), ZeroLogon (CVE-2020-1472), and PrintNightmare (CVE-2021-34527). Returns a risk score (0-100) with verdicts: confirmed, likely, or not vulnerable. Signatures live in `conf/signatures/rce_smb/` as editable YAML files. 
 
-Results are cached in `~/.dirracuda/probes/` and reloaded automatically. Configure probe limits in `conf/config.json` under `file_browser` settings.
+Probe snapshots are now persisted in `dirracuda.db` (normalized snapshot tables linked from protocol probe-cache rows). Legacy file caches under `~/.dirracuda/{probes,ftp_probes,http_probes}` remain as compatibility fallback for older data and can be imported on startup.
+
+Live scan/probe/extract output is shown in non-modal monitor dialogs. Hiding a monitor does not stop the task; reopen it from **Running Tasks**.
 
 ### Browsing Shares
 
@@ -366,6 +369,8 @@ Results browser:
 - Actions: `Copy URL`, `Open in Explorer`, `Open in system browser`, `Probe Selected` / `Probe URL`, `Add to dirracuda DB`
 - Promotion note: if `Add to dirracuda DB` shows **Not available**, open Server List once and reopen Results DB (the add-record callback comes from the live Server List window).
 
+SearXNG sidecar data remains intact, and resolvable host entities are also eligible for one-time startup import into main `dirracuda.db` so shared DB exports include analyst-discovered hosts.
+
 #### SearXNG `format=json` and 403 troubleshooting
 
 If `Test` fails with a 403 on `format=json`, enable JSON output in your SearXNG `settings.yml`:
@@ -381,7 +386,7 @@ Then restart SearXNG and run `Test` again.
 
 ### Reddit Ingestion (redseek)
 
-redseek ingests submissions from `r/opendirectories` into a sidecar DB (`~/.dirracuda/reddit_od.db`) for analyst review. It is separate from SMB/FTP/HTTP scanning and does not auto-probe or auto-extract anything.
+redseek ingests submissions from `r/opendirectories` into a sidecar DB (`~/.dirracuda/reddit_od.db`) for analyst review. Runtime workflow state remains sidecar-based, and it does not auto-probe or auto-extract anything.
 
 Access points:
 - Dashboard → `⚗ Experimental` → `Reddit` tab → `Open Reddit Grab` (ingest)
@@ -410,7 +415,7 @@ Promotion flow:
 - `Open Reddit Post DB` supports `Add to dirracuda DB` from the row context menu.
 - If that action shows **Not available**, open the Server List once and reopen Reddit Post DB (the add-record callback comes from the live Server List window).
 
-redseek data does not write to main Dirracuda DB tables unless a host is manually promoted.
+redseek sidecar data is retained, and Dirracuda now also supports one-time startup import of resolvable host entities into the main `dirracuda.db` for shareability. Unresolved records are skipped and reported.
 
 Disclaimer:
 
