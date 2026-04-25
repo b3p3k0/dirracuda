@@ -25,6 +25,7 @@ import argparse
 import sys
 import os
 import json
+import copy
 import shutil
 import getpass
 import random
@@ -149,8 +150,7 @@ class XSMBSeekConfig:
                     f"Configuration file not found at {config_path} and example template is missing."
                 )
 
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = json.load(f)
+        config = self._read_config_from_disk(strict=True)
 
         if self.GUI_SECTION not in config:
             config[self.GUI_SECTION] = self._default_gui_section()
@@ -168,6 +168,67 @@ class XSMBSeekConfig:
                 # In-memory migration is already done; app continues normally.
 
         return config
+
+    def _read_config_from_disk(self, *, strict: bool = False) -> Dict[str, Any]:
+        """
+        Read current on-disk config as an object.
+
+        Args:
+            strict: When True, raise on any read/parse error. When False,
+                return an empty dict on errors.
+        """
+        try:
+            with open(self.config_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+            if strict:
+                raise ValueError(f"Config root must be an object: {self.config_file}")
+        except Exception:
+            if strict:
+                raise
+        return {}
+
+    def _build_managed_overlay(self) -> Dict[str, Any]:
+        """
+        Build the subset of config managed by XSMBSeekConfig.
+
+        This class owns `gui_app` and the canonical `database.path` synchronization.
+        Everything else should be preserved from latest on-disk data to avoid
+        clobbering runtime updates made by other config writers.
+        """
+        overlay: Dict[str, Any] = {}
+
+        gui_section = self.config.get(self.GUI_SECTION)
+        if isinstance(gui_section, dict):
+            overlay[self.GUI_SECTION] = copy.deepcopy(gui_section)
+        else:
+            overlay[self.GUI_SECTION] = self._default_gui_section()
+
+        database_cfg = self.config.get("database")
+        if isinstance(database_cfg, dict) and "path" in database_cfg:
+            overlay["database"] = {"path": database_cfg.get("path")}
+
+        return overlay
+
+    def _merge_managed_overlay(self, disk_config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Merge managed overlay into latest on-disk config.
+
+        Disk content remains authoritative for non-managed keys so features that
+        write other sections (for example `shodan.api_key` prompts and dork editors)
+        are not reverted by a later GUI config save.
+        """
+        merged = copy.deepcopy(disk_config) if isinstance(disk_config, dict) else {}
+        overlay = self._build_managed_overlay()
+
+        merged[self.GUI_SECTION] = copy.deepcopy(overlay[self.GUI_SECTION])
+        if "database" in overlay:
+            if not isinstance(merged.get("database"), dict):
+                merged["database"] = {}
+            merged["database"]["path"] = overlay["database"].get("path")
+
+        return merged
     
     def _default_gui_section(self) -> Dict[str, Any]:
         return {
@@ -200,9 +261,20 @@ class XSMBSeekConfig:
             json.dump(data, f, indent=2)
     
     def save_config(self) -> bool:
-        """Save current configuration to file."""
+        """
+        Save managed configuration to file without clobbering external updates.
+
+        Why this matters:
+        Multiple runtime components can update `conf/config.json` directly.
+        Persisting a stale in-memory full snapshot here would overwrite those
+        updates (for example, a newly prompted Shodan API key). This method
+        now reconciles managed fields onto the latest on-disk config first.
+        """
         try:
-            self._write_config(self.config)
+            disk_config = self._read_config_from_disk(strict=False)
+            merged_config = self._merge_managed_overlay(disk_config)
+            self._write_config(merged_config)
+            self.config = merged_config
             return True
         except Exception as e:
             _logger.error("Failed to save config: %s", e)
