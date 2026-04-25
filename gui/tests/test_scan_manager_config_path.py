@@ -2,7 +2,12 @@
 
 from pathlib import Path
 
+import pytest
+
 from gui.utils import scan_manager as sm_mod
+
+
+pytestmark = pytest.mark.scenario
 
 
 class _DummyBackendInterface:

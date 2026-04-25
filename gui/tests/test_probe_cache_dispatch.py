@@ -47,6 +47,54 @@ def test_http_uppercase():
 
 
 # ---------------------------------------------------------------------------
+# DB-first precedence and file-cache fallback
+# ---------------------------------------------------------------------------
+
+def test_db_first_snapshot_short_circuits_file_cache():
+    class _FakeReader:
+        def get_probe_snapshot_for_host(self, ip_address, host_type, *, port=None):
+            assert ip_address == _IP
+            assert host_type == "H"
+            assert port == 8443
+            return {"ip_address": ip_address, "entries": []}
+
+    with patch("gui.utils.probe_cache_dispatch._get_cached_db_reader", return_value=_FakeReader()), \
+         patch("gui.utils.probe_cache_dispatch.http_probe_cache") as http_m:
+        result = load_probe_result_for_host(_IP, "H", port=8443)
+
+    assert result == {"ip_address": _IP, "entries": []}
+    http_m.load_http_probe_result.assert_not_called()
+
+
+def test_db_miss_falls_back_to_protocol_cache():
+    class _FakeReader:
+        def get_probe_snapshot_for_host(self, *_args, **_kwargs):
+            return None
+
+    with patch("gui.utils.probe_cache_dispatch._get_cached_db_reader", return_value=_FakeReader()), \
+         patch("gui.utils.probe_cache_dispatch.ftp_probe_cache") as ftp_m:
+        ftp_m.load_ftp_probe_result.return_value = _FAKE_SNAPSHOT
+        result = load_probe_result_for_host(_IP, "F")
+
+    ftp_m.load_ftp_probe_result.assert_called_once_with(_IP)
+    assert result is _FAKE_SNAPSHOT
+
+
+def test_db_exception_falls_back_to_protocol_cache():
+    class _FakeReader:
+        def get_probe_snapshot_for_host(self, *_args, **_kwargs):
+            raise RuntimeError("db unavailable")
+
+    with patch("gui.utils.probe_cache_dispatch._get_cached_db_reader", return_value=_FakeReader()), \
+         patch("gui.utils.probe_cache_dispatch.probe_cache") as smb_m:
+        smb_m.load_probe_result.return_value = _FAKE_SNAPSHOT
+        result = load_probe_result_for_host(_IP, "S")
+
+    smb_m.load_probe_result.assert_called_once_with(_IP)
+    assert result is _FAKE_SNAPSHOT
+
+
+# ---------------------------------------------------------------------------
 # Normalisation (lowercase input)
 # ---------------------------------------------------------------------------
 
