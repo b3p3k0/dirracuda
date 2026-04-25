@@ -111,7 +111,7 @@ You're connecting to machines you don't control. A few baseline precautions befo
 The main window. From here you can:
 
 - Launch discovery from one **▶ Start Scan** button - pick one protocol or queue multiple protocols in sequence from the same dialog
-- Access experimental features (SearXNG dorking, Reddit ingestion, and Dorkbook) via the `⚗ Experimental` button in the dashboard header (see [Experimental Features](#experimental-features))
+- Access experimental features (SearXNG dorking, Reddit ingestion, Dorkbook, and Keymaster) via the `⚗ Experimental` button in the dashboard header (see [Experimental Features](#experimental-features))
 - Open the Server List Browser to work with hosts you've found
 - Manage your database (import, export, merge, maintenance)
 - Edit configuration
@@ -339,6 +339,7 @@ The dialog is modeless and tab-based. Current tabs:
 - `SearXNG`
 - `Reddit`
 - `Dorkbook`
+- `Keymaster`
 
 On first open, the dialog shows an experimental warning banner. If you check **Don't show this notice again**, Dirracuda writes `experimental.warning_dismissed=true` to `~/.dirracuda/gui_settings.json`.
 
@@ -457,6 +458,28 @@ Persistence:
 - Last active Dorkbook protocol tab is restored on reopen
 
 Discovery dorks are edited via `Start Scan -> Edit Queries` (Discovery Dorks editor), not from App Config UI.
+
+### Keymaster
+
+Keymaster stores reusable Shodan API keys for rapid key rotation during testing.
+
+Quick start:
+1. Dashboard → `⚗ Experimental` → `Keymaster` tab.
+2. Click `Open Keymaster`.
+3. Add one or more keys with a label, API key, and optional notes.
+4. Select a key and click `Apply` (or double-click the row, or use the right-click menu).
+
+What Apply does:
+- Writes the selected key to `shodan.api_key` in the active config file.
+- Affects future scans only — a scan already running continues with the key that was active at launch.
+
+Sidecar DB path: `~/.dirracuda/keymaster.db`
+
+Key table columns: `Label`, `Key Preview`, `Notes`, `Last Used`.
+
+Key Preview format: keys longer than 8 characters show as `first4 + asterisks + last4`; shorter keys are fully masked.
+
+API key input is masked in Add/Edit dialogs. No full-key reveal in v1.
 
 ## Advanced
 

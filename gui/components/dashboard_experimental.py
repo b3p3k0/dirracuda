@@ -14,6 +14,7 @@ Patch path for show_reddit_browser_window in tests:
 from gui.components.reddit_browser_window import show_reddit_browser_window
 from gui.components.se_dork_browser_window import show_se_dork_browser_window
 from gui.components.dorkbook_window import show_dorkbook_window
+from gui.components.keymaster_window import show_keymaster_window
 from gui.utils.logging_config import get_logger
 
 _logger = get_logger("dashboard")
@@ -33,6 +34,7 @@ def handle_experimental_button_click(widget) -> None:
         "open_reddit_post_db": widget._open_reddit_post_db,
         "open_se_dork_results_db": lambda: open_se_dork_results_db(widget),
         "open_dorkbook": lambda: open_dorkbook(widget),
+        "open_keymaster": lambda: open_keymaster(widget),
         "parent": widget.parent,
     }
     show_experimental_features_dialog(widget.parent, context, widget.settings_manager)
@@ -91,6 +93,29 @@ def open_dorkbook(widget) -> None:
     show_dorkbook_window(
         parent=widget.parent,
         settings_manager=getattr(widget, "settings_manager", None),
+    )
+
+
+def open_keymaster(widget) -> None:
+    """Open singleton Keymaster window.
+
+    Patch path for tests:
+      gui.components.dashboard_experimental.show_keymaster_window
+    """
+    config_path = None
+    if hasattr(widget, "_resolve_active_config_path"):
+        try:
+            resolved = widget._resolve_active_config_path()
+            config_path = str(resolved) if resolved is not None else None
+        except Exception:
+            pass
+    if config_path is None:
+        config_path = getattr(widget, "config_path", None)
+
+    show_keymaster_window(
+        parent=widget.parent,
+        settings_manager=getattr(widget, "settings_manager", None),
+        config_path=config_path,
     )
 
 

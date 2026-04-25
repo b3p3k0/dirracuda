@@ -57,6 +57,8 @@ def test_experimental_button_packed_between_db_tools_and_config(monkeypatch):
             self._text = text
         def pack(self, **kw):
             packed_texts.append(self._text)
+        def grid(self, **kw):
+            packed_texts.append(self._text)
         def configure(self, **kw): pass
         def config(self, **kw): pass
 
@@ -568,3 +570,63 @@ def test_se_dork_tab_fallback_opens_browser_when_no_results_callback(monkeypatch
     assert len(calls) == 1
     assert calls[0].get("add_record_callback") is None
     assert calls[0].get("settings_manager") is None
+
+
+# ---------------------------------------------------------------------------
+# C4 — Keymaster tab registry + wiring
+# ---------------------------------------------------------------------------
+
+def test_registry_contains_keymaster_tab():
+    from gui.components.experimental_features.registry import _get_features
+    labels = [f.label for f in _get_features()]
+    assert "Keymaster" in labels
+
+
+def test_registry_keymaster_feature_id():
+    from gui.components.experimental_features.registry import _get_features
+    ids = [f.feature_id for f in _get_features()]
+    assert "keymaster" in ids
+
+
+def test_registry_keymaster_after_dorkbook():
+    from gui.components.experimental_features.registry import _get_features
+    features = _get_features()
+    assert features[3].feature_id == "keymaster"
+
+
+def test_keymaster_tab_callback_invoked():
+    """_invoke_open_keymaster must call the context callback."""
+    from gui.components.experimental_features.keymaster_tab import KeymasterTab
+    opened = []
+    tab = KeymasterTab.__new__(KeymasterTab)
+    tab._context = {"open_keymaster": lambda: opened.append(True)}
+    tab._invoke_open_keymaster()
+    assert opened == [True]
+
+
+def test_keymaster_tab_silent_when_no_callback():
+    """Missing open_keymaster key is a no-op, not an exception."""
+    from gui.components.experimental_features.keymaster_tab import KeymasterTab
+    tab = KeymasterTab.__new__(KeymasterTab)
+    tab._context = {}
+    tab._invoke_open_keymaster()  # must not raise
+
+
+def test_open_keymaster_forwards_parent_settings_config(monkeypatch):
+    """open_keymaster passes parent, settings_manager, and resolved config_path."""
+    dash = _make_dash()
+    resolved_path = MagicMock()
+    dash._resolve_active_config_path = MagicMock(return_value=resolved_path)
+
+    calls = []
+    monkeypatch.setattr(
+        "gui.components.dashboard_experimental.show_keymaster_window",
+        lambda **kw: calls.append(kw),
+    )
+
+    dashboard_experimental.open_keymaster(dash)
+
+    assert len(calls) == 1
+    assert calls[0]["parent"] is dash.parent
+    assert calls[0]["settings_manager"] is dash.settings_manager
+    assert calls[0]["config_path"] == str(resolved_path)

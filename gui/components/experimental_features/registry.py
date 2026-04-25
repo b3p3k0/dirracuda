@@ -31,6 +31,7 @@ def _get_features() -> List[ExperimentalFeature]:
     from gui.components.experimental_features.se_dork_tab import build_se_dork_tab
     from gui.components.experimental_features.reddit_tab import build_reddit_tab
     from gui.components.experimental_features.dorkbook_tab import build_dorkbook_tab
+    from gui.components.experimental_features.keymaster_tab import build_keymaster_tab
 
     return [
         ExperimentalFeature(
@@ -47,6 +48,11 @@ def _get_features() -> List[ExperimentalFeature]:
             feature_id="dorkbook",
             label="Dorkbook",
             build_tab=build_dorkbook_tab,
+        ),
+        ExperimentalFeature(
+            feature_id="keymaster",
+            label="Keymaster",
+            build_tab=build_keymaster_tab,
         ),
     ]
 

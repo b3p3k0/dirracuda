@@ -76,7 +76,7 @@ Dirracuda scans for internet-accessible servers exposing open or weakly-authenti
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-For SMB/FTP/HTTP scan flows, the GUI invokes CLI scripts as subprocesses via `gui/utils/backend_interface/interface.py` and parses stdout for progress data. Experimental SearXNG dorking (`experimental/se_dork`), Reddit ingestion (`experimental/redseek`), and Dorkbook recipe management (`experimental/dorkbook`) are in-process paths launched from the dashboard.
+For SMB/FTP/HTTP scan flows, the GUI invokes CLI scripts as subprocesses via `gui/utils/backend_interface/interface.py` and parses stdout for progress data. Experimental SearXNG dorking (`experimental/se_dork`), Reddit ingestion (`experimental/redseek`), Dorkbook recipe management (`experimental/dorkbook`), and Keymaster key management (`experimental/keymaster`) are in-process paths launched from the dashboard.
 
 ### 1.2 Core Workflow Flowchart
 
@@ -113,6 +113,7 @@ This shape applies to all three protocols. Protocol-specific differences are cov
 | `experimental/se_dork/` | SearXNG dork search pipeline (client, service, store, classifier, models) | `client.py`, `service.py`, `store.py`, `classifier.py`, `models.py` |
 | `experimental/redseek/` | Reddit ingestion pipeline (client fetch, parse, sidecar persistence) | `client.py`, `service.py`, `parser.py`, `store.py` |
 | `experimental/dorkbook/` | Dorkbook sidecar persistence for reusable protocol dorks | `models.py`, `store.py` |
+| `experimental/keymaster/` | Keymaster sidecar persistence for reusable API keys | `models.py`, `store.py` |
 | `gui/components/`, `gui/dashboard/` | Tkinter windows/dialogs plus dashboard shim+implementation | `gui/components/dashboard.py` (compat shim), `gui/dashboard/widget.py`, `unified_scan_dialog.py`, `server_list_window/`, `running_tasks_window.py`, `db_tools_dialog.py`, `*_browser_window.py` |
 | `gui/utils/` | GUI infrastructure | `ui_dispatcher.py`, `scan_manager.py`, `backend_interface/`, `probe_runner.py`, `extract_runner.py`, `settings_manager.py` |
 | `tools/` | Database management utilities | `db_manager.py`, `db_schema.sql`, `db_maintenance.py`, `db_migrations.py`* |
@@ -862,7 +863,7 @@ Backed by `gui/utils/db_tools_engine.py`. Capabilities:
 - **Statistics** — server count by country, protocol breakdown
 - **Maintenance** — SQLite VACUUM, integrity check (`PRAGMA integrity_check`), cascade-deletion preview before purging old sessions
 
-### 6.9 Experimental Features (Dorkbook, SearXNG, Reddit)
+### 6.9 Experimental Features (Dorkbook, SearXNG, Reddit, Keymaster)
 
 `ExperimentalFeaturesDialog` is a modeless tab host opened from the dashboard `Experimental` button. Tabs are registry-driven (`gui/components/experimental_features/registry.py`), so adding/removing experimental modules is a registry edit, not dialog shell surgery.
 
@@ -870,6 +871,7 @@ Current tabs:
 - `Dorkbook`
 - `SearXNG Dorking`
 - `Reddit`
+- `Keymaster`
 
 Warning banner behavior:
 - First open shows a warning banner with a "Don't show this notice again" checkbox
@@ -954,6 +956,36 @@ Reddit modes exposed in `RedditGrabDialog`:
 - `user` — fetches subreddit-scoped author query with `type=link`; service runtime-guards subreddit+author before writes
 
 Top windows for `sort=top`: `hour`, `day`, `week`, `month`, `year`, `all`.
+
+Keymaster entry path:
+
+```text
+Dashboard -> Experimental tab -> Open Keymaster
+  -> KeymasterWindow (reads/writes ~/.dirracuda/keymaster.db)
+  -> singleton modeless window (focus existing on repeated open)
+```
+
+Apply operation (double-click row, context menu Apply, or Apply button):
+
+```text
+KeymasterWindow._apply_selected_key()
+  -> write shodan.api_key to active config path (targeted key write only)
+  -> km_store.touch_last_used(conn, key_id)
+  -> active-scan behavior: running scans keep start-time key; apply affects future scans only
+```
+
+Config path resolution order:
+1. Explicit path passed from dashboard (`config_path` argument).
+2. `settings_manager` key `backend.config_path` when present.
+3. `settings_manager.get_smbseek_config_path()` fallback.
+
+Key table columns: `Label`, `Key Preview`, `Notes`, `Last Used`.
+
+Key Preview format: keys longer than 8 characters show as `first4 + asterisks + last4`; shorter keys are fully masked.
+
+Add/Edit modal: Label, API Key (masked entry; no reveal toggle in v1), Notes.
+
+Delete: requires confirmation; no session-mute option in v1.
 
 ---
 
