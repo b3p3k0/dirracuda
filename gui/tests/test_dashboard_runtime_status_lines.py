@@ -61,8 +61,8 @@ def test_compose_runtime_status_lines_enabled_and_active():
         },
     )
 
-    assert clamav_line == "✔ ClamAV integration active <clamdscan>"
-    assert tmpfs_line == "✔ tmpfs activated </home/test/.dirracuda/quarantine_tmpfs>"
+    assert clamav_line == "✔ ClamAV Integration"
+    assert tmpfs_line == "✔ tmpfs </home/test/.dirracuda/quarantine_tmpfs>"
 
 
 def test_compose_runtime_status_lines_disabled_and_inactive():
@@ -75,8 +75,8 @@ def test_compose_runtime_status_lines_disabled_and_inactive():
         },
     )
 
-    assert clamav_line == "✖ ClamAV integration active <clamscan>"
-    assert tmpfs_line == "✖ tmpfs activated </home/test/.dirracuda/quarantine_tmpfs>"
+    assert clamav_line == "✖ ClamAV Integration"
+    assert tmpfs_line == "✖ tmpfs </home/test/.dirracuda/quarantine_tmpfs>"
 
 
 def test_compose_runtime_status_lines_backend_invalid_or_missing_defaults_to_auto():
@@ -91,8 +91,8 @@ def test_compose_runtime_status_lines_backend_invalid_or_missing_defaults_to_aut
         tmpfs_state={"tmpfs_active": False, "mountpoint": "/tmp/mount"},
     )
 
-    assert invalid_line == "✔ ClamAV integration active <auto>"
-    assert missing_line == "✔ ClamAV integration active <auto>"
+    assert invalid_line == "✔ ClamAV Integration"
+    assert missing_line == "✔ ClamAV Integration"
 
 
 def test_update_runtime_status_display_shodan_no_key(monkeypatch):

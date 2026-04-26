@@ -174,11 +174,11 @@ class DashboardWidget:
         self.status_text = tk.StringVar(master=self.parent, value="Loading dashboard summary...")
         self.clamav_status_text = tk.StringVar(
             master=self.parent,
-            value="✖ ClamAV integration active <auto>",
+            value="✖ ClamAV Integration",
         )
         self.tmpfs_status_text = tk.StringVar(
             master=self.parent,
-            value=f"✖ tmpfs activated <{Path.home() / '.dirracuda' / 'quarantine_tmpfs'}>",
+            value=f"✖ tmpfs <{Path.home() / '.dirracuda' / 'quarantine_tmpfs'}>",
         )
         self.shodan_status_text = tk.StringVar(
             master=self.parent,
