@@ -44,7 +44,7 @@ class _DialogStub:
         self.destroyed = True
 
 
-def _make_dialog(max_results: str) -> UnifiedScanDialog:
+def _make_dialog(max_results: str, *, show_rce_controls: bool = True) -> UnifiedScanDialog:
     dlg = UnifiedScanDialog.__new__(UnifiedScanDialog)
     dlg.max_results_var = _Var(max_results)
     dlg.shared_concurrency_var = _Var("10")
@@ -62,6 +62,7 @@ def _make_dialog(max_results: str) -> UnifiedScanDialog:
     dlg.rce_enabled_var = _Var(False)
     dlg.allow_insecure_tls_var = _Var(True)
     dlg._settings_manager = None
+    dlg.show_rce_controls = show_rce_controls
     dlg.theme = object()
     dlg.dialog = _DialogStub()
     dlg.max_results_entry = _EntryStub()
@@ -119,6 +120,15 @@ def test_start_valid_max_results_invokes_callback(monkeypatch):
 
     assert captured["payload"]["max_shodan_results"] == 250
     assert dlg.dialog.destroyed is True
+
+
+def test_build_scan_request_forces_rce_disabled_when_controls_hidden():
+    dlg = _make_dialog("250", show_rce_controls=False)
+    dlg.rce_enabled_var.set(True)
+
+    payload = dlg._build_scan_request()
+
+    assert payload["rce_enabled"] is False
 
 
 def test_no_live_max_results_clamp_method_exists():

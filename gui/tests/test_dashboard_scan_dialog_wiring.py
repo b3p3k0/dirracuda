@@ -40,6 +40,7 @@ def test_show_quick_scan_dialog_passes_query_editor_callback(monkeypatch):
     dash.config_path = "/tmp/config.json"
     dash.scan_manager = _ScanManagerStub()
     dash.settings_manager = object()
+    dash._rce_unlocked = True
     dash._start_unified_scan = lambda _request: None
     dash.config_editor_callback = lambda _path: None
 
@@ -59,6 +60,7 @@ def test_show_quick_scan_dialog_passes_query_editor_callback(monkeypatch):
 
     assert captured["config_editor_callback"] == dash._open_config_editor_from_scan
     assert captured["query_editor_callback"] == dash._open_config_editor
+    assert captured["show_rce_controls"] is True
 
 
 def test_show_quick_scan_dialog_does_not_pass_reddit_grab_callback(monkeypatch):
@@ -79,6 +81,7 @@ def test_show_quick_scan_dialog_does_not_pass_reddit_grab_callback(monkeypatch):
     dash.config_path = "/tmp/config.json"
     dash.scan_manager = _ScanManagerStub()
     dash.settings_manager = object()
+    dash._rce_unlocked = False
     dash._start_unified_scan = lambda _request: None
     dash.config_editor_callback = lambda _path: None
 
@@ -86,3 +89,4 @@ def test_show_quick_scan_dialog_does_not_pass_reddit_grab_callback(monkeypatch):
 
     # Key must be absent entirely — not merely None — after C2 legacy removal.
     assert "reddit_grab_callback" not in captured
+    assert captured["show_rce_controls"] is False

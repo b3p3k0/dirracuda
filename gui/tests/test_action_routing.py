@@ -239,6 +239,7 @@ class _BatchMixinStub(ServerListWindowBatchMixin):
         self.search_text = MagicMock()
         self.country_listbox = None
         self._pry_unlocked = True
+        self._rce_unlocked = True
 
     def _apply_filters(self, force=False):
         pass
@@ -786,6 +787,49 @@ def test_probe_smb_row_returns_units_1(monkeypatch):
     assert result["status"] == "success"
     assert result["units"] == 1, "units must be 1 regardless of share count"
     assert "3 share(s)" in result["notes"]
+
+
+def test_probe_smb_rce_is_forced_off_when_session_locked(monkeypatch):
+    """_execute_probe_target ignores enable_rce when session RCE gate is locked."""
+    stub = _BatchMixinStub()
+    stub._rce_unlocked = False
+    target = {
+        "ip_address": "1.2.3.4",
+        "host_type": "S",
+        "row_key": "S:42",
+        "shares": ["docs"],
+        "auth_method": "anonymous",
+    }
+
+    dispatch_calls = []
+
+    monkeypatch.setitem(
+        stub._execute_probe_target.__globals__,
+        "dispatch_probe_run",
+        lambda *args, **kwargs: dispatch_calls.append((args, kwargs)) or {
+            "shares": [{"share_name": "docs"}],
+            "rce_analysis": {"rce_status": "flagged"},
+        },
+    )
+    monkeypatch.setitem(
+        stub._execute_probe_target.__globals__,
+        "probe_patterns",
+        types.SimpleNamespace(attach_indicator_analysis=lambda _r, _p: {"is_suspicious": False, "matches": []}),
+    )
+    stub.db_reader.upsert_probe_snapshot_for_host = MagicMock(return_value=1)
+    stub.db_reader.upsert_probe_cache_for_host = MagicMock()
+
+    result = stub._execute_probe_target(
+        "job-1",
+        target,
+        {"limits": {}, "enable_rce": True},
+        threading.Event(),
+    )
+
+    assert result["status"] == "success"
+    assert "RCE:" not in result["notes"]
+    assert dispatch_calls, "dispatch_probe_run should be called"
+    assert dispatch_calls[0][1]["enable_rce"] is False
 
 
 # ---------------------------------------------------------------------------
