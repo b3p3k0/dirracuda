@@ -6,7 +6,7 @@ import random
 
 import pytest
 
-import gui.main as main_module
+from gui.utils.dirracuda_loader import load_dirracuda_module
 
 from gui.utils.running_tasks import (
     _reset_running_task_registry_for_tests,
@@ -23,6 +23,8 @@ from gui.tests._server_ops_harness import (
     make_main_app_stub,
     patch_main_shutdown_helpers,
 )
+
+main_module = load_dirracuda_module()
 
 
 def setup_function() -> None:

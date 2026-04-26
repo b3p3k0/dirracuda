@@ -2,28 +2,16 @@
 
 from __future__ import annotations
 
-from importlib.machinery import SourceFileLoader
-import importlib.util
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from gui.utils.dirracuda_loader import load_dirracuda_module
 
 pytestmark = pytest.mark.scenario
 
 
-def _load_dirracuda_module():
-    path = Path(__file__).resolve().parents[2] / "dirracuda"
-    loader = SourceFileLoader("dirracuda_unification_ui_test", str(path))
-    spec = importlib.util.spec_from_loader(loader.name, loader)
-    module = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader
-    spec.loader.exec_module(module)
-    return module
-
-
-DIRRACUDA = _load_dirracuda_module()
+DIRRACUDA = load_dirracuda_module()
 
 
 class _FakeRoot:

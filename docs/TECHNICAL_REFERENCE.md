@@ -656,8 +656,9 @@ WHERE ip_address = '1.2.3.4';
 - Probe reads use DB-first resolution with file fallback when no DB snapshot is attached yet.
 
 **Startup migration orchestration (GUI startup):**
-- Canonical entrypoint `dirracuda` (and parity path `gui/main.py`) runs background startup unification via `gui/utils/db_unification.py`.
+- Canonical entrypoint `dirracuda` runs background startup unification via `gui/utils/db_unification.py`.
 - Includes idempotent legacy probe-cache backfill, targeted sidecar host-entity import, one-time keep/discard prompt for old cache files, and non-blocking warning+retry on migration failure.
+- `gui/main.py` is a compatibility shim only: it preserves import compatibility but exits non-zero when invoked as a runtime entrypoint.
 
 ### 5.3 Views
 
@@ -747,7 +748,7 @@ Constraints:
 
 ### 6.1 Entry Point and Component Hierarchy
 
-`dirracuda` is the authoritative GUI entry point. `gui/main.py` remains a deprecated legacy entry path for backward compatibility, but is still maintained with startup/close-flow parity.
+`dirracuda` is the authoritative GUI entry point. `gui/main.py` is a deprecated compatibility shim (import-only) and is not a supported runtime launch path.
 
 ```
 dirracuda

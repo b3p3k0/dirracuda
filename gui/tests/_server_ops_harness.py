@@ -10,7 +10,7 @@ import time
 import tkinter as tk
 from typing import Any, Dict, List, Optional
 
-import gui.main as main_module
+from gui.utils.dirracuda_loader import load_dirracuda_module
 from gui.components.server_list_window.actions.batch_operations import (
     ServerListWindowBatchOperationsMixin,
 )
@@ -19,6 +19,8 @@ from gui.components.server_list_window.actions.batch_status import (
 )
 from gui.dashboard.widget import DashboardWidget
 from gui.utils.running_tasks import get_running_task_registry
+
+main_module = load_dirracuda_module()
 
 
 class FakeButton:
@@ -592,10 +594,10 @@ def patch_main_shutdown_helpers(monkeypatch) -> None:
     monkeypatch.setattr(main_module, "cleanup_tmpfs_quarantine", lambda: {"ok": True, "message": ""})
 
 
-def make_main_app_stub() -> main_module.SMBSeekGUI:
-    """Construct a minimal SMBSeekGUI object for _on_closing tests."""
+def make_main_app_stub() -> object:
+    """Construct a minimal canonical app object for _on_closing tests."""
 
-    app = main_module.SMBSeekGUI.__new__(main_module.SMBSeekGUI)
+    app = main_module.XSMBSeekGUI.__new__(main_module.XSMBSeekGUI)
     app.root = FakeRoot()
     app._pending_tmpfs_startup_warning = None
     app.drill_down_windows = {}
@@ -605,6 +607,7 @@ def make_main_app_stub() -> main_module.SMBSeekGUI:
     app.settings_manager = None
     app.backend_interface = None
     app.mock_mode = False
+    app.config = SimpleNamespace(save_config=lambda: None)
     return app
 
 
