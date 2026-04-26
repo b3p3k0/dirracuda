@@ -315,7 +315,7 @@ class SMBSeekGUI:
         """Create and configure main application window."""
         self.root = tk.Tk()
         self.root.title("Dirracuda")
-        self.root.geometry("700x250")
+        self.root.geometry("700x315")
         
         # Apply theme
         apply_theme_to_window(self.root)
@@ -337,7 +337,7 @@ class SMBSeekGUI:
         Center the main window on screen using current tuning defaults.
         """
         target_width = 700
-        target_height = 250
+        target_height = 315
         
         # Calculate center position based on intended dimensions
         screen_width = self.root.winfo_screenwidth()

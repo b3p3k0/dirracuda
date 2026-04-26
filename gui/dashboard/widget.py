@@ -62,6 +62,17 @@ from shared.tmpfs_quarantine import get_tmpfs_runtime_state
 
 _logger = get_logger("dashboard")
 
+_SHODAN_STATUS_NO_KEY = "✖ Shodan API key configured <none>"
+_SHODAN_STATUS_CHECKING = "✔ Shodan API key configured <checking balance...>"
+_SHODAN_STATUS_UNAVAILABLE = "✔ Shodan API key configured <balance unavailable>"
+
+
+def _format_shodan_status_with_credits(credits: str) -> str:
+    value = str(credits or "").strip()
+    if not value:
+        return _SHODAN_STATUS_UNAVAILABLE
+    return f"✔ Shodan API key configured <query credits: {value}>"
+
 
 # ── Patch-safe helpers ────────────────────────────────────────────────────────
 
@@ -169,6 +180,11 @@ class DashboardWidget:
             master=self.parent,
             value=f"✖ tmpfs activated <{Path.home() / '.dirracuda' / 'quarantine_tmpfs'}>",
         )
+        self.shodan_status_text = tk.StringVar(
+            master=self.parent,
+            value=_SHODAN_STATUS_NO_KEY,
+        )
+        self._shodan_balance_refresh_generation = 0
         self._status_static_mode = True  # Keep status label static post-initialization
         self._status_summary_initialized = False
 
@@ -512,7 +528,7 @@ class DashboardWidget:
         footer.pack(fill=tk.X, padx=10, pady=(0, 12))
         footer.columnconfigure(0, weight=1)
         footer.columnconfigure(1, weight=0)
-        footer.rowconfigure(4, minsize=24)
+        footer.rowconfigure(5, minsize=24)
 
         clamav_status_label = tk.Label(
             footer,
@@ -538,6 +554,18 @@ class DashboardWidget:
         )
         tmpfs_status_label.grid(row=1, column=0, sticky="w", pady=(2, 0))
 
+        shodan_status_label = tk.Label(
+            footer,
+            textvariable=self.shodan_status_text,
+            anchor="w",
+            justify="left",
+            bg=self.theme.colors["card_bg"],
+            fg=self.theme.colors["text_secondary"],
+            font=self.theme.fonts["status"],
+            wraplength=520,
+        )
+        shodan_status_label.grid(row=2, column=0, sticky="w", pady=(2, 0))
+
         status_summary_label = tk.Label(
             footer,
             textvariable=self.status_text,
@@ -548,7 +576,7 @@ class DashboardWidget:
             font=self.theme.fonts["status"],
             wraplength=520
         )
-        status_summary_label.grid(row=2, column=0, sticky="w", pady=(4, 0))
+        status_summary_label.grid(row=3, column=0, sticky="w", pady=(4, 0))
 
         self.update_time_label = tk.Label(
             footer,
@@ -558,13 +586,13 @@ class DashboardWidget:
             fg=self.theme.colors["text_secondary"],
             font=self.theme.fonts["status"]
         )
-        self.update_time_label.grid(row=3, column=0, sticky="w", pady=(4, 0))
+        self.update_time_label.grid(row=4, column=0, sticky="w", pady=(4, 0))
 
         button_frame = tk.Frame(
             footer,
             bg=self.theme.colors["card_bg"]
         )
-        button_frame.grid(row=4, column=1, sticky="se", padx=(10, 0))
+        button_frame.grid(row=5, column=1, sticky="se", padx=(10, 0), pady=(20, 0))
 
         self.running_tasks_button = tk.Button(
             button_frame,
@@ -858,13 +886,87 @@ class DashboardWidget:
         return dashboard_status.compose_runtime_status_lines(clamav_cfg, tmpfs_state)
 
     def _update_runtime_status_display(self) -> None:
-        """Refresh runtime status rows for ClamAV and tmpfs."""
+        """Refresh runtime status rows for ClamAV, tmpfs, and Shodan key state."""
         try:
             clamav_line, tmpfs_line = self._compose_runtime_status_lines()
             self.clamav_status_text.set(clamav_line)
             self.tmpfs_status_text.set(tmpfs_line)
         except Exception as exc:
             _logger.debug("Failed to refresh runtime status rows: %s", exc)
+        try:
+            self._refresh_shodan_status_display()
+        except Exception as exc:
+            _logger.debug("Failed to refresh Shodan status row: %s", exc)
+
+    def _refresh_shodan_status_display(self) -> None:
+        """Set immediate Shodan key state and start async balance lookup when configured."""
+        self._shodan_balance_refresh_generation += 1
+        refresh_id = self._shodan_balance_refresh_generation
+
+        api_key = self._read_shodan_api_key_from_config()
+        if not api_key:
+            self.shodan_status_text.set(_SHODAN_STATUS_NO_KEY)
+            return
+
+        self.shodan_status_text.set(_SHODAN_STATUS_CHECKING)
+        self._start_shodan_balance_refresh(refresh_id, api_key)
+
+    def _start_shodan_balance_refresh(self, refresh_id: int, api_key: str) -> None:
+        """Launch background Shodan query-credit fetch."""
+        threading.Thread(
+            target=self._run_shodan_balance_refresh_worker,
+            args=(refresh_id, api_key),
+            name="dashboard-shodan-balance",
+            daemon=True,
+        ).start()
+
+    def _run_shodan_balance_refresh_worker(self, refresh_id: int, api_key: str) -> None:
+        """Resolve query credits in worker thread and hand off UI update to Tk thread."""
+        credits = self._fetch_shodan_query_credits(api_key)
+        try:
+            self.parent.after(
+                0,
+                lambda: self._finish_shodan_balance_refresh(refresh_id, credits),
+            )
+        except Exception:
+            # Parent likely torn down while worker finished; safe to drop.
+            pass
+
+    def _fetch_shodan_query_credits(self, api_key: str) -> Optional[str]:
+        """Return query credits display value for one API key, or None on failure."""
+        try:
+            import shodan
+        except Exception:
+            return None
+
+        try:
+            info = shodan.Shodan(api_key).info()
+        except Exception:
+            return None
+
+        if not isinstance(info, dict):
+            return None
+
+        credits = info.get("query_credits")
+        if isinstance(credits, bool):
+            return None
+        if isinstance(credits, int):
+            return str(credits)
+        if isinstance(credits, float):
+            return str(int(credits))
+        if isinstance(credits, str):
+            value = credits.strip()
+            return value or None
+        return None
+
+    def _finish_shodan_balance_refresh(self, refresh_id: int, credits: Optional[str]) -> None:
+        """Apply worker result if it matches latest refresh generation."""
+        if refresh_id != self._shodan_balance_refresh_generation:
+            return
+        if credits is None:
+            self.shodan_status_text.set(_SHODAN_STATUS_UNAVAILABLE)
+            return
+        self.shodan_status_text.set(_format_shodan_status_with_credits(credits))
 
     def _refresh_after_scan_completion(self) -> None:
         """

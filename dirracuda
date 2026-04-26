@@ -63,7 +63,7 @@ _logger = get_logger("dirracuda")
 # Canonical startup sizing for the Dirracuda frontend
 # (tuning phase: allow free resize after launch)
 WINDOW_WIDTH = 700
-WINDOW_HEIGHT = 270
+WINDOW_HEIGHT = 315
 WINDOW_GEOMETRY = f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}"
 
 LEET_MOTD_LINES = (
