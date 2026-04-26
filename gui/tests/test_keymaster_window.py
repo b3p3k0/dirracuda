@@ -35,7 +35,17 @@ if "impacket" not in sys.modules:
     sys.modules["impacket.smbconnection"] = _iconn
 
 import gui.components.keymaster_window as keymaster_window
-from gui.components.keymaster_window import KeymasterWindow, _mask_key
+from gui.components.keymaster_window import (
+    KeymasterWindow,
+    MAX_BURST_CREDIT_CHECKS,
+    _AUTO_CHECK_SETTING_KEY,
+    _mask_key,
+    _QUERY_CREDITS_NOT_CHECKED,
+    _QUERY_CREDITS_INVALID,
+    _QUERY_CREDITS_ERROR,
+    _classify_query_credit_error,
+    _is_retryable_query_credit_error,
+)
 from experimental.keymaster.models import PROVIDER_SHODAN
 
 
@@ -83,10 +93,20 @@ def _make_window(monkeypatch, *, db_path=None, config_path=None, settings_manage
     win._apply_btn = MagicMock()
     win._edit_btn = MagicMock()
     win._delete_btn = MagicMock()
+    win._recheck_btn = MagicMock()
+    win._recheck_selected_btn = MagicMock()
     win._context_menu = MagicMock()
     win.window = MagicMock()
+    win.window.after = lambda _ms, fn: fn()
+    win.window.winfo_exists.return_value = True
     win.theme = MagicMock()
     win.theme.colors = {"error": "red"}
+    win._query_credit_by_key_id = {}
+    win._credits_refresh_inflight = False
+    win._credits_refresh_generation = 0
+    win._total_saved_keys = 0
+    win._auto_check_var = MagicMock()
+    win._auto_check_var.get.return_value = True
     return win
 
 
@@ -399,6 +419,356 @@ def test_button_apply_calls_apply(monkeypatch):
     # Here we verify the method is the single path by calling it directly.
     win._apply_selected_key()
     assert called == [True]
+
+
+def test_context_menu_includes_recheck_all(monkeypatch):
+    win = _make_window(monkeypatch)
+    win._context_menu = MagicMock()
+    registered = []
+
+    def _add_command(**kw):
+        registered.append(kw)
+
+    win._context_menu.add_command = _add_command
+    win._context_menu.delete = MagicMock()
+    win._build_context_menu(None)
+
+    labels = [entry.get("label") for entry in registered]
+    assert "Recheck All" in labels
+
+
+def test_context_menu_disables_recheck_all_over_limit(monkeypatch):
+    win = _make_window(monkeypatch)
+    win._total_saved_keys = MAX_BURST_CREDIT_CHECKS + 1
+    win._context_menu = MagicMock()
+    registered = []
+
+    def _add_command(**kw):
+        registered.append(kw)
+
+    win._context_menu.add_command = _add_command
+    win._context_menu.delete = MagicMock()
+    win._build_context_menu(None)
+
+    entry = next(c for c in registered if c.get("label") == "Recheck All")
+    assert entry.get("state") == keymaster_window.tk.DISABLED
+
+
+def test_set_recheck_state_disables_recheck_all_over_limit(monkeypatch):
+    win = _make_window(monkeypatch)
+    win._selected_row = MagicMock(return_value={"key_id": 1})
+    win._total_saved_keys = MAX_BURST_CREDIT_CHECKS + 2
+
+    win._set_recheck_state(inflight=False)
+
+    assert win._recheck_btn.configure.call_args_list[-1].kwargs["state"] == keymaster_window.tk.DISABLED
+    assert (
+        win._recheck_selected_btn.configure.call_args_list[-1].kwargs["state"]
+        == keymaster_window.tk.NORMAL
+    )
+
+
+def test_classify_query_credit_error_invalid():
+    exc = RuntimeError("Invalid API key")
+    assert _classify_query_credit_error(exc) == _QUERY_CREDITS_INVALID
+
+
+def test_classify_query_credit_error_generic():
+    exc = RuntimeError("timed out")
+    assert _classify_query_credit_error(exc) == _QUERY_CREDITS_ERROR
+
+
+def test_is_retryable_query_credit_error_rate_limit():
+    exc = RuntimeError("429 Too Many Requests")
+    assert _is_retryable_query_credit_error(exc) is True
+
+
+def test_is_retryable_query_credit_error_non_retryable():
+    exc = RuntimeError("Invalid API key")
+    assert _is_retryable_query_credit_error(exc) is False
+
+
+def test_fetch_query_credit_display_success(monkeypatch):
+    win = _make_window(monkeypatch)
+
+    class _FakeApi:
+        def info(self):
+            return {"query_credits": 123}
+
+    fake_shodan = types.SimpleNamespace(Shodan=lambda _k: _FakeApi())
+    monkeypatch.setitem(sys.modules, "shodan", fake_shodan)
+
+    assert win._fetch_query_credit_display("KEY123") == "123"
+
+
+def test_fetch_query_credit_display_retries_transient_then_succeeds(monkeypatch):
+    win = _make_window(monkeypatch)
+    calls = {"n": 0}
+
+    class _FakeApi:
+        def info(self):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise RuntimeError("429 Too Many Requests")
+            return {"query_credits": 51}
+
+    fake_shodan = types.SimpleNamespace(Shodan=lambda _k: _FakeApi())
+    monkeypatch.setitem(sys.modules, "shodan", fake_shodan)
+    monkeypatch.setattr(keymaster_window.time, "sleep", lambda _s: None)
+
+    assert win._fetch_query_credit_display("KEY123") == "51"
+    assert calls["n"] == 3
+
+
+def test_start_query_credits_refresh_inflight_guard(monkeypatch):
+    win = _make_window(monkeypatch)
+    win._credits_refresh_inflight = True
+    win._status_var = MagicMock()
+
+    win._start_query_credits_refresh(user_initiated=True)
+
+    win._status_var.set.assert_called_with("Query credit check already in progress.")
+
+
+def test_start_query_credits_refresh_no_rows_user_initiated(monkeypatch):
+    win = _make_window(monkeypatch)
+    win._rows_for_credit_refresh = MagicMock(return_value=[])
+    win._status_var = MagicMock()
+
+    win._start_query_credits_refresh(user_initiated=True)
+
+    win._status_var.set.assert_called_with("No keys to check.")
+
+
+def test_start_query_credits_refresh_sets_checking_and_updates_results(monkeypatch):
+    win = _make_window(monkeypatch)
+    rows = [
+        {"key_id": 1, "api_key": "K1"},
+        {"key_id": 2, "api_key": "K2"},
+    ]
+    win._rows_for_credit_refresh = MagicMock(return_value=rows)
+    win._load_entries = MagicMock()
+    win._status_var = MagicMock()
+
+    values = {"K1": "91", "K2": "77"}
+    win._fetch_query_credit_display = lambda api_key: values[api_key]
+
+    class _ImmediateThread:
+        def __init__(self, *, target, args=(), daemon=None, name=None):
+            self._target = target
+            self._args = args
+
+        def start(self):
+            self._target(*self._args)
+
+    monkeypatch.setattr(keymaster_window.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(keymaster_window.time, "sleep", lambda _s: None)
+
+    win._start_query_credits_refresh(user_initiated=True)
+
+    assert win._query_credit_by_key_id[1] == "91"
+    assert win._query_credit_by_key_id[2] == "77"
+    assert win._credits_refresh_inflight is False
+    assert win._load_entries.call_count >= 2
+
+
+def test_start_query_credits_refresh_over_limit_skips_startup_without_modal(monkeypatch):
+    win = _make_window(monkeypatch)
+    rows = [{"key_id": i, "api_key": f"K{i}"} for i in range(1, MAX_BURST_CREDIT_CHECKS + 2)]
+    win._rows_for_credit_refresh = MagicMock(return_value=rows)
+    win._status_var = MagicMock()
+    win._set_recheck_state = MagicMock()
+
+    warnings = []
+    errors = []
+    monkeypatch.setattr(
+        "gui.components.keymaster_window.messagebox.showwarning",
+        lambda *a, **kw: warnings.append((a, kw)),
+    )
+    monkeypatch.setattr(
+        "gui.components.keymaster_window.messagebox.showerror",
+        lambda *a, **kw: errors.append((a, kw)),
+    )
+
+    win._start_query_credits_refresh(user_initiated=False, startup=True)
+
+    assert win._credits_refresh_inflight is False
+    assert warnings == []
+    assert errors == []
+    assert win._status_var.set.call_args_list[-1].args[0].startswith("Auto check skipped:")
+
+
+def test_start_query_credits_refresh_over_limit_skips_manual_without_modal(monkeypatch):
+    win = _make_window(monkeypatch)
+    rows = [{"key_id": i, "api_key": f"K{i}"} for i in range(1, MAX_BURST_CREDIT_CHECKS + 2)]
+    win._rows_for_credit_refresh = MagicMock(return_value=rows)
+    win._status_var = MagicMock()
+    win._set_recheck_state = MagicMock()
+
+    warnings = []
+    errors = []
+    monkeypatch.setattr(
+        "gui.components.keymaster_window.messagebox.showwarning",
+        lambda *a, **kw: warnings.append((a, kw)),
+    )
+    monkeypatch.setattr(
+        "gui.components.keymaster_window.messagebox.showerror",
+        lambda *a, **kw: errors.append((a, kw)),
+    )
+
+    win._start_query_credits_refresh(user_initiated=True, startup=False)
+
+    assert win._credits_refresh_inflight is False
+    assert warnings == []
+    assert errors == []
+    assert "Recheck All is disabled" in win._status_var.set.call_args_list[-1].args[0]
+
+
+def test_rows_for_credit_refresh_uses_unfiltered_lookup(monkeypatch, tmp_path):
+    db_path = tmp_path / "km.db"
+    from experimental.keymaster import store as km_store
+
+    km_store.init_db(db_path)
+    with km_store.open_connection(db_path) as conn:
+        km_store.create_key(conn, PROVIDER_SHODAN, "One", "KEY_ONE", "")
+        km_store.create_key(conn, PROVIDER_SHODAN, "Two", "KEY_TWO", "")
+        conn.commit()
+
+    win = _make_window(monkeypatch, db_path=db_path)
+    rows = win._rows_for_credit_refresh()
+    labels = sorted([row["label"] for row in rows])
+    assert labels == ["One", "Two"]
+
+
+def test_rows_for_credit_refresh_filters_selected_key_ids(monkeypatch, tmp_path):
+    db_path = tmp_path / "km.db"
+    from experimental.keymaster import store as km_store
+
+    km_store.init_db(db_path)
+    with km_store.open_connection(db_path) as conn:
+        id_one = km_store.create_key(conn, PROVIDER_SHODAN, "One", "KEY_ONE", "")
+        id_two = km_store.create_key(conn, PROVIDER_SHODAN, "Two", "KEY_TWO", "")
+        conn.commit()
+
+    win = _make_window(monkeypatch, db_path=db_path)
+    rows = win._rows_for_credit_refresh(only_key_ids={id_two})
+    assert len(rows) == 1
+    assert int(rows[0]["key_id"]) == int(id_two)
+    assert int(rows[0]["key_id"]) != int(id_one)
+
+
+def test_load_entries_shows_not_checked_when_missing_credit(monkeypatch, tmp_path):
+    db_path = tmp_path / "km.db"
+    from experimental.keymaster import store as km_store
+
+    km_store.init_db(db_path)
+    with km_store.open_connection(db_path) as conn:
+        km_store.create_key(conn, PROVIDER_SHODAN, "One", "KEY_ONE", "")
+        conn.commit()
+
+    win = _make_window(monkeypatch, db_path=db_path)
+    win._search_var.get.return_value = ""
+    win._tree.get_children.return_value = ()
+    win._tree.insert = MagicMock()
+
+    win._load_entries()
+
+    _, kwargs = win._tree.insert.call_args
+    values = kwargs["values"]
+    assert values[2] == _QUERY_CREDITS_NOT_CHECKED
+
+
+def test_on_recheck_selected_without_selection_sets_status(monkeypatch):
+    win = _make_window(monkeypatch)
+    win._selected_row = MagicMock(return_value=None)
+    win._status_var = MagicMock()
+
+    win._on_recheck_selected()
+
+    win._status_var.set.assert_called_with("Select a key to recheck.")
+
+
+def test_on_recheck_selected_starts_single_key_refresh(monkeypatch):
+    win = _make_window(monkeypatch)
+    win._total_saved_keys = MAX_BURST_CREDIT_CHECKS + 10
+    win._selected_row = MagicMock(return_value={"key_id": 17})
+    started = []
+
+    def _start(*, user_initiated, only_key_ids=None):
+        started.append((user_initiated, only_key_ids))
+
+    win._start_query_credits_refresh = _start
+    win._on_recheck_selected()
+
+    assert started == [(True, {17})]
+
+
+def test_context_menu_includes_recheck_selected_when_row_present(monkeypatch):
+    win = _make_window(monkeypatch)
+    win._context_menu = MagicMock()
+    registered = []
+
+    def _add_command(**kw):
+        registered.append(kw)
+
+    win._context_menu.add_command = _add_command
+    win._context_menu.delete = MagicMock()
+    win._build_context_menu({"key_id": 1, "label": "L"})
+
+    labels = [entry.get("label") for entry in registered]
+    assert "Recheck Selected" in labels
+
+
+def test_startup_refresh_skips_when_auto_check_disabled(monkeypatch):
+    win = _make_window(monkeypatch)
+    win._auto_check_var.get.return_value = False
+    win._status_var = MagicMock()
+    win._set_recheck_state = MagicMock()
+    win._start_query_credits_refresh = MagicMock()
+
+    win._run_startup_credit_refresh()
+
+    win._start_query_credits_refresh.assert_not_called()
+    assert win._status_var.set.call_args_list[-1].args[0] == "Auto check is off."
+
+
+def test_startup_refresh_runs_when_auto_check_enabled(monkeypatch):
+    win = _make_window(monkeypatch)
+    win._auto_check_var.get.return_value = True
+    win._start_query_credits_refresh = MagicMock()
+
+    win._run_startup_credit_refresh()
+
+    win._start_query_credits_refresh.assert_called_once_with(
+        user_initiated=False,
+        startup=True,
+    )
+
+
+def test_auto_check_setting_default_true_without_settings(monkeypatch):
+    win = _make_window(monkeypatch, settings_manager=None)
+    assert win._read_auto_check_setting() is True
+
+
+def test_auto_check_setting_reads_false_from_settings(monkeypatch):
+    sm = MagicMock()
+    sm.get_setting.return_value = False
+    win = _make_window(monkeypatch, settings_manager=sm)
+    assert win._read_auto_check_setting() is False
+
+
+def test_auto_check_toggle_persists_setting(monkeypatch):
+    sm = MagicMock()
+    win = _make_window(monkeypatch, settings_manager=sm)
+    win._auto_check_var.get.return_value = False
+    win._status_var = MagicMock()
+    win._set_recheck_state = MagicMock()
+    win._credits_refresh_inflight = False
+
+    win._on_auto_check_toggled()
+
+    sm.set_setting.assert_called_with(_AUTO_CHECK_SETTING_KEY, False)
+    assert win._status_var.set.call_args_list[-1].args[0] == "Auto check disabled."
 
 
 # ---------------------------------------------------------------------------

@@ -7,6 +7,8 @@ Modeless singleton window for managing reusable API keys.
 from __future__ import annotations
 
 import json
+import threading
+import time
 import tkinter as tk
 from tkinter import ttk
 from pathlib import Path
@@ -22,20 +24,78 @@ _WINDOW_INSTANCE = None
 
 _WINDOW_SETTINGS_NAME = "keymaster"
 _DEFAULT_GEOMETRY = "860x480"
+_AUTO_CHECK_SETTING_KEY = "keymaster.auto_check_query_credits"
+MAX_BURST_CREDIT_CHECKS = 5
 
 _COL_HEADERS = {
     "label": "Label",
     "key_preview": "Key Preview",
+    "query_credits": "Query Credits",
     "notes": "Notes",
     "last_used_at": "Last Used",
 }
 _COL_WIDTHS = {
-    "label": 200,
+    "label": 180,
     "key_preview": 180,
-    "notes": 260,
-    "last_used_at": 160,
+    "query_credits": 110,
+    "notes": 220,
+    "last_used_at": 150,
 }
-_COLS = ["label", "key_preview", "notes", "last_used_at"]
+_COLS = ["label", "key_preview", "query_credits", "notes", "last_used_at"]
+
+_QUERY_CREDITS_NOT_CHECKED = "Not checked"
+_QUERY_CREDITS_CHECKING = "Checking..."
+_QUERY_CREDITS_INVALID = "Invalid key"
+_QUERY_CREDITS_ERROR = "Error"
+
+_QUERY_CREDIT_MAX_ATTEMPTS = 3
+_QUERY_CREDIT_RETRY_DELAY_SECONDS = 0.85
+_QUERY_CREDIT_INTER_REQUEST_DELAY_SECONDS = 0.35
+_OVER_LIMIT_STARTUP_STATUS = (
+    f"Auto check skipped: more than {MAX_BURST_CREDIT_CHECKS} saved keys. "
+    "Use Recheck Selected."
+)
+_OVER_LIMIT_RECHECK_STATUS = (
+    f"Recheck All is disabled when you have more than {MAX_BURST_CREDIT_CHECKS} saved keys. "
+    "Use Recheck Selected."
+)
+
+
+def _classify_query_credit_error(exc: Exception) -> str:
+    """Map API exceptions to a safe UI status string."""
+    text = str(exc or "").strip().lower()
+    invalid_markers = (
+        "invalid api key",
+        "invalid key",
+        "invalid apikey",
+        "api key is invalid",
+        "unauthorized",
+        "forbidden",
+        "access denied",
+    )
+    if any(marker in text for marker in invalid_markers):
+        return _QUERY_CREDITS_INVALID
+    return _QUERY_CREDITS_ERROR
+
+
+def _is_retryable_query_credit_error(exc: Exception) -> bool:
+    """Identify transient API/network errors worth retrying."""
+    text = str(exc or "").strip().lower()
+    retry_markers = (
+        "rate limit",
+        "too many requests",
+        "429",
+        "timed out",
+        "timeout",
+        "temporarily unavailable",
+        "connection reset",
+        "connection aborted",
+        "service unavailable",
+        "bad gateway",
+        "gateway timeout",
+        "try again",
+    )
+    return any(marker in text for marker in retry_markers)
 
 
 def _window_instance_is_live(instance) -> bool:
@@ -251,6 +311,10 @@ class KeymasterWindow:
 
         self._row_by_iid: dict[str, dict] = {}
         self._context_menu: Optional[tk.Menu] = None
+        self._query_credit_by_key_id: dict[int, str] = {}
+        self._credits_refresh_inflight = False
+        self._credits_refresh_generation = 0
+        self._total_saved_keys = 0
 
         self._ensure_sidecar_ready()
         self.window = tk.Toplevel(parent)
@@ -262,6 +326,7 @@ class KeymasterWindow:
         self._restore_window_state()
         self._build_ui()
         self._load_entries()
+        self._schedule_startup_credit_refresh()
 
         self.window.protocol("WM_DELETE_WINDOW", self._on_close)
         self.window.bind("<Escape>", lambda _e: self._on_close())
@@ -308,6 +373,16 @@ class KeymasterWindow:
         search_entry.pack(side=tk.LEFT, padx=(6, 0))
         self._search_var.trace_add("write", lambda *_: self._load_entries())
 
+        self._auto_check_var = tk.BooleanVar(value=self._read_auto_check_setting())
+        auto_check_cb = tk.Checkbutton(
+            search_row,
+            text="Auto check",
+            variable=self._auto_check_var,
+        )
+        self.theme.apply_to_widget(auto_check_cb, "checkbox")
+        auto_check_cb.pack(side=tk.RIGHT)
+        self._auto_check_var.trace_add("write", lambda *_: self._on_auto_check_toggled())
+
         tree_frame = tk.Frame(outer)
         self.theme.apply_to_widget(tree_frame, "main_window")
         tree_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 4))
@@ -346,6 +421,19 @@ class KeymasterWindow:
         self.theme.apply_to_widget(add_btn, "button_secondary")
         add_btn.pack(side=tk.LEFT, padx=(0, 6))
 
+        self._recheck_btn = tk.Button(btn_row, text="Recheck All", command=self._on_recheck_all)
+        self.theme.apply_to_widget(self._recheck_btn, "button_secondary")
+        self._recheck_btn.pack(side=tk.LEFT, padx=(0, 6))
+
+        self._recheck_selected_btn = tk.Button(
+            btn_row,
+            text="Recheck Selected",
+            command=self._on_recheck_selected,
+        )
+        self.theme.apply_to_widget(self._recheck_selected_btn, "button_secondary")
+        self._recheck_selected_btn.configure(state=tk.DISABLED)
+        self._recheck_selected_btn.pack(side=tk.LEFT, padx=(0, 6))
+
         self._apply_btn = tk.Button(btn_row, text="Apply", command=self._apply_selected_key)
         self.theme.apply_to_widget(self._apply_btn, "button_primary")
         self._apply_btn.configure(state=tk.DISABLED)
@@ -375,20 +463,31 @@ class KeymasterWindow:
         try:
             with self._open_store_connection() as conn:
                 rows = km_store.list_keys(conn, PROVIDER_SHODAN, search_text=search_text)
+                if search_text.strip():
+                    all_rows = km_store.list_keys(conn, PROVIDER_SHODAN, search_text="")
+                    self._total_saved_keys = len(all_rows)
+                else:
+                    self._total_saved_keys = len(rows)
         except Exception as exc:
             self._status_var.set(f"Load error: {exc}")
+            self._total_saved_keys = 0
             self._set_action_state(None)
             return
 
         for row in rows:
             iid = str(row["key_id"])
+            key_id = int(row["key_id"])
             preview = _mask_key(row["api_key"])
             last_used = str(row["last_used_at"] or "")
+            credits = self._query_credit_by_key_id.get(
+                key_id,
+                _QUERY_CREDITS_NOT_CHECKED,
+            )
             self._tree.insert(
                 "",
                 tk.END,
                 iid=iid,
-                values=(row["label"], preview, row["notes"], last_used),
+                values=(row["label"], preview, credits, row["notes"], last_used),
             )
             self._row_by_iid[iid] = row
 
@@ -413,6 +512,7 @@ class KeymasterWindow:
         self._apply_btn.configure(state=state)
         self._edit_btn.configure(state=state)
         self._delete_btn.configure(state=state)
+        self._set_recheck_state(inflight=self._credits_refresh_inflight)
 
     # ------------------------------------------------------------------
     # Context menu
@@ -421,7 +521,23 @@ class KeymasterWindow:
     def _build_context_menu(self, row: Optional[dict]) -> None:
         self._context_menu.delete(0, tk.END)
         self._context_menu.add_command(label="Add", command=self._on_add)
+        recheck_all_state = (
+            tk.NORMAL
+            if (not self._credits_refresh_inflight and not self._is_over_burst_limit())
+            else tk.DISABLED
+        )
+        self._context_menu.add_command(
+            label="Recheck All",
+            command=self._on_recheck_all,
+            state=recheck_all_state,
+        )
         if row is not None:
+            selected_state = tk.NORMAL if not self._credits_refresh_inflight else tk.DISABLED
+            self._context_menu.add_command(
+                label="Recheck Selected",
+                command=self._on_recheck_selected,
+                state=selected_state,
+            )
             self._context_menu.add_command(label="Apply", command=self._apply_selected_key)
             self._context_menu.add_command(label="Edit", command=self._on_edit)
             self._context_menu.add_command(label="Delete", command=self._on_delete)
@@ -538,6 +654,253 @@ class KeymasterWindow:
             messagebox.showerror("Delete Failed", str(exc), parent=self.window)
             return
         self._load_entries()
+
+    def _on_recheck_all(self) -> None:
+        self._start_query_credits_refresh(user_initiated=True, startup=False)
+
+    def _on_recheck_selected(self) -> None:
+        row = self._selected_row()
+        if row is None:
+            self._status_var.set("Select a key to recheck.")
+            return
+        try:
+            key_id = int(row["key_id"])
+        except Exception:
+            self._status_var.set("Select a key to recheck.")
+            return
+        self._start_query_credits_refresh(
+            user_initiated=True,
+            only_key_ids={key_id},
+        )
+
+    def _schedule_startup_credit_refresh(self) -> None:
+        """Queue one startup refresh without blocking initial render."""
+        try:
+            self.window.after(
+                25,
+                self._run_startup_credit_refresh,
+            )
+        except Exception:
+            pass
+
+    def _run_startup_credit_refresh(self) -> None:
+        if not self._is_auto_check_enabled():
+            self._status_var.set("Auto check is off.")
+            self._set_recheck_state(inflight=False)
+            return
+        self._start_query_credits_refresh(user_initiated=False, startup=True)
+
+    def _read_auto_check_setting(self) -> bool:
+        if self.settings_manager is None:
+            return True
+        try:
+            return bool(
+                self.settings_manager.get_setting(
+                    _AUTO_CHECK_SETTING_KEY,
+                    True,
+                )
+            )
+        except Exception:
+            return True
+
+    def _is_auto_check_enabled(self) -> bool:
+        try:
+            return bool(self._auto_check_var.get())
+        except Exception:
+            return True
+
+    def _on_auto_check_toggled(self) -> None:
+        enabled = self._is_auto_check_enabled()
+        if self.settings_manager is not None:
+            try:
+                self.settings_manager.set_setting(_AUTO_CHECK_SETTING_KEY, enabled)
+            except Exception:
+                pass
+        self._status_var.set("Auto check enabled." if enabled else "Auto check disabled.")
+        self._set_recheck_state(inflight=self._credits_refresh_inflight)
+
+    def _is_over_burst_limit(self) -> bool:
+        return int(self._total_saved_keys) > MAX_BURST_CREDIT_CHECKS
+
+    def _guard_burst_credit_check(self, *, total_keys: int, startup: bool) -> bool:
+        if int(total_keys) <= MAX_BURST_CREDIT_CHECKS:
+            return True
+        self._status_var.set(_OVER_LIMIT_STARTUP_STATUS if startup else _OVER_LIMIT_RECHECK_STATUS)
+        self._set_recheck_state(inflight=False)
+        return False
+
+    def _set_recheck_state(self, *, inflight: bool) -> None:
+        recheck_all_enabled = (not inflight) and (not self._is_over_burst_limit())
+        state = tk.NORMAL if recheck_all_enabled else tk.DISABLED
+        try:
+            self._recheck_btn.configure(state=state)
+        except Exception:
+            pass
+        try:
+            selected_row = self._selected_row()
+        except Exception:
+            selected_row = None
+        selected_state = tk.NORMAL if (not inflight and selected_row is not None) else tk.DISABLED
+        try:
+            self._recheck_selected_btn.configure(state=selected_state)
+        except Exception:
+            pass
+
+    def _rows_for_credit_refresh(self, *, only_key_ids: Optional[set[int]] = None) -> list[dict]:
+        """Load all keys for provider, independent of search/filter state."""
+        with self._open_store_connection() as conn:
+            rows = km_store.list_keys(conn, PROVIDER_SHODAN, search_text="")
+        if only_key_ids:
+            filtered = []
+            for row in rows:
+                try:
+                    key_id = int(row.get("key_id"))
+                except Exception:
+                    continue
+                if key_id in only_key_ids:
+                    filtered.append(row)
+            return filtered
+        return rows
+
+    def _start_query_credits_refresh(
+        self,
+        *,
+        user_initiated: bool,
+        only_key_ids: Optional[set[int]] = None,
+        startup: bool = False,
+    ) -> None:
+        if self._credits_refresh_inflight:
+            if user_initiated:
+                self._status_var.set("Query credit check already in progress.")
+            return
+
+        try:
+            rows = self._rows_for_credit_refresh(only_key_ids=only_key_ids)
+        except Exception:
+            if user_initiated:
+                self._status_var.set("Query credit check failed.")
+            return
+
+        if not rows:
+            if user_initiated:
+                self._status_var.set("No keys to check.")
+            return
+
+        if only_key_ids is None and not self._guard_burst_credit_check(
+            total_keys=len(rows),
+            startup=startup,
+        ):
+            return
+
+        self._credits_refresh_inflight = True
+        self._set_recheck_state(inflight=True)
+        self._credits_refresh_generation += 1
+        refresh_id = self._credits_refresh_generation
+
+        for row in rows:
+            try:
+                key_id = int(row["key_id"])
+            except Exception:
+                continue
+            self._query_credit_by_key_id[key_id] = _QUERY_CREDITS_CHECKING
+
+        self._load_entries()
+        if len(rows) == 1:
+            self._status_var.set("Checking query credits for selected key...")
+        else:
+            self._status_var.set("Checking query credits...")
+
+        worker = threading.Thread(
+            target=self._run_query_credit_refresh_worker,
+            args=(refresh_id, rows),
+            daemon=True,
+            name="keymaster-credit-refresh",
+        )
+        worker.start()
+
+    def _run_query_credit_refresh_worker(self, refresh_id: int, rows: list[dict]) -> None:
+        results: dict[int, str] = {}
+        for index, row in enumerate(rows):
+            try:
+                key_id = int(row.get("key_id"))
+            except Exception:
+                continue
+
+            api_key = str(row.get("api_key") or "").strip()
+            if not api_key:
+                results[key_id] = _QUERY_CREDITS_INVALID
+                continue
+
+            results[key_id] = self._fetch_query_credit_display(api_key)
+            if index < (len(rows) - 1):
+                time.sleep(_QUERY_CREDIT_INTER_REQUEST_DELAY_SECONDS)
+
+        try:
+            self.window.after(
+                0,
+                lambda: self._finish_query_credit_refresh(refresh_id, results),
+            )
+        except Exception:
+            # Window likely closed; safe to drop worker result.
+            pass
+
+    def _fetch_query_credit_display(self, api_key: str) -> str:
+        try:
+            import shodan
+        except Exception:
+            return _QUERY_CREDITS_ERROR
+
+        last_exc: Optional[Exception] = None
+        for attempt in range(1, _QUERY_CREDIT_MAX_ATTEMPTS + 1):
+            try:
+                info = shodan.Shodan(api_key).info()
+                break
+            except Exception as exc:
+                last_exc = exc
+                if (
+                    attempt < _QUERY_CREDIT_MAX_ATTEMPTS
+                    and _is_retryable_query_credit_error(exc)
+                ):
+                    time.sleep(_QUERY_CREDIT_RETRY_DELAY_SECONDS)
+                    continue
+                return _classify_query_credit_error(exc)
+        else:
+            if last_exc is None:
+                return _QUERY_CREDITS_ERROR
+            return _classify_query_credit_error(last_exc)
+
+        if not isinstance(info, dict):
+            return _QUERY_CREDITS_ERROR
+
+        credits = info.get("query_credits")
+        if isinstance(credits, bool):
+            return _QUERY_CREDITS_ERROR
+        if isinstance(credits, int):
+            return str(credits)
+        if isinstance(credits, float):
+            return str(int(credits))
+        if isinstance(credits, str) and credits.strip():
+            return credits.strip()
+        return _QUERY_CREDITS_ERROR
+
+    def _finish_query_credit_refresh(self, refresh_id: int, results: dict[int, str]) -> None:
+        if refresh_id != self._credits_refresh_generation:
+            return
+
+        self._credits_refresh_inflight = False
+        self._set_recheck_state(inflight=False)
+
+        for key_id, display in results.items():
+            self._query_credit_by_key_id[int(key_id)] = str(display or _QUERY_CREDITS_ERROR)
+
+        try:
+            if not bool(self.window.winfo_exists()):
+                return
+        except Exception:
+            return
+
+        self._load_entries()
+        self._status_var.set(f"Updated query credits for {len(results)} key(s).")
 
     # ------------------------------------------------------------------
     # Apply (stub — full implementation in C3)
