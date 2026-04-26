@@ -53,6 +53,9 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
         if job_type == "pry" and not getattr(self, "_pry_unlocked", False):
             messagebox.showwarning("Pry Disabled", "Pry is disabled for this session.")
             return
+        rce_unlocked = bool(getattr(self, "_rce_unlocked", getattr(self, "_pry_unlocked", False)))
+        if job_type == "probe" and not rce_unlocked and bool((options or {}).get("enable_rce", False)):
+            options = {**(options or {}), "enable_rce": False}
 
         # Enforce max concurrent jobs
         if len(self.active_jobs) >= 3:
@@ -367,7 +370,8 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
         max_dirs = max(1, int(limits.get("max_directories", 3)))
         max_files = max(1, int(limits.get("max_files", 5)))
         timeout_seconds = max(1, int(limits.get("timeout_seconds", 10)))
-        enable_rce = bool(options.get("enable_rce", False))
+        rce_unlocked = bool(getattr(self, "_rce_unlocked", getattr(self, "_pry_unlocked", False)))
+        enable_rce = bool(options.get("enable_rce", False)) if rce_unlocked else False
 
         username, password = details._derive_credentials(target.get("auth_method", ""))
 

@@ -46,6 +46,7 @@ class UnifiedScanDialog:
         config_editor_callback: Optional[Callable[[str], None]] = None,
         query_editor_callback: Optional[Callable[[], None]] = None,
         reddit_grab_callback: Optional[Callable[[], None]] = None,
+        show_rce_controls: bool = False,
     ) -> None:
         self.parent = parent
         self.config_path = Path(config_path).resolve()
@@ -54,6 +55,7 @@ class UnifiedScanDialog:
         self.config_editor_callback = config_editor_callback
         self.query_editor_callback = query_editor_callback
         self.reddit_grab_callback = reddit_grab_callback
+        self.show_rce_controls = bool(show_rce_controls)
         self.theme = get_theme()
         self.template_store = TemplateStore(settings_manager=settings_manager)
 
@@ -196,9 +198,12 @@ class UnifiedScanDialog:
             self.skip_indicator_extract_var.set(
                 _coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.bulk_extract_skip_indicators", True), True)
             )
-            self.rce_enabled_var.set(
-                _coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.rce_enabled", False), False)
-            )
+            if self.show_rce_controls:
+                self.rce_enabled_var.set(
+                    _coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.rce_enabled", False), False)
+                )
+            else:
+                self.rce_enabled_var.set(False)
 
             mode = str(self._settings_manager.get_setting("unified_scan_dialog.security_mode", "cautious")).strip().lower()
             self.security_mode_var.set(mode if mode in {"cautious", "legacy"} else "cautious")
@@ -264,7 +269,8 @@ class UnifiedScanDialog:
             self._settings_manager.set_setting("unified_scan_dialog.bulk_probe_enabled", bool(self.bulk_probe_enabled_var.get()))
             self._settings_manager.set_setting("unified_scan_dialog.bulk_extract_enabled", bool(self.bulk_extract_enabled_var.get()))
             self._settings_manager.set_setting("unified_scan_dialog.bulk_extract_skip_indicators", bool(self.skip_indicator_extract_var.get()))
-            self._settings_manager.set_setting("unified_scan_dialog.rce_enabled", bool(self.rce_enabled_var.get()))
+            if self.show_rce_controls:
+                self._settings_manager.set_setting("unified_scan_dialog.rce_enabled", bool(self.rce_enabled_var.get()))
 
             mode = (self.security_mode_var.get() or "cautious").strip().lower()
             if mode not in {"cautious", "legacy"}:
@@ -582,7 +588,7 @@ class UnifiedScanDialog:
             "bulk_probe_enabled": self.bulk_probe_enabled_var.get(),
             "bulk_extract_enabled": self.bulk_extract_enabled_var.get(),
             "bulk_extract_skip_indicators": self.skip_indicator_extract_var.get(),
-            "rce_enabled": self.rce_enabled_var.get(),
+            "rce_enabled": self.rce_enabled_var.get() if self.show_rce_controls else False,
             "security_mode": self.security_mode_var.get(),
             "allow_insecure_tls": self.allow_insecure_tls_var.get(),
         }
@@ -620,7 +626,10 @@ class UnifiedScanDialog:
         self.bulk_probe_enabled_var.set(bool(state.get("bulk_probe_enabled", False)))
         self.bulk_extract_enabled_var.set(bool(state.get("bulk_extract_enabled", False)))
         self.skip_indicator_extract_var.set(bool(state.get("bulk_extract_skip_indicators", True)))
-        self.rce_enabled_var.set(bool(state.get("rce_enabled", False)))
+        if self.show_rce_controls:
+            self.rce_enabled_var.set(bool(state.get("rce_enabled", False)))
+        else:
+            self.rce_enabled_var.set(False)
 
         mode = str(state.get("security_mode", "cautious")).strip().lower()
         self.security_mode_var.set(mode if mode in {"cautious", "legacy"} else "cautious")
@@ -917,22 +926,28 @@ class UnifiedScanDialog:
         self.theme.apply_to_widget(skip_cb, "checkbox")
         skip_cb.pack(anchor="w", padx=10, pady=(2, 2))
 
-        rce_cb = tk.Checkbutton(
-            container,
-            text="Enable RCE analysis",
-            variable=self.rce_enabled_var,
-            font=self.theme.fonts["small"],
-        )
-        self.theme.apply_to_widget(rce_cb, "checkbox")
-        rce_cb.pack(anchor="w", padx=10, pady=(2, 2))
+        if self.show_rce_controls:
+            rce_cb = tk.Checkbutton(
+                container,
+                text="Enable RCE analysis",
+                variable=self.rce_enabled_var,
+                font=self.theme.fonts["small"],
+            )
+            self.theme.apply_to_widget(rce_cb, "checkbox")
+            rce_cb.pack(anchor="w", padx=10, pady=(2, 2))
 
-        rce_hint = self.theme.create_styled_label(
-            container,
-            "RCE analysis currently applies to SMB probe flow only.",
-            "small",
-            fg=self.theme.colors["text_secondary"],
-        )
-        rce_hint.pack(anchor="w", padx=15, pady=(0, 5))
+            rce_hint = self.theme.create_styled_label(
+                container,
+                "RCE analysis currently applies to SMB probe flow only.",
+                "small",
+                fg=self.theme.colors["text_secondary"],
+            )
+            rce_hint.pack(anchor="w", padx=15, pady=(0, 5))
+        else:
+            rce_spacer = tk.Frame(container, height=46)
+            self.theme.apply_to_widget(rce_spacer, "card")
+            rce_spacer.pack(fill=tk.X, padx=10, pady=(2, 7))
+            rce_spacer.pack_propagate(False)
 
         extract_hint = self.theme.create_styled_label(
             container,
@@ -1301,7 +1316,7 @@ class UnifiedScanDialog:
             "bulk_probe_enabled": bool(self.bulk_probe_enabled_var.get()),
             "bulk_extract_enabled": bool(self.bulk_extract_enabled_var.get()),
             "bulk_extract_skip_indicators": bool(self.skip_indicator_extract_var.get()),
-            "rce_enabled": bool(self.rce_enabled_var.get()),
+            "rce_enabled": bool(self.rce_enabled_var.get()) if self.show_rce_controls else False,
             "security_mode": mode,
             "allow_insecure_tls": bool(self.allow_insecure_tls_var.get()),
         }
@@ -1372,6 +1387,7 @@ def show_unified_scan_dialog(
     config_editor_callback: Optional[Callable[[str], None]] = None,
     query_editor_callback: Optional[Callable[[], None]] = None,
     reddit_grab_callback: Optional[Callable[[], None]] = None,
+    show_rce_controls: bool = False,
 ) -> Optional[str]:
     """Show the unified scan launch dialog as a single-instance window."""
     global _ACTIVE_UNIFIED_SCAN_DIALOG
@@ -1387,6 +1403,7 @@ def show_unified_scan_dialog(
         config_editor_callback=config_editor_callback,
         query_editor_callback=query_editor_callback,
         reddit_grab_callback=reddit_grab_callback,
+        show_rce_controls=show_rce_controls,
     )
     _ACTIVE_UNIFIED_SCAN_DIALOG = dialog
     try:

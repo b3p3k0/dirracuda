@@ -675,6 +675,13 @@ def _create_rce_analysis_option(self, parent_frame: tk.Frame) -> None:
     )
     confidence_label.pack(anchor="w", padx=15, pady=(0, 5))
 
+def _create_hidden_rce_spacer_option(self, parent_frame: tk.Frame) -> None:
+    """Reserve visual spacing when RCE controls are hidden."""
+    container = tk.Frame(parent_frame, height=120)
+    self.theme.apply_to_widget(container, "card")
+    container.pack(fill=tk.X, padx=15, pady=(0, 10))
+    container.pack_propagate(False)
+
 def _create_bulk_probe_option(self, parent_frame: tk.Frame) -> None:
     """Create bulk probe automation checkbox."""
     container = tk.Frame(parent_frame)
@@ -1099,6 +1106,7 @@ def bind_scan_dialog_layout_methods(dialog_cls) -> None:
         "_create_verbose_option",
         "_create_security_mode_option",
         "_create_rce_analysis_option",
+        "_create_hidden_rce_spacer_option",
         "_create_bulk_probe_option",
         "_create_bulk_extract_option",
         "_create_concurrency_options",

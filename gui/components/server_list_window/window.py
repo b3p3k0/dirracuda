@@ -99,6 +99,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self.theme = get_theme()
         self.window_data = window_data or {}
         self._pry_unlocked = bool(self.window_data.get("_pry_unlocked", False))
+        self._rce_unlocked = bool(self.window_data.get("_rce_unlocked", self._pry_unlocked))
         self.settings_manager = settings_manager
         self.probe_status_map = {}
         self.ransomware_indicators = []
@@ -537,7 +538,10 @@ class ServerListWindow(ServerListWindowActionsMixin):
 
         # Create table using module
         self.table_frame, self.tree, self.scrollbar_v, self.scrollbar_h = table.create_server_table(
-            self.window, self.theme, table_callbacks
+            self.window,
+            self.theme,
+            table_callbacks,
+            show_rce_column=self._rce_unlocked,
         )
 
         self._create_context_menu(self.tree)
@@ -1161,7 +1165,8 @@ class ServerListWindow(ServerListWindowActionsMixin):
             probe_callback=self._launch_probe_from_detail,
             extract_callback=self._launch_extract_from_detail,
             browse_callback=self._launch_browse_from_detail,
-            rce_status_callback=self._handle_rce_status_update
+            rce_status_callback=self._handle_rce_status_update,
+            show_rce_controls=self._rce_unlocked,
         )
 
     def _export_selected_servers(self) -> None:

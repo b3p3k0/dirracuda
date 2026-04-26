@@ -58,7 +58,8 @@ class ScanDialog:
                  config_editor_callback: Callable[[str], None],
                  scan_start_callback: Callable[[Dict[str, Any]], None],
                  backend_interface: Optional[Any] = None,
-                 settings_manager: Optional[Any] = None):
+                 settings_manager: Optional[Any] = None,
+                 show_rce_controls: bool = False):
         """
         Initialize scan dialog.
 
@@ -69,6 +70,7 @@ class ScanDialog:
             scan_start_callback: Function to start scan with scan options dict
             backend_interface: Optional backend interface for future use
             settings_manager: Optional settings manager for scan defaults
+            show_rce_controls: Whether to expose hidden RCE controls
         """
         self.parent = parent
         self.config_path = Path(config_path).resolve()
@@ -79,6 +81,7 @@ class ScanDialog:
         # Optional components for future use (prefixed to avoid static analyzer warnings)
         self._backend_interface = backend_interface
         self._settings_manager = settings_manager
+        self.show_rce_controls = bool(show_rce_controls)
         self.template_store = TemplateStore(settings_manager=settings_manager)
 
         # Dialog result
@@ -386,7 +389,10 @@ class ScanDialog:
         self._create_security_mode_option(right_column)
         self._create_bulk_probe_option(right_column)
         self._create_bulk_extract_option(right_column)
-        self._create_rce_analysis_option(right_column)
+        if self.show_rce_controls:
+            self._create_rce_analysis_option(right_column)
+        else:
+            self._create_hidden_rce_spacer_option(right_column)
         self._create_rescan_options(right_column)
         self._create_api_key_option(right_column)
 
@@ -750,7 +756,8 @@ class ScanDialog:
                 self._settings_manager.set_setting('scan_dialog.share_access_delay', share_access_delay)
                 self._settings_manager.set_setting('scan_dialog.security_mode', security_mode)
                 self._settings_manager.set_setting('scan_dialog.verbose', verbose_enabled)
-                self._settings_manager.set_setting('scan_dialog.rce_enabled', self.rce_enabled_var.get())
+                if self.show_rce_controls:
+                    self._settings_manager.set_setting('scan_dialog.rce_enabled', self.rce_enabled_var.get())
                 self._settings_manager.set_setting('scan_dialog.bulk_probe_enabled', self.bulk_probe_enabled_var.get())
                 self._settings_manager.set_setting('scan_dialog.bulk_extract_enabled', self.bulk_extract_enabled_var.get())
                 self._settings_manager.set_setting('scan_dialog.bulk_extract_skip_indicators', self.skip_indicator_extract_var.get())
@@ -780,7 +787,7 @@ class ScanDialog:
             'share_access_delay': share_access_delay,
             'security_mode': security_mode,
             'verbose': verbose_enabled,
-            'rce_enabled': self.rce_enabled_var.get(),
+            'rce_enabled': bool(self.rce_enabled_var.get()) if self.show_rce_controls else False,
             'bulk_probe_enabled': self.bulk_probe_enabled_var.get(),
             'bulk_extract_enabled': self.bulk_extract_enabled_var.get(),
             'bulk_extract_skip_indicators': self.skip_indicator_extract_var.get()
@@ -830,8 +837,11 @@ class ScanDialog:
                 self.verbose_var.set(verbose_enabled)
 
                 # Load RCE analysis setting
-                rce_enabled = bool(self._settings_manager.get_setting('scan_dialog.rce_enabled', False))
-                self.rce_enabled_var.set(rce_enabled)
+                if self.show_rce_controls:
+                    rce_enabled = bool(self._settings_manager.get_setting('scan_dialog.rce_enabled', False))
+                    self.rce_enabled_var.set(rce_enabled)
+                else:
+                    self.rce_enabled_var.set(False)
 
                 # Load bulk operation settings
                 bulk_probe_enabled = bool(self._settings_manager.get_setting('scan_dialog.bulk_probe_enabled', False))
@@ -1005,7 +1015,8 @@ def show_scan_dialog(parent: tk.Widget, config_path: str,
                     config_editor_callback: Callable[[str], None],
                     scan_start_callback: Callable[[Dict[str, Any]], None],
                     backend_interface: Optional[Any] = None,
-                    settings_manager: Optional[Any] = None) -> Optional[str]:
+                    settings_manager: Optional[Any] = None,
+                    show_rce_controls: bool = False) -> Optional[str]:
     """
     Show scan configuration dialog as a single-instance window.
 
@@ -1016,6 +1027,7 @@ def show_scan_dialog(parent: tk.Widget, config_path: str,
         scan_start_callback: Function to start scan with scan options dict
         backend_interface: Optional backend interface for future use
         settings_manager: Optional settings manager for scan defaults
+        show_rce_controls: Whether to expose hidden RCE controls
 
     Returns:
         Dialog result ("start", "cancel", or None)
@@ -1026,7 +1038,7 @@ def show_scan_dialog(parent: tk.Widget, config_path: str,
         return None
 
     dialog = ScanDialog(parent, config_path, config_editor_callback, scan_start_callback,
-                       backend_interface, settings_manager)
+                       backend_interface, settings_manager, show_rce_controls=show_rce_controls)
     _ACTIVE_SCAN_DIALOG = dialog
     try:
         return dialog.show()

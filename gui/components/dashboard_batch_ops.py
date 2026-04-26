@@ -484,6 +484,8 @@ def execute_batch_probe(dash, servers: List[Dict[str, Any]]) -> List[Dict[str, A
             dash.settings_manager.get_setting('scan_dialog.rce_enabled', False)
         )
     )
+    if not bool(getattr(dash, "_rce_unlocked", True)):
+        enable_rce = False
 
     results: List[Dict[str, Any]] = []
     cancel_event = _d("threading").Event()

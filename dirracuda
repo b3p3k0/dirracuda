@@ -582,6 +582,7 @@ class XSMBSeekGUI:
         self.mock_mode = mock_mode
         self.cli_database_path = database_path
         self._pry_unlocked = bool(pry_unlocked)
+        self._rce_unlocked = self._pry_unlocked
         
         # Initialize configuration system
         # Configuration Architecture:
@@ -895,7 +896,8 @@ class XSMBSeekGUI:
             self.root,
             self.db_reader,
             self.backend_interface,
-            str(smbseek_config_path)
+            str(smbseek_config_path),
+            rce_unlocked=self._rce_unlocked,
         )
         
         # Set callbacks
@@ -998,6 +1000,7 @@ class XSMBSeekGUI:
                     # Create new window and track it
                     window_data = dict(data or {})
                     window_data["_pry_unlocked"] = self._pry_unlocked
+                    window_data["_rce_unlocked"] = self._rce_unlocked
                     window = open_server_list_window(self.root, self.db_reader, window_data, self.settings_manager)
                     self.drill_down_windows['server_list'] = window
             elif window_type == "config_editor":
@@ -1019,7 +1022,10 @@ class XSMBSeekGUI:
                 server_window = ServerListWindow(
                     self.root,
                     self.db_reader,
-                    {"_pry_unlocked": self._pry_unlocked},
+                    {
+                        "_pry_unlocked": self._pry_unlocked,
+                        "_rce_unlocked": self._rce_unlocked,
+                    },
                 )
                 server_window.apply_recent_discoveries_filter()
             else:

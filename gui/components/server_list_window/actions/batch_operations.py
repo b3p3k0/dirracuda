@@ -1032,11 +1032,13 @@ class ServerListWindowBatchOperationsMixin:
     def _prompt_probe_batch_settings(self, target_count: int) -> Optional[Dict[str, Any]]:
         config = details._load_probe_config(self.settings_manager)
         default_workers = 3
+        rce_unlocked = bool(getattr(self, "_rce_unlocked", getattr(self, "_pry_unlocked", False)))
         enable_rce_default = False
         if self.settings_manager:
             default_workers = int(self.settings_manager.get_setting('probe.batch_max_workers', default_workers))
-            rce_pref = self.settings_manager.get_setting('probe_dialog.rce_enabled', None)
-            enable_rce_default = bool(rce_pref) if rce_pref is not None else bool(self.settings_manager.get_setting('scan_dialog.rce_enabled', False))
+            if rce_unlocked:
+                rce_pref = self.settings_manager.get_setting('probe_dialog.rce_enabled', None)
+                enable_rce_default = bool(rce_pref) if rce_pref is not None else bool(self.settings_manager.get_setting('scan_dialog.rce_enabled', False))
 
         default_workers = max(1, min(8, default_workers))
 
@@ -1065,7 +1067,19 @@ class ServerListWindowBatchOperationsMixin:
         add_labeled_entry(3, "Max files/directory:", max_files_var)
         add_labeled_entry(4, "Timeout per share (s):", timeout_var)
 
-        tk.Checkbutton(dialog, text="Enable RCE analysis", variable=rce_var).grid(row=5, column=0, columnspan=2, padx=10, pady=(5, 10), sticky="w")
+        if rce_unlocked:
+            tk.Checkbutton(dialog, text="Enable RCE analysis", variable=rce_var).grid(
+                row=5,
+                column=0,
+                columnspan=2,
+                padx=10,
+                pady=(5, 10),
+                sticky="w",
+            )
+        else:
+            spacer = tk.Frame(dialog, height=24)
+            spacer.grid(row=5, column=0, columnspan=2, padx=10, pady=(5, 10), sticky="we")
+            spacer.grid_propagate(False)
 
         result: Dict[str, Any] = {}
 
@@ -1084,11 +1098,12 @@ class ServerListWindowBatchOperationsMixin:
                 self.settings_manager.set_setting('probe.max_directories_per_share', max_dirs)
                 self.settings_manager.set_setting('probe.max_files_per_directory', max_files)
                 self.settings_manager.set_setting('probe.share_timeout_seconds', timeout_val)
-                self.settings_manager.set_setting('probe_dialog.rce_enabled', bool(rce_var.get()))
+                if rce_unlocked:
+                    self.settings_manager.set_setting('probe_dialog.rce_enabled', bool(rce_var.get()))
 
             result.update({
                 "worker_count": workers,
-                "enable_rce": bool(rce_var.get()),
+                "enable_rce": bool(rce_var.get()) if rce_unlocked else False,
                 "limits": {
                     "max_directories": max_dirs,
                     "max_files": max_files,

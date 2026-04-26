@@ -38,7 +38,8 @@ from shared.quarantine import create_quarantine_dir
 def show_server_detail_popup(parent_window, server_data, theme, settings_manager=None,
                              probe_status_callback=None, indicator_patterns: Optional[Sequence[probe_patterns.IndicatorPattern]] = None,
                              probe_callback=None, extract_callback=None, browse_callback=None,
-                             rce_status_callback=None):
+                             rce_status_callback=None,
+                             show_rce_controls: bool = False):
     """
     Show server detail popup window.
 
@@ -87,7 +88,12 @@ def show_server_detail_popup(parent_window, server_data, theme, settings_manager
     )
     if cached_probe and indicator_patterns:
         probe_patterns.attach_indicator_analysis(cached_probe, indicator_patterns)
-    _render_server_details(text_widget, server_data, cached_probe)
+    _render_server_details(
+        text_widget,
+        server_data,
+        cached_probe,
+        show_rce_details=bool(show_rce_controls),
+    )
 
     # Status label for probe feedback
     status_var = tk.StringVar(value="")
@@ -400,10 +406,11 @@ def _format_server_details(server: Dict[str, Any], probe_section: Optional[str] 
 def _render_server_details(
     text_widget: tk.Text,
     server: Dict[str, Any],
-    probe_result: Optional[Dict[str, Any]]
+    probe_result: Optional[Dict[str, Any]],
+    show_rce_details: bool = True,
 ) -> None:
     """Render server details with probe section embedded."""
-    probe_text = _format_probe_section(probe_result)
+    probe_text = _format_probe_section(probe_result, show_rce_details=show_rce_details)
     full_text = _format_server_details(server, probe_text)
 
     text_widget.configure(state=tk.NORMAL)
@@ -412,7 +419,11 @@ def _render_server_details(
     text_widget.configure(state=tk.DISABLED)
 
 
-def _format_probe_section(probe_result: Optional[Dict[str, Any]]) -> str:
+def _format_probe_section(
+    probe_result: Optional[Dict[str, Any]],
+    *,
+    show_rce_details: bool = True,
+) -> str:
     """Return formatted probe section text."""
     if not probe_result:
         return "🔍 Probe:\n   No probe has been run for this host yet.\n"
@@ -482,10 +493,11 @@ def _format_probe_section(probe_result: Optional[Dict[str, Any]]) -> str:
     else:
         lines.append("   No shares were successfully probed.")
 
-    rce_lines = _format_rce_summary(probe_result.get("rce_analysis"))
-    if rce_lines:
-        lines.append("")
-        lines.extend(rce_lines)
+    if show_rce_details:
+        rce_lines = _format_rce_summary(probe_result.get("rce_analysis"))
+        if rce_lines:
+            lines.append("")
+            lines.extend(rce_lines)
 
     analysis = probe_result.get("indicator_analysis") if probe_result else None
     if analysis:
@@ -654,7 +666,8 @@ def _start_probe(
     config_override: Optional[Dict[str, int]] = None,
     probe_status_callback=None,
     rce_status_callback=None,
-    enable_rce_override: Optional[bool] = None
+    enable_rce_override: Optional[bool] = None,
+    show_rce_controls: bool = False,
 ) -> None:
     """Trigger background probe run."""
     if probe_state.get("running"):
@@ -677,11 +690,14 @@ def _start_probe(
     indicator_patterns = probe_state.get("indicator_patterns") or []
 
     # Check if RCE analysis is enabled
-    if enable_rce_override is not None:
-        enable_rce = enable_rce_override
-    elif settings_manager:
-        probe_pref = settings_manager.get_setting('probe_dialog.rce_enabled', None)
-        enable_rce = probe_pref if probe_pref is not None else settings_manager.get_setting('scan_dialog.rce_enabled', False)
+    if show_rce_controls:
+        if enable_rce_override is not None:
+            enable_rce = enable_rce_override
+        elif settings_manager:
+            probe_pref = settings_manager.get_setting('probe_dialog.rce_enabled', None)
+            enable_rce = probe_pref if probe_pref is not None else settings_manager.get_setting('scan_dialog.rce_enabled', False)
+        else:
+            enable_rce = False
     else:
         enable_rce = False
     status_var.set("Probing accessible shares…")
@@ -847,7 +863,12 @@ def _start_probe(
                     status_var.set(f"Probe completed at {result.get('run_at', 'unknown')}")
                 if probe_button:
                     probe_button.configure(state=tk.NORMAL)
-                _render_server_details(text_widget, server_data, result)
+                _render_server_details(
+                    text_widget,
+                    server_data,
+                    result,
+                    show_rce_details=bool(show_rce_controls),
+                )
                 if probe_status_callback:
                     try:
                         probe_status_callback(
@@ -894,7 +915,8 @@ def _open_probe_dialog(
     theme,
     probe_button: Optional[tk.Button],
     probe_status_callback=None,
-    rce_status_callback=None
+    rce_status_callback=None,
+    show_rce_controls: bool = False,
 ) -> None:
     """Show settings + launch dialog for probes."""
     running = probe_state.get("running")
@@ -924,7 +946,7 @@ def _open_probe_dialog(
     timeout_var = tk.IntVar(value=config["timeout_seconds"])
     tk.Entry(dialog, textvariable=timeout_var, width=10).grid(row=2, column=1, padx=10, pady=5)
 
-    if settings_manager:
+    if show_rce_controls and settings_manager:
         stored_rce_pref = settings_manager.get_setting('probe_dialog.rce_enabled', None)
         if stored_rce_pref is None:
             stored_rce_pref = settings_manager.get_setting('scan_dialog.rce_enabled', False)
@@ -932,22 +954,27 @@ def _open_probe_dialog(
         stored_rce_pref = False
 
     rce_var = tk.BooleanVar(value=bool(stored_rce_pref))
-    rce_frame = tk.Frame(dialog)
-    rce_frame.grid(row=3, column=0, columnspan=2, sticky="w", padx=10, pady=5)
+    if show_rce_controls:
+        rce_frame = tk.Frame(dialog)
+        rce_frame.grid(row=3, column=0, columnspan=2, sticky="w", padx=10, pady=5)
 
-    rce_checkbox = tk.Checkbutton(
-        rce_frame,
-        text="Include RCE vulnerability scan",
-        variable=rce_var
-    )
-    rce_checkbox.pack(anchor="w")
+        rce_checkbox = tk.Checkbutton(
+            rce_frame,
+            text="Include RCE vulnerability scan",
+            variable=rce_var
+        )
+        rce_checkbox.pack(anchor="w")
 
-    rce_hint = tk.Label(
-        rce_frame,
-        text="Adds heuristic RCE detection with summary output.",
-        fg="#666666"
-    )
-    rce_hint.pack(anchor="w", padx=(24, 0))
+        rce_hint = tk.Label(
+            rce_frame,
+            text="Adds heuristic RCE detection with summary output.",
+            fg="#666666"
+        )
+        rce_hint.pack(anchor="w", padx=(24, 0))
+    else:
+        rce_spacer = tk.Frame(dialog, height=24)
+        rce_spacer.grid(row=3, column=0, columnspan=2, sticky="we", padx=10, pady=5)
+        rce_spacer.grid_propagate(False)
 
     def start_probe_from_dialog():
         try:
@@ -964,7 +991,8 @@ def _open_probe_dialog(
             settings_manager.set_setting('probe.max_directories_per_share', new_config["max_directories"])
             settings_manager.set_setting('probe.max_files_per_directory', new_config["max_files"])
             settings_manager.set_setting('probe.share_timeout_seconds', new_config["timeout_seconds"])
-            settings_manager.set_setting('probe_dialog.rce_enabled', bool(rce_var.get()))
+            if show_rce_controls:
+                settings_manager.set_setting('probe_dialog.rce_enabled', bool(rce_var.get()))
 
         dialog.destroy()
         _start_probe(
@@ -978,7 +1006,8 @@ def _open_probe_dialog(
             config_override=new_config,
             probe_status_callback=probe_status_callback,
             rce_status_callback=rce_status_callback,
-            enable_rce_override=bool(rce_var.get())
+            enable_rce_override=bool(rce_var.get()) if show_rce_controls else False,
+            show_rce_controls=show_rce_controls,
         )
 
     button_frame = tk.Frame(dialog)

@@ -165,6 +165,11 @@ def start_unified_scan(dash, scan_request: dict) -> None:
         )
         return
 
+    # Hidden RCE controls are session-gated; force runtime off when locked.
+    if not bool(getattr(dash, "_rce_unlocked", True)):
+        scan_request = dict(scan_request or {})
+        scan_request["rce_enabled"] = False
+
     # Single protocol: run directly (no queue wrapper).
     if len(protocols) == 1:
         dash._clear_queued_scan_state()
