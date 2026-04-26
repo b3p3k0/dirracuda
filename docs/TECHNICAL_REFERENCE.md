@@ -979,13 +979,25 @@ Config path resolution order:
 2. `settings_manager` key `backend.config_path` when present.
 3. `settings_manager.get_smbseek_config_path()` fallback.
 
-Key table columns: `Label`, `Key Preview`, `Notes`, `Last Used`.
+Key table columns: `Label`, `Key Preview`, `Query Credits`, `Notes`, `Last Used`.
 
 Key Preview format: keys longer than 8 characters show as `first4 + asterisks + last4`; shorter keys are fully masked.
 
 Add/Edit modal: Label, API Key (masked entry; no reveal toggle in v1), Notes.
 
 Delete: requires confirmation; no session-mute option in v1.
+
+#### Keymaster credit-check limits
+
+- Burst balance checks are capped at 5 saved keys.
+- Startup auto-check runs only when:
+  - `Auto check` is enabled
+  - saved key count is `<= 5`
+- When saved key count is `> 5`:
+  - startup auto-check is skipped (status-line message)
+  - `Recheck All` is disabled (button + context menu)
+  - `Recheck Selected` remains available
+- `Auto check` is persisted in GUI settings under `keymaster.auto_check_query_credits`.
 
 ---
 

@@ -13,6 +13,9 @@ Status: initial seed; append during implementation
 6. Keep UI hot paths responsive and avoid blocking operations on the Tk thread.
 7. Add focused regression tests for every discovered edge case before closing the card.
 8. Check line counts before and after every code card; stop and modularize if touched files exceed 1700 lines.
+9. Treat external key-health checks as background work; never block the Tk thread for network calls.
+10. Never include raw API key values in UI status, errors, or logs.
+11. For multi-key API checks, add pacing/retry handling and a per-item retry action to reduce false errors from transient throttling.
 
 ## Known Risks
 

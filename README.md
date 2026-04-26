@@ -475,11 +475,16 @@ What Apply does:
 
 Sidecar DB path: `~/.dirracuda/keymaster.db`
 
-Key table columns: `Label`, `Key Preview`, `Notes`, `Last Used`.
+Key table columns: `Label`, `Key Preview`, `Query Credits`, `Notes`, `Last Used`.
 
 Key Preview format: keys longer than 8 characters show as `first4 + asterisks + last4`; shorter keys are fully masked.
 
 API key input is masked in Add/Edit dialogs. No full-key reveal in v1.
+
+Balance checks:
+- Auto balance check runs on open when you have 5 or fewer saved keys.
+- If you have more than 5 saved keys, auto check and `Recheck All` stay off. Use `Recheck Selected`.
+- Full behavior: [Keymaster credit-check limits](docs/TECHNICAL_REFERENCE.md#keymaster-credit-check-limits)
 
 ## Advanced
 

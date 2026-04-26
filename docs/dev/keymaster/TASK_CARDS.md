@@ -239,3 +239,46 @@ Validation:
 
 HI test needed:
 1. Yes (final sign-off).
+
+---
+
+## C7 - Shodan Query Credits Visibility (Startup Check + Recheck All)
+
+Issue:
+Need quick visibility of remaining Shodan query credits per stored key to reduce trial-and-error during testing.
+
+Scope:
+1. Add `Query Credits` column to Keymaster table UI.
+2. On Keymaster window startup, run one non-blocking credit check for all stored SHODAN keys.
+3. Add `Recheck All` and `Recheck Selected` actions in Keymaster (button + context menu) for broad and isolated checks.
+4. Keep apply behavior unchanged (button/right-click/double-click still only apply selected key to config).
+5. Use Shodan API status data from `api.info()` (`/api-info`) and display only query credits.
+6. Keep credits runtime-only (in-memory); no sidecar schema changes in this card.
+7. Add focused tests in `gui/tests/test_keymaster_window.py`.
+
+Display contract:
+1. Success: show numeric query credits (stringified integer).
+2. Invalid key/auth failure: show `Invalid key`.
+3. Other API/network failures: show `Error`.
+4. Not yet checked: show `Not checked`.
+5. While running refresh: show `Checking...` for rows being checked.
+
+Safety/behavior rules:
+1. UI must remain responsive; no blocking network calls on Tk main thread.
+2. UI updates must occur on Tk thread (use `after` for cross-thread updates).
+3. No API key values in logs/status text/errors.
+4. One refresh job at a time; repeated clicks during active refresh should not spawn concurrent refresh storms.
+
+Validation:
+```bash
+./venv/bin/python -m py_compile gui/components/keymaster_window.py
+./venv/bin/python -m pytest gui/tests/test_keymaster_window.py -q
+./venv/bin/python -m pytest gui/tests/test_experimental_features_dialog.py -q -k keymaster
+```
+
+HI test needed:
+1. Yes.
+2. Open Keymaster with at least two saved keys.
+3. Confirm `Query Credits` populates shortly after window opens.
+4. Click `Recheck All` and confirm values/states update again.
+5. Confirm Apply flows still work unchanged.

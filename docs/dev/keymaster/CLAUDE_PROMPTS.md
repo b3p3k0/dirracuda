@@ -103,3 +103,48 @@ Focus:
 Return findings first, ordered by severity, with file:line references.
 Then list residual risks and exact additional tests to run (using ./venv/bin/python).
 ```
+
+---
+
+## Prompt D - C7 Plan Only
+
+```text
+Create a PLAN ONLY for card C7 from /home/kevin/DEV/dirracuda/docs/dev/keymaster/TASK_CARDS.md.
+Do not edit code yet.
+
+Before planning, read:
+- /home/kevin/DEV/dirracuda/docs/dev/keymaster/README.md
+- /home/kevin/DEV/dirracuda/docs/dev/keymaster/SPEC.md
+- /home/kevin/DEV/dirracuda/docs/dev/keymaster/TASK_CARDS.md
+- /home/kevin/DEV/dirracuda/docs/dev/keymaster/LESSONS_LEARNED.md
+- /home/kevin/DEV/dirracuda/gui/components/keymaster_window.py
+- /home/kevin/DEV/dirracuda/gui/tests/test_keymaster_window.py
+
+Locked decisions for C7:
+1) Query Credits only (not scan credits) in Keymaster grid.
+2) Run one all-keys check on Keymaster window startup.
+3) Recheck supports BOTH all-keys and selected-key refresh.
+4) Runtime-only cache for balances; no DB schema changes/migrations.
+5) Display states:
+   - success -> numeric credits
+   - invalid key -> "Invalid key"
+   - transient/network/API failure -> "Error"
+   - not checked -> "Not checked"
+   - in-progress -> "Checking..."
+6) Keep existing Apply behavior unchanged.
+7) Do not log or expose raw API key values.
+8) Must use ./venv/bin/python for validation commands.
+
+Implementation constraints:
+- Keep UI responsive (no blocking calls on Tk main thread).
+- Use safe Tk-thread UI updates for async work.
+- Smallest safe surgical edits.
+- Respect file-size rubric and stop-and-plan rule from TASK_CARDS.
+
+Output format:
+- Proposed assumptions
+- File-by-file plan
+- Test plan (new/updated tests)
+- Validation commands
+- Risks/blockers
+```
