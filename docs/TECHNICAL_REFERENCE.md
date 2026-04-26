@@ -12,7 +12,7 @@ Dirracuda scans for internet-accessible servers exposing open or weakly-authenti
 - File paths are relative to the repository root unless prefixed with `~/`.
 - Config keys are written in dot-notation (`shodan.api_key`).
 - Mermaid diagrams are used for flowcharts and the ER diagram. They render on GitHub and in VS Code with the Mermaid extension.
-- The SMB RCE vulnerability analysis feature (`--check-rce`) is **experimental**. Its implementation is incomplete; descriptions in §4.2 and §8 describe design intent and current partial state, not production capability.
+- The SMB RCE vulnerability analysis feature (`--check-rce`) is **incomplete and suspended indefinitely**. There is currently no planned resumption of development; §4.2 and §8 document retained internals only, not production-ready capability.
 
 ---
 
@@ -135,7 +135,7 @@ This shape applies to all three protocols. Protocol-specific differences are cov
 | `smb_browser.py` | Read-only SMB file browser |
 | `ftp_browser.py` | `FtpNavigator` — list directories, download files, cancel mid-operation |
 | `http_browser.py` | HTTP directory/file browser |
-| `rce_scanner/` | Signature-based SMB RCE analysis (experimental) |
+| `rce_scanner/` | Signature-based SMB RCE analysis (incomplete; development suspended indefinitely) |
 | `db_migrations.py` | `run_migrations()` — additive schema migrations, called on startup |
 | `smb_adapter.py` | `SMBAdapter` — unified SMB backend abstraction (smbprotocol + impacket) |
 | `results.py` | `DiscoverResult`, `AccessResult` dataclasses |
@@ -1030,9 +1030,9 @@ Downloaded files land in `quarantine_root` (default `~/.dirracuda/quarantine`). 
 
 ClamAV integration (`clamav.enabled=true`, `backend=auto`) runs `clamscan` or connects to `clamd` (auto-detected) after extraction. Flagged files are moved to `clamav.known_bad_subdir` under `extracted_root`.
 
-### 7.4 RCE Probe Limits
+### 7.4 RCE Probe Limits (Suspended Feature)
 
-RCE analysis is disabled by default (`rce.enabled_default=false`). When enabled via `--check-rce`:
+RCE analysis is disabled by default (`rce.enabled_default=false`). The implementation is incomplete and development is suspended indefinitely (no planned resume). If explicitly enabled via `--check-rce`:
 - Probe budget: 2 requests per host (`safe_active_budget.max_requests`)
 - Per-host timeout: 5 seconds
 - Jitter: 250ms between probes
@@ -1070,7 +1070,7 @@ The FTP and HTTP modules were added without touching the SMB codebase. The patte
 
 Drop a YAML file into `signatures/rce_smb/`. The signature format and required fields are documented in `docs/guides/RCE_SIGNATURE_GUIDE.md`. The scanner (`shared/rce_scanner/scanner.py`) loads all `*.yaml` files from that directory at runtime.
 
-The RCE feature is experimental; signatures you add will be loaded but the scoring and verdict pipeline is not production-ready.
+The RCE feature remains incomplete and suspended indefinitely; signatures you add will still load, but the scoring and verdict pipeline is not production-ready and is not under active development.
 
 ### 8.3 Adding GUI Components
 
