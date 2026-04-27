@@ -538,9 +538,10 @@ class SMBSeekConfig:
             issues.append("Missing Shodan API key")
         
         # Check exclusion file exists
-        exclusion_file = self.get_exclusion_file_path()
-        if not os.path.exists(exclusion_file):
-            issues.append(f"Exclusion file not found: {exclusion_file}")
+        exclusion_file_raw = self.get_exclusion_file_path()
+        exclusion_file = Path(exclusion_file_raw).expanduser()
+        if not exclusion_file.exists():
+            issues.append(f"Exclusion file not found: {exclusion_file_raw}")
         
         # Check reasonable values
         if self.get("workflow", "rescan_after_days", 30) < 1:
