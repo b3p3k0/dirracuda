@@ -1,7 +1,7 @@
 """
 Sidecar SQLite store for the se_dork module.
 
-DB path: ~/.dirracuda/se_dork.db (separate from main dirracuda.db)
+DB path: ~/.dirracuda/data/experimental/se_dork.db (separate from main dirracuda.db)
 
 Transaction ownership:
   - init_db() and open_connection() own their setup; init_db() commits internally.
@@ -18,8 +18,8 @@ from pathlib import Path
 from typing import Optional
 
 from experimental.se_dork.models import RunOptions, RUN_STATUS_RUNNING
+from shared.path_service import get_paths, get_legacy_paths, select_existing_path
 
-_SIDECAR_DEFAULT = Path.home() / ".dirracuda" / "se_dork.db"
 
 # ---------------------------------------------------------------------------
 # Schema DDL
@@ -94,7 +94,17 @@ _PROBE_COLUMN_ALTERS = (
 
 def get_db_path(override: Optional[Path] = None) -> Path:
     """Return sidecar DB path. ``override`` enables test injection."""
-    return override if override is not None else _SIDECAR_DEFAULT
+    if override is not None:
+        return override
+    paths = get_paths()
+    legacy = get_legacy_paths(paths=paths)
+    return select_existing_path(
+        paths.se_dork_db_file,
+        [
+            legacy.flat_sidecar_se_dork_file,
+            legacy.legacy_home_root / "se_dork.db",
+        ],
+    )
 
 
 # ---------------------------------------------------------------------------

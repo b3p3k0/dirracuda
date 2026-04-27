@@ -18,10 +18,14 @@ from typing import Dict, List, Optional, Any, Tuple, Set
 from pathlib import Path
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from shared.path_service import get_paths, get_legacy_paths, resolve_runtime_main_db_path
 try:
     from error_codes import get_error, format_error_message
 except ImportError:
     from .error_codes import get_error, format_error_message
+
+_PATHS = get_paths()
+_LEGACY = get_legacy_paths(paths=_PATHS)
 
 
 class DatabaseReader:
@@ -35,7 +39,11 @@ class DatabaseReader:
     database locks when backend is writing during scans.
     """
     
-    def __init__(self, db_path: str = "../backend/dirracuda.db", cache_duration: int = 5):
+    def __init__(
+        self,
+        db_path: str = str(resolve_runtime_main_db_path(paths=_PATHS, legacy=_LEGACY)),
+        cache_duration: int = 5,
+    ):
         """
         Initialize database reader.
         

@@ -23,8 +23,18 @@ from gui.utils import safe_messagebox as messagebox
 from gui.utils.coercion import _coerce_bool
 from gui.utils.filesize import _format_file_size
 from gui.browsers.core import UnifiedBrowserCore
+from shared.path_service import get_paths, get_legacy_paths, select_existing_path
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tif", ".tiff"}
+_PATHS = get_paths()
+_LEGACY = get_legacy_paths(paths=_PATHS)
+_DEFAULT_QUARANTINE_ROOT = select_existing_path(
+    _PATHS.quarantine_dir,
+    [
+        _LEGACY.flat_quarantine_dir,
+        _LEGACY.legacy_home_root / "quarantine",
+    ],
+)
 
 
 def _load_ftp_browser_config(config_path: Optional[str]) -> Dict:
@@ -35,7 +45,7 @@ def _load_ftp_browser_config(config_path: Optional[str]) -> Dict:
         "max_file_bytes": 26_214_400,   # 25 MB
         "connect_timeout": 10,
         "request_timeout": 15,
-        "quarantine_base": "~/.dirracuda/quarantine",
+        "quarantine_base": str(_DEFAULT_QUARANTINE_ROOT),
         "viewer": {
             "max_view_size_mb": 5,
             "max_image_size_mb": 15,

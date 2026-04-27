@@ -5,6 +5,9 @@ Separated from SettingsManager to keep the manager implementation concise.
 """
 
 from datetime import datetime
+from shared.path_service import get_paths
+
+_PATHS = get_paths()
 
 # Default settings dictionary used by SettingsManager
 DEFAULT_GUI_SETTINGS = {
@@ -130,11 +133,14 @@ DEFAULT_GUI_SETTINGS = {
     'templates': {
         'last_used': None
     },
+    'runtime_warnings': {
+        'tmpfs_legacy_mount_dismissed': False,
+    },
     'backend': {
         'mock_mode': False,
         'backend_path': '.',
-        'config_path': './conf/config.json',
-        'database_path': './dirracuda.db',
+        'config_path': str(_PATHS.config_file),
+        'database_path': str(_PATHS.main_db_file),
         'last_database_path': '',
         'database_validated': False
     },

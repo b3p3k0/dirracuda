@@ -33,6 +33,7 @@ from gui.utils.database_access import DatabaseReader
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.components.batch_extract_dialog import BatchExtractSettingsDialog
 from shared.quarantine import create_quarantine_dir
+from shared.path_service import get_paths, get_legacy_paths, select_existing_path
 
 
 def show_server_detail_popup(parent_window, server_data, theme, settings_manager=None,
@@ -1270,7 +1271,15 @@ def _load_file_collection_config(settings_manager) -> Dict[str, Any]:
 
 
 def _default_extract_path(ip_address: Optional[str]) -> str:
-    base_dir = Path.home() / ".dirracuda" / "quarantine"
+    paths = get_paths()
+    legacy = get_legacy_paths(paths=paths)
+    base_dir = select_existing_path(
+        paths.quarantine_dir,
+        [
+            legacy.flat_quarantine_dir,
+            legacy.legacy_home_root / "quarantine",
+        ],
+    )
     return str(base_dir)
 
 

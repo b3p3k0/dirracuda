@@ -58,7 +58,7 @@ def _bare_dialog() -> AppConfigDialog:
 
     dlg.api_key = ""
     dlg.wordlist_path = ""
-    dlg.quarantine_path = "~/.dirracuda/quarantine"
+    dlg.quarantine_path = "~/.dirracuda/data/quarantine"
 
     dlg.quarantine_tmpfs_enabled = False
     dlg.quarantine_tmpfs_size_mb = 512
@@ -84,7 +84,7 @@ def test_load_runtime_settings_reads_tmpfs_config(tmp_path):
                     "tmpfs_size_mb": 1024,
                 },
                 "file_browser": {
-                    "quarantine_root": "~/.dirracuda/quarantine",
+                    "quarantine_root": "~/.dirracuda/data/quarantine",
                 },
             }
         ),
@@ -105,14 +105,14 @@ def test_apply_runtime_settings_writes_tmpfs_keys():
     dlg._apply_runtime_settings(
         out,
         api_key="",
-        quarantine_path="~/.dirracuda/quarantine",
+        quarantine_path="~/.dirracuda/data/quarantine",
         wordlist_path="",
         clamav_settings=None,
-        quarantine_tmpfs_settings={"use_tmpfs": True, "tmpfs_size_mb": 768},
+        quarantine_tmpfs_settings={"use_tmpfs": True},
     )
 
     assert out["quarantine"]["use_tmpfs"] is True
-    assert out["quarantine"]["tmpfs_size_mb"] == 768
+    assert "tmpfs_size_mb" not in out["quarantine"]
 
 
 def test_sync_quarantine_controls_disables_path_widgets_when_tmpfs_enabled():
@@ -121,15 +121,13 @@ def test_sync_quarantine_controls_disables_path_widgets_when_tmpfs_enabled():
     dlg.quarantine_tmpfs_enabled_var = _BoolVar(True)
     dlg.quarantine_entry_widget = _Widget()
     dlg.quarantine_browse_button = _Widget()
-    dlg.quarantine_tmpfs_size_entry = _Widget()
     dlg.quarantine_tmpfs_note_label = _Widget()
 
     dlg._sync_quarantine_controls_for_tmpfs()
 
     assert dlg.quarantine_entry_widget.state == "disabled"
     assert dlg.quarantine_browse_button.state == "disabled"
-    assert dlg.quarantine_tmpfs_size_entry.state == "normal"
-    assert "disabled" in dlg.quarantine_tmpfs_note_label.text.lower()
+    assert "pre-mount" in dlg.quarantine_tmpfs_note_label.text.lower()
 
 
 def test_sync_quarantine_controls_non_linux_forces_disabled_tmpfs_controls():
@@ -138,12 +136,10 @@ def test_sync_quarantine_controls_non_linux_forces_disabled_tmpfs_controls():
     dlg.quarantine_tmpfs_enabled_var = _BoolVar(True)
     dlg.quarantine_entry_widget = _Widget()
     dlg.quarantine_browse_button = _Widget()
-    dlg.quarantine_tmpfs_size_entry = _Widget()
     dlg.quarantine_tmpfs_note_label = _Widget()
 
     dlg._sync_quarantine_controls_for_tmpfs()
 
     assert dlg.quarantine_entry_widget.state == "normal"
     assert dlg.quarantine_browse_button.state == "normal"
-    assert dlg.quarantine_tmpfs_size_entry.state == "disabled"
     assert "linux only" in dlg.quarantine_tmpfs_note_label.text.lower()

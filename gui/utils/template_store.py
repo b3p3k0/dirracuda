@@ -2,7 +2,7 @@
 Template storage utility for ScanDialog presets.
 
 Provides lightweight save/load/delete helpers backed by JSON files stored
-in the user's ~/.dirracuda/templates directory. Seeds that directory with
+in the user's ~/.dirracuda/state/templates/scan directory. Seeds that directory with
 curated defaults shipped in the repo and remembers the last-used template
 via SettingsManager when available.
 """
@@ -18,11 +18,13 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 
 from gui.utils.logging_config import get_logger
+from shared.path_service import get_paths, get_legacy_paths
 
 _logger = get_logger("template_store")
+_PATHS = get_paths()
+_LEGACY = get_legacy_paths(paths=_PATHS)
 
 
-TEMPLATE_DIRNAME = ".dirracuda/templates"
 # Repo layout: gui/utils/template_store.py → ../../templates/default_scan_templates
 DEFAULT_SEED_DIR = Path(__file__).resolve().parents[2] / "templates" / "default_scan_templates"
 
@@ -52,11 +54,13 @@ class TemplateStore:
     def list_templates(self) -> List[ScanTemplate]:
         """Return all templates sorted by name (case-insensitive)."""
         templates: List[ScanTemplate] = []
+        seen: set[str] = set()
         for path in sorted(self.templates_dir.glob("*.json"), key=lambda p: p.name.lower()):
             try:
                 with path.open("r", encoding="utf-8") as f:
                     data = json.load(f)
                 name = data.get("name") or path.stem
+                seen.add(path.stem)
                 templates.append(
                     ScanTemplate(
                         name=name,
@@ -67,13 +71,43 @@ class TemplateStore:
                 )
             except Exception as exc:
                 _logger.warning("Failed to load scan template %s: %s", path, exc)
+
+        for legacy_dir in self._legacy_dirs():
+            if not legacy_dir.exists():
+                continue
+            for path in sorted(legacy_dir.glob("*.json"), key=lambda p: p.name.lower()):
+                if path.stem in seen:
+                    continue
+                try:
+                    with path.open("r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    name = data.get("name") or path.stem
+                    templates.append(
+                        ScanTemplate(
+                            name=name,
+                            slug=path.stem,
+                            saved_at=data.get("saved_at"),
+                            form_state=data.get("form_state") or {},
+                        )
+                    )
+                except Exception as exc:
+                    _logger.warning("Failed to load legacy scan template %s: %s", path, exc)
+        templates.sort(key=lambda t: t.name.lower())
         return templates
 
     def load_template(self, slug: str) -> Optional[ScanTemplate]:
         """Load template by slug."""
         path = self.templates_dir / f"{slug}.json"
         if not path.exists():
-            return None
+            found = None
+            for legacy_dir in self._legacy_dirs():
+                candidate = legacy_dir / f"{slug}.json"
+                if candidate.exists():
+                    found = candidate
+                    break
+            if found is None:
+                return None
+            path = found
         try:
             with path.open("r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -136,8 +170,21 @@ class TemplateStore:
     def _resolve_dir(base_dir: Optional[Path]) -> Path:
         if base_dir:
             return Path(base_dir).expanduser().resolve()
-        home = Path.home()
-        return home / TEMPLATE_DIRNAME
+        return _PATHS.templates_scan_dir
+
+    def _legacy_dirs(self) -> List[Path]:
+        canonical = self.templates_dir.resolve(strict=False)
+        if canonical == _PATHS.templates_scan_dir.resolve(strict=False):
+            return [
+                _LEGACY.flat_scan_templates_dir,
+                _LEGACY.legacy_home_root / "templates",
+            ]
+        if canonical == _PATHS.templates_filter_dir.resolve(strict=False):
+            return [
+                _LEGACY.flat_filter_templates_dir,
+                _LEGACY.legacy_home_root / "filter_templates",
+            ]
+        return []
 
     @staticmethod
     def slugify(name: str) -> str:

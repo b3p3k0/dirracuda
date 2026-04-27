@@ -1,10 +1,10 @@
 """Runtime manager for optional tmpfs-backed quarantine storage.
 
-This module centralizes tmpfs lifecycle decisions for quarantine paths:
+This module centralizes tmpfs quarantine runtime decisions:
 - platform gating (Linux only)
-- tmpfs mount detection + optional mount attempt
+- presence-only tmpfs mount detection (no mount/umount operations)
 - fallback-to-disk behavior + one-time warning payload
-- cleanup/unmount support on application exit
+- cleanup support for tmpfs contents on application exit
 
 The GUI should call ``bootstrap_tmpfs_quarantine()`` once at startup and
 ``cleanup_tmpfs_quarantine()`` during shutdown.
@@ -15,18 +15,41 @@ from __future__ import annotations
 import json
 import platform
 import shutil
-import subprocess
 import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
-_DISK_DEFAULT = Path.home() / ".dirracuda" / "quarantine"
-_TMPFS_DEFAULT = Path.home() / ".dirracuda" / "quarantine_tmpfs"
+from shared.path_service import get_paths, get_legacy_paths, select_existing_path
+
+_PATHS = get_paths()
+_LEGACY = get_legacy_paths(paths=_PATHS)
+_DISK_DEFAULT = select_existing_path(
+    _PATHS.quarantine_dir,
+    [
+        _LEGACY.flat_quarantine_dir,
+        _LEGACY.legacy_home_root / "quarantine",
+    ],
+)
+
+# Canonical mountpoint first; legacy mountpoints remain detection-only fallbacks.
+_TMPFS_CANONICAL = _PATHS.tmpfs_quarantine_dir
+_TMPFS_LEGACY_DIRRACUDA = _LEGACY.flat_tmpfs_quarantine_dir
+_TMPFS_LEGACY_SMBSEEK = _LEGACY.legacy_home_root / "quarantine_tmpfs"
+_TMPFS_CANDIDATES = (
+    ("canonical", _TMPFS_CANONICAL),
+    ("legacy_dirracuda", _TMPFS_LEGACY_DIRRACUDA),
+    ("legacy_smbseek", _TMPFS_LEGACY_SMBSEEK),
+)
+
 _README_NAME = "README.txt"
 _TMPFS_SIZE_DEFAULT_MB = 512
 _TMPFS_SIZE_MIN_MB = 64
 _TMPFS_SIZE_MAX_MB = 4096
+
+_WARNING_NON_LINUX = "non_linux"
+_WARNING_LEGACY_MOUNTPOINT = "legacy_mountpoint"
+_WARNING_MOUNT_NOT_FOUND = "mount_not_found"
 
 
 def _coerce_bool(value: Any, default: bool = False) -> bool:
@@ -75,21 +98,6 @@ def _extract_disk_root(config_data: Dict[str, Any]) -> Path:
     return _DISK_DEFAULT
 
 
-def _kernel_supports_noswap() -> bool:
-    if platform.system().lower() != "linux":
-        return False
-    release = platform.release()
-    pieces = release.split(".")
-    if len(pieces) < 2:
-        return False
-    try:
-        major = int("".join(ch for ch in pieces[0] if ch.isdigit()) or "0")
-        minor = int("".join(ch for ch in pieces[1] if ch.isdigit()) or "0")
-    except ValueError:
-        return False
-    return (major, minor) >= (6, 4)
-
-
 def _mount_fstype(path: Path) -> Optional[str]:
     proc_mounts = Path("/proc/mounts")
     if not proc_mounts.exists():
@@ -122,48 +130,12 @@ def _is_tmpfs_mounted(path: Path) -> bool:
     return _mount_fstype(path) == "tmpfs"
 
 
-def _is_any_mount(path: Path) -> bool:
-    return _mount_fstype(path) is not None
-
-
-def _run_mount_tmpfs(mountpoint: Path, size_mb: int, *, with_noswap: bool) -> tuple[bool, str]:
-    options = [f"size={size_mb}M"]
-    if with_noswap:
-        options.append("noswap")
-
-    cmd = [
-        "mount",
-        "-t",
-        "tmpfs",
-        "tmpfs",
-        "-o",
-        ",".join(options),
-        str(mountpoint),
-    ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=12)
-    except Exception as exc:
-        return False, str(exc)
-    if result.returncode == 0:
-        return True, ""
-    detail = (result.stderr or result.stdout or "").strip()
-    if not detail:
-        detail = f"mount failed with exit code {result.returncode}"
-    return False, detail
-
-
-def _run_umount(mountpoint: Path) -> tuple[bool, str]:
-    cmd = ["umount", str(mountpoint)]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=12)
-    except Exception as exc:
-        return False, str(exc)
-    if result.returncode == 0:
-        return True, ""
-    detail = (result.stderr or result.stdout or "").strip()
-    if not detail:
-        detail = f"umount failed with exit code {result.returncode}"
-    return False, detail
+def _detect_tmpfs_mountpoint() -> tuple[Optional[str], Optional[Path]]:
+    """Return first active tmpfs mountpoint by canonical-first precedence."""
+    for label, mountpoint in _TMPFS_CANDIDATES:
+        if _is_tmpfs_mounted(mountpoint):
+            return label, mountpoint
+    return None, None
 
 
 def _purge_directory_contents(root: Path) -> tuple[bool, str]:
@@ -186,13 +158,15 @@ class _TmpfsState:
     use_tmpfs: bool = False
     tmpfs_size_mb: int = _TMPFS_SIZE_DEFAULT_MB
     platform_supported: bool = False
-    mountpoint: Path = _TMPFS_DEFAULT
+    mountpoint: Path = _TMPFS_CANONICAL
     disk_root: Path = _DISK_DEFAULT
     effective_root: Path = _DISK_DEFAULT
     tmpfs_active: bool = False
     mounted_by_app: bool = False
     fallback_reason: Optional[str] = None
     warning_message: Optional[str] = None
+    warning_code: Optional[str] = None
+    legacy_mount_in_use: bool = False
     warning_consumed: bool = False
 
 
@@ -213,6 +187,8 @@ def _snapshot() -> Dict[str, Any]:
         "mounted_by_app": _STATE.mounted_by_app,
         "fallback_reason": _STATE.fallback_reason,
         "warning_message": _STATE.warning_message,
+        "warning_code": _STATE.warning_code,
+        "legacy_mount_in_use": _STATE.legacy_mount_in_use,
     }
 
 
@@ -223,15 +199,16 @@ def bootstrap_tmpfs_quarantine(
 ) -> Dict[str, Any]:
     """Initialize tmpfs runtime state from config and prepare effective root.
 
-    If tmpfs is enabled but unavailable, this function falls back to disk and
-    stores a one-time warning payload retrievable through
-    ``consume_tmpfs_startup_warning()``.
+    This function is presence-only. It never attempts to mount or unmount tmpfs.
+    If tmpfs is enabled but no supported tmpfs mountpoint is active, runtime
+    falls back to disk quarantine and emits a one-time warning.
     """
     with _LOCK:
         data = config_data if isinstance(config_data, dict) else _load_config_data(config_path)
 
         quarantine_cfg = data.get("quarantine") if isinstance(data.get("quarantine"), dict) else {}
         use_tmpfs = _coerce_bool(quarantine_cfg.get("use_tmpfs"), False)
+        # Keep size readable for config compatibility, but never use it for mounting.
         size_mb = _coerce_int(
             quarantine_cfg.get("tmpfs_size_mb"),
             _TMPFS_SIZE_DEFAULT_MB,
@@ -245,13 +222,15 @@ def bootstrap_tmpfs_quarantine(
         _STATE.use_tmpfs = use_tmpfs
         _STATE.tmpfs_size_mb = size_mb
         _STATE.platform_supported = platform.system().lower() == "linux"
-        _STATE.mountpoint = _TMPFS_DEFAULT
+        _STATE.mountpoint = _TMPFS_CANONICAL
         _STATE.disk_root = disk_root
         _STATE.effective_root = disk_root
         _STATE.tmpfs_active = False
         _STATE.mounted_by_app = False
         _STATE.fallback_reason = None
         _STATE.warning_message = None
+        _STATE.warning_code = None
+        _STATE.legacy_mount_in_use = False
         _STATE.warning_consumed = False
 
         if not use_tmpfs:
@@ -259,6 +238,7 @@ def bootstrap_tmpfs_quarantine(
 
         if not _STATE.platform_supported:
             _STATE.fallback_reason = "tmpfs quarantine is supported on Linux only"
+            _STATE.warning_code = _WARNING_NON_LINUX
             _STATE.warning_message = (
                 "Tmpfs quarantine is enabled in config, but this platform is not Linux. "
                 "Dirracuda will use disk quarantine for this session."
@@ -266,48 +246,42 @@ def bootstrap_tmpfs_quarantine(
             _STATE.effective_root = disk_root
             return _snapshot()
 
-        mountpoint = _STATE.mountpoint
-        try:
-            mountpoint.mkdir(parents=True, exist_ok=True)
-        except Exception as exc:
-            _STATE.fallback_reason = f"unable to prepare tmpfs mountpoint: {exc}"
-            _STATE.warning_message = (
-                "Tmpfs quarantine is enabled, but the mountpoint could not be prepared. "
-                "Dirracuda will use disk quarantine for this session."
-            )
-            _STATE.effective_root = disk_root
-            return _snapshot()
-
-        if _is_tmpfs_mounted(mountpoint):
+        label, mountpoint = _detect_tmpfs_mountpoint()
+        if mountpoint is not None and label is not None:
+            _STATE.mountpoint = mountpoint
             _STATE.tmpfs_active = True
-            _STATE.mounted_by_app = False
             _STATE.effective_root = mountpoint
+            _STATE.mounted_by_app = False
+
+            if label != "canonical":
+                _STATE.legacy_mount_in_use = True
+                _STATE.warning_code = _WARNING_LEGACY_MOUNTPOINT
+                _STATE.warning_message = (
+                    "Tmpfs quarantine is active on a legacy mountpoint:\n"
+                    f"- Active: {mountpoint}\n"
+                    f"- Canonical: {_TMPFS_CANONICAL}\n\n"
+                    "Dirracuda now uses detect-only tmpfs behavior and will never mount/unmount automatically.\n"
+                    "Please migrate your mount to the canonical path.\n\n"
+                    "Suggested fix:\n"
+                    f"1) Update /etc/fstab to target {_TMPFS_CANONICAL}\n"
+                    f"2) sudo mkdir -p {_TMPFS_CANONICAL}\n"
+                    "3) sudo mount -a"
+                )
             return _snapshot()
 
-        if _is_any_mount(mountpoint):
-            _STATE.fallback_reason = "mountpoint is occupied by a non-tmpfs filesystem"
-            _STATE.warning_message = (
-                "Tmpfs quarantine is enabled, but the configured mountpoint is already mounted "
-                "as a non-tmpfs filesystem. Dirracuda will use disk quarantine for this session."
-            )
-            _STATE.effective_root = disk_root
-            return _snapshot()
-
-        supports_noswap = _kernel_supports_noswap()
-        mounted, detail = _run_mount_tmpfs(mountpoint, size_mb, with_noswap=supports_noswap)
-        if not mounted:
-            _STATE.fallback_reason = detail
-            _STATE.warning_message = (
-                "Tmpfs quarantine is enabled, but mount failed. "
-                "Dirracuda will use disk quarantine for this session.\n\n"
-                f"Reason: {detail}"
-            )
-            _STATE.effective_root = disk_root
-            return _snapshot()
-
-        _STATE.tmpfs_active = True
-        _STATE.mounted_by_app = True
-        _STATE.effective_root = mountpoint
+        _STATE.warning_code = _WARNING_MOUNT_NOT_FOUND
+        _STATE.fallback_reason = "no supported tmpfs mountpoint detected"
+        _STATE.warning_message = (
+            "Tmpfs quarantine is enabled, but no tmpfs mount was detected. "
+            "Dirracuda will use disk quarantine for this session.\n\n"
+            "Checked mountpoints:\n"
+            f"- {_TMPFS_CANONICAL}\n"
+            f"- {_TMPFS_LEGACY_DIRRACUDA}\n"
+            f"- {_TMPFS_LEGACY_SMBSEEK}\n\n"
+            "Dirracuda does not mount tmpfs automatically. "
+            "Please pre-mount tmpfs externally (for example via /etc/fstab) and restart Dirracuda."
+        )
+        _STATE.effective_root = disk_root
         return _snapshot()
 
 
@@ -333,7 +307,7 @@ def resolve_effective_quarantine_root(
 
     Behavior:
     - If tmpfs is configured (enabled), return current effective root
-      (tmpfs mountpoint or disk fallback root).
+      (active tmpfs mountpoint or disk fallback root).
     - If tmpfs is not configured, preserve existing behavior and prefer
       explicit ``base_path`` when provided.
     """
@@ -371,14 +345,13 @@ def tmpfs_has_quarantined_files() -> bool:
 
 
 def cleanup_tmpfs_quarantine() -> Dict[str, Any]:
-    """Cleanup tmpfs quarantine contents and unmount when app-mounted.
+    """Cleanup tmpfs quarantine contents.
 
-    Unmount is attempted only when this process mounted tmpfs.
+    Runtime is detect-only; Dirracuda never unmounts tmpfs.
     """
     with _LOCK:
         active = _STATE.tmpfs_active
         mountpoint = _STATE.mountpoint
-        mounted_by_app = _STATE.mounted_by_app
         disk_root = _STATE.disk_root
 
     if not active:
@@ -388,21 +361,12 @@ def cleanup_tmpfs_quarantine() -> Dict[str, Any]:
     if not ok:
         return {"ok": False, "skipped": False, "message": f"cleanup failed: {detail}"}
 
-    if mounted_by_app:
-        umount_ok, umount_detail = _run_umount(mountpoint)
-        if not umount_ok:
-            return {
-                "ok": False,
-                "skipped": False,
-                "message": f"umount failed: {umount_detail}",
-            }
-
     with _LOCK:
         _STATE.tmpfs_active = False
         _STATE.mounted_by_app = False
         _STATE.effective_root = disk_root
 
-    return {"ok": True, "skipped": False, "message": "tmpfs cleanup complete"}
+    return {"ok": True, "skipped": False, "message": "tmpfs cleanup complete (no unmount attempted)"}
 
 
 __all__ = [

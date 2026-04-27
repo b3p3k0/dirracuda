@@ -12,8 +12,17 @@ import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional
+from shared.path_service import get_paths, get_legacy_paths, resolve_runtime_config_path
 
 logger = logging.getLogger(__name__)
+_PATHS = get_paths()
+_LEGACY = get_legacy_paths(paths=_PATHS)
+_DEFAULT_CONFIG_DB_PATH = "~/.dirracuda/data/dirracuda.db"
+_DEFAULT_CONFIG_QUARANTINE_PATH = "~/.dirracuda/data/quarantine"
+_DEFAULT_CONFIG_EXTRACTED_PATH = "~/.dirracuda/data/extracted"
+_DEFAULT_CONFIG_EXCLUSION_PATH = "~/.dirracuda/conf/exclusion_list.json"
+_DEFAULT_CONFIG_RANSOMWARE_PATH = "~/.dirracuda/conf/ransomware_indicators.json"
+_DEFAULT_CONFIG_RCE_JSONL_PATH = "~/.dirracuda/logs/rce_analysis.jsonl"
 
 
 def load_json_config(config_file: str) -> Dict[str, Any]:
@@ -113,11 +122,11 @@ class SMBSeekConfig:
         Initialize configuration manager.
         
         Args:
-            config_file: Path to configuration file (default: conf/config.json)
+            config_file: Path to configuration file
+                (default: ~/.dirracuda/conf/config.json with legacy fallback)
         """
         if config_file is None:
-            # Default configuration path from project root
-            config_file = os.path.join("conf", "config.json")
+            config_file = str(resolve_runtime_config_path(paths=_PATHS, legacy=_LEGACY))
         
         self.config_file = config_file
         self.config = self.load_configuration()
@@ -189,18 +198,18 @@ class SMBSeekConfig:
                 "max_depth": 12,
                 "max_path_length": 240,
                 "download_chunk_mb": 4,
-                "quarantine_root": "~/.dirracuda/quarantine"
+                "quarantine_root": _DEFAULT_CONFIG_QUARANTINE_PATH
             },
             "quarantine": {
                 "use_tmpfs": False,
                 "tmpfs_size_mb": 512
             },
             "security": {
-                "ransomware_indicators_path": "conf/ransomware_indicators.json",
-                "exclusion_file": "conf/exclusion_list.json"
+                "ransomware_indicators_path": _DEFAULT_CONFIG_RANSOMWARE_PATH,
+                "exclusion_file": _DEFAULT_CONFIG_EXCLUSION_PATH
             },
             "database": {
-                "path": "dirracuda.db",
+                "path": _DEFAULT_CONFIG_DB_PATH,
                 "backup_enabled": True,
                 "backup_directory": "db_backups",
                 "max_backup_files": 30
@@ -357,7 +366,7 @@ class SMBSeekConfig:
 
     def get_database_path(self) -> str:
         """Get database file path."""
-        return self.get("database", "path", "dirracuda.db")
+        return self.get("database", "path", _DEFAULT_CONFIG_DB_PATH)
     
     def should_rescan_host(self, last_seen_days: int) -> bool:
         """
@@ -567,7 +576,7 @@ class SMBSeekConfig:
             },
             "ms17_010": {"enabled": True},
             "smbghost": {"enabled": True},
-            "logging": {"jsonl_path": "~/.dirracuda/logs/rce_analysis.jsonl"},
+            "logging": {"jsonl_path": _DEFAULT_CONFIG_RCE_JSONL_PATH},
             "intrusive_mode_enabled": False
         }
         user_rce = self.config.get("rce", {})
@@ -603,7 +612,7 @@ class SMBSeekConfig:
     def get_rce_logging_path(self) -> str:
         """Get JSONL logging path for RCE analysis results."""
         return self.get_rce_config().get("logging", {}).get(
-            "jsonl_path", "~/.dirracuda/logs/rce_analysis.jsonl"
+            "jsonl_path", _DEFAULT_CONFIG_RCE_JSONL_PATH
         )
 
     def is_ms17_010_enabled(self) -> bool:
@@ -625,7 +634,7 @@ class SMBSeekConfig:
             "enabled": False,
             "backend": "auto",
             "timeout_seconds": 60,
-            "extracted_root": "~/.dirracuda/extracted",
+            "extracted_root": _DEFAULT_CONFIG_EXTRACTED_PATH,
             "known_bad_subdir": "known_bad",
             "show_results": True,
             "auto_promote_clean_files": False,

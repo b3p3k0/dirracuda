@@ -13,10 +13,26 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from shared.path_service import get_paths, get_legacy_paths, select_existing_path
+
 
 _DATE_RE = re.compile(r"^\d{8}$")
-_DEFAULT_QUARANTINE = Path.home() / ".dirracuda" / "quarantine"
-_DEFAULT_EXTRACTED = Path.home() / ".dirracuda" / "extracted"
+_PATHS = get_paths()
+_LEGACY = get_legacy_paths(paths=_PATHS)
+_DEFAULT_QUARANTINE = select_existing_path(
+    _PATHS.quarantine_dir,
+    [
+        _LEGACY.flat_quarantine_dir,
+        _LEGACY.legacy_home_root / "quarantine",
+    ],
+)
+_DEFAULT_EXTRACTED = select_existing_path(
+    _PATHS.extracted_dir,
+    [
+        _LEGACY.flat_extracted_dir,
+        _LEGACY.legacy_home_root / "extracted",
+    ],
+)
 _SAFE_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.")
 _COLLISION_LIMIT = 99
 
@@ -37,7 +53,7 @@ class PromotionConfig:
     ip_address: str
     date_str: str          # "YYYYMMDD", validated/fallback applied by _build_promotion_config
     quarantine_root: Path  # validated/fallback applied by _build_promotion_config
-    extracted_root: Path   # ~/.dirracuda/extracted or caller override
+    extracted_root: Path   # ~/.dirracuda/data/extracted or caller override
     known_bad_subdir: str  # sanitized single-segment label, default "known_bad"
     download_dir: Path     # actual quarantine dir files landed in (for rel_path derivation)
 

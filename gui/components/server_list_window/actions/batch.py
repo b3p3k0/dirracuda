@@ -42,6 +42,7 @@ from gui.utils import (
 from gui.utils.probe_cache_dispatch import dispatch_probe_run
 from gui.utils.probe_snapshot_summary import summarize_probe_snapshot
 from shared.quarantine import create_quarantine_dir
+from shared.path_service import get_paths, get_legacy_paths, select_existing_path
 
 from .batch_operations import ServerListWindowBatchOperationsMixin
 
@@ -453,7 +454,16 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
         host_type = str(target.get("host_type", "S")).upper()
         row_key = target.get("row_key")
 
-        base_path = Path(options.get("download_path", str(Path.home() / ".dirracuda" / "quarantine"))).expanduser()
+        _paths = get_paths()
+        _legacy = get_legacy_paths(paths=_paths)
+        default_quarantine = select_existing_path(
+            _paths.quarantine_dir,
+            [
+                _legacy.flat_quarantine_dir,
+                _legacy.legacy_home_root / "quarantine",
+            ],
+        )
+        base_path = Path(options.get("download_path", str(default_quarantine))).expanduser()
         clamav_cfg: dict = options.get("clamav_config") or {}
         http_allow_insecure_tls = bool(options.get("http_allow_insecure_tls", True))
         try:

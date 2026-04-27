@@ -25,6 +25,8 @@ import sqlite3
 from pathlib import Path
 from typing import Optional
 
+from shared.path_service import get_legacy_paths, get_paths, resolve_runtime_gui_settings_path
+
 
 def run_migrations(db_path: str) -> None:
     """
@@ -657,9 +659,9 @@ def _import_legacy_settings(cur: sqlite3.Cursor) -> None:
     Safe to run multiple times; skips if data already present.
     """
     try:
-        settings_path = Path.home() / ".dirracuda" / "gui_settings.json"
-        if not settings_path.exists():
-            settings_path = Path.home() / ".smbseek" / "gui_settings.json"
+        paths = get_paths()
+        legacy = get_legacy_paths(paths=paths)
+        settings_path = resolve_runtime_gui_settings_path(paths=paths, legacy=legacy)
         if not settings_path.exists():
             return
         data = json.loads(settings_path.read_text(encoding="utf-8"))

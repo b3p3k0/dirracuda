@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import pytest
 
 from shared.signatures.rce_smb.loader import (
@@ -7,12 +5,13 @@ from shared.signatures.rce_smb.loader import (
     SignatureLoadError,
     SignatureLoader,
 )
+from shared.path_service import get_paths
 
 
 def test_signature_loader_defaults_to_conf_signatures_dir():
     loader = SignatureLoader()
     assert loader.signatures_dir == DEFAULT_SIGNATURES_DIR
-    assert loader.signatures_dir == Path("conf/signatures/rce_smb").resolve()
+    assert loader.signatures_dir == get_paths().signatures_rce_dir.resolve()
 
 
 def test_signature_loader_load_all_succeeds_from_default_conf_path():

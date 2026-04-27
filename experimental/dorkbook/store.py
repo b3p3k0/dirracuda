@@ -1,7 +1,7 @@
 """
 Sidecar SQLite store for the Dorkbook module.
 
-DB path: ~/.dirracuda/dorkbook.db (separate from main dirracuda.db)
+DB path: ~/.dirracuda/data/experimental/dorkbook.db (separate from main dirracuda.db)
 
 Transaction ownership:
   - init_db() owns setup and commit.
@@ -26,8 +26,8 @@ from experimental.dorkbook.models import (
     DuplicateEntryError,
     ReadOnlyEntryError,
 )
+from shared.path_service import get_paths, get_legacy_paths, select_existing_path
 
-_SIDECAR_DEFAULT = Path.home() / ".dirracuda" / "dorkbook.db"
 
 _DDL_ENTRIES = """
 CREATE TABLE IF NOT EXISTS dorkbook_entries (
@@ -96,7 +96,17 @@ def _normalize_optional_text(value: Optional[str]) -> str:
 
 def get_db_path(override: Optional[Path] = None) -> Path:
     """Return sidecar DB path. ``override`` enables test injection."""
-    return override if override is not None else _SIDECAR_DEFAULT
+    if override is not None:
+        return override
+    paths = get_paths()
+    legacy = get_legacy_paths(paths=paths)
+    return select_existing_path(
+        paths.dorkbook_db_file,
+        [
+            legacy.flat_sidecar_dorkbook_file,
+            legacy.legacy_home_root / "dorkbook.db",
+        ],
+    )
 
 
 def init_db(path: Optional[Path] = None) -> None:

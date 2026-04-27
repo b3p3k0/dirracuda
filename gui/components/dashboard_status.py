@@ -1,8 +1,11 @@
 """Pure helpers for dashboard runtime status composition (C6 extraction)."""
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, Dict
+
+from shared.path_service import get_paths
+
+_PATHS = get_paths()
 
 
 def coerce_bool_dashboard(value: Any) -> bool:
@@ -45,7 +48,7 @@ def compose_runtime_status_lines(
     tmpfs_active = bool(tmpfs_state.get("tmpfs_active", False))
     mountpoint = str(
         tmpfs_state.get("mountpoint")
-        or (Path.home() / ".dirracuda" / "quarantine_tmpfs")
+        or _PATHS.tmpfs_quarantine_dir
     )
     tmpfs_icon = "\u2714" if tmpfs_active else "\u2716"
     tmpfs_line = f"{tmpfs_icon} tmpfs <{mountpoint}>"

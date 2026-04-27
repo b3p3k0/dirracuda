@@ -28,6 +28,12 @@ from shared.db_path_resolution import (
     normalize_database_path,
     resolve_database_path,
 )
+from shared.path_service import (
+    get_legacy_paths,
+    get_paths,
+    resolve_runtime_config_path,
+    select_existing_path,
+)
 
 
 _CLAMAV_TRUE = frozenset(("true", "yes", "1"))
@@ -35,6 +41,25 @@ _CLAMAV_BACKENDS = frozenset(("auto", "clamdscan", "clamscan"))
 _TMPFS_SIZE_MIN_MB = 64
 _TMPFS_SIZE_MAX_MB = 4096
 _TMPFS_SIZE_DEFAULT_MB = 512
+_PATHS = get_paths()
+_LEGACY = get_legacy_paths(paths=_PATHS)
+_DEFAULT_CONFIG_PATH = resolve_runtime_config_path(paths=_PATHS, legacy=_LEGACY)
+_DEFAULT_DATABASE_PATH = _PATHS.main_db_file
+_DEFAULT_QUARANTINE_PATH = select_existing_path(
+    _PATHS.quarantine_dir,
+    [
+        _LEGACY.flat_quarantine_dir,
+        _LEGACY.legacy_home_root / "quarantine",
+    ],
+)
+_DEFAULT_EXTRACTED_ROOT = select_existing_path(
+    _PATHS.extracted_dir,
+    [
+        _LEGACY.flat_extracted_dir,
+        _LEGACY.legacy_home_root / "extracted",
+    ],
+)
+_DEFAULT_TMPFS_QUARANTINE_PATH = _PATHS.tmpfs_quarantine_dir
 
 
 def _coerce_bool_cfg(value: Any, default: bool) -> bool:
@@ -130,7 +155,7 @@ class AppConfigDialog:
         self.config_path = ""
         self.database_path = ""
         self.api_key = ""
-        self.quarantine_path = "~/.dirracuda/quarantine"
+        self.quarantine_path = str(_DEFAULT_QUARANTINE_PATH)
         self.wordlist_path = ""
         self.smb_dork = self.DORK_DEFAULTS["smb_dork"]
         self.ftp_dork = self.DORK_DEFAULTS["ftp_dork"]
@@ -170,7 +195,7 @@ class AppConfigDialog:
         self.clamav_enabled: bool = False
         self.clamav_backend: str = "auto"
         self.clamav_timeout: int = 60
-        self.clamav_extracted_root: str = "~/.dirracuda/extracted"
+        self.clamav_extracted_root: str = str(_DEFAULT_EXTRACTED_ROOT)
         self.clamav_known_bad_subdir: str = "known_bad"
         self.clamav_show_results: bool = True
         self.clamav_auto_promote_clean: bool = False
@@ -205,7 +230,7 @@ class AppConfigDialog:
             self.smbseek_path = self.settings_manager.get_backend_path()
             self.config_path = self.settings_manager.get_setting(
                 "backend.config_path",
-                str(Path(self.smbseek_path) / "conf" / "config.json"),
+                str(_DEFAULT_CONFIG_PATH),
             )
             self.database_path = str(resolve_database_path(
                 backend_path=self.smbseek_path,
@@ -217,8 +242,8 @@ class AppConfigDialog:
             ))
         else:
             self.smbseek_path = str(Path.cwd())
-            self.config_path = str(Path.cwd() / "conf" / "config.json")
-            self.database_path = str(auto_detect_database_path(Path.cwd()))
+            self.config_path = str(_DEFAULT_CONFIG_PATH)
+            self.database_path = str(_DEFAULT_DATABASE_PATH)
 
         self._load_runtime_settings_from_config(self.config_path)
 
@@ -271,7 +296,7 @@ class AppConfigDialog:
             except (TypeError, ValueError):
                 self.clamav_timeout = 60
             self.clamav_extracted_root = str(
-                clamav_raw.get("extracted_root", "~/.dirracuda/extracted")
+                clamav_raw.get("extracted_root", str(_DEFAULT_EXTRACTED_ROOT))
             )
             self.clamav_known_bad_subdir = str(clamav_raw.get("known_bad_subdir", "known_bad"))
             self.clamav_show_results = _coerce_bool_cfg(clamav_raw.get("show_results"), True)
@@ -427,33 +452,6 @@ class AppConfigDialog:
         self.theme.apply_to_widget(cb_tmpfs, "checkbox")
         cb_tmpfs.pack(anchor=tk.W)
 
-        row2 = tk.Frame(card)
-        self.theme.apply_to_widget(row2, "card")
-        row2.pack(fill=tk.X, padx=10, pady=(0, 6))
-        lbl_size = self.theme.create_styled_label(
-            row2,
-            "Max size (MB):",
-            "small",
-            fg=self.theme.colors["text_secondary"],
-        )
-        lbl_size.pack(side=tk.LEFT, padx=(0, 8))
-        self.quarantine_tmpfs_size_var = tk.StringVar(value=str(self.quarantine_tmpfs_size_mb))
-        self.quarantine_tmpfs_size_entry = tk.Entry(
-            row2,
-            textvariable=self.quarantine_tmpfs_size_var,
-            font=("Arial", 10),
-            width=8,
-        )
-        self.theme.apply_to_widget(self.quarantine_tmpfs_size_entry, "entry")
-        self.quarantine_tmpfs_size_entry.pack(side=tk.LEFT)
-        size_hint = self.theme.create_styled_label(
-            row2,
-            f"Range {_TMPFS_SIZE_MIN_MB}-{_TMPFS_SIZE_MAX_MB}",
-            "small",
-            fg=self.theme.colors["text_secondary"],
-        )
-        size_hint.pack(side=tk.LEFT, padx=(6, 0))
-
         self.quarantine_tmpfs_note_label = self.theme.create_styled_label(
             card,
             "",
@@ -467,10 +465,6 @@ class AppConfigDialog:
                 self.quarantine_tmpfs_enabled_var.set(False)
             try:
                 cb_tmpfs.configure(state=tk.DISABLED)
-            except tk.TclError:
-                pass
-            try:
-                self.quarantine_tmpfs_size_entry.configure(state=tk.DISABLED)
             except tk.TclError:
                 pass
 
@@ -488,20 +482,20 @@ class AppConfigDialog:
             except tk.TclError:
                 pass
 
-        if self.quarantine_tmpfs_size_entry is not None:
-            size_state = tk.NORMAL if (tmpfs_enabled and self._tmpfs_supported_platform) else tk.DISABLED
-            try:
-                self.quarantine_tmpfs_size_entry.configure(state=size_state)
-            except tk.TclError:
-                pass
-
         if self.quarantine_tmpfs_note_label is not None:
             if not self._tmpfs_supported_platform:
                 note = "tmpfs quarantine is available on Linux only; this setting is disabled here."
             elif tmpfs_enabled:
-                note = "Quarantine directory selection is disabled while tmpfs mode is enabled."
+                note = (
+                    "Dirracuda will not mount tmpfs automatically. "
+                    f"Pre-mount {_DEFAULT_TMPFS_QUARANTINE_PATH} externally; "
+                    "quarantine directory selection is disabled while tmpfs mode is enabled."
+                )
             else:
-                note = "When enabled, quarantine writes route to ~/.dirracuda/quarantine_tmpfs."
+                note = (
+                    f"When enabled, quarantine writes use {_DEFAULT_TMPFS_QUARANTINE_PATH} "
+                    "if it is already mounted as tmpfs."
+                )
             self.quarantine_tmpfs_note_label.configure(text=note)
 
     def _create_clamav_card(self, parent: tk.Widget) -> None:
@@ -781,7 +775,7 @@ class AppConfigDialog:
     # ------------------------------------------------------------------
 
     def _browse_path(self, field: str) -> None:
-        initial = str(Path.cwd())
+        initial = str(_PATHS.home_root)
         if field == "smbseek" and self.smbseek_var:
             initial = os.path.dirname(self.smbseek_var.get()) or initial
             selected = filedialog.askdirectory(
@@ -793,7 +787,7 @@ class AppConfigDialog:
             return
 
         if field == "database" and self.database_var:
-            initial = os.path.dirname(self.database_var.get()) or initial
+            initial = os.path.dirname(self.database_var.get()) or str(_PATHS.data_dir)
             selected = filedialog.askopenfilename(
                 title="Select Database File",
                 initialdir=initial,
@@ -804,7 +798,7 @@ class AppConfigDialog:
             return
 
         if field == "config" and self.config_var:
-            initial = os.path.dirname(self.config_var.get()) or initial
+            initial = os.path.dirname(self.config_var.get()) or str(_PATHS.conf_dir)
             selected = filedialog.askopenfilename(
                 title="Select Dirracuda Configuration File",
                 initialdir=initial,
@@ -815,7 +809,7 @@ class AppConfigDialog:
             return
 
         if field == "quarantine" and self.quarantine_var:
-            initial = os.path.dirname(self.quarantine_var.get()) or initial
+            initial = os.path.dirname(self.quarantine_var.get()) or str(_PATHS.data_dir)
             selected = filedialog.askdirectory(
                 title="Select Quarantine Directory",
                 initialdir=initial,
@@ -825,7 +819,7 @@ class AppConfigDialog:
             return
 
         if field == "wordlist" and self.wordlist_var:
-            initial = os.path.dirname(self.wordlist_var.get()) or initial
+            initial = os.path.dirname(self.wordlist_var.get()) or str(_PATHS.wordlists_dir)
             selected = filedialog.askopenfilename(
                 title="Select Pry Wordlist File",
                 initialdir=initial,
@@ -841,7 +835,7 @@ class AppConfigDialog:
         if field == "clamav_extracted_root" and self.clamav_extracted_root_var:
             initial = str(
                 Path(self.clamav_extracted_root_var.get()).expanduser().parent
-            ) or initial
+            ) or str(_PATHS.data_dir)
             selected = filedialog.askdirectory(
                 title="Select Extracted Files Root",
                 initialdir=initial,
@@ -856,8 +850,12 @@ class AppConfigDialog:
             self._update_status_label("smbseek", result)
 
             if result["valid"]:
-                derived_config = str(Path(self.smbseek_var.get()) / "conf" / "config.json")
-                if self.config_var and (not self.config_var.get() or "conf/config.json" in self.config_var.get()):
+                derived_config = str(_DEFAULT_CONFIG_PATH)
+                if self.config_var and (
+                    not self.config_var.get()
+                    or self.config_var.get().endswith("conf/config.json")
+                    or self.config_var.get() == str(_DEFAULT_CONFIG_PATH)
+                ):
                     self.config_var.set(derived_config)
                 derived_db = str(auto_detect_database_path(Path(self.smbseek_var.get())))
                 if self.database_var and (
@@ -1127,37 +1125,19 @@ class AppConfigDialog:
             "enabled": bool(_enabled_var.get()) if _enabled_var else False,
             "backend": _raw_backend if _raw_backend in _CLAMAV_BACKENDS else "auto",
             "timeout_seconds": _clamav_timeout,
-            "extracted_root": (_root_var.get().strip() if _root_var else "") or "~/.dirracuda/extracted",
+            "extracted_root": (_root_var.get().strip() if _root_var else "") or str(_DEFAULT_EXTRACTED_ROOT),
             "known_bad_subdir": (_kb_var.get().strip() if _kb_var else "") or "known_bad",
             "show_results": bool(_show_var.get()) if _show_var else True,
             "auto_promote_clean_files": bool(_promote_clean_var.get()) if _promote_clean_var else False,
         }
 
         tmpfs_enabled_var = getattr(self, "quarantine_tmpfs_enabled_var", None)
-        tmpfs_size_var = getattr(self, "quarantine_tmpfs_size_var", None)
         tmpfs_supported_platform = getattr(self, "_tmpfs_supported_platform", sys.platform.startswith("linux"))
         tmpfs_enabled = bool(tmpfs_enabled_var.get()) if tmpfs_enabled_var else False
         if not tmpfs_supported_platform:
             tmpfs_enabled = False
-        try:
-            tmpfs_size_mb = int(tmpfs_size_var.get()) if tmpfs_size_var else _TMPFS_SIZE_DEFAULT_MB
-        except (TypeError, ValueError):
-            messagebox.showerror(
-                "Configuration Validation Failed",
-                f"tmpfs size must be an integer between {_TMPFS_SIZE_MIN_MB} and {_TMPFS_SIZE_MAX_MB} MB.",
-                parent=self._messagebox_parent(),
-            )
-            return False
-        if tmpfs_size_mb < _TMPFS_SIZE_MIN_MB or tmpfs_size_mb > _TMPFS_SIZE_MAX_MB:
-            messagebox.showerror(
-                "Configuration Validation Failed",
-                f"tmpfs size must be between {_TMPFS_SIZE_MIN_MB} and {_TMPFS_SIZE_MAX_MB} MB.",
-                parent=self._messagebox_parent(),
-            )
-            return False
         new_quarantine_tmpfs = {
             "use_tmpfs": tmpfs_enabled,
-            "tmpfs_size_mb": tmpfs_size_mb,
         }
 
         old_smbseek = self.smbseek_path
@@ -1169,10 +1149,6 @@ class AppConfigDialog:
             old_clamav_backend = "auto"
         old_clamav_auto_promote_clean = bool(getattr(self, "clamav_auto_promote_clean", False))
         old_tmpfs_enabled = bool(getattr(self, "quarantine_tmpfs_enabled", False))
-        try:
-            old_tmpfs_size_mb = int(getattr(self, "quarantine_tmpfs_size_mb", _TMPFS_SIZE_DEFAULT_MB))
-        except (TypeError, ValueError):
-            old_tmpfs_size_mb = _TMPFS_SIZE_DEFAULT_MB
 
         try:
             normalized_database = normalize_database_path(new_database, new_smbseek)
@@ -1188,7 +1164,7 @@ class AppConfigDialog:
                 # Keeps on-demand extract defaults aligned with shared quarantine.
                 self.settings_manager.set_setting("extract.last_directory", new_quarantine)
 
-            # Persist runtime config fields in conf/config.json.
+            # Persist runtime config fields in the active config.json.
             if self.main_config and hasattr(self.main_config, "set_config_path"):
                 self.main_config.set_config_path(new_config_path)
                 self.main_config.set_smbseek_path(new_smbseek)
@@ -1234,7 +1210,6 @@ class AppConfigDialog:
             self.wordlist_path = new_wordlist
             self.clamav_auto_promote_clean = new_clamav["auto_promote_clean_files"]
             self.quarantine_tmpfs_enabled = tmpfs_enabled
-            self.quarantine_tmpfs_size_mb = tmpfs_size_mb
 
             # Refresh downstream interfaces whenever runtime-critical values changed.
             runtime_changed = (
@@ -1247,7 +1222,6 @@ class AppConfigDialog:
                 or old_clamav_backend != new_clamav["backend"]
                 or old_clamav_auto_promote_clean != new_clamav["auto_promote_clean_files"]
                 or old_tmpfs_enabled != tmpfs_enabled
-                or old_tmpfs_size_mb != tmpfs_size_mb
             )
             if self.refresh_callback and (runtime_changed or status_changed):
                 self.refresh_callback()
@@ -1281,6 +1255,10 @@ class AppConfigDialog:
         candidates = [path_obj]
 
         if not path_obj.exists():
+            if _LEGACY.repo_config_file.exists():
+                candidates.append(_LEGACY.repo_config_file)
+            if _LEGACY.repo_config_example_file.exists():
+                candidates.append(_LEGACY.repo_config_example_file)
             example_path = path_obj.parent / f"{path_obj.name}.example"
             if example_path.exists():
                 candidates.append(example_path)
@@ -1334,7 +1312,6 @@ class AppConfigDialog:
 
         if quarantine_tmpfs_settings is not None:
             _set_nested(config_data, ("quarantine", "use_tmpfs"), quarantine_tmpfs_settings["use_tmpfs"])
-            _set_nested(config_data, ("quarantine", "tmpfs_size_mb"), quarantine_tmpfs_settings["tmpfs_size_mb"])
 
 
 def open_app_config_dialog(

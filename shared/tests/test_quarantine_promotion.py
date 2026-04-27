@@ -17,8 +17,8 @@ from shared.quarantine_promotion import PromotionConfig, resolve_promotion_dest,
 # Helpers
 # ---------------------------------------------------------------------------
 
-_DEFAULT_QUARANTINE = Path.home() / ".dirracuda" / "quarantine"
-_DEFAULT_EXTRACTED = Path.home() / ".dirracuda" / "extracted"
+_DEFAULT_QUARANTINE = Path.home() / ".dirracuda" / "data" / "quarantine"
+_DEFAULT_EXTRACTED = Path.home() / ".dirracuda" / "data" / "extracted"
 
 
 def _cfg(tmp_path: Path, **overrides) -> PromotionConfig:
@@ -130,7 +130,7 @@ def test_build_promotion_config_quarantine_root_fallback_on_filesystem_root(tmp_
     download_dir = Path("/a/b")
     cfg = _sanitize_clamav_config({"enabled": True})
     result = _build_promotion_config("1.2.3.4", download_dir, cfg)
-    assert result.quarantine_root == Path.home() / ".dirracuda" / "quarantine"
+    assert result.quarantine_root == _DEFAULT_QUARANTINE
 
 
 def test_build_promotion_config_known_bad_subdir_sanitized(tmp_path):

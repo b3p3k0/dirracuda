@@ -12,6 +12,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 from urllib.parse import urlparse
 
 from gui.utils.database_access import DatabaseReader
+from shared.path_service import get_paths, get_legacy_paths, select_existing_path
 
 _logger = logging.getLogger(__name__)
 
@@ -24,11 +25,31 @@ _SIDECAR_IMPORT_ERROR_KEY = "db_unification.sidecar_import.last_error"
 
 
 def _legacy_probe_dirs() -> Dict[str, Path]:
-    home = Path.home() / ".dirracuda"
+    paths = get_paths()
+    legacy = get_legacy_paths(paths=paths)
+
+    def _pick(*candidates: Path) -> Path:
+        for candidate in candidates:
+            try:
+                if candidate.exists():
+                    return candidate
+            except Exception:
+                continue
+        return candidates[0]
+
     return {
-        "S": home / "probes",
-        "F": home / "ftp_probes",
-        "H": home / "http_probes",
+        "S": _pick(
+            legacy.flat_probe_smb_dir,
+            legacy.legacy_home_root / "probes",
+        ),
+        "F": _pick(
+            legacy.flat_probe_ftp_dir,
+            legacy.legacy_home_root / "ftp_probes",
+        ),
+        "H": _pick(
+            legacy.flat_probe_http_dir,
+            legacy.legacy_home_root / "http_probes",
+        ),
     }
 
 
@@ -220,7 +241,12 @@ def _resolve_ipv4(host: str) -> Optional[str]:
 
 
 def _import_se_dork(reader: DatabaseReader) -> Dict[str, int]:
-    sidecar_path = Path.home() / ".dirracuda" / "se_dork.db"
+    paths = get_paths()
+    legacy = get_legacy_paths(paths=paths)
+    sidecar_path = select_existing_path(
+        paths.se_dork_db_file,
+        [legacy.flat_sidecar_se_dork_file, legacy.legacy_home_root / "se_dork.db"],
+    )
     counts = {"imported": 0, "skipped": 0, "errors": 0}
     if not sidecar_path.is_file():
         return counts
@@ -303,7 +329,12 @@ def _import_se_dork(reader: DatabaseReader) -> Dict[str, int]:
 
 
 def _import_redseek(reader: DatabaseReader) -> Dict[str, int]:
-    sidecar_path = Path.home() / ".dirracuda" / "reddit_od.db"
+    paths = get_paths()
+    legacy = get_legacy_paths(paths=paths)
+    sidecar_path = select_existing_path(
+        paths.reddit_od_db_file,
+        [legacy.flat_sidecar_reddit_od_file, legacy.legacy_home_root / "reddit_od.db"],
+    )
     counts = {"imported": 0, "skipped": 0, "errors": 0}
     if not sidecar_path.is_file():
         return counts

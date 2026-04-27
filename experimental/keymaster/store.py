@@ -1,7 +1,7 @@
 """
 Sidecar SQLite store for the Keymaster module.
 
-DB path: ~/.dirracuda/keymaster.db (separate from main dirracuda.db)
+DB path: ~/.dirracuda/data/experimental/keymaster.db (separate from main dirracuda.db)
 
 Transaction ownership:
   - init_db() owns setup and commit.
@@ -21,8 +21,8 @@ from experimental.keymaster.models import (
     KeymasterKey,
     DuplicateKeyError,
 )
+from shared.path_service import get_paths, get_legacy_paths, select_existing_path
 
-_SIDECAR_DEFAULT = Path.home() / ".dirracuda" / "keymaster.db"
 
 _DDL_KEYS = """
 CREATE TABLE IF NOT EXISTS keymaster_keys (
@@ -95,7 +95,17 @@ def _require_nonempty(value: str, field: str) -> str:
 
 def get_db_path(override: Optional[Path] = None) -> Path:
     """Return sidecar DB path. ``override`` enables test injection."""
-    return override if override is not None else _SIDECAR_DEFAULT
+    if override is not None:
+        return override
+    paths = get_paths()
+    legacy = get_legacy_paths(paths=paths)
+    return select_existing_path(
+        paths.keymaster_db_file,
+        [
+            legacy.flat_sidecar_keymaster_file,
+            legacy.legacy_home_root / "keymaster.db",
+        ],
+    )
 
 
 def init_db(path: Optional[Path] = None) -> None:

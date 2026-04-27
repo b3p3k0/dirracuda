@@ -28,6 +28,7 @@ from gui.utils.logging_config import get_logger
 from gui.components.pry_dialog import PryDialog
 from gui.components.pry_status_dialog import BatchStatusDialog
 from shared.db_migrations import run_migrations
+from shared.path_service import get_paths
 
 _logger = get_logger("server_list_window")
 
@@ -173,9 +174,10 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self._filter_template_label_to_slug: Dict[str, str] = {}
         self._selected_filter_template_slug: Optional[str] = None
         try:
+            layout_paths = get_paths()
             self.filter_template_store = TemplateStore(
                 settings_manager=None,
-                base_dir=Path.home() / ".dirracuda" / "filter_templates",
+                base_dir=layout_paths.templates_filter_dir,
                 seed_dir=None
             )
         except Exception as exc:

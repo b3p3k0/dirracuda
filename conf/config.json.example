@@ -41,10 +41,11 @@
   },
   "exclusion_progress_interval": 100,
   "security": {
-    "exclusion_file": "conf/exclusion_list.json"
+    "exclusion_file": "~/.dirracuda/conf/exclusion_list.json",
+    "ransomware_indicators_path": "~/.dirracuda/conf/ransomware_indicators.json"
   },
   "database": {
-    "path": "dirracuda.db",
+    "path": "~/.dirracuda/data/dirracuda.db",
     "backup_enabled": true,
     "backup_directory": "db_backups",
     "max_backup_files": 30
@@ -130,7 +131,7 @@
     "download_worker_count": 2,
     "download_large_file_mb": 25,
     "max_download_size_mb": 25,
-    "quarantine_root": "~/.dirracuda/quarantine",
+    "quarantine_root": "~/.dirracuda/data/quarantine",
     "max_batch_files": 50,
     "folder_download": {
       "max_depth": 5,
@@ -153,7 +154,7 @@
     "max_file_bytes": 26214400,
     "connect_timeout": 10,
     "request_timeout": 15,
-    "quarantine_base": "~/.dirracuda/quarantine"
+    "quarantine_base": "~/.dirracuda/data/quarantine"
   },
   "quarantine": {
     "use_tmpfs": false,
@@ -223,7 +224,7 @@
     "enabled": false,
     "backend": "auto",
     "timeout_seconds": 60,
-    "extracted_root": "~/.dirracuda/extracted",
+    "extracted_root": "~/.dirracuda/data/extracted",
     "known_bad_subdir": "known_bad",
     "show_results": true,
     "auto_promote_clean_files": false

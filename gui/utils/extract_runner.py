@@ -25,6 +25,7 @@ from shared.quarantine_promotion import (
     resolve_promotion_dest,
     safe_move,
 )
+from shared.path_service import get_paths, get_legacy_paths, select_existing_path
 
 try:  # pragma: no cover - runtime dependency
     from impacket.smbconnection import SMBConnection, SessionError
@@ -33,6 +34,8 @@ except ImportError:  # pragma: no cover - handled upstream
     SessionError = Exception
 
 DEFAULT_CLIENT_NAME = "dirracuda-extract"
+_PATHS = get_paths()
+_LEGACY = get_legacy_paths(paths=_PATHS)
 
 
 class ExtractError(RuntimeError):
@@ -70,7 +73,7 @@ def _sanitize_clamav_config(raw: Any) -> Dict[str, Any]:
         "clamscan_path": str(raw.get("clamscan_path", "clamscan")),
         "clamdscan_path": str(raw.get("clamdscan_path", "clamdscan")),
         "timeout_seconds": timeout,
-        "extracted_root": str(raw.get("extracted_root", "~/.dirracuda/extracted")),
+        "extracted_root": str(raw.get("extracted_root", str(_PATHS.extracted_dir))),
         "known_bad_subdir": str(raw.get("known_bad_subdir", "known_bad")),
         "auto_promote_clean_files": auto_promote_clean,
     }
@@ -511,7 +514,13 @@ def run_extract(
 
 
 _DATE8_RE = re.compile(r"^\d{8}$")
-_DEFAULT_QUARANTINE_ROOT = Path.home() / ".dirracuda" / "quarantine"
+_DEFAULT_QUARANTINE_ROOT = select_existing_path(
+    _PATHS.quarantine_dir,
+    [
+        _LEGACY.flat_quarantine_dir,
+        _LEGACY.legacy_home_root / "quarantine",
+    ],
+)
 
 
 def _build_promotion_config(
@@ -629,7 +638,13 @@ def write_extract_log(
             # Fall through to legacy file persistence.
             pass
 
-    logs_dir = Path.home() / ".dirracuda" / "extract_logs"
+    logs_dir = select_existing_path(
+        _PATHS.extract_logs_dir,
+        [
+            _LEGACY.flat_extract_logs_dir,
+            _LEGACY.legacy_home_root / "extract_logs",
+        ],
+    )
     logs_dir.mkdir(parents=True, exist_ok=True)
 
     timestamp = summary.get("finished_at") or summary.get("started_at") or _utcnow()

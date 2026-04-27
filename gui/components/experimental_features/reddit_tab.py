@@ -14,6 +14,9 @@ import tkinter as tk
 from typing import Optional
 
 from gui.utils.style import get_theme
+from shared.path_service import get_paths
+
+_PATHS = get_paths()
 
 
 class RedditTab:
@@ -30,7 +33,7 @@ class RedditTab:
         description = (
             "Reddit ingestion and review tools.\n"
             "Fetches posts from r/opendirectories, extracts SMB/FTP/HTTP targets,\n"
-            "and stores them in a sidecar DB at ~/.dirracuda/reddit_od.db"
+            f"and stores them in a sidecar DB at {_PATHS.reddit_od_db_file}"
         )
         desc_label = tk.Label(
             frame,

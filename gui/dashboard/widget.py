@@ -58,9 +58,11 @@ from gui.utils.probe_cache_dispatch import get_probe_snapshot_path_for_host, dis
 from gui.utils.probe_snapshot_summary import summarize_probe_snapshot
 from gui.utils.logging_config import get_logger
 from shared.quarantine import create_quarantine_dir
+from shared.path_service import get_paths
 from shared.tmpfs_quarantine import get_tmpfs_runtime_state
 
 _logger = get_logger("dashboard")
+_PATHS = get_paths()
 
 _SHODAN_STATUS_NO_KEY = "✖ Shodan API key configured <none>"
 _SHODAN_STATUS_CHECKING = "✔ Shodan API key configured <checking balance...>"
@@ -181,7 +183,7 @@ class DashboardWidget:
         )
         self.tmpfs_status_text = tk.StringVar(
             master=self.parent,
-            value=f"✖ tmpfs <{Path.home() / '.dirracuda' / 'quarantine_tmpfs'}>",
+            value=f"✖ tmpfs <{_PATHS.tmpfs_quarantine_dir}>",
         )
         self.shodan_status_text = tk.StringVar(
             master=self.parent,

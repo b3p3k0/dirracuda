@@ -5,6 +5,7 @@ from pathlib import Path
 
 from gui.utils.settings_manager import SettingsManager
 from shared.db_path_resolution import resolve_database_path
+from shared.path_service import get_paths
 
 
 def _load_xsmbseek_config_class():
@@ -86,4 +87,4 @@ def test_relative_and_stale_persisted_rules(tmp_path: Path) -> None:
         cli_database_path=None,
         persisted_paths=[str(backend / "missing_parent" / "stale.db")],
     )
-    assert stale == (backend / "dirracuda.db").resolve(strict=False)
+    assert stale == get_paths().main_db_file.resolve(strict=False)
