@@ -140,11 +140,17 @@ def _import_batch_mixins_isolated():
 
 class _StubWindow:
     """Minimal Tk window substitute."""
+    def __init__(self):
+        self.clipboard_value = None
+
     def after(self, ms, fn, *args):
         fn(*args)
 
-    def clipboard_clear(self): pass
-    def clipboard_append(self, v): pass
+    def clipboard_clear(self):
+        self.clipboard_value = ""
+
+    def clipboard_append(self, v):
+        self.clipboard_value = str(v)
 
 
 class _StubTree:
@@ -1333,3 +1339,107 @@ def test_mark_compromised_toggles_selected_protocol_row_only():
     assert kwargs2["status"] == "clean"
     assert kwargs2["indicator_matches"] == 0
     stub._apply_filters.assert_called_once()
+
+
+def test_copy_url_mixed_selection_builds_protocol_urls():
+    """Copy URL emits newline-separated protocol URLs for mixed S/F/H selection."""
+    stub = _BatchMixinStub()
+    stub.filtered_servers = [
+        {
+            "ip_address": "10.10.10.10",
+            "host_type": "S",
+            "row_key": "S:1",
+            "auth_method": "Anonymous",
+            "port": None,
+        },
+        {
+            "ip_address": "10.10.10.20",
+            "host_type": "F",
+            "row_key": "F:2",
+            "auth_method": "anonymous",
+            "port": 2121,
+        },
+        {
+            "ip_address": "10.10.10.30",
+            "host_type": "H",
+            "row_key": "H:3",
+            "auth_method": "http",
+            "port": 8080,
+            "scheme": "http",
+            "probe_host": "example.test",
+            "probe_path": "/files",
+            "protocol_server_id": 3,
+        },
+    ]
+    stub.all_servers = list(stub.filtered_servers)
+    stub.tree._items = {"S:1": True, "F:2": True, "H:3": True}
+    stub.tree._selection = ["S:1", "F:2", "H:3"]
+    stub.db_reader.get_http_server_detail.return_value = {
+        "protocol_server_id": 3,
+        "scheme": "http",
+        "port": 8080,
+        "probe_host": "example.test",
+        "probe_path": "/files",
+    }
+
+    stub._on_copy_url()
+
+    assert stub.window.clipboard_value == (
+        "smb://10.10.10.10:445/\n"
+        "ftp://10.10.10.20:2121/\n"
+        "http://example.test:8080/files"
+    )
+
+
+def test_copy_url_http_prefers_probe_host_and_path_from_detail():
+    """HTTP Copy URL should prefer db detail probe_host/probe_path over row values."""
+    stub = _BatchMixinStub()
+    row = {
+        "ip_address": "10.20.30.40",
+        "host_type": "H",
+        "row_key": "H:4",
+        "auth_method": "http",
+        "port": 8443,
+        "scheme": "https",
+        "probe_host": "row-host.example",
+        "probe_path": "/row/path",
+        "protocol_server_id": 4,
+    }
+    stub.filtered_servers = [row]
+    stub.all_servers = [row]
+    stub.tree._items = {"H:4": True}
+    stub.tree._selection = ["H:4"]
+    stub.db_reader.get_http_server_detail.return_value = {
+        "protocol_server_id": 4,
+        "scheme": "https",
+        "port": 8443,
+        "probe_host": "detail-host.example",
+        "probe_path": "/detail/path?x=1#frag",
+    }
+
+    stub._on_copy_url()
+
+    assert stub.window.clipboard_value == "https://detail-host.example:8443/detail/path"
+
+
+def test_copy_url_http_falls_back_to_row_defaults_when_detail_missing():
+    """HTTP Copy URL should fallback to row ip/scheme/port and root path when detail missing."""
+    stub = _BatchMixinStub()
+    row = {
+        "ip_address": "10.99.88.77",
+        "host_type": "H",
+        "row_key": "H:5",
+        "auth_method": "http",
+        "port": 80,
+        "scheme": "http",
+        "protocol_server_id": 5,
+    }
+    stub.filtered_servers = [row]
+    stub.all_servers = [row]
+    stub.tree._items = {"H:5": True}
+    stub.tree._selection = ["H:5"]
+    stub.db_reader.get_http_server_detail.return_value = None
+
+    stub._on_copy_url()
+
+    assert stub.window.clipboard_value == "http://10.99.88.77:80/"

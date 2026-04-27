@@ -642,6 +642,86 @@ class ServerListWindowBatchOperationsMixin:
             except tk.TclError:
                 pass
 
+    @staticmethod
+    def _normalize_url_path(path: Any) -> str:
+        raw = str(path or "").strip()
+        normalized = raw.split("?", 1)[0].split("#", 1)[0].strip() or "/"
+        if not normalized.startswith("/"):
+            normalized = "/" + normalized.lstrip("/")
+        return normalized
+
+    def _build_copy_url_for_target(self, target: Dict[str, Any]) -> Optional[str]:
+        host_type = str(target.get("host_type") or "S").strip().upper()
+        ip_address = str(target.get("ip_address") or "").strip()
+        if not ip_address:
+            return None
+
+        if host_type == "S":
+            return f"smb://{ip_address}:445/"
+
+        if host_type == "F":
+            port_raw = target.get("port")
+            if port_raw in (None, ""):
+                port_raw = (target.get("data") or {}).get("port")
+            try:
+                port = int(port_raw) if port_raw not in (None, "") else 21
+            except (TypeError, ValueError):
+                port = 21
+            return f"ftp://{ip_address}:{port}/"
+
+        if host_type == "H":
+            row_data = target.get("data") or {}
+            row_port = target.get("port", row_data.get("port"))
+            detail = None
+            if self.db_reader:
+                try:
+                    detail = self.db_reader.get_http_server_detail(
+                        ip_address,
+                        protocol_server_id=target.get("protocol_server_id"),
+                        port=row_port,
+                    )
+                except Exception:
+                    detail = None
+
+            try:
+                port = int((detail or {}).get("port") or row_port or 80)
+            except (TypeError, ValueError):
+                port = 80
+
+            scheme = str(
+                (detail or {}).get("scheme")
+                or row_data.get("scheme")
+                or ("https" if port == 443 else "http")
+            ).strip().lower()
+            if scheme not in {"http", "https"}:
+                scheme = "https" if port == 443 else "http"
+
+            host = str((detail or {}).get("probe_host") or row_data.get("probe_host") or ip_address).strip() or ip_address
+            path = self._normalize_url_path((detail or {}).get("probe_path") or row_data.get("probe_path") or "/")
+            return f"{scheme}://{host}:{port}{path}"
+
+        return None
+
+    def _on_copy_url(self) -> None:
+        """Copy selected host URL(s) to clipboard."""
+        self._hide_context_menu()
+        targets = self._build_selected_targets()
+        if not targets:
+            return
+
+        urls = []
+        for target in targets:
+            built = self._build_copy_url_for_target(target)
+            if built:
+                urls.append(built)
+
+        if urls:
+            try:
+                self.window.clipboard_clear()
+                self.window.clipboard_append("\n".join(urls))
+            except tk.TclError:
+                pass
+
     def _on_probe_selected(self) -> None:
         self._hide_context_menu()
         targets = self._build_selected_targets()
