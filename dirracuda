@@ -782,7 +782,6 @@ class XSMBSeekGUI:
             # Capture runtime legacy fallbacks (for startup warning/reporting).
             self._runtime_fallback_paths = []
             config_fallback_candidates = {
-                (_LAYOUT_LEGACY.flat_home_root / "conf" / "config.json").resolve(strict=False),
                 _LAYOUT_LEGACY.repo_config_file.resolve(strict=False),
             }
             db_fallback_candidates = {
@@ -1045,6 +1044,24 @@ class XSMBSeekGUI:
         except tk.TclError:
             return
 
+    def _normalize_layout_runtime_fallback_paths(self, raw_paths: set[str]) -> list[str]:
+        """Normalize fallback path candidates and ignore canonical runtime targets."""
+        canonical_paths = {
+            _LAYOUT_PATHS.config_file.resolve(strict=False),
+            _LAYOUT_PATHS.main_db_file.resolve(strict=False),
+            _LAYOUT_PATHS.gui_settings_file.resolve(strict=False),
+        }
+        normalized: set[str] = set()
+        for raw in raw_paths:
+            text = str(raw).strip()
+            if not text:
+                continue
+            candidate = Path(text).expanduser().resolve(strict=False)
+            if candidate in canonical_paths:
+                continue
+            normalized.add(str(candidate))
+        return sorted(normalized)
+
     def _show_layout_migration_notification(self) -> None:
         """Display one layout migration summary dialog."""
         if self.root is None or self._layout_migration_result is None:
@@ -1053,22 +1070,31 @@ class XSMBSeekGUI:
             return
 
         result = dict(self._layout_migration_result)
-        fallback_paths = set(result.get("fallback_paths") or [])
+        fallback_paths: set[str] = set(result.get("fallback_paths") or [])
         fallback_paths.update(self._runtime_fallback_paths or [])
-        if fallback_paths:
-            result["fallback_paths"] = sorted(fallback_paths)
+        effective_fallback_paths = self._normalize_layout_runtime_fallback_paths(fallback_paths)
+        if effective_fallback_paths:
+            result["fallback_paths"] = effective_fallback_paths
             if str(result.get("status", "")).lower() == "success":
                 # Canonical targets were expected but fallback is still in use this run.
                 result["status"] = "partial"
+        else:
+            result["fallback_paths"] = []
         if self._session_db_fallback_path:
             result["db_runtime_fallback_path"] = self._session_db_fallback_path
             if str(result.get("status", "")).lower() == "success":
                 result["status"] = "partial"
 
+        sanitized = result.get("sanitized", {}) if isinstance(result.get("sanitized"), dict) else {}
+        sanitized_errors = int(sanitized.get("errors", 0) or 0)
+        status = str(result.get("status", "")).strip().lower()
+        if status == "success" and not effective_fallback_paths and not self._session_db_fallback_path and sanitized_errors == 0:
+            return
+
         title, body = summary_message_for_migration_result(result)
 
         try:
-            if str(result.get("status", "")).lower() == "success":
+            if status == "success" and sanitized_errors == 0:
                 messagebox.showinfo(title, body, parent=self.root)
             else:
                 messagebox.showwarning(title, body, parent=self.root)

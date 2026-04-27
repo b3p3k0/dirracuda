@@ -21,6 +21,7 @@ Scope: Home-first layout-v2 migration and path canonicalization.
 14. Canonical and explicit custom DB paths remain strict even when missing; only known stale legacy/repo-local targets should be auto-corrected.
 15. GUI helper dialogs should never default to `Path.cwd()/conf/config.json`; use canonical runtime config resolution to avoid repo-local drift.
 16. Config validators must normalize filesystem paths (`expanduser`/`resolve` as appropriate) before existence checks; otherwise valid `~/.dirracuda/...` installs fail as false negatives.
+17. Startup migration notifications must not classify canonical runtime targets (`~/.dirracuda/conf/config.json`, `~/.dirracuda/data/dirracuda.db`, `~/.dirracuda/state/gui_settings.json`) as fallback paths.
 
 ## Pitfalls Avoided
 
