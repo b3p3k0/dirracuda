@@ -14,6 +14,7 @@ Brief description of the changes in this PR.
 
 ## Promotion Parity Checklist (Required for development -> main)
 - [ ] I reviewed branch parity output and confirmed unique commit handling.
+- [ ] I confirmed dev-only promotion guardrails pass (for example `pytest.ini` is not in the promotion diff).
 
 ### Unique commits on source only
 - [ ] None

@@ -33,4 +33,5 @@ jobs:
             --head "${{ github.event.pull_request.head.sha }}" \
             --pr-body /tmp/pr_body.txt \
             --enforce-checklist-markers \
-            --require-dispositions
+            --require-dispositions \
+            --forbid-source-path "pytest.ini"

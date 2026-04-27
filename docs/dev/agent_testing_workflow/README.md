@@ -61,6 +61,11 @@ Run quick lane multiple times before merge to detect seed/order regressions:
 for i in 1 2 3; do ./venv/bin/python scripts/run_agent_testing_workflow.py --lane quick; done
 ```
 
+## Promotion Boundary
+- `pytest.ini` is development-testing infrastructure for custom markers (`scenario`, `fuzz`, `fuzz_heavy`, `gui_smoke`).
+- It is not required for ordinary runtime users on `main`.
+- Promotion parity guardrails now hard-fail development -> main PRs if `pytest.ini` is present in the promotion diff.
+
 ## How To Add A New Producer
 Use this template when a module starts registering tasks through `get_running_task_registry()`:
 1. Add at least one `scenario` test proving create/update/remove lifecycle.
