@@ -564,7 +564,10 @@ PYEOF
             fi
 
             if confirm "Run sudo mount -a now to apply fstab changes?" "n"; then
-                if sudo mkdir -p "$DIRRACUDA_CANON_TMPFS_MP" && sudo mount -a; then
+                mkdir -p "$DIRRACUDA_DATA_DIR"
+                if sudo mkdir -p "$DIRRACUDA_CANON_TMPFS_MP" \
+                   && sudo chown "$(id -u):$(id -g)" "$DIRRACUDA_DATA_DIR" \
+                   && sudo mount -a; then
                     success "mount -a completed."
                     if mount | grep -F "$DIRRACUDA_CANON_TMPFS_MP" >/dev/null 2>&1; then
                         success "Canonical tmpfs mount is active at $DIRRACUDA_CANON_TMPFS_MP"
