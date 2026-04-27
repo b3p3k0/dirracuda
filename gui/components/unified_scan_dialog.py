@@ -67,6 +67,7 @@ class UnifiedScanDialog:
         self.template_dropdown = None
         self.delete_template_button = None
         self.max_results_entry = None
+        self.skip_indicator_extract_checkbox = None
 
         # Protocol selections (default: all enabled)
         self.protocol_smb_var = tk.BooleanVar(value=True)
@@ -634,8 +635,16 @@ class UnifiedScanDialog:
         mode = str(state.get("security_mode", "cautious")).strip().lower()
         self.security_mode_var.set(mode if mode in {"cautious", "legacy"} else "cautious")
         self.allow_insecure_tls_var.set(bool(state.get("allow_insecure_tls", True)))
+        self._sync_skip_indicator_extract_state()
 
         self._update_region_status()
+
+    def _sync_skip_indicator_extract_state(self) -> None:
+        skip_checkbox = getattr(self, "skip_indicator_extract_checkbox", None)
+        if skip_checkbox is None:
+            return
+        state = tk.NORMAL if bool(self.bulk_extract_enabled_var.get()) else tk.DISABLED
+        skip_checkbox.configure(state=state)
 
     def _apply_template_by_slug(self, slug: str, *, silent: bool = False) -> None:
         template = self.template_store.load_template(slug)
@@ -912,6 +921,7 @@ class UnifiedScanDialog:
             container,
             text="Run bulk extract after each scan",
             variable=self.bulk_extract_enabled_var,
+            command=self._sync_skip_indicator_extract_state,
             font=self.theme.fonts["small"],
         )
         self.theme.apply_to_widget(extract_cb, "checkbox")
@@ -925,6 +935,8 @@ class UnifiedScanDialog:
         )
         self.theme.apply_to_widget(skip_cb, "checkbox")
         skip_cb.pack(anchor="w", padx=10, pady=(2, 2))
+        self.skip_indicator_extract_checkbox = skip_cb
+        self._sync_skip_indicator_extract_state()
 
         if self.show_rce_controls:
             rce_cb = tk.Checkbutton(

@@ -1,8 +1,9 @@
-"""Focused tests for unified scan dialog max-results validation behavior."""
+"""Focused tests for unified scan dialog validation and UI state behavior."""
 
 from __future__ import annotations
 
 import sys
+import tkinter as tk
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import gui.components.unified_scan_dialog as unified_scan_dialog
+import gui.components.scan_dialog_layout as scan_dialog_layout
 from gui.components.unified_scan_dialog import UnifiedScanDialog
 
 
@@ -44,6 +46,15 @@ class _DialogStub:
         self.destroyed = True
 
 
+class _CheckboxStub:
+    def __init__(self):
+        self.state = tk.NORMAL
+
+    def configure(self, **kwargs):
+        if "state" in kwargs:
+            self.state = kwargs["state"]
+
+
 def _make_dialog(max_results: str, *, show_rce_controls: bool = True) -> UnifiedScanDialog:
     dlg = UnifiedScanDialog.__new__(UnifiedScanDialog)
     dlg.max_results_var = _Var(max_results)
@@ -70,6 +81,35 @@ def _make_dialog(max_results: str, *, show_rce_controls: bool = True) -> Unified
     dlg._persist_dialog_state = lambda: None
     dlg._get_all_selected_countries = lambda _manual: ([], "")
     return dlg
+
+
+def test_sync_skip_indicator_extract_state_unified_follows_bulk_extract_toggle():
+    dlg = _make_dialog("250")
+    dlg.skip_indicator_extract_checkbox = _CheckboxStub()
+
+    dlg.bulk_extract_enabled_var.set(False)
+    dlg._sync_skip_indicator_extract_state()
+    assert dlg.skip_indicator_extract_checkbox.state == tk.DISABLED
+
+    dlg.bulk_extract_enabled_var.set(True)
+    dlg._sync_skip_indicator_extract_state()
+    assert dlg.skip_indicator_extract_checkbox.state == tk.NORMAL
+
+
+def test_sync_skip_indicator_extract_state_legacy_layout_follows_bulk_extract_toggle():
+    class _LegacyStub:
+        pass
+
+    dlg = _LegacyStub()
+    dlg.bulk_extract_enabled_var = _Var(False)
+    dlg.skip_indicator_extract_checkbox = _CheckboxStub()
+
+    scan_dialog_layout._sync_skip_indicator_extract_state(dlg)
+    assert dlg.skip_indicator_extract_checkbox.state == tk.DISABLED
+
+    dlg.bulk_extract_enabled_var.set(True)
+    scan_dialog_layout._sync_skip_indicator_extract_state(dlg)
+    assert dlg.skip_indicator_extract_checkbox.state == tk.NORMAL
 
 
 @pytest.mark.parametrize("raw", ["", "0", "-1", "1001", "abc"])

@@ -260,8 +260,17 @@ def _apply_form_state(self, state: Dict[str, Any]) -> None:
     self.bulk_probe_enabled_var.set(bool(state.get("bulk_probe_enabled", False)))
     self.bulk_extract_enabled_var.set(bool(state.get("bulk_extract_enabled", False)))
     self.skip_indicator_extract_var.set(bool(state.get("bulk_extract_skip_indicators", True)))
+    self._sync_skip_indicator_extract_state()
 
     self._update_region_status()
+
+def _sync_skip_indicator_extract_state(self) -> None:
+    """Enable skip-indicator toggle only when bulk extract is enabled."""
+    skip_checkbox = getattr(self, "skip_indicator_extract_checkbox", None)
+    if skip_checkbox is None:
+        return
+    state = tk.NORMAL if bool(self.bulk_extract_enabled_var.get()) else tk.DISABLED
+    skip_checkbox.configure(state=state)
 
 def _apply_template_by_slug(self, slug: str, *, silent: bool = False) -> None:
     """Load template by slug and populate form."""
@@ -729,6 +738,7 @@ def _create_bulk_extract_option(self, parent_frame: tk.Frame) -> None:
         options_frame,
         text="Run bulk extract after scan",
         variable=self.bulk_extract_enabled_var,
+        command=self._sync_skip_indicator_extract_state,
         font=self.theme.fonts["small"]
     )
     self.theme.apply_to_widget(bulk_extract_checkbox, "checkbox")
@@ -744,6 +754,8 @@ def _create_bulk_extract_option(self, parent_frame: tk.Frame) -> None:
     )
     self.theme.apply_to_widget(skip_checkbox, "checkbox")
     skip_checkbox.pack(anchor="w", padx=10, pady=2)
+    self.skip_indicator_extract_checkbox = skip_checkbox
+    self._sync_skip_indicator_extract_state()
 
     info_label = self.theme.create_styled_label(
         container,
@@ -1094,6 +1106,7 @@ def bind_scan_dialog_layout_methods(dialog_cls) -> None:
         "_delete_selected_template",
         "_capture_form_state",
         "_apply_form_state",
+        "_sync_skip_indicator_extract_state",
         "_apply_template_by_slug",
         "_create_region_selection",
         "_update_region_status",
