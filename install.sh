@@ -228,6 +228,26 @@ else
     fi
 fi
 
+DIRRACUDA_EXCLUSION_FILE="$DIRRACUDA_CONF_DIR/exclusion_list.json"
+DIRRACUDA_RANSOMWARE_FILE="$DIRRACUDA_CONF_DIR/ransomware_indicators.json"
+
+for _src_dst in \
+    "conf/exclusion_list.json:$DIRRACUDA_EXCLUSION_FILE" \
+    "conf/ransomware_indicators.json:$DIRRACUDA_RANSOMWARE_FILE"; do
+    _src="${_src_dst%%:*}"
+    _dst="${_src_dst##*:}"
+    if [[ -f "$_dst" ]]; then
+        success "$_dst already exists — skipping."
+    elif [[ -f "$_src" ]]; then
+        mkdir -p "$DIRRACUDA_CONF_DIR"
+        cp "$_src" "$_dst"
+        success "$(basename "$_dst") copied to $DIRRACUDA_CONF_DIR."
+    else
+        warn "Source file $PWD/$_src not found — skipping $(basename "$_dst")."
+    fi
+done
+unset _src_dst _src _dst
+
 pause
 
 # ──────────────────────────────────────────────────────────────────────────────
