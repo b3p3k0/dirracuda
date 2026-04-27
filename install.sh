@@ -497,9 +497,10 @@ PYEOF
             fi
 
             if [[ -n "${FSTAB_BACKUP:-}" ]]; then
-                if DIRRACUDA_CANON_TMPFS_MP="$DIRRACUDA_CANON_TMPFS_MP" \
+                if sudo env \
+                   DIRRACUDA_CANON_TMPFS_MP="$DIRRACUDA_CANON_TMPFS_MP" \
                    DIRRACUDA_LEGACY_TMPFS_MP="$DIRRACUDA_LEGACY_TMPFS_MP" \
-                   sudo python3 - <<'PYEOF'
+                   python3 - <<'PYEOF'
 import os
 import pathlib
 import sys
