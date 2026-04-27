@@ -52,6 +52,14 @@ if [[ ! -f requirements.txt ]] || [[ ! -d conf ]]; then
     die "Run this script from the Dirracuda project root directory."
 fi
 
+DIRRACUDA_HOME="$HOME/.dirracuda"
+DIRRACUDA_CONF_DIR="$DIRRACUDA_HOME/conf"
+DIRRACUDA_DATA_DIR="$DIRRACUDA_HOME/data"
+DIRRACUDA_CONFIG="$DIRRACUDA_CONF_DIR/config.json"
+DIRRACUDA_DB_PATH="$DIRRACUDA_DATA_DIR/dirracuda.db"
+DIRRACUDA_CANON_TMPFS_MP="$DIRRACUDA_HOME/data/tmpfs_quarantine"
+DIRRACUDA_LEGACY_TMPFS_MP="$DIRRACUDA_HOME/quarantine_tmpfs"
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Welcome
 # ──────────────────────────────────────────────────────────────────────────────
@@ -201,19 +209,21 @@ pause
 
 section "[Step 4 of 8]  Configuration file"
 
-echo "  Dirracuda reads settings from conf/config.json."
+echo "  Dirracuda reads settings from ~/.dirracuda/conf/config.json."
 echo "  We'll create one from the bundled example. You can edit it"
 echo "  at any time — the defaults are fine for getting started."
 echo
 
-if [[ -f conf/config.json ]]; then
-    success "conf/config.json already exists — skipping (will not overwrite)."
+if [[ -f "$DIRRACUDA_CONFIG" ]]; then
+    success "$DIRRACUDA_CONFIG already exists — skipping (will not overwrite)."
 else
-    if confirm "Create conf/config.json from the example template?"; then
-        cp conf/config.json.example conf/config.json
-        success "conf/config.json created."
+    if confirm "Create $DIRRACUDA_CONFIG from the example template?"; then
+        mkdir -p "$DIRRACUDA_CONF_DIR"
+        cp conf/config.json.example "$DIRRACUDA_CONFIG"
+        success "$DIRRACUDA_CONFIG created."
     else
-        warn "Skipped. Dirracuda will create a default config on first run."
+        warn "Skipped. Dirracuda will create a default config on first run at:"
+        warn "  $DIRRACUDA_CONFIG"
         warn "Note: the Shodan API key step (step 6) requires this file to exist."
     fi
 fi
@@ -256,7 +266,7 @@ echo "  You can sign up and find your key at:"
 echo "    https://account.shodan.io"
 echo
 echo "  If you don't have a key yet, press Enter to skip."
-echo "  You can add it later in conf/config.json under:  shodan → api_key"
+echo "  You can add it later in ~/.dirracuda/conf/config.json under:  shodan → api_key"
 echo
 
 SHODAN_KEY=''
@@ -291,17 +301,17 @@ if confirm "Would you like to enter a Shodan API key now?" "n"; then
 fi
 
 if [[ -n "$SHODAN_KEY" ]]; then
-    if [[ ! -f conf/config.json ]]; then
-        warn "conf/config.json not found — cannot save key."
+    if [[ ! -f "$DIRRACUDA_CONFIG" ]]; then
+        warn "$DIRRACUDA_CONFIG not found — cannot save key."
         warn "Add it manually under: shodan → api_key"
     elif [[ ! -x venv/bin/python3 ]]; then
         warn "Virtual environment not found — cannot save key."
-        warn "Add it manually to conf/config.json under: shodan → api_key"
+        warn "Add it manually to ~/.dirracuda/conf/config.json under: shodan → api_key"
     else
-        if SHODAN_KEY_VAL="$SHODAN_KEY" venv/bin/python3 - <<'PYEOF'
+        if SHODAN_KEY_VAL="$SHODAN_KEY" DIRRACUDA_CONFIG_PATH="$DIRRACUDA_CONFIG" venv/bin/python3 - <<'PYEOF'
 import json, pathlib, sys, os
 key = os.environ['SHODAN_KEY_VAL']
-p = pathlib.Path('conf/config.json')
+p = pathlib.Path(os.environ['DIRRACUDA_CONFIG_PATH'])
 try:
     cfg = json.loads(p.read_text())
     cfg.setdefault('shodan', {})['api_key'] = key
@@ -311,14 +321,14 @@ except Exception as e:
     sys.exit(1)
 PYEOF
         then
-            success "Shodan API key saved to conf/config.json."
+            success "Shodan API key saved to $DIRRACUDA_CONFIG."
         else
             warn "Could not save API key automatically."
-            warn "Add it manually to conf/config.json under: shodan → api_key"
+            warn "Add it manually to ~/.dirracuda/conf/config.json under: shodan → api_key"
         fi
     fi
 else
-    info "Skipped. Add your key later in conf/config.json → shodan → api_key"
+    info "Skipped. Add your key later in ~/.dirracuda/conf/config.json → shodan → api_key"
 fi
 
 pause
@@ -330,7 +340,8 @@ pause
 section "[Step 7 of 8]  Import existing database  (optional)"
 
 echo "  If you have a dirracuda.db from a previous installation, you can"
-echo "  copy it here to preserve your scan history and results."
+echo "  import it into the canonical home data path to preserve scan history."
+echo "  Target: $DIRRACUDA_DB_PATH"
 echo
 echo "  Leave blank to skip — a fresh database will be created on first run."
 echo
@@ -344,7 +355,7 @@ if [[ -n "$DB_IMPORT_PATH" ]]; then
         warn "File not found: $DB_IMPORT_PATH — skipping."
     elif [[ ! -x venv/bin/python3 ]]; then
         warn "Virtual environment not found — cannot validate the file."
-        warn "Copy it manually to this directory as dirracuda.db"
+        warn "Copy it manually to: $DIRRACUDA_DB_PATH"
     else
         DB_VALID=false
         if DB_FILE_PATH="$DB_IMPORT_PATH" venv/bin/python3 - <<'PYEOF'
@@ -365,16 +376,24 @@ PYEOF
         fi
 
         if [[ "$DB_VALID" == "true" ]]; then
-            if [[ -f dirracuda.db ]]; then
-                warn "A dirracuda.db already exists in this directory."
+            mkdir -p "$DIRRACUDA_DATA_DIR"
+            if [[ -f "$DIRRACUDA_DB_PATH" ]]; then
+                warn "A database already exists at $DIRRACUDA_DB_PATH."
                 if confirm "Overwrite it with the imported file?" "n"; then
-                    cp "$DB_IMPORT_PATH" dirracuda.db
-                    success "Database imported from: $DB_IMPORT_PATH"
+                    DB_BACKUP_PATH="$DIRRACUDA_DB_PATH.pre_import_$(date +%Y%m%d_%H%M%S).bak"
+                    if cp "$DIRRACUDA_DB_PATH" "$DB_BACKUP_PATH"; then
+                        info "Existing database backed up to: $DB_BACKUP_PATH"
+                        cp "$DB_IMPORT_PATH" "$DIRRACUDA_DB_PATH"
+                        success "Database imported from: $DB_IMPORT_PATH"
+                    else
+                        warn "Could not create backup at $DB_BACKUP_PATH — keeping existing database."
+                        info "Skipped import to avoid data loss."
+                    fi
                 else
                     info "Skipped — existing database kept."
                 fi
             else
-                cp "$DB_IMPORT_PATH" dirracuda.db
+                cp "$DB_IMPORT_PATH" "$DIRRACUDA_DB_PATH"
                 success "Database imported from: $DB_IMPORT_PATH"
             fi
         else
@@ -425,26 +444,26 @@ echo
 echo "  ┌─ RAM-backed quarantine (tmpfs) ─────────────────────────────────────┐"
 echo "  │                                                                       │"
 echo "  │  When enabled, files downloaded by Dirracuda are stored in a         │"
-echo "  │  temporary RAM volume (default: 512 MB). They never touch your        │"
-echo "  │  physical disk and are automatically erased when the app closes.      │"
+echo "  │  pre-mounted RAM volume. They never touch your physical disk.         │"
 echo "  │                                                                       │"
-echo "  │  Dirracuda handles mounting and unmounting automatically.             │"
-echo "  │  We just need to enable the setting here.                             │"
+echo "  │  Dirracuda now uses detect-only tmpfs behavior and never mounts       │"
+echo "  │  or unmounts as root. You can optionally add/update /etc/fstab here.  │"
 echo "  │                                                                       │"
 echo "  └───────────────────────────────────────────────────────────────────────┘"
 echo
 
 if confirm "Enable RAM-backed quarantine (tmpfs)?" "n"; then
-    if [[ ! -f conf/config.json ]]; then
-        warn "conf/config.json not found — cannot update config."
-        warn "Enable manually in conf/config.json under: quarantine → use_tmpfs: true"
+    if [[ ! -f "$DIRRACUDA_CONFIG" ]]; then
+        warn "$DIRRACUDA_CONFIG not found — cannot update config."
+        warn "Enable manually in ~/.dirracuda/conf/config.json under: quarantine → use_tmpfs: true"
     elif [[ ! -x venv/bin/python3 ]]; then
         warn "Virtual environment not found — cannot update config."
-        warn "Enable manually in conf/config.json under: quarantine → use_tmpfs: true"
+        warn "Enable manually in ~/.dirracuda/conf/config.json under: quarantine → use_tmpfs: true"
     else
-        if venv/bin/python3 - <<'PYEOF'
+        if DIRRACUDA_CONFIG_PATH="$DIRRACUDA_CONFIG" venv/bin/python3 - <<'PYEOF'
 import json, pathlib, sys
-p = pathlib.Path('conf/config.json')
+import os
+p = pathlib.Path(os.environ['DIRRACUDA_CONFIG_PATH'])
 try:
     cfg = json.loads(p.read_text())
     cfg.setdefault('quarantine', {})['use_tmpfs'] = True
@@ -454,11 +473,112 @@ except Exception as e:
     sys.exit(1)
 PYEOF
         then
-            success "tmpfs quarantine enabled in conf/config.json."
-            info "Dirracuda will mount it automatically on first run."
+            success "tmpfs quarantine enabled in $DIRRACUDA_CONFIG."
+            info "Dirracuda will only use tmpfs when a mount is already present."
         else
             warn "Could not update config automatically."
-            warn "Enable manually in conf/config.json under: quarantine → use_tmpfs: true"
+            warn "Enable manually in ~/.dirracuda/conf/config.json under: quarantine → use_tmpfs: true"
+        fi
+    fi
+
+    echo
+    if confirm "Add/update /etc/fstab for canonical tmpfs mountpoint ($DIRRACUDA_CANON_TMPFS_MP)?" "n"; then
+        if ! command -v sudo &>/dev/null; then
+            warn "sudo not found — cannot edit /etc/fstab automatically."
+        else
+            FSTAB_TS=$(date +%Y%m%d_%H%M%S)
+            FSTAB_BACKUP="/etc/fstab.dirracuda.${FSTAB_TS}.bak"
+            info "Backing up /etc/fstab to $FSTAB_BACKUP ..."
+            if sudo cp /etc/fstab "$FSTAB_BACKUP"; then
+                success "Backup created: $FSTAB_BACKUP"
+            else
+                warn "Failed to back up /etc/fstab. Skipping fstab update."
+                FSTAB_BACKUP=""
+            fi
+
+            if [[ -n "${FSTAB_BACKUP:-}" ]]; then
+                if DIRRACUDA_CANON_TMPFS_MP="$DIRRACUDA_CANON_TMPFS_MP" \
+                   DIRRACUDA_LEGACY_TMPFS_MP="$DIRRACUDA_LEGACY_TMPFS_MP" \
+                   sudo python3 - <<'PYEOF'
+import os
+import pathlib
+import sys
+
+fstab = pathlib.Path("/etc/fstab")
+canon = os.environ["DIRRACUDA_CANON_TMPFS_MP"]
+legacy = os.environ["DIRRACUDA_LEGACY_TMPFS_MP"]
+canonical_line = f"tmpfs  {canon}  tmpfs  noexec,nosuid,nodev,size=512M,noswap  0  0"
+
+try:
+    lines = fstab.read_text(encoding="utf-8").splitlines()
+except Exception as exc:
+    print(f"Could not read /etc/fstab: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+
+out = []
+legacy_commented = 0
+canonical_exists = False
+
+for raw in lines:
+    line = raw.rstrip("\n")
+    stripped = line.strip()
+    if stripped and not stripped.startswith("#"):
+        parts = stripped.split()
+        if len(parts) >= 3:
+            mountpoint = parts[1]
+            fstype = parts[2]
+            if mountpoint == canon and fstype == "tmpfs":
+                canonical_exists = True
+            if mountpoint == legacy and fstype == "tmpfs":
+                out.append(f"# dirracuda-migrated-legacy {line}")
+                legacy_commented += 1
+                continue
+    out.append(line)
+
+canonical_added = False
+if not canonical_exists:
+    if out and out[-1].strip():
+        out.append("")
+    out.append("# Dirracuda tmpfs quarantine (canonical)")
+    out.append(canonical_line)
+    canonical_added = True
+
+try:
+    fstab.write_text("\n".join(out) + "\n", encoding="utf-8")
+except Exception as exc:
+    print(f"Could not write /etc/fstab: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+
+print(f"legacy_commented={legacy_commented} canonical_added={int(canonical_added)}")
+PYEOF
+                then
+                    success "Updated /etc/fstab for canonical tmpfs mountpoint."
+                    info "Legacy mountpoint (if present) was commented and canonical entry ensured."
+                else
+                    warn "Automatic /etc/fstab update failed."
+                    if [[ -n "${FSTAB_BACKUP:-}" ]]; then
+                        warn "Restore backup with: sudo cp \"$FSTAB_BACKUP\" /etc/fstab"
+                    fi
+                fi
+            fi
+
+            if confirm "Run sudo mount -a now to apply fstab changes?" "n"; then
+                if sudo mkdir -p "$DIRRACUDA_CANON_TMPFS_MP" && sudo mount -a; then
+                    success "mount -a completed."
+                    if mount | grep -F "$DIRRACUDA_CANON_TMPFS_MP" >/dev/null 2>&1; then
+                        success "Canonical tmpfs mount is active at $DIRRACUDA_CANON_TMPFS_MP"
+                    else
+                        warn "mount -a succeeded, but canonical tmpfs mount was not detected."
+                    fi
+                else
+                    warn "mount -a failed. Review /etc/fstab and restore backup if needed."
+                    if [[ -n "${FSTAB_BACKUP:-}" ]]; then
+                        warn "Backup path: $FSTAB_BACKUP"
+                    fi
+                fi
+            else
+                info "Skipped mount -a. Apply later with: sudo mount -a"
+            fi
         fi
     fi
 else

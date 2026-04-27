@@ -47,10 +47,11 @@ Then:
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-cp conf/config.json.example conf/config.json
+mkdir -p ~/.dirracuda/conf
+cp conf/config.json.example ~/.dirracuda/conf/config.json
 ```
 
-Edit `conf/config.json` (or launch a new scan from the dashboard) and add your Shodan API key (requires paid membership):
+Edit `~/.dirracuda/conf/config.json` (or launch a new scan from the dashboard) and add your Shodan API key (requires paid membership):
 
 ```json
 {
@@ -78,7 +79,7 @@ Launch the GUI from your venv:
 | smbprotocol | ≥1.10.0 | Pure-Python SMB2/3 transport for cautious-mode sessions |
 | pyspnego | ≥0.8.0 | SPNEGO authentication support; required by smbprotocol |
 | impacket | ≥0.11.0 | SMB1/2/3 transport for legacy compatibility, share enumeration, and browser operations |
-| PyYAML | ≥6.0 | YAML parsing for optional signature/config data files |
+| PyYAML | ≥6.0 | Loads RCE vulnerability signatures from `conf/signatures/rce_smb/*.yaml` |
 | Pillow | ≥8.0.0 | Image rendering in the file viewer (PNG, JPEG, GIF, WebP, BMP, TIFF) |
 
 ### System tools
@@ -87,7 +88,7 @@ Launch the GUI from your venv:
 |------|---------|---------|
 | tkinter | `apt install python3-tk` | GUI framework; required to run Dirracuda |
 | ClamAV (`clamscan` / `clamdscan`) | `apt install clamav clamav-daemon` | Optional post-download malware scan step for bulk extract and browser downloads |
-| tmpfs (Linux) | built into the Linux kernel (`mount -t tmpfs ...`) | Optional RAM-backed quarantine path at `~/.dirracuda/quarantine_tmpfs`; app falls back to disk quarantine if tmpfs is unavailable |
+| tmpfs (Linux) | built into the Linux kernel (`mount -t tmpfs ...`) | Optional RAM-backed quarantine path at `~/.dirracuda/data/tmpfs_quarantine`; legacy mountpoints are detected for compatibility; app is detect-only and falls back to disk quarantine if tmpfs is unavailable |
 
 ---
 
@@ -100,7 +101,7 @@ You're connecting to machines you don't control. A few baseline precautions befo
 - **VPN** - don't scan from your real IP address
 - **VM** - run Dirracuda inside a virtual machine, especially if you plan to browse or extract files; unknown hosts can serve malicious content
 - **Network isolation** - keep the VM on an isolated network segment, not bridged directly to your LAN
-- **Don't open extracted files on your host** - quarantine defaults to `~/.dirracuda/quarantine/` inside the VM for a reason; treat everything you pull as untrusted
+- **Don't open extracted files on your host** - quarantine defaults to `~/.dirracuda/data/quarantine/` inside the VM for a reason; treat everything you pull as untrusted
 - **Audit the source code** - I'm not a threat actor, but I could be. Don't just clone and run things from Github all willy-nilly
 - **Don't run as root** - that's just silly!
 
@@ -163,7 +164,7 @@ Read-only directory enumeration that previews accessible shares without download
 
 **Ransomware detection:** Filenames are matched against 25+ known ransom-note patterns (WannaCry, Hive, STOP/Djvu, etc.). Matches flag the server with a red indicator in the list view.
 
-Probe snapshots are now persisted in `dirracuda.db` (normalized snapshot tables linked from protocol probe-cache rows). Legacy file caches under `~/.dirracuda/{probes,ftp_probes,http_probes}` remain as compatibility fallback for older data and can be imported on startup.
+Probe snapshots are now persisted in `dirracuda.db` (normalized snapshot tables linked from protocol probe-cache rows). Canonical file-cache fallback paths are `~/.dirracuda/data/cache/probes/{smb,ftp,http}`; legacy file caches under `~/.dirracuda/{probes,ftp_probes,http_probes}` remain compatibility-only and can be imported on startup.
 
 Live scan/probe/extract output is shown in non-modal monitor dialogs. Hiding a monitor does not stop the task; reopen it from **Running Tasks**.
 
@@ -176,9 +177,9 @@ The viewer auto-detects file types: text files display with an encoding selector
 
 ![image viewer](img/pic_view.png)
 
-Files over the specified maximum (default: 5 MB) trigger a warning-you can bump that limit in `conf/config.json` under `file_browser.viewer.max_view_size_mb`, or click "Ignore Once" to load anyway (hard cap: 1 GB).
+Files over the specified maximum (default: 5 MB) trigger a warning-you can bump that limit in `~/.dirracuda/conf/config.json` under `file_browser.viewer.max_view_size_mb`, or click "Ignore Once" to load anyway (hard cap: 1 GB).
 
-Downloads are staged in quarantine (`~/.dirracuda/quarantine/`). When ClamAV is enabled, downloaded files are post-processed by verdict (clean files promoted to extracted, infected files moved to known-bad). The browser never writes to remote systems.
+Downloads are staged in quarantine (`~/.dirracuda/data/quarantine/`). When ClamAV is enabled, downloaded files are post-processed by verdict (clean files promoted to extracted, infected files moved to known-bad). The browser never writes to remote systems.
 
 Download concurrency is configurable in the browser UI via the worker-count control (1–3 workers, default 2); the value is persisted in GUI settings under `file_browser.download_worker_count`. For SMB and FTP, a large-file threshold (persisted under `file_browser.download_large_file_mb`) routes files above that size to a dedicated worker. HTTP downloads use worker concurrency only - large-file routing is not active for HTTP in the current release. The large-file control is visible in the HTTP browser but disabled with an explanatory note.
 
@@ -186,29 +187,33 @@ Download concurrency is configurable in the browser UI via the worker-count cont
 
 Dirracuda can stage quarantine files in RAM-backed `tmpfs` instead of disk.
 
-- Mountpoint is fixed to `~/.dirracuda/quarantine_tmpfs`
+- Canonical mountpoint is `~/.dirracuda/data/tmpfs_quarantine`
+- Legacy mountpoints are still detected for compatibility: `~/.dirracuda/quarantine_tmpfs` and `~/.smbseek/quarantine_tmpfs`
 - Linux only (controls are disabled on non-Linux platforms)
-- If mount/setup fails, Dirracuda falls back to the configured disk quarantine path and shows one warning per app session
+- Dirracuda is detect-only and never runs `mount`/`umount`
+- If no supported tmpfs mount is present, Dirracuda falls back to the configured disk quarantine path and shows one warning per app session
 
-To pre-mount at boot, add an `/etc/fstab` entry like the one below (replace `<USER>`), then run `sudo mount -a`.
+For setup, either:
+
+1. Run `bash install.sh` and in Step 8 choose tmpfs + optional `/etc/fstab` update.
+2. Manually add an `/etc/fstab` entry like the one below (replace `<USER>`), then run `sudo mkdir -p /home/<USER>/.dirracuda/data/tmpfs_quarantine && sudo mount -a`.
+
 Dirracuda will reuse this mount when tmpfs mode is enabled.
 
 ```fstab
-tmpfs  /home/<USER>/.dirracuda/quarantine_tmpfs  tmpfs  noexec,nosuid,nodev,size=512M,noswap  0  0
+tmpfs  /home/<USER>/.dirracuda/data/tmpfs_quarantine  tmpfs  noexec,nosuid,nodev,size=512M,noswap  0  0
 ```
 
 Enable in **App Config**:
 
 - Check `Use memory (tmpfs) for quarantine`
-- Set `Max size (MB)` (default `512`)
 
-Or set in `conf/config.json`:
+Or set in `~/.dirracuda/conf/config.json`:
 
 ```json
 {
   "quarantine": {
-    "use_tmpfs": true,
-    "tmpfs_size_mb": 512
+    "use_tmpfs": true
   }
 }
 ```
@@ -216,11 +221,11 @@ Or set in `conf/config.json`:
 Manual setup notes (Linux):
 
 ```bash
-# Validate mount appears after starting Dirracuda with tmpfs enabled
-mount | grep -F "$HOME/.dirracuda/quarantine_tmpfs"
+# Validate mount exists before starting Dirracuda with tmpfs enabled
+mount | grep -F "$HOME/.dirracuda/data/tmpfs_quarantine"
 
 # Inspect current tmpfs usage
-df -h "$HOME/.dirracuda/quarantine_tmpfs"
+df -h "$HOME/.dirracuda/data/tmpfs_quarantine"
 ```
 
 ### Extracting Files
@@ -234,7 +239,7 @@ Automated file collection with configurable limits:
 - Max directory depth
 - File extension filtering
 
-All extracted files land in quarantine. The defaults are conservative - check `conf/config.json` if you need to adjust them.
+All extracted files land in quarantine. The defaults are conservative - check `~/.dirracuda/conf/config.json` if you need to adjust them.
 
 #### Optional ClamAV scanning (bulk extract + browser downloads)
 
@@ -247,8 +252,8 @@ When enabled, ClamAV post-processes files downloaded via:
 
 Each file is scanned and then routed by verdict:
 
-- **clean** → moved to `~/.dirracuda/extracted/<host>/<date>/<share>/...`
-- **infected** → moved to `~/.dirracuda/quarantine/<known_bad_subdir>/<host>/<date>/<share>/...` (default subdir: `known_bad`)
+- **clean** → moved to `~/.dirracuda/data/extracted/<host>/<date>/<share>/...`
+- **infected** → moved to `~/.dirracuda/data/quarantine/<known_bad_subdir>/<host>/<date>/<share>/...` (default subdir: `known_bad`)
 - **scanner error/timeout/missing binary** → file stays in quarantine; extract continues (fail-open)
 
 Configure it from **App Config → ClamAV Settings**:
@@ -308,7 +313,9 @@ Behavior notes:
 
 ![config](img/config.png)
 
-App settings are stored in `conf/config.json`. The example file (`conf/config.json.example`) documents every option.
+App settings are stored in `~/.dirracuda/conf/config.json`. The bundled example file (`conf/config.json.example`) documents every option.
+
+At startup, Dirracuda self-heals stale legacy/repo-local DB and config pointers when they are missing (for example old `.../dirracuda.db` in a checkout root) and resets them to canonical home paths.
 
 Key sections:
 
@@ -322,8 +329,8 @@ Key sections:
 
 Two additional files hold editable lists:
 
-- `conf/exclusion_list.json` - Organizations to skip during Shodan queries (hosting providers, ISPs you don't care about etc.). Add entries to the `organizations` array.
-- `conf/ransomware_indicators.json` - Filename patterns checked during probe. Matches flag a server as likely compromised.
+- `~/.dirracuda/conf/exclusion_list.json` - Organizations to skip during Shodan queries (hosting providers, ISPs you don't care about etc.). Add entries to the `organizations` array.
+- `~/.dirracuda/conf/ransomware_indicators.json` - Filename patterns checked during probe. Matches flag a server as likely compromised.
 
 These are separate so you can customize or share them without touching app settings.
 
@@ -339,7 +346,7 @@ The dialog is modeless and tab-based. Current tabs:
 - `Dorkbook`
 - `Keymaster`
 
-On first open, the dialog shows an experimental warning banner. If you check **Don't show this notice again**, Dirracuda writes `experimental.warning_dismissed=true` to `~/.dirracuda/gui_settings.json`.
+On first open, the dialog shows an experimental warning banner. If you check **Don't show this notice again**, Dirracuda writes `experimental.warning_dismissed=true` to `~/.dirracuda/state/gui_settings.json`.
 
 ### SearXNG
 
@@ -361,7 +368,7 @@ Inputs (persisted across opens/restarts):
 What each action does:
 - **Test** checks server reachability and JSON search support.
 - **Run** executes the query, keeps only confirmed open-index results, and updates status with fetched/stored counts. If probe is enabled, the status line also shows probe totals (`✔/✖/○`).
-- **Open Results DB** opens the results browser backed by `~/.dirracuda/se_dork.db`.
+- **Open Results DB** opens the results browser backed by `~/.dirracuda/data/experimental/se_dork.db`.
 
 Results browser:
 - Columns: `URL`, `Probed`, `Probe Preview`, `Checked`
@@ -385,7 +392,7 @@ Then restart SearXNG and run `Test` again.
 
 ### Reddit Ingestion (redseek)
 
-redseek ingests submissions from `r/opendirectories` into a sidecar DB (`~/.dirracuda/reddit_od.db`) for analyst review. Runtime workflow state remains sidecar-based, and it does not auto-probe or auto-extract anything.
+redseek ingests submissions from `r/opendirectories` into a sidecar DB (`~/.dirracuda/data/experimental/reddit_od.db`) for analyst review. Runtime workflow state remains sidecar-based, and it does not auto-probe or auto-extract anything.
 
 Access points:
 - Dashboard → `⚗ Experimental` → `Reddit` tab → `Open Reddit Grab` (ingest)
@@ -406,7 +413,7 @@ Sort options:
 Only submissions are ingested. Comments/replies are not ingested.
 
 Dialog input persistence:
-- Last-used `Reddit Grab` inputs persist across opens/restarts in `~/.dirracuda/gui_settings.json` under `reddit_grab.*` keys:
+- Last-used `Reddit Grab` inputs persist across opens/restarts in `~/.dirracuda/state/gui_settings.json` under `reddit_grab.*` keys:
   - `mode`, `sort`, `top_window`, `query`, `username`, `max_posts`
   - `parse_body`, `include_nsfw`, `replace_cache`
 
@@ -440,7 +447,7 @@ Quick start:
 3. Use `SMB` / `FTP` / `HTTP` tabs to manage recipes.
 
 Behavior:
-- Sidecar DB path: `~/.dirracuda/dorkbook.db`
+- Sidecar DB path: `~/.dirracuda/data/experimental/dorkbook.db`
 - Built-ins are read-only (italicized) and seeded one per protocol
 - Custom rows support `Add`, `Copy`, `Use in Discovery Dorks`, `Edit`, `Delete`
 - `Use in Discovery Dorks` is available from button, right-click menu, and row double-click
@@ -471,26 +478,21 @@ What Apply does:
 - Writes the selected key to `shodan.api_key` in the active config file.
 - Affects future scans only — a scan already running continues with the key that was active at launch.
 
-Sidecar DB path: `~/.dirracuda/keymaster.db`
+Sidecar DB path: `~/.dirracuda/data/experimental/keymaster.db`
 
-Key table columns: `Label`, `Key Preview`, `Query Credits`, `Notes`, `Last Used`.
+Key table columns: `Label`, `Key Preview`, `Notes`, `Last Used`.
 
 Key Preview format: keys longer than 8 characters show as `first4 + asterisks + last4`; shorter keys are fully masked.
 
-API key input is masked in Add/Edit dialogs. No full-key reveal in v1.
-
-Balance checks:
-- Auto balance check runs on open when you have 5 or fewer saved keys.
-- If you have more than 5 saved keys, auto check and `Recheck All` stay off. Use `Recheck Selected`.
-- Full behavior: [Keymaster credit-check limits](docs/TECHNICAL_REFERENCE.md#keymaster-credit-check-limits)
+API key input is masked in Add/Edit dialogs **BUT IS STORED IN CLEAR TEXT LOCALLY.** This should be a non-risk (unless you make ~ global readable...) but I would be remiss not to point it out.
 
 ## Advanced
 
 ### Templates
 
-**Scan templates** save your unified scan configuration - protocol selection, country/region filters, Shodan filters, max results, shared concurrency/timeout, and SMB/HTTP protocol-specific toggles. Click "Save Current" in the Start Scan dialog. Templates live in `~/.dirracuda/templates/` as JSON files you can edit directly.
+**Scan templates** save your unified scan configuration - protocol selection, country/region filters, Shodan filters, max results, shared concurrency/timeout, and SMB/HTTP protocol-specific toggles. Click "Save Current" in the Start Scan dialog. Templates live in `~/.dirracuda/state/templates/scan/` as JSON files you can edit directly.
 
-**Filter templates** save your server list filters - search text, date range, countries, checkboxes. Click "Save Filters" in the advanced filter panel. Stored in `~/.dirracuda/filter_templates/`.
+**Filter templates** save your server list filters - search text, date range, countries, checkboxes. Click "Save Filters" in the advanced filter panel. Stored in `~/.dirracuda/state/templates/filter/`.
 
 Both auto-restore your last-used template on startup.
 

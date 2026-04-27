@@ -20,9 +20,12 @@ import sys
 import os
 
 from gui.utils.dialog_helpers import ensure_dialog_focus
+from shared.path_service import get_paths, get_legacy_paths, resolve_runtime_config_path
 
 # Special display token for extensionless files
 NO_EXTENSION_TOKEN = "<no extension>"
+_PATHS = get_paths()
+_LEGACY = get_legacy_paths(paths=_PATHS)
 
 
 class BatchExtractSettingsDialog:
@@ -72,7 +75,7 @@ class BatchExtractSettingsDialog:
             except Exception:
                 resolved_config = None
         if resolved_config is None:
-            resolved_config = (Path.cwd() / "conf" / "config.json").resolve()
+            resolved_config = resolve_runtime_config_path(paths=_PATHS, legacy=_LEGACY).resolve(strict=False)
         self.config_path = resolved_config
         self.mode = mode
         self.target_count = target_count

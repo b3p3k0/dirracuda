@@ -11,6 +11,57 @@ if str(_SCRIPT_DIR) not in sys.path:
 
 from shared.ftp_workflow import create_ftp_workflow
 from commands.ftp.models import FtpDiscoveryError
+from shared.path_service import (
+    get_legacy_paths,
+    get_paths,
+    resolve_runtime_main_db_for_session,
+    run_layout_v2_migration,
+)
+from shared.db_path_resolution import normalize_database_path
+
+_PATHS = get_paths()
+_LEGACY = get_legacy_paths(paths=_PATHS)
+
+
+def _prepare_runtime_db_override(config_path: str | None) -> str:
+    """Run layout migration preflight and return effective DB path for this run."""
+    try:
+        migration_result = run_layout_v2_migration(paths=_PATHS, legacy=_LEGACY)
+    except Exception as exc:
+        print(
+            f"Warning: startup layout migration preflight failed: {exc}",
+            file=sys.stderr,
+        )
+        migration_result = {
+            "status": "failed",
+            "db_recovery_attempted": True,
+            "db_recovery_status": "failed",
+            "db_fallback_candidates": [],
+        }
+
+    try:
+        from shared.config import load_config
+        cfg = load_config(config_path)
+        preferred = cfg.get_database_path()
+    except Exception as exc:
+        print(
+            f"Warning: failed to resolve configured database path; using canonical default: {exc}",
+            file=sys.stderr,
+        )
+        preferred = str(_PATHS.main_db_file)
+
+    preferred_path = normalize_database_path(preferred, _PATHS.repo_root)
+    if preferred_path is None:
+        preferred_path = _PATHS.main_db_file.resolve(strict=False)
+    effective_path, warning = resolve_runtime_main_db_for_session(
+        preferred_path,
+        migration_result=migration_result,
+        paths=_PATHS,
+        legacy=_LEGACY,
+    )
+    if warning:
+        print(f"Warning: {warning}", file=sys.stderr)
+    return str(effective_path)
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -24,7 +75,7 @@ def create_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--config", metavar="FILE", default=None,
-        help="Path to config file (default: conf/config.json)",
+        help=f"Path to config file (default: {_PATHS.config_file})",
     )
     parser.add_argument(
         "--filter",
@@ -46,14 +97,15 @@ def main() -> int:
         print("Error: Cannot use both --quiet and --verbose options")
         return 1
 
+    runtime_db_override = _prepare_runtime_db_override(getattr(args, "config", None))
+    if runtime_db_override:
+        setattr(args, "runtime_db_path_override", runtime_db_override)
+
     # Ensure FTP (and SMB) schema migrations are applied before any workflow runs.
     # Best-effort: mirrors the pattern in SMBSeekWorkflowDatabase.__init__.
     try:
-        from shared.config import load_config
         from shared.db_migrations import run_migrations
-        _cfg = load_config(args.config)
-        _db_path = _cfg.get_database_path()
-        run_migrations(_db_path)
+        run_migrations(runtime_db_override)
     except Exception as mig_exc:
         print(
             f"Warning: failed to apply DB migrations before FTP scan: {mig_exc}",

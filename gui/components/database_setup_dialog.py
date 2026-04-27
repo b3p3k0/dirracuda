@@ -26,8 +26,11 @@ from gui.utils.error_codes import get_error, format_error_message
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.logging_config import get_logger
 from shared.db_path_resolution import auto_detect_database_path
+from shared.path_service import get_paths, get_legacy_paths, resolve_runtime_config_path
 
 _logger = get_logger("database_setup_dialog")
+_PATHS = get_paths()
+_LEGACY = get_legacy_paths(paths=_PATHS)
 
 
 class DatabaseSetupDialog:
@@ -52,7 +55,7 @@ class DatabaseSetupDialog:
         """
         self.parent = parent
         self.initial_db_path = initial_db_path
-        default_config = (Path.cwd() / "conf" / "config.json").resolve(strict=False)
+        default_config = resolve_runtime_config_path(paths=_PATHS, legacy=_LEGACY).resolve(strict=False)
         self.config_path = str(Path(config_path).expanduser().resolve(strict=False)) if config_path else str(default_config)
         self.backend_path = str(self._resolve_backend_path())
         self.theme = get_theme()
@@ -76,14 +79,14 @@ class DatabaseSetupDialog:
         self._create_dialog()
 
     def _resolve_backend_path(self) -> Path:
-        """Derive backend root from config path; fallback to cwd."""
+        """Derive backend root from config path; fallback to repository root."""
         try:
             cfg = Path(self.config_path).expanduser().resolve(strict=False)
             if cfg.parent.name == "conf":
                 return cfg.parent.parent
         except Exception:
             pass
-        return Path.cwd().resolve(strict=False)
+        return _PATHS.repo_root.resolve(strict=False)
     
     def _create_dialog(self) -> None:
         """Create and configure the setup dialog."""

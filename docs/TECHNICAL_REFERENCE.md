@@ -71,7 +71,7 @@ Dirracuda scans for internet-accessible servers exposing open or weakly-authenti
 │              ├─ db_tools_dialog.py                                  │
 │              └─ [config editor, browser windows, extract dialogs]   │
 │  gui/utils/ui_dispatcher.py  (thread-safe Tk marshaling)          │
-│  gui/utils/settings_manager.py  (persists ~/.dirracuda/            │
+│  gui/utils/settings_manager.py  (persists ~/.dirracuda/state/      │
 │                                  gui_settings.json)                │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -130,7 +130,7 @@ This shape applies to all three protocols. Protocol-specific differences are cov
 | `ftp_workflow.py` | `FtpWorkflow` — FTP 2-stage pipeline orchestrator |
 | `http_workflow.py` | `HttpWorkflow` — HTTP 2-stage pipeline orchestrator |
 | `database.py` | `SMBSeekWorkflowDatabase` — host filtering, session tracking, wraps `DatabaseManager` |
-| `config.py` | `SMBSeekConfig` — loads `conf/config.json`, deep-merge with defaults, typed accessors |
+| `config.py` | `SMBSeekConfig` — loads `~/.dirracuda/conf/config.json` (with fallback), deep-merge with defaults, typed accessors |
 | `output.py` | `SMBSeekOutput` — formatted console output (color, verbose, quiet modes) |
 | `smb_browser.py` | Read-only SMB file browser |
 | `ftp_browser.py` | `FtpNavigator` — list directories, download files, cancel mid-operation |
@@ -144,7 +144,7 @@ This shape applies to all three protocols. Protocol-specific differences are cov
 
 ## 3. Configuration
 
-### 3.1 `conf/config.json`
+### 3.1 `~/.dirracuda/conf/config.json`
 
 All configuration lives in one JSON file, deep-merged against hardcoded defaults in `SMBSeekConfig.__init__`. Missing keys fall back to defaults silently; a missing file prints a warning and uses defaults entirely.
 
@@ -163,12 +163,12 @@ All configuration lives in one JSON file, deep-merged against hardcoded defaults
 | `http` | Parallel to `ftp`; adds `verification.{allow_insecure_tls,verify_http,verify_https,subdir_timeout}` | HTTP-specific settings |
 | `rce` | `enabled_default` (false), `safe_active_budget.max_requests` (2), `intrusive_mode_enabled` (false) | RCE probe budget; intrusive mode must be explicitly enabled |
 | `clamav` | `enabled` (false), `backend` ("auto"), `timeout_seconds` (60), `extracted_root`, `known_bad_subdir` | Post-extraction AV scanning |
-| `quarantine` | `use_tmpfs` (false), `tmpfs_size_mb` (512) | tmpfs quarantine for file downloads |
+| `quarantine` | `use_tmpfs` (false), `tmpfs_size_mb` (512, compatibility-only) | tmpfs quarantine for file downloads (detect-only; no runtime mount/umount) |
 | `pry` | `wordlist_path`, `user_as_pass` (true), `stop_on_lockout` (true), `attempt_delay` (1.0s) | Password audit tool settings |
 
 ### 3.2 `SMBSeekConfig` (shared/config.py)
 
-`load_config(config_file=None)` is the factory. Returns an `SMBSeekConfig` instance with `conf/config.json` as the default path.
+`load_config(config_file=None)` is the factory. Returns an `SMBSeekConfig` instance with `~/.dirracuda/conf/config.json` as the default path.
 
 Typed accessors of note:
 
@@ -185,17 +185,19 @@ Typed accessors of note:
 | `validate_configuration()` | `bool` — checks API key, exclusion file, bounds |
 | `resolve_target_countries(args_country)` | `list[str]` — parses comma-separated `--country` arg; empty list = global scan |
 | `should_rescan_host(last_seen_days)` | `bool` — compares against `rescan_after_days` |
-| `get_exclusion_list()` | `list[str]` — org names loaded from `conf/exclusion_list.json` |
-| `get_ransomware_indicators()` | `list[str]` — patterns from `conf/ransomware_indicators.json` |
+| `get_exclusion_list()` | `list[str]` — org names loaded from `~/.dirracuda/conf/exclusion_list.json` (with legacy fallback) |
+| `get_ransomware_indicators()` | `list[str]` — patterns from `~/.dirracuda/conf/ransomware_indicators.json` (with legacy fallback) |
 
 ### 3.3 Two-Config System (GUI)
 
 The GUI maintains a separation between application config and user preferences:
 
-- **`conf/config.json`** — application settings, version-controlled, not overwritten on update
-- **`~/.dirracuda/gui_settings.json`** — user preferences managed by `gui/utils/settings_manager.py` (window geometry, last-used template, theme, backend path)
+- **`~/.dirracuda/conf/config.json`** — application settings (home-canonical)
+- **`~/.dirracuda/state/gui_settings.json`** — user preferences managed by `gui/utils/settings_manager.py` (window geometry, last-used template, theme, backend path)
 
-Config resolution order for GUI settings: CLI arg → `gui_settings.json` value → `conf/config.json` fallback. This prevents app updates from resetting window positions or scan templates.
+Config resolution order for GUI settings: CLI arg → `gui_settings.json` value → `~/.dirracuda/conf/config.json` fallback. This prevents app updates from resetting window positions or scan templates.
+
+Path drift guard: layout-v2 bootstrap/migration includes a self-heal pass for stale/missing legacy path fields (`database.path`, `gui_app.database_path`, `backend.database_path`, `backend.last_database_path`, `backend.config_path`). Known legacy/repo-local targets are reset to canonical home paths; canonical and explicit custom paths are preserved.
 
 SearXNG Dorking experimental UI settings persisted in `gui_settings.json`:
 
@@ -220,6 +222,10 @@ Dorkbook UI settings currently persisted in `gui_settings.json`:
 
 - `windows.dorkbook.geometry`
 - `dorkbook.active_protocol_tab`
+
+Runtime warning preferences currently persisted in `gui_settings.json`:
+
+- `runtime_warnings.tmpfs_legacy_mount_dismissed`
 
 ---
 
@@ -321,7 +327,7 @@ The success marker is only emitted on the non-error path; its absence signals fa
 
 Structurally identical to FTP. Implementation lives in `commands/http/operation.py`.
 
-**Shodan dork:** defaults to `http.title:"Index of /"` from `http.shodan.query_components.base_query` in `conf/config.json`.
+**Shodan dork:** defaults to `http.title:"Index of /"` from `http.shodan.query_components.base_query` in `~/.dirracuda/conf/config.json`.
 Operators can edit SMB/FTP/HTTP discovery dorks from `Start Scan -> Edit Queries` (Discovery Dorks editor).
 
 **Verifier** checks both HTTP and HTTPS on the discovered port; `allow_insecure_tls` controls whether TLS cert errors are fatal. `is_index_page` flag on `http_access` records rows distinguishes confirmed open-directory indexes from other accessible responses.
@@ -687,7 +693,7 @@ WHERE ip_address = '1.2.3.4';
 
 **`commands/ftp/operation.py` and equivalent HTTP file use `FtpPersistence` / `HttpPersistence`** (also in `shared/database.py`) which connect directly to the DB path without going through `SMBSeekWorkflowDatabase`.
 
-### 5.5 SearXNG Dork Sidecar Database (`~/.dirracuda/se_dork.db`)
+### 5.5 SearXNG Dork Sidecar Database (`~/.dirracuda/data/experimental/se_dork.db`)
 
 The SearXNG Dorking module (`experimental/se_dork`) writes runtime workflow data to a separate SQLite database.
 
@@ -701,7 +707,7 @@ Verdict values: `OPEN_INDEX`, `MAYBE`, `NOISE`, `ERROR`.
 
 URL normalization (`store.normalize_url`): scheme and netloc lowercased; path case preserved; trailing slash stripped from path; query string and fragment dropped.
 
-### 5.6 Reddit Sidecar Database (`~/.dirracuda/reddit_od.db`)
+### 5.6 Reddit Sidecar Database (`~/.dirracuda/data/experimental/reddit_od.db`)
 
 The Reddit module (`experimental/redseek`) writes runtime workflow data to a separate SQLite database.
 
@@ -720,7 +726,7 @@ Current `sort_mode` keys:
 
 Compatibility note: legacy `top` state is migrated to `top:week` on first week-top run; legacy row is left in place.
 
-### 5.7 Dorkbook Sidecar Database (`~/.dirracuda/dorkbook.db`)
+### 5.7 Dorkbook Sidecar Database (`~/.dirracuda/data/experimental/dorkbook.db`)
 
 The Dorkbook module (`experimental/dorkbook`) writes to a separate SQLite database and remains sidecar-only (no automatic startup import into `dirracuda.db`).
 
@@ -838,7 +844,7 @@ All three protocol browsers are read-only. Navigation traverses directories up t
 - Image files: displayed inline up to `viewer.max_image_size_mb` (15MB) / `max_image_pixels` (20M px)
 - Binary files: hex view at 16 bytes/row
 
-Downloads are staged to `file_browser.quarantine_root` (`~/.dirracuda/quarantine` by default). If `quarantine.use_tmpfs` is true, the quarantine root is a tmpfs mount of `tmpfs_size_mb` size.
+Downloads are staged to `file_browser.quarantine_root` (`~/.dirracuda/data/quarantine` by default). If `quarantine.use_tmpfs` is true, Dirracuda uses a pre-mounted tmpfs when detected (canonical-first: `~/.dirracuda/data/tmpfs_quarantine`, then legacy fallbacks).
 
 Download concurrency is controlled by the worker-count spinbox in the browser UI (range 1–3, default 2), persisted in GUI settings under `file_browser.download_worker_count`. For SMB and FTP, a large-file threshold (GUI settings key `file_browser.download_large_file_mb`) dispatches files above that size to a dedicated large-file worker; remaining files share a separate small-file pool. HTTP uses worker-count concurrency only — there is no large-file queue routing for HTTP in the current release. The HTTP browser renders the large-file threshold control but disables it with an explanatory note.
 
@@ -882,7 +888,7 @@ Dorkbook entry path:
 
 ```text
 Dashboard -> Experimental tab -> Open Dorkbook
-  -> DorkbookWindow (reads/writes ~/.dirracuda/dorkbook.db)
+  -> DorkbookWindow (reads/writes ~/.dirracuda/data/experimental/dorkbook.db)
   -> singleton modeless window (focus existing on repeated open)
 ```
 
@@ -920,13 +926,13 @@ Dashboard -> Experimental tab -> Test (preflight)
 ```
 Dashboard -> Experimental tab -> Run (dork search)
   -> SeDorkTab._invoke_run -> run_dork_search(options) on worker thread
-  -> writes dork_runs + dork_results rows to ~/.dirracuda/se_dork.db
+  -> writes dork_runs + dork_results rows to ~/.dirracuda/data/experimental/se_dork.db
   -> status label shows fetched/stored counts
 ```
 
 ```
 Dashboard -> Experimental tab -> Open Results DB
-  -> SeDorkBrowserWindow (reads ~/.dirracuda/se_dork.db)
+  -> SeDorkBrowserWindow (reads ~/.dirracuda/data/experimental/se_dork.db)
   -> optional "Add to dirracuda DB" action if ServerListWindow callback is available
   -> "Not available" shown if callback is absent (open Server List first to enable it)
 ```
@@ -947,7 +953,7 @@ Reddit Post DB entry path:
 
 ```
 Dashboard -> Experimental tab -> Open Reddit Post DB
-  -> RedditBrowserWindow (reads ~/.dirracuda/reddit_od.db)
+  -> RedditBrowserWindow (reads ~/.dirracuda/data/experimental/reddit_od.db)
   -> optional "Add to dirracuda DB" action if ServerListWindow callback is available
 ```
 
@@ -962,7 +968,7 @@ Keymaster entry path:
 
 ```text
 Dashboard -> Experimental tab -> Open Keymaster
-  -> KeymasterWindow (reads/writes ~/.dirracuda/keymaster.db)
+  -> KeymasterWindow (reads/writes ~/.dirracuda/data/experimental/keymaster.db)
   -> singleton modeless window (focus existing on repeated open)
 ```
 
@@ -1026,7 +1032,7 @@ Cautious mode is implemented in `test_smb_auth()` (`commands/discover/auth.py`):
 
 ### 7.3 File Handling
 
-Downloaded files land in `quarantine_root` (default `~/.dirracuda/quarantine`). If `quarantine.use_tmpfs=true`, a tmpfs of `tmpfs_size_mb` is mounted at that path on Linux — files never touch persistent storage. Tmpfs setup requires appropriate OS permissions.
+Downloaded files land in `quarantine_root` (default `~/.dirracuda/data/quarantine`). If `quarantine.use_tmpfs=true`, Dirracuda checks for an existing tmpfs mount at `~/.dirracuda/data/tmpfs_quarantine` (with legacy compatibility checks) and uses it when present; otherwise it falls back to disk quarantine for the session. Dirracuda never mounts or unmounts tmpfs at runtime. When a legacy tmpfs mountpoint is detected, startup shows a migration warning that can be dismissed persistently via `runtime_warnings.tmpfs_legacy_mount_dismissed`.
 
 ClamAV integration (`clamav.enabled=true`, `backend=auto`) runs `clamscan` or connects to `clamd` (auto-detected) after extraction. Flagged files are moved to `clamav.known_bad_subdir` under `extracted_root`.
 
