@@ -138,6 +138,7 @@ class ServerListWindowBatchOperationsMixin:
         max_directories = int(limits.get("max_directories", 3))
         max_files = int(limits.get("max_files", 5))
         timeout_seconds = int(limits.get("timeout_seconds", 10))
+        max_depth = int(limits.get("max_depth", 1))
 
         if host_type == "F":
             try:
@@ -151,6 +152,7 @@ class ServerListWindowBatchOperationsMixin:
                 max_files=max_files,
                 timeout_seconds=timeout_seconds,
                 cancel_event=cancel_event,
+                max_depth=max_depth,
                 port=ftp_port,
             )
             analysis = probe_patterns.attach_indicator_analysis(snapshot, indicator_patterns)
@@ -189,6 +191,7 @@ class ServerListWindowBatchOperationsMixin:
                 max_files=max_files,
                 timeout_seconds=timeout_seconds,
                 cancel_event=cancel_event,
+                max_depth=max_depth,
                 port=http_port,
                 scheme=scheme,
                 db_reader=self.db_reader,
@@ -221,6 +224,7 @@ class ServerListWindowBatchOperationsMixin:
             max_files=max_files,
             timeout_seconds=timeout_seconds,
             cancel_event=cancel_event,
+            max_depth=max_depth,
             shares=[],
             allow_empty=True,
             db_reader=self.db_reader,
@@ -1135,6 +1139,7 @@ class ServerListWindowBatchOperationsMixin:
         max_dirs_var = tk.IntVar(value=config["max_directories"])
         max_files_var = tk.IntVar(value=config["max_files"])
         timeout_var = tk.IntVar(value=config["timeout_seconds"])
+        max_depth_var = tk.IntVar(value=config.get("max_depth", 1))
 
         def add_labeled_entry(row: int, label: str, var: tk.Variable):
             tk.Label(dialog, text=label).grid(row=row, column=0, padx=10, pady=5, sticky="w")
@@ -1146,10 +1151,11 @@ class ServerListWindowBatchOperationsMixin:
         add_labeled_entry(2, "Max directories/share:", max_dirs_var)
         add_labeled_entry(3, "Max files/directory:", max_files_var)
         add_labeled_entry(4, "Timeout per share (s):", timeout_var)
+        add_labeled_entry(5, "Max probe depth (1-3):", max_depth_var)
 
         if rce_unlocked:
             tk.Checkbutton(dialog, text="Enable RCE analysis", variable=rce_var).grid(
-                row=5,
+                row=6,
                 column=0,
                 columnspan=2,
                 padx=10,
@@ -1158,7 +1164,7 @@ class ServerListWindowBatchOperationsMixin:
             )
         else:
             spacer = tk.Frame(dialog, height=24)
-            spacer.grid(row=5, column=0, columnspan=2, padx=10, pady=(5, 10), sticky="we")
+            spacer.grid(row=6, column=0, columnspan=2, padx=10, pady=(5, 10), sticky="we")
             spacer.grid_propagate(False)
 
         result: Dict[str, Any] = {}
@@ -1169,6 +1175,7 @@ class ServerListWindowBatchOperationsMixin:
                 max_dirs = max(1, int(max_dirs_var.get()))
                 max_files = max(1, int(max_files_var.get()))
                 timeout_val = max(1, int(timeout_var.get()))
+                max_depth = min(3, max(1, int(max_depth_var.get())))
             except (ValueError, tk.TclError):
                 messagebox.showerror("Invalid Input", "Please enter numeric values for probe limits.", parent=dialog)
                 return
@@ -1178,6 +1185,7 @@ class ServerListWindowBatchOperationsMixin:
                 self.settings_manager.set_setting('probe.max_directories_per_share', max_dirs)
                 self.settings_manager.set_setting('probe.max_files_per_directory', max_files)
                 self.settings_manager.set_setting('probe.share_timeout_seconds', timeout_val)
+                self.settings_manager.set_setting('probe.max_depth_levels', max_depth)
                 if rce_unlocked:
                     self.settings_manager.set_setting('probe_dialog.rce_enabled', bool(rce_var.get()))
 
@@ -1187,7 +1195,8 @@ class ServerListWindowBatchOperationsMixin:
                 "limits": {
                     "max_directories": max_dirs,
                     "max_files": max_files,
-                    "timeout_seconds": timeout_val
+                    "timeout_seconds": timeout_val,
+                    "max_depth": max_depth,
                 }
             })
             dialog.destroy()
@@ -1196,7 +1205,7 @@ class ServerListWindowBatchOperationsMixin:
             dialog.destroy()
 
         button_frame = tk.Frame(dialog)
-        button_frame.grid(row=6, column=0, columnspan=2, pady=(0, 10))
+        button_frame.grid(row=7, column=0, columnspan=2, pady=(0, 10))
         tk.Button(button_frame, text="Cancel", command=on_cancel).pack(side=tk.RIGHT, padx=5)
         tk.Button(button_frame, text="Start", command=on_start).pack(side=tk.RIGHT)
 

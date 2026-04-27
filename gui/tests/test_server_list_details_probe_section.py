@@ -152,6 +152,102 @@ def test_probe_section_mixed_root_files_and_directories_render_together():
     assert "manual.pdf" in text
 
 
+def test_probe_section_renders_nested_tree_with_mixed_files():
+    details = _import_details_module_isolated()
+    text = details._format_probe_section(
+        _snapshot(
+            shares=[
+                {
+                    "share": "www",
+                    "directories": [
+                        {
+                            "name": "app",
+                            "subdirectories": [
+                                "bootstrap",
+                                "bootstrap/cache",
+                                "config",
+                            ],
+                            "subdirectories_truncated": False,
+                            "files": [
+                                "artisan",
+                                "bootstrap/cache/packages.php",
+                                "config/app.php",
+                            ],
+                            "files_truncated": False,
+                        }
+                    ],
+                }
+            ]
+        )
+    )
+
+    assert "      📁 app/" in text
+    assert "         📁 bootstrap/" in text
+    assert "            📁 cache/" in text
+    assert "               • packages.php" in text
+    assert "         📁 config/" in text
+    assert "            • app.php" in text
+    assert "         • artisan" in text
+
+
+def test_probe_section_deduplicates_nested_subdirectories_and_files():
+    details = _import_details_module_isolated()
+    text = details._format_probe_section(
+        _snapshot(
+            shares=[
+                {
+                    "share": "dup",
+                    "directories": [
+                        {
+                            "name": "public",
+                            "subdirectories": [
+                                "assets/css",
+                                "assets/css",
+                                "assets",
+                            ],
+                            "files": [
+                                "assets/css/site.css",
+                                "assets/css/site.css",
+                            ],
+                        }
+                    ],
+                }
+            ]
+        )
+    )
+
+    assert text.count("📁 assets/") == 1
+    assert text.count("📁 css/") == 1
+    assert text.count("• site.css") == 1
+
+
+def test_probe_section_keeps_directory_file_truncation_notices():
+    details = _import_details_module_isolated()
+    text = details._format_probe_section(
+        _snapshot(
+            shares=[
+                {
+                    "share": "ftp_root",
+                    "directories": [
+                        {
+                            "name": "public",
+                            "subdirectories": ["incoming/daily"],
+                            "subdirectories_truncated": True,
+                            "files": ["incoming/readme.txt"],
+                            "files_truncated": True,
+                        }
+                    ],
+                    "directories_truncated": True,
+                }
+            ]
+        )
+    )
+
+    assert "additional subdirectories not shown" in text
+    assert "additional files not shown" in text
+    assert "additional directories not shown" in text
+
+
 def test_probe_section_shows_root_file_truncation_notice():
     details = _import_details_module_isolated()
     text = details._format_probe_section(
@@ -184,3 +280,28 @@ def test_probe_section_handles_string_and_dict_error_entries():
 
     assert "Unknown share: socket timeout" in text
     assert "http_root: 403 Forbidden" in text
+
+
+def test_load_probe_config_includes_depth_default_when_settings_missing():
+    details = _import_details_module_isolated()
+
+    config = details._load_probe_config(None)
+
+    assert config["max_depth"] == 1
+
+
+def test_load_probe_config_clamps_depth_to_supported_range():
+    details = _import_details_module_isolated()
+
+    class _Settings:
+        def __init__(self, values):
+            self._values = values
+
+        def get_setting(self, key, default=None):
+            return self._values.get(key, default)
+
+    high = details._load_probe_config(_Settings({"probe.max_depth_levels": 99}))
+    assert high["max_depth"] == 3
+
+    low = details._load_probe_config(_Settings({"probe.max_depth_levels": 0}))
+    assert low["max_depth"] == 1

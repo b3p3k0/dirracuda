@@ -192,6 +192,37 @@ def test_directory_listing_limits_subdirs_and_files_independently(tmp_path, monk
     assert directory["files_truncated"] is True
 
 
+def test_depth_three_includes_nested_relative_paths(tmp_path, monkeypatch):
+    monkeypatch.setattr("gui.utils.http_probe_cache.HTTP_CACHE_DIR", tmp_path)
+
+    with patch("gui.utils.http_probe_runner.try_http_request", return_value=(200, b"<body>", False, None)), \
+         patch("gui.utils.http_probe_runner.validate_index_page", return_value=True), \
+         patch(
+             "gui.utils.http_probe_runner._parse_dir_entries",
+             side_effect=[
+                 (["/pub/"], []),
+                 (["/pub/incoming/"], ["/pub/root.txt"]),
+                 (["/pub/incoming/archive/"], ["/pub/incoming/deep.txt"]),
+                 ([], ["/pub/incoming/archive/leaf.txt"]),
+             ],
+         ):
+        snapshot = run_http_probe(
+            "10.0.0.9",
+            port=80,
+            max_directories=3,
+            max_files=5,
+            max_depth=3,
+        )
+
+    directory = snapshot["shares"][0]["directories"][0]
+    assert "incoming" in directory["subdirectories"]
+    assert "incoming/archive" in directory["subdirectories"]
+    assert "root.txt" in directory["files"]
+    assert "incoming/deep.txt" in directory["files"]
+    assert "incoming/archive/leaf.txt" in directory["files"]
+    assert snapshot["limits"]["max_depth"] == 3
+
+
 def test_start_path_used_for_initial_listing_request(tmp_path, monkeypatch):
     monkeypatch.setattr("gui.utils.http_probe_cache.HTTP_CACHE_DIR", tmp_path)
 

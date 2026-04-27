@@ -197,12 +197,14 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
             except Exception:
                 port = 21
             limits = options.get("limits", {}) or {}
+            max_depth = max(1, min(3, int(limits.get("max_depth", 1))))
             snapshot = dispatch_probe_run(
                 ip_address, host_type,
                 max_directories=int(limits.get("max_directories", 3)),
                 max_files=int(limits.get("max_files", 5)),
                 timeout_seconds=int(limits.get("timeout_seconds", 10)),
                 cancel_event=cancel_event,
+                max_depth=max_depth,
                 port=port,
             )
             analysis = probe_patterns.attach_indicator_analysis(snapshot, self.indicator_patterns)
@@ -253,6 +255,7 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
 
         if host_type == "H":
             limits = options.get("limits", {}) or {}
+            max_depth = max(1, min(3, int(limits.get("max_depth", 1))))
             protocol_server_id = (
                 target.get("protocol_server_id")
                 if target.get("protocol_server_id") is not None
@@ -305,6 +308,7 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                 max_files=int(limits.get("max_files", 5)),
                 timeout_seconds=int(limits.get("timeout_seconds", 10)),
                 cancel_event=cancel_event,
+                max_depth=max_depth,
                 port=http_port,
                 scheme=http_scheme,
                 request_host=http_request_host,
@@ -371,6 +375,7 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
         max_dirs = max(1, int(limits.get("max_directories", 3)))
         max_files = max(1, int(limits.get("max_files", 5)))
         timeout_seconds = max(1, int(limits.get("timeout_seconds", 10)))
+        max_depth = max(1, min(3, int(limits.get("max_depth", 1))))
         rce_unlocked = bool(getattr(self, "_rce_unlocked", getattr(self, "_pry_unlocked", False)))
         enable_rce = bool(options.get("enable_rce", False)) if rce_unlocked else False
 
@@ -383,6 +388,7 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                 max_files=max_files,
                 timeout_seconds=timeout_seconds,
                 cancel_event=cancel_event,
+                max_depth=max_depth,
                 shares=shares,
                 username=username,
                 password=password,

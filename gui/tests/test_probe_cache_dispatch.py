@@ -260,6 +260,7 @@ def test_dispatch_ftp_kwargs_and_cancel_event():
             max_files=5,
             timeout_seconds=10,
             cancel_event=cancel,
+            max_depth=3,
             port=2121,
         )
     assert result is _FAKE_FTP_SNAP
@@ -271,6 +272,7 @@ def test_dispatch_ftp_kwargs_and_cancel_event():
     assert kw["connect_timeout"] == 10
     assert kw["request_timeout"] == 10
     assert kw["cancel_event"] is cancel
+    assert kw["max_depth"] == 3
 
 
 def test_dispatch_http_explicit_scheme_skips_db_lookup():
@@ -285,6 +287,7 @@ def test_dispatch_http_explicit_scheme_skips_db_lookup():
             max_files=5,
             timeout_seconds=10,
             cancel_event=cancel,
+            max_depth=2,
             port=8080,
             scheme="https",
             db_reader=db_mock,
@@ -297,6 +300,7 @@ def test_dispatch_http_explicit_scheme_skips_db_lookup():
     assert kw["start_path"] == "/"
     assert kw["allow_insecure_tls"] is True
     assert kw["cancel_event"] is cancel
+    assert kw["max_depth"] == 2
 
 
 def test_dispatch_http_scheme_none_resolves_from_db_reader():
@@ -317,6 +321,7 @@ def test_dispatch_http_scheme_none_resolves_from_db_reader():
             max_files=4,
             timeout_seconds=5,
             cancel_event=cancel,
+            max_depth=3,
             db_reader=db_mock,
         )
     db_mock.get_http_server_detail.assert_called_once_with(_IP)
@@ -325,6 +330,7 @@ def test_dispatch_http_scheme_none_resolves_from_db_reader():
     assert kw["scheme"] == "https"
     assert kw["request_host"] == "example.com"
     assert kw["start_path"] == "/movies/"
+    assert kw["max_depth"] == 3
 
 
 def test_dispatch_http_explicit_hints_forwarded():
@@ -338,6 +344,7 @@ def test_dispatch_http_explicit_hints_forwarded():
             max_files=5,
             timeout_seconds=10,
             cancel_event=cancel,
+            max_depth=1,
             port=8443,
             scheme="https",
             request_host="www.example.com",
@@ -350,6 +357,7 @@ def test_dispatch_http_explicit_hints_forwarded():
     assert kw["scheme"] == "https"
     assert kw["request_host"] == "www.example.com"
     assert kw["start_path"] == "/movies/"
+    assert kw["max_depth"] == 1
 
 
 def test_dispatch_smb_omitted_creds_not_forwarded():
@@ -363,11 +371,13 @@ def test_dispatch_smb_omitted_creds_not_forwarded():
             max_files=5,
             timeout_seconds=10,
             cancel_event=cancel,
+            max_depth=3,
             shares=["docs"],
         )
     kw = pr_m.run_probe.call_args.kwargs
     assert "username" not in kw, "username must be absent so probe_runner DEFAULT_USERNAME applies"
     assert "password" not in kw, "password must be absent so probe_runner DEFAULT_PASSWORD applies"
+    assert kw["max_depth"] == 3
 
 
 def test_dispatch_smb_explicit_creds_forwarded():
@@ -381,6 +391,7 @@ def test_dispatch_smb_explicit_creds_forwarded():
             max_files=5,
             timeout_seconds=10,
             cancel_event=cancel,
+            max_depth=2,
             shares=["docs"],
             username="guest",
             password="",
@@ -388,6 +399,7 @@ def test_dispatch_smb_explicit_creds_forwarded():
     kw = pr_m.run_probe.call_args.kwargs
     assert kw["username"] == "guest"
     assert kw["password"] == ""
+    assert kw["max_depth"] == 2
 
 
 def test_dispatch_smb_kwargs_forwarding():
@@ -402,6 +414,7 @@ def test_dispatch_smb_kwargs_forwarding():
             max_files=5,
             timeout_seconds=10,
             cancel_event=cancel,
+            max_depth=3,
             shares=["share1"],
             enable_rce=True,
             allow_empty=True,
@@ -412,3 +425,20 @@ def test_dispatch_smb_kwargs_forwarding():
     assert kw["allow_empty"] is True
     assert kw["db_accessor"] is db_mock
     assert kw["cancel_event"] is cancel
+    assert kw["max_depth"] == 3
+
+
+def test_dispatch_probe_depth_clamped_to_three():
+    cancel = _threading.Event()
+    with patch("gui.utils.probe_cache_dispatch.ftp_probe_runner") as ftp_m:
+        ftp_m.run_ftp_probe.return_value = _FAKE_FTP_SNAP
+        dispatch_probe_run(
+            _IP, "F",
+            max_directories=3,
+            max_files=5,
+            timeout_seconds=10,
+            cancel_event=cancel,
+            max_depth=99,
+        )
+    kw = ftp_m.run_ftp_probe.call_args.kwargs
+    assert kw["max_depth"] == 3

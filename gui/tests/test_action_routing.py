@@ -674,10 +674,12 @@ def test_probe_ftp_row_runs_and_persists():
          patch.object(pp, "attach_indicator_analysis", return_value={"is_suspicious": False, "matches": []}):
         stub.db_reader.upsert_probe_cache_for_host = MagicMock()
         result = stub._execute_probe_target("job-1", target, {}, threading.Event())
+        run_kwargs = fpr.run_ftp_probe.call_args.kwargs
 
     assert result["status"] == "success"
     assert result["units"] == 1
     assert "2 directorie(s)" in result["notes"]
+    assert run_kwargs["max_depth"] == 1
     stub.db_reader.upsert_probe_cache_for_host.assert_called_once()
 
 
@@ -765,6 +767,7 @@ def test_probe_http_row_uses_probe_hints_from_http_detail(monkeypatch):
     assert kwargs["scheme"] == "https"
     assert kwargs["request_host"] == "www.bound2burst.net"
     assert kwargs["start_path"] == "/movies/"
+    assert kwargs["max_depth"] == 1
 
 
 def test_probe_smb_row_returns_units_1(monkeypatch):
@@ -836,6 +839,7 @@ def test_probe_smb_rce_is_forced_off_when_session_locked(monkeypatch):
     assert "RCE:" not in result["notes"]
     assert dispatch_calls, "dispatch_probe_run should be called"
     assert dispatch_calls[0][1]["enable_rce"] is False
+    assert dispatch_calls[0][1]["max_depth"] == 1
 
 
 # ---------------------------------------------------------------------------

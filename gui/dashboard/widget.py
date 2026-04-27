@@ -1395,9 +1395,10 @@ class DashboardWidget:
         return dashboard_batch_ops.execute_batch_probe(self, servers)
 
     def _probe_single_server(self, server: Dict[str, Any], max_dirs: int, max_files: int,
-                              timeout_seconds: int, enable_rce: bool, cancel_event: threading.Event) -> Dict[str, Any]:
+                              timeout_seconds: int, max_depth: int = 1,
+                              enable_rce: bool = False, cancel_event: threading.Event = None) -> Dict[str, Any]:
         return dashboard_batch_ops.probe_single_server(
-            self, server, max_dirs, max_files, timeout_seconds, enable_rce, cancel_event
+            self, server, max_dirs, max_files, timeout_seconds, max_depth, enable_rce, cancel_event
         )
 
     def _protocol_label_from_host_type(self, host_type: Optional[str]) -> str:

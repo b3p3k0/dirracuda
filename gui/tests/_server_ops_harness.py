@@ -509,6 +509,7 @@ def make_dashboard_batch_task_stub(
         _max_dirs,
         _max_files,
         _timeout_seconds,
+        _max_depth,
         _enable_rce,
         cancel_event,
     ):

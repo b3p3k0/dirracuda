@@ -433,11 +433,12 @@ def _format_probe_section(
     max_dirs = limits.get("max_directories")
     max_files = limits.get("max_files")
     timeout = limits.get("timeout_seconds")
+    max_depth = limits.get("max_depth")
 
     lines: List[str] = [
         "🔍 Probe Snapshot:",
         f"   Run: {probe_result.get('run_at', 'Unknown')}",
-        f"   Limits: {max_dirs or '?'} dirs / {max_files or '?'} files per share | Timeout: {timeout or '?'}s"
+        f"   Limits: {max_dirs or '?'} dirs / {max_files or '?'} files per share | Timeout: {timeout or '?'}s | Depth: {max_depth or '?'}"
     ]
 
     shares = probe_result.get("shares", [])
@@ -475,20 +476,16 @@ def _format_probe_section(
             for directory in directories:
                 dir_name = directory.get("name", "")
                 lines.append(f"      📁 {dir_name}/")
-                subdirs = directory.get("subdirectories", [])
-                if subdirs:
-                    for subdir_name in subdirs:
-                        lines.append(f"         📁 {subdir_name}/")
-                    if directory.get("subdirectories_truncated"):
-                        lines.append("         … additional subdirectories not shown")
-                files = directory.get("files", [])
-                if files:
-                    for file_name in files:
-                        lines.append(f"         • {file_name}")
-                    if directory.get("files_truncated"):
-                        lines.append("         … additional files not shown")
-                if not subdirs and not files:
+                tree = _build_probe_directory_tree(
+                    directory.get("subdirectories", []),
+                    directory.get("files", []),
+                )
+                if _render_probe_directory_tree(tree, lines, indent=9) == 0:
                     lines.append("         (no files or subdirectories listed)")
+                if directory.get("subdirectories_truncated"):
+                    lines.append("         … additional subdirectories not shown")
+                if directory.get("files_truncated"):
+                    lines.append("         … additional files not shown")
             if share.get("directories_truncated"):
                 lines.append("      … additional directories not shown")
     else:
@@ -528,6 +525,62 @@ def _format_probe_section(
 
     lines.append("")
     return "\n".join(lines)
+
+
+def _normalize_probe_relative_path(path_value: Any) -> List[str]:
+    """Return normalized path segments for a relative probe entry."""
+    text = str(path_value or "").strip().replace("\\", "/")
+    if not text:
+        return []
+    return [segment for segment in text.split("/") if segment and segment != "."]
+
+
+def _build_probe_directory_tree(subdirectories: Any, files: Any) -> Dict[str, Any]:
+    """Build a de-duplicated insertion-ordered tree from relative probe paths."""
+    root: Dict[str, Any] = {"dirs": {}, "files": []}
+
+    for raw_subdir in subdirectories or []:
+        segments = _normalize_probe_relative_path(raw_subdir)
+        if not segments:
+            continue
+        node = root
+        for segment in segments:
+            child = node["dirs"].get(segment)
+            if child is None:
+                child = {"dirs": {}, "files": []}
+                node["dirs"][segment] = child
+            node = child
+
+    for raw_file in files or []:
+        segments = _normalize_probe_relative_path(raw_file)
+        if not segments:
+            continue
+        *folder_segments, file_name = segments
+        node = root
+        for segment in folder_segments:
+            child = node["dirs"].get(segment)
+            if child is None:
+                child = {"dirs": {}, "files": []}
+                node["dirs"][segment] = child
+            node = child
+        if file_name not in node["files"]:
+            node["files"].append(file_name)
+
+    return root
+
+
+def _render_probe_directory_tree(tree: Dict[str, Any], lines: List[str], indent: int) -> int:
+    """Render a nested tree and return count of lines emitted."""
+    emitted = 0
+    prefix = " " * indent
+    for dir_name, child in tree["dirs"].items():
+        lines.append(f"{prefix}📁 {dir_name}/")
+        emitted += 1
+        emitted += _render_probe_directory_tree(child, lines, indent + 3)
+    for file_name in tree["files"]:
+        lines.append(f"{prefix}• {file_name}")
+        emitted += 1
+    return emitted
 
 
 def _format_rce_summary(rce_report: Optional[Dict[str, Any]]) -> List[str]:
@@ -637,7 +690,8 @@ def _load_probe_config(settings_manager) -> Dict[str, int]:
     defaults = {
         "max_directories": 3,
         "max_files": 5,
-        "timeout_seconds": 10
+        "timeout_seconds": 10,
+        "max_depth": 1,
     }
     if not settings_manager:
         return defaults
@@ -646,13 +700,15 @@ def _load_probe_config(settings_manager) -> Dict[str, int]:
         max_dirs = int(settings_manager.get_setting('probe.max_directories_per_share', defaults["max_directories"]))
         max_files = int(settings_manager.get_setting('probe.max_files_per_directory', defaults["max_files"]))
         timeout = int(settings_manager.get_setting('probe.share_timeout_seconds', defaults["timeout_seconds"]))
+        max_depth = int(settings_manager.get_setting('probe.max_depth_levels', defaults["max_depth"]))
     except Exception:
         return defaults
 
     return {
         "max_directories": max(1, max_dirs),
         "max_files": max(1, max_files),
-        "timeout_seconds": max(1, timeout)
+        "timeout_seconds": max(1, timeout),
+        "max_depth": min(3, max(1, max_depth)),
     }
 
 
@@ -755,6 +811,7 @@ def _start_probe(
                 max_files=int(config["max_files"]),
                 timeout_seconds=int(config["timeout_seconds"]),
                 cancel_event=cancel_event,
+                max_depth=int(config.get("max_depth", 1)),
                 port=_ftp_port if host_type == "F" else _http_port,
                 scheme=_http_scheme,
                 request_host=_http_request_host,
@@ -947,6 +1004,10 @@ def _open_probe_dialog(
     timeout_var = tk.IntVar(value=config["timeout_seconds"])
     tk.Entry(dialog, textvariable=timeout_var, width=10).grid(row=2, column=1, padx=10, pady=5)
 
+    tk.Label(dialog, text="Max probe depth (1-3):").grid(row=3, column=0, sticky="w", padx=10, pady=5)
+    depth_var = tk.IntVar(value=config.get("max_depth", 1))
+    tk.Entry(dialog, textvariable=depth_var, width=10).grid(row=3, column=1, padx=10, pady=5)
+
     if show_rce_controls and settings_manager:
         stored_rce_pref = settings_manager.get_setting('probe_dialog.rce_enabled', None)
         if stored_rce_pref is None:
@@ -957,7 +1018,7 @@ def _open_probe_dialog(
     rce_var = tk.BooleanVar(value=bool(stored_rce_pref))
     if show_rce_controls:
         rce_frame = tk.Frame(dialog)
-        rce_frame.grid(row=3, column=0, columnspan=2, sticky="w", padx=10, pady=5)
+        rce_frame.grid(row=4, column=0, columnspan=2, sticky="w", padx=10, pady=5)
 
         rce_checkbox = tk.Checkbutton(
             rce_frame,
@@ -974,7 +1035,7 @@ def _open_probe_dialog(
         rce_hint.pack(anchor="w", padx=(24, 0))
     else:
         rce_spacer = tk.Frame(dialog, height=24)
-        rce_spacer.grid(row=3, column=0, columnspan=2, sticky="we", padx=10, pady=5)
+        rce_spacer.grid(row=4, column=0, columnspan=2, sticky="we", padx=10, pady=5)
         rce_spacer.grid_propagate(False)
 
     def start_probe_from_dialog():
@@ -982,7 +1043,8 @@ def _open_probe_dialog(
             new_config = {
                 "max_directories": max(1, int(dirs_var.get())),
                 "max_files": max(1, int(files_var.get())),
-                "timeout_seconds": max(1, int(timeout_var.get()))
+                "timeout_seconds": max(1, int(timeout_var.get())),
+                "max_depth": min(3, max(1, int(depth_var.get()))),
             }
         except ValueError:
             messagebox.showerror("Invalid Input", "Please enter valid integers for all fields.", parent=dialog)
@@ -992,6 +1054,7 @@ def _open_probe_dialog(
             settings_manager.set_setting('probe.max_directories_per_share', new_config["max_directories"])
             settings_manager.set_setting('probe.max_files_per_directory', new_config["max_files"])
             settings_manager.set_setting('probe.share_timeout_seconds', new_config["timeout_seconds"])
+            settings_manager.set_setting('probe.max_depth_levels', new_config["max_depth"])
             if show_rce_controls:
                 settings_manager.set_setting('probe_dialog.rce_enabled', bool(rce_var.get()))
 
@@ -1012,7 +1075,7 @@ def _open_probe_dialog(
         )
 
     button_frame = tk.Frame(dialog)
-    button_frame.grid(row=4, column=0, columnspan=2, pady=10)
+    button_frame.grid(row=5, column=0, columnspan=2, pady=10)
 
     if running:
         def cancel_running():

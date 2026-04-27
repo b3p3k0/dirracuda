@@ -478,6 +478,8 @@ def execute_batch_probe(dash, servers: List[Dict[str, Any]]) -> List[Dict[str, A
     max_dirs = int(dash.settings_manager.get_setting('probe.max_directories_per_share', 3))
     max_files = int(dash.settings_manager.get_setting('probe.max_files_per_directory', 5))
     timeout_seconds = int(dash.settings_manager.get_setting('probe.share_timeout_seconds', 10))
+    max_depth = int(dash.settings_manager.get_setting('probe.max_depth_levels', 1))
+    max_depth = max(1, min(3, max_depth))
     enable_rce = bool(
         (dash.current_scan_options or {}).get(
             "rce_enabled",
@@ -570,6 +572,7 @@ def execute_batch_probe(dash, servers: List[Dict[str, Any]]) -> List[Dict[str, A
                         max_dirs,
                         max_files,
                         timeout_seconds,
+                        max_depth,
                         enable_rce,
                         cancel_event
                     ): server for server in servers
@@ -677,8 +680,9 @@ def probe_single_server(
     max_dirs: int,
     max_files: int,
     timeout_seconds: int,
-    enable_rce: bool,
-    cancel_event: threading.Event,
+    max_depth: int = 1,
+    enable_rce: bool = False,
+    cancel_event: Optional[threading.Event] = None,
 ) -> Dict[str, Any]:
     """Probe a single server (SMB, FTP, or HTTP)."""
     protocol_label = dash._protocol_label_from_host_type(server.get("host_type"))
@@ -694,6 +698,7 @@ def probe_single_server(
     ip_address = server.get("ip_address")
     host_type = (server.get("host_type") or "S").upper()
     protocol_label = dash._protocol_label_from_host_type(host_type)
+    max_depth = max(1, min(3, int(max_depth)))
 
     # FTP probe path
     if host_type == "F":
@@ -709,6 +714,7 @@ def probe_single_server(
                 max_files=int(max_files),
                 timeout_seconds=int(timeout_seconds),
                 cancel_event=cancel_event,
+                max_depth=max_depth,
                 port=port,
             )
             analysis = _d("probe_patterns").attach_indicator_analysis(snapshot, dash.indicator_patterns)
@@ -793,6 +799,7 @@ def probe_single_server(
                 max_files=int(max_files),
                 timeout_seconds=int(timeout_seconds),
                 cancel_event=cancel_event,
+                max_depth=max_depth,
                 port=http_port,
                 scheme=http_scheme,
                 protocol_server_id=protocol_server_id,
@@ -871,6 +878,7 @@ def probe_single_server(
             max_files=max_files,
             timeout_seconds=timeout_seconds,
             cancel_event=cancel_event,
+            max_depth=max_depth,
             shares=shares,
             username=username,
             password=password,

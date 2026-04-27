@@ -112,6 +112,7 @@ def dispatch_probe_run(
     max_files: int,
     timeout_seconds: int,
     cancel_event,
+    max_depth: int = 1,
     port: Optional[int] = None,
     scheme: Optional[str] = None,
     request_host: Optional[str] = None,
@@ -132,12 +133,14 @@ def dispatch_probe_run(
     host_type: 'S' = SMB, 'F' = FTP, 'H' = HTTP (coerced/uppercased).
     username/password: omit (leave as _UNSET) to let probe_runner use its own
         defaults (DEFAULT_USERNAME = "guest"). Pass explicit values to override.
+    max_depth: Probe recursion depth, clamped to 1..3.
     port: caller-selected endpoint port (FTP or HTTP). When omitted for HTTP,
         db_reader.get_http_server_detail() is used as fallback.
     request_host/start_path: optional HTTP probe hints. When omitted for HTTP,
         db_reader.get_http_server_detail() may provide probe_host/probe_path.
     """
     _ht = str(host_type or "S").strip().upper()
+    depth_limit = min(3, max(1, int(max_depth)))
 
     if _ht == "F":
         try:
@@ -154,6 +157,7 @@ def dispatch_probe_run(
             connect_timeout=timeout_seconds,
             request_timeout=timeout_seconds,
             cancel_event=cancel_event,
+            max_depth=depth_limit,
         )
 
     if _ht == "H":
@@ -199,6 +203,7 @@ def dispatch_probe_run(
             connect_timeout=timeout_seconds,
             request_timeout=timeout_seconds,
             cancel_event=cancel_event,
+            max_depth=depth_limit,
         )
 
     # SMB path
@@ -210,6 +215,7 @@ def dispatch_probe_run(
         "cancel_event": cancel_event,
         "allow_empty": allow_empty,
         "db_accessor": db_reader,
+        "max_depth": depth_limit,
     }
     if username is not _UNSET:
         _kwargs["username"] = username

@@ -61,15 +61,16 @@ def run_http_probe(
     max_entries: int = 5000,
     max_directories: Optional[int] = None,
     max_files: Optional[int] = None,
+    max_depth: int = 1,
     connect_timeout: int = 10,
     request_timeout: int = 15,
     cancel_event: Optional[threading.Event] = None,
     progress_callback: Optional[Callable[[str], None]] = None,
 ) -> dict:
     """
-    Walk an HTTP listing path (one level deep) and return a probe snapshot dict.
+    Walk an HTTP listing path and return a probe snapshot dict.
 
-    root_files and directories[].files contain basename strings (not dicts).
+    root_files and directories[].files contain relative path strings.
     directories[].name contains the basename without trailing slash.
     errors contains dicts {"share": "http_root", "message": str}.
 
@@ -83,6 +84,8 @@ def run_http_probe(
 
     directory_limit = max(1, int(max_directories)) if max_directories is not None else max(1, int(max_entries))
     file_limit = max(1, int(max_files)) if max_files is not None else max(1, int(max_entries))
+    depth_limit = min(3, max(1, int(max_depth)))
+    visit_limit_per_top_level = max(1, directory_limit * depth_limit)
 
     scheme_norm = str(scheme or "http").strip().lower() or "http"
     request_host_norm = str(request_host or "").strip() or None
@@ -175,7 +178,7 @@ def run_http_probe(
         root_files = all_root_file_names[:file_limit]
         root_files_truncated = len(all_root_file_names) > file_limit
 
-        # One level deep: list each top-level directory
+        # Traverse each top-level directory up to configured depth.
         for dir_abs_path in all_dir_abs_paths[:directory_limit]:
             if cancel_event is not None and cancel_event.is_set():
                 break
@@ -185,40 +188,78 @@ def run_http_probe(
                 progress_callback(f"Listing {dir_abs_path}...")
 
             try:
-                sub_status, sub_body, _tls, sub_reason = try_http_request(
-                    active_connect_host,
-                    port,
-                    scheme_norm,
-                    allow_insecure_tls,
-                    float(request_timeout),
-                    path=dir_abs_path,
-                    request_host=active_request_host,
-                )
+                subdirectories: List[str] = []
+                files: List[str] = []
+                subdirs_truncated = False
+                files_truncated = False
+                visited_directories = 0
+                # (relative path from top-level dir, depth)
+                stack: List[tuple[str, int]] = [("", 1)]
 
-                if sub_reason or not validate_index_page(sub_body, sub_status):
-                    directories.append({
-                        "name": dir_display_name,
-                        "subdirectories": [],
-                        "subdirectories_truncated": False,
-                        "files": [],
-                        "files_truncated": False,
-                    })
-                    continue
+                while stack:
+                    if cancel_event is not None and cancel_event.is_set():
+                        break
+                    if visited_directories >= visit_limit_per_top_level:
+                        subdirs_truncated = True
+                        files_truncated = True
+                        break
 
-                sub_dir_paths, sub_file_paths = _parse_dir_entries(
-                    sub_body, current_path=dir_abs_path
-                )
-                sub_file_names = [PurePosixPath(p).name for p in sub_file_paths]
-                sub_dir_names = [
-                    PurePosixPath(p.rstrip("/")).name for p in sub_dir_paths
-                ]
+                    current_rel_path, current_depth = stack.pop()
+                    current_abs_path = _join_abs_path(dir_abs_path, current_rel_path)
+                    sub_status, sub_body, _tls, sub_reason = try_http_request(
+                        active_connect_host,
+                        port,
+                        scheme_norm,
+                        allow_insecure_tls,
+                        float(request_timeout),
+                        path=current_abs_path,
+                        request_host=active_request_host,
+                    )
+
+                    if sub_reason or not validate_index_page(sub_body, sub_status):
+                        visited_directories += 1
+                        continue
+
+                    sub_dir_paths, sub_file_paths = _parse_dir_entries(
+                        sub_body, current_path=current_abs_path
+                    )
+                    visited_directories += 1
+
+                    if len(sub_dir_paths) > file_limit:
+                        subdirs_truncated = True
+                    if len(sub_file_paths) > file_limit:
+                        files_truncated = True
+
+                    selected_child_dirs: List[str] = []
+                    for child_abs in sub_dir_paths[:file_limit]:
+                        child_rel = _to_relative_path(child_abs, dir_abs_path)
+                        if not child_rel:
+                            continue
+                        selected_child_dirs.append(child_rel)
+                        subdirectories.append(child_rel)
+
+                    for file_abs in sub_file_paths[:file_limit]:
+                        file_rel = _to_relative_path(file_abs, dir_abs_path)
+                        if file_rel:
+                            files.append(file_rel)
+
+                    if current_depth < depth_limit:
+                        for child_rel in reversed(selected_child_dirs):
+                            if visited_directories + len(stack) >= visit_limit_per_top_level:
+                                subdirs_truncated = True
+                                files_truncated = True
+                                break
+                            stack.append((child_rel, current_depth + 1))
+                    elif selected_child_dirs:
+                        subdirs_truncated = True
+                        files_truncated = True
 
                 directories.append({
                     "name": dir_display_name,
-                    "subdirectories": sub_dir_names[:file_limit],
-                    "subdirectories_truncated": len(sub_dir_names) > file_limit,
-                    "files": sub_file_names[:file_limit],
-                    "files_truncated": len(sub_file_names) > file_limit,
+                    "subdirectories": subdirectories,
+                    "subdirectories_truncated": subdirs_truncated,
+                    "files": files,
+                    "files_truncated": files_truncated,
                 })
 
             except Exception as sub_exc:
@@ -240,6 +281,7 @@ def run_http_probe(
             "max_directories": directory_limit,
             "max_files": file_limit,
             "timeout_seconds": request_timeout,
+            "max_depth": depth_limit,
         },
         "shares": [
             {
@@ -254,3 +296,30 @@ def run_http_probe(
     }
 
     return snapshot
+
+
+def _to_relative_path(path_abs: str, base_abs: str) -> str:
+    path_norm = str(path_abs or "").split("?", 1)[0].split("#", 1)[0].strip() or "/"
+    base_norm = str(base_abs or "/").split("?", 1)[0].split("#", 1)[0].strip() or "/"
+    if not path_norm.startswith("/"):
+        path_norm = "/" + path_norm.lstrip("/")
+    if not base_norm.startswith("/"):
+        base_norm = "/" + base_norm.lstrip("/")
+    base_prefix = base_norm.rstrip("/")
+    if base_prefix and path_norm.startswith(base_prefix + "/"):
+        rel = path_norm[len(base_prefix) + 1 :]
+    elif path_norm == base_prefix:
+        rel = ""
+    else:
+        rel = path_norm.lstrip("/")
+    return rel.rstrip("/")
+
+
+def _join_abs_path(root_abs: str, rel_path: str) -> str:
+    root_norm = str(root_abs or "/").strip() or "/"
+    if not root_norm.startswith("/"):
+        root_norm = "/" + root_norm.lstrip("/")
+    rel_norm = str(rel_path or "").strip().strip("/")
+    if not rel_norm:
+        return root_norm
+    return f"{root_norm.rstrip('/')}/{rel_norm}"

@@ -211,6 +211,55 @@ def test_directory_listing_limits_subdirs_and_files_independently(tmp_path, monk
     assert directory["files_truncated"] is True
 
 
+def test_depth_three_includes_nested_relative_paths(tmp_path, monkeypatch):
+    monkeypatch.setattr("gui.utils.ftp_probe_cache.FTP_CACHE_DIR", tmp_path)
+
+    root_result = ListResult(
+        entries=[Entry(name="pub", is_dir=True, size=0, modified_time=None)],
+        truncated=False,
+    )
+    pub_result = ListResult(
+        entries=[
+            Entry(name="incoming", is_dir=True, size=0, modified_time=None),
+            Entry(name="root.txt", is_dir=False, size=10, modified_time=None),
+        ],
+        truncated=False,
+    )
+    incoming_result = ListResult(
+        entries=[
+            Entry(name="archive", is_dir=True, size=0, modified_time=None),
+            Entry(name="deep.txt", is_dir=False, size=20, modified_time=None),
+        ],
+        truncated=False,
+    )
+    archive_result = ListResult(
+        entries=[Entry(name="leaf.txt", is_dir=False, size=30, modified_time=None)],
+        truncated=False,
+    )
+
+    mock_nav = MagicMock()
+    mock_nav.connect.return_value = None
+    mock_nav.list_dir.side_effect = [root_result, pub_result, incoming_result, archive_result]
+    mock_nav.disconnect.return_value = None
+
+    with patch("gui.utils.ftp_probe_runner.FtpNavigator", return_value=mock_nav):
+        snapshot = run_ftp_probe(
+            "10.0.0.9",
+            port=21,
+            max_directories=3,
+            max_files=5,
+            max_depth=3,
+        )
+
+    directory = snapshot["shares"][0]["directories"][0]
+    assert "incoming" in directory["subdirectories"]
+    assert "incoming/archive" in directory["subdirectories"]
+    assert "root.txt" in directory["files"]
+    assert "incoming/deep.txt" in directory["files"]
+    assert "incoming/archive/leaf.txt" in directory["files"]
+    assert snapshot["limits"]["max_depth"] == 3
+
+
 # ---------------------------------------------------------------------------
 # probe_patterns compatibility — empty patterns → not suspicious
 # ---------------------------------------------------------------------------

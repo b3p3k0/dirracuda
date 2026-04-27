@@ -698,9 +698,15 @@ def test_probe_single_server_ftp_snapshot_path_from_dispatch(monkeypatch):
     dash.db_reader = MagicMock()
 
     minimal_snapshot = {"shares": [{"directories": [], "root_files": []}]}
+    captured = {}
+
+    def _fake_dispatch(*args, **kwargs):
+        captured["kwargs"] = kwargs
+        return minimal_snapshot
+
     monkeypatch.setattr(
         "gui.components.dashboard.dispatch_probe_run",
-        lambda *a, **kw: minimal_snapshot,
+        _fake_dispatch,
     )
     monkeypatch.setattr(
         "gui.components.dashboard.probe_patterns.attach_indicator_analysis",
@@ -718,6 +724,7 @@ def test_probe_single_server_ftp_snapshot_path_from_dispatch(monkeypatch):
     )
 
     assert result["status"] == "success"
+    assert captured["kwargs"]["max_depth"] == 1
     call_kwargs = dash.db_reader.upsert_probe_cache_for_host.call_args[1]
     assert call_kwargs["snapshot_path"] is None
 
@@ -764,9 +771,15 @@ def test_probe_single_server_http_snapshot_path_from_dispatch(monkeypatch):
     dash.db_reader.get_http_server_detail.return_value = {"port": 80, "scheme": "http"}
 
     minimal_snapshot = {"shares": [{"directories": [], "root_files": []}]}
+    captured = {}
+
+    def _fake_dispatch(*args, **kwargs):
+        captured["kwargs"] = kwargs
+        return minimal_snapshot
+
     monkeypatch.setattr(
         "gui.components.dashboard.dispatch_probe_run",
-        lambda *a, **kw: minimal_snapshot,
+        _fake_dispatch,
     )
     monkeypatch.setattr(
         "gui.components.dashboard.probe_patterns.attach_indicator_analysis",
@@ -784,6 +797,7 @@ def test_probe_single_server_http_snapshot_path_from_dispatch(monkeypatch):
     )
 
     assert result["status"] == "success"
+    assert captured["kwargs"]["max_depth"] == 1
     call_kwargs = dash.db_reader.upsert_probe_cache_for_host.call_args[1]
     assert call_kwargs["snapshot_path"] is None
 
@@ -866,6 +880,41 @@ def test_execute_batch_probe_completion_path_avoids_worker_destroy_after(monkeyp
     assert "ui_tick" in dialog.after_callbacks
     assert "destroy" not in dialog.after_callbacks
     assert dialog.destroy_calls >= 1
+
+
+def test_execute_batch_probe_passes_configured_depth_to_probe_worker(monkeypatch):
+    _patch_fake_probe_dialog_stack(monkeypatch)
+
+    class _DepthSettings(_FakeSettingsManager):
+        def get_setting(self, key, default=None):
+            if key == "probe.max_depth_levels":
+                return 3
+            return default
+
+    captured = {}
+    dash = DashboardWidget.__new__(DashboardWidget)
+    dash.parent = _FakeParentModal()
+    dash.theme = _FakeTheme()
+    dash.settings_manager = _DepthSettings()
+    dash.current_scan_options = {}
+    dash._protocol_label_from_host_type = lambda _host_type: "SMB"
+
+    def _probe_single_server(server, _max_dirs, _max_files, _timeout_seconds, max_depth, _enable_rce, _cancel_event):
+        captured["max_depth"] = max_depth
+        return {
+            "ip_address": server.get("ip_address"),
+            "protocol": "SMB",
+            "action": "probe",
+            "status": "success",
+            "notes": "ok",
+        }
+
+    dash._probe_single_server = _probe_single_server
+
+    results = dash._execute_batch_probe([{"ip_address": "198.51.100.4", "host_type": "S"}])
+
+    assert results and results[0]["status"] == "success"
+    assert captured["max_depth"] == 3
 
 
 def test_run_background_fetch_closes_via_ui_poll_without_destroy_after(monkeypatch):

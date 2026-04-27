@@ -15,3 +15,4 @@ Date: 2026-04-20
 9. Keep Dorkbook population manual-save only; never auto-write config on row use actions.
 10. In shared batch operations, never assume SMB-only behavior; branch explicitly by host type (`S`/`F`/`H`) for extract/probe state writes and runtime routing.
 11. Preserve bulk-extract dependency gating in both unified and legacy scan dialogs: `Skip extract on hosts with malware indicators` must be disabled unless bulk extract is enabled, and state sync must run on initial render and template/form-state apply paths.
+12. Keep probe depth controls centralized via one persisted setting key (`probe.max_depth_levels`) and clamp at load/save boundaries (`1..3`) so preflight, server-list batch probe, and per-host probe dialogs stay in sync.
