@@ -10,6 +10,25 @@ A GUI for finding and categorizing open directory listings across multiple proto
 
 ## Setup
 
+```bash
+git clone https://github.com/b3p3k0/dirracuda
+cd dirracuda
+```
+
+Or for the latest development (experimental features and brand new bugs!) version:
+
+```bash
+git clone https://github.com/b3p3k0/dirracuda -b development --single-branch
+cd dirracuda
+```
+Optionally, run the interactive installer (designed for Ubuntu 24.04 LTS+ )— it handles dependencies, venv, config, and optional extras:
+
+```bash
+bash install.sh
+```
+
+**Manual setup** (other distros, or if you prefer to do it yourself):
+
 You'll need Python 3.8+ (3.10+ recommended) and Tkinter:
 
 ```bash
@@ -24,27 +43,15 @@ sudo pacman -S tk python-virtualenv
 ```
 
 Then:
-
 ```bash
-git clone https://github.com/b3p3k0/dirracuda
-```
-
-Or for the latest development (experimental features and brand new bugs!) version:
-
-```bash
-git clone https://github.com/b3p3k0/dirracuda -b development --single-branch
-```
-
-Then:
-```bash
-cd dirracuda
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-cp conf/config.json.example conf/config.json
+mkdir -p ~/.dirracuda/conf
+cp conf/config.json.example ~/.dirracuda/conf/config.json
 ```
 
-Edit `conf/config.json` (or launch a new scan from the dashboard) and add your Shodan API key (requires paid membership):
+Edit `~/.dirracuda/conf/config.json` (or launch a new scan from the dashboard) and add your Shodan API key (requires paid membership):
 
 ```json
 {
@@ -81,7 +88,7 @@ Launch the GUI from your venv:
 |------|---------|---------|
 | tkinter | `apt install python3-tk` | GUI framework; required to run Dirracuda |
 | ClamAV (`clamscan` / `clamdscan`) | `apt install clamav clamav-daemon` | Optional post-download malware scan step for bulk extract and browser downloads |
-| tmpfs (Linux) | built into the Linux kernel (`mount -t tmpfs ...`) | Optional RAM-backed quarantine path at `~/.dirracuda/quarantine_tmpfs`; app falls back to disk quarantine if tmpfs is unavailable |
+| tmpfs (Linux) | built into the Linux kernel (`mount -t tmpfs ...`) | Optional RAM-backed quarantine path at `~/.dirracuda/data/tmpfs_quarantine`; legacy mountpoints are detected for compatibility; app is detect-only and falls back to disk quarantine if tmpfs is unavailable |
 
 ---
 
@@ -94,7 +101,7 @@ You're connecting to machines you don't control. A few baseline precautions befo
 - **VPN** - don't scan from your real IP address
 - **VM** - run Dirracuda inside a virtual machine, especially if you plan to browse or extract files; unknown hosts can serve malicious content
 - **Network isolation** - keep the VM on an isolated network segment, not bridged directly to your LAN
-- **Don't open extracted files on your host** - quarantine defaults to `~/.dirracuda/quarantine/` inside the VM for a reason; treat everything you pull as untrusted
+- **Don't open extracted files on your host** - quarantine defaults to `~/.dirracuda/data/quarantine/` inside the VM for a reason; treat everything you pull as untrusted
 - **Audit the source code** - I'm not a threat actor, but I could be. Don't just clone and run things from Github all willy-nilly
 - **Don't run as root** - that's just silly!
 
@@ -105,11 +112,12 @@ You're connecting to machines you don't control. A few baseline precautions befo
 The main window. From here you can:
 
 - Launch discovery from one **▶ Start Scan** button - pick one protocol or queue multiple protocols in sequence from the same dialog
-- Ingest Reddit open-directory posts via `Reddit Grab (EXP)` in the Start Scan dialog; review them via `Reddit Post DB (EXP)` in the Servers window (see [Experimental Features](#experimental-features))
+- Access experimental features (SearXNG dorking, Reddit ingestion, Dorkbook, and Keymaster) via the `⚗ Experimental` button in the dashboard header (see [Experimental Features](#experimental-features))
 - Open the Server List Browser to work with hosts you've found
 - Manage your database (import, export, merge, maintenance)
 - Edit configuration
 - Toggle dark/light mode with the 🌙/☀️ button in the top-right
+- Open **Running Tasks** to monitor active/queued work and reopen hidden monitor dialogs (scan/probe/extract)
 
 ### Discovery
 
@@ -123,12 +131,46 @@ Triggered from **▶ Start Scan** with the protocol(s) selected. All three follo
 
 **HTTP** - default dork: `http.title:"Index of /"`. Verification stays locked to the exact Shodan hit endpoint (same IP + same port), and tests HTTP and/or HTTPS on that port based on your config toggles.
 
-**Post-scan bulk probe/extract scope** - when bulk probe or bulk extract is enabled from the scan flow, targets are limited to accessible hosts from the scan that just completed (same protocol). Manual probe actions launched from Server List continue to use your explicit row selection and are unchanged.
+`Edit Queries` in Start Scan opens the modeless `Discovery Dorks` editor (single-instance) for SMB/FTP/HTTP base queries.
+Changes there are manual-save only.
+GUI scan dialogs no longer include a per-scan `Custom Shodan Filters` field; GUI query customization is centralized in `Edit Queries` / Dorkbook. CLI users can still pass ad-hoc filters with `--filter`.
+
+Start Scan shows a preflight confirmation that includes an approximate Shodan query-cost estimate before launch.
+
+### Shodan Credits: How Spend Is Calculated
+
+Dirracuda spends Shodan query credits by **result page** (about 100 matches/page), not by protocol toggle alone.  
+That means a scan can consume more than one credit when you raise per-protocol budgets.
+
+- Each protocol now has its own credit budget cap (`SMB`, `FTP`, `HTTP`).
+- Default is wallet-safe: `1` credit budget per protocol per scan.
+- In the GUI scan flow, discovery window sizing is budget-driven: `max_shodan_results = budget * 100`.
+- CLI/config-only workflows can still apply explicit `max_results` caps.
+- SMB can stop early when adaptive target is met; FTP/HTTP use strict caps.
+- Budgets are editable from scan dialogs via `Query Budget...`.
+- Estimated totals are approximate; real usage can be lower when result pages are sparse.
+
+```mermaid
+flowchart LR
+    A[Scan Settings\\nprotocol budgets] --> B[Per-protocol query windows\\nbudget * 100]
+    B --> C[Page fetches\\n~100 results per credit]
+    C --> D[Budget cap enforcement]
+    D --> E[Host filtering/verification]
+    E --> F[Preflight display\\nShodan balance + estimated total cost]
+```
+
+If preflight cannot fetch a **live** Shodan balance, Dirracuda shows:
+- `Shodan balance: not available at this time`
+- `Check balance: https://developer.shodan.io/dashboard`
+
+In that case, numeric cost estimates are intentionally suppressed to avoid stale/misleading projections.
+
+**Post-scan bulk probe/extract scope** - when bulk probe or bulk extract is enabled from the scan flow, targets are limited to accessible hosts from the scan that just completed (same protocol). .
 
 ### Server List
 
 ![server list browser](img/servers.png)
- Shows discovered hosts with IP, country, auth method, and share counts as well as status indicators and a favorite/avoid list.
+ Shows discovered hosts with IP, country, and accessible share counts as well as status indicators and a favorite/avoid list.
 
 **Operations** (right-click a host or use the bottom-row buttons):
 
@@ -137,7 +179,6 @@ Triggered from **▶ Start Scan** with the protocol(s) selected. All three follo
 | 📋 Copy IP | Copy selected server IP address to clipboard |
 | 🔍 Probe Selected | Enumerate shares, detect ransomware indicators |
 | 📦 Extract Selected | Collect files with hard limits on count, size, and time |
-| 🔓 Pry Selected | Password audit against a specific user |
 | 🗂️ Browse Selected | Read-only exploration of accessible shares |
 | ⭐ Toggle Favorite | Mark/unmark selected servers as favorites |
 | 🚫 Toggle Avoid | Mark/unmark selected servers to avoid |
@@ -154,9 +195,7 @@ Read-only directory enumeration that previews accessible shares without download
 
 **Ransomware detection:** Filenames are matched against 25+ known ransom-note patterns (WannaCry, Hive, STOP/Djvu, etc.). Matches flag the server with a red indicator in the list view.
 
-**RCE vulnerability analysis:** **NOTE: this feature is still under development; don't trust results until verified with alternative measures.** Optionally scans for SMB vulnerabilities using passive heuristics. Covers 8 CVEs including EternalBlue (MS17-010), SMBGhost (CVE-2020-0796), ZeroLogon (CVE-2020-1472), and PrintNightmare (CVE-2021-34527). Returns a risk score (0-100) with verdicts: confirmed, likely, or not vulnerable. Signatures live in `conf/signatures/rce_smb/` as editable YAML files. 
-
-Results are cached in `~/.dirracuda/probes/` and reloaded automatically. Configure probe limits in `conf/config.json` under `file_browser` settings.
+Live scan/probe/extract output is shown in monitor dialogs. Hiding a monitor does not stop the task; reopen it from **Running Tasks**.
 
 ### Browsing Shares
 
@@ -167,9 +206,9 @@ The viewer auto-detects file types: text files display with an encoding selector
 
 ![image viewer](img/pic_view.png)
 
-Files over the specified maximum (default: 5 MB) trigger a warning-you can bump that limit in `conf/config.json` under `file_browser.viewer.max_view_size_mb`, or click "Ignore Once" to load anyway (hard cap: 1 GB).
+Files over the specified maximum (default: 5 MB) trigger a warning-you can bump that limit in `~/.dirracuda/conf/config.json` under `file_browser.viewer.max_view_size_mb`, or click "Ignore Once" to load anyway (hard cap: 1 GB).
 
-Downloads are staged in quarantine (`~/.dirracuda/quarantine/`). When ClamAV is enabled, downloaded files are post-processed by verdict (clean files promoted to extracted, infected files moved to known-bad). The browser never writes to remote systems.
+Downloads are staged in quarantine (`~/.dirracuda/data/quarantine/`). When ClamAV is enabled, downloaded files are post-processed by verdict (clean files optionally promoted to extracted, infected files moved to known-bad). The browser never writes to remote systems.
 
 Download concurrency is configurable in the browser UI via the worker-count control (1–3 workers, default 2); the value is persisted in GUI settings under `file_browser.download_worker_count`. For SMB and FTP, a large-file threshold (persisted under `file_browser.download_large_file_mb`) routes files above that size to a dedicated worker. HTTP downloads use worker concurrency only - large-file routing is not active for HTTP in the current release. The large-file control is visible in the HTTP browser but disabled with an explanatory note.
 
@@ -177,29 +216,33 @@ Download concurrency is configurable in the browser UI via the worker-count cont
 
 Dirracuda can stage quarantine files in RAM-backed `tmpfs` instead of disk.
 
-- Mountpoint is fixed to `~/.dirracuda/quarantine_tmpfs`
+- Canonical mountpoint is `~/.dirracuda/data/tmpfs_quarantine`
+- Legacy mountpoints are still detected for compatibility: `~/.dirracuda/quarantine_tmpfs` and `~/.smbseek/quarantine_tmpfs`
 - Linux only (controls are disabled on non-Linux platforms)
-- If mount/setup fails, Dirracuda falls back to the configured disk quarantine path and shows one warning per app session
+- Dirracuda is detect-only and never runs `mount`/`umount`
+- If no supported tmpfs mount is present, Dirracuda falls back to the configured disk quarantine path and shows one warning per app session
 
-To pre-mount at boot, add an `/etc/fstab` entry like the one below (replace `<USER>`), then run `sudo mount -a`.
+For setup, either:
+
+1. Run `bash install.sh` and in Step 8 choose tmpfs + optional `/etc/fstab` update.
+2. Manually add an `/etc/fstab` entry like the one below (replace `<USER>`), then run `sudo mkdir -p /home/<USER>/.dirracuda/data/tmpfs_quarantine && sudo mount -a`.
+
 Dirracuda will reuse this mount when tmpfs mode is enabled.
 
 ```fstab
-tmpfs  /home/<USER>/.dirracuda/quarantine_tmpfs  tmpfs  noexec,nosuid,nodev,size=512M,noswap  0  0
+tmpfs  /home/<USER>/.dirracuda/data/tmpfs_quarantine  tmpfs  noexec,nosuid,nodev,size=512M,noswap  0  0
 ```
 
 Enable in **App Config**:
 
 - Check `Use memory (tmpfs) for quarantine`
-- Set `Max size (MB)` (default `512`)
 
-Or set in `conf/config.json`:
+Or set in `~/.dirracuda/conf/config.json`:
 
 ```json
 {
   "quarantine": {
-    "use_tmpfs": true,
-    "tmpfs_size_mb": 512
+    "use_tmpfs": true
   }
 }
 ```
@@ -207,11 +250,11 @@ Or set in `conf/config.json`:
 Manual setup notes (Linux):
 
 ```bash
-# Validate mount appears after starting Dirracuda with tmpfs enabled
-mount | grep -F "$HOME/.dirracuda/quarantine_tmpfs"
+# Validate mount exists before starting Dirracuda with tmpfs enabled
+mount | grep -F "$HOME/.dirracuda/data/tmpfs_quarantine"
 
 # Inspect current tmpfs usage
-df -h "$HOME/.dirracuda/quarantine_tmpfs"
+df -h "$HOME/.dirracuda/data/tmpfs_quarantine"
 ```
 
 ### Extracting Files
@@ -225,21 +268,21 @@ Automated file collection with configurable limits:
 - Max directory depth
 - File extension filtering
 
-All extracted files land in quarantine. The defaults are conservative - check `conf/config.json` if you need to adjust them.
+All extracted files land in quarantine. The defaults are conservative - check `~/.dirracuda/conf/config.json` if you need to adjust them.
 
 #### Optional ClamAV scanning (bulk extract + browser downloads)
 
-ClamAV integration is optional and off by default.
+ClamAV integration is optional and off by default, but highly recommended.
 
 When enabled, ClamAV post-processes files downloaded via:
 
 - Bulk extract paths (`Dashboard` post-scan bulk extract and `Server List` batch extract)
 - Browser/manual file downloads (SMB/FTP/HTTP browser windows)
 
-Each file is scanned and then routed by verdict:
+Each file is scanned and may then optioanlly be routed by verdict:
 
-- **clean** → moved to `~/.dirracuda/extracted/<host>/<date>/<share>/...`
-- **infected** → moved to `~/.dirracuda/quarantine/<known_bad_subdir>/<host>/<date>/<share>/...` (default subdir: `known_bad`)
+- **clean** → moved to `~/.dirracuda/data/extracted/<host>/<date>/<share>/...`
+- **infected** → moved to `~/.dirracuda/data/quarantine/<known_bad_subdir>/<host>/<date>/<share>/...` (default subdir: `known_bad`)
 - **scanner error/timeout/missing binary** → file stays in quarantine; extract continues (fail-open)
 
 Configure it from **App Config → ClamAV Settings**:
@@ -255,22 +298,6 @@ Notes:
 
 - The results dialog supports **Mute until restart**.
 - One completion popup is shown per session (ClamAV results dialog if shown, otherwise a single fallback completion popup).
-
-### Pry (Password Audit)
-
-Tests passwords from a wordlist against a single SMB host/share/user. Optionally tries username-as-password first.
-
-To use it, download a wordlist (we recommend [SecLists](https://github.com/danielmiessler/SecLists)) and set the path in config:
-
-```json
-{
-  "pry": {
-    "wordlist_path": "/path/to/SecLists/Passwords/Leaked-Databases/rockyou.txt"
-  }
-}
-```
-
-Pry includes lockout detection and configurable delays between attempts. That said, **this feature exists mostly as a novelty/proof of concept** - dedicated tools like Hydra or CrackMapExec will serve you better for serious password auditing.
 
 ### DB Tools
 
@@ -292,7 +319,7 @@ Three conflict strategies are available in both paths: **Keep Newer** (default -
 
 ### CSV Host Import Standard
 
-CSV import is intentionally simple: **select -> preview -> write**. The app does lightweight validation and previews skips/warnings, but CSV quality is the operator's responsibility.
+CSV import is intentionally simple: **select -> preview -> write**. The app does lightweight validation and previews skips/warnings, but input CSV quality is the operator's responsibility. This is designed so experienced users can easily bring in their existing data and begin using it in Dirracuda.
 
 Required column:
 - `ip_address`
@@ -315,12 +342,19 @@ Behavior notes:
 
 ![config](img/config.png)
 
-App settings are stored in `conf/config.json`. The example file (`conf/config.json.example`) documents every option.
+App settings are stored in `~/.dirracuda/conf/config.json`. The bundled example file (`conf/config.json.example`) documents every option.
+
+At startup, Dirracuda self-heals stale legacy/repo-local DB and config pointers when they are missing (for example old `.../dirracuda.db` in a checkout root) and resets them to canonical home paths.
 
 Key sections:
 
 - `shodan.api_key` - required for discovery scans (SMB/FTP/HTTP)
-- `pry.*` - wordlist path, delays, lockout behavior
+- `shodan.query_limits.max_results` - requested discovery result ceiling
+- `shodan.query_limits.smb_max_query_credits_per_scan` - SMB credit-budget cap (default: `1`)
+- `shodan.query_limits.ftp_max_query_credits_per_scan` - FTP credit-budget cap (default: `1`)
+- `shodan.query_limits.http_max_query_credits_per_scan` - HTTP credit-budget cap (default: `1`)
+- `shodan.query_limits.max_query_credits_per_scan` - legacy SMB alias (backward compatibility only)
+- `shodan.query_limits.min_usable_hosts_target` - SMB adaptive top-up threshold when budget >1 (default: `50`)
 - `file_collection.*` - extraction limits
 - `clamav.*` - optional post-extract scan/routing behavior
 - `file_browser.*` - browse mode limits (depth, entries, chunk size, quarantine root); download tuning - `download_worker_count` (1–3) and `download_large_file_mb` - is user-controlled in the browser UI and persisted in GUI settings, not read from this config file
@@ -330,8 +364,8 @@ Key sections:
 
 Two additional files hold editable lists:
 
-- `conf/exclusion_list.json` - Organizations to skip during Shodan queries (hosting providers, ISPs you don't care about etc.). Add entries to the `organizations` array.
-- `conf/ransomware_indicators.json` - Filename patterns checked during probe. Matches flag a server as likely compromised.
+- `~/.dirracuda/conf/exclusion_list.json` - Organizations to skip during Shodan queries (hosting providers, ISPs you don't care about etc.). Add entries to the `organizations` array.
+- `~/.dirracuda/conf/ransomware_indicators.json` - Filename patterns checked during probe. Matches flag a server as likely compromised.
 
 These are separate so you can customize or share them without touching app settings.
 
@@ -339,15 +373,84 @@ The GUI includes a built-in config editor for common settings.
 
 ## Experimental Features
 
+Experimental work is grouped under the permanent `⚗ Experimental` button in the dashboard header.
+
+The dialog is modeless and tab-based. Current tabs:
+- `SearXNG`
+- `Reddit`
+- `Dorkbook`
+- `Keymaster`
+
+### SearXNG
+
+Use this tab to run open-directory dork queries against a SearXNG server, keep confirmed open indexes, and review/promote the results.
+
+Quick start:
+1. Dashboard → `⚗ Experimental` → `SearXNG` tab.
+2. Fill in your server and query.
+3. Click `Test` to confirm the server is reachable and JSON search is enabled.
+4. Click `Run` to collect results.
+5. Click `Open Results DB` to review, probe, and promote hosts.
+
+Inputs (persisted across opens/restarts):
+- **SearXNG Server** — server URL (default placeholder: `http://your.searxng.server:port`)
+- **Query** — dork query (default: `site:* intitle:"index of /"`)
+- **Max results** — fetch cap per run (default 50, max 500)
+- **Run Probe on Results** — optional bulk probe pass for retained results
+
+What each action does:
+- **Test** checks server reachability and JSON search support.
+- **Run** executes the query, keeps only confirmed open-index results, and updates status with fetched/stored counts. If probe is enabled, the status line also shows probe totals (`✔/✖/○`).
+- **Open Results DB** opens the results browser backed by `~/.dirracuda/data/experimental/se_dork.db`.
+
+Results browser:
+- Columns: `URL`, `Probed`, `Probe Preview`, `Checked`
+- Actions: `Copy URL`, `Open in Explorer`, `Open in system browser`, `Probe Selected` / `Probe URL`, `Add to dirracuda DB`
+- Promotion note: if `Add to dirracuda DB` shows **Not available**, open Server List once and reopen Results DB (the add-record callback comes from the live Server List window).
+
+#### SearXNG `format=json` and 403 troubleshooting
+
+If `Test` fails with a 403 on `format=json`, enable JSON output in your SearXNG `settings.yml`:
+
+```yaml
+search:
+  formats:
+    - html
+    - json
+```
+
+Then restart SearXNG and run `Test` again.
+
 ### Reddit Ingestion (redseek)
 
-Dirracuda can ingest posts from `r/opendirectories` as a feed source for analyst review. This is separate from SMB/FTP/HTTP scanning and performs no automatic probing or extraction.
+redseek ingests submissions from `r/opendirectories` into a sidecar DB (`~/.dirracuda/data/experimental/reddit_od.db`) for review. Runtime workflow state remains sidecar-based, and it does not auto-probe or auto-extract anything.
 
 Access points:
-- Dashboard → `▶ Start Scan` dialog → `Reddit Grab (EXP)` (ingest)
-- Dashboard → `📋 Servers` window → `Reddit Post DB (EXP)` (review/open actions)
+- Dashboard → `⚗ Experimental` → `Reddit` tab → `Open Reddit Grab` (ingest)
+- Dashboard → `⚗ Experimental` → `Reddit` tab → `Open Reddit Post DB` (review/open actions)
 
-Data is stored in a sidecar database at `~/.dirracuda/reddit_od.db` and does not write to the main Dirracuda DB tables unless a host is manually promoted by the user.
+Ingest modes in `Reddit Grab`:
+
+| Mode | Endpoint | Required input | Notes |
+|------|----------|----------------|-------|
+| `feed` | `/r/opendirectories/{sort}.json` | none | Default mode |
+| `search` | `/r/opendirectories/search.json` with `restrict_sr=1` | query | Subreddit-scoped keyword search |
+| `user` | `/r/opendirectories/search.json` with `q=author:<user> subreddit:opendirectories`, `restrict_sr=1`, `type=link` | username | Service still runtime-checks subreddit and author before writes |
+
+Sort options:
+- `new`
+- `top` with window `hour`, `day`, `week`, `month`, `year`, or `all`
+
+Only submissions are ingested. Comments/replies are not ingested.
+
+Dialog input persistence:
+- Last-used `Reddit Grab` inputs persist across opens/restarts in `~/.dirracuda/state/gui_settings.json` under `reddit_grab.*` keys:
+  - `mode`, `sort`, `top_window`, `query`, `username`, `max_posts`
+  - `parse_body`, `include_nsfw`, `replace_cache`
+
+Promotion flow:
+- `Open Reddit Post DB` supports `Add to dirracuda DB` from the row context menu.
+- If that action shows **Not available**, open the Server List once and reopen Reddit Post DB (the add-record callback comes from the live Server List window).
 
 Disclaimer:
 
@@ -363,19 +466,61 @@ Known limitations:
 - Some posts contain no usable targets
 - Data quality depends entirely on user-submitted content
 
+### Dorkbook
+
+Dorkbook is a protocol-aware notebook for reusable dork recipes.
+
+Quick start:
+1. Dashboard → `⚗ Experimental` → `Dorkbook` tab.
+2. Click `Open Dorkbook`.
+3. Use `SMB` / `FTP` / `HTTP` tabs to manage recipes.
+
+Behavior:
+- Sidecar DB path: `~/.dirracuda/data/experimental/dorkbook.db`
+- Built-ins are read-only (italicized) and seeded one per protocol
+- Custom rows support `Add`, `Copy`, `Use in Discovery Dorks`, `Edit`, `Delete`
+- `Use in Discovery Dorks` populates the protocol-matched field in Discovery Dorks editor as an unsaved/manual-save change
+- Right-click menu mirrors the same row actions
+- Search filters the current protocol tab only
+- Copy places query text only on clipboard
+- If no scan config context is available, `Use in Discovery Dorks` shows a warning and does not write
+- Delete confirmation can be muted until app restart via checkbox
+
+### Keymaster
+
+Keymaster stores reusable Shodan API keys for rapid key rotation during testing or billing management etc.
+
+Quick start:
+1. Dashboard → `⚗ Experimental` → `Keymaster` tab.
+2. Click `Open Keymaster`.
+3. Add one or more keys with a label, API key, and optional notes.
+4. Select a key and click `Apply` (or double-click the row, or use the right-click menu).
+
+What Apply does:
+- Writes the selected key to `shodan.api_key` in the active config file.
+- Affects future scans only — a scan already running or queued continues with the key that was active at launch.
+
+Sidecar DB path: `~/.dirracuda/data/experimental/keymaster.db`
+
+Key table columns: `Label`, `Key Preview`, `Notes`, `Last Used`.
+
+Key Preview format: keys longer than 8 characters show as `first4 + asterisks + last4`; shorter keys are fully masked.
+
+API key input is masked in Add/Edit dialogs to avoid shoulder surfing, **BUT IS STORED IN CLEAR TEXT LOCALLY.** This should be a non-risk (if a threat actor can read the unencrypted string in your local home dir, you probably have bigger issues...) but I would be remiss not to point it out.
+
 ## Advanced
 
 ### Templates
 
-**Scan templates** save your unified scan configuration - protocol selection, country/region filters, Shodan filters, max results, shared concurrency/timeout, and SMB/HTTP protocol-specific toggles. Click "Save Current" in the Start Scan dialog. Templates live in `~/.dirracuda/templates/` as JSON files you can edit directly.
+**Scan templates** save your unified scan configuration - protocol selection, country/region filters, Shodan filters, max results, shared concurrency/timeout, and SMB/HTTP protocol-specific toggles. Click "Save Current" in the Start Scan dialog. Templates live in `~/.dirracuda/state/templates/scan/` as JSON files you can edit directly.
 
-**Filter templates** save your server list filters - search text, date range, countries, checkboxes. Click "Save Filters" in the advanced filter panel. Stored in `~/.dirracuda/filter_templates/`.
+**Filter templates** save your server list filters - search text, date range, countries, checkboxes. Click "Save Filters" in the advanced filter panel. Stored in `~/.dirracuda/state/templates/filter/`.
 
 Both auto-restore your last-used template on startup.
 
 ### CLI Usage
 
-The CLI is useful for scripting and automation. The GUI uses the same backends.
+This program began as a collection of loosely related scripts; they came together and were revised to form the "backend" before I integrated the GUI. The CLI tools can be useful for scripting and automation. 
 
 ```bash
 # SMB discovery
@@ -418,9 +563,5 @@ If you're unsure whether something is authorized, it probably isn't. When in dou
 ---
 
 ## Acknowledgements
-
-**Pry password logic** derived from [mmcbrute](https://github.com/giMini/mmcbrute) (BSD-3-Clause)
-
-**Wordlists** from [SecLists](https://github.com/danielmiessler/SecLists) (MIT)
 
 Licensed under GNU GPL v3. See `LICENSE.md` and `licenses/` for details.
