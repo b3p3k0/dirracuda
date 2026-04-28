@@ -3,6 +3,12 @@
     "api_key": "",
     "query_limits": {
       "max_results": 1000,
+      "smb_max_query_credits_per_scan": 1,
+      "ftp_max_query_credits_per_scan": 1,
+      "http_max_query_credits_per_scan": 1,
+      "_legacy_note_max_query_credits_per_scan": "Legacy SMB alias retained for backward compatibility",
+      "max_query_credits_per_scan": 1,
+      "min_usable_hosts_target": 50,
       "timeout": 1
     },
     "query_components": {

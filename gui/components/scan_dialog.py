@@ -23,6 +23,11 @@ from typing import Optional, Callable, Dict, Any
 from gui.utils.style import get_theme
 from gui.utils.template_store import TemplateStore
 from gui.utils.dialog_helpers import ensure_dialog_focus
+from gui.components.query_budget_dialog import (
+    load_query_budget_state,
+    resolve_config_path_from_settings,
+    show_query_budget_dialog,
+)
 from gui.components.scan_preflight import run_preflight
 
 
@@ -112,7 +117,6 @@ class ScanDialog:
         self.south_america_var = tk.BooleanVar(value=False)
 
         # Advanced options UI variables
-        self.max_results_var = tk.IntVar(value=1000)
         self.recent_hours_var = tk.StringVar()  # Empty means None/default
         self.rescan_all_var = tk.BooleanVar(value=False)
         self.rescan_failed_var = tk.BooleanVar(value=False)
@@ -379,7 +383,6 @@ class ScanDialog:
         example_label.pack(side=tk.LEFT)
         
         self._create_region_selection(left_column)
-        self._create_max_results_option(left_column)
         self._create_recent_hours_option(left_column)
         self._create_concurrency_options(left_column)
         self._create_rate_limit_options(left_column)
@@ -408,7 +411,6 @@ class ScanDialog:
         self.country_var.trace_add("write", self._validate_country_input)
 
         # Advanced options validation
-        self.max_results_var.trace_add("write", self._validate_max_results)
         self.recent_hours_var.trace_add("write", self._validate_recent_hours)
     
     def _focus_initial_field(self) -> None:
@@ -512,18 +514,6 @@ class ScanDialog:
         upper_input = country_input.upper()
         if upper_input != country_input:
             self.country_var.set(upper_input)
-
-    def _validate_max_results(self, *args) -> None:
-        """Validate max results input."""
-        try:
-            value = self.max_results_var.get()
-            if value < 1 or value > 1000:
-                # Reset to valid range
-                valid_value = max(1, min(1000, value))
-                self.max_results_var.set(valid_value)
-        except tk.TclError:
-            # Invalid integer, reset to default
-            self.max_results_var.set(1000)
 
     def _validate_recent_hours(self, *args) -> None:
         """Validate recent hours input."""
@@ -690,8 +680,6 @@ class ScanDialog:
             Complete scan options dict with all keys ScanManager expects
         """
         # Get values from UI (user's current selections)
-        max_results = self.max_results_var.get()
-
         # Handle recent hours (empty string means None)
         recent_hours_text = self.recent_hours_var.get().strip()
         recent_hours = int(recent_hours_text) if recent_hours_text else None
@@ -741,7 +729,6 @@ class ScanDialog:
         # Save selections back to settings for next time
         if self._settings_manager is not None:
             try:
-                self._settings_manager.set_setting('scan_dialog.max_shodan_results', max_results)
                 self._settings_manager.set_setting('scan_dialog.recent_hours', recent_hours)
                 self._settings_manager.set_setting('scan_dialog.rescan_all', rescan_all)
                 self._settings_manager.set_setting('scan_dialog.rescan_failed', rescan_failed)
@@ -773,9 +760,16 @@ class ScanDialog:
                 pass  # Don't fail scan if settings save fails
 
         # Build complete scan options dict
+        config_path = resolve_config_path_from_settings(self._settings_manager) or str(self.config_path)
+        budget_state = load_query_budget_state(
+            settings_manager=self._settings_manager,
+            config_path=config_path,
+        )
+        smb_budget = max(1, int(budget_state['smb_max_query_credits_per_scan']))
         scan_options = {
+            'protocols': ['smb'],
             'country': country_param,
-            'max_shodan_results': max_results,
+            'max_shodan_results': smb_budget * 100,
             'recent_hours': recent_hours,
             'rescan_all': rescan_all,
             'rescan_failed': rescan_failed,
@@ -790,7 +784,10 @@ class ScanDialog:
             'rce_enabled': bool(self.rce_enabled_var.get()) if self.show_rce_controls else False,
             'bulk_probe_enabled': self.bulk_probe_enabled_var.get(),
             'bulk_extract_enabled': self.bulk_extract_enabled_var.get(),
-            'bulk_extract_skip_indicators': self.skip_indicator_extract_var.get()
+            'bulk_extract_skip_indicators': self.skip_indicator_extract_var.get(),
+            'smb_max_query_credits_per_scan': budget_state['smb_max_query_credits_per_scan'],
+            'ftp_max_query_credits_per_scan': budget_state['ftp_max_query_credits_per_scan'],
+            'http_max_query_credits_per_scan': budget_state['http_max_query_credits_per_scan'],
         }
 
         return scan_options
@@ -800,7 +797,6 @@ class ScanDialog:
         if self._settings_manager is not None:
             try:
                 # Load saved settings into UI variables
-                max_results = int(self._settings_manager.get_setting('scan_dialog.max_shodan_results', 1000))
                 recent_hours = self._settings_manager.get_setting('scan_dialog.recent_hours', None)
                 rescan_all = bool(self._settings_manager.get_setting('scan_dialog.rescan_all', False))
                 rescan_failed = bool(self._settings_manager.get_setting('scan_dialog.rescan_failed', False))
@@ -816,7 +812,6 @@ class ScanDialog:
                 verbose_enabled = bool(self._settings_manager.get_setting('scan_dialog.verbose', False))
 
                 # Set UI variables
-                self.max_results_var.set(max_results)
                 self.recent_hours_var.set(str(recent_hours) if recent_hours is not None else '')
                 self.rescan_all_var.set(rescan_all)
                 self.rescan_failed_var.set(rescan_failed)
@@ -990,6 +985,16 @@ class ScanDialog:
         self._persist_quick_settings()
         self.result = "cancel"
         self.dialog.destroy()
+
+    def _open_query_budget_dialog(self) -> None:
+        """Open shared query budget editor."""
+        config_path = resolve_config_path_from_settings(self._settings_manager) or str(self.config_path)
+        show_query_budget_dialog(
+            parent=self.dialog,
+            theme=self.theme,
+            settings_manager=self._settings_manager,
+            config_path=config_path,
+        )
 
     def focus_dialog(self) -> None:
         """Bring the existing dialog instance to front."""

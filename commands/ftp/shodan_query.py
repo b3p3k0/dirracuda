@@ -15,6 +15,103 @@ from commands.ftp.models import FtpCandidate, FtpDiscoveryError
 if TYPE_CHECKING:
     from shared.ftp_workflow import FtpWorkflow
 
+SHODAN_PAGE_SIZE = 100
+SHODAN_RESULT_FIELDS = [
+    "ip_str",
+    "port",
+    "data",
+    "location.country_name",
+    "location.country_code",
+    "org",
+    "isp",
+    "hostnames",
+]
+
+
+def _coerce_int(value, default: int, minimum: int = 1) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    if parsed < minimum:
+        return default
+    return parsed
+
+
+def _resolve_ftp_query_limits(workflow: "FtpWorkflow") -> dict:
+    """Resolve FTP query limits with a hard per-scan credit budget."""
+    ftp_cfg = workflow.config.get_ftp_config()
+    ftp_limits = ftp_cfg.get("shodan", {}).get("query_limits", {})
+    shodan_limits = workflow.config.get_shodan_config().get("query_limits", {})
+
+    ftp_limit = ftp_limits.get("max_results")
+    global_limit = shodan_limits.get("max_results")
+    max_results = _coerce_int(ftp_limit if ftp_limit is not None else global_limit, 1000)
+    budget = _coerce_int(shodan_limits.get("ftp_max_query_credits_per_scan"), 1)
+    effective_limit = min(max_results, budget * SHODAN_PAGE_SIZE)
+    max_pages = max(1, (effective_limit + SHODAN_PAGE_SIZE - 1) // SHODAN_PAGE_SIZE)
+
+    return {
+        "max_results": max_results,
+        "budget": budget,
+        "effective_limit": effective_limit,
+        "max_pages": max_pages,
+    }
+
+
+def _collect_ftp_matches(api, query: str, limits: dict, out) -> List[dict]:
+    """Collect FTP matches page-by-page within configured budget."""
+    effective_limit = limits["effective_limit"]
+    max_pages = limits["max_pages"]
+
+    if effective_limit <= 0:
+        return []
+
+    out.info(
+        "FTP Shodan budget: "
+        f"requested {limits['max_results']} results, "
+        f"budget {limits['budget']} credit(s), "
+        f"effective limit {effective_limit} ({max_pages} page(s) max)"
+    )
+
+    matches: List[dict] = []
+    pages_fetched = 0
+    page = 1
+
+    while len(matches) < effective_limit and page <= max_pages:
+        try:
+            response = api.search(
+                query,
+                page=page,
+                minify=False,
+                fields=SHODAN_RESULT_FIELDS,
+            )
+        except Exception as exc:
+            err_text = str(exc).lower()
+            if ("unable to parse json response" in err_text or "search cursor timed out" in err_text) and matches:
+                out.warning(
+                    f"Shodan API paging interrupted on page {page} ({exc}); using "
+                    f"{len(matches)} results collected so far"
+                )
+                break
+            raise
+
+        pages_fetched = page
+        page_matches = response.get("matches", [])
+        if not isinstance(page_matches, list) or not page_matches:
+            break
+
+        remaining = effective_limit - len(matches)
+        matches.extend(page_matches[:remaining])
+        if len(page_matches) < SHODAN_PAGE_SIZE:
+            break
+        page += 1
+
+    out.print_if_verbose(
+        f"Shodan query fetched {len(matches)} matches over {pages_fetched} page(s)"
+    )
+    return matches
+
 
 def query_ftp_shodan(
     workflow: "FtpWorkflow",
@@ -38,11 +135,7 @@ def query_ftp_shodan(
     else:
         out.info("Querying Shodan for FTP servers (global scan)")
 
-    # Resolve max_results: FTP-specific → global → hard default.
-    ftp_cfg = workflow.config.get_ftp_config()
-    ftp_lim = ftp_cfg.get("shodan", {}).get("query_limits", {}).get("max_results")
-    smb_lim = workflow.config.get_shodan_config().get("query_limits", {}).get("max_results")
-    max_results = ftp_lim if ftp_lim is not None else (smb_lim if smb_lim is not None else 1000)
+    limits = _resolve_ftp_query_limits(workflow)
 
     try:
         import shodan
@@ -52,7 +145,7 @@ def query_ftp_shodan(
     try:
         api_key = workflow.config.get_shodan_api_key()
         api = shodan.Shodan(api_key)
-        results = api.search(query, limit=max_results)
+        page_matches = _collect_ftp_matches(api, query, limits, out)
     except shodan.APIError as exc:
         out.error(f"Shodan API error: {exc}")
         raise FtpDiscoveryError(str(exc)) from exc
@@ -62,7 +155,7 @@ def query_ftp_shodan(
 
     # Deduplicate by IP (last-wins; Shodan rarely returns duplicates).
     by_ip: dict = {}
-    for match in results.get("matches", []):
+    for match in page_matches:
         ip = match.get("ip_str", "")
         if not ip:
             continue

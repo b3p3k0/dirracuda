@@ -197,13 +197,23 @@ def build_protocol_scan_options(protocol: str, common_options: Dict[str, Any]) -
     Pure function — no dash state required.
     """
     country = common_options.get("country")
-    max_results = common_options.get("max_shodan_results", 1000)
     custom_filters = common_options.get("custom_filters", "")
     verbose = bool(common_options.get("verbose", False))
     bulk_probe = bool(common_options.get("bulk_probe_enabled", False))
     bulk_extract = bool(common_options.get("bulk_extract_enabled", False))
     skip_indicator_extract = bool(common_options.get("bulk_extract_skip_indicators", True))
     rce_enabled = bool(common_options.get("rce_enabled", False))
+
+    def _coerce_budget(value: Any, default: int = 1) -> int:
+        try:
+            budget = int(value)
+        except (TypeError, ValueError):
+            return default
+        return max(1, budget)
+
+    smb_budget = _coerce_budget(common_options.get("smb_max_query_credits_per_scan"), 1)
+    ftp_budget = _coerce_budget(common_options.get("ftp_max_query_credits_per_scan"), 1)
+    http_budget = _coerce_budget(common_options.get("http_max_query_credits_per_scan"), 1)
 
     try:
         shared_concurrency = int(common_options.get("shared_concurrency", 10))
@@ -223,7 +233,7 @@ def build_protocol_scan_options(protocol: str, common_options: Dict[str, Any]) -
             security_mode = "cautious"
         return {
             "country": country,
-            "max_shodan_results": max_results,
+            "max_shodan_results": smb_budget * 100,
             "custom_filters": custom_filters,
             "discovery_max_concurrent_hosts": shared_concurrency,
             "access_max_concurrent_hosts": shared_concurrency,
@@ -234,12 +244,15 @@ def build_protocol_scan_options(protocol: str, common_options: Dict[str, Any]) -
             "bulk_probe_enabled": bulk_probe,
             "bulk_extract_enabled": bulk_extract,
             "bulk_extract_skip_indicators": skip_indicator_extract,
+            "smb_max_query_credits_per_scan": smb_budget,
+            "ftp_max_query_credits_per_scan": ftp_budget,
+            "http_max_query_credits_per_scan": http_budget,
         }
 
     if protocol == "ftp":
         return {
             "country": country,
-            "max_shodan_results": max_results,
+            "max_shodan_results": ftp_budget * 100,
             "custom_filters": custom_filters,
             "discovery_max_concurrent_hosts": shared_concurrency,
             "access_max_concurrent_hosts": shared_concurrency,
@@ -251,13 +264,16 @@ def build_protocol_scan_options(protocol: str, common_options: Dict[str, Any]) -
             "bulk_probe_enabled": bulk_probe,
             "bulk_extract_enabled": bulk_extract,
             "bulk_extract_skip_indicators": skip_indicator_extract,
+            "smb_max_query_credits_per_scan": smb_budget,
+            "ftp_max_query_credits_per_scan": ftp_budget,
+            "http_max_query_credits_per_scan": http_budget,
         }
 
     # HTTP
     allow_insecure_tls = bool(common_options.get("allow_insecure_tls", True))
     return {
         "country": country,
-        "max_shodan_results": max_results,
+        "max_shodan_results": http_budget * 100,
         "custom_filters": custom_filters,
         "discovery_max_concurrent_hosts": shared_concurrency,
         "access_max_concurrent_hosts": shared_concurrency,
@@ -272,6 +288,9 @@ def build_protocol_scan_options(protocol: str, common_options: Dict[str, Any]) -
         "bulk_probe_enabled": bulk_probe,
         "bulk_extract_enabled": bulk_extract,
         "bulk_extract_skip_indicators": skip_indicator_extract,
+        "smb_max_query_credits_per_scan": smb_budget,
+        "ftp_max_query_credits_per_scan": ftp_budget,
+        "http_max_query_credits_per_scan": http_budget,
     }
 
 

@@ -1,5 +1,4 @@
 import sys
-import time
 import types
 
 
@@ -41,7 +40,13 @@ class _ConfigStub:
         return [country] if country else []
 
     def get_shodan_config(self):
-        return {"query_limits": {"max_results": 5}}
+        return {
+            "query_limits": {
+                "max_results": 5,
+                "max_query_credits_per_scan": 1,
+                "min_usable_hosts_target": 50,
+            }
+        }
 
     def get(self, section, key=None, default=None):
         if section == "shodan" and key == "query_components":
@@ -60,7 +65,6 @@ class _ShodanApiStub:
 
     def search(self, _query, **kwargs):
         self.calls.append(kwargs)
-        time.sleep(0.05)
         return {
             "matches": [
                 {
@@ -89,15 +93,17 @@ class _OpStub:
         self.stats = {"shodan_results": 0}
 
 
-def test_query_shodan_uses_paged_minimal_field_requests():
+def test_query_shodan_uses_budgeted_page_request_for_first_page():
     op = _OpStub()
 
     ips, query = shodan_query.query_shodan(op, country="US", custom_filters="")
 
     assert ips == {"10.20.30.1", "10.20.30.2"}
     assert "country:US" in query
+    assert len(op.shodan_api.calls) == 1
     call_kwargs = op.shodan_api.calls[0]
     assert call_kwargs.get("page") == 1
+    assert "limit" not in call_kwargs
     assert call_kwargs.get("minify") is False
     assert call_kwargs.get("fields") == shodan_query.SHODAN_RESULT_FIELDS
 
@@ -124,66 +130,31 @@ def test_query_shodan_returns_empty_set_on_api_parse_error(monkeypatch):
     assert any("Shodan API error" in msg for msg in op.output.error_messages)
 
 
-def test_query_shodan_keeps_partial_results_when_later_page_parse_fails(monkeypatch):
+def test_query_shodan_keeps_partial_results_on_cursor_timeout_when_budget_allows_more_pages(monkeypatch):
     op = _OpStub()
 
     class _ApiError(Exception):
         pass
 
-    class _Config150(_ConfigStub):
+    class _Config200(_ConfigStub):
         def get_shodan_config(self):
-            return {"query_limits": {"max_results": 150}}
+            return {
+                "query_limits": {
+                    "max_results": 200,
+                    "max_query_credits_per_scan": 3,
+                    "min_usable_hosts_target": 999,
+                }
+            }
 
-    class _SecondPageFails:
-        def __init__(self):
-            self.calls = 0
-
-        def search(self, _query, **kwargs):
-            self.calls += 1
-            if kwargs.get("page") == 2:
-                raise _ApiError("Unable to parse JSON response")
-            matches = []
-            for i in range(100):
-                matches.append(
-                    {
-                        "ip_str": f"10.20.30.{i}",
-                        "location": {"country_name": "United States", "country_code": "US"},
-                        "org": "Example ISP",
-                        "isp": "Example ISP",
-                    }
-                )
-            return {"matches": matches}
-
-    op.config = _Config150()
-    op.shodan_api = _SecondPageFails()
-
-    monkeypatch.setattr(shodan_query.shodan, "APIError", _ApiError, raising=False)
-
-    ips, _query = shodan_query.query_shodan(op, country="US", custom_filters="")
-
-    assert len(ips) == 100
-    assert any("using 100 results collected so far" in msg.lower() for msg in op.output.warning_messages)
-
-
-def test_query_shodan_keeps_partial_results_when_cursor_times_out(monkeypatch):
-    op = _OpStub()
-
-    class _ApiError(Exception):
-        pass
-
-    class _Config150(_ConfigStub):
-        def get_shodan_config(self):
-            return {"query_limits": {"max_results": 150}}
-
-    class _SecondPageCursorTimeout:
+    class _CursorTimeoutApiStub:
         def search(self, _query, **kwargs):
             if kwargs.get("page") == 2:
                 raise _ApiError("Search cursor timed out. Restart the search query from page 1.")
             matches = []
-            for i in range(100):
+            for idx in range(100):
                 matches.append(
                     {
-                        "ip_str": f"10.30.40.{i}",
+                        "ip_str": f"10.20.30.{idx}",
                         "location": {"country_name": "United States", "country_code": "US"},
                         "org": "Example ISP",
                         "isp": "Example ISP",
@@ -191,8 +162,8 @@ def test_query_shodan_keeps_partial_results_when_cursor_times_out(monkeypatch):
                 )
             return {"matches": matches}
 
-    op.config = _Config150()
-    op.shodan_api = _SecondPageCursorTimeout()
+    op.config = _Config200()
+    op.shodan_api = _CursorTimeoutApiStub()
 
     monkeypatch.setattr(shodan_query.shodan, "APIError", _ApiError, raising=False)
 
@@ -200,6 +171,67 @@ def test_query_shodan_keeps_partial_results_when_cursor_times_out(monkeypatch):
 
     assert len(ips) == 100
     assert any("paging interrupted" in msg.lower() for msg in op.output.warning_messages)
+
+
+def test_query_shodan_budget_cap_limits_to_one_page_when_budget_is_one():
+    op = _OpStub()
+
+    class _Config1000Budget1(_ConfigStub):
+        def get_shodan_config(self):
+            return {
+                "query_limits": {
+                    "max_results": 1000,
+                    "max_query_credits_per_scan": 1,
+                    "min_usable_hosts_target": 50,
+                }
+            }
+
+    op.config = _Config1000Budget1()
+
+    _ips, _query = shodan_query.query_shodan(op, country="US", custom_filters="")
+
+    assert len(op.shodan_api.calls) == 1
+    assert op.shodan_api.calls[0].get("page") == 1
+
+
+def test_query_shodan_adaptive_stops_early_when_usable_target_hit():
+    op = _OpStub()
+
+    class _Config500Budget3Target2(_ConfigStub):
+        def get_shodan_config(self):
+            return {
+                "query_limits": {
+                    "max_results": 500,
+                    "max_query_credits_per_scan": 3,
+                    "min_usable_hosts_target": 2,
+                }
+            }
+
+    class _PagedApiStub:
+        def __init__(self):
+            self.calls = []
+
+        def search(self, _query, **kwargs):
+            self.calls.append(kwargs)
+            matches = []
+            for idx in range(100):
+                matches.append(
+                    {
+                        "ip_str": f"10.20.40.{idx}",
+                        "location": {"country_name": "United States", "country_code": "US"},
+                        "org": "Example ISP",
+                        "isp": "Example ISP",
+                    }
+                )
+            return {"matches": matches}
+
+    op.config = _Config500Budget3Target2()
+    op.shodan_api = _PagedApiStub()
+
+    _ips, _query = shodan_query.query_shodan(op, country="US", custom_filters="")
+
+    assert len(op.shodan_api.calls) == 1
+    assert any("adaptive query target reached" in msg.lower() for msg in op.output.info_messages)
 
 
 def test_build_targeted_query_does_not_embed_org_exclusions():

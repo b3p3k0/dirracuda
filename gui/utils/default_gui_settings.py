@@ -46,7 +46,6 @@ DEFAULT_GUI_SETTINGS = {
         'avoid_servers': []
     },
     'scan_dialog': {
-        'max_shodan_results': 1000,
         'recent_hours': None,  # None means use config default
         'country_code': '',
         'rescan_all': False,
@@ -64,7 +63,6 @@ DEFAULT_GUI_SETTINGS = {
         'protocol_smb': True,
         'protocol_ftp': True,
         'protocol_http': True,
-        'max_shodan_results': 1000,
         'custom_filters': '',
         'country_code': '',
         'shared_concurrency': 10,
@@ -84,7 +82,6 @@ DEFAULT_GUI_SETTINGS = {
         'region_south_america': False
     },
     'ftp_scan_dialog': {
-        'max_shodan_results': 1000,
         'api_key_override': '',
         'custom_filters': '',
         'country_code': '',
@@ -101,6 +98,11 @@ DEFAULT_GUI_SETTINGS = {
         'region_north_america': False,
         'region_oceania': False,
         'region_south_america': False
+    },
+    'query_budget': {
+        'smb_max_query_credits_per_scan': 1,
+        'ftp_max_query_credits_per_scan': 1,
+        'http_max_query_credits_per_scan': 1
     },
     'probe': {
         'max_directories_per_share': 3,

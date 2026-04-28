@@ -22,6 +22,8 @@ Scope: Home-first layout-v2 migration and path canonicalization.
 15. GUI helper dialogs should never default to `Path.cwd()/conf/config.json`; use canonical runtime config resolution to avoid repo-local drift.
 16. Config validators must normalize filesystem paths (`expanduser`/`resolve` as appropriate) before existence checks; otherwise valid `~/.dirracuda/...` installs fail as false negatives.
 17. Startup migration notifications must not classify canonical runtime targets (`~/.dirracuda/conf/config.json`, `~/.dirracuda/data/dirracuda.db`, `~/.dirracuda/state/gui_settings.json`) as fallback paths.
+18. Discovery query paths should not manually paginate Shodan by default; use a single `search(..., limit=max_results)` request unless multi-call behavior is explicitly required and documented with its query-credit cost.
+19. Avoid overlapping discovery-volume controls in the GUI; keep one authoritative knob (query budget) so estimate text and runtime fetch windows cannot diverge.
 
 ## Pitfalls Avoided
 

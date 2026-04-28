@@ -5,7 +5,7 @@ Single-instance, non-blocking dialog for configuring and starting HTTP scans.
 Styled consistently with FtpScanDialog and ScanDialog.
 
 Design: Compact two-column layout covering HTTP-specific parameters
-(country/region, max results, API key, concurrency, timeouts, TLS toggle, verbose).
+(country/region, API key, concurrency, timeouts, TLS toggle, verbose).
 Uses the same region map and country validation logic as ScanDialog.
 
 Differences from FtpScanDialog:
@@ -27,6 +27,12 @@ from typing import Optional, Callable, Dict, Any
 
 from gui.utils.style import get_theme
 from gui.utils.dialog_helpers import ensure_dialog_focus
+from gui.components.query_budget_dialog import (
+    load_query_budget_state,
+    resolve_config_path_from_settings,
+    show_query_budget_dialog,
+)
+from gui.components.scan_preflight import run_preflight
 from gui.components.scan_dialog import ScanDialog
 
 # Reuse the canonical region map — no forked copy.
@@ -43,7 +49,7 @@ class HttpScanDialog:
 
     Collects HTTP-specific launch parameters and passes a scan_options dict
     to scan_start_callback on Start.  All runtime overrides (concurrency,
-    timeouts, API key, max results) are passed through to the HTTP scan worker
+    timeouts and API key) are passed through to the HTTP scan worker
     via the existing temporary-config-override mechanism in scan_manager (Card 2+).
     """
 
@@ -79,7 +85,6 @@ class HttpScanDialog:
 
         # --- scan options ---
         self.custom_filters_var = tk.StringVar()
-        self.max_results_var = tk.IntVar(value=1000)
         self.api_key_var = tk.StringVar()
         self.discovery_concurrency_var = tk.StringVar()
         self.connect_timeout_var = tk.StringVar()
@@ -146,10 +151,6 @@ class HttpScanDialog:
                 return default
 
         try:
-            max_results = _coerce_int(
-                self._settings_manager.get_setting("http_scan_dialog.max_shodan_results", 1000),
-                1000,
-            )
             api_key = str(self._settings_manager.get_setting("http_scan_dialog.api_key_override", ""))
             country_code = str(self._settings_manager.get_setting("http_scan_dialog.country_code", ""))
             custom_filters = str(self._settings_manager.get_setting("http_scan_dialog.custom_filters", ""))
@@ -185,7 +186,6 @@ class HttpScanDialog:
                 self._settings_manager.get_setting("http_scan_dialog.region_south_america", False)
             )
 
-            self.max_results_var.set(max_results)
             self.api_key_var.set(api_key)
             self.country_var.set(country_code)
             self.custom_filters_var.set(custom_filters)
@@ -223,10 +223,6 @@ class HttpScanDialog:
             return v
 
         try:
-            max_results = _coerce_int(self.max_results_var.get(), 1, 1000)
-            if max_results is not None:
-                self._settings_manager.set_setting("http_scan_dialog.max_shodan_results", max_results)
-
             disc = _coerce_int(self.discovery_concurrency_var.get(), 1, _CONCURRENCY_UPPER)
             conn_to = _coerce_int(self.connect_timeout_var.get(), 1, _TIMEOUT_UPPER)
             req_to = _coerce_int(self.request_timeout_var.get(), 1, _TIMEOUT_UPPER)
@@ -312,7 +308,6 @@ class HttpScanDialog:
         self.dialog.bind("<Return>", lambda _e: self._start())
         self.dialog.bind("<Escape>", lambda _e: self._cancel())
         self.country_var.trace_add("write", self._validate_country_input)
-        self.max_results_var.trace_add("write", self._validate_max_results)
 
         target_entry = self.custom_filters_entry or self.country_entry
         if target_entry:
@@ -382,7 +377,6 @@ class HttpScanDialog:
         self._create_custom_filters_option(left)
         self._create_country_option(left)
         self._create_region_selection(left)
-        self._create_max_results_option(left)
         self._create_api_key_option(left)
 
         # Right column
@@ -565,33 +559,6 @@ class HttpScanDialog:
                     self.north_america_var, self.oceania_var, self.south_america_var):
             var.set(False)
         self._update_region_status()
-
-    # ------------------------------------------------------------------
-    # Max results
-    # ------------------------------------------------------------------
-
-    def _create_max_results_option(self, parent: tk.Frame) -> None:
-        container = tk.Frame(parent)
-        self.theme.apply_to_widget(container, "card")
-        container.pack(fill=tk.X, padx=15, pady=(0, 10))
-
-        self._create_accent_heading(container, "🔢 Max Shodan Results").pack(fill=tk.X)
-
-        row = tk.Frame(container)
-        self.theme.apply_to_widget(row, "card")
-        row.pack(fill=tk.X, pady=(5, 0))
-
-        tk.Entry(
-            row, textvariable=self.max_results_var, width=8,
-            font=self.theme.fonts["body"]
-        ).pack(side=tk.LEFT)
-
-        hint = self.theme.create_styled_label(
-            row, "  (1–1000, default: 1000)", "small",
-            fg=self.theme.colors["text_secondary"]
-        )
-        hint.configure(font=(self.theme.fonts["small"][0], self.theme.fonts["small"][1], "italic"))
-        hint.pack(side=tk.LEFT)
 
     # ------------------------------------------------------------------
     # API key
@@ -853,6 +820,10 @@ class HttpScanDialog:
         self.theme.apply_to_widget(btns, "main_window")
         btns.pack(side=tk.RIGHT)
 
+        budget_btn = tk.Button(btns, text="Query Budget...", command=self._open_query_budget_dialog)
+        self.theme.apply_to_widget(budget_btn, "button_secondary")
+        budget_btn.pack(side=tk.LEFT, padx=(0, 10))
+
         cancel_btn = tk.Button(btns, text="Cancel", command=self._cancel)
         self.theme.apply_to_widget(cancel_btn, "button_secondary")
         cancel_btn.pack(side=tk.LEFT, padx=(0, 10))
@@ -870,14 +841,6 @@ class HttpScanDialog:
         upper = raw.upper()
         if upper != raw:
             self.country_var.set(upper)
-
-    def _validate_max_results(self, *_args) -> None:
-        try:
-            v = self.max_results_var.get()
-            if not (1 <= v <= 1000):
-                self.max_results_var.set(max(1, min(1000, v)))
-        except tk.TclError:
-            self.max_results_var.set(1000)
 
     def _parse_positive_int(
         self, value_str: str, field_name: str, *, minimum: int = 1, maximum: int
@@ -963,7 +926,6 @@ class HttpScanDialog:
             self.request_timeout_var.get().strip(),
             "Request timeout", minimum=1, maximum=_TIMEOUT_UPPER
         )
-        max_results = self.max_results_var.get()
         custom_filters = self.custom_filters_var.get().strip()
 
         api_key = self.api_key_var.get().strip()
@@ -983,7 +945,6 @@ class HttpScanDialog:
         if self._settings_manager is not None:
             try:
                 manual_country_input = self.country_var.get().strip()
-                self._settings_manager.set_setting("http_scan_dialog.max_shodan_results", max_results)
                 self._settings_manager.set_setting("http_scan_dialog.api_key_override", api_key or "")
                 self._settings_manager.set_setting("http_scan_dialog.custom_filters", custom_filters)
                 self._settings_manager.set_setting("http_scan_dialog.country_code", manual_country_input)
@@ -1013,9 +974,17 @@ class HttpScanDialog:
                 # Best-effort only; do not block scan start on settings write failures.
                 pass
 
+        config_path = resolve_config_path_from_settings(self._settings_manager) or str(self.config_path)
+        budget_state = load_query_budget_state(
+            settings_manager=self._settings_manager,
+            config_path=config_path,
+        )
+        http_budget = max(1, int(budget_state["http_max_query_credits_per_scan"]))
+
         return {
+            "protocols": ["http"],
             "country": country_param,
-            "max_shodan_results": max_results,
+            "max_shodan_results": http_budget * 100,
             "api_key_override": api_key,
             "custom_filters": custom_filters,
             "discovery_max_concurrent_hosts": discovery_concurrency,
@@ -1028,6 +997,9 @@ class HttpScanDialog:
             "allow_insecure_tls": allow_insecure_tls,
             "verbose": verbose,
             "bulk_probe_enabled": bool(self.bulk_probe_enabled_var.get()),
+            "smb_max_query_credits_per_scan": budget_state["smb_max_query_credits_per_scan"],
+            "ftp_max_query_credits_per_scan": budget_state["ftp_max_query_credits_per_scan"],
+            "http_max_query_credits_per_scan": budget_state["http_max_query_credits_per_scan"],
         }
 
     # ------------------------------------------------------------------
@@ -1043,8 +1015,20 @@ class HttpScanDialog:
             messagebox.showerror("Invalid Input", str(exc), parent=self.dialog)
             return
 
+        country_desc = scan_options.get("country") or "global"
+        scan_desc = f"protocol: HTTP; target: {country_desc}"
+        preflight_result = run_preflight(
+            self.dialog,
+            self.theme,
+            self._settings_manager,
+            scan_options,
+            scan_desc,
+        )
+        if preflight_result is None:
+            return
+
         self.result = "start"
-        self.scan_start_callback(scan_options)
+        self.scan_start_callback(preflight_result)
         self.dialog.destroy()
 
     def _cancel(self) -> None:
@@ -1068,6 +1052,16 @@ class HttpScanDialog:
             ensure_dialog_focus(self.dialog, self.parent)
         except Exception:
             pass
+
+    def _open_query_budget_dialog(self) -> None:
+        """Open shared query budget editor."""
+        config_path = resolve_config_path_from_settings(self._settings_manager) or str(self.config_path)
+        show_query_budget_dialog(
+            parent=self.dialog,
+            theme=self.theme,
+            settings_manager=self._settings_manager,
+            config_path=config_path,
+        )
 
 
 _ACTIVE_HTTP_SCAN_DIALOG: Optional[HttpScanDialog] = None

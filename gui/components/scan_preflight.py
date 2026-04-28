@@ -14,6 +14,136 @@ import os
 
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.components.batch_extract_dialog import BatchExtractSettingsDialog
+from gui.components.query_budget_dialog import (
+    load_query_budget_state,
+    resolve_config_path_from_settings,
+)
+from shared.config import load_config
+
+
+def _coerce_int(value: Any, default: int, minimum: int = 1) -> int:
+    """Coerce a value to an integer with minimum/default guards."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    if parsed < minimum:
+        return default
+    return parsed
+
+
+def _resolve_protocols(scan_options: Dict[str, Any]) -> List[str]:
+    """Return normalized protocol list for preflight estimation."""
+    raw_protocols = scan_options.get("protocols")
+    if isinstance(raw_protocols, list) and raw_protocols:
+        protocols = [str(item).strip().lower() for item in raw_protocols if str(item).strip()]
+        if protocols:
+            return protocols
+    # Legacy SMB dialog path does not populate explicit protocol list.
+    return ["smb"]
+
+
+def _estimate_query_cost_details(scan_options: Dict[str, Any], budget_state: Dict[str, int]) -> Dict[str, Any]:
+    """
+    Build preflight estimate lines for Shodan query-credit usage.
+
+    Estimates are intentionally approximate and settings-based so users get
+    clear budget visibility before launch.
+    """
+    max_results = _coerce_int(scan_options.get("max_shodan_results"), 0)
+    has_explicit_max = max_results > 0
+    protocols = _resolve_protocols(scan_options)
+
+    smb_credit_budget = _coerce_int(
+        scan_options.get("smb_max_query_credits_per_scan", budget_state.get("smb_max_query_credits_per_scan")),
+        1,
+    )
+    ftp_credit_budget = _coerce_int(
+        scan_options.get("ftp_max_query_credits_per_scan", budget_state.get("ftp_max_query_credits_per_scan")),
+        1,
+    )
+    http_credit_budget = _coerce_int(
+        scan_options.get("http_max_query_credits_per_scan", budget_state.get("http_max_query_credits_per_scan")),
+        1,
+    )
+    total_min = 0
+    total_max = 0
+
+    for protocol in protocols:
+        if protocol == "smb":
+            effective_limit = (
+                min(max_results, smb_credit_budget * 100)
+                if has_explicit_max
+                else smb_credit_budget * 100
+            )
+            smb_credit_cap = max(1, (effective_limit + 99) // 100)
+            if smb_credit_budget > 1:
+                total_min += 1
+                total_max += smb_credit_cap
+            else:
+                total_min += smb_credit_cap
+                total_max += smb_credit_cap
+        elif protocol in {"ftp", "http"}:
+            budget = ftp_credit_budget if protocol == "ftp" else http_credit_budget
+            effective_limit = min(max_results, budget * 100) if has_explicit_max else budget * 100
+            proto_credits = max(1, (effective_limit + 99) // 100)
+            total_min += proto_credits
+            total_max += proto_credits
+
+    if total_min == total_max:
+        total_line = f"Estimated total query cost: ~{total_max} API query credit(s)"
+    else:
+        total_line = f"Estimated total query cost: ~{total_min}..{total_max} API query credits"
+
+    return {
+        "total_line": total_line,
+        "total_min": total_min,
+        "total_max": total_max,
+    }
+
+
+def _resolve_shodan_api_key(scan_options: Dict[str, Any], shodan_cfg: Dict[str, Any]) -> Optional[str]:
+    """Resolve API key with override precedence for live-balance checks."""
+    override = str(scan_options.get("api_key_override") or "").strip()
+    if override:
+        return override
+    configured = ""
+    if isinstance(shodan_cfg, dict):
+        configured = str(shodan_cfg.get("api_key") or "").strip()
+    return configured or None
+
+
+def _fetch_shodan_query_credits(api_key: str) -> Optional[int]:
+    """Return live Shodan query-credit balance, or None when unavailable."""
+    try:
+        import shodan
+    except Exception:
+        return None
+
+    try:
+        info = shodan.Shodan(api_key).info()
+    except Exception:
+        return None
+
+    if not isinstance(info, dict):
+        return None
+
+    credits = info.get("query_credits")
+    if isinstance(credits, bool):
+        return None
+    if isinstance(credits, int):
+        return credits
+    if isinstance(credits, float):
+        return int(credits)
+    if isinstance(credits, str):
+        text = credits.strip()
+        if not text:
+            return None
+        try:
+            return int(float(text))
+        except ValueError:
+            return None
+    return None
 
 
 class ProbeConfigDialog:
@@ -221,8 +351,20 @@ class ScanPreflightController:
         self.skip_indicator_extract = bool(self.scan_options.get('bulk_extract_skip_indicators', True))
         rce_enabled = bool(self.scan_options.get('rce_enabled', False))
 
-        if not any((probe_enabled, extract_enabled, rce_enabled)):
-            return self.scan_options
+        config_path = resolve_config_path_from_settings(self.settings)
+        shodan_cfg = load_config(config_path).get_shodan_config()
+        budget_state = load_query_budget_state(settings_manager=self.settings, config_path=config_path)
+        cost_details = _estimate_query_cost_details(self.scan_options, budget_state)
+
+        api_key = _resolve_shodan_api_key(self.scan_options, shodan_cfg)
+        credits = _fetch_shodan_query_credits(api_key) if api_key else None
+
+        if credits is None:
+            self.summary_lines.append("Shodan balance: not available at this time")
+            self.summary_lines.append("Check balance: https://developer.shodan.io/dashboard")
+        else:
+            self.summary_lines.append(f"Shodan balance: {credits} credits")
+            self.summary_lines.append(cost_details["total_line"])
 
         if probe_enabled:
             outcome = ProbeConfigDialog(self.parent, self.theme, self.settings).show()
@@ -269,9 +411,9 @@ class ScanPreflightController:
             self.scan_options['rce_enabled'] = False
             self.summary_lines.append('RCE disabled (requires probe)')
         elif self.scan_options.get('rce_enabled'):
-                self.summary_lines.append('RCE analysis will run with probe results')
+            self.summary_lines.append('RCE analysis will run with probe results')
 
-        if not self.summary_lines:
+        if not any((probe_enabled, extract_enabled, rce_enabled)):
             self.summary_lines.append('No optional post-scan actions selected')
 
         ok = SummaryDialog(self.parent, self.theme, self.summary_lines, self.scan_description).show()

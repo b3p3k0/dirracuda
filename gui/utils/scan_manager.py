@@ -329,6 +329,23 @@ class ScanManager:
             if max_results is not None:
                 config_overrides['shodan'] = {'query_limits': {'max_results': max_results}}
 
+            smb_budget = scan_options.get("smb_max_query_credits_per_scan")
+            if smb_budget is not None:
+                q_limits = config_overrides.setdefault("shodan", {}).setdefault("query_limits", {})
+                q_limits["smb_max_query_credits_per_scan"] = smb_budget
+                # Backward-compatible alias consumed by legacy helpers.
+                q_limits["max_query_credits_per_scan"] = smb_budget
+
+            ftp_budget = scan_options.get("ftp_max_query_credits_per_scan")
+            if ftp_budget is not None:
+                q_limits = config_overrides.setdefault("shodan", {}).setdefault("query_limits", {})
+                q_limits["ftp_max_query_credits_per_scan"] = ftp_budget
+
+            http_budget = scan_options.get("http_max_query_credits_per_scan")
+            if http_budget is not None:
+                q_limits = config_overrides.setdefault("shodan", {}).setdefault("query_limits", {})
+                q_limits["http_max_query_credits_per_scan"] = http_budget
+
             # Apply API key override
             api_key = scan_options.get('api_key_override')
             if api_key:
@@ -993,6 +1010,13 @@ class ScanManager:
                  .setdefault("query_limits", {})
                  )["max_results"] = max_results
 
+            ftp_budget = scan_options.get("ftp_max_query_credits_per_scan")
+            if ftp_budget is not None:
+                (config_overrides
+                 .setdefault("shodan", {})
+                 .setdefault("query_limits", {})
+                 )["ftp_max_query_credits_per_scan"] = ftp_budget
+
             # FTP discovery concurrency (key matches SMB naming convention).
             disc_conc = scan_options.get("discovery_max_concurrent_hosts")
             if disc_conc is not None:
@@ -1139,6 +1163,13 @@ class ScanManager:
                  .setdefault("shodan", {})
                  .setdefault("query_limits", {})
                  )["max_results"] = max_results
+
+            http_budget = scan_options.get("http_max_query_credits_per_scan")
+            if http_budget is not None:
+                (config_overrides
+                 .setdefault("shodan", {})
+                 .setdefault("query_limits", {})
+                 )["http_max_query_credits_per_scan"] = http_budget
 
             # HTTP discovery concurrency.
             disc_conc = scan_options.get("discovery_max_concurrent_hosts")

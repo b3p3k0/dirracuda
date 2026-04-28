@@ -71,6 +71,7 @@ class TestFtpScanDialogOptionBuild:
         dlg = _make_dialog(tk_root)
         opts = dlg._build_scan_options()
         expected_keys = {
+            "protocols",
             "country",
             "max_shodan_results",
             "api_key_override",
@@ -82,6 +83,9 @@ class TestFtpScanDialogOptionBuild:
             "listing_timeout",
             "verbose",
             "bulk_probe_enabled",
+            "smb_max_query_credits_per_scan",
+            "ftp_max_query_credits_per_scan",
+            "http_max_query_credits_per_scan",
         }
         assert set(opts.keys()) == expected_keys
 
@@ -94,6 +98,7 @@ class TestFtpScanDialogOptionBuild:
         assert isinstance(opts["max_shodan_results"], int)
         assert opts["api_key_override"] is None or isinstance(opts["api_key_override"], str)
         assert isinstance(opts["custom_filters"], str)
+        assert isinstance(opts["protocols"], list)
         assert isinstance(opts["discovery_max_concurrent_hosts"], int)
         assert isinstance(opts["access_max_concurrent_hosts"], int)
         assert isinstance(opts["connect_timeout"], int)
@@ -101,14 +106,18 @@ class TestFtpScanDialogOptionBuild:
         assert isinstance(opts["listing_timeout"], int)
         assert isinstance(opts["verbose"], bool)
         assert isinstance(opts["bulk_probe_enabled"], bool)
+        assert isinstance(opts["smb_max_query_credits_per_scan"], int)
+        assert isinstance(opts["ftp_max_query_credits_per_scan"], int)
+        assert isinstance(opts["http_max_query_credits_per_scan"], int)
 
     def test_defaults(self, tk_root):
         """Defaults match the spec when no config file exists."""
         dlg = _make_dialog(tk_root)
         opts = dlg._build_scan_options()
         # No country selected → global scan
+        assert opts["protocols"] == ["ftp"]
         assert opts["country"] is None
-        assert opts["max_shodan_results"] == 1000
+        assert opts["max_shodan_results"] == 100
         assert opts["custom_filters"] == ""
         assert opts["verbose"] is False
         assert opts["discovery_max_concurrent_hosts"] == 10
@@ -117,6 +126,22 @@ class TestFtpScanDialogOptionBuild:
         assert opts["auth_timeout"] == 10
         assert opts["listing_timeout"] == 15
         assert opts["bulk_probe_enabled"] is False
+        assert opts["ftp_max_query_credits_per_scan"] == 1
+
+    def test_max_results_derived_from_ftp_budget(self, tk_root, monkeypatch):
+        dlg = _make_dialog(tk_root)
+        monkeypatch.setattr(
+            "gui.components.ftp_scan_dialog.load_query_budget_state",
+            lambda **_kwargs: {
+                "smb_max_query_credits_per_scan": 1,
+                "ftp_max_query_credits_per_scan": 4,
+                "http_max_query_credits_per_scan": 1,
+                "min_usable_hosts_target": 50,
+            },
+        )
+
+        opts = dlg._build_scan_options()
+        assert opts["max_shodan_results"] == 400
 
     def test_country_passed_through(self, tk_root):
         """Manual country entry is passed through correctly."""
@@ -191,7 +216,6 @@ class TestFtpScanDialogOptionBuild:
         """Dialog restores last-used FTP values when settings manager is provided."""
         sm = MagicMock()
         stored = {
-            "ftp_scan_dialog.max_shodan_results": 321,
             "ftp_scan_dialog.api_key_override": "SAVED_KEY",
             "ftp_scan_dialog.custom_filters": "org:SavedISP",
             "ftp_scan_dialog.country_code": "US,GB",
@@ -210,7 +234,7 @@ class TestFtpScanDialogOptionBuild:
         dlg = _make_dialog(tk_root, settings_manager=sm)
         opts = dlg._build_scan_options()
 
-        assert opts["max_shodan_results"] == 321
+        assert opts["max_shodan_results"] == 100
         assert opts["api_key_override"] == "SAVED_KEY"
         assert opts["custom_filters"] == "org:SavedISP"
         assert opts["discovery_max_concurrent_hosts"] == 12
@@ -234,7 +258,6 @@ class TestFtpScanDialogOptionBuild:
         dlg = _make_dialog(tk_root, settings_manager=sm)
 
         dlg.country_var.set("US")
-        dlg.max_results_var.set(250)
         dlg.api_key_var.set("TMP_KEY")
         dlg.custom_filters_var.set('country:US org:"Tmp ISP"')
         dlg.discovery_concurrency_var.set("9")
@@ -249,7 +272,6 @@ class TestFtpScanDialogOptionBuild:
         dlg._build_scan_options()
 
         expected_calls = [
-            call("ftp_scan_dialog.max_shodan_results", 250),
             call("ftp_scan_dialog.api_key_override", "TMP_KEY"),
             call("ftp_scan_dialog.custom_filters", 'country:US org:"Tmp ISP"'),
             call("ftp_scan_dialog.country_code", "US"),
@@ -300,7 +322,6 @@ class TestShowFtpScanDialogCancel:
         sm = MagicMock()
         dlg = _make_dialog(tk_root, settings_manager=sm)
 
-        dlg.max_results_var.set(123)
         dlg.country_var.set("us")
         dlg.custom_filters_var.set("org:PersistMe")
         dlg.europe_var.set(True)
@@ -308,7 +329,6 @@ class TestShowFtpScanDialogCancel:
 
         dlg._cancel()
 
-        sm.set_setting.assert_any_call("ftp_scan_dialog.max_shodan_results", 123)
         sm.set_setting.assert_any_call("ftp_scan_dialog.country_code", "US")
         sm.set_setting.assert_any_call("ftp_scan_dialog.custom_filters", "org:PersistMe")
         sm.set_setting.assert_any_call("ftp_scan_dialog.region_europe", True)
@@ -360,6 +380,7 @@ class TestFtpScanManagerOverrides:
             "connect_timeout": 4,
             "auth_timeout": 9,
             "listing_timeout": 12,
+            "ftp_max_query_credits_per_scan": 2,
             "verbose": True,
         }
         sm._ftp_scan_worker(scan_options)
@@ -375,6 +396,12 @@ class TestFtpScanManagerOverrides:
             .get("query_limits", {})
             .get("max_results")
             == 500
+        )
+        assert (
+            overrides.get("shodan", {})
+            .get("query_limits", {})
+            .get("ftp_max_query_credits_per_scan")
+            == 2
         )
         # concurrency
         assert overrides.get("ftp", {}).get("discovery", {}).get("max_concurrent_hosts") == 8

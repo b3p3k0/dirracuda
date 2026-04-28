@@ -89,3 +89,152 @@ def test_scan_preflight_summary_line_includes_probe_depth(monkeypatch):
 
     assert result is not None
     assert any("depth 3" in line for line in controller.summary_lines)
+
+
+def test_scan_preflight_always_shows_summary_even_without_optional_actions(monkeypatch):
+    captured = {}
+
+    class _CfgStub:
+        def get_shodan_config(self):
+            return {"api_key": "KEY", "query_limits": {"smb_max_query_credits_per_scan": 1, "min_usable_hosts_target": 50}}
+
+    class _FakeSummaryDialog:
+        def __init__(self, _parent, _theme, lines, _base_line):
+            captured["lines"] = lines
+
+        def show(self):
+            return True
+
+    monkeypatch.setattr("gui.components.scan_preflight.load_config", lambda _path=None: _CfgStub())
+    monkeypatch.setattr(
+        "gui.components.scan_preflight.load_query_budget_state",
+        lambda **_kwargs: {
+            "smb_max_query_credits_per_scan": 1,
+            "ftp_max_query_credits_per_scan": 1,
+            "http_max_query_credits_per_scan": 1,
+            "min_usable_hosts_target": 50,
+        },
+    )
+    monkeypatch.setattr("gui.components.scan_preflight._fetch_shodan_query_credits", lambda _key: 42)
+    monkeypatch.setattr("gui.components.scan_preflight.SummaryDialog", _FakeSummaryDialog)
+
+    scan_options = {
+        "protocols": ["smb"],
+        "max_shodan_results": 1000,
+        "bulk_probe_enabled": False,
+        "bulk_extract_enabled": False,
+        "rce_enabled": False,
+    }
+    controller = ScanPreflightController(
+        parent=object(),
+        theme=None,
+        settings_manager=None,
+        scan_options=scan_options,
+        scan_description="test scan",
+    )
+
+    result = controller.run()
+
+    assert result is not None
+    assert any("Shodan balance: 42 credits" in line for line in captured["lines"])
+    assert any("Estimated total query cost:" in line for line in captured["lines"])
+    assert any("No optional post-scan actions selected" in line for line in captured["lines"])
+
+
+def test_scan_preflight_mult_protocol_cost_estimate_includes_adaptive_range(monkeypatch):
+    captured = {}
+
+    class _CfgStub:
+        def get_shodan_config(self):
+            return {"api_key": "KEY", "query_limits": {"smb_max_query_credits_per_scan": 3, "min_usable_hosts_target": 50}}
+
+    class _FakeSummaryDialog:
+        def __init__(self, _parent, _theme, lines, _base_line):
+            captured["lines"] = lines
+
+        def show(self):
+            return True
+
+    monkeypatch.setattr("gui.components.scan_preflight.load_config", lambda _path=None: _CfgStub())
+    monkeypatch.setattr(
+        "gui.components.scan_preflight.load_query_budget_state",
+        lambda **_kwargs: {
+            "smb_max_query_credits_per_scan": 3,
+            "ftp_max_query_credits_per_scan": 3,
+            "http_max_query_credits_per_scan": 3,
+            "min_usable_hosts_target": 50,
+        },
+    )
+    monkeypatch.setattr("gui.components.scan_preflight._fetch_shodan_query_credits", lambda _key: 100)
+    monkeypatch.setattr("gui.components.scan_preflight.SummaryDialog", _FakeSummaryDialog)
+
+    scan_options = {
+        "protocols": ["smb", "ftp", "http"],
+        "max_shodan_results": 250,
+        "bulk_probe_enabled": False,
+        "bulk_extract_enabled": False,
+        "rce_enabled": False,
+    }
+    controller = ScanPreflightController(
+        parent=object(),
+        theme=None,
+        settings_manager=None,
+        scan_options=scan_options,
+        scan_description="test scan",
+    )
+
+    result = controller.run()
+
+    assert result is not None
+    assert any("Shodan balance: 100 credits" in line for line in captured["lines"])
+    assert any("Estimated total query cost: ~7..9" in line for line in captured["lines"])
+
+
+def test_scan_preflight_hides_numeric_estimates_when_balance_unavailable(monkeypatch):
+    captured = {}
+
+    class _CfgStub:
+        def get_shodan_config(self):
+            return {"api_key": "KEY", "query_limits": {"smb_max_query_credits_per_scan": 1, "min_usable_hosts_target": 50}}
+
+    class _FakeSummaryDialog:
+        def __init__(self, _parent, _theme, lines, _base_line):
+            captured["lines"] = lines
+
+        def show(self):
+            return True
+
+    monkeypatch.setattr("gui.components.scan_preflight.load_config", lambda _path=None: _CfgStub())
+    monkeypatch.setattr(
+        "gui.components.scan_preflight.load_query_budget_state",
+        lambda **_kwargs: {
+            "smb_max_query_credits_per_scan": 1,
+            "ftp_max_query_credits_per_scan": 1,
+            "http_max_query_credits_per_scan": 1,
+            "min_usable_hosts_target": 50,
+        },
+    )
+    monkeypatch.setattr("gui.components.scan_preflight._fetch_shodan_query_credits", lambda _key: None)
+    monkeypatch.setattr("gui.components.scan_preflight.SummaryDialog", _FakeSummaryDialog)
+
+    scan_options = {
+        "protocols": ["smb", "ftp", "http"],
+        "max_shodan_results": 250,
+        "bulk_probe_enabled": False,
+        "bulk_extract_enabled": False,
+        "rce_enabled": False,
+    }
+    controller = ScanPreflightController(
+        parent=object(),
+        theme=None,
+        settings_manager=None,
+        scan_options=scan_options,
+        scan_description="test scan",
+    )
+
+    result = controller.run()
+
+    assert result is not None
+    assert any("Shodan balance: not available at this time" in line for line in captured["lines"])
+    assert any("Check balance: https://developer.shodan.io/dashboard" in line for line in captured["lines"])
+    assert not any("Estimated total query cost:" in line for line in captured["lines"])

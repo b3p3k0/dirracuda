@@ -152,7 +152,7 @@ All configuration lives in one JSON file, deep-merged against hardcoded defaults
 
 | Section | Key Fields | Notes |
 |---------|-----------|-------|
-| `shodan` | `api_key`, `query_limits.max_results` (1000), `query_components.base_query`, `product_filter`, `additional_exclusions`, `use_organization_exclusions`, `string_filters` | SMB only. FTP/HTTP have own `shodan` sub-blocks. |
+| `shodan` | `api_key`, `query_limits.max_results` (1000), `query_limits.max_query_credits_per_scan` (1), `query_limits.min_usable_hosts_target` (50), `query_components.base_query`, `product_filter`, `additional_exclusions`, `use_organization_exclusions`, `string_filters` | SMB budget controls live under global `shodan.query_limits`; FTP/HTTP keep protocol-local `shodan` sub-blocks for query settings. |
 | `workflow` | `rescan_after_days` (30), `skip_failed_hosts` (true) | Controls rescan policy in `get_new_hosts_filter()` |
 | `connection` | `timeout` (30s), `port_check_timeout` (5s), `rate_limit_delay` (1s), `share_access_delay` (2s) | SMB connection and throttle settings |
 | `discovery` | `max_concurrent_hosts` (10), `max_worker_cap` (20), `smart_throttling` (false) | Thread pool sizing for auth stage |
@@ -281,6 +281,22 @@ With `smart_throttling=true`, `throttled_auth_wait()` adjusts the rate-limit del
 
 Progress is reported on the first host, every 10 hosts, and the final host.
 
+**Shodan budget controls (all discovery protocols):**
+
+- GUI scan dialogs are budget-authoritative (no user-facing `Max Shodan Results` control):
+  - per protocol runtime window is derived as `max_shodan_results = protocol_budget * 100`.
+- CLI/config-driven flows can still apply explicit `max_results`; in those paths
+  `effective_limit = min(max_results, protocol_budget * 100)`.
+- Budget keys:
+  - `query_limits.smb_max_query_credits_per_scan`
+  - `query_limits.ftp_max_query_credits_per_scan`
+  - `query_limits.http_max_query_credits_per_scan`
+- Legacy SMB alias `query_limits.max_query_credits_per_scan` is still read for backward compatibility.
+- SMB supports adaptive early stop when budget > 1:
+  - stop once exclusion-passing candidate count reaches `query_limits.min_usable_hosts_target`,
+  - or when budget pages are exhausted.
+- FTP/HTTP use strict page caps (no adaptive top-up in current build).
+
 **Share enumeration** (`commands/access/share_enumerator.py`):
 
 `enumerate_shares_detailed(op, ip, username, password)` calls `SMBAdapter.list_shares()`. Fatal status codes (`DEPENDENCY_MISSING`, `NORMALIZATION_ERROR`) abort enumeration for that host immediately rather than retrying.
@@ -293,7 +309,7 @@ Progress is reported on the first host, every 10 hosts, and the final host.
 
 **Stage 1 — Discovery** (`run_discover_stage`):
 
-1. `query_ftp_shodan()` — Shodan dork: `port:21 "230 Login successful"` (+ optional country filter and custom filters)
+1. `query_ftp_shodan()` — Shodan dork: `port:21 "230 Login successful"` (+ optional country filter and custom filters), page-based fetch with FTP budget cap
 2. Concurrent TCP port checks via `ThreadPoolExecutor` (up to `ftp.discovery.max_concurrent_hosts`, default 10)
 3. Port-failed hosts are persisted immediately via `FtpPersistence.persist_discovery_outcomes_batch()`
 4. Returns `(reachable_candidates, shodan_total)` — only reachable hosts proceed to stage 2
@@ -327,7 +343,7 @@ The success marker is only emitted on the non-error path; its absence signals fa
 
 Structurally identical to FTP. Implementation lives in `commands/http/operation.py`.
 
-**Shodan dork:** defaults to `http.title:"Index of /"` from `http.shodan.query_components.base_query` in `~/.dirracuda/conf/config.json`.
+**Shodan dork:** defaults to `http.title:"Index of /"` from `http.shodan.query_components.base_query` in `~/.dirracuda/conf/config.json` (page-based fetch with HTTP budget cap).
 Operators can edit SMB/FTP/HTTP discovery dorks from `Start Scan -> Edit Queries` (Discovery Dorks editor).
 
 **Verifier** checks both HTTP and HTTPS on the discovered port; `allow_insecure_tls` controls whether TLS cert errors are fatal. `is_index_page` flag on `http_access` records rows distinguishes confirmed open-directory indexes from other accessible responses.
@@ -813,7 +829,7 @@ SearXNG dorking, Reddit ingestion, and Dorkbook do not use this subprocess path.
 
 | Control | Function |
 |---------|---------|
-| Start Scan | Opens `UnifiedScanDialog` (protocol selector + scan options) |
+| Start Scan | Opens `UnifiedScanDialog` (protocol selector + scan options), then always shows preflight confirmation with live-balance + cost visibility before launch. Numeric estimates are shown only when live balance lookup succeeds. |
 | Server List | Opens `ServerListWindow` with SMB / FTP / HTTP tabs |
 | DB Tools | Opens `DBToolsDialog` |
 | Experimental | Opens `ExperimentalFeaturesDialog` (`Dorkbook`, `SearXNG Dorking`, `Reddit` tabs) |

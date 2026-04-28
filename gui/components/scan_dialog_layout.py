@@ -194,7 +194,6 @@ def _capture_form_state(self) -> Dict[str, Any]:
             "oceania": self.oceania_var.get(),
             "south_america": self.south_america_var.get()
         },
-        "max_results": self.max_results_var.get(),
         "recent_hours": self.recent_hours_var.get(),
         "rescan_all": self.rescan_all_var.get(),
         "rescan_failed": self.rescan_failed_var.get(),
@@ -222,13 +221,6 @@ def _apply_form_state(self, state: Dict[str, Any]) -> None:
     self.north_america_var.set(bool(regions.get("north_america", False)))
     self.oceania_var.set(bool(regions.get("oceania", False)))
     self.south_america_var.set(bool(regions.get("south_america", False)))
-
-    max_results = state.get("max_results")
-    if max_results is not None:
-        try:
-            self.max_results_var.set(int(max_results))
-        except (ValueError, tk.TclError):
-            pass
 
     recent_hours = state.get("recent_hours")
     self.recent_hours_var.set("" if recent_hours in (None, "") else str(recent_hours))
@@ -474,43 +466,6 @@ def _create_custom_filters_option(self, parent_frame: tk.Frame) -> None:
         fg=self.theme.colors["text_secondary"]
     )
     desc_label.pack(anchor="w")
-
-def _create_max_results_option(self, parent_frame: tk.Frame) -> None:
-    """Create max Shodan results option."""
-    max_results_container = tk.Frame(parent_frame)
-    self.theme.apply_to_widget(max_results_container, "card")
-    max_results_container.pack(fill=tk.X, padx=15, pady=(0, 10))
-
-    # Label
-    max_results_heading = self._create_accent_heading(
-        max_results_container,
-        "🔢 Max Shodan Results"
-    )
-    max_results_heading.pack(fill=tk.X)
-
-    # Input frame
-    input_frame = tk.Frame(max_results_container)
-    self.theme.apply_to_widget(input_frame, "card")
-    input_frame.pack(fill=tk.X, pady=(5, 0))
-
-    # Entry field
-    self.max_results_entry = tk.Entry(
-        input_frame,
-        textvariable=self.max_results_var,
-        width=8,
-        font=self.theme.fonts["body"]
-    )
-    self.max_results_entry.pack(side=tk.LEFT)
-
-    # Description
-    desc_label = self.theme.create_styled_label(
-        input_frame,
-        "  (1–1000, default: 1000)",
-        "small",
-        fg=self.theme.colors["text_secondary"]
-    )
-    desc_label.configure(font=(self.theme.fonts["small"][0], self.theme.fonts["small"][1], "italic"))
-    desc_label.pack(side=tk.LEFT)
 
 def _create_recent_hours_option(self, parent_frame: tk.Frame) -> None:
     """Create recent hours filter option."""
@@ -1074,6 +1029,14 @@ def _create_button_panel(self) -> None:
     buttons_container = tk.Frame(button_frame)
     self.theme.apply_to_widget(buttons_container, "main_window")
     buttons_container.pack(side=tk.RIGHT)
+
+    budget_button = tk.Button(
+        buttons_container,
+        text="Query Budget...",
+        command=self._open_query_budget_dialog
+    )
+    self.theme.apply_to_widget(budget_button, "button_secondary")
+    budget_button.pack(side=tk.LEFT, padx=(0, 10))
     
     cancel_button = tk.Button(
         buttons_container,
@@ -1113,7 +1076,6 @@ def bind_scan_dialog_layout_methods(dialog_cls) -> None:
         "_select_all_regions",
         "_clear_all_regions",
         "_create_custom_filters_option",
-        "_create_max_results_option",
         "_create_recent_hours_option",
         "_create_rescan_options",
         "_create_verbose_option",

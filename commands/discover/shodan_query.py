@@ -1,9 +1,10 @@
 import shodan
-from typing import Set, Optional, Tuple, List
+from typing import Set, Optional, Tuple, List, Dict, Any
+
+from commands.discover import host_filter
 
 
 SHODAN_PAGE_SIZE = 100
-MAX_SHODAN_PAGES = 200
 SHODAN_RESULT_FIELDS = [
     "ip_str",
     "location.country_name",
@@ -13,22 +14,100 @@ SHODAN_RESULT_FIELDS = [
 ]
 
 
-def _collect_shodan_matches(op, query: str, max_results: int) -> List[dict]:
-    """
-    Fetch Shodan matches in smaller pages to avoid large one-shot payload stalls.
-    """
+def _coerce_int(value: Any, default: int, minimum: int = 1) -> int:
+    """Coerce integer-like values to bounded ints with a safe fallback."""
     try:
-        target = int(max_results)
+        result = int(value)
     except (TypeError, ValueError):
-        target = 1000
+        return default
+    if result < minimum:
+        return default
+    return result
 
-    if target <= 0:
-        target = 1000
+
+def _resolve_query_limits(shodan_config: Dict[str, Any]) -> Dict[str, int]:
+    """Resolve SMB Shodan query limits including credit budget controls."""
+    query_limits = shodan_config.get("query_limits", {}) if isinstance(shodan_config, dict) else {}
+    max_results = _coerce_int(query_limits.get("max_results"), 1000)
+    max_query_credits = _coerce_int(
+        query_limits.get("smb_max_query_credits_per_scan", query_limits.get("max_query_credits_per_scan")),
+        1,
+    )
+    min_usable_hosts_target = _coerce_int(query_limits.get("min_usable_hosts_target"), 50)
+
+    effective_limit = min(max_results, max_query_credits * SHODAN_PAGE_SIZE)
+    max_pages = max(1, (effective_limit + SHODAN_PAGE_SIZE - 1) // SHODAN_PAGE_SIZE)
+
+    return {
+        "max_results": max_results,
+        "max_query_credits_per_scan": max_query_credits,
+        "min_usable_hosts_target": min_usable_hosts_target,
+        "effective_limit": effective_limit,
+        "max_pages": max_pages,
+    }
+
+
+def _record_result_metadata(op, result: dict) -> Optional[str]:
+    """Record metadata for a Shodan result and return its IP when valid."""
+    ip = result.get("ip_str")
+    if not isinstance(ip, str) or not ip:
+        return None
+
+    if not isinstance(op.shodan_host_metadata, dict):
+        op.output.error(
+            f"CRITICAL: shodan_host_metadata corrupted during Shodan result processing - "
+            f"expected dict, got {type(op.shodan_host_metadata)}: {op.shodan_host_metadata}"
+        )
+        op.shodan_host_metadata = {}
+
+    location = result.get("location", {})
+    country_name = location.get("country_name") or result.get("country_name")
+    country_code = location.get("country_code") or result.get("country_code")
+    org = result.get("org", "")
+    isp = result.get("isp", "")
+
+    metadata = op.shodan_host_metadata.setdefault(ip, {})
+
+    if country_name and not metadata.get("country_name"):
+        metadata["country_name"] = country_name
+    if country_code and not metadata.get("country_code"):
+        metadata["country_code"] = country_code
+    if org and not metadata.get("org_normalized") and isinstance(org, str):
+        metadata["org"] = org
+        metadata["org_normalized"] = org.lower()
+    if isp and not metadata.get("isp_normalized") and isinstance(isp, str):
+        metadata["isp"] = isp
+        metadata["isp_normalized"] = isp.lower()
+
+    return ip
+
+
+def _collect_shodan_matches(op, query: str, query_limits: Dict[str, int]) -> List[dict]:
+    """
+    Fetch Shodan matches within the configured credit budget and result cap.
+    """
+    effective_limit = query_limits["effective_limit"]
+    max_pages = query_limits["max_pages"]
+    adaptive_enabled = query_limits["max_query_credits_per_scan"] > 1
+    usable_target = query_limits["min_usable_hosts_target"]
+
+    if effective_limit <= 0:
+        return []
+
+    op.output.info(
+        "SMB Shodan budget: "
+        f"requested {query_limits['max_results']} results, "
+        f"budget {query_limits['max_query_credits_per_scan']} credit(s), "
+        f"effective limit {effective_limit} ({max_pages} page(s) max)"
+    )
 
     matches: List[dict] = []
+    collected_ips: Set[str] = set()
+    non_excluded_candidate_ips: Set[str] = set()
     page = 1
+    pages_fetched = 0
 
-    while len(matches) < target and page <= MAX_SHODAN_PAGES:
+    while len(matches) < effective_limit and page <= max_pages:
         try:
             response = op.shodan_api.search(
                 query,
@@ -45,20 +124,44 @@ def _collect_shodan_matches(op, query: str, max_results: int) -> List[dict]:
                 )
                 break
             raise
+        pages_fetched = page
 
         page_matches = response.get("matches", [])
         if not isinstance(page_matches, list) or not page_matches:
             break
 
-        remaining = target - len(matches)
-        matches.extend(page_matches[:remaining])
+        remaining = effective_limit - len(matches)
+        page_slice = page_matches[:remaining]
+        matches.extend(page_slice)
+
+        for result in page_slice:
+            ip = _record_result_metadata(op, result)
+            if not ip or ip in collected_ips:
+                continue
+            collected_ips.add(ip)
+            if not host_filter.should_exclude_ip(op, ip):
+                non_excluded_candidate_ips.add(ip)
 
         if len(page_matches) < SHODAN_PAGE_SIZE:
             break
 
+        if adaptive_enabled and len(non_excluded_candidate_ips) >= usable_target:
+            op.output.info(
+                "SMB adaptive query target reached: "
+                f"{len(non_excluded_candidate_ips)} exclusion-passing candidates after {page} page(s)"
+            )
+            break
+
         page += 1
 
-    op.output.print_if_verbose(f"Shodan paging fetched {len(matches)} matches across {page} page(s)")
+    op.output.print_if_verbose(
+        f"Shodan query fetched {len(matches)} matches over {pages_fetched} page(s); "
+        f"exclusion-passing candidates: {len(non_excluded_candidate_ips)}"
+    )
+    if isinstance(getattr(op, "stats", None), dict):
+        op.stats["shodan_pages_fetched"] = pages_fetched
+        op.stats["shodan_effective_limit"] = effective_limit
+        op.stats["shodan_non_excluded_candidates"] = len(non_excluded_candidate_ips)
     return matches
 
 
@@ -87,42 +190,15 @@ def query_shodan(op, country: Optional[str] = None, custom_filters: Optional[str
         query = build_targeted_query(op, target_countries, custom_filters)
 
         shodan_config = op.config.get_shodan_config()
-        max_results = shodan_config['query_limits']['max_results']
-        matches = _collect_shodan_matches(op, query, max_results)
+        query_limits = _resolve_query_limits(shodan_config)
+        matches = _collect_shodan_matches(op, query, query_limits)
 
         ip_addresses = set()
         for result in matches:
-            ip = result.get('ip_str')
-            if not isinstance(ip, str) or not ip:
+            ip = _record_result_metadata(op, result)
+            if not ip:
                 continue
             ip_addresses.add(ip)
-
-            location = result.get('location', {})
-            country_name = location.get('country_name') or result.get('country_name')
-            country_code = location.get('country_code') or result.get('country_code')
-            org = result.get('org', '')
-            isp = result.get('isp', '')
-
-            if not isinstance(op.shodan_host_metadata, dict):
-                op.output.error(
-                    f"CRITICAL: shodan_host_metadata corrupted during Shodan result processing - "
-                    f"expected dict, got {type(op.shodan_host_metadata)}: {op.shodan_host_metadata}"
-                )
-                op.shodan_host_metadata = {}
-
-            metadata = op.shodan_host_metadata.setdefault(ip, {})
-
-            if country_name and not metadata.get('country_name'):
-                metadata['country_name'] = country_name
-            if country_code and not metadata.get('country_code'):
-                metadata['country_code'] = country_code
-
-            if org and not metadata.get('org_normalized') and isinstance(org, str):
-                metadata['org'] = org
-                metadata['org_normalized'] = org.lower()
-            if isp and not metadata.get('isp_normalized') and isinstance(isp, str):
-                metadata['isp'] = isp
-                metadata['isp_normalized'] = isp.lower()
 
         op.stats['shodan_results'] = len(ip_addresses)
         op.output.success(f"Found {len(ip_addresses)} SMB servers in Shodan database")

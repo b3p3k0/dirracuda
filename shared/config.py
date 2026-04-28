@@ -143,6 +143,12 @@ class SMBSeekConfig:
                 "api_key": "",
                 "query_limits": {
                     "max_results": 1000,
+                    "smb_max_query_credits_per_scan": 1,
+                    "ftp_max_query_credits_per_scan": 1,
+                    "http_max_query_credits_per_scan": 1,
+                    # Legacy SMB alias retained for compatibility with older configs/tools.
+                    "max_query_credits_per_scan": 1,
+                    "min_usable_hosts_target": 50,
                     "timeout": 30
                 },
                 "query_components": {
@@ -296,6 +302,12 @@ class SMBSeekConfig:
             "api_key": "",
             "query_limits": {
                 "max_results": 1000,
+                "smb_max_query_credits_per_scan": 1,
+                "ftp_max_query_credits_per_scan": 1,
+                "http_max_query_credits_per_scan": 1,
+                # Legacy SMB alias retained for compatibility with older configs/tools.
+                "max_query_credits_per_scan": 1,
+                "min_usable_hosts_target": 50,
                 "timeout": 30
             }
         })

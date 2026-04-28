@@ -19,6 +19,11 @@ from gui.utils import safe_messagebox as messagebox
 from typing import Any, Callable, Dict, Optional
 
 from gui.components.scan_dialog import ScanDialog
+from gui.components.query_budget_dialog import (
+    load_query_budget_state,
+    resolve_config_path_from_settings,
+    show_query_budget_dialog,
+)
 from gui.components.scan_dork_editor_dialog import show_scan_dork_editor_dialog
 from gui.components.scan_preflight import run_preflight
 from gui.utils.dialog_helpers import ensure_dialog_focus
@@ -66,8 +71,9 @@ class UnifiedScanDialog:
         self.custom_filters_entry = None
         self.template_dropdown = None
         self.delete_template_button = None
-        self.max_results_entry = None
         self.skip_indicator_extract_checkbox = None
+        self.protocol_cost_label = None
+        self.protocol_results_label = None
 
         # Protocol selections (default: all enabled)
         self.protocol_smb_var = tk.BooleanVar(value=True)
@@ -85,7 +91,6 @@ class UnifiedScanDialog:
         self.south_america_var = tk.BooleanVar(value=False)
 
         # Shared runtime settings
-        self.max_results_var = tk.StringVar(value="1000")
         self.shared_concurrency_var = tk.StringVar(value="10")
         self.shared_timeout_var = tk.StringVar(value="10")
         self.verbose_var = tk.BooleanVar(value=False)
@@ -173,10 +178,6 @@ class UnifiedScanDialog:
             self.protocol_http_var.set(
                 _coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.protocol_http", True), True)
             )
-
-            self.max_results_var.set(
-                str(_coerce_int(self._settings_manager.get_setting("unified_scan_dialog.max_shodan_results", 1000), 1000))
-            )
             self.custom_filters_var.set(str(self._settings_manager.get_setting("unified_scan_dialog.custom_filters", "")))
             self.country_var.set(str(self._settings_manager.get_setting("unified_scan_dialog.country_code", "")))
 
@@ -250,10 +251,6 @@ class UnifiedScanDialog:
             self._settings_manager.set_setting("unified_scan_dialog.protocol_smb", bool(self.protocol_smb_var.get()))
             self._settings_manager.set_setting("unified_scan_dialog.protocol_ftp", bool(self.protocol_ftp_var.get()))
             self._settings_manager.set_setting("unified_scan_dialog.protocol_http", bool(self.protocol_http_var.get()))
-
-            max_results = _coerce_int(self.max_results_var.get(), 1, 1000)
-            if max_results is not None:
-                self._settings_manager.set_setting("unified_scan_dialog.max_shodan_results", max_results)
 
             shared_concurrency = _coerce_int(self.shared_concurrency_var.get(), 1, _CONCURRENCY_UPPER)
             if shared_concurrency is not None:
@@ -406,7 +403,6 @@ class UnifiedScanDialog:
         self._create_custom_filters_option(left)
         self._create_country_option(left)
         self._create_region_selection(left)
-        self._create_max_results_option(left)
 
         self._create_shared_runtime_options(right)
         self._create_protocol_specific_options(right)
@@ -582,7 +578,6 @@ class UnifiedScanDialog:
                 "oceania": self.oceania_var.get(),
                 "south_america": self.south_america_var.get(),
             },
-            "max_results": self.max_results_var.get(),
             "shared_concurrency": self.shared_concurrency_var.get(),
             "shared_timeout_seconds": self.shared_timeout_var.get(),
             "verbose": self.verbose_var.get(),
@@ -611,10 +606,6 @@ class UnifiedScanDialog:
         self.oceania_var.set(bool(regions.get("oceania", False)))
         self.south_america_var.set(bool(regions.get("south_america", False)))
 
-        max_results = state.get("max_results")
-        if max_results is not None:
-            self.max_results_var.set(str(max_results))
-
         shared_conc = state.get("shared_concurrency")
         if shared_conc is not None:
             self.shared_concurrency_var.set(str(shared_conc))
@@ -638,6 +629,7 @@ class UnifiedScanDialog:
         self._sync_skip_indicator_extract_state()
 
         self._update_region_status()
+        self._refresh_protocol_estimate_lines()
 
     def _sync_skip_indicator_extract_state(self) -> None:
         skip_checkbox = getattr(self, "skip_indicator_extract_checkbox", None)
@@ -678,7 +670,13 @@ class UnifiedScanDialog:
             ("FTP", self.protocol_ftp_var),
             ("HTTP", self.protocol_http_var),
         ):
-            cb = tk.Checkbutton(row, text=text, variable=var, font=self.theme.fonts["small"])
+            cb = tk.Checkbutton(
+                row,
+                text=text,
+                variable=var,
+                command=self._refresh_protocol_estimate_lines,
+                font=self.theme.fonts["small"],
+            )
             self.theme.apply_to_widget(cb, "checkbox")
             cb.pack(side=tk.LEFT, padx=(10, 12), pady=2)
 
@@ -691,6 +689,41 @@ class UnifiedScanDialog:
         self.theme.apply_to_widget(edit_queries_btn, "button_secondary")
         edit_queries_btn.pack(side=tk.RIGHT, padx=(0, 10))
 
+        query_budget_btn = tk.Button(
+            row,
+            text="Query Budget...",
+            command=self._open_query_budget_dialog,
+            font=self.theme.fonts["small"],
+        )
+        self.theme.apply_to_widget(query_budget_btn, "button_secondary")
+        query_budget_btn.pack(side=tk.RIGHT, padx=(0, 8))
+
+        self.protocol_cost_label = self.theme.create_styled_label(
+            container,
+            "",
+            "small",
+            fg=self.theme.colors["text_secondary"],
+        )
+        self.protocol_cost_label.pack(anchor="w", padx=15, pady=(0, 2))
+
+        self.protocol_results_label = self.theme.create_styled_label(
+            container,
+            "",
+            "small",
+            fg=self.theme.colors["text_secondary"],
+        )
+        self.protocol_results_label.pack(anchor="w", padx=15, pady=(0, 2))
+
+        estimate_help_link = tk.Label(
+            container,
+            text="How cost & result estimates work",
+            fg=self.theme.colors["accent"],
+            cursor="hand2",
+            font=self.theme.fonts["small"],
+        )
+        estimate_help_link.pack(anchor="w", padx=15, pady=(0, 3))
+        estimate_help_link.bind("<Button-1>", self._on_cost_estimate_help_clicked)
+
         info = self.theme.create_styled_label(
             container,
             "Selected protocols run sequentially in one queue and stop on first failure.",
@@ -698,6 +731,7 @@ class UnifiedScanDialog:
             fg=self.theme.colors["text_secondary"],
         )
         info.pack(anchor="w", padx=15, pady=(0, 5))
+        self._refresh_protocol_estimate_lines()
 
     def _create_custom_filters_option(self, parent: tk.Frame) -> None:
         container = tk.Frame(parent)
@@ -815,36 +849,6 @@ class UnifiedScanDialog:
             fg=self.theme.colors["text_secondary"],
         )
         self.region_status_label.pack(side=tk.RIGHT, padx=(10, 5))
-
-    def _create_max_results_option(self, parent: tk.Frame) -> None:
-        container = tk.Frame(parent)
-        self.theme.apply_to_widget(container, "card")
-        container.pack(fill=tk.X, padx=15, pady=(0, 10))
-
-        self._create_accent_heading(container, "Max Shodan Results").pack(fill=tk.X)
-
-        row = tk.Frame(container)
-        self.theme.apply_to_widget(row, "card")
-        row.pack(fill=tk.X, pady=(5, 0))
-
-        max_results_entry = tk.Entry(
-            row,
-            textvariable=self.max_results_var,
-            width=8,
-            font=self.theme.fonts["body"],
-        )
-        self.theme.apply_to_widget(max_results_entry, "entry")
-        max_results_entry.pack(side=tk.LEFT)
-        self.max_results_entry = max_results_entry
-
-        hint = self.theme.create_styled_label(
-            row,
-            "  (1–1000, default: 1000)",
-            "small",
-            fg=self.theme.colors["text_secondary"],
-        )
-        hint.configure(font=(self.theme.fonts["small"][0], self.theme.fonts["small"][1], "italic"))
-        hint.pack(side=tk.LEFT)
 
     def _create_shared_runtime_options(self, parent: tk.Frame) -> None:
         container = tk.Frame(parent)
@@ -1101,6 +1105,85 @@ class UnifiedScanDialog:
             except Exception:
                 return
 
+    def _open_query_budget_dialog(self) -> None:
+        """Open budget dialog used to cap per-protocol Shodan credit usage."""
+        config_path = resolve_config_path_from_settings(self._settings_manager) or str(self.config_path)
+        saved = show_query_budget_dialog(
+            parent=self.dialog,
+            theme=self.theme,
+            settings_manager=self._settings_manager,
+            config_path=config_path,
+        )
+        if saved is not None:
+            self._refresh_protocol_estimate_lines()
+
+    def _on_cost_estimate_help_clicked(self, _event=None) -> None:
+        self._show_cost_estimate_help_dialog()
+
+    def _build_cost_estimate_help_text(self) -> str:
+        lines = [
+            "• This estimate shows how much raw search data we can pull for API credits spent. "
+            "Shodan charges by search pages, not by accessible hosts. "
+            "One API credit typically yields roughly 100 search results.",
+            "• Query Budget sets how many credits each protocol can use per scan.",
+            "• Initial Shodan search returns a list of candidates, not results. "
+            "The subsequent screening process thins out invalid hosts, leaving the operator "
+            "with a better quality list of potential hosts to investigate.",
+        ]
+        return "\n".join(lines)
+
+    def _show_cost_estimate_help_dialog(self) -> None:
+        help_dialog = tk.Toplevel(self.dialog)
+        help_dialog.title("Cost & Result Estimate Help")
+        help_dialog.transient(self.dialog)
+        self.theme.apply_to_widget(help_dialog, "main_window")
+
+        frame = tk.Frame(help_dialog)
+        self.theme.apply_to_widget(frame, "main_window")
+        frame.pack(fill=tk.BOTH, expand=True, padx=16, pady=16)
+
+        heading = self.theme.create_styled_label(frame, "Cost & Result Estimate Help", "heading")
+        heading.pack(anchor="w")
+
+        body = self.theme.create_styled_label(
+            frame,
+            self._build_cost_estimate_help_text(),
+            "body",
+            justify="left",
+            anchor="w",
+            fg=self.theme.colors["text_secondary"],
+            wraplength=470,
+        )
+        body.pack(anchor="w", pady=(10, 12))
+
+        button_row = tk.Frame(frame)
+        self.theme.apply_to_widget(button_row, "main_window")
+        button_row.pack(fill=tk.X)
+
+        close_button = tk.Button(button_row, text="Close", command=help_dialog.destroy)
+        self.theme.apply_to_widget(close_button, "button_primary")
+        close_button.pack(side=tk.RIGHT)
+
+        if self.theme:
+            self.theme.apply_theme_to_application(help_dialog)
+
+        ensure_dialog_focus(help_dialog, self.dialog)
+        self._try_grab_dialog(help_dialog)
+        help_dialog.wait_window()
+
+    def _try_grab_dialog(self, dialog: tk.Toplevel) -> None:
+        """Best-effort modal grab for helper dialogs."""
+        try:
+            dialog.wait_visibility()
+        except Exception:
+            # Window may already be viewable, or platform may not support visibility wait.
+            pass
+        try:
+            dialog.grab_set()
+        except tk.TclError:
+            # Some Tk/WM combos reject grab while viewability is racing; keep dialog usable.
+            pass
+
     def _create_button_panel(self) -> None:
         frame = tk.Frame(self.dialog)
         self.theme.apply_to_widget(frame, "main_window")
@@ -1153,29 +1236,46 @@ class UnifiedScanDialog:
             raise ValueError(f"{field_name} must be {maximum} or less.")
         return v
 
-    def _parse_max_results(self, value_str: str) -> int:
-        raw = str(value_str or "").strip()
-        if not raw:
-            raise ValueError("Max Shodan Results is required.")
-        try:
-            value = int(raw)
-        except ValueError as exc:
-            raise ValueError("Max Shodan Results must be a whole number.") from exc
-        if value <= 0:
-            raise ValueError("Max Shodan Results must be greater than 0.")
-        if value > 1000:
-            raise ValueError("Max Shodan Results must be 1000 or less.")
-        return value
+    def _resolve_selected_protocols(self) -> list[str]:
+        protocols: list[str] = []
+        if bool(self.protocol_smb_var.get()):
+            protocols.append("smb")
+        if bool(self.protocol_ftp_var.get()):
+            protocols.append("ftp")
+        if bool(self.protocol_http_var.get()):
+            protocols.append("http")
+        return protocols
 
-    def _focus_max_results_entry(self) -> None:
-        entry = getattr(self, "max_results_entry", None)
-        if not entry:
+    def _refresh_protocol_estimate_lines(self) -> None:
+        cost_label = getattr(self, "protocol_cost_label", None)
+        results_label = getattr(self, "protocol_results_label", None)
+        if cost_label is None or results_label is None:
             return
-        try:
-            entry.focus_set()
-            entry.select_range(0, tk.END)
-        except Exception:
-            pass
+
+        config_path = resolve_config_path_from_settings(self._settings_manager) or str(self.config_path)
+        budgets = load_query_budget_state(settings_manager=self._settings_manager, config_path=config_path)
+
+        selected = self._resolve_selected_protocols()
+        if not selected:
+            cost_label.configure(text="Est. cost: ~0 credits")
+            results_label.configure(text="Est. initial results: none selected")
+            return
+
+        budget_by_protocol = {
+            "smb": max(1, int(budgets.get("smb_max_query_credits_per_scan", 1))),
+            "ftp": max(1, int(budgets.get("ftp_max_query_credits_per_scan", 1))),
+            "http": max(1, int(budgets.get("http_max_query_credits_per_scan", 1))),
+        }
+
+        total_credits = sum(budget_by_protocol[p] for p in selected)
+        cost_label.configure(text=f"Est. cost: ~{total_credits} credits")
+
+        parts = []
+        for protocol in selected:
+            label = protocol.upper()
+            results = budget_by_protocol[protocol] * 100
+            parts.append(f"{label} ~{results}")
+        results_label.configure(text=f"Est. initial results: {'   '.join(parts)}")
 
     def _parse_and_validate_countries(self, country_input: str) -> tuple[list[str], str]:
         if not country_input.strip():
@@ -1279,8 +1379,6 @@ class UnifiedScanDialog:
     # ------------------------------------------------------------------
 
     def _build_scan_request(self) -> Dict[str, Any]:
-        max_shodan_results = self._parse_max_results(self.max_results_var.get())
-
         shared_concurrency = self._parse_positive_int(
             self.shared_concurrency_var.get().strip(),
             "Backend concurrency",
@@ -1294,13 +1392,7 @@ class UnifiedScanDialog:
             maximum=_TIMEOUT_UPPER,
         )
 
-        protocols = []
-        if self.protocol_smb_var.get():
-            protocols.append("smb")
-        if self.protocol_ftp_var.get():
-            protocols.append("ftp")
-        if self.protocol_http_var.get():
-            protocols.append("http")
+        protocols = self._resolve_selected_protocols()
 
         if not protocols:
             raise ValueError("Select at least one protocol (SMB, FTP, or HTTP).")
@@ -1315,12 +1407,17 @@ class UnifiedScanDialog:
         if mode not in {"cautious", "legacy"}:
             mode = "cautious"
 
+        config_path = resolve_config_path_from_settings(self._settings_manager) or str(self.config_path)
+        budget_state = load_query_budget_state(
+            settings_manager=self._settings_manager,
+            config_path=config_path,
+        )
+
         self._persist_dialog_state()
 
         return {
             "protocols": protocols,
             "country": country_param,
-            "max_shodan_results": max_shodan_results,
             "custom_filters": self.custom_filters_var.get().strip(),
             "shared_concurrency": shared_concurrency,
             "shared_timeout_seconds": shared_timeout,
@@ -1331,6 +1428,9 @@ class UnifiedScanDialog:
             "rce_enabled": bool(self.rce_enabled_var.get()) if self.show_rce_controls else False,
             "security_mode": mode,
             "allow_insecure_tls": bool(self.allow_insecure_tls_var.get()),
+            "smb_max_query_credits_per_scan": budget_state["smb_max_query_credits_per_scan"],
+            "ftp_max_query_credits_per_scan": budget_state["ftp_max_query_credits_per_scan"],
+            "http_max_query_credits_per_scan": budget_state["http_max_query_credits_per_scan"],
         }
 
     def _start(self) -> None:
@@ -1339,8 +1439,6 @@ class UnifiedScanDialog:
             scan_request = self._build_scan_request()
         except ValueError as exc:
             messagebox.showerror("Invalid Input", str(exc), parent=self.dialog)
-            if "Max Shodan Results" in str(exc):
-                self._focus_max_results_entry()
             return
 
         protocol_label = ", ".join(p.upper() for p in scan_request["protocols"])
