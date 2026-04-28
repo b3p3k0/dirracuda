@@ -24,6 +24,7 @@ Scope: Home-first layout-v2 migration and path canonicalization.
 17. Startup migration notifications must not classify canonical runtime targets (`~/.dirracuda/conf/config.json`, `~/.dirracuda/data/dirracuda.db`, `~/.dirracuda/state/gui_settings.json`) as fallback paths.
 18. Discovery query paths should not manually paginate Shodan by default; use a single `search(..., limit=max_results)` request unless multi-call behavior is explicitly required and documented with its query-credit cost.
 19. Avoid overlapping discovery-volume controls in the GUI; keep one authoritative knob (query budget) so estimate text and runtime fetch windows cannot diverge.
+20. Avoid overlapping query-string controls in GUI scan flows; keep one canonical edit surface (`Edit Queries` / Dorkbook) and remove per-scan ad-hoc filter boxes that can create protocol confusion or hidden conflicts.
 
 ## Pitfalls Avoided
 

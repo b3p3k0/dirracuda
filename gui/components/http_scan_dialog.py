@@ -21,7 +21,6 @@ import tkinter as tk
 from tkinter import ttk
 from gui.utils import safe_messagebox as messagebox
 import json
-import webbrowser
 from pathlib import Path
 from typing import Optional, Callable, Dict, Any
 
@@ -72,7 +71,6 @@ class HttpScanDialog:
         self.dialog = None
         self.country_entry = None
         self.region_status_label = None
-        self.custom_filters_entry = None
 
         # --- country / region ---
         self.country_var = tk.StringVar()
@@ -84,7 +82,6 @@ class HttpScanDialog:
         self.south_america_var = tk.BooleanVar(value=False)
 
         # --- scan options ---
-        self.custom_filters_var = tk.StringVar()
         self.api_key_var = tk.StringVar()
         self.discovery_concurrency_var = tk.StringVar()
         self.connect_timeout_var = tk.StringVar()
@@ -153,7 +150,6 @@ class HttpScanDialog:
         try:
             api_key = str(self._settings_manager.get_setting("http_scan_dialog.api_key_override", ""))
             country_code = str(self._settings_manager.get_setting("http_scan_dialog.country_code", ""))
-            custom_filters = str(self._settings_manager.get_setting("http_scan_dialog.custom_filters", ""))
 
             discovery_workers = _coerce_int(
                 self._settings_manager.get_setting("http_scan_dialog.discovery_max_concurrent_hosts", 10),
@@ -188,7 +184,6 @@ class HttpScanDialog:
 
             self.api_key_var.set(api_key)
             self.country_var.set(country_code)
-            self.custom_filters_var.set(custom_filters)
             self.discovery_concurrency_var.set(str(discovery_workers))
             self.connect_timeout_var.set(str(connect_timeout))
             self.request_timeout_var.set(str(request_timeout))
@@ -236,7 +231,6 @@ class HttpScanDialog:
 
             self._settings_manager.set_setting("http_scan_dialog.api_key_override", self.api_key_var.get().strip())
             self._settings_manager.set_setting("http_scan_dialog.country_code", self.country_var.get().strip().upper())
-            self._settings_manager.set_setting("http_scan_dialog.custom_filters", self.custom_filters_var.get().strip())
             self._settings_manager.set_setting(
                 "http_scan_dialog.allow_insecure_tls", bool(self.allow_insecure_tls_var.get())
             )
@@ -309,9 +303,8 @@ class HttpScanDialog:
         self.dialog.bind("<Escape>", lambda _e: self._cancel())
         self.country_var.trace_add("write", self._validate_country_input)
 
-        target_entry = self.custom_filters_entry or self.country_entry
-        if target_entry:
-            target_entry.focus_set()
+        if self.country_entry:
+            self.country_entry.focus_set()
         ensure_dialog_focus(self.dialog, self.parent)
 
     def _center_dialog(self) -> None:
@@ -374,7 +367,6 @@ class HttpScanDialog:
         right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         # Left column
-        self._create_custom_filters_option(left)
         self._create_country_option(left)
         self._create_region_selection(left)
         self._create_api_key_option(left)
@@ -408,49 +400,6 @@ class HttpScanDialog:
     # ------------------------------------------------------------------
     # Country / region
     # ------------------------------------------------------------------
-
-    def _create_custom_filters_option(self, parent: tk.Frame) -> None:
-        """Create custom Shodan filters input option with helper link."""
-        container = tk.Frame(parent)
-        self.theme.apply_to_widget(container, "card")
-        container.pack(fill=tk.X, padx=15, pady=(0, 10))
-
-        heading_frame = tk.Frame(container)
-        self.theme.apply_to_widget(heading_frame, "card")
-        heading_frame.pack(fill=tk.X)
-
-        heading = self._create_accent_heading(heading_frame, "🔍 Custom Shodan Filters (optional)")
-        heading.pack(side=tk.LEFT)
-
-        help_link = tk.Label(
-            heading_frame,
-            text="Filter Reference",
-            fg="#0066cc",
-            cursor="hand2",
-            font=self.theme.fonts["small"],
-        )
-        help_link.pack(side=tk.LEFT, padx=(10, 0))
-        help_link.bind("<Button-1>", lambda _e: webbrowser.open("https://www.shodan.io/search/filters"))
-
-        input_frame = tk.Frame(container)
-        self.theme.apply_to_widget(input_frame, "card")
-        input_frame.pack(fill=tk.X, pady=(5, 0))
-
-        self.custom_filters_entry = tk.Entry(
-            input_frame,
-            textvariable=self.custom_filters_var,
-            width=50,
-            font=self.theme.fonts["body"],
-        )
-        self.custom_filters_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-
-        desc = self.theme.create_styled_label(
-            container,
-            '(e.g., "http.title:\\"Index of /\\"" — appended to base query)',
-            "small",
-            fg=self.theme.colors["text_secondary"],
-        )
-        desc.pack(anchor="w", pady=(5, 0))
 
     def _create_country_option(self, parent: tk.Frame) -> None:
         container = tk.Frame(parent)
@@ -926,7 +875,6 @@ class HttpScanDialog:
             self.request_timeout_var.get().strip(),
             "Request timeout", minimum=1, maximum=_TIMEOUT_UPPER
         )
-        custom_filters = self.custom_filters_var.get().strip()
 
         api_key = self.api_key_var.get().strip()
         api_key = api_key if api_key else None
@@ -946,7 +894,6 @@ class HttpScanDialog:
             try:
                 manual_country_input = self.country_var.get().strip()
                 self._settings_manager.set_setting("http_scan_dialog.api_key_override", api_key or "")
-                self._settings_manager.set_setting("http_scan_dialog.custom_filters", custom_filters)
                 self._settings_manager.set_setting("http_scan_dialog.country_code", manual_country_input)
                 self._settings_manager.set_setting(
                     "http_scan_dialog.discovery_max_concurrent_hosts",
@@ -986,7 +933,6 @@ class HttpScanDialog:
             "country": country_param,
             "max_shodan_results": http_budget * 100,
             "api_key_override": api_key,
-            "custom_filters": custom_filters,
             "discovery_max_concurrent_hosts": discovery_concurrency,
             "connect_timeout": connect_timeout,
             "request_timeout": request_timeout,

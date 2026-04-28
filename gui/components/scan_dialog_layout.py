@@ -6,7 +6,6 @@ import csv
 import io
 import json
 import os
-import webbrowser
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -184,7 +183,6 @@ def _delete_selected_template(self) -> None:
 def _capture_form_state(self) -> Dict[str, Any]:
     """Capture current ScanDialog form state for template storage."""
     return {
-        "custom_filters": self.custom_filters_var.get(),
         "country_code": self.country_var.get(),
         "regions": {
             "africa": self.africa_var.get(),
@@ -211,7 +209,6 @@ def _capture_form_state(self) -> Dict[str, Any]:
 
 def _apply_form_state(self, state: Dict[str, Any]) -> None:
     """Populate form fields from saved template state."""
-    self.custom_filters_var.set(state.get("custom_filters", ""))
     self.country_var.set(state.get("country_code", ""))
 
     regions = state.get("regions", {})
@@ -408,64 +405,6 @@ def _clear_all_regions(self) -> None:
     self.oceania_var.set(False)
     self.south_america_var.set(False)
     self._update_region_status()
-
-def _create_custom_filters_option(self, parent_frame: tk.Frame) -> None:
-    """Create custom Shodan filters input option with helper link."""
-    filters_container = tk.Frame(parent_frame)
-    self.theme.apply_to_widget(filters_container, "card")
-    filters_container.pack(fill=tk.X, padx=15, pady=(0, 10))
-
-    # Heading with helper link
-    heading_frame = tk.Frame(filters_container)
-    self.theme.apply_to_widget(heading_frame, "card")
-    heading_frame.pack(fill=tk.X)
-
-    heading_label = self._create_accent_heading(
-        heading_frame,
-        "🔍 Custom Shodan Filters (optional)"
-    )
-    heading_label.pack(side=tk.LEFT)
-
-    # Helper link (clickable, blue, hand cursor)
-    help_link = tk.Label(
-        heading_frame,
-        text="Filter Reference",
-        fg="#0066cc",
-        cursor="hand2",
-        font=self.theme.fonts["small"]
-    )
-    help_link.pack(side=tk.LEFT, padx=(10, 0))
-    help_link.bind(
-        "<Button-1>",
-        lambda e: webbrowser.open("https://www.shodan.io/search/filters")
-    )
-
-    # Input frame
-    input_frame = tk.Frame(filters_container)
-    self.theme.apply_to_widget(input_frame, "card")
-    input_frame.pack(fill=tk.X, pady=(5, 0))
-
-    # Entry field
-    self.custom_filters_entry = tk.Entry(
-        input_frame,
-        textvariable=self.custom_filters_var,
-        width=50,
-        font=self.theme.fonts["body"]
-    )
-    self.custom_filters_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-
-    # Description
-    desc_frame = tk.Frame(filters_container)
-    self.theme.apply_to_widget(desc_frame, "card")
-    desc_frame.pack(fill=tk.X, pady=(5, 0))
-
-    desc_label = self.theme.create_styled_label(
-        desc_frame,
-        '(e.g., "port:445 os:Windows" or "city:\\"Los Angeles\\"" — appended to base query)',
-        "small",
-        fg=self.theme.colors["text_secondary"]
-    )
-    desc_label.pack(anchor="w")
 
 def _create_recent_hours_option(self, parent_frame: tk.Frame) -> None:
     """Create recent hours filter option."""
@@ -1075,7 +1014,6 @@ def bind_scan_dialog_layout_methods(dialog_cls) -> None:
         "_update_region_status",
         "_select_all_regions",
         "_clear_all_regions",
-        "_create_custom_filters_option",
         "_create_recent_hours_option",
         "_create_rescan_options",
         "_create_verbose_option",

@@ -425,16 +425,12 @@ class ScanManager:
         # Execute scan with additional CLI arguments
         self._update_progress(10, "Starting scan execution...", "discovery")
 
-        # Use the backend interface run_scan method but with enhanced parameters
-        # Extract custom filters from scan options
-        custom_filters = scan_options.get('custom_filters', '')
-
+        # Use the backend interface run_scan method with enhanced parameters.
         return self.backend_interface.run_scan(
             countries,
             progress_callback=self._handle_backend_progress,
             log_callback=self._handle_backend_log_line,
             additional_args=cli_args,
-            filters=custom_filters,
             verbose=verbose_flag
         )
 
@@ -1041,7 +1037,6 @@ class ScanManager:
                 config_overrides.setdefault("ftp", {})["verification"] = verif_overrides
 
             verbose = bool(scan_options.get("verbose", False))
-            custom_filters = scan_options.get("custom_filters", "")
 
             if config_overrides:
                 self._update_progress(7, "Applying configuration overrides...", "initialization")
@@ -1050,7 +1045,6 @@ class ScanManager:
                         countries=countries,
                         progress_callback=self._handle_backend_progress,
                         log_callback=self._handle_backend_log_line,
-                        filters=custom_filters,
                         verbose=verbose,
                     )
             else:
@@ -1058,7 +1052,6 @@ class ScanManager:
                     countries=countries,
                     progress_callback=self._handle_backend_progress,
                     log_callback=self._handle_backend_log_line,
-                    filters=custom_filters,
                     verbose=verbose,
                 )
 
@@ -1206,7 +1199,6 @@ class ScanManager:
                 config_overrides.setdefault("http", {})["bulk_probe_enabled"] = bulk
 
             verbose = bool(scan_options.get("verbose", False))
-            custom_filters = scan_options.get("custom_filters", "")
 
             if config_overrides:
                 self._update_progress(7, "Applying configuration overrides...", "initialization")
@@ -1215,7 +1207,6 @@ class ScanManager:
                         countries=countries,
                         progress_callback=self._handle_backend_progress,
                         log_callback=self._handle_backend_log_line,
-                        filters=custom_filters,
                         verbose=verbose,
                     )
             else:
@@ -1223,7 +1214,6 @@ class ScanManager:
                     countries=countries,
                     progress_callback=self._handle_backend_progress,
                     log_callback=self._handle_backend_log_line,
-                    filters=custom_filters,
                     verbose=verbose,
                 )
 

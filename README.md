@@ -133,6 +133,7 @@ Triggered from **▶ Start Scan** with the protocol(s) selected. All three follo
 
 `Edit Queries` in Start Scan opens the modeless `Discovery Dorks` editor (single-instance) for SMB/FTP/HTTP base queries.
 Changes there are manual-save only.
+GUI scan dialogs no longer include a per-scan `Custom Shodan Filters` field; GUI query customization is centralized in `Edit Queries` / Dorkbook. CLI users can still pass ad-hoc filters with `--filter`.
 
 Start Scan shows a preflight confirmation that includes an approximate Shodan query-cost estimate before launch.
 

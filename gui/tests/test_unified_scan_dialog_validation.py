@@ -79,7 +79,6 @@ def _make_dialog(*, show_rce_controls: bool = True) -> UnifiedScanDialog:
     dlg.protocol_http_var = _Var(False)
     dlg.country_var = _Var("")
     dlg.security_mode_var = _Var("cautious")
-    dlg.custom_filters_var = _Var("")
     dlg.verbose_var = _Var(False)
     dlg.bulk_probe_enabled_var = _Var(False)
     dlg.bulk_extract_enabled_var = _Var(False)

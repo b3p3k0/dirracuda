@@ -11,7 +11,6 @@ Single entrypoint for SMB/FTP/HTTP scan launches. Supports:
 from __future__ import annotations
 
 import json
-import webbrowser
 import tkinter as tk
 from pathlib import Path
 from tkinter import ttk, simpledialog
@@ -68,7 +67,6 @@ class UnifiedScanDialog:
         self.dialog = None
         self.country_entry = None
         self.region_status_label = None
-        self.custom_filters_entry = None
         self.template_dropdown = None
         self.delete_template_button = None
         self.skip_indicator_extract_checkbox = None
@@ -81,7 +79,6 @@ class UnifiedScanDialog:
         self.protocol_http_var = tk.BooleanVar(value=True)
 
         # Shared targeting
-        self.custom_filters_var = tk.StringVar()
         self.country_var = tk.StringVar()
         self.africa_var = tk.BooleanVar(value=False)
         self.asia_var = tk.BooleanVar(value=False)
@@ -178,7 +175,6 @@ class UnifiedScanDialog:
             self.protocol_http_var.set(
                 _coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.protocol_http", True), True)
             )
-            self.custom_filters_var.set(str(self._settings_manager.get_setting("unified_scan_dialog.custom_filters", "")))
             self.country_var.set(str(self._settings_manager.get_setting("unified_scan_dialog.country_code", "")))
 
             self.shared_concurrency_var.set(
@@ -260,7 +256,6 @@ class UnifiedScanDialog:
             if shared_timeout is not None:
                 self._settings_manager.set_setting("unified_scan_dialog.shared_timeout_seconds", shared_timeout)
 
-            self._settings_manager.set_setting("unified_scan_dialog.custom_filters", self.custom_filters_var.get().strip())
             self._settings_manager.set_setting("unified_scan_dialog.country_code", self.country_var.get().strip().upper())
 
             self._settings_manager.set_setting("unified_scan_dialog.verbose", bool(self.verbose_var.get()))
@@ -334,9 +329,8 @@ class UnifiedScanDialog:
         self.dialog.bind("<Escape>", lambda _e: self._cancel())
         self.country_var.trace_add("write", self._validate_country_input)
 
-        target_entry = self.custom_filters_entry or self.country_entry
-        if target_entry:
-            target_entry.focus_set()
+        if self.country_entry:
+            self.country_entry.focus_set()
 
         self._refresh_template_toolbar()
         self._update_region_status()
@@ -400,7 +394,6 @@ class UnifiedScanDialog:
         right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         self._create_protocol_selection(left)
-        self._create_custom_filters_option(left)
         self._create_country_option(left)
         self._create_region_selection(left)
 
@@ -568,7 +561,6 @@ class UnifiedScanDialog:
                 "ftp": self.protocol_ftp_var.get(),
                 "http": self.protocol_http_var.get(),
             },
-            "custom_filters": self.custom_filters_var.get(),
             "country_code": self.country_var.get(),
             "regions": {
                 "africa": self.africa_var.get(),
@@ -595,7 +587,6 @@ class UnifiedScanDialog:
         self.protocol_ftp_var.set(bool(protocols.get("ftp", True)))
         self.protocol_http_var.set(bool(protocols.get("http", True)))
 
-        self.custom_filters_var.set(state.get("custom_filters", ""))
         self.country_var.set(state.get("country_code", ""))
 
         regions = state.get("regions", {})
@@ -732,41 +723,6 @@ class UnifiedScanDialog:
         )
         info.pack(anchor="w", padx=15, pady=(0, 5))
         self._refresh_protocol_estimate_lines()
-
-    def _create_custom_filters_option(self, parent: tk.Frame) -> None:
-        container = tk.Frame(parent)
-        self.theme.apply_to_widget(container, "card")
-        container.pack(fill=tk.X, padx=15, pady=(0, 10))
-
-        heading_frame = tk.Frame(container)
-        self.theme.apply_to_widget(heading_frame, "card")
-        heading_frame.pack(fill=tk.X)
-
-        heading = self._create_accent_heading(heading_frame, "Custom Shodan Filters (optional)")
-        heading.pack(side=tk.LEFT)
-
-        help_link = tk.Label(
-            heading_frame,
-            text="Filter Reference",
-            fg=self.theme.colors["accent"],
-            cursor="hand2",
-            font=self.theme.fonts["small"],
-        )
-        help_link.pack(side=tk.LEFT, padx=(10, 0))
-        help_link.bind("<Button-1>", lambda _e: webbrowser.open("https://www.shodan.io/search/filters"))
-
-        row = tk.Frame(container)
-        self.theme.apply_to_widget(row, "card")
-        row.pack(fill=tk.X, pady=(5, 0))
-
-        self.custom_filters_entry = tk.Entry(
-            row,
-            textvariable=self.custom_filters_var,
-            width=50,
-            font=self.theme.fonts["body"],
-        )
-        self.theme.apply_to_widget(self.custom_filters_entry, "entry")
-        self.custom_filters_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
     def _create_country_option(self, parent: tk.Frame) -> None:
         container = tk.Frame(parent)
@@ -1418,7 +1374,6 @@ class UnifiedScanDialog:
         return {
             "protocols": protocols,
             "country": country_param,
-            "custom_filters": self.custom_filters_var.get().strip(),
             "shared_concurrency": shared_concurrency,
             "shared_timeout_seconds": shared_timeout,
             "verbose": bool(self.verbose_var.get()),

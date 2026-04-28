@@ -309,7 +309,7 @@ Progress is reported on the first host, every 10 hosts, and the final host.
 
 **Stage 1 — Discovery** (`run_discover_stage`):
 
-1. `query_ftp_shodan()` — Shodan dork: `port:21 "230 Login successful"` (+ optional country filter and custom filters), page-based fetch with FTP budget cap
+1. `query_ftp_shodan()` — Shodan dork: `port:21 "230 Login successful"` (+ optional country filter, optional CLI `--filter` custom filters), page-based fetch with FTP budget cap
 2. Concurrent TCP port checks via `ThreadPoolExecutor` (up to `ftp.discovery.max_concurrent_hosts`, default 10)
 3. Port-failed hosts are persisted immediately via `FtpPersistence.persist_discovery_outcomes_batch()`
 4. Returns `(reachable_candidates, shodan_total)` — only reachable hosts proceed to stage 2
@@ -344,7 +344,7 @@ The success marker is only emitted on the non-error path; its absence signals fa
 Structurally identical to FTP. Implementation lives in `commands/http/operation.py`.
 
 **Shodan dork:** defaults to `http.title:"Index of /"` from `http.shodan.query_components.base_query` in `~/.dirracuda/conf/config.json` (page-based fetch with HTTP budget cap).
-Operators can edit SMB/FTP/HTTP discovery dorks from `Start Scan -> Edit Queries` (Discovery Dorks editor).
+Operators can edit SMB/FTP/HTTP discovery dorks from `Start Scan -> Edit Queries` (Discovery Dorks editor). GUI scan dialogs do not expose a per-scan custom-filter text box; that surface is intentionally centralized to avoid conflicting query-control paths.
 
 **Verifier** checks both HTTP and HTTPS on the discovered port; `allow_insecure_tls` controls whether TLS cert errors are fatal. `is_index_page` flag on `http_access` records rows distinguishes confirmed open-directory indexes from other accessible responses.
 

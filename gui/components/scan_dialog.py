@@ -16,7 +16,6 @@ import sys
 import json
 import csv
 import io
-import webbrowser
 from pathlib import Path
 from typing import Optional, Callable, Dict, Any
 
@@ -99,8 +98,6 @@ class ScanDialog:
         self.content_frame = None
         self.country_var = tk.StringVar()
         self.country_entry = None
-        self.custom_filters_var = tk.StringVar()
-        self.custom_filters_entry = None
         self.extension_count_label = None
         self.template_var = tk.StringVar()
         self.template_dropdown = None
@@ -346,8 +343,7 @@ class ScanDialog:
         self.theme.apply_to_widget(right_column, "card")
         right_column.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        # Left column: target scope + filters
-        self._create_custom_filters_option(left_column)
+        # Left column: target scope
         
         country_container = tk.Frame(left_column)
         self.theme.apply_to_widget(country_container, "card")
@@ -414,10 +410,9 @@ class ScanDialog:
         self.recent_hours_var.trace_add("write", self._validate_recent_hours)
     
     def _focus_initial_field(self) -> None:
-        """Set initial focus to custom filters (fallback to country)."""
-        target_entry = self.custom_filters_entry or self.country_entry
-        if target_entry:
-            target_entry.focus_set()
+        """Set initial focus to country field."""
+        if self.country_entry:
+            self.country_entry.focus_set()
 
     def _get_selected_region_countries(self) -> list[str]:
         """Get all country codes from selected regions."""
@@ -695,9 +690,6 @@ class ScanDialog:
         api_key = self.api_key_var.get().strip()
         api_key = api_key if api_key else None
 
-        # Handle custom filters
-        custom_filters = self.custom_filters_var.get().strip()
-
         discovery_concurrency = self._parse_positive_int(
             self.discovery_concurrency_var.get().strip(),
             "Discovery max concurrent hosts",
@@ -733,7 +725,6 @@ class ScanDialog:
                 self._settings_manager.set_setting('scan_dialog.rescan_all', rescan_all)
                 self._settings_manager.set_setting('scan_dialog.rescan_failed', rescan_failed)
                 self._settings_manager.set_setting('scan_dialog.api_key_override', api_key or '')
-                self._settings_manager.set_setting('scan_dialog.custom_filters', custom_filters)
                 # Save only manually entered country codes, not region-selected ones
                 manual_country_input = self.country_var.get().strip()
                 self._settings_manager.set_setting('scan_dialog.country_code', manual_country_input)
@@ -774,7 +765,6 @@ class ScanDialog:
             'rescan_all': rescan_all,
             'rescan_failed': rescan_failed,
             'api_key_override': api_key,
-            'custom_filters': custom_filters,
             'discovery_max_concurrent_hosts': discovery_concurrency,
             'access_max_concurrent_hosts': access_concurrency,
             'rate_limit_delay': rate_limit_delay,
@@ -801,7 +791,6 @@ class ScanDialog:
                 rescan_all = bool(self._settings_manager.get_setting('scan_dialog.rescan_all', False))
                 rescan_failed = bool(self._settings_manager.get_setting('scan_dialog.rescan_failed', False))
                 api_key = str(self._settings_manager.get_setting('scan_dialog.api_key_override', ''))
-                custom_filters = str(self._settings_manager.get_setting('scan_dialog.custom_filters', ''))
                 country_code = str(self._settings_manager.get_setting('scan_dialog.country_code', ''))
 
                 discovery_concurrency = self._settings_manager.get_setting('scan_dialog.discovery_max_concurrency', None)
@@ -816,7 +805,6 @@ class ScanDialog:
                 self.rescan_all_var.set(rescan_all)
                 self.rescan_failed_var.set(rescan_failed)
                 self.api_key_var.set(api_key)
-                self.custom_filters_var.set(custom_filters)
                 self.country_var.set(country_code)
 
                 if discovery_concurrency is not None:

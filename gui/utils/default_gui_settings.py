@@ -63,7 +63,6 @@ DEFAULT_GUI_SETTINGS = {
         'protocol_smb': True,
         'protocol_ftp': True,
         'protocol_http': True,
-        'custom_filters': '',
         'country_code': '',
         'shared_concurrency': 10,
         'shared_timeout_seconds': 10,
@@ -83,7 +82,6 @@ DEFAULT_GUI_SETTINGS = {
     },
     'ftp_scan_dialog': {
         'api_key_override': '',
-        'custom_filters': '',
         'country_code': '',
         'discovery_max_concurrent_hosts': 10,
         'access_max_concurrent_hosts': 4,

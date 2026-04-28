@@ -197,7 +197,6 @@ def build_protocol_scan_options(protocol: str, common_options: Dict[str, Any]) -
     Pure function — no dash state required.
     """
     country = common_options.get("country")
-    custom_filters = common_options.get("custom_filters", "")
     verbose = bool(common_options.get("verbose", False))
     bulk_probe = bool(common_options.get("bulk_probe_enabled", False))
     bulk_extract = bool(common_options.get("bulk_extract_enabled", False))
@@ -234,7 +233,6 @@ def build_protocol_scan_options(protocol: str, common_options: Dict[str, Any]) -
         return {
             "country": country,
             "max_shodan_results": smb_budget * 100,
-            "custom_filters": custom_filters,
             "discovery_max_concurrent_hosts": shared_concurrency,
             "access_max_concurrent_hosts": shared_concurrency,
             "connection_timeout": shared_timeout,
@@ -253,7 +251,6 @@ def build_protocol_scan_options(protocol: str, common_options: Dict[str, Any]) -
         return {
             "country": country,
             "max_shodan_results": ftp_budget * 100,
-            "custom_filters": custom_filters,
             "discovery_max_concurrent_hosts": shared_concurrency,
             "access_max_concurrent_hosts": shared_concurrency,
             "connect_timeout": shared_timeout,
@@ -274,7 +271,6 @@ def build_protocol_scan_options(protocol: str, common_options: Dict[str, Any]) -
     return {
         "country": country,
         "max_shodan_results": http_budget * 100,
-        "custom_filters": custom_filters,
         "discovery_max_concurrent_hosts": shared_concurrency,
         "access_max_concurrent_hosts": shared_concurrency,
         "connect_timeout": shared_timeout,
