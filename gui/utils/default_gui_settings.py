@@ -5,6 +5,9 @@ Separated from SettingsManager to keep the manager implementation concise.
 """
 
 from datetime import datetime
+from shared.path_service import get_paths
+
+_PATHS = get_paths()
 
 # Default settings dictionary used by SettingsManager
 DEFAULT_GUI_SETTINGS = {
@@ -43,7 +46,6 @@ DEFAULT_GUI_SETTINGS = {
         'avoid_servers': []
     },
     'scan_dialog': {
-        'max_shodan_results': 1000,
         'recent_hours': None,  # None means use config default
         'country_code': '',
         'rescan_all': False,
@@ -61,8 +63,6 @@ DEFAULT_GUI_SETTINGS = {
         'protocol_smb': True,
         'protocol_ftp': True,
         'protocol_http': True,
-        'max_shodan_results': 1000,
-        'custom_filters': '',
         'country_code': '',
         'shared_concurrency': 10,
         'shared_timeout_seconds': 10,
@@ -81,9 +81,7 @@ DEFAULT_GUI_SETTINGS = {
         'region_south_america': False
     },
     'ftp_scan_dialog': {
-        'max_shodan_results': 1000,
         'api_key_override': '',
-        'custom_filters': '',
         'country_code': '',
         'discovery_max_concurrent_hosts': 10,
         'access_max_concurrent_hosts': 4,
@@ -98,6 +96,11 @@ DEFAULT_GUI_SETTINGS = {
         'region_north_america': False,
         'region_oceania': False,
         'region_south_america': False
+    },
+    'query_budget': {
+        'smb_max_query_credits_per_scan': 1,
+        'ftp_max_query_credits_per_scan': 1,
+        'http_max_query_credits_per_scan': 1
     },
     'probe': {
         'max_directories_per_share': 3,
@@ -130,11 +133,14 @@ DEFAULT_GUI_SETTINGS = {
     'templates': {
         'last_used': None
     },
+    'runtime_warnings': {
+        'tmpfs_legacy_mount_dismissed': False,
+    },
     'backend': {
         'mock_mode': False,
         'backend_path': '.',
-        'config_path': './conf/config.json',
-        'database_path': './dirracuda.db',
+        'config_path': str(_PATHS.config_file),
+        'database_path': str(_PATHS.main_db_file),
         'last_database_path': '',
         'database_validated': False
     },

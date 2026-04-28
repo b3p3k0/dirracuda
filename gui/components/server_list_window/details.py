@@ -18,14 +18,12 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Sequence, Tuple
 
 from gui.utils import (
-    probe_cache,
     probe_runner,
     probe_patterns,
     extract_runner,
 )
 from gui.utils.probe_cache_dispatch import (
     load_probe_result_for_host,
-    get_probe_snapshot_path_for_host,
     dispatch_probe_run,
 )
 from gui.utils.probe_snapshot_summary import (
@@ -35,12 +33,14 @@ from gui.utils.database_access import DatabaseReader
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.components.batch_extract_dialog import BatchExtractSettingsDialog
 from shared.quarantine import create_quarantine_dir
+from shared.path_service import get_paths, get_legacy_paths, select_existing_path
 
 
 def show_server_detail_popup(parent_window, server_data, theme, settings_manager=None,
                              probe_status_callback=None, indicator_patterns: Optional[Sequence[probe_patterns.IndicatorPattern]] = None,
                              probe_callback=None, extract_callback=None, browse_callback=None,
-                             rce_status_callback=None):
+                             rce_status_callback=None,
+                             show_rce_controls: bool = False):
     """
     Show server detail popup window.
 
@@ -89,7 +89,12 @@ def show_server_detail_popup(parent_window, server_data, theme, settings_manager
     )
     if cached_probe and indicator_patterns:
         probe_patterns.attach_indicator_analysis(cached_probe, indicator_patterns)
-    _render_server_details(text_widget, server_data, cached_probe)
+    _render_server_details(
+        text_widget,
+        server_data,
+        cached_probe,
+        show_rce_details=bool(show_rce_controls),
+    )
 
     # Status label for probe feedback
     status_var = tk.StringVar(value="")
@@ -402,10 +407,11 @@ def _format_server_details(server: Dict[str, Any], probe_section: Optional[str] 
 def _render_server_details(
     text_widget: tk.Text,
     server: Dict[str, Any],
-    probe_result: Optional[Dict[str, Any]]
+    probe_result: Optional[Dict[str, Any]],
+    show_rce_details: bool = True,
 ) -> None:
     """Render server details with probe section embedded."""
-    probe_text = _format_probe_section(probe_result)
+    probe_text = _format_probe_section(probe_result, show_rce_details=show_rce_details)
     full_text = _format_server_details(server, probe_text)
 
     text_widget.configure(state=tk.NORMAL)
@@ -414,7 +420,11 @@ def _render_server_details(
     text_widget.configure(state=tk.DISABLED)
 
 
-def _format_probe_section(probe_result: Optional[Dict[str, Any]]) -> str:
+def _format_probe_section(
+    probe_result: Optional[Dict[str, Any]],
+    *,
+    show_rce_details: bool = True,
+) -> str:
     """Return formatted probe section text."""
     if not probe_result:
         return "🔍 Probe:\n   No probe has been run for this host yet.\n"
@@ -423,11 +433,12 @@ def _format_probe_section(probe_result: Optional[Dict[str, Any]]) -> str:
     max_dirs = limits.get("max_directories")
     max_files = limits.get("max_files")
     timeout = limits.get("timeout_seconds")
+    max_depth = limits.get("max_depth")
 
     lines: List[str] = [
         "🔍 Probe Snapshot:",
         f"   Run: {probe_result.get('run_at', 'Unknown')}",
-        f"   Limits: {max_dirs or '?'} dirs / {max_files or '?'} files per share | Timeout: {timeout or '?'}s"
+        f"   Limits: {max_dirs or '?'} dirs / {max_files or '?'} files per share | Timeout: {timeout or '?'}s | Depth: {max_depth or '?'}"
     ]
 
     shares = probe_result.get("shares", [])
@@ -465,29 +476,26 @@ def _format_probe_section(probe_result: Optional[Dict[str, Any]]) -> str:
             for directory in directories:
                 dir_name = directory.get("name", "")
                 lines.append(f"      📁 {dir_name}/")
-                subdirs = directory.get("subdirectories", [])
-                if subdirs:
-                    for subdir_name in subdirs:
-                        lines.append(f"         📁 {subdir_name}/")
-                    if directory.get("subdirectories_truncated"):
-                        lines.append("         … additional subdirectories not shown")
-                files = directory.get("files", [])
-                if files:
-                    for file_name in files:
-                        lines.append(f"         • {file_name}")
-                    if directory.get("files_truncated"):
-                        lines.append("         … additional files not shown")
-                if not subdirs and not files:
+                tree = _build_probe_directory_tree(
+                    directory.get("subdirectories", []),
+                    directory.get("files", []),
+                )
+                if _render_probe_directory_tree(tree, lines, indent=9) == 0:
                     lines.append("         (no files or subdirectories listed)")
+                if directory.get("subdirectories_truncated"):
+                    lines.append("         … additional subdirectories not shown")
+                if directory.get("files_truncated"):
+                    lines.append("         … additional files not shown")
             if share.get("directories_truncated"):
                 lines.append("      … additional directories not shown")
     else:
         lines.append("   No shares were successfully probed.")
 
-    rce_lines = _format_rce_summary(probe_result.get("rce_analysis"))
-    if rce_lines:
-        lines.append("")
-        lines.extend(rce_lines)
+    if show_rce_details:
+        rce_lines = _format_rce_summary(probe_result.get("rce_analysis"))
+        if rce_lines:
+            lines.append("")
+            lines.extend(rce_lines)
 
     analysis = probe_result.get("indicator_analysis") if probe_result else None
     if analysis:
@@ -517,6 +525,62 @@ def _format_probe_section(probe_result: Optional[Dict[str, Any]]) -> str:
 
     lines.append("")
     return "\n".join(lines)
+
+
+def _normalize_probe_relative_path(path_value: Any) -> List[str]:
+    """Return normalized path segments for a relative probe entry."""
+    text = str(path_value or "").strip().replace("\\", "/")
+    if not text:
+        return []
+    return [segment for segment in text.split("/") if segment and segment != "."]
+
+
+def _build_probe_directory_tree(subdirectories: Any, files: Any) -> Dict[str, Any]:
+    """Build a de-duplicated insertion-ordered tree from relative probe paths."""
+    root: Dict[str, Any] = {"dirs": {}, "files": []}
+
+    for raw_subdir in subdirectories or []:
+        segments = _normalize_probe_relative_path(raw_subdir)
+        if not segments:
+            continue
+        node = root
+        for segment in segments:
+            child = node["dirs"].get(segment)
+            if child is None:
+                child = {"dirs": {}, "files": []}
+                node["dirs"][segment] = child
+            node = child
+
+    for raw_file in files or []:
+        segments = _normalize_probe_relative_path(raw_file)
+        if not segments:
+            continue
+        *folder_segments, file_name = segments
+        node = root
+        for segment in folder_segments:
+            child = node["dirs"].get(segment)
+            if child is None:
+                child = {"dirs": {}, "files": []}
+                node["dirs"][segment] = child
+            node = child
+        if file_name not in node["files"]:
+            node["files"].append(file_name)
+
+    return root
+
+
+def _render_probe_directory_tree(tree: Dict[str, Any], lines: List[str], indent: int) -> int:
+    """Render a nested tree and return count of lines emitted."""
+    emitted = 0
+    prefix = " " * indent
+    for dir_name, child in tree["dirs"].items():
+        lines.append(f"{prefix}📁 {dir_name}/")
+        emitted += 1
+        emitted += _render_probe_directory_tree(child, lines, indent + 3)
+    for file_name in tree["files"]:
+        lines.append(f"{prefix}• {file_name}")
+        emitted += 1
+    return emitted
 
 
 def _format_rce_summary(rce_report: Optional[Dict[str, Any]]) -> List[str]:
@@ -626,7 +690,8 @@ def _load_probe_config(settings_manager) -> Dict[str, int]:
     defaults = {
         "max_directories": 3,
         "max_files": 5,
-        "timeout_seconds": 10
+        "timeout_seconds": 10,
+        "max_depth": 1,
     }
     if not settings_manager:
         return defaults
@@ -635,13 +700,15 @@ def _load_probe_config(settings_manager) -> Dict[str, int]:
         max_dirs = int(settings_manager.get_setting('probe.max_directories_per_share', defaults["max_directories"]))
         max_files = int(settings_manager.get_setting('probe.max_files_per_directory', defaults["max_files"]))
         timeout = int(settings_manager.get_setting('probe.share_timeout_seconds', defaults["timeout_seconds"]))
+        max_depth = int(settings_manager.get_setting('probe.max_depth_levels', defaults["max_depth"]))
     except Exception:
         return defaults
 
     return {
         "max_directories": max(1, max_dirs),
         "max_files": max(1, max_files),
-        "timeout_seconds": max(1, timeout)
+        "timeout_seconds": max(1, timeout),
+        "max_depth": min(3, max(1, max_depth)),
     }
 
 
@@ -656,7 +723,8 @@ def _start_probe(
     config_override: Optional[Dict[str, int]] = None,
     probe_status_callback=None,
     rce_status_callback=None,
-    enable_rce_override: Optional[bool] = None
+    enable_rce_override: Optional[bool] = None,
+    show_rce_controls: bool = False,
 ) -> None:
     """Trigger background probe run."""
     if probe_state.get("running"):
@@ -679,11 +747,14 @@ def _start_probe(
     indicator_patterns = probe_state.get("indicator_patterns") or []
 
     # Check if RCE analysis is enabled
-    if enable_rce_override is not None:
-        enable_rce = enable_rce_override
-    elif settings_manager:
-        probe_pref = settings_manager.get_setting('probe_dialog.rce_enabled', None)
-        enable_rce = probe_pref if probe_pref is not None else settings_manager.get_setting('scan_dialog.rce_enabled', False)
+    if show_rce_controls:
+        if enable_rce_override is not None:
+            enable_rce = enable_rce_override
+        elif settings_manager:
+            probe_pref = settings_manager.get_setting('probe_dialog.rce_enabled', None)
+            enable_rce = probe_pref if probe_pref is not None else settings_manager.get_setting('scan_dialog.rce_enabled', False)
+        else:
+            enable_rce = False
     else:
         enable_rce = False
     status_var.set("Probing accessible shares…")
@@ -740,6 +811,7 @@ def _start_probe(
                 max_files=int(config["max_files"]),
                 timeout_seconds=int(config["timeout_seconds"]),
                 cancel_event=cancel_event,
+                max_depth=int(config.get("max_depth", 1)),
                 port=_ftp_port if host_type == "F" else _http_port,
                 scheme=_http_scheme,
                 request_host=_http_request_host,
@@ -762,16 +834,19 @@ def _start_probe(
                 server_data["accessible_shares_list"] = ",".join(display_entries)
                 if db_accessor:
                     try:
-                        try:
-                            snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type, port=_ftp_port)
-                        except TypeError:
-                            snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type)
+                        snapshot_id = db_accessor.upsert_probe_snapshot_for_host(
+                            ip_address,
+                            host_type,
+                            result,
+                            port=_ftp_port,
+                        )
                         db_accessor.upsert_probe_cache_for_host(
                             ip_address,
                             "F",
                             status='issue' if analysis.get("is_suspicious") else 'clean',
                             indicator_matches=len(analysis.get("matches", [])),
-                            snapshot_path=snapshot_path,
+                            snapshot_path=None,
+                            latest_snapshot_id=snapshot_id,
                             accessible_dirs_count=len(display_entries),
                             accessible_dirs_list=",".join(display_entries),
                         )
@@ -788,16 +863,20 @@ def _start_probe(
                 server_data["accessible_shares_list"] = ",".join(display_entries)
                 if db_accessor:
                     try:
-                        try:
-                            snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type, port=_http_port)
-                        except TypeError:
-                            snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type)
+                        snapshot_id = db_accessor.upsert_probe_snapshot_for_host(
+                            ip_address,
+                            host_type,
+                            result,
+                            protocol_server_id=_protocol_server_id,
+                            port=_http_port,
+                        )
                         db_accessor.upsert_probe_cache_for_host(
                             ip_address,
                             "H",
                             status='issue' if analysis.get("is_suspicious") else 'clean',
                             indicator_matches=len(analysis.get("matches", [])),
-                            snapshot_path=snapshot_path,
+                            snapshot_path=None,
+                            latest_snapshot_id=snapshot_id,
                             accessible_dirs_count=len(dir_names),
                             accessible_dirs_list=",".join(display_entries),
                             accessible_files_count=total_files,
@@ -807,7 +886,23 @@ def _start_probe(
                     except Exception:
                         pass
             else:
-                probe_cache.save_probe_result(ip_address, result)
+                if db_accessor:
+                    try:
+                        snapshot_id = db_accessor.upsert_probe_snapshot_for_host(
+                            ip_address,
+                            host_type,
+                            result,
+                        )
+                        db_accessor.upsert_probe_cache_for_host(
+                            ip_address,
+                            "S",
+                            status='issue' if analysis.get("is_suspicious") else 'clean',
+                            indicator_matches=len(analysis.get("matches", [])),
+                            snapshot_path=None,
+                            latest_snapshot_id=snapshot_id,
+                        )
+                    except Exception:
+                        pass
             issue_detected = bool(analysis.get("is_suspicious"))
             rce_status = None
             if host_type == "S" and enable_rce:
@@ -826,7 +921,12 @@ def _start_probe(
                     status_var.set(f"Probe completed at {result.get('run_at', 'unknown')}")
                 if probe_button:
                     probe_button.configure(state=tk.NORMAL)
-                _render_server_details(text_widget, server_data, result)
+                _render_server_details(
+                    text_widget,
+                    server_data,
+                    result,
+                    show_rce_details=bool(show_rce_controls),
+                )
                 if probe_status_callback:
                     try:
                         probe_status_callback(
@@ -873,7 +973,8 @@ def _open_probe_dialog(
     theme,
     probe_button: Optional[tk.Button],
     probe_status_callback=None,
-    rce_status_callback=None
+    rce_status_callback=None,
+    show_rce_controls: bool = False,
 ) -> None:
     """Show settings + launch dialog for probes."""
     running = probe_state.get("running")
@@ -903,7 +1004,11 @@ def _open_probe_dialog(
     timeout_var = tk.IntVar(value=config["timeout_seconds"])
     tk.Entry(dialog, textvariable=timeout_var, width=10).grid(row=2, column=1, padx=10, pady=5)
 
-    if settings_manager:
+    tk.Label(dialog, text="Max probe depth (1-3):").grid(row=3, column=0, sticky="w", padx=10, pady=5)
+    depth_var = tk.IntVar(value=config.get("max_depth", 1))
+    tk.Entry(dialog, textvariable=depth_var, width=10).grid(row=3, column=1, padx=10, pady=5)
+
+    if show_rce_controls and settings_manager:
         stored_rce_pref = settings_manager.get_setting('probe_dialog.rce_enabled', None)
         if stored_rce_pref is None:
             stored_rce_pref = settings_manager.get_setting('scan_dialog.rce_enabled', False)
@@ -911,29 +1016,35 @@ def _open_probe_dialog(
         stored_rce_pref = False
 
     rce_var = tk.BooleanVar(value=bool(stored_rce_pref))
-    rce_frame = tk.Frame(dialog)
-    rce_frame.grid(row=3, column=0, columnspan=2, sticky="w", padx=10, pady=5)
+    if show_rce_controls:
+        rce_frame = tk.Frame(dialog)
+        rce_frame.grid(row=4, column=0, columnspan=2, sticky="w", padx=10, pady=5)
 
-    rce_checkbox = tk.Checkbutton(
-        rce_frame,
-        text="Include RCE vulnerability scan",
-        variable=rce_var
-    )
-    rce_checkbox.pack(anchor="w")
+        rce_checkbox = tk.Checkbutton(
+            rce_frame,
+            text="Include RCE vulnerability scan",
+            variable=rce_var
+        )
+        rce_checkbox.pack(anchor="w")
 
-    rce_hint = tk.Label(
-        rce_frame,
-        text="Adds heuristic RCE detection with summary output.",
-        fg="#666666"
-    )
-    rce_hint.pack(anchor="w", padx=(24, 0))
+        rce_hint = tk.Label(
+            rce_frame,
+            text="Adds heuristic RCE detection with summary output.",
+            fg="#666666"
+        )
+        rce_hint.pack(anchor="w", padx=(24, 0))
+    else:
+        rce_spacer = tk.Frame(dialog, height=24)
+        rce_spacer.grid(row=4, column=0, columnspan=2, sticky="we", padx=10, pady=5)
+        rce_spacer.grid_propagate(False)
 
     def start_probe_from_dialog():
         try:
             new_config = {
                 "max_directories": max(1, int(dirs_var.get())),
                 "max_files": max(1, int(files_var.get())),
-                "timeout_seconds": max(1, int(timeout_var.get()))
+                "timeout_seconds": max(1, int(timeout_var.get())),
+                "max_depth": min(3, max(1, int(depth_var.get()))),
             }
         except ValueError:
             messagebox.showerror("Invalid Input", "Please enter valid integers for all fields.", parent=dialog)
@@ -943,7 +1054,9 @@ def _open_probe_dialog(
             settings_manager.set_setting('probe.max_directories_per_share', new_config["max_directories"])
             settings_manager.set_setting('probe.max_files_per_directory', new_config["max_files"])
             settings_manager.set_setting('probe.share_timeout_seconds', new_config["timeout_seconds"])
-            settings_manager.set_setting('probe_dialog.rce_enabled', bool(rce_var.get()))
+            settings_manager.set_setting('probe.max_depth_levels', new_config["max_depth"])
+            if show_rce_controls:
+                settings_manager.set_setting('probe_dialog.rce_enabled', bool(rce_var.get()))
 
         dialog.destroy()
         _start_probe(
@@ -957,11 +1070,12 @@ def _open_probe_dialog(
             config_override=new_config,
             probe_status_callback=probe_status_callback,
             rce_status_callback=rce_status_callback,
-            enable_rce_override=bool(rce_var.get())
+            enable_rce_override=bool(rce_var.get()) if show_rce_controls else False,
+            show_rce_controls=show_rce_controls,
         )
 
     button_frame = tk.Frame(dialog)
-    button_frame.grid(row=4, column=0, columnspan=2, pady=10)
+    button_frame.grid(row=5, column=0, columnspan=2, pady=10)
 
     if running:
         def cancel_running():
@@ -1090,7 +1204,29 @@ def _start_extract(
                 extension_mode=extract_config.get("extension_mode"),
                 progress_callback=thread_progress
             )
-            log_path = extract_runner.write_extract_log(summary)
+            db_path = None
+            if settings_manager:
+                try:
+                    db_path = settings_manager.get_database_path() if hasattr(settings_manager, "get_database_path") else None
+                except Exception:
+                    db_path = None
+                if not db_path and hasattr(settings_manager, "get_setting"):
+                    try:
+                        db_path = settings_manager.get_setting('backend.database_path', None)
+                    except Exception:
+                        db_path = None
+            try:
+                log_path = extract_runner.write_extract_log(
+                    summary,
+                    db_path=str(db_path or ""),
+                    ip_address=ip_address,
+                    host_type=server_data.get("host_type", "S"),
+                    protocol_server_id=server_data.get("protocol_server_id"),
+                    port=server_data.get("port"),
+                )
+            except TypeError:
+                # Test doubles may still expose the legacy single-arg signature.
+                log_path = extract_runner.write_extract_log(summary)
 
             def on_success():
                 extract_state["running"] = False
@@ -1198,7 +1334,15 @@ def _load_file_collection_config(settings_manager) -> Dict[str, Any]:
 
 
 def _default_extract_path(ip_address: Optional[str]) -> str:
-    base_dir = Path.home() / ".dirracuda" / "quarantine"
+    paths = get_paths()
+    legacy = get_legacy_paths(paths=paths)
+    base_dir = select_existing_path(
+        paths.quarantine_dir,
+        [
+            legacy.flat_quarantine_dir,
+            legacy.legacy_home_root / "quarantine",
+        ],
+    )
     return str(base_dir)
 
 

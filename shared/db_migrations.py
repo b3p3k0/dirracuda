@@ -12,6 +12,9 @@ Currently installs:
 - http_access: per-session HTTP access summary (status_code, dir_count, file_count, tls_verified).
 - http_user_flags: per-HTTP-server user flags (favorite/avoid/notes), parallel to host_user_flags.
 - http_probe_cache: per-HTTP-server probe cache (status/indicators/dirs/files/extracted/rce), parallel to host_probe_cache.
+- probe_snapshots + children: normalized probe snapshot payload persistence shared by SMB/FTP/HTTP.
+- app_migration_state + app_migration_reports: startup migration idempotency + skip/failure reporting.
+- extract_run_summaries: host extraction summary metadata for portable analyst handoff.
 - v_host_protocols: view resolving has_smb / has_ftp / has_http / protocol_presence per IP.
 - Timestamp canonicalization: normalizes existing T-format timestamps in smb_servers/ftp_servers/http_servers
   first_seen/last_seen to canonical YYYY-MM-DD HH:MM:SS format.
@@ -21,6 +24,8 @@ import json
 import sqlite3
 from pathlib import Path
 from typing import Optional
+
+from shared.path_service import get_legacy_paths, get_paths, resolve_runtime_gui_settings_path
 
 
 def run_migrations(db_path: str) -> None:
@@ -121,6 +126,11 @@ def run_migrations(db_path: str) -> None:
         if "rce_verdict_summary" not in columns:
             cur.execute(
                 "ALTER TABLE host_probe_cache ADD COLUMN rce_verdict_summary TEXT"
+            )
+
+        if "latest_snapshot_id" not in columns:
+            cur.execute(
+                "ALTER TABLE host_probe_cache ADD COLUMN latest_snapshot_id INTEGER"
             )
 
         # Migration: explicit protocol identity on SMB rows (existing rows => 'S')
@@ -227,6 +237,7 @@ def run_migrations(db_path: str) -> None:
                 indicator_matches   INTEGER  DEFAULT 0,
                 indicator_samples   TEXT,
                 snapshot_path       TEXT,
+                latest_snapshot_id  INTEGER,
                 accessible_dirs_count INTEGER DEFAULT 0,
                 accessible_dirs_list  TEXT,
                 extracted           INTEGER  DEFAULT 0,
@@ -261,6 +272,10 @@ def run_migrations(db_path: str) -> None:
         if "accessible_dirs_list" not in ftp_pc_cols:
             cur.execute(
                 "ALTER TABLE ftp_probe_cache ADD COLUMN accessible_dirs_list TEXT"
+            )
+        if "latest_snapshot_id" not in ftp_pc_cols:
+            cur.execute(
+                "ALTER TABLE ftp_probe_cache ADD COLUMN latest_snapshot_id INTEGER"
             )
 
         # Backfill visible FTP share counts from latest ftp_access record per server
@@ -412,6 +427,7 @@ def run_migrations(db_path: str) -> None:
                 indicator_matches      INTEGER  DEFAULT 0,
                 indicator_samples      TEXT,
                 snapshot_path          TEXT,
+                latest_snapshot_id     INTEGER,
                 accessible_dirs_count  INTEGER  DEFAULT 0,
                 accessible_dirs_list   TEXT,
                 accessible_files_count INTEGER  DEFAULT 0,
@@ -443,6 +459,137 @@ def run_migrations(db_path: str) -> None:
             cur.execute(
                 "ALTER TABLE http_probe_cache ADD COLUMN rce_verdict_summary TEXT"
             )
+        if "latest_snapshot_id" not in http_pc_cols:
+            cur.execute(
+                "ALTER TABLE http_probe_cache ADD COLUMN latest_snapshot_id INTEGER"
+            )
+
+        # --- Shared probe snapshot payload tables (normalized) ---
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS probe_snapshots (
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                snapshot_hash      TEXT UNIQUE,
+                host_type          TEXT NOT NULL,
+                ip_address         TEXT NOT NULL,
+                port               INTEGER,
+                protocol_server_id INTEGER,
+                run_at             DATETIME,
+                source             TEXT DEFAULT 'runtime',
+                raw_snapshot_json  TEXT NOT NULL,
+                created_at         DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS probe_snapshot_entries (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                snapshot_id   INTEGER NOT NULL,
+                share_name    TEXT,
+                entry_kind    TEXT NOT NULL,
+                path          TEXT,
+                parent_path   TEXT,
+                is_truncated  INTEGER DEFAULT 0,
+                metadata_json TEXT,
+                created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (snapshot_id) REFERENCES probe_snapshots(id) ON DELETE CASCADE
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS probe_snapshot_errors (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                snapshot_id INTEGER NOT NULL,
+                share_name  TEXT,
+                message     TEXT,
+                created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (snapshot_id) REFERENCES probe_snapshots(id) ON DELETE CASCADE
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS probe_snapshot_rce (
+                snapshot_id    INTEGER PRIMARY KEY,
+                rce_status     TEXT,
+                verdict_summary TEXT,
+                analysis_json  TEXT,
+                created_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (snapshot_id) REFERENCES probe_snapshots(id) ON DELETE CASCADE
+            )
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_probe_snapshots_lookup "
+            "ON probe_snapshots(host_type, ip_address, port, created_at DESC)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_probe_snapshot_entries_snapshot "
+            "ON probe_snapshot_entries(snapshot_id)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_probe_snapshot_errors_snapshot "
+            "ON probe_snapshot_errors(snapshot_id)"
+        )
+
+        # --- App migration state/report tables ---
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS app_migration_state (
+                key        TEXT PRIMARY KEY,
+                value      TEXT,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS app_migration_reports (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                migration_name TEXT NOT NULL,
+                source         TEXT NOT NULL,
+                item_key       TEXT,
+                reason_code    TEXT NOT NULL,
+                detail         TEXT,
+                created_at     DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_app_migration_reports_name "
+            "ON app_migration_reports(migration_name, created_at DESC)"
+        )
+
+        # --- Portable extraction summary table (host intelligence) ---
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS extract_run_summaries (
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                ip_address         TEXT NOT NULL,
+                host_type          TEXT DEFAULT 'S',
+                protocol_server_id INTEGER,
+                port               INTEGER,
+                started_at         TEXT,
+                finished_at        TEXT,
+                stop_reason        TEXT,
+                timed_out          INTEGER DEFAULT 0,
+                files_downloaded   INTEGER DEFAULT 0,
+                bytes_downloaded   INTEGER DEFAULT 0,
+                files_skipped      INTEGER DEFAULT 0,
+                errors_count       INTEGER DEFAULT 0,
+                clamav_summary_json TEXT,
+                summary_json       TEXT NOT NULL,
+                source             TEXT DEFAULT 'extract_runner',
+                created_at         DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_extract_run_summaries_host "
+            "ON extract_run_summaries(ip_address, host_type, created_at DESC)"
+        )
 
         # Protocol coexistence view — rebuilt to include HTTP (drop+create required for new columns)
         cur.execute("DROP VIEW IF EXISTS v_host_protocols")
@@ -512,9 +659,9 @@ def _import_legacy_settings(cur: sqlite3.Cursor) -> None:
     Safe to run multiple times; skips if data already present.
     """
     try:
-        settings_path = Path.home() / ".dirracuda" / "gui_settings.json"
-        if not settings_path.exists():
-            settings_path = Path.home() / ".smbseek" / "gui_settings.json"
+        paths = get_paths()
+        legacy = get_legacy_paths(paths=paths)
+        settings_path = resolve_runtime_gui_settings_path(paths=paths, legacy=legacy)
         if not settings_path.exists():
             return
         data = json.loads(settings_path.read_text(encoding="utf-8"))

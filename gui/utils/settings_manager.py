@@ -23,6 +23,13 @@ from shared.db_path_resolution import (
     normalize_database_path,
     resolve_database_path,
 )
+from shared.path_service import (
+    get_paths,
+    get_legacy_paths,
+    resolve_runtime_config_path,
+    resolve_runtime_gui_settings_path,
+    ensure_layout_dirs,
+)
 
 _logger = get_logger("settings_manager")
 
@@ -42,17 +49,22 @@ class SettingsManager:
         Args:
             settings_dir: Directory to store settings files (default: ~/.dirracuda)
         """
-        # Default settings directory
+        # Default canonical location is ~/.dirracuda/state/gui_settings.json
         if settings_dir is None:
-            home_dir = Path.home()
-            self.settings_dir = home_dir / '.dirracuda'
+            paths = get_paths()
+            ensure_layout_dirs(paths=paths)
+            runtime_settings = resolve_runtime_gui_settings_path(
+                paths=paths,
+                legacy=get_legacy_paths(paths=paths),
+            )
+            self.settings_file = runtime_settings
+            self.settings_dir = runtime_settings.parent
         else:
             self.settings_dir = Path(settings_dir)
-        
-        self.settings_file = self.settings_dir / 'gui_settings.json'
-        
+            self.settings_file = self.settings_dir / 'gui_settings.json'
+
         # Ensure settings directory exists
-        self.settings_dir.mkdir(exist_ok=True)
+        self.settings_dir.mkdir(parents=True, exist_ok=True)
         
         # Default settings (deep copy so nested values are not shared/mutated globally)
         self.default_settings = copy.deepcopy(DEFAULT_GUI_SETTINGS)
@@ -538,10 +550,13 @@ class SettingsManager:
             backend_path = Path(self.get_backend_path()).expanduser()
             config_path = Path(self.get_setting('backend.config_path', '')).expanduser()
             db_path = normalize_database_path(self.get_setting('backend.database_path', ''), backend_path)
+            canonical_paths = get_paths()
+            canonical_config = canonical_paths.config_file.resolve(strict=False)
+            canonical_db = canonical_paths.main_db_file.resolve(strict=False)
 
             candidate_backend = Path.cwd()
+            candidate_db = canonical_db
             candidate_config = candidate_backend / "conf" / "config.json"
-            candidate_db = auto_detect_database_path(candidate_backend)
             candidate_smbseek = candidate_backend / "cli" / "smbseek.py"
             candidate_ftpseek = candidate_backend / "cli" / "ftpseek.py"
             candidate_httpseek = candidate_backend / "cli" / "httpseek.py"
@@ -573,7 +588,7 @@ class SettingsManager:
             # Missing stored paths -> repair to cwd checkout.
             if not (backend_exists and config_exists):
                 self.set_backend_path(str(candidate_backend), validate=False)
-                self.set_setting('backend.config_path', str(candidate_config))
+                self.set_setting('backend.config_path', str(canonical_config))
                 if db_path is None or not db_path.exists():
                     self.set_database_path(str(candidate_db), validate=False)
                 return
@@ -581,17 +596,10 @@ class SettingsManager:
             # Stored backend points to a different checkout; prefer cwd.
             if backend_resolved is not None and backend_resolved != candidate_resolved:
                 self.set_backend_path(str(candidate_backend), validate=False)
-                self.set_setting('backend.config_path', str(candidate_config))
 
-                # Repoint DB if it is missing or still tied to old backend root.
+                # Repoint DB only when missing; preserve explicit custom paths.
                 db_missing = (db_path is None) or (not db_path.exists())
-                db_under_old_backend = False
-                if not db_missing and db_path is not None:
-                    try:
-                        db_under_old_backend = str(db_path.resolve(strict=False)).startswith(str(backend_resolved))
-                    except Exception:
-                        db_under_old_backend = str(db_path).startswith(str(backend_path))
-                if db_missing or db_under_old_backend:
+                if db_missing:
                     self.set_database_path(str(candidate_db), validate=False)
         except Exception:
             # Fail silently; worst case the user corrects via dialog
@@ -652,8 +660,12 @@ class SettingsManager:
         Returns:
             Path to SMBSeek config.json file
         """
-        smbseek_path = self.get_backend_path()
-        return str(Path(smbseek_path) / "conf" / "config.json")
+        explicit = str(self.get_setting("backend.config_path", "") or "").strip()
+        if explicit:
+            return str(Path(explicit).expanduser().resolve(strict=False))
+        paths = get_paths()
+        legacy = get_legacy_paths(paths=paths)
+        return str(resolve_runtime_config_path(paths=paths, legacy=legacy))
     
     def set_backend_paths(self, backend_path: str, config_path: Optional[str] = None,
                          db_path: Optional[str] = None) -> bool:
@@ -669,13 +681,14 @@ class SettingsManager:
             True if all paths set successfully
         """
         try:
-            path_obj = Path(backend_path)
+            paths = get_paths()
+            legacy = get_legacy_paths(paths=paths)
 
             if config_path is None:
-                config_path = str(path_obj / "conf" / "config.json")
+                config_path = str(resolve_runtime_config_path(paths=paths, legacy=legacy))
 
             if db_path is None:
-                db_path = str(auto_detect_database_path(path_obj))
+                db_path = str(paths.main_db_file)
 
             success1 = self.set_backend_path(backend_path)
             success2 = self.set_setting('backend.config_path', config_path)

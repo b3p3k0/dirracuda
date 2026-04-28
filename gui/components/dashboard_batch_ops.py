@@ -34,7 +34,6 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import tkinter as tk  # annotations + tk.TclError only — use _d("tk")/_d("ttk") for widget construction
 
 from gui.utils import safe_messagebox as _fallback_msgbox
-from gui.utils import probe_cache
 from gui.utils.logging_config import get_logger
 from gui.utils.probe_snapshot_summary import summarize_probe_snapshot
 from gui.components.scan_results_dialog import show_scan_results_dialog
@@ -73,6 +72,32 @@ def _d(name: str) -> Any:
     )
 
 
+# ── Dialog lifecycle helpers ─────────────────────────────────────────────────
+
+def _safe_destroy_dialog(dialog: Any) -> None:
+    """Best-effort dialog teardown with grab release and existence checks."""
+    if dialog is None:
+        return
+
+    try:
+        dialog.grab_release()
+    except Exception:
+        pass
+
+    try:
+        exists = bool(dialog.winfo_exists()) if hasattr(dialog, "winfo_exists") else True
+    except Exception:
+        exists = True
+
+    if not exists:
+        return
+
+    try:
+        dialog.destroy()
+    except Exception:
+        pass
+
+
 # ── Pure helpers ──────────────────────────────────────────────────────────────
 
 def protocol_label_from_host_type(host_type: Optional[str]) -> str:
@@ -94,7 +119,7 @@ def run_post_scan_batch_operations(
     *,
     schedule_reset: bool = True,
     show_dialogs: bool = True,
-) -> None:
+) -> Dict[str, List[Dict[str, Any]]]:
     """Run bulk probe/extract operations after scan completion.
 
     Called when:
@@ -105,6 +130,10 @@ def run_post_scan_batch_operations(
 
     Will show info dialog if no accessible servers are found.
     """
+    summary_payload: Dict[str, List[Dict[str, Any]]] = {
+        "probe": [],
+        "extract": [],
+    }
     try:
         # Check if any bulk operations are enabled
         bulk_probe_enabled = scan_options.get('bulk_probe_enabled', False)
@@ -118,7 +147,7 @@ def run_post_scan_batch_operations(
                     dash.parent.after(5000, dash._reset_scan_status)
                 except tk.TclError:
                     pass
-            return  # No bulk operations requested
+            return summary_payload  # No bulk operations requested
 
         # Skip bulk if scan failed or produced no hosts (use tolerant metrics)
         host_metric = max(
@@ -134,7 +163,7 @@ def run_post_scan_batch_operations(
                     dash.parent.after(5000, dash._reset_scan_status)
                 except tk.TclError:
                     pass
-            return
+            return summary_payload
 
         # Query database for eligible servers in the active protocol (keep UI responsive)
         scan_protocol = str(scan_results.get("protocol") or "").strip().lower()
@@ -171,7 +200,7 @@ def run_post_scan_batch_operations(
                     dash.parent.after(5000, dash._reset_scan_status)
                 except tk.TclError:
                     pass
-            return
+            return summary_payload
 
         probe_targets = servers_for_ops.get("probe") if isinstance(servers_for_ops, dict) else []
         extract_targets = servers_for_ops.get("extract") if isinstance(servers_for_ops, dict) else []
@@ -190,7 +219,7 @@ def run_post_scan_batch_operations(
                     dash.parent.after(5000, dash._reset_scan_status)
                 except tk.TclError:
                     pass
-            return
+            return summary_payload
 
         # Run batch operations (record summaries per op, show in LIFO order)
         summary_stack: List[Tuple[str, List[Dict[str, Any]]]] = []
@@ -198,19 +227,23 @@ def run_post_scan_batch_operations(
 
         if bulk_probe_enabled:
             probe_results = dash._execute_batch_probe(probe_targets)
+            summary_payload["probe"] = list(probe_results)
             summary_stack.append(("probe", probe_results))
 
         if bulk_extract_enabled:
             if not extract_targets:
-                summary_stack.append(("extract", [{
+                skipped_extract = [{
                     "ip_address": "",
                     "protocol": dash._protocol_label_from_host_type(host_type_filter),
                     "action": "extract",
                     "status": "skipped",
                     "notes": "All accessible hosts were flagged with indicators; extract skipped."
-                }]))
+                }]
+                summary_payload["extract"] = list(skipped_extract)
+                summary_stack.append(("extract", skipped_extract))
             else:
                 extract_results = dash._execute_batch_extract(extract_targets)
+                summary_payload["extract"] = list(extract_results)
                 summary_stack.append(("extract", extract_results))
 
         # Present summaries in LIFO order
@@ -231,6 +264,7 @@ def run_post_scan_batch_operations(
                 dash.parent.after(5000, dash._reset_scan_status)
             except tk.TclError:
                 pass
+        return summary_payload
 
     except Exception as e:
         if show_dialogs:
@@ -250,6 +284,7 @@ def run_post_scan_batch_operations(
                 dash.parent.after(5000, dash._reset_scan_status)
         except Exception:
             pass
+        return summary_payload
 
 
 def get_servers_for_bulk_ops(
@@ -373,37 +408,63 @@ def run_background_fetch(
         (result, error_message_or_None)
     """
     result_container = {"result": None, "error": None, "done": False}
+    dialog = None
+    progress = None
 
-    dialog = _d("tk").Toplevel(dash.parent)
-    dialog.title(title)
-    dialog.geometry("380x140")
-    dialog.transient(dash.parent)
-    dialog.grab_set()
-    dash.theme.apply_to_widget(dialog, "main_window")
+    try:
+        dialog = _d("tk").Toplevel(dash.parent)
+        dialog.title(title)
+        dialog.geometry("380x140")
+        dialog.transient(dash.parent)
+        dialog.grab_set()
+        dash.theme.apply_to_widget(dialog, "main_window")
 
-    label = _d("tk").Label(dialog, text=message)
-    label.pack(pady=(20, 10))
+        label = _d("tk").Label(dialog, text=message)
+        label.pack(pady=(20, 10))
 
-    progress = _d("ttk").Progressbar(dialog, mode="indeterminate", length=260)
-    progress.pack(pady=(0, 10))
-    progress.start(10)
+        progress = _d("ttk").Progressbar(dialog, mode="indeterminate", length=260)
+        progress.pack(pady=(0, 10))
+        progress.start(10)
 
-    dialog.update_idletasks()
+        dialog.update_idletasks()
 
-    def worker():
+        # This dialog has no cancel path; keep it modal until fetch completes.
         try:
-            result_container["result"] = fetch_fn()
-        except Exception as exc:  # pragma: no cover - best-effort guard
-            result_container["error"] = str(exc)
-        finally:
-            result_container["done"] = True
+            dialog.protocol("WM_DELETE_WINDOW", lambda: None)
+        except Exception:
+            pass
+
+        def close_dialog():
             try:
-                dialog.after(0, dialog.destroy)
+                if progress is not None:
+                    progress.stop()
             except Exception:
                 pass
+            _safe_destroy_dialog(dialog)
 
-    _d("threading").Thread(target=worker, daemon=True).start()
-    dash.parent.wait_window(dialog)
+        def poll_done():
+            if result_container["done"]:
+                close_dialog()
+                return
+            try:
+                dialog.after(80, poll_done)
+            except Exception:
+                close_dialog()
+
+        def worker():
+            try:
+                result_container["result"] = fetch_fn()
+            except Exception as exc:  # pragma: no cover - best-effort guard
+                result_container["error"] = str(exc)
+            finally:
+                result_container["done"] = True
+
+        _d("threading").Thread(target=worker, daemon=True).start()
+        dialog.after(80, poll_done)
+        dash.parent.wait_window(dialog)
+    finally:
+        _safe_destroy_dialog(dialog)
+
     return result_container["result"], result_container["error"]
 
 
@@ -417,45 +478,24 @@ def execute_batch_probe(dash, servers: List[Dict[str, Any]]) -> List[Dict[str, A
     max_dirs = int(dash.settings_manager.get_setting('probe.max_directories_per_share', 3))
     max_files = int(dash.settings_manager.get_setting('probe.max_files_per_directory', 5))
     timeout_seconds = int(dash.settings_manager.get_setting('probe.share_timeout_seconds', 10))
+    max_depth = int(dash.settings_manager.get_setting('probe.max_depth_levels', 1))
+    max_depth = max(1, min(3, max_depth))
     enable_rce = bool(
         (dash.current_scan_options or {}).get(
             "rce_enabled",
             dash.settings_manager.get_setting('scan_dialog.rce_enabled', False)
         )
     )
+    if not bool(getattr(dash, "_rce_unlocked", True)):
+        enable_rce = False
 
     results: List[Dict[str, Any]] = []
     cancel_event = _d("threading").Event()
-
-    # Create progress dialog quickly, then hand work to background thread
-    progress_dialog = _d("tk").Toplevel(dash.parent)
-    progress_dialog.title("Bulk Probe Progress")
-    progress_dialog.geometry("420x170")
-    progress_dialog.transient(dash.parent)
-    progress_dialog.grab_set()
-    dash.theme.apply_to_widget(progress_dialog, "main_window")
-
-    progress_label = _d("tk").Label(progress_dialog, text=f"Probing 0/{len(servers)} servers...")
-    dash.theme.apply_to_widget(progress_label, "label")
-    progress_label.pack(pady=(18, 8))
-
-    progress_bar = _d("ttk").Progressbar(
-        progress_dialog,
-        length=320,
-        mode='determinate',
-        maximum=len(servers),
-        style="SMBSeek.Horizontal.TProgressbar",
-    )
-    progress_bar.pack(pady=(0, 10))
-
-    cancel_button = _d("tk").Button(progress_dialog, text="Cancel", command=lambda: cancel_event.set())
-    dash.theme.apply_to_widget(cancel_button, "button_secondary")
-    cancel_button.pack(pady=(0, 10))
-
-    dash.theme.apply_theme_to_application(progress_dialog)
-
-    # Ensure initial paint before heavy work
-    progress_dialog.update_idletasks()
+    done_event = _d("threading").Event()
+    progress_dialog = None
+    progress_label = None
+    progress_bar = None
+    task_id: Optional[str] = None
 
     # Shared state for UI updates from worker
     state = {
@@ -463,23 +503,66 @@ def execute_batch_probe(dash, servers: List[Dict[str, Any]]) -> List[Dict[str, A
         "total": len(servers),
         "results": results,
         "done": False,
-        "error": None
+        "error": None,
     }
+
+    def cleanup_progress_dialog():
+        nonlocal progress_dialog
+        dialog = progress_dialog
+        if dialog is None:
+            return
+        _safe_destroy_dialog(dialog)
+        if getattr(dash, "_bulk_probe_progress_dialog", None) is dialog:
+            setattr(dash, "_bulk_probe_progress_dialog", None)
+        progress_dialog = None
+
+    def reopen_monitor_dialog() -> None:
+        if progress_dialog is None:
+            return
+        try:
+            progress_dialog.deiconify()
+            progress_dialog.lift()
+            progress_dialog.focus_force()
+        except Exception:
+            return
+
+    def request_cancel() -> None:
+        cancel_event.set()
 
     def ui_tick():
         """Periodic UI refresher to keep dialog responsive."""
+        if progress_dialog is None:
+            return
+
+        if state["done"]:
+            if task_id and hasattr(dash, "_remove_running_task"):
+                dash._remove_running_task(task_id)
+            cleanup_progress_dialog()
+            return
+
         try:
             progress_label.config(text=f"Probing {state['completed']}/{state['total']} servers...")
             progress_bar['value'] = state['completed']
             progress_dialog.update_idletasks()
+            if task_id and hasattr(dash, "_update_running_task"):
+                dash._update_running_task(
+                    task_id,
+                    state="running",
+                    progress=f"{state['completed']}/{state['total']} targets",
+                )
         except tk.TclError:
-            return  # Dialog closed
+            if task_id and hasattr(dash, "_remove_running_task"):
+                dash._remove_running_task(task_id)
+            cleanup_progress_dialog()
+            return
 
-        if not state["done"]:
-            progress_dialog.after(150, ui_tick)
+        progress_dialog.after(150, ui_tick)
 
     def worker():
-        """Run probes off the UI thread and report completion order."""
+        """Run probes off the UI thread and report completion order.
+
+        Tk calls are intentionally forbidden here; UI teardown runs via ui_tick().
+        """
         try:
             with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="probe-batch") as executor:
                 future_to_server = {
@@ -489,6 +572,7 @@ def execute_batch_probe(dash, servers: List[Dict[str, Any]]) -> List[Dict[str, A
                         max_dirs,
                         max_files,
                         timeout_seconds,
+                        max_depth,
                         enable_rce,
                         cancel_event
                     ): server for server in servers
@@ -515,17 +599,78 @@ def execute_batch_probe(dash, servers: List[Dict[str, Any]]) -> List[Dict[str, A
             state["error"] = str(exc)
         finally:
             state["done"] = True
-            try:
-                progress_dialog.after(0, progress_dialog.destroy)
-            except Exception:
-                pass
+            done_event.set()
 
-    # Start background worker and UI tick
-    _d("threading").Thread(target=worker, daemon=True).start()
-    progress_dialog.after(150, ui_tick)
+    # If a stale dialog survived a prior run, clean it before opening a new one.
+    stale_dialog = getattr(dash, "_bulk_probe_progress_dialog", None)
+    if stale_dialog is not None:
+        _safe_destroy_dialog(stale_dialog)
+        if getattr(dash, "_bulk_probe_progress_dialog", None) is stale_dialog:
+            setattr(dash, "_bulk_probe_progress_dialog", None)
 
-    # Block until dialog destroyed (worker sets done then destroys dialog)
-    dash.parent.wait_window(progress_dialog)
+    try:
+        # Create progress dialog quickly, then hand work to background thread.
+        progress_dialog = _d("tk").Toplevel(dash.parent)
+        setattr(dash, "_bulk_probe_progress_dialog", progress_dialog)
+
+        progress_dialog.title("Bulk Probe Progress")
+        progress_dialog.geometry("420x170")
+        progress_dialog.transient(dash.parent)
+        dash.theme.apply_to_widget(progress_dialog, "main_window")
+
+        progress_label = _d("tk").Label(progress_dialog, text=f"Probing 0/{len(servers)} servers...")
+        dash.theme.apply_to_widget(progress_label, "label")
+        progress_label.pack(pady=(18, 8))
+
+        progress_bar = _d("ttk").Progressbar(
+            progress_dialog,
+            length=320,
+            mode='determinate',
+            maximum=len(servers),
+            style="SMBSeek.Horizontal.TProgressbar",
+        )
+        progress_bar.pack(pady=(0, 10))
+
+        cancel_button = _d("tk").Button(progress_dialog, text="Cancel", command=request_cancel)
+        dash.theme.apply_to_widget(cancel_button, "button_secondary")
+        cancel_button.pack(pady=(0, 10))
+
+        # Window close hides monitor; task continues and can be reopened.
+        try:
+            progress_dialog.protocol("WM_DELETE_WINDOW", lambda dialog=progress_dialog: dialog.withdraw())
+        except Exception:
+            pass
+
+        if hasattr(dash, "_register_running_task"):
+            task_id = dash._register_running_task(
+                task_type="probe",
+                name="Post-scan Probe Batch",
+                state="running",
+                progress=f"0/{len(servers)} targets",
+                reopen_callback=reopen_monitor_dialog,
+                cancel_callback=request_cancel,
+            )
+
+        dash.theme.apply_theme_to_application(progress_dialog)
+
+        # Ensure initial paint before heavy work.
+        progress_dialog.update_idletasks()
+
+        # Start background worker and UI tick.
+        _d("threading").Thread(target=worker, daemon=True).start()
+        progress_dialog.after(150, ui_tick)
+
+        # Block until dialog is closed by ui_tick() completion path.
+        dash.parent.wait_window(progress_dialog)
+        if not state["done"]:
+            done_event.wait(timeout=5.0)
+    finally:
+        if not state["done"]:
+            cancel_event.set()
+        if task_id and hasattr(dash, "_remove_running_task"):
+            dash._remove_running_task(task_id)
+        cleanup_progress_dialog()
+
     return results
 
 
@@ -535,8 +680,9 @@ def probe_single_server(
     max_dirs: int,
     max_files: int,
     timeout_seconds: int,
-    enable_rce: bool,
-    cancel_event: threading.Event,
+    max_depth: int = 1,
+    enable_rce: bool = False,
+    cancel_event: Optional[threading.Event] = None,
 ) -> Dict[str, Any]:
     """Probe a single server (SMB, FTP, or HTTP)."""
     protocol_label = dash._protocol_label_from_host_type(server.get("host_type"))
@@ -552,6 +698,7 @@ def probe_single_server(
     ip_address = server.get("ip_address")
     host_type = (server.get("host_type") or "S").upper()
     protocol_label = dash._protocol_label_from_host_type(host_type)
+    max_depth = max(1, min(3, int(max_depth)))
 
     # FTP probe path
     if host_type == "F":
@@ -567,6 +714,7 @@ def probe_single_server(
                 max_files=int(max_files),
                 timeout_seconds=int(timeout_seconds),
                 cancel_event=cancel_event,
+                max_depth=max_depth,
                 port=port,
             )
             analysis = _d("probe_patterns").attach_indicator_analysis(snapshot, dash.indicator_patterns)
@@ -578,18 +726,20 @@ def probe_single_server(
             accessible_dirs_count = len(display_entries)
             accessible_dirs_list = ",".join(display_entries)
             try:
-                snapshot_path = _d("get_probe_snapshot_path_for_host")(ip_address, host_type, port=port)
-            except TypeError:
-                snapshot_path = _d("get_probe_snapshot_path_for_host")(ip_address, host_type)
-
-            try:
                 if dash.db_reader:
+                    snapshot_id = dash.db_reader.upsert_probe_snapshot_for_host(
+                        ip_address,
+                        "F",
+                        snapshot,
+                        port=port,
+                    )
                     dash.db_reader.upsert_probe_cache_for_host(
                         ip_address,
                         "F",
                         status=status,
                         indicator_matches=len(analysis.get("matches", [])),
-                        snapshot_path=snapshot_path,
+                        snapshot_path=None,
+                        latest_snapshot_id=snapshot_id,
                         accessible_dirs_count=accessible_dirs_count,
                         accessible_dirs_list=accessible_dirs_list,
                     )
@@ -649,6 +799,7 @@ def probe_single_server(
                 max_files=int(max_files),
                 timeout_seconds=int(timeout_seconds),
                 cancel_event=cancel_event,
+                max_depth=max_depth,
                 port=http_port,
                 scheme=http_scheme,
                 protocol_server_id=protocol_server_id,
@@ -666,18 +817,21 @@ def probe_single_server(
             accessible_dirs_count = len(dir_names)
             accessible_dirs_list = ",".join(display_entries)
             try:
-                snapshot_path = _d("get_probe_snapshot_path_for_host")(ip_address, host_type, port=http_port)
-            except TypeError:
-                snapshot_path = _d("get_probe_snapshot_path_for_host")(ip_address, host_type)
-
-            try:
                 if dash.db_reader:
+                    snapshot_id = dash.db_reader.upsert_probe_snapshot_for_host(
+                        ip_address,
+                        "H",
+                        snapshot,
+                        protocol_server_id=protocol_server_id,
+                        port=http_port,
+                    )
                     dash.db_reader.upsert_probe_cache_for_host(
                         ip_address,
                         "H",
                         status=status,
                         indicator_matches=len(analysis.get("matches", [])),
-                        snapshot_path=snapshot_path,
+                        snapshot_path=None,
+                        latest_snapshot_id=snapshot_id,
                         accessible_dirs_count=accessible_dirs_count,
                         accessible_dirs_list=accessible_dirs_list,
                         accessible_files_count=total_files,
@@ -724,6 +878,7 @@ def probe_single_server(
             max_files=max_files,
             timeout_seconds=timeout_seconds,
             cancel_event=cancel_event,
+            max_depth=max_depth,
             shares=shares,
             username=username,
             password=password,
@@ -731,27 +886,24 @@ def probe_single_server(
             allow_empty=True,
             db_reader=dash.db_reader,
         )
-        # Persist probe snapshot to disk and DB (align with server list workflow)
-        probe_cache.save_probe_result(ip_address, result)
-        snapshot_path = None
-        try:
-            if hasattr(probe_cache, "get_probe_result_path"):
-                snapshot_path = probe_cache.get_probe_result_path(ip_address)
-        except Exception:
-            snapshot_path = None
-
         # Attach ransomware indicator analysis (mirror server list behavior)
         analysis = _d("probe_patterns").attach_indicator_analysis(result, dash.indicator_patterns)
         issue_detected = bool(analysis.get("is_suspicious"))
 
         try:
             if dash.db_reader:
+                snapshot_id = dash.db_reader.upsert_probe_snapshot_for_host(
+                    ip_address,
+                    "S",
+                    result,
+                )
                 dash.db_reader.upsert_probe_cache_for_host(
                     ip_address,
                     "S",
                     status="issue" if issue_detected else "clean",
                     indicator_matches=len(analysis.get("matches", [])),
-                    snapshot_path=snapshot_path
+                    snapshot_path=None,
+                    latest_snapshot_id=snapshot_id,
                 )
         except Exception:
             pass
@@ -829,6 +981,7 @@ def execute_batch_extract(dash, servers: List[Dict[str, Any]]) -> List[Dict[str,
     excluded_extensions: List[str] = []
     quarantine_base_path: Optional[Path] = None
     clamav_cfg: Dict[str, Any] = {}
+    http_allow_insecure_tls = True
     config_path = dash.settings_manager.get_setting('backend.config_path', None) if dash.settings_manager else None
     if config_path and Path(config_path).exists():
         try:
@@ -845,71 +998,174 @@ def execute_batch_extract(dash, servers: List[Dict[str, Any]]) -> List[Dict[str,
             if quarantine_candidate:
                 quarantine_base_path = Path(str(quarantine_candidate)).expanduser()
             clamav_cfg = config_data.get("clamav", {})
+            http_allow_insecure_tls = bool(
+                config_data.get("http", {})
+                .get("verification", {})
+                .get("allow_insecure_tls", True)
+            )
         except Exception:
             pass
 
-    results = []
+    results: List[Dict[str, Any]] = []
     cancel_event = _d("threading").Event()
+    done_event = _d("threading").Event()
+    progress_dialog = None
+    progress_label = None
+    progress_bar = None
+    task_id: Optional[str] = None
 
-    # Create progress dialog
-    progress_dialog = _d("tk").Toplevel(dash.parent)
-    progress_dialog.title("Bulk Extract Progress")
-    progress_dialog.geometry("400x150")
-    progress_dialog.transient(dash.parent)
-    progress_dialog.grab_set()
-    dash.theme.apply_to_widget(progress_dialog, "main_window")
+    state = {
+        "completed": 0,
+        "total": len(servers),
+        "done": False,
+        "error": None,
+    }
 
-    progress_label = _d("tk").Label(progress_dialog, text=f"Extracting from 0/{len(servers)} servers...")
-    progress_label.pack(pady=20)
+    def cleanup_progress_dialog():
+        nonlocal progress_dialog
+        dialog = progress_dialog
+        if dialog is None:
+            return
+        _safe_destroy_dialog(dialog)
+        progress_dialog = None
 
-    progress_bar = _d("ttk").Progressbar(progress_dialog, length=300, mode='determinate', maximum=len(servers))
-    progress_bar.pack(pady=10)
+    def reopen_monitor_dialog() -> None:
+        if progress_dialog is None:
+            return
+        try:
+            progress_dialog.deiconify()
+            progress_dialog.lift()
+            progress_dialog.focus_force()
+        except Exception:
+            return
 
-    cancel_button = _d("tk").Button(progress_dialog, text="Cancel", command=lambda: cancel_event.set())
-    cancel_button.pack(pady=10)
+    def request_cancel() -> None:
+        cancel_event.set()
 
-    def update_progress(completed_count):
-        progress_label.config(text=f"Extracting from {completed_count}/{len(servers)} servers...")
-        progress_bar['value'] = completed_count
-        progress_dialog.update()
+    def ui_tick():
+        if progress_dialog is None:
+            return
+        if state["done"]:
+            if task_id and hasattr(dash, "_remove_running_task"):
+                dash._remove_running_task(task_id)
+            cleanup_progress_dialog()
+            return
+        try:
+            progress_label.config(text=f"Extracting from {state['completed']}/{state['total']} servers...")
+            progress_bar['value'] = state['completed']
+            progress_dialog.update_idletasks()
+            if task_id and hasattr(dash, "_update_running_task"):
+                dash._update_running_task(
+                    task_id,
+                    state="running",
+                    progress=f"{state['completed']}/{state['total']} targets",
+                )
+        except tk.TclError:
+            if task_id and hasattr(dash, "_remove_running_task"):
+                dash._remove_running_task(task_id)
+            cleanup_progress_dialog()
+            return
+        progress_dialog.after(150, ui_tick)
 
-    # Run extract operations with ThreadPoolExecutor
-    with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="extract-batch") as executor:
-        futures = []
-        for server in servers:
-            future = executor.submit(
-                dash._extract_single_server,
-                server,
-                max_file_mb,
-                max_total_mb,
-                max_time,
-                max_files,
-                extension_mode,
-                included_extensions,
-                excluded_extensions,
-                quarantine_base_path,
-                cancel_event,
-                clamav_cfg,
+    def worker():
+        try:
+            with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="extract-batch") as executor:
+                future_to_server = {}
+                for server in servers:
+                    server_payload = dict(server)
+                    server_payload["_http_allow_insecure_tls"] = bool(http_allow_insecure_tls)
+                    future = executor.submit(
+                        dash._extract_single_server,
+                        server_payload,
+                        max_file_mb,
+                        max_total_mb,
+                        max_time,
+                        max_files,
+                        extension_mode,
+                        included_extensions,
+                        excluded_extensions,
+                        quarantine_base_path,
+                        cancel_event,
+                        clamav_cfg,
+                    )
+                    future_to_server[future] = server
+
+                for future in as_completed(future_to_server):
+                    server = future_to_server[future]
+                    if cancel_event.is_set():
+                        break
+                    try:
+                        result = future.result(timeout=max_time + 30)
+                    except Exception as exc:
+                        result = {
+                            "ip_address": server.get("ip_address"),
+                            "protocol": dash._protocol_label_from_host_type(server.get("host_type")),
+                            "action": "extract",
+                            "status": "failed",
+                            "notes": str(exc),
+                        }
+                    results.append(result)
+                    state["completed"] = len(results)
+        except Exception as exc:
+            state["error"] = str(exc)
+        finally:
+            state["done"] = True
+            done_event.set()
+
+    try:
+        progress_dialog = _d("tk").Toplevel(dash.parent)
+        progress_dialog.title("Bulk Extract Progress")
+        progress_dialog.geometry("420x170")
+        progress_dialog.transient(dash.parent)
+        dash.theme.apply_to_widget(progress_dialog, "main_window")
+
+        progress_label = _d("tk").Label(progress_dialog, text=f"Extracting from 0/{len(servers)} servers...")
+        dash.theme.apply_to_widget(progress_label, "label")
+        progress_label.pack(pady=(18, 8))
+
+        progress_bar = _d("ttk").Progressbar(
+            progress_dialog,
+            length=320,
+            mode='determinate',
+            maximum=len(servers),
+            style="SMBSeek.Horizontal.TProgressbar",
+        )
+        progress_bar.pack(pady=(0, 10))
+
+        cancel_button = _d("tk").Button(progress_dialog, text="Cancel", command=request_cancel)
+        dash.theme.apply_to_widget(cancel_button, "button_secondary")
+        cancel_button.pack(pady=(0, 10))
+
+        try:
+            progress_dialog.protocol("WM_DELETE_WINDOW", lambda dialog=progress_dialog: dialog.withdraw())
+        except Exception:
+            pass
+
+        if hasattr(dash, "_register_running_task"):
+            task_id = dash._register_running_task(
+                task_type="extract",
+                name="Post-scan Extract Batch",
+                state="running",
+                progress=f"0/{len(servers)} targets",
+                reopen_callback=reopen_monitor_dialog,
+                cancel_callback=request_cancel,
             )
-            futures.append((server, future))
 
-        for server, future in futures:
-            if cancel_event.is_set():
-                break
-            try:
-                result = future.result(timeout=max_time + 30)
-                results.append(result)
-            except Exception as e:
-                results.append({
-                    "ip_address": server.get("ip_address"),
-                    "protocol": dash._protocol_label_from_host_type(server.get("host_type")),
-                    "action": "extract",
-                    "status": "failed",
-                    "notes": str(e)
-                })
-            update_progress(len(results))
+        dash.theme.apply_theme_to_application(progress_dialog)
+        progress_dialog.update_idletasks()
 
-    progress_dialog.destroy()
+        _d("threading").Thread(target=worker, daemon=True).start()
+        progress_dialog.after(150, ui_tick)
+        dash.parent.wait_window(progress_dialog)
+        if not state["done"]:
+            done_event.wait(timeout=5.0)
+    finally:
+        if not state["done"]:
+            cancel_event.set()
+        if task_id and hasattr(dash, "_remove_running_task"):
+            dash._remove_running_task(task_id)
+        cleanup_progress_dialog()
+
     return results
 
 
@@ -926,9 +1182,14 @@ def extract_single_server(
     quarantine_base_path: Optional[Path],
     cancel_event: threading.Event,
     clamav_config: Optional[Dict[str, Any]] = None,
+    http_allow_insecure_tls: bool = True,
 ) -> Dict[str, Any]:
     """Extract files from a single server."""
-    protocol_label = dash._protocol_label_from_host_type(server.get("host_type"))
+    host_type = str(server.get("host_type") or "S").upper()
+    protocol_label = dash._protocol_label_from_host_type(host_type)
+    allow_insecure_tls = bool(
+        server.get("_http_allow_insecure_tls", http_allow_insecure_tls)
+    )
     if cancel_event.is_set():
         return {
             "ip_address": server.get("ip_address"),
@@ -939,17 +1200,6 @@ def extract_single_server(
         }
 
     ip_address = server.get("ip_address")
-    raw_shares = server.get("accessible_shares_list") or server.get("accessible_shares") or ""
-    shares = [s.strip() for s in str(raw_shares).split(",") if s.strip()]
-
-    if not shares:
-        return {
-            "ip_address": ip_address,
-            "protocol": protocol_label,
-            "action": "extract",
-            "status": "skipped",
-            "notes": "No accessible shares"
-        }
 
     # Create quarantine directory
     try:
@@ -967,32 +1217,139 @@ def extract_single_server(
             "notes": f"Quarantine error: {e}"
         }
 
-    # Derive credentials
-    auth_method = server.get("auth_method", "")
-    username = "" if "anonymous" in auth_method.lower() else "guest"
-    password = ""
+    ftp_port: Optional[int] = None
+    http_port: Optional[int] = None
+    protocol_server_id = server.get("protocol_server_id")
 
     try:
-        summary = _d("extract_runner").run_extract(
-            ip_address,
-            shares,
-            download_dir=quarantine_dir,
-            username=username,
-            password=password,
-            max_total_bytes=max_total_mb * 1024 * 1024,
-            max_file_bytes=max_file_mb * 1024 * 1024,
-            max_file_count=max_files,
-            max_seconds=max_time,
-            max_depth=3,
-            allowed_extensions=included_extensions,
-            denied_extensions=excluded_extensions,
-            delay_seconds=0,
-            connection_timeout=30,
-            extension_mode=extension_mode,
-            progress_callback=None,
-            cancel_event=cancel_event,
-            clamav_config=clamav_config,
-        )
+        if host_type == "F":
+            try:
+                ftp_port = int(server.get("port")) if server.get("port") is not None else 21
+            except (TypeError, ValueError):
+                ftp_port = 21
+            summary = _d("protocol_extract_runner").run_ftp_extract(
+                ip_address,
+                port=ftp_port,
+                download_dir=quarantine_dir,
+                max_total_bytes=max_total_mb * 1024 * 1024,
+                max_file_bytes=max_file_mb * 1024 * 1024,
+                max_file_count=max_files,
+                max_seconds=max_time,
+                max_depth=3,
+                allowed_extensions=included_extensions,
+                denied_extensions=excluded_extensions,
+                delay_seconds=0,
+                connection_timeout=30,
+                extension_mode=extension_mode,
+                progress_callback=None,
+                cancel_event=cancel_event,
+                clamav_config=clamav_config,
+            )
+        elif host_type == "H":
+            try:
+                http_port = int(server.get("port")) if server.get("port") is not None else None
+            except (TypeError, ValueError):
+                http_port = None
+
+            http_scheme = server.get("scheme")
+            request_host = server.get("probe_host")
+            start_path = server.get("probe_path")
+
+            if dash.db_reader and (
+                http_scheme is None
+                or http_port is None
+                or request_host is None
+                or start_path is None
+            ):
+                detail = dash.db_reader.get_http_server_detail(
+                    ip_address,
+                    protocol_server_id=protocol_server_id,
+                    port=http_port,
+                )
+                if detail:
+                    if http_port is None:
+                        try:
+                            http_port = int(detail.get("port") or 80)
+                        except (TypeError, ValueError):
+                            http_port = 80
+                    if http_scheme is None:
+                        http_scheme = detail.get("scheme")
+                    if request_host is None:
+                        request_host = detail.get("probe_host")
+                    if start_path is None:
+                        start_path = detail.get("probe_path")
+
+            if http_port is None:
+                http_port = 80
+            if not isinstance(http_scheme, str) or http_scheme.strip().lower() not in {"http", "https"}:
+                http_scheme = "https" if http_port == 443 else "http"
+            else:
+                http_scheme = http_scheme.strip().lower()
+
+            request_host_norm = str(request_host or "").strip() or None
+            start_path_norm = str(start_path or "/").split("?", 1)[0].split("#", 1)[0].strip() or "/"
+            if not start_path_norm.startswith("/"):
+                start_path_norm = "/" + start_path_norm.lstrip("/")
+
+            summary = _d("protocol_extract_runner").run_http_extract(
+                ip_address,
+                port=http_port,
+                scheme=http_scheme,
+                request_host=request_host_norm,
+                start_path=start_path_norm,
+                allow_insecure_tls=allow_insecure_tls,
+                download_dir=quarantine_dir,
+                max_total_bytes=max_total_mb * 1024 * 1024,
+                max_file_bytes=max_file_mb * 1024 * 1024,
+                max_file_count=max_files,
+                max_seconds=max_time,
+                max_depth=3,
+                allowed_extensions=included_extensions,
+                denied_extensions=excluded_extensions,
+                delay_seconds=0,
+                connection_timeout=30,
+                extension_mode=extension_mode,
+                progress_callback=None,
+                cancel_event=cancel_event,
+                clamav_config=clamav_config,
+            )
+        else:
+            raw_shares = server.get("accessible_shares_list") or server.get("accessible_shares") or ""
+            shares = [s.strip() for s in str(raw_shares).split(",") if s.strip()]
+            if not shares:
+                return {
+                    "ip_address": ip_address,
+                    "protocol": protocol_label,
+                    "action": "extract",
+                    "status": "skipped",
+                    "notes": "No accessible shares"
+                }
+
+            # Derive credentials
+            auth_method = server.get("auth_method", "")
+            username = "" if "anonymous" in auth_method.lower() else "guest"
+            password = ""
+
+            summary = _d("extract_runner").run_extract(
+                ip_address,
+                shares,
+                download_dir=quarantine_dir,
+                username=username,
+                password=password,
+                max_total_bytes=max_total_mb * 1024 * 1024,
+                max_file_bytes=max_file_mb * 1024 * 1024,
+                max_file_count=max_files,
+                max_seconds=max_time,
+                max_depth=3,
+                allowed_extensions=included_extensions,
+                denied_extensions=excluded_extensions,
+                delay_seconds=0,
+                connection_timeout=30,
+                extension_mode=extension_mode,
+                progress_callback=None,
+                cancel_event=cancel_event,
+                clamav_config=clamav_config,
+            )
 
         files = summary["totals"].get("files_downloaded", 0)
         bytes_downloaded = summary["totals"].get("bytes_downloaded", 0)
@@ -1001,7 +1358,22 @@ def extract_single_server(
         # Mark host as extracted (one-way flag)
         try:
             if dash.db_reader:
-                dash.db_reader.upsert_extracted_flag(ip_address, True)
+                if hasattr(dash.db_reader, "upsert_extracted_flag_for_host"):
+                    kwargs: Dict[str, Any] = {}
+                    if protocol_server_id is not None:
+                        kwargs["protocol_server_id"] = protocol_server_id
+                    if host_type == "F" and ftp_port is not None:
+                        kwargs["port"] = ftp_port
+                    if host_type == "H" and http_port is not None:
+                        kwargs["port"] = http_port
+                    dash.db_reader.upsert_extracted_flag_for_host(
+                        ip_address,
+                        host_type,
+                        True,
+                        **kwargs,
+                    )
+                else:
+                    dash.db_reader.upsert_extracted_flag(ip_address, True)
         except Exception:
             pass
 

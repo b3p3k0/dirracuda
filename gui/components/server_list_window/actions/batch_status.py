@@ -14,7 +14,8 @@ from typing import Dict, Any, Optional, List
 from gui.components.server_list_window import table, filters
 from gui.components.batch_summary_dialog import show_batch_summary_dialog
 from gui.utils import safe_messagebox as messagebox
-from gui.utils import probe_cache
+from gui.components.running_tasks_window import RunningTasksWindow
+from gui.utils.running_tasks import RunningTaskSnapshot, get_running_task_registry
 from gui.utils.logging_config import get_logger
 from gui.components.pry_status_dialog import BatchStatusDialog
 from shared.config import get_standard_timestamp
@@ -25,9 +26,16 @@ _logger = get_logger("server_list_window.batch_status")
 
 class ServerListWindowBatchStatusMixin:
         def _widget_exists(self, widget) -> bool:
-            """Return True if a Tk widget is still alive."""
+            """Return True if a Tk widget or wrapper-backed widget is still alive."""
+            if not widget:
+                return False
+            tk_widget = widget
+            if not hasattr(tk_widget, "winfo_exists"):
+                tk_widget = getattr(widget, "window", None)
+            if tk_widget is None or not hasattr(tk_widget, "winfo_exists"):
+                return False
             try:
-                return bool(widget) and widget.winfo_exists()
+                return bool(tk_widget.winfo_exists())
             except Exception:
                 return False
 
@@ -59,6 +67,135 @@ class ServerListWindowBatchStatusMixin:
                 if not config_path and hasattr(self.settings_manager, "get_smbseek_config_path"):
                     config_path = self.settings_manager.get_smbseek_config_path()
             return config_path
+
+        def _running_task_registry(self):
+            return get_running_task_registry()
+
+        def _initialize_running_tasks_button(self) -> None:
+            registry = self._running_task_registry()
+            if getattr(self, "_running_tasks_subscribed", False):
+                return
+            registry.subscribe(self._on_running_tasks_changed)
+            self._running_tasks_subscribed = True
+
+        def _on_running_tasks_changed(self, tasks: List[RunningTaskSnapshot]) -> None:
+            count = len(tasks or [])
+            running_tasks_button = getattr(self, "running_tasks_button", None)
+            if not self._widget_exists(running_tasks_button):
+                return
+            try:
+                running_tasks_button.configure(text=f"Running Tasks ({count})")
+                running_tasks_button.configure(state=tk.NORMAL if count > 0 else tk.DISABLED)
+            except Exception:
+                return
+
+        def _open_running_tasks_window(self) -> None:
+            registry = self._running_task_registry()
+            running_tasks_window = getattr(self, "running_tasks_window", None)
+            if running_tasks_window is None:
+                parent_window = getattr(self, "window", None) or getattr(self, "parent", None)
+                running_tasks_window = RunningTasksWindow(
+                    parent=parent_window,
+                    theme=getattr(self, "theme", None),
+                    registry=registry,
+                )
+                self.running_tasks_window = running_tasks_window
+            try:
+                running_tasks_window.show()
+            except Exception:
+                return
+
+        def _teardown_running_tasks_ui(self) -> None:
+            if getattr(self, "_running_tasks_subscribed", False):
+                try:
+                    self._running_task_registry().unsubscribe(self._on_running_tasks_changed)
+                except Exception:
+                    pass
+                self._running_tasks_subscribed = False
+            running_tasks_window = getattr(self, "running_tasks_window", None)
+            if running_tasks_window is not None:
+                try:
+                    running_tasks_window.destroy()
+                except Exception:
+                    pass
+            self.running_tasks_window = None
+
+        def _build_batch_task_name(self, job: Dict[str, Any]) -> str:
+            job_type = str(job.get("type", "batch") or "batch").strip().lower()
+            label = {
+                "probe": "Probe",
+                "extract": "Extract",
+                "pry": "Pry",
+            }.get(job_type, job_type.title() or "Batch")
+            return f"Server List {label} Batch"
+
+        def _reopen_batch_monitor_dialog(self, job_id: str) -> None:
+            job = self.active_jobs.get(job_id)
+            if not job:
+                return
+            dialog = job.get("dialog")
+            if not self._widget_exists(dialog):
+                return
+            try:
+                dialog.show()
+                self.batch_status_dialog = dialog
+            except Exception:
+                return
+
+        def _request_cancel_batch_job(self, job_id: str) -> None:
+            job = self.active_jobs.get(job_id)
+            if not job:
+                return
+            cancel_event = job.get("cancel_event")
+            if cancel_event:
+                cancel_event.set()
+            self._update_batch_running_task(job_id, state="cancelling")
+
+        def _register_batch_running_task(self, job_id: str) -> None:
+            job = self.active_jobs.get(job_id)
+            if not job:
+                return
+            total = int(job.get("total") or 0)
+            unit_label = str(job.get("unit_label") or "targets")
+            progress = f"0/{total} {unit_label}" if total > 0 else "running"
+            task_id = self._running_task_registry().create_task(
+                task_type=str(job.get("type") or "batch"),
+                name=self._build_batch_task_name(job),
+                state="running",
+                progress=progress,
+                reopen_callback=lambda jid=job_id: self._reopen_batch_monitor_dialog(jid),
+                cancel_callback=lambda jid=job_id: self._request_cancel_batch_job(jid),
+            )
+            job["task_id"] = task_id
+
+        def _update_batch_running_task(
+            self,
+            job_id: str,
+            *,
+            state: Optional[str] = None,
+            progress: Optional[str] = None,
+        ) -> None:
+            job = self.active_jobs.get(job_id)
+            if not job:
+                return
+            task_id = job.get("task_id")
+            if not task_id:
+                return
+            kwargs: Dict[str, Any] = {
+                "reopen_callback": lambda jid=job_id: self._reopen_batch_monitor_dialog(jid),
+                "cancel_callback": lambda jid=job_id: self._request_cancel_batch_job(jid),
+            }
+            if state is not None:
+                kwargs["state"] = state
+            if progress is not None:
+                kwargs["progress"] = progress
+            self._running_task_registry().update_task(task_id, **kwargs)
+
+        def _remove_batch_running_task(self, job: Optional[Dict[str, Any]]) -> None:
+            task_id = (job or {}).get("task_id")
+            if not task_id:
+                return
+            self._running_task_registry().remove_task(task_id)
 
         def _on_batch_future_done(self, job_id: str, target: Dict[str, Any], future: Future) -> None:
             # If the window is already destroyed, ignore late callbacks
@@ -102,6 +239,11 @@ class ServerListWindowBatchStatusMixin:
             except Exception:
                 message = None
             self._update_batch_status_dialog(dialog, completed, total, message)
+            self._update_batch_running_task(
+                job_id,
+                state="running",
+                progress=f"{completed}/{total} {unit_label}",
+            )
 
             if completed >= total:
                 self._finalize_batch_job(job_id, dialog)
@@ -110,6 +252,7 @@ class ServerListWindowBatchStatusMixin:
             job = self.active_jobs.pop(job_id, None)
             if not job:
                 return
+            self._remove_batch_running_task(job)
 
             executor = job.get("executor")
             if executor:
@@ -152,6 +295,7 @@ class ServerListWindowBatchStatusMixin:
             job = self.active_jobs.get(job_id)
             if not job:
                 return
+            self._update_batch_running_task(job_id, state="cancelling")
             cancel_event = job.get("cancel_event")
             if cancel_event:
                 cancel_event.set()
@@ -184,6 +328,7 @@ class ServerListWindowBatchStatusMixin:
                 job = self.active_jobs.get(job_id)
                 if not job:
                     continue
+                self._update_batch_running_task(job_id, state="cancelling")
                 cancel_event = job.get("cancel_event")
                 if cancel_event:
                     cancel_event.set()
@@ -220,30 +365,16 @@ class ServerListWindowBatchStatusMixin:
                     pass
 
         def _set_pry_status_button_visible(self, visible: bool) -> None:
-            if not self.pry_status_button:
-                return
-            if visible:
-                try:
-                    self.pry_status_button.pack(anchor="w", pady=(4, 0))
-                except Exception:
-                    pass
-            else:
-                try:
-                    self.pry_status_button.pack_forget()
-                except Exception:
-                    pass
+            return
 
         def _show_pry_status_dialog(self) -> None:
             if self.batch_status_dialog:
                 self.batch_status_dialog.show()
-            elif self.active_jobs:
-                # Show the most recent job dialog if available
-                for job in reversed(list(self.active_jobs.values())):
-                    dlg = job.get("dialog")
-                    if dlg:
-                        dlg.show()
-                        self.batch_status_dialog = dlg
-                        break
+                return
+            if not self.active_jobs:
+                return
+            latest_job_id = list(self.active_jobs.keys())[-1]
+            self._reopen_batch_monitor_dialog(latest_job_id)
 
         def _init_batch_status_dialog(self, job_type: str, fields: Dict[str, str], cancel_event: threading.Event, total: Optional[int] = None) -> BatchStatusDialog:
             """Create a fresh batch status dialog for the active run."""
@@ -255,8 +386,7 @@ class ServerListWindowBatchStatusMixin:
                 on_cancel=lambda: cancel_event.set(),
                 total=total
             )
-            self.batch_status_dialog = dialog  # keep latest for quick reopen
-            self._set_pry_status_button_visible(True)
+            self.batch_status_dialog = dialog
             return dialog
 
         def _update_batch_status_dialog(self, dialog: BatchStatusDialog, done: int, total: Optional[int], message: Optional[str]) -> None:
@@ -275,7 +405,6 @@ class ServerListWindowBatchStatusMixin:
                 dialog.show()
             except Exception:
                 pass
-            self._set_pry_status_button_visible(True)
 
         def _destroy_batch_status_dialog(self) -> None:
             if self.batch_status_dialog:
@@ -284,7 +413,6 @@ class ServerListWindowBatchStatusMixin:
                 except Exception:
                     pass
             self.batch_status_dialog = None
-            self._set_pry_status_button_visible(False)
 
         def _persist_pry_success(self, target: Dict[str, Any], share_label: str, username: str, password: str) -> None:
             """
@@ -403,9 +531,6 @@ class ServerListWindowBatchStatusMixin:
         def _update_action_buttons_state(self) -> None:
             has_selection = bool(self.tree and self.tree.selection())
             batch_active = self._is_batch_active()
-            pry_batch_active = self._is_pry_batch_active()
-            probe_batch_active = self._is_probe_batch_active()
-            extract_batch_active = self._is_extract_batch_active()
 
             # Allow browsing/details/export during running batches (read-only), but block starting new batches
             start_state = tk.NORMAL if has_selection and len(self.active_jobs) < 3 else tk.DISABLED
@@ -429,8 +554,6 @@ class ServerListWindowBatchStatusMixin:
             detail_state = tk.NORMAL if has_selection else tk.DISABLED
             if self.details_button:
                 self.details_button.configure(state=detail_state)
-
-            self._set_pry_status_button_visible(bool(batch_active or self.batch_status_dialog))
 
             self._update_context_menu_state()
 
@@ -591,26 +714,11 @@ class ServerListWindowBatchStatusMixin:
             self._pending_selection = []
 
         def _attach_probe_status(self, servers: List[Dict[str, Any]]) -> None:
-            if not self.settings_manager:
-                for server in servers:
-                    server["probe_status"] = 'unprobed'
-                    server["probe_status_emoji"] = self._probe_status_to_emoji('unprobed')
-                    server["rce_status"] = 'not_run'
-                    server["rce_status_emoji"] = self._rce_status_to_emoji('not_run')
-                    server["extracted"] = server.get("extracted", 0) or 0
-                    server["extract_status_emoji"] = self._extract_status_to_emoji(server.get("extracted", 0))
-                return
-
             for server in servers:
                 ip = server.get("ip_address")
-                host_type = server.get("host_type", "S")
-                # FTP and HTTP rows: use DB-supplied probe_status only — never call
-                # _determine_probe_status which reads the SMB file-based cache.
-                # The UNION ALL query already populates probe_status from probe_cache tables.
-                if host_type in ("F", "H"):
-                    status = server.get("probe_status") or "unprobed"
-                else:
-                    status = server.get("probe_status") or self._determine_probe_status(ip)
+                host_type = str(server.get("host_type") or "S").upper()
+                # DB-authoritative for all protocols. Fallback only when row lacks probe_status.
+                status = server.get("probe_status") or self._determine_probe_status(ip, host_type)
                 server["probe_status"] = status
                 server["probe_status_emoji"] = self._probe_status_to_emoji(status)
                 # Attach RCE status from database (protocol-aware)
@@ -656,28 +764,44 @@ class ServerListWindowBatchStatusMixin:
                 self._apply_filters()
                 self._restore_selection(selected_ips)
 
-        def _determine_probe_status(self, ip_address: Optional[str]) -> str:
+        def _determine_probe_status(self, ip_address: Optional[str], host_type: str = "S") -> str:
             if not ip_address:
                 return 'unprobed'
-
-            cached_result = probe_cache.load_probe_result(ip_address)
-            derived_status = 'unprobed'
-            if cached_result:
-                if self.indicator_patterns:
-                    analysis = probe_patterns.attach_indicator_analysis(cached_result, self.indicator_patterns)
-                else:
-                    analysis = {"is_suspicious": False}
-                if analysis.get('is_suspicious'):
-                    derived_status = 'issue'
-                else:
-                    derived_status = 'clean'
-
-            stored_status = self.settings_manager.get_probe_status(ip_address)
-            status = derived_status if derived_status != 'unprobed' else stored_status
-
-            if status != stored_status:
-                self.settings_manager.set_probe_status(ip_address, status)
-
+            host_type = str(host_type or "S").upper()
+            if host_type not in ("S", "F", "H"):
+                host_type = "S"
+            if not self.db_reader:
+                return self.probe_status_map.get(ip_address, "unprobed")
+            if host_type == "S":
+                query = (
+                    "SELECT COALESCE(pc.status, 'unprobed') AS status "
+                    "FROM host_probe_cache pc "
+                    "JOIN smb_servers s ON s.id = pc.server_id "
+                    "WHERE s.ip_address = ? "
+                    "ORDER BY datetime(s.last_seen) DESC, s.id DESC LIMIT 1"
+                )
+            elif host_type == "F":
+                query = (
+                    "SELECT COALESCE(pc.status, 'unprobed') AS status "
+                    "FROM ftp_probe_cache pc "
+                    "JOIN ftp_servers s ON s.id = pc.server_id "
+                    "WHERE s.ip_address = ? "
+                    "ORDER BY datetime(s.last_seen) DESC, s.id DESC LIMIT 1"
+                )
+            else:
+                query = (
+                    "SELECT COALESCE(pc.status, 'unprobed') AS status "
+                    "FROM http_probe_cache pc "
+                    "JOIN http_servers s ON s.id = pc.server_id "
+                    "WHERE s.ip_address = ? "
+                    "ORDER BY datetime(s.last_seen) DESC, s.id DESC LIMIT 1"
+                )
+            try:
+                with self.db_reader._get_connection() as conn:
+                    row = conn.execute(query, (ip_address,)).fetchone()
+                status = (row["status"] if row and row["status"] else "unprobed")
+            except Exception:
+                status = self.probe_status_map.get(ip_address, "unprobed")
             self.probe_status_map[ip_address] = status
             return status
 
@@ -712,8 +836,6 @@ class ServerListWindowBatchStatusMixin:
         def _handle_probe_status_update(self, ip_address: str, status: str, row_key: Optional[str] = None) -> None:
             if not ip_address:
                 return
-            if self.settings_manager:
-                self.settings_manager.set_probe_status(ip_address, status)
             self.probe_status_map[ip_address] = status
 
             for server in self.all_servers:

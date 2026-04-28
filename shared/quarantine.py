@@ -7,8 +7,17 @@ from pathlib import Path
 from typing import Optional, Union
 
 from shared.tmpfs_quarantine import resolve_effective_quarantine_root
+from shared.path_service import get_paths, get_legacy_paths, select_existing_path
 
-_DEFAULT_ROOT = Path.home() / ".dirracuda" / "quarantine"
+_PATHS = get_paths()
+_LEGACY = get_legacy_paths(paths=_PATHS)
+_DEFAULT_ROOT = select_existing_path(
+    _PATHS.quarantine_dir,
+    [
+        _LEGACY.flat_quarantine_dir,
+        _LEGACY.legacy_home_root / "quarantine",
+    ],
+)
 
 
 def _sanitize_label(value: str) -> str:

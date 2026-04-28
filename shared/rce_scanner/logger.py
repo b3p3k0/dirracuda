@@ -11,7 +11,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional
 
+from shared.path_service import get_paths, get_legacy_paths, select_existing_path
+
 logger = logging.getLogger(__name__)
+_PATHS = get_paths()
+_LEGACY = get_legacy_paths(paths=_PATHS)
+_DEFAULT_LOG_PATH = select_existing_path(
+    _PATHS.rce_analysis_log_file,
+    [
+        _LEGACY.flat_rce_analysis_log_file,
+        _LEGACY.legacy_home_root / "logs" / "rce_analysis.jsonl",
+        _LEGACY.legacy_home_root / "rce_analysis.jsonl",
+    ],
+)
 
 
 class RceJsonlLogger:
@@ -31,7 +43,7 @@ class RceJsonlLogger:
                       Supports ~ expansion for home directory.
         """
         if log_path is None:
-            log_path = "~/.dirracuda/logs/rce_analysis.jsonl"
+            log_path = str(_DEFAULT_LOG_PATH)
 
         self.path = Path(log_path).expanduser()
         self._ensure_directory()

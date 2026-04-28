@@ -38,6 +38,7 @@ def run_probe(
     max_directories: int,
     max_files: int,
     timeout_seconds: int,
+    max_depth: int = 1,
     username: str = DEFAULT_USERNAME,
     password: str = DEFAULT_PASSWORD,
     enable_rce_analysis: bool = False,
@@ -56,6 +57,7 @@ def run_probe(
         max_directories: Max directories per share to inspect.
         max_files: Max files per directory to list.
         timeout_seconds: SMB socket timeout per request.
+        max_depth: Directory recursion depth (1 = current behavior).
         username/password: Credentials to reuse (guest/anonymous by default).
         enable_rce_analysis: Enable RCE vulnerability analysis if True.
         config: Optional SMBSeekConfig to reuse budget/timeouts for RCE probes.
@@ -78,13 +80,16 @@ def run_probe(
     if not normalized_shares and not allow_empty:
         raise ProbeError("No accessible shares available to probe.")
 
+    depth_limit = min(3, max(1, int(max_depth)))
+
     snapshot = {
         "ip_address": ip_address,
         "run_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
         "limits": {
             "max_directories": max_directories,
             "max_files": max_files,
-            "timeout_seconds": timeout_seconds
+            "timeout_seconds": timeout_seconds,
+            "max_depth": depth_limit,
         },
         "shares": [],
         "errors": []
@@ -103,6 +108,7 @@ def run_probe(
                 max_directories=max_directories,
                 max_files=max_files,
                 timeout_seconds=timeout_seconds,
+                max_depth=depth_limit,
                 username=username,
                 password=password,
                 cancel_event=cancel_event
@@ -190,11 +196,14 @@ def _probe_share(
     max_directories: int,
     max_files: int,
     timeout_seconds: int,
+    max_depth: int,
     username: str,
     password: str,
     cancel_event: Optional[Event] = None
 ) -> Dict[str, Any]:
     """Probe a single share and return structured directory/file info."""
+    depth_limit = min(3, max(1, int(max_depth)))
+    directory_visit_cap = max(1, int(max_directories) * depth_limit)
     conn = _connect(ip_address, timeout_seconds)
     try:
         conn.login(username, password)
@@ -214,22 +223,75 @@ def _probe_share(
         for dir_entry in selected_dirs:
             _check_cancel(cancel_event)
             safe_dir = dir_entry["name"].strip("\\/")
-            nested_pattern = f"{safe_dir}\\*"
-            nested_entries = _list_entries(conn, share_name, pattern=nested_pattern)
-            nested_dirs = [
-                entry for entry in nested_entries
-                if entry["is_directory"] and entry["name"] not in (".", "..")
-            ]
-            file_entries = [
-                entry for entry in nested_entries
-                if not entry["is_directory"] and entry["name"] not in (".", "..")
-            ]
+            if not safe_dir:
+                continue
+
+            subdirectory_paths: List[str] = []
+            file_paths: List[str] = []
+            subdirs_truncated = False
+            files_truncated = False
+            visited_directories = 0
+            # (path relative to top-level sampled dir, current depth)
+            stack: List[tuple[str, int]] = [("", 1)]
+
+            while stack:
+                _check_cancel(cancel_event)
+                if visited_directories >= directory_visit_cap:
+                    subdirs_truncated = True
+                    files_truncated = True
+                    break
+
+                current_rel_path, current_depth = stack.pop()
+                visited_directories += 1
+                current_smb_path = _join_smb_path(safe_dir, current_rel_path)
+                nested_entries = _list_entries(conn, share_name, pattern=f"{current_smb_path}\\*")
+                nested_dirs = [
+                    entry for entry in nested_entries
+                    if entry["is_directory"] and entry["name"] not in (".", "..")
+                ]
+                file_entries = [
+                    entry for entry in nested_entries
+                    if not entry["is_directory"] and entry["name"] not in (".", "..")
+                ]
+
+                if len(nested_dirs) > max_files:
+                    subdirs_truncated = True
+                if len(file_entries) > max_files:
+                    files_truncated = True
+
+                selected_child_dirs: List[str] = []
+                for entry in nested_dirs[:max_files]:
+                    child_name = str(entry.get("name") or "").strip("\\/ ")
+                    if not child_name:
+                        continue
+                    child_rel_path = _join_relative_path(current_rel_path, child_name)
+                    selected_child_dirs.append(child_rel_path)
+                    subdirectory_paths.append(child_rel_path)
+
+                for entry in file_entries[:max_files]:
+                    file_name = str(entry.get("name") or "").strip("\\/ ")
+                    if not file_name:
+                        continue
+                    file_paths.append(_join_relative_path(current_rel_path, file_name))
+
+                if current_depth < depth_limit:
+                    for child_rel_path in reversed(selected_child_dirs):
+                        if visited_directories + len(stack) >= directory_visit_cap:
+                            subdirs_truncated = True
+                            files_truncated = True
+                            break
+                        stack.append((child_rel_path, current_depth + 1))
+                elif selected_child_dirs:
+                    # Additional nested entries exist but depth limit blocks traversal.
+                    subdirs_truncated = True
+                    files_truncated = True
+
             directory_payload.append({
                 "name": dir_entry["name"],
-                "subdirectories": [d["name"] for d in nested_dirs[:max_files]],
-                "subdirectories_truncated": len(nested_dirs) > max_files,
-                "files": [f["name"] for f in file_entries[:max_files]],
-                "files_truncated": len(file_entries) > max_files
+                "subdirectories": subdirectory_paths,
+                "subdirectories_truncated": subdirs_truncated,
+                "files": file_paths,
+                "files_truncated": files_truncated,
             })
 
         return {
@@ -262,3 +324,20 @@ def _list_entries(conn: SMBConnection, share: str, pattern: str) -> List[Dict[st
             "is_directory": is_dir
         })
     return payload
+
+
+def _join_relative_path(parent: str, child: str) -> str:
+    parent_norm = str(parent or "").strip().strip("/")
+    child_norm = str(child or "").strip().strip("/")
+    if not parent_norm:
+        return child_norm
+    if not child_norm:
+        return parent_norm
+    return f"{parent_norm}/{child_norm}"
+
+
+def _join_smb_path(base_dir: str, rel_path: str) -> str:
+    rel_norm = str(rel_path or "").strip().strip("/").replace("/", "\\")
+    if not rel_norm:
+        return base_dir
+    return f"{base_dir}\\{rel_norm}"

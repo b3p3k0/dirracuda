@@ -423,6 +423,10 @@ class ServerListWindowTemplateMixin:
             self._destroy_batch_status_dialog()
         except Exception:
             pass
+        try:
+            self._teardown_running_tasks_ui()
+        except Exception:
+            pass
         if self.window is not None:
             if hasattr(self, "_hide_notes_tooltip"):
                 try:

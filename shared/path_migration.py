@@ -1,4 +1,8 @@
-"""One-time user data migration helpers for ~/.smbseek -> ~/.dirracuda."""
+"""One-time user data migration helpers for ~/.smbseek -> ~/.dirracuda.
+
+Deprecated for primary startup flow (layout-v2 uses shared.path_service), but
+kept for backward compatibility with older callers/tests.
+"""
 
 from __future__ import annotations
 

@@ -16,6 +16,10 @@ from tkinter import filedialog
 from gui.utils import safe_messagebox as messagebox
 from typing import Any, Callable, Dict, Optional
 
+from gui.components.discovery_dork_config import (
+    DORK_DEFAULTS as SHARED_DORK_DEFAULTS,
+    read_discovery_dorks,
+)
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.style import get_theme
 from gui.utils.wordlist_path import normalize_wordlist_path
@@ -24,6 +28,12 @@ from shared.db_path_resolution import (
     normalize_database_path,
     resolve_database_path,
 )
+from shared.path_service import (
+    get_legacy_paths,
+    get_paths,
+    resolve_runtime_config_path,
+    select_existing_path,
+)
 
 
 _CLAMAV_TRUE = frozenset(("true", "yes", "1"))
@@ -31,6 +41,25 @@ _CLAMAV_BACKENDS = frozenset(("auto", "clamdscan", "clamscan"))
 _TMPFS_SIZE_MIN_MB = 64
 _TMPFS_SIZE_MAX_MB = 4096
 _TMPFS_SIZE_DEFAULT_MB = 512
+_PATHS = get_paths()
+_LEGACY = get_legacy_paths(paths=_PATHS)
+_DEFAULT_CONFIG_PATH = resolve_runtime_config_path(paths=_PATHS, legacy=_LEGACY)
+_DEFAULT_DATABASE_PATH = _PATHS.main_db_file
+_DEFAULT_QUARANTINE_PATH = select_existing_path(
+    _PATHS.quarantine_dir,
+    [
+        _LEGACY.flat_quarantine_dir,
+        _LEGACY.legacy_home_root / "quarantine",
+    ],
+)
+_DEFAULT_EXTRACTED_ROOT = select_existing_path(
+    _PATHS.extracted_dir,
+    [
+        _LEGACY.flat_extracted_dir,
+        _LEGACY.legacy_home_root / "extracted",
+    ],
+)
+_DEFAULT_TMPFS_QUARANTINE_PATH = _PATHS.tmpfs_quarantine_dir
 
 
 def _coerce_bool_cfg(value: Any, default: bool) -> bool:
@@ -90,13 +119,9 @@ class AppConfigDialog:
     - Quarantine directory (shared SMB/FTP/HTTP browser + extract default)
     """
 
-    DORK_DEFAULTS = {
-        "smb_dork": "smb authentication: disabled",
-        "ftp_dork": 'port:21 "230 Login successful"',
-        "http_dork": 'http.title:"Index of /"',
-    }
-    DORK_FIELDS = ("smb_dork", "ftp_dork", "http_dork")
-    REQUIRED_FIELDS = ("smbseek", "database", "config", "quarantine", "smb_dork", "ftp_dork", "http_dork")
+    DORK_DEFAULTS = dict(SHARED_DORK_DEFAULTS)
+    DORK_FIELDS = tuple(DORK_DEFAULTS.keys())
+    REQUIRED_FIELDS = ("smbseek", "database", "config", "quarantine")
     FIELD_LABELS = {
         "smbseek": "Dirracuda Root",
         "database": "Database File",
@@ -116,19 +141,21 @@ class AppConfigDialog:
         config_editor_callback: Optional[Callable[[str], None]] = None,
         main_config=None,
         refresh_callback: Optional[Callable[[], None]] = None,
+        show_pry_controls: bool = False,
     ):
         self.parent = parent
         self.settings_manager = settings_manager
         self.config_editor_callback = config_editor_callback
         self.main_config = main_config
         self.refresh_callback = refresh_callback
+        self.show_pry_controls = bool(show_pry_controls)
         self.theme = get_theme()
 
         self.smbseek_path = ""
         self.config_path = ""
         self.database_path = ""
         self.api_key = ""
-        self.quarantine_path = "~/.dirracuda/quarantine"
+        self.quarantine_path = str(_DEFAULT_QUARANTINE_PATH)
         self.wordlist_path = ""
         self.smb_dork = self.DORK_DEFAULTS["smb_dork"]
         self.ftp_dork = self.DORK_DEFAULTS["ftp_dork"]
@@ -145,9 +172,6 @@ class AppConfigDialog:
             "api_key": {"valid": False, "message": ""},
             "quarantine": {"valid": False, "message": ""},
             "wordlist": {"valid": False, "message": ""},
-            "smb_dork": {"valid": False, "message": ""},
-            "ftp_dork": {"valid": False, "message": ""},
-            "http_dork": {"valid": False, "message": ""},
         }
 
         self.dialog: Optional[tk.Toplevel] = None
@@ -171,7 +195,7 @@ class AppConfigDialog:
         self.clamav_enabled: bool = False
         self.clamav_backend: str = "auto"
         self.clamav_timeout: int = 60
-        self.clamav_extracted_root: str = "~/.dirracuda/extracted"
+        self.clamav_extracted_root: str = str(_DEFAULT_EXTRACTED_ROOT)
         self.clamav_known_bad_subdir: str = "known_bad"
         self.clamav_show_results: bool = True
         self.clamav_auto_promote_clean: bool = False
@@ -206,7 +230,7 @@ class AppConfigDialog:
             self.smbseek_path = self.settings_manager.get_backend_path()
             self.config_path = self.settings_manager.get_setting(
                 "backend.config_path",
-                str(Path(self.smbseek_path) / "conf" / "config.json"),
+                str(_DEFAULT_CONFIG_PATH),
             )
             self.database_path = str(resolve_database_path(
                 backend_path=self.smbseek_path,
@@ -218,8 +242,8 @@ class AppConfigDialog:
             ))
         else:
             self.smbseek_path = str(Path.cwd())
-            self.config_path = str(Path.cwd() / "conf" / "config.json")
-            self.database_path = str(auto_detect_database_path(Path.cwd()))
+            self.config_path = str(_DEFAULT_CONFIG_PATH)
+            self.database_path = str(_DEFAULT_DATABASE_PATH)
 
         self._load_runtime_settings_from_config(self.config_path)
 
@@ -272,7 +296,7 @@ class AppConfigDialog:
             except (TypeError, ValueError):
                 self.clamav_timeout = 60
             self.clamav_extracted_root = str(
-                clamav_raw.get("extracted_root", "~/.dirracuda/extracted")
+                clamav_raw.get("extracted_root", str(_DEFAULT_EXTRACTED_ROOT))
             )
             self.clamav_known_bad_subdir = str(clamav_raw.get("known_bad_subdir", "known_bad"))
             self.clamav_show_results = _coerce_bool_cfg(clamav_raw.get("show_results"), True)
@@ -281,30 +305,10 @@ class AppConfigDialog:
                 False,
             )
 
-        self.smb_dork = str(
-            _get_nested(
-                config_data,
-                ("shodan", "query_components", "base_query"),
-                self.DORK_DEFAULTS["smb_dork"],
-            )
-            or self.DORK_DEFAULTS["smb_dork"]
-        )
-        self.ftp_dork = str(
-            _get_nested(
-                config_data,
-                ("ftp", "shodan", "query_components", "base_query"),
-                self.DORK_DEFAULTS["ftp_dork"],
-            )
-            or self.DORK_DEFAULTS["ftp_dork"]
-        )
-        self.http_dork = str(
-            _get_nested(
-                config_data,
-                ("http", "shodan", "query_components", "base_query"),
-                self.DORK_DEFAULTS["http_dork"],
-            )
-            or self.DORK_DEFAULTS["http_dork"]
-        )
+        dorks = read_discovery_dorks(config_data)
+        self.smb_dork = dorks["smb_dork"]
+        self.ftp_dork = dorks["ftp_dork"]
+        self.http_dork = dorks["http_dork"]
         self._capture_open_dork_values()
 
     def _capture_open_dork_values(self) -> None:
@@ -322,7 +326,7 @@ class AppConfigDialog:
     def _create_dialog(self) -> None:
         self.dialog = tk.Toplevel(self.parent)
         self.dialog.title("Dirracuda - Application Configuration")
-        self.dialog.geometry("760x1080")
+        self.dialog.geometry("760x860")
         self.dialog.minsize(720, 680)
         self.theme.apply_to_widget(self.dialog, "main_window")
         self.dialog.transient(self.parent)
@@ -369,8 +373,8 @@ class AppConfigDialog:
         container.pack(fill=tk.BOTH, expand=True, padx=18, pady=(0, 8))
 
         self._create_compact_card(container, "Core Paths", ("smbseek", "database", "config"))
-        self._create_compact_card(container, "Runtime Settings", ("api_key", "quarantine", "wordlist"))
-        self._create_dork_card(container)
+        runtime_fields = ("api_key", "quarantine", "wordlist") if self.show_pry_controls else ("api_key", "quarantine")
+        self._create_compact_card(container, "Runtime Settings", runtime_fields)
         self._create_tmpfs_card(container)
         self._create_clamav_card(container)
         self._sync_quarantine_controls_for_tmpfs()
@@ -448,33 +452,6 @@ class AppConfigDialog:
         self.theme.apply_to_widget(cb_tmpfs, "checkbox")
         cb_tmpfs.pack(anchor=tk.W)
 
-        row2 = tk.Frame(card)
-        self.theme.apply_to_widget(row2, "card")
-        row2.pack(fill=tk.X, padx=10, pady=(0, 6))
-        lbl_size = self.theme.create_styled_label(
-            row2,
-            "Max size (MB):",
-            "small",
-            fg=self.theme.colors["text_secondary"],
-        )
-        lbl_size.pack(side=tk.LEFT, padx=(0, 8))
-        self.quarantine_tmpfs_size_var = tk.StringVar(value=str(self.quarantine_tmpfs_size_mb))
-        self.quarantine_tmpfs_size_entry = tk.Entry(
-            row2,
-            textvariable=self.quarantine_tmpfs_size_var,
-            font=("Arial", 10),
-            width=8,
-        )
-        self.theme.apply_to_widget(self.quarantine_tmpfs_size_entry, "entry")
-        self.quarantine_tmpfs_size_entry.pack(side=tk.LEFT)
-        size_hint = self.theme.create_styled_label(
-            row2,
-            f"Range {_TMPFS_SIZE_MIN_MB}-{_TMPFS_SIZE_MAX_MB}",
-            "small",
-            fg=self.theme.colors["text_secondary"],
-        )
-        size_hint.pack(side=tk.LEFT, padx=(6, 0))
-
         self.quarantine_tmpfs_note_label = self.theme.create_styled_label(
             card,
             "",
@@ -488,10 +465,6 @@ class AppConfigDialog:
                 self.quarantine_tmpfs_enabled_var.set(False)
             try:
                 cb_tmpfs.configure(state=tk.DISABLED)
-            except tk.TclError:
-                pass
-            try:
-                self.quarantine_tmpfs_size_entry.configure(state=tk.DISABLED)
             except tk.TclError:
                 pass
 
@@ -509,20 +482,20 @@ class AppConfigDialog:
             except tk.TclError:
                 pass
 
-        if self.quarantine_tmpfs_size_entry is not None:
-            size_state = tk.NORMAL if (tmpfs_enabled and self._tmpfs_supported_platform) else tk.DISABLED
-            try:
-                self.quarantine_tmpfs_size_entry.configure(state=size_state)
-            except tk.TclError:
-                pass
-
         if self.quarantine_tmpfs_note_label is not None:
             if not self._tmpfs_supported_platform:
                 note = "tmpfs quarantine is available on Linux only; this setting is disabled here."
             elif tmpfs_enabled:
-                note = "Quarantine directory selection is disabled while tmpfs mode is enabled."
+                note = (
+                    "Dirracuda will not mount tmpfs automatically. "
+                    f"Pre-mount {_DEFAULT_TMPFS_QUARANTINE_PATH} externally; "
+                    "quarantine directory selection is disabled while tmpfs mode is enabled."
+                )
             else:
-                note = "When enabled, quarantine writes route to ~/.dirracuda/quarantine_tmpfs."
+                note = (
+                    f"When enabled, quarantine writes use {_DEFAULT_TMPFS_QUARANTINE_PATH} "
+                    "if it is already mounted as tmpfs."
+                )
             self.quarantine_tmpfs_note_label.configure(text=note)
 
     def _create_clamav_card(self, parent: tk.Widget) -> None:
@@ -802,7 +775,7 @@ class AppConfigDialog:
     # ------------------------------------------------------------------
 
     def _browse_path(self, field: str) -> None:
-        initial = str(Path.cwd())
+        initial = str(_PATHS.home_root)
         if field == "smbseek" and self.smbseek_var:
             initial = os.path.dirname(self.smbseek_var.get()) or initial
             selected = filedialog.askdirectory(
@@ -814,7 +787,7 @@ class AppConfigDialog:
             return
 
         if field == "database" and self.database_var:
-            initial = os.path.dirname(self.database_var.get()) or initial
+            initial = os.path.dirname(self.database_var.get()) or str(_PATHS.data_dir)
             selected = filedialog.askopenfilename(
                 title="Select Database File",
                 initialdir=initial,
@@ -825,7 +798,7 @@ class AppConfigDialog:
             return
 
         if field == "config" and self.config_var:
-            initial = os.path.dirname(self.config_var.get()) or initial
+            initial = os.path.dirname(self.config_var.get()) or str(_PATHS.conf_dir)
             selected = filedialog.askopenfilename(
                 title="Select Dirracuda Configuration File",
                 initialdir=initial,
@@ -836,7 +809,7 @@ class AppConfigDialog:
             return
 
         if field == "quarantine" and self.quarantine_var:
-            initial = os.path.dirname(self.quarantine_var.get()) or initial
+            initial = os.path.dirname(self.quarantine_var.get()) or str(_PATHS.data_dir)
             selected = filedialog.askdirectory(
                 title="Select Quarantine Directory",
                 initialdir=initial,
@@ -846,7 +819,7 @@ class AppConfigDialog:
             return
 
         if field == "wordlist" and self.wordlist_var:
-            initial = os.path.dirname(self.wordlist_var.get()) or initial
+            initial = os.path.dirname(self.wordlist_var.get()) or str(_PATHS.wordlists_dir)
             selected = filedialog.askopenfilename(
                 title="Select Pry Wordlist File",
                 initialdir=initial,
@@ -862,7 +835,7 @@ class AppConfigDialog:
         if field == "clamav_extracted_root" and self.clamav_extracted_root_var:
             initial = str(
                 Path(self.clamav_extracted_root_var.get()).expanduser().parent
-            ) or initial
+            ) or str(_PATHS.data_dir)
             selected = filedialog.askdirectory(
                 title="Select Extracted Files Root",
                 initialdir=initial,
@@ -877,8 +850,12 @@ class AppConfigDialog:
             self._update_status_label("smbseek", result)
 
             if result["valid"]:
-                derived_config = str(Path(self.smbseek_var.get()) / "conf" / "config.json")
-                if self.config_var and (not self.config_var.get() or "conf/config.json" in self.config_var.get()):
+                derived_config = str(_DEFAULT_CONFIG_PATH)
+                if self.config_var and (
+                    not self.config_var.get()
+                    or self.config_var.get().endswith("conf/config.json")
+                    or self.config_var.get() == str(_DEFAULT_CONFIG_PATH)
+                ):
                     self.config_var.set(derived_config)
                 derived_db = str(auto_detect_database_path(Path(self.smbseek_var.get())))
                 if self.database_var and (
@@ -907,26 +884,9 @@ class AppConfigDialog:
             self._update_status_label("api_key", result)
             return
 
-        if field == "smb_dork":
-            result = self._validate_dork_query(self.smb_dork_var.get(), self.FIELD_LABELS["smb_dork"])
-            self.validation_results["smb_dork"] = result
-            self._update_status_label("smb_dork", result)
-            return
-
-        if field == "ftp_dork":
-            result = self._validate_dork_query(self.ftp_dork_var.get(), self.FIELD_LABELS["ftp_dork"])
-            self.validation_results["ftp_dork"] = result
-            self._update_status_label("ftp_dork", result)
-            return
-
-        if field == "http_dork":
-            result = self._validate_dork_query(self.http_dork_var.get(), self.FIELD_LABELS["http_dork"])
-            self.validation_results["http_dork"] = result
-            self._update_status_label("http_dork", result)
-            return
-
         if field == "wordlist":
-            result = self._validate_wordlist_path(self.wordlist_var.get())
+            value = self.wordlist_var.get() if self.wordlist_var else self.wordlist_path
+            result = self._validate_wordlist_path(value)
             self.validation_results["wordlist"] = result
             self._update_status_label("wordlist", result)
             return
@@ -1057,12 +1017,6 @@ class AppConfigDialog:
             return {"valid": False, "message": "Wordlist path is not a file."}
         return {"valid": True, "message": "Wordlist file is valid."}
 
-    def _validate_dork_query(self, value: str, label: str) -> Dict[str, Any]:
-        query = str(value or "").strip()
-        if not query:
-            return {"valid": False, "message": f"{label} cannot be blank."}
-        return {"valid": True, "message": f"{label} is set."}
-
     def _update_status_label(self, field: str, result: Dict[str, Any]) -> None:
         label = self.status_labels.get(field)
         if not label:
@@ -1076,7 +1030,10 @@ class AppConfigDialog:
         label.config(text=symbol, fg=color)
 
     def _validate_all_fields(self) -> None:
-        for field in ("smbseek", "database", "config", "api_key", "quarantine", "wordlist", "smb_dork", "ftp_dork", "http_dork"):
+        fields = ["smbseek", "database", "config", "api_key", "quarantine"]
+        if self.show_pry_controls:
+            fields.append("wordlist")
+        for field in fields:
             self._validate_field(field)
 
     def _messagebox_parent(self) -> tk.Widget:
@@ -1147,30 +1104,10 @@ class AppConfigDialog:
         new_config_path = self.config_var.get().strip()
         new_api_key = self.api_key_var.get().strip()
         new_quarantine = self.quarantine_var.get().strip()
-        new_wordlist = self.wordlist_var.get().strip()
-        smb_dork_var = getattr(self, "smb_dork_var", None)
-        ftp_dork_var = getattr(self, "ftp_dork_var", None)
-        http_dork_var = getattr(self, "http_dork_var", None)
-        new_smb_dork = (
-            smb_dork_var.get().strip()
-            if smb_dork_var is not None
-            else str(getattr(self, "smb_dork", self.DORK_DEFAULTS["smb_dork"])).strip()
-        )
-        new_ftp_dork = (
-            ftp_dork_var.get().strip()
-            if ftp_dork_var is not None
-            else str(getattr(self, "ftp_dork", self.DORK_DEFAULTS["ftp_dork"])).strip()
-        )
-        new_http_dork = (
-            http_dork_var.get().strip()
-            if http_dork_var is not None
-            else str(getattr(self, "http_dork", self.DORK_DEFAULTS["http_dork"])).strip()
-        )
-        new_dork_settings = {
-            "smb_dork": new_smb_dork,
-            "ftp_dork": new_ftp_dork,
-            "http_dork": new_http_dork,
-        }
+        if self.show_pry_controls and self.wordlist_var is not None:
+            new_wordlist = self.wordlist_var.get().strip()
+        else:
+            new_wordlist = self.wordlist_path
 
         _timeout_var = getattr(self, "clamav_timeout_var", None)
         try:
@@ -1188,37 +1125,19 @@ class AppConfigDialog:
             "enabled": bool(_enabled_var.get()) if _enabled_var else False,
             "backend": _raw_backend if _raw_backend in _CLAMAV_BACKENDS else "auto",
             "timeout_seconds": _clamav_timeout,
-            "extracted_root": (_root_var.get().strip() if _root_var else "") or "~/.dirracuda/extracted",
+            "extracted_root": (_root_var.get().strip() if _root_var else "") or str(_DEFAULT_EXTRACTED_ROOT),
             "known_bad_subdir": (_kb_var.get().strip() if _kb_var else "") or "known_bad",
             "show_results": bool(_show_var.get()) if _show_var else True,
             "auto_promote_clean_files": bool(_promote_clean_var.get()) if _promote_clean_var else False,
         }
 
         tmpfs_enabled_var = getattr(self, "quarantine_tmpfs_enabled_var", None)
-        tmpfs_size_var = getattr(self, "quarantine_tmpfs_size_var", None)
         tmpfs_supported_platform = getattr(self, "_tmpfs_supported_platform", sys.platform.startswith("linux"))
         tmpfs_enabled = bool(tmpfs_enabled_var.get()) if tmpfs_enabled_var else False
         if not tmpfs_supported_platform:
             tmpfs_enabled = False
-        try:
-            tmpfs_size_mb = int(tmpfs_size_var.get()) if tmpfs_size_var else _TMPFS_SIZE_DEFAULT_MB
-        except (TypeError, ValueError):
-            messagebox.showerror(
-                "Configuration Validation Failed",
-                f"tmpfs size must be an integer between {_TMPFS_SIZE_MIN_MB} and {_TMPFS_SIZE_MAX_MB} MB.",
-                parent=self._messagebox_parent(),
-            )
-            return False
-        if tmpfs_size_mb < _TMPFS_SIZE_MIN_MB or tmpfs_size_mb > _TMPFS_SIZE_MAX_MB:
-            messagebox.showerror(
-                "Configuration Validation Failed",
-                f"tmpfs size must be between {_TMPFS_SIZE_MIN_MB} and {_TMPFS_SIZE_MAX_MB} MB.",
-                parent=self._messagebox_parent(),
-            )
-            return False
         new_quarantine_tmpfs = {
             "use_tmpfs": tmpfs_enabled,
-            "tmpfs_size_mb": tmpfs_size_mb,
         }
 
         old_smbseek = self.smbseek_path
@@ -1230,10 +1149,6 @@ class AppConfigDialog:
             old_clamav_backend = "auto"
         old_clamav_auto_promote_clean = bool(getattr(self, "clamav_auto_promote_clean", False))
         old_tmpfs_enabled = bool(getattr(self, "quarantine_tmpfs_enabled", False))
-        try:
-            old_tmpfs_size_mb = int(getattr(self, "quarantine_tmpfs_size_mb", _TMPFS_SIZE_DEFAULT_MB))
-        except (TypeError, ValueError):
-            old_tmpfs_size_mb = _TMPFS_SIZE_DEFAULT_MB
 
         try:
             normalized_database = normalize_database_path(new_database, new_smbseek)
@@ -1249,7 +1164,7 @@ class AppConfigDialog:
                 # Keeps on-demand extract defaults aligned with shared quarantine.
                 self.settings_manager.set_setting("extract.last_directory", new_quarantine)
 
-            # Persist runtime config fields in conf/config.json.
+            # Persist runtime config fields in the active config.json.
             if self.main_config and hasattr(self.main_config, "set_config_path"):
                 self.main_config.set_config_path(new_config_path)
                 self.main_config.set_smbseek_path(new_smbseek)
@@ -1259,7 +1174,6 @@ class AppConfigDialog:
                     new_api_key,
                     new_quarantine,
                     new_wordlist,
-                    dork_settings=new_dork_settings,
                     clamav_settings=new_clamav,
                     quarantine_tmpfs_settings=new_quarantine_tmpfs,
                 )
@@ -1281,7 +1195,6 @@ class AppConfigDialog:
                     new_api_key,
                     new_quarantine,
                     new_wordlist,
-                    dork_settings=new_dork_settings,
                     clamav_settings=new_clamav,
                     quarantine_tmpfs_settings=new_quarantine_tmpfs,
                 )
@@ -1295,13 +1208,8 @@ class AppConfigDialog:
             self.api_key = new_api_key
             self.quarantine_path = new_quarantine
             self.wordlist_path = new_wordlist
-            self.smb_dork = new_smb_dork
-            self.ftp_dork = new_ftp_dork
-            self.http_dork = new_http_dork
-            self._capture_open_dork_values()
             self.clamav_auto_promote_clean = new_clamav["auto_promote_clean_files"]
             self.quarantine_tmpfs_enabled = tmpfs_enabled
-            self.quarantine_tmpfs_size_mb = tmpfs_size_mb
 
             # Refresh downstream interfaces whenever runtime-critical values changed.
             runtime_changed = (
@@ -1314,7 +1222,6 @@ class AppConfigDialog:
                 or old_clamav_backend != new_clamav["backend"]
                 or old_clamav_auto_promote_clean != new_clamav["auto_promote_clean_files"]
                 or old_tmpfs_enabled != tmpfs_enabled
-                or old_tmpfs_size_mb != tmpfs_size_mb
             )
             if self.refresh_callback and (runtime_changed or status_changed):
                 self.refresh_callback()
@@ -1326,7 +1233,7 @@ class AppConfigDialog:
                     "Discovery scans will fail until a valid key is set.",
                     parent=self._messagebox_parent(),
                 )
-            if not self.validation_results["wordlist"]["valid"]:
+            if self.show_pry_controls and not self.validation_results["wordlist"]["valid"]:
                 messagebox.showwarning(
                     "Configuration Saved",
                     "Settings were saved, but the Pry wordlist path is invalid.\n"
@@ -1348,6 +1255,10 @@ class AppConfigDialog:
         candidates = [path_obj]
 
         if not path_obj.exists():
+            if _LEGACY.repo_config_file.exists():
+                candidates.append(_LEGACY.repo_config_file)
+            if _LEGACY.repo_config_example_file.exists():
+                candidates.append(_LEGACY.repo_config_example_file)
             example_path = path_obj.parent / f"{path_obj.name}.example"
             if example_path.exists():
                 candidates.append(example_path)
@@ -1373,17 +1284,11 @@ class AppConfigDialog:
         api_key: str,
         quarantine_path: str,
         wordlist_path: str,
-        dork_settings: Optional[Dict[str, str]] = None,
         clamav_settings: Optional[Dict[str, Any]] = None,
         quarantine_tmpfs_settings: Optional[Dict[str, Any]] = None,
     ) -> None:
         # Shodan API key drives scan processes.
         _set_nested(config_data, ("shodan", "api_key"), api_key)
-
-        if dork_settings is not None:
-            _set_nested(config_data, ("shodan", "query_components", "base_query"), dork_settings["smb_dork"])
-            _set_nested(config_data, ("ftp", "shodan", "query_components", "base_query"), dork_settings["ftp_dork"])
-            _set_nested(config_data, ("http", "shodan", "query_components", "base_query"), dork_settings["http_dork"])
 
         # Keep quarantine path aligned across browser and extract-adjacent sections.
         _set_nested(config_data, ("file_browser", "quarantine_root"), quarantine_path)
@@ -1407,7 +1312,6 @@ class AppConfigDialog:
 
         if quarantine_tmpfs_settings is not None:
             _set_nested(config_data, ("quarantine", "use_tmpfs"), quarantine_tmpfs_settings["use_tmpfs"])
-            _set_nested(config_data, ("quarantine", "tmpfs_size_mb"), quarantine_tmpfs_settings["tmpfs_size_mb"])
 
 
 def open_app_config_dialog(
@@ -1416,10 +1320,18 @@ def open_app_config_dialog(
     config_editor_callback: Optional[Callable[[str], None]] = None,
     main_config=None,
     refresh_callback: Optional[Callable[[], None]] = None,
+    show_pry_controls: bool = False,
 ) -> None:
     """Open application configuration dialog."""
     try:
-        AppConfigDialog(parent, settings_manager, config_editor_callback, main_config, refresh_callback)
+        AppConfigDialog(
+            parent,
+            settings_manager,
+            config_editor_callback,
+            main_config,
+            refresh_callback,
+            show_pry_controls=show_pry_controls,
+        )
     except Exception as exc:
         messagebox.showerror(
             "Configuration Dialog Error",

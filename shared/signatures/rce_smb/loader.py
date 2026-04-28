@@ -12,9 +12,18 @@ from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
 
 from .validator import SignatureValidator, ValidationError
+from shared.path_service import get_paths, get_legacy_paths, select_existing_path
 
 logger = logging.getLogger(__name__)
-DEFAULT_SIGNATURES_DIR = Path(__file__).resolve().parents[3] / "conf" / "signatures" / "rce_smb"
+_PATHS = get_paths()
+_LEGACY = get_legacy_paths(paths=_PATHS)
+DEFAULT_SIGNATURES_DIR = select_existing_path(
+    _PATHS.signatures_rce_dir,
+    [
+        _LEGACY.flat_home_root / "conf" / "signatures" / "rce_smb",
+        _LEGACY.repo_signatures_dir / "rce_smb",
+    ],
+)
 
 
 @dataclass

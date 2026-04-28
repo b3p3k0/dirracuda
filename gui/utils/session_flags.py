@@ -10,6 +10,7 @@ _flags: dict = {}
 
 CLAMAV_MUTE_KEY = "clamav_results_dialog_muted"
 REDDIT_PROMOTION_NOTICE_MUTE_KEY = "reddit_promotion_notice_muted"
+DORKBOOK_DELETE_CONFIRM_MUTE_KEY = "dorkbook_delete_confirm_muted"
 
 
 def set_flag(key: str, value: bool = True) -> None:

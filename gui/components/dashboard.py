@@ -46,6 +46,7 @@ from gui.utils import (
     probe_cache,
     probe_patterns,
     extract_runner,
+    protocol_extract_runner,
 )
 from gui.utils.probe_cache_dispatch import get_probe_snapshot_path_for_host, dispatch_probe_run
 from gui.utils.probe_snapshot_summary import summarize_probe_snapshot

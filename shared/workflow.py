@@ -221,6 +221,11 @@ def create_unified_workflow(args) -> UnifiedWorkflow:
     """
     # Load configuration and shared components
     config = load_config(getattr(args, 'config', None))
+    runtime_db_override = str(getattr(args, "runtime_db_path_override", "") or "").strip()
+    if runtime_db_override:
+        if not isinstance(config.config.get("database"), dict):
+            config.config["database"] = {}
+        config.config["database"]["path"] = runtime_db_override
 
     output = create_output_manager(
         config,

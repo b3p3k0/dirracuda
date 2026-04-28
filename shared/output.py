@@ -11,10 +11,13 @@ import threading
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 import sys
+from shared.path_service import get_paths
 
 # Add tools directory to path for database imports
 tools_path = os.path.join(os.path.dirname(__file__), '..', 'tools')
 sys.path.insert(0, tools_path)
+
+_PATHS = get_paths()
 
 
 class SMBSeekOutput:
@@ -128,7 +131,7 @@ class SMBSeekOutput:
         self.print_if_not_quiet(f"📁 Accessible Shares: {getattr(summary, 'accessible_shares', 0)}")
 
         # Display database location (dynamic path keeps GUI/parser-independent output accurate)
-        db_path = self.config.get_database_path() if self.config else "dirracuda.db"
+        db_path = self.config.get_database_path() if self.config else str(_PATHS.main_db_file)
         self.print_if_not_quiet(f"💾 Results saved to: {db_path}")
 
         # Success indicator

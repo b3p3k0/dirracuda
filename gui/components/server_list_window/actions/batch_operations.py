@@ -21,8 +21,8 @@ from typing import Dict, List, Any, Optional
 from gui.components.server_list_window import export, details, filters, table
 from gui.components.batch_extract_dialog import BatchExtractSettingsDialog
 from gui.components.pry_dialog import PryDialog
-from gui.utils import probe_cache, probe_patterns, probe_runner, extract_runner, pry_runner, session_flags
-from gui.utils.probe_cache_dispatch import get_probe_snapshot_path_for_host, dispatch_probe_run
+from gui.utils import probe_patterns, probe_runner, extract_runner, pry_runner, session_flags
+from gui.utils.probe_cache_dispatch import dispatch_probe_run
 from gui.utils.probe_snapshot_summary import summarize_probe_snapshot
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.logging_config import get_logger
@@ -138,6 +138,7 @@ class ServerListWindowBatchOperationsMixin:
         max_directories = int(limits.get("max_directories", 3))
         max_files = int(limits.get("max_files", 5))
         timeout_seconds = int(limits.get("timeout_seconds", 10))
+        max_depth = int(limits.get("max_depth", 1))
 
         if host_type == "F":
             try:
@@ -151,21 +152,19 @@ class ServerListWindowBatchOperationsMixin:
                 max_files=max_files,
                 timeout_seconds=timeout_seconds,
                 cancel_event=cancel_event,
+                max_depth=max_depth,
                 port=ftp_port,
             )
             analysis = probe_patterns.attach_indicator_analysis(snapshot, indicator_patterns)
             probe_summary = summarize_probe_snapshot(snapshot)
             display_entries = probe_summary["display_entries"]
-            try:
-                snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type, port=ftp_port)
-            except TypeError:
-                snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type)
             return {
                 "host_type": host_type,
                 "ip_address": ip_address,
                 "status": "issue" if analysis.get("is_suspicious") else "clean",
                 "indicator_matches": len(analysis.get("matches", [])),
-                "snapshot_path": snapshot_path,
+                "snapshot_path": None,
+                "snapshot_payload": snapshot,
                 "accessible_dirs_count": len(display_entries),
                 "accessible_dirs_list": ",".join(display_entries),
                 "accessible_files_count": None,
@@ -192,6 +191,7 @@ class ServerListWindowBatchOperationsMixin:
                 max_files=max_files,
                 timeout_seconds=timeout_seconds,
                 cancel_event=cancel_event,
+                max_depth=max_depth,
                 port=http_port,
                 scheme=scheme,
                 db_reader=self.db_reader,
@@ -203,16 +203,13 @@ class ServerListWindowBatchOperationsMixin:
             dir_names = probe_summary["directory_names"]
             display_entries = probe_summary["display_entries"]
             total_files = int(probe_summary["total_file_count"])
-            try:
-                snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type, port=http_port)
-            except TypeError:
-                snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type)
             return {
                 "host_type": host_type,
                 "ip_address": ip_address,
                 "status": "issue" if analysis.get("is_suspicious") else "clean",
                 "indicator_matches": len(analysis.get("matches", [])),
-                "snapshot_path": snapshot_path,
+                "snapshot_path": None,
+                "snapshot_payload": snapshot,
                 "accessible_dirs_count": len(dir_names),
                 "accessible_dirs_list": ",".join(display_entries),
                 "accessible_files_count": total_files,
@@ -227,23 +224,19 @@ class ServerListWindowBatchOperationsMixin:
             max_files=max_files,
             timeout_seconds=timeout_seconds,
             cancel_event=cancel_event,
+            max_depth=max_depth,
             shares=[],
             allow_empty=True,
             db_reader=self.db_reader,
         )
-        probe_cache.save_probe_result(ip_address, snapshot)
         analysis = probe_patterns.attach_indicator_analysis(snapshot, indicator_patterns)
-        snapshot_path = (
-            probe_cache.get_probe_result_path(ip_address)
-            if hasattr(probe_cache, "get_probe_result_path")
-            else None
-        )
         return {
             "host_type": host_type,
             "ip_address": ip_address,
             "status": "issue" if analysis.get("is_suspicious") else "clean",
             "indicator_matches": len(analysis.get("matches", [])),
-            "snapshot_path": snapshot_path,
+            "snapshot_path": None,
+            "snapshot_payload": snapshot,
             "accessible_dirs_count": None,
             "accessible_dirs_list": None,
             "accessible_files_count": None,
@@ -267,6 +260,21 @@ class ServerListWindowBatchOperationsMixin:
             "indicator_matches": int(probe_result.get("indicator_matches") or 0),
             "snapshot_path": probe_result.get("snapshot_path"),
         }
+        snapshot_payload = probe_result.get("snapshot_payload")
+        snapshot_id = None
+        if isinstance(snapshot_payload, dict):
+            try:
+                snapshot_id = self.db_reader.upsert_probe_snapshot_for_host(
+                    ip_address,
+                    host_type,
+                    snapshot_payload,
+                    protocol_server_id=upsert_result.get("protocol_server_id"),
+                    port=probe_result.get("port"),
+                    source="manual_add_probe",
+                )
+            except Exception:
+                snapshot_id = None
+        kwargs["latest_snapshot_id"] = snapshot_id
 
         if host_type == "F":
             kwargs["accessible_dirs_count"] = probe_result.get("accessible_dirs_count")
@@ -310,7 +318,7 @@ class ServerListWindowBatchOperationsMixin:
             justify=tk.LEFT,
             wraplength=420,
         )
-        self.theme.apply_to_widget(msg, "body")
+        self.theme.apply_to_widget(msg, "label")
         msg.pack(fill=tk.X)
 
         buttons = tk.Frame(body)
@@ -417,7 +425,7 @@ class ServerListWindowBatchOperationsMixin:
                     ),
                     justify=tk.LEFT,
                 )
-                self.theme.apply_to_widget(note, "body")
+                self.theme.apply_to_widget(note, "label")
                 note.grid(row=row, column=0, columnspan=2, sticky="w", pady=(0, 4))
                 row += 1
 
@@ -467,12 +475,12 @@ class ServerListWindowBatchOperationsMixin:
             text="Probe host before adding",
             variable=probe_before_add_var,
         )
-        self.theme.apply_to_widget(probe_before_add_cb, "body")
+        self.theme.apply_to_widget(probe_before_add_cb, "checkbox")
         probe_before_add_cb.grid(row=row, column=0, columnspan=2, sticky="w", pady=(4, 0))
         row += 1
 
         for label in form.grid_slaves(column=0):
-            self.theme.apply_to_widget(label, "body")
+            self.theme.apply_to_widget(label, "label")
 
         def _update_field_states(*_args):
             selected = (type_var.get() or "SMB").strip().upper()
@@ -638,6 +646,86 @@ class ServerListWindowBatchOperationsMixin:
             except tk.TclError:
                 pass
 
+    @staticmethod
+    def _normalize_url_path(path: Any) -> str:
+        raw = str(path or "").strip()
+        normalized = raw.split("?", 1)[0].split("#", 1)[0].strip() or "/"
+        if not normalized.startswith("/"):
+            normalized = "/" + normalized.lstrip("/")
+        return normalized
+
+    def _build_copy_url_for_target(self, target: Dict[str, Any]) -> Optional[str]:
+        host_type = str(target.get("host_type") or "S").strip().upper()
+        ip_address = str(target.get("ip_address") or "").strip()
+        if not ip_address:
+            return None
+
+        if host_type == "S":
+            return f"smb://{ip_address}:445/"
+
+        if host_type == "F":
+            port_raw = target.get("port")
+            if port_raw in (None, ""):
+                port_raw = (target.get("data") or {}).get("port")
+            try:
+                port = int(port_raw) if port_raw not in (None, "") else 21
+            except (TypeError, ValueError):
+                port = 21
+            return f"ftp://{ip_address}:{port}/"
+
+        if host_type == "H":
+            row_data = target.get("data") or {}
+            row_port = target.get("port", row_data.get("port"))
+            detail = None
+            if self.db_reader:
+                try:
+                    detail = self.db_reader.get_http_server_detail(
+                        ip_address,
+                        protocol_server_id=target.get("protocol_server_id"),
+                        port=row_port,
+                    )
+                except Exception:
+                    detail = None
+
+            try:
+                port = int((detail or {}).get("port") or row_port or 80)
+            except (TypeError, ValueError):
+                port = 80
+
+            scheme = str(
+                (detail or {}).get("scheme")
+                or row_data.get("scheme")
+                or ("https" if port == 443 else "http")
+            ).strip().lower()
+            if scheme not in {"http", "https"}:
+                scheme = "https" if port == 443 else "http"
+
+            host = str((detail or {}).get("probe_host") or row_data.get("probe_host") or ip_address).strip() or ip_address
+            path = self._normalize_url_path((detail or {}).get("probe_path") or row_data.get("probe_path") or "/")
+            return f"{scheme}://{host}:{port}{path}"
+
+        return None
+
+    def _on_copy_url(self) -> None:
+        """Copy selected host URL(s) to clipboard."""
+        self._hide_context_menu()
+        targets = self._build_selected_targets()
+        if not targets:
+            return
+
+        urls = []
+        for target in targets:
+            built = self._build_copy_url_for_target(target)
+            if built:
+                urls.append(built)
+
+        if urls:
+            try:
+                self.window.clipboard_clear()
+                self.window.clipboard_append("\n".join(urls))
+            except tk.TclError:
+                pass
+
     def _on_probe_selected(self) -> None:
         self._hide_context_menu()
         targets = self._build_selected_targets()
@@ -650,6 +738,13 @@ class ServerListWindowBatchOperationsMixin:
 
     def _on_pry_selected(self) -> None:
         self._hide_context_menu()
+        if not getattr(self, "_pry_unlocked", False):
+            messagebox.showwarning(
+                "Pry Disabled",
+                "Pry is disabled for this session.",
+                parent=self.window,
+            )
+            return
         targets = self._build_selected_targets()
         ftp_targets = [t for t in targets if t.get("host_type") == "F"]
         if ftp_targets:
@@ -944,15 +1039,6 @@ class ServerListWindowBatchOperationsMixin:
         try:
             results = self.db_reader.bulk_delete_rows(row_specs)
 
-            # Clear file-based probe cache only for SMB-deleted IPs.
-            # Probe cache is IP-keyed; clearing on FTP-only delete would
-            # also wipe the SMB probe cache for the same IP.
-            for ip in results.get("deleted_smb_ips", []):
-                try:
-                    probe_cache.clear_probe_result(ip)
-                except Exception:
-                    pass
-
             return results
 
         except Exception as e:
@@ -1030,11 +1116,13 @@ class ServerListWindowBatchOperationsMixin:
     def _prompt_probe_batch_settings(self, target_count: int) -> Optional[Dict[str, Any]]:
         config = details._load_probe_config(self.settings_manager)
         default_workers = 3
+        rce_unlocked = bool(getattr(self, "_rce_unlocked", getattr(self, "_pry_unlocked", False)))
         enable_rce_default = False
         if self.settings_manager:
             default_workers = int(self.settings_manager.get_setting('probe.batch_max_workers', default_workers))
-            rce_pref = self.settings_manager.get_setting('probe_dialog.rce_enabled', None)
-            enable_rce_default = bool(rce_pref) if rce_pref is not None else bool(self.settings_manager.get_setting('scan_dialog.rce_enabled', False))
+            if rce_unlocked:
+                rce_pref = self.settings_manager.get_setting('probe_dialog.rce_enabled', None)
+                enable_rce_default = bool(rce_pref) if rce_pref is not None else bool(self.settings_manager.get_setting('scan_dialog.rce_enabled', False))
 
         default_workers = max(1, min(8, default_workers))
 
@@ -1051,6 +1139,7 @@ class ServerListWindowBatchOperationsMixin:
         max_dirs_var = tk.IntVar(value=config["max_directories"])
         max_files_var = tk.IntVar(value=config["max_files"])
         timeout_var = tk.IntVar(value=config["timeout_seconds"])
+        max_depth_var = tk.IntVar(value=config.get("max_depth", 1))
 
         def add_labeled_entry(row: int, label: str, var: tk.Variable):
             tk.Label(dialog, text=label).grid(row=row, column=0, padx=10, pady=5, sticky="w")
@@ -1062,8 +1151,21 @@ class ServerListWindowBatchOperationsMixin:
         add_labeled_entry(2, "Max directories/share:", max_dirs_var)
         add_labeled_entry(3, "Max files/directory:", max_files_var)
         add_labeled_entry(4, "Timeout per share (s):", timeout_var)
+        add_labeled_entry(5, "Max probe depth (1-3):", max_depth_var)
 
-        tk.Checkbutton(dialog, text="Enable RCE analysis", variable=rce_var).grid(row=5, column=0, columnspan=2, padx=10, pady=(5, 10), sticky="w")
+        if rce_unlocked:
+            tk.Checkbutton(dialog, text="Enable RCE analysis", variable=rce_var).grid(
+                row=6,
+                column=0,
+                columnspan=2,
+                padx=10,
+                pady=(5, 10),
+                sticky="w",
+            )
+        else:
+            spacer = tk.Frame(dialog, height=24)
+            spacer.grid(row=6, column=0, columnspan=2, padx=10, pady=(5, 10), sticky="we")
+            spacer.grid_propagate(False)
 
         result: Dict[str, Any] = {}
 
@@ -1073,6 +1175,7 @@ class ServerListWindowBatchOperationsMixin:
                 max_dirs = max(1, int(max_dirs_var.get()))
                 max_files = max(1, int(max_files_var.get()))
                 timeout_val = max(1, int(timeout_var.get()))
+                max_depth = min(3, max(1, int(max_depth_var.get())))
             except (ValueError, tk.TclError):
                 messagebox.showerror("Invalid Input", "Please enter numeric values for probe limits.", parent=dialog)
                 return
@@ -1082,15 +1185,18 @@ class ServerListWindowBatchOperationsMixin:
                 self.settings_manager.set_setting('probe.max_directories_per_share', max_dirs)
                 self.settings_manager.set_setting('probe.max_files_per_directory', max_files)
                 self.settings_manager.set_setting('probe.share_timeout_seconds', timeout_val)
-                self.settings_manager.set_setting('probe_dialog.rce_enabled', bool(rce_var.get()))
+                self.settings_manager.set_setting('probe.max_depth_levels', max_depth)
+                if rce_unlocked:
+                    self.settings_manager.set_setting('probe_dialog.rce_enabled', bool(rce_var.get()))
 
             result.update({
                 "worker_count": workers,
-                "enable_rce": bool(rce_var.get()),
+                "enable_rce": bool(rce_var.get()) if rce_unlocked else False,
                 "limits": {
                     "max_directories": max_dirs,
                     "max_files": max_files,
-                    "timeout_seconds": timeout_val
+                    "timeout_seconds": timeout_val,
+                    "max_depth": max_depth,
                 }
             })
             dialog.destroy()
@@ -1099,7 +1205,7 @@ class ServerListWindowBatchOperationsMixin:
             dialog.destroy()
 
         button_frame = tk.Frame(dialog)
-        button_frame.grid(row=6, column=0, columnspan=2, pady=(0, 10))
+        button_frame.grid(row=7, column=0, columnspan=2, pady=(0, 10))
         tk.Button(button_frame, text="Cancel", command=on_cancel).pack(side=tk.RIGHT, padx=5)
         tk.Button(button_frame, text="Start", command=on_start).pack(side=tk.RIGHT)
 
@@ -1142,13 +1248,20 @@ class ServerListWindowBatchOperationsMixin:
 
         # Load clamav config once before futures start (not per-target).
         clamav_cfg: Dict[str, Any] = {}
+        http_allow_insecure_tls = True
         if config_path and Path(config_path).exists():
             try:
                 _cfg_data = json.loads(Path(config_path).read_text(encoding="utf-8"))
                 clamav_cfg = _cfg_data.get("clamav", {})
+                http_allow_insecure_tls = bool(
+                    _cfg_data.get("http", {})
+                    .get("verification", {})
+                    .get("allow_insecure_tls", True)
+                )
             except Exception:
                 pass
         dialog_config["clamav_config"] = clamav_cfg
+        dialog_config["http_allow_insecure_tls"] = http_allow_insecure_tls
 
         self._start_batch_job("extract", targets, dialog_config)
 
