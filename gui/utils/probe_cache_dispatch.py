@@ -16,8 +16,29 @@ from typing import Any, Dict, List, Optional
 
 from gui.utils import probe_cache, ftp_probe_cache, http_probe_cache
 from gui.utils import probe_runner, ftp_probe_runner, http_probe_runner
+from gui.utils.database_access import DatabaseReader
+from gui.utils.settings_manager import get_settings_manager
 
 _UNSET = object()
+_DB_READER_CACHE: Dict[str, Any] = {"path": None, "reader": None}
+
+
+def _get_cached_db_reader() -> Optional[DatabaseReader]:
+    """Return DatabaseReader bound to active settings DB path, cached by path."""
+    try:
+        settings = get_settings_manager()
+        db_path = settings.get_database_path() if hasattr(settings, "get_database_path") else None
+        if not db_path and hasattr(settings, "get_setting"):
+            db_path = settings.get_setting("backend.database_path", None)
+        db_path = str(db_path or "").strip()
+        if not db_path:
+            return None
+        if _DB_READER_CACHE.get("path") != db_path or _DB_READER_CACHE.get("reader") is None:
+            _DB_READER_CACHE["path"] = db_path
+            _DB_READER_CACHE["reader"] = DatabaseReader(db_path)
+        return _DB_READER_CACHE.get("reader")
+    except Exception:
+        return None
 
 
 def load_probe_result_for_host(
@@ -38,6 +59,18 @@ def load_probe_result_for_host(
     if not ip_address:
         return None
     _ht = str(host_type or "S").strip().upper()
+    db_reader = _get_cached_db_reader()
+    if db_reader is not None:
+        try:
+            snapshot = db_reader.get_probe_snapshot_for_host(
+                ip_address,
+                _ht,
+                port=port,
+            )
+            if isinstance(snapshot, dict):
+                return snapshot
+        except Exception:
+            pass
     if _ht == "F":
         return ftp_probe_cache.load_ftp_probe_result(ip_address)
     if _ht == "H":
@@ -79,6 +112,7 @@ def dispatch_probe_run(
     max_files: int,
     timeout_seconds: int,
     cancel_event,
+    max_depth: int = 1,
     port: Optional[int] = None,
     scheme: Optional[str] = None,
     request_host: Optional[str] = None,
@@ -99,12 +133,14 @@ def dispatch_probe_run(
     host_type: 'S' = SMB, 'F' = FTP, 'H' = HTTP (coerced/uppercased).
     username/password: omit (leave as _UNSET) to let probe_runner use its own
         defaults (DEFAULT_USERNAME = "guest"). Pass explicit values to override.
+    max_depth: Probe recursion depth, clamped to 1..3.
     port: caller-selected endpoint port (FTP or HTTP). When omitted for HTTP,
         db_reader.get_http_server_detail() is used as fallback.
     request_host/start_path: optional HTTP probe hints. When omitted for HTTP,
         db_reader.get_http_server_detail() may provide probe_host/probe_path.
     """
     _ht = str(host_type or "S").strip().upper()
+    depth_limit = min(3, max(1, int(max_depth)))
 
     if _ht == "F":
         try:
@@ -121,6 +157,7 @@ def dispatch_probe_run(
             connect_timeout=timeout_seconds,
             request_timeout=timeout_seconds,
             cancel_event=cancel_event,
+            max_depth=depth_limit,
         )
 
     if _ht == "H":
@@ -166,6 +203,7 @@ def dispatch_probe_run(
             connect_timeout=timeout_seconds,
             request_timeout=timeout_seconds,
             cancel_event=cancel_event,
+            max_depth=depth_limit,
         )
 
     # SMB path
@@ -177,6 +215,7 @@ def dispatch_probe_run(
         "cancel_event": cancel_event,
         "allow_empty": allow_empty,
         "db_accessor": db_reader,
+        "max_depth": depth_limit,
     }
     if username is not _UNSET:
         _kwargs["username"] = username

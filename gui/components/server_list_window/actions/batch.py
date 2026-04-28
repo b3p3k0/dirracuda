@@ -33,15 +33,16 @@ from gui.components.server_list_window import export, details, filters, table
 from gui.components.batch_extract_dialog import BatchExtractSettingsDialog
 from .batch_status import ServerListWindowBatchStatusMixin
 from gui.utils import (
-    probe_cache,
     probe_patterns,
     probe_runner,
     extract_runner,
+    protocol_extract_runner,
     pry_runner,
 )
-from gui.utils.probe_cache_dispatch import get_probe_snapshot_path_for_host, dispatch_probe_run
+from gui.utils.probe_cache_dispatch import dispatch_probe_run
 from gui.utils.probe_snapshot_summary import summarize_probe_snapshot
 from shared.quarantine import create_quarantine_dir
+from shared.path_service import get_paths, get_legacy_paths, select_existing_path
 
 from .batch_operations import ServerListWindowBatchOperationsMixin
 
@@ -50,6 +51,12 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
     def _start_batch_job(self, job_type: str, targets: List[Dict[str, Any]], options: Dict[str, Any]) -> None:
         if not targets:
             return
+        if job_type == "pry" and not getattr(self, "_pry_unlocked", False):
+            messagebox.showwarning("Pry Disabled", "Pry is disabled for this session.")
+            return
+        rce_unlocked = bool(getattr(self, "_rce_unlocked", getattr(self, "_pry_unlocked", False)))
+        if job_type == "probe" and not rce_unlocked and bool((options or {}).get("enable_rce", False)):
+            options = {**(options or {}), "enable_rce": False}
 
         # Enforce max concurrent jobs
         if len(self.active_jobs) >= 3:
@@ -143,6 +150,8 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
             )
             job_record["dialog"] = dialog
 
+        self._register_batch_running_task(job_id)
+
         for target in targets:
             future = executor.submit(self._run_batch_task, job_id, job_type, target, options, cancel_event)
             job_record["futures"].append((target, future))
@@ -188,12 +197,14 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
             except Exception:
                 port = 21
             limits = options.get("limits", {}) or {}
+            max_depth = max(1, min(3, int(limits.get("max_depth", 1))))
             snapshot = dispatch_probe_run(
                 ip_address, host_type,
                 max_directories=int(limits.get("max_directories", 3)),
                 max_files=int(limits.get("max_files", 5)),
                 timeout_seconds=int(limits.get("timeout_seconds", 10)),
                 cancel_event=cancel_event,
+                max_depth=max_depth,
                 port=port,
             )
             analysis = probe_patterns.attach_indicator_analysis(snapshot, self.indicator_patterns)
@@ -203,11 +214,6 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
             display_entries = probe_summary["display_entries"]
             accessible_dirs_count = len(display_entries)
             accessible_dirs_list = ",".join(display_entries)
-            try:
-                snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type, port=port)
-            except TypeError:
-                snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type)
-
             for server in self.all_servers:
                 if server.get("row_key") == row_key:
                     server["total_shares"] = accessible_dirs_count
@@ -217,12 +223,19 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
 
             self._handle_probe_status_update(ip_address, status, row_key=row_key)
             try:
+                snapshot_id = self.db_reader.upsert_probe_snapshot_for_host(
+                    ip_address,
+                    host_type,
+                    snapshot,
+                    port=port,
+                )
                 self.db_reader.upsert_probe_cache_for_host(
                     ip_address,
                     host_type,
                     status=status,
                     indicator_matches=len(analysis.get("matches", [])),
-                    snapshot_path=snapshot_path,
+                    snapshot_path=None,
+                    latest_snapshot_id=snapshot_id,
                     accessible_dirs_count=accessible_dirs_count,
                     accessible_dirs_list=accessible_dirs_list,
                 )
@@ -242,6 +255,7 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
 
         if host_type == "H":
             limits = options.get("limits", {}) or {}
+            max_depth = max(1, min(3, int(limits.get("max_depth", 1))))
             protocol_server_id = (
                 target.get("protocol_server_id")
                 if target.get("protocol_server_id") is not None
@@ -294,6 +308,7 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                 max_files=int(limits.get("max_files", 5)),
                 timeout_seconds=int(limits.get("timeout_seconds", 10)),
                 cancel_event=cancel_event,
+                max_depth=max_depth,
                 port=http_port,
                 scheme=http_scheme,
                 request_host=http_request_host,
@@ -311,11 +326,6 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
             total = len(dir_names) + total_files
             accessible_dirs_count = len(dir_names)
             accessible_dirs_list = ",".join(display_entries)
-            try:
-                snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type, port=http_port)
-            except TypeError:
-                snapshot_path = get_probe_snapshot_path_for_host(ip_address, host_type)
-
             for server in self.all_servers:
                 if server.get("row_key") == row_key:
                     server["total_shares"] = total
@@ -325,12 +335,20 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
 
             self._handle_probe_status_update(ip_address, status, row_key=row_key)
             try:
+                snapshot_id = self.db_reader.upsert_probe_snapshot_for_host(
+                    ip_address,
+                    host_type,
+                    snapshot,
+                    protocol_server_id=protocol_server_id,
+                    port=http_port,
+                )
                 self.db_reader.upsert_probe_cache_for_host(
                     ip_address,
                     host_type,
                     status=status,
                     indicator_matches=len(analysis.get("matches", [])),
-                    snapshot_path=snapshot_path,
+                    snapshot_path=None,
+                    latest_snapshot_id=snapshot_id,
                     accessible_dirs_count=accessible_dirs_count,
                     accessible_dirs_list=accessible_dirs_list,
                     accessible_files_count=total_files,
@@ -357,7 +375,9 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
         max_dirs = max(1, int(limits.get("max_directories", 3)))
         max_files = max(1, int(limits.get("max_files", 5)))
         timeout_seconds = max(1, int(limits.get("timeout_seconds", 10)))
-        enable_rce = bool(options.get("enable_rce", False))
+        max_depth = max(1, min(3, int(limits.get("max_depth", 1))))
+        rce_unlocked = bool(getattr(self, "_rce_unlocked", getattr(self, "_pry_unlocked", False)))
+        enable_rce = bool(options.get("enable_rce", False)) if rce_unlocked else False
 
         username, password = details._derive_credentials(target.get("auth_method", ""))
 
@@ -368,6 +388,7 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                 max_files=max_files,
                 timeout_seconds=timeout_seconds,
                 cancel_event=cancel_event,
+                max_depth=max_depth,
                 shares=shares,
                 username=username,
                 password=password,
@@ -388,17 +409,22 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
         if cancel_event.is_set():
             raise probe_runner.ProbeError("Probe cancelled")
 
-        probe_cache.save_probe_result(ip_address, result)
         analysis = probe_patterns.attach_indicator_analysis(result, self.indicator_patterns)
         issue_detected = bool(analysis.get("is_suspicious"))
         self._handle_probe_status_update(ip_address, 'issue' if issue_detected else 'clean', row_key=row_key)
         try:
+            snapshot_id = self.db_reader.upsert_probe_snapshot_for_host(
+                ip_address,
+                host_type,
+                result,
+            )
             self.db_reader.upsert_probe_cache_for_host(
                 ip_address,
                 host_type,
                 status='issue' if issue_detected else 'clean',
                 indicator_matches=len(analysis.get("matches", [])),
-                snapshot_path=probe_cache.get_probe_result_path(ip_address) if hasattr(probe_cache, "get_probe_result_path") else None
+                snapshot_path=None,
+                latest_snapshot_id=snapshot_id,
             )
         except Exception:
             pass
@@ -431,29 +457,21 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
 
     def _execute_extract_target(self, job_id: str, target: Dict[str, Any], options: Dict[str, Any], cancel_event: threading.Event) -> Dict[str, Any]:
         ip_address = target.get("ip_address")
-        host_type = target.get("host_type", "S")
+        host_type = str(target.get("host_type", "S")).upper()
         row_key = target.get("row_key")
 
-        if host_type in ("F", "H"):
-            protocol_name = {"F": "FTP", "H": "HTTP"}.get(host_type, host_type)
-            return {
-                "ip_address": ip_address,
-                "action": "extract",
-                "status": "skipped",
-                "notes": f"{protocol_name} extract not yet supported",
-            }
-
-        shares = target.get("shares", [])
-        if not shares:
-            return {
-                "ip_address": ip_address,
-                "action": "extract",
-                "status": "skipped",
-                "notes": "No accessible shares"
-            }
-
-        base_path = Path(options.get("download_path", str(Path.home() / ".dirracuda" / "quarantine"))).expanduser()
+        _paths = get_paths()
+        _legacy = get_legacy_paths(paths=_paths)
+        default_quarantine = select_existing_path(
+            _paths.quarantine_dir,
+            [
+                _legacy.flat_quarantine_dir,
+                _legacy.legacy_home_root / "quarantine",
+            ],
+        )
+        base_path = Path(options.get("download_path", str(default_quarantine))).expanduser()
         clamav_cfg: dict = options.get("clamav_config") or {}
+        http_allow_insecure_tls = bool(options.get("http_allow_insecure_tls", True))
         try:
             quarantine_dir = create_quarantine_dir(ip_address, purpose="extract", base_path=base_path)
         except Exception as exc:
@@ -463,8 +481,6 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                 "status": "failed",
                 "notes": f"Quarantine error: {exc}"
             }
-
-        username, password = details._derive_credentials(target.get("auth_method", ""))
 
         dialog = self.active_jobs.get(job_id, {}).get("dialog")
 
@@ -477,27 +493,145 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                 except Exception:
                     pass
 
-            summary = extract_runner.run_extract(
-                ip_address,
-                shares,
-                download_dir=quarantine_dir,
-                username=username,
-                password=password,
-                max_total_bytes=options["max_total_size_mb"] * 1024 * 1024,
-                max_file_bytes=options["max_file_size_mb"] * 1024 * 1024,
-                max_file_count=options["max_files_per_target"],
-                max_seconds=options["max_time_seconds"],
-                max_depth=options["max_directory_depth"],
-                allowed_extensions=options["included_extensions"],
-                denied_extensions=options["excluded_extensions"],
-                delay_seconds=options["download_delay_seconds"],
-                connection_timeout=options["connection_timeout"],
-                extension_mode=options.get("extension_mode"),
-                progress_callback=progress_cb,
-                cancel_event=cancel_event,
-                clamav_config=clamav_cfg,
-            )
-            log_path = extract_runner.write_extract_log(summary)
+            if host_type == "F":
+                raw_port = target.get("port")
+                if raw_port is None:
+                    raw_port = (target.get("data") or {}).get("port")
+                try:
+                    ftp_port = int(raw_port) if raw_port is not None else 21
+                except (TypeError, ValueError):
+                    ftp_port = 21
+
+                summary = protocol_extract_runner.run_ftp_extract(
+                    ip_address,
+                    port=ftp_port,
+                    download_dir=quarantine_dir,
+                    max_total_bytes=options["max_total_size_mb"] * 1024 * 1024,
+                    max_file_bytes=options["max_file_size_mb"] * 1024 * 1024,
+                    max_file_count=options["max_files_per_target"],
+                    max_seconds=options["max_time_seconds"],
+                    max_depth=options["max_directory_depth"],
+                    allowed_extensions=options["included_extensions"],
+                    denied_extensions=options["excluded_extensions"],
+                    delay_seconds=options["download_delay_seconds"],
+                    connection_timeout=options["connection_timeout"],
+                    extension_mode=options.get("extension_mode"),
+                    progress_callback=progress_cb,
+                    cancel_event=cancel_event,
+                    clamav_config=clamav_cfg,
+                )
+            elif host_type == "H":
+                protocol_server_id = target.get("protocol_server_id")
+                target_data = target.get("data") or {}
+                raw_port = target.get("port")
+                if raw_port is None:
+                    raw_port = target_data.get("port")
+                try:
+                    http_port = int(raw_port) if raw_port is not None else None
+                except (TypeError, ValueError):
+                    http_port = None
+
+                http_scheme = target_data.get("scheme")
+                probe_host = target_data.get("probe_host")
+                probe_path = target_data.get("probe_path")
+                if self.db_reader and (
+                    http_port is None or http_scheme is None or probe_host is None or probe_path is None
+                ):
+                    detail = self.db_reader.get_http_server_detail(
+                        ip_address,
+                        protocol_server_id=protocol_server_id,
+                        port=http_port,
+                    )
+                    if detail:
+                        if http_port is None:
+                            try:
+                                http_port = int(detail.get("port") or 80)
+                            except (TypeError, ValueError):
+                                http_port = 80
+                        if http_scheme is None:
+                            http_scheme = detail.get("scheme")
+                        if probe_host is None:
+                            probe_host = detail.get("probe_host")
+                        if probe_path is None:
+                            probe_path = detail.get("probe_path")
+
+                if http_port is None:
+                    http_port = 80
+                if not isinstance(http_scheme, str) or http_scheme.strip().lower() not in {"http", "https"}:
+                    http_scheme = "https" if http_port == 443 else "http"
+                else:
+                    http_scheme = http_scheme.strip().lower()
+
+                start_path = str(probe_path or "/").split("?", 1)[0].split("#", 1)[0].strip() or "/"
+                if not start_path.startswith("/"):
+                    start_path = "/" + start_path.lstrip("/")
+
+                summary = protocol_extract_runner.run_http_extract(
+                    ip_address,
+                    port=http_port,
+                    scheme=http_scheme,
+                    request_host=str(probe_host or "").strip() or None,
+                    start_path=start_path,
+                    allow_insecure_tls=http_allow_insecure_tls,
+                    download_dir=quarantine_dir,
+                    max_total_bytes=options["max_total_size_mb"] * 1024 * 1024,
+                    max_file_bytes=options["max_file_size_mb"] * 1024 * 1024,
+                    max_file_count=options["max_files_per_target"],
+                    max_seconds=options["max_time_seconds"],
+                    max_depth=options["max_directory_depth"],
+                    allowed_extensions=options["included_extensions"],
+                    denied_extensions=options["excluded_extensions"],
+                    delay_seconds=options["download_delay_seconds"],
+                    connection_timeout=options["connection_timeout"],
+                    extension_mode=options.get("extension_mode"),
+                    progress_callback=progress_cb,
+                    cancel_event=cancel_event,
+                    clamav_config=clamav_cfg,
+                )
+            else:
+                shares = target.get("shares", [])
+                if not shares:
+                    return {
+                        "ip_address": ip_address,
+                        "action": "extract",
+                        "status": "skipped",
+                        "notes": "No accessible shares"
+                    }
+
+                username, password = details._derive_credentials(target.get("auth_method", ""))
+
+                summary = extract_runner.run_extract(
+                    ip_address,
+                    shares,
+                    download_dir=quarantine_dir,
+                    username=username,
+                    password=password,
+                    max_total_bytes=options["max_total_size_mb"] * 1024 * 1024,
+                    max_file_bytes=options["max_file_size_mb"] * 1024 * 1024,
+                    max_file_count=options["max_files_per_target"],
+                    max_seconds=options["max_time_seconds"],
+                    max_depth=options["max_directory_depth"],
+                    allowed_extensions=options["included_extensions"],
+                    denied_extensions=options["excluded_extensions"],
+                    delay_seconds=options["download_delay_seconds"],
+                    connection_timeout=options["connection_timeout"],
+                    extension_mode=options.get("extension_mode"),
+                    progress_callback=progress_cb,
+                    cancel_event=cancel_event,
+                    clamav_config=clamav_cfg,
+                )
+            try:
+                log_path = extract_runner.write_extract_log(
+                    summary,
+                    db_path=str(getattr(self.db_reader, "db_path", "") or ""),
+                    ip_address=ip_address,
+                    host_type=host_type,
+                    protocol_server_id=target.get("protocol_server_id"),
+                    port=(target.get("data") or {}).get("port"),
+                )
+            except TypeError:
+                # Test doubles may still provide the legacy single-arg signature.
+                log_path = extract_runner.write_extract_log(summary)
         except extract_runner.ExtractError as exc:
             status = "cancelled" if "cancel" in str(exc).lower() else "failed"
             return {

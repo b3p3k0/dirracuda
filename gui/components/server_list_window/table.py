@@ -29,7 +29,7 @@ RCE_STATUS_TEXT = {
     "error": "Analysis failed",
 }
 
-def create_server_table(parent, theme, callbacks):
+def create_server_table(parent, theme, callbacks, show_rce_column: bool = True):
     """
     Create server data table with scrollbars.
 
@@ -37,6 +37,7 @@ def create_server_table(parent, theme, callbacks):
         parent: Parent widget for the table
         theme: Theme object for styling
         callbacks: Dict of callback functions for table events
+        show_rce_column: Whether to display the RCE status column
 
     Returns:
         tuple: (table_frame, tree_widget, scrollbar_v, scrollbar_h)
@@ -65,6 +66,7 @@ def create_server_table(parent, theme, callbacks):
     tree = ttk.Treeview(
         table_frame,
         columns=columns,
+        displaycolumns=columns if show_rce_column else tuple(col for col in columns if col != "rce"),
         show="tree headings",
         selectmode="extended"
     )
@@ -74,7 +76,7 @@ def create_server_table(parent, theme, callbacks):
     tree.column("favorite", width=80, anchor="center")  # Favorite star column
     tree.column("avoid", width=55, anchor="center")  # Avoid skull column
     tree.column("probe", width=65, anchor="center")
-    tree.column("rce", width=40, anchor="center")  # RCE status column
+    tree.column("rce", width=40 if show_rce_column else 0, anchor="center", stretch=show_rce_column)  # RCE status column
     tree.column("extracted", width=85, anchor="center")
     tree.column("Type", width=40, anchor="center")  # Protocol type: S or F
     tree.column("IP Address", width=135, anchor="w")

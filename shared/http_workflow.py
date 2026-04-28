@@ -57,6 +57,11 @@ def create_http_workflow(args: argparse.Namespace) -> HttpWorkflow:
     from shared.output import create_output_manager
 
     config = load_config(getattr(args, "config", None))
+    runtime_db_override = str(getattr(args, "runtime_db_path_override", "") or "").strip()
+    if runtime_db_override:
+        if not isinstance(config.config.get("database"), dict):
+            config.config["database"] = {}
+        config.config["database"]["path"] = runtime_db_override
     db_path = config.get_database_path()
     output = create_output_manager(
         config,

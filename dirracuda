@@ -25,7 +25,12 @@ import argparse
 import sys
 import os
 import json
+import copy
 import shutil
+import getpass
+import random
+import time
+import threading
 from pathlib import Path
 import webbrowser
 from typing import Dict, Any, Optional
@@ -33,6 +38,15 @@ from shared.db_path_resolution import (
     auto_detect_database_path,
     normalize_database_path,
     resolve_database_path,
+)
+from shared.path_service import (
+    bootstrap_layout_v2,
+    get_legacy_paths,
+    get_paths,
+    resolve_runtime_config_path,
+    resolve_runtime_main_db_for_session,
+    run_layout_v2_migration,
+    summary_message_for_migration_result,
 )
 from shared.tmpfs_quarantine import (
     bootstrap_tmpfs_quarantine,
@@ -49,16 +63,78 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 GUI_DIR = SCRIPT_DIR / "gui"
+_LAYOUT_PATHS = get_paths(repo_root=SCRIPT_DIR)
+_LAYOUT_LEGACY = get_legacy_paths(paths=_LAYOUT_PATHS)
 
 # Initialize GUI logging early (before other GUI imports)
 from gui.utils.logging_config import setup_gui_logging, get_logger
 setup_gui_logging()
 _logger = get_logger("dirracuda")
 
-# Canonical window sizing for the Dirracuda frontend
-WINDOW_WIDTH = 1200
-WINDOW_HEIGHT = 745
+# Canonical startup sizing for the Dirracuda frontend
+# (tuning phase: allow free resize after launch)
+WINDOW_WIDTH = 700
+WINDOW_HEIGHT = 315
 WINDOW_GEOMETRY = f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}"
+TMPFS_LEGACY_WARNING_DISMISS_KEY = "runtime_warnings.tmpfs_legacy_mount_dismissed"
+
+LEET_MOTD_LINES = (
+    "Hack the Planet!",
+    "Would you like to play a game?",
+    "A strange game. The only winning move is not to play.",
+    "Curiosity is not a crime.",
+    "This is our world now... the world of the electron and the switch.",
+    "Wake up, $USER...",
+    "Follow the white rabbit.",
+    "It's a UNIX system! I know this!",
+)
+
+
+def _sanitize_single_line_printable(value: Any, fallback: str = "") -> str:
+    text = "" if value is None else str(value)
+    text = text.replace("\r", " ").replace("\n", " ")
+    text = "".join(ch for ch in text if ch.isprintable())
+    text = " ".join(text.split()).strip()
+    return text or fallback
+
+
+def _resolve_motd_user() -> str:
+    candidates = [os.getenv("USER"), os.getenv("USERNAME")]
+    try:
+        candidates.append(getpass.getuser())
+    except Exception:
+        candidates.append(None)
+
+    for candidate in candidates:
+        resolved = _sanitize_single_line_printable(candidate)
+        if resolved:
+            return resolved
+    return "operator"
+
+
+def _render_1337_motd(
+    lines: Optional[Any] = None,
+    chooser: Optional[Any] = None,
+    username: Optional[str] = None,
+) -> str:
+    pool = tuple(lines) if lines is not None else LEET_MOTD_LINES
+    if not pool:
+        return ""
+
+    pick = chooser or random.choice
+    template = _sanitize_single_line_printable(
+        pick(pool),
+        fallback="Welcome, $USER.",
+    )
+    motd_user = (
+        _sanitize_single_line_printable(username, fallback="operator")
+        if username is not None
+        else _resolve_motd_user()
+    )
+    return _sanitize_single_line_printable(
+        template.replace("$USER", motd_user),
+        fallback=f"Welcome, {motd_user}.",
+    )
 
 # Thread-safe UI dispatcher for worker callbacks
 from gui.utils.ui_dispatcher import UIDispatcher
@@ -66,28 +142,45 @@ from gui.utils.scan_manager import get_scan_manager
 
 # Configuration manager for Dirracuda settings
 class XSMBSeekConfig:
-    """Manages GUI settings stored within conf/config.json."""
+    """Manages application/runtime settings in the active config.json."""
 
     GUI_SECTION = "gui_app"
 
     def __init__(self, config_file: Optional[str] = None):
-        default_path = SCRIPT_DIR / "conf" / "config.json"
-        self.config_file = Path(config_file).resolve() if config_file else default_path
+        try:
+            bootstrap_layout_v2(paths=_LAYOUT_PATHS, legacy=_LAYOUT_LEGACY)
+        except Exception as exc:
+            _logger.warning("Layout bootstrap warning during config init: %s", exc)
+
+        default_path = resolve_runtime_config_path(paths=_LAYOUT_PATHS, legacy=_LAYOUT_LEGACY)
+        self.config_file = (
+            Path(config_file).expanduser().resolve(strict=False)
+            if config_file
+            else default_path.resolve(strict=False)
+        )
         self.config = self._load_config()
     
     def _load_config(self) -> Dict[str, Any]:
         config_path = self.config_file
         if not config_path.exists():
-            example_path = config_path.parent / f"{config_path.name}.example"
-            if example_path.exists():
-                shutil.copy2(example_path, config_path)
-            else:
+            seed_candidates = [
+                _LAYOUT_LEGACY.repo_config_file,
+                _LAYOUT_LEGACY.repo_config_example_file,
+                config_path.parent / f"{config_path.name}.example",
+            ]
+            copied = False
+            for seed in seed_candidates:
+                if seed.exists() and seed.is_file():
+                    config_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(seed, config_path)
+                    copied = True
+                    break
+            if not copied:
                 raise FileNotFoundError(
-                    f"Configuration file not found at {config_path} and example template is missing."
+                    f"Configuration file not found at {config_path}; no usable seed template found."
                 )
 
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = json.load(f)
+        config = self._read_config_from_disk(strict=True)
 
         if self.GUI_SECTION not in config:
             config[self.GUI_SECTION] = self._default_gui_section()
@@ -105,6 +198,67 @@ class XSMBSeekConfig:
                 # In-memory migration is already done; app continues normally.
 
         return config
+
+    def _read_config_from_disk(self, *, strict: bool = False) -> Dict[str, Any]:
+        """
+        Read current on-disk config as an object.
+
+        Args:
+            strict: When True, raise on any read/parse error. When False,
+                return an empty dict on errors.
+        """
+        try:
+            with open(self.config_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+            if strict:
+                raise ValueError(f"Config root must be an object: {self.config_file}")
+        except Exception:
+            if strict:
+                raise
+        return {}
+
+    def _build_managed_overlay(self) -> Dict[str, Any]:
+        """
+        Build the subset of config managed by XSMBSeekConfig.
+
+        This class owns `gui_app` and the canonical `database.path` synchronization.
+        Everything else should be preserved from latest on-disk data to avoid
+        clobbering runtime updates made by other config writers.
+        """
+        overlay: Dict[str, Any] = {}
+
+        gui_section = self.config.get(self.GUI_SECTION)
+        if isinstance(gui_section, dict):
+            overlay[self.GUI_SECTION] = copy.deepcopy(gui_section)
+        else:
+            overlay[self.GUI_SECTION] = self._default_gui_section()
+
+        database_cfg = self.config.get("database")
+        if isinstance(database_cfg, dict) and "path" in database_cfg:
+            overlay["database"] = {"path": database_cfg.get("path")}
+
+        return overlay
+
+    def _merge_managed_overlay(self, disk_config: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Merge managed overlay into latest on-disk config.
+
+        Disk content remains authoritative for non-managed keys so features that
+        write other sections (for example `shodan.api_key` prompts and dork editors)
+        are not reverted by a later GUI config save.
+        """
+        merged = copy.deepcopy(disk_config) if isinstance(disk_config, dict) else {}
+        overlay = self._build_managed_overlay()
+
+        merged[self.GUI_SECTION] = copy.deepcopy(overlay[self.GUI_SECTION])
+        if "database" in overlay:
+            if not isinstance(merged.get("database"), dict):
+                merged["database"] = {}
+            merged["database"]["path"] = overlay["database"].get("path")
+
+        return merged
     
     def _default_gui_section(self) -> Dict[str, Any]:
         return {
@@ -137,9 +291,20 @@ class XSMBSeekConfig:
             json.dump(data, f, indent=2)
     
     def save_config(self) -> bool:
-        """Save current configuration to file."""
+        """
+        Save managed configuration to file without clobbering external updates.
+
+        Why this matters:
+        Multiple runtime components can update the runtime config directly.
+        Persisting a stale in-memory full snapshot here would overwrite those
+        updates (for example, a newly prompted Shodan API key). This method
+        now reconciles managed fields onto the latest on-disk config first.
+        """
         try:
-            self._write_config(self.config)
+            disk_config = self._read_config_from_disk(strict=False)
+            merged_config = self._merge_managed_overlay(disk_config)
+            self._write_config(merged_config)
+            self.config = merged_config
             return True
         except Exception as e:
             _logger.error("Failed to save config: %s", e)
@@ -404,6 +569,10 @@ try:
     from gui.components.data_import_dialog import open_data_import_dialog
     from gui.components.database_setup_dialog import show_database_setup_dialog
     from gui.utils.database_access import DatabaseReader
+    from gui.utils.db_unification import (
+        apply_probe_cleanup_choice,
+        run_startup_db_unification,
+    )
     from gui.utils.backend_interface import BackendInterface
     from gui.utils.style import get_theme, apply_theme_to_window
     from gui.utils.settings_manager import get_settings_manager
@@ -423,8 +592,14 @@ class XSMBSeekGUI:
     This version works with SMBSeek as an external configurable dependency.
     """
     
-    def __init__(self, mock_mode: bool = False, config_path: Optional[str] = None, 
-                 smbseek_path: Optional[str] = None, database_path: Optional[str] = None):
+    def __init__(
+        self,
+        mock_mode: bool = False,
+        config_path: Optional[str] = None,
+        smbseek_path: Optional[str] = None,
+        database_path: Optional[str] = None,
+        pry_unlocked: bool = False,
+    ):
         """
         Initialize xsmbseek GUI application.
         
@@ -435,12 +610,21 @@ class XSMBSeekGUI:
             database_path: Optional path to database file
         """
         self.mock_mode = mock_mode
+        self.cli_config_path = config_path
         self.cli_database_path = database_path
-        
+        self._pry_unlocked = bool(pry_unlocked)
+        self._rce_unlocked = self._pry_unlocked
+        self._layout_migration_result: Optional[Dict[str, Any]] = None
+        self._runtime_fallback_paths: list[str] = []
+        self._session_db_fallback_path: Optional[str] = None
+        self._session_db_fallback_warning: Optional[str] = None
+
+        self._run_layout_v2_startup_migration()
+
         # Initialize configuration system
         # Configuration Architecture:
-        # - self.config (XSMBSeekConfig) manages GUI settings inside conf/config.json
-        # - self.settings_manager (SettingsManager) manages ~/.dirracuda/gui_settings.json
+        # - self.config (XSMBSeekConfig) manages runtime config in ~/.dirracuda/conf/config.json
+        # - self.settings_manager (SettingsManager) manages ~/.dirracuda/state/gui_settings.json
         # These work together but maintain separate responsibilities
         self.config = XSMBSeekConfig(config_path)
         
@@ -464,11 +648,35 @@ class XSMBSeekGUI:
         # Scan manager reference (initialized via get_scan_manager)
         self.scan_manager = None
         self._pending_tmpfs_startup_warning: Optional[str] = None
+        self._pending_tmpfs_warning_code: Optional[str] = None
+        self._db_unification_running = False
+        self._pending_db_unification_error: Optional[str] = None
 
         self._initialize_application()
         
         # Set up global exception handler
         self._setup_global_exception_handler()
+
+    def _run_layout_v2_startup_migration(self) -> None:
+        """Run home-layout migration once per startup (non-blocking failure semantics)."""
+        try:
+            self._layout_migration_result = run_layout_v2_migration(
+                paths=_LAYOUT_PATHS,
+                legacy=_LAYOUT_LEGACY,
+            )
+        except Exception as exc:
+            self._layout_migration_result = {
+                "status": "failed",
+                "layout_version": 0,
+                "report_file": "",
+                "fallback_paths": [],
+                "migrated": {"ok": 0, "skipped": 0, "errors": 1},
+                "db_recovery_attempted": True,
+                "db_recovery_status": "failed",
+                "db_fallback_candidates": [],
+                "error": str(exc),
+            }
+            _logger.warning("Layout v2 startup migration failed: %s", exc)
     
     def _setup_global_exception_handler(self) -> None:
         """Set up global exception handler for unhandled errors."""
@@ -503,6 +711,8 @@ class XSMBSeekGUI:
             self._create_main_window()
             self._bootstrap_tmpfs_runtime()
             self._create_dashboard()
+            self._schedule_layout_migration_notification()
+            self._start_db_unification_tasks()
             self._setup_event_handlers()
             
             if self.mock_mode:
@@ -516,8 +726,8 @@ class XSMBSeekGUI:
         Setup integration with SMBSeek toolkit.
         
         Initializes two separate configuration systems:
-        1. XSMBSeekConfig: Manages GUI settings in conf/config.json (paths, metadata)
-        2. SettingsManager: Manages ~/.dirracuda/gui_settings.json (GUI preferences)
+        1. XSMBSeekConfig: Manages runtime config (paths, metadata, API key)
+        2. SettingsManager: Manages ~/.dirracuda/state/gui_settings.json (GUI preferences)
         
         The systems work together but maintain separate concerns for modularity.
         XSMBSeekConfig handles application-level configuration while SettingsManager
@@ -555,26 +765,48 @@ class XSMBSeekGUI:
         except Exception as e:
             raise RuntimeError(f"Failed to initialize Dirracuda interface: {e}")
         
-        # Initialize settings manager (GUI preferences in ~/.dirracuda/)
-        # Note: This is separate from self.config (XSMBSeekConfig) which manages conf/config.json
+        # Initialize settings manager (GUI preferences in ~/.dirracuda/state/gui_settings.json)
+        # Note: This is separate from self.config (XSMBSeekConfig) which manages app config.
         try:
-            from shared.path_migration import legacy_user_data_needs_migration, migrate_user_data_root
-
-            if legacy_user_data_needs_migration():
-                if not self._confirm_user_data_migration():
-                    _logger.info("User cancelled user-data migration (~/.smbseek -> ~/.dirracuda)")
-                    sys.exit(0)
-                if not migrate_user_data_root():
-                    raise RuntimeError("Failed to migrate user data from ~/.smbseek to ~/.dirracuda")
-
-            self.settings_manager = get_settings_manager()  # Use default ~/.dirracuda/ directory
+            self.settings_manager = get_settings_manager()
             
             # Sync SMBSeek path from XSMBSeekConfig to SettingsManager for GUI consistency
             smbseek_path = str(self.config.get_smbseek_path())
             self.settings_manager.set_backend_path(smbseek_path)
-            self.settings_manager.set_setting("backend.config_path", str(self.config.get_config_path()))
-            resolved_db_path = self._resolve_runtime_database_path()
-            self._sync_database_path_to_stores(resolved_db_path)
+            active_config_path = self.config.get_config_path().expanduser().resolve(strict=False)
+            self.settings_manager.set_setting("backend.config_path", str(active_config_path))
+            resolved_db_path = self._resolve_effective_runtime_database_path()
+            if self._session_db_fallback_path is None:
+                self._sync_database_path_to_stores(resolved_db_path)
+
+            # Capture runtime legacy fallbacks (for startup warning/reporting).
+            self._runtime_fallback_paths = []
+            config_fallback_candidates = {
+                _LAYOUT_LEGACY.repo_config_file.resolve(strict=False),
+            }
+            db_fallback_candidates = {
+                _LAYOUT_LEGACY.flat_main_db_file.resolve(strict=False),
+                _LAYOUT_LEGACY.flat_legacy_db_file.resolve(strict=False),
+                _LAYOUT_LEGACY.repo_main_db_file.resolve(strict=False),
+                _LAYOUT_LEGACY.repo_legacy_db_file.resolve(strict=False),
+                (_LAYOUT_LEGACY.legacy_home_root / "dirracuda.db").resolve(strict=False),
+                (_LAYOUT_LEGACY.legacy_home_root / "smbseek.db").resolve(strict=False),
+            }
+            settings_fallback_candidates = {
+                _LAYOUT_LEGACY.flat_gui_settings_file.resolve(strict=False),
+                (_LAYOUT_LEGACY.legacy_home_root / "gui_settings.json").resolve(strict=False),
+            }
+
+            if self.cli_config_path is None and active_config_path in config_fallback_candidates:
+                self._runtime_fallback_paths.append(str(active_config_path))
+
+            resolved_db_path_abs = resolved_db_path.expanduser().resolve(strict=False)
+            if self.cli_database_path is None and resolved_db_path_abs in db_fallback_candidates:
+                self._runtime_fallback_paths.append(str(resolved_db_path_abs))
+
+            settings_file = Path(getattr(self.settings_manager, "settings_file", "")).expanduser().resolve(strict=False)
+            if settings_file in settings_fallback_candidates:
+                self._runtime_fallback_paths.append(str(settings_file))
 
             # Initialize database reader after DB path is resolved and synced.
             self.db_reader = DatabaseReader(str(resolved_db_path))
@@ -647,8 +879,8 @@ class XSMBSeekGUI:
         Order:
         1) explicit CLI --database-path
         2) persisted settings/config paths
-        3) backend auto-detect (dirracuda.db, smbseek.db)
-        4) backend/dirracuda.db
+        3) home/backend auto-detect (home canonical first)
+        4) ~/.dirracuda/data/dirracuda.db
         """
         backend_path = self.config.get_smbseek_path()
         persisted_paths = []
@@ -672,6 +904,29 @@ class XSMBSeekGUI:
             persisted_paths=persisted_paths,
         )
 
+    def _resolve_effective_runtime_database_path(self) -> Path:
+        """Resolve runtime DB path with migration-aware session fallback."""
+        resolved = self._resolve_runtime_database_path()
+        self._session_db_fallback_path = None
+        self._session_db_fallback_warning = None
+
+        # Explicit CLI override always wins for this run.
+        if self.cli_database_path:
+            return resolved
+
+        effective, warning = resolve_runtime_main_db_for_session(
+            resolved,
+            migration_result=self._layout_migration_result,
+            paths=_LAYOUT_PATHS,
+            legacy=_LAYOUT_LEGACY,
+        )
+        if effective != resolved:
+            self._session_db_fallback_path = str(effective)
+            self._session_db_fallback_warning = warning
+            if warning:
+                _logger.warning("%s", warning)
+        return effective
+
     def _sync_database_path_to_stores(self, db_path: Path) -> None:
         """
         Persist one exact absolute normalized DB path string to all stores.
@@ -689,9 +944,8 @@ class XSMBSeekGUI:
         self.root = tk.Tk()
         self.root.title("Dirracuda")
         
-        # Force canonical geometry; users may enlarge but not shrink below this
+        # Set startup geometry only; keep resize unconstrained during tuning.
         self.root.geometry(WINDOW_GEOMETRY)
-        self.root.minsize(WINDOW_WIDTH, WINDOW_HEIGHT)
         
         # Apply theme
         apply_theme_to_window(self.root)
@@ -715,17 +969,8 @@ class XSMBSeekGUI:
 
     def _center_window(self) -> None:
         """
-        Center the main window on screen using fixed dimensions.
-        
-        Forces window to maintain intended 1200x745 size instead of
-        auto-sizing based on content. This ensures consistent compact
-        layout across different screen configurations.
-        
-        Design Decision: Fixed dimensions prevent tkinter's automatic
-        content-based sizing from overriding our intended compact layout.
+        Center the main window on screen using current startup defaults.
         """
-        # Force our intended dimensions instead of querying auto-sized dimensions
-        # This prevents tkinter from expanding the window based on content
         target_width = WINDOW_WIDTH
         target_height = WINDOW_HEIGHT
         
@@ -735,48 +980,17 @@ class XSMBSeekGUI:
         x = (screen_width // 2) - (target_width // 2)
         y = (screen_height // 2) - (target_height // 2)
         
-        # Force our intended dimensions and center position
+        # Set startup geometry and centered position.
         self.root.geometry(f"{target_width}x{target_height}+{x}+{y}")
     
     def _enforce_window_size(self) -> None:
         """
-        Enforce minimum window size constraints while respecting user preferences.
-        
-        This method ensures the window doesn't shrink below minimum requirements
-        but allows users to manually resize larger without forcing back to defaults.
-        Implements industry-standard UX behavior for window management.
+        Temporary no-op while dashboard dimensions are being tuned.
+
+        Intentional: disable minimum-size enforcement so users can freely drag
+        and resize the dashboard during layout calibration.
         """
-        min_width = WINDOW_WIDTH
-        min_height = WINDOW_HEIGHT
-        
-        # Get current geometry
-        current_geometry = self.root.geometry()
-        if 'x' in current_geometry and '+' in current_geometry:
-            # Parse current dimensions and position
-            size_part = current_geometry.split('+')[0]
-            pos_part = current_geometry[len(size_part):]
-            
-            current_width, current_height = map(int, size_part.split('x'))
-            
-            # Only enforce minimum constraints - respect user's larger choices
-            needs_adjustment = False
-            new_width = current_width
-            new_height = current_height
-            
-            if current_width < min_width:
-                new_width = min_width
-                needs_adjustment = True
-                
-            if current_height < min_height:
-                new_height = min_height
-                needs_adjustment = True
-            
-            # Only adjust if window is below minimum - preserve user's larger sizing
-            if needs_adjustment:
-                self.root.geometry(f"{new_width}x{new_height}{pos_part}")
-        else:
-            # Fallback: ensure minimum size without forcing position
-            self.root.minsize(min_width, min_height)
+        return
     
     def _create_dashboard(self) -> None:
         """Create main dashboard widget."""
@@ -787,13 +1001,17 @@ class XSMBSeekGUI:
             self.root,
             self.db_reader,
             self.backend_interface,
-            str(smbseek_config_path)
+            str(smbseek_config_path),
+            rce_unlocked=self._rce_unlocked,
         )
         
         # Set callbacks
         self.dashboard.set_drill_down_callback(self._open_drill_down_window)
         self.dashboard.set_config_editor_callback(self._open_config_editor_direct)
         self.dashboard.set_size_enforcement_callback(self._enforce_window_size)
+        self.dashboard.set_server_list_getter(
+            lambda: self.drill_down_windows.get('server_list')
+        )
     
     def _setup_event_handlers(self) -> None:
         """Setup application-wide event handlers."""
@@ -814,32 +1032,74 @@ class XSMBSeekGUI:
         current_title = self.root.title()
         self.root.title(f"{current_title} - Mock Mode")
 
-    def _confirm_user_data_migration(self) -> bool:
-        """Ask user for one-time migration from ~/.smbseek to ~/.dirracuda."""
-        prompt = (
-            "Legacy user data directory detected:\n\n"
-            "~/.smbseek\n\n"
-            "Dirracuda now uses:\n"
-            "~/.dirracuda\n\n"
-            "Migrate now?"
-        )
-        root = tk.Tk()
-        root.withdraw()
+    def _schedule_layout_migration_notification(self) -> None:
+        """Queue one migration result notification after startup."""
+        if self.root is None or self._layout_migration_result is None:
+            return
+        status = str(self._layout_migration_result.get("status", "")).strip().lower()
+        if status in {"", "already_done"}:
+            return
         try:
-            choice = messagebox.askyesnocancel(
-                "Dirracuda Data Migration",
-                prompt,
-                icon="warning",
-            )
-            return choice is True
-        except tk.TclError as exc:
-            _logger.warning("Could not show migration prompt: %s", exc)
-            return False
-        finally:
-            try:
-                root.destroy()
-            except Exception:
-                pass
+            self.root.after_idle(self._show_layout_migration_notification)
+        except tk.TclError:
+            return
+
+    def _normalize_layout_runtime_fallback_paths(self, raw_paths: set[str]) -> list[str]:
+        """Normalize fallback path candidates and ignore canonical runtime targets."""
+        canonical_paths = {
+            _LAYOUT_PATHS.config_file.resolve(strict=False),
+            _LAYOUT_PATHS.main_db_file.resolve(strict=False),
+            _LAYOUT_PATHS.gui_settings_file.resolve(strict=False),
+        }
+        normalized: set[str] = set()
+        for raw in raw_paths:
+            text = str(raw).strip()
+            if not text:
+                continue
+            candidate = Path(text).expanduser().resolve(strict=False)
+            if candidate in canonical_paths:
+                continue
+            normalized.add(str(candidate))
+        return sorted(normalized)
+
+    def _show_layout_migration_notification(self) -> None:
+        """Display one layout migration summary dialog."""
+        if self.root is None or self._layout_migration_result is None:
+            return
+        if not self.root.winfo_exists():
+            return
+
+        result = dict(self._layout_migration_result)
+        fallback_paths: set[str] = set(result.get("fallback_paths") or [])
+        fallback_paths.update(self._runtime_fallback_paths or [])
+        effective_fallback_paths = self._normalize_layout_runtime_fallback_paths(fallback_paths)
+        if effective_fallback_paths:
+            result["fallback_paths"] = effective_fallback_paths
+            if str(result.get("status", "")).lower() == "success":
+                # Canonical targets were expected but fallback is still in use this run.
+                result["status"] = "partial"
+        else:
+            result["fallback_paths"] = []
+        if self._session_db_fallback_path:
+            result["db_runtime_fallback_path"] = self._session_db_fallback_path
+            if str(result.get("status", "")).lower() == "success":
+                result["status"] = "partial"
+
+        sanitized = result.get("sanitized", {}) if isinstance(result.get("sanitized"), dict) else {}
+        sanitized_errors = int(sanitized.get("errors", 0) or 0)
+        status = str(result.get("status", "")).strip().lower()
+        if status == "success" and not effective_fallback_paths and not self._session_db_fallback_path and sanitized_errors == 0:
+            return
+
+        title, body = summary_message_for_migration_result(result)
+
+        try:
+            if status == "success" and sanitized_errors == 0:
+                messagebox.showinfo(title, body, parent=self.root)
+            else:
+                messagebox.showwarning(title, body, parent=self.root)
+        except Exception as exc:
+            _logger.warning("Could not display layout migration dialog: %s", exc)
     
     def _handle_initialization_error(self, error: Exception) -> None:
         """Handle application initialization errors."""
@@ -863,7 +1123,7 @@ class XSMBSeekGUI:
         messagebox.showinfo(
             "Settings",
             "Dirracuda settings dialog will be implemented in the next phase.\\n\\n"
-            "For now, you can edit conf/config.json manually."
+            f"For now, you can edit {_LAYOUT_PATHS.config_file} manually."
         )
     
     def _open_drill_down_window(self, window_type: str, data: Dict[str, Any]) -> None:
@@ -885,7 +1145,10 @@ class XSMBSeekGUI:
                     existing_window.restore_and_focus()
                 else:
                     # Create new window and track it
-                    window = open_server_list_window(self.root, self.db_reader, data, self.settings_manager)
+                    window_data = dict(data or {})
+                    window_data["_pry_unlocked"] = self._pry_unlocked
+                    window_data["_rce_unlocked"] = self._rce_unlocked
+                    window = open_server_list_window(self.root, self.db_reader, window_data, self.settings_manager)
                     self.drill_down_windows['server_list'] = window
             elif window_type == "config_editor":
                 # Open SMBSeek configuration editor
@@ -896,13 +1159,21 @@ class XSMBSeekGUI:
                     self.root,
                     self.settings_manager,
                     self._open_config_editor_direct,
-                    self.config,  # Pass main config so changes get saved to conf/config.json
-                    self._refresh_database_connection  # Refresh database connection after changes
+                    self.config,  # Pass runtime config manager for persisted app settings.
+                    self._refresh_database_connection,  # Refresh database connection after changes
+                    show_pry_controls=self._pry_unlocked,
                 )
             elif window_type == "data_import":
                 open_data_import_dialog(self.root, self.db_reader)
             elif window_type == "recent_activity":
-                server_window = ServerListWindow(self.root, self.db_reader)
+                server_window = ServerListWindow(
+                    self.root,
+                    self.db_reader,
+                    {
+                        "_pry_unlocked": self._pry_unlocked,
+                        "_rce_unlocked": self._rce_unlocked,
+                    },
+                )
                 server_window.apply_recent_discoveries_filter()
             else:
                 # For other window types, show placeholder message
@@ -948,6 +1219,96 @@ class XSMBSeekGUI:
         if self.dashboard:
             self.dashboard._refresh_dashboard_data()
 
+    def _start_db_unification_tasks(self) -> None:
+        """Run startup DB unification in the background (non-blocking)."""
+        if self.mock_mode:
+            return
+        if self._db_unification_running:
+            return
+        db_path = str(getattr(self.db_reader, "db_path", "") or "").strip()
+        if not db_path or self.root is None:
+            return
+
+        self._db_unification_running = True
+        worker = threading.Thread(
+            target=self._run_db_unification_worker,
+            args=(db_path,),
+            daemon=True,
+            name="db-unification-startup",
+        )
+        worker.start()
+
+    def _run_db_unification_worker(self, db_path: str) -> None:
+        """Background worker for startup DB unification."""
+        try:
+            result = run_startup_db_unification(db_path)
+        except Exception as exc:
+            result = {
+                "success": False,
+                "errors": [str(exc)],
+                "probe_backfill": {},
+                "sidecar_import": {},
+                "prompt_cleanup": False,
+            }
+        if self.root is None:
+            return
+        try:
+            self.root.after(0, self._handle_db_unification_result, result)
+        except tk.TclError:
+            self._db_unification_running = False
+
+    def _handle_db_unification_result(self, result: Dict[str, Any]) -> None:
+        """UI-thread handler for startup DB-unification completion."""
+        self._db_unification_running = False
+        if self.root is None or not self.root.winfo_exists():
+            return
+
+        try:
+            if result.get("prompt_cleanup"):
+                keep_files = messagebox.askyesno(
+                    "Probe Cache Cleanup",
+                    "Legacy probe cache files were imported into dirracuda.db.\n\n"
+                    "Keep old local cache files for safety?\n\n"
+                    "Yes = keep files.\n"
+                    "No = discard old cache files now.",
+                    icon="question",
+                    default=messagebox.YES,
+                    parent=self.root,
+                )
+                apply_probe_cleanup_choice(self.db_reader, keep_files=bool(keep_files))
+        except Exception as exc:
+            _logger.warning("Probe cache cleanup prompt failed: %s", exc)
+
+        if result.get("success"):
+            return
+
+        error_text = "; ".join(str(e) for e in (result.get("errors") or []) if e)
+        if not error_text:
+            error_text = "Unknown startup migration failure."
+        self._pending_db_unification_error = error_text
+
+        try:
+            if self.dashboard and hasattr(self.dashboard, "_show_status_bar"):
+                self.dashboard._show_status_bar(
+                    "DB unification warning: startup migration failed. Retry available."
+                )
+        except Exception:
+            pass
+
+        try:
+            retry = messagebox.askretrycancel(
+                "Startup Data Migration Warning",
+                "Dirracuda could not complete startup data migration.\n\n"
+                f"Details: {error_text}\n\n"
+                "You can continue using the app. Retry now?",
+                icon="warning",
+                parent=self.root,
+            )
+        except Exception:
+            retry = False
+        if retry:
+            self._start_db_unification_tasks()
+
     def _bootstrap_tmpfs_runtime(self) -> None:
         """Initialize tmpfs quarantine runtime and surface fallback warning once."""
         try:
@@ -960,8 +1321,22 @@ class XSMBSeekGUI:
                 state.get("fallback_reason"),
             )
             warning = consume_tmpfs_startup_warning()
+            warning_code = str(state.get("warning_code") or "").strip()
             if warning:
+                if (
+                    warning_code == "legacy_mountpoint"
+                    and self.settings_manager is not None
+                    and bool(
+                        self.settings_manager.get_setting(
+                            TMPFS_LEGACY_WARNING_DISMISS_KEY,
+                            False,
+                        )
+                    )
+                ):
+                    _logger.info("tmpfs legacy-mount warning suppressed by user preference")
+                    return
                 self._pending_tmpfs_startup_warning = warning
+                self._pending_tmpfs_warning_code = warning_code or None
                 self._schedule_tmpfs_startup_warning_dialog()
         except Exception as exc:
             _logger.warning("tmpfs bootstrap failed: %s", exc)
@@ -980,23 +1355,50 @@ class XSMBSeekGUI:
     def _show_pending_tmpfs_startup_warning(self) -> None:
         """Show one queued tmpfs warning only when the root window is alive/mapped."""
         warning = self._pending_tmpfs_startup_warning
+        warning_code = str(getattr(self, "_pending_tmpfs_warning_code", "") or "")
         if not warning or self.root is None:
             return
         try:
             if not self.root.winfo_exists():
                 self._pending_tmpfs_startup_warning = None
+                self._pending_tmpfs_warning_code = None
                 return
             if not self.root.winfo_ismapped():
                 self.root.after(50, self._show_pending_tmpfs_startup_warning)
                 return
             self._pending_tmpfs_startup_warning = None
+            self._pending_tmpfs_warning_code = None
             messagebox.showwarning(
                 "tmpfs Quarantine Fallback",
                 warning,
                 parent=self.root,
             )
+            if (
+                warning_code == "legacy_mountpoint"
+                and self.settings_manager is not None
+                and not bool(
+                    self.settings_manager.get_setting(
+                        TMPFS_LEGACY_WARNING_DISMISS_KEY,
+                        False,
+                    )
+                )
+            ):
+                mute = messagebox.askyesno(
+                    "Legacy tmpfs Mountpoint",
+                    "Dirracuda is using a legacy tmpfs mountpoint.\n\n"
+                    "Hide this reminder on future startups?",
+                    icon="question",
+                    default=messagebox.NO,
+                    parent=self.root,
+                )
+                if mute:
+                    self.settings_manager.set_setting(
+                        TMPFS_LEGACY_WARNING_DISMISS_KEY,
+                        True,
+                    )
         except tk.TclError:
             self._pending_tmpfs_startup_warning = None
+            self._pending_tmpfs_warning_code = None
     
     def _refresh_database_connection(self) -> None:
         """Refresh database connection after configuration changes."""
@@ -1006,8 +1408,9 @@ class XSMBSeekGUI:
             self.backend_interface.config_path = self.config.get_config_path().expanduser().resolve()
 
             # Resolve and sync DB path before reconnecting readers/subprocess consumers.
-            resolved_db_path = self._resolve_runtime_database_path()
-            self._sync_database_path_to_stores(resolved_db_path)
+            resolved_db_path = self._resolve_effective_runtime_database_path()
+            if self._session_db_fallback_path is None:
+                self._sync_database_path_to_stores(resolved_db_path)
             self.db_reader = DatabaseReader(str(resolved_db_path))
             _logger.info("Refreshed DB connection | db=%s", resolved_db_path)
             
@@ -1015,7 +1418,8 @@ class XSMBSeekGUI:
             if self.settings_manager:
                 self.settings_manager.set_backend_path(str(self.config.get_smbseek_path()))
                 self.settings_manager.set_setting("backend.config_path", str(self.config.get_config_path()))
-                self.settings_manager.set_database_path(str(resolved_db_path), validate=False)
+                if self._session_db_fallback_path is None:
+                    self.settings_manager.set_database_path(str(resolved_db_path), validate=False)
 
             # Re-evaluate tmpfs settings after config changes.
             self._bootstrap_tmpfs_runtime()
@@ -1037,17 +1441,77 @@ class XSMBSeekGUI:
     def _on_closing(self) -> None:
         """Handle application closing."""
         self._pending_tmpfs_startup_warning = None
-        # Check for active scans via scan_manager
-        if self.scan_manager and self.scan_manager.is_scanning:
+        self._pending_tmpfs_warning_code = None
+        dashboard = self.dashboard
+        has_active_work = False
+        try:
+            if dashboard and hasattr(dashboard, "has_active_or_queued_work"):
+                has_active_work = bool(dashboard.has_active_or_queued_work())
+            elif self.scan_manager and self.scan_manager.is_scanning:
+                has_active_work = True
+        except Exception:
+            has_active_work = bool(self.scan_manager and self.scan_manager.is_scanning)
+
+        if has_active_work:
             response = messagebox.askyesno(
-                "Scan in Progress",
-                "A scan is currently running. Are you sure you want to exit?",
-                icon="warning"
+                "Tasks in Progress",
+                "A scan is running or scans/tasks are queued.\n\n"
+                "Stop all running and queued tasks and exit?",
+                icon="warning",
+                parent=self.root,
             )
             if not response:
                 return
-            # User confirmed exit during scan - interrupt it
-            self.scan_manager.interrupt_scan()
+
+            try:
+                if dashboard and hasattr(dashboard, "request_cancel_active_or_queued_work"):
+                    dashboard.request_cancel_active_or_queued_work()
+                elif self.scan_manager and self.scan_manager.is_scanning:
+                    self.scan_manager.interrupt_scan()
+            except Exception:
+                pass
+
+            start = time.time()
+            retried = False
+            while (time.time() - start) < 6.0:
+                try:
+                    if self.root and self.root.winfo_exists():
+                        self.root.update_idletasks()
+                        self.root.update()
+                except tk.TclError:
+                    break
+
+                try:
+                    if dashboard and hasattr(dashboard, "has_active_or_queued_work"):
+                        still_active = bool(dashboard.has_active_or_queued_work())
+                    else:
+                        still_active = bool(self.scan_manager and self.scan_manager.is_scanning)
+                except Exception:
+                    still_active = bool(self.scan_manager and self.scan_manager.is_scanning)
+
+                if not still_active:
+                    break
+
+                elapsed = time.time() - start
+                if (not retried) and elapsed >= 3.0:
+                    retried = True
+                    try:
+                        if dashboard and hasattr(dashboard, "request_cancel_active_or_queued_work"):
+                            dashboard.request_cancel_active_or_queued_work()
+                        if dashboard and hasattr(dashboard, "force_terminate_active_work"):
+                            dashboard.force_terminate_active_work()
+                        elif self.scan_manager and self.scan_manager.is_scanning:
+                            self.scan_manager.interrupt_scan()
+                    except Exception:
+                        pass
+                time.sleep(0.10)
+
+            try:
+                if dashboard and hasattr(dashboard, "has_active_or_queued_work"):
+                    if dashboard.has_active_or_queued_work() and hasattr(dashboard, "force_terminate_active_work"):
+                        dashboard.force_terminate_active_work()
+            except Exception:
+                pass
 
         # tmpfs data-loss confirmation gate.
         try:
@@ -1076,6 +1540,12 @@ class XSMBSeekGUI:
                 try:
                     window.destroy()
                 except:
+                    pass
+
+            if dashboard and hasattr(dashboard, "teardown_dashboard_monitors"):
+                try:
+                    dashboard.teardown_dashboard_monitors()
+                except Exception:
                     pass
             
             # Clean up backend interfaces
@@ -1127,7 +1597,7 @@ def main():
         "--config",
         type=str,
         metavar="FILE",
-        help="Path to Dirracuda configuration file (default: ./conf/config.json)"
+        help=f"Path to Dirracuda configuration file (default: {resolve_runtime_config_path(paths=_LAYOUT_PATHS, legacy=_LAYOUT_LEGACY)})"
     )
     
     parser.add_argument(
@@ -1151,6 +1621,15 @@ def main():
         help="Enable debug output"
     )
 
+    # Easter egg: pry is intentionally hidden unless this startup flag is present.
+    parser.add_argument(
+        "--1337",
+        dest="pry_unlocked",
+        action="store_true",
+        default=False,
+        help=argparse.SUPPRESS,
+    )
+
     parser.add_argument(
         "--version",
         action="version",
@@ -1158,6 +1637,12 @@ def main():
     )
     
     args = parser.parse_args()
+
+    pry_unlocked = bool(getattr(args, "pry_unlocked", False))
+    if pry_unlocked:
+        motd = _render_1337_motd()
+        if motd:
+            print(motd)
 
     # Set debug environment variable if requested
     if args.debug:
@@ -1168,7 +1653,8 @@ def main():
             mock_mode=args.mock,
             config_path=args.config,
             smbseek_path=args.backend_path,
-            database_path=getattr(args, 'database_path', None)
+            database_path=getattr(args, 'database_path', None),
+            pry_unlocked=pry_unlocked,
         )
         app.run()
     except KeyboardInterrupt:

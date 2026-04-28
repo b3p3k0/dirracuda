@@ -329,6 +329,23 @@ class ScanManager:
             if max_results is not None:
                 config_overrides['shodan'] = {'query_limits': {'max_results': max_results}}
 
+            smb_budget = scan_options.get("smb_max_query_credits_per_scan")
+            if smb_budget is not None:
+                q_limits = config_overrides.setdefault("shodan", {}).setdefault("query_limits", {})
+                q_limits["smb_max_query_credits_per_scan"] = smb_budget
+                # Backward-compatible alias consumed by legacy helpers.
+                q_limits["max_query_credits_per_scan"] = smb_budget
+
+            ftp_budget = scan_options.get("ftp_max_query_credits_per_scan")
+            if ftp_budget is not None:
+                q_limits = config_overrides.setdefault("shodan", {}).setdefault("query_limits", {})
+                q_limits["ftp_max_query_credits_per_scan"] = ftp_budget
+
+            http_budget = scan_options.get("http_max_query_credits_per_scan")
+            if http_budget is not None:
+                q_limits = config_overrides.setdefault("shodan", {}).setdefault("query_limits", {})
+                q_limits["http_max_query_credits_per_scan"] = http_budget
+
             # Apply API key override
             api_key = scan_options.get('api_key_override')
             if api_key:
@@ -408,16 +425,12 @@ class ScanManager:
         # Execute scan with additional CLI arguments
         self._update_progress(10, "Starting scan execution...", "discovery")
 
-        # Use the backend interface run_scan method but with enhanced parameters
-        # Extract custom filters from scan options
-        custom_filters = scan_options.get('custom_filters', '')
-
+        # Use the backend interface run_scan method with enhanced parameters.
         return self.backend_interface.run_scan(
             countries,
             progress_callback=self._handle_backend_progress,
             log_callback=self._handle_backend_log_line,
             additional_args=cli_args,
-            filters=custom_filters,
             verbose=verbose_flag
         )
 
@@ -993,6 +1006,13 @@ class ScanManager:
                  .setdefault("query_limits", {})
                  )["max_results"] = max_results
 
+            ftp_budget = scan_options.get("ftp_max_query_credits_per_scan")
+            if ftp_budget is not None:
+                (config_overrides
+                 .setdefault("shodan", {})
+                 .setdefault("query_limits", {})
+                 )["ftp_max_query_credits_per_scan"] = ftp_budget
+
             # FTP discovery concurrency (key matches SMB naming convention).
             disc_conc = scan_options.get("discovery_max_concurrent_hosts")
             if disc_conc is not None:
@@ -1017,7 +1037,6 @@ class ScanManager:
                 config_overrides.setdefault("ftp", {})["verification"] = verif_overrides
 
             verbose = bool(scan_options.get("verbose", False))
-            custom_filters = scan_options.get("custom_filters", "")
 
             if config_overrides:
                 self._update_progress(7, "Applying configuration overrides...", "initialization")
@@ -1026,7 +1045,6 @@ class ScanManager:
                         countries=countries,
                         progress_callback=self._handle_backend_progress,
                         log_callback=self._handle_backend_log_line,
-                        filters=custom_filters,
                         verbose=verbose,
                     )
             else:
@@ -1034,7 +1052,6 @@ class ScanManager:
                     countries=countries,
                     progress_callback=self._handle_backend_progress,
                     log_callback=self._handle_backend_log_line,
-                    filters=custom_filters,
                     verbose=verbose,
                 )
 
@@ -1140,6 +1157,13 @@ class ScanManager:
                  .setdefault("query_limits", {})
                  )["max_results"] = max_results
 
+            http_budget = scan_options.get("http_max_query_credits_per_scan")
+            if http_budget is not None:
+                (config_overrides
+                 .setdefault("shodan", {})
+                 .setdefault("query_limits", {})
+                 )["http_max_query_credits_per_scan"] = http_budget
+
             # HTTP discovery concurrency.
             disc_conc = scan_options.get("discovery_max_concurrent_hosts")
             if disc_conc is not None:
@@ -1175,7 +1199,6 @@ class ScanManager:
                 config_overrides.setdefault("http", {})["bulk_probe_enabled"] = bulk
 
             verbose = bool(scan_options.get("verbose", False))
-            custom_filters = scan_options.get("custom_filters", "")
 
             if config_overrides:
                 self._update_progress(7, "Applying configuration overrides...", "initialization")
@@ -1184,7 +1207,6 @@ class ScanManager:
                         countries=countries,
                         progress_callback=self._handle_backend_progress,
                         log_callback=self._handle_backend_log_line,
-                        filters=custom_filters,
                         verbose=verbose,
                     )
             else:
@@ -1192,7 +1214,6 @@ class ScanManager:
                     countries=countries,
                     progress_callback=self._handle_backend_progress,
                     log_callback=self._handle_backend_log_line,
-                    filters=custom_filters,
                     verbose=verbose,
                 )
 

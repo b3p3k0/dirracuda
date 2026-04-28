@@ -38,7 +38,20 @@ def show_batch_summary_dialog(
         theme.apply_to_widget(dialog, "main_window")
 
     columns, headings, widths = _resolve_summary_columns(show_protocol=show_protocol)
-    tree = ttk.Treeview(dialog, columns=columns, show="headings", height=15)
+    tree_frame = tk.Frame(dialog)
+    if theme:
+        theme.apply_to_widget(tree_frame, "main_window")
+    tree_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+    scrollbar_y = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL)
+    tree = ttk.Treeview(
+        tree_frame,
+        columns=columns,
+        show="headings",
+        height=15,
+        yscrollcommand=scrollbar_y.set,
+    )
+    scrollbar_y.config(command=tree.yview)
     for col in columns:
         tree.heading(col, text=headings[col])
         tree.column(col, width=widths[col], anchor="w")
@@ -57,7 +70,8 @@ def show_batch_summary_dialog(
             values=_build_summary_row(entry, job_type=job_type, status=status, show_protocol=show_protocol),
         )
 
-    tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+    tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    scrollbar_y.pack(side=tk.RIGHT, fill=tk.Y)
 
     if show_stats:
         stats_label = tk.Label(

@@ -19,6 +19,7 @@ from pathlib import Path
 from gui.utils.style import get_theme
 from gui.utils.data_import_engine import get_import_engine
 from gui.utils.dialog_helpers import ensure_dialog_focus
+from shared.path_service import get_paths
 
 
 def open_data_import_dialog(parent: tk.Tk, db_reader) -> None:
@@ -53,7 +54,7 @@ class DataImportDialog:
         self.theme = get_theme()
         
         # Get database path from the database reader
-        self.db_path = getattr(db_reader, 'db_path', '../backend/dirracuda.db')
+        self.db_path = getattr(db_reader, 'db_path', str(get_paths().main_db_file))
         self.import_engine = get_import_engine(self.db_path)
         
         # Dialog state

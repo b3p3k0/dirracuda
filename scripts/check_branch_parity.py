@@ -108,6 +108,41 @@ def _collect_unique_commits(base_ref: str, head_ref: str) -> List[UniqueCommit]:
     return commits
 
 
+def _changed_paths(base_ref: str, head_ref: str) -> List[str]:
+    """Return paths changed by source branch relative to merge-base."""
+    out = _run_git(
+        [
+            "diff",
+            "--name-only",
+            "--no-renames",
+            f"{base_ref}...{head_ref}",
+        ]
+    )
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
+def _path_matches_rule(path: str, rule: str) -> bool:
+    """Match exact file rule or directory-prefix rule (trailing slash)."""
+    normalized_path = path.strip().replace("\\", "/").strip("/")
+    normalized_rule = rule.strip().replace("\\", "/").strip("/")
+    if not normalized_rule:
+        return False
+
+    if rule.strip().replace("\\", "/").endswith("/"):
+        return normalized_path == normalized_rule or normalized_path.startswith(f"{normalized_rule}/")
+
+    return normalized_path == normalized_rule
+
+
+def _find_forbidden_paths(changed_paths: Iterable[str], forbidden_rules: Iterable[str]) -> List[str]:
+    """Return changed paths that match any forbidden rule."""
+    blocked: List[str] = []
+    for path in changed_paths:
+        if any(_path_matches_rule(path, rule) for rule in forbidden_rules):
+            blocked.append(path)
+    return blocked
+
+
 def _load_pr_body(path: str | None) -> str:
     if not path:
         return ""
@@ -184,12 +219,22 @@ def main() -> int:
         action="store_true",
         help="Require promotion checklist markers in PR body",
     )
+    parser.add_argument(
+        "--forbid-source-path",
+        action="append",
+        default=[],
+        help=(
+            "Forbidden path rule in source diff. "
+            "Use exact file paths (e.g. pytest.ini) or directory rules ending with '/'."
+        ),
+    )
     args = parser.parse_args()
 
     commits = _collect_unique_commits(args.base, args.head)
     _print_summary(commits)
 
     non_doc_unique = [c for c in commits if not c.docs_only and c.side in {"source_only", "target_only"}]
+    changed_paths = _changed_paths(args.base, args.head)
 
     pr_body = _load_pr_body(args.pr_body)
     failures: List[str] = []
@@ -210,6 +255,14 @@ def main() -> int:
             )
             failures.append(
                 "Missing disposition entries for non-doc unique commits:\n" + bullets
+            )
+
+    if args.forbid_source_path:
+        blocked_paths = sorted(set(_find_forbidden_paths(changed_paths, args.forbid_source_path)))
+        if blocked_paths:
+            bullets = "\n".join(f"  - {path}" for path in blocked_paths)
+            failures.append(
+                "Forbidden source paths present in promotion diff:\n" + bullets
             )
 
     if failures:

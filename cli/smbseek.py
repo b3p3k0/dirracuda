@@ -20,6 +20,7 @@ import sys
 import os
 import ipaddress
 import re
+from pathlib import Path
 from typing import Optional, Set
 from typing import List
 
@@ -27,6 +28,57 @@ from typing import List
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared.utils import format_string_for_shodan
+from shared.path_service import (
+    get_legacy_paths,
+    get_paths,
+    resolve_runtime_main_db_for_session,
+    run_layout_v2_migration,
+)
+from shared.db_path_resolution import normalize_database_path
+
+_PATHS = get_paths()
+_LEGACY = get_legacy_paths(paths=_PATHS)
+
+
+def _prepare_runtime_db_override(config_path: Optional[str]) -> str:
+    """Run layout migration preflight and return effective DB path for this run."""
+    try:
+        migration_result = run_layout_v2_migration(paths=_PATHS, legacy=_LEGACY)
+    except Exception as exc:
+        print(
+            f"Warning: startup layout migration preflight failed: {exc}",
+            file=sys.stderr,
+        )
+        migration_result = {
+            "status": "failed",
+            "db_recovery_attempted": True,
+            "db_recovery_status": "failed",
+            "db_fallback_candidates": [],
+        }
+
+    try:
+        from shared.config import load_config
+        cfg = load_config(config_path)
+        preferred = cfg.get_database_path()
+    except Exception as exc:
+        print(
+            f"Warning: failed to resolve configured database path; using canonical default: {exc}",
+            file=sys.stderr,
+        )
+        preferred = str(_PATHS.main_db_file)
+
+    preferred_path = normalize_database_path(preferred, _PATHS.repo_root)
+    if preferred_path is None:
+        preferred_path = _PATHS.main_db_file.resolve(strict=False)
+    effective_path, warning = resolve_runtime_main_db_for_session(
+        preferred_path,
+        migration_result=migration_result,
+        paths=_PATHS,
+        legacy=_LEGACY,
+    )
+    if warning:
+        print(f"Warning: {warning}", file=sys.stderr)
+    return str(effective_path)
 
 
 def validate_force_hosts(value):
@@ -207,7 +259,8 @@ The tool performs two main operations:
   1. Discovery: Query Shodan and test SMB authentication
   2. Share Access: Enumerate accessible shares on authenticated hosts
 
-Results are automatically saved to the configured database (default: dirracuda.db).
+Results are automatically saved to the configured database
+(default: ~/.dirracuda/data/dirracuda.db).
 
 Documentation: docs/USER_GUIDE.md
 """
@@ -229,7 +282,7 @@ Documentation: docs/USER_GUIDE.md
         '--config',
         type=str,
         metavar='FILE',
-        help='Configuration file path (default: conf/config.json)'
+        help=f'Configuration file path (default: {_PATHS.config_file})'
     )
     parser.add_argument(
         '--quiet', '-q',
@@ -326,6 +379,10 @@ def main():
     else:
         args.force_hosts = set()
 
+    runtime_db_override = _prepare_runtime_db_override(getattr(args, "config", None))
+    if runtime_db_override:
+        setattr(args, "runtime_db_path_override", runtime_db_override)
+
     try:
         # Import workflow components
         from shared.workflow import create_unified_workflow
@@ -346,6 +403,11 @@ def main():
         from shared.output import create_output_manager
 
         config = load_config(args.config)
+        override_path = str(getattr(args, "runtime_db_path_override", "") or "").strip()
+        if override_path:
+            if not isinstance(config.config.get("database"), dict):
+                config.config["database"] = {}
+            config.config["database"]["path"] = override_path
         output = create_output_manager(
             config,
             quiet=args.quiet,

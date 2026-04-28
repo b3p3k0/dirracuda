@@ -1,7 +1,7 @@
 """
 Sidecar SQLite store for the redseek module.
 
-DB path: ~/.dirracuda/reddit_od.db (separate from main dirracuda.db)
+DB path: ~/.dirracuda/data/experimental/reddit_od.db (separate from main dirracuda.db)
 
 Transaction ownership:
   - init_db() and wipe_all() own their connections and commit internally.
@@ -15,8 +15,8 @@ from pathlib import Path
 from typing import List, Optional
 
 from experimental.redseek.models import RedditIngestState, RedditPost, RedditTarget
+from shared.path_service import get_paths, get_legacy_paths, select_existing_path
 
-_SIDECAR_DEFAULT = Path.home() / ".dirracuda" / "reddit_od.db"
 
 # ---------------------------------------------------------------------------
 # Schema DDL
@@ -87,7 +87,17 @@ _REQUIRED_COLUMNS = {
 
 def get_db_path(override: Optional[Path] = None) -> Path:
     """Return sidecar DB path. ``override`` enables test injection."""
-    return override if override is not None else _SIDECAR_DEFAULT
+    if override is not None:
+        return override
+    paths = get_paths()
+    legacy = get_legacy_paths(paths=paths)
+    return select_existing_path(
+        paths.reddit_od_db_file,
+        [
+            legacy.flat_sidecar_reddit_od_file,
+            legacy.legacy_home_root / "reddit_od.db",
+        ],
+    )
 
 
 # ---------------------------------------------------------------------------

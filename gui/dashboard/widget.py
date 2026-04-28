@@ -9,7 +9,6 @@ to resolve correctly via _mb() / _d() at call time.
 import tkinter as tk
 from tkinter import ttk
 import webbrowser
-import tkinter.font as tkfont
 from gui.utils import safe_messagebox as messagebox
 from gui.utils import safe_messagebox as _fallback_msgbox
 import threading
@@ -34,14 +33,22 @@ from gui.components.ftp_scan_dialog import show_ftp_scan_dialog
 from gui.components.http_scan_dialog import show_http_scan_dialog
 from gui.components.reddit_grab_dialog import show_reddit_grab_dialog
 from experimental.redseek.service import IngestOptions, IngestResult, run_ingest
+from gui.components import dashboard_experimental
 from gui.components.scan_results_dialog import show_scan_results_dialog
 from gui.components.batch_summary_dialog import show_batch_summary_dialog
 from gui.utils.settings_manager import get_settings_manager
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.components import dashboard_logs
+from gui.components import dashboard_scan_output_dialog
 from gui.components import dashboard_status
 from gui.components import dashboard_scan
 from gui.components import dashboard_batch_ops
+from gui.components.running_tasks_window import RunningTasksWindow
+from gui.utils.running_tasks import (
+    RunningTaskRegistry,
+    RunningTaskSnapshot,
+    get_running_task_registry,
+)
 from gui.utils import (
     probe_cache,
     probe_patterns,
@@ -51,9 +58,22 @@ from gui.utils.probe_cache_dispatch import get_probe_snapshot_path_for_host, dis
 from gui.utils.probe_snapshot_summary import summarize_probe_snapshot
 from gui.utils.logging_config import get_logger
 from shared.quarantine import create_quarantine_dir
+from shared.path_service import get_paths
 from shared.tmpfs_quarantine import get_tmpfs_runtime_state
 
 _logger = get_logger("dashboard")
+_PATHS = get_paths()
+
+_SHODAN_STATUS_NO_KEY = "✖ Shodan API key configured <none>"
+_SHODAN_STATUS_CHECKING = "✔ Shodan API key configured <checking balance...>"
+_SHODAN_STATUS_UNAVAILABLE = "✔ Shodan API key configured <balance unavailable>"
+
+
+def _format_shodan_status_with_credits(credits: str) -> str:
+    value = str(credits or "").strip()
+    if not value:
+        return _SHODAN_STATUS_UNAVAILABLE
+    return f"✔ Shodan API key configured <query credits: {value}>"
 
 
 # ── Patch-safe helpers ────────────────────────────────────────────────────────
@@ -102,7 +122,8 @@ class DashboardWidget:
     """
 
     def __init__(self, parent: tk.Widget, db_reader: DatabaseReader,
-                 backend_interface: BackendInterface, config_path: str = None):
+                 backend_interface: BackendInterface, config_path: str = None,
+                 rce_unlocked: bool = False):
         """
         Initialize dashboard widget.
 
@@ -111,6 +132,7 @@ class DashboardWidget:
             db_reader: Database access instance
             backend_interface: Backend communication interface
             config_path: Path to SMBSeek configuration file (optional)
+            rce_unlocked: Session unlock state for hidden RCE controls
 
         Design Decision: Dependency injection allows easy testing with mock
         objects and clear separation of concerns.
@@ -129,27 +151,27 @@ class DashboardWidget:
         self.scan_manager = get_scan_manager()
         self.config_path = config_path
         self.settings_manager = get_settings_manager()
+        self._rce_unlocked = bool(rce_unlocked)
         self.ransomware_indicators: List[str] = []
         self.indicator_patterns = []
         self._mock_mode_notice_shown = False
 
         # UI components
         self.main_frame = None
-        self.body_canvas = None
-        self.body_scrollbar = None
-        self.body_frame = None
-        self.body_canvas_window = None
         self.progress_frame = None
         self.metrics_frame = None
         self.scan_button = None
         self.servers_button = None
         self.db_tools_button = None
+        self.experimental_button = None
         self.config_button = None
         self.about_button = None
         self.theme_toggle_button = None
+        self._server_list_getter = None
         self.status_bar = None
         self.update_time_label = None
         self.status_message = None
+        self.running_tasks_button = None
 
         # Progress tracking
         self.current_progress_summary = ""
@@ -157,12 +179,17 @@ class DashboardWidget:
         self.status_text = tk.StringVar(master=self.parent, value="Loading dashboard summary...")
         self.clamav_status_text = tk.StringVar(
             master=self.parent,
-            value="✖ ClamAV integration active <auto>",
+            value="✖ ClamAV Integration",
         )
         self.tmpfs_status_text = tk.StringVar(
             master=self.parent,
-            value=f"✖ tmpfs activated <{Path.home() / '.dirracuda' / 'quarantine_tmpfs'}>",
+            value=f"✖ tmpfs <{_PATHS.tmpfs_quarantine_dir}>",
         )
+        self.shodan_status_text = tk.StringVar(
+            master=self.parent,
+            value=_SHODAN_STATUS_NO_KEY,
+        )
+        self._shodan_balance_refresh_generation = 0
         self._status_static_mode = True  # Keep status label static post-initialization
         self._status_summary_initialized = False
 
@@ -179,6 +206,9 @@ class DashboardWidget:
         self.log_bg_color = self.theme.colors.get("log_bg", "#111418")
         self.log_fg_color = self.theme.colors.get("log_fg", "#f5f5f5")
         self.log_placeholder_color = self.theme.colors.get("log_placeholder", "#9ea4b3")
+        self.scan_output_dialog = None
+        self.scan_output_title_var = None
+        self.scan_output_header_label = None
 
         # ANSI parsing helpers for preserving backend colors
         self._ansi_pattern = re.compile(r"\x1b\[([\d;]*)m")
@@ -216,6 +246,10 @@ class DashboardWidget:
         self._queued_scan_common_options: Optional[Dict[str, Any]] = None
         self._queued_scan_current_protocol: Optional[str] = None
         self._queued_scan_failures: List[Dict[str, str]] = []
+        self._queued_scan_total = 0
+        self._scan_task_id: Optional[str] = None
+        self.running_tasks_registry = get_running_task_registry()
+        self.running_tasks_window: Optional[RunningTasksWindow] = None
 
         # Callbacks
         self.drill_down_callback = None
@@ -226,6 +260,7 @@ class DashboardWidget:
         self._load_indicator_patterns()
 
         self._build_dashboard()
+        self.running_tasks_registry.subscribe(self._on_running_tasks_changed)
 
         # Initial data load
         self._refresh_dashboard_data()
@@ -261,12 +296,9 @@ class DashboardWidget:
         """
         Build the complete dashboard layout.
 
-        Design Decision: Vertical layout with sections allows natural reading
-        flow and responsive behavior on different screen sizes.
-
         Layout structure:
-        - Header (fixed at top): title and action buttons
-        - Body (scrollable): progress frame with log viewer
+        - Header (fixed at top): title, theme toggle, and action grid
+        - Status summary card (middle): runtime status + running tasks
         - Status bar (fixed at bottom): external scan notifications
         """
         # Main container
@@ -277,170 +309,94 @@ class DashboardWidget:
         # Header section (fixed at top)
         self._build_header_section()
 
-        # Scrollable body area for progress/log content
-        self._build_scrollable_body()
+        # Compact status content
+        self._build_progress_section()
 
         # Status bar (fixed at bottom)
         self._build_status_bar()
-
-    def _build_scrollable_body(self) -> None:
-        """Build scrollable container for body content (log viewer)."""
-        # Container frame for canvas and scrollbar
-        body_container = tk.Frame(self.main_frame)
-        self.theme.apply_to_widget(body_container, "main_window")
-        body_container.pack(fill=tk.BOTH, expand=True)
-
-        # Canvas for scrollable content
-        self.body_canvas = tk.Canvas(
-            body_container,
-            highlightthickness=0,
-            bg=self.theme.colors["primary_bg"]
-        )
-        self.body_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        # Scrollbar (only visible when content overflows)
-        self.body_scrollbar = ttk.Scrollbar(
-            body_container,
-            orient=tk.VERTICAL,
-            command=self.body_canvas.yview
-        )
-        self.body_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.body_canvas.configure(yscrollcommand=self._on_body_scroll)
-
-        # Inner frame to hold body content
-        self.body_frame = tk.Frame(self.body_canvas)
-        self.theme.apply_to_widget(self.body_frame, "main_window")
-        self.body_canvas_window = self.body_canvas.create_window(
-            (0, 0),
-            window=self.body_frame,
-            anchor="nw"
-        )
-
-        # Update scroll region when content changes
-        self.body_frame.bind("<Configure>", self._on_body_frame_configure)
-        self.body_canvas.bind("<Configure>", self._on_canvas_configure)
-
-        # Build progress section inside the scrollable body
-        self._build_progress_section()
-
-    def _on_body_frame_configure(self, event=None) -> None:
-        """Update canvas scroll region when body content changes."""
-        self.body_canvas.configure(scrollregion=self.body_canvas.bbox("all"))
-        self._update_scrollbar_visibility()
-
-    def _on_canvas_configure(self, event=None) -> None:
-        """Expand body frame to fill canvas width."""
-        if event:
-            self.body_canvas.itemconfig(self.body_canvas_window, width=event.width)
-        self._update_scrollbar_visibility()
-
-    def _on_body_scroll(self, *args) -> None:
-        """Handle scroll events and update scrollbar."""
-        self.body_scrollbar.set(*args)
-        self._update_scrollbar_visibility()
-
-    def _update_scrollbar_visibility(self) -> None:
-        """Show scrollbar only when content overflows."""
-        try:
-            # Check if content exceeds visible area
-            bbox = self.body_canvas.bbox("all")
-            if bbox:
-                content_height = bbox[3] - bbox[1]
-                canvas_height = self.body_canvas.winfo_height()
-                if content_height > canvas_height and canvas_height > 1:
-                    if not self.body_scrollbar.winfo_ismapped():
-                        self.body_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-                else:
-                    if self.body_scrollbar.winfo_ismapped():
-                        self.body_scrollbar.pack_forget()
-        except tk.TclError:
-            pass  # Widget may not exist during shutdown
-
-        # Initial scan state check and data load
+        # Initial scan state + log pump
         self._check_external_scans()
-        self._refresh_dashboard_data()
         self._process_log_queue()
 
     def _build_header_section(self) -> None:
-        """Build responsive two-line header with title and action buttons."""
+        """Build compact header with title/toggle row and 2x3 action grid."""
         header_frame = tk.Frame(self.main_frame)
         self.theme.apply_to_widget(header_frame, "main_window")
         header_frame.pack(fill=tk.X, pady=(0, 10))
 
-        # Line 1: Title only
+        top_row = tk.Frame(header_frame)
+        self.theme.apply_to_widget(top_row, "main_window")
+        top_row.pack(fill=tk.X, pady=(0, 6))
+
         title_label = self.theme.create_styled_label(
-            header_frame,
+            top_row,
             "Dirracuda      ><(((°>",
             "title"
         )
-        title_label.pack(anchor=tk.W, pady=(0, 5))
+        title_label.pack(side=tk.LEFT, anchor=tk.W)
 
-        # Line 2: Action buttons with natural sizing
-        actions_frame = tk.Frame(header_frame)
-        self.theme.apply_to_widget(actions_frame, "main_window")
-        actions_frame.pack(fill=tk.X)
-
-        left_actions = tk.Frame(actions_frame)
-        self.theme.apply_to_widget(left_actions, "main_window")
-        left_actions.pack(side=tk.LEFT, anchor=tk.W)
-
-        right_actions = tk.Frame(actions_frame)
-        self.theme.apply_to_widget(right_actions, "main_window")
-        right_actions.pack(side=tk.RIGHT, anchor=tk.E)
-
-        # Start Scan button (preserve state management)
-        self.scan_button = tk.Button(
-            left_actions,
-            text="▶ Start Scan",
-            command=self._handle_scan_button_click
-        )
-        self.theme.apply_to_widget(self.scan_button, "button_primary")
-        self.scan_button.pack(side=tk.LEFT, padx=(0, 5))
-
-        # Unified servers browser (SMB + FTP rows)
-        self.servers_button = tk.Button(
-            left_actions,
-            text="📋 Servers",
-            command=lambda: self._open_drill_down("server_list")
-        )
-        self.theme.apply_to_widget(self.servers_button, "button_secondary")
-        self.servers_button.pack(side=tk.LEFT, padx=(0, 5))
-
-        # DB Tools button
-        self.db_tools_button = tk.Button(
-            left_actions,
-            text="\U0001F5C4 DB Tools",  # File cabinet emoji
-            command=self._open_db_tools
-        )
-        self.theme.apply_to_widget(self.db_tools_button, "button_secondary")
-        self.db_tools_button.pack(side=tk.LEFT, padx=(0, 5))
-
-        # Config button (existing functionality)
-        self.config_button = tk.Button(
-            left_actions,
-            text="⚙ Config",
-            command=self._open_config_editor
-        )
-        self.theme.apply_to_widget(self.config_button, "button_secondary")
-        self.config_button.pack(side=tk.LEFT)
-
-        # About button
-        self.about_button = tk.Button(
-            left_actions,
-            text="❔ About",
-            command=self._open_about_dialog
-        )
-        self.theme.apply_to_widget(self.about_button, "button_secondary")
-        self.about_button.pack(side=tk.LEFT, padx=(8, 0))
-
-        # Theme toggle button (right-aligned)
         self.theme_toggle_button = tk.Button(
-            right_actions,
+            top_row,
             text=self._theme_toggle_button_text(),
             command=self._toggle_theme
         )
         self.theme.apply_to_widget(self.theme_toggle_button, "button_secondary")
         self.theme_toggle_button.pack(side=tk.RIGHT)
+
+        actions_grid = tk.Frame(header_frame)
+        self.theme.apply_to_widget(actions_grid, "main_window")
+        actions_grid.pack(fill=tk.X)
+        actions_grid.columnconfigure(0, weight=1)
+        actions_grid.columnconfigure(1, weight=1)
+        actions_grid.columnconfigure(2, weight=1)
+
+        self.scan_button = tk.Button(
+            actions_grid,
+            text="▶ Start Scan",
+            command=self._handle_scan_button_click,
+        )
+        self.theme.apply_to_widget(self.scan_button, "button_primary")
+        self.scan_button.grid(row=0, column=0, padx=(0, 6), pady=(0, 6), sticky="ew")
+
+        self.servers_button = tk.Button(
+            actions_grid,
+            text="📋 Servers",
+            command=lambda: self._open_drill_down("server_list"),
+        )
+        self.theme.apply_to_widget(self.servers_button, "button_secondary")
+        self.servers_button.grid(row=0, column=1, padx=3, pady=(0, 6), sticky="ew")
+
+        self.db_tools_button = tk.Button(
+            actions_grid,
+            text="\U0001F5C4 DB Tools",
+            command=self._open_db_tools,
+        )
+        self.theme.apply_to_widget(self.db_tools_button, "button_secondary")
+        self.db_tools_button.grid(row=0, column=2, padx=(6, 0), pady=(0, 6), sticky="ew")
+
+        self.experimental_button = tk.Button(
+            actions_grid,
+            text="⚗ Experimental",
+            command=self._handle_experimental_button_click,
+        )
+        self.theme.apply_to_widget(self.experimental_button, "button_secondary")
+        self.experimental_button.grid(row=1, column=0, padx=(0, 6), pady=(0, 0), sticky="ew")
+
+        self.config_button = tk.Button(
+            actions_grid,
+            text="⚙ Config",
+            command=self._open_config_editor,
+        )
+        self.theme.apply_to_widget(self.config_button, "button_secondary")
+        self.config_button.grid(row=1, column=1, padx=3, pady=(0, 0), sticky="ew")
+
+        self.about_button = tk.Button(
+            actions_grid,
+            text="❔ About",
+            command=self._open_about_dialog,
+        )
+        self.theme.apply_to_widget(self.about_button, "button_secondary")
+        self.about_button.grid(row=1, column=2, padx=(6, 0), pady=(0, 0), sticky="ew")
 
     def _theme_toggle_button_text(self) -> str:
         """Return dashboard button label for switching to the opposite theme."""
@@ -455,12 +411,13 @@ class DashboardWidget:
         for button in (
             getattr(self, "servers_button", None),
             getattr(self, "db_tools_button", None),
+            getattr(self, "experimental_button", None),
             getattr(self, "config_button", None),
             getattr(self, "about_button", None),
             getattr(self, "theme_toggle_button", None),
             getattr(self, "copy_log_button", None),
-            getattr(self, "clear_log_button", None),
             getattr(self, "reddit_grab_button", None),
+            getattr(self, "running_tasks_button", None),
         ):
             if button and button.winfo_exists():
                 self.theme.apply_to_widget(button, "button_secondary")
@@ -478,6 +435,13 @@ class DashboardWidget:
                 self._configure_log_tags()
                 if self._log_placeholder_visible:
                     self._render_log_placeholder()
+            except tk.TclError:
+                pass
+
+        scan_output_dialog = getattr(self, "scan_output_dialog", None)
+        if scan_output_dialog and scan_output_dialog.winfo_exists():
+            try:
+                self.theme.apply_theme_to_application(scan_output_dialog)
             except tk.TclError:
                 pass
 
@@ -504,12 +468,11 @@ class DashboardWidget:
 
 
     def _build_progress_section(self) -> None:
-        """Build persistent progress display that's always visible."""
-        self.progress_frame = tk.Frame(self.body_frame)
+        """Build compact status card shown under header controls."""
+        self.progress_frame = tk.Frame(self.main_frame)
         self.theme.apply_to_widget(self.progress_frame, "card")
         self.progress_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
 
-        self._build_log_viewer()
         self._build_status_footer()
 
     def _configure_log_tags(self) -> None:
@@ -558,10 +521,10 @@ class DashboardWidget:
         dashboard_logs.clear_log_output(self)
 
     def _build_log_viewer(self) -> None:
-        dashboard_logs.build_log_viewer(self)
+        dashboard_scan_output_dialog.ensure_scan_output_dialog(self)
 
     def _build_status_footer(self) -> None:
-        """Place status summary + clipboard controls below the console."""
+        """Place runtime status rows and Running Tasks control."""
         footer = tk.Frame(
             self.progress_frame,
             bg=self.theme.colors["card_bg"],
@@ -570,6 +533,7 @@ class DashboardWidget:
         footer.pack(fill=tk.X, padx=10, pady=(0, 12))
         footer.columnconfigure(0, weight=1)
         footer.columnconfigure(1, weight=0)
+        footer.rowconfigure(5, minsize=24)
 
         clamav_status_label = tk.Label(
             footer,
@@ -595,6 +559,18 @@ class DashboardWidget:
         )
         tmpfs_status_label.grid(row=1, column=0, sticky="w", pady=(2, 0))
 
+        shodan_status_label = tk.Label(
+            footer,
+            textvariable=self.shodan_status_text,
+            anchor="w",
+            justify="left",
+            bg=self.theme.colors["card_bg"],
+            fg=self.theme.colors["text_secondary"],
+            font=self.theme.fonts["status"],
+            wraplength=520,
+        )
+        shodan_status_label.grid(row=2, column=0, sticky="w", pady=(2, 0))
+
         status_summary_label = tk.Label(
             footer,
             textvariable=self.status_text,
@@ -605,7 +581,7 @@ class DashboardWidget:
             font=self.theme.fonts["status"],
             wraplength=520
         )
-        status_summary_label.grid(row=2, column=0, sticky="w", pady=(4, 0))
+        status_summary_label.grid(row=3, column=0, sticky="w", pady=(4, 0))
 
         self.update_time_label = tk.Label(
             footer,
@@ -615,50 +591,229 @@ class DashboardWidget:
             fg=self.theme.colors["text_secondary"],
             font=self.theme.fonts["status"]
         )
-        self.update_time_label.grid(row=3, column=0, sticky="w", pady=(4, 0))
+        self.update_time_label.grid(row=4, column=0, sticky="w", pady=(4, 0))
 
         button_frame = tk.Frame(
             footer,
             bg=self.theme.colors["card_bg"]
         )
-        button_frame.grid(row=0, column=1, rowspan=4, sticky="se", padx=(10, 0))
+        button_frame.grid(row=5, column=1, sticky="se", padx=(10, 0), pady=(20, 0))
 
-        self.copy_log_button = tk.Button(
+        self.running_tasks_button = tk.Button(
             button_frame,
-            text="Copy All",
-            command=self._copy_log_output
+            text="Running Tasks (0)",
+            command=self._open_running_tasks_window,
+            state=tk.DISABLED,
         )
-        self.theme.apply_to_widget(self.copy_log_button, "button_secondary")
-        self.copy_log_button.pack(side=tk.LEFT, padx=(0, 5))
+        self.theme.apply_to_widget(self.running_tasks_button, "button_secondary")
+        self.running_tasks_button.pack(side=tk.LEFT)
 
-        self.clear_log_button = tk.Button(
-            button_frame,
-            text="Clear",
-            command=self._clear_log_output
+    def _on_running_tasks_changed(self, tasks: List[RunningTaskSnapshot]) -> None:
+        """Refresh Running Tasks button state whenever registry changes."""
+        count = len(tasks or [])
+        running_tasks_button = getattr(self, "running_tasks_button", None)
+        if not running_tasks_button or not running_tasks_button.winfo_exists():
+            return
+        label = f"Running Tasks ({count})"
+        running_tasks_button.configure(text=label)
+        if count > 0:
+            running_tasks_button.configure(state=tk.NORMAL)
+        else:
+            running_tasks_button.configure(state=tk.DISABLED)
+
+    def _open_running_tasks_window(self) -> None:
+        """Open (or focus) the non-modal running-tasks manager."""
+        registry = getattr(self, "running_tasks_registry", None)
+        if registry is None:
+            registry = get_running_task_registry()
+            self.running_tasks_registry = registry
+        running_tasks_window = getattr(self, "running_tasks_window", None)
+        if running_tasks_window is None:
+            running_tasks_window = RunningTasksWindow(
+                parent=self.parent,
+                theme=self.theme,
+                registry=registry,
+            )
+            self.running_tasks_window = running_tasks_window
+        running_tasks_window.show()
+
+    def _register_running_task(
+        self,
+        *,
+        task_type: str,
+        name: str,
+        state: str = "running",
+        progress: str = "",
+        reopen_callback: Optional[Callable[[], None]] = None,
+        cancel_callback: Optional[Callable[[], None]] = None,
+    ) -> str:
+        registry = getattr(self, "running_tasks_registry", None)
+        if registry is None:
+            registry = get_running_task_registry()
+            self.running_tasks_registry = registry
+        return registry.create_task(
+            task_type=task_type,
+            name=name,
+            state=state,
+            progress=progress,
+            reopen_callback=reopen_callback,
+            cancel_callback=cancel_callback,
         )
-        self.theme.apply_to_widget(self.clear_log_button, "button_secondary")
-        self.clear_log_button.pack(side=tk.LEFT)
 
-    def _pixels_to_text_lines(self, pixels: int) -> int:
-        """
-        Convert a pixel delta into Tk Text height units (lines).
+    def _update_running_task(
+        self,
+        task_id: Optional[str],
+        *,
+        name: Optional[str] = None,
+        state: Optional[str] = None,
+        progress: Optional[str] = None,
+        reopen_callback: Optional[Callable[[], None]] = None,
+        cancel_callback: Optional[Callable[[], None]] = None,
+    ) -> None:
+        if not task_id:
+            return
+        registry = getattr(self, "running_tasks_registry", None)
+        if registry is None:
+            return
+        registry.update_task(
+            task_id,
+            name=name,
+            state=state,
+            progress=progress,
+            reopen_callback=reopen_callback,
+            cancel_callback=cancel_callback,
+        )
 
-        Text widgets size their height in lines (TkDocs Text tutorial),
-        so we translate requested padding into line counts using the active
-        monospace font metrics. This avoids fragile hard-coded guesses.
-        """
-        if pixels <= 0:
-            return 0
+    def _remove_running_task(self, task_id: Optional[str]) -> None:
+        if not task_id:
+            return
+        registry = getattr(self, "running_tasks_registry", None)
+        if registry is None:
+            return
+        registry.remove_task(task_id)
+
+    def _show_scan_output_dialog(self, protocol: str, country: Optional[str]) -> None:
+        dashboard_scan_output_dialog.show_scan_output_dialog(
+            self,
+            protocol=protocol,
+            country=country,
+        )
+
+    def _reopen_scan_output_dialog(self) -> None:
+        dashboard_scan_output_dialog.reopen_scan_output_dialog(self)
+
+    def _hide_scan_output_dialog(self) -> None:
+        dashboard_scan_output_dialog.hide_scan_output_dialog(self)
+
+    def _set_scan_task_queued(self, protocols: List[str], country: Optional[str] = None) -> None:
+        labels = [str(p).strip().upper() for p in protocols if str(p).strip()]
+        if not labels:
+            return
+        target = str(country or "").strip() or "Global"
+        self._queued_scan_total = len(labels)
+        name = f"Queued Scan ({', '.join(labels)}) - {target}"
+        progress = f"0/{self._queued_scan_total} protocols"
+        if self._scan_task_id:
+            self._update_running_task(self._scan_task_id, name=name, state="queued", progress=progress)
+            return
+        self._scan_task_id = self._register_running_task(
+            task_type="scan",
+            name=name,
+            state="queued",
+            progress=progress,
+            reopen_callback=self._reopen_scan_output_dialog,
+            cancel_callback=self.scan_manager.interrupt_scan,
+        )
+
+    def _set_scan_task_running(self, protocol: str, country: Optional[str] = None) -> None:
+        protocol_label = str(protocol or "").strip().upper() or "SCAN"
+        target = str(country or "").strip() or "Global"
+        completed = 0
+        total = int(self._queued_scan_total or 0)
+        if total > 0:
+            remaining = len(getattr(self, "_queued_scan_protocols", []) or [])
+            completed = max(0, total - remaining - 1)
+        progress = f"{completed + 1}/{total} protocols" if total > 0 else "running"
+        name = f"{protocol_label} Scan ({target})"
+        if self._scan_task_id:
+            self._update_running_task(
+                self._scan_task_id,
+                name=name,
+                state="running",
+                progress=progress,
+                reopen_callback=self._reopen_scan_output_dialog,
+                cancel_callback=self.scan_manager.interrupt_scan,
+            )
+            return
+        self._scan_task_id = self._register_running_task(
+            task_type="scan",
+            name=name,
+            state="running",
+            progress=progress,
+            reopen_callback=self._reopen_scan_output_dialog,
+            cancel_callback=self.scan_manager.interrupt_scan,
+        )
+
+    def _set_scan_task_waiting_next(self) -> None:
+        if not self._scan_task_id:
+            return
+        remaining = len(getattr(self, "_queued_scan_protocols", []) or [])
+        total = int(self._queued_scan_total or 0)
+        completed = max(0, total - remaining)
+        progress = f"{completed}/{total} protocols" if total > 0 else "queued"
+        self._update_running_task(self._scan_task_id, state="queued", progress=progress)
+
+    def _clear_scan_task(self) -> None:
+        self._remove_running_task(self._scan_task_id)
+        self._scan_task_id = None
+        self._queued_scan_total = 0
+
+    def has_active_or_queued_work(self) -> bool:
+        """Return True when scans/tasks are still active and monitorable."""
+        registry = getattr(self, "running_tasks_registry", None)
+        registry_has_tasks = bool(registry.has_tasks()) if registry is not None else False
+        return bool(
+            self.scan_manager.is_scanning
+            or self._queued_scan_active
+            or registry_has_tasks
+        )
+
+    def request_cancel_active_or_queued_work(self) -> None:
+        """Request cancellation for scan + queued + running monitor tasks."""
         try:
-            log_font = tkfont.Font(font=self.theme.fonts["mono"])
-            line_height = max(1, log_font.metrics("linespace"))
-        except tk.TclError:
-            # Safe fallback during shutdown/detached widgets
-            line_height = 14
-        extra_lines = pixels // line_height
-        if pixels % line_height:
-            extra_lines += 1
-        return extra_lines
+            if self._queued_scan_active or self._queued_scan_protocols:
+                self._clear_queued_scan_state()
+        except Exception:
+            pass
+        try:
+            registry = getattr(self, "running_tasks_registry", None)
+            if registry is not None:
+                registry.cancel_all()
+        except Exception:
+            pass
+        try:
+            if self.scan_manager.is_scanning:
+                self.scan_manager.interrupt_scan()
+        except Exception:
+            pass
+
+    def force_terminate_active_work(self) -> None:
+        """Force-terminate backend operation for emergency shutdown."""
+        self.request_cancel_active_or_queued_work()
+        try:
+            self.backend_interface.terminate_current_operation()
+        except Exception:
+            pass
+
+    def teardown_dashboard_monitors(self) -> None:
+        """Destroy non-modal monitor windows during application shutdown."""
+        try:
+            if self.running_tasks_window is not None:
+                self.running_tasks_window.destroy()
+        except Exception:
+            pass
+        self.running_tasks_window = None
+        dashboard_scan_output_dialog.destroy_scan_output_dialog(self)
 
     def _update_progress_summary(self, summary: Optional[str], detail: Optional[str] = None) -> None:
         """Cache scan progress summary for dialogs; UI status label stays static."""
@@ -736,13 +891,87 @@ class DashboardWidget:
         return dashboard_status.compose_runtime_status_lines(clamav_cfg, tmpfs_state)
 
     def _update_runtime_status_display(self) -> None:
-        """Refresh runtime status rows for ClamAV and tmpfs."""
+        """Refresh runtime status rows for ClamAV, tmpfs, and Shodan key state."""
         try:
             clamav_line, tmpfs_line = self._compose_runtime_status_lines()
             self.clamav_status_text.set(clamav_line)
             self.tmpfs_status_text.set(tmpfs_line)
         except Exception as exc:
             _logger.debug("Failed to refresh runtime status rows: %s", exc)
+        try:
+            self._refresh_shodan_status_display()
+        except Exception as exc:
+            _logger.debug("Failed to refresh Shodan status row: %s", exc)
+
+    def _refresh_shodan_status_display(self) -> None:
+        """Set immediate Shodan key state and start async balance lookup when configured."""
+        self._shodan_balance_refresh_generation += 1
+        refresh_id = self._shodan_balance_refresh_generation
+
+        api_key = self._read_shodan_api_key_from_config()
+        if not api_key:
+            self.shodan_status_text.set(_SHODAN_STATUS_NO_KEY)
+            return
+
+        self.shodan_status_text.set(_SHODAN_STATUS_CHECKING)
+        self._start_shodan_balance_refresh(refresh_id, api_key)
+
+    def _start_shodan_balance_refresh(self, refresh_id: int, api_key: str) -> None:
+        """Launch background Shodan query-credit fetch."""
+        threading.Thread(
+            target=self._run_shodan_balance_refresh_worker,
+            args=(refresh_id, api_key),
+            name="dashboard-shodan-balance",
+            daemon=True,
+        ).start()
+
+    def _run_shodan_balance_refresh_worker(self, refresh_id: int, api_key: str) -> None:
+        """Resolve query credits in worker thread and hand off UI update to Tk thread."""
+        credits = self._fetch_shodan_query_credits(api_key)
+        try:
+            self.parent.after(
+                0,
+                lambda: self._finish_shodan_balance_refresh(refresh_id, credits),
+            )
+        except Exception:
+            # Parent likely torn down while worker finished; safe to drop.
+            pass
+
+    def _fetch_shodan_query_credits(self, api_key: str) -> Optional[str]:
+        """Return query credits display value for one API key, or None on failure."""
+        try:
+            import shodan
+        except Exception:
+            return None
+
+        try:
+            info = shodan.Shodan(api_key).info()
+        except Exception:
+            return None
+
+        if not isinstance(info, dict):
+            return None
+
+        credits = info.get("query_credits")
+        if isinstance(credits, bool):
+            return None
+        if isinstance(credits, int):
+            return str(credits)
+        if isinstance(credits, float):
+            return str(int(credits))
+        if isinstance(credits, str):
+            value = credits.strip()
+            return value or None
+        return None
+
+    def _finish_shodan_balance_refresh(self, refresh_id: int, credits: Optional[str]) -> None:
+        """Apply worker result if it matches latest refresh generation."""
+        if refresh_id != self._shodan_balance_refresh_generation:
+            return
+        if credits is None:
+            self.shodan_status_text.set(_SHODAN_STATUS_UNAVAILABLE)
+            return
+        self.shodan_status_text.set(_format_shodan_status_with_credits(credits))
 
     def _refresh_after_scan_completion(self) -> None:
         """
@@ -879,7 +1108,7 @@ class DashboardWidget:
             settings_manager=getattr(self, "settings_manager", None),
             config_editor_callback=self._open_config_editor_from_scan,
             query_editor_callback=self._open_config_editor,
-            reddit_grab_callback=self._handle_reddit_grab_button_click,
+            show_rce_controls=bool(getattr(self, "_rce_unlocked", False)),
         )
 
     def _open_config_editor_from_scan(self, config_path: str) -> None:
@@ -1125,8 +1354,8 @@ class DashboardWidget:
         *,
         schedule_reset: bool = True,
         show_dialogs: bool = True,
-    ) -> None:
-        dashboard_batch_ops.run_post_scan_batch_operations(
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        return dashboard_batch_ops.run_post_scan_batch_operations(
             self, scan_options, scan_results,
             schedule_reset=schedule_reset, show_dialogs=show_dialogs,
         )
@@ -1166,9 +1395,10 @@ class DashboardWidget:
         return dashboard_batch_ops.execute_batch_probe(self, servers)
 
     def _probe_single_server(self, server: Dict[str, Any], max_dirs: int, max_files: int,
-                              timeout_seconds: int, enable_rce: bool, cancel_event: threading.Event) -> Dict[str, Any]:
+                              timeout_seconds: int, max_depth: int = 1,
+                              enable_rce: bool = False, cancel_event: threading.Event = None) -> Dict[str, Any]:
         return dashboard_batch_ops.probe_single_server(
-            self, server, max_dirs, max_files, timeout_seconds, enable_rce, cancel_event
+            self, server, max_dirs, max_files, timeout_seconds, max_depth, enable_rce, cancel_event
         )
 
     def _protocol_label_from_host_type(self, host_type: Optional[str]) -> str:
@@ -1218,6 +1448,16 @@ class DashboardWidget:
 
     def _show_scan_results(self, results: Dict[str, Any]) -> None:
         dashboard_batch_ops.show_scan_results(self, results)
+
+    def set_server_list_getter(self, getter) -> None:
+        """Register a callable that returns the active ServerListWindow or None."""
+        dashboard_experimental.set_server_list_getter(self, getter)
+
+    def _handle_experimental_button_click(self) -> None:
+        dashboard_experimental.handle_experimental_button_click(self)
+
+    def _open_reddit_post_db(self) -> None:
+        dashboard_experimental.open_reddit_post_db(self)
 
     def _open_config_editor(self) -> None:
         """Open application configuration dialog."""
@@ -1361,418 +1601,7 @@ class DashboardWidget:
         self.status_message.pack_forget()
         self.status_bar.pack_forget()
 
-    def _handle_scan_button_click(self) -> None:
-        """Handle scan button click based on current state."""
-        if self.scan_button_state == "idle":
-            self._maybe_warn_mock_mode_persistence()
-            self._check_external_scans()  # Check again before starting
-            if self.scan_button_state == "idle":  # Still idle after check
-                self._show_quick_scan_dialog()
-        elif self.scan_button_state == "scanning":
-            self._show_stop_confirmation()
-        elif self.scan_button_state == "disabled_external":
-            # Show info about external scan
-            _mb().showinfo(
-                "Scan In Progress",
-                f"Another scan is currently running (PID: {self.external_scan_pid}). "
-                "Please wait for it to complete or stop it from that application."
-            )
-        elif self.scan_button_state in ("retry", "error"):
-            # Retry stopping the scan
-            self._stop_scan_immediate()
-        # "stopping" state doesn't respond to clicks (button is disabled)
 
-    def _handle_ftp_scan_button_click(self) -> None:
-        """Handle FTP scan button click — opens FTP scan dialog."""
-        if self.scan_button_state == "idle":
-            self._maybe_warn_mock_mode_persistence()
-            self._check_external_scans()
-            if self.scan_button_state == "idle":
-                _d("show_ftp_scan_dialog")(
-                    parent=self.parent,
-                    config_path=self.config_path,
-                    scan_start_callback=self._start_ftp_scan,
-                    settings_manager=getattr(self, "settings_manager", None),
-                    config_editor_callback=self._open_config_editor_from_scan,
-                )
-        # Non-idle states: button is disabled; defensive no-op if somehow reached.
+from gui.dashboard.scan_controls import bind_scan_control_methods
 
-    def _handle_http_scan_button_click(self) -> None:
-        """Handle HTTP scan button click — opens HTTP scan dialog."""
-        if self.scan_button_state == "idle":
-            self._maybe_warn_mock_mode_persistence()
-            self._check_external_scans()
-            if self.scan_button_state == "idle":
-                _d("show_http_scan_dialog")(
-                    parent=self.parent,
-                    config_path=self.config_path,
-                    scan_start_callback=self._start_http_scan,
-                    settings_manager=getattr(self, "settings_manager", None),
-                    config_editor_callback=self._open_config_editor_from_scan,
-                )
-        # Non-idle states: button is disabled; defensive no-op if somehow reached.
-
-    def _handle_reddit_grab_button_click(self) -> None:
-        """Handle Reddit Grab button click — opens Reddit Grab dialog."""
-        if self._reddit_grab_running:
-            return
-        self._check_external_scans()
-        if self.scan_button_state != "idle":
-            return
-        _d('show_reddit_grab_dialog')(
-            parent=self.parent,
-            grab_start_callback=self._handle_reddit_grab_start,
-        )
-
-    def _handle_reddit_grab_start(self, options: IngestOptions) -> None:
-        """Callback from Reddit Grab dialog — launches background ingest worker."""
-        # Second state check: dialog may have been open while scan state changed.
-        self._check_external_scans()
-        if self.scan_button_state != "idle" or self._reddit_grab_running:
-            return
-
-        self._reddit_grab_running = True
-        if self.reddit_grab_button is not None:
-            self.reddit_grab_button.config(state=tk.DISABLED)
-        self._log_status_event(
-            f"Reddit Grab started (sort={options.sort}, max_posts={options.max_posts})"
-        )
-        _d('threading').Thread(
-            target=self._reddit_grab_worker,
-            args=(options,),
-            daemon=True,
-        ).start()
-
-    def _reddit_grab_worker(self, options: IngestOptions) -> None:
-        """Background worker: runs run_ingest and marshals result to main thread."""
-        try:
-            result = _d('run_ingest')(options)
-        except Exception as exc:
-            result = IngestResult(
-                sort=options.sort,
-                subreddit=options.subreddit,
-                pages_fetched=0,
-                posts_stored=0,
-                posts_skipped=0,
-                targets_stored=0,
-                targets_deduped=0,
-                parse_errors=0,
-                stopped_by_cursor=False,
-                stopped_by_max_posts=False,
-                replace_cache_done=False,
-                rate_limited=False,
-                error=f"unexpected error: {exc}",
-            )
-        self.parent.after(0, self._on_reddit_grab_done, result)
-
-    def _on_reddit_grab_done(self, result: IngestResult) -> None:
-        """Main-thread completion handler for a Reddit Grab run."""
-        self._reddit_grab_running = False
-        if self.reddit_grab_button is not None and self.scan_button_state == "idle":
-            self.reddit_grab_button.config(state=tk.NORMAL)
-
-        if result.error:
-            detail = f"Error: {result.error}"
-            if result.rate_limited:
-                detail = f"Rate limited (HTTP 429). {detail}"
-            if result.replace_cache_done:
-                detail += "\nNote: cache was wiped before the failure."
-            self._log_status_event(f"Reddit Grab failed: {result.error}")
-            _mb().showerror("Reddit Grab Failed", detail, parent=self.parent)
-        else:
-            stop_reason = ""
-            if result.stopped_by_cursor:
-                stop_reason = " (stopped at known cursor)"
-            elif result.stopped_by_max_posts:
-                stop_reason = " (max posts reached)"
-            summary = (
-                f"sort={result.sort}{stop_reason}\n"
-                f"Pages fetched: {result.pages_fetched}\n"
-                f"Posts stored: {result.posts_stored}  "
-                f"Skipped: {result.posts_skipped}\n"
-                f"Targets stored: {result.targets_stored}  "
-                f"Deduped: {result.targets_deduped}"
-            )
-            if result.replace_cache_done:
-                summary += "\nCache replaced before run."
-            self._log_status_event(
-                f"Reddit Grab done — {result.posts_stored} posts, "
-                f"{result.targets_stored} targets"
-            )
-            _mb().showinfo("Reddit Grab Complete", summary, parent=self.parent)
-
-    def _maybe_warn_mock_mode_persistence(self) -> None:
-        """Show one-time warning that mock scans are non-persistent."""
-        if self._mock_mode_notice_shown:
-            return
-        if not getattr(self.backend_interface, "mock_mode", False):
-            return
-        self._mock_mode_notice_shown = True
-        _mb().showinfo(
-            "Mock Mode Active",
-            "Mock mode is enabled. Scan results are simulated and are not written to the database.",
-            parent=self.parent,
-        )
-
-    def _start_ftp_scan(self, scan_options: dict) -> bool:
-        """Start FTP scan with options from dialog. Mirrors _start_new_scan()."""
-        return dashboard_scan.start_ftp_scan(self, scan_options)
-
-    def _start_http_scan(self, scan_options: dict) -> bool:
-        """Start HTTP scan with options from dialog. Mirrors _start_ftp_scan()."""
-        return dashboard_scan.start_http_scan(self, scan_options)
-
-    def _update_scan_button_state(self, new_state: str) -> None:
-        """Update scan button state and appearance."""
-        self.scan_button_state = new_state
-
-        if new_state == "idle":
-            self._set_button_to_start()
-            self._hide_status_bar()
-            self.stopping_started_time = None  # Clear stop timeout tracking
-            if self.ftp_scan_button is not None:
-                self.ftp_scan_button.config(state=tk.NORMAL)
-            if self.http_scan_button is not None:
-                self.http_scan_button.config(state=tk.NORMAL)
-            if self.reddit_grab_button is not None:
-                state = tk.DISABLED if self._reddit_grab_running else tk.NORMAL
-                self.reddit_grab_button.config(state=state)
-        elif new_state == "disabled_external":
-            self._set_button_to_disabled()
-            self._show_status_bar(f"Scan running by PID: {self.external_scan_pid} - Please wait")
-            if self.ftp_scan_button is not None:
-                self.ftp_scan_button.config(state=tk.DISABLED)
-            if self.http_scan_button is not None:
-                self.http_scan_button.config(state=tk.DISABLED)
-            if self.reddit_grab_button is not None:
-                self.reddit_grab_button.config(state=tk.DISABLED)
-        elif new_state == "scanning":
-            self._set_button_to_stop()
-            self._hide_status_bar()
-            if self.ftp_scan_button is not None:
-                self.ftp_scan_button.config(state=tk.DISABLED)
-            if self.http_scan_button is not None:
-                self.http_scan_button.config(state=tk.DISABLED)
-            if self.reddit_grab_button is not None:
-                self.reddit_grab_button.config(state=tk.DISABLED)
-        elif new_state == "stopping":
-            self._set_button_to_stopping()
-            if self.ftp_scan_button is not None:
-                self.ftp_scan_button.config(state=tk.DISABLED)
-            if self.http_scan_button is not None:
-                self.http_scan_button.config(state=tk.DISABLED)
-            if self.reddit_grab_button is not None:
-                self.reddit_grab_button.config(state=tk.DISABLED)
-        elif new_state == "retry":
-            self._set_button_to_retry()
-            if self.ftp_scan_button is not None:
-                self.ftp_scan_button.config(state=tk.DISABLED)
-            if self.http_scan_button is not None:
-                self.http_scan_button.config(state=tk.DISABLED)
-            if self.reddit_grab_button is not None:
-                self.reddit_grab_button.config(state=tk.DISABLED)
-        elif new_state == "error":
-            self._set_button_to_error()
-            if self.ftp_scan_button is not None:
-                self.ftp_scan_button.config(state=tk.DISABLED)
-            if self.http_scan_button is not None:
-                self.http_scan_button.config(state=tk.DISABLED)
-            if self.reddit_grab_button is not None:
-                self.reddit_grab_button.config(state=tk.DISABLED)
-
-    def _set_button_to_start(self) -> None:
-        """Configure button for start state."""
-        self.scan_button.config(
-            text="▶ Start Scan",
-            state="normal"
-        )
-        self.theme.apply_to_widget(self.scan_button, "button_primary")
-
-    def _set_button_to_stop(self) -> None:
-        """Configure button for stop state."""
-        self.scan_button.config(
-            text="⬛ Stop Scan",
-            state="normal"
-        )
-        self.theme.apply_to_widget(self.scan_button, "button_danger")
-
-    def _set_button_to_disabled(self) -> None:
-        """Configure button for disabled state (external scan)."""
-        self.scan_button.config(
-            text="🔍 Scan Running",
-            state="disabled"
-        )
-        self.theme.apply_to_widget(self.scan_button, "button_disabled")
-
-    def _set_button_to_stopping(self) -> None:
-        """Configure button for stopping state with warning color."""
-        self.stopping_started_time = time.time()
-        self.scan_button.config(
-            text="⏳ Stopping...",
-            state="disabled"
-        )
-        # Apply secondary theme first, then override with warning color
-        self.theme.apply_to_widget(self.scan_button, "button_secondary")
-        self.scan_button.config(bg=self.theme.colors["warning"])
-
-    def _set_button_to_retry(self) -> None:
-        """Configure button for retry state after stop timeout."""
-        self.scan_button.config(
-            text="⏹ Stop (retry)",
-            state="normal"
-        )
-        # Use warning color to indicate retry needed
-        self.theme.apply_to_widget(self.scan_button, "button_secondary")
-        self.scan_button.config(bg=self.theme.colors["warning"])
-
-    def _set_button_to_error(self) -> None:
-        """Configure button for error state."""
-        self.scan_button.config(
-            text="⬛ Stop Failed",
-            state="normal"
-        )
-        self.theme.apply_to_widget(self.scan_button, "button_danger")
-
-    # ===== LOCK FILE MANAGEMENT =====
-
-    def _check_external_scans(self) -> None:
-        """Check for external scans using lock file system."""
-        dashboard_scan.check_external_scans(self)
-
-    def _validate_external_process(self, pid: int) -> bool:
-        """Validate that external process is actually running."""
-        try:
-            # Try psutil first (more reliable)
-            try:
-                import psutil
-                return psutil.pid_exists(pid)
-            except ImportError:
-                # Fallback to os.kill method
-                import signal
-                os.kill(pid, 0)  # Doesn't actually kill, just checks existence
-                return True
-        except (OSError, ProcessLookupError):
-            return False
-        except Exception:
-            # Unknown error, assume process exists to be safe
-            return True
-
-    # ===== STOP CONFIRMATION DIALOG =====
-
-    def _show_stop_confirmation(self) -> None:
-        """Show confirmation dialog for stopping scan."""
-        # Custom dialog for stop options
-        dialog = tk.Toplevel(self.parent)
-        dialog.title("Stop Scan")
-        dialog.geometry("400x250")
-        dialog.minsize(300, 200)
-        dialog.transient(self.parent)
-
-        # Apply theme
-        self.theme.apply_to_widget(dialog, "main_window")
-
-        # Header
-        header_label = self.theme.create_styled_label(
-            dialog,
-            "⚠️ Stop Scan Confirmation",
-            "heading"
-        )
-        header_label.pack(pady=(20, 10))
-
-        # Warning message
-        warning_text = (
-            "Stopping the scan may result in incomplete data collection.\n"
-            "Choose how you would like to stop the scan:"
-        )
-        warning_label = self.theme.create_styled_label(
-            dialog,
-            warning_text,
-            "body",
-            justify="center"
-        )
-        warning_label.pack(pady=(0, 20), padx=20)
-
-        # Progress context (if available)
-        current_progress = getattr(self, "current_progress_summary", "")
-        if current_progress:
-            progress_label = self.theme.create_styled_label(
-                dialog,
-                f"Current: {current_progress}",
-                "small",
-                fg=self.theme.colors["text_secondary"]
-            )
-            progress_label.pack(pady=(0, 20))
-
-        # Buttons frame
-        buttons_frame = tk.Frame(dialog)
-        self.theme.apply_to_widget(buttons_frame, "main_window")
-        buttons_frame.pack(pady=20)
-
-        # Stop now button
-        stop_now_btn = tk.Button(
-            buttons_frame,
-            text="Stop Now",
-            command=lambda: self._handle_stop_choice(dialog, "immediate")
-        )
-        self.theme.apply_to_widget(stop_now_btn, "button_danger")
-        stop_now_btn.pack(side=tk.LEFT, padx=(0, 10))
-
-        # Stop after host button
-        stop_after_btn = tk.Button(
-            buttons_frame,
-            text="Stop After Current Host",
-            command=lambda: self._handle_stop_choice(dialog, "graceful")
-        )
-        self.theme.apply_to_widget(stop_after_btn, "button_secondary")
-        stop_after_btn.pack(side=tk.LEFT, padx=(10, 0))
-
-        # Cancel button
-        cancel_btn = tk.Button(
-            buttons_frame,
-            text="Cancel",
-            command=dialog.destroy
-        )
-        self.theme.apply_to_widget(cancel_btn, "button_secondary")
-        cancel_btn.pack(side=tk.LEFT, padx=(10, 0))
-
-        # Handle window close
-        dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
-
-        # Finalize geometry and focus/stacking after content exists.
-        dialog.update_idletasks()
-        parent_x = self.parent.winfo_x()
-        parent_y = self.parent.winfo_y()
-        parent_w = self.parent.winfo_width()
-        parent_h = self.parent.winfo_height()
-        dialog_w = dialog.winfo_width()
-        dialog_h = dialog.winfo_height()
-        x = parent_x + max(0, (parent_w - dialog_w) // 2)
-        y = parent_y + max(0, (parent_h - dialog_h) // 2)
-        dialog.geometry(f"{dialog_w}x{dialog_h}+{x}+{y}")
-
-        dialog.grab_set()
-        ensure_dialog_focus(dialog, self.parent)
-        cancel_btn.focus_set()
-
-    def _handle_stop_choice(self, dialog: tk.Toplevel, choice: str) -> None:
-        """Handle user's stop choice."""
-        dialog.destroy()
-
-        if choice == "immediate":
-            self._stop_scan_immediate()
-        elif choice == "graceful":
-            self._stop_scan_after_host()
-
-    # ===== SCAN STOP FUNCTIONALITY =====
-
-    def _stop_scan_immediate(self) -> None:
-        """Stop scan immediately."""
-        dashboard_scan.stop_scan_immediate(self)
-
-    def _stop_scan_after_host(self) -> None:
-        """Stop scan after current host completes."""
-        dashboard_scan.stop_scan_after_host(self)
-
-    def _handle_stop_error(self, error_message: str) -> None:
-        """Handle scan stop error."""
-        dashboard_scan.handle_stop_error(self, error_message)
+bind_scan_control_methods(DashboardWidget)

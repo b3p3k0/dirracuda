@@ -212,7 +212,7 @@ class AccessOperation:
             auth_attempts = self.auth_attempt_sequence()
 
             for method_name, username, password in auth_attempts:
-                self.output.info(
+                self.output.print_if_verbose(
                     f"Using auth: {username}/{password if password else '[blank]'} ({method_name})"
                 )
                 enum_result = self.enumerate_shares_detailed(ip, username, password)

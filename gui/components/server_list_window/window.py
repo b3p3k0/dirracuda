@@ -27,8 +27,8 @@ from gui.utils.template_store import TemplateStore
 from gui.utils.logging_config import get_logger
 from gui.components.pry_dialog import PryDialog
 from gui.components.pry_status_dialog import BatchStatusDialog
-from gui.components.reddit_browser_window import show_reddit_browser_window
 from shared.db_migrations import run_migrations
+from shared.path_service import get_paths
 
 _logger = get_logger("server_list_window")
 
@@ -99,6 +99,8 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self.db_reader = db_reader
         self.theme = get_theme()
         self.window_data = window_data or {}
+        self._pry_unlocked = bool(self.window_data.get("_pry_unlocked", False))
+        self._rce_unlocked = bool(self.window_data.get("_rce_unlocked", self._pry_unlocked))
         self.settings_manager = settings_manager
         self.probe_status_map = {}
         self.ransomware_indicators = []
@@ -150,6 +152,8 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self.pry_button = None
         self.browser_button = None
         self.stop_button = None
+        self.running_tasks_button = None
+        self.running_tasks_window = None
         self.delete_button = None
         self._selection_menu_indices: List[int] = []  # Selection-dependent context menu entries
         self._delete_menu_index = None  # Store context menu index
@@ -159,6 +163,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self.pry_status_button = None
         self.batch_status_dialog = None
         self._stop_button_original_style = None
+        self._running_tasks_subscribed = False
         self._context_menu_visible = False
         self._context_menu_bindings = []
         self._notes_tooltip = None
@@ -169,9 +174,10 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self._filter_template_label_to_slug: Dict[str, str] = {}
         self._selected_filter_template_slug: Optional[str] = None
         try:
+            layout_paths = get_paths()
             self.filter_template_store = TemplateStore(
                 settings_manager=None,
-                base_dir=Path.home() / ".dirracuda" / "filter_templates",
+                base_dir=layout_paths.templates_filter_dir,
                 seed_dir=None
             )
         except Exception as exc:
@@ -220,11 +226,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self._prime_initial_render()
         self._schedule_initial_data_load()
 
-        if self.settings_manager:
-            self.probe_status_map = self.settings_manager.get_probe_status_map()
-            self._load_indicator_patterns()
-        else:
-            self._load_indicator_patterns()
+        self._load_indicator_patterns()
 
     def _create_window(self) -> None:
         """Create the server list window."""
@@ -439,18 +441,6 @@ class ServerListWindow(ServerListWindowActionsMixin):
         )
         self.count_label.pack(side=tk.LEFT, padx=(20, 0))
 
-        # Experimental Reddit browser entrypoint
-        reddit_browser_button = tk.Button(
-            header_frame,
-            text="Reddit Post DB (EXP)",
-            command=lambda: show_reddit_browser_window(
-                parent=self.window,
-                add_record_callback=self.open_add_record_dialog,
-            ),
-        )
-        self.theme.apply_to_widget(reddit_browser_button, "button_secondary")
-        reddit_browser_button.pack(side=tk.RIGHT)
-
     def open_add_record_dialog(self, prefill=None) -> None:
         """Public entrypoint for external callers (e.g. Reddit browser) to open Add Record."""
         self._run_add_record(prefill=prefill)
@@ -550,7 +540,10 @@ class ServerListWindow(ServerListWindowActionsMixin):
 
         # Create table using module
         self.table_frame, self.tree, self.scrollbar_v, self.scrollbar_h = table.create_server_table(
-            self.window, self.theme, table_callbacks
+            self.window,
+            self.theme,
+            table_callbacks,
+            show_rce_column=self._rce_unlocked,
         )
 
         self._create_context_menu(self.tree)
@@ -572,10 +565,12 @@ class ServerListWindow(ServerListWindowActionsMixin):
                 self._selection_menu_indices.append(int(idx))
 
         _add_selection_command("📋 Copy IP", self._on_copy_ip)
+        _add_selection_command("🔗 Copy URL", self._on_copy_url)
         self.context_menu.add_separator()
         _add_selection_command("🔍 Probe Selected", self._on_probe_selected)
         _add_selection_command("📦 Extract Selected", self._on_extract_selected)
-        _add_selection_command("🔓 Pry Selected", self._on_pry_selected)
+        if self._pry_unlocked:
+            _add_selection_command("🔓 Pry Selected", self._on_pry_selected)
         _add_selection_command("🗂️ Browse Selected", self._on_file_browser_selected)
         self.context_menu.add_separator()
         _add_selection_command("⭐ Toggle Favorite", self._on_mark_favorite_selected)
@@ -794,16 +789,6 @@ class ServerListWindow(ServerListWindowActionsMixin):
         )
         self.status_label.pack(anchor="w")
 
-        # Hidden by default; becomes visible to reopen batch status dialog
-        self.pry_status_button = tk.Button(
-            info_container,
-            text="Show Task Status",
-            command=self._show_pry_status_dialog
-        )
-        self.theme.apply_to_widget(self.pry_status_button, "button_secondary")
-        self.pry_status_button.pack(anchor="w", pady=(4, 0))
-        self.pry_status_button.pack_forget()
-
         # Right side - action buttons
         button_container = tk.Frame(self.button_frame)
         self.theme.apply_to_widget(button_container, "main_window")
@@ -846,14 +831,20 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self.theme.apply_to_widget(self.browser_button, "button_secondary")
         self.browser_button.pack(side=tk.LEFT, padx=(0, 8))
 
-        self.pry_button = tk.Button(
-            button_container,
-            text="🔓 Pry Selected",
-            command=self._on_pry_selected,
-            state=tk.DISABLED
-        )
-        self.theme.apply_to_widget(self.pry_button, "button_secondary")
-        self.pry_button.pack(side=tk.LEFT, padx=(0, 8))
+        if self._pry_unlocked:
+            self.pry_button = tk.Button(
+                button_container,
+                text="🔓 Pry Selected",
+                command=self._on_pry_selected,
+                state=tk.DISABLED
+            )
+            self.theme.apply_to_widget(self.pry_button, "button_secondary")
+            self.pry_button.pack(side=tk.LEFT, padx=(0, 8))
+        else:
+            pry_spacer = tk.Frame(button_container, width=120)
+            self.theme.apply_to_widget(pry_spacer, "main_window")
+            pry_spacer.pack(side=tk.LEFT, padx=(0, 8))
+            pry_spacer.pack_propagate(False)
 
         self.delete_button = tk.Button(
             button_container,
@@ -866,21 +857,15 @@ class ServerListWindow(ServerListWindowActionsMixin):
         # Double padding before delete for visual separation; standard after
         self.delete_button.pack(side=tk.LEFT, padx=(16, 8))
 
-        self.stop_button = tk.Button(
+        self.running_tasks_button = tk.Button(
             button_container,
-            text="⏹ Stop Batch",
-            command=self._stop_active_batch,
+            text="Running Tasks (0)",
+            command=self._open_running_tasks_window,
             state=tk.DISABLED
         )
-        self.theme.apply_to_widget(self.stop_button, "button_secondary")
-        self.stop_button.pack(side=tk.LEFT, padx=(0, 20))
-        self._stop_button_original_style = {
-            "bg": self.stop_button.cget("bg"),
-            "fg": self.stop_button.cget("fg"),
-            "activebackground": self.stop_button.cget("activebackground"),
-            "activeforeground": self.stop_button.cget("activeforeground"),
-            "text": self.stop_button.cget("text")
-        }
+        self.theme.apply_to_widget(self.running_tasks_button, "button_secondary")
+        self.running_tasks_button.pack(side=tk.LEFT, padx=(0, 20))
+        self._initialize_running_tasks_button()
 
         self._update_action_buttons_state()
 
@@ -1183,7 +1168,8 @@ class ServerListWindow(ServerListWindowActionsMixin):
             probe_callback=self._launch_probe_from_detail,
             extract_callback=self._launch_extract_from_detail,
             browse_callback=self._launch_browse_from_detail,
-            rce_status_callback=self._handle_rce_status_update
+            rce_status_callback=self._handle_rce_status_update,
+            show_rce_controls=self._rce_unlocked,
         )
 
     def _export_selected_servers(self) -> None:
