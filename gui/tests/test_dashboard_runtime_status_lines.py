@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from gui.components import dashboard_batch_ops
 from gui.components.dashboard import DashboardWidget
 
 
@@ -93,6 +94,32 @@ def test_compose_runtime_status_lines_backend_invalid_or_missing_defaults_to_aut
 
     assert invalid_line == "✔ ClamAV Integration"
     assert missing_line == "✔ ClamAV Integration"
+
+
+def test_load_clamav_config_prefers_dashboard_active_config_path(tmp_path):
+    active_cfg = tmp_path / "active.json"
+    stale_cfg = tmp_path / "stale.json"
+    active_cfg.write_text(
+        '{"clamav": {"enabled": true, "backend": "clamscan"}}',
+        encoding="utf-8",
+    )
+    stale_cfg.write_text(
+        '{"clamav": {"enabled": false, "backend": "auto"}}',
+        encoding="utf-8",
+    )
+
+    class _Settings:
+        def get_setting(self, _key, default=None):
+            return str(stale_cfg)
+
+    dash = _make_dashboard()
+    dash.config_path = str(active_cfg)
+    dash.settings_manager = _Settings()
+
+    loaded = dashboard_batch_ops.load_clamav_config(dash)
+
+    assert loaded["enabled"] is True
+    assert loaded["backend"] == "clamscan"
 
 
 def test_update_runtime_status_display_shodan_no_key(monkeypatch):

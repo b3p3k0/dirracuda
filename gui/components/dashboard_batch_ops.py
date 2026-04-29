@@ -1426,8 +1426,23 @@ def show_batch_summary(
 
 
 def load_clamav_config(dash) -> Dict[str, Any]:
-    """Read the clamav section from conf/config.json. Returns {} on any error."""
-    config_path = dash.settings_manager.get_setting('backend.config_path', None) if dash.settings_manager else None
+    """Read the clamav section from the dashboard's active config path."""
+    config_path = None
+    resolver = getattr(dash, "_resolve_active_config_path", None)
+    if callable(resolver):
+        try:
+            config_path = resolver()
+        except Exception:
+            config_path = None
+    if not config_path:
+        config_path = getattr(dash, "config_path", None)
+    if not config_path and getattr(dash, "settings_manager", None):
+        config_path = dash.settings_manager.get_setting('backend.config_path', None)
+        if not config_path:
+            try:
+                config_path = dash.settings_manager.get_smbseek_config_path()
+            except Exception:
+                config_path = None
     if not config_path:
         return {}
     try:

@@ -46,6 +46,61 @@ def test_bootstrap_layout_v2_creates_structure_and_seeds_conf(tmp_path: Path) ->
     assert result["seeded"]["copied"] >= 1
 
 
+def test_bootstrap_auto_enables_clamav_for_fresh_config_when_scanner_detected(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repo_root = tmp_path / "repo"
+    home_root = tmp_path / ".dirracuda"
+    _seed_repo_conf(repo_root)
+
+    monkeypatch.setattr(
+        "shared.path_service.shutil.which",
+        lambda name: f"/usr/bin/{name}" if name == "clamscan" else None,
+    )
+
+    paths = get_paths(home_root=home_root, repo_root=repo_root)
+    legacy = get_legacy_paths(paths=paths)
+
+    result = bootstrap_layout_v2(paths=paths, legacy=legacy)
+    seeded = json.loads(paths.config_file.read_text(encoding="utf-8"))
+
+    assert seeded["clamav"]["enabled"] is True
+    assert seeded["clamav"]["backend"] == "auto"
+    assert any(
+        item.get("action") == "auto_enable_clamav_if_detected"
+        and item.get("status") == "ok"
+        for item in result["seeded"]["items"]
+    )
+
+
+def test_bootstrap_preserves_existing_clamav_disabled_config(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repo_root = tmp_path / "repo"
+    home_root = tmp_path / ".dirracuda"
+    _seed_repo_conf(repo_root)
+
+    monkeypatch.setattr(
+        "shared.path_service.shutil.which",
+        lambda name: f"/usr/bin/{name}" if name == "clamscan" else None,
+    )
+
+    paths = get_paths(home_root=home_root, repo_root=repo_root)
+    paths.config_file.parent.mkdir(parents=True, exist_ok=True)
+    paths.config_file.write_text(
+        json.dumps({"clamav": {"enabled": False, "backend": "auto"}}),
+        encoding="utf-8",
+    )
+    legacy = get_legacy_paths(paths=paths)
+
+    bootstrap_layout_v2(paths=paths, legacy=legacy)
+    persisted = json.loads(paths.config_file.read_text(encoding="utf-8"))
+
+    assert persisted["clamav"]["enabled"] is False
+
+
 def test_bootstrap_prefers_example_over_repo_runtime_config(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     home_root = tmp_path / ".dirracuda"

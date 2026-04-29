@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import sys
+from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -54,6 +56,14 @@ class _MainConfigStub:
         return True
 
 
+def _load_xsmbseek_config_class():
+    loader = SourceFileLoader("dirracuda_app_config_test", str(Path("dirracuda").resolve()))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module.XSMBSeekConfig
+
+
 def _build_dialog(validation_results: dict, *, parent=None, dialog=None) -> AppConfigDialog:
     dlg = AppConfigDialog.__new__(AppConfigDialog)
     dlg.parent = parent if parent is not None else object()
@@ -93,6 +103,20 @@ def _build_dialog(validation_results: dict, *, parent=None, dialog=None) -> AppC
 
     dlg._validate_all_fields = lambda: None
     return dlg
+
+
+def _set_clamav_form_vars(dlg: AppConfigDialog, *, enabled: bool) -> None:
+    dlg.clamav_enabled = not enabled
+    dlg.clamav_backend = "auto"
+    dlg.clamav_auto_promote_clean = False
+    dlg.clamav_enabled_var = _BoolVar(enabled)
+    dlg.clamav_backend_var = _Var("auto")
+    dlg.clamav_timeout_var = _Var("60")
+    dlg.clamav_extracted_root_var = _Var("~/.dirracuda/data/extracted")
+    dlg.clamav_known_bad_subdir_var = _Var("known_bad")
+    dlg.clamav_show_results_var = _BoolVar(True)
+    dlg.clamav_auto_promote_clean_var = _BoolVar(False)
+    dlg.quarantine_tmpfs_enabled_var = _BoolVar(False)
 
 
 def _base_validation(*, api_key_valid=True, wordlist_valid=True) -> dict:
@@ -284,6 +308,47 @@ def test_validate_and_save_refreshes_when_only_tmpfs_settings_change(monkeypatch
 
     assert dlg._validate_and_save() is True
     assert len(refresh_calls) == 1
+
+
+def test_validate_and_save_persists_clamav_toggle_with_real_main_config(tmp_path, monkeypatch):
+    cfg_path = tmp_path / "conf" / "config.json"
+    db_path = tmp_path / "data" / "dirracuda.db"
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "clamav": {"enabled": False, "backend": "auto"},
+                "gui_app": {"backend_path": str(tmp_path), "database_path": str(db_path)},
+                "database": {"path": str(db_path)},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    XSMBSeekConfig = _load_xsmbseek_config_class()
+    dlg = _build_dialog(_base_validation())
+    dlg.main_config = XSMBSeekConfig(str(cfg_path))
+    dlg.smbseek_var = _Var(str(tmp_path))
+    dlg.database_var = _Var(str(db_path))
+    dlg.config_var = _Var(str(cfg_path))
+    dlg.quarantine_var = _Var(str(tmp_path / "quarantine"))
+    dlg.wordlist_var = _Var("")
+
+    monkeypatch.setattr("gui.components.app_config_dialog.messagebox.showwarning", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("gui.components.app_config_dialog.messagebox.showerror", lambda *_args, **_kwargs: None)
+
+    _set_clamav_form_vars(dlg, enabled=True)
+    assert dlg._validate_and_save() is True
+    persisted = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert persisted["clamav"]["enabled"] is True
+    assert dlg.main_config.config["clamav"]["enabled"] is True
+
+    _set_clamav_form_vars(dlg, enabled=False)
+    assert dlg._validate_and_save() is True
+    persisted = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert persisted["clamav"]["enabled"] is False
+    assert dlg.main_config.config["clamav"]["enabled"] is False
 
 
 def test_open_app_config_dialog_failure_uses_parent(monkeypatch):
