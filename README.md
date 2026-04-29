@@ -112,18 +112,19 @@ You're connecting to machines you don't control. A few baseline precautions befo
 The main window. From here you can:
 
 - Launch discovery from one **▶ Start Scan** button - pick one protocol or queue multiple protocols in sequence from the same dialog
-- Access experimental features (SearXNG dorking, Reddit ingestion, Dorkbook, and Keymaster) via the `⚗ Experimental` button in the dashboard header (see [Experimental Features](#experimental-features))
+- Access [Experimental Features](#experimental-features) 
 - Open the Server List Browser to work with hosts you've found
 - Manage your database (import, export, merge, maintenance)
 - Edit configuration
-- Toggle dark/light mode with the 🌙/☀️ button in the top-right
 - Open **Running Tasks** to monitor active/queued work and reopen hidden monitor dialogs (scan/probe/extract)
 
 ### Discovery
 
-![start new scan dialog](img/scan.png)
+![livescan](img/livescan.png)
 
 Triggered from **▶ Start Scan** with the protocol(s) selected. All three follow the same pipeline: Shodan query → reachability check → protocol-specific verification. Only hosts that pass get stored; failures are recorded with a reason code so you can see exactly where each candidate dropped out. Scan summary shows Shodan candidates vs. verified count. The same host registry handles all three protocols - the same IP can carry SMB, FTP, and multiple HTTP endpoint entries without collision.
+
+![start new scan dialog](img/scan.png)
 
 **SMB** - default dork: `smb authentication: disabled product:"Samba"`. Applies two extra pre-connection filters: org filtering (drops excluded ISPs and hosting providers) and 30-day deduplication (CLI overrides: `--rescan-all`, `--rescan-failed`). Verification tries Anonymous, Guest/blank, and Guest/Guest in sequence; whichever succeeds is recorded alongside country and timestamp, so auth method drift shows up across rescans. Two security modes: **Cautious** (default) restricts to signed SMB2+/SMB3 and rejects SMB1; **Legacy** lifts those restrictions and tends to find more targets. 
 
@@ -142,22 +143,11 @@ Start Scan shows a preflight confirmation that includes an approximate Shodan qu
 Dirracuda spends Shodan query credits by **result page** (about 100 matches/page), not by protocol toggle alone.  
 That means a scan can consume more than one credit when you raise per-protocol budgets.
 
-- Each protocol now has its own credit budget cap (`SMB`, `FTP`, `HTTP`).
-- Default is wallet-safe: `1` credit budget per protocol per scan.
-- In the GUI scan flow, discovery window sizing is budget-driven: `max_shodan_results = budget * 100`.
-- CLI/config-only workflows can still apply explicit `max_results` caps.
-- SMB can stop early when adaptive target is met; FTP/HTTP use strict caps.
+- Each protocol has its own credit budget cap (`SMB`, `FTP`, `HTTP`).
+- Default is `1` credit budget per protocol per scan.
+- In the scan flow, discovery window sizing is budget-driven: `max_shodan_results = budget * 100`.
 - Budgets are editable from scan dialogs via `Query Budget...`.
-- Estimated totals are approximate; real usage can be lower when result pages are sparse.
-
-```mermaid
-flowchart LR
-    A[Scan Settings\\nprotocol budgets] --> B[Per-protocol query windows\\nbudget * 100]
-    B --> C[Page fetches\\n~100 results per credit]
-    C --> D[Budget cap enforcement]
-    D --> E[Host filtering/verification]
-    E --> F[Preflight display\\nShodan balance + estimated total cost]
-```
+- Estimated totals are approximate
 
 If preflight cannot fetch a **live** Shodan balance, Dirracuda shows:
 - `Shodan balance: not available at this time`
@@ -170,7 +160,8 @@ In that case, numeric cost estimates are intentionally suppressed to avoid stale
 ### Server List
 
 ![server list browser](img/servers.png)
- Shows discovered hosts with IP, country, and accessible share counts as well as status indicators and a favorite/avoid list.
+
+ Shows discovered hosts with IP/hostname, country, and accessible share counts as well as status indicators and a favorite/avoid list.
 
 **Operations** (right-click a host or use the bottom-row buttons):
 
@@ -200,7 +191,8 @@ Live scan/probe/extract output is shown in monitor dialogs. Hiding a monitor doe
 ### Browsing Shares
 
 ![file browser](img/browse.png)
-Read-only navigation available shares. Double-click directories to descend, files to preview.
+
+Read-only, protocol transparent navigation available shares. Typical file explorer behavior (double click to descend/open etc...) are supported
 
 The viewer auto-detects file types: text files display with an encoding selector (UTF-8, Latin-1, etc.), binary files switch to hex mode, and images (PNG, JPEG, GIF, WebP, BMP, TIFF) render with fit-to-window scaling.
 
@@ -209,8 +201,6 @@ The viewer auto-detects file types: text files display with an encoding selector
 Files over the specified maximum (default: 5 MB) trigger a warning-you can bump that limit in `~/.dirracuda/conf/config.json` under `file_browser.viewer.max_view_size_mb`, or click "Ignore Once" to load anyway (hard cap: 1 GB).
 
 Downloads are staged in quarantine (`~/.dirracuda/data/quarantine/`). When ClamAV is enabled, downloaded files are post-processed by verdict (clean files optionally promoted to extracted, infected files moved to known-bad). The browser never writes to remote systems.
-
-Download concurrency is configurable in the browser UI via the worker-count control (1–3 workers, default 2); the value is persisted in GUI settings under `file_browser.download_worker_count`. For SMB and FTP, a large-file threshold (persisted under `file_browser.download_large_file_mb`) routes files above that size to a dedicated worker. HTTP downloads use worker concurrency only - large-file routing is not active for HTTP in the current release. The large-file control is visible in the HTTP browser but disabled with an explanatory note.
 
 #### Optional tmpfs quarantine (Linux)
 
@@ -294,11 +284,6 @@ Configure it from **App Config → ClamAV Settings**:
 - Known-bad subfolder name
 - Show/hide post-extract ClamAV results dialog
 
-Notes:
-
-- The results dialog supports **Mute until restart**.
-- One completion popup is shown per session (ClamAV results dialog if shown, otherwise a single fallback completion popup).
-
 ### DB Tools
 
 ![db dialog](img/db.png)
@@ -344,24 +329,6 @@ Behavior notes:
 
 App settings are stored in `~/.dirracuda/conf/config.json`. The bundled example file (`conf/config.json.example`) documents every option.
 
-At startup, Dirracuda self-heals stale legacy/repo-local DB and config pointers when they are missing (for example old `.../dirracuda.db` in a checkout root) and resets them to canonical home paths.
-
-Key sections:
-
-- `shodan.api_key` - required for discovery scans (SMB/FTP/HTTP)
-- `shodan.query_limits.max_results` - requested discovery result ceiling
-- `shodan.query_limits.smb_max_query_credits_per_scan` - SMB credit-budget cap (default: `1`)
-- `shodan.query_limits.ftp_max_query_credits_per_scan` - FTP credit-budget cap (default: `1`)
-- `shodan.query_limits.http_max_query_credits_per_scan` - HTTP credit-budget cap (default: `1`)
-- `shodan.query_limits.max_query_credits_per_scan` - legacy SMB alias (backward compatibility only)
-- `shodan.query_limits.min_usable_hosts_target` - SMB adaptive top-up threshold when budget >1 (default: `50`)
-- `file_collection.*` - extraction limits
-- `clamav.*` - optional post-extract scan/routing behavior
-- `file_browser.*` - browse mode limits (depth, entries, chunk size, quarantine root); download tuning - `download_worker_count` (1–3) and `download_large_file_mb` - is user-controlled in the browser UI and persisted in GUI settings, not read from this config file
-- `connection.*` - timeouts and rate limiting
-- `ftp.shodan.query_limits.max_results` - cap on Shodan FTP candidates per scan
-- `ftp.verification.*` - per-step timeouts for FTP connect, auth, and listing (seconds)
-
 Two additional files hold editable lists:
 
 - `~/.dirracuda/conf/exclusion_list.json` - Organizations to skip during Shodan queries (hosting providers, ISPs you don't care about etc.). Add entries to the `organizations` array.
@@ -369,7 +336,7 @@ Two additional files hold editable lists:
 
 These are separate so you can customize or share them without touching app settings.
 
-The GUI includes a built-in config editor for common settings.
+The GUI includes a built-in config editor for common settings and an integrated simple text editor for full configuration.
 
 ## Experimental Features
 
@@ -382,6 +349,8 @@ The dialog is modeless and tab-based. Current tabs:
 - `Keymaster`
 
 ### SearXNG
+
+![SearXNG](img/searxng.png)
 
 Use this tab to run open-directory dork queries against a SearXNG server, keep confirmed open indexes, and review/promote the results.
 
@@ -403,6 +372,8 @@ What each action does:
 - **Run** executes the query, keeps only confirmed open-index results, and updates status with fetched/stored counts. If probe is enabled, the status line also shows probe totals (`✔/✖/○`).
 - **Open Results DB** opens the results browser backed by `~/.dirracuda/data/experimental/se_dork.db`.
 
+![searxng db](img/searxng_db.png)
+
 Results browser:
 - Columns: `URL`, `Probed`, `Probe Preview`, `Checked`
 - Actions: `Copy URL`, `Open in Explorer`, `Open in system browser`, `Probe Selected` / `Probe URL`, `Add to dirracuda DB`
@@ -423,11 +394,9 @@ Then restart SearXNG and run `Test` again.
 
 ### Reddit Ingestion (redseek)
 
-redseek ingests submissions from `r/opendirectories` into a sidecar DB (`~/.dirracuda/data/experimental/reddit_od.db`) for review. Runtime workflow state remains sidecar-based, and it does not auto-probe or auto-extract anything.
+![reddit](img/reddit.png)
 
-Access points:
-- Dashboard → `⚗ Experimental` → `Reddit` tab → `Open Reddit Grab` (ingest)
-- Dashboard → `⚗ Experimental` → `Reddit` tab → `Open Reddit Post DB` (review/open actions)
+redseek ingests submissions from `r/opendirectories` into a sidecar DB (`~/.dirracuda/data/experimental/reddit_od.db`) for review. 
 
 Ingest modes in `Reddit Grab`:
 
@@ -441,12 +410,9 @@ Sort options:
 - `new`
 - `top` with window `hour`, `day`, `week`, `month`, `year`, or `all`
 
-Only submissions are ingested. Comments/replies are not ingested.
+Only submissions are processed. Comments/replies are not.
 
-Dialog input persistence:
-- Last-used `Reddit Grab` inputs persist across opens/restarts in `~/.dirracuda/state/gui_settings.json` under `reddit_grab.*` keys:
-  - `mode`, `sort`, `top_window`, `query`, `username`, `max_posts`
-  - `parse_body`, `include_nsfw`, `replace_cache`
+![reddit db](img/reddit_db.png)
 
 Promotion flow:
 - `Open Reddit Post DB` supports `Add to dirracuda DB` from the row context menu.
@@ -457,7 +423,6 @@ Disclaimer:
 > Dirracuda's Reddit ingestion feature uses publicly accessible JSON endpoints to retrieve posts from `r/opendirectories`.
 > No authentication is required, and only publicly available data is accessed.
 > This method is not part of Reddit's official API and may change or break at any time.
-> Treat all ingested data as unverified and potentially unsafe.
 
 Known limitations:
 - Reddit JSON endpoints are unofficial and may change without notice
@@ -468,7 +433,9 @@ Known limitations:
 
 ### Dorkbook
 
-Dorkbook is a protocol-aware notebook for reusable dork recipes.
+![dorkbook](img/dorkbook.png)
+
+Dorkbook is a notebook for reusable search queries.
 
 Quick start:
 1. Dashboard → `⚗ Experimental` → `Dorkbook` tab.
@@ -480,13 +447,10 @@ Behavior:
 - Built-ins are read-only (italicized) and seeded one per protocol
 - Custom rows support `Add`, `Copy`, `Use in Discovery Dorks`, `Edit`, `Delete`
 - `Use in Discovery Dorks` populates the protocol-matched field in Discovery Dorks editor as an unsaved/manual-save change
-- Right-click menu mirrors the same row actions
-- Search filters the current protocol tab only
-- Copy places query text only on clipboard
-- If no scan config context is available, `Use in Discovery Dorks` shows a warning and does not write
-- Delete confirmation can be muted until app restart via checkbox
 
 ### Keymaster
+
+![keymaster](img/keymaster.png)
 
 Keymaster stores reusable Shodan API keys for rapid key rotation during testing or billing management etc.
 
@@ -506,7 +470,7 @@ Key table columns: `Label`, `Key Preview`, `Notes`, `Last Used`.
 
 Key Preview format: keys longer than 8 characters show as `first4 + asterisks + last4`; shorter keys are fully masked.
 
-API key input is masked in Add/Edit dialogs to avoid shoulder surfing, **BUT IS STORED IN CLEAR TEXT LOCALLY.** This should be a non-risk (if a threat actor can read the unencrypted string in your local home dir, you probably have bigger issues...) but I would be remiss not to point it out.
+API key input is masked in Add/Edit dialogs to avoid shoulder surfing, **BUT IS STORED IN CLEAR TEXT LOCALLY.** This should be a non-risk (if an attacker can read the unencrypted string in your local home dir, you probably have bigger issues...) but I would be remiss not to point it out.
 
 ## Advanced
 
@@ -520,7 +484,7 @@ Both auto-restore your last-used template on startup.
 
 ### CLI Usage
 
-This program began as a collection of loosely related scripts; they came together and were revised to form the "backend" before I integrated the GUI. The CLI tools can be useful for scripting and automation. 
+This program began as a collection of loosely related scripts; they came together and were revised to form the "backend" before I integrated the GUI. The CLI tools can still be useful for scripting and automation. 
 
 ```bash
 # SMB discovery
