@@ -621,9 +621,10 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                     clamav_config=clamav_cfg,
                 )
             try:
+                db_reader = getattr(self, "db_reader", None)
                 log_path = extract_runner.write_extract_log(
                     summary,
-                    db_path=str(getattr(self.db_reader, "db_path", "") or ""),
+                    db_path=str(getattr(db_reader, "db_path", "") or ""),
                     ip_address=ip_address,
                     host_type=host_type,
                     protocol_server_id=target.get("protocol_server_id"),

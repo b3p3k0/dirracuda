@@ -1169,16 +1169,31 @@ class AppConfigDialog:
                 self.main_config.set_config_path(new_config_path)
                 self.main_config.set_smbseek_path(new_smbseek)
                 self.main_config.set_database_path(normalized_database_str)
+                if hasattr(self.main_config, "get_config_path"):
+                    path_obj = Path(self.main_config.get_config_path()).expanduser()
+                else:
+                    path_obj = Path(new_config_path).expanduser()
+                config_data = self._load_runtime_config_json(
+                    str(path_obj),
+                    fallback_from=old_config_path,
+                )
+                gui_app = _ensure_dict(config_data.get("gui_app"))
+                gui_app["backend_path"] = new_smbseek
+                gui_app.pop("smbseek_path", None)
+                gui_app["database_path"] = normalized_database_str
+                config_data["gui_app"] = gui_app
+                _set_nested(config_data, ("database", "path"), normalized_database_str)
                 self._apply_runtime_settings(
-                    self.main_config.config,
+                    config_data,
                     new_api_key,
                     new_quarantine,
                     new_wordlist,
                     clamav_settings=new_clamav,
                     quarantine_tmpfs_settings=new_quarantine_tmpfs,
                 )
-                if not self.main_config.save_config():
-                    raise RuntimeError("Failed to write config.json")
+                path_obj.parent.mkdir(parents=True, exist_ok=True)
+                path_obj.write_text(json.dumps(config_data, indent=2), encoding="utf-8")
+                self.main_config.config = config_data
             else:
                 config_data = self._load_runtime_config_json(
                     new_config_path,
@@ -1208,6 +1223,12 @@ class AppConfigDialog:
             self.api_key = new_api_key
             self.quarantine_path = new_quarantine
             self.wordlist_path = new_wordlist
+            self.clamav_enabled = new_clamav["enabled"]
+            self.clamav_backend = new_clamav["backend"]
+            self.clamav_timeout = new_clamav["timeout_seconds"]
+            self.clamav_extracted_root = new_clamav["extracted_root"]
+            self.clamav_known_bad_subdir = new_clamav["known_bad_subdir"]
+            self.clamav_show_results = new_clamav["show_results"]
             self.clamav_auto_promote_clean = new_clamav["auto_promote_clean_files"]
             self.quarantine_tmpfs_enabled = tmpfs_enabled
 

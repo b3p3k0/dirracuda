@@ -140,7 +140,7 @@ Start Scan shows a preflight confirmation that includes an approximate Shodan qu
 
 ### Shodan Credits: How Spend Is Calculated
 
-Dirracuda spends Shodan query credits by **result page** (about 100 matches/page), not by protocol toggle alone.  
+Dirracuda spends Shodan query credits by **result page** (about 100 matches/page), not by protocol toggle alone.
 That means a scan can consume more than one credit when you raise per-protocol budgets.
 
 - Each protocol has its own credit budget cap (`SMB`, `FTP`, `HTTP`).
@@ -262,14 +262,16 @@ All extracted files land in quarantine. The defaults are conservative - check `~
 
 #### Optional ClamAV scanning (bulk extract + browser downloads)
 
-ClamAV integration is optional and off by default, but highly recommended.
+ClamAV integration is optional and highly recommended. On a fresh setup, if
+`clamscan` or `clamdscan` is detected, Dirracuda enables ClamAV integration
+automatically. If you disable it later in App Config, that choice is preserved.
 
 When enabled, ClamAV post-processes files downloaded via:
 
 - Bulk extract paths (`Dashboard` post-scan bulk extract and `Server List` batch extract)
 - Browser/manual file downloads (SMB/FTP/HTTP browser windows)
 
-Each file is scanned and may then optioanlly be routed by verdict:
+Each file is scanned and may then optionally be routed by verdict:
 
 - **clean** → moved to `~/.dirracuda/data/extracted/<host>/<date>/<share>/...`
 - **infected** → moved to `~/.dirracuda/data/quarantine/<known_bad_subdir>/<host>/<date>/<share>/...` (default subdir: `known_bad`)
