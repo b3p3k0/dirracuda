@@ -421,6 +421,37 @@ def _copy_asset_if_missing(src: Path, dst: Path) -> Dict[str, Any]:
     return item
 
 
+def _clamav_scanner_available() -> bool:
+    return bool(shutil.which("clamscan") or shutil.which("clamdscan"))
+
+
+def _auto_enable_clamav_for_seeded_config(config_path: Path) -> Dict[str, Any]:
+    item = {
+        "target": str(config_path),
+        "action": "auto_enable_clamav_if_detected",
+        "status": "skipped",
+        "detail": "scanner_not_found",
+    }
+    if not _clamav_scanner_available():
+        return item
+
+    try:
+        cfg = _read_json_object(config_path)
+        clamav_cfg = cfg.get("clamav")
+        if not isinstance(clamav_cfg, dict):
+            clamav_cfg = {}
+            cfg["clamav"] = clamav_cfg
+        clamav_cfg["enabled"] = True
+        clamav_cfg["backend"] = "auto"
+        _safe_write_json(config_path, cfg)
+        item["status"] = "ok"
+        item["detail"] = "enabled"
+    except Exception as exc:
+        item["status"] = "error"
+        item["detail"] = f"enable_failed: {exc}"
+    return item
+
+
 def _read_json_object(path: Path) -> Dict[str, Any]:
     raw = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
@@ -727,7 +758,10 @@ def seed_conf_assets(*, paths: Optional[DirracudaPaths] = None, legacy: Optional
     # repo edits into user runtime state.
     if not p.config_file.exists():
         seed_src = l.repo_config_example_file if l.repo_config_example_file.exists() else l.repo_config_file
-        results.append(_copy_asset_if_missing(seed_src, p.config_file))
+        seeded_config = _copy_asset_if_missing(seed_src, p.config_file)
+        results.append(seeded_config)
+        if seeded_config.get("status") == "ok":
+            results.append(_auto_enable_clamav_for_seeded_config(p.config_file))
 
     results.append(_copy_asset_if_missing(l.repo_exclusion_list_file, p.exclusion_list_file))
     results.append(_copy_asset_if_missing(l.repo_ransomware_indicators_file, p.ransomware_indicators_file))

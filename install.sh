@@ -59,6 +59,90 @@ DIRRACUDA_CONFIG="$DIRRACUDA_CONF_DIR/config.json"
 DIRRACUDA_DB_PATH="$DIRRACUDA_DATA_DIR/dirracuda.db"
 DIRRACUDA_CANON_TMPFS_MP="$DIRRACUDA_HOME/data/tmpfs_quarantine"
 DIRRACUDA_LEGACY_TMPFS_MP="$DIRRACUDA_HOME/quarantine_tmpfs"
+CONFIG_CREATED_THIS_INSTALL=false
+
+enable_clamav_for_fresh_config() {
+    if [[ "$CONFIG_CREATED_THIS_INSTALL" != "true" ]]; then
+        return 0
+    fi
+    if [[ ! -f "$DIRRACUDA_CONFIG" ]]; then
+        warn "$DIRRACUDA_CONFIG not found — first app launch will auto-enable ClamAV if it is still detected."
+        return 0
+    fi
+    if [[ ! -x venv/bin/python3 ]]; then
+        warn "Virtual environment not found — cannot auto-enable ClamAV in config now."
+        warn "First app launch will auto-enable ClamAV if it is still detected."
+        return 0
+    fi
+
+    if DIRRACUDA_CONFIG_PATH="$DIRRACUDA_CONFIG" venv/bin/python3 - <<'PYEOF'
+import json
+import os
+import pathlib
+import sys
+
+p = pathlib.Path(os.environ["DIRRACUDA_CONFIG_PATH"])
+try:
+    cfg = json.loads(p.read_text(encoding="utf-8"))
+    if not isinstance(cfg, dict):
+        cfg = {}
+    clamav = cfg.get("clamav")
+    if not isinstance(clamav, dict):
+        clamav = {}
+        cfg["clamav"] = clamav
+    clamav["enabled"] = True
+    clamav["backend"] = "auto"
+    p.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+except Exception as exc:
+    print(f"Could not update config: {exc}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+    then
+        success "ClamAV integration auto-enabled in fresh config."
+        info "You can disable it later in App Config → ClamAV Settings."
+    else
+        warn "Could not auto-enable ClamAV in config."
+        warn "Enable manually in ~/.dirracuda/conf/config.json under: clamav → enabled: true"
+    fi
+}
+
+report_existing_clamav_config_state() {
+    if [[ "$CONFIG_CREATED_THIS_INSTALL" == "true" ]]; then
+        return 0
+    fi
+    if [[ ! -f "$DIRRACUDA_CONFIG" ]]; then
+        info "No config exists yet; first app launch will auto-enable ClamAV if it is still detected."
+        return 0
+    fi
+    if [[ ! -x venv/bin/python3 ]]; then
+        info "Existing config preserved. Check clamav.enabled in $DIRRACUDA_CONFIG to change integration state."
+        return 0
+    fi
+
+    local clamav_state
+    if clamav_state=$(DIRRACUDA_CONFIG_PATH="$DIRRACUDA_CONFIG" venv/bin/python3 - <<'PYEOF'
+import json
+import os
+import pathlib
+import sys
+
+p = pathlib.Path(os.environ["DIRRACUDA_CONFIG_PATH"])
+try:
+    cfg = json.loads(p.read_text(encoding="utf-8"))
+    clamav = cfg.get("clamav", {}) if isinstance(cfg, dict) else {}
+    raw = clamav.get("enabled", False) if isinstance(clamav, dict) else False
+    enabled = raw if isinstance(raw, bool) else str(raw).strip().lower() in {"1", "true", "yes", "on"}
+    print("enabled" if enabled else "disabled")
+except Exception as exc:
+    print(f"unknown ({exc})")
+    sys.exit(1)
+PYEOF
+    ); then
+        info "Existing config preserved: ClamAV integration is currently $clamav_state."
+    else
+        warn "Existing config preserved, but ClamAV state could not be read."
+    fi
+}
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Welcome
@@ -220,6 +304,7 @@ else
     if confirm "Create $DIRRACUDA_CONFIG from the example template?"; then
         mkdir -p "$DIRRACUDA_CONF_DIR"
         cp conf/config.json.example "$DIRRACUDA_CONFIG"
+        CONFIG_CREATED_THIS_INSTALL=true
         success "$DIRRACUDA_CONFIG created."
     else
         warn "Skipped. Dirracuda will create a default config on first run at:"
@@ -438,12 +523,15 @@ echo "  ┌─ ClamAV antivirus support ─────────────�
 echo "  │                                                                       │"
 echo "  │  ClamAV is a free, open-source antivirus scanner. When enabled,      │"
 echo "  │  Dirracuda can scan files it downloads and quarantine infected ones   │"
-echo "  │  before they reach your filesystem. It is entirely optional.          │"
+echo "  │  before they reach your filesystem. Fresh installs auto-enable it     │"
+echo "  │  when a scanner is detected; you can disable it in App Config.        │"
 echo "  │                                                                       │"
 echo "  └───────────────────────────────────────────────────────────────────────┘"
 echo
 
-if command -v clamscan &>/dev/null; then
+CLAMAV_AVAILABLE=false
+if command -v clamscan &>/dev/null || command -v clamdscan &>/dev/null; then
+    CLAMAV_AVAILABLE=true
     success "ClamAV is already installed — skipping."
 else
     if confirm "Install ClamAV now?" "n"; then
@@ -452,9 +540,19 @@ else
         echo
         success "ClamAV installed."
         info "Tip: run 'sudo freshclam' to download the latest virus definitions."
+        if command -v clamscan &>/dev/null || command -v clamdscan &>/dev/null; then
+            CLAMAV_AVAILABLE=true
+        fi
     else
         info "Skipped. Install later with: sudo apt-get install clamav clamav-daemon"
     fi
+fi
+
+if [[ "$CLAMAV_AVAILABLE" == "true" ]]; then
+    enable_clamav_for_fresh_config
+    report_existing_clamav_config_state
+else
+    info "ClamAV integration remains disabled until a scanner is installed."
 fi
 
 echo
