@@ -343,13 +343,13 @@ class SeDorkTab:
         if cb is not None:
             cb()
         else:
-            # Wiring absent — open browser without callback so "Not available"
-            # message is shown if the user attempts promotion. Visible failure
-            # is preferable to a silent no-op for a mandatory promotion path.
+            # Unhosted/test context: browsing should still work, while promotion
+            # reports main-DB unavailability from the browser.
             from gui.components.se_dork_browser_window import show_se_dork_browser_window
             show_se_dork_browser_window(
                 self.frame,
                 add_record_callback=None,
+                promote_record_callback=None,
                 settings_manager=self._context.get("settings_manager"),
             )
 

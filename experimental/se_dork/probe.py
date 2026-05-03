@@ -12,7 +12,7 @@ from __future__ import annotations
 import datetime
 import threading
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 from urllib.parse import urlparse
 
 from gui.utils.probe_cache_dispatch import dispatch_probe_run
@@ -33,6 +33,7 @@ class ProbeOutcome:
     probe_preview: Optional[str]
     probe_checked_at: str
     probe_error: Optional[str]
+    probe_snapshot_payload: Optional[dict[str, Any]] = None
 
 
 def _utcnow() -> str:
@@ -172,4 +173,5 @@ def probe_url(
         probe_preview=preview,
         probe_checked_at=checked_at,
         probe_error=None,
+        probe_snapshot_payload=snapshot,
     )

@@ -717,7 +717,7 @@ Dirracuda now also supports one-time targeted startup import of resolvable host 
 
 Tables:
 - `dork_runs` — one row per dork search run (`run_id` PK), with `instance_url`, `query`, `max_results`, `fetched_count`, `deduped_count`, `verified_count`, `status`, `error_message`, `started_at`, `finished_at`
-- `dork_results` — one row per candidate URL per run (`result_id` PK), FK `run_id → dork_runs(run_id)`; deduped per run on `UNIQUE(run_id, url_normalized)`; stores `url`, `url_normalized`, `title`, `snippet`, `source_engine`, `source_engines_json`, `verdict`, `reason_code`, `http_status`, `checked_at`
+- `dork_results` — one row per candidate URL per run (`result_id` PK), FK `run_id → dork_runs(run_id)`; deduped per run on `UNIQUE(run_id, url_normalized)`; stores `url`, `url_normalized`, `title`, `snippet`, `source_engine`, `source_engines_json`, `verdict`, `reason_code`, `http_status`, `checked_at`, probe summary fields, and optional `probe_snapshot_json` for full probe-tree carry-forward
 
 Verdict values: `OPEN_INDEX`, `MAYBE`, `NOISE`, `ERROR`.
 
@@ -949,8 +949,10 @@ Dashboard -> Experimental tab -> Run (dork search)
 ```
 Dashboard -> Experimental tab -> Open Results DB
   -> SeDorkBrowserWindow (reads ~/.dirracuda/data/experimental/se_dork.db)
-  -> optional "Add to dirracuda DB" action if ServerListWindow callback is available
-  -> "Not available" shown if callback is absent (open Server List first to enable it)
+  -> "Add to dirracuda DB" promotes directly to the main DB via DatabaseReader
+  -> cacheable se_dork probe summaries and full snapshots are copied into main probe tables
+  -> double-click opens a read-only row details view from sidecar metadata and stored probe snapshots
+  -> unresolved/non-IPv4 hosts are rejected with an explicit Cannot promote message
 ```
 
 SearXNG preflight checks (`experimental/se_dork/client.py`):
@@ -970,7 +972,7 @@ Reddit Post DB entry path:
 ```
 Dashboard -> Experimental tab -> Open Reddit Post DB
   -> RedditBrowserWindow (reads ~/.dirracuda/data/experimental/reddit_od.db)
-  -> optional "Add to dirracuda DB" action if ServerListWindow callback is available
+  -> "Add to dirracuda DB" promotes SMB/FTP/HTTP rows directly to the main DB
 ```
 
 Reddit modes exposed in `RedditGrabDialog`:

@@ -155,15 +155,22 @@ def _make_dash():
     dash._server_list_getter = None
     dash._open_drill_down = MagicMock()
     dash.settings_manager = MagicMock()
+    dash.db_reader = MagicMock()
+    dash.db_reader.upsert_manual_server_record.return_value = {
+        "host_type": "H",
+        "protocol_server_id": 3,
+        "row_key": "H:3",
+        "operation": "insert",
+    }
     return dash
 
 
 def test_open_reddit_post_db_with_live_server_window(monkeypatch):
-    """When server window is live, browser opens with server window as parent."""
+    """Promotion wiring no longer depends on a live Server List Browser."""
     dash = _make_dash()
     mock_win = MagicMock()
     mock_win.window.winfo_exists.return_value = True
-    dash._server_list_getter = lambda: mock_win
+    dash._server_list_getter = MagicMock(return_value=mock_win)
 
     calls = []
     monkeypatch.setattr(
@@ -174,12 +181,28 @@ def test_open_reddit_post_db_with_live_server_window(monkeypatch):
     dashboard_experimental.open_reddit_post_db(dash)
 
     assert len(calls) == 1
-    assert calls[0]["parent"] is mock_win.window
-    assert calls[0]["add_record_callback"] is mock_win.open_add_record_dialog
+    assert calls[0]["parent"] is dash.parent
+    assert calls[0]["add_record_callback"] is None
+    assert callable(calls[0]["promote_record_callback"])
+    dash._server_list_getter.assert_not_called()
+
+    result = calls[0]["promote_record_callback"]({
+        "host_type": "H",
+        "host": "1.2.3.4",
+        "port": 80,
+        "scheme": "http",
+    })
+    dash.db_reader.upsert_manual_server_record.assert_called_once_with({
+        "host_type": "H",
+        "ip_address": "1.2.3.4",
+        "port": 80,
+        "scheme": "http",
+    })
+    assert result["result"]["row_key"] == "H:3"
 
 
 def test_open_reddit_post_db_fallback_when_no_server_window(monkeypatch):
-    """Getter=None path falls back to widget.parent without opening Server List."""
+    """Getter=None path still opens with direct promotion wiring."""
     dash = _make_dash()
     dash._server_list_getter = MagicMock(return_value=None)
     dash._open_drill_down = MagicMock()
@@ -195,16 +218,17 @@ def test_open_reddit_post_db_fallback_when_no_server_window(monkeypatch):
     assert len(calls) == 1
     assert calls[0]["parent"] is dash.parent
     assert calls[0]["add_record_callback"] is None
+    assert callable(calls[0]["promote_record_callback"])
     dash._open_drill_down.assert_not_called()
-    assert dash._server_list_getter.call_count == 1
+    dash._server_list_getter.assert_not_called()
 
 
 def test_open_reddit_post_db_treats_dead_window_as_none(monkeypatch):
-    """A window whose winfo_exists() returns False is treated as None."""
+    """Dead windows are irrelevant to direct sidecar promotion wiring."""
     dash = _make_dash()
     mock_win = MagicMock()
     mock_win.window.winfo_exists.return_value = False
-    dash._server_list_getter = lambda: mock_win
+    dash._server_list_getter = MagicMock(return_value=mock_win)
     dash._open_drill_down = MagicMock()
 
     calls = []
@@ -218,7 +242,9 @@ def test_open_reddit_post_db_treats_dead_window_as_none(monkeypatch):
     assert len(calls) == 1
     assert calls[0]["parent"] is dash.parent
     assert calls[0]["add_record_callback"] is None
+    assert callable(calls[0]["promote_record_callback"])
     dash._open_drill_down.assert_not_called()
+    dash._server_list_getter.assert_not_called()
 
 
 def test_open_reddit_post_db_does_not_open_server_list_on_fallback(monkeypatch):
@@ -238,11 +264,13 @@ def test_open_reddit_post_db_does_not_open_server_list_on_fallback(monkeypatch):
     assert len(calls) == 1
     assert calls[0]["parent"] is dash.parent
     assert calls[0]["add_record_callback"] is None
+    assert callable(calls[0]["promote_record_callback"])
     dash._open_drill_down.assert_not_called()
+    dash._server_list_getter.assert_not_called()
 
 
 def test_open_reddit_post_db_fallback_when_getter_raises(monkeypatch):
-    """Getter exceptions are logged and converted to deterministic fallback."""
+    """Getter exceptions cannot block direct sidecar promotion wiring."""
     dash = _make_dash()
     getter_calls = {"count": 0}
 
@@ -270,9 +298,29 @@ def test_open_reddit_post_db_fallback_when_getter_raises(monkeypatch):
     assert len(calls) == 1
     assert calls[0]["parent"] is dash.parent
     assert calls[0]["add_record_callback"] is None
+    assert callable(calls[0]["promote_record_callback"])
     dash._open_drill_down.assert_not_called()
-    assert getter_calls["count"] == 1
-    assert any("server list getter failed" in msg for msg in log_warnings)
+    assert getter_calls["count"] == 0
+    assert log_warnings == []
+
+
+def test_open_reddit_post_db_without_db_reader_has_no_promote_callback(monkeypatch):
+    """Browser still opens, but action reports DB unavailability from the browser."""
+    dash = _make_dash()
+    dash.db_reader = None
+
+    calls = []
+    monkeypatch.setattr(
+        "gui.components.dashboard_experimental.show_reddit_browser_window",
+        lambda **kw: calls.append(kw),
+    )
+
+    dashboard_experimental.open_reddit_post_db(dash)
+
+    assert len(calls) == 1
+    assert calls[0]["parent"] is dash.parent
+    assert calls[0]["add_record_callback"] is None
+    assert calls[0]["promote_record_callback"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -438,11 +486,11 @@ def test_registry_dorkbook_after_reddit():
 
 
 def test_open_se_dork_results_db_with_live_server_window(monkeypatch):
-    """When server window is live, browser opens with server window and callback."""
+    """SE Dork promotion wiring does not depend on a live Server List Browser."""
     dash = _make_dash()
     mock_win = MagicMock()
     mock_win.window.winfo_exists.return_value = True
-    dash._server_list_getter = lambda: mock_win
+    dash._server_list_getter = MagicMock(return_value=mock_win)
 
     calls = []
     monkeypatch.setattr(
@@ -453,13 +501,15 @@ def test_open_se_dork_results_db_with_live_server_window(monkeypatch):
     dashboard_experimental.open_se_dork_results_db(dash)
 
     assert len(calls) == 1
-    assert calls[0]["parent"] is mock_win.window
-    assert calls[0]["add_record_callback"] is mock_win.open_add_record_dialog
+    assert calls[0]["parent"] is dash.parent
+    assert calls[0]["add_record_callback"] is None
+    assert callable(calls[0]["promote_record_callback"])
     assert calls[0]["settings_manager"] is dash.settings_manager
+    dash._server_list_getter.assert_not_called()
 
 
 def test_open_se_dork_results_db_fallback_when_no_server_window(monkeypatch):
-    """Getter=None → fallback to widget.parent with add_record_callback=None."""
+    """Getter=None still opens with direct promotion wiring."""
     dash = _make_dash()
     dash._server_list_getter = None
 
@@ -474,15 +524,16 @@ def test_open_se_dork_results_db_fallback_when_no_server_window(monkeypatch):
     assert len(calls) == 1
     assert calls[0]["parent"] is dash.parent
     assert calls[0]["add_record_callback"] is None
+    assert callable(calls[0]["promote_record_callback"])
     assert calls[0]["settings_manager"] is dash.settings_manager
 
 
 def test_open_se_dork_results_db_treats_dead_window_as_none(monkeypatch):
-    """Dead window (winfo_exists=False) treated as None → fallback."""
+    """Dead windows are irrelevant to direct promotion wiring."""
     dash = _make_dash()
     mock_win = MagicMock()
     mock_win.window.winfo_exists.return_value = False
-    dash._server_list_getter = lambda: mock_win
+    dash._server_list_getter = MagicMock(return_value=mock_win)
 
     calls = []
     monkeypatch.setattr(
@@ -495,14 +546,18 @@ def test_open_se_dork_results_db_treats_dead_window_as_none(monkeypatch):
     assert len(calls) == 1
     assert calls[0]["parent"] is dash.parent
     assert calls[0]["add_record_callback"] is None
+    assert callable(calls[0]["promote_record_callback"])
     assert calls[0]["settings_manager"] is dash.settings_manager
+    dash._server_list_getter.assert_not_called()
 
 
 def test_open_se_dork_results_db_fallback_when_getter_raises(monkeypatch):
-    """Getter exceptions are swallowed and converted to fallback path."""
+    """Getter exceptions cannot block direct promotion wiring."""
     dash = _make_dash()
+    getter_calls = {"count": 0}
 
     def _boom():
+        getter_calls["count"] += 1
         raise RuntimeError("getter boom")
 
     dash._server_list_getter = _boom
@@ -518,7 +573,9 @@ def test_open_se_dork_results_db_fallback_when_getter_raises(monkeypatch):
     assert len(calls) == 1
     assert calls[0]["parent"] is dash.parent
     assert calls[0]["add_record_callback"] is None
+    assert callable(calls[0]["promote_record_callback"])
     assert calls[0]["settings_manager"] is dash.settings_manager
+    assert getter_calls["count"] == 0
 
 
 def test_open_dorkbook_forwards_parent_and_settings_manager(monkeypatch):

@@ -12,7 +12,8 @@ Columns (display name -> row dict key):
   Notes   -> notes
   Date    -> created_at
 
-Actions: Open in Explorer, Open Reddit Post, Refresh, Clear DB
+Actions: Open in Explorer, Open Reddit Post, Refresh, Clear DB,
+Add to dirracuda DB
 
 Filter scope: target_normalized only (MVP). Expanding to other fields
 requires deliberate change here and in _apply_filter_and_sort.
@@ -30,6 +31,10 @@ from typing import Optional
 import tkinter as tk
 from tkinter import ttk
 from gui.utils import safe_messagebox as messagebox
+from gui.utils.sidecar_promotion import (
+    SidecarPromotionError,
+    format_promotion_success,
+)
 
 import experimental.redseek.store as store
 from gui.components.unified_browser_window import open_ftp_http_browser
@@ -108,11 +113,13 @@ class RedditBrowserWindow:
         parent: tk.Widget,
         db_path: Optional[Path] = None,
         add_record_callback=None,
+        promote_record_callback=None,
     ) -> None:
         self.parent = parent
         self.db_path = db_path
         self.theme = get_theme()
         self._add_record_callback = add_record_callback
+        self._promote_record_callback = promote_record_callback
 
         # Row data store — keyed by iid (str(target.id))
         self._row_by_iid: dict[str, dict] = {}
@@ -495,6 +502,8 @@ class RedditBrowserWindow:
             host_type, scheme = "H", protocol
         elif protocol == "ftp":
             host_type, scheme = "F", None
+        elif protocol == "smb":
+            host_type, scheme = "S", None
         else:
             return None
 
@@ -570,13 +579,6 @@ class RedditBrowserWindow:
 
     def _on_add_to_db(self) -> None:
         self._hide_context_menu()
-        if self._add_record_callback is None:
-            messagebox.showinfo(
-                "Not available",
-                "Open this window from the Servers window to use 'Add to dirracuda DB'.",
-                parent=self.window,
-            )
-            return
         row = self._selected_row()
         if row is None:
             messagebox.showinfo("No selection", "Select a row first.", parent=self.window)
@@ -590,6 +592,19 @@ class RedditBrowserWindow:
             )
             return
         prefill["_promotion_source"] = "reddit_browser"
+
+        if self._promote_record_callback is not None:
+            self._promote_prefill_direct(prefill)
+            return
+
+        if self._add_record_callback is None:
+            messagebox.showinfo(
+                "Main database unavailable",
+                "No main database promotion handler is available for this window.",
+                parent=self.window,
+            )
+            return
+
         resolved_host, was_resolved = self._resolve_prefill_host_ipv4(prefill)
         if not was_resolved and resolved_host != "" and resolved_host == str(prefill.get("host") or "").strip():
             try:
@@ -606,11 +621,41 @@ class RedditBrowserWindow:
         prefill["host"] = resolved_host
         self._add_record_callback(prefill)
 
+    def _promote_prefill_direct(self, prefill: dict) -> None:
+        try:
+            promotion = self._promote_record_callback(prefill)
+        except SidecarPromotionError as exc:
+            messagebox.showinfo(
+                "Cannot promote",
+                str(exc),
+                parent=self.window,
+            )
+            return
+        except Exception as exc:
+            messagebox.showerror(
+                "Add Record Failed",
+                f"Unable to save record:\n{exc}",
+                parent=self.window,
+            )
+            return
+
+        messagebox.showinfo(
+            "Record Added",
+            format_promotion_success(promotion),
+            parent=self.window,
+        )
+
 
 def show_reddit_browser_window(
     parent: tk.Widget,
     db_path: Optional[Path] = None,
     add_record_callback=None,
+    promote_record_callback=None,
 ) -> None:
     """Open the Reddit Post DB browser window."""
-    RedditBrowserWindow(parent, db_path, add_record_callback=add_record_callback)
+    RedditBrowserWindow(
+        parent,
+        db_path,
+        add_record_callback=add_record_callback,
+        promote_record_callback=promote_record_callback,
+    )

@@ -143,6 +143,7 @@ def test_init_db_backfills_probe_columns_on_existing_schema(tmp_path: Path) -> N
     assert "probe_preview" in cols
     assert "probe_checked_at" in cols
     assert "probe_error" in cols
+    assert "probe_snapshot_json" in cols
 
 
 # ---------------------------------------------------------------------------
@@ -308,7 +309,13 @@ def test_get_results_for_run_returns_result_id_and_url(db_path: Path) -> None:
     with open_connection(db_path) as conn:
         run_id = insert_run(conn, _minimal_options(), "2026-01-01T00:00:00")
         conn.commit()
-        insert_result(conn, run_id, {"url": "http://example.com/open/"})
+        insert_result(conn, run_id, {
+            "url": "http://example.com/open/",
+            "title": "Index of /open",
+            "content": "Parent Directory",
+            "engine": "bing",
+            "engines": ["bing", "google"],
+        })
         conn.commit()
         rows = get_results_for_run(conn, run_id)
 
@@ -321,7 +328,13 @@ def test_update_result_probe_persists_probe_fields(db_path: Path) -> None:
     with open_connection(db_path) as conn:
         run_id = insert_run(conn, _minimal_options(), "2026-01-01T00:00:00")
         conn.commit()
-        insert_result(conn, run_id, {"url": "http://example.com/open/"})
+        insert_result(conn, run_id, {
+            "url": "http://example.com/open/",
+            "title": "Index of /open",
+            "content": "Parent Directory",
+            "engine": "bing",
+            "engines": ["bing", "google"],
+        })
         conn.commit()
         result_id = conn.execute(
             "SELECT result_id FROM dork_results WHERE run_id=?",
@@ -336,27 +349,35 @@ def test_update_result_probe_persists_probe_fields(db_path: Path) -> None:
             probe_preview="notes,[[loose files]]",
             probe_checked_at="2026-01-01T00:05:00",
             probe_error=None,
+            probe_snapshot_payload={"run_at": "2026-01-01T00:05:00", "shares": []},
         )
         conn.commit()
 
         row = conn.execute(
             """
             SELECT probe_status, probe_indicator_matches, probe_preview,
-                   probe_checked_at, probe_error
+                   probe_checked_at, probe_error, probe_snapshot_json
               FROM dork_results
              WHERE result_id=?
             """,
             (result_id,),
         ).fetchone()
 
-    assert row == ("issue", 2, "notes,[[loose files]]", "2026-01-01T00:05:00", None)
+    assert row[:5] == ("issue", 2, "notes,[[loose files]]", "2026-01-01T00:05:00", None)
+    assert '"shares": []' in row[5]
 
 
 def test_get_all_results_includes_probe_fields(db_path: Path) -> None:
     with open_connection(db_path) as conn:
         run_id = insert_run(conn, _minimal_options(), "2026-01-01T00:00:00")
         conn.commit()
-        insert_result(conn, run_id, {"url": "http://example.com/open/"})
+        insert_result(conn, run_id, {
+            "url": "http://example.com/open/",
+            "title": "Index of /open",
+            "content": "Parent Directory",
+            "engine": "bing",
+            "engines": ["bing", "google"],
+        })
         conn.commit()
         result_id = conn.execute("SELECT result_id FROM dork_results").fetchone()[0]
         update_result_probe(
@@ -367,6 +388,7 @@ def test_get_all_results_includes_probe_fields(db_path: Path) -> None:
             probe_preview="pub,movies",
             probe_checked_at="2026-01-01T00:04:00",
             probe_error=None,
+            probe_snapshot_payload={"run_at": "2026-01-01T00:04:00", "shares": []},
         )
         conn.commit()
 
@@ -378,6 +400,11 @@ def test_get_all_results_includes_probe_fields(db_path: Path) -> None:
     assert row["probe_indicator_matches"] == 0
     assert row["probe_preview"] == "pub,movies"
     assert row["probe_checked_at"] == "2026-01-01T00:04:00"
+    assert row["title"] == "Index of /open"
+    assert row["snippet"] == "Parent Directory"
+    assert row["source_engine"] == "bing"
+    assert row["source_engines_json"] == '["bing", "google"]'
+    assert '"run_at": "2026-01-01T00:04:00"' in row["probe_snapshot_json"]
 
 
 # ---------------------------------------------------------------------------
@@ -520,6 +547,7 @@ def test_check_schema_raises_on_missing_unique_constraint(tmp_path: Path) -> Non
                 probe_preview     TEXT,
                 probe_checked_at  TEXT,
                 probe_error       TEXT,
+                probe_snapshot_json TEXT,
                 FOREIGN KEY (run_id) REFERENCES dork_runs(run_id)
             )
         """)
@@ -554,6 +582,7 @@ def test_check_schema_raises_on_missing_fk(tmp_path: Path) -> None:
                 probe_preview     TEXT,
                 probe_checked_at  TEXT,
                 probe_error       TEXT,
+                probe_snapshot_json TEXT,
                 UNIQUE (run_id, url_normalized)
             )
         """)

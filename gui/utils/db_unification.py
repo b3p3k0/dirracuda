@@ -12,6 +12,11 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 from urllib.parse import urlparse
 
 from gui.utils.database_access import DatabaseReader
+from gui.utils.sidecar_promotion import (
+    build_manual_record_payload,
+    build_probe_cache_payload,
+    build_probe_snapshot_payload,
+)
 from shared.path_service import get_paths, get_legacy_paths, select_existing_path
 
 _logger = logging.getLogger(__name__)
@@ -254,9 +259,24 @@ def _import_se_dork(reader: DatabaseReader) -> Dict[str, int]:
     conn = sqlite3.connect(str(sidecar_path))
     conn.row_factory = sqlite3.Row
     try:
+        columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(dork_results)").fetchall()
+        }
+        optional = {
+            "probe_status": "'unprobed' AS probe_status",
+            "probe_indicator_matches": "0 AS probe_indicator_matches",
+            "probe_preview": "NULL AS probe_preview",
+            "probe_checked_at": "NULL AS probe_checked_at",
+            "probe_error": "NULL AS probe_error",
+            "probe_snapshot_json": "NULL AS probe_snapshot_json",
+        }
+        select_parts = ["result_id", "url"]
+        for column, fallback_sql in optional.items():
+            select_parts.append(column if column in columns else fallback_sql)
         rows = conn.execute(
-            """
-            SELECT result_id, url, probe_status, probe_indicator_matches
+            f"""
+            SELECT {", ".join(select_parts)}
             FROM dork_results
             """
         ).fetchall()
@@ -292,28 +312,49 @@ def _import_se_dork(reader: DatabaseReader) -> Dict[str, int]:
         if scheme not in {"http", "https"}:
             scheme = "http"
         port = parsed.port or (443 if scheme == "https" else 80)
+        prefill = {
+            "host_type": "H",
+            "host": ip_address,
+            "port": port,
+            "scheme": scheme,
+            "_probe_host_hint": host,
+            "_probe_path_hint": parsed.path or "/",
+            "_probe_cache": {
+                "status": row["probe_status"],
+                "indicator_matches": row["probe_indicator_matches"],
+                "preview": row["probe_preview"],
+                "checked_at": row["probe_checked_at"],
+                "error": row["probe_error"],
+            },
+            "_probe_snapshot": row["probe_snapshot_json"],
+            "_probe_snapshot_source": "sidecar:se_dork",
+        }
 
         try:
-            upsert = reader.upsert_manual_server_record(
-                {
-                    "host_type": "H",
-                    "ip_address": ip_address,
-                    "port": port,
-                    "scheme": scheme,
-                }
-            )
-            probe_status = str(row["probe_status"] or "unprobed").lower()
-            if probe_status not in {"clean", "issue", "unprobed"}:
-                probe_status = "unprobed"
-            reader.upsert_probe_cache_for_host(
-                ip_address,
-                "H",
-                status=probe_status,
-                indicator_matches=int(row["probe_indicator_matches"] or 0),
-                snapshot_path=None,
-                protocol_server_id=upsert.get("protocol_server_id"),
-                port=port,
-            )
+            payload = build_manual_record_payload(prefill)
+            upsert = reader.upsert_manual_server_record(payload)
+            probe_cache = build_probe_cache_payload(prefill)
+            probe_snapshot = build_probe_snapshot_payload(prefill) if probe_cache is not None else None
+            snapshot_id = None
+            if probe_snapshot is not None:
+                snapshot_id = reader.upsert_probe_snapshot_for_host(
+                    payload["ip_address"],
+                    "H",
+                    probe_snapshot,
+                    protocol_server_id=upsert.get("protocol_server_id"),
+                    port=payload.get("port"),
+                    source="sidecar:se_dork",
+                )
+            if probe_cache is not None:
+                if snapshot_id is not None:
+                    probe_cache["latest_snapshot_id"] = snapshot_id
+                reader.upsert_probe_cache_for_host(
+                    payload["ip_address"],
+                    "H",
+                    protocol_server_id=upsert.get("protocol_server_id"),
+                    port=payload.get("port"),
+                    **probe_cache,
+                )
             counts["imported"] += 1
         except Exception as exc:
             counts["errors"] += 1

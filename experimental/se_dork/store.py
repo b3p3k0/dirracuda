@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS dork_results (
     probe_preview       TEXT,
     probe_checked_at    TEXT,
     probe_error         TEXT,
+    probe_snapshot_json TEXT,
     FOREIGN KEY (run_id) REFERENCES dork_runs(run_id),
     UNIQUE (run_id, url_normalized)
 )
@@ -75,7 +76,7 @@ _REQUIRED_COLUMNS: dict[str, set[str]] = {
         "result_id", "run_id", "url", "url_normalized", "title", "snippet",
         "source_engine", "source_engines_json", "verdict", "reason_code",
         "http_status", "checked_at", "probe_status", "probe_indicator_matches",
-        "probe_preview", "probe_checked_at", "probe_error",
+        "probe_preview", "probe_checked_at", "probe_error", "probe_snapshot_json",
     },
 }
 
@@ -85,6 +86,7 @@ _PROBE_COLUMN_ALTERS = (
     "ALTER TABLE dork_results ADD COLUMN probe_preview TEXT",
     "ALTER TABLE dork_results ADD COLUMN probe_checked_at TEXT",
     "ALTER TABLE dork_results ADD COLUMN probe_error TEXT",
+    "ALTER TABLE dork_results ADD COLUMN probe_snapshot_json TEXT",
 )
 
 # ---------------------------------------------------------------------------
@@ -406,8 +408,14 @@ def update_result_probe(
     probe_preview: Optional[str],
     probe_checked_at: Optional[str],
     probe_error: Optional[str],
+    probe_snapshot_payload: Optional[dict] = None,
 ) -> None:
     """Write probe fields on one dork_results row."""
+    snapshot_json = (
+        json.dumps(probe_snapshot_payload, sort_keys=True, default=str)
+        if isinstance(probe_snapshot_payload, dict)
+        else None
+    )
     conn.execute(
         """
         UPDATE dork_results
@@ -415,7 +423,8 @@ def update_result_probe(
                probe_indicator_matches = ?,
                probe_preview = ?,
                probe_checked_at = ?,
-               probe_error = ?
+               probe_error = ?,
+               probe_snapshot_json = ?
          WHERE result_id = ?
         """,
         (
@@ -424,6 +433,7 @@ def update_result_probe(
             probe_preview,
             probe_checked_at,
             probe_error,
+            snapshot_json,
             result_id,
         ),
     )
@@ -497,15 +507,18 @@ def get_all_results(conn: sqlite3.Connection) -> list[dict]:
     Return all result rows for browser display (all runs), newest run_id first.
 
     Dict keys match DB column names exactly:
-    result_id, run_id, url, title, verdict, reason_code, http_status, checked_at,
-    probe_status, probe_indicator_matches, probe_preview, probe_checked_at, probe_error.
+    result_id, run_id, url, title, snippet, source_engine, source_engines_json,
+    verdict, reason_code, http_status, checked_at, probe_status,
+    probe_indicator_matches, probe_preview, probe_checked_at, probe_error,
+    probe_snapshot_json.
     """
     cursor = conn.execute(
         """
-        SELECT result_id, run_id, url, title, verdict, reason_code,
-               http_status, checked_at,
+        SELECT result_id, run_id, url, title, snippet,
+               source_engine, source_engines_json,
+               verdict, reason_code, http_status, checked_at,
                probe_status, probe_indicator_matches, probe_preview,
-               probe_checked_at, probe_error
+               probe_checked_at, probe_error, probe_snapshot_json
           FROM dork_results
          ORDER BY run_id DESC, result_id ASC
         """

@@ -10,6 +10,7 @@ from concurrent.futures import Future
 import sys
 import types
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -38,6 +39,7 @@ from gui.components.se_dork_browser_window import (
     PROBE_STATUS_EMOJI,
     SeDorkBrowserWindow,
 )
+from gui.utils.sidecar_promotion import SidecarPromotionError
 
 
 # ---------------------------------------------------------------------------
@@ -52,6 +54,7 @@ def _make_browser(**kwargs) -> SeDorkBrowserWindow:
     obj.db_path = kwargs.get("db_path", None)
     obj.theme = MagicMock()
     obj._add_record_callback = kwargs.get("add_record_callback", None)
+    obj._promote_record_callback = kwargs.get("promote_record_callback", None)
     obj._settings_manager = kwargs.get("settings_manager", None)
     obj._row_by_iid = {}
     obj._context_menu_visible = False
@@ -185,7 +188,14 @@ def test_build_window_sets_column_anchors():
 
 def test_build_prefill_http_url():
     b = _make_browser()
-    row = {"url": "http://192.168.1.5:8080/files/"}
+    row = {
+        "url": "http://192.168.1.5:8080/files/",
+        "probe_status": "issue",
+        "probe_indicator_matches": 2,
+        "probe_preview": "pub,movies",
+        "probe_checked_at": "2026-05-03T10:20:30",
+        "probe_error": None,
+    }
     prefill = b._build_prefill(row)
     assert prefill is not None
     assert prefill["host_type"] == "H"
@@ -195,6 +205,14 @@ def test_build_prefill_http_url():
     assert prefill["_probe_host_hint"] == "192.168.1.5"
     assert prefill["_probe_path_hint"] == "/files/"
     assert prefill["_promotion_source"] == "se_dork_browser"
+    assert prefill["_probe_snapshot_source"] == "sidecar:se_dork"
+    assert prefill["_probe_cache"] == {
+        "status": "issue",
+        "indicator_matches": 2,
+        "preview": "pub,movies",
+        "checked_at": "2026-05-03T10:20:30",
+        "error": None,
+    }
 
 
 def test_build_prefill_https_default_port():
@@ -223,6 +241,22 @@ def test_build_prefill_explicit_port():
     assert prefill["_probe_path_hint"] == "/some/path"
 
 
+def test_build_prefill_includes_probe_snapshot_artifact():
+    b = _make_browser()
+    row = {
+        "url": "http://192.168.1.5/files/",
+        "probe_snapshot_json": '{"run_at": "2026-05-03T10:20:30", "shares": []}',
+    }
+
+    prefill = b._build_prefill(row)
+
+    assert prefill is not None
+    assert prefill["_probe_snapshot"] == {
+        "run_at": "2026-05-03T10:20:30",
+        "shares": [],
+    }
+
+
 def test_build_prefill_unsupported_scheme():
     b = _make_browser()
     row = {"url": "ftp://192.168.1.1/pub"}
@@ -243,11 +277,11 @@ def test_build_prefill_empty_url():
 
 
 # ---------------------------------------------------------------------------
-# _on_add_to_db — no callback
+# _on_add_to_db — no promotion context
 # ---------------------------------------------------------------------------
 
 
-def test_on_add_to_db_no_callback_shows_not_available():
+def test_on_add_to_db_no_callback_shows_main_db_unavailable():
     b = _make_browser(add_record_callback=None)
     b.tree.selection.return_value = ["1"]
     b._row_by_iid["1"] = {"url": "http://192.168.1.1/"}
@@ -257,7 +291,7 @@ def test_on_add_to_db_no_callback_shows_not_available():
 
     mock_mb.showinfo.assert_called_once()
     args = mock_mb.showinfo.call_args
-    assert "Not available" in args[0][0] or "Not available" in str(args)
+    assert args[0][0] == "Main database unavailable"
 
 
 # ---------------------------------------------------------------------------
@@ -302,6 +336,42 @@ def test_on_add_to_db_calls_callback_with_prefill():
     assert prefill["_promotion_source"] == "se_dork_browser"
 
 
+def test_on_add_to_db_calls_direct_promote_callback():
+    callback = MagicMock(return_value={
+        "payload": {"host_type": "H", "ip_address": "192.168.1.10", "port": 8080},
+        "result": {"host_type": "H", "operation": "insert"},
+    })
+    b = _make_browser(promote_record_callback=callback)
+    b.tree.selection.return_value = ["4"]
+    b._row_by_iid["4"] = {"url": "http://192.168.1.10:8080/files/"}
+
+    with patch("gui.components.se_dork_browser_window.messagebox") as mock_mb:
+        b._on_add_to_db()
+
+    callback.assert_called_once()
+    prefill = callback.call_args[0][0]
+    assert prefill["host"] == "192.168.1.10"
+    assert prefill["port"] == 8080
+    assert prefill["_promotion_source"] == "se_dork_browser"
+    assert "_probe_cache" in prefill
+    mock_mb.showinfo.assert_called_once()
+    assert mock_mb.showinfo.call_args[0][0] == "Record Added"
+
+
+def test_on_add_to_db_direct_promotion_error_shows_cannot_promote():
+    callback = MagicMock(side_effect=SidecarPromotionError("Could not resolve host."))
+    b = _make_browser(promote_record_callback=callback)
+    b.tree.selection.return_value = ["5"]
+    b._row_by_iid["5"] = {"url": "http://missing.example.invalid/files/"}
+
+    with patch("gui.components.se_dork_browser_window.messagebox") as mock_mb:
+        b._on_add_to_db()
+
+    callback.assert_called_once()
+    mock_mb.showinfo.assert_called_once()
+    assert mock_mb.showinfo.call_args[0][0] == "Cannot promote"
+
+
 def test_on_add_to_db_no_selection_does_not_call_callback():
     callback = MagicMock()
     b = _make_browser(add_record_callback=callback)
@@ -311,6 +381,64 @@ def test_on_add_to_db_no_selection_does_not_call_callback():
         b._on_add_to_db()
 
     callback.assert_not_called()
+
+
+def test_format_result_details_includes_probe_and_source_metadata():
+    b = _make_browser()
+    details = b._format_result_details({
+        "url": "http://example.local/files/",
+        "title": "Index of /files",
+        "snippet": "Parent Directory",
+        "source_engine": "bing",
+        "verdict": "OPEN_INDEX",
+        "reason_code": "directory_listing",
+        "http_status": 200,
+        "checked_at": "2026-05-03T10:00:00",
+        "probe_status": "issue",
+        "probe_indicator_matches": 2,
+        "probe_preview": "pub,movies",
+        "probe_checked_at": "2026-05-03T10:05:00",
+        "probe_error": None,
+    })
+
+    assert "URL: http://example.local/files/" in details
+    assert "Source: bing" in details
+    assert "Verdict: OPEN_INDEX" in details
+    assert "Status: issue" in details
+    assert "Indicator Matches: 2" in details
+    assert "Preview: pub,movies" in details
+
+
+def test_format_result_details_renders_probe_snapshot_tree():
+    b = _make_browser()
+    details = b._format_result_details({
+        "url": "http://example.local/files/",
+        "probe_status": "clean",
+        "probe_snapshot_json": (
+            '{"run_at": "2026-05-03T10:20:30", "limits": {}, '
+            '"shares": [{"share": "http_root", "directories": ['
+            '{"name": "pub", "files": ["index.html"]}]}]}'
+        ),
+    })
+
+    assert "🔍 Probe Snapshot:" in details
+    assert "Share: http_root" in details
+    assert "📁 pub/" in details
+    assert "index.html" in details
+
+
+def test_on_double_click_selects_row_and_opens_details():
+    b = _make_browser()
+    b.tree.identify_region.return_value = "cell"
+    b.tree.identify_row.return_value = "9"
+    row = {"result_id": 9, "url": "http://example.local/files/"}
+    b._row_by_iid["9"] = row
+    b._show_result_details = MagicMock()
+
+    b._on_double_click(SimpleNamespace(x=10, y=15))
+
+    b.tree.selection_set.assert_called_once_with("9")
+    b._show_result_details.assert_called_once_with(row)
 
 
 # ---------------------------------------------------------------------------
@@ -416,6 +544,7 @@ def test_on_probe_selected_updates_probe_fields_and_refreshes():
         probe_preview="pub,movies",
         probe_checked_at="2026-04-19T10:00:00",
         probe_error=None,
+        probe_snapshot_payload={"run_at": "2026-04-19T10:00:00", "shares": []},
     )
 
     with patch(
@@ -433,6 +562,10 @@ def test_on_probe_selected_updates_probe_fields_and_refreshes():
     assert mock_update.call_count == 2
     result_ids = [call.kwargs["result_id"] for call in mock_update.call_args_list]
     assert result_ids == [7, 8]
+    assert all(
+        call.kwargs["probe_snapshot_payload"] == {"run_at": "2026-04-19T10:00:00", "shares": []}
+        for call in mock_update.call_args_list
+    )
     mock_reload.assert_called_once()
     b.tree.selection_set.assert_called_once_with("7", "8")
 

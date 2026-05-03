@@ -82,6 +82,7 @@ def _probe_outcome(
     preview: str | None = None,
     checked_at: str = "2026-01-01T00:10:00",
     error: str | None = None,
+    snapshot: dict | None = None,
 ):
     from experimental.se_dork.probe import ProbeOutcome
 
@@ -91,6 +92,7 @@ def _probe_outcome(
         probe_preview=preview,
         probe_checked_at=checked_at,
         probe_error=error,
+        probe_snapshot_payload=snapshot,
     )
 
 
@@ -473,8 +475,18 @@ def test_run_dork_search_bulk_probe_enabled_updates_summary_and_row_state(tmp_pa
                     with patch(
                         "experimental.se_dork.probe.probe_url",
                         side_effect=[
-                            _probe_outcome(status="clean", matches=0, preview="pub"),
-                            _probe_outcome(status="issue", matches=2, preview="decrypt,notes"),
+                            _probe_outcome(
+                                status="clean",
+                                matches=0,
+                                preview="pub",
+                                snapshot={"run_at": "2026-01-01T00:10:00", "shares": [{"share": "http_root"}]},
+                            ),
+                            _probe_outcome(
+                                status="issue",
+                                matches=2,
+                                preview="decrypt,notes",
+                                snapshot={"run_at": "2026-01-01T00:11:00", "shares": [{"share": "http_root"}]},
+                            ),
                         ],
                     ):
                         result = run_dork_search(
@@ -491,9 +503,10 @@ def test_run_dork_search_bulk_probe_enabled_updates_summary_and_row_state(tmp_pa
 
     with sqlite3.connect(str(db)) as conn:
         rows = conn.execute(
-            "SELECT probe_status, probe_indicator_matches, probe_preview FROM dork_results ORDER BY result_id"
+            "SELECT probe_status, probe_indicator_matches, probe_preview, probe_snapshot_json FROM dork_results ORDER BY result_id"
         ).fetchall()
-    assert sorted(rows) == sorted([("clean", 0, "pub"), ("issue", 2, "decrypt,notes")])
+    assert sorted(row[:3] for row in rows) == sorted([("clean", 0, "pub"), ("issue", 2, "decrypt,notes")])
+    assert all(row[3] and '"shares"' in row[3] for row in rows)
 
 
 def test_run_dork_search_bulk_probe_targets_retained_rows_only(tmp_path: Path) -> None:

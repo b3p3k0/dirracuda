@@ -1,8 +1,7 @@
 """
 Experimental feature helpers for DashboardWidget (C1 extraction).
 
-Each function takes the dashboard widget instance as first arg. No UI text
-or behavior changes beyond what is explicitly described here.
+Each function takes the dashboard widget instance as first arg.
 
 Intra-class call discipline: calls to other DashboardWidget methods go through
 widget.method_name() so instance-level monkeypatches in tests still intercept.
@@ -15,6 +14,7 @@ from gui.components.reddit_browser_window import show_reddit_browser_window
 from gui.components.se_dork_browser_window import show_se_dork_browser_window
 from gui.components.dorkbook_window import show_dorkbook_window
 from gui.components.keymaster_window import show_keymaster_window
+from gui.utils.sidecar_promotion import promote_sidecar_prefill
 from gui.utils.logging_config import get_logger
 
 _logger = get_logger("dashboard")
@@ -41,51 +41,22 @@ def handle_experimental_button_click(widget) -> None:
 
 
 def open_reddit_post_db(widget) -> None:
-    """Open the Reddit Post DB browser, wiring add_record_callback when possible.
-
-    Resolution order (single pass; no side-effect window opens):
-    1. Call _server_list_getter() if set; accept result if window is live.
-    2. If None/dead/error: open browser without add_record_callback (fallback).
-       The browser's own "Not available" message handles the UX.
-
-    Parent window:
-    - Live server_window: parent=server_window.window  (matches prior behavior)
-    - Fallback:           parent=widget.parent
-    """
-    server_window = _resolve_server_window(widget)
-
-    if server_window is not None:
-        show_reddit_browser_window(
-            parent=server_window.window,
-            add_record_callback=server_window.open_add_record_dialog,
-        )
-    else:
-        show_reddit_browser_window(
-            parent=widget.parent,
-            add_record_callback=None,
-        )
+    """Open the Reddit Post DB browser with direct main-DB promotion."""
+    show_reddit_browser_window(
+        parent=widget.parent,
+        add_record_callback=None,
+        promote_record_callback=_make_sidecar_promote_callback(widget),
+    )
 
 
 def open_se_dork_results_db(widget) -> None:
-    """Open the SE Dork results browser, wiring add_record_callback when possible.
-
-    Resolution order: same as open_reddit_post_db — single-pass _resolve_server_window().
-    Patch path for tests: gui.components.dashboard_experimental.show_se_dork_browser_window
-    """
-    server_window = _resolve_server_window(widget)
-
-    if server_window is not None:
-        show_se_dork_browser_window(
-            parent=server_window.window,
-            add_record_callback=server_window.open_add_record_dialog,
-            settings_manager=getattr(widget, "settings_manager", None),
-        )
-    else:
-        show_se_dork_browser_window(
-            parent=widget.parent,
-            add_record_callback=None,
-            settings_manager=getattr(widget, "settings_manager", None),
-        )
+    """Open the SE Dork results browser with direct main-DB promotion."""
+    show_se_dork_browser_window(
+        parent=widget.parent,
+        add_record_callback=None,
+        promote_record_callback=_make_sidecar_promote_callback(widget),
+        settings_manager=getattr(widget, "settings_manager", None),
+    )
 
 
 def open_dorkbook(widget) -> None:
@@ -122,6 +93,17 @@ def open_keymaster(widget) -> None:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+def _make_sidecar_promote_callback(widget):
+    """Return a direct sidecar promotion callback, or None when DB is absent."""
+    db_reader = getattr(widget, "db_reader", None)
+    if db_reader is None:
+        return None
+
+    def _promote(prefill):
+        return promote_sidecar_prefill(db_reader, prefill)
+
+    return _promote
 
 def _resolve_server_window(widget):
     """Return a live ServerListWindow instance or None (single getter pass)."""

@@ -378,8 +378,8 @@ What each action does:
 
 Results browser:
 - Columns: `URL`, `Probed`, `Probe Preview`, `Checked`
-- Actions: `Copy URL`, `Open in Explorer`, `Open in system browser`, `Probe Selected` / `Probe URL`, `Add to dirracuda DB`
-- Promotion note: if `Add to dirracuda DB` shows **Not available**, open Server List once and reopen Results DB (the add-record callback comes from the live Server List window).
+- Actions: `Copy URL`, `Open in Explorer`, `Open in system browser`, `Probe Selected` / `Probe URL`, `Add to dirracuda DB`; double-click opens a read-only result details view.
+- Promotion note: `Add to dirracuda DB` writes directly to the main Dirracuda DB when the URL host is a literal or resolvable IPv4 target. New SearXNG probes persist the full probe snapshot in the sidecar; promotion carries that snapshot into main DB details so the SLB probe tree can render without re-probing. Older summary-only rows keep their summary until manually re-probed. The Server List Browser does not need to be open. Newly added rows may be hidden by active SLB filters.
 
 #### SearXNG `format=json` and 403 troubleshooting
 
@@ -418,7 +418,7 @@ Only submissions are processed. Comments/replies are not.
 
 Promotion flow:
 - `Open Reddit Post DB` supports `Add to dirracuda DB` from the row context menu.
-- If that action shows **Not available**, open the Server List once and reopen Reddit Post DB (the add-record callback comes from the live Server List window).
+- Promotion writes directly to the main Dirracuda DB when the target host is a literal or resolvable IPv4 target. The Server List Browser does not need to be open. Newly added rows may be hidden by active SLB filters.
 
 Disclaimer:
 

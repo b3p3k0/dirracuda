@@ -290,6 +290,44 @@ def test_load_probe_config_includes_depth_default_when_settings_missing():
     assert config["max_depth"] == 1
 
 
+def test_detail_probe_loader_prefers_active_settings_db(monkeypatch):
+    details = _import_details_module_isolated()
+
+    class _Settings:
+        def get_database_path(self):
+            return "/tmp/main.db"
+
+    class _Reader:
+        def __init__(self, db_path):
+            assert db_path == "/tmp/main.db"
+
+        def get_probe_snapshot_for_host(self, ip_address, host_type, *, protocol_server_id=None, port=None):
+            assert ip_address == "93.184.216.34"
+            assert host_type == "H"
+            assert protocol_server_id == 7
+            assert port == 8080
+            return {"run_at": "2026-05-03T10:20:30", "shares": []}
+
+    monkeypatch.setattr(details, "DatabaseReader", _Reader)
+    monkeypatch.setattr(
+        details,
+        "load_probe_result_for_host",
+        lambda *_args, **_kwargs: {"fallback": True},
+    )
+
+    result = details._load_probe_result_for_detail(
+        {
+            "ip_address": "93.184.216.34",
+            "host_type": "H",
+            "protocol_server_id": 7,
+            "port": 8080,
+        },
+        settings_manager=_Settings(),
+    )
+
+    assert result == {"run_at": "2026-05-03T10:20:30", "shares": []}
+
+
 def test_load_probe_config_clamps_depth_to_supported_range():
     details = _import_details_module_isolated()
 

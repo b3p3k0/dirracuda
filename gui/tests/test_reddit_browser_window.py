@@ -29,6 +29,7 @@ from gui.components.reddit_browser_window import (
     COLUMNS,
     RedditBrowserWindow,
 )
+from gui.utils.sidecar_promotion import SidecarPromotionError
 from experimental.redseek.models import RedditTarget
 
 
@@ -186,6 +187,7 @@ def _make_win(monkeypatch=None) -> RedditBrowserWindow:
     win.status_var = _StrVar()
     win._filter_var = _StrVar()
     win._add_record_callback = None
+    win._promote_record_callback = None
     return win
 
 
@@ -639,15 +641,29 @@ class TestAddToDb:
         assert result["_probe_host_hint"] == "1.2.3.4"
         assert result["_probe_path_hint"] == "/"
 
-    def test_build_prefill_unknown_protocol_returns_none(self):
+    def test_build_prefill_smb(self):
         win = _make_win()
         row = _make_raw_row(1, protocol="smb", host="example.com",
                             target_normalized="smb://example.com/share")
+        assert win._build_prefill(row) == {
+            "host_type": "S",
+            "host": "example.com",
+            "port": None,
+            "scheme": None,
+        }
+
+    def test_build_prefill_unknown_protocol_returns_none(self):
+        win = _make_win()
+        row = _make_raw_row(1, protocol="unknown", host="example.com")
         assert win._build_prefill(row) is None
 
     def test_on_add_to_db_no_callback_shows_info(self, monkeypatch):
         win = _make_win()
         win._add_record_callback = None
+        row = _make_raw_row(1, protocol="http", host="1.2.3.4",
+                            target_normalized="http://1.2.3.4/files/")
+        win._row_by_iid["1"] = row
+        win.tree.set_selection("1")
         info_calls = []
         monkeypatch.setattr(
             "gui.components.reddit_browser_window.messagebox.showinfo",
@@ -655,6 +671,7 @@ class TestAddToDb:
         )
         win._on_add_to_db()
         assert len(info_calls) == 1
+        assert info_calls[0][0] == "Main database unavailable"
 
     def test_on_add_to_db_no_selection_shows_info(self, monkeypatch):
         win = _make_win()
@@ -671,7 +688,7 @@ class TestAddToDb:
     def test_on_add_to_db_unknown_protocol_shows_info(self, monkeypatch):
         win = _make_win()
         win._add_record_callback = MagicMock()
-        row = _make_raw_row(1, protocol="smb", host="example.com")
+        row = _make_raw_row(1, protocol="unknown", host="example.com")
         win._row_by_iid["1"] = row
         win.tree.set_selection("1")
         info_calls = []
@@ -682,6 +699,51 @@ class TestAddToDb:
         win._on_add_to_db()
         assert len(info_calls) == 1
         win._add_record_callback.assert_not_called()
+
+    def test_on_add_to_db_calls_direct_promote_callback(self, monkeypatch):
+        win = _make_win()
+        win._promote_record_callback = MagicMock(return_value={
+            "payload": {"host_type": "H", "ip_address": "1.2.3.4", "port": 80},
+            "result": {"host_type": "H", "operation": "insert"},
+        })
+        row = _make_raw_row(1, protocol="http", host="1.2.3.4",
+                            target_normalized="http://1.2.3.4/files/")
+        win._row_by_iid["1"] = row
+        win.tree.set_selection("1")
+        info_calls = []
+        monkeypatch.setattr(
+            "gui.components.reddit_browser_window.messagebox.showinfo",
+            lambda *a, **k: info_calls.append(a),
+        )
+
+        win._on_add_to_db()
+
+        win._promote_record_callback.assert_called_once()
+        prefill = win._promote_record_callback.call_args[0][0]
+        assert prefill["host_type"] == "H"
+        assert prefill["host"] == "1.2.3.4"
+        assert prefill["_promotion_source"] == "reddit_browser"
+        assert info_calls[0][0] == "Record Added"
+
+    def test_on_add_to_db_direct_promotion_error_shows_cannot_promote(self, monkeypatch):
+        win = _make_win()
+        win._promote_record_callback = MagicMock(
+            side_effect=SidecarPromotionError("Could not resolve host.")
+        )
+        row = _make_raw_row(1, protocol="http", host="missing.example.invalid",
+                            target_normalized="http://missing.example.invalid/files/")
+        win._row_by_iid["1"] = row
+        win.tree.set_selection("1")
+        info_calls = []
+        monkeypatch.setattr(
+            "gui.components.reddit_browser_window.messagebox.showinfo",
+            lambda *a, **k: info_calls.append(a),
+        )
+
+        win._on_add_to_db()
+
+        win._promote_record_callback.assert_called_once()
+        assert info_calls[0][0] == "Cannot promote"
 
     def test_on_add_to_db_calls_callback_with_correct_prefill(self, monkeypatch):
         win = _make_win()

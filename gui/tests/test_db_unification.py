@@ -36,12 +36,22 @@ class _FakeReader:
             }
         )
 
-    def upsert_probe_snapshot_for_host(self, ip_address, host_type, payload, *, port=None, source=None):
+    def upsert_probe_snapshot_for_host(
+        self,
+        ip_address,
+        host_type,
+        payload,
+        *,
+        protocol_server_id=None,
+        port=None,
+        source=None,
+    ):
         self.snapshot_calls.append(
             {
                 "ip_address": ip_address,
                 "host_type": host_type,
                 "payload": payload,
+                "protocol_server_id": protocol_server_id,
                 "port": port,
                 "source": source,
             }
@@ -72,6 +82,11 @@ class _FakeReader:
         snapshot_path=None,
         protocol_server_id=None,
         port=None,
+        last_probe_at=None,
+        latest_snapshot_id=None,
+        accessible_dirs_count=None,
+        accessible_dirs_list=None,
+        accessible_files_count=None,
     ):
         self.probe_cache_calls.append(
             {
@@ -82,6 +97,11 @@ class _FakeReader:
                 "snapshot_path": snapshot_path,
                 "protocol_server_id": protocol_server_id,
                 "port": port,
+                "last_probe_at": last_probe_at,
+                "latest_snapshot_id": latest_snapshot_id,
+                "accessible_dirs_count": accessible_dirs_count,
+                "accessible_dirs_list": accessible_dirs_list,
+                "accessible_files_count": accessible_files_count,
             }
         )
         return None
@@ -216,6 +236,59 @@ def _create_se_dork_sidecar(db_path: Path) -> None:
         conn.close()
 
 
+def _create_se_dork_sidecar_with_probe(db_path: Path, *, snapshot: bool = False) -> None:
+    conn = sqlite3.connect(str(db_path))
+    try:
+        snapshot_column = ", probe_snapshot_json TEXT" if snapshot else ""
+        conn.execute(
+            f"""
+            CREATE TABLE dork_results (
+                result_id INTEGER PRIMARY KEY,
+                url TEXT,
+                probe_status TEXT,
+                probe_indicator_matches INTEGER,
+                probe_preview TEXT,
+                probe_checked_at TEXT,
+                probe_error TEXT
+                {snapshot_column}
+            )
+            """
+        )
+        snapshot_cols = ", probe_snapshot_json" if snapshot else ""
+        snapshot_values = ", ?" if snapshot else ""
+        snapshot_payload = {
+            "run_at": "2026-05-03T10:20:30",
+            "shares": [
+                {
+                    "share": "http_root",
+                    "root_files": ["index.html"],
+                    "directories": [{"name": "pub", "files": ["readme.txt"]}],
+                }
+            ],
+        }
+        conn.execute(
+            f"""
+            INSERT INTO dork_results(
+                result_id, url, probe_status, probe_indicator_matches,
+                probe_preview, probe_checked_at, probe_error
+                {snapshot_cols}
+            ) VALUES (?, ?, ?, ?, ?, ?, ?{snapshot_values})
+            """,
+            (
+                1,
+                "https://example.local/files/",
+                "issue",
+                2,
+                "pub,movies",
+                "2026-05-03T10:20:30",
+                None,
+            ) + ((json.dumps(snapshot_payload),) if snapshot else ()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _create_redseek_sidecar(db_path: Path) -> None:
     conn = sqlite3.connect(str(db_path))
     try:
@@ -259,6 +332,102 @@ def test_targeted_sidecar_import_skips_unresolved_records_and_reports(tmp_path, 
     assert reader.state["db_unification.sidecar_import.completed"] == "1"
     reason_codes = [entry["reason_code"] for entry in reader.reports]
     assert reason_codes.count("unresolved_host") == 2
+
+
+def test_targeted_se_dork_import_copies_cacheable_probe_summary(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    sidecar_root = home / ".dirracuda"
+    sidecar_root.mkdir(parents=True)
+    _create_se_dork_sidecar_with_probe(sidecar_root / "se_dork.db")
+
+    monkeypatch.setattr(db_unification.Path, "home", staticmethod(lambda: home))
+    monkeypatch.setattr(db_unification, "_resolve_ipv4", lambda _host: "93.184.216.34")
+
+    reader = _FakeReader()
+    result = db_unification.run_targeted_sidecar_import(reader)
+
+    assert result["status"] == "done"
+    assert result["imported"] == 1
+    assert reader.manual_server_calls == [{
+        "host_type": "H",
+        "ip_address": "93.184.216.34",
+        "port": 443,
+        "scheme": "https",
+        "probe_host": "example.local",
+        "probe_path": "/files/",
+    }]
+    assert reader.probe_cache_calls == [{
+        "ip_address": "93.184.216.34",
+        "host_type": "H",
+        "status": "issue",
+        "indicator_matches": 2,
+        "snapshot_path": None,
+        "protocol_server_id": 7,
+        "port": 443,
+        "last_probe_at": "2026-05-03T10:20:30",
+        "latest_snapshot_id": None,
+        "accessible_dirs_count": 2,
+        "accessible_dirs_list": "pub,movies",
+        "accessible_files_count": None,
+    }]
+
+
+def test_targeted_se_dork_import_copies_probe_snapshot_and_links_cache(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    sidecar_root = home / ".dirracuda"
+    sidecar_root.mkdir(parents=True)
+    _create_se_dork_sidecar_with_probe(sidecar_root / "se_dork.db", snapshot=True)
+
+    monkeypatch.setattr(db_unification.Path, "home", staticmethod(lambda: home))
+    monkeypatch.setattr(db_unification, "_resolve_ipv4", lambda _host: "93.184.216.34")
+
+    reader = _FakeReader()
+    result = db_unification.run_targeted_sidecar_import(reader)
+
+    assert result["status"] == "done"
+    assert result["imported"] == 1
+    assert reader.snapshot_calls == [{
+        "ip_address": "93.184.216.34",
+        "host_type": "H",
+        "payload": {
+            "run_at": "2026-05-03T10:20:30",
+            "shares": [
+                {
+                    "share": "http_root",
+                    "root_files": ["index.html"],
+                    "directories": [{"name": "pub", "files": ["readme.txt"]}],
+                }
+            ],
+        },
+        "protocol_server_id": 7,
+        "port": 443,
+        "source": "sidecar:se_dork",
+    }]
+    assert reader.probe_cache_calls[0]["latest_snapshot_id"] == 42
+    assert reader.probe_cache_calls[0]["accessible_dirs_count"] == 1
+    assert reader.probe_cache_calls[0]["accessible_files_count"] == 2
+
+
+def test_targeted_se_dork_import_ignores_invalid_snapshot_json(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    sidecar_root = home / ".dirracuda"
+    sidecar_root.mkdir(parents=True)
+    sidecar_db = sidecar_root / "se_dork.db"
+    _create_se_dork_sidecar_with_probe(sidecar_db, snapshot=True)
+    with sqlite3.connect(str(sidecar_db)) as conn:
+        conn.execute("UPDATE dork_results SET probe_snapshot_json = ?", ("{bad json",))
+        conn.commit()
+
+    monkeypatch.setattr(db_unification.Path, "home", staticmethod(lambda: home))
+    monkeypatch.setattr(db_unification, "_resolve_ipv4", lambda _host: "93.184.216.34")
+
+    reader = _FakeReader()
+    result = db_unification.run_targeted_sidecar_import(reader)
+
+    assert result["status"] == "done"
+    assert result["imported"] == 1
+    assert reader.snapshot_calls == []
+    assert reader.probe_cache_calls[0]["latest_snapshot_id"] is None
 
 
 def test_startup_unification_reports_failures_without_raising(monkeypatch):

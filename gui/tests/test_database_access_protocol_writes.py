@@ -576,6 +576,56 @@ def test_snapshot_path_coalesce_preserved(monkeypatch):
         os.unlink(path)
 
 
+def test_probe_cache_for_host_accepts_explicit_last_probe_at(monkeypatch):
+    """Sidecar promotion can preserve the original probe timestamp."""
+    path = _make_db(smb=True, ftp=True, http=True)
+    try:
+        conn = sqlite3.connect(path)
+        conn.execute(
+            "INSERT INTO http_servers (ip_address, port, scheme, status) VALUES (?,?,?,?)",
+            ("14.14.14.14", 8080, "http", "active"),
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS http_probe_cache (
+                server_id INTEGER PRIMARY KEY,
+                status TEXT DEFAULT 'unprobed',
+                last_probe_at DATETIME,
+                indicator_matches INTEGER DEFAULT 0,
+                snapshot_path TEXT,
+                accessible_dirs_count INTEGER DEFAULT 0,
+                accessible_dirs_list TEXT,
+                accessible_files_count INTEGER DEFAULT 0,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (server_id) REFERENCES http_servers(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.commit()
+        conn.close()
+
+        reader = _reader(path, monkeypatch)
+        reader.upsert_probe_cache_for_host(
+            "14.14.14.14",
+            "H",
+            status="clean",
+            indicator_matches=0,
+            protocol_server_id=1,
+            port=8080,
+            last_probe_at="2026-05-03T12:34:56",
+        )
+
+        conn = sqlite3.connect(path)
+        row = conn.execute(
+            "SELECT last_probe_at FROM http_probe_cache WHERE server_id=1"
+        ).fetchone()
+        conn.close()
+
+        assert row[0] == "2026-05-03T12:34:56"
+    finally:
+        os.unlink(path)
+
+
 def test_ftp_probe_writes_accessible_dirs_fields(monkeypatch):
     """FTP probe cache write stores accessible directory count/list when provided."""
     path = _make_db(smb=True, ftp=True)

@@ -12,9 +12,8 @@ Columns (treeview column id → row dict key):
 Actions: Copy URL, Open in Explorer, Open in system browser, Probe URL,
 Add to dirracuda DB.
 
-Promotion follows the same callback pattern as reddit_browser_window:
-  add_record_callback(prefill) is called with an HTTP prefill dict.
-  If callback is None, "Not available" is shown on promotion attempt.
+Promotion uses a direct main-DB callback when available. add_record_callback
+is retained only for legacy callers that still want the Add Record dialog.
 """
 
 from __future__ import annotations
@@ -22,6 +21,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import datetime
 import ipaddress
+import json
 import socket
 import threading
 import webbrowser
@@ -35,6 +35,11 @@ from gui.components.unified_browser_window import open_ftp_http_browser
 from gui.components.pry_status_dialog import BatchStatusDialog
 from gui.utils.running_tasks import get_running_task_registry
 from gui.utils import safe_messagebox as messagebox
+from gui.utils.sidecar_promotion import (
+    SidecarPromotionError,
+    format_promotion_success,
+)
+from gui.utils.probe_snapshot_details import format_probe_section
 from gui.utils.style import get_theme
 
 # ---------------------------------------------------------------------------
@@ -73,7 +78,7 @@ class SeDorkBrowserWindow:
     Toplevel window for reviewing se_dork classification results.
 
     Loads all rows from the se_dork sidecar DB on open.
-    Promotion to dirracuda.db is available when add_record_callback is supplied.
+    Promotion to dirracuda.db is available when promote_record_callback is supplied.
     """
 
     def __init__(
@@ -81,12 +86,14 @@ class SeDorkBrowserWindow:
         parent: tk.Widget,
         db_path: Optional[Path] = None,
         add_record_callback=None,
+        promote_record_callback=None,
         settings_manager=None,
     ) -> None:
         self.parent = parent
         self.db_path = db_path
         self.theme = get_theme()
         self._add_record_callback = add_record_callback
+        self._promote_record_callback = promote_record_callback
         self._settings_manager = settings_manager
 
         self._row_by_iid: dict[str, dict] = {}
@@ -151,6 +158,7 @@ class SeDorkBrowserWindow:
             command=self._on_add_to_db,
         )
         self.tree.bind("<Button-3>", self._on_right_click)
+        self.tree.bind("<Double-1>", self._on_double_click)
 
         # Status bar
         status_frame = tk.Frame(self.window)
@@ -255,6 +263,102 @@ class SeDorkBrowserWindow:
         except Exception:
             pass
         self._context_menu_visible = False
+
+    def _on_double_click(self, event: tk.Event) -> None:
+        """Open a read-only details view for the clicked result row."""
+        try:
+            if self.tree.identify_region(event.x, event.y) == "heading":
+                return
+        except Exception:
+            pass
+        iid = self.tree.identify_row(event.y)
+        if not iid:
+            return
+        row = self._row_by_iid.get(iid)
+        if row is None:
+            return
+        try:
+            self.tree.selection_set(iid)
+        except Exception:
+            pass
+        self._show_result_details(row)
+
+    def _show_result_details(self, row: dict) -> None:
+        """Show a read-only notes/details window for a SearXNG result."""
+        dialog = tk.Toplevel(self.window)
+        dialog.title("SearXNG Result Details")
+        dialog.transient(self.window)
+        self.theme.apply_to_widget(dialog, "main_window")
+
+        frame = tk.Frame(dialog, padx=10, pady=10)
+        self.theme.apply_to_widget(frame, "main_window")
+        frame.pack(fill=tk.BOTH, expand=True)
+
+        text = tk.Text(frame, width=92, height=24, wrap="word")
+        text.insert(tk.END, self._format_result_details(row))
+        text.configure(state=tk.DISABLED)
+        self.theme.apply_to_widget(text, "text_area")
+        text.pack(fill=tk.BOTH, expand=True)
+
+        buttons = tk.Frame(frame)
+        self.theme.apply_to_widget(buttons, "main_window")
+        buttons.pack(fill=tk.X, pady=(8, 0))
+
+        close_btn = tk.Button(buttons, text="Close", command=dialog.destroy)
+        self.theme.apply_to_widget(close_btn, "button_secondary")
+        close_btn.pack(side=tk.RIGHT)
+
+    def _format_result_details(self, row: dict) -> str:
+        """Return read-only details text for a SearXNG result row."""
+        source_engine = str(row.get("source_engine") or "").strip()
+        source_engines = str(row.get("source_engines_json") or "").strip()
+        source = source_engine or source_engines or "Unknown"
+
+        lines = [
+            "SearXNG Result Details",
+            "",
+            "Result",
+            f"URL: {row.get('url') or 'Unknown'}",
+            f"Title: {row.get('title') or 'N/A'}",
+            f"Snippet: {row.get('snippet') or 'N/A'}",
+            f"Source: {source}",
+            "",
+            "Classification",
+            f"Verdict: {row.get('verdict') or 'Unknown'}",
+            f"Reason: {row.get('reason_code') or 'N/A'}",
+            f"HTTP Status: {row.get('http_status') or 'N/A'}",
+            f"Checked: {row.get('checked_at') or 'N/A'}",
+            "",
+            "Probe",
+            f"Status: {row.get('probe_status') or 'unprobed'}",
+            f"Indicator Matches: {row.get('probe_indicator_matches') or 0}",
+            f"Preview: {row.get('probe_preview') or 'N/A'}",
+            f"Checked: {row.get('probe_checked_at') or 'N/A'}",
+            f"Error: {row.get('probe_error') or 'N/A'}",
+        ]
+        snapshot = self._parse_probe_snapshot(row.get("probe_snapshot_json"))
+        if snapshot:
+            lines.extend(["", format_probe_section(snapshot, show_rce_details=True).rstrip()])
+        elif row.get("probe_status") in {"clean", "issue"}:
+            lines.extend([
+                "",
+                "Probe Snapshot:",
+                "   Full probe tree is not stored for this legacy sidecar row. Re-probe the row to populate it.",
+            ])
+        return "\n".join(lines)
+
+    def _parse_probe_snapshot(self, value) -> Optional[dict]:
+        """Return stored probe snapshot JSON as a dict, if available."""
+        if isinstance(value, dict):
+            return value
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            return None
+        return parsed if isinstance(parsed, dict) else None
 
     def _selected_row(self) -> Optional[dict]:
         rows = self._selected_rows()
@@ -492,6 +596,7 @@ class SeDorkBrowserWindow:
                             probe_preview=outcome.probe_preview,
                             probe_checked_at=outcome.probe_checked_at,
                             probe_error=outcome.probe_error,
+                            probe_snapshot_payload=outcome.probe_snapshot_payload,
                         )
                         if outcome.probe_status == "unprobed" and outcome.probe_error:
                             unprobed_errors.append(
@@ -610,7 +715,7 @@ class SeDorkBrowserWindow:
             return None
         path = parsed.path or "/"
 
-        return {
+        prefill = {
             "host_type": "H",
             "host": hostname,
             "port": port,
@@ -618,7 +723,19 @@ class SeDorkBrowserWindow:
             "_probe_host_hint": hostname,
             "_probe_path_hint": path,
             "_promotion_source": "se_dork_browser",
+            "_probe_cache": {
+                "status": row.get("probe_status"),
+                "indicator_matches": row.get("probe_indicator_matches"),
+                "preview": row.get("probe_preview"),
+                "checked_at": row.get("probe_checked_at"),
+                "error": row.get("probe_error"),
+            },
+            "_probe_snapshot_source": "sidecar:se_dork",
         }
+        snapshot = self._parse_probe_snapshot(row.get("probe_snapshot_json"))
+        if snapshot is not None:
+            prefill["_probe_snapshot"] = snapshot
+        return prefill
 
     def _resolve_prefill_host_ipv4(self, prefill: dict) -> tuple[str, bool]:
         """
@@ -654,14 +771,6 @@ class SeDorkBrowserWindow:
     def _on_add_to_db(self) -> None:
         self._hide_context_menu()
 
-        if self._add_record_callback is None:
-            messagebox.showinfo(
-                "Not available",
-                "Open this window from the Servers window to use 'Add to dirracuda DB'.",
-                parent=self.window,
-            )
-            return
-
         row = self._selected_row()
         if row is None:
             messagebox.showinfo("No selection", "Select a row first.", parent=self.window)
@@ -673,6 +782,18 @@ class SeDorkBrowserWindow:
             messagebox.showinfo(
                 "Cannot promote",
                 f"URL '{url}' has an unsupported scheme or missing hostname.",
+                parent=self.window,
+            )
+            return
+
+        if self._promote_record_callback is not None:
+            self._promote_prefill_direct(prefill)
+            return
+
+        if self._add_record_callback is None:
+            messagebox.showinfo(
+                "Main database unavailable",
+                "No main database promotion handler is available for this window.",
                 parent=self.window,
             )
             return
@@ -694,11 +815,36 @@ class SeDorkBrowserWindow:
         prefill["host"] = resolved_host
         self._add_record_callback(prefill)
 
+    def _promote_prefill_direct(self, prefill: dict) -> None:
+        try:
+            promotion = self._promote_record_callback(prefill)
+        except SidecarPromotionError as exc:
+            messagebox.showinfo(
+                "Cannot promote",
+                str(exc),
+                parent=self.window,
+            )
+            return
+        except Exception as exc:
+            messagebox.showerror(
+                "Add Record Failed",
+                f"Unable to save record:\n{exc}",
+                parent=self.window,
+            )
+            return
+
+        messagebox.showinfo(
+            "Record Added",
+            format_promotion_success(promotion),
+            parent=self.window,
+        )
+
 
 def show_se_dork_browser_window(
     parent: tk.Widget,
     db_path: Optional[Path] = None,
     add_record_callback=None,
+    promote_record_callback=None,
     settings_manager=None,
 ) -> None:
     """Open the SE Dork results browser window."""
@@ -706,5 +852,6 @@ def show_se_dork_browser_window(
         parent,
         db_path=db_path,
         add_record_callback=add_record_callback,
+        promote_record_callback=promote_record_callback,
         settings_manager=settings_manager,
     )
