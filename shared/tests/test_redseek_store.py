@@ -8,6 +8,7 @@ rollback explicitly.
 
 import sqlite3
 import datetime
+import json
 
 import pytest
 
@@ -15,9 +16,11 @@ from experimental.redseek.models import RedditIngestState, RedditPost, RedditTar
 from experimental.redseek.store import (
     _check_schema,
     get_ingest_state,
+    get_targets_by_dedupe_keys,
     init_db,
     open_connection,
     save_ingest_state,
+    update_target_probe,
     upsert_post,
     upsert_targets,
     wipe_all,
@@ -84,6 +87,64 @@ def test_init_db_idempotent(tmp_path):
     assert REQUIRED_TABLES <= _tables(db)
 
 
+def test_init_db_backfills_probe_columns_on_old_db(tmp_path):
+    """Older sidecar DBs gain probe columns without a destructive migration."""
+    db = tmp_path / "test.db"
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        """
+        CREATE TABLE reddit_posts (
+            post_id TEXT PRIMARY KEY,
+            post_title TEXT NOT NULL,
+            post_author TEXT,
+            post_created_utc REAL NOT NULL,
+            is_nsfw INTEGER NOT NULL DEFAULT 0,
+            had_targets INTEGER NOT NULL DEFAULT 0,
+            source_sort TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE reddit_targets (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            post_id TEXT NOT NULL,
+            target_raw TEXT NOT NULL,
+            target_normalized TEXT NOT NULL,
+            host TEXT,
+            protocol TEXT,
+            notes TEXT,
+            parse_confidence TEXT,
+            created_at TEXT NOT NULL,
+            dedupe_key TEXT NOT NULL UNIQUE,
+            FOREIGN KEY (post_id) REFERENCES reddit_posts(post_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE reddit_ingest_state (
+            subreddit TEXT NOT NULL,
+            sort_mode TEXT NOT NULL,
+            last_post_created_utc REAL,
+            last_post_id TEXT,
+            last_scrape_time TEXT,
+            PRIMARY KEY (subreddit, sort_mode)
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    init_db(db)
+    with open_connection(db) as checked:
+        cols = {r[1] for r in checked.execute("PRAGMA table_info(reddit_targets)")}
+
+    assert "probe_snapshot_json" in cols
+    assert "probe_status" in cols
+
+
 # ---------------------------------------------------------------------------
 # Gate A4 — wipe_all on fresh (never-initialized) DB
 # ---------------------------------------------------------------------------
@@ -136,6 +197,52 @@ def test_upsert_post_no_cascade_delete(tmp_path):
         ).fetchone()[0]
         conn.commit()
     assert count == 1, f"expected 1 target, got {count}"
+
+
+def test_update_target_probe_stores_and_clears_snapshot(tmp_path):
+    db = tmp_path / "test.db"
+    init_db(db)
+    snapshot = {"run_at": "2026-05-03T10:20:30", "shares": [{"share": "root"}]}
+    with open_connection(db) as conn:
+        upsert_post(conn, _make_post())
+        upsert_targets(conn, [_make_target()])
+        row = get_targets_by_dedupe_keys(conn, ["key1"])[0]
+        update_target_probe(
+            conn,
+            target_id=row["id"],
+            probe_status="clean",
+            probe_indicator_matches=0,
+            probe_preview="pub",
+            probe_checked_at="2026-05-03T10:20:30",
+            probe_error=None,
+            probe_snapshot_payload=snapshot,
+        )
+        stored = conn.execute(
+            "SELECT probe_status, probe_preview, probe_snapshot_json FROM reddit_targets WHERE id=?",
+            (row["id"],),
+        ).fetchone()
+        update_target_probe(
+            conn,
+            target_id=row["id"],
+            probe_status="unprobed",
+            probe_indicator_matches=0,
+            probe_preview=None,
+            probe_checked_at="2026-05-03T10:21:30",
+            probe_error="unsupported",
+            probe_snapshot_payload=None,
+        )
+        cleared = conn.execute(
+            "SELECT probe_status, probe_error, probe_snapshot_json FROM reddit_targets WHERE id=?",
+            (row["id"],),
+        ).fetchone()
+        conn.commit()
+
+    assert stored["probe_status"] == "clean"
+    assert stored["probe_preview"] == "pub"
+    assert json.loads(stored["probe_snapshot_json"]) == snapshot
+    assert cleared["probe_status"] == "unprobed"
+    assert cleared["probe_error"] == "unsupported"
+    assert cleared["probe_snapshot_json"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -260,6 +367,12 @@ def test_check_schema_raises_on_missing_unique(tmp_path):
             parse_confidence TEXT,
             created_at TEXT NOT NULL,
             dedupe_key TEXT NOT NULL,
+            probe_status TEXT NOT NULL DEFAULT 'unprobed',
+            probe_indicator_matches INTEGER NOT NULL DEFAULT 0,
+            probe_preview TEXT,
+            probe_checked_at TEXT,
+            probe_error TEXT,
+            probe_snapshot_json TEXT,
             FOREIGN KEY (post_id) REFERENCES reddit_posts(post_id)
         )
         """
@@ -317,6 +430,12 @@ def test_check_schema_raises_on_missing_pk(tmp_path):
             parse_confidence TEXT,
             created_at TEXT NOT NULL,
             dedupe_key TEXT NOT NULL UNIQUE,
+            probe_status TEXT NOT NULL DEFAULT 'unprobed',
+            probe_indicator_matches INTEGER NOT NULL DEFAULT 0,
+            probe_preview TEXT,
+            probe_checked_at TEXT,
+            probe_error TEXT,
+            probe_snapshot_json TEXT,
             FOREIGN KEY (post_id) REFERENCES reddit_posts(post_id)
         )
         """
@@ -374,6 +493,12 @@ def test_check_schema_raises_on_reversed_pk(tmp_path):
             parse_confidence TEXT,
             created_at TEXT NOT NULL,
             dedupe_key TEXT NOT NULL UNIQUE,
+            probe_status TEXT NOT NULL DEFAULT 'unprobed',
+            probe_indicator_matches INTEGER NOT NULL DEFAULT 0,
+            probe_preview TEXT,
+            probe_checked_at TEXT,
+            probe_error TEXT,
+            probe_snapshot_json TEXT,
             FOREIGN KEY (post_id) REFERENCES reddit_posts(post_id)
         )
         """
@@ -433,7 +558,13 @@ def test_check_schema_raises_on_missing_fk(tmp_path):
             notes TEXT,
             parse_confidence TEXT,
             created_at TEXT NOT NULL,
-            dedupe_key TEXT NOT NULL UNIQUE
+            dedupe_key TEXT NOT NULL UNIQUE,
+            probe_status TEXT NOT NULL DEFAULT 'unprobed',
+            probe_indicator_matches INTEGER NOT NULL DEFAULT 0,
+            probe_preview TEXT,
+            probe_checked_at TEXT,
+            probe_error TEXT,
+            probe_snapshot_json TEXT
         )
         """
     )

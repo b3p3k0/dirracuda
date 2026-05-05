@@ -121,8 +121,7 @@ share_access_*.json
 file_manifest_*.json
 collection_report_*.txt
 
-# Experimental and development workspace
-experimental/
+# Experimental source packages are tracked; generated artifacts are covered above.
 MIGRATION_CHECKLIST.md
 
 # Legacy tools (deprecated, kept for reference)

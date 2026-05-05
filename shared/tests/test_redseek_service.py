@@ -25,6 +25,7 @@ from experimental.redseek.store import (
     save_ingest_state,
 )
 from experimental.redseek.service import IngestOptions, IngestResult, _make_preview_note, run_ingest
+from gui.utils.sidecar_probe import SidecarProbeOutcome
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -66,6 +67,8 @@ def _make_opts(
     mode: str = "feed",
     query: str = "",
     username: str = "",
+    bulk_probe_enabled: bool = False,
+    probe_worker_count: int | None = None,
 ) -> IngestOptions:
     return IngestOptions(
         sort=sort,
@@ -78,6 +81,8 @@ def _make_opts(
         mode=mode,
         query=query,
         username=username,
+        bulk_probe_enabled=bulk_probe_enabled,
+        probe_worker_count=probe_worker_count,
     )
 
 
@@ -521,6 +526,123 @@ def test_ingest_result_fields_populated(tmp_path):
     assert isinstance(result.replace_cache_done, bool)
     assert isinstance(result.rate_limited, bool)
     assert result.pages_fetched == 1
+    assert result.probe_enabled is False
+    assert result.probe_total == 0
+
+
+def test_bulk_probe_default_off_does_not_probe(tmp_path, monkeypatch):
+    db = tmp_path / "test.db"
+    posts = [_make_raw_post("p1", title="http://example.com/files")]
+    probe_calls = []
+    monkeypatch.setattr(
+        _svc,
+        "_probe_targets_for_keys",
+        lambda *a, **kw: probe_calls.append((a, kw)) or {},
+    )
+
+    with patch("experimental.redseek.service.fetch_posts", return_value=_make_fetch(posts)):
+        result = run_ingest(_make_opts(sort="new"), db_path=db)
+
+    assert result.error is None
+    assert result.probe_enabled is False
+    assert probe_calls == []
+
+
+def test_bulk_probe_copies_snapshot_for_concrete_targets_and_skips_unknown(tmp_path, monkeypatch):
+    db = tmp_path / "test.db"
+    posts = [
+        _make_raw_post(
+            "p1",
+            title="http://example.com/files and example.org",
+        )
+    ]
+    snapshot = {
+        "run_at": "2026-05-03T10:20:30",
+        "shares": [
+            {
+                "share": "http_root",
+                "root_files": ["index.html"],
+                "directories": [{"name": "pub", "files": ["readme.txt"]}],
+            }
+        ],
+    }
+
+    monkeypatch.setattr(
+        "gui.utils.sidecar_probe.build_indicator_patterns",
+        lambda _config_path: [],
+    )
+    monkeypatch.setattr(
+        "gui.utils.sidecar_probe.run_sidecar_probe",
+        lambda *_a, **_k: SidecarProbeOutcome(
+            probe_status="clean",
+            probe_indicator_matches=0,
+            probe_preview="pub,[[loose files]]",
+            probe_checked_at="2026-05-03T10:20:30",
+            probe_error=None,
+            probe_snapshot_payload=snapshot,
+        ),
+    )
+
+    with patch("experimental.redseek.service.fetch_posts", return_value=_make_fetch(posts)):
+        result = run_ingest(
+            _make_opts(sort="new", bulk_probe_enabled=True, probe_worker_count=1),
+            db_path=db,
+        )
+
+    assert result.error is None
+    assert result.probe_enabled is True
+    assert result.probe_total == 1
+    assert result.probe_clean == 1
+    assert result.probe_skipped == 1
+
+    conn = sqlite3.connect(str(db))
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT protocol, probe_status, probe_preview, probe_snapshot_json "
+        "FROM reddit_targets ORDER BY id"
+    ).fetchall()
+    conn.close()
+
+    http_row = next(r for r in rows if r["protocol"] == "http")
+    unknown_row = next(r for r in rows if r["protocol"] == "unknown")
+    assert http_row["probe_status"] == "clean"
+    assert http_row["probe_preview"] == "pub,[[loose files]]"
+    assert '"directories"' in http_row["probe_snapshot_json"]
+    assert unknown_row["probe_status"] == "unprobed"
+    assert unknown_row["probe_snapshot_json"] is None
+
+
+def test_bulk_probe_failure_marks_target_unprobed_without_failing_ingest(tmp_path, monkeypatch):
+    db = tmp_path / "test.db"
+    posts = [_make_raw_post("p1", title="ftp://example.com/pub")]
+
+    monkeypatch.setattr(
+        "gui.utils.sidecar_probe.build_indicator_patterns",
+        lambda _config_path: [],
+    )
+
+    def _raise_probe(*_args, **_kwargs):
+        raise RuntimeError("probe boom")
+
+    monkeypatch.setattr("gui.utils.sidecar_probe.run_sidecar_probe", _raise_probe)
+
+    with patch("experimental.redseek.service.fetch_posts", return_value=_make_fetch(posts)):
+        result = run_ingest(
+            _make_opts(sort="new", bulk_probe_enabled=True, probe_worker_count=1),
+            db_path=db,
+        )
+
+    assert result.error is None
+    assert result.probe_total == 1
+    assert result.probe_unprobed == 1
+
+    conn = sqlite3.connect(str(db))
+    row = conn.execute(
+        "SELECT probe_status, probe_error FROM reddit_targets"
+    ).fetchone()
+    conn.close()
+    assert row[0] == "unprobed"
+    assert "probe boom" in row[1]
 
 
 # ---------------------------------------------------------------------------

@@ -105,6 +105,22 @@ def _handle_reddit_grab_start(self, options: IngestOptions) -> None:
     if self.scan_button_state != "idle" or self._reddit_grab_running:
         return
 
+    if getattr(options, "bulk_probe_enabled", False):
+        sm = getattr(self, "settings_manager", None)
+        if sm is not None:
+            if hasattr(sm, "get_smbseek_config_path"):
+                try:
+                    options.probe_config_path = sm.get_smbseek_config_path()
+                except Exception:
+                    options.probe_config_path = None
+            try:
+                options.probe_worker_count = max(
+                    1,
+                    min(8, int(sm.get_setting("probe.batch_max_workers", 3))),
+                )
+            except Exception:
+                options.probe_worker_count = 3
+
     self._reddit_grab_running = True
     if self.reddit_grab_button is not None:
         self.reddit_grab_button.config(state=tk.DISABLED)
@@ -167,6 +183,15 @@ def _on_reddit_grab_done(self, result: IngestResult) -> None:
             f"Targets stored: {result.targets_stored}  "
             f"Deduped: {result.targets_deduped}"
         )
+        if getattr(result, "probe_enabled", False):
+            summary += (
+                "\nProbe:"
+                f" {result.probe_total} attempted"
+                f" ({result.probe_clean} clean,"
+                f" {result.probe_issue} issue,"
+                f" {result.probe_unprobed} unprobed,"
+                f" {result.probe_skipped} skipped)"
+            )
         if result.replace_cache_done:
             summary += "\nCache replaced before run."
         self._log_status_event(

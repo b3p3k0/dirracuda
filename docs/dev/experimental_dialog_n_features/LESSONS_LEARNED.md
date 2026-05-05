@@ -13,3 +13,4 @@ Scope: Sidecar browser promotion into the main Dirracuda DB.
 6. Sidecar probe summaries should travel as explicit `_probe_cache` artifacts on promotion payloads. Copy only cacheable `clean`/`issue` statuses into main DB probe caches; do not fabricate raw probe snapshots when the sidecar stores only summary fields.
 7. Sidecar details/notes views should start read-only unless the sidecar schema has an intentional notes contract and migration path.
 8. Sidecars that call the shared probe runner must persist the full probe snapshot, not only a summary, when downstream promotion or details views need the probe tree. Summary-only legacy rows should stay honest and require manual re-probe to populate missing trees.
+9. Sidecar probing should use the shared sidecar probe contract and preserve `_probe_cache` plus `_probe_snapshot` promotion artifacts. Unknown protocols must be skipped with an explicit reason instead of guessed or coerced.

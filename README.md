@@ -414,11 +414,16 @@ Sort options:
 
 Only submissions are processed. Comments/replies are not.
 
+Reddit Grab options:
+- **Run probe on results** — optional explicit probe pass for concrete HTTP/HTTPS/FTP targets found during that ingest run. Unknown-protocol rows are skipped with a clear notice instead of guessing a protocol.
+
 ![reddit db](img/reddit_db.png)
 
-Promotion flow:
-- `Open Reddit Post DB` supports `Add to dirracuda DB` from the row context menu.
-- Promotion writes directly to the main Dirracuda DB when the target host is a literal or resolvable IPv4 target. The Server List Browser does not need to be open. Newly added rows may be hidden by active SLB filters.
+Reddit Post DB:
+- Columns include target metadata plus probe status, preview, and checked time.
+- `Probe Selected` runs the same full-featured probe stack used elsewhere and stores the full probe snapshot in the Reddit sidecar for HTTP/HTTPS/FTP targets.
+- Double-click opens a read-only details view with Reddit metadata and the probe tree when a snapshot is available.
+- `Add to dirracuda DB` writes directly to the main Dirracuda DB when the target host is a literal or resolvable IPv4 target. Cacheable Reddit probe summaries and full snapshots are carried into main DB details so the SLB probe tree can render without re-probing. Unknown-protocol rows are skipped with a clear message. The Server List Browser does not need to be open; newly added rows may be hidden by active SLB filters.
 
 Disclaimer:
 

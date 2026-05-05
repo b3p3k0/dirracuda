@@ -31,6 +31,9 @@ def handle_experimental_button_click(widget) -> None:
 
     context = {
         "reddit_grab_callback": widget._handle_reddit_grab_button_click,
+        "reddit_grab_status_getter": lambda: bool(
+            getattr(widget, "_reddit_grab_running", False)
+        ),
         "open_reddit_post_db": widget._open_reddit_post_db,
         "open_se_dork_results_db": lambda: open_se_dork_results_db(widget),
         "open_dorkbook": lambda: open_dorkbook(widget),
@@ -46,6 +49,7 @@ def open_reddit_post_db(widget) -> None:
         parent=widget.parent,
         add_record_callback=None,
         promote_record_callback=_make_sidecar_promote_callback(widget),
+        settings_manager=getattr(widget, "settings_manager", None),
     )
 
 

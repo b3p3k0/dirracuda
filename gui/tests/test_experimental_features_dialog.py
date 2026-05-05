@@ -40,6 +40,53 @@ from gui.components.dashboard import DashboardWidget
 import gui.components.dashboard_experimental as dashboard_experimental
 
 
+class _ValueVar:
+    def __init__(self) -> None:
+        self.value = None
+
+    def set(self, value) -> None:
+        self.value = value
+
+
+class _StatusWidget:
+    def __init__(self) -> None:
+        self.configure_calls = []
+        self.pack_calls = []
+        self.pack_forget_calls = 0
+
+    def configure(self, **kwargs) -> None:
+        self.configure_calls.append(kwargs)
+
+    def pack(self, **kwargs) -> None:
+        self.pack_calls.append(kwargs)
+
+    def pack_forget(self) -> None:
+        self.pack_forget_calls += 1
+
+
+class _FrameWidget:
+    def __init__(self) -> None:
+        self.after_calls = []
+
+    def winfo_exists(self) -> bool:
+        return True
+
+    def after(self, delay, callback):
+        self.after_calls.append((delay, callback))
+        return "after-id"
+
+
+def _make_reddit_status_tab(context: dict) -> RedditTab:
+    tab = RedditTab.__new__(RedditTab)
+    tab._context = context
+    tab._status_visible = False
+    tab._status_var = _ValueVar()
+    tab._grab_btn = _StatusWidget()
+    tab._status_label = _StatusWidget()
+    tab.frame = _FrameWidget()
+    return tab
+
+
 # ---------------------------------------------------------------------------
 # C5 Group A — Experimental button packed between DB Tools and Config
 # ---------------------------------------------------------------------------
@@ -127,6 +174,43 @@ def test_reddit_tab_silent_when_no_post_db_callback():
     tab._invoke_open_reddit_post_db()  # must not raise
 
 
+def test_reddit_tab_running_status_visible_and_disables_grab():
+    """Reddit tab shows a simple running status while Reddit Grab is active."""
+    tab = _make_reddit_status_tab({"reddit_grab_status_getter": lambda: True})
+
+    tab._update_running_status()
+
+    assert tab._status_var.value == "Reddit Grab is running..."
+    assert tab._grab_btn.configure_calls[-1] == {"state": tk.DISABLED}
+    assert tab._status_label.pack_calls
+    assert tab._status_visible is True
+    assert tab.frame.after_calls
+
+
+def test_reddit_tab_running_status_clears_and_enables_grab():
+    """Reddit tab clears the status line when Reddit Grab is idle."""
+    tab = _make_reddit_status_tab({"reddit_grab_status_getter": lambda: False})
+    tab._status_visible = True
+
+    tab._update_running_status()
+
+    assert tab._status_var.value == ""
+    assert tab._grab_btn.configure_calls[-1] == {"state": tk.NORMAL}
+    assert tab._status_label.pack_forget_calls == 1
+    assert tab._status_visible is False
+
+
+def test_reddit_tab_missing_running_getter_is_safe():
+    """Missing running-state getter leaves the Reddit status line blank."""
+    tab = _make_reddit_status_tab({})
+
+    tab._update_running_status()
+
+    assert tab._status_var.value == ""
+    assert tab._grab_btn.configure_calls[-1] == {"state": tk.NORMAL}
+    assert tab._status_label.pack_calls == []
+
+
 def test_dorkbook_callback_invoked_from_tab():
     """_invoke_open_dorkbook must call the context callback."""
     opened = []
@@ -165,6 +249,31 @@ def _make_dash():
     return dash
 
 
+def test_experimental_context_includes_reddit_grab_status_getter(monkeypatch):
+    """Experimental dialog context exposes the dashboard Reddit Grab running state."""
+    dash = _make_dash()
+    dash._handle_reddit_grab_button_click = MagicMock()
+    dash._open_reddit_post_db = MagicMock()
+    dash._reddit_grab_running = True
+    captured = {}
+    monkeypatch.setattr(
+        "gui.components.experimental_features_dialog.show_experimental_features_dialog",
+        lambda parent, context, settings_manager: captured.update(
+            parent=parent,
+            context=context,
+            settings_manager=settings_manager,
+        ),
+    )
+
+    dashboard_experimental.handle_experimental_button_click(dash)
+
+    getter = captured["context"]["reddit_grab_status_getter"]
+    assert callable(getter)
+    assert getter() is True
+    dash._reddit_grab_running = False
+    assert getter() is False
+
+
 def test_open_reddit_post_db_with_live_server_window(monkeypatch):
     """Promotion wiring no longer depends on a live Server List Browser."""
     dash = _make_dash()
@@ -184,6 +293,7 @@ def test_open_reddit_post_db_with_live_server_window(monkeypatch):
     assert calls[0]["parent"] is dash.parent
     assert calls[0]["add_record_callback"] is None
     assert callable(calls[0]["promote_record_callback"])
+    assert calls[0]["settings_manager"] is dash.settings_manager
     dash._server_list_getter.assert_not_called()
 
     result = calls[0]["promote_record_callback"]({
@@ -219,6 +329,7 @@ def test_open_reddit_post_db_fallback_when_no_server_window(monkeypatch):
     assert calls[0]["parent"] is dash.parent
     assert calls[0]["add_record_callback"] is None
     assert callable(calls[0]["promote_record_callback"])
+    assert calls[0]["settings_manager"] is dash.settings_manager
     dash._open_drill_down.assert_not_called()
     dash._server_list_getter.assert_not_called()
 
@@ -243,6 +354,7 @@ def test_open_reddit_post_db_treats_dead_window_as_none(monkeypatch):
     assert calls[0]["parent"] is dash.parent
     assert calls[0]["add_record_callback"] is None
     assert callable(calls[0]["promote_record_callback"])
+    assert calls[0]["settings_manager"] is dash.settings_manager
     dash._open_drill_down.assert_not_called()
     dash._server_list_getter.assert_not_called()
 
@@ -265,6 +377,7 @@ def test_open_reddit_post_db_does_not_open_server_list_on_fallback(monkeypatch):
     assert calls[0]["parent"] is dash.parent
     assert calls[0]["add_record_callback"] is None
     assert callable(calls[0]["promote_record_callback"])
+    assert calls[0]["settings_manager"] is dash.settings_manager
     dash._open_drill_down.assert_not_called()
     dash._server_list_getter.assert_not_called()
 
@@ -299,6 +412,7 @@ def test_open_reddit_post_db_fallback_when_getter_raises(monkeypatch):
     assert calls[0]["parent"] is dash.parent
     assert calls[0]["add_record_callback"] is None
     assert callable(calls[0]["promote_record_callback"])
+    assert calls[0]["settings_manager"] is dash.settings_manager
     dash._open_drill_down.assert_not_called()
     assert getter_calls["count"] == 0
     assert log_warnings == []
@@ -321,6 +435,7 @@ def test_open_reddit_post_db_without_db_reader_has_no_promote_callback(monkeypat
     assert calls[0]["parent"] is dash.parent
     assert calls[0]["add_record_callback"] is None
     assert calls[0]["promote_record_callback"] is None
+    assert calls[0]["settings_manager"] is dash.settings_manager
 
 
 # ---------------------------------------------------------------------------

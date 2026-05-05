@@ -19,6 +19,7 @@ replace_cache semantics:
     IngestResult.replace_cache_done=True signals this state to the caller.
 """
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import datetime
 import sqlite3
 from dataclasses import dataclass
@@ -37,9 +38,11 @@ from experimental.redseek.models import RedditIngestState, RedditPost
 from experimental.redseek.parser import extract_targets
 from experimental.redseek.store import (
     get_ingest_state,
+    get_targets_by_dedupe_keys,
     init_db,
     open_connection,
     save_ingest_state,
+    update_target_probe,
     upsert_post,
     upsert_targets,
     wipe_all,
@@ -63,6 +66,9 @@ class IngestOptions:
     mode: str = "feed"           # "feed" | "search" | "user"
     query: str = ""              # required non-empty when mode="search"
     username: str = ""           # required non-empty when mode="user"; may include leading u/
+    bulk_probe_enabled: bool = False
+    probe_config_path: Optional[str] = None
+    probe_worker_count: Optional[int] = None
 
 
 @dataclass
@@ -80,6 +86,12 @@ class IngestResult:
     replace_cache_done: bool  # True if wipe_all ran this cycle (even if fetch later failed)
     rate_limited: bool
     error: Optional[str]      # None on success
+    probe_enabled: bool = False
+    probe_total: int = 0
+    probe_clean: int = 0
+    probe_issue: int = 0
+    probe_unprobed: int = 0
+    probe_skipped: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -108,9 +120,21 @@ def _error_result(options: IngestOptions, replace_cache_done: bool, **kwargs) ->
         replace_cache_done=replace_cache_done,
         rate_limited=False,
         error=None,
+        probe_enabled=bool(getattr(options, "bulk_probe_enabled", False)),
+        probe_total=0,
+        probe_clean=0,
+        probe_issue=0,
+        probe_unprobed=0,
+        probe_skipped=0,
     )
     defaults.update(kwargs)
     return IngestResult(**defaults)
+
+
+def _with_probe_candidate_keys(result: IngestResult, keys: list[str]) -> IngestResult:
+    """Attach current-run target keys for the optional post-commit probe pass."""
+    setattr(result, "_probe_candidate_keys", tuple(dict.fromkeys(k for k in keys if k)))
+    return result
 
 
 def _extract_post_meta(raw: dict) -> Optional[dict]:
@@ -170,6 +194,163 @@ def _make_preview_note(title: Optional[str], body: Optional[str]) -> Optional[st
     return " | ".join(parts) if parts else None
 
 
+def _resolve_probe_worker_count(options: IngestOptions) -> int:
+    raw = getattr(options, "probe_worker_count", None)
+    try:
+        return max(1, min(8, int(raw))) if raw is not None else 3
+    except (TypeError, ValueError):
+        return 3
+
+
+def _probe_targets_for_keys(
+    dedupe_keys: list[str],
+    db_path: Optional[Path],
+    *,
+    config_path: Optional[str] = None,
+    worker_count: int = 3,
+) -> dict[str, int]:
+    """Probe current-run concrete targets and persist sidecar probe fields."""
+    from gui.utils.sidecar_probe import (
+        PROBE_STATUS_CLEAN,
+        PROBE_STATUS_ISSUE,
+        PROBE_STATUS_UNPROBED,
+        SidecarProbeOutcome,
+        SidecarProbeUnsupported,
+        build_indicator_patterns,
+        build_probe_target_from_sidecar_row,
+        run_sidecar_probe,
+    )
+
+    counts = {
+        "total": 0,
+        "clean": 0,
+        "issue": 0,
+        "unprobed": 0,
+        "skipped": 0,
+    }
+    if not dedupe_keys:
+        return counts
+
+    try:
+        conn = open_connection(db_path)
+    except Exception:
+        return counts
+
+    try:
+        rows = get_targets_by_dedupe_keys(conn, dedupe_keys)
+    finally:
+        conn.close()
+
+    targets: list[tuple[dict, object]] = []
+    for row in rows:
+        try:
+            targets.append((row, build_probe_target_from_sidecar_row(row)))
+        except SidecarProbeUnsupported:
+            counts["skipped"] += 1
+
+    if not targets:
+        return counts
+
+    try:
+        patterns = build_indicator_patterns(config_path)
+    except Exception:
+        patterns = None
+
+    try:
+        resolved_workers = max(1, min(8, int(worker_count)))
+    except (TypeError, ValueError):
+        resolved_workers = 3
+    max_workers = max(1, min(resolved_workers, len(targets)))
+
+    try:
+        conn = open_connection(db_path)
+    except Exception:
+        return counts
+
+    try:
+        with ThreadPoolExecutor(
+            max_workers=max_workers,
+            thread_name_prefix="reddit-sidecar-probe",
+        ) as executor:
+            future_to_row = {
+                executor.submit(
+                    run_sidecar_probe,
+                    target,
+                    config_path=config_path,
+                    indicator_patterns=patterns,
+                ): row
+                for row, target in targets
+            }
+            for future in as_completed(future_to_row):
+                row = future_to_row[future]
+                try:
+                    outcome = future.result()
+                except Exception as exc:
+                    outcome = SidecarProbeOutcome(
+                        probe_status=PROBE_STATUS_UNPROBED,
+                        probe_indicator_matches=0,
+                        probe_preview=None,
+                        probe_checked_at=datetime.datetime.now(
+                            datetime.timezone.utc
+                        ).replace(tzinfo=None).isoformat(),
+                        probe_error=str(exc),
+                    )
+
+                update_target_probe(
+                    conn,
+                    target_id=int(row["id"]),
+                    probe_status=outcome.probe_status,
+                    probe_indicator_matches=outcome.probe_indicator_matches,
+                    probe_preview=outcome.probe_preview,
+                    probe_checked_at=outcome.probe_checked_at,
+                    probe_error=outcome.probe_error,
+                    probe_snapshot_payload=outcome.probe_snapshot_payload,
+                )
+                counts["total"] += 1
+                if outcome.probe_status == PROBE_STATUS_ISSUE:
+                    counts["issue"] += 1
+                elif outcome.probe_status == PROBE_STATUS_CLEAN:
+                    counts["clean"] += 1
+                else:
+                    counts["unprobed"] += 1
+        conn.commit()
+        return counts
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return counts
+    finally:
+        conn.close()
+
+
+def _finalize_result_with_optional_probe(
+    options: IngestOptions,
+    result: IngestResult,
+    db_path: Optional[Path],
+) -> IngestResult:
+    """Apply the explicit bulk probe pass after ingest commits successfully."""
+    bulk_probe_enabled = bool(getattr(options, "bulk_probe_enabled", False))
+    result.probe_enabled = bulk_probe_enabled
+    if result.error or not bulk_probe_enabled:
+        return result
+
+    keys = list(getattr(result, "_probe_candidate_keys", ()))
+    summary = _probe_targets_for_keys(
+        keys,
+        db_path,
+        config_path=getattr(options, "probe_config_path", None),
+        worker_count=_resolve_probe_worker_count(options),
+    )
+    result.probe_total = summary.get("total", 0)
+    result.probe_clean = summary.get("clean", 0)
+    result.probe_issue = summary.get("issue", 0)
+    result.probe_unprobed = summary.get("unprobed", 0)
+    result.probe_skipped = summary.get("skipped", 0)
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Mode workers
 # ---------------------------------------------------------------------------
@@ -197,6 +378,7 @@ def _run_new(
         targets_stored = 0
         targets_deduped = 0
         parse_errors = 0
+        probe_candidate_keys: list[str] = []
 
         for raw in fetch_result.posts:
             meta = _extract_post_meta(raw)
@@ -245,6 +427,7 @@ def _run_new(
             except Exception:
                 targets = []
                 parse_errors += 1
+            probe_candidate_keys.extend(t.dedupe_key for t in targets)
 
             post_obj = RedditPost(
                 post_id=post_id,
@@ -283,20 +466,23 @@ def _run_new(
             )
 
         conn.commit()
-        return IngestResult(
-            sort="new",
-            subreddit=options.subreddit,
-            pages_fetched=fetch_result.pages_fetched,
-            posts_stored=posts_stored,
-            posts_skipped=posts_skipped,
-            targets_stored=targets_stored,
-            targets_deduped=targets_deduped,
-            parse_errors=parse_errors,
-            stopped_by_cursor=stopped_by_cursor,
-            stopped_by_max_posts=stopped_by_max_posts,
-            replace_cache_done=replace_cache_done,
-            rate_limited=False,
-            error=None,
+        return _with_probe_candidate_keys(
+            IngestResult(
+                sort="new",
+                subreddit=options.subreddit,
+                pages_fetched=fetch_result.pages_fetched,
+                posts_stored=posts_stored,
+                posts_skipped=posts_skipped,
+                targets_stored=targets_stored,
+                targets_deduped=targets_deduped,
+                parse_errors=parse_errors,
+                stopped_by_cursor=stopped_by_cursor,
+                stopped_by_max_posts=stopped_by_max_posts,
+                replace_cache_done=replace_cache_done,
+                rate_limited=False,
+                error=None,
+            ),
+            probe_candidate_keys,
         )
     except sqlite3.Error as e:
         conn.rollback()
@@ -330,6 +516,7 @@ def _run_top(
         targets_stored = 0
         targets_deduped = 0
         parse_errors = 0
+        probe_candidate_keys: list[str] = []
 
         # Build the scoped state key and migrate legacy "top" row on first use of "top:week".
         # Both writes share conn's transaction — a rollback undoes both atomically.
@@ -382,6 +569,7 @@ def _run_top(
             except Exception:
                 targets = []
                 parse_errors += 1
+            probe_candidate_keys.extend(t.dedupe_key for t in targets)
 
             post_obj = RedditPost(
                 post_id=meta["id"],
@@ -420,20 +608,23 @@ def _run_top(
         )
 
         conn.commit()
-        return IngestResult(
-            sort="top",
-            subreddit=options.subreddit,
-            pages_fetched=fetch_result.pages_fetched,
-            posts_stored=posts_stored,
-            posts_skipped=posts_skipped,
-            targets_stored=targets_stored,
-            targets_deduped=targets_deduped,
-            parse_errors=parse_errors,
-            stopped_by_cursor=False,
-            stopped_by_max_posts=stopped_by_max_posts,
-            replace_cache_done=replace_cache_done,
-            rate_limited=False,
-            error=None,
+        return _with_probe_candidate_keys(
+            IngestResult(
+                sort="top",
+                subreddit=options.subreddit,
+                pages_fetched=fetch_result.pages_fetched,
+                posts_stored=posts_stored,
+                posts_skipped=posts_skipped,
+                targets_stored=targets_stored,
+                targets_deduped=targets_deduped,
+                parse_errors=parse_errors,
+                stopped_by_cursor=False,
+                stopped_by_max_posts=stopped_by_max_posts,
+                replace_cache_done=replace_cache_done,
+                rate_limited=False,
+                error=None,
+            ),
+            probe_candidate_keys,
         )
     except sqlite3.Error as e:
         conn.rollback()
@@ -467,6 +658,7 @@ def _run_search(
         targets_stored = 0
         targets_deduped = 0
         parse_errors = 0
+        probe_candidate_keys: list[str] = []
 
         normalized_q = " ".join(options.query.split()).lower()
         window = options.top_window if options.sort == "top" else "na"
@@ -499,6 +691,7 @@ def _run_search(
             except Exception:
                 targets = []
                 parse_errors += 1
+            probe_candidate_keys.extend(t.dedupe_key for t in targets)
 
             post_obj = RedditPost(
                 post_id=meta["id"],
@@ -536,20 +729,23 @@ def _run_search(
         )
 
         conn.commit()
-        return IngestResult(
-            sort=options.sort,
-            subreddit=options.subreddit,
-            pages_fetched=fetch_result.pages_fetched,
-            posts_stored=posts_stored,
-            posts_skipped=posts_skipped,
-            targets_stored=targets_stored,
-            targets_deduped=targets_deduped,
-            parse_errors=parse_errors,
-            stopped_by_cursor=False,
-            stopped_by_max_posts=stopped_by_max_posts,
-            replace_cache_done=replace_cache_done,
-            rate_limited=False,
-            error=None,
+        return _with_probe_candidate_keys(
+            IngestResult(
+                sort=options.sort,
+                subreddit=options.subreddit,
+                pages_fetched=fetch_result.pages_fetched,
+                posts_stored=posts_stored,
+                posts_skipped=posts_skipped,
+                targets_stored=targets_stored,
+                targets_deduped=targets_deduped,
+                parse_errors=parse_errors,
+                stopped_by_cursor=False,
+                stopped_by_max_posts=stopped_by_max_posts,
+                replace_cache_done=replace_cache_done,
+                rate_limited=False,
+                error=None,
+            ),
+            probe_candidate_keys,
         )
     except sqlite3.Error as e:
         conn.rollback()
@@ -584,6 +780,7 @@ def _run_user(
         targets_stored = 0
         targets_deduped = 0
         parse_errors = 0
+        probe_candidate_keys: list[str] = []
 
         window = options.top_window if options.sort == "top" else "na"
         state_key = f"user:{options.sort}:{window}:{_uname.lower()}"
@@ -624,6 +821,7 @@ def _run_user(
             except Exception:
                 targets = []
                 parse_errors += 1
+            probe_candidate_keys.extend(t.dedupe_key for t in targets)
 
             post_obj = RedditPost(
                 post_id=meta["id"],
@@ -661,20 +859,23 @@ def _run_user(
         )
 
         conn.commit()
-        return IngestResult(
-            sort=options.sort,
-            subreddit=options.subreddit,
-            pages_fetched=fetch_result.pages_fetched,
-            posts_stored=posts_stored,
-            posts_skipped=posts_skipped,
-            targets_stored=targets_stored,
-            targets_deduped=targets_deduped,
-            parse_errors=parse_errors,
-            stopped_by_cursor=False,
-            stopped_by_max_posts=stopped_by_max_posts,
-            replace_cache_done=replace_cache_done,
-            rate_limited=False,
-            error=None,
+        return _with_probe_candidate_keys(
+            IngestResult(
+                sort=options.sort,
+                subreddit=options.subreddit,
+                pages_fetched=fetch_result.pages_fetched,
+                posts_stored=posts_stored,
+                posts_skipped=posts_skipped,
+                targets_stored=targets_stored,
+                targets_deduped=targets_deduped,
+                parse_errors=parse_errors,
+                stopped_by_cursor=False,
+                stopped_by_max_posts=stopped_by_max_posts,
+                replace_cache_done=replace_cache_done,
+                rate_limited=False,
+                error=None,
+            ),
+            probe_candidate_keys,
         )
     except sqlite3.Error as e:
         conn.rollback()
@@ -772,9 +973,11 @@ def run_ingest(options: IngestOptions, db_path: Optional[Path] = None) -> Ingest
 
     # --- Dispatch ---
     if options.mode == "search":
-        return _run_search(options, fetch_result, db_path, now_str, replace_cache_done)
-    if options.mode == "user":
-        return _run_user(options, fetch_result, db_path, now_str, replace_cache_done)
-    if options.sort == "new":
-        return _run_new(options, fetch_result, db_path, now_str, replace_cache_done)
-    return _run_top(options, fetch_result, db_path, now_str, replace_cache_done)
+        result = _run_search(options, fetch_result, db_path, now_str, replace_cache_done)
+    elif options.mode == "user":
+        result = _run_user(options, fetch_result, db_path, now_str, replace_cache_done)
+    elif options.sort == "new":
+        result = _run_new(options, fetch_result, db_path, now_str, replace_cache_done)
+    else:
+        result = _run_top(options, fetch_result, db_path, now_str, replace_cache_done)
+    return _finalize_result_with_optional_probe(options, result, db_path)

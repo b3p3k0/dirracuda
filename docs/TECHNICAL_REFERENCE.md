@@ -217,6 +217,7 @@ Reddit experimental UI settings currently persisted in `gui_settings.json`:
 - `reddit_grab.parse_body`
 - `reddit_grab.include_nsfw`
 - `reddit_grab.replace_cache`
+- `reddit_grab.bulk_probe_enabled`
 
 Dorkbook UI settings currently persisted in `gui_settings.json`:
 
@@ -731,7 +732,7 @@ Dirracuda now also supports one-time targeted startup import of resolvable host 
 
 Tables:
 - `reddit_posts` — one row per Reddit post (`post_id` PK), with `source_sort` values `new`, `top`, `search`, or `user`
-- `reddit_targets` — extracted targets from post text/title, deduped by unique `dedupe_key`
+- `reddit_targets` — extracted targets from post text/title, deduped by unique `dedupe_key`; stores probe summary fields and optional `probe_snapshot_json` for full probe-tree carry-forward
 - `reddit_ingest_state` — per-mode state rows keyed by `(subreddit, sort_mode)`
 
 Current `sort_mode` keys:
@@ -964,7 +965,8 @@ Reddit ingest entry path:
 ```
 Dashboard -> Experimental tab -> Open Reddit Grab
   -> RedditGrabDialog -> run_ingest(options) on worker thread
-  -> result dialog (counts, dedupe, rate-limit errors)
+  -> optional explicit bulk probe pass for current-run HTTP/HTTPS/FTP targets
+  -> result dialog (counts, dedupe, probe totals, rate-limit errors)
 ```
 
 Reddit Post DB entry path:
@@ -972,7 +974,11 @@ Reddit Post DB entry path:
 ```
 Dashboard -> Experimental tab -> Open Reddit Post DB
   -> RedditBrowserWindow (reads ~/.dirracuda/data/experimental/reddit_od.db)
+  -> "Probe Selected" stores cacheable probe summaries and full snapshots in reddit_targets
   -> "Add to dirracuda DB" promotes SMB/FTP/HTTP rows directly to the main DB
+  -> cacheable Reddit probe summaries and full snapshots are copied into main probe tables
+  -> double-click opens a read-only row details view from sidecar metadata and stored probe snapshots
+  -> unknown-protocol rows are skipped with explicit Cannot promote/probe messages
 ```
 
 Reddit modes exposed in `RedditGrabDialog`:

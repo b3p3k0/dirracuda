@@ -65,6 +65,8 @@ def _make_dialog() -> RedditGrabDialog:
     d.include_nsfw_var.get.return_value = False
     d.replace_cache_var = MagicMock()
     d.replace_cache_var.get.return_value = False
+    d.bulk_probe_var = MagicMock()
+    d.bulk_probe_var.get.return_value = False
     d.dialog = MagicMock()
     d.settings = None
     return d
@@ -132,6 +134,14 @@ def test_validate_new_sort_carries_top_window_field():
     assert result is not None
     assert result.sort == "new"
     assert result.top_window == "week"
+
+
+def test_validate_passes_bulk_probe_flag():
+    d = _make_dialog()
+    d.bulk_probe_var.get.return_value = True
+    result = d._validate()
+    assert result is not None
+    assert result.bulk_probe_enabled is True
 
 
 # ---------------------------------------------------------------------------
@@ -383,6 +393,13 @@ def test_load_settings_bool_string_false_coerced_correctly():
     d.parse_body_var.set.assert_called_with(False)
 
 
+def test_load_settings_restores_bulk_probe_flag():
+    d = _make_dialog()
+    d.settings = _make_settings_mock({'reddit_grab.bulk_probe_enabled': 'true'})
+    d._load_settings()
+    d.bulk_probe_var.set.assert_called_with(True)
+
+
 # ---------------------------------------------------------------------------
 # Settings persistence — _save_settings
 # ---------------------------------------------------------------------------
@@ -394,14 +411,15 @@ def test_save_settings_no_op_when_settings_none():
     d._save_settings()  # must not raise
 
 
-def test_save_settings_writes_all_nine_fields():
-    """_save_settings calls set_setting exactly 9 times."""
+def test_save_settings_writes_all_ten_fields():
+    """_save_settings calls set_setting exactly 10 times."""
     d = _make_dialog()
     sm = MagicMock()
     d.settings = sm
     d.max_posts_var.get.return_value = "75"
     d._save_settings()
-    assert sm.set_setting.call_count == 9
+    assert sm.set_setting.call_count == 10
+    sm.set_setting.assert_any_call('reddit_grab.bulk_probe_enabled', False)
 
 
 def test_on_run_calls_save_settings_before_callback(monkeypatch):

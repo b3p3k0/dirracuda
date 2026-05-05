@@ -136,6 +136,18 @@ DEFAULT_GUI_SETTINGS = {
     'runtime_warnings': {
         'tmpfs_legacy_mount_dismissed': False,
     },
+    'reddit_grab': {
+        'mode': 'feed',
+        'sort': 'new',
+        'top_window': 'week',
+        'query': '',
+        'username': '',
+        'max_posts': 50,
+        'parse_body': True,
+        'include_nsfw': False,
+        'replace_cache': False,
+        'bulk_probe_enabled': False
+    },
     'backend': {
         'mock_mode': False,
         'backend_path': '.',

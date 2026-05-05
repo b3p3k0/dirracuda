@@ -73,6 +73,16 @@ def _make_raw_row(
     host: str = "example.com",
     target_raw: str = "http://example.com",
     dedupe_key: str = "dk",
+    probe_status: str = "unprobed",
+    probe_indicator_matches: int = 0,
+    probe_preview: str | None = None,
+    probe_checked_at: str | None = None,
+    probe_error: str | None = None,
+    probe_snapshot_json: str | None = None,
+    post_title: str = "Post title",
+    post_created_utc: float = 1_700_000_000.0,
+    source_sort: str = "new",
+    last_seen_at: str = "2026-01-01 00:00:00",
 ) -> dict:
     return dict(
         id=id_,
@@ -87,6 +97,16 @@ def _make_raw_row(
         host=host,
         target_raw=target_raw,
         dedupe_key=dedupe_key,
+        probe_status=probe_status,
+        probe_indicator_matches=probe_indicator_matches,
+        probe_preview=probe_preview,
+        probe_checked_at=probe_checked_at,
+        probe_error=probe_error,
+        probe_snapshot_json=probe_snapshot_json,
+        post_title=post_title,
+        post_created_utc=post_created_utc,
+        source_sort=source_sort,
+        last_seen_at=last_seen_at,
     )
 
 
@@ -126,14 +146,20 @@ class _CaptureTree:
     def set_selection(self, iid: str) -> None:
         self._selection = (iid,)
 
-    def selection_set(self, iid: str) -> None:
-        self._selection = (iid,)
+    def selection_set(self, *iids: str) -> None:
+        self._selection = tuple(iids)
 
     def set_identify_row(self, y: int, iid: str) -> None:
         self._row_for_y[y] = iid
 
     def identify_row(self, y: int) -> str:
         return self._row_for_y.get(y, "")
+
+    def identify_region(self, x: int, y: int) -> str:
+        return "cell"
+
+    def exists(self, iid: str) -> bool:
+        return iid in self.visible_iids
 
     def bind(self, sequence, callback=None, add=None):
         self._bind_counter += 1
@@ -188,6 +214,7 @@ def _make_win(monkeypatch=None) -> RedditBrowserWindow:
     win._filter_var = _StrVar()
     win._add_record_callback = None
     win._promote_record_callback = None
+    win._settings_manager = None
     return win
 
 
@@ -358,6 +385,141 @@ class TestSelectedRow:
         win._row_by_iid["42"] = row
         win.tree.set_selection("42")
         assert win._selected_row() is row
+
+
+# ---------------------------------------------------------------------------
+# Group C2 — details and probe actions
+# ---------------------------------------------------------------------------
+
+class TestDetailsAndProbe:
+
+    def test_format_target_details_renders_probe_snapshot_tree(self):
+        win = _make_win()
+        row = _make_raw_row(
+            1,
+            probe_status="clean",
+            probe_preview="pub,[[loose files]]",
+            probe_checked_at="2026-05-03T10:20:30",
+            probe_snapshot_json=(
+                '{"run_at": "2026-05-03T10:20:30", '
+                '"shares": [{"share": "http_root", '
+                '"root_files": ["index.html"], '
+                '"directories": [{"name": "pub", "files": ["readme.txt"]}]}]}'
+            ),
+        )
+
+        text = win._format_target_details(row)
+
+        assert "Reddit Target Details" in text
+        assert "Probe Snapshot" in text
+        assert "pub/" in text
+        assert "readme.txt" in text
+        assert "index.html" in text
+
+    def test_double_click_selects_row_and_opens_details(self, monkeypatch):
+        win = _make_win()
+        row = _make_raw_row(1)
+        win._row_by_iid["1"] = row
+        win.tree.set_identify_row(15, "1")
+        opened = []
+        monkeypatch.setattr(win, "_show_target_details", lambda r: opened.append(r))
+
+        win._on_double_click(SimpleNamespace(x=3, y=15))
+
+        assert opened == [row]
+        assert win.tree.selection() == ("1",)
+
+    def test_on_probe_selected_skips_unknown_protocol(self, monkeypatch):
+        win = _make_win()
+        row = _make_raw_row(1, protocol="unknown", host="example.com")
+        win._row_by_iid["1"] = row
+        win.tree.set_selection("1")
+        info_calls = []
+        monkeypatch.setattr(
+            "gui.components.reddit_browser_window.messagebox.showinfo",
+            lambda *a, **k: info_calls.append(a),
+        )
+
+        win._on_probe_selected()
+
+        assert len(info_calls) == 1
+        assert info_calls[0][0] == "Probe skipped"
+        assert "protocol info" in info_calls[0][1]
+
+    def test_on_probe_selected_writes_probe_result(self, monkeypatch):
+        win = _make_win()
+        row = _make_raw_row(
+            1,
+            protocol="http",
+            host="example.com",
+            target_normalized="http://example.com/files",
+        )
+        win._row_by_iid["1"] = row
+        win.tree._items = [("1", [])]
+        win.tree.set_selection("1")
+
+        class _Dialog:
+            window = None
+            def __init__(self, *a, **k): pass
+            def update_progress(self, *a, **k): pass
+            def show(self): pass
+            def mark_finished(self, *a, **k): pass
+
+        class _Registry:
+            def create_task(self, *a, **k): return "task-1"
+            def update_task(self, *a, **k): pass
+            def remove_task(self, *a, **k): pass
+
+        class _Conn:
+            def commit(self): pass
+            def close(self): pass
+
+        updates = []
+        monkeypatch.setattr(
+            "gui.components.reddit_browser_window.BatchStatusDialog",
+            _Dialog,
+        )
+        monkeypatch.setattr(
+            "gui.components.reddit_browser_window.get_running_task_registry",
+            lambda: _Registry(),
+        )
+        monkeypatch.setattr(
+            "gui.components.reddit_browser_window.build_indicator_patterns",
+            lambda _config_path: [],
+        )
+        monkeypatch.setattr(
+            "gui.components.reddit_browser_window.run_sidecar_probe",
+            lambda *_a, **_k: SimpleNamespace(
+                probe_status="clean",
+                probe_indicator_matches=0,
+                probe_preview="pub",
+                probe_checked_at="2026-05-03T10:20:30",
+                probe_error=None,
+                probe_snapshot_payload={"shares": []},
+            ),
+        )
+        monkeypatch.setattr(
+            "gui.components.reddit_browser_window.store.init_db",
+            lambda _path: None,
+        )
+        monkeypatch.setattr(
+            "gui.components.reddit_browser_window.store.open_connection",
+            lambda _path: _Conn(),
+        )
+        monkeypatch.setattr(
+            "gui.components.reddit_browser_window.store.update_target_probe",
+            lambda *a, **k: updates.append((a, k)),
+        )
+        load_calls = []
+        monkeypatch.setattr(win, "_load_rows", lambda: load_calls.append(True))
+
+        win._on_probe_selected()
+
+        assert len(updates) == 1
+        assert updates[0][1]["probe_status"] == "clean"
+        assert updates[0][1]["probe_preview"] == "pub"
+        assert updates[0][1]["probe_snapshot_payload"] == {"shares": []}
+        assert load_calls == [True]
 
 
 # ---------------------------------------------------------------------------
@@ -601,6 +763,8 @@ class TestAddToDb:
         assert result["scheme"] == "http"
         assert result["_probe_host_hint"] == "example.com"
         assert result["_probe_path_hint"] == "/files/"
+        assert result["_probe_cache"]["status"] == "unprobed"
+        assert result["_probe_snapshot_source"] == "sidecar:reddit"
 
     def test_build_prefill_https_with_explicit_port(self):
         win = _make_win()
@@ -620,7 +784,12 @@ class TestAddToDb:
         row = _make_raw_row(1, protocol="ftp", host="example.com",
                             target_normalized="ftp://example.com/pub/")
         result = win._build_prefill(row)
-        assert result == {"host_type": "F", "host": "example.com", "port": None, "scheme": None}
+        assert result is not None
+        assert result["host_type"] == "F"
+        assert result["host"] == "example.com"
+        assert result["port"] is None
+        assert result["scheme"] is None
+        assert result["_probe_snapshot_source"] == "sidecar:reddit"
 
     def test_build_prefill_ftp_with_port(self):
         win = _make_win()
@@ -645,17 +814,47 @@ class TestAddToDb:
         win = _make_win()
         row = _make_raw_row(1, protocol="smb", host="example.com",
                             target_normalized="smb://example.com/share")
-        assert win._build_prefill(row) == {
-            "host_type": "S",
-            "host": "example.com",
-            "port": None,
-            "scheme": None,
-        }
+        result = win._build_prefill(row)
+        assert result is not None
+        assert result["host_type"] == "S"
+        assert result["host"] == "example.com"
+        assert result["port"] is None
+        assert result["scheme"] is None
 
     def test_build_prefill_unknown_protocol_returns_none(self):
         win = _make_win()
         row = _make_raw_row(1, protocol="unknown", host="example.com")
         assert win._build_prefill(row) is None
+
+    def test_build_prefill_includes_probe_snapshot_artifact(self):
+        win = _make_win()
+        row = _make_raw_row(
+            1,
+            protocol="http",
+            host="1.2.3.4",
+            target_normalized="http://1.2.3.4/files/",
+            probe_status="clean",
+            probe_indicator_matches=0,
+            probe_preview="pub",
+            probe_checked_at="2026-05-03T10:20:30",
+            probe_snapshot_json='{"run_at": "2026-05-03T10:20:30", "shares": []}',
+        )
+
+        result = win._build_prefill(row)
+
+        assert result is not None
+        assert result["_probe_cache"] == {
+            "status": "clean",
+            "indicator_matches": 0,
+            "preview": "pub",
+            "checked_at": "2026-05-03T10:20:30",
+            "error": None,
+        }
+        assert result["_probe_snapshot"] == {
+            "run_at": "2026-05-03T10:20:30",
+            "shares": [],
+        }
+        assert result["_probe_snapshot_source"] == "sidecar:reddit"
 
     def test_on_add_to_db_no_callback_shows_info(self, monkeypatch):
         win = _make_win()

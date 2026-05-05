@@ -10,6 +10,7 @@ Transaction ownership:
     The caller is responsible for BEGIN / commit / rollback.
 """
 
+import json
 import sqlite3
 from pathlib import Path
 from typing import List, Optional
@@ -48,6 +49,12 @@ CREATE TABLE IF NOT EXISTS reddit_targets (
     parse_confidence  TEXT,
     created_at        TEXT    NOT NULL,
     dedupe_key        TEXT    NOT NULL UNIQUE,
+    probe_status      TEXT    NOT NULL DEFAULT 'unprobed',
+    probe_indicator_matches INTEGER NOT NULL DEFAULT 0,
+    probe_preview     TEXT,
+    probe_checked_at  TEXT,
+    probe_error       TEXT,
+    probe_snapshot_json TEXT,
     FOREIGN KEY (post_id) REFERENCES reddit_posts(post_id)
 )
 """
@@ -72,13 +79,24 @@ _REQUIRED_COLUMNS = {
     "reddit_targets": {
         "id", "post_id", "target_raw", "target_normalized",
         "host", "protocol", "notes", "parse_confidence",
-        "created_at", "dedupe_key",
+        "created_at", "dedupe_key", "probe_status",
+        "probe_indicator_matches", "probe_preview", "probe_checked_at",
+        "probe_error", "probe_snapshot_json",
     },
     "reddit_ingest_state": {
         "subreddit", "sort_mode", "last_post_created_utc",
         "last_post_id", "last_scrape_time",
     },
 }
+
+_PROBE_COLUMN_ALTERS = (
+    "ALTER TABLE reddit_targets ADD COLUMN probe_status TEXT NOT NULL DEFAULT 'unprobed'",
+    "ALTER TABLE reddit_targets ADD COLUMN probe_indicator_matches INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE reddit_targets ADD COLUMN probe_preview TEXT",
+    "ALTER TABLE reddit_targets ADD COLUMN probe_checked_at TEXT",
+    "ALTER TABLE reddit_targets ADD COLUMN probe_error TEXT",
+    "ALTER TABLE reddit_targets ADD COLUMN probe_snapshot_json TEXT",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -118,7 +136,22 @@ def init_db(path: Optional[Path] = None) -> None:
         conn.execute(_DDL_POSTS)
         conn.execute(_DDL_TARGETS)
         conn.execute(_DDL_INGEST_STATE)
+        _ensure_probe_columns(conn)
         conn.commit()
+
+
+def _ensure_probe_columns(conn: sqlite3.Connection) -> None:
+    """
+    Backfill probe columns on older sidecar DBs.
+
+    Safe to call repeatedly; only missing columns are added.
+    """
+    present = {row[1] for row in conn.execute("PRAGMA table_info(reddit_targets)")}
+    for alter_sql in _PROBE_COLUMN_ALTERS:
+        col = alter_sql.split(" ADD COLUMN ", 1)[1].split(" ", 1)[0]
+        if col not in present:
+            conn.execute(alter_sql)
+            present.add(col)
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +304,75 @@ def upsert_targets(conn: sqlite3.Connection, targets: List[RedditTarget]) -> Non
             )
             for t in targets
         ],
+    )
+
+
+def get_targets_by_dedupe_keys(
+    conn: sqlite3.Connection,
+    dedupe_keys: List[str],
+) -> list[dict]:
+    """Return target rows matching dedupe keys, preserving DB row identity."""
+    keys = list(dict.fromkeys(k for k in dedupe_keys if k))
+    if not keys:
+        return []
+
+    rows: list[dict] = []
+    for idx in range(0, len(keys), 500):
+        chunk = keys[idx:idx + 500]
+        placeholders = ",".join("?" for _ in chunk)
+        cursor = conn.execute(
+            f"""
+            SELECT
+                id, post_id, target_raw, target_normalized, host, protocol,
+                notes, parse_confidence, created_at, dedupe_key,
+                probe_status, probe_indicator_matches, probe_preview,
+                probe_checked_at, probe_error, probe_snapshot_json
+              FROM reddit_targets
+             WHERE dedupe_key IN ({placeholders})
+             ORDER BY id ASC
+            """,
+            chunk,
+        )
+        rows.extend(dict(row) for row in cursor.fetchall())
+    return rows
+
+
+def update_target_probe(
+    conn: sqlite3.Connection,
+    target_id: int,
+    probe_status: str,
+    probe_indicator_matches: int,
+    probe_preview: Optional[str],
+    probe_checked_at: Optional[str],
+    probe_error: Optional[str],
+    probe_snapshot_payload: Optional[dict] = None,
+) -> None:
+    """Write probe fields on one reddit_targets row."""
+    snapshot_json = (
+        json.dumps(probe_snapshot_payload, sort_keys=True, default=str)
+        if isinstance(probe_snapshot_payload, dict)
+        else None
+    )
+    conn.execute(
+        """
+        UPDATE reddit_targets
+           SET probe_status = ?,
+               probe_indicator_matches = ?,
+               probe_preview = ?,
+               probe_checked_at = ?,
+               probe_error = ?,
+               probe_snapshot_json = ?
+         WHERE id = ?
+        """,
+        (
+            probe_status,
+            probe_indicator_matches,
+            probe_preview,
+            probe_checked_at,
+            probe_error,
+            snapshot_json,
+            target_id,
+        ),
     )
 
 

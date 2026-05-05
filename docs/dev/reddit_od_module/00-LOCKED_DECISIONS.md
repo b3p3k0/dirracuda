@@ -15,7 +15,7 @@ Build an experimental, GUI-driven Reddit feed ingestion module for `r/opendirect
 
 ## Guardrails
 1. Do not integrate with SMB/FTP/HTTP scan pipelines.
-2. Do not auto-probe or auto-extract anything from ingested targets.
+2. Do not implicitly probe or extract ingested targets. Probing is allowed only from an explicit user action: `Probe Selected` in Reddit Post DB or the opt-in `Run probe on results` Reddit Grab setting.
 3. Keep all Reddit data untrusted and analyst-triggered only.
 4. Keep changes surgical and reversible.
 5. No commits unless HI explicitly says `commit`.

@@ -370,3 +370,45 @@ class TestWorkerExceptionPath:
 
         assert dash._reddit_grab_running is False
         assert thread_started == []
+
+    def test_handle_reddit_grab_start_populates_probe_settings(self, monkeypatch):
+        """Bulk Reddit probes use the same active config and probe worker setting."""
+        dash = _make_dash()
+        dash.settings_manager = MagicMock()
+        dash.settings_manager.get_smbseek_config_path.return_value = "/tmp/config.json"
+        dash.settings_manager.get_setting.return_value = 5
+        started = []
+
+        monkeypatch.setattr(dash, "_check_external_scans", lambda: None, raising=False)
+        monkeypatch.setattr(
+            "gui.components.dashboard.threading.Thread",
+            lambda **kw: type("T", (), {"start": lambda self: started.append(kw)})(),
+        )
+
+        options = _make_options()
+        options.bulk_probe_enabled = True
+        dash._handle_reddit_grab_start(options)
+
+        assert options.probe_config_path == "/tmp/config.json"
+        assert options.probe_worker_count == 5
+        assert started
+
+    def test_on_reddit_grab_done_includes_probe_summary(self, monkeypatch):
+        dash = _make_dash()
+        messages = []
+        monkeypatch.setattr(
+            "gui.components.dashboard.messagebox.showinfo",
+            lambda title, message, **_k: messages.append((title, message)),
+        )
+
+        dash._on_reddit_grab_done(_make_ingest_result(
+            probe_enabled=True,
+            probe_total=3,
+            probe_clean=1,
+            probe_issue=1,
+            probe_unprobed=0,
+            probe_skipped=1,
+        ))
+
+        assert "Probe: 3 attempted" in messages[0][1]
+        assert "1 skipped" in messages[0][1]
