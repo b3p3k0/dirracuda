@@ -41,6 +41,14 @@ class _AfterQueue:
             callback()
 
 
+class _Label:
+    def __init__(self) -> None:
+        self.kwargs = {}
+
+    def configure(self, **kwargs) -> None:
+        self.kwargs.update(kwargs)
+
+
 def _make_runtime_dashboard() -> DashboardWidget:
     dash = _make_dashboard()
     dash.parent = _AfterQueue()
@@ -49,6 +57,31 @@ def _make_runtime_dashboard() -> DashboardWidget:
     dash.shodan_status_text = _Var()
     dash._shodan_balance_refresh_generation = 0
     dash._compose_runtime_status_lines = lambda: ("clam status", "tmpfs status")
+    return dash
+
+
+def _make_summary_dashboard() -> DashboardWidget:
+    dash = _make_dashboard()
+    dash.parent = _AfterQueue()
+    dash.status_text = _Var("old summary")
+    dash.update_time_label = _Label()
+    dash.size_enforcement_callback = None
+    dash._status_static_mode = True
+    dash._status_summary_initialized = True
+    dash._update_runtime_status_display = lambda: None
+    dash.db_reader = type("_Reader", (), {})()
+    dash.db_reader.clear_cache_calls = 0
+
+    def _clear_cache():
+        dash.db_reader.clear_cache_calls += 1
+
+    dash.db_reader.clear_cache = _clear_cache
+    dash.db_reader.get_dashboard_summary = lambda: {
+        "total_servers": 12,
+        "servers_with_accessible_shares": 5,
+        "total_shares": 34,
+        "last_scan": "2026-05-06T09:10:00",
+    }
     return dash
 
 
@@ -94,6 +127,47 @@ def test_compose_runtime_status_lines_backend_invalid_or_missing_defaults_to_aut
 
     assert invalid_line == "✔ ClamAV Integration"
     assert missing_line == "✔ ClamAV Integration"
+
+
+def test_refresh_after_database_change_updates_locked_summary_without_runtime_refresh(monkeypatch):
+    dash = _make_summary_dashboard()
+    runtime_calls = []
+    monkeypatch.setattr(dash, "_update_runtime_status_display", lambda: runtime_calls.append(True))
+
+    dash.refresh_after_database_change(refresh_runtime_status=False)
+
+    assert dash.db_reader.clear_cache_calls == 1
+    assert "DB: 12 servers, 5 with accessible shares, 34 total shares" in dash.status_text.get()
+    assert dash.update_time_label.kwargs["text"].startswith("Updated: ")
+    assert dash._status_static_mode is True
+    assert dash._status_summary_initialized is True
+    assert runtime_calls == []
+
+
+def test_refresh_after_database_change_can_refresh_runtime_status(monkeypatch):
+    dash = _make_summary_dashboard()
+    runtime_calls = []
+    monkeypatch.setattr(dash, "_update_runtime_status_display", lambda: runtime_calls.append(True))
+
+    dash.refresh_after_database_change(refresh_runtime_status=True)
+
+    assert runtime_calls == [True]
+
+
+def test_refresh_after_scan_completion_uses_database_change_refresh(monkeypatch):
+    dash = _make_dashboard()
+    dash._status_refresh_pending = True
+    calls = []
+    monkeypatch.setattr(
+        dash,
+        "refresh_after_database_change",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    dash._refresh_after_scan_completion()
+
+    assert calls == [{"refresh_runtime_status": True}]
+    assert dash._status_refresh_pending is False
 
 
 def test_load_clamav_config_prefers_dashboard_active_config_path(tmp_path):

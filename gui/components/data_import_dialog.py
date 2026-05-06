@@ -19,18 +19,21 @@ from pathlib import Path
 from gui.utils.style import get_theme
 from gui.utils.data_import_engine import get_import_engine
 from gui.utils.dialog_helpers import ensure_dialog_focus
+from gui.utils.logging_config import get_logger
 from shared.path_service import get_paths
 
+_logger = get_logger("data_import_dialog")
 
-def open_data_import_dialog(parent: tk.Tk, db_reader) -> None:
+def open_data_import_dialog(parent: tk.Tk, db_reader, on_database_changed: Optional[Callable[[], None]] = None) -> None:
     """
     Open data import dialog.
     
     Args:
         parent: Parent window
         db_reader: Database reader instance (for getting database path)
+        on_database_changed: Optional callback after successful import
     """
-    dialog = DataImportDialog(parent, db_reader)
+    dialog = DataImportDialog(parent, db_reader, on_database_changed=on_database_changed)
 
 
 class DataImportDialog:
@@ -41,16 +44,18 @@ class DataImportDialog:
     and import with progress feedback.
     """
     
-    def __init__(self, parent: tk.Tk, db_reader):
+    def __init__(self, parent: tk.Tk, db_reader, on_database_changed: Optional[Callable[[], None]] = None):
         """
         Initialize data import dialog.
         
         Args:
             parent: Parent window
             db_reader: Database reader instance
+            on_database_changed: Optional callback after successful import
         """
         self.parent = parent
         self.db_reader = db_reader
+        self.on_database_changed = on_database_changed
         self.theme = get_theme()
         
         # Get database path from the database reader
@@ -549,6 +554,7 @@ class DataImportDialog:
                     success_msg += f"\nErrors: {len(stats['errors'])}"
                 
                 messagebox.showinfo("Import Complete", success_msg)
+                self._notify_database_changed()
                 
                 # Close dialog
                 self.dialog.destroy()
@@ -569,6 +575,16 @@ class DataImportDialog:
             except:
                 pass
             messagebox.showerror("Import Error", f"Import failed:\n{str(e)}")
+
+    def _notify_database_changed(self) -> None:
+        """Notify owner that a successful import changed the active database."""
+        callback = getattr(self, "on_database_changed", None)
+        if not callable(callback):
+            return
+        try:
+            callback()
+        except Exception as exc:
+            _logger.warning("Data import database-change callback failed: %s", exc)
     
     def _cancel(self) -> None:
         """Cancel and close dialog."""

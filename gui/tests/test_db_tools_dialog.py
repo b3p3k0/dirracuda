@@ -1,13 +1,16 @@
 """Unit tests for DBToolsDialog import-button state behavior."""
 
 import sys
+import queue
 from pathlib import Path
 from types import SimpleNamespace
 import tkinter as tk
+from unittest.mock import MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from gui.components.db_tools_dialog import DBToolsDialog
+from gui.components.data_import_dialog import DataImportDialog
 
 
 class _StubLabel:
@@ -91,6 +94,40 @@ def test_validate_db_import_new_source_reenables_merge_button():
     assert dlg.merge_button.state == tk.NORMAL
     assert dlg.merge_button.text == "Start Merge"
     assert "validated successfully" in dlg.import_status_label.text.lower()
+
+
+def test_process_operation_queue_invokes_database_changed_callback(monkeypatch):
+    dlg = DBToolsDialog.__new__(DBToolsDialog)
+    dlg.operation_queue = queue.Queue()
+    dlg.operation_queue.put({
+        "type": "complete",
+        "success": True,
+        "message": "done",
+        "refresh_needed": True,
+    })
+    dlg.dialog = SimpleNamespace(winfo_exists=lambda: False)
+    dlg._hide_progress = MagicMock()
+    dlg._lock_import_source_until_changed = MagicMock()
+    dlg._refresh_stats = MagicMock()
+    dlg.on_database_changed = MagicMock()
+    monkeypatch.setattr(
+        "gui.components.db_tools_dialog.messagebox.showinfo",
+        MagicMock(),
+    )
+
+    dlg._process_operation_queue()
+
+    dlg.on_database_changed.assert_called_once()
+    dlg._refresh_stats.assert_called_once()
+
+
+def test_data_import_notify_database_changed_invokes_callback():
+    dlg = DataImportDialog.__new__(DataImportDialog)
+    dlg.on_database_changed = MagicMock()
+
+    dlg._notify_database_changed()
+
+    dlg.on_database_changed.assert_called_once()
 
 
 def test_format_country_distribution_top5_ordered_with_percentages():

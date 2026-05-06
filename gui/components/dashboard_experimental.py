@@ -105,9 +105,22 @@ def _make_sidecar_promote_callback(widget):
         return None
 
     def _promote(prefill):
-        return promote_sidecar_prefill(db_reader, prefill)
+        promotion = promote_sidecar_prefill(db_reader, prefill)
+        _notify_dashboard_database_changed(widget)
+        return promotion
 
     return _promote
+
+
+def _notify_dashboard_database_changed(widget) -> None:
+    """Refresh dashboard DB summary after a successful sidecar promotion."""
+    refresher = getattr(widget, "refresh_after_database_change", None)
+    if not callable(refresher):
+        return
+    try:
+        refresher(refresh_runtime_status=False)
+    except Exception as exc:
+        _logger.warning("Dashboard refresh after sidecar promotion failed: %s", exc)
 
 def _resolve_server_window(widget):
     """Return a live ServerListWindow instance or None (single getter pass)."""

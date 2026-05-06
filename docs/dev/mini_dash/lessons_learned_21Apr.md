@@ -31,3 +31,6 @@ Date: 2026-04-21
 - Dialog liveness checks must support wrapper-style dialogs (`dialog.window.winfo_exists()`), not only raw Tk widgets.
 - Reopen regression test coverage should include hidden wrapper dialogs to protect task-manager double-click behavior.
 - Server-list footer control should align with canonical task UX: `Running Tasks` launcher instead of local `Stop Batch`.
+
+## Wave 1.2 Follow-through (Dashboard DB Summary Refresh)
+- Dashboard DB summary refreshes must go through the shared database-change hook; the static summary gate must be explicitly unlocked for post-write refreshes and re-locked afterward.

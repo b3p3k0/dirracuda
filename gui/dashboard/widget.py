@@ -846,7 +846,7 @@ class DashboardWidget:
         """Return dashboard status indicators to the ready state."""
         self.current_progress_summary = ""
 
-    def _refresh_dashboard_data(self) -> None:
+    def _refresh_dashboard_data(self, *, refresh_runtime_status: bool = True) -> None:
         """
         Refresh all dashboard data from database.
 
@@ -854,7 +854,8 @@ class DashboardWidget:
         across all dashboard components and handles errors gracefully.
         """
         try:
-            self._update_runtime_status_display()
+            if refresh_runtime_status:
+                self._update_runtime_status_display()
 
             # Get dashboard summary
             summary = self.db_reader.get_dashboard_summary()
@@ -973,6 +974,21 @@ class DashboardWidget:
             return
         self.shodan_status_text.set(_format_shodan_status_with_credits(credits))
 
+    def refresh_after_database_change(self, *, refresh_runtime_status: bool = False) -> None:
+        """Refresh dashboard DB summary after a known successful database write."""
+        try:
+            if self.db_reader:
+                try:
+                    self.db_reader.clear_cache()
+                except Exception as exc:
+                    _logger.debug("Dashboard cache clear failed during DB refresh: %s", exc)
+            self._unlock_status_updates()
+            self._refresh_dashboard_data(refresh_runtime_status=refresh_runtime_status)
+        except Exception as e:
+            _logger.warning("Dashboard refresh error after database change: %s", e)
+        finally:
+            self._lock_status_updates()
+
     def _refresh_after_scan_completion(self) -> None:
         """
         Refresh dashboard after scan completion with cache invalidation.
@@ -981,17 +997,11 @@ class DashboardWidget:
         which is critical for displaying updated Recent Discoveries count.
         """
         try:
-            self._unlock_status_updates()
-            # Clear cache to force fresh database queries
-            self.db_reader.clear_cache()
-
-            # Refresh dashboard with new data
-            self._refresh_dashboard_data()
+            self.refresh_after_database_change(refresh_runtime_status=True)
         except Exception as e:
             _logger.warning("Dashboard refresh error after scan completion: %s", e)
             # Continue anyway
         finally:
-            self._lock_status_updates()
             self._status_refresh_pending = False
 
     def _update_status_display(self, summary: Dict[str, Any]) -> None:
@@ -1485,12 +1495,7 @@ class DashboardWidget:
 
     def _refresh_after_db_tools(self) -> None:
         """Refresh dashboard after DB tools operation."""
-        try:
-            if self.db_reader:
-                self.db_reader.clear_cache()
-            self._refresh_dashboard_data()
-        except Exception as e:
-            _logger.warning("Dashboard refresh error after DB tools: %s", e)
+        self.refresh_after_database_change(refresh_runtime_status=False)
 
     def _open_about_dialog(self) -> None:
         dialog = tk.Toplevel(self.parent)

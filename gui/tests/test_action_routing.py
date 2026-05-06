@@ -246,6 +246,7 @@ class _BatchMixinStub(ServerListWindowBatchMixin):
         self.country_listbox = None
         self._pry_unlocked = True
         self._rce_unlocked = True
+        self._notify_database_changed = MagicMock()
 
     def _apply_filters(self, force=False):
         pass
@@ -455,6 +456,51 @@ def test_delete_ftp_only_does_not_clear_smb_probe_cache():
     assert cleared_ips == [], "No probe cache clear for FTP-only delete"
 
 
+def test_delete_complete_notifies_database_changed_when_rows_deleted(monkeypatch):
+    mock_db = MagicMock()
+    stub = _BatchMixinStub(db_reader=mock_db)
+    stub._load_data = MagicMock()
+    stub._apply_filters = MagicMock()
+    stub._set_status = MagicMock()
+    stub._update_action_buttons_state = MagicMock()
+    monkeypatch.setattr(
+        "gui.components.server_list_window.actions.batch_operations.messagebox.showinfo",
+        MagicMock(),
+    )
+
+    future = MagicMock()
+    future.result.return_value = {"deleted_count": 1, "error": None}
+
+    stub._on_delete_complete(future)
+
+    mock_db.clear_cache.assert_called_once()
+    stub._load_data.assert_called_once()
+    stub._apply_filters.assert_called_once_with(force=True)
+    stub._notify_database_changed.assert_called_once()
+
+
+def test_probe_batch_finalize_notifies_database_changed_on_success():
+    stub = _BatchMixinStub()
+    stub.active_jobs = {
+        "probe-1": {
+            "type": "probe",
+            "results": [{"status": "success", "notes": "ok"}],
+            "executor": None,
+        }
+    }
+    stub._remove_batch_running_task = MagicMock()
+    stub._finish_batch_status_dialog = MagicMock()
+    stub._update_action_buttons_state = MagicMock()
+    stub._set_status = MagicMock()
+    stub._flush_pending_refresh = MagicMock()
+    stub._set_table_interaction_enabled = MagicMock()
+    stub._show_batch_summary = MagicMock()
+
+    stub._finalize_batch_job("probe-1", show_summary=False)
+
+    stub._notify_database_changed.assert_called_once()
+
+
 # ---------------------------------------------------------------------------
 # _on_add_record
 # ---------------------------------------------------------------------------
@@ -487,6 +533,7 @@ def test_add_record_success_refreshes_and_selects_visible_row():
     mock_db.clear_cache.assert_called_once()
     stub._load_data.assert_called_once()
     stub._apply_filters.assert_called_once_with(force=True)
+    stub._notify_database_changed.assert_called_once()
     assert stub.tree.selection() == ["S:42"]
     assert "SMB record insert" in stub._set_status.call_args[0][0]
 
@@ -515,6 +562,7 @@ def test_add_record_hidden_by_filters_sets_explicit_note():
     status_msg = stub._set_status.call_args[0][0]
     assert "hidden by current filters" in status_msg
     assert "Show Only Shares >0" in status_msg
+    stub._notify_database_changed.assert_called_once()
 
 
 def test_add_record_probe_enabled_runs_before_upsert_and_persists_cache():

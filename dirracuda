@@ -1148,7 +1148,13 @@ class XSMBSeekGUI:
                     window_data = dict(data or {})
                     window_data["_pry_unlocked"] = self._pry_unlocked
                     window_data["_rce_unlocked"] = self._rce_unlocked
-                    window = open_server_list_window(self.root, self.db_reader, window_data, self.settings_manager)
+                    window = open_server_list_window(
+                        self.root,
+                        self.db_reader,
+                        window_data,
+                        self.settings_manager,
+                        on_database_changed=self._refresh_after_database_change,
+                    )
                     self.drill_down_windows['server_list'] = window
             elif window_type == "config_editor":
                 # Open SMBSeek configuration editor
@@ -1164,7 +1170,11 @@ class XSMBSeekGUI:
                     show_pry_controls=self._pry_unlocked,
                 )
             elif window_type == "data_import":
-                open_data_import_dialog(self.root, self.db_reader)
+                open_data_import_dialog(
+                    self.root,
+                    self.db_reader,
+                    on_database_changed=self._refresh_after_database_change,
+                )
             elif window_type == "recent_activity":
                 server_window = ServerListWindow(
                     self.root,
@@ -1173,6 +1183,7 @@ class XSMBSeekGUI:
                         "_pry_unlocked": self._pry_unlocked,
                         "_rce_unlocked": self._rce_unlocked,
                     },
+                    on_database_changed=self._refresh_after_database_change,
                 )
                 server_window.apply_recent_discoveries_filter()
             else:
@@ -1217,7 +1228,12 @@ class XSMBSeekGUI:
     def _refresh_dashboard(self) -> None:
         """Manually refresh dashboard data."""
         if self.dashboard:
-            self.dashboard._refresh_dashboard_data()
+            self.dashboard.refresh_after_database_change(refresh_runtime_status=True)
+
+    def _refresh_after_database_change(self) -> None:
+        """Refresh dashboard summary after a successful DB write."""
+        if self.dashboard:
+            self.dashboard.refresh_after_database_change(refresh_runtime_status=False)
 
     def _start_db_unification_tasks(self) -> None:
         """Run startup DB unification in the background (non-blocking)."""
@@ -1429,7 +1445,7 @@ class XSMBSeekGUI:
                 self.dashboard.backend_interface = self.backend_interface
                 self.dashboard.db_reader = self.db_reader
                 self.dashboard.config_path = str(self.config.get_config_path())
-                self.dashboard._refresh_dashboard_data()
+                self.dashboard.refresh_after_database_change(refresh_runtime_status=True)
                 
         except Exception as e:
             messagebox.showerror(

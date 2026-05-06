@@ -93,6 +93,9 @@ class ServerListWindowBatchOperationsMixin:
         self.db_reader.clear_cache()
         self._load_data()
         self._apply_filters(force=True)
+        notifier = getattr(self, "_notify_database_changed", None)
+        if callable(notifier):
+            notifier()
 
         row_key = result.get("row_key")
         operation = str(result.get("operation") or "upserted").lower()
@@ -1092,6 +1095,9 @@ class ServerListWindowBatchOperationsMixin:
                 self.db_reader.clear_cache()
                 self._load_data()
                 self._apply_filters(force=True)
+                notifier = getattr(self, "_notify_database_changed", None)
+                if callable(notifier):
+                    notifier()
 
             # Clear selection BEFORE re-enabling buttons
             if self.tree:

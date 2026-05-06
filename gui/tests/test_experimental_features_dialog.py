@@ -37,6 +37,7 @@ import tkinter as tk
 from gui.components.experimental_features.reddit_tab import RedditTab
 from gui.components.experimental_features.dorkbook_tab import DorkbookTab
 from gui.components.dashboard import DashboardWidget
+from gui.utils.sidecar_promotion import SidecarPromotionError
 import gui.components.dashboard_experimental as dashboard_experimental
 
 
@@ -239,6 +240,7 @@ def _make_dash():
     dash._server_list_getter = None
     dash._open_drill_down = MagicMock()
     dash.settings_manager = MagicMock()
+    dash.refresh_after_database_change = MagicMock()
     dash.db_reader = MagicMock()
     dash.db_reader.upsert_manual_server_record.return_value = {
         "host_type": "H",
@@ -309,6 +311,25 @@ def test_open_reddit_post_db_with_live_server_window(monkeypatch):
         "scheme": "http",
     })
     assert result["result"]["row_key"] == "H:3"
+    dash.refresh_after_database_change.assert_called_once_with(refresh_runtime_status=False)
+
+
+def test_sidecar_promotion_callback_does_not_refresh_when_promotion_fails(monkeypatch):
+    dash = _make_dash()
+    monkeypatch.setattr(
+        dashboard_experimental,
+        "promote_sidecar_prefill",
+        MagicMock(side_effect=SidecarPromotionError("cannot promote")),
+    )
+
+    callback = dashboard_experimental._make_sidecar_promote_callback(dash)
+
+    try:
+        callback({"host_type": "H", "host": "example.invalid"})
+    except SidecarPromotionError:
+        pass
+
+    dash.refresh_after_database_change.assert_not_called()
 
 
 def test_open_reddit_post_db_fallback_when_no_server_window(monkeypatch):
@@ -621,6 +642,14 @@ def test_open_se_dork_results_db_with_live_server_window(monkeypatch):
     assert callable(calls[0]["promote_record_callback"])
     assert calls[0]["settings_manager"] is dash.settings_manager
     dash._server_list_getter.assert_not_called()
+
+    calls[0]["promote_record_callback"]({
+        "host_type": "H",
+        "host": "1.2.3.4",
+        "port": 80,
+        "scheme": "http",
+    })
+    dash.refresh_after_database_change.assert_called_once_with(refresh_runtime_status=False)
 
 
 def test_open_se_dork_results_db_fallback_when_no_server_window(monkeypatch):
