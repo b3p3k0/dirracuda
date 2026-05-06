@@ -176,7 +176,7 @@ In that case, numeric cost estimates are intentionally suppressed to avoid stale
 | ⚠ Toggle Compromised | Mark/unmark selected servers as likely compromised |
 | 🗑️ Delete Selected | Remove selected servers from the database |
 
-Server List also includes an **Add Record** control (next to `Advanced`) for manually inserting one SMB/FTP/HTTP host row into the active database. Save keeps your current filters unchanged. If the newly added row does not appear, it is usually hidden by an active filter (most commonly `Shares > 0`). Inserted records can then be probed and investigated from the GUI.
+Server List also includes an **Add Record** control (next to `Advanced`) for manually inserting one SMB/FTP/HTTP host row into the active database. Save keeps your current filters unchanged. If the newly added row does not appear, it is usually hidden by an active filter (most commonly `Show Only Shares >0`). Inserted records can then be probed and investigated from the GUI.
 
 ### Probing Shares
 

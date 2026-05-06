@@ -165,6 +165,109 @@ def _servers():
 
 
 # ---------------------------------------------------------------------------
+# Test 0: filter panel UI placement
+# ---------------------------------------------------------------------------
+
+class TestFilterPanelLayout:
+    """Headless layout guard for always-visible Server List filters."""
+
+    def test_shares_filter_is_fulltime_after_exclude_compromised(self, monkeypatch):
+        f = _get_filters()
+
+        class DummyWidget:
+            def __init__(self, parent=None, **kwargs):
+                self.parent = parent
+                self.kwargs = kwargs
+                self.children = []
+                self.pack_calls = []
+                if hasattr(parent, "children"):
+                    parent.children.append(self)
+
+            def pack(self, **kwargs):
+                self.pack_calls.append(kwargs)
+
+            def bind(self, *args, **kwargs):
+                pass
+
+            def config(self, **kwargs):
+                self.kwargs.update(kwargs)
+
+            configure = config
+
+            def set(self, *_args, **_kwargs):
+                pass
+
+            def yview(self, *_args, **_kwargs):
+                pass
+
+        class DummyTheme:
+            def apply_to_widget(self, widget, style):
+                widget.applied_style = style
+
+            def create_styled_label(self, parent, text, style):
+                return DummyWidget(parent, text=text, style=style)
+
+        for widget_name in ("Frame", "Entry", "Button", "Checkbutton", "Scrollbar", "Listbox"):
+            monkeypatch.setattr(f.tk, widget_name, DummyWidget)
+        monkeypatch.setattr(f.ttk, "Combobox", DummyWidget)
+
+        filter_vars = {
+            "search_text": object(),
+            "date_filter": object(),
+            "shares_filter": object(),
+            "favorites_only": object(),
+            "exclude_avoid": object(),
+            "probed_only": object(),
+            "exclude_compromised": object(),
+            "protocol_smb": object(),
+            "protocol_ftp": object(),
+            "protocol_http": object(),
+            "country_filter_text": object(),
+        }
+        callbacks = {
+            "on_search_changed": MagicMock(),
+            "on_clear_search": MagicMock(),
+            "on_favorites_only_changed": MagicMock(),
+            "on_exclude_avoid_changed": MagicMock(),
+            "on_probed_only_changed": MagicMock(),
+            "on_exclude_compromised_changed": MagicMock(),
+            "on_shares_filter_changed": MagicMock(),
+            "on_toggle_mode": MagicMock(),
+            "on_add_record": MagicMock(),
+            "on_save_filter_template": MagicMock(),
+            "on_reset_filters": MagicMock(),
+            "on_delete_filter_template": MagicMock(),
+            "on_filter_template_selected": MagicMock(),
+            "on_date_filter_changed": MagicMock(),
+            "on_protocol_filter_changed": MagicMock(),
+            "on_country_filter_changed": MagicMock(),
+            "on_clear_countries": MagicMock(),
+            "on_country_filter_text_changed": MagicMock(),
+        }
+
+        filter_frame, widget_refs = f.create_filter_panel(
+            DummyWidget(), DummyTheme(), filter_vars, callbacks
+        )
+
+        def walk(widget):
+            yield widget
+            for child in widget.children:
+                yield from walk(child)
+
+        search_frame = filter_frame.children[0]
+        search_texts = [child.kwargs.get("text") for child in search_frame.children]
+        assert search_texts.index("Show Only Shares >0") == (
+            search_texts.index("Exclude compromised") + 1
+        )
+
+        shares_checkbox = widget_refs["shares_filter_checkbox"]
+        assert shares_checkbox.parent is search_frame
+        assert shares_checkbox.kwargs["variable"] is filter_vars["shares_filter"]
+        assert shares_checkbox.kwargs["command"] is callbacks["on_shares_filter_changed"]
+        assert "Shares > 0" not in {widget.kwargs.get("text") for widget in walk(filter_frame)}
+
+
+# ---------------------------------------------------------------------------
 # Test 1: get_selected_server_data uses row_key identity
 # ---------------------------------------------------------------------------
 

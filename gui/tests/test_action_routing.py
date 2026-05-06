@@ -514,7 +514,7 @@ def test_add_record_hidden_by_filters_sets_explicit_note():
     stub._apply_filters.assert_called_once_with(force=True)
     status_msg = stub._set_status.call_args[0][0]
     assert "hidden by current filters" in status_msg
-    assert "Shares > 0" in status_msg
+    assert "Show Only Shares >0" in status_msg
 
 
 def test_add_record_probe_enabled_runs_before_upsert_and_persists_cache():

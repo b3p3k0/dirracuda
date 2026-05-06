@@ -114,7 +114,7 @@ class ServerListWindowBatchOperationsMixin:
 
         hidden_note = (
             f"{type_label} record {operation}: {ip_address}. "
-            f"The row is hidden by current filters (for example, Shares > 0)."
+            f"The row is hidden by current filters (for example, Show Only Shares >0)."
         )
         self._set_status(hidden_note)
         if is_reddit_promotion:
@@ -313,7 +313,7 @@ class ServerListWindowBatchOperationsMixin:
             text=(
                 "Record added.\n\n"
                 "NOTE: it may be hidden by active filters in Server List Browser "
-                "(for example, Shares > 0)."
+                "(for example, Show Only Shares >0)."
             ),
             justify=tk.LEFT,
             wraplength=420,
