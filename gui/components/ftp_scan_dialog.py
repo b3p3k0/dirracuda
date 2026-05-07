@@ -20,9 +20,11 @@ from gui.utils.style import get_theme
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.template_store import TemplateStore
 from gui.components.query_budget_dialog import (
+    _coerce_int as _cap_coerce_int,
+    _credits_for_cap,
     load_query_budget_state,
+    persist_query_budget_state,
     resolve_config_path_from_settings,
-    show_query_budget_dialog,
 )
 from gui.components.scan_preflight import run_preflight
 from gui.components.scan_dialog import ScanDialog
@@ -88,6 +90,7 @@ class FtpScanDialog:
         self.listing_timeout_var = tk.StringVar()
         self.verbose_var = tk.BooleanVar(value=False)
         self.bulk_probe_enabled_var = tk.BooleanVar(value=False)
+        self.ftp_max_results_var = tk.StringVar(value="100")
         self.template_var = tk.StringVar()
         self._template_label_to_slug: Dict[str, str] = {}
         self._selected_template_slug: Optional[str] = None
@@ -229,6 +232,16 @@ class FtpScanDialog:
             self.south_america_var.set(south_america)
         except Exception:
             # Best-effort only; defaults remain in place if settings are unavailable.
+            pass
+
+        try:
+            config_path = resolve_config_path_from_settings(self._settings_manager) or str(self.config_path)
+            _initial = load_query_budget_state(
+                settings_manager=self._settings_manager,
+                config_path=config_path,
+            )
+            self.ftp_max_results_var.set(str(_initial["ftp_max_shodan_results_per_scan"]))
+        except Exception:
             pass
 
     def _persist_dialog_state(self) -> None:
@@ -403,6 +416,7 @@ class FtpScanDialog:
 
         # Left column
         self._create_country_option(left)
+        self._create_max_results_option(left)
         self._create_region_selection(left)
         self._create_api_key_option(left)
 
@@ -673,6 +687,26 @@ class FtpScanDialog:
         )
         hint.configure(font=(self.theme.fonts["small"][0], self.theme.fonts["small"][1], "italic"))
         hint.pack(side=tk.LEFT)
+
+    def _create_max_results_option(self, parent: tk.Frame) -> None:
+        container = tk.Frame(parent)
+        self.theme.apply_to_widget(container, "card")
+        container.pack(fill=tk.X, padx=15, pady=(0, 10))
+
+        self._create_accent_heading(container, "Max Shodan Results").pack(fill=tk.X)
+
+        row = tk.Frame(container)
+        self.theme.apply_to_widget(row, "card")
+        row.pack(fill=tk.X, pady=(5, 0))
+
+        entry = tk.Entry(
+            row,
+            textvariable=self.ftp_max_results_var,
+            width=10,
+            font=self.theme.fonts["body"],
+        )
+        self.theme.apply_to_widget(entry, "entry")
+        entry.pack(side=tk.LEFT)
 
     def _create_region_selection(self, parent: tk.Frame) -> None:
         container = tk.Frame(parent)
@@ -987,10 +1021,6 @@ class FtpScanDialog:
         self.theme.apply_to_widget(btns, "main_window")
         btns.pack(side=tk.RIGHT)
 
-        budget_btn = tk.Button(btns, text="Query Budget...", command=self._open_query_budget_dialog)
-        self.theme.apply_to_widget(budget_btn, "button_secondary")
-        budget_btn.pack(side=tk.LEFT, padx=(0, 10))
-
         cancel_btn = tk.Button(btns, text="Cancel", command=self._cancel)
         self.theme.apply_to_widget(cancel_btn, "button_secondary")
         cancel_btn.pack(side=tk.LEFT, padx=(0, 10))
@@ -1152,17 +1182,23 @@ class FtpScanDialog:
                 # Best-effort only; do not block scan start on settings write failures.
                 pass
 
+        ftp_cap = max(1, _cap_coerce_int(self.ftp_max_results_var.get(), 100, minimum=1, maximum=100000))
+
         config_path = resolve_config_path_from_settings(self._settings_manager) or str(self.config_path)
-        budget_state = load_query_budget_state(
+        cross_proto = load_query_budget_state(
             settings_manager=self._settings_manager,
             config_path=config_path,
         )
-        ftp_budget = max(1, int(budget_state["ftp_max_query_credits_per_scan"]))
+
+        try:
+            persist_query_budget_state(self._settings_manager, {"ftp_max_shodan_results_per_scan": ftp_cap})
+        except Exception:
+            pass
 
         return {
             "protocols": ["ftp"],
             "country": country_param,
-            "max_shodan_results": ftp_budget * 100,
+            "max_shodan_results": ftp_cap,
             "api_key_override": api_key,
             "discovery_max_concurrent_hosts": discovery_concurrency,
             "access_max_concurrent_hosts": access_concurrency,
@@ -1171,9 +1207,12 @@ class FtpScanDialog:
             "listing_timeout": listing_timeout,
             "verbose": verbose,
             "bulk_probe_enabled": bool(self.bulk_probe_enabled_var.get()),
-            "smb_max_query_credits_per_scan": budget_state["smb_max_query_credits_per_scan"],
-            "ftp_max_query_credits_per_scan": budget_state["ftp_max_query_credits_per_scan"],
-            "http_max_query_credits_per_scan": budget_state["http_max_query_credits_per_scan"],
+            "smb_max_shodan_results_per_scan": cross_proto["smb_max_shodan_results_per_scan"],
+            "ftp_max_shodan_results_per_scan": ftp_cap,
+            "http_max_shodan_results_per_scan": cross_proto["http_max_shodan_results_per_scan"],
+            "smb_max_query_credits_per_scan": cross_proto["smb_max_query_credits_per_scan"],
+            "ftp_max_query_credits_per_scan": _credits_for_cap(ftp_cap),
+            "http_max_query_credits_per_scan": cross_proto["http_max_query_credits_per_scan"],
         }
 
     # ------------------------------------------------------------------
@@ -1226,16 +1265,6 @@ class FtpScanDialog:
             ensure_dialog_focus(self.dialog, self.parent)
         except Exception:
             pass
-
-    def _open_query_budget_dialog(self) -> None:
-        """Open shared query budget editor."""
-        config_path = resolve_config_path_from_settings(self._settings_manager) or str(self.config_path)
-        show_query_budget_dialog(
-            parent=self.dialog,
-            theme=self.theme,
-            settings_manager=self._settings_manager,
-            config_path=config_path,
-        )
 
 
 _ACTIVE_FTP_SCAN_DIALOG: Optional[FtpScanDialog] = None

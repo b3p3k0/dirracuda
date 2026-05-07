@@ -217,6 +217,7 @@ Reddit experimental UI settings currently persisted in `gui_settings.json`:
 - `reddit_grab.parse_body`
 - `reddit_grab.include_nsfw`
 - `reddit_grab.replace_cache`
+- `reddit_grab.bulk_probe_enabled`
 
 Dorkbook UI settings currently persisted in `gui_settings.json`:
 
@@ -281,20 +282,26 @@ With `smart_throttling=true`, `throttled_auth_wait()` adjusts the rate-limit del
 
 Progress is reported on the first host, every 10 hosts, and the final host.
 
-**Shodan budget controls (all discovery protocols):**
+**Shodan candidate-cap controls (all discovery protocols):**
 
-- GUI scan dialogs are budget-authoritative (no user-facing `Max Shodan Results` control):
-  - per protocol runtime window is derived as `max_shodan_results = protocol_budget * 100`.
+- GUI scan dialogs are candidate-cap authoritative. Each protocol has an inline **Max Shodan Results** field:
+  - per-protocol runtime window is `max_shodan_results = protocol_candidate_cap`.
+  - internal page budgets are derived as `ceil(protocol_candidate_cap / 100)` so legacy budget guards do not undercut explicit caps.
 - CLI/config-driven flows can still apply explicit `max_results`; in those paths
   `effective_limit = min(max_results, protocol_budget * 100)`.
-- Budget keys:
+- Persisted GUI cap keys:
+  - `query_cap.smb_max_shodan_results_per_scan`
+  - `query_cap.ftp_max_shodan_results_per_scan`
+  - `query_cap.http_max_shodan_results_per_scan`
+- Compatibility budget keys:
   - `query_limits.smb_max_query_credits_per_scan`
   - `query_limits.ftp_max_query_credits_per_scan`
   - `query_limits.http_max_query_credits_per_scan`
 - Legacy SMB alias `query_limits.max_query_credits_per_scan` is still read for backward compatibility.
-- SMB supports adaptive early stop when budget > 1:
+- SMB supports adaptive early stop in config-driven flows when budget > 1:
   - stop once exclusion-passing candidate count reaches `query_limits.min_usable_hosts_target`,
   - or when budget pages are exhausted.
+- GUI-launched SMB scans set the runtime usable-host target above the candidate cap so a cap of 1000 can fetch up to the full 1000 candidates instead of stopping after the first good page.
 - FTP/HTTP use strict page caps (no adaptive top-up in current build).
 
 **Share enumeration** (`commands/access/share_enumerator.py`):
@@ -717,7 +724,7 @@ Dirracuda now also supports one-time targeted startup import of resolvable host 
 
 Tables:
 - `dork_runs` — one row per dork search run (`run_id` PK), with `instance_url`, `query`, `max_results`, `fetched_count`, `deduped_count`, `verified_count`, `status`, `error_message`, `started_at`, `finished_at`
-- `dork_results` — one row per candidate URL per run (`result_id` PK), FK `run_id → dork_runs(run_id)`; deduped per run on `UNIQUE(run_id, url_normalized)`; stores `url`, `url_normalized`, `title`, `snippet`, `source_engine`, `source_engines_json`, `verdict`, `reason_code`, `http_status`, `checked_at`
+- `dork_results` — one row per candidate URL per run (`result_id` PK), FK `run_id → dork_runs(run_id)`; deduped per run on `UNIQUE(run_id, url_normalized)`; stores `url`, `url_normalized`, `title`, `snippet`, `source_engine`, `source_engines_json`, `verdict`, `reason_code`, `http_status`, `checked_at`, probe summary fields, and optional `probe_snapshot_json` for full probe-tree carry-forward
 
 Verdict values: `OPEN_INDEX`, `MAYBE`, `NOISE`, `ERROR`.
 
@@ -731,7 +738,7 @@ Dirracuda now also supports one-time targeted startup import of resolvable host 
 
 Tables:
 - `reddit_posts` — one row per Reddit post (`post_id` PK), with `source_sort` values `new`, `top`, `search`, or `user`
-- `reddit_targets` — extracted targets from post text/title, deduped by unique `dedupe_key`
+- `reddit_targets` — extracted targets from post text/title, deduped by unique `dedupe_key`; stores probe summary fields and optional `probe_snapshot_json` for full probe-tree carry-forward
 - `reddit_ingest_state` — per-mode state rows keyed by `(subreddit, sort_mode)`
 
 Current `sort_mode` keys:
@@ -836,6 +843,39 @@ SearXNG dorking, Reddit ingestion, and Dorkbook do not use this subprocess path.
 | Configuration | Opens config editor |
 | Dark/Light toggle | Switches ttkthemes theme; persisted in `gui_settings.json` |
 | Running Tasks | Opens non-modal task manager for active/queued work; supports monitor reopen via double-click |
+
+#### Keyboard Contract (Phase 1 + Phase 2)
+
+- Dashboard Alt mappings:
+  - `Alt+1` Start Scan
+  - `Alt+2` Server List
+  - `Alt+3` DB Tools
+  - `Alt+4` Experimental
+  - `Alt+5` Config
+  - `Alt+6` About
+  - `Alt+7..0` reserved no-op (consumed, not shown in UI helper text)
+- App-global bindings (via `bind_all`):
+  - `Ctrl/Cmd+Q` quit through existing close-confirm flow
+  - `Ctrl/Cmd+H` open User Manual dialog
+  - `Ctrl/Cmd+T` toggle theme
+- Dialog/window defaults:
+  - `Esc` close/cancel via existing handlers
+  - `Enter` primary action in core forms/dialogs
+  - `Ctrl/Cmd+S` save/apply where supported
+  - `Ctrl/Cmd+W` close non-destructive windows/dialogs
+- Multiline safety rule:
+  - focused `Text` widgets keep newline on plain `Enter`
+  - `Ctrl/Cmd+Enter` submits where submit behavior is available
+- List/tree parity:
+  - Enter maps to existing open/reopen behavior for task/server list surfaces
+- Browser windows (SMB/FTP/HTTP):
+  - `Enter` / `KP_Enter` open selected row (double-click parity)
+  - `BackSpace` / `Alt+Up` parent/up navigation
+  - `F5` / `Ctrl/Cmd+R` refresh current view
+  - `Esc` / `Ctrl/Cmd+W` close browser window
+- File/image viewers:
+  - `Esc` / `Ctrl/Cmd+W` close viewer
+  - `Ctrl/Cmd+S` save to quarantine only when save callback is available
 
 ### 6.5 Server List
 
@@ -949,8 +989,11 @@ Dashboard -> Experimental tab -> Run (dork search)
 ```
 Dashboard -> Experimental tab -> Open Results DB
   -> SeDorkBrowserWindow (reads ~/.dirracuda/data/experimental/se_dork.db)
-  -> optional "Add to dirracuda DB" action if ServerListWindow callback is available
-  -> "Not available" shown if callback is absent (open Server List first to enable it)
+  -> "Add to dirracuda DB" promotes directly to the main DB via DatabaseReader
+  -> multi-select bulk import runs in background with BatchStatusDialog progress/cancel and best-effort summary counts
+  -> cacheable se_dork probe summaries and full snapshots are copied into main probe tables
+  -> double-click opens a read-only row details view from sidecar metadata and stored probe snapshots
+  -> unresolved/non-IPv4 hosts are rejected with an explicit Cannot promote message
 ```
 
 SearXNG preflight checks (`experimental/se_dork/client.py`):
@@ -962,7 +1005,8 @@ Reddit ingest entry path:
 ```
 Dashboard -> Experimental tab -> Open Reddit Grab
   -> RedditGrabDialog -> run_ingest(options) on worker thread
-  -> result dialog (counts, dedupe, rate-limit errors)
+  -> optional explicit bulk probe pass for current-run HTTP/HTTPS/FTP targets
+  -> result dialog (counts, dedupe, probe totals, rate-limit errors)
 ```
 
 Reddit Post DB entry path:
@@ -970,7 +1014,12 @@ Reddit Post DB entry path:
 ```
 Dashboard -> Experimental tab -> Open Reddit Post DB
   -> RedditBrowserWindow (reads ~/.dirracuda/data/experimental/reddit_od.db)
-  -> optional "Add to dirracuda DB" action if ServerListWindow callback is available
+  -> "Probe Selected" stores cacheable probe summaries and full snapshots in reddit_targets
+  -> "Add to dirracuda DB" promotes SMB/FTP/HTTP rows directly to the main DB
+  -> multi-select bulk import runs in background with BatchStatusDialog progress/cancel and best-effort summary counts
+  -> cacheable Reddit probe summaries and full snapshots are copied into main probe tables
+  -> double-click opens a read-only row details view from sidecar metadata and stored probe snapshots
+  -> unknown-protocol rows are skipped with explicit Cannot promote/probe messages
 ```
 
 Reddit modes exposed in `RedditGrabDialog`:

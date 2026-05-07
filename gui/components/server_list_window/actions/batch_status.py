@@ -268,6 +268,10 @@ class ServerListWindowBatchStatusMixin:
             self._update_action_buttons_state()
             self._set_status(f"{job_type.title()} batch finished")
             self._flush_pending_refresh()
+            if job_type == "probe" and any(r.get("status") == "success" for r in results):
+                notifier = getattr(self, "_notify_database_changed", None)
+                if callable(notifier):
+                    notifier()
             self._set_table_interaction_enabled(True)
             if results and show_summary:
                 self._show_batch_summary(job_type, results)

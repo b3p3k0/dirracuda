@@ -301,6 +301,7 @@ class SmbBrowserWindow(UnifiedBrowserCore):
 
         for btn in (self.btn_up, self.btn_refresh, self.btn_view, self.btn_download, self.btn_cancel):
             btn.pack(side=tk.LEFT, padx=5)
+        self._add_shortcut_hint(button_frame)
 
         # Download tuning controls (workers + large threshold)
         tuning_frame = tk.Frame(self.window)
@@ -344,6 +345,7 @@ class SmbBrowserWindow(UnifiedBrowserCore):
         tree_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         self._adapt_setup_treeview(tree_frame)
         self.tree.bind("<Double-1>", self._on_item_double_click)
+        self._bind_keyboard_shortcuts()
 
         self.status_var = tk.StringVar(value="Ready.")
         status = tk.Label(self.window, textvariable=self.status_var, anchor="w")

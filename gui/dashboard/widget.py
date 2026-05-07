@@ -38,11 +38,18 @@ from gui.components.scan_results_dialog import show_scan_results_dialog
 from gui.components.batch_summary_dialog import show_batch_summary_dialog
 from gui.utils.settings_manager import get_settings_manager
 from gui.utils.dialog_helpers import ensure_dialog_focus
+from gui.utils.keybindings import (
+    add_shortcut_hint,
+    bind_close_shortcuts,
+    bind_save_shortcuts,
+    bind_submit_shortcuts,
+)
 from gui.components import dashboard_logs
 from gui.components import dashboard_scan_output_dialog
 from gui.components import dashboard_status
 from gui.components import dashboard_scan
 from gui.components import dashboard_batch_ops
+from gui.components.help_manual_dialog import open_help_manual_dialog
 from gui.components.running_tasks_window import RunningTasksWindow
 from gui.utils.running_tasks import (
     RunningTaskRegistry,
@@ -311,6 +318,7 @@ class DashboardWidget:
 
         # Compact status content
         self._build_progress_section()
+        self._build_keyboard_hint_footer()
 
         # Status bar (fixed at bottom)
         self._build_status_bar()
@@ -474,6 +482,15 @@ class DashboardWidget:
         self.progress_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
 
         self._build_status_footer()
+
+    def _build_keyboard_hint_footer(self) -> None:
+        """Place keyboard helper text below status box content."""
+        self.theme.create_styled_label(
+            self.main_frame,
+            "Alt+1..6 launch dashboard actions  •  Ctrl/Cmd+T theme  •  Ctrl/Cmd+H help  •  Ctrl/Cmd+Q quit",
+            "small",
+            fg=self.theme.colors["text_secondary"],
+        ).pack(anchor="w", pady=(0, 4))
 
     def _configure_log_tags(self) -> None:
         dashboard_logs.configure_log_tags(self)
@@ -846,7 +863,7 @@ class DashboardWidget:
         """Return dashboard status indicators to the ready state."""
         self.current_progress_summary = ""
 
-    def _refresh_dashboard_data(self) -> None:
+    def _refresh_dashboard_data(self, *, refresh_runtime_status: bool = True) -> None:
         """
         Refresh all dashboard data from database.
 
@@ -854,7 +871,8 @@ class DashboardWidget:
         across all dashboard components and handles errors gracefully.
         """
         try:
-            self._update_runtime_status_display()
+            if refresh_runtime_status:
+                self._update_runtime_status_display()
 
             # Get dashboard summary
             summary = self.db_reader.get_dashboard_summary()
@@ -973,6 +991,21 @@ class DashboardWidget:
             return
         self.shodan_status_text.set(_format_shodan_status_with_credits(credits))
 
+    def refresh_after_database_change(self, *, refresh_runtime_status: bool = False) -> None:
+        """Refresh dashboard DB summary after a known successful database write."""
+        try:
+            if self.db_reader:
+                try:
+                    self.db_reader.clear_cache()
+                except Exception as exc:
+                    _logger.debug("Dashboard cache clear failed during DB refresh: %s", exc)
+            self._unlock_status_updates()
+            self._refresh_dashboard_data(refresh_runtime_status=refresh_runtime_status)
+        except Exception as e:
+            _logger.warning("Dashboard refresh error after database change: %s", e)
+        finally:
+            self._lock_status_updates()
+
     def _refresh_after_scan_completion(self) -> None:
         """
         Refresh dashboard after scan completion with cache invalidation.
@@ -981,17 +1014,11 @@ class DashboardWidget:
         which is critical for displaying updated Recent Discoveries count.
         """
         try:
-            self._unlock_status_updates()
-            # Clear cache to force fresh database queries
-            self.db_reader.clear_cache()
-
-            # Refresh dashboard with new data
-            self._refresh_dashboard_data()
+            self.refresh_after_database_change(refresh_runtime_status=True)
         except Exception as e:
             _logger.warning("Dashboard refresh error after scan completion: %s", e)
             # Continue anyway
         finally:
-            self._lock_status_updates()
             self._status_refresh_pending = False
 
     def _update_status_display(self, summary: Dict[str, Any]) -> None:
@@ -1311,9 +1338,14 @@ class DashboardWidget:
         save_btn = tk.Button(btn_row, text="Save & Continue", command=_save)
         self.theme.apply_to_widget(save_btn, "button_primary")
         save_btn.pack(side=tk.RIGHT)
-
-        key_entry.bind("<Return>", lambda _e: _save())
-        dialog.bind("<Escape>", lambda _e: _cancel())
+        add_shortcut_hint(
+            btn_row,
+            self.theme,
+            "Enter save and continue  •  Esc cancel  •  Ctrl/Cmd+S save  •  Esc/Ctrl+W/Cmd+W close",
+        )
+        bind_submit_shortcuts(dialog, _save)
+        bind_save_shortcuts(dialog, _save)
+        bind_close_shortcuts(dialog, _cancel)
         key_entry.focus_set()
 
         ensure_dialog_focus(dialog, self.parent)
@@ -1485,12 +1517,7 @@ class DashboardWidget:
 
     def _refresh_after_db_tools(self) -> None:
         """Refresh dashboard after DB tools operation."""
-        try:
-            if self.db_reader:
-                self.db_reader.clear_cache()
-            self._refresh_dashboard_data()
-        except Exception as e:
-            _logger.warning("Dashboard refresh error after DB tools: %s", e)
+        self.refresh_after_database_change(refresh_runtime_status=False)
 
     def _open_about_dialog(self) -> None:
         dialog = tk.Toplevel(self.parent)
@@ -1540,13 +1567,38 @@ class DashboardWidget:
         btn_frame = tk.Frame(body)
         self.theme.apply_to_widget(btn_frame, "main_window")
         btn_frame.pack(fill=tk.X, pady=(12, 0))
+
+        manual_button = tk.Button(
+            btn_frame,
+            text="User Manual",
+            command=lambda: self._open_user_manual_from_about(dialog),
+        )
+        self.theme.apply_to_widget(manual_button, "button_secondary")
+        manual_button.pack(side=tk.RIGHT, padx=(0, 6))
+
         close_button = tk.Button(btn_frame, text="Close", command=dialog.destroy)
         self.theme.apply_to_widget(close_button, "button_secondary")
         close_button.pack(side=tk.RIGHT)
+        add_shortcut_hint(
+            btn_frame,
+            self.theme,
+            "Enter close  •  Esc/Ctrl+W/Cmd+W close",
+        )
+        bind_submit_shortcuts(dialog, dialog.destroy, allow_text_submit_with_enter=True)
+        bind_close_shortcuts(dialog, dialog.destroy)
 
         dialog.update_idletasks()
         dialog.lift()
         dialog.focus_set()
+
+    def _open_user_manual_from_about(self, about_dialog: Optional[tk.Misc] = None) -> None:
+        """Close About dialog (if present) then open/focus the shared User Manual window."""
+        try:
+            if about_dialog is not None:
+                about_dialog.destroy()
+        except Exception:
+            pass
+        open_help_manual_dialog(self.parent, theme=self.theme)
 
 
     def _open_drill_down(self, window_type: str) -> None:

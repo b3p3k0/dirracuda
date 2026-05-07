@@ -255,6 +255,7 @@ def _probe_run_results(
                     probe_preview=outcome.probe_preview,
                     probe_checked_at=outcome.probe_checked_at,
                     probe_error=outcome.probe_error,
+                    probe_snapshot_payload=outcome.probe_snapshot_payload,
                 )
 
                 counts["total"] += 1

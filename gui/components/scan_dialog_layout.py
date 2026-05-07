@@ -971,7 +971,7 @@ def _create_button_panel(self) -> None:
 
     budget_button = tk.Button(
         buttons_container,
-        text="Query Budget...",
+        text="Shodan Candidate Cap...",
         command=self._open_query_budget_dialog
     )
     self.theme.apply_to_widget(budget_button, "button_secondary")

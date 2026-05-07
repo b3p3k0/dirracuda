@@ -43,7 +43,7 @@ def _coerce_int(value, default: int, minimum: int = 1) -> int:
 
 
 def _resolve_http_query_limits(workflow: "HttpWorkflow") -> dict:
-    """Resolve HTTP query limits with a hard per-scan credit budget."""
+    """Resolve HTTP query limits with a hard per-scan candidate cap."""
     http_cfg = workflow.config.get_http_config()
     http_limits = http_cfg.get("shodan", {}).get("query_limits", {})
     shodan_limits = workflow.config.get_shodan_config().get("query_limits", {})
@@ -72,9 +72,9 @@ def _collect_http_matches(api, query: str, limits: dict, out) -> List[dict]:
         return []
 
     out.info(
-        "HTTP Shodan budget: "
-        f"requested {limits['max_results']} results, "
-        f"budget {limits['budget']} credit(s), "
+        "HTTP Shodan candidate cap: "
+        f"requested up to {limits['max_results']} candidates, "
+        f"internal page budget {limits['budget']} credit(s), "
         f"effective limit {effective_limit} ({max_pages} page(s) max)"
     )
 

@@ -23,9 +23,11 @@ from gui.utils.style import get_theme
 from gui.utils.template_store import TemplateStore
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.components.query_budget_dialog import (
+    _coerce_int as _cap_coerce_int,
+    _credits_for_cap,
     load_query_budget_state,
+    persist_query_budget_state,
     resolve_config_path_from_settings,
-    show_query_budget_dialog,
 )
 from gui.components.scan_preflight import run_preflight
 
@@ -140,6 +142,9 @@ class ScanDialog:
         self.bulk_probe_enabled_var = tk.BooleanVar(value=False)
         self.skip_indicator_extract_var = tk.BooleanVar(value=True)
         self.bulk_extract_enabled_var = tk.BooleanVar(value=False)
+
+        # Inline Shodan max-results field
+        self.smb_max_results_var = tk.StringVar(value="100")
 
         self._concurrency_upper_limit = 256
         self._delay_upper_limit = 3600
@@ -378,6 +383,27 @@ class ScanDialog:
         example_label.configure(font=(self.theme.fonts["small"][0], self.theme.fonts["small"][1], "italic"))
         example_label.pack(side=tk.LEFT)
         
+        # Max Shodan Results inline field
+        max_results_container = tk.Frame(left_column)
+        self.theme.apply_to_widget(max_results_container, "card")
+        max_results_container.pack(fill=tk.X, padx=15, pady=(0, 10))
+
+        max_results_heading = self._create_accent_heading(max_results_container, "Max Shodan Results")
+        max_results_heading.pack(fill=tk.X)
+
+        max_results_row = tk.Frame(max_results_container)
+        self.theme.apply_to_widget(max_results_row, "card")
+        max_results_row.pack(fill=tk.X, pady=(5, 0))
+
+        max_results_entry = tk.Entry(
+            max_results_row,
+            textvariable=self.smb_max_results_var,
+            width=10,
+            font=self.theme.fonts["body"],
+        )
+        self.theme.apply_to_widget(max_results_entry, "entry")
+        max_results_entry.pack(side=tk.LEFT)
+
         self._create_region_selection(left_column)
         self._create_recent_hours_option(left_column)
         self._create_concurrency_options(left_column)
@@ -751,16 +777,23 @@ class ScanDialog:
                 pass  # Don't fail scan if settings save fails
 
         # Build complete scan options dict
+        smb_cap = max(1, _cap_coerce_int(self.smb_max_results_var.get(), 100, minimum=1, maximum=100000))
+
         config_path = resolve_config_path_from_settings(self._settings_manager) or str(self.config_path)
-        budget_state = load_query_budget_state(
+        cross_proto = load_query_budget_state(
             settings_manager=self._settings_manager,
             config_path=config_path,
         )
-        smb_budget = max(1, int(budget_state['smb_max_query_credits_per_scan']))
+
+        try:
+            persist_query_budget_state(self._settings_manager, {"smb_max_shodan_results_per_scan": smb_cap})
+        except Exception:
+            pass
+
         scan_options = {
             'protocols': ['smb'],
             'country': country_param,
-            'max_shodan_results': smb_budget * 100,
+            'max_shodan_results': smb_cap,
             'recent_hours': recent_hours,
             'rescan_all': rescan_all,
             'rescan_failed': rescan_failed,
@@ -775,9 +808,12 @@ class ScanDialog:
             'bulk_probe_enabled': self.bulk_probe_enabled_var.get(),
             'bulk_extract_enabled': self.bulk_extract_enabled_var.get(),
             'bulk_extract_skip_indicators': self.skip_indicator_extract_var.get(),
-            'smb_max_query_credits_per_scan': budget_state['smb_max_query_credits_per_scan'],
-            'ftp_max_query_credits_per_scan': budget_state['ftp_max_query_credits_per_scan'],
-            'http_max_query_credits_per_scan': budget_state['http_max_query_credits_per_scan'],
+            'smb_max_shodan_results_per_scan': smb_cap,
+            'ftp_max_shodan_results_per_scan': cross_proto['ftp_max_shodan_results_per_scan'],
+            'http_max_shodan_results_per_scan': cross_proto['http_max_shodan_results_per_scan'],
+            'smb_max_query_credits_per_scan': _credits_for_cap(smb_cap),
+            'ftp_max_query_credits_per_scan': cross_proto['ftp_max_query_credits_per_scan'],
+            'http_max_query_credits_per_scan': cross_proto['http_max_query_credits_per_scan'],
         }
 
         return scan_options
@@ -852,6 +888,16 @@ class ScanDialog:
             except Exception:
                 # Fall back to defaults if settings loading fails
                 pass
+
+        try:
+            config_path = resolve_config_path_from_settings(self._settings_manager) or str(self.config_path)
+            _initial = load_query_budget_state(
+                settings_manager=self._settings_manager,
+                config_path=config_path,
+            )
+            self.smb_max_results_var.set(str(_initial["smb_max_shodan_results_per_scan"]))
+        except Exception:
+            pass
 
         # (Query preview removed)
 
@@ -973,16 +1019,6 @@ class ScanDialog:
         self._persist_quick_settings()
         self.result = "cancel"
         self.dialog.destroy()
-
-    def _open_query_budget_dialog(self) -> None:
-        """Open shared query budget editor."""
-        config_path = resolve_config_path_from_settings(self._settings_manager) or str(self.config_path)
-        show_query_budget_dialog(
-            parent=self.dialog,
-            theme=self.theme,
-            settings_manager=self._settings_manager,
-            config_path=config_path,
-        )
 
     def focus_dialog(self) -> None:
         """Bring the existing dialog instance to front."""

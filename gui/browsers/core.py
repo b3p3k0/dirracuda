@@ -19,6 +19,7 @@ from typing import Any, Dict, Optional
 
 from gui.utils import safe_messagebox as messagebox
 from gui.utils.coercion import _coerce_bool
+from gui.utils.keybindings import add_shortcut_hint, bind_browser_navigation_shortcuts
 
 
 class UnifiedBrowserCore:
@@ -53,6 +54,25 @@ class UnifiedBrowserCore:
     # ------------------------------------------------------------------
     # UI construction
     # ------------------------------------------------------------------
+
+    def _browser_shortcut_hint_text(self) -> str:
+        return (
+            "Enter open selected  •  BackSpace/Alt+Up parent  •  "
+            "F5/Ctrl+R/Cmd+R refresh  •  Esc/Ctrl+W/Cmd+W close"
+        )
+
+    def _add_shortcut_hint(self, parent: tk.Widget) -> None:
+        add_shortcut_hint(parent, self.theme, self._browser_shortcut_hint_text())
+
+    def _bind_keyboard_shortcuts(self) -> None:
+        bind_browser_navigation_shortcuts(
+            self.window,
+            self.tree,
+            on_open_selected=lambda: self._on_item_double_click(None),
+            on_up=self._on_up,
+            on_refresh=self._refresh,
+            on_close=self._on_close,
+        )
 
     def _build_window(self) -> None:
         self.window = tk.Toplevel(self.parent)
@@ -129,6 +149,7 @@ class UnifiedBrowserCore:
             self.btn_cancel,
         ):
             btn.pack(side=tk.LEFT, padx=5)
+        self._add_shortcut_hint(button_frame)
 
         # Download tuning strip (FTP/HTTP; SMB overrides _build_window entirely)
         tuning_frame = tk.Frame(self.window)
@@ -185,6 +206,7 @@ class UnifiedBrowserCore:
         tree_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 5))
         self._adapt_setup_treeview(tree_frame)
         self.tree.bind("<Double-1>", self._on_item_double_click)
+        self._bind_keyboard_shortcuts()
 
         # Status bar
         self.status_var = tk.StringVar(value="Connecting...")

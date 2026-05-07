@@ -19,13 +19,20 @@ from typing import Any, Callable, Dict, Optional
 
 from gui.components.scan_dialog import ScanDialog
 from gui.components.query_budget_dialog import (
+    _coerce_int as _cap_coerce_int,
+    _credits_for_cap,
     load_query_budget_state,
+    persist_query_budget_state,
     resolve_config_path_from_settings,
-    show_query_budget_dialog,
 )
 from gui.components.scan_dork_editor_dialog import show_scan_dork_editor_dialog
 from gui.components.scan_preflight import run_preflight
 from gui.utils.dialog_helpers import ensure_dialog_focus
+from gui.utils.keybindings import (
+    add_shortcut_hint,
+    bind_close_shortcuts,
+    bind_submit_shortcuts,
+)
 from gui.utils.style import get_theme
 from gui.utils.template_store import TemplateStore
 
@@ -99,6 +106,11 @@ class UnifiedScanDialog:
         # Protocol-specific settings
         self.security_mode_var = tk.StringVar(value="cautious")
         self.allow_insecure_tls_var = tk.BooleanVar(value=True)
+
+        # Per-protocol max Shodan results (inline fields, populated from settings at init)
+        self.smb_max_results_var = tk.StringVar(value="100")
+        self.ftp_max_results_var = tk.StringVar(value="100")
+        self.http_max_results_var = tk.StringVar(value="100")
 
         # Template UI state
         self.template_var = tk.StringVar()
@@ -223,6 +235,22 @@ class UnifiedScanDialog:
         except Exception:
             pass
 
+        try:
+            config_path = resolve_config_path_from_settings(self._settings_manager) or str(self.config_path)
+            _initial = load_query_budget_state(
+                settings_manager=self._settings_manager,
+                config_path=config_path,
+            )
+            self.smb_max_results_var.set(str(_initial["smb_max_shodan_results_per_scan"]))
+            self.ftp_max_results_var.set(str(_initial["ftp_max_shodan_results_per_scan"]))
+            self.http_max_results_var.set(str(_initial["http_max_shodan_results_per_scan"]))
+        except Exception:
+            pass
+
+        # Wire trace callbacks so estimates refresh live as values are typed
+        for _v in (self.smb_max_results_var, self.ftp_max_results_var, self.http_max_results_var):
+            _v.trace_add("write", lambda *_: self._refresh_protocol_estimate_lines())
+
         # Safety: ensure at least one protocol remains selected.
         if not (self.protocol_smb_var.get() or self.protocol_ftp_var.get() or self.protocol_http_var.get()):
             self.protocol_smb_var.set(True)
@@ -325,8 +353,8 @@ class UnifiedScanDialog:
         self._create_button_panel()
 
         self.dialog.protocol("WM_DELETE_WINDOW", self._cancel)
-        self.dialog.bind("<Return>", lambda _e: self._start())
-        self.dialog.bind("<Escape>", lambda _e: self._cancel())
+        bind_submit_shortcuts(self.dialog, self._start)
+        bind_close_shortcuts(self.dialog, self._cancel)
         self.country_var.trace_add("write", self._validate_country_input)
 
         if self.country_entry:
@@ -652,27 +680,12 @@ class UnifiedScanDialog:
 
         self._create_accent_heading(container, "Protocols").pack(fill=tk.X)
 
-        row = tk.Frame(container)
-        self.theme.apply_to_widget(row, "card")
-        row.pack(fill=tk.X, pady=(5, 5))
-
-        for text, var in (
-            ("SMB", self.protocol_smb_var),
-            ("FTP", self.protocol_ftp_var),
-            ("HTTP", self.protocol_http_var),
-        ):
-            cb = tk.Checkbutton(
-                row,
-                text=text,
-                variable=var,
-                command=self._refresh_protocol_estimate_lines,
-                font=self.theme.fonts["small"],
-            )
-            self.theme.apply_to_widget(cb, "checkbox")
-            cb.pack(side=tk.LEFT, padx=(10, 12), pady=2)
+        btn_row = tk.Frame(container)
+        self.theme.apply_to_widget(btn_row, "card")
+        btn_row.pack(fill=tk.X, pady=(5, 0))
 
         edit_queries_btn = tk.Button(
-            row,
+            btn_row,
             text="Edit Queries",
             command=self._open_query_editor,
             font=self.theme.fonts["small"],
@@ -680,14 +693,36 @@ class UnifiedScanDialog:
         self.theme.apply_to_widget(edit_queries_btn, "button_secondary")
         edit_queries_btn.pack(side=tk.RIGHT, padx=(0, 10))
 
-        query_budget_btn = tk.Button(
-            row,
-            text="Query Budget...",
-            command=self._open_query_budget_dialog,
-            font=self.theme.fonts["small"],
-        )
-        self.theme.apply_to_widget(query_budget_btn, "button_secondary")
-        query_budget_btn.pack(side=tk.RIGHT, padx=(0, 8))
+        for proto_text, cb_var, results_var in (
+            ("SMB", self.protocol_smb_var, self.smb_max_results_var),
+            ("FTP", self.protocol_ftp_var, self.ftp_max_results_var),
+            ("HTTP", self.protocol_http_var, self.http_max_results_var),
+        ):
+            proto_row = tk.Frame(container)
+            self.theme.apply_to_widget(proto_row, "card")
+            proto_row.pack(fill=tk.X, pady=(2, 0))
+
+            cb = tk.Checkbutton(
+                proto_row,
+                text=proto_text,
+                variable=cb_var,
+                command=self._refresh_protocol_estimate_lines,
+                font=self.theme.fonts["small"],
+            )
+            self.theme.apply_to_widget(cb, "checkbox")
+            cb.pack(side=tk.LEFT, padx=(10, 8), pady=2)
+
+            cap_label = self.theme.create_styled_label(proto_row, "Max Shodan Results", "small")
+            cap_label.pack(side=tk.LEFT, padx=(0, 4))
+
+            cap_entry = tk.Entry(
+                proto_row,
+                textvariable=results_var,
+                width=8,
+                font=self.theme.fonts["small"],
+            )
+            self.theme.apply_to_widget(cap_entry, "entry")
+            cap_entry.pack(side=tk.LEFT, pady=2)
 
         self.protocol_cost_label = self.theme.create_styled_label(
             container,
@@ -1061,18 +1096,6 @@ class UnifiedScanDialog:
             except Exception:
                 return
 
-    def _open_query_budget_dialog(self) -> None:
-        """Open budget dialog used to cap per-protocol Shodan credit usage."""
-        config_path = resolve_config_path_from_settings(self._settings_manager) or str(self.config_path)
-        saved = show_query_budget_dialog(
-            parent=self.dialog,
-            theme=self.theme,
-            settings_manager=self._settings_manager,
-            config_path=config_path,
-        )
-        if saved is not None:
-            self._refresh_protocol_estimate_lines()
-
     def _on_cost_estimate_help_clicked(self, _event=None) -> None:
         self._show_cost_estimate_help_dialog()
 
@@ -1081,7 +1104,8 @@ class UnifiedScanDialog:
             "• This estimate shows how much raw search data we can pull for API credits spent. "
             "Shodan charges by search pages, not by accessible hosts. "
             "One API credit typically yields roughly 100 search results.",
-            "• Query Budget sets how many credits each protocol can use per scan.",
+            "• Max Shodan Results sets the maximum initial candidates each protocol can fetch.",
+            "• Estimated cost is about one query credit per 100 candidates requested.",
             "• Initial Shodan search returns a list of candidates, not results. "
             "The subsequent screening process thins out invalid hosts, leaving the operator "
             "with a better quality list of potential hosts to investigate.",
@@ -1144,6 +1168,12 @@ class UnifiedScanDialog:
         frame = tk.Frame(self.dialog)
         self.theme.apply_to_widget(frame, "main_window")
         frame.pack(fill=tk.X, padx=20, pady=(5, 15))
+
+        add_shortcut_hint(
+            frame,
+            self.theme,
+            "Enter start scan  •  Esc cancel  •  Ctrl/Cmd+W close",
+        )
 
         btns = tk.Frame(frame)
         self.theme.apply_to_widget(btns, "main_window")
@@ -1208,28 +1238,25 @@ class UnifiedScanDialog:
         if cost_label is None or results_label is None:
             return
 
-        config_path = resolve_config_path_from_settings(self._settings_manager) or str(self.config_path)
-        budgets = load_query_budget_state(settings_manager=self._settings_manager, config_path=config_path)
-
         selected = self._resolve_selected_protocols()
         if not selected:
             cost_label.configure(text="Est. cost: ~0 credits")
             results_label.configure(text="Est. initial results: none selected")
             return
 
-        budget_by_protocol = {
-            "smb": max(1, int(budgets.get("smb_max_query_credits_per_scan", 1))),
-            "ftp": max(1, int(budgets.get("ftp_max_query_credits_per_scan", 1))),
-            "http": max(1, int(budgets.get("http_max_query_credits_per_scan", 1))),
+        cap_by_protocol = {
+            "smb": max(1, _cap_coerce_int(self.smb_max_results_var.get(), 100, minimum=1, maximum=100000)),
+            "ftp": max(1, _cap_coerce_int(self.ftp_max_results_var.get(), 100, minimum=1, maximum=100000)),
+            "http": max(1, _cap_coerce_int(self.http_max_results_var.get(), 100, minimum=1, maximum=100000)),
         }
 
-        total_credits = sum(budget_by_protocol[p] for p in selected)
+        total_credits = sum(max(1, (cap_by_protocol[p] + 99) // 100) for p in selected)
         cost_label.configure(text=f"Est. cost: ~{total_credits} credits")
 
         parts = []
         for protocol in selected:
             label = protocol.upper()
-            results = budget_by_protocol[protocol] * 100
+            results = cap_by_protocol[protocol]
             parts.append(f"{label} ~{results}")
         results_label.configure(text=f"Est. initial results: {'   '.join(parts)}")
 
@@ -1363,11 +1390,18 @@ class UnifiedScanDialog:
         if mode not in {"cautious", "legacy"}:
             mode = "cautious"
 
-        config_path = resolve_config_path_from_settings(self._settings_manager) or str(self.config_path)
-        budget_state = load_query_budget_state(
-            settings_manager=self._settings_manager,
-            config_path=config_path,
-        )
+        smb_cap = _cap_coerce_int(self.smb_max_results_var.get(), 100, minimum=1, maximum=100000)
+        ftp_cap = _cap_coerce_int(self.ftp_max_results_var.get(), 100, minimum=1, maximum=100000)
+        http_cap = _cap_coerce_int(self.http_max_results_var.get(), 100, minimum=1, maximum=100000)
+
+        try:
+            persist_query_budget_state(self._settings_manager, {
+                "smb_max_shodan_results_per_scan": smb_cap,
+                "ftp_max_shodan_results_per_scan": ftp_cap,
+                "http_max_shodan_results_per_scan": http_cap,
+            })
+        except Exception:
+            pass
 
         self._persist_dialog_state()
 
@@ -1383,9 +1417,12 @@ class UnifiedScanDialog:
             "rce_enabled": bool(self.rce_enabled_var.get()) if self.show_rce_controls else False,
             "security_mode": mode,
             "allow_insecure_tls": bool(self.allow_insecure_tls_var.get()),
-            "smb_max_query_credits_per_scan": budget_state["smb_max_query_credits_per_scan"],
-            "ftp_max_query_credits_per_scan": budget_state["ftp_max_query_credits_per_scan"],
-            "http_max_query_credits_per_scan": budget_state["http_max_query_credits_per_scan"],
+            "smb_max_shodan_results_per_scan": smb_cap,
+            "ftp_max_shodan_results_per_scan": ftp_cap,
+            "http_max_shodan_results_per_scan": http_cap,
+            "smb_max_query_credits_per_scan": _credits_for_cap(smb_cap),
+            "ftp_max_query_credits_per_scan": _credits_for_cap(ftp_cap),
+            "http_max_query_credits_per_scan": _credits_for_cap(http_cap),
         }
 
     def _start(self) -> None:

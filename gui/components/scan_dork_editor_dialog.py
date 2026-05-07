@@ -22,6 +22,12 @@ from gui.components.discovery_dork_config import (
 )
 from gui.utils import safe_messagebox as messagebox
 from gui.utils.dialog_helpers import ensure_dialog_focus
+from gui.utils.keybindings import (
+    add_shortcut_hint,
+    bind_close_shortcuts,
+    bind_save_shortcuts,
+    bind_submit_shortcuts,
+)
 from gui.utils.style import get_theme
 
 _PROTOCOL_TO_DORK_FIELD = {
@@ -115,7 +121,9 @@ class ScanDorkEditorDialog:
         self._validate_all_fields()
 
         self.dialog.protocol("WM_DELETE_WINDOW", self._on_cancel)
-        self.dialog.bind("<Escape>", lambda _e: self._on_cancel())
+        bind_submit_shortcuts(self.dialog, self._on_save)
+        bind_save_shortcuts(self.dialog, self._on_save)
+        bind_close_shortcuts(self.dialog, self._on_cancel)
         self.theme.apply_theme_to_application(self.dialog)
         ensure_dialog_focus(self.dialog, self.parent)
 
@@ -192,6 +200,12 @@ class ScanDorkEditorDialog:
         frame = tk.Frame(self.dialog)
         self.theme.apply_to_widget(frame, "main_window")
         frame.pack(fill=tk.X, padx=16, pady=(0, 14))
+
+        add_shortcut_hint(
+            frame,
+            self.theme,
+            "Enter save  •  Esc cancel  •  Ctrl/Cmd+S save  •  Ctrl/Cmd+W close",
+        )
 
         left_btns = tk.Frame(frame)
         self.theme.apply_to_widget(left_btns, "main_window")

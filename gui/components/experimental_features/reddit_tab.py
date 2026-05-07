@@ -17,6 +17,8 @@ from gui.utils.style import get_theme
 from shared.path_service import get_paths
 
 _PATHS = get_paths()
+_RUNNING_STATUS_TEXT = "Reddit Grab is running..."
+_STATUS_POLL_MS = 500
 
 
 class RedditTab:
@@ -25,6 +27,7 @@ class RedditTab:
     def __init__(self, parent: tk.Widget, context: dict) -> None:
         self._context = context
         self._theme = get_theme()
+        self._status_visible = False
         self.frame = tk.Frame(parent)
         self._theme.apply_to_widget(self.frame, "main_window")
         self._build(self.frame)
@@ -65,15 +68,62 @@ class RedditTab:
         self._theme.apply_to_widget(self._post_db_btn, "button_secondary")
         self._post_db_btn.pack(side=tk.LEFT)
 
+        self._status_var = tk.StringVar(value="")
+        self._status_label = tk.Label(
+            frame,
+            textvariable=self._status_var,
+            anchor="w",
+            justify="left",
+        )
+        self._theme.apply_to_widget(self._status_label, "label")
+        self._update_running_status()
+
     def _invoke_reddit_grab(self) -> None:
         cb = self._context.get("reddit_grab_callback")
         if cb is not None:
             cb()
+        self._update_running_status()
 
     def _invoke_open_reddit_post_db(self) -> None:
         cb = self._context.get("open_reddit_post_db")
         if cb is not None:
             cb()
+
+    def _is_reddit_grab_running(self) -> bool:
+        getter = self._context.get("reddit_grab_status_getter")
+        if getter is None:
+            return False
+        try:
+            return bool(getter())
+        except Exception:
+            return False
+
+    def _update_running_status(self) -> None:
+        running = self._is_reddit_grab_running()
+        status_var = getattr(self, "_status_var", None)
+        if status_var is not None:
+            status_var.set(_RUNNING_STATUS_TEXT if running else "")
+
+        grab_btn = getattr(self, "_grab_btn", None)
+        if grab_btn is not None:
+            grab_btn.configure(state=tk.DISABLED if running else tk.NORMAL)
+
+        status_label = getattr(self, "_status_label", None)
+        if status_label is not None and running and not self._status_visible:
+            status_label.pack(anchor="w", padx=16, pady=(0, 8))
+            self._status_visible = True
+        elif status_label is not None and not running and self._status_visible:
+            status_label.pack_forget()
+            self._status_visible = False
+
+        self._schedule_status_poll()
+
+    def _schedule_status_poll(self) -> None:
+        try:
+            if self.frame.winfo_exists():
+                self.frame.after(_STATUS_POLL_MS, self._update_running_status)
+        except Exception:
+            pass
 
 
 def build_reddit_tab(parent: tk.Widget, context: dict) -> tk.Widget:

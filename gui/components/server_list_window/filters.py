@@ -95,6 +95,15 @@ def create_filter_panel(parent, theme, filter_vars, callbacks):
     theme.apply_to_widget(exclude_compromised_checkbox, "checkbox")
     exclude_compromised_checkbox.pack(side=tk.LEFT, padx=(0, 10))
 
+    shares_filter_checkbox = tk.Checkbutton(
+        search_frame,
+        text="Show Only Shares >0",
+        variable=filter_vars['shares_filter'],
+        command=callbacks['on_shares_filter_changed']
+    )
+    theme.apply_to_widget(shares_filter_checkbox, "checkbox")
+    shares_filter_checkbox.pack(side=tk.LEFT, padx=(0, 10))
+
     # Advanced toggle button aligned to the right of the search row
     mode_button = tk.Button(
         search_frame,
@@ -172,16 +181,7 @@ def create_filter_panel(parent, theme, filter_vars, callbacks):
     template_dropdown.pack(anchor="w", pady=(0, 5))
     template_dropdown.bind("<<ComboboxSelected>>", lambda e: callbacks['on_filter_template_selected']())
 
-    # --- Date/Shares section (below templates) ---
-    shares_filter_checkbox = tk.Checkbutton(
-        left_column,
-        text="Shares > 0",
-        variable=filter_vars['shares_filter'],
-        command=callbacks['on_shares_filter_changed']
-    )
-    theme.apply_to_widget(shares_filter_checkbox, "checkbox")
-    shares_filter_checkbox.pack(anchor="w", pady=(0, 2))
-
+    # --- Date section (below templates) ---
     date_label = theme.create_styled_label(
         left_column,
         "Discovery Date:",

@@ -20,6 +20,12 @@ import sys
 import os
 
 from gui.utils.dialog_helpers import ensure_dialog_focus
+from gui.utils.keybindings import (
+    add_shortcut_hint,
+    bind_close_shortcuts,
+    bind_save_shortcuts,
+    bind_submit_shortcuts,
+)
 from shared.path_service import get_paths, get_legacy_paths, resolve_runtime_config_path
 
 # Special display token for extensionless files
@@ -204,8 +210,24 @@ class BatchExtractSettingsDialog:
         # Handle window close
         if self.mode == "preflight":
             self.dialog.protocol("WM_DELETE_WINDOW", self._on_abort)
+            bind_submit_shortcuts(self.dialog, self._on_save)
+            bind_save_shortcuts(self.dialog, self._on_save)
+            bind_close_shortcuts(self.dialog, self._on_abort)
+            hint_text = (
+                "Enter save and continue  •  Esc abort  •  "
+                "Ctrl/Cmd+S save  •  Ctrl/Cmd+W close"
+            )
         else:
             self.dialog.protocol("WM_DELETE_WINDOW", self._on_cancel)
+            bind_submit_shortcuts(self.dialog, self._on_start)
+            bind_save_shortcuts(self.dialog, self._on_start)
+            bind_close_shortcuts(self.dialog, self._on_cancel)
+            hint_text = (
+                "Enter start  •  Esc cancel  •  "
+                "Ctrl/Cmd+S start  •  Ctrl/Cmd+W close"
+            )
+
+        add_shortcut_hint(self.dialog, self.theme, hint_text)
 
         if self.theme:
             self.theme.apply_theme_to_application(self.dialog)

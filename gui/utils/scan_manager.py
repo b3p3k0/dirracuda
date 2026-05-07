@@ -31,6 +31,33 @@ from shared.db_path_resolution import resolve_database_path
 _logger = get_logger("scan_manager")
 
 
+def _derive_query_credit_budget(max_results: Any) -> Optional[int]:
+    """Return the page-budget guard needed for a Shodan candidate cap."""
+    try:
+        cap = int(max_results)
+    except (TypeError, ValueError):
+        return None
+    if cap < 1:
+        return None
+    return max(1, (cap + 99) // 100)
+
+
+def _resolve_query_credit_budget(provided_budget: Any, max_results: Any) -> Optional[int]:
+    """Resolve internal budget so explicit candidate caps cannot be undercut."""
+    derived_budget = _derive_query_credit_budget(max_results)
+    try:
+        provided = int(provided_budget)
+    except (TypeError, ValueError):
+        provided = None
+    if provided is not None and provided < 1:
+        provided = None
+    if derived_budget is None:
+        return provided
+    if provided is None:
+        return derived_budget
+    return max(provided, derived_budget)
+
+
 class ScanManager:
     """
     Manages SMB security scan operations.
@@ -327,9 +354,17 @@ class ScanManager:
             # Apply max results override
             max_results = scan_options.get('max_shodan_results')
             if max_results is not None:
-                config_overrides['shodan'] = {'query_limits': {'max_results': max_results}}
+                q_limits = config_overrides.setdefault('shodan', {}).setdefault('query_limits', {})
+                q_limits['max_results'] = max_results
+                try:
+                    q_limits['min_usable_hosts_target'] = int(max_results) + 1
+                except (TypeError, ValueError):
+                    pass
 
-            smb_budget = scan_options.get("smb_max_query_credits_per_scan")
+            smb_budget = _resolve_query_credit_budget(
+                scan_options.get("smb_max_query_credits_per_scan"),
+                max_results,
+            )
             if smb_budget is not None:
                 q_limits = config_overrides.setdefault("shodan", {}).setdefault("query_limits", {})
                 q_limits["smb_max_query_credits_per_scan"] = smb_budget
@@ -1006,7 +1041,10 @@ class ScanManager:
                  .setdefault("query_limits", {})
                  )["max_results"] = max_results
 
-            ftp_budget = scan_options.get("ftp_max_query_credits_per_scan")
+            ftp_budget = _resolve_query_credit_budget(
+                scan_options.get("ftp_max_query_credits_per_scan"),
+                max_results,
+            )
             if ftp_budget is not None:
                 (config_overrides
                  .setdefault("shodan", {})
@@ -1157,7 +1195,10 @@ class ScanManager:
                  .setdefault("query_limits", {})
                  )["max_results"] = max_results
 
-            http_budget = scan_options.get("http_max_query_credits_per_scan")
+            http_budget = _resolve_query_credit_budget(
+                scan_options.get("http_max_query_credits_per_scan"),
+                max_results,
+            )
             if http_budget is not None:
                 (config_overrides
                  .setdefault("shodan", {})

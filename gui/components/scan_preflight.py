@@ -13,6 +13,12 @@ import sys
 import os
 
 from gui.utils.dialog_helpers import ensure_dialog_focus
+from gui.utils.keybindings import (
+    add_shortcut_hint,
+    bind_close_shortcuts,
+    bind_save_shortcuts,
+    bind_submit_shortcuts,
+)
 from gui.components.batch_extract_dialog import BatchExtractSettingsDialog
 from gui.components.query_budget_dialog import (
     load_query_budget_state,
@@ -48,57 +54,50 @@ def _estimate_query_cost_details(scan_options: Dict[str, Any], budget_state: Dic
     Build preflight estimate lines for Shodan query-credit usage.
 
     Estimates are intentionally approximate and settings-based so users get
-    clear budget visibility before launch.
+    clear candidate-cap visibility before launch.
     """
-    max_results = _coerce_int(scan_options.get("max_shodan_results"), 0)
-    has_explicit_max = max_results > 0
+    shared_cap = _coerce_int(scan_options.get("max_shodan_results"), 0)
+    has_shared_cap = shared_cap > 0
     protocols = _resolve_protocols(scan_options)
 
-    smb_credit_budget = _coerce_int(
-        scan_options.get("smb_max_query_credits_per_scan", budget_state.get("smb_max_query_credits_per_scan")),
-        1,
-    )
-    ftp_credit_budget = _coerce_int(
-        scan_options.get("ftp_max_query_credits_per_scan", budget_state.get("ftp_max_query_credits_per_scan")),
-        1,
-    )
-    http_credit_budget = _coerce_int(
-        scan_options.get("http_max_query_credits_per_scan", budget_state.get("http_max_query_credits_per_scan")),
-        1,
-    )
-    total_min = 0
-    total_max = 0
+    def _resolve_cap(protocol: str, option_key: str, state_key: str) -> int:
+        value = scan_options.get(option_key, budget_state.get(state_key))
+        cap = _coerce_int(value, 0)
+        if cap > 0:
+            return cap
+        if has_shared_cap:
+            return shared_cap
+        return 100
 
-    for protocol in protocols:
-        if protocol == "smb":
-            effective_limit = (
-                min(max_results, smb_credit_budget * 100)
-                if has_explicit_max
-                else smb_credit_budget * 100
-            )
-            smb_credit_cap = max(1, (effective_limit + 99) // 100)
-            if smb_credit_budget > 1:
-                total_min += 1
-                total_max += smb_credit_cap
-            else:
-                total_min += smb_credit_cap
-                total_max += smb_credit_cap
-        elif protocol in {"ftp", "http"}:
-            budget = ftp_credit_budget if protocol == "ftp" else http_credit_budget
-            effective_limit = min(max_results, budget * 100) if has_explicit_max else budget * 100
-            proto_credits = max(1, (effective_limit + 99) // 100)
-            total_min += proto_credits
-            total_max += proto_credits
+    cap_by_protocol = {
+        "smb": _resolve_cap(
+            "smb",
+            "smb_max_shodan_results_per_scan",
+            "smb_max_shodan_results_per_scan",
+        ),
+        "ftp": _resolve_cap(
+            "ftp",
+            "ftp_max_shodan_results_per_scan",
+            "ftp_max_shodan_results_per_scan",
+        ),
+        "http": _resolve_cap(
+            "http",
+            "http_max_shodan_results_per_scan",
+            "http_max_shodan_results_per_scan",
+        ),
+    }
 
-    if total_min == total_max:
-        total_line = f"Estimated total query cost: ~{total_max} API query credit(s)"
-    else:
-        total_line = f"Estimated total query cost: ~{total_min}..{total_max} API query credits"
+    total_credits = sum(
+        max(1, (cap_by_protocol[protocol] + 99) // 100)
+        for protocol in protocols
+        if protocol in cap_by_protocol
+    )
+    total_line = f"Estimated total query cost: ~{total_credits} API query credit(s)"
 
     return {
         "total_line": total_line,
-        "total_min": total_min,
-        "total_max": total_max,
+        "total_min": total_credits,
+        "total_max": total_credits,
     }
 
 
@@ -210,6 +209,12 @@ class ProbeConfigDialog:
                 self.theme.apply_to_widget(btn, "button_secondary")
             btn.pack(side=tk.LEFT, padx=5)
 
+        add_shortcut_hint(
+            self.dialog,
+            self.theme,
+            "Enter save and continue  •  Esc abort  •  Ctrl/Cmd+S save  •  Ctrl/Cmd+W close",
+        )
+
         if self.theme:
             self.theme.apply_theme_to_application(self.dialog)
 
@@ -217,6 +222,9 @@ class ProbeConfigDialog:
         ensure_dialog_focus(self.dialog, self.parent)
 
         self.dialog.protocol("WM_DELETE_WINDOW", self._abort)
+        bind_submit_shortcuts(self.dialog, self._save)
+        bind_save_shortcuts(self.dialog, self._save)
+        bind_close_shortcuts(self.dialog, self._abort)
         self.parent.wait_window(self.dialog)
         return self.result or {"status": "abort"}
 
@@ -324,6 +332,17 @@ class SummaryDialog:
         ensure_dialog_focus(self.dialog, self.parent)
 
         self.dialog.protocol("WM_DELETE_WINDOW", self._back)
+        bind_submit_shortcuts(
+            self.dialog,
+            self._start,
+            allow_text_submit_with_enter=True,
+        )
+        bind_close_shortcuts(self.dialog, self._back)
+        add_shortcut_hint(
+            frame,
+            self.theme,
+            "Enter start scan  •  Esc back  •  Ctrl/Cmd+W close",
+        )
         self.parent.wait_window(self.dialog)
         return bool(self.result)
 
