@@ -6,6 +6,9 @@
 docs/*
 !docs/dev/
 !docs/dev/**
+!docs/TECHNICAL_REFERENCE.md
+!docs/KBD_QUICKREF.md
+!docs/HISTORY.md
 !docs/example_db/
 docs/example_db/*
 !docs/example_db/generate_bogan_dbs.py

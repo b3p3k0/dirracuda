@@ -126,8 +126,8 @@ def test_reserved_alt_digits_are_consumed_without_action() -> None:
 def test_global_shortcuts_dispatch_quit_help_and_theme() -> None:
     app, calls = _build_app_stub()
     help_calls = []
-    original_help = _global_shortcuts.open_help_stub_dialog
-    _global_shortcuts.open_help_stub_dialog = lambda *_args, **_kwargs: help_calls.append("help")
+    original_help = _global_shortcuts.open_help_manual_dialog
+    _global_shortcuts.open_help_manual_dialog = lambda *_args, **_kwargs: help_calls.append("help")
     DIRRACUDA.XSMBSeekGUI._setup_event_handlers(app)
 
     try:
@@ -135,7 +135,7 @@ def test_global_shortcuts_dispatch_quit_help_and_theme() -> None:
         assert app.root.global_bindings["<Control-t>"](None) == "break"
         assert app.root.global_bindings["<Control-h>"](None) == "break"
     finally:
-        _global_shortcuts.open_help_stub_dialog = original_help
+        _global_shortcuts.open_help_manual_dialog = original_help
 
     assert "close" in calls
     assert "theme" in calls

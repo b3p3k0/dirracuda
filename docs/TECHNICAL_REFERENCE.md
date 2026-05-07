@@ -856,7 +856,7 @@ SearXNG dorking, Reddit ingestion, and Dorkbook do not use this subprocess path.
   - `Alt+7..0` reserved no-op (consumed, not shown in UI helper text)
 - App-global bindings (via `bind_all`):
   - `Ctrl/Cmd+Q` quit through existing close-confirm flow
-  - `Ctrl/Cmd+H` open Help placeholder dialog
+  - `Ctrl/Cmd+H` open User Manual dialog
   - `Ctrl/Cmd+T` toggle theme
 - Dialog/window defaults:
   - `Esc` close/cancel via existing handlers

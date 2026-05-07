@@ -49,6 +49,7 @@ from gui.components import dashboard_scan_output_dialog
 from gui.components import dashboard_status
 from gui.components import dashboard_scan
 from gui.components import dashboard_batch_ops
+from gui.components.help_manual_dialog import open_help_manual_dialog
 from gui.components.running_tasks_window import RunningTasksWindow
 from gui.utils.running_tasks import (
     RunningTaskRegistry,
@@ -1566,6 +1567,15 @@ class DashboardWidget:
         btn_frame = tk.Frame(body)
         self.theme.apply_to_widget(btn_frame, "main_window")
         btn_frame.pack(fill=tk.X, pady=(12, 0))
+
+        manual_button = tk.Button(
+            btn_frame,
+            text="User Manual",
+            command=lambda: self._open_user_manual_from_about(dialog),
+        )
+        self.theme.apply_to_widget(manual_button, "button_secondary")
+        manual_button.pack(side=tk.RIGHT, padx=(0, 6))
+
         close_button = tk.Button(btn_frame, text="Close", command=dialog.destroy)
         self.theme.apply_to_widget(close_button, "button_secondary")
         close_button.pack(side=tk.RIGHT)
@@ -1580,6 +1590,15 @@ class DashboardWidget:
         dialog.update_idletasks()
         dialog.lift()
         dialog.focus_set()
+
+    def _open_user_manual_from_about(self, about_dialog: Optional[tk.Misc] = None) -> None:
+        """Close About dialog (if present) then open/focus the shared User Manual window."""
+        try:
+            if about_dialog is not None:
+                about_dialog.destroy()
+        except Exception:
+            pass
+        open_help_manual_dialog(self.parent, theme=self.theme)
 
 
     def _open_drill_down(self, window_type: str) -> None:
