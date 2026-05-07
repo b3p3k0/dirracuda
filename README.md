@@ -118,6 +118,11 @@ The main window. From here you can:
 - Edit configuration
 - Open **Running Tasks** to monitor active/queued work and reopen hidden monitor dialogs (scan/probe/extract)
 
+### Keyboard Shortcuts
+
+For the full keyboard contract and per-surface shortcut matrix, see
+[`docs/KBD_QUICKREF.md`](docs/KBD_QUICKREF.md).
+
 ### Discovery
 
 ![livescan](img/livescan.png)
@@ -138,22 +143,17 @@ GUI scan dialogs no longer include a per-scan `Custom Shodan Filters` field; GUI
 
 Start Scan shows a preflight confirmation that includes an approximate Shodan query-cost estimate before launch.
 
-### Shodan Credits: How Spend Is Calculated
+### Shodan Credits
 
-Dirracuda spends Shodan query credits by **result page** (about 100 matches/page), not by protocol toggle alone.
-That means a scan can consume more than one credit when you raise per-protocol budgets.
+Shodan charges by **result page** — roughly 100 candidates per credit. Dirracuda controls this through a **Max Shodan Results** field next to each protocol toggle in the scan dialog.
 
-- Each protocol has its own credit budget cap (`SMB`, `FTP`, `HTTP`).
-- Default is `1` credit budget per protocol per scan.
-- In the scan flow, discovery window sizing is budget-driven: `max_shodan_results = budget * 100`.
-- Budgets are editable from scan dialogs via `Query Budget...`.
-- Estimated totals are approximate
+Cost is `ceil(Max Shodan Results / 100)` credits per selected protocol — the default `100` costs ~1 credit, `1000` costs ~10.
 
-If preflight cannot fetch a **live** Shodan balance, Dirracuda shows:
-- `Shodan balance: not available at this time`
-- `Check balance: https://developer.shodan.io/dashboard`
+The verified host count stored in your database will be lower than the candidate count — Shodan may return fewer matches than the cap, and hosts that fail the reachability check, protocol verification, or exclusion filters don't make it through.
 
-In that case, numeric cost estimates are intentionally suppressed to avoid stale/misleading projections.
+The **preflight screen** shows your live balance and an estimated post-scan balance before you commit. If Dirracuda can't reach Shodan to check your balance,  estimates are suppressed and a link to the [Shodan dashboard](https://developer.shodan.io/dashboard) is shown instead.
+
+> For implementation details — how credits are derived from caps, config keys, adaptive page-stop behavior — see [Shodan candidate-cap controls](docs/TECHNICAL_REFERENCE.md#shodan-candidate-cap-controls-all-discovery-protocols) in the Technical Reference.
 
 **Post-scan bulk probe/extract scope** - when bulk probe or bulk extract is enabled from the scan flow, targets are limited to accessible hosts from the scan that just completed (same protocol). .
 
@@ -176,7 +176,7 @@ In that case, numeric cost estimates are intentionally suppressed to avoid stale
 | ⚠ Toggle Compromised | Mark/unmark selected servers as likely compromised |
 | 🗑️ Delete Selected | Remove selected servers from the database |
 
-Server List also includes an **Add Record** control (next to `Advanced`) for manually inserting one SMB/FTP/HTTP host row into the active database. Save keeps your current filters unchanged. If the newly added row does not appear, it is usually hidden by an active filter (most commonly `Shares > 0`). Inserted records can then be probed and investigated from the GUI.
+Server List also includes an **Add Record** control (next to `Advanced`) for manually inserting one SMB/FTP/HTTP host row into the active database. Save keeps your current filters unchanged. If the newly added row does not appear, it is usually hidden by an active filter (most commonly `Show Only Shares >0`). Inserted records can then be probed and investigated from the GUI.
 
 ### Probing Shares
 
@@ -378,8 +378,8 @@ What each action does:
 
 Results browser:
 - Columns: `URL`, `Probed`, `Probe Preview`, `Checked`
-- Actions: `Copy URL`, `Open in Explorer`, `Open in system browser`, `Probe Selected` / `Probe URL`, `Add to dirracuda DB`
-- Promotion note: if `Add to dirracuda DB` shows **Not available**, open Server List once and reopen Results DB (the add-record callback comes from the live Server List window).
+- Actions: `Copy URL`, `Open in Explorer`, `Open in system browser`, `Probe Selected` / `Probe URL`, `Add to dirracuda DB`; double-click opens a read-only result details view.
+- Promotion note: `Add to dirracuda DB` promotes resolvable IPv4 targets directly into the main Dirracuda DB, and multi-select imports run in the background with progress/cancel plus a best-effort summary. Probe snapshots from newer SearXNG results are carried into the main DB so SLB can render probe trees without re-probing (older summary-only rows keep summary data until re-probed). The Server List Browser does not need to be open, and new rows may be hidden by active filters.
 
 #### SearXNG `format=json` and 403 troubleshooting
 
@@ -414,11 +414,16 @@ Sort options:
 
 Only submissions are processed. Comments/replies are not.
 
+Reddit Grab options:
+- **Run probe on results** — optional explicit probe pass for concrete HTTP/HTTPS/FTP targets found during that ingest run. Unknown-protocol rows are skipped with a clear notice instead of guessing a protocol.
+
 ![reddit db](img/reddit_db.png)
 
-Promotion flow:
-- `Open Reddit Post DB` supports `Add to dirracuda DB` from the row context menu.
-- If that action shows **Not available**, open the Server List once and reopen Reddit Post DB (the add-record callback comes from the live Server List window).
+Reddit Post DB:
+- Columns include target metadata plus probe status, preview, and checked time.
+- `Probe Selected` runs the same full-featured probe stack used elsewhere and stores the full probe snapshot in the Reddit sidecar for HTTP/HTTPS/FTP targets.
+- Double-click opens a read-only details view with Reddit metadata and the probe tree when a snapshot is available.
+- `Add to dirracuda DB` promotes resolvable IPv4 targets directly into the main Dirracuda DB, and multi-select imports run in the background with progress/cancel plus a best-effort summary. Reddit probe summaries and snapshots are carried into the main DB so SLB can render probe trees without re-probing, while unknown-protocol rows are skipped with a clear message. The Server List Browser does not need to be open, and new rows may be hidden by active filters.
 
 Disclaimer:
 

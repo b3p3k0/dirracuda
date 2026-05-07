@@ -102,6 +102,11 @@ DEFAULT_GUI_SETTINGS = {
         'ftp_max_query_credits_per_scan': 1,
         'http_max_query_credits_per_scan': 1
     },
+    'query_cap': {
+        'smb_max_shodan_results_per_scan': 100,
+        'ftp_max_shodan_results_per_scan': 100,
+        'http_max_shodan_results_per_scan': 100
+    },
     'probe': {
         'max_directories_per_share': 3,
         'max_files_per_directory': 5,
@@ -135,6 +140,18 @@ DEFAULT_GUI_SETTINGS = {
     },
     'runtime_warnings': {
         'tmpfs_legacy_mount_dismissed': False,
+    },
+    'reddit_grab': {
+        'mode': 'feed',
+        'sort': 'new',
+        'top_window': 'week',
+        'query': '',
+        'username': '',
+        'max_posts': 50,
+        'parse_body': True,
+        'include_nsfw': False,
+        'replace_cache': False,
+        'bulk_probe_enabled': False
     },
     'backend': {
         'mock_mode': False,

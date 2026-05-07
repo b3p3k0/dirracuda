@@ -21,6 +21,12 @@ from gui.components.discovery_dork_config import (
     read_discovery_dorks,
 )
 from gui.utils.dialog_helpers import ensure_dialog_focus
+from gui.utils.keybindings import (
+    add_shortcut_hint,
+    bind_close_shortcuts,
+    bind_save_shortcuts,
+    bind_submit_shortcuts,
+)
 from gui.utils.style import get_theme
 from gui.utils.wordlist_path import normalize_wordlist_path
 from shared.db_path_resolution import (
@@ -339,6 +345,9 @@ class AppConfigDialog:
         self._create_sections()
         self._create_button_panel()
         self._validate_all_fields()
+        bind_submit_shortcuts(self.dialog, self._on_ok)
+        bind_save_shortcuts(self.dialog, self._on_ok)
+        bind_close_shortcuts(self.dialog, self._on_cancel)
 
         self.theme.apply_theme_to_application(self.dialog)
         ensure_dialog_focus(self.dialog, self.parent)
@@ -761,6 +770,12 @@ class AppConfigDialog:
         panel = tk.Frame(self.dialog)
         self.theme.apply_to_widget(panel, "main_window")
         panel.pack(fill=tk.X, padx=18, pady=(4, 16))
+
+        add_shortcut_hint(
+            panel,
+            self.theme,
+            "Enter save  •  Esc cancel  •  Ctrl/Cmd+S save  •  Ctrl/Cmd+W close",
+        )
 
         cancel_btn = tk.Button(panel, text="Cancel", command=self._on_cancel)
         self.theme.apply_to_widget(cancel_btn, "button_secondary")

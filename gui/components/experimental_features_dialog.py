@@ -24,6 +24,7 @@ from typing import Any, Optional
 
 from gui.utils.style import get_theme
 from gui.utils.dialog_helpers import ensure_dialog_focus
+from gui.utils.keybindings import add_shortcut_hint, bind_close_shortcuts, bind_submit_shortcuts
 
 _DISMISSED_KEY = "experimental.warning_dismissed"
 _WARNING_TEXT = (
@@ -80,9 +81,15 @@ class ExperimentalFeaturesDialog:
         close_btn = tk.Button(btn_frame, text="Close", command=dialog.destroy)
         self._theme.apply_to_widget(close_btn, "button_secondary")
         close_btn.pack(side=tk.RIGHT)
+        add_shortcut_hint(
+            btn_frame,
+            self._theme,
+            "Enter close  •  Esc/Ctrl+W/Cmd+W close",
+        )
 
         dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
-        dialog.bind("<Escape>", lambda _e: dialog.destroy())
+        bind_submit_shortcuts(dialog, dialog.destroy, allow_text_submit_with_enter=True)
+        bind_close_shortcuts(dialog, dialog.destroy)
 
         ensure_dialog_focus(dialog, parent)
 

@@ -9,6 +9,7 @@ from tkinter import ttk
 from typing import List, Optional
 
 from gui.utils.running_tasks import RunningTaskRegistry, RunningTaskSnapshot
+from gui.utils.keybindings import bind_close_shortcuts, bind_tree_enter_shortcut
 
 
 class RunningTasksWindow:
@@ -72,6 +73,7 @@ class RunningTasksWindow:
         self.tree.column("started", width=90, anchor="center", stretch=False)
         self.tree.pack(fill=tk.BOTH, expand=True)
         self.tree.bind("<Double-1>", self._on_row_double_click, add="+")
+        bind_tree_enter_shortcut(self.tree, self._on_row_double_click)
 
         self.empty_label = tk.Label(
             frame,
@@ -86,6 +88,7 @@ class RunningTasksWindow:
         if self.theme:
             self.theme.apply_theme_to_application(self.window)
 
+        bind_close_shortcuts(self.window, self.destroy)
         self.registry.subscribe(self._on_tasks_changed)
         self._subscribed = True
         self.window.lift()
@@ -116,7 +119,7 @@ class RunningTasksWindow:
 
         if self.empty_label:
             if tasks:
-                self.empty_label.configure(text="Double-click a task to reopen its monitor dialog.")
+                self.empty_label.configure(text="Double-click or press Enter to reopen a task monitor dialog.")
             else:
                 self.empty_label.configure(text="No active or queued tasks.")
 
@@ -134,4 +137,3 @@ class RunningTasksWindow:
             task.reopen_callback()
         except Exception:
             return
-

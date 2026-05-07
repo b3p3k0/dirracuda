@@ -565,7 +565,8 @@ def upsert_probe_cache_for_host(self, ip_address: str, host_type: str, *,
                                  accessible_dirs_list: Optional[str] = None,
                                  accessible_files_count: Optional[int] = None,
                                  protocol_server_id: Optional[int] = None,
-                                 port: Optional[int] = None) -> None:
+                                 port: Optional[int] = None,
+                                 last_probe_at: Optional[str] = None) -> None:
     """Route probe cache write to SMB, FTP, or HTTP tables based on host_type.
 
     Args:
@@ -579,6 +580,7 @@ def upsert_probe_cache_for_host(self, ip_address: str, host_type: str, *,
         accessible_dirs_count: FTP/HTTP accessible directory count
         accessible_dirs_list: FTP/HTTP comma-separated directory paths
         accessible_files_count: HTTP-only accessible file count
+        last_probe_at: Optional probe timestamp; current timestamp is used when absent
 
     No-op for invalid host_type or unknown IP.
     FTP/HTTP branches degrade gracefully when tables are absent (pre-migration).
@@ -623,8 +625,20 @@ def upsert_probe_cache_for_host(self, ip_address: str, host_type: str, *,
                 "indicator_matches",
                 "snapshot_path",
             ]
-            insert_values = ["?", "?", "CURRENT_TIMESTAMP", "?", "?"]
-            params: List[Any] = [server_id, status, indicator_matches, snapshot_path]
+            insert_values = [
+                "?",
+                "?",
+                "COALESCE(?, CURRENT_TIMESTAMP)",
+                "?",
+                "?",
+            ]
+            params: List[Any] = [
+                server_id,
+                status,
+                last_probe_at,
+                indicator_matches,
+                snapshot_path,
+            ]
             update_parts = [
                 "status=excluded.status",
                 "last_probe_at=excluded.last_probe_at",

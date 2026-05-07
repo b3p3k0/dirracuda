@@ -26,6 +26,12 @@ class RedditTarget:
     parse_confidence: Optional[str]  # "high", "medium", "low"
     created_at: str                 # UTC datetime string
     dedupe_key: str                 # sha1(post_id + "|" + target_normalized)
+    probe_status: str = "unprobed"
+    probe_indicator_matches: int = 0
+    probe_preview: Optional[str] = None
+    probe_checked_at: Optional[str] = None
+    probe_error: Optional[str] = None
+    probe_snapshot_json: Optional[str] = None
 
 
 @dataclass

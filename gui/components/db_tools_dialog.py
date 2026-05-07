@@ -20,6 +20,7 @@ from typing import Callable, Optional
 
 from gui.utils.style import get_theme
 from gui.utils.dialog_helpers import ensure_dialog_focus
+from gui.utils.keybindings import add_shortcut_hint, bind_close_shortcuts
 from gui.utils.db_tools_engine import (
     DBToolsEngine,
     MergeConflictStrategy,
@@ -115,6 +116,7 @@ class DBToolsDialog:
 
         # Handle window close
         self.dialog.protocol("WM_DELETE_WINDOW", self._on_close)
+        bind_close_shortcuts(self.dialog, self._on_close)
 
         # Create layout
         self._create_header()
@@ -1254,6 +1256,12 @@ class DBToolsDialog:
         button_frame = tk.Frame(self.dialog)
         self.theme.apply_to_widget(button_frame, "main_window")
         button_frame.pack(fill=tk.X, padx=20, pady=(0, 20))
+
+        add_shortcut_hint(
+            button_frame,
+            self.theme,
+            "Esc/Ctrl+W/Cmd+W close",
+        )
 
         self.close_button = tk.Button(
             button_frame,

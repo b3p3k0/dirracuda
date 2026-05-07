@@ -29,6 +29,8 @@ try:
 except ImportError:
     from utils.filesize import _format_file_size  # type: ignore[no-redef]
 
+from gui.utils.keybindings import add_shortcut_hint, bind_viewer_shortcuts
+
 
 ENCODINGS = ["utf-8", "ascii", "latin-1", "utf-16", "windows-1252"]
 HEX_BYTES_PER_ROW = 16
@@ -225,19 +227,29 @@ class FileViewerWindow:
         if self.theme:
             self.theme.apply_to_widget(close_btn, "button_primary")
         close_btn.pack(side=tk.RIGHT)
+        if self.on_save_callback:
+            hint_text = "Esc/Ctrl+W/Cmd+W close  •  Ctrl/Cmd+S save to quarantine"
+        else:
+            hint_text = "Esc/Ctrl+W/Cmd+W close"
+        add_shortcut_hint(button_frame, self.theme, hint_text)
 
         # Update encoding visibility based on mode
         self._update_encoding_visibility()
 
-        # Keyboard shortcuts
-        self.window.bind("<Escape>", lambda e: self._on_close())
-        self.window.bind("<Control-w>", lambda e: self._on_close())
+        self._bind_keyboard_shortcuts()
 
         if self.theme:
             self.theme.apply_theme_to_application(self.window)
 
         # Ensure focus
         ensure_dialog_focus(self.window, self.parent)
+
+    def _bind_keyboard_shortcuts(self) -> None:
+        bind_viewer_shortcuts(
+            self.window,
+            on_close=self._on_close,
+            on_save=self._on_save if self.on_save_callback else None,
+        )
 
     def _on_mode_change(self) -> None:
         """Handle mode radio button change."""

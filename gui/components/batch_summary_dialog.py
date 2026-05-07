@@ -9,6 +9,7 @@ import tkinter as tk
 from tkinter import filedialog, ttk
 from gui.utils import safe_messagebox as messagebox
 from typing import Any, Dict, List, Optional
+from gui.utils.keybindings import add_shortcut_hint, bind_close_shortcuts, bind_save_shortcuts, bind_submit_shortcuts
 
 
 def show_batch_summary_dialog(
@@ -103,8 +104,22 @@ def show_batch_summary_dialog(
         theme.apply_to_widget(close_button, "button_secondary")
     close_button.pack(side=tk.RIGHT)
 
+    add_shortcut_hint(
+        button_frame,
+        theme,
+        "Enter close  •  Esc/Ctrl+W/Cmd+W close  •  Ctrl/Cmd+S save CSV",
+    )
+
     if theme:
         theme.apply_theme_to_application(dialog)
+
+    bind_submit_shortcuts(dialog, dialog.destroy, allow_text_submit_with_enter=True)
+    bind_close_shortcuts(dialog, dialog.destroy)
+    if show_export:
+        bind_save_shortcuts(
+            dialog,
+            lambda: _export_batch_summary(results, job_type, dialog, show_protocol=show_protocol),
+        )
 
     if wait:
         parent.wait_window(dialog)

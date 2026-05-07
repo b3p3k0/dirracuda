@@ -15,6 +15,7 @@ Options:
   parse_body    bool
   include_nsfw  bool
   replace_cache bool
+  bulk_probe    bool
 """
 
 import logging
@@ -58,6 +59,7 @@ class RedditGrabDialog:
         self.parse_body_var = tk.BooleanVar(value=True)
         self.include_nsfw_var = tk.BooleanVar(value=False)
         self.replace_cache_var = tk.BooleanVar(value=False)
+        self.bulk_probe_var = tk.BooleanVar(value=False)
 
         self._load_settings()
 
@@ -157,7 +159,7 @@ class RedditGrabDialog:
         self.theme.apply_to_widget(max_entry, "entry")
         max_entry.grid(row=4, column=1, sticky=tk.W, pady=4)
 
-        # Checkboxes (rows 5-7)
+        # Checkboxes (rows 5-8)
         def _check(row: int, text: str, var: tk.BooleanVar) -> None:
             cb = tk.Checkbutton(grid, text=text, variable=var, anchor=tk.W)
             self.theme.apply_to_widget(cb, "checkbox")
@@ -166,6 +168,7 @@ class RedditGrabDialog:
         _check(5, "Parse body", self.parse_body_var)
         _check(6, "Include NSFW", self.include_nsfw_var)
         _check(7, "Replace cache", self.replace_cache_var)
+        _check(8, "Run probe on results", self.bulk_probe_var)
 
         # Buttons
         btn_frame = tk.Frame(outer)
@@ -296,6 +299,7 @@ class RedditGrabDialog:
             mode=mode,
             query=query,
             username=username,
+            bulk_probe_enabled=bool(self.bulk_probe_var.get()),
         )
 
     # ------------------------------------------------------------------
@@ -370,6 +374,9 @@ class RedditGrabDialog:
             self.replace_cache_var.set(
                 _coerce_bool(self.settings.get_setting('reddit_grab.replace_cache', False), False)
             )
+            self.bulk_probe_var.set(
+                _coerce_bool(self.settings.get_setting('reddit_grab.bulk_probe_enabled', False), False)
+            )
         except Exception as e:
             _log.warning("reddit_grab_dialog: failed to load settings: %s", e)
 
@@ -391,6 +398,7 @@ class RedditGrabDialog:
             self.settings.set_setting('reddit_grab.parse_body', bool(self.parse_body_var.get()))
             self.settings.set_setting('reddit_grab.include_nsfw', bool(self.include_nsfw_var.get()))
             self.settings.set_setting('reddit_grab.replace_cache', bool(self.replace_cache_var.get()))
+            self.settings.set_setting('reddit_grab.bulk_probe_enabled', bool(self.bulk_probe_var.get()))
         except Exception as e:
             _log.warning("reddit_grab_dialog: failed to save settings: %s", e)
 
