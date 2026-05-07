@@ -55,6 +55,7 @@ def _make_browser(**kwargs) -> SeDorkBrowserWindow:
     obj.theme = MagicMock()
     obj._add_record_callback = kwargs.get("add_record_callback", None)
     obj._promote_record_callback = kwargs.get("promote_record_callback", None)
+    obj._promote_records_callback = kwargs.get("promote_records_callback", None)
     obj._settings_manager = kwargs.get("settings_manager", None)
     obj._row_by_iid = {}
     obj._context_menu_visible = False
@@ -381,6 +382,39 @@ def test_on_add_to_db_no_selection_does_not_call_callback():
         b._on_add_to_db()
 
     callback.assert_not_called()
+
+
+def test_on_add_to_db_multi_selection_without_bulk_callback_shows_info():
+    add_callback = MagicMock()
+    b = _make_browser(add_record_callback=add_callback)
+    b.tree.selection.return_value = ["10", "11"]
+    b._row_by_iid["10"] = {"url": "http://1.2.3.4/files/"}
+    b._row_by_iid["11"] = {"url": "http://1.2.3.5/files/"}
+
+    with patch("gui.components.se_dork_browser_window.messagebox") as mock_mb:
+        b._on_add_to_db()
+
+    mock_mb.showinfo.assert_called_once()
+    assert mock_mb.showinfo.call_args[0][0] == "Bulk import unavailable"
+    add_callback.assert_not_called()
+
+
+def test_on_add_to_db_multi_selection_dispatches_bulk_workflow():
+    bulk_callback = MagicMock()
+    b = _make_browser(promote_records_callback=bulk_callback)
+    b.tree.selection.return_value = ["20", "21"]
+    b._row_by_iid["20"] = {"url": "http://1.2.3.4/files/"}
+    b._row_by_iid["21"] = {"url": "ftp://1.2.3.5/pub"}  # unsupported -> pre-build skip
+    b._start_bulk_promotion = MagicMock()
+
+    b._on_add_to_db()
+
+    b._start_bulk_promotion.assert_called_once()
+    kwargs = b._start_bulk_promotion.call_args.kwargs
+    assert kwargs["selected_count"] == 2
+    assert len(kwargs["prefills"]) == 1
+    assert kwargs["prefills"][0]["host_type"] == "H"
+    assert kwargs["skipped_reasons"]
 
 
 def test_format_result_details_includes_probe_and_source_metadata():

@@ -379,7 +379,7 @@ What each action does:
 Results browser:
 - Columns: `URL`, `Probed`, `Probe Preview`, `Checked`
 - Actions: `Copy URL`, `Open in Explorer`, `Open in system browser`, `Probe Selected` / `Probe URL`, `Add to dirracuda DB`; double-click opens a read-only result details view.
-- Promotion note: `Add to dirracuda DB` writes directly to the main Dirracuda DB when the URL host is a literal or resolvable IPv4 target. New SearXNG probes persist the full probe snapshot in the sidecar; promotion carries that snapshot into main DB details so the SLB probe tree can render without re-probing. Older summary-only rows keep their summary until manually re-probed. The Server List Browser does not need to be open. Newly added rows may be hidden by active SLB filters.
+- Promotion note: `Add to dirracuda DB` writes directly to the main Dirracuda DB when the URL host is a literal or resolvable IPv4 target. Multi-select bulk import is supported from this window when opened from the Dashboard Experimental flow, runs in background with cancel/progress, and reports best-effort imported/updated/skipped/failed totals. New SearXNG probes persist the full probe snapshot in the sidecar; promotion carries that snapshot into main DB details so the SLB probe tree can render without re-probing. Older summary-only rows keep their summary until manually re-probed. The Server List Browser does not need to be open. Newly added rows may be hidden by active SLB filters.
 
 #### SearXNG `format=json` and 403 troubleshooting
 
@@ -423,7 +423,7 @@ Reddit Post DB:
 - Columns include target metadata plus probe status, preview, and checked time.
 - `Probe Selected` runs the same full-featured probe stack used elsewhere and stores the full probe snapshot in the Reddit sidecar for HTTP/HTTPS/FTP targets.
 - Double-click opens a read-only details view with Reddit metadata and the probe tree when a snapshot is available.
-- `Add to dirracuda DB` writes directly to the main Dirracuda DB when the target host is a literal or resolvable IPv4 target. Cacheable Reddit probe summaries and full snapshots are carried into main DB details so the SLB probe tree can render without re-probing. Unknown-protocol rows are skipped with a clear message. The Server List Browser does not need to be open; newly added rows may be hidden by active SLB filters.
+- `Add to dirracuda DB` writes directly to the main Dirracuda DB when the target host is a literal or resolvable IPv4 target. Multi-select bulk import is supported from this window when opened from the Dashboard Experimental flow, runs in background with cancel/progress, and reports best-effort imported/updated/skipped/failed totals. Cacheable Reddit probe summaries and full snapshots are carried into main DB details so the SLB probe tree can render without re-probing. Unknown-protocol rows are skipped with a clear message. The Server List Browser does not need to be open; newly added rows may be hidden by active SLB filters.
 
 Disclaimer:
 

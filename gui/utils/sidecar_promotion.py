@@ -11,7 +11,8 @@ import datetime
 import ipaddress
 import json
 import socket
-from typing import Any, Callable, Dict, Optional
+import threading
+from typing import Any, Callable, Dict, Iterable, Optional
 
 from gui.utils.probe_snapshot_summary import summarize_probe_snapshot
 
@@ -123,6 +124,74 @@ def promote_sidecar_prefill(db_reader: Any, prefill: Dict[str, Any]) -> Dict[str
         "probe_snapshot_copied": probe_snapshot_copied,
         "probe_snapshot_id": probe_snapshot_id,
     }
+
+
+def promote_sidecar_prefills(
+    db_reader: Any,
+    prefills: Iterable[Any],
+    *,
+    cancel_event: Optional[threading.Event] = None,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+) -> Dict[str, Any]:
+    """Promote multiple sidecar prefills with best-effort summary reporting."""
+    prefill_list = list(prefills or [])
+    total = len(prefill_list)
+    summary: Dict[str, Any] = {
+        "selected": total,
+        "processed": 0,
+        "inserted": 0,
+        "updated": 0,
+        "skipped": 0,
+        "failed": 0,
+        "cancelled": 0,
+        "skipped_reason_samples": [],
+        "failed_reason_samples": [],
+    }
+
+    for index, prefill in enumerate(prefill_list, start=1):
+        if cancel_event is not None and cancel_event.is_set():
+            break
+
+        message = f"Imported row {index}/{total}"
+        try:
+            promotion = promote_sidecar_prefill(db_reader, prefill)
+            result = promotion.get("result") if isinstance(promotion, dict) else {}
+            operation = str(
+                result.get("operation") if isinstance(result, dict) else ""
+            ).strip().lower()
+            if operation == "insert":
+                summary["inserted"] += 1
+            else:
+                # upsert outcomes are historically update for existing rows.
+                summary["updated"] += 1
+
+            payload = promotion.get("payload") if isinstance(promotion, dict) else {}
+            endpoint = _format_endpoint_for_summary(payload)
+            message = f"Imported {endpoint} ({operation or 'update'})"
+        except SidecarPromotionError as exc:
+            summary["skipped"] += 1
+            message = str(exc)
+            _append_reason_sample(
+                summary["skipped_reason_samples"],
+                f"Row {index}: {message}",
+            )
+        except Exception as exc:
+            summary["failed"] += 1
+            message = str(exc)
+            _append_reason_sample(
+                summary["failed_reason_samples"],
+                f"Row {index}: {message}",
+            )
+        finally:
+            summary["processed"] += 1
+            if callable(progress_callback):
+                try:
+                    progress_callback(summary["processed"], total, message)
+                except Exception:
+                    pass
+
+    summary["cancelled"] = max(0, summary["selected"] - summary["processed"])
+    return summary
 
 
 def build_probe_cache_payload(prefill: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -320,3 +389,20 @@ def _normalize_checked_at(value: Any) -> Optional[str]:
     except ValueError:
         return None
     return text
+
+
+def _append_reason_sample(samples: list[str], reason: str, *, max_samples: int = 6) -> None:
+    text = str(reason or "").strip()
+    if not text or len(samples) >= max_samples:
+        return
+    samples.append(text)
+
+
+def _format_endpoint_for_summary(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return "unknown endpoint"
+    host = str(payload.get("ip_address") or "").strip() or "unknown-host"
+    port = payload.get("port")
+    if port not in (None, ""):
+        return f"{host}:{port}"
+    return host

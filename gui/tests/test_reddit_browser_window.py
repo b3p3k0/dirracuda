@@ -214,6 +214,7 @@ def _make_win(monkeypatch=None) -> RedditBrowserWindow:
     win._filter_var = _StrVar()
     win._add_record_callback = None
     win._promote_record_callback = None
+    win._promote_records_callback = None
     win._settings_manager = None
     return win
 
@@ -1062,6 +1063,47 @@ class TestAddToDb:
         assert captured[0]["_probe_path_hint"] == "/files/"
         assert dns_calls == []
 
+    def test_on_add_to_db_multi_selection_without_bulk_callback_shows_info(self, monkeypatch):
+        win = _make_win()
+        win._add_record_callback = MagicMock()
+        win._row_by_iid["1"] = _make_raw_row(
+            1, protocol="http", host="1.2.3.4", target_normalized="http://1.2.3.4/files/"
+        )
+        win._row_by_iid["2"] = _make_raw_row(
+            2, protocol="http", host="1.2.3.5", target_normalized="http://1.2.3.5/files/"
+        )
+        win.tree.selection_set("1", "2")
+        info_calls = []
+        monkeypatch.setattr(
+            "gui.components.reddit_browser_window.messagebox.showinfo",
+            lambda *a, **k: info_calls.append(a),
+        )
+
+        win._on_add_to_db()
+
+        assert len(info_calls) == 1
+        assert info_calls[0][0] == "Bulk import unavailable"
+        win._add_record_callback.assert_not_called()
+
+    def test_on_add_to_db_multi_selection_dispatches_bulk_workflow(self):
+        win = _make_win()
+        win._promote_records_callback = MagicMock()
+        win._row_by_iid["1"] = _make_raw_row(
+            1, protocol="http", host="1.2.3.4", target_normalized="http://1.2.3.4/files/"
+        )
+        win._row_by_iid["2"] = _make_raw_row(2, protocol="unknown", host="example.com")
+        win.tree.selection_set("1", "2")
+        win._start_bulk_promotion = MagicMock()
+
+        win._on_add_to_db()
+
+        win._start_bulk_promotion.assert_called_once()
+        kwargs = win._start_bulk_promotion.call_args.kwargs
+        assert kwargs["selected_count"] == 2
+        assert len(kwargs["prefills"]) == 1
+        assert kwargs["prefills"][0]["host_type"] == "H"
+        assert kwargs["skipped_reasons"]
+
 
 # ---------------------------------------------------------------------------
 # Group F — context menu lifecycle
@@ -1081,6 +1123,17 @@ class TestContextMenuLifecycle:
         win._context_menu.grab_release.assert_called_once()
         assert win._context_menu_visible is True
         assert len(win._context_menu_bindings) == 4
+
+    def test_right_click_preserves_multi_selection_when_row_already_selected(self):
+        win = _make_win()
+        win.tree.selection_set("1", "2")
+        win.tree.set_identify_row(10, "1")
+        event = SimpleNamespace(y=10, x_root=320, y_root=210)
+
+        result = win._on_right_click(event)
+
+        assert result == "break"
+        assert win.tree.selection() == ("1", "2")
 
     def test_dismiss_click_hides_menu_and_cleans_handlers(self):
         win = _make_win()

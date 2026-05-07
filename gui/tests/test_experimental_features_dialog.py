@@ -295,6 +295,7 @@ def test_open_reddit_post_db_with_live_server_window(monkeypatch):
     assert calls[0]["parent"] is dash.parent
     assert calls[0]["add_record_callback"] is None
     assert callable(calls[0]["promote_record_callback"])
+    assert callable(calls[0]["promote_records_callback"])
     assert calls[0]["settings_manager"] is dash.settings_manager
     dash._server_list_getter.assert_not_called()
 
@@ -311,6 +312,38 @@ def test_open_reddit_post_db_with_live_server_window(monkeypatch):
         "scheme": "http",
     })
     assert result["result"]["row_key"] == "H:3"
+    dash.refresh_after_database_change.assert_called_once_with(refresh_runtime_status=False)
+
+
+def test_sidecar_bulk_promotion_callback_refreshes_once(monkeypatch):
+    dash = _make_dash()
+    monkeypatch.setattr(
+        dashboard_experimental,
+        "promote_sidecar_prefills",
+        MagicMock(
+            return_value={
+                "selected": 2,
+                "processed": 2,
+                "inserted": 1,
+                "updated": 1,
+                "skipped": 0,
+                "failed": 0,
+                "cancelled": 0,
+                "skipped_reason_samples": [],
+                "failed_reason_samples": [],
+            }
+        ),
+    )
+    callback = dashboard_experimental._make_sidecar_bulk_promote_callback(dash)
+
+    result = callback(
+        [
+            {"host_type": "H", "host": "1.2.3.4", "port": 80, "scheme": "http"},
+            {"host_type": "H", "host": "1.2.3.5", "port": 80, "scheme": "http"},
+        ]
+    )
+
+    assert result["selected"] == 2
     dash.refresh_after_database_change.assert_called_once_with(refresh_runtime_status=False)
 
 
@@ -350,6 +383,7 @@ def test_open_reddit_post_db_fallback_when_no_server_window(monkeypatch):
     assert calls[0]["parent"] is dash.parent
     assert calls[0]["add_record_callback"] is None
     assert callable(calls[0]["promote_record_callback"])
+    assert callable(calls[0]["promote_records_callback"])
     assert calls[0]["settings_manager"] is dash.settings_manager
     dash._open_drill_down.assert_not_called()
     dash._server_list_getter.assert_not_called()
@@ -375,6 +409,7 @@ def test_open_reddit_post_db_treats_dead_window_as_none(monkeypatch):
     assert calls[0]["parent"] is dash.parent
     assert calls[0]["add_record_callback"] is None
     assert callable(calls[0]["promote_record_callback"])
+    assert callable(calls[0]["promote_records_callback"])
     assert calls[0]["settings_manager"] is dash.settings_manager
     dash._open_drill_down.assert_not_called()
     dash._server_list_getter.assert_not_called()
@@ -398,6 +433,7 @@ def test_open_reddit_post_db_does_not_open_server_list_on_fallback(monkeypatch):
     assert calls[0]["parent"] is dash.parent
     assert calls[0]["add_record_callback"] is None
     assert callable(calls[0]["promote_record_callback"])
+    assert callable(calls[0]["promote_records_callback"])
     assert calls[0]["settings_manager"] is dash.settings_manager
     dash._open_drill_down.assert_not_called()
     dash._server_list_getter.assert_not_called()
@@ -433,6 +469,7 @@ def test_open_reddit_post_db_fallback_when_getter_raises(monkeypatch):
     assert calls[0]["parent"] is dash.parent
     assert calls[0]["add_record_callback"] is None
     assert callable(calls[0]["promote_record_callback"])
+    assert callable(calls[0]["promote_records_callback"])
     assert calls[0]["settings_manager"] is dash.settings_manager
     dash._open_drill_down.assert_not_called()
     assert getter_calls["count"] == 0
@@ -456,6 +493,7 @@ def test_open_reddit_post_db_without_db_reader_has_no_promote_callback(monkeypat
     assert calls[0]["parent"] is dash.parent
     assert calls[0]["add_record_callback"] is None
     assert calls[0]["promote_record_callback"] is None
+    assert calls[0]["promote_records_callback"] is None
     assert calls[0]["settings_manager"] is dash.settings_manager
 
 
@@ -640,6 +678,7 @@ def test_open_se_dork_results_db_with_live_server_window(monkeypatch):
     assert calls[0]["parent"] is dash.parent
     assert calls[0]["add_record_callback"] is None
     assert callable(calls[0]["promote_record_callback"])
+    assert callable(calls[0]["promote_records_callback"])
     assert calls[0]["settings_manager"] is dash.settings_manager
     dash._server_list_getter.assert_not_called()
 
@@ -669,6 +708,7 @@ def test_open_se_dork_results_db_fallback_when_no_server_window(monkeypatch):
     assert calls[0]["parent"] is dash.parent
     assert calls[0]["add_record_callback"] is None
     assert callable(calls[0]["promote_record_callback"])
+    assert callable(calls[0]["promote_records_callback"])
     assert calls[0]["settings_manager"] is dash.settings_manager
 
 
@@ -691,6 +731,7 @@ def test_open_se_dork_results_db_treats_dead_window_as_none(monkeypatch):
     assert calls[0]["parent"] is dash.parent
     assert calls[0]["add_record_callback"] is None
     assert callable(calls[0]["promote_record_callback"])
+    assert callable(calls[0]["promote_records_callback"])
     assert calls[0]["settings_manager"] is dash.settings_manager
     dash._server_list_getter.assert_not_called()
 
@@ -718,6 +759,7 @@ def test_open_se_dork_results_db_fallback_when_getter_raises(monkeypatch):
     assert calls[0]["parent"] is dash.parent
     assert calls[0]["add_record_callback"] is None
     assert callable(calls[0]["promote_record_callback"])
+    assert callable(calls[0]["promote_records_callback"])
     assert calls[0]["settings_manager"] is dash.settings_manager
     assert getter_calls["count"] == 0
 

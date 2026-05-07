@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -16,6 +17,7 @@ from gui.utils.sidecar_promotion import (
     build_manual_record_payload,
     build_probe_snapshot_payload,
     format_promotion_success,
+    promote_sidecar_prefills,
     promote_sidecar_prefill,
 )
 
@@ -296,3 +298,87 @@ def test_format_promotion_success_prefers_snapshot_copy_message():
     })
 
     assert "Probe snapshot copied from sidecar" in message
+
+
+def test_promote_sidecar_prefills_mixed_results_and_reason_samples(monkeypatch):
+    reader = MagicMock()
+    progress_calls = []
+
+    def _promote(_reader, prefill):
+        marker = str(prefill.get("marker"))
+        if marker == "insert":
+            return {"payload": {"ip_address": "1.2.3.4"}, "result": {"operation": "insert"}}
+        if marker == "update":
+            return {"payload": {"ip_address": "1.2.3.5"}, "result": {"operation": "update"}}
+        if marker == "skip":
+            raise SidecarPromotionError("unsupported row")
+        raise RuntimeError("db write failure")
+
+    monkeypatch.setattr("gui.utils.sidecar_promotion.promote_sidecar_prefill", _promote)
+
+    summary = promote_sidecar_prefills(
+        reader,
+        [
+            {"marker": "insert"},
+            {"marker": "update"},
+            {"marker": "skip"},
+            {"marker": "fail"},
+        ],
+        progress_callback=lambda done, total, msg: progress_calls.append((done, total, msg)),
+    )
+
+    assert summary["selected"] == 4
+    assert summary["processed"] == 4
+    assert summary["inserted"] == 1
+    assert summary["updated"] == 1
+    assert summary["skipped"] == 1
+    assert summary["failed"] == 1
+    assert summary["cancelled"] == 0
+    assert any("unsupported row" in item for item in summary["skipped_reason_samples"])
+    assert any("db write failure" in item for item in summary["failed_reason_samples"])
+    assert [p[0] for p in progress_calls] == [1, 2, 3, 4]
+    assert all(p[1] == 4 for p in progress_calls)
+
+
+def test_promote_sidecar_prefills_invalid_prefill_is_skipped(monkeypatch):
+    def _promote(_reader, prefill):
+        if prefill is None:
+            raise SidecarPromotionError("Promotion data is missing or invalid.")
+        return {"result": {"operation": "insert"}, "payload": {"ip_address": "1.2.3.4"}}
+
+    monkeypatch.setattr("gui.utils.sidecar_promotion.promote_sidecar_prefill", _promote)
+
+    summary = promote_sidecar_prefills(MagicMock(), [None, {"host_type": "H", "host": "1.2.3.4"}])
+
+    assert summary["selected"] == 2
+    assert summary["processed"] == 2
+    assert summary["inserted"] == 1
+    assert summary["skipped"] == 1
+    assert summary["failed"] == 0
+    assert summary["cancelled"] == 0
+    assert summary["skipped_reason_samples"]
+
+
+def test_promote_sidecar_prefills_honors_cancel_event(monkeypatch):
+    cancel_event = threading.Event()
+
+    def _promote(_reader, _prefill):
+        return {"result": {"operation": "insert"}, "payload": {"ip_address": "1.2.3.4"}}
+
+    monkeypatch.setattr("gui.utils.sidecar_promotion.promote_sidecar_prefill", _promote)
+
+    def _progress(done, _total, _msg):
+        if done == 1:
+            cancel_event.set()
+
+    summary = promote_sidecar_prefills(
+        MagicMock(),
+        [{"a": 1}, {"a": 2}, {"a": 3}],
+        cancel_event=cancel_event,
+        progress_callback=_progress,
+    )
+
+    assert summary["selected"] == 3
+    assert summary["processed"] == 1
+    assert summary["inserted"] == 1
+    assert summary["cancelled"] == 2

@@ -14,7 +14,10 @@ from gui.components.reddit_browser_window import show_reddit_browser_window
 from gui.components.se_dork_browser_window import show_se_dork_browser_window
 from gui.components.dorkbook_window import show_dorkbook_window
 from gui.components.keymaster_window import show_keymaster_window
-from gui.utils.sidecar_promotion import promote_sidecar_prefill
+from gui.utils.sidecar_promotion import (
+    promote_sidecar_prefill,
+    promote_sidecar_prefills,
+)
 from gui.utils.logging_config import get_logger
 
 _logger = get_logger("dashboard")
@@ -49,6 +52,7 @@ def open_reddit_post_db(widget) -> None:
         parent=widget.parent,
         add_record_callback=None,
         promote_record_callback=_make_sidecar_promote_callback(widget),
+        promote_records_callback=_make_sidecar_bulk_promote_callback(widget),
         settings_manager=getattr(widget, "settings_manager", None),
     )
 
@@ -59,6 +63,7 @@ def open_se_dork_results_db(widget) -> None:
         parent=widget.parent,
         add_record_callback=None,
         promote_record_callback=_make_sidecar_promote_callback(widget),
+        promote_records_callback=_make_sidecar_bulk_promote_callback(widget),
         settings_manager=getattr(widget, "settings_manager", None),
     )
 
@@ -110,6 +115,27 @@ def _make_sidecar_promote_callback(widget):
         return promotion
 
     return _promote
+
+
+def _make_sidecar_bulk_promote_callback(widget):
+    """Return a direct bulk sidecar promotion callback, or None when DB is absent."""
+    db_reader = getattr(widget, "db_reader", None)
+    if db_reader is None:
+        return None
+
+    def _promote_many(prefills, *, cancel_event=None, progress_callback=None):
+        summary = promote_sidecar_prefills(
+            db_reader,
+            prefills,
+            cancel_event=cancel_event,
+            progress_callback=progress_callback,
+        )
+        promoted = int(summary.get("inserted", 0)) + int(summary.get("updated", 0))
+        if promoted > 0:
+            _notify_dashboard_database_changed(widget)
+        return summary
+
+    return _promote_many
 
 
 def _notify_dashboard_database_changed(widget) -> None:

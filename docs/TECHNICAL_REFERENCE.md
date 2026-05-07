@@ -990,6 +990,7 @@ Dashboard -> Experimental tab -> Run (dork search)
 Dashboard -> Experimental tab -> Open Results DB
   -> SeDorkBrowserWindow (reads ~/.dirracuda/data/experimental/se_dork.db)
   -> "Add to dirracuda DB" promotes directly to the main DB via DatabaseReader
+  -> multi-select bulk import runs in background with BatchStatusDialog progress/cancel and best-effort summary counts
   -> cacheable se_dork probe summaries and full snapshots are copied into main probe tables
   -> double-click opens a read-only row details view from sidecar metadata and stored probe snapshots
   -> unresolved/non-IPv4 hosts are rejected with an explicit Cannot promote message
@@ -1015,6 +1016,7 @@ Dashboard -> Experimental tab -> Open Reddit Post DB
   -> RedditBrowserWindow (reads ~/.dirracuda/data/experimental/reddit_od.db)
   -> "Probe Selected" stores cacheable probe summaries and full snapshots in reddit_targets
   -> "Add to dirracuda DB" promotes SMB/FTP/HTTP rows directly to the main DB
+  -> multi-select bulk import runs in background with BatchStatusDialog progress/cancel and best-effort summary counts
   -> cacheable Reddit probe summaries and full snapshots are copied into main probe tables
   -> double-click opens a read-only row details view from sidecar metadata and stored probe snapshots
   -> unknown-protocol rows are skipped with explicit Cannot promote/probe messages

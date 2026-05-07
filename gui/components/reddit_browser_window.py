@@ -31,6 +31,7 @@ import webbrowser
 import ipaddress
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
+import queue
 from pathlib import Path
 from typing import Optional
 import tkinter as tk
@@ -157,6 +158,7 @@ class RedditBrowserWindow:
         db_path: Optional[Path] = None,
         add_record_callback=None,
         promote_record_callback=None,
+        promote_records_callback=None,
         settings_manager=None,
     ) -> None:
         self.parent = parent
@@ -164,6 +166,7 @@ class RedditBrowserWindow:
         self.theme = get_theme()
         self._add_record_callback = add_record_callback
         self._promote_record_callback = promote_record_callback
+        self._promote_records_callback = promote_records_callback
         self._settings_manager = settings_manager
 
         # Row data store — keyed by iid (str(target.id))
@@ -503,7 +506,9 @@ class RedditBrowserWindow:
         iid = self.tree.identify_row(event.y)
         if not iid:
             return "break"
-        self.tree.selection_set(iid)
+        selected = set(self.tree.selection())
+        if iid not in selected:
+            self.tree.selection_set(iid)
         try:
             self._context_menu.tk_popup(event.x_root, event.y_root)
         finally:
@@ -1025,10 +1030,16 @@ class RedditBrowserWindow:
 
     def _on_add_to_db(self) -> None:
         self._hide_context_menu()
-        row = self._selected_row()
-        if row is None:
+        rows = self._selected_rows()
+        if not rows:
             messagebox.showinfo("No selection", "Select a row first.", parent=self.window)
             return
+        if len(rows) == 1:
+            self._on_add_to_db_single(rows[0])
+            return
+        self._on_add_to_db_bulk(rows)
+
+    def _on_add_to_db_single(self, row: dict) -> None:
         prefill = self._build_prefill(row)
         if prefill is None:
             messagebox.showinfo(
@@ -1068,6 +1079,191 @@ class RedditBrowserWindow:
         prefill["host"] = resolved_host
         self._add_record_callback(prefill)
 
+    def _on_add_to_db_bulk(self, rows: list[dict]) -> None:
+        if self._promote_records_callback is None:
+            messagebox.showinfo(
+                "Bulk import unavailable",
+                (
+                    "Bulk import requires direct sidecar promotion context.\n"
+                    "Open this window from Dashboard -> Experimental Features."
+                ),
+                parent=self.window,
+            )
+            return
+
+        prefills, skipped_reasons = self._collect_bulk_prefills(rows)
+        self._start_bulk_promotion(
+            prefills=prefills,
+            skipped_reasons=skipped_reasons,
+            selected_count=len(rows),
+        )
+
+    def _collect_bulk_prefills(self, rows: list[dict]) -> tuple[list[dict], list[str]]:
+        prefills: list[dict] = []
+        skipped_reasons: list[str] = []
+        for row in rows:
+            prefill = self._build_prefill(row)
+            if prefill is None:
+                target = str(row.get("target_normalized") or row.get("host") or "").strip()
+                target = target or "unknown target"
+                skipped_reasons.append(f"{target}: protocol info unavailable.")
+                continue
+            prefills.append(prefill)
+        return prefills, skipped_reasons
+
+    def _start_bulk_promotion(
+        self,
+        *,
+        prefills: list[dict],
+        skipped_reasons: list[str],
+        selected_count: int,
+    ) -> None:
+        if not prefills:
+            summary = self._merge_bulk_promotion_summary(
+                selected_count,
+                skipped_reasons,
+                {},
+            )
+            messagebox.showinfo(
+                "Bulk import summary",
+                self._format_bulk_promotion_summary(summary),
+                parent=self.window,
+            )
+            return
+
+        cancel_event = threading.Event()
+        updates: queue.Queue = queue.Queue()
+
+        def _request_cancel() -> None:
+            cancel_event.set()
+
+        status_dialog = BatchStatusDialog(
+            parent=self.window,
+            theme=self.theme,
+            title="Bulk Import Status",
+            fields={
+                "Target": "Reddit Targets",
+                "Selected": str(selected_count),
+            },
+            on_cancel=_request_cancel,
+            total=selected_count,
+        )
+        status_dialog.update_progress(
+            len(skipped_reasons),
+            selected_count,
+            "Starting bulk import...",
+        )
+        status_dialog.show()
+
+        def _progress(done: int, _total: int, message: str) -> None:
+            updates.put(("progress", (done, message)))
+
+        def _worker() -> None:
+            try:
+                summary = self._promote_records_callback(
+                    prefills,
+                    cancel_event=cancel_event,
+                    progress_callback=_progress,
+                )
+                updates.put(("done", summary))
+            except Exception as exc:
+                updates.put(("error", str(exc)))
+
+        worker = threading.Thread(target=_worker, daemon=True)
+        worker.start()
+
+        def _poll_updates() -> None:
+            try:
+                while True:
+                    kind, payload = updates.get_nowait()
+                    if kind == "progress":
+                        done, message = payload
+                        status_dialog.update_progress(
+                            min(selected_count, int(done) + len(skipped_reasons)),
+                            selected_count,
+                            str(message),
+                        )
+                    elif kind == "done":
+                        summary = self._merge_bulk_promotion_summary(
+                            selected_count,
+                            skipped_reasons,
+                            payload if isinstance(payload, dict) else {},
+                        )
+                        final_status = "cancelled" if int(summary.get("cancelled", 0)) else "done"
+                        status_dialog.mark_finished(final_status, "Bulk import finished.")
+                        status_dialog.destroy()
+                        messagebox.showinfo(
+                            "Bulk import summary",
+                            self._format_bulk_promotion_summary(summary),
+                            parent=self.window,
+                        )
+                        return
+                    elif kind == "error":
+                        status_dialog.destroy()
+                        messagebox.showerror(
+                            "Bulk import failed",
+                            str(payload),
+                            parent=self.window,
+                        )
+                        return
+            except queue.Empty:
+                pass
+
+            if worker.is_alive():
+                self.window.after(90, _poll_updates)
+
+        self.window.after(40, _poll_updates)
+
+    def _merge_bulk_promotion_summary(
+        self,
+        selected_count: int,
+        skipped_reasons: list[str],
+        summary: dict,
+    ) -> dict:
+        base = dict(summary or {})
+        pre_skipped = len(skipped_reasons)
+        processed = int(base.get("processed", 0)) + pre_skipped
+        merged_skipped = int(base.get("skipped", 0)) + pre_skipped
+        cancelled = max(0, selected_count - processed)
+        samples = list(skipped_reasons)
+        samples.extend(list(base.get("skipped_reason_samples") or []))
+        return {
+            "selected": selected_count,
+            "processed": processed,
+            "inserted": int(base.get("inserted", 0)),
+            "updated": int(base.get("updated", 0)),
+            "skipped": merged_skipped,
+            "failed": int(base.get("failed", 0)),
+            "cancelled": cancelled,
+            "skipped_reason_samples": samples[:6],
+            "failed_reason_samples": list(base.get("failed_reason_samples") or [])[:6],
+        }
+
+    def _format_bulk_promotion_summary(self, summary: dict) -> str:
+        lines = [
+            f"Selected: {int(summary.get('selected', 0))}",
+            f"Processed: {int(summary.get('processed', 0))}",
+            f"Imported: {int(summary.get('inserted', 0))}",
+            f"Updated: {int(summary.get('updated', 0))}",
+            f"Skipped: {int(summary.get('skipped', 0))}",
+            f"Failed: {int(summary.get('failed', 0))}",
+        ]
+        cancelled = int(summary.get("cancelled", 0))
+        if cancelled > 0:
+            lines.append(f"Cancelled: {cancelled}")
+
+        skipped_samples = list(summary.get("skipped_reason_samples") or [])
+        failed_samples = list(summary.get("failed_reason_samples") or [])
+        if skipped_samples:
+            lines.append("")
+            lines.append("Skipped samples:")
+            lines.extend(f"- {reason}" for reason in skipped_samples)
+        if failed_samples:
+            lines.append("")
+            lines.append("Failure samples:")
+            lines.extend(f"- {reason}" for reason in failed_samples)
+        return "\n".join(lines)
+
     def _promote_prefill_direct(self, prefill: dict) -> None:
         try:
             promotion = self._promote_record_callback(prefill)
@@ -1098,6 +1294,7 @@ def show_reddit_browser_window(
     db_path: Optional[Path] = None,
     add_record_callback=None,
     promote_record_callback=None,
+    promote_records_callback=None,
     settings_manager=None,
 ) -> None:
     """Open the Reddit Post DB browser window."""
@@ -1106,5 +1303,6 @@ def show_reddit_browser_window(
         db_path,
         add_record_callback=add_record_callback,
         promote_record_callback=promote_record_callback,
+        promote_records_callback=promote_records_callback,
         settings_manager=settings_manager,
     )
