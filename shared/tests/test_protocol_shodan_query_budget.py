@@ -155,6 +155,30 @@ def test_query_ftp_shodan_respects_budgeted_page_cap(monkeypatch):
     assert len(api.calls) == 3
 
 
+def test_query_ftp_shodan_cap_1000_uses_ten_pages(monkeypatch):
+    class _ApiStub:
+        def __init__(self):
+            self.calls = []
+
+        def search(self, _query, **kwargs):
+            self.calls.append(kwargs)
+            page = int(kwargs.get("page", 1))
+            matches = [
+                {"ip_str": f"10.{page}.{idx // 256}.{idx % 256}", "port": 21}
+                for idx in range(100)
+            ]
+            return {"matches": matches}
+
+    api = _ApiStub()
+    _install_shodan_module(monkeypatch, api)
+
+    workflow = _WorkflowStub(_ConfigStub(ftp_budget=10, ftp_max_results=1000))
+    candidates = ftp_shodan_query.query_ftp_shodan(workflow)
+
+    assert len(candidates) == 1000
+    assert len(api.calls) == 10
+
+
 def test_query_http_shodan_uses_single_page_when_budget_is_one(monkeypatch):
     class _ApiStub:
         def __init__(self):
@@ -179,3 +203,31 @@ def test_query_http_shodan_uses_single_page_when_budget_is_one(monkeypatch):
     assert len(api.calls) == 1
     assert api.calls[0].get("page") == 1
     assert "limit" not in api.calls[0]
+
+
+def test_query_http_shodan_cap_1000_uses_ten_pages(monkeypatch):
+    class _ApiStub:
+        def __init__(self):
+            self.calls = []
+
+        def search(self, _query, **kwargs):
+            self.calls.append(kwargs)
+            page = int(kwargs.get("page", 1))
+            matches = [
+                {
+                    "ip_str": f"20.{page}.{idx // 256}.{idx % 256}",
+                    "port": 80,
+                    "http": {"title": "Index of /"},
+                }
+                for idx in range(100)
+            ]
+            return {"matches": matches}
+
+    api = _ApiStub()
+    _install_shodan_module(monkeypatch, api)
+
+    workflow = _WorkflowStub(_ConfigStub(http_budget=10, http_max_results=1000))
+    candidates = http_shodan_query.query_http_shodan(workflow)
+
+    assert len(candidates) == 1000
+    assert len(api.calls) == 10

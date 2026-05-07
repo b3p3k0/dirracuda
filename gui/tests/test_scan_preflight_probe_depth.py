@@ -141,7 +141,7 @@ def test_scan_preflight_always_shows_summary_even_without_optional_actions(monke
     assert any("No optional post-scan actions selected" in line for line in captured["lines"])
 
 
-def test_scan_preflight_mult_protocol_cost_estimate_includes_adaptive_range(monkeypatch):
+def test_scan_preflight_mult_protocol_cost_estimate_uses_candidate_caps(monkeypatch):
     captured = {}
 
     class _CfgStub:
@@ -187,7 +187,7 @@ def test_scan_preflight_mult_protocol_cost_estimate_includes_adaptive_range(monk
 
     assert result is not None
     assert any("Shodan balance: 100 credits" in line for line in captured["lines"])
-    assert any("Estimated total query cost: ~7..9" in line for line in captured["lines"])
+    assert any("Estimated total query cost: ~9" in line for line in captured["lines"])
 
 
 def test_scan_preflight_hides_numeric_estimates_when_balance_unavailable(monkeypatch):

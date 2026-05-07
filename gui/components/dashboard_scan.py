@@ -210,9 +210,34 @@ def build_protocol_scan_options(protocol: str, common_options: Dict[str, Any]) -
             return default
         return max(1, budget)
 
-    smb_budget = _coerce_budget(common_options.get("smb_max_query_credits_per_scan"), 1)
-    ftp_budget = _coerce_budget(common_options.get("ftp_max_query_credits_per_scan"), 1)
-    http_budget = _coerce_budget(common_options.get("http_max_query_credits_per_scan"), 1)
+    def _coerce_cap(value: Any, default: int = 100) -> int:
+        try:
+            cap = int(value)
+        except (TypeError, ValueError):
+            return default
+        return max(1, cap)
+
+    def _budget_for_cap(cap: int) -> int:
+        return max(1, (cap + 99) // 100)
+
+    shared_cap = common_options.get("max_shodan_results")
+    shared_cap_default = _coerce_cap(shared_cap, 0) if shared_cap is not None else 0
+
+    smb_cap = _coerce_cap(
+        common_options.get("smb_max_shodan_results_per_scan"),
+        shared_cap_default or _coerce_budget(common_options.get("smb_max_query_credits_per_scan"), 1) * 100,
+    )
+    ftp_cap = _coerce_cap(
+        common_options.get("ftp_max_shodan_results_per_scan"),
+        shared_cap_default or _coerce_budget(common_options.get("ftp_max_query_credits_per_scan"), 1) * 100,
+    )
+    http_cap = _coerce_cap(
+        common_options.get("http_max_shodan_results_per_scan"),
+        shared_cap_default or _coerce_budget(common_options.get("http_max_query_credits_per_scan"), 1) * 100,
+    )
+    smb_budget = _budget_for_cap(smb_cap)
+    ftp_budget = _budget_for_cap(ftp_cap)
+    http_budget = _budget_for_cap(http_cap)
 
     try:
         shared_concurrency = int(common_options.get("shared_concurrency", 10))
@@ -232,7 +257,7 @@ def build_protocol_scan_options(protocol: str, common_options: Dict[str, Any]) -
             security_mode = "cautious"
         return {
             "country": country,
-            "max_shodan_results": smb_budget * 100,
+            "max_shodan_results": smb_cap,
             "discovery_max_concurrent_hosts": shared_concurrency,
             "access_max_concurrent_hosts": shared_concurrency,
             "connection_timeout": shared_timeout,
@@ -242,6 +267,9 @@ def build_protocol_scan_options(protocol: str, common_options: Dict[str, Any]) -
             "bulk_probe_enabled": bulk_probe,
             "bulk_extract_enabled": bulk_extract,
             "bulk_extract_skip_indicators": skip_indicator_extract,
+            "smb_max_shodan_results_per_scan": smb_cap,
+            "ftp_max_shodan_results_per_scan": ftp_cap,
+            "http_max_shodan_results_per_scan": http_cap,
             "smb_max_query_credits_per_scan": smb_budget,
             "ftp_max_query_credits_per_scan": ftp_budget,
             "http_max_query_credits_per_scan": http_budget,
@@ -250,7 +278,7 @@ def build_protocol_scan_options(protocol: str, common_options: Dict[str, Any]) -
     if protocol == "ftp":
         return {
             "country": country,
-            "max_shodan_results": ftp_budget * 100,
+            "max_shodan_results": ftp_cap,
             "discovery_max_concurrent_hosts": shared_concurrency,
             "access_max_concurrent_hosts": shared_concurrency,
             "connect_timeout": shared_timeout,
@@ -261,6 +289,9 @@ def build_protocol_scan_options(protocol: str, common_options: Dict[str, Any]) -
             "bulk_probe_enabled": bulk_probe,
             "bulk_extract_enabled": bulk_extract,
             "bulk_extract_skip_indicators": skip_indicator_extract,
+            "smb_max_shodan_results_per_scan": smb_cap,
+            "ftp_max_shodan_results_per_scan": ftp_cap,
+            "http_max_shodan_results_per_scan": http_cap,
             "smb_max_query_credits_per_scan": smb_budget,
             "ftp_max_query_credits_per_scan": ftp_budget,
             "http_max_query_credits_per_scan": http_budget,
@@ -270,7 +301,7 @@ def build_protocol_scan_options(protocol: str, common_options: Dict[str, Any]) -
     allow_insecure_tls = bool(common_options.get("allow_insecure_tls", True))
     return {
         "country": country,
-        "max_shodan_results": http_budget * 100,
+        "max_shodan_results": http_cap,
         "discovery_max_concurrent_hosts": shared_concurrency,
         "access_max_concurrent_hosts": shared_concurrency,
         "connect_timeout": shared_timeout,
@@ -284,6 +315,9 @@ def build_protocol_scan_options(protocol: str, common_options: Dict[str, Any]) -
         "bulk_probe_enabled": bulk_probe,
         "bulk_extract_enabled": bulk_extract,
         "bulk_extract_skip_indicators": skip_indicator_extract,
+        "smb_max_shodan_results_per_scan": smb_cap,
+        "ftp_max_shodan_results_per_scan": ftp_cap,
+        "http_max_shodan_results_per_scan": http_cap,
         "smb_max_query_credits_per_scan": smb_budget,
         "ftp_max_query_credits_per_scan": ftp_budget,
         "http_max_query_credits_per_scan": http_budget,

@@ -138,22 +138,17 @@ GUI scan dialogs no longer include a per-scan `Custom Shodan Filters` field; GUI
 
 Start Scan shows a preflight confirmation that includes an approximate Shodan query-cost estimate before launch.
 
-### Shodan Credits: How Spend Is Calculated
+### Shodan Credits
 
-Dirracuda spends Shodan query credits by **result page** (about 100 matches/page), not by protocol toggle alone.
-That means a scan can consume more than one credit when you raise per-protocol budgets.
+Shodan charges by **result page** — roughly 100 candidates per credit. Dirracuda controls this through a **Max Shodan Results** field next to each protocol toggle in the scan dialog.
 
-- Each protocol has its own credit budget cap (`SMB`, `FTP`, `HTTP`).
-- Default is `1` credit budget per protocol per scan.
-- In the scan flow, discovery window sizing is budget-driven: `max_shodan_results = budget * 100`.
-- Budgets are editable from scan dialogs via `Query Budget...`.
-- Estimated totals are approximate
+Cost is `ceil(Max Shodan Results / 100)` credits per selected protocol — the default `100` costs ~1 credit, `1000` costs ~10.
 
-If preflight cannot fetch a **live** Shodan balance, Dirracuda shows:
-- `Shodan balance: not available at this time`
-- `Check balance: https://developer.shodan.io/dashboard`
+The verified host count stored in your database will be lower than the candidate count — Shodan may return fewer matches than the cap, and hosts that fail the reachability check, protocol verification, or exclusion filters don't make it through.
 
-In that case, numeric cost estimates are intentionally suppressed to avoid stale/misleading projections.
+The **preflight screen** shows your live balance and an estimated post-scan balance before you commit. If Dirracuda can't reach Shodan to check your balance,  estimates are suppressed and a link to the [Shodan dashboard](https://developer.shodan.io/dashboard) is shown instead.
+
+> For implementation details — how credits are derived from caps, config keys, adaptive page-stop behavior — see [Shodan candidate-cap controls](docs/TECHNICAL_REFERENCE.md#shodan-candidate-cap-controls-all-discovery-protocols) in the Technical Reference.
 
 **Post-scan bulk probe/extract scope** - when bulk probe or bulk extract is enabled from the scan flow, targets are limited to accessible hosts from the scan that just completed (same protocol). .
 

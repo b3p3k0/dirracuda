@@ -102,6 +102,11 @@ DEFAULT_GUI_SETTINGS = {
         'ftp_max_query_credits_per_scan': 1,
         'http_max_query_credits_per_scan': 1
     },
+    'query_cap': {
+        'smb_max_shodan_results_per_scan': 100,
+        'ftp_max_shodan_results_per_scan': 100,
+        'http_max_shodan_results_per_scan': 100
+    },
     'probe': {
         'max_directories_per_share': 3,
         'max_files_per_directory': 5,

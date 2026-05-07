@@ -77,6 +77,9 @@ def _make_dialog(*, show_rce_controls: bool = True) -> UnifiedScanDialog:
     dlg.protocol_smb_var = _Var(True)
     dlg.protocol_ftp_var = _Var(False)
     dlg.protocol_http_var = _Var(False)
+    dlg.smb_max_results_var = _Var("100")
+    dlg.ftp_max_results_var = _Var("100")
+    dlg.http_max_results_var = _Var("100")
     dlg.country_var = _Var("")
     dlg.security_mode_var = _Var("cautious")
     dlg.verbose_var = _Var(False)
@@ -166,24 +169,22 @@ def test_start_invalid_protocol_selection_shows_error(monkeypatch):
 
 def test_start_valid_request_invokes_callback(monkeypatch):
     dlg = _make_dialog()
+    dlg.smb_max_results_var.set("200")
+    dlg.ftp_max_results_var.set("300")
+    dlg.http_max_results_var.set("400")
     captured = {}
     dlg.scan_start_callback = lambda payload: captured.setdefault("payload", payload)
 
     monkeypatch.setattr("gui.components.unified_scan_dialog.messagebox.showerror", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(
-        "gui.components.unified_scan_dialog.load_query_budget_state",
-        lambda **_kwargs: {
-            "smb_max_query_credits_per_scan": 2,
-            "ftp_max_query_credits_per_scan": 3,
-            "http_max_query_credits_per_scan": 4,
-            "min_usable_hosts_target": 50,
-        },
-    )
+    monkeypatch.setattr("gui.components.unified_scan_dialog.persist_query_budget_state", lambda *_a, **_k: None)
     monkeypatch.setattr("gui.components.unified_scan_dialog.run_preflight", lambda *_args, **_kwargs: _args[3])
 
     dlg._start()
 
     assert "max_shodan_results" not in captured["payload"]
+    assert captured["payload"]["smb_max_shodan_results_per_scan"] == 200
+    assert captured["payload"]["ftp_max_shodan_results_per_scan"] == 300
+    assert captured["payload"]["http_max_shodan_results_per_scan"] == 400
     assert captured["payload"]["smb_max_query_credits_per_scan"] == 2
     assert captured["payload"]["ftp_max_query_credits_per_scan"] == 3
     assert captured["payload"]["http_max_query_credits_per_scan"] == 4
@@ -203,26 +204,19 @@ def test_no_live_max_results_clamp_method_exists():
     assert not hasattr(UnifiedScanDialog, "_validate_max_results")
 
 
-def test_protocol_estimate_lines_show_selected_protocols_only(monkeypatch):
+def test_protocol_estimate_lines_show_selected_protocols_only():
     dlg = _make_dialog()
     dlg.protocol_smb_var.set(True)
     dlg.protocol_ftp_var.set(True)
     dlg.protocol_http_var.set(False)
-
-    monkeypatch.setattr(
-        "gui.components.unified_scan_dialog.load_query_budget_state",
-        lambda **_kwargs: {
-            "smb_max_query_credits_per_scan": 3,
-            "ftp_max_query_credits_per_scan": 5,
-            "http_max_query_credits_per_scan": 1,
-            "min_usable_hosts_target": 50,
-        },
-    )
+    dlg.smb_max_results_var.set("1000")
+    dlg.ftp_max_results_var.set("1000")
+    dlg.http_max_results_var.set("100")
 
     dlg._refresh_protocol_estimate_lines()
 
-    assert dlg.protocol_cost_label.text == "Est. cost: ~8 credits"
-    assert dlg.protocol_results_label.text == "Est. initial results: SMB ~300   FTP ~500"
+    assert dlg.protocol_cost_label.text == "Est. cost: ~20 credits"
+    assert dlg.protocol_results_label.text == "Est. initial results: SMB ~1000   FTP ~1000"
 
 
 def test_cost_estimate_help_text_includes_key_contract_lines():
@@ -231,7 +225,8 @@ def test_cost_estimate_help_text_includes_key_contract_lines():
     help_text = dlg._build_cost_estimate_help_text()
 
     assert "One API credit typically yields roughly 100 search results." in help_text
-    assert "Query Budget sets how many credits each protocol can use per scan." in help_text
+    assert "Max Shodan Results sets the maximum initial candidates each protocol can fetch." in help_text
+    assert "Estimated cost is about one query credit per 100 candidates requested." in help_text
     assert "Initial Shodan search returns a list of candidates, not results." in help_text
 
 
@@ -252,20 +247,11 @@ def test_cost_estimate_help_click_routes_to_dialog_renderer(monkeypatch):
 
 def test_opening_cost_estimate_help_does_not_mutate_scan_request(monkeypatch):
     dlg = _make_dialog()
-    monkeypatch.setattr(
-        dlg,
-        "_show_cost_estimate_help_dialog",
-        lambda: None,
-    )
-    monkeypatch.setattr(
-        "gui.components.unified_scan_dialog.load_query_budget_state",
-        lambda **_kwargs: {
-            "smb_max_query_credits_per_scan": 2,
-            "ftp_max_query_credits_per_scan": 3,
-            "http_max_query_credits_per_scan": 4,
-            "min_usable_hosts_target": 50,
-        },
-    )
+    dlg.smb_max_results_var.set("200")
+    dlg.ftp_max_results_var.set("300")
+    dlg.http_max_results_var.set("400")
+    monkeypatch.setattr(dlg, "_show_cost_estimate_help_dialog", lambda: None)
+    monkeypatch.setattr("gui.components.unified_scan_dialog.persist_query_budget_state", lambda *_a, **_k: None)
 
     before = dlg._build_scan_request()
     dlg._on_cost_estimate_help_clicked()
@@ -392,3 +378,24 @@ def test_show_unified_scan_dialog_passes_query_editor_callback(monkeypatch):
 
     assert result == "start"
     assert callable(captured["query_editor_callback"])
+
+
+def test_no_open_query_budget_dialog_method_on_unified_dialog():
+    assert not hasattr(UnifiedScanDialog, "_open_query_budget_dialog")
+
+
+def test_inline_max_results_vars_flow_into_build_scan_request(monkeypatch):
+    dlg = _make_dialog()
+    dlg.smb_max_results_var.set("500")
+    dlg.ftp_max_results_var.set("750")
+    dlg.http_max_results_var.set("250")
+    monkeypatch.setattr("gui.components.unified_scan_dialog.persist_query_budget_state", lambda *_a, **_k: None)
+
+    payload = dlg._build_scan_request()
+
+    assert payload["smb_max_shodan_results_per_scan"] == 500
+    assert payload["ftp_max_shodan_results_per_scan"] == 750
+    assert payload["http_max_shodan_results_per_scan"] == 250
+    assert payload["smb_max_query_credits_per_scan"] == 5
+    assert payload["ftp_max_query_credits_per_scan"] == 8
+    assert payload["http_max_query_credits_per_scan"] == 3

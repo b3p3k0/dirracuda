@@ -1,4 +1,4 @@
-"""Tests for shared query budget state helpers."""
+"""Tests for shared Shodan candidate-cap state helpers."""
 
 from __future__ import annotations
 
@@ -33,14 +33,17 @@ def test_load_query_budget_state_prefers_gui_settings_over_config(monkeypatch):
 
     sm = MagicMock()
     stored = {
-        "query_budget.smb_max_query_credits_per_scan": 5,
-        "query_budget.ftp_max_query_credits_per_scan": 6,
-        "query_budget.http_max_query_credits_per_scan": 7,
+        "query_cap.smb_max_shodan_results_per_scan": 500,
+        "query_cap.ftp_max_shodan_results_per_scan": 600,
+        "query_cap.http_max_shodan_results_per_scan": 700,
     }
     sm.get_setting.side_effect = lambda key, default=None: stored.get(key, default)
 
     state = load_query_budget_state(settings_manager=sm, config_path="/tmp/config.json")
 
+    assert state["smb_max_shodan_results_per_scan"] == 500
+    assert state["ftp_max_shodan_results_per_scan"] == 600
+    assert state["http_max_shodan_results_per_scan"] == 700
     assert state["smb_max_query_credits_per_scan"] == 5
     assert state["ftp_max_query_credits_per_scan"] == 6
     assert state["http_max_query_credits_per_scan"] == 7
@@ -63,9 +66,33 @@ def test_load_query_budget_state_supports_legacy_smb_budget_key(monkeypatch):
 
     state = load_query_budget_state(settings_manager=None, config_path=None)
 
+    assert state["smb_max_shodan_results_per_scan"] == 900
+    assert state["ftp_max_shodan_results_per_scan"] == 100
+    assert state["http_max_shodan_results_per_scan"] == 100
     assert state["smb_max_query_credits_per_scan"] == 9
     assert state["ftp_max_query_credits_per_scan"] == 1
     assert state["http_max_query_credits_per_scan"] == 1
+
+
+def test_load_query_budget_state_falls_back_to_legacy_gui_budgets(monkeypatch):
+    monkeypatch.setattr(
+        "gui.components.query_budget_dialog.load_config",
+        lambda _path=None: _CfgStub({"query_limits": {}}),
+    )
+
+    sm = MagicMock()
+    stored = {
+        "query_budget.smb_max_query_credits_per_scan": 4,
+        "query_budget.ftp_max_query_credits_per_scan": 2,
+        "query_budget.http_max_query_credits_per_scan": 1,
+    }
+    sm.get_setting.side_effect = lambda key, default=None: stored.get(key, default)
+
+    state = load_query_budget_state(settings_manager=sm, config_path="/tmp/config.json")
+
+    assert state["smb_max_shodan_results_per_scan"] == 400
+    assert state["ftp_max_shodan_results_per_scan"] == 200
+    assert state["http_max_shodan_results_per_scan"] == 100
 
 
 def test_persist_query_budget_state_clamps_and_writes_values():
@@ -82,6 +109,9 @@ def test_persist_query_budget_state_clamps_and_writes_values():
 
     sm.set_setting.assert_has_calls(
         [
+            call("query_cap.smb_max_shodan_results_per_scan", 100),
+            call("query_cap.ftp_max_shodan_results_per_scan", 200),
+            call("query_cap.http_max_shodan_results_per_scan", 300),
             call("query_budget.smb_max_query_credits_per_scan", 1),
             call("query_budget.ftp_max_query_credits_per_scan", 2),
             call("query_budget.http_max_query_credits_per_scan", 3),

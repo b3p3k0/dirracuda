@@ -234,6 +234,48 @@ def test_query_shodan_adaptive_stops_early_when_usable_target_hit():
     assert any("adaptive query target reached" in msg.lower() for msg in op.output.info_messages)
 
 
+def test_query_shodan_gui_style_cap_fetches_all_allowed_pages():
+    op = _OpStub()
+
+    class _Config250Budget3TargetAboveCap(_ConfigStub):
+        def get_shodan_config(self):
+            return {
+                "query_limits": {
+                    "max_results": 250,
+                    "max_query_credits_per_scan": 3,
+                    "min_usable_hosts_target": 251,
+                }
+            }
+
+    class _PagedApiStub:
+        def __init__(self):
+            self.calls = []
+
+        def search(self, _query, **kwargs):
+            self.calls.append(kwargs)
+            page = int(kwargs.get("page", 1))
+            matches = []
+            for idx in range(100):
+                matches.append(
+                    {
+                        "ip_str": f"10.30.{page}.{idx}",
+                        "location": {"country_name": "United States", "country_code": "US"},
+                        "org": "Example ISP",
+                        "isp": "Example ISP",
+                    }
+                )
+            return {"matches": matches}
+
+    op.config = _Config250Budget3TargetAboveCap()
+    op.shodan_api = _PagedApiStub()
+
+    ips, _query = shodan_query.query_shodan(op, country="US", custom_filters="")
+
+    assert len(ips) == 250
+    assert len(op.shodan_api.calls) == 3
+    assert op.stats["shodan_effective_limit"] == 250
+
+
 def test_build_targeted_query_does_not_embed_org_exclusions():
     op = _OpStub()
     query = shodan_query.build_targeted_query(op, countries=["US"], custom_filters="")

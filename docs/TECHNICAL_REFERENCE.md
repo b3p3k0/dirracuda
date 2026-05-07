@@ -282,20 +282,26 @@ With `smart_throttling=true`, `throttled_auth_wait()` adjusts the rate-limit del
 
 Progress is reported on the first host, every 10 hosts, and the final host.
 
-**Shodan budget controls (all discovery protocols):**
+**Shodan candidate-cap controls (all discovery protocols):**
 
-- GUI scan dialogs are budget-authoritative (no user-facing `Max Shodan Results` control):
-  - per protocol runtime window is derived as `max_shodan_results = protocol_budget * 100`.
+- GUI scan dialogs are candidate-cap authoritative. Each protocol has an inline **Max Shodan Results** field:
+  - per-protocol runtime window is `max_shodan_results = protocol_candidate_cap`.
+  - internal page budgets are derived as `ceil(protocol_candidate_cap / 100)` so legacy budget guards do not undercut explicit caps.
 - CLI/config-driven flows can still apply explicit `max_results`; in those paths
   `effective_limit = min(max_results, protocol_budget * 100)`.
-- Budget keys:
+- Persisted GUI cap keys:
+  - `query_cap.smb_max_shodan_results_per_scan`
+  - `query_cap.ftp_max_shodan_results_per_scan`
+  - `query_cap.http_max_shodan_results_per_scan`
+- Compatibility budget keys:
   - `query_limits.smb_max_query_credits_per_scan`
   - `query_limits.ftp_max_query_credits_per_scan`
   - `query_limits.http_max_query_credits_per_scan`
 - Legacy SMB alias `query_limits.max_query_credits_per_scan` is still read for backward compatibility.
-- SMB supports adaptive early stop when budget > 1:
+- SMB supports adaptive early stop in config-driven flows when budget > 1:
   - stop once exclusion-passing candidate count reaches `query_limits.min_usable_hosts_target`,
   - or when budget pages are exhausted.
+- GUI-launched SMB scans set the runtime usable-host target above the candidate cap so a cap of 1000 can fetch up to the full 1000 candidates instead of stopping after the first good page.
 - FTP/HTTP use strict page caps (no adaptive top-up in current build).
 
 **Share enumeration** (`commands/access/share_enumerator.py`):

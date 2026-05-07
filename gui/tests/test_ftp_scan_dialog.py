@@ -82,6 +82,9 @@ class TestFtpScanDialogOptionBuild:
             "listing_timeout",
             "verbose",
             "bulk_probe_enabled",
+            "smb_max_shodan_results_per_scan",
+            "ftp_max_shodan_results_per_scan",
+            "http_max_shodan_results_per_scan",
             "smb_max_query_credits_per_scan",
             "ftp_max_query_credits_per_scan",
             "http_max_query_credits_per_scan",
@@ -104,6 +107,9 @@ class TestFtpScanDialogOptionBuild:
         assert isinstance(opts["listing_timeout"], int)
         assert isinstance(opts["verbose"], bool)
         assert isinstance(opts["bulk_probe_enabled"], bool)
+        assert isinstance(opts["smb_max_shodan_results_per_scan"], int)
+        assert isinstance(opts["ftp_max_shodan_results_per_scan"], int)
+        assert isinstance(opts["http_max_shodan_results_per_scan"], int)
         assert isinstance(opts["smb_max_query_credits_per_scan"], int)
         assert isinstance(opts["ftp_max_query_credits_per_scan"], int)
         assert isinstance(opts["http_max_query_credits_per_scan"], int)
@@ -125,20 +131,22 @@ class TestFtpScanDialogOptionBuild:
         assert opts["bulk_probe_enabled"] is False
         assert opts["ftp_max_query_credits_per_scan"] == 1
 
-    def test_max_results_derived_from_ftp_budget(self, tk_root, monkeypatch):
+    def test_max_results_derived_from_ftp_candidate_cap(self, tk_root):
         dlg = _make_dialog(tk_root)
-        monkeypatch.setattr(
-            "gui.components.ftp_scan_dialog.load_query_budget_state",
-            lambda **_kwargs: {
-                "smb_max_query_credits_per_scan": 1,
-                "ftp_max_query_credits_per_scan": 4,
-                "http_max_query_credits_per_scan": 1,
-                "min_usable_hosts_target": 50,
-            },
-        )
+        dlg.ftp_max_results_var.set("1000")
 
         opts = dlg._build_scan_options()
-        assert opts["max_shodan_results"] == 400
+        assert opts["max_shodan_results"] == 1000
+        assert opts["ftp_max_query_credits_per_scan"] == 10
+
+    def test_inline_ftp_max_results_var_flows_to_build_options(self, tk_root):
+        dlg = _make_dialog(tk_root)
+        dlg.ftp_max_results_var.set("500")
+
+        opts = dlg._build_scan_options()
+        assert opts["max_shodan_results"] == 500
+        assert opts["ftp_max_shodan_results_per_scan"] == 500
+        assert opts["ftp_max_query_credits_per_scan"] == 5
 
     def test_country_passed_through(self, tk_root):
         """Manual country entry is passed through correctly."""
@@ -391,7 +399,7 @@ class TestFtpScanManagerOverrides:
             overrides.get("shodan", {})
             .get("query_limits", {})
             .get("ftp_max_query_credits_per_scan")
-            == 2
+            == 5
         )
         # concurrency
         assert overrides.get("ftp", {}).get("discovery", {}).get("max_concurrent_hosts") == 8

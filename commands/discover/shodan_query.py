@@ -26,7 +26,7 @@ def _coerce_int(value: Any, default: int, minimum: int = 1) -> int:
 
 
 def _resolve_query_limits(shodan_config: Dict[str, Any]) -> Dict[str, int]:
-    """Resolve SMB Shodan query limits including credit budget controls."""
+    """Resolve SMB Shodan query limits including candidate cap controls."""
     query_limits = shodan_config.get("query_limits", {}) if isinstance(shodan_config, dict) else {}
     max_results = _coerce_int(query_limits.get("max_results"), 1000)
     max_query_credits = _coerce_int(
@@ -95,9 +95,9 @@ def _collect_shodan_matches(op, query: str, query_limits: Dict[str, int]) -> Lis
         return []
 
     op.output.info(
-        "SMB Shodan budget: "
-        f"requested {query_limits['max_results']} results, "
-        f"budget {query_limits['max_query_credits_per_scan']} credit(s), "
+        "SMB Shodan candidate cap: "
+        f"requested up to {query_limits['max_results']} candidates, "
+        f"internal page budget {query_limits['max_query_credits_per_scan']} credit(s), "
         f"effective limit {effective_limit} ({max_pages} page(s) max)"
     )
 

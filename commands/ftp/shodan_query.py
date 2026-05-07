@@ -39,7 +39,7 @@ def _coerce_int(value, default: int, minimum: int = 1) -> int:
 
 
 def _resolve_ftp_query_limits(workflow: "FtpWorkflow") -> dict:
-    """Resolve FTP query limits with a hard per-scan credit budget."""
+    """Resolve FTP query limits with a hard per-scan candidate cap."""
     ftp_cfg = workflow.config.get_ftp_config()
     ftp_limits = ftp_cfg.get("shodan", {}).get("query_limits", {})
     shodan_limits = workflow.config.get_shodan_config().get("query_limits", {})
@@ -68,9 +68,9 @@ def _collect_ftp_matches(api, query: str, limits: dict, out) -> List[dict]:
         return []
 
     out.info(
-        "FTP Shodan budget: "
-        f"requested {limits['max_results']} results, "
-        f"budget {limits['budget']} credit(s), "
+        "FTP Shodan candidate cap: "
+        f"requested up to {limits['max_results']} candidates, "
+        f"internal page budget {limits['budget']} credit(s), "
         f"effective limit {effective_limit} ({max_pages} page(s) max)"
     )
 
