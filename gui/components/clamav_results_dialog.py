@@ -13,6 +13,7 @@ from tkinter import ttk
 from typing import Any, Callable, Dict, List, Optional
 
 from gui.utils import session_flags
+from gui.utils.keybindings import add_shortcut_hint, bind_close_shortcuts, bind_submit_shortcuts
 
 _BOOL_TRUE = frozenset(("true", "yes", "1"))
 
@@ -243,8 +244,17 @@ def _build_dialog(
         theme.apply_to_widget(close_btn, "button_secondary")
     close_btn.pack(side=tk.RIGHT)
 
+    add_shortcut_hint(
+        btn_frame,
+        theme,
+        "Enter close  •  Esc/Ctrl+W/Cmd+W close",
+    )
+
     if theme:
         theme.apply_theme_to_application(dialog)
+
+    bind_submit_shortcuts(dialog, dialog.destroy, allow_text_submit_with_enter=True)
+    bind_close_shortcuts(dialog, dialog.destroy)
 
     if wait:
         parent.wait_window(dialog)

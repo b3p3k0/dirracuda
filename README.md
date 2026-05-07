@@ -118,6 +118,38 @@ The main window. From here you can:
 - Edit configuration
 - Open **Running Tasks** to monitor active/queued work and reopen hidden monitor dialogs (scan/probe/extract)
 
+### Keyboard Shortcuts (Phase 1 + Phase 2)
+
+Dirracuda now ships a standardized keyboard contract across core dialogs/windows.
+
+- **Dashboard**
+  - `Alt+1` Start Scan
+  - `Alt+2` Servers
+  - `Alt+3` DB Tools
+  - `Alt+4` Experimental
+  - `Alt+5` Config
+  - `Alt+6` About
+- **Global shortcuts (any focused window)**
+  - `Ctrl+Q` / `Cmd+Q` quit app (uses normal running-task confirmation flow)
+  - `Ctrl+H` / `Cmd+H` open Help placeholder dialog
+  - `Ctrl+T` / `Cmd+T` toggle theme
+- **Core dialog defaults**
+  - `Esc` closes/cancels using existing handlers
+  - `Enter` triggers the primary action on most forms/dialogs
+  - `Ctrl+S` / `Cmd+S` saves/applies where supported
+  - `Ctrl+W` / `Cmd+W` closes non-destructive dialogs/windows
+- **Multiline text safety**
+  - In multiline text editors, plain `Enter` stays newline
+  - Use `Ctrl+Enter` / `Cmd+Enter` for submit where that flow supports it
+- **Browser windows (SMB/FTP/HTTP)**
+  - `Enter` / `KP_Enter` open selected row (double-click parity)
+  - `BackSpace` / `Alt+Up` navigate parent/up
+  - `F5` / `Ctrl+R` / `Cmd+R` refresh current view
+  - `Esc` / `Ctrl+W` / `Cmd+W` close browser window
+- **File/Image viewers**
+  - `Esc` / `Ctrl+W` / `Cmd+W` close viewer
+  - `Ctrl+S` / `Cmd+S` save to quarantine when Save is available
+
 ### Discovery
 
 ![livescan](img/livescan.png)

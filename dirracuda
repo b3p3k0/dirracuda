@@ -74,7 +74,7 @@ _logger = get_logger("dirracuda")
 # Canonical startup sizing for the Dirracuda frontend
 # (tuning phase: allow free resize after launch)
 WINDOW_WIDTH = 700
-WINDOW_HEIGHT = 315
+WINDOW_HEIGHT = 350
 WINDOW_GEOMETRY = f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}"
 TMPFS_LEGACY_WARNING_DISMISS_KEY = "runtime_warnings.tmpfs_legacy_mount_dismissed"
 
@@ -139,6 +139,7 @@ def _render_1337_motd(
 # Thread-safe UI dispatcher for worker callbacks
 from gui.utils.ui_dispatcher import UIDispatcher
 from gui.utils.scan_manager import get_scan_manager
+from gui.utils.keybindings import bind_dashboard_alt_shortcuts
 
 # Configuration manager for Dirracuda settings
 class XSMBSeekConfig:
@@ -568,6 +569,7 @@ try:
     from gui.components.app_config_dialog import open_app_config_dialog
     from gui.components.data_import_dialog import open_data_import_dialog
     from gui.components.database_setup_dialog import show_database_setup_dialog
+    from gui.components.global_shortcuts import register_global_shortcuts
     from gui.utils.database_access import DatabaseReader
     from gui.utils.db_unification import (
         apply_probe_cleanup_choice,
@@ -1016,11 +1018,24 @@ class XSMBSeekGUI:
     def _setup_event_handlers(self) -> None:
         """Setup application-wide event handlers."""
         # Keyboard shortcuts
-        self.root.bind("<Control-q>", lambda e: self._on_closing())
         self.root.bind("<F5>", lambda e: self._refresh_dashboard())
         self.root.bind("<Control-r>", lambda e: self._refresh_dashboard())
         self.root.bind("<Control-i>", lambda e: self._open_drill_down_window("data_import", {}))
         self.root.bind("<Control-comma>", lambda e: self._open_xsmbseek_settings())
+        register_global_shortcuts(self.root, self.dashboard, self._on_closing)
+        # Dashboard Alt shortcuts (row-major action grid + reserved digits).
+        bind_dashboard_alt_shortcuts(
+            self.root,
+            actions_by_digit={
+                "1": lambda: self.dashboard._handle_scan_button_click(),
+                "2": lambda: self.dashboard._open_drill_down("server_list"),
+                "3": lambda: self.dashboard._open_db_tools(),
+                "4": lambda: self.dashboard._handle_experimental_button_click(),
+                "5": lambda: self.dashboard._open_config_editor(),
+                "6": lambda: self.dashboard._open_about_dialog(),
+            },
+            reserved_digits=("7", "8", "9", "0"),
+        )
     
     def _enable_mock_mode(self) -> None:
         """Enable mock mode for testing."""

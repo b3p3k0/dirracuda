@@ -35,6 +35,8 @@ try:
 except ImportError:
     from utils.dialog_helpers import ensure_dialog_focus
 
+from gui.utils.keybindings import add_shortcut_hint, bind_viewer_shortcuts
+
 
 def open_image_viewer(
     parent: tk.Widget,
@@ -123,6 +125,11 @@ class ImageViewerWindow:
         if self.on_save_callback is None:
             save_btn.configure(state=tk.DISABLED)
 
+        close_btn = tk.Button(toolbar, text="Close", command=self._on_close)
+        close_btn.pack(side=tk.RIGHT)
+        if self.theme:
+            self.theme.apply_to_widget(close_btn, "button_secondary")
+
         info_text = f"{self.original_image.width}x{self.original_image.height}"
         if self.truncated:
             info_text += " (truncated input)"
@@ -153,8 +160,25 @@ class ImageViewerWindow:
         if self.theme:
             self.theme.apply_to_widget(status, "status_bar")
 
+        if self.on_save_callback:
+            hint_text = "Esc/Ctrl+W/Cmd+W close  •  Ctrl/Cmd+S save to quarantine"
+        else:
+            hint_text = "Esc/Ctrl+W/Cmd+W close"
+        add_shortcut_hint(self.window, self.theme, hint_text)
+
+        self._bind_keyboard_shortcuts()
+
         if self.theme:
             self.theme.apply_theme_to_application(self.window)
+
+        ensure_dialog_focus(self.window, self.parent)
+
+    def _bind_keyboard_shortcuts(self) -> None:
+        bind_viewer_shortcuts(
+            self.window,
+            on_close=self._on_close,
+            on_save=self._on_save if self.on_save_callback else None,
+        )
 
     def _render_image(self) -> None:
         if not self.canvas:

@@ -28,6 +28,11 @@ from gui.components.query_budget_dialog import (
 from gui.components.scan_dork_editor_dialog import show_scan_dork_editor_dialog
 from gui.components.scan_preflight import run_preflight
 from gui.utils.dialog_helpers import ensure_dialog_focus
+from gui.utils.keybindings import (
+    add_shortcut_hint,
+    bind_close_shortcuts,
+    bind_submit_shortcuts,
+)
 from gui.utils.style import get_theme
 from gui.utils.template_store import TemplateStore
 
@@ -348,8 +353,8 @@ class UnifiedScanDialog:
         self._create_button_panel()
 
         self.dialog.protocol("WM_DELETE_WINDOW", self._cancel)
-        self.dialog.bind("<Return>", lambda _e: self._start())
-        self.dialog.bind("<Escape>", lambda _e: self._cancel())
+        bind_submit_shortcuts(self.dialog, self._start)
+        bind_close_shortcuts(self.dialog, self._cancel)
         self.country_var.trace_add("write", self._validate_country_input)
 
         if self.country_entry:
@@ -1163,6 +1168,12 @@ class UnifiedScanDialog:
         frame = tk.Frame(self.dialog)
         self.theme.apply_to_widget(frame, "main_window")
         frame.pack(fill=tk.X, padx=20, pady=(5, 15))
+
+        add_shortcut_hint(
+            frame,
+            self.theme,
+            "Enter start scan  •  Esc cancel  •  Ctrl/Cmd+W close",
+        )
 
         btns = tk.Frame(frame)
         self.theme.apply_to_widget(btns, "main_window")

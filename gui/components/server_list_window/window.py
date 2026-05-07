@@ -25,6 +25,7 @@ from gui.utils.data_export_engine import get_export_engine
 from gui.utils.scan_manager import get_scan_manager
 from gui.utils.template_store import TemplateStore
 from gui.utils.logging_config import get_logger
+from gui.utils.keybindings import bind_close_shortcuts, bind_tree_enter_shortcut
 from gui.components.pry_dialog import PryDialog
 from gui.components.pry_status_dialog import BatchStatusDialog
 from shared.db_migrations import run_migrations
@@ -552,6 +553,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self._create_context_menu(self.tree)
         self._bind_context_menu_events(self.tree)
         self._bind_hover_tooltip_events(self.tree)
+        bind_tree_enter_shortcut(self.tree, self._view_server_details)
         self._create_table_overlay()
 
         # Pack table frame
@@ -792,6 +794,13 @@ class ServerListWindow(ServerListWindowActionsMixin):
         )
         self.status_label.pack(anchor="w")
 
+        self.theme.create_styled_label(
+            info_container,
+            "Enter view details  •  Esc/Ctrl+W/Cmd+W close",
+            "small",
+            fg=self.theme.colors["text_secondary"],
+        ).pack(anchor="w", pady=(2, 0))
+
         # Right side - action buttons
         button_container = tk.Frame(self.button_frame)
         self.theme.apply_to_widget(button_container, "main_window")
@@ -876,12 +885,12 @@ class ServerListWindow(ServerListWindowActionsMixin):
         """Setup event handlers for the window."""
         # Window close event
         self.window.protocol("WM_DELETE_WINDOW", self._close_window)
+        bind_close_shortcuts(self.window, self._close_window)
 
         # Keyboard shortcuts
         self.window.bind("<Control-a>", self._select_all)
         self.window.bind("<Control-e>", lambda e: self._export_selected_servers())
         self.window.bind("<Control-b>", lambda e: self._on_file_browser_selected())
-        self.window.bind("<Escape>", lambda e: self._close_window())
         self.window.bind("<F5>", lambda e: self._refresh_data())
 
     def _apply_filters(self, *, force: bool = False) -> None:

@@ -13,6 +13,12 @@ import sys
 import os
 
 from gui.utils.dialog_helpers import ensure_dialog_focus
+from gui.utils.keybindings import (
+    add_shortcut_hint,
+    bind_close_shortcuts,
+    bind_save_shortcuts,
+    bind_submit_shortcuts,
+)
 from gui.components.batch_extract_dialog import BatchExtractSettingsDialog
 from gui.components.query_budget_dialog import (
     load_query_budget_state,
@@ -203,6 +209,12 @@ class ProbeConfigDialog:
                 self.theme.apply_to_widget(btn, "button_secondary")
             btn.pack(side=tk.LEFT, padx=5)
 
+        add_shortcut_hint(
+            self.dialog,
+            self.theme,
+            "Enter save and continue  •  Esc abort  •  Ctrl/Cmd+S save  •  Ctrl/Cmd+W close",
+        )
+
         if self.theme:
             self.theme.apply_theme_to_application(self.dialog)
 
@@ -210,6 +222,9 @@ class ProbeConfigDialog:
         ensure_dialog_focus(self.dialog, self.parent)
 
         self.dialog.protocol("WM_DELETE_WINDOW", self._abort)
+        bind_submit_shortcuts(self.dialog, self._save)
+        bind_save_shortcuts(self.dialog, self._save)
+        bind_close_shortcuts(self.dialog, self._abort)
         self.parent.wait_window(self.dialog)
         return self.result or {"status": "abort"}
 
@@ -317,6 +332,17 @@ class SummaryDialog:
         ensure_dialog_focus(self.dialog, self.parent)
 
         self.dialog.protocol("WM_DELETE_WINDOW", self._back)
+        bind_submit_shortcuts(
+            self.dialog,
+            self._start,
+            allow_text_submit_with_enter=True,
+        )
+        bind_close_shortcuts(self.dialog, self._back)
+        add_shortcut_hint(
+            frame,
+            self.theme,
+            "Enter start scan  •  Esc back  •  Ctrl/Cmd+W close",
+        )
         self.parent.wait_window(self.dialog)
         return bool(self.result)
 

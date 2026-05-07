@@ -34,6 +34,7 @@ from gui.utils.probe_snapshot_details import (
 )
 from gui.utils.database_access import DatabaseReader
 from gui.utils.dialog_helpers import ensure_dialog_focus
+from gui.utils.keybindings import add_shortcut_hint, bind_close_shortcuts, bind_submit_shortcuts
 from gui.components.batch_extract_dialog import BatchExtractSettingsDialog
 from shared.quarantine import create_quarantine_dir
 from shared.path_service import get_paths, get_legacy_paths, select_existing_path
@@ -267,11 +268,18 @@ def show_server_detail_popup(parent_window, server_data, theme, settings_manager
         detail_window.destroy()
 
     detail_window.protocol("WM_DELETE_WINDOW", _on_close)
+    bind_submit_shortcuts(detail_window, _on_close)
+    bind_close_shortcuts(detail_window, _on_close)
 
     # Ensure window is fully rendered before setting grab
     detail_window.update_idletasks()
     if theme:
         theme.apply_theme_to_application(detail_window)
+    add_shortcut_hint(
+        button_frame,
+        theme,
+        "Enter close (outside notes)  •  Esc/Ctrl+W/Cmd+W close",
+    )
     detail_window.grab_set()
 
     # Ensure dialog appears on top and gains focus (critical for VMs)

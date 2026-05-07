@@ -844,6 +844,39 @@ SearXNG dorking, Reddit ingestion, and Dorkbook do not use this subprocess path.
 | Dark/Light toggle | Switches ttkthemes theme; persisted in `gui_settings.json` |
 | Running Tasks | Opens non-modal task manager for active/queued work; supports monitor reopen via double-click |
 
+#### Keyboard Contract (Phase 1 + Phase 2)
+
+- Dashboard Alt mappings:
+  - `Alt+1` Start Scan
+  - `Alt+2` Server List
+  - `Alt+3` DB Tools
+  - `Alt+4` Experimental
+  - `Alt+5` Config
+  - `Alt+6` About
+  - `Alt+7..0` reserved no-op (consumed, not shown in UI helper text)
+- App-global bindings (via `bind_all`):
+  - `Ctrl/Cmd+Q` quit through existing close-confirm flow
+  - `Ctrl/Cmd+H` open Help placeholder dialog
+  - `Ctrl/Cmd+T` toggle theme
+- Dialog/window defaults:
+  - `Esc` close/cancel via existing handlers
+  - `Enter` primary action in core forms/dialogs
+  - `Ctrl/Cmd+S` save/apply where supported
+  - `Ctrl/Cmd+W` close non-destructive windows/dialogs
+- Multiline safety rule:
+  - focused `Text` widgets keep newline on plain `Enter`
+  - `Ctrl/Cmd+Enter` submits where submit behavior is available
+- List/tree parity:
+  - Enter maps to existing open/reopen behavior for task/server list surfaces
+- Browser windows (SMB/FTP/HTTP):
+  - `Enter` / `KP_Enter` open selected row (double-click parity)
+  - `BackSpace` / `Alt+Up` parent/up navigation
+  - `F5` / `Ctrl/Cmd+R` refresh current view
+  - `Esc` / `Ctrl/Cmd+W` close browser window
+- File/image viewers:
+  - `Esc` / `Ctrl/Cmd+W` close viewer
+  - `Ctrl/Cmd+S` save to quarantine only when save callback is available
+
 ### 6.5 Server List
 
 Displays hosts from `smb_servers`, `ftp_servers`, `http_servers` in separate tabs. Per-row actions:

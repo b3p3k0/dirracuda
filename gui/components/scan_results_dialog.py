@@ -19,6 +19,7 @@ import os
 from gui.utils import safe_messagebox as messagebox
 from gui.utils.style import get_theme
 from gui.utils.dialog_helpers import ensure_dialog_focus
+from gui.utils.keybindings import add_shortcut_hint, bind_close_shortcuts, bind_submit_shortcuts
 
 
 class ScanResultsDialog:
@@ -446,6 +447,12 @@ class ScanResultsDialog:
         button_frame = tk.Frame(self.dialog)
         self.theme.apply_to_widget(button_frame, "main_window")
         button_frame.pack(fill=tk.X, padx=20, pady=(10, 20))
+
+        add_shortcut_hint(
+            button_frame,
+            self.theme,
+            "Enter close  •  Esc/Ctrl+W/Cmd+W close",
+        )
         
         # Close button (always present)
         self.close_button = tk.Button(
@@ -461,10 +468,8 @@ class ScanResultsDialog:
     def _setup_event_handlers(self) -> None:
         """Setup event handlers."""
         self.dialog.protocol("WM_DELETE_WINDOW", self._close_dialog)
-        
-        # Keyboard shortcuts
-        self.dialog.bind("<Return>", lambda e: self._close_dialog())
-        self.dialog.bind("<Escape>", lambda e: self._close_dialog())
+        bind_submit_shortcuts(self.dialog, self._close_dialog, allow_text_submit_with_enter=True)
+        bind_close_shortcuts(self.dialog, self._close_dialog)
     
     def _focus_close_button(self) -> None:
         """Set focus to close button."""

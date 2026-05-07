@@ -38,6 +38,12 @@ from gui.components.scan_results_dialog import show_scan_results_dialog
 from gui.components.batch_summary_dialog import show_batch_summary_dialog
 from gui.utils.settings_manager import get_settings_manager
 from gui.utils.dialog_helpers import ensure_dialog_focus
+from gui.utils.keybindings import (
+    add_shortcut_hint,
+    bind_close_shortcuts,
+    bind_save_shortcuts,
+    bind_submit_shortcuts,
+)
 from gui.components import dashboard_logs
 from gui.components import dashboard_scan_output_dialog
 from gui.components import dashboard_status
@@ -311,6 +317,7 @@ class DashboardWidget:
 
         # Compact status content
         self._build_progress_section()
+        self._build_keyboard_hint_footer()
 
         # Status bar (fixed at bottom)
         self._build_status_bar()
@@ -474,6 +481,15 @@ class DashboardWidget:
         self.progress_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 15))
 
         self._build_status_footer()
+
+    def _build_keyboard_hint_footer(self) -> None:
+        """Place keyboard helper text below status box content."""
+        self.theme.create_styled_label(
+            self.main_frame,
+            "Alt+1..6 launch dashboard actions  •  Ctrl/Cmd+T theme  •  Ctrl/Cmd+H help  •  Ctrl/Cmd+Q quit",
+            "small",
+            fg=self.theme.colors["text_secondary"],
+        ).pack(anchor="w", pady=(0, 4))
 
     def _configure_log_tags(self) -> None:
         dashboard_logs.configure_log_tags(self)
@@ -1321,9 +1337,14 @@ class DashboardWidget:
         save_btn = tk.Button(btn_row, text="Save & Continue", command=_save)
         self.theme.apply_to_widget(save_btn, "button_primary")
         save_btn.pack(side=tk.RIGHT)
-
-        key_entry.bind("<Return>", lambda _e: _save())
-        dialog.bind("<Escape>", lambda _e: _cancel())
+        add_shortcut_hint(
+            btn_row,
+            self.theme,
+            "Enter save and continue  •  Esc cancel  •  Ctrl/Cmd+S save  •  Esc/Ctrl+W/Cmd+W close",
+        )
+        bind_submit_shortcuts(dialog, _save)
+        bind_save_shortcuts(dialog, _save)
+        bind_close_shortcuts(dialog, _cancel)
         key_entry.focus_set()
 
         ensure_dialog_focus(dialog, self.parent)
@@ -1548,6 +1569,13 @@ class DashboardWidget:
         close_button = tk.Button(btn_frame, text="Close", command=dialog.destroy)
         self.theme.apply_to_widget(close_button, "button_secondary")
         close_button.pack(side=tk.RIGHT)
+        add_shortcut_hint(
+            btn_frame,
+            self.theme,
+            "Enter close  •  Esc/Ctrl+W/Cmd+W close",
+        )
+        bind_submit_shortcuts(dialog, dialog.destroy, allow_text_submit_with_enter=True)
+        bind_close_shortcuts(dialog, dialog.destroy)
 
         dialog.update_idletasks()
         dialog.lift()
