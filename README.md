@@ -119,9 +119,7 @@ The main window. From here you can:
 - Open **Running Tasks** to monitor active/queued work and reopen hidden monitor dialogs (scan/probe/extract)
 
 ### Keyboard Shortcuts
-
-For the full keyboard contract and per-surface shortcut matrix, see
-[`docs/KBD_QUICKREF.md`](docs/KBD_QUICKREF.md).
+For the full list of keyboard shortcuts, see [`docs/KBD_QUICKREF.md`](docs/KBD_QUICKREF.md).
 
 ### Discovery
 
