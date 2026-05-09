@@ -25,5 +25,5 @@ Seeded before implementation. Append after every major card.
     downloads are not.
 13. Mobile is v1 scope. A desktop-only web UI misses how operators actually use
     browser dashboards.
-14. Web dependencies belong in `requirements-web.txt` unless HI explicitly folds
+14. Web dependencies belong in `webui/requirements-web.txt` unless HI explicitly folds
     them into the main runtime.

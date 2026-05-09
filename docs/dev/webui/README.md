@@ -10,7 +10,7 @@ summaries, database export, and limited web UI configuration.
 ## Locked Decisions
 
 - Framework: FastAPI + Uvicorn + Jinja2 are acceptable new dependencies.
-  Web-only dependencies go in `requirements-web.txt`; keep the main runtime
+  Web-only dependencies go in `webui/requirements-web.txt`; keep the main runtime
   requirements file focused on CLI/desktop dependencies.
 - Scan execution: v1 uses existing CLI entrypoints through `subprocess` with
   `shell=False`, not direct `shared/*Workflow` calls. This matches the current

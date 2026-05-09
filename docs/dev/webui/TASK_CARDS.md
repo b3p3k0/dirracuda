@@ -49,13 +49,13 @@ Add the minimum package skeleton for a disabled web UI.
 
 Scope:
 
-- `requirements-web.txt`
+- `webui/requirements-web.txt`
 - new `webui/` package
 - tests for import/app factory only
 
 Tasks:
 
-1. Add FastAPI, Uvicorn, and Jinja2 dependencies to `requirements-web.txt`.
+1. Add FastAPI, Uvicorn, and Jinja2 dependencies to `webui/requirements-web.txt`.
    Do not add web-only dependencies to `requirements.txt`.
 2. Add `webui/__init__.py`, `webui/app.py`, `webui/server.py`.
 3. Add an app factory with `/health`.

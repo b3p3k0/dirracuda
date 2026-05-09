@@ -29,7 +29,7 @@ Operating rules:
 - Do not change unrelated behavior.
 - Preserve ./dirracuda as canonical GUI entrypoint.
 - Do not make gui/main.py runnable.
-- Put web-only dependencies in requirements-web.txt, not requirements.txt.
+- Put web-only dependencies in webui/requirements-web.txt, not requirements.txt.
 - Check line counts before and after touched files.
 - If any touched file exceeds 1700 lines, stop and propose modularization.
 - Use subprocess argument lists with shell=False for scan execution.
@@ -73,7 +73,7 @@ Use the Universal Header.
 Implement C1 from docs/dev/webui/TASK_CARDS.md.
 
 Add the disabled web UI package scaffold and accepted dependencies only:
-FastAPI, Uvicorn, Jinja2. Put them in requirements-web.txt. Add a health route
+FastAPI, Uvicorn, Jinja2. Put them in webui/requirements-web.txt. Add a health route
 and import/app-factory tests. No auth, scan launch, desktop GUI wiring, or
 service control yet.
 ```
