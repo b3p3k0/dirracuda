@@ -6,10 +6,10 @@ import sqlite3
 import pytest
 from fastapi.testclient import TestClient
 
-import webui.db as _db
-from webui.app import create_app
-from webui.auth import set_password
-from webui.config import TLSConfig, WebUIConfig
+import experimental.webui.db as _db
+from experimental.webui.app import create_app
+from experimental.webui.auth import set_password
+from experimental.webui.config import TLSConfig, WebUIConfig
 
 _USERNAME = "exportuser"
 _PASSWORD = "correct-horse-battery-staple"

@@ -16,8 +16,8 @@ Goal: prove the current app state and lock the implementation boundary.
 
 Goal: start a local authenticated FastAPI service with no scan side effects.
 
-- Add web-only dependencies in `webui/requirements-web.txt`.
-- Add `webui/` package.
+- Add web-only dependencies in `experimental/webui/requirements-web.txt`.
+- Add `experimental/webui/` package.
 - Add config loader for `webui.json`.
 - Add credential setup/verification.
 - Add login/logout/session middleware.

@@ -33,34 +33,34 @@ which xvfb-run
 ### Web Package
 
 ```bash
-./venv/bin/python -m py_compile webui/__init__.py webui/app.py webui/server.py
-./venv/bin/python -m pytest webui/tests -q
+./venv/bin/python -m py_compile experimental/webui/__init__.py experimental/webui/app.py experimental/webui/server.py
+./venv/bin/python -m pytest experimental/webui/tests -q
 ```
 
 ### Auth And Config
 
 ```bash
 ./venv/bin/python -m pytest \
-  webui/tests/test_config.py \
-  webui/tests/test_auth.py \
-  webui/tests/test_sessions.py \
-  webui/tests/test_csrf.py -q
+  experimental/webui/tests/test_config.py \
+  experimental/webui/tests/test_auth.py \
+  experimental/webui/tests/test_sessions.py \
+  experimental/webui/tests/test_csrf.py -q
 ```
 
 ### Scan Queue
 
 ```bash
 ./venv/bin/python -m pytest \
-  webui/tests/test_tasks.py \
-  webui/tests/test_scan_routes.py -q
+  experimental/webui/tests/test_tasks.py \
+  experimental/webui/tests/test_scan_routes.py -q
 ```
 
 ### Results And Export
 
 ```bash
 ./venv/bin/python -m pytest \
-  webui/tests/test_results.py \
-  webui/tests/test_export.py -q
+  experimental/webui/tests/test_results.py \
+  experimental/webui/tests/test_export.py -q
 ```
 
 ### Desktop Experimental Integration
@@ -85,16 +85,16 @@ Manual gates are required before calling the feature done.
 1. Run `./dirracuda`.
 2. Open `Experimental`.
 3. Confirm tab order: `SearXNG`, `Reddit`, `Web UI`, `Dorkbook`, `Keymaster`.
-4. Open the Web UI control dialog.
+4. Open the `Web UI` tab.
 5. Confirm status text is clear and the configured URL is visible.
-6. Start/stop behavior matches the mode described in the dialog.
+6. Confirm Start/Stop/Open in Browser/Copy URL controls are present and responsive.
 
 ### Local Web UI
 
 1. Start localhost web UI:
-   `./venv/bin/python -m webui.server`
+   `./venv/bin/python -m experimental.webui.server`
    or
-   `./venv/bin/uvicorn webui.app:create_app --factory`.
+   `./venv/bin/uvicorn experimental.webui.app:create_app --factory`.
 2. Open `http://127.0.0.1:5480`.
 3. Confirm login is required.
 4. Log in.

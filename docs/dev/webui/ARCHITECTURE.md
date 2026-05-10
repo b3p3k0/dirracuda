@@ -29,12 +29,12 @@ Implementation cards may adjust exact names after reading local patterns, but
 the target shape is:
 
 ```text
-webui/
+experimental/webui/
   __init__.py
   app.py                  # FastAPI app factory
   auth.py                 # credential verification, sessions, CSRF
   config.py               # webui.json load/validate/write
-  server.py               # python -m webui.server entrypoint
+  server.py               # python -m experimental.webui.server entrypoint
   service_control.py      # health/pidfile/systemd control helpers
   tasks.py                # scan queue + subprocess lifecycle
   db.py                   # read-only host summaries + export
@@ -61,7 +61,7 @@ Keep generated/static assets small. No bundler in v1.
 ## Entrypoints
 
 - Desktop GUI: `./dirracuda`
-- Web service module: `./venv/bin/python -m webui.server`
+- Web service module: `./venv/bin/python -m experimental.webui.server`
 - Future convenience script, if wanted: `./dirracuda-webui`
 
 Do not make `gui/main.py` runnable again. It is compatibility-only.
@@ -145,12 +145,11 @@ Writes must be atomic:
 4. replace
 5. chmod
 
-## Desktop Control Dialog
+## Desktop Web UI Tab Controls
 
-The Experimental tab should stay simple. The control dialog can hold operational
-buttons and status without bloating the tab.
+Operational controls live inline in the Experimental -> Web UI tab.
 
-Control dialog responsibilities:
+Inline control responsibilities:
 
 - show configured URL
 - show health check result
@@ -169,7 +168,11 @@ The controller must not rely only on in-memory Tk state. A usable v1 needs to:
 - leave a clear "manual stop required" message if state is ambiguous
 
 If systemd support lands in v1, keep it explicit and conservative. The control
-dialog should show what it will run before it runs it.
+surface should show what it will run before it runs it.
+
+Launch contract: use module execution (`python -m experimental.webui.server`)
+instead of script-path execution, so imports of `experimental.webui.*` resolve
+correctly after package relocation.
 
 ## Frontend
 

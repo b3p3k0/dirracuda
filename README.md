@@ -474,54 +474,25 @@ Sidecar DB path: `~/.dirracuda/data/experimental/keymaster.db`
 
 Key table columns: `Label`, `Key Preview`, `Notes`, `Last Used`.
 
-Key Preview format: keys longer than 8 characters show as `first4 + asterisks + last4`; shorter keys are fully masked.
+Key Preview format: keys longer than 8 characters show as `first4 + asterisks`; shorter keys are fully masked.
 
 API key input is masked in Add/Edit dialogs to avoid shoulder surfing, **BUT IS STORED IN CLEAR TEXT LOCALLY.** This should be a non-risk (if an attacker can read the unencrypted string in your local home dir, you probably have bigger issues...) but I would be remiss not to point it out.
 
 ## Web UI (Optional)
 
-An optional browser-based interface is available as a separate package under `webui/`. It is disabled by default and not required for normal operation.
-
-Install its dependencies separately:
+An optional browser-based interface for scan management, results browsing, and database export. Runs as a separate service alongside the desktop GUI; disabled by default.
 
 ```bash
-pip install -r webui/requirements-web.txt
+pip install -r experimental/webui/requirements-web.txt
+./venv/bin/python -m experimental.webui.server
+# → http://127.0.0.1:5480
 ```
 
-Current capability (v1):
+For setup, configuration, remote mode, and security guidance, see [experimental/webui/README.md](experimental/webui/README.md).
 
-- **Results** — paginated SMB, FTP, and HTTP host summaries with optional country filter. Accessible at `/results` after logging in. Share names, accessible dir counts, and HTTP access summaries are shown when the relevant tables exist in the main DB.
-- **Export** — exports the main DB as a clean, defragmented SQLite file using `VACUUM INTO`. Artifacts are written to `~/.dirracuda/exports/` with a generated filename (`dirracuda_export_YYYYMMDD_HHMMSS_<random>.db`). The download endpoint enforces an allowlist regex so only export artifacts can be served.
-- **Scan launch** (C4) — submit and cancel SMB/FTP/HTTP scans; follows the same CLI subprocess boundary as the Tkinter GUI.
-- **Config page** (C6) — view and save web UI bind/TLS/allowlist/session settings at `/config` (CSRF-protected). Idle timeout is edited in minutes and stored in seconds; absolute timeout is edited in hours and stored in seconds.
-- **Frontend pass** (C6) — shared layout, static stylesheet, keyboard-visible focus states, and mobile reflow for scan/results/config pages without adding a SPA framework or build step.
-
-The file explorer, direct target downloads, and browser-based file manifests are out of scope for v1.
-
-### Modes and configuration
-
-Config file: `~/.dirracuda/conf/webui.json` (safe defaults are used when absent; file is created on first `/config` save).
-
-**Localhost mode (default):** binds to `127.0.0.1:5480`. No TLS cert is required — the server starts plain HTTP when no cert/key is configured. TLS can be explicitly disabled with `"tls": {"enabled": false}`.
-
-**Remote mode:** binds to a non-loopback address. Requires all three of the following in `webui.json`:
-
-```json
-{
-  "bind_address": "0.0.0.0",
-  "remote_enabled": true,
-  "allowed_cidrs": ["10.0.0.0/8"],
-  "tls": {
-    "enabled": true,
-    "cert_file": "/path/to/cert.pem",
-    "key_file": "/path/to/key.pem"
-  }
-}
-```
-
-To run remote without TLS (not recommended), set `"tls": {"enabled": false, "allow_insecure_remote": true}`.
-
-Startup is refused if the combination is unsafe: a non-loopback bind without `remote_enabled`, an empty `allowed_cidrs`, or TLS enabled without cert/key all cause an immediate exit with an error message. There is no silent fallback.
+From the desktop app, use `Experimental -> Web UI` for inline service controls
+(`Start`, `Stop`, `Open in Browser`, `Copy URL`) with live status, including
+explicit startup-failure reasons when launch fails.
 
 ---
 

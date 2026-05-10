@@ -2,19 +2,19 @@
 
 
 def test_webui_package_importable():
-    import webui  # must not raise even without requirements-web.txt installed
+    import experimental.webui  # must not raise even without requirements-web.txt installed
 
 
 def test_create_app_returns_fastapi_instance():
     from fastapi import FastAPI
-    from webui.app import create_app
+    from experimental.webui.app import create_app
 
     assert isinstance(create_app(), FastAPI)
 
 
 def test_health_route_registered():
     from fastapi.routing import APIRoute
-    from webui.app import create_app
+    from experimental.webui.app import create_app
 
     app = create_app()
     paths = [r.path for r in app.routes if isinstance(r, APIRoute)]
@@ -22,13 +22,13 @@ def test_health_route_registered():
 
 
 def test_health_route_payload():
-    from webui.app import health
+    from experimental.webui.app import health
 
     assert health() == {"status": "ok"}
 
 
 def test_debug_endpoints_not_registered():
-    from webui.app import create_app
+    from experimental.webui.app import create_app
 
     app = create_app()
     paths = {getattr(route, "path", None) for route in app.routes}

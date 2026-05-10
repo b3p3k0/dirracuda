@@ -6,9 +6,9 @@ import re
 import pytest
 from fastapi.testclient import TestClient
 
-from webui.app import create_app
-from webui.auth import set_password
-from webui.config import TLSConfig, WebUIConfig
+from experimental.webui.app import create_app
+from experimental.webui.auth import set_password
+from experimental.webui.config import TLSConfig, WebUIConfig
 
 _USERNAME = "testuser"
 _PASSWORD = "correct-horse-battery-staple"

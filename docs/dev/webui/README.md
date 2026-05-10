@@ -10,7 +10,7 @@ summaries, database export, and limited web UI configuration.
 ## Locked Decisions
 
 - Framework: FastAPI + Uvicorn + Jinja2 are acceptable new dependencies.
-  Web-only dependencies go in `webui/requirements-web.txt`; keep the main runtime
+  Web-only dependencies go in `experimental/webui/requirements-web.txt`; keep the main runtime
   requirements file focused on CLI/desktop dependencies.
 - Scan execution: v1 uses existing CLI entrypoints through `subprocess` with
   `shell=False`, not direct `shared/*Workflow` calls. This matches the current
@@ -24,8 +24,9 @@ summaries, database export, and limited web UI configuration.
   enabled/required by default, with an explicit operator opt-out. Non-loopback
   binding requires explicit config and an allowlist.
 - Desktop integration: add a `Web UI` tab to the existing tabbed Experimental
-  dialog. Insert it between `Reddit` and `Dorkbook`. The tab contains a short
-  description and one button: `Open Web UI Control`.
+  dialog. Insert it between `Reddit` and `Dorkbook`. The tab contains inline
+  operational controls (`Start`, `Stop`, `Open in Browser`, `Copy URL`) plus
+  status text.
 - Existing desktop layout stays intact. No left-side menu or broader redesign of
   the Experimental dialog.
 - Share/file browsing, in-browser downloads, DB import/merge, and experimental
@@ -36,7 +37,7 @@ summaries, database export, and limited web UI configuration.
 - `SPEC.md` - v1 behavior, non-goals, acceptance criteria.
 - `ARCHITECTURE.md` - process model, code layout, scan/task/data flow.
 - `SECURITY_MODEL.md` - auth, remote exposure, input, subprocess, DB, and logs.
-- `ASCII_SKETCHES.md` - desktop tab/control dialog and web page sketches.
+- `ASCII_SKETCHES.md` - desktop tab and web page sketches.
 - `ROADMAP.md` - card sequence and phase boundaries.
 - `TASK_CARDS.md` - implementation cards for Claude.
 - `CLAUDE_PROMPTS.md` - copy-paste prompts for DA execution.

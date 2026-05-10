@@ -1,9 +1,9 @@
-"""C2: webui/config.py tests."""
+"""C2: experimental/webui/config.py tests."""
 
 import json
 import pytest
 
-from webui.config import (
+from experimental.webui.config import (
     TLSConfig,
     WebUIConfig,
     WebUIConfigError,

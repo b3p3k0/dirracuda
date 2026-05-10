@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from webui.config import _atomic_write_json
+from experimental.webui.config import _atomic_write_json
 
 
 PBKDF2_ITERATIONS = 600_000

@@ -49,15 +49,15 @@ Add the minimum package skeleton for a disabled web UI.
 
 Scope:
 
-- `webui/requirements-web.txt`
-- new `webui/` package
+- `experimental/webui/requirements-web.txt`
+- new `experimental/webui/` package
 - tests for import/app factory only
 
 Tasks:
 
-1. Add FastAPI, Uvicorn, and Jinja2 dependencies to `webui/requirements-web.txt`.
+1. Add FastAPI, Uvicorn, and Jinja2 dependencies to `experimental/webui/requirements-web.txt`.
    Do not add web-only dependencies to `requirements.txt`.
-2. Add `webui/__init__.py`, `webui/app.py`, `webui/server.py`.
+2. Add `experimental/webui/__init__.py`, `experimental/webui/app.py`, `experimental/webui/server.py`.
 3. Add an app factory with `/health`.
 4. Add minimal config defaults but do not start service from desktop GUI.
 5. Add tests that import the package and verify the app factory/health handler.
@@ -66,15 +66,15 @@ Tasks:
 
 Acceptance:
 
-- `from webui.app import create_app` works.
+- `from experimental.webui.app import create_app` works.
 - `/health` returns a safe payload without auth-sensitive details.
 - No desktop GUI behavior changes.
 
 Validation:
 
 ```bash
-./venv/bin/python -m py_compile webui/__init__.py webui/app.py webui/server.py
-./venv/bin/python -m pytest webui/tests -q
+./venv/bin/python -m py_compile experimental/webui/__init__.py experimental/webui/app.py experimental/webui/server.py
+./venv/bin/python -m pytest experimental/webui/tests -q
 ```
 
 ## C2 - Web UI Config And Credential Store
@@ -84,8 +84,8 @@ The service needs secure local config and credentials before any protected UI.
 
 Scope:
 
-- `webui/config.py`
-- `webui/auth.py`
+- `experimental/webui/config.py`
+- `experimental/webui/auth.py`
 - tests
 
 Tasks:
@@ -113,8 +113,8 @@ Acceptance:
 Validation:
 
 ```bash
-./venv/bin/python -m py_compile webui/config.py webui/auth.py
-./venv/bin/python -m pytest webui/tests/test_config.py webui/tests/test_auth.py -q
+./venv/bin/python -m py_compile experimental/webui/config.py experimental/webui/auth.py
+./venv/bin/python -m pytest experimental/webui/tests/test_config.py experimental/webui/tests/test_auth.py -q
 ```
 
 ## C3 - Sessions, Login, CSRF, And Minimal Pages
@@ -124,8 +124,8 @@ Protected browser pages need auth and CSRF before scan actions exist.
 
 Scope:
 
-- `webui/app.py`
-- `webui/auth.py`
+- `experimental/webui/app.py`
+- `experimental/webui/auth.py`
 - templates/static
 - tests
 
@@ -149,8 +149,8 @@ Acceptance:
 Validation:
 
 ```bash
-./venv/bin/python -m py_compile webui/app.py webui/auth.py
-./venv/bin/python -m pytest webui/tests/test_sessions.py webui/tests/test_csrf.py -q
+./venv/bin/python -m py_compile experimental/webui/app.py experimental/webui/auth.py
+./venv/bin/python -m pytest experimental/webui/tests/test_sessions.py experimental/webui/tests/test_csrf.py -q
 ```
 
 ## C4 - Scan Queue And CLI Subprocess Runner
@@ -160,7 +160,7 @@ The web UI must launch scans without reimplementing scanning logic.
 
 Scope:
 
-- `webui/tasks.py`
+- `experimental/webui/tasks.py`
 - scan schemas/routes/templates
 - tests
 
@@ -189,8 +189,8 @@ Acceptance:
 Validation:
 
 ```bash
-./venv/bin/python -m py_compile webui/tasks.py webui/app.py
-./venv/bin/python -m pytest webui/tests/test_tasks.py webui/tests/test_scan_routes.py -q
+./venv/bin/python -m py_compile experimental/webui/tasks.py experimental/webui/app.py
+./venv/bin/python -m pytest experimental/webui/tests/test_tasks.py experimental/webui/tests/test_scan_routes.py -q
 ```
 
 HI test needed:
@@ -206,7 +206,7 @@ The first web UI needs useful read-only output without browser file access.
 
 Scope:
 
-- `webui/db.py`
+- `experimental/webui/db.py`
 - results/export routes/templates
 - tests
 
@@ -232,8 +232,8 @@ Acceptance:
 Validation:
 
 ```bash
-./venv/bin/python -m py_compile webui/db.py webui/app.py
-./venv/bin/python -m pytest webui/tests/test_results.py webui/tests/test_export.py -q
+./venv/bin/python -m py_compile experimental/webui/db.py experimental/webui/app.py
+./venv/bin/python -m pytest experimental/webui/tests/test_results.py experimental/webui/tests/test_export.py -q
 ```
 
 ## C6 - Web UI Frontend Pass
@@ -267,7 +267,7 @@ Acceptance:
 Validation:
 
 ```bash
-./venv/bin/python -m pytest webui/tests/test_pages.py -q
+./venv/bin/python -m pytest experimental/webui/tests/test_pages.py -q
 ```
 
 HI test needed:
@@ -285,7 +285,7 @@ Scope:
 - `gui/components/experimental_features/registry.py`
 - new `gui/components/experimental_features/webui_tab.py`
 - new `gui/components/webui_control_dialog.py`
-- service control helper, likely `webui/service_control.py` or a GUI utility if
+- service control helper, likely `experimental/webui/service_control.py` or a GUI utility if
   local patterns argue for it
 - dashboard context wiring
 - focused GUI tests
@@ -360,7 +360,7 @@ Acceptance:
 Validation:
 
 ```bash
-./venv/bin/python -m pytest webui/tests/test_remote_mode.py -q
+./venv/bin/python -m pytest experimental/webui/tests/test_remote_mode.py -q
 ```
 
 HI test needed:
@@ -393,7 +393,7 @@ Tasks:
 Validation:
 
 ```bash
-./venv/bin/python -m pytest webui/tests -q
+./venv/bin/python -m pytest experimental/webui/tests -q
 xvfb-run -a ./venv/bin/python -m pytest gui/tests/test_experimental_features_dialog.py -q
 ./venv/bin/python scripts/run_agent_testing_workflow.py --lane quick
 ```

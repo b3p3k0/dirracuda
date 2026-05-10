@@ -2,7 +2,7 @@
 
 from unittest.mock import MagicMock
 
-from webui.dependencies import validate_csrf, same_origin
+from experimental.webui.dependencies import validate_csrf, same_origin
 
 
 def _req(headers=None, scheme="http"):

@@ -1,6 +1,6 @@
 """Unit tests for SessionStore and cookie_name."""
 
-from webui.sessions import SessionStore, cookie_name, COOKIE_NAME_PLAIN, COOKIE_NAME_SECURE
+from experimental.webui.sessions import SessionStore, cookie_name, COOKIE_NAME_PLAIN, COOKIE_NAME_SECURE
 
 
 def test_create_returns_unique_ids():

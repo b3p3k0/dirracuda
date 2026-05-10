@@ -92,7 +92,7 @@ class WebUITab:
 
     def _get_webui_cfg(self):
         try:
-            from webui.config import load_config
+            from experimental.webui.config import load_config
 
             return load_config()
         except Exception:
@@ -113,7 +113,7 @@ class WebUITab:
         self._url_var.set(f"http://{host}:{port}")
 
         def _check() -> None:
-            from webui.service_control import is_running
+            from experimental.webui.service_control import is_running
 
             running = is_running(host, port)
             self._schedule_ui(lambda: self._apply_status(running))
@@ -134,6 +134,17 @@ class WebUITab:
             self._stop_btn.configure(state=tk.DISABLED)
             self._browser_btn.configure(state=tk.DISABLED)
 
+    def _apply_failed_status(self, reason: str) -> None:
+        if not self.frame.winfo_exists():
+            return
+        suffix = "startup failed"
+        if reason:
+            suffix = reason
+        self._status_var.set(f"Failed: {suffix}")
+        self._start_btn.configure(state=tk.NORMAL)
+        self._stop_btn.configure(state=tk.DISABLED)
+        self._browser_btn.configure(state=tk.DISABLED)
+
     def _on_start(self) -> None:
         cfg = self._get_webui_cfg()
         host, port = cfg.bind_address, cfg.port
@@ -141,21 +152,23 @@ class WebUITab:
         self._status_var.set("Starting…")
 
         def _do() -> None:
-            import time
-
-            from webui.service_control import is_running, start
+            from experimental.webui.service_control import start
 
             try:
-                start(host, port)
-                time.sleep(1.5)
+                result = start(host, port)
             except Exception as exc:
                 self._schedule_ui(
                     lambda: safe_messagebox.showerror(
                         "Start Failed", str(exc), parent=self.frame
                     )
                 )
-            running = is_running(host, port)
-            self._schedule_ui(lambda: self._apply_status(running))
+                self._schedule_ui(lambda: self._apply_failed_status(str(exc)))
+                return
+
+            if result.state in ("running", "already_running"):
+                self._schedule_ui(lambda: self._apply_status(True))
+                return
+            self._schedule_ui(lambda: self._apply_failed_status(result.reason))
 
         threading.Thread(target=_do, daemon=True).start()
 
@@ -166,7 +179,7 @@ class WebUITab:
         self._status_var.set("Stopping…")
 
         def _do() -> None:
-            from webui.service_control import is_running, stop
+            from experimental.webui.service_control import is_running, stop
 
             try:
                 stop()

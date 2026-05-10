@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import Optional
 
 import uvicorn
-from webui.app import create_app
-from webui.config import WebUIConfig, WebUIConfigError, load_config, validate
+from experimental.webui.app import create_app
+from experimental.webui.config import WebUIConfig, WebUIConfigError, load_config, validate
 
 logger = logging.getLogger(__name__)
 

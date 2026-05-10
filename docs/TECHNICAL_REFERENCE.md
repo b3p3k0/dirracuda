@@ -77,7 +77,7 @@ Dirracuda scans for internet-accessible servers exposing open or weakly-authenti
 
 ┌─────────────────────────────────────────────────────────────────────┐
 │  Optional Web UI Layer                                              │
-│  webui/server.py -> webui/app.py (FastAPI app factory)              │
+│  experimental/webui/server.py -> experimental/webui/app.py (FastAPI app factory)              │
 │    ├─ auth/session/CSRF helpers                                     │
 │    ├─ tasks.py (single-active scan queue -> CLI subprocess runner)  │
 │    └─ db.py (read-only result queries + VACUUM INTO export)         │
@@ -87,7 +87,7 @@ Dirracuda scans for internet-accessible servers exposing open or weakly-authenti
 For SMB/FTP/HTTP scan flows, the GUI invokes CLI scripts as subprocesses via `gui/utils/backend_interface/interface.py` and parses stdout for progress data. Experimental SearXNG dorking (`experimental/se_dork`), Reddit ingestion (`experimental/redseek`), Dorkbook recipe management (`experimental/dorkbook`), and Keymaster key management (`experimental/keymaster`) are in-process paths launched from the dashboard.
 
 The optional Web UI is disabled by default and installed separately with
-`webui/requirements-web.txt`. Its C4 scan launcher follows the same CLI
+`experimental/webui/requirements-web.txt`. Its C4 scan launcher follows the same CLI
 subprocess boundary as the Tkinter GUI: one active scan at a time, strict request
 validation, explicit `shell=False`, repo-root `cwd`, unbuffered Python output,
 and merged stdout/stderr progress logs.
@@ -103,11 +103,11 @@ and merged stdout/stderr progress logs.
 | `GET /config` | session | Web UI config page (bind/port/remote/TLS/allowlist/session timeout fields) |
 | `POST /config` | session + CSRF | Validate and save `webui.json` fields. UI submits idle timeout in minutes and absolute timeout in hours; server converts to stored seconds before `save_config`. |
 
-`webui/db.py` implements the reader functions (`get_smb_results`, `get_ftp_results`, `get_http_results`) and `export_db`. All readers use read-only URI connections (`mode=ro`). The export function opens the source with `mode=rw` (no-create) to prevent silent empty-DB creation when the source is absent. Runtime schema guards (`sqlite_master` + `PRAGMA table_info`) handle optional tables and columns without raising errors on schema drift.
+`experimental/webui/db.py` implements the reader functions (`get_smb_results`, `get_ftp_results`, `get_http_results`) and `export_db`. All readers use read-only URI connections (`mode=ro`). The export function opens the source with `mode=rw` (no-create) to prevent silent empty-DB creation when the source is absent. Runtime schema guards (`sqlite_master` + `PRAGMA table_info`) handle optional tables and columns without raising errors on schema drift.
 
 **Web UI startup and remote mode (C8):**
 
-`webui/server.py::run()` loads `webui.json` via `load_config()` (which calls `validate()`) before starting uvicorn. CLI `--host`, `--port`, and `--config` args are supported. `--host`/`--port` are treated as validated overrides over the loaded config (re-validated after merge); `--config` selects the webui.json path to load and propagates to `create_app()` so the `/config` save endpoint writes back to the same file. Startup exits immediately on any validation failure — no silent fallback.
+`experimental/webui/server.py::run()` loads `webui.json` via `load_config()` (which calls `validate()`) before starting uvicorn. CLI `--host`, `--port`, and `--config` args are supported. `--host`/`--port` are treated as validated overrides over the loaded config (re-validated after merge); `--config` selects the webui.json path to load and propagates to `create_app()` so the `/config` save endpoint writes back to the same file. Startup exits immediately on any validation failure — no silent fallback. Desktop service control launches with module semantics (`python -m experimental.webui.server`) rather than direct script execution, so package imports resolve correctly after the `experimental/webui` move.
 
 Config fields relevant to remote mode:
 
@@ -127,7 +127,7 @@ Startup enforcement rules (fail-closed, checked before uvicorn starts):
 
 Allowlist middleware: registered as an HTTP middleware in `create_app()`. When `remote_enabled=True`, each request's `request.client.host` is checked against `allowed_cidrs` (parsed as `ipaddress.ip_network` objects). Non-matching or non-parseable addresses get 403. When `remote_enabled=False`, the check is skipped entirely — localhost mode is unaffected.
 
-**Reverse proxy note:** `request.client.host` reflects the TCP peer address as seen by the ASGI server. Behind a reverse proxy, this will be the proxy's address rather than the real client IP unless forwarded-header trust is correctly configured at the ASGI server layer — that configuration is deployment-specific and not managed by `webui/server.py`. Without it, allowlist decisions may be wrong (all traffic passes as the proxy address, or forwarded headers can be spoofed). See [FastAPI proxy guidance](https://fastapi.tiangolo.com/advanced/behind-a-proxy/) and [uvicorn deployment docs](https://www.uvicorn.org/deployment/) for details on trusted-proxy configuration.
+**Reverse proxy note:** `request.client.host` reflects the TCP peer address as seen by the ASGI server. Behind a reverse proxy, this will be the proxy's address rather than the real client IP unless forwarded-header trust is correctly configured at the ASGI server layer — that configuration is deployment-specific and not managed by `experimental/webui/server.py`. Without it, allowlist decisions may be wrong (all traffic passes as the proxy address, or forwarded headers can be spoofed). See [FastAPI proxy guidance](https://fastapi.tiangolo.com/advanced/behind-a-proxy/) and [uvicorn deployment docs](https://www.uvicorn.org/deployment/) for details on trusted-proxy configuration.
 
 ### 1.2 Core Workflow Flowchart
 
@@ -167,7 +167,7 @@ This shape applies to all three protocols. Protocol-specific differences are cov
 | `experimental/keymaster/` | Keymaster sidecar persistence for reusable API keys | `models.py`, `store.py` |
 | `gui/components/`, `gui/dashboard/` | Tkinter windows/dialogs plus dashboard shim+implementation | `gui/components/dashboard.py` (compat shim), `gui/dashboard/widget.py`, `unified_scan_dialog.py`, `server_list_window/`, `running_tasks_window.py`, `db_tools_dialog.py`, `*_browser_window.py` |
 | `gui/utils/` | GUI infrastructure | `ui_dispatcher.py`, `scan_manager.py`, `backend_interface/`, `probe_runner.py`, `extract_runner.py`, `settings_manager.py` |
-| `webui/` | Optional FastAPI Web UI package; disabled by default | `app.py`, `server.py`, `config.py`, `auth.py`, `sessions.py`, `dependencies.py`, `tasks.py`, `templates/` |
+| `experimental/webui/` | Optional FastAPI Web UI package; disabled by default | `app.py`, `server.py`, `config.py`, `auth.py`, `sessions.py`, `dependencies.py`, `tasks.py`, `templates/` |
 | `tools/` | Database management utilities | `db_manager.py`, `db_schema.sql`, `db_maintenance.py`, `db_migrations.py`* |
 | `signatures/rce_smb/` | YAML CVE signature definitions | `*.yaml` |
 | `conf/` | Application configuration | `config.json.example`, `exclusion_list.json`, `ransomware_indicators.json` |
@@ -999,7 +999,8 @@ Warning banner behavior:
 
 Web UI tab behavior:
 - Controls are inline in the tab (no separate control window).
-- Status/start/stop use `webui.service_control` with pidfile + health checks.
+- Status/start/stop use `experimental.webui.service_control` with pidfile + health checks.
+- Start failures are shown inline as `Failed: <reason>` (for example, exit code or startup timeout) instead of collapsing back to `Stopped`.
 - Open-browser and copy-URL actions use the current `webui.json` host/port values.
 
 Dorkbook entry path:

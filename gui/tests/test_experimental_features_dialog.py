@@ -904,7 +904,7 @@ def test_webui_tab_get_cfg_fallback(monkeypatch):
     def _boom():
         raise RuntimeError("fail")
 
-    monkeypatch.setattr("webui.config.load_config", _boom)
+    monkeypatch.setattr("experimental.webui.config.load_config", _boom)
     tab = WebUITab.__new__(WebUITab)
     cfg = tab._get_webui_cfg()
     assert cfg.bind_address == "127.0.0.1"
@@ -945,6 +945,104 @@ def test_webui_tab_apply_status_stopped():
     assert tab._start_btn.configure_calls[-1] == {"state": tk.NORMAL}
     assert tab._stop_btn.configure_calls[-1] == {"state": tk.DISABLED}
     assert tab._browser_btn.configure_calls[-1] == {"state": tk.DISABLED}
+
+
+def test_webui_tab_apply_status_failed():
+    from gui.components.experimental_features.webui_tab import WebUITab
+
+    tab = WebUITab.__new__(WebUITab)
+    tab.frame = _FrameWidget()
+    tab._status_var = _ValueVar()
+    tab._start_btn = _StatusWidget()
+    tab._stop_btn = _StatusWidget()
+    tab._browser_btn = _StatusWidget()
+
+    tab._apply_failed_status("process exited with code 1")
+
+    assert tab._status_var.value == "Failed: process exited with code 1"
+    assert tab._start_btn.configure_calls[-1] == {"state": tk.NORMAL}
+    assert tab._stop_btn.configure_calls[-1] == {"state": tk.DISABLED}
+    assert tab._browser_btn.configure_calls[-1] == {"state": tk.DISABLED}
+
+
+def test_webui_tab_on_start_failed_sets_inline_status(monkeypatch):
+    from gui.components.experimental_features.webui_tab import WebUITab
+
+    class _ImmediateThread:
+        def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+            self._target = target
+            self._args = args
+            self._kwargs = kwargs or {}
+
+        def start(self):
+            if self._target is not None:
+                self._target(*self._args, **self._kwargs)
+
+    monkeypatch.setattr(
+        "gui.components.experimental_features.webui_tab.threading.Thread",
+        _ImmediateThread,
+    )
+    monkeypatch.setattr(
+        "experimental.webui.service_control.start",
+        lambda *_a, **_k: types.SimpleNamespace(
+            ok=False, state="failed", reason="process exited with code 1"
+        ),
+    )
+
+    tab = WebUITab.__new__(WebUITab)
+    tab.frame = _FrameWidget()
+    tab._status_var = _ValueVar()
+    tab._start_btn = _StatusWidget()
+    tab._stop_btn = _StatusWidget()
+    tab._browser_btn = _StatusWidget()
+    tab._get_webui_cfg = lambda: types.SimpleNamespace(bind_address="127.0.0.1", port=5480)
+    tab._schedule_ui = lambda cb: cb()
+
+    tab._on_start()
+
+    assert tab._status_var.value == "Failed: process exited with code 1"
+    assert tab._start_btn.configure_calls[-1] == {"state": tk.NORMAL}
+    assert tab._stop_btn.configure_calls[-1] == {"state": tk.DISABLED}
+    assert tab._browser_btn.configure_calls[-1] == {"state": tk.DISABLED}
+
+
+def test_webui_tab_on_start_success_sets_running(monkeypatch):
+    from gui.components.experimental_features.webui_tab import WebUITab
+
+    class _ImmediateThread:
+        def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+            self._target = target
+            self._args = args
+            self._kwargs = kwargs or {}
+
+        def start(self):
+            if self._target is not None:
+                self._target(*self._args, **self._kwargs)
+
+    monkeypatch.setattr(
+        "gui.components.experimental_features.webui_tab.threading.Thread",
+        _ImmediateThread,
+    )
+    monkeypatch.setattr(
+        "experimental.webui.service_control.start",
+        lambda *_a, **_k: types.SimpleNamespace(ok=True, state="running", reason=""),
+    )
+
+    tab = WebUITab.__new__(WebUITab)
+    tab.frame = _FrameWidget()
+    tab._status_var = _ValueVar()
+    tab._start_btn = _StatusWidget()
+    tab._stop_btn = _StatusWidget()
+    tab._browser_btn = _StatusWidget()
+    tab._get_webui_cfg = lambda: types.SimpleNamespace(bind_address="127.0.0.1", port=5480)
+    tab._schedule_ui = lambda cb: cb()
+
+    tab._on_start()
+
+    assert tab._status_var.value == "Running"
+    assert tab._start_btn.configure_calls[-1] == {"state": tk.DISABLED}
+    assert tab._stop_btn.configure_calls[-1] == {"state": tk.NORMAL}
+    assert tab._browser_btn.configure_calls[-1] == {"state": tk.NORMAL}
 
 
 def test_webui_tab_copy_url(monkeypatch):

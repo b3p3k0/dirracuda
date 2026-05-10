@@ -25,7 +25,7 @@ Seeded before implementation. Append after every major card.
     downloads are not.
 13. Mobile is v1 scope. A desktop-only web UI misses how operators actually use
     browser dashboards.
-14. Web dependencies belong in `webui/requirements-web.txt` unless HI explicitly folds
+14. Web dependencies belong in `experimental/webui/requirements-web.txt` unless HI explicitly folds
     them into the main runtime.
 15. Web scan launch should keep using strict request validation plus argv-list
     subprocess calls with explicit `shell=False`; never let browser input become
@@ -90,3 +90,15 @@ Seeded before implementation. Append after every major card.
     `--host`/`--port` override the loaded config (re-validated after merge);
     `--config` selects the webui.json path passed through to `create_app()`.
     Any doc or test that references server CLI args should include all three.
+
+## C12 — Launch Diagnostics and Inline Failure State
+
+26. After moving package code under `experimental/webui`, service launch must
+    use module execution (`python -m experimental.webui.server`) instead of
+    direct script-path execution. Script execution can fail import resolution
+    for `experimental.webui.*` and exit immediately with no visible UI signal.
+
+27. A startup failure should not silently collapse to `Stopped`. Preserve a
+    readable inline state (`Failed: <reason>`) with bounded diagnostics (exit
+    code + short stderr fragment or timeout reason) so operators can self-debug
+    without hunting console output.

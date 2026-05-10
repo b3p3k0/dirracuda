@@ -11,9 +11,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
-import webui.db as _db
-from webui.auth import verify_password
-from webui.config import (
+import experimental.webui.db as _db
+from experimental.webui.auth import verify_password
+from experimental.webui.config import (
     TLSConfig,
     WebUIConfig,
     WebUIConfigError,
@@ -21,9 +21,9 @@ from webui.config import (
     save_config,
     validate,
 )
-from webui.dependencies import AuthRequired, get_session, same_origin, validate_csrf
-from webui.sessions import Session, SessionStore, cookie_name
-from webui.tasks import CancelResult, ScanQueue, ScanRequest
+from experimental.webui.dependencies import AuthRequired, get_session, same_origin, validate_csrf
+from experimental.webui.sessions import Session, SessionStore, cookie_name
+from experimental.webui.tasks import CancelResult, ScanQueue, ScanRequest
 
 logger = logging.getLogger(__name__)
 

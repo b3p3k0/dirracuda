@@ -1,9 +1,9 @@
-"""C2: webui/auth.py tests."""
+"""C2: experimental/webui/auth.py tests."""
 
 import json
 import pytest
 
-from webui.auth import (
+from experimental.webui.auth import (
     PBKDF2_ALGORITHM,
     PBKDF2_ITERATIONS,
     MAX_PASSWORD_BYTES,

@@ -6,8 +6,8 @@ import sys
 import pytest
 from pydantic import ValidationError
 
-from webui import tasks as task_module
-from webui.tasks import (
+from experimental.webui import tasks as task_module
+from experimental.webui.tasks import (
     CancelResult,
     ScanQueue,
     ScanRequest,
