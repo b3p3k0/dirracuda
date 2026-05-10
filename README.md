@@ -497,6 +497,31 @@ Current capability (v1):
 
 The file explorer, direct target downloads, and browser-based file manifests are out of scope for v1.
 
+### Modes and configuration
+
+Config file: `~/.dirracuda/conf/webui.json` (created with safe defaults on first run).
+
+**Localhost mode (default):** binds to `127.0.0.1:5480`. No TLS cert is required — the server starts plain HTTP when no cert/key is configured. TLS can be explicitly disabled with `"tls": {"enabled": false}`.
+
+**Remote mode:** binds to a non-loopback address. Requires all three of the following in `webui.json`:
+
+```json
+{
+  "bind_address": "0.0.0.0",
+  "remote_enabled": true,
+  "allowed_cidrs": ["10.0.0.0/8"],
+  "tls": {
+    "enabled": true,
+    "cert_file": "/path/to/cert.pem",
+    "key_file": "/path/to/key.pem"
+  }
+}
+```
+
+To run remote without TLS (not recommended), set `"tls": {"enabled": false, "allow_insecure_remote": true}`.
+
+Startup is refused if the combination is unsafe: a non-loopback bind without `remote_enabled`, an empty `allowed_cidrs`, or TLS enabled without cert/key all cause an immediate exit with an error message. There is no silent fallback.
+
 ---
 
 ## Advanced

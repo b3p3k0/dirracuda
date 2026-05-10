@@ -105,6 +105,28 @@ and merged stdout/stderr progress logs.
 
 `webui/db.py` implements the reader functions (`get_smb_results`, `get_ftp_results`, `get_http_results`) and `export_db`. All readers use read-only URI connections (`mode=ro`). The export function opens the source with `mode=rw` (no-create) to prevent silent empty-DB creation when the source is absent. Runtime schema guards (`sqlite_master` + `PRAGMA table_info`) handle optional tables and columns without raising errors on schema drift.
 
+**Web UI startup and remote mode (C8):**
+
+`webui/server.py::run()` loads `webui.json` via `load_config()` (which calls `validate()`) before starting uvicorn. CLI `--host`/`--port` args are treated as validated overrides over the loaded config. Startup exits immediately on any validation failure — no silent fallback.
+
+Config fields relevant to remote mode:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `bind_address` | `"127.0.0.1"` | IP to bind. Loopback = localhost mode. |
+| `remote_enabled` | `false` | Must be `true` for any non-loopback bind. |
+| `allowed_cidrs` | `["127.0.0.1/32","::1/128"]` | IP allowlist enforced per-request when `remote_enabled=true`. |
+| `tls.enabled` | `true` | TLS on/off. Remote with TLS requires cert+key. |
+| `tls.cert_file` / `tls.key_file` | `""` | Paths to PEM cert and key. Required for remote TLS. |
+| `tls.allow_insecure_remote` | `false` | Allow non-loopback HTTP. Must be explicitly set; no default. |
+
+Startup enforcement rules (fail-closed, checked before uvicorn starts):
+- Loopback bind: always allowed with any TLS state.
+- Non-loopback: requires `remote_enabled=true`, non-empty `allowed_cidrs`, and either (TLS enabled with cert+key present) or (`tls.allow_insecure_remote=true` with TLS disabled).
+- TLS enabled for remote without cert/key files readable on disk → startup refused.
+
+Allowlist middleware: registered as an HTTP middleware in `create_app()`. When `remote_enabled=True`, each request's `request.client.host` is checked against `allowed_cidrs` (parsed as `ipaddress.ip_network` objects). Non-matching or non-parseable addresses get 403. When `remote_enabled=False`, the check is skipped entirely — localhost mode is unaffected.
+
 ### 1.2 Core Workflow Flowchart
 
 ```mermaid

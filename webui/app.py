@@ -1,5 +1,6 @@
 """Web UI FastAPI application factory."""
 
+import ipaddress
 import logging
 from pathlib import Path
 from typing import List, Literal, Optional
@@ -28,6 +29,16 @@ logger = logging.getLogger(__name__)
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 _STATIC_DIR = Path(__file__).parent / "static"
+
+
+def _is_ip_allowed(host, networks) -> bool:
+    if not host:
+        return False
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return any(addr in net for net in networks)
 
 
 class _LoginRequest(BaseModel):
@@ -59,7 +70,7 @@ def create_app(
     config_path=None,
 ) -> FastAPI:
     if cfg is None:
-        cfg = load_config()
+        cfg = load_config(config_path)
 
     app = FastAPI(
         title="Dirracuda Web UI",
@@ -68,6 +79,17 @@ def create_app(
         redoc_url=None,
     )
     app.state.cfg = cfg
+
+    _networks = [ipaddress.ip_network(c, strict=False) for c in cfg.allowed_cidrs]
+
+    @app.middleware("http")
+    async def _allowlist_check(request: Request, call_next):
+        if not cfg.remote_enabled:
+            return await call_next(request)
+        host = request.client.host if request.client else None
+        if not _is_ip_allowed(host, _networks):
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        return await call_next(request)
     app.state.session_store = SessionStore()
     app.state.creds_path = creds_path
     app.state.scan_queue = ScanQueue()

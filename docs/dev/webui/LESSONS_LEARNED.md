@@ -58,3 +58,23 @@ Seeded before implementation. Append after every major card.
     directory-containment via `Path.resolve()` + `relative_to()`. Neither
     alone is sufficient — the regex blocks non-artifact filenames; the
     containment check blocks symlinks that escape the export dir.
+
+## C8 — Remote Mode
+
+20. Validate at server startup via `load_config()` (which calls `validate()`),
+    not just at config save time. The config rules already existed — `server.py`
+    simply wasn't calling them before starting uvicorn.
+
+21. Allowlist middleware must be gated on `cfg.remote_enabled=True`. An
+    unconditional check breaks all existing tests: Starlette's `TestClient`
+    defaults `scope["client"]` to `("testclient", 50000)`, which is not a valid
+    IP and would be blocked by any CIDR check. Gate on `remote_enabled` so
+    localhost-mode tests run without modification.
+
+22. Extract startup validations that need unit tests into pure helpers (e.g.,
+    `_check_remote_tls(cfg, bind)`) that return an error string or `None`.
+    This makes them testable without mocking uvicorn or catching `SystemExit`.
+
+23. Propagate `config_path` through `server.run()` → `create_app()` so the
+    `/config` save endpoint writes to the file the server actually loaded,
+    not the hardcoded default path.
