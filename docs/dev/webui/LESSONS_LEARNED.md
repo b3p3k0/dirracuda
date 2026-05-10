@@ -78,3 +78,15 @@ Seeded before implementation. Append after every major card.
 23. Propagate `config_path` through `server.run()` → `create_app()` so the
     `/config` save endpoint writes to the file the server actually loaded,
     not the hardcoded default path.
+
+## C9 — Docs and Closeout
+
+24. `webui.json` is not created automatically at server startup. `load_config()`
+    returns safe in-memory defaults when the file is absent. The file is written
+    only when `save_config()` is called — typically on the first `/config` POST.
+    Docs that say "created on first run" are inaccurate; say "used when absent."
+
+25. `server.py` exposes three CLI flags: `--host`, `--port`, and `--config`.
+    `--host`/`--port` override the loaded config (re-validated after merge);
+    `--config` selects the webui.json path passed through to `create_app()`.
+    Any doc or test that references server CLI args should include all three.

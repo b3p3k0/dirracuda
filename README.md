@@ -345,6 +345,7 @@ Experimental work is grouped under the permanent `⚗ Experimental` button in th
 The dialog is modeless and tab-based. Current tabs:
 - `SearXNG`
 - `Reddit`
+- `Web UI`
 - `Dorkbook`
 - `Keymaster`
 
@@ -499,7 +500,7 @@ The file explorer, direct target downloads, and browser-based file manifests are
 
 ### Modes and configuration
 
-Config file: `~/.dirracuda/conf/webui.json` (created with safe defaults on first run).
+Config file: `~/.dirracuda/conf/webui.json` (safe defaults are used when absent; file is created on first `/config` save).
 
 **Localhost mode (default):** binds to `127.0.0.1:5480`. No TLS cert is required — the server starts plain HTTP when no cert/key is configured. TLS can be explicitly disabled with `"tls": {"enabled": false}`.
 

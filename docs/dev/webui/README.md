@@ -1,6 +1,6 @@
 # Dirracuda Web UI Planning Workspace
 
-Status: RA planning approved for card-based implementation.
+Status: C0–C8 complete and committed. C9 (docs and closeout) in progress.
 
 This workspace turns the first-pass web UI notes in `INITIAL_PLANNING/` into a
 Claude-ready plan. The web UI is optional, disabled by default, and scoped to

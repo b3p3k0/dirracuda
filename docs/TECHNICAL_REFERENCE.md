@@ -107,7 +107,7 @@ and merged stdout/stderr progress logs.
 
 **Web UI startup and remote mode (C8):**
 
-`webui/server.py::run()` loads `webui.json` via `load_config()` (which calls `validate()`) before starting uvicorn. CLI `--host`/`--port` args are treated as validated overrides over the loaded config. Startup exits immediately on any validation failure — no silent fallback.
+`webui/server.py::run()` loads `webui.json` via `load_config()` (which calls `validate()`) before starting uvicorn. CLI `--host`, `--port`, and `--config` args are supported. `--host`/`--port` are treated as validated overrides over the loaded config (re-validated after merge); `--config` selects the webui.json path to load and propagates to `create_app()` so the `/config` save endpoint writes back to the same file. Startup exits immediately on any validation failure — no silent fallback.
 
 Config fields relevant to remote mode:
 
@@ -126,6 +126,8 @@ Startup enforcement rules (fail-closed, checked before uvicorn starts):
 - TLS enabled for remote without cert/key files readable on disk → startup refused.
 
 Allowlist middleware: registered as an HTTP middleware in `create_app()`. When `remote_enabled=True`, each request's `request.client.host` is checked against `allowed_cidrs` (parsed as `ipaddress.ip_network` objects). Non-matching or non-parseable addresses get 403. When `remote_enabled=False`, the check is skipped entirely — localhost mode is unaffected.
+
+**Reverse proxy note:** `request.client.host` reflects the TCP peer address as seen by the ASGI server. Behind a reverse proxy, this will be the proxy's address rather than the real client IP unless forwarded-header trust is correctly configured at the ASGI server layer — that configuration is deployment-specific and not managed by `webui/server.py`. Without it, allowlist decisions may be wrong (all traffic passes as the proxy address, or forwarded headers can be spoofed). See [FastAPI proxy guidance](https://fastapi.tiangolo.com/advanced/behind-a-proxy/) and [uvicorn deployment docs](https://www.uvicorn.org/deployment/) for details on trusted-proxy configuration.
 
 ### 1.2 Core Workflow Flowchart
 
@@ -846,13 +848,17 @@ dirracuda
    │    ├─ FTP tab
    │    └─ HTTP tab
    ├─ ExperimentalFeaturesDialog (gui/components/experimental_features_dialog.py)
+   │    ├─ SearXNG tab (gui/components/experimental_features/se_dork_tab.py)
+   │    │    └─ SeDorkBrowserWindow (gui/components/se_dork_browser_window.py)
+   │    ├─ Reddit tab (gui/components/experimental_features/reddit_tab.py)
+   │    │    ├─ RedditGrabDialog (gui/components/reddit_grab_dialog.py)
+   │    │    └─ RedditBrowserWindow (gui/components/reddit_browser_window.py)
+   │    ├─ Web UI tab (gui/components/experimental_features/webui_tab.py)
+   │    │    └─ WebUIControlDialog (gui/components/webui_control_dialog.py)
    │    ├─ Dorkbook tab (gui/components/experimental_features/dorkbook_tab.py)
    │    │    └─ DorkbookWindow (gui/components/dorkbook_window.py)
-   │    ├─ SearXNG Dorking tab (gui/components/experimental_features/se_dork_tab.py)
-   │    │    └─ SeDorkBrowserWindow (gui/components/se_dork_browser_window.py)
-   │    └─ Reddit tab (gui/components/experimental_features/reddit_tab.py)
-   │         ├─ RedditGrabDialog (gui/components/reddit_grab_dialog.py)
-   │         └─ RedditBrowserWindow (gui/components/reddit_browser_window.py)
+   │    └─ Keymaster tab (gui/components/experimental_features/keymaster_tab.py)
+   │         └─ KeymasterWindow (gui/components/keymaster_window.py)
    ├─ DBToolsDialog (gui/components/db_tools_dialog.py)
    │    └─ DBToolsEngine (gui/utils/db_tools_engine.py)
    ├─ RunningTasksWindow (gui/components/running_tasks_window.py)
@@ -889,7 +895,7 @@ SearXNG dorking, Reddit ingestion, and Dorkbook do not use this subprocess path.
 | Start Scan | Opens `UnifiedScanDialog` (protocol selector + scan options), then always shows preflight confirmation with live-balance + cost visibility before launch. Numeric estimates are shown only when live balance lookup succeeds. |
 | Server List | Opens `ServerListWindow` with SMB / FTP / HTTP tabs |
 | DB Tools | Opens `DBToolsDialog` |
-| Experimental | Opens `ExperimentalFeaturesDialog` (`Dorkbook`, `SearXNG Dorking`, `Reddit` tabs) |
+| Experimental | Opens `ExperimentalFeaturesDialog` (`SearXNG`, `Reddit`, `Web UI`, `Dorkbook`, `Keymaster` tabs) |
 | Configuration | Opens config editor |
 | Dark/Light toggle | Switches ttkthemes theme; persisted in `gui_settings.json` |
 | Running Tasks | Opens non-modal task manager for active/queued work; supports monitor reopen via double-click |
@@ -976,14 +982,15 @@ Backed by `gui/utils/db_tools_engine.py`. Capabilities:
 - **Statistics** — server count by country, protocol breakdown
 - **Maintenance** — SQLite VACUUM, integrity check (`PRAGMA integrity_check`), cascade-deletion preview before purging old sessions
 
-### 6.9 Experimental Features (Dorkbook, SearXNG, Reddit, Keymaster)
+### 6.9 Experimental Features (SearXNG, Reddit, Web UI, Dorkbook, Keymaster)
 
 `ExperimentalFeaturesDialog` is a modeless tab host opened from the dashboard `Experimental` button. Tabs are registry-driven (`gui/components/experimental_features/registry.py`), so adding/removing experimental modules is a registry edit, not dialog shell surgery.
 
-Current tabs:
-- `Dorkbook`
-- `SearXNG Dorking`
+Current tabs (registry order):
+- `SearXNG`
 - `Reddit`
+- `Web UI`
+- `Dorkbook`
 - `Keymaster`
 
 Warning banner behavior:

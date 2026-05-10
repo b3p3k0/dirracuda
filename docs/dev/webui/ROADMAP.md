@@ -67,7 +67,7 @@ Goal: support remote mode only when explicitly and safely configured.
 - Add systemd unit template if HI wants daemon management in v1.
 - Add installer/control-dialog hooks only after manual review.
 
-## Phase 6 - Closeout
+## Phase 6 - Closeout ← active (C9)
 
 Goal: make the docs match reality and leave a clean handoff.
 
