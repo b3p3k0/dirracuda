@@ -30,3 +30,31 @@ Seeded before implementation. Append after every major card.
 15. Web scan launch should keep using strict request validation plus argv-list
     subprocess calls with explicit `shell=False`; never let browser input become
     shell syntax or loosely coerced scan options.
+
+## C5 — Results Summaries and Database Export
+
+16. Export must use `VACUUM INTO` (not `backup()`). `export_database()` in
+    `gui/utils/db_tools_engine_maintenance_methods.py` uses `VACUUM INTO` — that
+    is the product export contract (clean, defragmented copy). `quick_backup()`
+    uses the backup API and is a separate operation. Web UI export must match
+    the same contract.
+
+17. Open the export source DB with `mode=rw` (no-create), not the default
+    `mode=rwc`. SQLite's default `connect(path)` creates a new empty file when
+    the path is absent; `VACUUM INTO` then succeeds against it, silently
+    exporting nothing. `sqlite3.connect(f"file:{path}?mode=rw", uri=True)`
+    refuses to create and raises `OperationalError` instead, which propagates
+    to a 500 response with no artifact written.
+
+18. Runtime schema guards must cover columns, not just tables. Inspect
+    `PRAGMA table_info(table)` for every optional column used in a SELECT —
+    especially when joining probe-cache or access tables that may have schema
+    drift across DB versions. A table being present does not guarantee its
+    columns are present.
+
+19. Export artifact filenames are generated-only (timestamp + random suffix).
+    Download endpoints must enforce two layers: (1) allowlist regex matching
+    only the generated filename pattern (`_EXPORT_FILENAME_RE`), (2)
+    directory-containment via `Path.resolve()` + `relative_to()`. Neither
+    alone is sufficient — the regex blocks non-artifact filenames; the
+    containment check blocks symlinks that escape the export dir.

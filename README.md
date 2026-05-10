@@ -477,6 +477,26 @@ Key Preview format: keys longer than 8 characters show as `first4 + asterisks + 
 
 API key input is masked in Add/Edit dialogs to avoid shoulder surfing, **BUT IS STORED IN CLEAR TEXT LOCALLY.** This should be a non-risk (if an attacker can read the unencrypted string in your local home dir, you probably have bigger issues...) but I would be remiss not to point it out.
 
+## Web UI (Optional)
+
+An optional browser-based interface is available as a separate package under `webui/`. It is disabled by default and not required for normal operation.
+
+Install its dependencies separately:
+
+```bash
+pip install -r webui/requirements-web.txt
+```
+
+Current capability (v1):
+
+- **Results** — paginated SMB, FTP, and HTTP host summaries with optional country filter. Accessible at `/results` after logging in. Share names, accessible dir counts, and HTTP access summaries are shown when the relevant tables exist in the main DB.
+- **Export** — exports the main DB as a clean, defragmented SQLite file using `VACUUM INTO`. Artifacts are written to `~/.dirracuda/exports/` with a generated filename (`dirracuda_export_YYYYMMDD_HHMMSS_<random>.db`). The download endpoint enforces an allowlist regex so only export artifacts can be served.
+- **Scan launch** (C4) — submit and cancel SMB/FTP/HTTP scans; follows the same CLI subprocess boundary as the Tkinter GUI.
+
+The file explorer, direct target downloads, and browser-based file manifests are out of scope for v1.
+
+---
+
 ## Advanced
 
 ### Templates

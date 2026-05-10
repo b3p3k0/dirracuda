@@ -13,6 +13,9 @@ cat /tmp/webui_test.txt
 echo "pytest exit=${RESULT}"
 ```
 
+When reporting test outcomes, report the exact pass/fail counts from the command
+output you ran. Do not hard-code historical totals as a fixed expectation.
+
 ## Baseline
 
 C0 records:
@@ -88,7 +91,10 @@ Manual gates are required before calling the feature done.
 
 ### Local Web UI
 
-1. Start localhost web UI.
+1. Start localhost web UI:
+   `./venv/bin/python -m webui.server`
+   or
+   `./venv/bin/uvicorn webui.app:create_app --factory`.
 2. Open `http://127.0.0.1:5480`.
 3. Confirm login is required.
 4. Log in.

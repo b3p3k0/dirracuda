@@ -79,7 +79,8 @@ Dirracuda scans for internet-accessible servers exposing open or weakly-authenti
 │  Optional Web UI Layer                                              │
 │  webui/server.py -> webui/app.py (FastAPI app factory)              │
 │    ├─ auth/session/CSRF helpers                                     │
-│    └─ tasks.py (single-active scan queue -> CLI subprocess runner)  │
+│    ├─ tasks.py (single-active scan queue -> CLI subprocess runner)  │
+│    └─ db.py (read-only result queries + VACUUM INTO export)         │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -90,6 +91,17 @@ The optional Web UI is disabled by default and installed separately with
 subprocess boundary as the Tkinter GUI: one active scan at a time, strict request
 validation, explicit `shell=False`, repo-root `cwd`, unbuffered Python output,
 and merged stdout/stderr progress logs.
+
+**Web UI routes (C4–C5):**
+
+| Route | Auth | Description |
+|-------|------|-------------|
+| `GET /results` | session | Results page (SMB/FTP/HTTP tabs, country filter, pagination) |
+| `GET /api/results/{protocol}` | session | Paginated JSON rows; `protocol` ∈ `smb\|ftp\|http`; `page` 1–10 000; `page_size` 1–200; optional `country` (2-letter ISO code) |
+| `POST /api/export` | session + CSRF | Export main DB via `VACUUM INTO`; artifact written to `~/.dirracuda/exports/`; response: `{"filename": "dirracuda_export_YYYYMMDD_HHMMSS_<8hex>.db"}` |
+| `GET /api/export/{filename}` | session | Download an export artifact; filename enforced against allowlist regex before serving |
+
+`webui/db.py` implements the reader functions (`get_smb_results`, `get_ftp_results`, `get_http_results`) and `export_db`. All readers use read-only URI connections (`mode=ro`). The export function opens the source with `mode=rw` (no-create) to prevent silent empty-DB creation when the source is absent. Runtime schema guards (`sqlite_master` + `PRAGMA table_info`) handle optional tables and columns without raising errors on schema drift.
 
 ### 1.2 Core Workflow Flowchart
 

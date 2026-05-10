@@ -2,13 +2,14 @@
 
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
-from fastapi import Depends, FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi import Depends, FastAPI, Query, Request
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
+import webui.db as _db
 from webui.auth import verify_password
 from webui.config import WebUIConfig, load_config
 from webui.dependencies import AuthRequired, get_session, same_origin, validate_csrf
@@ -32,6 +33,7 @@ def health() -> dict:
 def create_app(
     cfg: Optional[WebUIConfig] = None,
     creds_path=None,
+    db_path=None,
 ) -> FastAPI:
     if cfg is None:
         cfg = load_config()
@@ -46,6 +48,7 @@ def create_app(
     app.state.session_store = SessionStore()
     app.state.creds_path = creds_path
     app.state.scan_queue = ScanQueue()
+    app.state.db_path = Path(db_path) if db_path is not None else _db._DEFAULT_DB_PATH
 
     templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
@@ -193,5 +196,82 @@ def create_app(
 
         logger.info("scan cancel requested: task_id=%s", task_id)
         return JSONResponse({"ok": True})
+
+    @app.get("/results", response_class=HTMLResponse)
+    async def _results_page(
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> HTMLResponse:
+        return templates.TemplateResponse(request, "results.html", {"session": session})
+
+    @app.get("/api/results/{protocol}")
+    async def _get_results(
+        protocol: Literal["smb", "ftp", "http"],
+        request: Request,
+        session: Session = Depends(get_session),
+        page: int = Query(default=1),
+        page_size: int = Query(default=_db._PAGE_SIZE_DEFAULT),
+        country: Optional[str] = Query(default=None),
+    ) -> JSONResponse:
+        try:
+            p, ps, c = _db._validate_bounds(page, page_size, country)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        db_path = request.app.state.db_path
+        readers = {
+            "smb": _db.get_smb_results,
+            "ftp": _db.get_ftp_results,
+            "http": _db.get_http_results,
+        }
+        try:
+            rows = readers[protocol](db_path, p, ps, c)
+        except Exception:
+            logger.exception("results query failed: protocol=%s", protocol)
+            return JSONResponse({"error": "database error"}, status_code=500)
+        return JSONResponse({"results": rows, "page": p, "page_size": ps})
+
+    @app.post("/api/export")
+    async def _trigger_export(
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> JSONResponse:
+        if not same_origin(request):
+            return JSONResponse({"error": "origin check failed"}, status_code=403)
+        csrf_tok = request.headers.get("X-CSRF-Token")
+        if not validate_csrf(csrf_tok, session.csrf_token):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+        db_path = request.app.state.db_path
+        try:
+            artifact = _db.export_db(db_path, _db._EXPORT_DIR)
+        except Exception:
+            logger.exception("export failed")
+            return JSONResponse({"error": "export failed"}, status_code=500)
+        logger.info("export created: filename=%s", artifact.name)
+        return JSONResponse({"filename": artifact.name})
+
+    @app.get("/api/export/{filename}")
+    async def _download_export(
+        filename: str,
+        request: Request,
+        session: Session = Depends(get_session),
+    ):
+        if not _db._EXPORT_FILENAME_RE.fullmatch(filename):
+            return JSONResponse({"error": "invalid filename"}, status_code=400)
+        export_dir = _db._EXPORT_DIR
+        if not export_dir.exists():
+            return JSONResponse({"error": "not found"}, status_code=404)
+        resolved_dir = export_dir.resolve()
+        target = (export_dir / filename).resolve()
+        try:
+            target.relative_to(resolved_dir)
+        except ValueError:
+            return JSONResponse({"error": "invalid filename"}, status_code=400)
+        if not target.exists() or not target.is_file():
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return FileResponse(
+            path=target,
+            filename=filename,
+            media_type="application/octet-stream",
+        )
 
     return app
