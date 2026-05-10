@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dirracuda &#8211; Login</title>
+</head>
+<body>
+  <h1>Dirracuda Web UI</h1>
+  <p id="err" aria-live="polite" role="alert" style="color:red;display:none"></p>
+  <form id="lf" aria-label="Login">
+    <div>
+      <label for="u">Username</label><br>
+      <input id="u" name="username" type="text" autocomplete="username" required>
+    </div>
+    <div>
+      <label for="p">Password</label><br>
+      <input id="p" name="password" type="password" autocomplete="current-password" required>
+    </div>
+    <button type="submit">Log in</button>
+  </form>
+  <script>
+    document.getElementById('lf').addEventListener('submit', async function(e) {
+      e.preventDefault();
+      var err = document.getElementById('err');
+      err.style.display = 'none';
+      try {
+        var r = await fetch('/login', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            username: document.getElementById('u').value,
+            password: document.getElementById('p').value
+          })
+        });
+        if (r.ok) {
+          window.location.href = '/dashboard';
+        } else {
+          var b = await r.json().catch(function() { return {}; });
+          err.textContent = b.error || 'Login failed.';
+          err.style.display = '';
+        }
+      } catch (ex) {
+        err.textContent = 'Network error. Please try again.';
+        err.style.display = '';
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ session.csrf_token }}">
+  <title>Dirracuda &#8211; Dashboard</title>
+</head>
+<body>
+  <h1>Dirracuda Web UI</h1>
+  <p>Logged in as <strong>{{ session.username }}</strong>.</p>
+  <button id="lo" type="button">Log out</button>
+  <script>
+    document.getElementById('lo').addEventListener('click', async function() {
+      var token = document.querySelector('meta[name="csrf-token"]').content;
+      await fetch('/logout', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-CSRF-Token': token},
+        body: '{}'
+      });
+      window.location.href = '/login';
+    });
+  </script>
+</body>
+</html>
