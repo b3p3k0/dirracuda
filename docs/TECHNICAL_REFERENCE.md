@@ -3,7 +3,7 @@
 **Version:** current (`development` branch)
 **Scope:** Internals for developers and security analysts who need more than the README and less than reading every file themselves.
 
-Dirracuda scans for internet-accessible servers exposing open or weakly-authenticated directories across three protocols: SMB, FTP, and HTTP. It discovers candidates through the Shodan API, verifies access, persists results to a local SQLite database, and provides both a CLI and a Tkinter GUI for interacting with the data.
+Dirracuda scans for internet-accessible servers exposing open or weakly-authenticated directories across three protocols: SMB, FTP, and HTTP. It discovers candidates through the Shodan API, verifies access, persists results to a local SQLite database, and provides CLI, Tkinter GUI, and optional Web UI surfaces for interacting with the data.
 
 ---
 
@@ -74,9 +74,22 @@ Dirracuda scans for internet-accessible servers exposing open or weakly-authenti
 │  gui/utils/settings_manager.py  (persists ~/.dirracuda/state/      │
 │                                  gui_settings.json)                │
 └─────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────┐
+│  Optional Web UI Layer                                              │
+│  webui/server.py -> webui/app.py (FastAPI app factory)              │
+│    ├─ auth/session/CSRF helpers                                     │
+│    └─ tasks.py (single-active scan queue -> CLI subprocess runner)  │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 For SMB/FTP/HTTP scan flows, the GUI invokes CLI scripts as subprocesses via `gui/utils/backend_interface/interface.py` and parses stdout for progress data. Experimental SearXNG dorking (`experimental/se_dork`), Reddit ingestion (`experimental/redseek`), Dorkbook recipe management (`experimental/dorkbook`), and Keymaster key management (`experimental/keymaster`) are in-process paths launched from the dashboard.
+
+The optional Web UI is disabled by default and installed separately with
+`webui/requirements-web.txt`. Its C4 scan launcher follows the same CLI
+subprocess boundary as the Tkinter GUI: one active scan at a time, strict request
+validation, explicit `shell=False`, repo-root `cwd`, unbuffered Python output,
+and merged stdout/stderr progress logs.
 
 ### 1.2 Core Workflow Flowchart
 
@@ -116,6 +129,7 @@ This shape applies to all three protocols. Protocol-specific differences are cov
 | `experimental/keymaster/` | Keymaster sidecar persistence for reusable API keys | `models.py`, `store.py` |
 | `gui/components/`, `gui/dashboard/` | Tkinter windows/dialogs plus dashboard shim+implementation | `gui/components/dashboard.py` (compat shim), `gui/dashboard/widget.py`, `unified_scan_dialog.py`, `server_list_window/`, `running_tasks_window.py`, `db_tools_dialog.py`, `*_browser_window.py` |
 | `gui/utils/` | GUI infrastructure | `ui_dispatcher.py`, `scan_manager.py`, `backend_interface/`, `probe_runner.py`, `extract_runner.py`, `settings_manager.py` |
+| `webui/` | Optional FastAPI Web UI package; disabled by default | `app.py`, `server.py`, `config.py`, `auth.py`, `sessions.py`, `dependencies.py`, `tasks.py`, `templates/` |
 | `tools/` | Database management utilities | `db_manager.py`, `db_schema.sql`, `db_maintenance.py`, `db_migrations.py`* |
 | `signatures/rce_smb/` | YAML CVE signature definitions | `*.yaml` |
 | `conf/` | Application configuration | `config.json.example`, `exclusion_list.json`, `ransomware_indicators.json` |

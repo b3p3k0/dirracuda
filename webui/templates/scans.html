@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ session.csrf_token }}">
+  <title>Dirracuda - Scans</title>
+</head>
+<body>
+  <h1>Launch Scan</h1>
+  <p>Logged in as <strong>{{ session.username }}</strong>.</p>
+  <p><a href="/dashboard">Dashboard</a></p>
+
+  <form id="scan-form">
+    <label for="protocol">Protocol</label>
+    <select id="protocol" name="protocol">
+      <option value="smb">SMB</option>
+      <option value="ftp">FTP</option>
+      <option value="http">HTTP</option>
+    </select>
+
+    <label for="countries">Countries</label>
+    <input id="countries" name="countries" type="text"
+           placeholder="US,GB - leave blank for global">
+
+    <label for="probe">
+      <input id="probe" name="probe" type="checkbox">
+      Run post-scan probe (SMB only)
+    </label>
+
+    <label for="filters">Filters</label>
+    <input id="filters" name="filters" type="text"
+           placeholder="Optional Shodan filter string">
+
+    <button type="submit">Submit</button>
+  </form>
+
+  <div id="status" role="status"></div>
+
+  <script>
+    function parseCountries(value) {
+      if (!value) {
+        return [];
+      }
+      return value.split(',')
+        .map(function(part) { return part.trim().toUpperCase(); })
+        .filter(function(part) { return part.length > 0; });
+    }
+
+    function responseMessage(data) {
+      if (data && data.detail) {
+        return JSON.stringify(data.detail);
+      }
+      if (data && data.error) {
+        return data.error;
+      }
+      return 'Request failed.';
+    }
+
+    document.getElementById('scan-form').addEventListener('submit', async function(event) {
+      event.preventDefault();
+      var token = document.querySelector('meta[name="csrf-token"]').content;
+      var payload = {
+        protocol: document.getElementById('protocol').value,
+        countries: parseCountries(document.getElementById('countries').value),
+        run_probe_after_scan: document.getElementById('probe').checked,
+        filters: document.getElementById('filters').value
+      };
+      var status = document.getElementById('status');
+      var response = await fetch('/api/scans', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-CSRF-Token': token},
+        body: JSON.stringify(payload)
+      });
+      var data = await response.json();
+      if (response.status === 202) {
+        status.textContent = 'Queued task ' + data.task_id + ' (' + data.status + ')';
+        return;
+      }
+      status.textContent = responseMessage(data);
+    });
+  </script>
+</body>
+</html>

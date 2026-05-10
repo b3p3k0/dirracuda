@@ -13,6 +13,7 @@ from webui.auth import verify_password
 from webui.config import WebUIConfig, load_config
 from webui.dependencies import AuthRequired, get_session, same_origin, validate_csrf
 from webui.sessions import Session, SessionStore, cookie_name
+from webui.tasks import CancelResult, ScanQueue, ScanRequest
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ def create_app(
     app.state.cfg = cfg
     app.state.session_store = SessionStore()
     app.state.creds_path = creds_path
+    app.state.scan_queue = ScanQueue()
 
     templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
@@ -129,5 +131,67 @@ def create_app(
         return templates.TemplateResponse(
             request, "dashboard.html", {"session": session}
         )
+
+    @app.get("/scans", response_class=HTMLResponse)
+    async def _scans_page(
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> HTMLResponse:
+        return templates.TemplateResponse(request, "scans.html", {"session": session})
+
+    @app.post("/api/scans")
+    async def _submit_scan(
+        body: ScanRequest,
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> JSONResponse:
+        if not same_origin(request):
+            return JSONResponse({"error": "origin check failed"}, status_code=403)
+        csrf_tok = request.headers.get("X-CSRF-Token")
+        if not validate_csrf(csrf_tok, session.csrf_token):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+
+        queue = request.app.state.scan_queue
+        task = queue.submit(body)
+        logger.info("scan submitted: task_id=%s protocol=%s", task.task_id, body.protocol)
+        return JSONResponse(
+            {"task_id": task.task_id, "status": task.status.value}, status_code=202
+        )
+
+    @app.get("/api/scans/{task_id}")
+    async def _get_scan(
+        task_id: str,
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> JSONResponse:
+        queue = request.app.state.scan_queue
+        task = queue.get_task(task_id)
+        if task is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return JSONResponse(task.to_dict())
+
+    @app.post("/api/scans/{task_id}/cancel")
+    async def _cancel_scan(
+        task_id: str,
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> JSONResponse:
+        if not same_origin(request):
+            return JSONResponse({"error": "origin check failed"}, status_code=403)
+        csrf_tok = request.headers.get("X-CSRF-Token")
+        if not validate_csrf(csrf_tok, session.csrf_token):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+
+        queue = request.app.state.scan_queue
+        result = queue.cancel(task_id)
+        if result == CancelResult.NOT_FOUND:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        if result == CancelResult.TERMINAL:
+            task = queue.get_task(task_id)
+            status = task.status.value if task else "unknown"
+            return JSONResponse({"ok": False, "status": status}, status_code=409)
+
+        logger.info("scan cancel requested: task_id=%s", task_id)
+        return JSONResponse({"ok": True})
 
     return app

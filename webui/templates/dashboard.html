@@ -9,6 +9,7 @@
 <body>
   <h1>Dirracuda Web UI</h1>
   <p>Logged in as <strong>{{ session.username }}</strong>.</p>
+  <p><a href="/scans">Launch Scan</a></p>
   <button id="lo" type="button">Log out</button>
   <script>
     document.getElementById('lo').addEventListener('click', async function() {

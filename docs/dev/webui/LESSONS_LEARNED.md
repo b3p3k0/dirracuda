@@ -27,3 +27,6 @@ Seeded before implementation. Append after every major card.
     browser dashboards.
 14. Web dependencies belong in `webui/requirements-web.txt` unless HI explicitly folds
     them into the main runtime.
+15. Web scan launch should keep using strict request validation plus argv-list
+    subprocess calls with explicit `shell=False`; never let browser input become
+    shell syntax or loosely coerced scan options.
