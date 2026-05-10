@@ -492,6 +492,8 @@ Current capability (v1):
 - **Results** — paginated SMB, FTP, and HTTP host summaries with optional country filter. Accessible at `/results` after logging in. Share names, accessible dir counts, and HTTP access summaries are shown when the relevant tables exist in the main DB.
 - **Export** — exports the main DB as a clean, defragmented SQLite file using `VACUUM INTO`. Artifacts are written to `~/.dirracuda/exports/` with a generated filename (`dirracuda_export_YYYYMMDD_HHMMSS_<random>.db`). The download endpoint enforces an allowlist regex so only export artifacts can be served.
 - **Scan launch** (C4) — submit and cancel SMB/FTP/HTTP scans; follows the same CLI subprocess boundary as the Tkinter GUI.
+- **Config page** (C6) — view and save web UI bind/TLS/allowlist/session settings at `/config` (CSRF-protected). Idle timeout is edited in minutes and stored in seconds; absolute timeout is edited in hours and stored in seconds.
+- **Frontend pass** (C6) — shared layout, static stylesheet, keyboard-visible focus states, and mobile reflow for scan/results/config pages without adding a SPA framework or build step.
 
 The file explorer, direct target downloads, and browser-based file manifests are out of scope for v1.
 

@@ -2,16 +2,24 @@
 
 import logging
 from pathlib import Path
-from typing import Literal, Optional
+from typing import List, Literal, Optional
 
 from fastapi import Depends, FastAPI, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 import webui.db as _db
 from webui.auth import verify_password
-from webui.config import WebUIConfig, load_config
+from webui.config import (
+    TLSConfig,
+    WebUIConfig,
+    WebUIConfigError,
+    load_config,
+    save_config,
+    validate,
+)
 from webui.dependencies import AuthRequired, get_session, same_origin, validate_csrf
 from webui.sessions import Session, SessionStore, cookie_name
 from webui.tasks import CancelResult, ScanQueue, ScanRequest
@@ -19,11 +27,25 @@ from webui.tasks import CancelResult, ScanQueue, ScanRequest
 logger = logging.getLogger(__name__)
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
+_STATIC_DIR = Path(__file__).parent / "static"
 
 
 class _LoginRequest(BaseModel):
     username: str
     password: str
+
+
+class _ConfigUpdateRequest(BaseModel):
+    bind_address: str
+    port: int
+    remote_enabled: bool
+    tls_enabled: bool
+    tls_allow_insecure_remote: bool
+    tls_cert: str = ""
+    tls_key: str = ""
+    allowed_cidrs: List[str] = []
+    session_timeout_idle_min: int
+    session_timeout_absolute_hr: int
 
 
 def health() -> dict:
@@ -34,6 +56,7 @@ def create_app(
     cfg: Optional[WebUIConfig] = None,
     creds_path=None,
     db_path=None,
+    config_path=None,
 ) -> FastAPI:
     if cfg is None:
         cfg = load_config()
@@ -49,6 +72,10 @@ def create_app(
     app.state.creds_path = creds_path
     app.state.scan_queue = ScanQueue()
     app.state.db_path = Path(db_path) if db_path is not None else _db._DEFAULT_DB_PATH
+    app.state.config_path = Path(config_path) if config_path is not None else None
+
+    if _STATIC_DIR.exists():
+        app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
     templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
@@ -131,8 +158,15 @@ def create_app(
         request: Request,
         session: Session = Depends(get_session),
     ) -> HTMLResponse:
+        queue = request.app.state.scan_queue
+        cfg_ = request.app.state.cfg
         return templates.TemplateResponse(
-            request, "dashboard.html", {"session": session}
+            request, "dashboard.html", {
+                "session": session,
+                "cfg": cfg_,
+                "qs": queue.queue_status(),
+                "active_page": "dashboard",
+            }
         )
 
     @app.get("/scans", response_class=HTMLResponse)
@@ -140,7 +174,9 @@ def create_app(
         request: Request,
         session: Session = Depends(get_session),
     ) -> HTMLResponse:
-        return templates.TemplateResponse(request, "scans.html", {"session": session})
+        return templates.TemplateResponse(
+            request, "scans.html", {"session": session, "active_page": "scans"}
+        )
 
     @app.post("/api/scans")
     async def _submit_scan(
@@ -202,7 +238,9 @@ def create_app(
         request: Request,
         session: Session = Depends(get_session),
     ) -> HTMLResponse:
-        return templates.TemplateResponse(request, "results.html", {"session": session})
+        return templates.TemplateResponse(
+            request, "results.html", {"session": session, "active_page": "results"}
+        )
 
     @app.get("/api/results/{protocol}")
     async def _get_results(
@@ -273,5 +311,57 @@ def create_app(
             filename=filename,
             media_type="application/octet-stream",
         )
+
+    @app.get("/config", response_class=HTMLResponse)
+    async def _config_page(
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> HTMLResponse:
+        return templates.TemplateResponse(
+            request, "config.html", {
+                "session": session,
+                "cfg": request.app.state.cfg,
+                "active_page": "config",
+            }
+        )
+
+    @app.post("/config")
+    async def _config_save(
+        body: _ConfigUpdateRequest,
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> JSONResponse:
+        if not same_origin(request):
+            return JSONResponse({"error": "origin check failed"}, status_code=403)
+        csrf_tok = request.headers.get("X-CSRF-Token")
+        if not validate_csrf(csrf_tok, session.csrf_token):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+
+        new_cfg = WebUIConfig(
+            enabled=request.app.state.cfg.enabled,
+            bind_address=body.bind_address,
+            port=body.port,
+            remote_enabled=body.remote_enabled,
+            allowed_cidrs=list(body.allowed_cidrs),
+            session_timeout_idle=body.session_timeout_idle_min * 60,
+            session_timeout_absolute=body.session_timeout_absolute_hr * 3600,
+            tls=TLSConfig(
+                enabled=body.tls_enabled,
+                cert_file=body.tls_cert,
+                key_file=body.tls_key,
+                allow_insecure_remote=body.tls_allow_insecure_remote,
+            ),
+        )
+        try:
+            validate(new_cfg)
+        except WebUIConfigError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        try:
+            save_config(new_cfg, path=request.app.state.config_path)
+        except Exception:
+            logger.exception("config save failed")
+            return JSONResponse({"error": "failed to save config"}, status_code=500)
+        logger.info("config saved by user=%r", session.username)
+        return JSONResponse({"ok": True, "note": "Changes take effect on restart."})
 
     return app

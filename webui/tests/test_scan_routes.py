@@ -42,6 +42,14 @@ class FakeScanQueue:
         task.status = TaskStatus.CANCELLED
         return CancelResult.OK
 
+    def queue_status(self) -> dict:
+        active = next(
+            (t.to_dict() for t in self.tasks.values() if t.status == TaskStatus.RUNNING),
+            None,
+        )
+        queued = [t.to_dict() for t in self.tasks.values() if t.status == TaskStatus.QUEUED]
+        return {"active": active, "queued": queued}
+
 
 @pytest.fixture
 def creds(tmp_path):
@@ -109,7 +117,7 @@ def test_scans_page_requires_auth(client):
 def test_scans_page_authenticated(logged_in_client):
     r = logged_in_client.get("/scans")
     assert r.status_code == 200
-    assert "Launch Scan" in r.text
+    assert "Queue Scan" in r.text
 
 
 def test_submit_requires_auth(client):

@@ -92,7 +92,7 @@ subprocess boundary as the Tkinter GUI: one active scan at a time, strict reques
 validation, explicit `shell=False`, repo-root `cwd`, unbuffered Python output,
 and merged stdout/stderr progress logs.
 
-**Web UI routes (C4–C5):**
+**Web UI routes (C4–C6):**
 
 | Route | Auth | Description |
 |-------|------|-------------|
@@ -100,6 +100,8 @@ and merged stdout/stderr progress logs.
 | `GET /api/results/{protocol}` | session | Paginated JSON rows; `protocol` ∈ `smb\|ftp\|http`; `page` 1–10 000; `page_size` 1–200; optional `country` (2-letter ISO code) |
 | `POST /api/export` | session + CSRF | Export main DB via `VACUUM INTO`; artifact written to `~/.dirracuda/exports/`; response: `{"filename": "dirracuda_export_YYYYMMDD_HHMMSS_<8hex>.db"}` |
 | `GET /api/export/{filename}` | session | Download an export artifact; filename enforced against allowlist regex before serving |
+| `GET /config` | session | Web UI config page (bind/port/remote/TLS/allowlist/session timeout fields) |
+| `POST /config` | session + CSRF | Validate and save `webui.json` fields. UI submits idle timeout in minutes and absolute timeout in hours; server converts to stored seconds before `save_config`. |
 
 `webui/db.py` implements the reader functions (`get_smb_results`, `get_ftp_results`, `get_http_results`) and `export_db`. All readers use read-only URI connections (`mode=ro`). The export function opens the source with `mode=rw` (no-create) to prevent silent empty-DB creation when the source is absent. Runtime schema guards (`sqlite_master` + `PRAGMA table_info`) handle optional tables and columns without raising errors on schema drift.
 

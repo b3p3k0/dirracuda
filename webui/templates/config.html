@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block title %}Config{% endblock %}
+
+{% block content %}
+<h1>Config</h1>
+
+<div role="status" id="cfg-status" aria-live="polite" style="margin-bottom:12px"></div>
+
+<form id="cfg-form" novalidate>
+  <div class="form-section">
+    <div class="form-row">
+      <label for="bind-addr">Bind address</label>
+      <input id="bind-addr" name="bind_address" type="text"
+             value="{{ cfg.bind_address }}" maxlength="64" required>
+    </div>
+    <div class="form-row">
+      <label for="port">Port</label>
+      <input id="port" name="port" type="number"
+             value="{{ cfg.port }}" min="1" max="65535" style="max-width:100px" required>
+    </div>
+  </div>
+
+  <div class="form-section">
+    <div class="check-row">
+      <input id="remote-enabled" name="remote_enabled" type="checkbox"
+             {% if cfg.remote_enabled %}checked{% endif %}>
+      <label for="remote-enabled">Remote access enabled</label>
+    </div>
+    <div id="remote-warn" class="status-warn"
+         style="{% if not cfg.remote_enabled %}display:none{% endif %}; margin-top:6px">
+      Warning: remote access exposes this service on non-loopback interfaces.
+      Ensure TLS and allowlist are configured before enabling.
+    </div>
+  </div>
+
+  <div class="form-section">
+    <div class="check-row">
+      <input id="tls-enabled" name="tls_enabled" type="checkbox"
+             {% if cfg.tls.enabled %}checked{% endif %}>
+      <label for="tls-enabled">TLS enabled</label>
+    </div>
+    <div class="check-row">
+      <input id="tls-insecure" name="tls_allow_insecure_remote" type="checkbox"
+             {% if cfg.tls.allow_insecure_remote %}checked{% endif %}>
+      <label for="tls-insecure">Allow insecure remote override</label>
+    </div>
+    <div class="form-row">
+      <label for="tls-cert">TLS cert path</label>
+      <input id="tls-cert" name="tls_cert" type="text"
+             value="{{ cfg.tls.cert_file }}" maxlength="512" placeholder="/path/to/cert.pem">
+    </div>
+    <div class="form-row">
+      <label for="tls-key">TLS key path</label>
+      <input id="tls-key" name="tls_key" type="text"
+             value="{{ cfg.tls.key_file }}" maxlength="512" placeholder="/path/to/key.pem">
+    </div>
+  </div>
+
+  <div class="form-section">
+    <div class="form-row">
+      <label for="allowlist">Allowlist (CIDRs, comma-separated)</label>
+      <input id="allowlist" name="allowed_cidrs" type="text"
+             value="{{ cfg.allowed_cidrs | join(', ') }}" maxlength="1024"
+             placeholder="127.0.0.1/32, ::1/128">
+    </div>
+  </div>
+
+  <div class="form-section">
+    <div class="form-row">
+      <label for="idle-timeout">Idle timeout (minutes)</label>
+      <input id="idle-timeout" name="session_timeout_idle_min" type="number"
+             value="{{ (cfg.session_timeout_idle // 60) }}"
+             min="5" max="240" style="max-width:100px">
+    </div>
+    <div class="form-row">
+      <label for="abs-timeout">Absolute timeout (hours)</label>
+      <input id="abs-timeout" name="session_timeout_absolute_hr" type="number"
+             value="{{ (cfg.session_timeout_absolute // 3600) }}"
+             min="1" max="24" style="max-width:100px">
+    </div>
+  </div>
+
+  <div class="form-actions">
+    <button type="submit" id="save-btn">Save</button>
+    <span class="status-text" style="margin-left:8px; font-size:0.9em">
+      Changes take effect on restart.
+    </span>
+  </div>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  var token = document.querySelector('meta[name="csrf-token"]').content;
+
+  document.getElementById('remote-enabled').addEventListener('change', function() {
+    document.getElementById('remote-warn').style.display = this.checked ? '' : 'none';
+  });
+
+  function parseCidrs(value) {
+    if (!value || !value.trim()) return [];
+    return value.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+  }
+
+  function setStatus(msg, cls) {
+    var el = document.getElementById('cfg-status');
+    el.textContent = msg;
+    el.className = cls || '';
+    el.style.display = msg ? '' : 'none';
+  }
+
+  document.getElementById('cfg-form').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    var btn = document.getElementById('save-btn');
+    btn.disabled = true;
+    setStatus('Saving...');
+
+    var payload = {
+      bind_address: document.getElementById('bind-addr').value.trim(),
+      port: parseInt(document.getElementById('port').value, 10),
+      remote_enabled: document.getElementById('remote-enabled').checked,
+      tls_enabled: document.getElementById('tls-enabled').checked,
+      tls_allow_insecure_remote: document.getElementById('tls-insecure').checked,
+      tls_cert: document.getElementById('tls-cert').value.trim(),
+      tls_key: document.getElementById('tls-key').value.trim(),
+      allowed_cidrs: parseCidrs(document.getElementById('allowlist').value),
+      session_timeout_idle_min: parseInt(document.getElementById('idle-timeout').value, 10),
+      session_timeout_absolute_hr: parseInt(document.getElementById('abs-timeout').value, 10)
+    };
+
+    try {
+      var resp = await fetch('/config', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-CSRF-Token': token},
+        body: JSON.stringify(payload)
+      });
+      var data = await resp.json();
+      if (resp.ok) {
+        setStatus('Saved. ' + (data.note || 'Changes take effect on restart.'), 'status-ok');
+      } else {
+        setStatus('Error: ' + (data.error || resp.status), 'status-error');
+      }
+    } catch (ex) {
+      setStatus('Network error. Please try again.', 'status-error');
+    }
+    btn.disabled = false;
+  });
+</script>
+{% endblock %}

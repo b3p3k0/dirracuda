@@ -1,181 +1,224 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="csrf-token" content="{{ session.csrf_token }}">
-  <title>Dirracuda &#8211; Results</title>
-</head>
-<body>
-  <h1>Scan Results</h1>
-  <p>Logged in as <strong>{{ session.username }}</strong>.</p>
-  <p><a href="/dashboard">Dashboard</a> | <a href="/scans">Launch Scan</a></p>
+{% extends "base.html" %}
+{% block title %}Results{% endblock %}
 
-  <nav id="proto-nav">
-    <button data-proto="smb" class="proto-tab">SMB</button>
-    <button data-proto="ftp" class="proto-tab">FTP</button>
-    <button data-proto="http" class="proto-tab">HTTP</button>
-  </nav>
+{% block content %}
+<h1>Results</h1>
 
-  <div id="filter-bar">
-    <label for="country-filter">Country (2-letter code):</label>
-    <input id="country-filter" type="text" maxlength="2" placeholder="US" size="4">
-    <button id="load-btn" type="button">Load</button>
-    <button id="prev-btn" type="button">&laquo; Prev</button>
-    <button id="next-btn" type="button">Next &raquo;</button>
-    <span id="page-label"></span>
-  </div>
+<nav class="proto-tabs" aria-label="Protocol tabs">
+  <button data-proto="smb" class="proto-tab active" type="button">SMB</button>
+  <button data-proto="ftp" class="proto-tab" type="button">FTP</button>
+  <button data-proto="http" class="proto-tab" type="button">HTTP</button>
+</nav>
 
-  <div id="results-wrap">
-    <table id="results-table">
-      <thead id="results-thead"></thead>
-      <tbody id="results-body">
-        <tr><td>Select a protocol and click Load.</td></tr>
-      </tbody>
-    </table>
-  </div>
+<div class="filter-bar">
+  <label for="country-filter">Country:</label>
+  <input id="country-filter" type="text" maxlength="2" placeholder="US" aria-label="Two-letter country filter">
+  <button id="load-btn" type="button">Load</button>
+  <button id="prev-btn" type="button">&laquo; Prev</button>
+  <button id="next-btn" type="button">Next &raquo;</button>
+  <span class="page-label" id="page-label" aria-live="polite"></span>
+</div>
 
-  <div id="export-bar">
-    <button id="export-btn" type="button">Export DB</button>
-    <span id="export-status" role="status"></span>
-  </div>
+<div role="status" id="results-status" aria-live="polite" style="margin-bottom:6px"></div>
 
-  <script>
-    var currentProto = 'smb';
-    var currentPage = 1;
-    var pageSize = 50;
-    var token = document.querySelector('meta[name="csrf-token"]').content;
+<div class="table-wrap">
+  <table id="results-table" class="results-table">
+    <thead id="results-thead"></thead>
+    <tbody id="results-body">
+      <tr><td>Select a protocol and click Load.</td></tr>
+    </tbody>
+  </table>
+</div>
 
-    var HEADERS = {
-      smb:  ['IP', 'Country', 'Auth', 'Status', 'Shares', 'Last Seen', 'Copy'],
-      ftp:  ['IP', 'Port', 'Country', 'Anon', 'Dirs', 'Status', 'Last Seen', 'Copy'],
-      http: ['IP', 'Port', 'Scheme', 'Country', 'Title', 'Dirs', 'Files', 'Status', 'Last Seen', 'Copy'],
-    };
+<div class="share-summary" id="share-summary" aria-label="Share summary">
+  <span class="share-summary-empty">Click a row to see share/directory details.</span>
+</div>
 
-    function buildRow(proto, r) {
-      var td = function(text) {
-        var el = document.createElement('td');
-        el.textContent = text != null ? String(text) : '';
-        return el;
-      };
-      var copyBtn = document.createElement('button');
-      copyBtn.type = 'button';
-      copyBtn.textContent = 'Copy';
-      copyBtn.addEventListener('click', function() {
-        navigator.clipboard.writeText(r.copy_str).catch(function() {
-          window.prompt('Copy:', r.copy_str);
+<div id="export-bar" style="margin-top:16px">
+  <button id="export-btn" type="button">Export DB</button>
+  <span id="export-status" role="status" aria-live="polite" style="margin-left:8px"></span>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  var currentProto = 'smb';
+  var currentPage = 1;
+  var pageSize = 50;
+  var token = document.querySelector('meta[name="csrf-token"]').content;
+  var selectedRow = null;
+
+  var HEADERS = {
+    smb:  [['IP','ip'], ['Country','country_code'], ['Auth','auth_method'], ['Status','status'],
+            ['Shares','accessible_shares'], ['Last Seen','last_seen'], ['','copy']],
+    ftp:  [['IP','ip'], ['Port','port'], ['Country','country_code'], ['Anon','anon_accessible'],
+            ['Dirs','accessible_dirs'], ['Status','status'], ['Last Seen','last_seen'], ['','copy']],
+    http: [['IP','ip'], ['Port','port'], ['Scheme','scheme'], ['Country','country_code'],
+            ['Title','title'], ['Dirs','dir_count'], ['Files','file_count'],
+            ['Status','status'], ['Last Seen','last_seen'], ['','copy']],
+  };
+
+  function setResults(msg, cls) {
+    var el = document.getElementById('results-status');
+    el.textContent = msg;
+    el.className = cls || '';
+  }
+
+  function buildSummary(proto, r) {
+    var s = document.getElementById('share-summary');
+    s.innerHTML = '';
+    if (proto === 'smb') {
+      var names = Array.isArray(r.share_names) ? r.share_names : [];
+      if (!names.length && !r.accessible_shares) {
+        s.innerHTML = '<span class="share-summary-empty">No share data available.</span>';
+        return;
+      }
+      var html = '<strong>' + escHtml(r.ip) + '</strong> &mdash; ' +
+                 (r.accessible_shares || 0) + ' accessible share(s)';
+      if (names.length) {
+        html += '<br><span class="status-text">' + names.map(escHtml).join(', ') + '</span>';
+      }
+      s.innerHTML = html;
+    } else if (proto === 'ftp') {
+      s.innerHTML = '<strong>' + escHtml(r.ip) + ':' + (r.port || 21) + '</strong>' +
+        ' &mdash; Anon: ' + (r.anon_accessible ? 'yes' : 'no') +
+        ', Dirs: ' + (r.accessible_dirs || 0);
+    } else {
+      s.innerHTML = '<strong>' + escHtml(r.ip) + ':' + (r.port || 80) + '</strong>' +
+        ' &mdash; Dirs: ' + (r.dir_count || 0) +
+        ', Files: ' + (r.file_count || 0) +
+        (r.is_index_page ? ', index page' : '');
+    }
+  }
+
+  function escHtml(str) {
+    if (str == null) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function buildRow(proto, r) {
+    var headers = HEADERS[proto];
+    var tr = document.createElement('tr');
+    tr.style.cursor = 'pointer';
+
+    headers.forEach(function(pair) {
+      var label = pair[0];
+      var key = pair[1];
+      var td = document.createElement('td');
+      if (label) td.setAttribute('data-label', label);
+      if (key === 'copy') {
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = 'Copy';
+        btn.addEventListener('click', function(e) {
+          e.stopPropagation();
+          navigator.clipboard.writeText(r.copy_str).catch(function() {
+            window.prompt('Copy:', r.copy_str);
+          });
         });
-      });
-      var copyTd = document.createElement('td');
-      copyTd.appendChild(copyBtn);
-
-      var tr = document.createElement('tr');
-      if (proto === 'smb') {
-        tr.appendChild(td(r.ip));
-        tr.appendChild(td(r.country_code || r.country));
-        tr.appendChild(td(r.auth_method));
-        tr.appendChild(td(r.status));
-        tr.appendChild(td(r.accessible_shares));
-        tr.appendChild(td(r.last_seen));
-        tr.appendChild(copyTd);
-      } else if (proto === 'ftp') {
-        tr.appendChild(td(r.ip));
-        tr.appendChild(td(r.port));
-        tr.appendChild(td(r.country_code || r.country));
-        tr.appendChild(td(r.anon_accessible ? 'Yes' : 'No'));
-        tr.appendChild(td(r.accessible_dirs));
-        tr.appendChild(td(r.status));
-        tr.appendChild(td(r.last_seen));
-        tr.appendChild(copyTd);
+        td.appendChild(btn);
+      } else if (key === 'anon_accessible') {
+        td.textContent = r[key] ? 'Yes' : 'No';
       } else {
-        tr.appendChild(td(r.ip));
-        tr.appendChild(td(r.port));
-        tr.appendChild(td(r.scheme));
-        tr.appendChild(td(r.country_code || r.country));
-        tr.appendChild(td(r.title));
-        tr.appendChild(td(r.dir_count));
-        tr.appendChild(td(r.file_count));
-        tr.appendChild(td(r.status));
-        tr.appendChild(td(r.last_seen));
-        tr.appendChild(copyTd);
+        td.textContent = r[key] != null ? String(r[key]) : '';
       }
-      return tr;
-    }
-
-    function setHeaders(proto) {
-      var thead = document.getElementById('results-thead');
-      thead.innerHTML = '';
-      var tr = document.createElement('tr');
-      HEADERS[proto].forEach(function(h) {
-        var th = document.createElement('th');
-        th.textContent = h;
-        tr.appendChild(th);
-      });
-      thead.appendChild(tr);
-    }
-
-    function loadResults() {
-      var country = document.getElementById('country-filter').value.trim().toUpperCase();
-      var url = '/api/results/' + currentProto +
-        '?page=' + currentPage + '&page_size=' + pageSize;
-      if (country) {
-        url += '&country=' + encodeURIComponent(country);
-      }
-      var status = document.getElementById('results-body');
-      status.innerHTML = '<tr><td>Loading...</td></tr>';
-      setHeaders(currentProto);
-      fetch(url).then(function(resp) {
-        return resp.json().then(function(data) {
-          var tbody = document.getElementById('results-body');
-          tbody.innerHTML = '';
-          if (!resp.ok) {
-            tbody.innerHTML = '<tr><td>Error: ' + (data.error || resp.status) + '</td></tr>';
-            return;
-          }
-          if (!data.results || data.results.length === 0) {
-            tbody.innerHTML = '<tr><td>No results.</td></tr>';
-          } else {
-            data.results.forEach(function(r) {
-              tbody.appendChild(buildRow(currentProto, r));
-            });
-          }
-          document.getElementById('page-label').textContent =
-            'Page ' + data.page + ' (' + pageSize + ' per page)';
-        });
-      }).catch(function(err) {
-        document.getElementById('results-body').innerHTML =
-          '<tr><td>Request failed.</td></tr>';
-      });
-    }
-
-    document.querySelectorAll('.proto-tab').forEach(function(btn) {
-      btn.addEventListener('click', function() {
-        currentProto = btn.getAttribute('data-proto');
-        currentPage = 1;
-        loadResults();
-      });
+      tr.appendChild(td);
     });
 
-    document.getElementById('load-btn').addEventListener('click', function() {
+    tr.addEventListener('click', function() {
+      if (selectedRow) selectedRow.classList.remove('selected');
+      tr.classList.add('selected');
+      selectedRow = tr;
+      buildSummary(proto, r);
+    });
+
+    return tr;
+  }
+
+  function setHeaders(proto) {
+    var thead = document.getElementById('results-thead');
+    thead.innerHTML = '';
+    var tr = document.createElement('tr');
+    HEADERS[proto].forEach(function(pair) {
+      var th = document.createElement('th');
+      th.textContent = pair[0];
+      tr.appendChild(th);
+    });
+    thead.appendChild(tr);
+  }
+
+  function loadResults() {
+    selectedRow = null;
+    document.getElementById('share-summary').innerHTML =
+      '<span class="share-summary-empty">Click a row to see share/directory details.</span>';
+    var country = document.getElementById('country-filter').value.trim().toUpperCase();
+    var url = '/api/results/' + currentProto +
+      '?page=' + currentPage + '&page_size=' + pageSize;
+    if (country) url += '&country=' + encodeURIComponent(country);
+
+    var tbody = document.getElementById('results-body');
+    tbody.innerHTML = '<tr><td colspan="10">Loading...</td></tr>';
+    setHeaders(currentProto);
+    setResults('');
+
+    fetch(url).then(function(resp) {
+      return resp.json().then(function(data) {
+        tbody.innerHTML = '';
+        if (!resp.ok) {
+          setResults('Error: ' + (data.error || resp.status), 'status-error');
+          tbody.innerHTML = '<tr><td colspan="10" class="status-text">Query failed.</td></tr>';
+          return;
+        }
+        if (!data.results || !data.results.length) {
+          tbody.innerHTML = '<tr><td colspan="10" class="status-text">No results.</td></tr>';
+        } else {
+          data.results.forEach(function(r) {
+            tbody.appendChild(buildRow(currentProto, r));
+          });
+        }
+        document.getElementById('page-label').textContent =
+          'Page ' + data.page + ' (' + pageSize + ' per page)';
+      });
+    }).catch(function() {
+      setResults('Request failed.', 'status-error');
+      document.getElementById('results-body').innerHTML =
+        '<tr><td colspan="10" class="status-text">Request failed.</td></tr>';
+    });
+  }
+
+  document.querySelectorAll('.proto-tab').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      document.querySelectorAll('.proto-tab').forEach(function(b) { b.classList.remove('active'); });
+      btn.classList.add('active');
+      currentProto = btn.getAttribute('data-proto');
       currentPage = 1;
       loadResults();
     });
+  });
 
-    document.getElementById('prev-btn').addEventListener('click', function() {
-      if (currentPage > 1) {
-        currentPage -= 1;
-        loadResults();
-      }
-    });
+  document.getElementById('load-btn').addEventListener('click', function() {
+    currentPage = 1;
+    loadResults();
+  });
 
-    document.getElementById('next-btn').addEventListener('click', function() {
-      currentPage += 1;
-      loadResults();
-    });
+  document.getElementById('prev-btn').addEventListener('click', function() {
+    if (currentPage > 1) { currentPage--; loadResults(); }
+  });
 
-    document.getElementById('export-btn').addEventListener('click', async function() {
-      var es = document.getElementById('export-status');
-      es.textContent = 'Exporting...';
+  document.getElementById('next-btn').addEventListener('click', function() {
+    currentPage++;
+    loadResults();
+  });
+
+  document.getElementById('export-btn').addEventListener('click', async function() {
+    var es = document.getElementById('export-status');
+    es.textContent = 'Exporting...';
+    es.className = '';
+    try {
       var resp = await fetch('/api/export', {
         method: 'POST',
         headers: {'Content-Type': 'application/json', 'X-CSRF-Token': token},
@@ -184,11 +227,16 @@
       var data = await resp.json();
       if (resp.ok && data.filename) {
         es.textContent = 'Export ready: ' + data.filename;
+        es.className = 'status-text ok';
         window.location.href = '/api/export/' + encodeURIComponent(data.filename);
       } else {
         es.textContent = 'Export failed: ' + (data.error || resp.status);
+        es.className = 'status-text error';
       }
-    });
-  </script>
-</body>
-</html>
+    } catch (ex) {
+      es.textContent = 'Export failed: network error';
+      es.className = 'status-text error';
+    }
+  });
+</script>
+{% endblock %}

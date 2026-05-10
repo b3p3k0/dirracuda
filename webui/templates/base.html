@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ session.csrf_token if session else '' }}">
+  <title>Dirracuda &#8211; {% block title %}{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  {% block head %}{% endblock %}
+</head>
+<body>
+<div class="layout">
+  <nav class="nav" aria-label="Main navigation">
+    <div class="nav-brand">Dirracuda</div>
+    <ul>
+      <li><a href="/dashboard"{% if active_page == 'dashboard' %} class="active"{% endif %}>Dashboard</a></li>
+      <li><a href="/scans"{% if active_page == 'scans' %} class="active"{% endif %}>Scans</a></li>
+      <li><a href="/results"{% if active_page == 'results' %} class="active"{% endif %}>Results</a></li>
+      <li><a href="/results"{% if active_page == 'export' %} class="active"{% endif %}>Export</a></li>
+      <li><a href="/config"{% if active_page == 'config' %} class="active"{% endif %}>Config</a></li>
+    </ul>
+    {% if session %}
+    <div class="nav-user">
+      <span class="username">{{ session.username }}</span><br>
+      <button id="nav-logout-btn" class="btn-link" type="button">Logout</button>
+    </div>
+    {% endif %}
+  </nav>
+
+  <main class="main" id="main-content">
+    {% block content %}{% endblock %}
+  </main>
+</div>
+
+{% if session %}
+<script>
+  document.getElementById('nav-logout-btn').addEventListener('click', async function() {
+    var token = document.querySelector('meta[name="csrf-token"]').content;
+    try {
+      await fetch('/logout', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-CSRF-Token': token},
+        body: '{}'
+      });
+    } catch (_) {}
+    window.location.href = '/login';
+  });
+</script>
+{% endif %}
+
+{% block scripts %}{% endblock %}
+</body>
+</html>

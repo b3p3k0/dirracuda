@@ -1,84 +1,222 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="csrf-token" content="{{ session.csrf_token }}">
-  <title>Dirracuda - Scans</title>
-</head>
-<body>
-  <h1>Launch Scan</h1>
-  <p>Logged in as <strong>{{ session.username }}</strong>.</p>
-  <p><a href="/dashboard">Dashboard</a></p>
+{% extends "base.html" %}
+{% block title %}Scans{% endblock %}
 
-  <form id="scan-form">
-    <label for="protocol">Protocol</label>
-    <select id="protocol" name="protocol">
-      <option value="smb">SMB</option>
-      <option value="ftp">FTP</option>
-      <option value="http">HTTP</option>
-    </select>
+{% block content %}
+<h1>Scans</h1>
 
-    <label for="countries">Countries</label>
-    <input id="countries" name="countries" type="text"
-           placeholder="US,GB - leave blank for global">
+<div role="status" id="submit-status" aria-live="polite" style="margin-bottom:8px"></div>
 
-    <label for="probe">
+<form id="scan-form" novalidate>
+  <div class="form-section">
+    <div class="check-row">
+      <strong>Protocols</strong>
+    </div>
+    <div class="check-row">
+      <input id="proto-smb" name="proto-smb" type="checkbox" checked>
+      <label for="proto-smb">SMB</label>
+      <input id="proto-ftp" name="proto-ftp" type="checkbox" checked style="margin-left:12px">
+      <label for="proto-ftp">FTP</label>
+      <input id="proto-http" name="proto-http" type="checkbox" checked style="margin-left:12px">
+      <label for="proto-http">HTTP</label>
+    </div>
+  </div>
+
+  <div class="form-section">
+    <div class="form-row">
+      <label for="countries">Country</label>
+      <input id="countries" name="countries" type="text" placeholder="US,GB (blank = global)" maxlength="200">
+    </div>
+    <div class="form-row">
+      <label for="max-results">Max results</label>
+      <input id="max-results" name="max-results" type="number" value="100" min="1" max="10000" style="max-width:100px">
+    </div>
+    <div class="check-row" title="Rescan options are passed as flags when CLI support is available">
+      <input id="rescan-all" name="rescan-all" type="checkbox">
+      <label for="rescan-all">Rescan all</label>
+      <input id="rescan-failed" name="rescan-failed" type="checkbox" style="margin-left:12px">
+      <label for="rescan-failed">Rescan failed</label>
+    </div>
+    <div class="check-row">
       <input id="probe" name="probe" type="checkbox">
-      Run post-scan probe (SMB only)
-    </label>
+      <label for="probe">Run probe on verified hosts after scan <span class="status-text">(SMB only)</span></label>
+    </div>
+    <div class="form-row">
+      <label for="filters">Filters</label>
+      <input id="filters" name="filters" type="text" placeholder="Optional Shodan filter string" maxlength="500">
+    </div>
+  </div>
 
-    <label for="filters">Filters</label>
-    <input id="filters" name="filters" type="text"
-           placeholder="Optional Shodan filter string">
+  <div class="form-actions">
+    <button type="submit" id="queue-btn">Queue Scan</button>
+  </div>
+</form>
 
-    <button type="submit">Submit</button>
-  </form>
+<div class="queue-section">
+  <h2>Queue</h2>
+  <div class="table-wrap">
+    <table id="queue-table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Protocol</th>
+          <th>State</th>
+          <th>Progress</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody id="queue-body">
+        <tr><td colspan="5" class="status-text">No tasks submitted this session.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
 
-  <div id="status" role="status"></div>
+{% block scripts %}
+<script>
+  var token = document.querySelector('meta[name="csrf-token"]').content;
+  var trackedTasks = {};  // task_id → row element
+  var pollTimer = null;
+  var TERMINAL = {done: 1, failed: 1, cancelled: 1};
 
-  <script>
-    function parseCountries(value) {
-      if (!value) {
-        return [];
-      }
-      return value.split(',')
-        .map(function(part) { return part.trim().toUpperCase(); })
-        .filter(function(part) { return part.length > 0; });
+  function parseCountries(value) {
+    if (!value) return [];
+    return value.split(',').map(function(s) { return s.trim().toUpperCase(); }).filter(Boolean);
+  }
+
+  function setStatus(msg, cls) {
+    var el = document.getElementById('submit-status');
+    el.textContent = msg;
+    el.className = cls ? cls : '';
+  }
+
+  function upsertRow(task) {
+    var tbody = document.getElementById('queue-body');
+    var existing = trackedTasks[task.task_id];
+    if (!existing) {
+      // Remove the placeholder row if present
+      var placeholder = tbody.querySelector('[colspan]');
+      if (placeholder) placeholder.parentNode.remove();
+      var tr = document.createElement('tr');
+      tr.dataset.taskId = task.task_id;
+      tr.innerHTML =
+        '<td class="cell-id"></td>' +
+        '<td class="cell-proto"></td>' +
+        '<td class="cell-state"></td>' +
+        '<td class="cell-progress"></td>' +
+        '<td class="cell-action"></td>';
+      var cancelBtn = document.createElement('button');
+      cancelBtn.textContent = 'Cancel';
+      cancelBtn.type = 'button';
+      cancelBtn.addEventListener('click', function() { cancelTask(task.task_id, tr); });
+      tr.querySelector('.cell-action').appendChild(cancelBtn);
+      tbody.appendChild(tr);
+      trackedTasks[task.task_id] = tr;
+      existing = tr;
     }
-
-    function responseMessage(data) {
-      if (data && data.detail) {
-        return JSON.stringify(data.detail);
-      }
-      if (data && data.error) {
-        return data.error;
-      }
-      return 'Request failed.';
+    existing.querySelector('.cell-id').textContent = task.task_id.slice(0, 8);
+    existing.querySelector('.cell-proto').textContent = task.protocol;
+    existing.querySelector('.cell-state').textContent = task.status;
+    existing.querySelector('.cell-progress').textContent = task.progress_message || '';
+    if (TERMINAL[task.status]) {
+      var btn = existing.querySelector('.cell-action button');
+      if (btn) btn.disabled = true;
     }
+  }
 
-    document.getElementById('scan-form').addEventListener('submit', async function(event) {
-      event.preventDefault();
-      var token = document.querySelector('meta[name="csrf-token"]').content;
-      var payload = {
-        protocol: document.getElementById('protocol').value,
-        countries: parseCountries(document.getElementById('countries').value),
-        run_probe_after_scan: document.getElementById('probe').checked,
-        filters: document.getElementById('filters').value
-      };
-      var status = document.getElementById('status');
-      var response = await fetch('/api/scans', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json', 'X-CSRF-Token': token},
-        body: JSON.stringify(payload)
-      });
-      var data = await response.json();
-      if (response.status === 202) {
-        status.textContent = 'Queued task ' + data.task_id + ' (' + data.status + ')';
-        return;
+  function cancelTask(taskId, tr) {
+    fetch('/api/scans/' + encodeURIComponent(taskId) + '/cancel', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRF-Token': token},
+      body: '{}'
+    }).then(function(r) { return r.json(); }).then(function(data) {
+      if (!data.ok && data.status) {
+        tr.querySelector('.cell-state').textContent = data.status;
       }
-      status.textContent = responseMessage(data);
+    }).catch(function() {});
+  }
+
+  function pollAll() {
+    var ids = Object.keys(trackedTasks);
+    if (!ids.length) return;
+    var active = ids.filter(function(id) {
+      var tr = trackedTasks[id];
+      var state = tr.querySelector('.cell-state').textContent;
+      return !TERMINAL[state];
     });
-  </script>
-</body>
-</html>
+    if (!active.length) return;
+    active.forEach(function(id) {
+      fetch('/api/scans/' + encodeURIComponent(id))
+        .then(function(r) { return r.ok ? r.json() : null; })
+        .then(function(data) { if (data) upsertRow(data); })
+        .catch(function() {});
+    });
+    pollTimer = setTimeout(pollAll, 3000);
+  }
+
+  function startPolling() {
+    if (pollTimer) clearTimeout(pollTimer);
+    pollTimer = setTimeout(pollAll, 3000);
+  }
+
+  document.getElementById('scan-form').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    var btn = document.getElementById('queue-btn');
+    btn.disabled = true;
+    setStatus('');
+
+    var protos = [];
+    if (document.getElementById('proto-smb').checked) protos.push('smb');
+    if (document.getElementById('proto-ftp').checked) protos.push('ftp');
+    if (document.getElementById('proto-http').checked) protos.push('http');
+
+    if (!protos.length) {
+      setStatus('Select at least one protocol.', 'status-warn');
+      btn.disabled = false;
+      return;
+    }
+
+    var countries = parseCountries(document.getElementById('countries').value);
+    var probeChecked = document.getElementById('probe').checked;
+    var filters = document.getElementById('filters').value;
+    var queued = 0;
+    var errs = [];
+
+    for (var i = 0; i < protos.length; i++) {
+      var proto = protos[i];
+      var payload = {
+        protocol: proto,
+        countries: countries,
+        run_probe_after_scan: probeChecked && proto === 'smb',
+        filters: filters
+      };
+      try {
+        var resp = await fetch('/api/scans', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json', 'X-CSRF-Token': token},
+          body: JSON.stringify(payload)
+        });
+        var data = await resp.json();
+        if (resp.status === 202) {
+          upsertRow(data);
+          queued++;
+        } else {
+          var msg = (data && data.detail) ? JSON.stringify(data.detail) : (data && data.error) || 'Request failed.';
+          errs.push(proto.toUpperCase() + ': ' + msg);
+        }
+      } catch (ex) {
+        errs.push(proto.toUpperCase() + ': network error');
+      }
+    }
+
+    if (queued) startPolling();
+
+    if (errs.length) {
+      setStatus(errs.join('; '), 'status-error');
+    } else if (queued) {
+      setStatus('Queued ' + queued + ' task(s).', 'status-ok');
+    }
+    btn.disabled = false;
+  });
+</script>
+{% endblock %}
