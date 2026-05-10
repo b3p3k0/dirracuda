@@ -274,6 +274,7 @@ def test_experimental_context_includes_reddit_grab_status_getter(monkeypatch):
     assert getter() is True
     dash._reddit_grab_running = False
     assert getter() is False
+    assert "open_webui_control" not in captured["context"]
 
 
 def test_open_reddit_post_db_with_live_server_window(monkeypatch):
@@ -876,7 +877,7 @@ def test_open_keymaster_forwards_parent_settings_config(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# C7 — Web UI tab registry and callback wiring
+# C7/C10 — Web UI tab registry and inline control behavior
 # ---------------------------------------------------------------------------
 
 def test_registry_webui_tab_exists():
@@ -897,17 +898,84 @@ def test_registry_tab_order_exact():
     assert ids == ["se_dork", "reddit", "webui", "dorkbook", "keymaster"]
 
 
-def test_webui_tab_callback_invoked():
+def test_webui_tab_get_cfg_fallback(monkeypatch):
     from gui.components.experimental_features.webui_tab import WebUITab
-    called = []
+
+    def _boom():
+        raise RuntimeError("fail")
+
+    monkeypatch.setattr("webui.config.load_config", _boom)
     tab = WebUITab.__new__(WebUITab)
-    tab._context = {"open_webui_control": lambda: called.append(True)}
-    tab._invoke_open_control()
-    assert called == [True]
+    cfg = tab._get_webui_cfg()
+    assert cfg.bind_address == "127.0.0.1"
+    assert cfg.port == 5480
 
 
-def test_webui_tab_silent_when_no_callback():
+def test_webui_tab_apply_status_running():
     from gui.components.experimental_features.webui_tab import WebUITab
+
     tab = WebUITab.__new__(WebUITab)
-    tab._context = {}
-    tab._invoke_open_control()  # must not raise
+    tab.frame = _FrameWidget()
+    tab._status_var = _ValueVar()
+    tab._start_btn = _StatusWidget()
+    tab._stop_btn = _StatusWidget()
+    tab._browser_btn = _StatusWidget()
+
+    tab._apply_status(True)
+
+    assert tab._status_var.value == "Running"
+    assert tab._start_btn.configure_calls[-1] == {"state": tk.DISABLED}
+    assert tab._stop_btn.configure_calls[-1] == {"state": tk.NORMAL}
+    assert tab._browser_btn.configure_calls[-1] == {"state": tk.NORMAL}
+
+
+def test_webui_tab_apply_status_stopped():
+    from gui.components.experimental_features.webui_tab import WebUITab
+
+    tab = WebUITab.__new__(WebUITab)
+    tab.frame = _FrameWidget()
+    tab._status_var = _ValueVar()
+    tab._start_btn = _StatusWidget()
+    tab._stop_btn = _StatusWidget()
+    tab._browser_btn = _StatusWidget()
+
+    tab._apply_status(False)
+
+    assert tab._status_var.value == "Stopped"
+    assert tab._start_btn.configure_calls[-1] == {"state": tk.NORMAL}
+    assert tab._stop_btn.configure_calls[-1] == {"state": tk.DISABLED}
+    assert tab._browser_btn.configure_calls[-1] == {"state": tk.DISABLED}
+
+
+def test_webui_tab_copy_url(monkeypatch):
+    from gui.components.experimental_features.webui_tab import WebUITab
+
+    class _ClipboardFrame(_FrameWidget):
+        def __init__(self):
+            super().__init__()
+            self.cleared = False
+            self.copied = None
+
+        def clipboard_clear(self):
+            self.cleared = True
+
+        def clipboard_append(self, text):
+            self.copied = text
+
+    calls = []
+    monkeypatch.setattr(
+        "gui.components.experimental_features.webui_tab.safe_messagebox.showinfo",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    tab = WebUITab.__new__(WebUITab)
+    tab.frame = _ClipboardFrame()
+    tab._get_webui_cfg = lambda: types.SimpleNamespace(
+        bind_address="127.0.0.1", port=5480
+    )
+
+    tab._on_copy_url()
+
+    assert tab.frame.cleared is True
+    assert tab.frame.copied == "http://127.0.0.1:5480"
+    assert calls

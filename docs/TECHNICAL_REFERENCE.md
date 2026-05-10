@@ -854,7 +854,7 @@ dirracuda
    │    │    ├─ RedditGrabDialog (gui/components/reddit_grab_dialog.py)
    │    │    └─ RedditBrowserWindow (gui/components/reddit_browser_window.py)
    │    ├─ Web UI tab (gui/components/experimental_features/webui_tab.py)
-   │    │    └─ WebUIControlDialog (gui/components/webui_control_dialog.py)
+   │    │    └─ inline controls: status/start/stop/open browser/copy URL
    │    ├─ Dorkbook tab (gui/components/experimental_features/dorkbook_tab.py)
    │    │    └─ DorkbookWindow (gui/components/dorkbook_window.py)
    │    └─ Keymaster tab (gui/components/experimental_features/keymaster_tab.py)
@@ -996,6 +996,11 @@ Current tabs (registry order):
 Warning banner behavior:
 - First open shows a warning banner with a "Don't show this notice again" checkbox
 - Dismissal writes `experimental.warning_dismissed=true` immediately (not deferred to dialog close)
+
+Web UI tab behavior:
+- Controls are inline in the tab (no separate control window).
+- Status/start/stop use `webui.service_control` with pidfile + health checks.
+- Open-browser and copy-URL actions use the current `webui.json` host/port values.
 
 Dorkbook entry path:
 
