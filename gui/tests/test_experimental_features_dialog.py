@@ -651,7 +651,7 @@ def test_registry_dorkbook_after_reddit():
     from gui.components.experimental_features.registry import _get_features
 
     features = _get_features()
-    assert features[2].feature_id == "dorkbook"
+    assert features[3].feature_id == "dorkbook"
 
 
 # ---------------------------------------------------------------------------
@@ -834,7 +834,7 @@ def test_registry_keymaster_feature_id():
 def test_registry_keymaster_after_dorkbook():
     from gui.components.experimental_features.registry import _get_features
     features = _get_features()
-    assert features[3].feature_id == "keymaster"
+    assert features[4].feature_id == "keymaster"
 
 
 def test_keymaster_tab_callback_invoked():
@@ -873,3 +873,41 @@ def test_open_keymaster_forwards_parent_settings_config(monkeypatch):
     assert calls[0]["parent"] is dash.parent
     assert calls[0]["settings_manager"] is dash.settings_manager
     assert calls[0]["config_path"] == str(resolved_path)
+
+
+# ---------------------------------------------------------------------------
+# C7 — Web UI tab registry and callback wiring
+# ---------------------------------------------------------------------------
+
+def test_registry_webui_tab_exists():
+    from gui.components.experimental_features.registry import _get_features
+    ids = [f.feature_id for f in _get_features()]
+    assert "webui" in ids
+
+
+def test_registry_webui_label():
+    from gui.components.experimental_features.registry import _get_features
+    labels = [f.label for f in _get_features()]
+    assert "Web UI" in labels
+
+
+def test_registry_tab_order_exact():
+    from gui.components.experimental_features.registry import _get_features
+    ids = [f.feature_id for f in _get_features()]
+    assert ids == ["se_dork", "reddit", "webui", "dorkbook", "keymaster"]
+
+
+def test_webui_tab_callback_invoked():
+    from gui.components.experimental_features.webui_tab import WebUITab
+    called = []
+    tab = WebUITab.__new__(WebUITab)
+    tab._context = {"open_webui_control": lambda: called.append(True)}
+    tab._invoke_open_control()
+    assert called == [True]
+
+
+def test_webui_tab_silent_when_no_callback():
+    from gui.components.experimental_features.webui_tab import WebUITab
+    tab = WebUITab.__new__(WebUITab)
+    tab._context = {}
+    tab._invoke_open_control()  # must not raise

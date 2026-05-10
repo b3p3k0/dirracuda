@@ -41,6 +41,7 @@ def handle_experimental_button_click(widget) -> None:
         "open_se_dork_results_db": lambda: open_se_dork_results_db(widget),
         "open_dorkbook": lambda: open_dorkbook(widget),
         "open_keymaster": lambda: open_keymaster(widget),
+        "open_webui_control": lambda: open_webui_control(widget),
         "parent": widget.parent,
     }
     show_experimental_features_dialog(widget.parent, context, widget.settings_manager)
@@ -74,6 +75,12 @@ def open_dorkbook(widget) -> None:
         parent=widget.parent,
         settings_manager=getattr(widget, "settings_manager", None),
     )
+
+
+def open_webui_control(widget) -> None:
+    """Open the Web UI control dialog."""
+    from gui.components.webui_control_dialog import show_webui_control_dialog
+    show_webui_control_dialog(widget.parent)
 
 
 def open_keymaster(widget) -> None:
