@@ -128,7 +128,6 @@ def _run_target_probe(
                 "shares": shares,
                 "username": "" if "anonymous" in auth_method.lower() else "guest",
                 "password": "",
-                "enable_rce": False,
                 "allow_empty": True,
             }
         )

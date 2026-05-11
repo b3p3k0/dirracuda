@@ -46,7 +46,6 @@
         <th>Favorite</th>
         <th>Avoid</th>
         <th>Probed</th>
-        <th>RCE</th>
         <th>Extracted</th>
         <th>Type</th>
         <th>IP Address</th>
@@ -58,7 +57,7 @@
       </tr>
     </thead>
     <tbody id="results-body">
-      <tr><td colspan="12">Loading...</td></tr>
+      <tr><td colspan="11">Loading...</td></tr>
     </tbody>
   </table>
 </div>
@@ -146,7 +145,6 @@
       ['Favorite', r.favorite],
       ['Avoid', r.avoid],
       ['Probed', r.probe_status_emoji],
-      ['RCE', r.rce_status_emoji],
       ['Extracted', r.extract_status_emoji],
       ['Type', r.host_type],
       ['IP Address', r.ip_address],
@@ -218,7 +216,6 @@
       ['Auth', overview.auth_method],
       ['Access', overview.access_summary],
       ['Probe', overview.probe_status],
-      ['RCE', overview.rce_status],
       ['Extracted', overview.extracted]
     ];
 
@@ -305,7 +302,7 @@
     detailRow.className = 'result-detail-row';
     detailRow.dataset.parentKey = rowKey;
     var detailCell = document.createElement('td');
-    detailCell.colSpan = 12;
+    detailCell.colSpan = 11;
     var detailBox = document.createElement('div');
     detailBox.className = 'result-detail-box';
     detailBox.textContent = 'Loading details...';
@@ -353,7 +350,7 @@
 
     var tbody = document.getElementById('results-body');
     closeOpenDetail();
-    tbody.innerHTML = '<tr><td colspan="12">Loading...</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="11">Loading...</td></tr>';
     setResults('');
     updatePagerButtons();
 
@@ -362,14 +359,14 @@
         tbody.innerHTML = '';
         if (!resp.ok) {
           setResults('Error: ' + (data.error || resp.status), 'status-error');
-          tbody.innerHTML = '<tr><td colspan="12" class="status-text">Query failed.</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="11" class="status-text">Query failed.</td></tr>';
           openDetailRowKey = null;
           return;
         }
         currentPage = Number(data.page || currentPage);
         totalPages = Number(data.total_pages || 1);
         if (!data.results || !data.results.length) {
-          tbody.innerHTML = '<tr><td colspan="12" class="status-text">No results.</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="11" class="status-text">No results.</td></tr>';
           openDetailRowKey = null;
         } else {
           data.results.forEach(function(r) {
@@ -382,7 +379,7 @@
     }).catch(function() {
       setResults('Request failed.', 'status-error');
       document.getElementById('results-body').innerHTML =
-        '<tr><td colspan="12" class="status-text">Request failed.</td></tr>';
+        '<tr><td colspan="11" class="status-text">Request failed.</td></tr>';
       openDetailRowKey = null;
       updatePagerButtons();
     });

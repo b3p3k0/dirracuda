@@ -52,9 +52,10 @@ def test_build_command_http():
     assert "--legacy" not in cmd
 
 
-def test_build_command_probe_smb():
-    cmd = build_command(_request(run_probe_after_scan=True))
-    assert "--check-rce" not in cmd
+def test_build_command_probe_flag_does_not_change_scan_cli_args():
+    base_cmd = build_command(_request(run_probe_after_scan=False))
+    probe_cmd = build_command(_request(run_probe_after_scan=True))
+    assert probe_cmd == base_cmd
 
 
 def test_build_command_no_country():

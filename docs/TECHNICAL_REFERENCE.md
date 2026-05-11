@@ -93,7 +93,7 @@ validation, explicit `shell=False`, repo-root `cwd`, unbuffered Python output,
 and merged stdout/stderr progress logs. Web UI SMB tasks run with `--legacy` by
 default so SMB1-capable targets are included. When `run_probe_after_scan=true`,
 the task runner executes a protocol-aware post-scan probe stage for SMB/FTP/HTTP
-verified hosts; this is no longer coupled to legacy SMB `--check-rce`.
+verified hosts.
 
 **Web UI routes (C4–C6):**
 

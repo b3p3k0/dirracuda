@@ -24,13 +24,6 @@ _PROBE_STATUS_EMOJI = {
     "issue": "✖",
     "unprobed": "○",
 }
-_RCE_STATUS_EMOJI = {
-    "not_run": "⭘",
-    "clean": "✓",
-    "flagged": "✖",
-    "unknown": "?",
-    "error": "⚠",
-}
 
 
 def _validate_bounds(
@@ -348,10 +341,6 @@ def _probe_status_to_emoji(status: Optional[str]) -> str:
     return _PROBE_STATUS_EMOJI.get((status or "").strip().lower(), "⚪")
 
 
-def _rce_status_to_emoji(status: Optional[str]) -> str:
-    return _RCE_STATUS_EMOJI.get((status or "").strip().lower(), "⭘")
-
-
 def _extract_status_to_emoji(extracted: object) -> str:
     try:
         return "✔" if int(extracted) else "○"
@@ -443,17 +432,11 @@ def _build_smb_arm(
             )
 
     probe_status_expr = "'unprobed'"
-    rce_status_expr = "'not_run'"
     extracted_expr = "0"
     if _table_has_columns(table_columns, "host_probe_cache", "server_id"):
         if "status" in table_columns["host_probe_cache"]:
             probe_status_expr = (
                 "(SELECT COALESCE(pc.status, 'unprobed') "
-                "FROM host_probe_cache pc WHERE pc.server_id = s.id LIMIT 1)"
-            )
-        if "rce_status" in table_columns["host_probe_cache"]:
-            rce_status_expr = (
-                "(SELECT COALESCE(pc.rce_status, 'not_run') "
                 "FROM host_probe_cache pc WHERE pc.server_id = s.id LIMIT 1)"
             )
         if "extracted" in table_columns["host_probe_cache"]:
@@ -473,7 +456,6 @@ def _build_smb_arm(
             {favorite_expr} AS favorite,
             {avoid_expr} AS avoid,
             {probe_status_expr} AS probe_status,
-            {rce_status_expr} AS rce_status,
             {extracted_expr} AS extracted,
             {accessible_count_expr} AS accessible_shares,
             {accessible_list_expr} AS accessible_shares_list,
@@ -519,7 +501,6 @@ def _build_ftp_arm(
             )
 
     probe_status_expr = "'unprobed'"
-    rce_status_expr = "'not_run'"
     extracted_expr = "0"
     accessible_count_expr = "0"
     accessible_list_expr = "''"
@@ -527,11 +508,6 @@ def _build_ftp_arm(
         if "status" in table_columns["ftp_probe_cache"]:
             probe_status_expr = (
                 "(SELECT COALESCE(pc.status, 'unprobed') "
-                "FROM ftp_probe_cache pc WHERE pc.server_id = f.id LIMIT 1)"
-            )
-        if "rce_status" in table_columns["ftp_probe_cache"]:
-            rce_status_expr = (
-                "(SELECT COALESCE(pc.rce_status, 'not_run') "
                 "FROM ftp_probe_cache pc WHERE pc.server_id = f.id LIMIT 1)"
             )
         if "extracted" in table_columns["ftp_probe_cache"]:
@@ -561,7 +537,6 @@ def _build_ftp_arm(
             {favorite_expr} AS favorite,
             {avoid_expr} AS avoid,
             {probe_status_expr} AS probe_status,
-            {rce_status_expr} AS rce_status,
             {extracted_expr} AS extracted,
             {accessible_count_expr} AS accessible_shares,
             {accessible_list_expr} AS accessible_shares_list,
@@ -607,7 +582,6 @@ def _build_http_arm(
             )
 
     probe_status_expr = "'unprobed'"
-    rce_status_expr = "'not_run'"
     extracted_expr = "0"
     accessible_count_expr = "0"
     accessible_list_expr = "''"
@@ -615,11 +589,6 @@ def _build_http_arm(
         if "status" in table_columns["http_probe_cache"]:
             probe_status_expr = (
                 "(SELECT COALESCE(pc.status, 'unprobed') "
-                "FROM http_probe_cache pc WHERE pc.server_id = h.id LIMIT 1)"
-            )
-        if "rce_status" in table_columns["http_probe_cache"]:
-            rce_status_expr = (
-                "(SELECT COALESCE(pc.rce_status, 'not_run') "
                 "FROM http_probe_cache pc WHERE pc.server_id = h.id LIMIT 1)"
             )
         if "extracted" in table_columns["http_probe_cache"]:
@@ -662,7 +631,6 @@ def _build_http_arm(
             {favorite_expr} AS favorite,
             {avoid_expr} AS avoid,
             {probe_status_expr} AS probe_status,
-            {rce_status_expr} AS rce_status,
             {extracted_expr} AS extracted,
             {accessible_count_expr} AS accessible_shares,
             {accessible_list_expr} AS accessible_shares_list,
@@ -762,7 +730,6 @@ def get_results_table_rows(
                     "favorite": "✔" if int(data.get("favorite") or 0) else "○",
                     "avoid": "✖" if int(data.get("avoid") or 0) else "○",
                     "probe_status_emoji": _probe_status_to_emoji(data.get("probe_status")),
-                    "rce_status_emoji": _rce_status_to_emoji(data.get("rce_status")),
                     "extract_status_emoji": _extract_status_to_emoji(data.get("extracted")),
                     "host_type": data.get("host_type") or "",
                     "ip_address": data.get("ip_address") or "",
@@ -823,12 +790,6 @@ def _get_smb_detail(
                 if _table_has_columns(table_columns, "host_probe_cache", "server_id", "status")
                 else "'unprobed'"
             } AS probe_status,
-            {
-                "(SELECT COALESCE(pc.rce_status, 'not_run') FROM host_probe_cache pc "
-                "WHERE pc.server_id = s.id LIMIT 1)"
-                if _table_has_columns(table_columns, "host_probe_cache", "server_id", "rce_status")
-                else "'not_run'"
-            } AS rce_status,
             {
                 "(SELECT COALESCE(pc.extracted, 0) FROM host_probe_cache pc "
                 "WHERE pc.server_id = s.id LIMIT 1)"
@@ -928,7 +889,6 @@ def _get_smb_detail(
         f"Accessible Shares ({accessible_count}): {', '.join(accessible_names) or '(none)'}",
         f"Denied Shares ({denied_count}): {', '.join(denied_names) or '(none)'}",
         f"Probe Status: {_clean_text(data.get('probe_status')) or 'unprobed'}",
-        f"RCE Status: {_clean_text(data.get('rce_status')) or 'not_run'}",
         f"Extracted: {'yes' if _to_int(data.get('extracted')) else 'no'}",
         f"Indicator Matches: {_to_int(data.get('indicator_matches'))}",
         f"Indicator Samples: {_clean_text(data.get('indicator_samples')) or '(none)'}",
@@ -952,7 +912,6 @@ def _get_smb_detail(
             "auth_method": _clean_text(data.get("auth_method")) or "unknown",
             "access_summary": access_summary,
             "probe_status": _clean_text(data.get("probe_status")) or "unprobed",
-            "rce_status": _clean_text(data.get("rce_status")) or "not_run",
             "extracted": bool(_to_int(data.get("extracted"))),
         },
         "notes": notes,
@@ -1034,12 +993,6 @@ def _get_ftp_detail(
                 else "'unprobed'"
             } AS probe_status,
             {
-                "(SELECT COALESCE(pc.rce_status, 'not_run') FROM ftp_probe_cache pc "
-                "WHERE pc.server_id = f.id LIMIT 1)"
-                if _table_has_columns(table_columns, "ftp_probe_cache", "server_id", "rce_status")
-                else "'not_run'"
-            } AS rce_status,
-            {
                 "(SELECT COALESCE(pc.extracted, 0) FROM ftp_probe_cache pc "
                 "WHERE pc.server_id = f.id LIMIT 1)"
                 if _table_has_columns(table_columns, "ftp_probe_cache", "server_id", "extracted")
@@ -1112,7 +1065,6 @@ def _get_ftp_detail(
         f"Favorite: {'yes' if _to_int(data.get('favorite')) else 'no'}",
         f"Avoid: {'yes' if _to_int(data.get('avoid')) else 'no'}",
         f"Probe Status: {_clean_text(data.get('probe_status')) or 'unprobed'}",
-        f"RCE Status: {_clean_text(data.get('rce_status')) or 'not_run'}",
         f"Extracted: {'yes' if _to_int(data.get('extracted')) else 'no'}",
         f"Accessible Dirs ({dirs_count}): {_clean_text(data.get('accessible_dirs_list')) or '(none)'}",
         f"Indicator Matches: {_to_int(data.get('indicator_matches'))}",
@@ -1145,7 +1097,6 @@ def _get_ftp_detail(
             "auth_method": "anonymous" if _to_int(data.get("anon_accessible")) else "unknown",
             "access_summary": access_summary,
             "probe_status": _clean_text(data.get("probe_status")) or "unprobed",
-            "rce_status": _clean_text(data.get("rce_status")) or "not_run",
             "extracted": bool(_to_int(data.get("extracted"))),
         },
         "notes": notes,
@@ -1230,12 +1181,6 @@ def _get_http_detail(
                 else "'unprobed'"
             } AS probe_status,
             {
-                "(SELECT COALESCE(pc.rce_status, 'not_run') FROM http_probe_cache pc "
-                "WHERE pc.server_id = h.id LIMIT 1)"
-                if _table_has_columns(table_columns, "http_probe_cache", "server_id", "rce_status")
-                else "'not_run'"
-            } AS rce_status,
-            {
                 "(SELECT COALESCE(pc.extracted, 0) FROM http_probe_cache pc "
                 "WHERE pc.server_id = h.id LIMIT 1)"
                 if _table_has_columns(table_columns, "http_probe_cache", "server_id", "extracted")
@@ -1318,7 +1263,6 @@ def _get_http_detail(
         f"Favorite: {'yes' if _to_int(data.get('favorite')) else 'no'}",
         f"Avoid: {'yes' if _to_int(data.get('avoid')) else 'no'}",
         f"Probe Status: {_clean_text(data.get('probe_status')) or 'unprobed'}",
-        f"RCE Status: {_clean_text(data.get('rce_status')) or 'not_run'}",
         f"Extracted: {'yes' if _to_int(data.get('extracted')) else 'no'}",
         f"Accessible Dirs ({dirs_count}): {_clean_text(data.get('accessible_dirs_list')) or '(none)'}",
         f"Accessible Files: {files_count}",
@@ -1354,7 +1298,6 @@ def _get_http_detail(
             "auth_method": _clean_text(data.get("scheme")) or "http",
             "access_summary": access_summary,
             "probe_status": _clean_text(data.get("probe_status")) or "unprobed",
-            "rce_status": _clean_text(data.get("rce_status")) or "not_run",
             "extracted": bool(_to_int(data.get("extracted"))),
         },
         "notes": notes,

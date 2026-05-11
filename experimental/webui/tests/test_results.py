@@ -114,14 +114,12 @@ def db_all_protocols(tmp_path):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             server_id INTEGER NOT NULL,
             status TEXT,
-            rce_status TEXT,
             extracted INTEGER DEFAULT 0
         );
         CREATE TABLE ftp_probe_cache (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             server_id INTEGER NOT NULL,
             status TEXT,
-            rce_status TEXT,
             extracted INTEGER DEFAULT 0,
             accessible_dirs_count INTEGER DEFAULT 0,
             accessible_dirs_list TEXT
@@ -130,7 +128,6 @@ def db_all_protocols(tmp_path):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             server_id INTEGER NOT NULL,
             status TEXT,
-            rce_status TEXT,
             extracted INTEGER DEFAULT 0,
             accessible_dirs_count INTEGER DEFAULT 0,
             accessible_files_count INTEGER DEFAULT 0,
@@ -175,20 +172,20 @@ def db_all_protocols(tmp_path):
         INSERT INTO ftp_user_flags (server_id, favorite, avoid) VALUES (1, 0, 1);
         INSERT INTO http_user_flags (server_id, favorite, avoid) VALUES (1, 0, 0);
 
-        INSERT INTO host_probe_cache (server_id, status, rce_status, extracted)
-        VALUES (1, 'clean', 'not_run', 0);
+        INSERT INTO host_probe_cache (server_id, status, extracted)
+        VALUES (1, 'clean', 0);
         INSERT INTO ftp_probe_cache (
-            server_id, status, rce_status, extracted, accessible_dirs_count, accessible_dirs_list
+            server_id, status, extracted, accessible_dirs_count, accessible_dirs_list
         )
-        VALUES (1, 'issue', 'flagged', 1, 2, 'pub,docs');
+        VALUES (1, 'issue', 1, 2, 'pub,docs');
         INSERT INTO ftp_access (
             server_id, accessible, auth_status, root_listing_available, root_entry_count, access_details, test_timestamp
         )
         VALUES (1, 1, 'anonymous', 1, 4, '["pub","docs"]', '2026-05-10T14:20:30');
         INSERT INTO http_probe_cache (
-            server_id, status, rce_status, extracted, accessible_dirs_count, accessible_files_count, accessible_dirs_list
+            server_id, status, extracted, accessible_dirs_count, accessible_files_count, accessible_dirs_list
         )
-        VALUES (1, 'unprobed', 'unknown', 0, 1, 1, '/,/admin');
+        VALUES (1, 'unprobed', 0, 1, 1, '/,/admin');
         INSERT INTO http_access (
             server_id, accessible, status_code, is_index_page, dir_count, file_count, tls_verified, access_details, test_timestamp
         )
@@ -302,7 +299,6 @@ def test_all_protocol_results_mixed_rows_and_metadata(creds, cfg_no_tls, db_all_
             "favorite",
             "avoid",
             "probe_status_emoji",
-            "rce_status_emoji",
             "extract_status_emoji",
             "host_type",
             "ip_address",
@@ -320,7 +316,6 @@ def test_all_protocol_results_mixed_rows_and_metadata(creds, cfg_no_tls, db_all_
     assert smb["favorite"] == "✔"
     assert smb["avoid"] == "○"
     assert smb["probe_status_emoji"] == "✔"
-    assert smb["rce_status_emoji"] == "⭘"
     assert smb["extract_status_emoji"] == "○"
     assert smb["shares"] == "📁 1"
     assert smb["accessible_shares_list"] == "Public"
@@ -332,7 +327,6 @@ def test_all_protocol_results_mixed_rows_and_metadata(creds, cfg_no_tls, db_all_
     assert ftp["favorite"] == "○"
     assert ftp["avoid"] == "✖"
     assert ftp["probe_status_emoji"] == "✖"
-    assert ftp["rce_status_emoji"] == "✖"
     assert ftp["extract_status_emoji"] == "✔"
     assert ftp["shares"] == "📁 2"
     assert ftp["accessible_shares_list"] == "pub,docs"
@@ -341,7 +335,6 @@ def test_all_protocol_results_mixed_rows_and_metadata(creds, cfg_no_tls, db_all_
     http = rows[2]
     assert http["row_key"] == "H:1"
     assert http["probe_status_emoji"] == "○"
-    assert http["rce_status_emoji"] == "?"
     assert http["extract_status_emoji"] == "○"
     assert http["shares"] == "📁 2"
     assert http["accessible_shares_list"] == "/,/admin"
