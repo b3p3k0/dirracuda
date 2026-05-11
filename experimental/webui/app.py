@@ -24,6 +24,7 @@ from experimental.webui.config import (
 )
 from experimental.webui.dependencies import AuthRequired, get_session, same_origin, validate_csrf
 from experimental.webui.sessions import Session, SessionStore, cookie_name
+from experimental.webui.shodan_balance import ShodanBalanceService
 from experimental.webui.tasks import CancelResult, ScanQueue, ScanRequest
 
 logger = logging.getLogger(__name__)
@@ -69,6 +70,7 @@ def create_app(
     creds_path=None,
     db_path=None,
     config_path=None,
+    main_config_path=None,
 ) -> FastAPI:
     if cfg is None:
         cfg = load_config(config_path)
@@ -96,6 +98,9 @@ def create_app(
     app.state.scan_queue = ScanQueue()
     app.state.db_path = Path(db_path) if db_path is not None else _db._DEFAULT_DB_PATH
     app.state.config_path = Path(config_path) if config_path is not None else None
+    app.state.shodan_balance_service = ShodanBalanceService(
+        main_config_path=main_config_path
+    )
 
     if _STATIC_DIR.exists():
         app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
@@ -191,6 +196,19 @@ def create_app(
                 "active_page": "dashboard",
             }
         )
+
+    @app.get("/api/dashboard/shodan-balance")
+    async def _dashboard_shodan_balance(
+        request: Request,
+        session: Session = Depends(get_session),
+        force: bool = Query(default=False),
+    ) -> JSONResponse:
+        service = request.app.state.shodan_balance_service
+        try:
+            payload = service.get_balance(force=force)
+        except Exception:
+            payload = {"state": "unavailable", "reason": "unknown", "cached": False}
+        return JSONResponse(payload)
 
     @app.get("/scans", response_class=HTMLResponse)
     async def _scans_page(

@@ -14,6 +14,13 @@
     {% endif %}
     http://{{ cfg.bind_address }}:{{ cfg.port }}
   </p>
+  <p>
+    Shodan Balance:
+    <span id="shodan-balance-status" class="status-text" role="status" aria-live="polite">
+      Checking...
+    </span>
+    <button id="shodan-balance-refresh" type="button" style="margin-left:8px;">Refresh</button>
+  </p>
 </div>
 
 <div class="dash-card">
@@ -62,6 +69,55 @@
 {% endblock %}
 
 {% block scripts %}
+<script>
+  (function() {
+    var statusEl = document.getElementById('shodan-balance-status');
+    var refreshBtn = document.getElementById('shodan-balance-refresh');
+
+    function toStatusText(payload) {
+      if (!payload || typeof payload !== 'object') {
+        return "✔ Shodan API key configured <balance unavailable: unknown>";
+      }
+      if (payload.state === 'ok') {
+        return "✔ Shodan API key configured <query credits: " + String(payload.query_credits) + ">";
+      }
+      if (payload.state === 'no_key') {
+        return "✖ Shodan API key configured <none>";
+      }
+      var reason = String(payload.reason || 'unknown');
+      return "✔ Shodan API key configured <balance unavailable: " + reason + ">";
+    }
+
+    function loadShodanBalance(force) {
+      if (!statusEl) return;
+      statusEl.textContent = "Checking...";
+      var url = '/api/dashboard/shodan-balance';
+      if (force) {
+        url += '?force=true';
+      }
+      fetch(url)
+        .then(function(resp) {
+          return resp.json().then(function(data) {
+            if (!resp.ok) {
+              statusEl.textContent = "✔ Shodan API key configured <balance unavailable: unknown>";
+              return;
+            }
+            statusEl.textContent = toStatusText(data);
+          });
+        })
+        .catch(function() {
+          statusEl.textContent = "✔ Shodan API key configured <balance unavailable: network>";
+        });
+    }
+
+    if (refreshBtn) {
+      refreshBtn.addEventListener('click', function() {
+        loadShodanBalance(true);
+      });
+    }
+    loadShodanBalance(false);
+  })();
+</script>
 {% if qs.active %}
 <script>
   (function() {

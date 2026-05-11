@@ -96,6 +96,10 @@ def test_dashboard_renders_authenticated(logged_in):
     assert r.status_code == 200
     assert "Dashboard" in r.text
     assert "127.0.0.1" in r.text
+    assert "Shodan Balance:" in r.text
+    assert 'id="shodan-balance-status"' in r.text
+    assert 'id="shodan-balance-refresh"' in r.text
+    assert "/api/dashboard/shodan-balance" in r.text
     assert 'id="prefs-consent-banner"' in r.text
     assert 'id="prefs-consent-yes"' in r.text
     assert 'id="prefs-consent-no"' in r.text
