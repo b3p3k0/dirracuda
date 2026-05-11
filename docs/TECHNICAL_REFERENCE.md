@@ -1007,7 +1007,7 @@ Web UI tab behavior:
 - Controls are inline in the tab (no separate control window).
 - Status/start/stop use `experimental.webui.service_control` with pidfile + health checks.
 - Start failures are shown inline as `Failed: <reason>` (for example, exit code or startup timeout) instead of collapsing back to `Stopped`.
-- Credential setup is inline (`Username`, `Password`, `Confirm`, `Save Credentials`) and calls `experimental.webui.auth.set_password(...)`; expected validation/save errors are shown inline (no popup spam).
+- Credential setup opens from `Manage Credentials` into a modal dialog (`Username`, `Password`, `Save Credentials`) and calls `experimental.webui.auth.set_password(...)`; expected validation/save errors are shown inline (no popup spam).
 - Open-browser and copy-URL actions use the current `webui.json` host/port values.
 
 Dorkbook entry path:

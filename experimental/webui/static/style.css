@@ -199,11 +199,20 @@ label {
   width: 320px;
 }
 
-.login-wrap h1 {
-  font-size: 1.1em;
-  margin-bottom: 20px;
-  text-transform: none;
-  letter-spacing: 0;
+.login-logo {
+  font-size: 1.5em;
+  line-height: 1;
+  margin-bottom: 16px;
+}
+
+.login-meta {
+  margin-top: 10px;
+  margin-bottom: 0;
+  text-align: center;
+}
+
+.login-link {
+  font-size: 0.9em;
 }
 
 .login-wrap .field {

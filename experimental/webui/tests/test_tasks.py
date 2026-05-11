@@ -310,6 +310,14 @@ def test_parse_progress_known_pattern():
     assert task.stdout_lines == ["[25%] discovering"]
 
 
+def test_parse_progress_strips_ansi_codes():
+    task = ScanTask(task_id="abc", request=_request())
+    _parse_progress(task, "\033[94m[25%] discovering\033[0m")
+    assert task.progress_pct == 25.0
+    assert task.progress_message == "[25%] discovering"
+    assert task.stdout_lines == ["[25%] discovering"]
+
+
 def test_parse_progress_unknown_line():
     task = ScanTask(task_id="abc", request=_request())
     _parse_progress(task, "plain output")

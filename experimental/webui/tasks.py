@@ -291,6 +291,7 @@ _VALID_COUNTRY_CODES = frozenset(
 )
 
 _PROGRESS_RE = re.compile(r"\b(\d{1,3})%")
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 class TaskStatus(str, enum.Enum):
@@ -491,16 +492,21 @@ def _terminate_proc(proc: subprocess.Popen) -> None:
         proc.terminate()
 
 
+def _strip_ansi(text: str) -> str:
+    return _ANSI_ESCAPE_RE.sub("", text)
+
+
 def _parse_progress(task: ScanTask, line: str) -> None:
+    clean_line = _strip_ansi(line)
     with task._lock:
-        task.stdout_lines.append(line)
-        match = _PROGRESS_RE.search(line)
+        task.stdout_lines.append(clean_line)
+        match = _PROGRESS_RE.search(clean_line)
         if not match:
             return
         pct = int(match.group(1))
         if 0 <= pct <= 100:
             task.progress_pct = float(pct)
-            task.progress_message = line
+            task.progress_message = clean_line
 
 
 class ScanQueue:

@@ -42,11 +42,14 @@ import gui.components.dashboard_experimental as dashboard_experimental
 
 
 class _ValueVar:
-    def __init__(self) -> None:
-        self.value = None
+    def __init__(self, value=None) -> None:
+        self.value = value
 
     def set(self, value) -> None:
         self.value = value
+
+    def get(self):
+        return self.value
 
 
 class _StatusWidget:
@@ -1043,6 +1046,160 @@ def test_webui_tab_on_start_success_sets_running(monkeypatch):
     assert tab._start_btn.configure_calls[-1] == {"state": tk.DISABLED}
     assert tab._stop_btn.configure_calls[-1] == {"state": tk.NORMAL}
     assert tab._browser_btn.configure_calls[-1] == {"state": tk.NORMAL}
+
+
+def test_webui_tab_on_save_credentials_dialog_empty_username():
+    from gui.components.experimental_features.webui_tab import WebUITab
+
+    tab = WebUITab.__new__(WebUITab)
+    tab.frame = _FrameWidget()
+    tab._cred_dialog = _FrameWidget()
+    tab._cred_status_var = _ValueVar("Ready")
+    tab._save_creds_btn = _StatusWidget()
+    tab._cred_username_var = _ValueVar("   ")
+    tab._cred_password_var = _ValueVar("secret1")
+
+    tab._on_save_credentials_dialog()
+
+    assert tab._cred_status_var.value == "Failed: username is required"
+    assert tab._save_creds_btn.configure_calls == []
+
+
+def test_webui_tab_on_save_credentials_dialog_empty_password():
+    from gui.components.experimental_features.webui_tab import WebUITab
+
+    tab = WebUITab.__new__(WebUITab)
+    tab.frame = _FrameWidget()
+    tab._cred_dialog = _FrameWidget()
+    tab._cred_status_var = _ValueVar("Ready")
+    tab._save_creds_btn = _StatusWidget()
+    tab._cred_username_var = _ValueVar("admin")
+    tab._cred_password_var = _ValueVar("")
+
+    tab._on_save_credentials_dialog()
+
+    assert tab._cred_status_var.value == "Failed: password is required"
+    assert tab._save_creds_btn.configure_calls == []
+
+
+def test_webui_tab_on_save_credentials_dialog_success(monkeypatch):
+    from gui.components.experimental_features.webui_tab import WebUITab
+
+    class _ImmediateThread:
+        def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+            self._target = target
+            self._args = args
+            self._kwargs = kwargs or {}
+
+        def start(self):
+            if self._target is not None:
+                self._target(*self._args, **self._kwargs)
+
+    calls = []
+    monkeypatch.setattr(
+        "gui.components.experimental_features.webui_tab.threading.Thread",
+        _ImmediateThread,
+    )
+    monkeypatch.setattr(
+        "experimental.webui.auth.set_password",
+        lambda username, password: calls.append((username, password)),
+    )
+
+    tab = WebUITab.__new__(WebUITab)
+    tab.frame = _FrameWidget()
+    tab._cred_dialog = _FrameWidget()
+    tab._schedule_dialog_ui = lambda cb: cb()
+    tab._cred_status_var = _ValueVar("Ready")
+    tab._save_creds_btn = _StatusWidget()
+    tab._cred_username_var = _ValueVar("admin")
+    tab._cred_password_var = _ValueVar("secret1")
+
+    tab._on_save_credentials_dialog()
+
+    assert calls == [("admin", "secret1")]
+    assert tab._cred_status_var.value == "Saved credentials for 'admin'"
+    assert tab._cred_password_var.value == ""
+    assert tab._save_creds_btn.configure_calls[-1] == {"state": tk.NORMAL}
+
+
+def test_webui_tab_on_save_credentials_dialog_known_failure_inline(monkeypatch):
+    from gui.components.experimental_features.webui_tab import WebUITab
+
+    class _ImmediateThread:
+        def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+            self._target = target
+            self._args = args
+            self._kwargs = kwargs or {}
+
+        def start(self):
+            if self._target is not None:
+                self._target(*self._args, **self._kwargs)
+
+    monkeypatch.setattr(
+        "gui.components.experimental_features.webui_tab.threading.Thread",
+        _ImmediateThread,
+    )
+    monkeypatch.setattr(
+        "experimental.webui.auth.set_password",
+        lambda *_a, **_k: (_ for _ in ()).throw(ValueError("username must not be empty")),
+    )
+
+    tab = WebUITab.__new__(WebUITab)
+    tab.frame = _FrameWidget()
+    tab._cred_dialog = _FrameWidget()
+    tab._schedule_dialog_ui = lambda cb: cb()
+    tab._cred_status_var = _ValueVar("Ready")
+    tab._save_creds_btn = _StatusWidget()
+    tab._cred_username_var = _ValueVar("admin")
+    tab._cred_password_var = _ValueVar("secret1")
+
+    tab._on_save_credentials_dialog()
+
+    assert tab._cred_status_var.value == "Failed: username must not be empty"
+    assert tab._save_creds_btn.configure_calls[-1] == {"state": tk.NORMAL}
+
+
+def test_webui_tab_on_save_credentials_dialog_unexpected_exception_popup(monkeypatch):
+    from gui.components.experimental_features.webui_tab import WebUITab
+
+    class _ImmediateThread:
+        def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+            self._target = target
+            self._args = args
+            self._kwargs = kwargs or {}
+
+        def start(self):
+            if self._target is not None:
+                self._target(*self._args, **self._kwargs)
+
+    popups = []
+    monkeypatch.setattr(
+        "gui.components.experimental_features.webui_tab.threading.Thread",
+        _ImmediateThread,
+    )
+    monkeypatch.setattr(
+        "experimental.webui.auth.set_password",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("disk error")),
+    )
+    monkeypatch.setattr(
+        "gui.components.experimental_features.webui_tab.safe_messagebox.showerror",
+        lambda *args, **kwargs: popups.append((args, kwargs)),
+    )
+
+    tab = WebUITab.__new__(WebUITab)
+    tab.frame = _FrameWidget()
+    tab._cred_dialog = _FrameWidget()
+    tab._schedule_dialog_ui = lambda cb: cb()
+    tab._cred_status_var = _ValueVar("Ready")
+    tab._save_creds_btn = _StatusWidget()
+    tab._cred_username_var = _ValueVar("admin")
+    tab._cred_password_var = _ValueVar("secret1")
+
+    tab._on_save_credentials_dialog()
+
+    assert tab._cred_status_var.value == "Failed: disk error"
+    assert popups
+    assert tab._save_creds_btn.configure_calls[-1] == {"state": tk.NORMAL}
 
 
 def test_webui_tab_copy_url(monkeypatch):
