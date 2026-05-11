@@ -32,6 +32,16 @@ def handle_experimental_button_click(widget) -> None:
     """Open the Experimental Features dialog from the dashboard."""
     from gui.components.experimental_features_dialog import show_experimental_features_dialog
 
+    config_path = None
+    if hasattr(widget, "_resolve_active_config_path"):
+        try:
+            resolved = widget._resolve_active_config_path()
+            config_path = str(resolved) if resolved is not None else None
+        except Exception:
+            config_path = None
+    if config_path is None:
+        config_path = getattr(widget, "config_path", None)
+
     context = {
         "reddit_grab_callback": widget._handle_reddit_grab_button_click,
         "reddit_grab_status_getter": lambda: bool(
@@ -43,6 +53,8 @@ def handle_experimental_button_click(widget) -> None:
         "open_keymaster": lambda: open_keymaster(widget),
         "parent": widget.parent,
     }
+    if config_path is not None:
+        context["webui_config_path"] = config_path
     show_experimental_features_dialog(widget.parent, context, widget.settings_manager)
 
 

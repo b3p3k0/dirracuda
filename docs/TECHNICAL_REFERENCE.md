@@ -1008,6 +1008,8 @@ Web UI tab behavior:
 - Status/start/stop use `experimental.webui.service_control` with pidfile + health checks.
 - Start failures are shown inline as `Failed: <reason>` (for example, exit code or startup timeout) instead of collapsing back to `Stopped`.
 - Credential setup opens from `Manage Credentials` into a modal dialog (`Username`, `Password`, `Save Credentials`) and calls `experimental.webui.auth.set_password(...)`; expected validation/save errors are shown inline (no popup spam).
+- `WebUI Config` opens a modal dialog with the same control surface as `/config` (`bind_address`, `port`, `remote_enabled`, TLS fields, `allowed_cidrs`, idle/absolute session timeouts).
+- Config dialog supports `Save` (persist only) and `Save & Restart` (save, then restart/start the service). Validation/save/restart outcomes are shown inline in dialog status text.
 - Open-browser and copy-URL actions use the current `webui.json` host/port values.
 
 Dorkbook entry path:

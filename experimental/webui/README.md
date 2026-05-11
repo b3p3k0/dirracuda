@@ -47,7 +47,7 @@ Optional flags:
 | `--port` | `5480` | Override port |
 | `--config` | auto | Path to a specific `webui.json` |
 
-The desktop GUI also controls the service: `⚗ Experimental → Web UI` → `Manage Credentials`, then Start/Stop/Open Browser. No terminal required.
+The desktop GUI also controls the service: `⚗ Experimental → Web UI` exposes `Manage Credentials`, `WebUI Config` (with `Save` and `Save & Restart`), and Start/Stop/Open Browser controls. No terminal required.
 
 ---
 
