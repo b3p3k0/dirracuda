@@ -102,14 +102,14 @@ verified hosts; this is no longer coupled to legacy SMB `--check-rce`.
 | `POST /api/scans` | session + CSRF | Queue one scan task (`protocol`: `smb\|ftp\|http`). Includes `max_shodan_results` (1..100000) for per-task query-limit/budget overrides. Optional `run_probe_after_scan` triggers protocol-aware post-scan probe stage for the same protocol after the scan subprocess succeeds. |
 | `GET /api/scans/{task_id}` | session | Task status/log polling for queued/running/completed scan tasks |
 | `POST /api/scans/{task_id}/cancel` | session + CSRF | Cancel queued task or request cancellation for active task (scan/probe stage) |
-| `GET /results` | session | Results page (SMB/FTP/HTTP tabs, country filter, pagination) |
-| `GET /api/results/{protocol}` | session | Paginated JSON rows; `protocol` ∈ `smb\|ftp\|http`; `page` 1–10 000; `page_size` 1–200; optional `country` (2-letter ISO code) |
+| `GET /results` | session | Results page (`ALL/SMB/FTP/HTTP` tabs, country + row filters, desktop-parity row columns, pagination with first/prev/next/last/jump-to). Refresh is manual via the **Refresh** button; no background auto-refresh/polling is performed. |
+| `GET /api/results/{protocol}` | session | Paginated JSON rows; `protocol` ∈ `all\|smb\|ftp\|http`; `page` 1–10 000; `page_size` 1–200; optional `country` (2-letter ISO code). Response includes `total_count` and `total_pages`. |
 | `POST /api/export` | session + CSRF | Export main DB via `VACUUM INTO`; artifact written to `~/.dirracuda/exports/`; response: `{"filename": "dirracuda_export_YYYYMMDD_HHMMSS_<8hex>.db"}` |
 | `GET /api/export/{filename}` | session | Download an export artifact; filename enforced against allowlist regex before serving |
 | `GET /config` | session | Web UI config page (bind/port/remote/TLS/allowlist/session timeout fields) |
 | `POST /config` | session + CSRF | Validate and save `webui.json` fields. UI submits idle timeout in minutes and absolute timeout in hours; server converts to stored seconds before `save_config`. |
 
-`experimental/webui/db.py` implements the reader functions (`get_smb_results`, `get_ftp_results`, `get_http_results`) and `export_db`. All readers use read-only URI connections (`mode=ro`). The export function opens the source with `mode=rw` (no-create) to prevent silent empty-DB creation when the source is absent. Runtime schema guards (`sqlite_master` + `PRAGMA table_info`) handle optional tables and columns without raising errors on schema drift.
+`experimental/webui/db.py` implements unified results readers for desktop-parity rows and `export_db`. Readers use read-only URI connections (`mode=ro`) and runtime schema guards (`sqlite_master` + `PRAGMA table_info`) so optional protocol tables/columns degrade safely on older or partial schemas. The export function opens the source with `mode=rw` (no-create) to prevent silent empty-DB creation when the source is absent.
 
 **Web UI startup and remote mode (C8):**
 

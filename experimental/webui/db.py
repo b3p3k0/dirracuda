@@ -19,6 +19,19 @@ _COUNTRY_RE = re.compile(r"^[A-Z]{2}$")
 # Allowlist for generated export filenames (timestamp + 8-char hex suffix)
 _EXPORT_FILENAME_RE = re.compile(r"^dirracuda_export_\d{8}_\d{6}_[0-9a-f]{8}\.db$")
 
+_PROBE_STATUS_EMOJI = {
+    "clean": "✔",
+    "issue": "✖",
+    "unprobed": "○",
+}
+_RCE_STATUS_EMOJI = {
+    "not_run": "⭘",
+    "clean": "✓",
+    "flagged": "✖",
+    "unknown": "?",
+    "error": "⚠",
+}
+
 
 def _validate_bounds(
     page: int,
@@ -307,6 +320,428 @@ def get_http_results(
                 "copy_str": f"{scheme}://{r['ip_address']}:{port}",
             })
         return result
+    finally:
+        conn.close()
+
+
+def _table_has_columns(table_columns: dict[str, set[str]], table: str, *columns: str) -> bool:
+    cols = table_columns.get(table)
+    if not cols:
+        return False
+    return all(col in cols for col in columns)
+
+
+def _format_last_seen(value: Optional[str]) -> str:
+    if not value:
+        return "Never"
+    text = str(value).strip()
+    if not text:
+        return "Never"
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return parsed.strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return text
+
+
+def _probe_status_to_emoji(status: Optional[str]) -> str:
+    return _PROBE_STATUS_EMOJI.get((status or "").strip().lower(), "⚪")
+
+
+def _rce_status_to_emoji(status: Optional[str]) -> str:
+    return _RCE_STATUS_EMOJI.get((status or "").strip().lower(), "⭘")
+
+
+def _extract_status_to_emoji(extracted: object) -> str:
+    try:
+        return "✔" if int(extracted) else "○"
+    except (TypeError, ValueError):
+        return "○"
+
+
+def _build_smb_arm(
+    table_columns: dict[str, set[str]],
+    country: Optional[str],
+) -> tuple[Optional[str], list]:
+    if not _table_has_columns(table_columns, "smb_servers", "id", "ip_address", "last_seen"):
+        return None, []
+
+    params: list = []
+    where = ""
+    if "status" in table_columns["smb_servers"]:
+        where = "WHERE s.status = 'active'"
+    if country:
+        if "country_code" not in table_columns["smb_servers"]:
+            return None, []
+        if where:
+            where += " AND s.country_code = ?"
+        else:
+            where = "WHERE s.country_code = ?"
+        params.append(country)
+
+    accessible_count_expr = "0"
+    accessible_list_expr = "''"
+    denied_count_expr = "0"
+    if _table_has_columns(table_columns, "share_access", "server_id", "accessible"):
+        accessible_count_expr = (
+            "(SELECT COUNT(1) FROM share_access sa "
+            "WHERE sa.server_id = s.id AND COALESCE(sa.accessible, 0) = 1)"
+        )
+        denied_count_expr = (
+            "(SELECT COUNT(1) FROM share_access sa "
+            "WHERE sa.server_id = s.id AND COALESCE(sa.accessible, 0) = 0)"
+        )
+        if "share_name" in table_columns["share_access"]:
+            accessible_list_expr = (
+                "(SELECT COALESCE(GROUP_CONCAT(sa.share_name, ','), '') "
+                "FROM share_access sa "
+                "WHERE sa.server_id = s.id AND COALESCE(sa.accessible, 0) = 1)"
+            )
+
+    favorite_expr = "0"
+    avoid_expr = "0"
+    if _table_has_columns(table_columns, "host_user_flags", "server_id"):
+        if "favorite" in table_columns["host_user_flags"]:
+            favorite_expr = (
+                "(SELECT COALESCE(uf.favorite, 0) "
+                "FROM host_user_flags uf WHERE uf.server_id = s.id LIMIT 1)"
+            )
+        if "avoid" in table_columns["host_user_flags"]:
+            avoid_expr = (
+                "(SELECT COALESCE(uf.avoid, 0) "
+                "FROM host_user_flags uf WHERE uf.server_id = s.id LIMIT 1)"
+            )
+
+    probe_status_expr = "'unprobed'"
+    rce_status_expr = "'not_run'"
+    extracted_expr = "0"
+    if _table_has_columns(table_columns, "host_probe_cache", "server_id"):
+        if "status" in table_columns["host_probe_cache"]:
+            probe_status_expr = (
+                "(SELECT COALESCE(pc.status, 'unprobed') "
+                "FROM host_probe_cache pc WHERE pc.server_id = s.id LIMIT 1)"
+            )
+        if "rce_status" in table_columns["host_probe_cache"]:
+            rce_status_expr = (
+                "(SELECT COALESCE(pc.rce_status, 'not_run') "
+                "FROM host_probe_cache pc WHERE pc.server_id = s.id LIMIT 1)"
+            )
+        if "extracted" in table_columns["host_probe_cache"]:
+            extracted_expr = (
+                "(SELECT COALESCE(pc.extracted, 0) "
+                "FROM host_probe_cache pc WHERE pc.server_id = s.id LIMIT 1)"
+            )
+
+    sql = f"""
+        SELECT
+            'S' AS host_type,
+            s.id AS protocol_server_id,
+            'S:' || CAST(s.id AS TEXT) AS row_key,
+            s.ip_address AS ip_address,
+            COALESCE(s.country, 'Unknown') AS country,
+            s.last_seen AS last_seen,
+            {favorite_expr} AS favorite,
+            {avoid_expr} AS avoid,
+            {probe_status_expr} AS probe_status,
+            {rce_status_expr} AS rce_status,
+            {extracted_expr} AS extracted,
+            {accessible_count_expr} AS accessible_shares,
+            {accessible_list_expr} AS accessible_shares_list,
+            {denied_count_expr} AS denied_shares_count
+        FROM smb_servers s
+        {where}
+    """
+    return sql, params
+
+
+def _build_ftp_arm(
+    table_columns: dict[str, set[str]],
+    country: Optional[str],
+) -> tuple[Optional[str], list]:
+    if not _table_has_columns(table_columns, "ftp_servers", "id", "ip_address", "last_seen"):
+        return None, []
+
+    params: list = []
+    where = ""
+    if "status" in table_columns["ftp_servers"]:
+        where = "WHERE f.status = 'active'"
+    if country:
+        if "country_code" not in table_columns["ftp_servers"]:
+            return None, []
+        if where:
+            where += " AND f.country_code = ?"
+        else:
+            where = "WHERE f.country_code = ?"
+        params.append(country)
+
+    favorite_expr = "0"
+    avoid_expr = "0"
+    if _table_has_columns(table_columns, "ftp_user_flags", "server_id"):
+        if "favorite" in table_columns["ftp_user_flags"]:
+            favorite_expr = (
+                "(SELECT COALESCE(uf.favorite, 0) "
+                "FROM ftp_user_flags uf WHERE uf.server_id = f.id LIMIT 1)"
+            )
+        if "avoid" in table_columns["ftp_user_flags"]:
+            avoid_expr = (
+                "(SELECT COALESCE(uf.avoid, 0) "
+                "FROM ftp_user_flags uf WHERE uf.server_id = f.id LIMIT 1)"
+            )
+
+    probe_status_expr = "'unprobed'"
+    rce_status_expr = "'not_run'"
+    extracted_expr = "0"
+    accessible_count_expr = "0"
+    accessible_list_expr = "''"
+    if _table_has_columns(table_columns, "ftp_probe_cache", "server_id"):
+        if "status" in table_columns["ftp_probe_cache"]:
+            probe_status_expr = (
+                "(SELECT COALESCE(pc.status, 'unprobed') "
+                "FROM ftp_probe_cache pc WHERE pc.server_id = f.id LIMIT 1)"
+            )
+        if "rce_status" in table_columns["ftp_probe_cache"]:
+            rce_status_expr = (
+                "(SELECT COALESCE(pc.rce_status, 'not_run') "
+                "FROM ftp_probe_cache pc WHERE pc.server_id = f.id LIMIT 1)"
+            )
+        if "extracted" in table_columns["ftp_probe_cache"]:
+            extracted_expr = (
+                "(SELECT COALESCE(pc.extracted, 0) "
+                "FROM ftp_probe_cache pc WHERE pc.server_id = f.id LIMIT 1)"
+            )
+        if "accessible_dirs_count" in table_columns["ftp_probe_cache"]:
+            accessible_count_expr = (
+                "(SELECT COALESCE(pc.accessible_dirs_count, 0) "
+                "FROM ftp_probe_cache pc WHERE pc.server_id = f.id LIMIT 1)"
+            )
+        if "accessible_dirs_list" in table_columns["ftp_probe_cache"]:
+            accessible_list_expr = (
+                "(SELECT COALESCE(pc.accessible_dirs_list, '') "
+                "FROM ftp_probe_cache pc WHERE pc.server_id = f.id LIMIT 1)"
+            )
+
+    sql = f"""
+        SELECT
+            'F' AS host_type,
+            f.id AS protocol_server_id,
+            'F:' || CAST(f.id AS TEXT) AS row_key,
+            f.ip_address AS ip_address,
+            COALESCE(f.country, 'Unknown') AS country,
+            f.last_seen AS last_seen,
+            {favorite_expr} AS favorite,
+            {avoid_expr} AS avoid,
+            {probe_status_expr} AS probe_status,
+            {rce_status_expr} AS rce_status,
+            {extracted_expr} AS extracted,
+            {accessible_count_expr} AS accessible_shares,
+            {accessible_list_expr} AS accessible_shares_list,
+            0 AS denied_shares_count
+        FROM ftp_servers f
+        {where}
+    """
+    return sql, params
+
+
+def _build_http_arm(
+    table_columns: dict[str, set[str]],
+    country: Optional[str],
+) -> tuple[Optional[str], list]:
+    if not _table_has_columns(table_columns, "http_servers", "id", "ip_address", "last_seen"):
+        return None, []
+
+    params: list = []
+    where = ""
+    if "status" in table_columns["http_servers"]:
+        where = "WHERE h.status = 'active'"
+    if country:
+        if "country_code" not in table_columns["http_servers"]:
+            return None, []
+        if where:
+            where += " AND h.country_code = ?"
+        else:
+            where = "WHERE h.country_code = ?"
+        params.append(country)
+
+    favorite_expr = "0"
+    avoid_expr = "0"
+    if _table_has_columns(table_columns, "http_user_flags", "server_id"):
+        if "favorite" in table_columns["http_user_flags"]:
+            favorite_expr = (
+                "(SELECT COALESCE(uf.favorite, 0) "
+                "FROM http_user_flags uf WHERE uf.server_id = h.id LIMIT 1)"
+            )
+        if "avoid" in table_columns["http_user_flags"]:
+            avoid_expr = (
+                "(SELECT COALESCE(uf.avoid, 0) "
+                "FROM http_user_flags uf WHERE uf.server_id = h.id LIMIT 1)"
+            )
+
+    probe_status_expr = "'unprobed'"
+    rce_status_expr = "'not_run'"
+    extracted_expr = "0"
+    accessible_count_expr = "0"
+    accessible_list_expr = "''"
+    if _table_has_columns(table_columns, "http_probe_cache", "server_id"):
+        if "status" in table_columns["http_probe_cache"]:
+            probe_status_expr = (
+                "(SELECT COALESCE(pc.status, 'unprobed') "
+                "FROM http_probe_cache pc WHERE pc.server_id = h.id LIMIT 1)"
+            )
+        if "rce_status" in table_columns["http_probe_cache"]:
+            rce_status_expr = (
+                "(SELECT COALESCE(pc.rce_status, 'not_run') "
+                "FROM http_probe_cache pc WHERE pc.server_id = h.id LIMIT 1)"
+            )
+        if "extracted" in table_columns["http_probe_cache"]:
+            extracted_expr = (
+                "(SELECT COALESCE(pc.extracted, 0) "
+                "FROM http_probe_cache pc WHERE pc.server_id = h.id LIMIT 1)"
+            )
+        has_dirs = "accessible_dirs_count" in table_columns["http_probe_cache"]
+        has_files = "accessible_files_count" in table_columns["http_probe_cache"]
+        if has_dirs and has_files:
+            accessible_count_expr = (
+                "(SELECT COALESCE(pc.accessible_dirs_count, 0) + "
+                "COALESCE(pc.accessible_files_count, 0) "
+                "FROM http_probe_cache pc WHERE pc.server_id = h.id LIMIT 1)"
+            )
+        elif has_dirs:
+            accessible_count_expr = (
+                "(SELECT COALESCE(pc.accessible_dirs_count, 0) "
+                "FROM http_probe_cache pc WHERE pc.server_id = h.id LIMIT 1)"
+            )
+        elif has_files:
+            accessible_count_expr = (
+                "(SELECT COALESCE(pc.accessible_files_count, 0) "
+                "FROM http_probe_cache pc WHERE pc.server_id = h.id LIMIT 1)"
+            )
+        if "accessible_dirs_list" in table_columns["http_probe_cache"]:
+            accessible_list_expr = (
+                "(SELECT COALESCE(pc.accessible_dirs_list, '') "
+                "FROM http_probe_cache pc WHERE pc.server_id = h.id LIMIT 1)"
+            )
+
+    sql = f"""
+        SELECT
+            'H' AS host_type,
+            h.id AS protocol_server_id,
+            'H:' || CAST(h.id AS TEXT) AS row_key,
+            h.ip_address AS ip_address,
+            COALESCE(h.country, 'Unknown') AS country,
+            h.last_seen AS last_seen,
+            {favorite_expr} AS favorite,
+            {avoid_expr} AS avoid,
+            {probe_status_expr} AS probe_status,
+            {rce_status_expr} AS rce_status,
+            {extracted_expr} AS extracted,
+            {accessible_count_expr} AS accessible_shares,
+            {accessible_list_expr} AS accessible_shares_list,
+            0 AS denied_shares_count
+        FROM http_servers h
+        {where}
+    """
+    return sql, params
+
+
+def get_results_table_rows(
+    db_path: Path,
+    protocol: str,
+    page: int,
+    page_size: int,
+    country: Optional[str],
+    shares_only: bool = False,
+    favorites_only: bool = False,
+    hide_avoid: bool = False,
+) -> tuple[list[dict], int]:
+    """Return desktop-parity rows for one protocol/all with optional server-side filters."""
+    if not Path(db_path).exists():
+        return [], 0
+
+    conn = _connect(db_path)
+    try:
+        tables = _inspect_tables(conn)
+        table_columns: dict[str, set[str]] = {}
+        for table in (
+            "smb_servers",
+            "ftp_servers",
+            "http_servers",
+            "share_access",
+            "host_user_flags",
+            "ftp_user_flags",
+            "http_user_flags",
+            "host_probe_cache",
+            "ftp_probe_cache",
+            "http_probe_cache",
+        ):
+            if table in tables:
+                table_columns[table] = _inspect_columns(conn, table)
+
+        arms: list[str] = []
+        params: list = []
+
+        if protocol in ("all", "smb"):
+            smb_sql, smb_params = _build_smb_arm(table_columns, country)
+            if smb_sql:
+                arms.append(smb_sql)
+                params.extend(smb_params)
+
+        if protocol in ("all", "ftp"):
+            ftp_sql, ftp_params = _build_ftp_arm(table_columns, country)
+            if ftp_sql:
+                arms.append(ftp_sql)
+                params.extend(ftp_params)
+
+        if protocol in ("all", "http"):
+            http_sql, http_params = _build_http_arm(table_columns, country)
+            if http_sql:
+                arms.append(http_sql)
+                params.extend(http_params)
+
+        if not arms:
+            return [], 0
+
+        union_sql = "\nUNION ALL\n".join(arms)
+        filter_clauses: list[str] = []
+        if shares_only:
+            filter_clauses.append("COALESCE(accessible_shares, 0) > 0")
+        if favorites_only:
+            filter_clauses.append("COALESCE(favorite, 0) = 1")
+        if hide_avoid:
+            filter_clauses.append("COALESCE(avoid, 0) != 1")
+        filter_sql = f"WHERE {' AND '.join(filter_clauses)}" if filter_clauses else ""
+
+        count_sql = f"SELECT COUNT(*) AS total_count FROM ({union_sql}) _u {filter_sql}"
+        total_count = int(conn.execute(count_sql, params).fetchone()["total_count"])
+
+        offset = (page - 1) * page_size
+        data_sql = (
+            f"SELECT * FROM ({union_sql}) _u {filter_sql} "
+            "ORDER BY datetime(last_seen) DESC, row_key ASC "
+            "LIMIT ? OFFSET ?"
+        )
+        rows = conn.execute(data_sql, params + [page_size, offset]).fetchall()
+
+        result_rows: list[dict] = []
+        for row in rows:
+            data = dict(row)
+            shares_count = int(data.get("accessible_shares") or 0)
+            result_rows.append(
+                {
+                    "favorite": "✔" if int(data.get("favorite") or 0) else "○",
+                    "avoid": "✖" if int(data.get("avoid") or 0) else "○",
+                    "probe_status_emoji": _probe_status_to_emoji(data.get("probe_status")),
+                    "rce_status_emoji": _rce_status_to_emoji(data.get("rce_status")),
+                    "extract_status_emoji": _extract_status_to_emoji(data.get("extracted")),
+                    "host_type": data.get("host_type") or "",
+                    "ip_address": data.get("ip_address") or "",
+                    "shares": f"📁 {shares_count}" if shares_count > 0 else str(shares_count),
+                    "accessible_shares_list": data.get("accessible_shares_list") or "",
+                    "denied_shares_count": int(data.get("denied_shares_count") or 0),
+                    "last_seen": _format_last_seen(data.get("last_seen")),
+                    "country": data.get("country") or "Unknown",
+                }
+            )
+        return result_rows, total_count
     finally:
         conn.close()
 

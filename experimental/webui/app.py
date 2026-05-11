@@ -2,6 +2,7 @@
 
 import ipaddress
 import logging
+import math
 from pathlib import Path
 from typing import List, Literal, Optional
 
@@ -266,29 +267,45 @@ def create_app(
 
     @app.get("/api/results/{protocol}")
     async def _get_results(
-        protocol: Literal["smb", "ftp", "http"],
+        protocol: Literal["all", "smb", "ftp", "http"],
         request: Request,
         session: Session = Depends(get_session),
         page: int = Query(default=1),
         page_size: int = Query(default=_db._PAGE_SIZE_DEFAULT),
         country: Optional[str] = Query(default=None),
+        shares_only: bool = Query(default=False),
+        favorites_only: bool = Query(default=False),
+        hide_avoid: bool = Query(default=False),
     ) -> JSONResponse:
         try:
             p, ps, c = _db._validate_bounds(page, page_size, country)
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         db_path = request.app.state.db_path
-        readers = {
-            "smb": _db.get_smb_results,
-            "ftp": _db.get_ftp_results,
-            "http": _db.get_http_results,
-        }
         try:
-            rows = readers[protocol](db_path, p, ps, c)
+            rows, total_count = _db.get_results_table_rows(
+                db_path,
+                protocol,
+                p,
+                ps,
+                c,
+                shares_only=shares_only,
+                favorites_only=favorites_only,
+                hide_avoid=hide_avoid,
+            )
         except Exception:
             logger.exception("results query failed: protocol=%s", protocol)
             return JSONResponse({"error": "database error"}, status_code=500)
-        return JSONResponse({"results": rows, "page": p, "page_size": ps})
+        total_pages = max(1, math.ceil(total_count / ps)) if ps > 0 else 1
+        return JSONResponse(
+            {
+                "results": rows,
+                "page": p,
+                "page_size": ps,
+                "total_count": total_count,
+                "total_pages": total_pages,
+            }
+        )
 
     @app.post("/api/export")
     async def _trigger_export(

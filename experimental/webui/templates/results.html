@@ -5,7 +5,8 @@
 <h1>Results</h1>
 
 <nav class="proto-tabs" aria-label="Protocol tabs">
-  <button data-proto="smb" class="proto-tab active" type="button">SMB</button>
+  <button data-proto="all" class="proto-tab active" type="button">ALL</button>
+  <button data-proto="smb" class="proto-tab" type="button">SMB</button>
   <button data-proto="ftp" class="proto-tab" type="button">FTP</button>
   <button data-proto="http" class="proto-tab" type="button">HTTP</button>
 </nav>
@@ -13,9 +14,26 @@
 <div class="filter-bar">
   <label for="country-filter">Country:</label>
   <input id="country-filter" type="text" maxlength="2" placeholder="US" aria-label="Two-letter country filter">
-  <button id="load-btn" type="button">Load</button>
+  <label>
+    <input id="shares-only-filter" type="checkbox">
+    Show Only Shares &gt; 0
+  </label>
+  <label>
+    <input id="favorites-only-filter" type="checkbox">
+    Favorites Only
+  </label>
+  <label>
+    <input id="hide-avoid-filter" type="checkbox">
+    Hide Avoid
+  </label>
+  <button id="load-btn" type="button">Refresh</button>
+  <button id="first-btn" type="button">&laquo; First</button>
   <button id="prev-btn" type="button">&laquo; Prev</button>
   <button id="next-btn" type="button">Next &raquo;</button>
+  <button id="last-btn" type="button">Last &raquo;</button>
+  <label for="jump-page">Jump to:</label>
+  <input id="jump-page" type="number" min="1" step="1" aria-label="Jump to page">
+  <button id="jump-btn" type="button">Go</button>
   <span class="page-label" id="page-label" aria-live="polite"></span>
 </div>
 
@@ -23,15 +41,26 @@
 
 <div class="table-wrap">
   <table id="results-table" class="results-table">
-    <thead id="results-thead"></thead>
+    <thead>
+      <tr>
+        <th>Favorite</th>
+        <th>Avoid</th>
+        <th>Probed</th>
+        <th>RCE</th>
+        <th>Extracted</th>
+        <th>Type</th>
+        <th>IP Address</th>
+        <th>Shares</th>
+        <th>Accessible</th>
+        <th>Denied</th>
+        <th>Last Seen</th>
+        <th>Country</th>
+      </tr>
+    </thead>
     <tbody id="results-body">
-      <tr><td>Select a protocol and click Load.</td></tr>
+      <tr><td colspan="12">Loading...</td></tr>
     </tbody>
   </table>
-</div>
-
-<div class="share-summary" id="share-summary" aria-label="Share summary">
-  <span class="share-summary-empty">Click a row to see share/directory details.</span>
 </div>
 
 <div id="export-bar" style="margin-top:16px">
@@ -42,53 +71,16 @@
 
 {% block scripts %}
 <script>
-  var currentProto = 'smb';
+  var currentProto = 'all';
   var currentPage = 1;
   var pageSize = 50;
+  var totalPages = 1;
   var token = document.querySelector('meta[name="csrf-token"]').content;
-  var selectedRow = null;
-
-  var HEADERS = {
-    smb:  [['IP','ip'], ['Country','country_code'], ['Auth','auth_method'], ['Status','status'],
-            ['Shares','accessible_shares'], ['Last Seen','last_seen'], ['','copy']],
-    ftp:  [['IP','ip'], ['Port','port'], ['Country','country_code'], ['Anon','anon_accessible'],
-            ['Dirs','accessible_dirs'], ['Status','status'], ['Last Seen','last_seen'], ['','copy']],
-    http: [['IP','ip'], ['Port','port'], ['Scheme','scheme'], ['Country','country_code'],
-            ['Title','title'], ['Dirs','dir_count'], ['Files','file_count'],
-            ['Status','status'], ['Last Seen','last_seen'], ['','copy']],
-  };
 
   function setResults(msg, cls) {
     var el = document.getElementById('results-status');
     el.textContent = msg;
     el.className = cls || '';
-  }
-
-  function buildSummary(proto, r) {
-    var s = document.getElementById('share-summary');
-    s.innerHTML = '';
-    if (proto === 'smb') {
-      var names = Array.isArray(r.share_names) ? r.share_names : [];
-      if (!names.length && !r.accessible_shares) {
-        s.innerHTML = '<span class="share-summary-empty">No share data available.</span>';
-        return;
-      }
-      var html = '<strong>' + escHtml(r.ip) + '</strong> &mdash; ' +
-                 (r.accessible_shares || 0) + ' accessible share(s)';
-      if (names.length) {
-        html += '<br><span class="status-text">' + names.map(escHtml).join(', ') + '</span>';
-      }
-      s.innerHTML = html;
-    } else if (proto === 'ftp') {
-      s.innerHTML = '<strong>' + escHtml(r.ip) + ':' + (r.port || 21) + '</strong>' +
-        ' &mdash; Anon: ' + (r.anon_accessible ? 'yes' : 'no') +
-        ', Dirs: ' + (r.accessible_dirs || 0);
-    } else {
-      s.innerHTML = '<strong>' + escHtml(r.ip) + ':' + (r.port || 80) + '</strong>' +
-        ' &mdash; Dirs: ' + (r.dir_count || 0) +
-        ', Files: ' + (r.file_count || 0) +
-        (r.is_index_page ? ', index page' : '');
-    }
   }
 
   function escHtml(str) {
@@ -100,93 +92,88 @@
       .replace(/"/g, '&quot;');
   }
 
-  function buildRow(proto, r) {
-    var headers = HEADERS[proto];
+  function updatePagerLabel(totalCount, page, pages) {
+    document.getElementById('page-label').textContent =
+      'Total: ' + totalCount + '   Page ' + page + ' / ' + pages;
+  }
+
+  function updatePagerButtons() {
+    document.getElementById('first-btn').disabled = currentPage <= 1;
+    document.getElementById('prev-btn').disabled = currentPage <= 1;
+    document.getElementById('next-btn').disabled = currentPage >= totalPages;
+    document.getElementById('last-btn').disabled = currentPage >= totalPages;
+  }
+
+  function buildRow(r) {
     var tr = document.createElement('tr');
-    tr.style.cursor = 'pointer';
 
-    headers.forEach(function(pair) {
-      var label = pair[0];
-      var key = pair[1];
+    var cells = [
+      ['Favorite', r.favorite],
+      ['Avoid', r.avoid],
+      ['Probed', r.probe_status_emoji],
+      ['RCE', r.rce_status_emoji],
+      ['Extracted', r.extract_status_emoji],
+      ['Type', r.host_type],
+      ['IP Address', r.ip_address],
+      ['Shares', r.shares],
+      ['Accessible', r.accessible_shares_list],
+      ['Denied', r.denied_shares_count],
+      ['Last Seen', r.last_seen],
+      ['Country', r.country]
+    ];
+
+    cells.forEach(function(pair) {
       var td = document.createElement('td');
-      if (label) td.setAttribute('data-label', label);
-      if (key === 'copy') {
-        var btn = document.createElement('button');
-        btn.type = 'button';
-        btn.textContent = 'Copy';
-        btn.addEventListener('click', function(e) {
-          e.stopPropagation();
-          navigator.clipboard.writeText(r.copy_str).catch(function() {
-            window.prompt('Copy:', r.copy_str);
-          });
-        });
-        td.appendChild(btn);
-      } else if (key === 'anon_accessible') {
-        td.textContent = r[key] ? 'Yes' : 'No';
-      } else {
-        td.textContent = r[key] != null ? String(r[key]) : '';
-      }
+      td.setAttribute('data-label', pair[0]);
+      td.textContent = pair[1] != null ? String(pair[1]) : '';
       tr.appendChild(td);
-    });
-
-    tr.addEventListener('click', function() {
-      if (selectedRow) selectedRow.classList.remove('selected');
-      tr.classList.add('selected');
-      selectedRow = tr;
-      buildSummary(proto, r);
     });
 
     return tr;
   }
 
-  function setHeaders(proto) {
-    var thead = document.getElementById('results-thead');
-    thead.innerHTML = '';
-    var tr = document.createElement('tr');
-    HEADERS[proto].forEach(function(pair) {
-      var th = document.createElement('th');
-      th.textContent = pair[0];
-      tr.appendChild(th);
-    });
-    thead.appendChild(tr);
-  }
-
   function loadResults() {
-    selectedRow = null;
-    document.getElementById('share-summary').innerHTML =
-      '<span class="share-summary-empty">Click a row to see share/directory details.</span>';
     var country = document.getElementById('country-filter').value.trim().toUpperCase();
+    var sharesOnly = document.getElementById('shares-only-filter').checked;
+    var favoritesOnly = document.getElementById('favorites-only-filter').checked;
+    var hideAvoid = document.getElementById('hide-avoid-filter').checked;
     var url = '/api/results/' + currentProto +
-      '?page=' + currentPage + '&page_size=' + pageSize;
+      '?page=' + currentPage + '&page_size=' + pageSize +
+      '&shares_only=' + (sharesOnly ? 'true' : 'false') +
+      '&favorites_only=' + (favoritesOnly ? 'true' : 'false') +
+      '&hide_avoid=' + (hideAvoid ? 'true' : 'false');
     if (country) url += '&country=' + encodeURIComponent(country);
 
     var tbody = document.getElementById('results-body');
-    tbody.innerHTML = '<tr><td colspan="10">Loading...</td></tr>';
-    setHeaders(currentProto);
+    tbody.innerHTML = '<tr><td colspan="12">Loading...</td></tr>';
     setResults('');
+    updatePagerButtons();
 
     fetch(url).then(function(resp) {
       return resp.json().then(function(data) {
         tbody.innerHTML = '';
         if (!resp.ok) {
           setResults('Error: ' + (data.error || resp.status), 'status-error');
-          tbody.innerHTML = '<tr><td colspan="10" class="status-text">Query failed.</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="12" class="status-text">Query failed.</td></tr>';
           return;
         }
+        currentPage = Number(data.page || currentPage);
+        totalPages = Number(data.total_pages || 1);
         if (!data.results || !data.results.length) {
-          tbody.innerHTML = '<tr><td colspan="10" class="status-text">No results.</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="12" class="status-text">No results.</td></tr>';
         } else {
           data.results.forEach(function(r) {
-            tbody.appendChild(buildRow(currentProto, r));
+            tbody.appendChild(buildRow(r));
           });
         }
-        document.getElementById('page-label').textContent =
-          'Page ' + data.page + ' (' + pageSize + ' per page)';
+        updatePagerLabel(Number(data.total_count || 0), currentPage, totalPages);
+        updatePagerButtons();
       });
     }).catch(function() {
       setResults('Request failed.', 'status-error');
       document.getElementById('results-body').innerHTML =
-        '<tr><td colspan="10" class="status-text">Request failed.</td></tr>';
+        '<tr><td colspan="12" class="status-text">Request failed.</td></tr>';
+      updatePagerButtons();
     });
   }
 
@@ -205,13 +192,52 @@
     loadResults();
   });
 
+  document.getElementById('first-btn').addEventListener('click', function() {
+    if (currentPage > 1) {
+      currentPage = 1;
+      loadResults();
+    }
+  });
+
   document.getElementById('prev-btn').addEventListener('click', function() {
-    if (currentPage > 1) { currentPage--; loadResults(); }
+    if (currentPage > 1) {
+      currentPage--;
+      loadResults();
+    }
   });
 
   document.getElementById('next-btn').addEventListener('click', function() {
-    currentPage++;
-    loadResults();
+    if (currentPage < totalPages) {
+      currentPage++;
+      loadResults();
+    }
+  });
+
+  document.getElementById('last-btn').addEventListener('click', function() {
+    if (currentPage < totalPages) {
+      currentPage = totalPages;
+      loadResults();
+    }
+  });
+
+  document.getElementById('jump-btn').addEventListener('click', function() {
+    var raw = document.getElementById('jump-page').value;
+    var jumpPage = Number(raw);
+    if (!Number.isInteger(jumpPage) || jumpPage < 1 || jumpPage > totalPages) {
+      setResults('Jump-to page must be between 1 and ' + totalPages + '.', 'status-warn');
+      return;
+    }
+    if (jumpPage !== currentPage) {
+      currentPage = jumpPage;
+      loadResults();
+    }
+  });
+
+  document.getElementById('jump-page').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      document.getElementById('jump-btn').click();
+    }
   });
 
   document.getElementById('export-btn').addEventListener('click', async function() {
@@ -238,5 +264,7 @@
       es.className = 'status-text error';
     }
   });
+
+  loadResults();
 </script>
 {% endblock %}
