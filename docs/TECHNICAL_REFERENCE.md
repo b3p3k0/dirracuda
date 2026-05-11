@@ -90,12 +90,18 @@ The optional Web UI is disabled by default and installed separately with
 `experimental/webui/requirements-web.txt`. Its C4 scan launcher follows the same CLI
 subprocess boundary as the Tkinter GUI: one active scan at a time, strict request
 validation, explicit `shell=False`, repo-root `cwd`, unbuffered Python output,
-and merged stdout/stderr progress logs.
+and merged stdout/stderr progress logs. Web UI SMB tasks run with `--legacy` by
+default so SMB1-capable targets are included. When `run_probe_after_scan=true`,
+the task runner executes a protocol-aware post-scan probe stage for SMB/FTP/HTTP
+verified hosts; this is no longer coupled to legacy SMB `--check-rce`.
 
 **Web UI routes (C4–C6):**
 
 | Route | Auth | Description |
 |-------|------|-------------|
+| `POST /api/scans` | session + CSRF | Queue one scan task (`protocol`: `smb\|ftp\|http`). Includes `max_shodan_results` (1..100000) for per-task query-limit/budget overrides. Optional `run_probe_after_scan` triggers protocol-aware post-scan probe stage for the same protocol after the scan subprocess succeeds. |
+| `GET /api/scans/{task_id}` | session | Task status/log polling for queued/running/completed scan tasks |
+| `POST /api/scans/{task_id}/cancel` | session + CSRF | Cancel queued task or request cancellation for active task (scan/probe stage) |
 | `GET /results` | session | Results page (SMB/FTP/HTTP tabs, country filter, pagination) |
 | `GET /api/results/{protocol}` | session | Paginated JSON rows; `protocol` ∈ `smb\|ftp\|http`; `page` 1–10 000; `page_size` 1–200; optional `country` (2-letter ISO code) |
 | `POST /api/export` | session + CSRF | Export main DB via `VACUUM INTO`; artifact written to `~/.dirracuda/exports/`; response: `{"filename": "dirracuda_export_YYYYMMDD_HHMMSS_<8hex>.db"}` |
@@ -1001,6 +1007,7 @@ Web UI tab behavior:
 - Controls are inline in the tab (no separate control window).
 - Status/start/stop use `experimental.webui.service_control` with pidfile + health checks.
 - Start failures are shown inline as `Failed: <reason>` (for example, exit code or startup timeout) instead of collapsing back to `Stopped`.
+- Credential setup is inline (`Username`, `Password`, `Confirm`, `Save Credentials`) and calls `experimental.webui.auth.set_password(...)`; expected validation/save errors are shown inline (no popup spam).
 - Open-browser and copy-URL actions use the current `webui.json` host/port values.
 
 Dorkbook entry path:

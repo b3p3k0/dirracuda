@@ -38,7 +38,7 @@
     </div>
     <div class="check-row">
       <input id="probe" name="probe" type="checkbox">
-      <label for="probe">Run probe on verified hosts after scan <span class="status-text">(SMB only)</span></label>
+      <label for="probe">Run probe on verified hosts after scan</label>
     </div>
     <div class="form-row">
       <label for="filters">Filters</label>
@@ -82,6 +82,16 @@
   function parseCountries(value) {
     if (!value) return [];
     return value.split(',').map(function(s) { return s.trim().toUpperCase(); }).filter(Boolean);
+  }
+
+  function parseMaxResults(value) {
+    var raw = String(value || '').trim();
+    if (!raw) return null;
+    if (!/^\d+$/.test(raw)) return null;
+    var parsed = Number(raw);
+    if (!Number.isInteger(parsed)) return null;
+    if (parsed < 1 || parsed > 100000) return null;
+    return parsed;
   }
 
   function setStatus(msg, cls) {
@@ -179,15 +189,23 @@
     var countries = parseCountries(document.getElementById('countries').value);
     var probeChecked = document.getElementById('probe').checked;
     var filters = document.getElementById('filters').value;
+    var maxResults = parseMaxResults(document.getElementById('max-results').value);
     var queued = 0;
     var errs = [];
+
+    if (maxResults === null) {
+      setStatus('Max results must be an integer between 1 and 100000.', 'status-warn');
+      btn.disabled = false;
+      return;
+    }
 
     for (var i = 0; i < protos.length; i++) {
       var proto = protos[i];
       var payload = {
         protocol: proto,
         countries: countries,
-        run_probe_after_scan: probeChecked && proto === 'smb',
+        max_shodan_results: maxResults,
+        run_probe_after_scan: probeChecked,
         filters: filters
       };
       try {

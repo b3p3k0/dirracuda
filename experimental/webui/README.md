@@ -53,7 +53,7 @@ The desktop GUI also controls the service: `⚗ Experimental → Web UI` → set
 
 ## What You Can Do
 
-**Scans** — submit and cancel SMB, FTP, or HTTP discovery runs. One scan runs at a time (same FIFO queue as the desktop GUI); the web UI uses the same CLI subprocess boundary. The optional probe toggle runs a protocol-aware post-scan probe pass for SMB/FTP/HTTP verified hosts (not legacy SMB `--check-rce` wiring).
+**Scans** — submit and cancel SMB, FTP, or HTTP discovery runs. One scan runs at a time (same FIFO queue as the desktop GUI); the web UI uses the same CLI subprocess boundary. Web UI SMB runs default to legacy mode (`--legacy`) so SMB1-capable targets are included. The scan form’s max-results value is passed through and enforced via per-task query-limit overrides. The optional probe toggle runs a protocol-aware post-scan probe pass for SMB/FTP/HTTP verified hosts (not legacy SMB `--check-rce` wiring).
 
 **Results** — paginated host summaries per protocol with optional country filter. Share names, accessible directory counts, and HTTP access details are shown when the relevant tables exist in the DB — older databases degrade cleanly without errors.
 

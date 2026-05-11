@@ -8,7 +8,9 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 import enum
+import json
 import os
 from pathlib import Path
 import re
@@ -16,13 +18,16 @@ import secrets
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
+from experimental.webui.post_scan_probe import run_post_scan_probe
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 _PROTOCOL_SCRIPTS = {
     "smb": _REPO_ROOT / "cli" / "smbseek.py",
     "ftp": _REPO_ROOT / "cli" / "ftpseek.py",
@@ -307,6 +312,7 @@ class ScanRequest(BaseModel):
 
     protocol: str
     countries: list[str] = Field(default_factory=list)
+    max_shodan_results: int = 100
     run_probe_after_scan: bool = False
     filters: str = ""
 
@@ -334,14 +340,12 @@ class ScanRequest(BaseModel):
             raise ValueError("filters contain invalid control characters")
         return value
 
-    @model_validator(mode="after")
-    def _probe_protocol_check(self) -> "ScanRequest":
-        if self.run_probe_after_scan and self.protocol != "smb":
-            raise ValueError(
-                "run_probe_after_scan is only supported for protocol 'smb'; "
-                f"got {self.protocol!r}"
-            )
-        return self
+    @field_validator("max_shodan_results")
+    @classmethod
+    def _validate_max_shodan_results(cls, value: int) -> int:
+        if value < 1 or value > 100000:
+            raise ValueError("max_shodan_results must be between 1 and 100000")
+        return value
 
 
 @dataclass
@@ -357,6 +361,7 @@ class ScanTask:
     finished_at: Optional[float] = None
     _process: Optional[subprocess.Popen] = field(default=None, repr=False)
     _cancel_requested: bool = field(default=False, repr=False)
+    _cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def to_dict(self) -> dict:
@@ -375,20 +380,92 @@ class ScanTask:
             }
 
 
-def build_command(request: ScanRequest) -> list[str]:
+def _query_credit_budget(max_results: int) -> int:
+    return max(1, (int(max_results) + 99) // 100)
+
+
+def _build_scan_config_overrides(request: ScanRequest) -> dict:
+    max_results = int(request.max_shodan_results)
+    budget = _query_credit_budget(max_results)
+    return {
+        "shodan": {
+            "query_limits": {
+                "max_results": max_results,
+                "min_usable_hosts_target": max_results + 1,
+                "smb_max_query_credits_per_scan": budget,
+                "max_query_credits_per_scan": budget,
+                "ftp_max_query_credits_per_scan": budget,
+                "http_max_query_credits_per_scan": budget,
+            }
+        },
+        "ftp": {"shodan": {"query_limits": {"max_results": max_results}}},
+        "http": {"shodan": {"query_limits": {"max_results": max_results}}},
+    }
+
+
+def _deep_merge_dict(base: dict, override: dict) -> dict:
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge_dict(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _load_base_scan_config(config_path: Path) -> dict:
+    from shared.config import load_config as _load_core_config
+
+    cfg = _load_core_config(str(config_path))
+    return dict(cfg.config)
+
+
+def _create_task_config_file(request: ScanRequest, base_config_path: Path) -> Path:
+    base = _load_base_scan_config(base_config_path)
+    merged = _deep_merge_dict(base, _build_scan_config_overrides(request))
+    fd, temp_path = tempfile.mkstemp(
+        suffix=".json",
+        prefix=f"webui_scan_{request.protocol}_",
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(merged, handle, indent=2)
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass
+        raise
+    return Path(temp_path)
+
+
+def _cleanup_task_config_file(path: Optional[Path]) -> None:
+    if path is None:
+        return
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def build_command(request: ScanRequest, *, config_path: Optional[Path] = None) -> list[str]:
     cmd = [
         sys.executable,
         str(_PROTOCOL_SCRIPTS[request.protocol]),
         "--verbose",
         "--config",
-        str(_CONFIG_PATH),
+        str(config_path or _CONFIG_PATH),
     ]
     if request.countries:
         cmd += ["--country", ",".join(request.countries)]
     if request.filters:
         cmd += ["--filter", request.filters]
-    if request.run_probe_after_scan:
-        cmd.append("--check-rce")
+    if request.protocol == "smb":
+        cmd.append("--legacy")
     return cmd
 
 
@@ -459,6 +536,7 @@ class ScanQueue:
             if task.status == TaskStatus.RUNNING:
                 with task._lock:
                     task._cancel_requested = True
+                    task._cancel_event.set()
                     proc = task._process
                 if proc is not None:
                     _terminate_proc(proc)
@@ -497,6 +575,7 @@ class ScanQueue:
             self._advance()
 
     def _run(self, task: ScanTask) -> None:
+        task_config_path: Optional[Path] = None
         try:
             with task._lock:
                 if task._cancel_requested:
@@ -508,7 +587,8 @@ class ScanQueue:
             if cancelled_before_start:
                 return
 
-            cmd = build_command(task.request)
+            task_config_path = _create_task_config_file(task.request, _CONFIG_PATH)
+            cmd = build_command(task.request, config_path=task_config_path)
             env = _build_subprocess_env()
             if sys.platform.startswith("win"):
                 proc = subprocess.Popen(
@@ -549,14 +629,70 @@ class ScanQueue:
                     _parse_progress(task, line.rstrip("\n"))
 
             proc.wait()
+            run_probe_stage = False
+            scan_start_iso = None
+            scan_end_iso = None
+            scan_cancel_event = None
             with task._lock:
+                task._process = None
                 if task._cancel_requested:
                     task.status = TaskStatus.CANCELLED
+                elif proc.returncode != 0:
+                    task.status = TaskStatus.FAILED
+                elif task.request.run_probe_after_scan:
+                    task.progress_message = "scan completed; probing verified hosts..."
+                    started_at = task.started_at
+                    finished_at = time.time()
+                    scan_start_iso = (
+                        datetime.fromtimestamp(started_at, tz=timezone.utc).isoformat()
+                        if started_at is not None
+                        else None
+                    )
+                    scan_end_iso = datetime.fromtimestamp(
+                        finished_at, tz=timezone.utc
+                    ).isoformat()
+                    scan_cancel_event = task._cancel_event
+                    run_probe_stage = True
                 elif proc.returncode == 0:
                     task.status = TaskStatus.DONE
                 else:
                     task.status = TaskStatus.FAILED
-                task.finished_at = time.time()
+                if not run_probe_stage:
+                    task.finished_at = time.time()
+
+            if run_probe_stage:
+                probe_result = run_post_scan_probe(
+                    protocol=task.request.protocol,
+                    config_path=task_config_path or _CONFIG_PATH,
+                    scan_start_iso=scan_start_iso,
+                    scan_end_iso=scan_end_iso,
+                    cancel_event=scan_cancel_event,
+                )
+
+                with task._lock:
+                    if task._cancel_requested or probe_result.cancelled:
+                        task.status = TaskStatus.CANCELLED
+                        task.progress_message = "cancelled during probe stage"
+                    else:
+                        task.status = TaskStatus.DONE
+                        if probe_result.failed:
+                            task.progress_message = (
+                                "scan+probe complete with warnings: "
+                                f"{probe_result.succeeded}/{probe_result.attempted} hosts probed, "
+                                f"{probe_result.failed} failed"
+                            )
+                            for warning in probe_result.warnings:
+                                task.stdout_lines.append(f"[probe warning] {warning}")
+                        elif probe_result.attempted:
+                            task.progress_message = (
+                                "scan+probe complete: "
+                                f"{probe_result.succeeded}/{probe_result.attempted} hosts probed"
+                            )
+                        else:
+                            task.progress_message = (
+                                "scan completed; no verified hosts required probing"
+                            )
+                    task.finished_at = time.time()
         except Exception:
             with task._lock:
                 if task.status != TaskStatus.CANCELLED:
@@ -564,6 +700,7 @@ class ScanQueue:
                 task.progress_message = "scan runner error"
                 task.finished_at = time.time()
         finally:
+            _cleanup_task_config_file(task_config_path)
             self._finish_and_advance(task)
 
     def _kill_after(self, proc: subprocess.Popen, timeout_s: int) -> None:

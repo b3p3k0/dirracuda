@@ -101,6 +101,7 @@ def _valid_payload(**overrides):
     payload = {
         "protocol": "smb",
         "countries": ["US"],
+        "max_shodan_results": 100,
         "run_probe_after_scan": False,
         "filters": "",
     }
@@ -161,14 +162,38 @@ def test_submit_invalid_country(logged_in_client):
     assert r.status_code == 422
 
 
-def test_submit_probe_on_ftp(logged_in_client):
+def test_submit_invalid_max_shodan_results(logged_in_client):
+    csrf = _csrf_from_dashboard(logged_in_client)
+    r = logged_in_client.post(
+        "/api/scans",
+        headers={"X-CSRF-Token": csrf},
+        json=_valid_payload(max_shodan_results=0),
+    )
+    assert r.status_code == 422
+
+
+def test_submit_probe_on_ftp(logged_in_client, fake_queue):
     csrf = _csrf_from_dashboard(logged_in_client)
     r = logged_in_client.post(
         "/api/scans",
         headers={"X-CSRF-Token": csrf},
         json=_valid_payload(protocol="ftp", run_probe_after_scan=True),
     )
-    assert r.status_code == 422
+    assert r.status_code == 202
+    assert fake_queue.submitted[0].protocol == "ftp"
+    assert fake_queue.submitted[0].run_probe_after_scan is True
+
+
+def test_submit_probe_on_http(logged_in_client, fake_queue):
+    csrf = _csrf_from_dashboard(logged_in_client)
+    r = logged_in_client.post(
+        "/api/scans",
+        headers={"X-CSRF-Token": csrf},
+        json=_valid_payload(protocol="http", run_probe_after_scan=True),
+    )
+    assert r.status_code == 202
+    assert fake_queue.submitted[0].protocol == "http"
+    assert fake_queue.submitted[0].run_probe_after_scan is True
 
 
 def test_submit_probe_string_coercion_rejected(logged_in_client):
@@ -191,6 +216,18 @@ def test_submit_valid_smb(logged_in_client, fake_queue):
     assert r.status_code == 202
     assert r.json()["task_id"] == "task-1"
     assert fake_queue.submitted[0].protocol == "smb"
+    assert fake_queue.submitted[0].max_shodan_results == 100
+
+
+def test_submit_valid_custom_max_results(logged_in_client, fake_queue):
+    csrf = _csrf_from_dashboard(logged_in_client)
+    r = logged_in_client.post(
+        "/api/scans",
+        headers={"X-CSRF-Token": csrf},
+        json=_valid_payload(max_shodan_results=500),
+    )
+    assert r.status_code == 202
+    assert fake_queue.submitted[0].max_shodan_results == 500
 
 
 def test_submit_valid_ftp(logged_in_client, fake_queue):
