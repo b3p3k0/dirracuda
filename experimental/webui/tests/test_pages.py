@@ -96,6 +96,10 @@ def test_dashboard_renders_authenticated(logged_in):
     assert r.status_code == 200
     assert "Dashboard" in r.text
     assert "127.0.0.1" in r.text
+    assert 'id="prefs-consent-banner"' in r.text
+    assert 'id="prefs-consent-yes"' in r.text
+    assert 'id="prefs-consent-no"' in r.text
+    assert '/static/prefs.js' in r.text
 
 
 def test_scans_renders_authenticated(logged_in):
@@ -103,6 +107,14 @@ def test_scans_renders_authenticated(logged_in):
     assert r.status_code == 200
     assert "SMB" in r.text
     assert "Queue Scan" in r.text
+    assert "DirracudaPrefs.readSection('scans')" in r.text
+    assert "DirracudaPrefs.writeSection('scans'" in r.text
+    m = re.search(r"writeSection\('scans', \{([^}]*)\}\);", r.text, re.S)
+    assert m is not None
+    body = m.group(1)
+    assert "countries" not in body
+    assert "filters" not in body
+    assert "max_results" in body
 
 
 def test_results_renders_authenticated(logged_in):
@@ -110,6 +122,8 @@ def test_results_renders_authenticated(logged_in):
     assert r.status_code == 200
     assert "Results" in r.text
     assert "Export DB" in r.text
+    assert "DirracudaPrefs.readSection('results')" in r.text
+    assert "DirracudaPrefs.writeSection('results'" in r.text
 
 
 def test_config_renders_authenticated(logged_in, cfg_no_tls):
@@ -117,6 +131,10 @@ def test_config_renders_authenticated(logged_in, cfg_no_tls):
     assert r.status_code == 200
     assert "Bind address" in r.text
     assert str(cfg_no_tls.port) in r.text
+    assert "Browser Preference Storage" in r.text
+    assert 'id="prefs-enable-btn"' in r.text
+    assert 'id="prefs-disable-btn"' in r.text
+    assert 'id="prefs-clear-btn"' in r.text
 
 
 # --- Config POST ---

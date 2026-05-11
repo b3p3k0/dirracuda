@@ -80,6 +80,19 @@
     </div>
   </div>
 
+  <div class="form-section">
+    <h2>Browser Preference Storage</h2>
+    <p class="status-text" style="margin-bottom:8px;">
+      Stores non-sensitive UI preferences in this browser only (via localStorage).
+    </p>
+    <div class="form-actions" style="margin-top:0;">
+      <button type="button" id="prefs-enable-btn">Enable</button>
+      <button type="button" id="prefs-disable-btn">Disable</button>
+      <button type="button" id="prefs-clear-btn">Clear Saved Preferences</button>
+    </div>
+    <div role="status" id="prefs-storage-status" aria-live="polite" style="margin-top:8px;"></div>
+  </div>
+
   <div class="form-actions">
     <button type="submit" id="save-btn">Save</button>
     <span class="status-text" style="margin-left:8px; font-size:0.9em">
@@ -108,6 +121,66 @@
     el.className = cls || '';
     el.style.display = msg ? '' : 'none';
   }
+
+  function setPrefStatus(msg, cls) {
+    var el = document.getElementById('prefs-storage-status');
+    el.textContent = msg;
+    el.className = cls || '';
+    el.style.display = msg ? '' : 'none';
+  }
+
+  function refreshPrefStatusSummary() {
+    if (!window.DirracudaPrefs || !window.DirracudaPrefs.isAvailable()) {
+      setPrefStatus('Preference storage unavailable in this browser context.', 'status-warn');
+      return;
+    }
+    var consent = window.DirracudaPrefs.getConsent();
+    if (consent === 'allow') {
+      setPrefStatus('Preference storage is enabled in this browser.', 'status-ok');
+      return;
+    }
+    if (consent === 'deny') {
+      setPrefStatus('Preference storage is disabled in this browser.', 'status-neutral');
+      return;
+    }
+    setPrefStatus('Preference storage has not been decided yet.', 'status-info');
+  }
+
+  document.getElementById('prefs-enable-btn').addEventListener('click', function() {
+    if (!window.DirracudaPrefs || !window.DirracudaPrefs.isAvailable()) {
+      setPrefStatus('Preference storage unavailable in this browser context.', 'status-warn');
+      return;
+    }
+    if (window.DirracudaPrefs.setConsent('allow')) {
+      setPrefStatus('Preference storage enabled in this browser.', 'status-ok');
+    } else {
+      setPrefStatus('Failed to update browser preference storage setting.', 'status-error');
+    }
+  });
+
+  document.getElementById('prefs-disable-btn').addEventListener('click', function() {
+    if (!window.DirracudaPrefs || !window.DirracudaPrefs.isAvailable()) {
+      setPrefStatus('Preference storage unavailable in this browser context.', 'status-warn');
+      return;
+    }
+    if (window.DirracudaPrefs.setConsent('deny')) {
+      setPrefStatus('Preference storage disabled in this browser.', 'status-neutral');
+    } else {
+      setPrefStatus('Failed to update browser preference storage setting.', 'status-error');
+    }
+  });
+
+  document.getElementById('prefs-clear-btn').addEventListener('click', function() {
+    if (!window.DirracudaPrefs || !window.DirracudaPrefs.isAvailable()) {
+      setPrefStatus('Preference storage unavailable in this browser context.', 'status-warn');
+      return;
+    }
+    if (window.DirracudaPrefs.clearData()) {
+      setPrefStatus('Saved browser preferences cleared.', 'status-ok');
+    } else {
+      setPrefStatus('Failed to clear saved browser preferences.', 'status-error');
+    }
+  });
 
   document.getElementById('cfg-form').addEventListener('submit', async function(e) {
     e.preventDefault();
@@ -145,5 +218,7 @@
     }
     btn.disabled = false;
   });
+
+  refreshPrefStatusSummary();
 </script>
 {% endblock %}

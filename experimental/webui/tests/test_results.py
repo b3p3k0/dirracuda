@@ -1,5 +1,6 @@
 """Route integration tests for unified Web UI results endpoints (C17)."""
 
+import re
 import sqlite3
 
 import pytest
@@ -214,6 +215,14 @@ def test_results_page_renders_filter_controls(logged_in_client):
     assert "Show Only Shares &gt; 0" in r.text
     assert "Favorites Only" in r.text
     assert "Hide Avoid" in r.text
+    m = re.search(r"writeSection\('results', \{([^}]*)\}\);", r.text, re.S)
+    assert m is not None
+    body = m.group(1)
+    assert "protocol" in body
+    assert "shares_only" in body
+    assert "favorites_only" in body
+    assert "hide_avoid" in body
+    assert "country" not in body
 
 
 def test_invalid_protocol_rejected(logged_in_client):

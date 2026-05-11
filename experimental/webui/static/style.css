@@ -272,6 +272,12 @@ tbody tr.selected td { background: var(--bg3); color: var(--accent); }
 .status-info    { background: var(--info-bg);  color: var(--info-fg);  border-color: var(--info-fg); }
 .status-neutral { background: var(--bg3);      color: var(--text-dim); border-color: var(--border); }
 
+.prefs-banner-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
 /* Inline status span (no block padding) */
 .status-text { color: var(--text-dim); }
 .status-text.ok    { color: var(--ok-fg); }

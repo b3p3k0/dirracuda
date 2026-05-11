@@ -100,6 +100,34 @@
     el.className = cls ? cls : '';
   }
 
+  function applyScansPrefsFromStorage() {
+    if (!window.DirracudaPrefs || !window.DirracudaPrefs.isAvailable()) return;
+    var saved = window.DirracudaPrefs.readSection('scans');
+    document.getElementById('proto-smb').checked = !!saved.proto_smb;
+    document.getElementById('proto-ftp').checked = !!saved.proto_ftp;
+    document.getElementById('proto-http').checked = !!saved.proto_http;
+    document.getElementById('probe').checked = !!saved.probe;
+    document.getElementById('rescan-all').checked = !!saved.rescan_all;
+    document.getElementById('rescan-failed').checked = !!saved.rescan_failed;
+    if (Number.isInteger(saved.max_results) && saved.max_results >= 1 && saved.max_results <= 100000) {
+      document.getElementById('max-results').value = String(saved.max_results);
+    }
+  }
+
+  function persistScansPrefs() {
+    if (!window.DirracudaPrefs || !window.DirracudaPrefs.isAvailable()) return;
+    var maxResults = parseMaxResults(document.getElementById('max-results').value);
+    window.DirracudaPrefs.writeSection('scans', {
+      proto_smb: document.getElementById('proto-smb').checked,
+      proto_ftp: document.getElementById('proto-ftp').checked,
+      proto_http: document.getElementById('proto-http').checked,
+      max_results: maxResults === null ? 100 : maxResults,
+      probe: document.getElementById('probe').checked,
+      rescan_all: document.getElementById('rescan-all').checked,
+      rescan_failed: document.getElementById('rescan-failed').checked
+    });
+  }
+
   function upsertRow(task) {
     var tbody = document.getElementById('queue-body');
     var existing = trackedTasks[task.task_id];
@@ -169,6 +197,14 @@
     pollTimer = setTimeout(pollAll, 3000);
   }
 
+  document.getElementById('proto-smb').addEventListener('change', persistScansPrefs);
+  document.getElementById('proto-ftp').addEventListener('change', persistScansPrefs);
+  document.getElementById('proto-http').addEventListener('change', persistScansPrefs);
+  document.getElementById('max-results').addEventListener('change', persistScansPrefs);
+  document.getElementById('probe').addEventListener('change', persistScansPrefs);
+  document.getElementById('rescan-all').addEventListener('change', persistScansPrefs);
+  document.getElementById('rescan-failed').addEventListener('change', persistScansPrefs);
+
   document.getElementById('scan-form').addEventListener('submit', async function(e) {
     e.preventDefault();
     var btn = document.getElementById('queue-btn');
@@ -236,5 +272,7 @@
     }
     btn.disabled = false;
   });
+
+  applyScansPrefsFromStorage();
 </script>
 {% endblock %}

@@ -104,6 +104,33 @@
     document.getElementById('last-btn').disabled = currentPage >= totalPages;
   }
 
+  function applyResultsPrefsFromStorage() {
+    if (!window.DirracudaPrefs || !window.DirracudaPrefs.isAvailable()) return;
+    var saved = window.DirracudaPrefs.readSection('results');
+    if (saved.protocol && ['all', 'smb', 'ftp', 'http'].indexOf(saved.protocol) >= 0) {
+      currentProto = saved.protocol;
+    }
+    document.getElementById('shares-only-filter').checked = !!saved.shares_only;
+    document.getElementById('favorites-only-filter').checked = !!saved.favorites_only;
+    document.getElementById('hide-avoid-filter').checked = !!saved.hide_avoid;
+
+    var activeBtn = document.querySelector('.proto-tab[data-proto="' + currentProto + '"]');
+    if (activeBtn) {
+      document.querySelectorAll('.proto-tab').forEach(function(b) { b.classList.remove('active'); });
+      activeBtn.classList.add('active');
+    }
+  }
+
+  function persistResultsPrefs() {
+    if (!window.DirracudaPrefs || !window.DirracudaPrefs.isAvailable()) return;
+    window.DirracudaPrefs.writeSection('results', {
+      protocol: currentProto,
+      shares_only: document.getElementById('shares-only-filter').checked,
+      favorites_only: document.getElementById('favorites-only-filter').checked,
+      hide_avoid: document.getElementById('hide-avoid-filter').checked
+    });
+  }
+
   function buildRow(r) {
     var tr = document.createElement('tr');
 
@@ -182,10 +209,15 @@
       document.querySelectorAll('.proto-tab').forEach(function(b) { b.classList.remove('active'); });
       btn.classList.add('active');
       currentProto = btn.getAttribute('data-proto');
+      persistResultsPrefs();
       currentPage = 1;
       loadResults();
     });
   });
+
+  document.getElementById('shares-only-filter').addEventListener('change', persistResultsPrefs);
+  document.getElementById('favorites-only-filter').addEventListener('change', persistResultsPrefs);
+  document.getElementById('hide-avoid-filter').addEventListener('change', persistResultsPrefs);
 
   document.getElementById('load-btn').addEventListener('click', function() {
     currentPage = 1;
@@ -265,6 +297,7 @@
     }
   });
 
+  applyResultsPrefsFromStorage();
   loadResults();
 </script>
 {% endblock %}

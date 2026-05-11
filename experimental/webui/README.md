@@ -53,9 +53,9 @@ The desktop GUI also controls the service: `⚗ Experimental → Web UI` exposes
 
 ## What You Can Do
 
-**Scans** — submit and cancel SMB, FTP, or HTTP discovery runs. One scan runs at a time (same FIFO queue as the desktop GUI); the web UI uses the same CLI subprocess boundary. Web UI SMB runs default to legacy mode (`--legacy`) so SMB1-capable targets are included. The scan form’s max-results value is passed through and enforced via per-task query-limit overrides. The optional probe toggle runs a protocol-aware post-scan probe pass for SMB/FTP/HTTP verified hosts (not legacy SMB `--check-rce` wiring).
+**Scans** — submit and cancel SMB, FTP, or HTTP discovery runs. One scan runs at a time (same FIFO queue as the desktop GUI); the web UI uses the same CLI subprocess boundary. Web UI SMB runs default to legacy mode (`--legacy`) so SMB1-capable targets are included. The scan form’s max-results value is passed through and enforced via per-task query-limit overrides. The optional probe toggle runs a protocol-aware post-scan probe pass for SMB/FTP/HTTP verified hosts (not legacy SMB `--check-rce` wiring). With explicit user opt-in, non-sensitive scan form toggles are remembered in this browser via `localStorage`.
 
-**Results** — paginated host summaries per protocol with optional country and row filters. Share names, accessible directory counts, and HTTP access details are shown when the relevant tables exist in the DB — older databases degrade cleanly without errors. The page updates on demand using **Refresh** (no automatic background refresh).
+**Results** — paginated host summaries per protocol with optional country and row filters. Share names, accessible directory counts, and HTTP access details are shown when the relevant tables exist in the DB — older databases degrade cleanly without errors. The page updates on demand using **Refresh** (no automatic background refresh). With explicit user opt-in, non-sensitive results toggles and selected protocol are remembered in this browser via `localStorage`.
 
 **Export** — creates a clean, defragmented SQLite copy (`VACUUM INTO`) and downloads it. Exports land in `~/.dirracuda/exports/` with a timestamped filename. The download endpoint only serves files matching that naming pattern.
 
@@ -116,6 +116,8 @@ Config file: `~/.dirracuda/conf/webui.json`. Not created until you save from `/c
 ## Security Considerations
 
 **Sessions are in-memory.** Restarting the server logs everyone out. There's no persistent session store in v1.
+
+**Preference persistence is browser-local only.** Optional UI preference memory uses `localStorage` keys (`dirracuda_pref_consent_v1`, `dirracuda_pref_data_v1`), not cookies. Only allowlisted non-sensitive toggles/selectors are stored, never credentials, CSRF/session tokens, or free-text filter fields. Users can enable/disable/clear from `/config`.
 
 **TLS cert rotation requires a restart.** Cert and key files are read once at startup.
 
