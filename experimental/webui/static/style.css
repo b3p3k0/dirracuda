@@ -358,6 +358,86 @@ tbody tr.selected td { background: var(--bg3); color: var(--accent); }
 .share-summary-empty { color: var(--text-dim); font-style: italic; }
 .share-summary table { min-width: auto; }
 
+/* --- Results inline details ------------------------------------------ */
+.result-row {
+  cursor: pointer;
+}
+
+.result-detail-row td {
+  padding: 0;
+  background: var(--bg2);
+}
+
+.result-detail-box {
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  padding: 10px 12px;
+}
+
+.result-detail-header {
+  color: var(--text);
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.result-detail-kv {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 4px 12px;
+  margin-bottom: 10px;
+}
+
+.result-detail-kv-item {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+
+.result-detail-k {
+  color: var(--text-dim);
+  flex: 0 0 auto;
+}
+
+.result-detail-v {
+  color: var(--text);
+  word-break: break-all;
+}
+
+.result-detail-notes-wrap {
+  margin-bottom: 8px;
+}
+
+.result-detail-notes-label {
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+
+.result-detail-notes {
+  margin: 0;
+  padding: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.detail-toggle {
+  margin-top: 2px;
+  margin-bottom: 6px;
+}
+
+.detail-full-wrap {
+  margin-top: 4px;
+}
+
+.detail-full-box {
+  width: 100%;
+  max-width: 100%;
+  min-height: 14em;
+  resize: vertical;
+}
+
 /* --- Queue table ------------------------------------------------------- */
 .queue-section {
   margin-top: 24px;
@@ -451,6 +531,20 @@ tbody tr.selected td { background: var(--bg3); color: var(--accent); }
     content: attr(data-label) ": ";
     color: var(--text-dim);
     font-size: 0.85em;
+  }
+
+  .result-detail-row,
+  .result-detail-row td {
+    display: block;
+    width: 100%;
+  }
+
+  .result-detail-box {
+    padding: 8px;
+  }
+
+  .result-detail-kv {
+    grid-template-columns: 1fr;
   }
 
   /* Stack form rows */

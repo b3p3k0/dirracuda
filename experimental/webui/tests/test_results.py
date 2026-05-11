@@ -136,6 +136,30 @@ def db_all_protocols(tmp_path):
             accessible_files_count INTEGER DEFAULT 0,
             accessible_dirs_list TEXT
         );
+        CREATE TABLE ftp_access (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            server_id INTEGER NOT NULL,
+            accessible BOOLEAN DEFAULT 0,
+            auth_status TEXT,
+            root_listing_available BOOLEAN DEFAULT 0,
+            root_entry_count INTEGER DEFAULT 0,
+            error_message TEXT,
+            access_details TEXT,
+            test_timestamp TEXT
+        );
+        CREATE TABLE http_access (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            server_id INTEGER NOT NULL,
+            accessible BOOLEAN DEFAULT 0,
+            status_code INTEGER DEFAULT 0,
+            is_index_page BOOLEAN DEFAULT 0,
+            dir_count INTEGER DEFAULT 0,
+            file_count INTEGER DEFAULT 0,
+            tls_verified BOOLEAN DEFAULT 0,
+            error_message TEXT,
+            access_details TEXT,
+            test_timestamp TEXT
+        );
 
         INSERT INTO smb_servers (ip_address, country, country_code, status, last_seen)
         VALUES ('10.0.0.10', 'United States', 'US', 'active', '2026-05-10T14:22:00');
@@ -157,10 +181,18 @@ def db_all_protocols(tmp_path):
             server_id, status, rce_status, extracted, accessible_dirs_count, accessible_dirs_list
         )
         VALUES (1, 'issue', 'flagged', 1, 2, 'pub,docs');
+        INSERT INTO ftp_access (
+            server_id, accessible, auth_status, root_listing_available, root_entry_count, access_details, test_timestamp
+        )
+        VALUES (1, 1, 'anonymous', 1, 4, '["pub","docs"]', '2026-05-10T14:20:30');
         INSERT INTO http_probe_cache (
             server_id, status, rce_status, extracted, accessible_dirs_count, accessible_files_count, accessible_dirs_list
         )
         VALUES (1, 'unprobed', 'unknown', 0, 1, 1, '/,/admin');
+        INSERT INTO http_access (
+            server_id, accessible, status_code, is_index_page, dir_count, file_count, tls_verified, access_details, test_timestamp
+        )
+        VALUES (1, 1, 200, 1, 5, 12, 0, '{"paths":["/","/admin"]}', '2026-05-10T14:19:30');
         """
     )
     conn.commit()
@@ -207,6 +239,9 @@ def test_results_page_defaults_to_all_and_autoload(logged_in_client):
     assert 'data-proto="all"' in r.text
     assert "proto-tab active" in r.text
     assert "loadResults();" in r.text
+    assert "/api/results/details" in r.text
+    assert "Show full details" in r.text
+    assert "rows', '10'" in r.text or 'rows="10"' in r.text
 
 
 def test_results_page_renders_filter_controls(logged_in_client):
@@ -262,6 +297,8 @@ def test_all_protocol_results_mixed_rows_and_metadata(creds, cfg_no_tls, db_all_
     assert [row["host_type"] for row in rows] == ["S", "F", "H"]
     for row in rows:
         assert set(row.keys()) == {
+            "row_key",
+            "protocol_server_id",
             "favorite",
             "avoid",
             "probe_status_emoji",
@@ -275,8 +312,11 @@ def test_all_protocol_results_mixed_rows_and_metadata(creds, cfg_no_tls, db_all_
             "last_seen",
             "country",
         }
+        assert row["row_key"]
+        assert row["protocol_server_id"] > 0
 
     smb = rows[0]
+    assert smb["row_key"] == "S:1"
     assert smb["favorite"] == "✔"
     assert smb["avoid"] == "○"
     assert smb["probe_status_emoji"] == "✔"
@@ -288,6 +328,7 @@ def test_all_protocol_results_mixed_rows_and_metadata(creds, cfg_no_tls, db_all_
     assert smb["country"] == "United States"
 
     ftp = rows[1]
+    assert ftp["row_key"] == "F:1"
     assert ftp["favorite"] == "○"
     assert ftp["avoid"] == "✖"
     assert ftp["probe_status_emoji"] == "✖"
@@ -298,6 +339,7 @@ def test_all_protocol_results_mixed_rows_and_metadata(creds, cfg_no_tls, db_all_
     assert ftp["denied_shares_count"] == 0
 
     http = rows[2]
+    assert http["row_key"] == "H:1"
     assert http["probe_status_emoji"] == "○"
     assert http["rce_status_emoji"] == "?"
     assert http["extract_status_emoji"] == "○"
@@ -429,3 +471,73 @@ def test_results_empty_when_db_absent(creds, cfg_no_tls, tmp_path):
     assert payload["results"] == []
     assert payload["total_count"] == 0
     assert payload["total_pages"] == 1
+
+
+def test_result_details_smb_success(creds, cfg_no_tls, db_all_protocols):
+    c = _logged_in_client_for_db(creds, cfg_no_tls, db_all_protocols)
+    r = c.get("/api/results/details?host_type=S&protocol_server_id=1")
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["row_key"] == "S:1"
+    assert payload["host_type"] == "S"
+    assert payload["protocol"] == "SMB"
+    assert payload["ip_address"] == "10.0.0.10"
+    assert payload["overview"]["access_summary"] == "accessible=1, denied=1"
+    assert "Protocol: SMB" in payload["full_details_text"]
+    assert "Accessible Shares (1): Public" in payload["full_details_text"]
+
+
+def test_result_details_ftp_success(creds, cfg_no_tls, db_all_protocols):
+    c = _logged_in_client_for_db(creds, cfg_no_tls, db_all_protocols)
+    r = c.get("/api/results/details?host_type=F&protocol_server_id=1")
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["row_key"] == "F:1"
+    assert payload["host_type"] == "F"
+    assert payload["protocol"] == "FTP"
+    assert payload["overview"]["access_summary"] == "dirs=2, denied=0"
+    assert "Protocol: FTP" in payload["full_details_text"]
+    assert "Auth Status: anonymous" in payload["full_details_text"]
+
+
+def test_result_details_http_success(creds, cfg_no_tls, db_all_protocols):
+    c = _logged_in_client_for_db(creds, cfg_no_tls, db_all_protocols)
+    r = c.get("/api/results/details?host_type=H&protocol_server_id=1")
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["row_key"] == "H:1"
+    assert payload["host_type"] == "H"
+    assert payload["protocol"] == "HTTP"
+    assert payload["overview"]["access_summary"] == "dirs=1, files=1"
+    assert "Protocol: HTTP" in payload["full_details_text"]
+    assert "Status Code: 200" in payload["full_details_text"]
+
+
+def test_result_details_invalid_params_rejected(logged_in_client):
+    assert (
+        logged_in_client.get("/api/results/details?host_type=Z&protocol_server_id=1").status_code
+        == 400
+    )
+    assert (
+        logged_in_client.get("/api/results/details?host_type=S&protocol_server_id=abc").status_code
+        == 400
+    )
+    assert (
+        logged_in_client.get("/api/results/details?host_type=S&protocol_server_id=0").status_code
+        == 400
+    )
+
+
+def test_result_details_not_found_returns_404(creds, cfg_no_tls, db_all_protocols):
+    c = _logged_in_client_for_db(creds, cfg_no_tls, db_all_protocols)
+    r = c.get("/api/results/details?host_type=S&protocol_server_id=99")
+    assert r.status_code == 404
+
+
+def test_result_details_schema_fallback_without_optional_tables(logged_in_client):
+    r = logged_in_client.get("/api/results/details?host_type=S&protocol_server_id=1")
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["host_type"] == "S"
+    assert payload["overview"]["access_summary"] == "accessible=0, denied=0"
+    assert "Protocol: SMB" in payload["full_details_text"]

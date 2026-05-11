@@ -265,6 +265,37 @@ def create_app(
             request, "results.html", {"session": session, "active_page": "results"}
         )
 
+    @app.get("/api/results/details")
+    async def _get_result_details(
+        request: Request,
+        session: Session = Depends(get_session),
+        host_type: str = Query(...),
+        protocol_server_id: str = Query(...),
+    ) -> JSONResponse:
+        host = host_type.strip().upper()
+        if host not in {"S", "F", "H"}:
+            return JSONResponse({"error": "host_type must be one of S, F, H"}, status_code=400)
+        try:
+            server_id = int(protocol_server_id)
+        except (TypeError, ValueError):
+            return JSONResponse({"error": "protocol_server_id must be a positive integer"}, status_code=400)
+        if server_id <= 0:
+            return JSONResponse({"error": "protocol_server_id must be a positive integer"}, status_code=400)
+
+        db_path = request.app.state.db_path
+        try:
+            payload = _db.get_result_details(db_path, host, server_id)
+        except Exception:
+            logger.exception(
+                "results details query failed: host_type=%s protocol_server_id=%s",
+                host,
+                server_id,
+            )
+            return JSONResponse({"error": "database error"}, status_code=500)
+        if payload is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return JSONResponse(payload)
+
     @app.get("/api/results/{protocol}")
     async def _get_results(
         protocol: Literal["all", "smb", "ftp", "http"],
