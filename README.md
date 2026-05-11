@@ -493,6 +493,10 @@ For setup, configuration, remote mode, and security guidance, see [experimental/
 From the desktop app, use `Experimental -> Web UI` for inline service controls
 (`Start`, `Stop`, `Open in Browser`, `Copy URL`) with live status, including
 explicit startup-failure reasons when launch fails.
+The same tab also provides inline username/password credential setup (create or
+update) for Web UI login.
+In the Web UI scan page, `Run probe on verified hosts after scan` now applies to
+SMB, FTP, and HTTP using the shared protocol-aware probe pipeline.
 
 ---
 

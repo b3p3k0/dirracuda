@@ -47,13 +47,13 @@ Optional flags:
 | `--port` | `5480` | Override port |
 | `--config` | auto | Path to a specific `webui.json` |
 
-The desktop GUI also controls the service: `⚗ Experimental → Web UI` → Start/Stop/Open Browser. No terminal required.
+The desktop GUI also controls the service: `⚗ Experimental → Web UI` → set username/password credentials inline, then Start/Stop/Open Browser. No terminal required.
 
 ---
 
 ## What You Can Do
 
-**Scans** — submit and cancel SMB, FTP, or HTTP discovery runs. One scan runs at a time (same FIFO queue as the desktop GUI); the web UI uses the same CLI subprocess boundary.
+**Scans** — submit and cancel SMB, FTP, or HTTP discovery runs. One scan runs at a time (same FIFO queue as the desktop GUI); the web UI uses the same CLI subprocess boundary. The optional probe toggle runs a protocol-aware post-scan probe pass for SMB/FTP/HTTP verified hosts (not legacy SMB `--check-rce` wiring).
 
 **Results** — paginated host summaries per protocol with optional country filter. Share names, accessible directory counts, and HTTP access details are shown when the relevant tables exist in the DB — older databases degrade cleanly without errors.
 
