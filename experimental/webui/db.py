@@ -1,11 +1,12 @@
 """Read-only protocol host summaries and database export for the Web UI."""
 
+import json
 import re
 import secrets
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 _DEFAULT_DB_PATH = Path.home() / ".dirracuda" / "data" / "dirracuda.db"
 _EXPORT_DIR = Path.home() / ".dirracuda" / "exports"
@@ -376,6 +377,199 @@ def _country_display(country: object, country_code: object) -> str:
     if cc:
         return f"{c} ({cc})"
     return c
+
+
+def _safe_list(value: object) -> list:
+    if isinstance(value, list):
+        return value
+    if value is None:
+        return []
+    if isinstance(value, tuple):
+        return list(value)
+    return []
+
+
+def _normalize_snapshot_path(path_value: object) -> list[str]:
+    text = _clean_text(path_value).replace("\\", "/")
+    if not text:
+        return []
+    return [segment for segment in text.split("/") if segment and segment != "."]
+
+
+def _build_snapshot_tree(subdirectories: object, files: object) -> dict[str, Any]:
+    root: dict[str, Any] = {"dirs": {}, "files": []}
+
+    for raw_subdir in _safe_list(subdirectories):
+        segments = _normalize_snapshot_path(raw_subdir)
+        if not segments:
+            continue
+        node = root
+        for segment in segments:
+            child = node["dirs"].get(segment)
+            if child is None:
+                child = {"dirs": {}, "files": []}
+                node["dirs"][segment] = child
+            node = child
+
+    for raw_file in _safe_list(files):
+        segments = _normalize_snapshot_path(raw_file)
+        if not segments:
+            continue
+        *folder_segments, file_name = segments
+        node = root
+        for segment in folder_segments:
+            child = node["dirs"].get(segment)
+            if child is None:
+                child = {"dirs": {}, "files": []}
+                node["dirs"][segment] = child
+            node = child
+        if file_name not in node["files"]:
+            node["files"].append(file_name)
+
+    return root
+
+
+def _render_snapshot_tree(tree: dict[str, Any], lines: list[str], indent: int) -> int:
+    emitted = 0
+    prefix = " " * indent
+    for dir_name, child in tree["dirs"].items():
+        lines.append(f"{prefix}📁 {dir_name}/")
+        emitted += 1
+        emitted += _render_snapshot_tree(child, lines, indent + 3)
+    for file_name in tree["files"]:
+        lines.append(f"{prefix}• {file_name}")
+        emitted += 1
+    return emitted
+
+
+def _format_root_file_name(item: object) -> str:
+    if isinstance(item, str):
+        return item.strip()
+    if isinstance(item, dict):
+        return _clean_text(
+            item.get("name")
+            or item.get("file_name")
+            or item.get("file")
+        )
+    return _clean_text(item)
+
+
+def _latest_snapshot_id_for_host(
+    conn: sqlite3.Connection,
+    table_columns: dict[str, set[str]],
+    host_type: str,
+    server_id: int,
+) -> Optional[int]:
+    cache_table = {
+        "S": "host_probe_cache",
+        "F": "ftp_probe_cache",
+        "H": "http_probe_cache",
+    }.get(host_type)
+    if not cache_table:
+        return None
+    if not _table_has_columns(table_columns, cache_table, "server_id", "latest_snapshot_id"):
+        return None
+    row = conn.execute(
+        f"SELECT latest_snapshot_id FROM {cache_table} WHERE server_id = ? LIMIT 1",
+        [server_id],
+    ).fetchone()
+    if row is None or row["latest_snapshot_id"] is None:
+        return None
+    try:
+        return int(row["latest_snapshot_id"])
+    except (TypeError, ValueError):
+        return None
+
+
+def _load_probe_snapshot_payload(
+    conn: sqlite3.Connection,
+    table_columns: dict[str, set[str]],
+    host_type: str,
+    server_id: int,
+) -> Optional[dict]:
+    snapshot_id = _latest_snapshot_id_for_host(conn, table_columns, host_type, server_id)
+    if snapshot_id is None:
+        return None
+    if not _table_has_columns(table_columns, "probe_snapshots", "id", "raw_snapshot_json"):
+        return None
+
+    row = conn.execute(
+        "SELECT raw_snapshot_json FROM probe_snapshots WHERE id = ? LIMIT 1",
+        [snapshot_id],
+    ).fetchone()
+    if row is None or not row["raw_snapshot_json"]:
+        return None
+    try:
+        payload = json.loads(row["raw_snapshot_json"])
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _probe_tree_lines(
+    snapshot: Optional[dict],
+    *,
+    fallback_paths: str = "",
+) -> list[str]:
+    lines = ["Probe Snapshot Tree (stored):"]
+    if not isinstance(snapshot, dict):
+        lines.append("  (no stored tree available)")
+        if fallback_paths:
+            lines.append(f"  Fallback Paths: {fallback_paths}")
+        return lines
+
+    shares = _safe_list(snapshot.get("shares"))
+    if not shares:
+        lines.append("  (stored snapshot has no shares)")
+        if fallback_paths:
+            lines.append(f"  Fallback Paths: {fallback_paths}")
+        return lines
+
+    for idx, share in enumerate(shares, start=1):
+        if not isinstance(share, dict):
+            continue
+        share_name = _clean_text(share.get("share")) or f"share_{idx}"
+        lines.append(f"  Share: {share_name}")
+
+        root_files = []
+        for root_item in _safe_list(share.get("root_files")):
+            file_name = _format_root_file_name(root_item)
+            if file_name:
+                root_files.append(file_name)
+        if root_files:
+            lines.append("    Root files:")
+            for file_name in root_files:
+                lines.append(f"      • {file_name}")
+            if share.get("root_files_truncated"):
+                lines.append("      … additional root files not shown")
+
+        directories = _safe_list(share.get("directories"))
+        if not directories:
+            if not root_files:
+                lines.append("    (no directories returned)")
+            continue
+
+        for directory in directories:
+            if not isinstance(directory, dict):
+                continue
+            dir_name = _clean_text(directory.get("name")) or "(unnamed)"
+            lines.append(f"    📁 {dir_name}/")
+            tree = _build_snapshot_tree(
+                directory.get("subdirectories"),
+                directory.get("files"),
+            )
+            if _render_snapshot_tree(tree, lines, indent=7) == 0:
+                lines.append("       (no files or subdirectories listed)")
+            if directory.get("subdirectories_truncated"):
+                lines.append("       … additional subdirectories not shown")
+            if directory.get("files_truncated"):
+                lines.append("       … additional files not shown")
+        if share.get("directories_truncated"):
+            lines.append("    … additional directories not shown")
+
+    if fallback_paths:
+        lines.append(f"  Fallback Paths: {fallback_paths}")
+    return lines
 
 
 def _build_smb_arm(
@@ -882,6 +1076,14 @@ def _get_smb_detail(
 
     notes = _first_non_empty(data.get("user_notes"), data.get("server_notes"))
     access_summary = f"accessible={accessible_count}, denied={denied_count}"
+    snapshot = _load_probe_snapshot_payload(
+        conn,
+        table_columns,
+        "S",
+        _to_int(data.get("protocol_server_id")),
+    )
+    tree_fallback = ", ".join(accessible_names) if accessible_names else "(none)"
+    tree_lines = _probe_tree_lines(snapshot, fallback_paths=tree_fallback)
 
     full_lines = [
         "Protocol: SMB",
@@ -897,6 +1099,10 @@ def _get_smb_detail(
         f"Avoid: {'yes' if _to_int(data.get('avoid')) else 'no'}",
         f"Accessible Shares ({accessible_count}): {', '.join(accessible_names) or '(none)'}",
         f"Denied Shares ({denied_count}): {', '.join(denied_names) or '(none)'}",
+        "",
+        *tree_lines,
+        "",
+        "Probe Summary:",
         f"Probe Status: {_clean_text(data.get('probe_status')) or 'unprobed'}",
         f"Extracted: {'yes' if _to_int(data.get('extracted')) else 'no'}",
         f"Indicator Matches: {_to_int(data.get('indicator_matches'))}",
@@ -943,7 +1149,6 @@ def _get_ftp_latest_access(
             { "COALESCE(root_listing_available, 0)" if "root_listing_available" in cols else "0" } AS root_listing_available,
             { "COALESCE(root_entry_count, 0)" if "root_entry_count" in cols else "0" } AS root_entry_count,
             { "COALESCE(error_message, '')" if "error_message" in cols else "''" } AS error_message,
-            { "COALESCE(access_details, '')" if "access_details" in cols else "''" } AS access_details,
             { "COALESCE(test_timestamp, '')" if "test_timestamp" in cols else "''" } AS test_timestamp
         FROM ftp_access
         WHERE server_id = ?
@@ -1058,6 +1263,16 @@ def _get_ftp_detail(
     notes = _first_non_empty(data.get("user_notes"), data.get("server_notes"))
     dirs_count = _to_int(data.get("accessible_dirs_count"))
     access_summary = f"dirs={dirs_count}, denied=0"
+    snapshot = _load_probe_snapshot_payload(
+        conn,
+        table_columns,
+        "F",
+        _to_int(data.get("protocol_server_id")),
+    )
+    tree_lines = _probe_tree_lines(
+        snapshot,
+        fallback_paths=_clean_text(data.get("accessible_dirs_list")) or "(none)",
+    )
 
     full_lines = [
         "Protocol: FTP",
@@ -1073,12 +1288,17 @@ def _get_ftp_detail(
         f"Banner: {_clean_text(data.get('banner')) or '(none)'}",
         f"Favorite: {'yes' if _to_int(data.get('favorite')) else 'no'}",
         f"Avoid: {'yes' if _to_int(data.get('avoid')) else 'no'}",
+        "",
+        *tree_lines,
+        "",
+        "Probe Summary:",
         f"Probe Status: {_clean_text(data.get('probe_status')) or 'unprobed'}",
         f"Extracted: {'yes' if _to_int(data.get('extracted')) else 'no'}",
         f"Accessible Dirs ({dirs_count}): {_clean_text(data.get('accessible_dirs_list')) or '(none)'}",
         f"Indicator Matches: {_to_int(data.get('indicator_matches'))}",
         f"Indicator Samples: {_clean_text(data.get('indicator_samples')) or '(none)'}",
         f"Snapshot Path: {_clean_text(data.get('snapshot_path')) or '(none)'}",
+        "",
         f"Latest FTP Access: {'found' if access else 'none'}",
         f"  Accessible: {'yes' if _to_int(access.get('accessible')) else 'no'}",
         f"  Auth Status: {_clean_text(access.get('auth_status')) or '(none)'}",
@@ -1086,7 +1306,6 @@ def _get_ftp_detail(
         f"  Root Entry Count: {_to_int(access.get('root_entry_count'))}",
         f"  Test Timestamp: {_clean_text(access.get('test_timestamp')) or '(none)'}",
         f"  Error Message: {_clean_text(access.get('error_message')) or '(none)'}",
-        f"  Access Details: {_clean_text(access.get('access_details')) or '(none)'}",
         f"Notes: {notes or '(none)'}",
     ]
 
@@ -1130,7 +1349,6 @@ def _get_http_latest_access(
             { "COALESCE(file_count, 0)" if "file_count" in cols else "0" } AS file_count,
             { "COALESCE(tls_verified, 0)" if "tls_verified" in cols else "0" } AS tls_verified,
             { "COALESCE(error_message, '')" if "error_message" in cols else "''" } AS error_message,
-            { "COALESCE(access_details, '')" if "access_details" in cols else "''" } AS access_details,
             { "COALESCE(test_timestamp, '')" if "test_timestamp" in cols else "''" } AS test_timestamp
         FROM http_access
         WHERE server_id = ?
@@ -1256,6 +1474,16 @@ def _get_http_detail(
     dirs_count = _to_int(data.get("accessible_dirs_count"))
     files_count = _to_int(data.get("accessible_files_count"))
     access_summary = f"dirs={dirs_count}, files={files_count}"
+    snapshot = _load_probe_snapshot_payload(
+        conn,
+        table_columns,
+        "H",
+        _to_int(data.get("protocol_server_id")),
+    )
+    tree_lines = _probe_tree_lines(
+        snapshot,
+        fallback_paths=_clean_text(data.get("accessible_dirs_list")) or "(none)",
+    )
 
     full_lines = [
         "Protocol: HTTP",
@@ -1271,6 +1499,10 @@ def _get_http_detail(
         f"Banner: {_clean_text(data.get('banner')) or '(none)'}",
         f"Favorite: {'yes' if _to_int(data.get('favorite')) else 'no'}",
         f"Avoid: {'yes' if _to_int(data.get('avoid')) else 'no'}",
+        "",
+        *tree_lines,
+        "",
+        "Probe Summary:",
         f"Probe Status: {_clean_text(data.get('probe_status')) or 'unprobed'}",
         f"Extracted: {'yes' if _to_int(data.get('extracted')) else 'no'}",
         f"Accessible Dirs ({dirs_count}): {_clean_text(data.get('accessible_dirs_list')) or '(none)'}",
@@ -1278,6 +1510,7 @@ def _get_http_detail(
         f"Indicator Matches: {_to_int(data.get('indicator_matches'))}",
         f"Indicator Samples: {_clean_text(data.get('indicator_samples')) or '(none)'}",
         f"Snapshot Path: {_clean_text(data.get('snapshot_path')) or '(none)'}",
+        "",
         f"Latest HTTP Access: {'found' if access else 'none'}",
         f"  Accessible: {'yes' if _to_int(access.get('accessible')) else 'no'}",
         f"  Status Code: {_to_int(access.get('status_code')) or '(none)'}",
@@ -1287,7 +1520,6 @@ def _get_http_detail(
         f"  TLS Verified: {'yes' if _to_int(access.get('tls_verified')) else 'no'}",
         f"  Test Timestamp: {_clean_text(access.get('test_timestamp')) or '(none)'}",
         f"  Error Message: {_clean_text(access.get('error_message')) or '(none)'}",
-        f"  Access Details: {_clean_text(access.get('access_details')) or '(none)'}",
         f"Notes: {notes or '(none)'}",
     ]
 
@@ -1337,6 +1569,7 @@ def get_result_details(
             "host_probe_cache",
             "ftp_probe_cache",
             "http_probe_cache",
+            "probe_snapshots",
             "ftp_access",
             "http_access",
         ):

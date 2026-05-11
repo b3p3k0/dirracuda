@@ -114,7 +114,8 @@ def db_all_protocols(tmp_path):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             server_id INTEGER NOT NULL,
             status TEXT,
-            extracted INTEGER DEFAULT 0
+            extracted INTEGER DEFAULT 0,
+            latest_snapshot_id INTEGER
         );
         CREATE TABLE ftp_probe_cache (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -122,7 +123,8 @@ def db_all_protocols(tmp_path):
             status TEXT,
             extracted INTEGER DEFAULT 0,
             accessible_dirs_count INTEGER DEFAULT 0,
-            accessible_dirs_list TEXT
+            accessible_dirs_list TEXT,
+            latest_snapshot_id INTEGER
         );
         CREATE TABLE http_probe_cache (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -131,7 +133,12 @@ def db_all_protocols(tmp_path):
             extracted INTEGER DEFAULT 0,
             accessible_dirs_count INTEGER DEFAULT 0,
             accessible_files_count INTEGER DEFAULT 0,
-            accessible_dirs_list TEXT
+            accessible_dirs_list TEXT,
+            latest_snapshot_id INTEGER
+        );
+        CREATE TABLE probe_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            raw_snapshot_json TEXT NOT NULL
         );
         CREATE TABLE ftp_access (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -172,20 +179,27 @@ def db_all_protocols(tmp_path):
         INSERT INTO ftp_user_flags (server_id, favorite, avoid) VALUES (1, 0, 1);
         INSERT INTO http_user_flags (server_id, favorite, avoid) VALUES (1, 0, 0);
 
-        INSERT INTO host_probe_cache (server_id, status, extracted)
-        VALUES (1, 'clean', 0);
+        INSERT INTO probe_snapshots (raw_snapshot_json)
+        VALUES ('{"shares":[{"share":"Public","directories":[{"name":"pub","subdirectories":["docs"],"files":["docs/readme.txt","users.csv"]}],"root_files":["top.txt"]}]}');
+        INSERT INTO probe_snapshots (raw_snapshot_json)
+        VALUES ('{"shares":[{"share":"ftp_root","directories":[{"name":"pub","subdirectories":["docs"],"files":["docs/readme.txt","users.csv"]},{"name":"incoming","files":["drop.zip"]}]}]}');
+        INSERT INTO probe_snapshots (raw_snapshot_json)
+        VALUES ('{"shares":[{"share":"http_root","directories":[{"name":"/","subdirectories":["admin"],"files":["index.html","admin/panel.html"]}]}]}');
+
+        INSERT INTO host_probe_cache (server_id, status, extracted, latest_snapshot_id)
+        VALUES (1, 'clean', 0, 1);
         INSERT INTO ftp_probe_cache (
-            server_id, status, extracted, accessible_dirs_count, accessible_dirs_list
+            server_id, status, extracted, accessible_dirs_count, accessible_dirs_list, latest_snapshot_id
         )
-        VALUES (1, 'issue', 1, 2, 'pub,docs');
+        VALUES (1, 'issue', 1, 2, 'pub,docs', 2);
         INSERT INTO ftp_access (
             server_id, accessible, auth_status, root_listing_available, root_entry_count, access_details, test_timestamp
         )
         VALUES (1, 1, 'anonymous', 1, 4, '["pub","docs"]', '2026-05-10T14:20:30');
         INSERT INTO http_probe_cache (
-            server_id, status, extracted, accessible_dirs_count, accessible_files_count, accessible_dirs_list
+            server_id, status, extracted, accessible_dirs_count, accessible_files_count, accessible_dirs_list, latest_snapshot_id
         )
-        VALUES (1, 'unprobed', 0, 1, 1, '/,/admin');
+        VALUES (1, 'unprobed', 0, 1, 1, '/,/admin', 3);
         INSERT INTO http_access (
             server_id, accessible, status_code, is_index_page, dir_count, file_count, tls_verified, access_details, test_timestamp
         )
@@ -507,6 +521,9 @@ def test_result_details_smb_success(creds, cfg_no_tls, db_all_protocols):
     assert payload["overview"]["access_summary"] == "accessible=1, denied=1"
     assert "Protocol: SMB" in payload["full_details_text"]
     assert "Accessible Shares (1): Public" in payload["full_details_text"]
+    assert "Probe Snapshot Tree (stored):" in payload["full_details_text"]
+    assert "Share: Public" in payload["full_details_text"]
+    assert "📁 docs/" in payload["full_details_text"]
 
 
 def test_result_details_ftp_success(creds, cfg_no_tls, db_all_protocols):
@@ -519,7 +536,11 @@ def test_result_details_ftp_success(creds, cfg_no_tls, db_all_protocols):
     assert payload["protocol"] == "FTP"
     assert payload["overview"]["access_summary"] == "dirs=2, denied=0"
     assert "Protocol: FTP" in payload["full_details_text"]
+    assert "Probe Snapshot Tree (stored):" in payload["full_details_text"]
+    assert "Share: ftp_root" in payload["full_details_text"]
+    assert "📁 incoming/" in payload["full_details_text"]
     assert "Auth Status: anonymous" in payload["full_details_text"]
+    assert "Access Details:" not in payload["full_details_text"]
 
 
 def test_result_details_http_success(creds, cfg_no_tls, db_all_protocols):
@@ -532,7 +553,10 @@ def test_result_details_http_success(creds, cfg_no_tls, db_all_protocols):
     assert payload["protocol"] == "HTTP"
     assert payload["overview"]["access_summary"] == "dirs=1, files=1"
     assert "Protocol: HTTP" in payload["full_details_text"]
+    assert "Probe Snapshot Tree (stored):" in payload["full_details_text"]
+    assert "Share: http_root" in payload["full_details_text"]
     assert "Status Code: 200" in payload["full_details_text"]
+    assert "Access Details:" not in payload["full_details_text"]
 
 
 def test_result_details_invalid_params_rejected(logged_in_client):

@@ -255,7 +255,7 @@
     toggleBtn.type = 'button';
     toggleBtn.className = 'detail-toggle';
     toggleBtn.setAttribute('aria-expanded', 'false');
-    toggleBtn.textContent = 'Show full details \u25be';
+    toggleBtn.textContent = 'Show full details + probe tree \u25be';
     container.appendChild(toggleBtn);
 
     var fullWrap = document.createElement('div');
@@ -273,7 +273,11 @@
       var isOpen = !fullWrap.hidden;
       fullWrap.hidden = isOpen;
       toggleBtn.setAttribute('aria-expanded', isOpen ? 'false' : 'true');
-      toggleBtn.textContent = (isOpen ? 'Show full details \u25be' : 'Hide full details \u25b4');
+      toggleBtn.textContent = (
+        isOpen
+          ? 'Show full details + probe tree \u25be'
+          : 'Hide full details + probe tree \u25b4'
+      );
     });
   }
 
