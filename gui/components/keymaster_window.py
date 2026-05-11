@@ -10,12 +10,18 @@ import json
 import threading
 import time
 import tkinter as tk
-from tkinter import ttk
+from tkinter import simpledialog, ttk
 from pathlib import Path
 from typing import Any, Optional
 
 from experimental.keymaster import store as km_store
-from experimental.keymaster.models import PROVIDER_SHODAN, DuplicateKeyError
+from experimental.keymaster.models import (
+    PROVIDER_SHODAN,
+    DuplicateKeyError,
+    InvalidPassphraseError,
+    KeymasterLockedError,
+    PassphraseRequiredError,
+)
 from gui.utils import safe_messagebox as messagebox
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.style import get_theme
@@ -26,6 +32,7 @@ _WINDOW_SETTINGS_NAME = "keymaster"
 _DEFAULT_GEOMETRY = "860x480"
 _AUTO_CHECK_SETTING_KEY = "keymaster.auto_check_query_credits"
 MAX_BURST_CREDIT_CHECKS = 5
+_PASSPHRASE_PROMPT_MAX_ATTEMPTS = 2
 
 _COL_HEADERS = {
     "label": "Label",
@@ -315,6 +322,9 @@ class KeymasterWindow:
         self._credits_refresh_inflight = False
         self._credits_refresh_generation = 0
         self._total_saved_keys = 0
+        self._session_keys: Optional[dict[str, bytes]] = None
+        self._secure_mode_enabled = True
+        self._suppress_secure_toggle = False
 
         self._ensure_sidecar_ready()
         self.window = tk.Toplevel(parent)
@@ -325,6 +335,8 @@ class KeymasterWindow:
 
         self._restore_window_state()
         self._build_ui()
+        self._load_security_policy()
+        self._initialize_security_session()
         self._load_entries()
         self._schedule_startup_credit_refresh()
 
@@ -340,6 +352,316 @@ class KeymasterWindow:
 
     def _open_store_connection(self):
         return km_store.open_connection(self.db_path)
+
+    def _load_security_policy(self) -> None:
+        enabled = True
+        try:
+            with self._open_store_connection() as conn:
+                enabled = bool(km_store.secure_mode_enabled(conn))
+        except Exception:
+            enabled = True
+        self._secure_mode_enabled = enabled
+        self._suppress_secure_toggle = True
+        try:
+            self._secure_mode_var.set(enabled)
+        finally:
+            self._suppress_secure_toggle = False
+        self._refresh_security_controls()
+
+    def _refresh_security_controls(self) -> None:
+        if not hasattr(self, "_unlock_btn"):
+            return
+        if not self._secure_mode_enabled:
+            self._unlock_btn.configure(text="Unlock", state=tk.DISABLED)
+            self._reset_btn.configure(state=tk.DISABLED)
+            return
+
+        if self._session_keys:
+            self._unlock_btn.configure(text="Unlocked", state=tk.DISABLED)
+        else:
+            self._unlock_btn.configure(text="Unlock", state=tk.NORMAL)
+        self._reset_btn.configure(state=tk.NORMAL)
+
+    def _initialize_security_session(self) -> None:
+        if not self._secure_mode_enabled:
+            self._session_keys = None
+            self._refresh_security_controls()
+            self._status_var.set("Secure storage disabled (opt-out mode).")
+            return
+
+        try:
+            with self._open_store_connection() as conn:
+                configured = km_store.passphrase_is_configured(conn)
+        except Exception as exc:
+            self._status_var.set(f"Security setup error: {exc}")
+            self._session_keys = None
+            self._refresh_security_controls()
+            return
+
+        if not configured:
+            if not self._setup_initial_passphrase():
+                self._status_var.set("Secure storage is enabled. Configure a passphrase to unlock.")
+                self._session_keys = None
+                self._refresh_security_controls()
+                return
+        else:
+            if not self._unlock_session(startup=True):
+                self._status_var.set("Keymaster is locked. Use Unlock to continue.")
+                self._session_keys = None
+                self._refresh_security_controls()
+                return
+
+        self._refresh_security_controls()
+
+    def _ask_passphrase(self, *, title: str, prompt: str) -> Optional[str]:
+        return simpledialog.askstring(
+            title,
+            prompt,
+            show="*",
+            parent=self.window,
+        )
+
+    def _setup_initial_passphrase(self) -> bool:
+        for _ in range(_PASSPHRASE_PROMPT_MAX_ATTEMPTS):
+            first = self._ask_passphrase(
+                title="Set Keymaster Passphrase",
+                prompt="Create a dedicated Keymaster passphrase:",
+            )
+            if first is None:
+                return False
+            second = self._ask_passphrase(
+                title="Confirm Keymaster Passphrase",
+                prompt="Re-enter the Keymaster passphrase:",
+            )
+            if second is None:
+                return False
+            if first != second:
+                messagebox.showerror(
+                    "Passphrase Mismatch",
+                    "Passphrases did not match. Try again.",
+                    parent=self.window,
+                )
+                continue
+            try:
+                with self._open_store_connection() as conn:
+                    km_store.configure_passphrase(conn, first)
+                    self._session_keys = km_store.unlock_session_keys(conn, first)
+                    converted = km_store.migrate_legacy_plaintext_rows(
+                        conn,
+                        session_keys=self._session_keys,
+                    )
+                    conn.commit()
+            except Exception as exc:
+                messagebox.showerror(
+                    "Setup Failed",
+                    str(exc),
+                    parent=self.window,
+                )
+                self._session_keys = None
+                return False
+
+            if converted > 0:
+                self._status_var.set(f"Secure storage enabled. Migrated {converted} key(s).")
+            else:
+                self._status_var.set("Secure storage enabled.")
+            return True
+        return False
+
+    def _unlock_session(self, startup: bool = False) -> bool:
+        if not self._secure_mode_enabled:
+            self._session_keys = None
+            self._refresh_security_controls()
+            return True
+
+        for _ in range(_PASSPHRASE_PROMPT_MAX_ATTEMPTS):
+            value = self._ask_passphrase(
+                title="Unlock Keymaster",
+                prompt="Enter Keymaster passphrase:",
+            )
+            if value is None:
+                if not startup:
+                    self._status_var.set("Unlock cancelled.")
+                return False
+            try:
+                with self._open_store_connection() as conn:
+                    self._session_keys = km_store.unlock_session_keys(conn, value)
+                    converted = km_store.migrate_legacy_plaintext_rows(
+                        conn,
+                        session_keys=self._session_keys,
+                    )
+                    conn.commit()
+            except InvalidPassphraseError:
+                messagebox.showerror(
+                    "Unlock Failed",
+                    "Invalid passphrase.",
+                    parent=self.window,
+                )
+                continue
+            except Exception as exc:
+                messagebox.showerror(
+                    "Unlock Failed",
+                    str(exc),
+                    parent=self.window,
+                )
+                return False
+
+            self._load_entries()
+            self._refresh_security_controls()
+            if converted > 0:
+                self._status_var.set(f"Unlocked. Migrated {converted} legacy key(s).")
+            else:
+                self._status_var.set("Keymaster unlocked.")
+            return True
+
+        self._session_keys = None
+        self._refresh_security_controls()
+        return False
+
+    def _ensure_unlocked_for_sensitive_action(self) -> bool:
+        if not self._secure_mode_enabled:
+            return True
+        if self._session_keys:
+            return True
+        if self._unlock_session(startup=False):
+            return True
+        return False
+
+    def _on_forgot_passphrase_reset(self) -> None:
+        if not self._secure_mode_enabled:
+            self._status_var.set("Secure storage is disabled.")
+            return
+        if not messagebox.askyesno(
+            "Destructive Reset",
+            (
+                "This will permanently delete all stored Keymaster keys and reset the "
+                "passphrase metadata.\n\nContinue?"
+            ),
+            parent=self.window,
+        ):
+            return
+        try:
+            with self._open_store_connection() as conn:
+                km_store.destructive_reset(conn)
+                conn.commit()
+        except Exception as exc:
+            messagebox.showerror("Reset Failed", str(exc), parent=self.window)
+            return
+        self._session_keys = None
+        self._status_var.set("Keymaster reset complete. Configure a new passphrase.")
+        self._initialize_security_session()
+        self._load_entries()
+
+    def _on_secure_mode_toggled(self) -> None:
+        if self._suppress_secure_toggle:
+            return
+        requested = bool(self._secure_mode_var.get())
+        if requested == self._secure_mode_enabled:
+            return
+
+        # Disable secure mode (opt-out): preserve data by decrypting if needed.
+        if not requested:
+            if not messagebox.askyesno(
+                "Disable Secure Storage",
+                (
+                    "Disabling secure storage will keep keys in plaintext in the local sidecar DB.\n\n"
+                    "Continue?"
+                ),
+                parent=self.window,
+            ):
+                self._suppress_secure_toggle = True
+                try:
+                    self._secure_mode_var.set(True)
+                finally:
+                    self._suppress_secure_toggle = False
+                return
+            if not self._ensure_unlocked_for_sensitive_action():
+                self._suppress_secure_toggle = True
+                try:
+                    self._secure_mode_var.set(True)
+                finally:
+                    self._suppress_secure_toggle = False
+                return
+            try:
+                with self._open_store_connection() as conn:
+                    converted = km_store.switch_secure_mode(
+                        conn,
+                        False,
+                        session_keys=self._session_keys,
+                    )
+                    conn.commit()
+            except Exception as exc:
+                messagebox.showerror("Mode Change Failed", str(exc), parent=self.window)
+                self._suppress_secure_toggle = True
+                try:
+                    self._secure_mode_var.set(True)
+                finally:
+                    self._suppress_secure_toggle = False
+                return
+            self._secure_mode_enabled = False
+            self._session_keys = None
+            self._refresh_security_controls()
+            self._load_entries()
+            self._status_var.set(
+                f"Secure storage disabled. Converted {converted} key(s) to plaintext."
+            )
+            return
+
+        # Enable secure mode (default posture): require passphrase and convert.
+        try:
+            with self._open_store_connection() as conn:
+                configured = km_store.passphrase_is_configured(conn)
+        except Exception as exc:
+            messagebox.showerror("Mode Change Failed", str(exc), parent=self.window)
+            self._suppress_secure_toggle = True
+            try:
+                self._secure_mode_var.set(False)
+            finally:
+                self._suppress_secure_toggle = False
+            return
+
+        self._secure_mode_enabled = True
+        if not configured:
+            if not self._setup_initial_passphrase():
+                self._secure_mode_enabled = False
+                self._suppress_secure_toggle = True
+                try:
+                    self._secure_mode_var.set(False)
+                finally:
+                    self._suppress_secure_toggle = False
+                self._refresh_security_controls()
+                return
+        elif not self._ensure_unlocked_for_sensitive_action():
+            self._secure_mode_enabled = False
+            self._suppress_secure_toggle = True
+            try:
+                self._secure_mode_var.set(False)
+            finally:
+                self._suppress_secure_toggle = False
+            self._refresh_security_controls()
+            return
+
+        try:
+            with self._open_store_connection() as conn:
+                converted = km_store.switch_secure_mode(
+                    conn,
+                    True,
+                    session_keys=self._session_keys,
+                )
+                conn.commit()
+        except Exception as exc:
+            messagebox.showerror("Mode Change Failed", str(exc), parent=self.window)
+            self._secure_mode_enabled = False
+            self._suppress_secure_toggle = True
+            try:
+                self._secure_mode_var.set(False)
+            finally:
+                self._suppress_secure_toggle = False
+            self._refresh_security_controls()
+            return
+
+        self._refresh_security_controls()
+        self._load_entries()
+        self._status_var.set(f"Secure storage enabled. Converted {converted} key(s).")
 
     # ------------------------------------------------------------------
     # UI construction
@@ -372,6 +694,28 @@ class KeymasterWindow:
         self.theme.apply_to_widget(search_entry, "entry")
         search_entry.pack(side=tk.LEFT, padx=(6, 0))
         self._search_var.trace_add("write", lambda *_: self._load_entries())
+
+        self._secure_mode_var = tk.BooleanVar(value=True)
+        secure_mode_cb = tk.Checkbutton(
+            search_row,
+            text="Secure storage",
+            variable=self._secure_mode_var,
+        )
+        self.theme.apply_to_widget(secure_mode_cb, "checkbox")
+        secure_mode_cb.pack(side=tk.RIGHT, padx=(6, 0))
+        self._secure_mode_var.trace_add("write", lambda *_: self._on_secure_mode_toggled())
+
+        self._unlock_btn = tk.Button(search_row, text="Unlock", command=self._unlock_session)
+        self.theme.apply_to_widget(self._unlock_btn, "button_secondary")
+        self._unlock_btn.pack(side=tk.RIGHT, padx=(6, 0))
+
+        self._reset_btn = tk.Button(
+            search_row,
+            text="Forgot Passphrase / Reset",
+            command=self._on_forgot_passphrase_reset,
+        )
+        self.theme.apply_to_widget(self._reset_btn, "button_secondary")
+        self._reset_btn.pack(side=tk.RIGHT, padx=(6, 0))
 
         self._auto_check_var = tk.BooleanVar(value=self._read_auto_check_setting())
         auto_check_cb = tk.Checkbutton(
@@ -462,9 +806,19 @@ class KeymasterWindow:
 
         try:
             with self._open_store_connection() as conn:
-                rows = km_store.list_keys(conn, PROVIDER_SHODAN, search_text=search_text)
+                rows = km_store.list_keys(
+                    conn,
+                    PROVIDER_SHODAN,
+                    search_text=search_text,
+                    session_keys=self._session_keys,
+                )
                 if search_text.strip():
-                    all_rows = km_store.list_keys(conn, PROVIDER_SHODAN, search_text="")
+                    all_rows = km_store.list_keys(
+                        conn,
+                        PROVIDER_SHODAN,
+                        search_text="",
+                        session_keys=self._session_keys,
+                    )
                     self._total_saved_keys = len(all_rows)
                 else:
                     self._total_saved_keys = len(rows)
@@ -477,7 +831,10 @@ class KeymasterWindow:
         for row in rows:
             iid = str(row["key_id"])
             key_id = int(row["key_id"])
-            preview = _mask_key(row["api_key"])
+            if bool(row.get("is_decrypted")):
+                preview = _mask_key(str(row.get("api_key") or ""))
+            else:
+                preview = "Locked"
             last_used = str(row["last_used_at"] or "")
             credits = self._query_credit_by_key_id.get(
                 key_id,
@@ -491,7 +848,11 @@ class KeymasterWindow:
             )
             self._row_by_iid[iid] = row
 
-        if search_text.strip():
+        if self._secure_mode_enabled and not self._session_keys:
+            self._status_var.set(
+                f"Keymaster is locked. {len(rows)} key(s) loaded. Use Unlock to continue."
+            )
+        elif search_text.strip():
             self._status_var.set(f"{len(rows)} key(s) match search.")
         elif rows:
             self._status_var.set(f"{len(rows)} key(s).")
@@ -508,7 +869,8 @@ class KeymasterWindow:
         return self._row_by_iid.get(iid)
 
     def _set_action_state(self, row: Optional[dict]) -> None:
-        state = tk.NORMAL if row is not None else tk.DISABLED
+        unlocked_for_sensitive = (not self._secure_mode_enabled) or bool(self._session_keys)
+        state = tk.NORMAL if (row is not None and unlocked_for_sensitive) else tk.DISABLED
         self._apply_btn.configure(state=state)
         self._edit_btn.configure(state=state)
         self._delete_btn.configure(state=state)
@@ -533,14 +895,28 @@ class KeymasterWindow:
         )
         if row is not None:
             selected_state = tk.NORMAL if not self._credits_refresh_inflight else tk.DISABLED
+            unlocked_for_sensitive = (not self._secure_mode_enabled) or bool(self._session_keys)
+            action_state = tk.NORMAL if unlocked_for_sensitive else tk.DISABLED
             self._context_menu.add_command(
                 label="Recheck Selected",
                 command=self._on_recheck_selected,
                 state=selected_state,
             )
-            self._context_menu.add_command(label="Apply", command=self._apply_selected_key)
-            self._context_menu.add_command(label="Edit", command=self._on_edit)
-            self._context_menu.add_command(label="Delete", command=self._on_delete)
+            self._context_menu.add_command(
+                label="Apply",
+                command=self._apply_selected_key,
+                state=action_state,
+            )
+            self._context_menu.add_command(
+                label="Edit",
+                command=self._on_edit,
+                state=action_state,
+            )
+            self._context_menu.add_command(
+                label="Delete",
+                command=self._on_delete,
+                state=action_state,
+            )
 
     def _on_right_click(self, event) -> None:
         row_iid = self._tree.identify_row(event.y)
@@ -579,6 +955,9 @@ class KeymasterWindow:
     # ------------------------------------------------------------------
 
     def _on_add(self) -> None:
+        if not self._ensure_unlocked_for_sensitive_action():
+            self._status_var.set("Unlock required before adding keys.")
+            return
         dialog = _KeyEditorDialog(self.window, self.theme, title="Add API Key")
         payload = dialog.show()
         if payload is None:
@@ -591,10 +970,14 @@ class KeymasterWindow:
                     payload["label"],
                     payload["api_key"],
                     payload.get("notes"),
+                    session_keys=self._session_keys,
                 )
                 conn.commit()
         except DuplicateKeyError as exc:
             messagebox.showerror("Duplicate Key", str(exc), parent=self.window)
+            return
+        except (PassphraseRequiredError, KeymasterLockedError) as exc:
+            messagebox.showerror("Add Failed", str(exc), parent=self.window)
             return
         except Exception as exc:
             messagebox.showerror("Add Failed", str(exc), parent=self.window)
@@ -602,6 +985,9 @@ class KeymasterWindow:
         self._load_entries()
 
     def _on_edit(self) -> None:
+        if not self._ensure_unlocked_for_sensitive_action():
+            self._status_var.set("Unlock required before editing keys.")
+            return
         row = self._selected_row()
         if row is None:
             return
@@ -624,10 +1010,14 @@ class KeymasterWindow:
                     payload["label"],
                     payload["api_key"],
                     payload.get("notes"),
+                    session_keys=self._session_keys,
                 )
                 conn.commit()
         except DuplicateKeyError as exc:
             messagebox.showerror("Duplicate Key", str(exc), parent=self.window)
+            return
+        except (PassphraseRequiredError, KeymasterLockedError) as exc:
+            messagebox.showerror("Edit Failed", str(exc), parent=self.window)
             return
         except Exception as exc:
             messagebox.showerror("Edit Failed", str(exc), parent=self.window)
@@ -635,6 +1025,9 @@ class KeymasterWindow:
         self._load_entries()
 
     def _on_delete(self) -> None:
+        if not self._ensure_unlocked_for_sensitive_action():
+            self._status_var.set("Unlock required before deleting keys.")
+            return
         row = self._selected_row()
         if row is None:
             return
@@ -749,7 +1142,12 @@ class KeymasterWindow:
     def _rows_for_credit_refresh(self, *, only_key_ids: Optional[set[int]] = None) -> list[dict]:
         """Load all keys for provider, independent of search/filter state."""
         with self._open_store_connection() as conn:
-            rows = km_store.list_keys(conn, PROVIDER_SHODAN, search_text="")
+            rows = km_store.list_keys(
+                conn,
+                PROVIDER_SHODAN,
+                search_text="",
+                session_keys=self._session_keys,
+            )
         if only_key_ids:
             filtered = []
             for row in rows:
@@ -773,6 +1171,14 @@ class KeymasterWindow:
             if user_initiated:
                 self._status_var.set("Query credit check already in progress.")
             return
+        if self._secure_mode_enabled and not self._session_keys:
+            if user_initiated:
+                if not self._ensure_unlocked_for_sensitive_action():
+                    self._status_var.set("Unlock required before checking query credits.")
+                    return
+            else:
+                self._status_var.set("Auto check skipped: Keymaster is locked.")
+                return
 
         try:
             rows = self._rows_for_credit_refresh(only_key_ids=only_key_ids)
@@ -903,7 +1309,7 @@ class KeymasterWindow:
         self._status_var.set(f"Updated query credits for {len(results)} key(s).")
 
     # ------------------------------------------------------------------
-    # Apply (stub — full implementation in C3)
+    # Apply
     # ------------------------------------------------------------------
 
     def _resolve_active_config_path(self) -> Optional[Path]:
@@ -929,6 +1335,16 @@ class KeymasterWindow:
         row = self._selected_row()
         if row is None:
             messagebox.showwarning("No Selection", "Select a key to apply.", parent=self.window)
+            return
+        if not self._ensure_unlocked_for_sensitive_action():
+            self._status_var.set("Unlock required before applying keys.")
+            return
+        if not str(row.get("api_key") or "").strip():
+            messagebox.showerror(
+                "Apply Failed",
+                "Selected key is unavailable while Keymaster is locked.",
+                parent=self.window,
+            )
             return
 
         config_path = self._resolve_active_config_path()

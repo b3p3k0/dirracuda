@@ -16,6 +16,11 @@ Status: initial seed; append during implementation
 9. Treat external key-health checks as background work; never block the Tk thread for network calls.
 10. Never include raw API key values in UI status, errors, or logs.
 11. For multi-key API checks, add pacing/retry handling and a per-item retry action to reduce false errors from transient throttling.
+12. Secure-mode default changes must be reflected in tests immediately; old plaintext assumptions will fail silently until CRUD paths are exercised.
+13. In secure mode, always pass session key material into store CRUD/list operations or encrypted rows will appear empty and downstream flows (apply/check) will misbehave.
+14. Duplicate detection can stay deterministic without plaintext by storing a keyed fingerprint and enforcing uniqueness on that stable lookup value.
+15. Legacy plaintext migration must be guarded by live schema/runtime checks and run only after verified unlock so data conversion is deterministic and recoverable.
+16. Forgotten-passphrase handling should remain destructive-only unless a true recovery mechanism exists; half-recovery flows create false safety assumptions.
 
 ## Known Risks
 

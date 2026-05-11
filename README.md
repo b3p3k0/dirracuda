@@ -457,13 +457,15 @@ Behavior:
 
 ![keymaster](img/keymaster.png)
 
-Keymaster stores reusable Shodan API keys for rapid key rotation during testing or billing management etc.
+Keymaster stores reusable Shodan API keys for rapid key rotation during testing.
 
 Quick start:
 1. Dashboard → `⚗ Experimental` → `Keymaster` tab.
 2. Click `Open Keymaster`.
-3. Add one or more keys with a label, API key, and optional notes.
-4. Select a key and click `Apply` (or double-click the row, or use the right-click menu).
+3. On first secure-mode use, set a dedicated Keymaster passphrase.
+4. Unlock once per app session.
+5. Add one or more keys with a label, API key, and optional notes.
+6. Select a key and click `Apply` (or double-click the row, or use the right-click menu).
 
 What Apply does:
 - Writes the selected key to `shodan.api_key` in the active config file.
@@ -471,11 +473,16 @@ What Apply does:
 
 Sidecar DB path: `~/.dirracuda/data/experimental/keymaster.db`
 
-Key table columns: `Label`, `Key Preview`, `Notes`, `Last Used`.
+Storage behavior:
+- Secure storage is enabled by default.
+- Key material is encrypted at rest in Keymaster sidecar storage.
+- Existing legacy plaintext rows are auto-migrated on successful unlock/setup.
+- If you disable secure storage in the Keymaster window, existing encrypted rows are converted back to plaintext in the sidecar DB.
+- `Forgot Passphrase / Reset` is destructive by design: it clears Keymaster rows and passphrase metadata so secure mode can be reinitialized.
+
+Key table columns: `Label`, `Key Preview`, `Query Credits`, `Notes`, `Last Used`.
 
 Key Preview format: keys longer than 8 characters show as `first4 + asterisks + last4`; shorter keys are fully masked.
-
-API key input is masked in Add/Edit dialogs to avoid shoulder surfing, **BUT IS STORED IN CLEAR TEXT LOCALLY.** This should be a non-risk (if an attacker can read the unencrypted string in your local home dir, you probably have bigger issues...) but I would be remiss not to point it out.
 
 ## Advanced
 

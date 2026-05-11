@@ -1037,6 +1037,15 @@ Dashboard -> Experimental tab -> Open Keymaster
   -> singleton modeless window (focus existing on repeated open)
 ```
 
+Keymaster secure-storage behavior:
+
+- Secure storage policy defaults to enabled and is persisted in sidecar metadata.
+- First secure-mode run requires a dedicated Keymaster passphrase setup.
+- Successful unlock derives per-session keys and unlocks once for the app session.
+- Legacy plaintext sidecar rows are migrated in place after successful setup/unlock.
+- `Forgot Passphrase / Reset` is intentionally destructive: it clears stored rows plus passphrase metadata, then reinitializes secure mode.
+- Explicit secure-mode opt-out is available in-window; opt-out converts encrypted rows back to plaintext for compatibility with the selected policy.
+
 Apply operation (double-click row, context menu Apply, or Apply button):
 
 ```text
@@ -1054,6 +1063,16 @@ Config path resolution order:
 Key table columns: `Label`, `Key Preview`, `Query Credits`, `Notes`, `Last Used`.
 
 Key Preview format: keys longer than 8 characters show as `first4 + asterisks + last4`; shorter keys are fully masked.
+
+Keymaster sidecar schema (`experimental/keymaster/store.py`) includes:
+
+- `keymaster_keys` row metadata plus encrypted-at-rest fields (`key_ciphertext`, `key_fingerprint`, `is_encrypted`)
+- `keymaster_meta` policy/KDF metadata (secure-mode flag, KDF algorithm settings, salt, verifier)
+
+Runtime state guards:
+
+- Schema/column/index checks run on sidecar open; failures raise explicit runtime errors.
+- Secure-mode CRUD/apply/query-credit operations require unlocked session material.
 
 Add/Edit modal: Label, API Key (masked entry; no reveal toggle in v1), Notes.
 

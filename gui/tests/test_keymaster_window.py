@@ -11,7 +11,7 @@ import json
 import sys
 import types
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -46,7 +46,7 @@ from gui.components.keymaster_window import (
     _classify_query_credit_error,
     _is_retryable_query_credit_error,
 )
-from experimental.keymaster.models import PROVIDER_SHODAN
+from experimental.keymaster.models import InvalidPassphraseError, PROVIDER_SHODAN
 
 
 # ---------------------------------------------------------------------------
@@ -107,7 +107,36 @@ def _make_window(monkeypatch, *, db_path=None, config_path=None, settings_manage
     win._total_saved_keys = 0
     win._auto_check_var = MagicMock()
     win._auto_check_var.get.return_value = True
+    win._session_keys = None
+    win._secure_mode_enabled = False
+    win._suppress_secure_toggle = False
     return win
+
+
+def _set_plaintext_mode(db_path: Path) -> None:
+    from experimental.keymaster import store as km_store
+
+    with km_store.open_connection(db_path) as conn:
+        km_store.set_secure_mode(conn, False)
+        conn.commit()
+
+
+def _seed_secure_key(db_path: Path, *, passphrase: str = "window-test-passphrase") -> int:
+    from experimental.keymaster import store as km_store
+
+    with km_store.open_connection(db_path) as conn:
+        km_store.configure_passphrase(conn, passphrase)
+        session_keys = km_store.unlock_session_keys(conn, passphrase)
+        key_id = km_store.create_key(
+            conn,
+            PROVIDER_SHODAN,
+            "Secure Label",
+            "SECUREKEY",
+            "",
+            session_keys=session_keys,
+        )
+        conn.commit()
+    return int(key_id)
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +147,7 @@ def test_add_calls_create_key(monkeypatch, tmp_path):
     db_path = tmp_path / "km.db"
     from experimental.keymaster import store as km_store
     km_store.init_db(db_path)
+    _set_plaintext_mode(db_path)
 
     win = _make_window(monkeypatch, db_path=db_path)
     win._load_entries = MagicMock()
@@ -142,6 +172,7 @@ def test_delete_calls_delete_key(monkeypatch, tmp_path):
     db_path = tmp_path / "km.db"
     from experimental.keymaster import store as km_store
     km_store.init_db(db_path)
+    _set_plaintext_mode(db_path)
     with km_store.open_connection(db_path) as conn:
         key_id = km_store.create_key(conn, PROVIDER_SHODAN, "Label", "key001", "")
         conn.commit()
@@ -168,6 +199,7 @@ def test_edit_calls_update_key(monkeypatch, tmp_path):
     db_path = tmp_path / "km.db"
     from experimental.keymaster import store as km_store
     km_store.init_db(db_path)
+    _set_plaintext_mode(db_path)
     with km_store.open_connection(db_path) as conn:
         key_id = km_store.create_key(conn, PROVIDER_SHODAN, "Old", "key001", "")
         conn.commit()
@@ -192,6 +224,25 @@ def test_edit_calls_update_key(monkeypatch, tmp_path):
         row = km_store.get_key(conn, key_id)
     assert row["label"] == "New"
     assert row["notes"] == "updated"
+
+
+def test_add_requires_unlock_when_secure_mode_enabled(monkeypatch):
+    win = _make_window(monkeypatch)
+    win._secure_mode_enabled = True
+    win._session_keys = None
+    win._status_var = MagicMock()
+    win._ensure_unlocked_for_sensitive_action = MagicMock(return_value=False)
+
+    dialog_calls = []
+    monkeypatch.setattr(
+        "gui.components.keymaster_window._KeyEditorDialog",
+        lambda *a, **kw: dialog_calls.append((a, kw)),
+    )
+
+    win._on_add()
+
+    assert dialog_calls == []
+    assert win._status_var.set.call_args_list[-1].args[0] == "Unlock required before adding keys."
 
 
 # ---------------------------------------------------------------------------
@@ -234,6 +285,7 @@ def test_apply_writes_shodan_api_key_to_config(monkeypatch, tmp_path):
     db_path = tmp_path / "km.db"
     from experimental.keymaster import store as km_store
     km_store.init_db(db_path)
+    _set_plaintext_mode(db_path)
     with km_store.open_connection(db_path) as conn:
         key_id = km_store.create_key(conn, PROVIDER_SHODAN, "Label", "NEWKEY", "")
         conn.commit()
@@ -256,6 +308,7 @@ def test_apply_preserves_other_config_keys(monkeypatch, tmp_path):
     db_path = tmp_path / "km.db"
     from experimental.keymaster import store as km_store
     km_store.init_db(db_path)
+    _set_plaintext_mode(db_path)
     with km_store.open_connection(db_path) as conn:
         key_id = km_store.create_key(conn, PROVIDER_SHODAN, "Label", "NEWKEY", "")
         conn.commit()
@@ -301,6 +354,7 @@ def test_apply_shodan_non_dict_overwritten_safely(monkeypatch, tmp_path):
     db_path = tmp_path / "km.db"
     from experimental.keymaster import store as km_store
     km_store.init_db(db_path)
+    _set_plaintext_mode(db_path)
     with km_store.open_connection(db_path) as conn:
         key_id = km_store.create_key(conn, PROVIDER_SHODAN, "Label", "NEWKEY", "")
         conn.commit()
@@ -540,6 +594,37 @@ def test_start_query_credits_refresh_no_rows_user_initiated(monkeypatch):
     win._status_var.set.assert_called_with("No keys to check.")
 
 
+def test_start_query_credits_refresh_user_initiated_requires_unlock(monkeypatch):
+    win = _make_window(monkeypatch)
+    win._secure_mode_enabled = True
+    win._session_keys = None
+    win._status_var = MagicMock()
+    win._rows_for_credit_refresh = MagicMock(return_value=[{"key_id": 1, "api_key": "K1"}])
+    win._ensure_unlocked_for_sensitive_action = MagicMock(return_value=False)
+
+    win._start_query_credits_refresh(user_initiated=True)
+
+    win._rows_for_credit_refresh.assert_not_called()
+    assert (
+        win._status_var.set.call_args_list[-1].args[0]
+        == "Unlock required before checking query credits."
+    )
+
+
+def test_start_query_credits_refresh_startup_skips_when_locked(monkeypatch):
+    win = _make_window(monkeypatch)
+    win._secure_mode_enabled = True
+    win._session_keys = None
+    win._status_var = MagicMock()
+    win._rows_for_credit_refresh = MagicMock(return_value=[{"key_id": 1, "api_key": "K1"}])
+    win._ensure_unlocked_for_sensitive_action = MagicMock(return_value=False)
+
+    win._start_query_credits_refresh(user_initiated=False, startup=True)
+
+    win._rows_for_credit_refresh.assert_not_called()
+    assert win._status_var.set.call_args_list[-1].args[0] == "Auto check skipped: Keymaster is locked."
+
+
 def test_start_query_credits_refresh_sets_checking_and_updates_results(monkeypatch):
     win = _make_window(monkeypatch)
     rows = [
@@ -629,6 +714,7 @@ def test_rows_for_credit_refresh_uses_unfiltered_lookup(monkeypatch, tmp_path):
     from experimental.keymaster import store as km_store
 
     km_store.init_db(db_path)
+    _set_plaintext_mode(db_path)
     with km_store.open_connection(db_path) as conn:
         km_store.create_key(conn, PROVIDER_SHODAN, "One", "KEY_ONE", "")
         km_store.create_key(conn, PROVIDER_SHODAN, "Two", "KEY_TWO", "")
@@ -645,6 +731,7 @@ def test_rows_for_credit_refresh_filters_selected_key_ids(monkeypatch, tmp_path)
     from experimental.keymaster import store as km_store
 
     km_store.init_db(db_path)
+    _set_plaintext_mode(db_path)
     with km_store.open_connection(db_path) as conn:
         id_one = km_store.create_key(conn, PROVIDER_SHODAN, "One", "KEY_ONE", "")
         id_two = km_store.create_key(conn, PROVIDER_SHODAN, "Two", "KEY_TWO", "")
@@ -662,6 +749,7 @@ def test_load_entries_shows_not_checked_when_missing_credit(monkeypatch, tmp_pat
     from experimental.keymaster import store as km_store
 
     km_store.init_db(db_path)
+    _set_plaintext_mode(db_path)
     with km_store.open_connection(db_path) as conn:
         km_store.create_key(conn, PROVIDER_SHODAN, "One", "KEY_ONE", "")
         conn.commit()
@@ -676,6 +764,28 @@ def test_load_entries_shows_not_checked_when_missing_credit(monkeypatch, tmp_pat
     _, kwargs = win._tree.insert.call_args
     values = kwargs["values"]
     assert values[2] == _QUERY_CREDITS_NOT_CHECKED
+
+
+def test_load_entries_shows_locked_preview_when_secure_session_missing(monkeypatch, tmp_path):
+    db_path = tmp_path / "km.db"
+    from experimental.keymaster import store as km_store
+
+    km_store.init_db(db_path)
+    _seed_secure_key(db_path)
+
+    win = _make_window(monkeypatch, db_path=db_path)
+    win._secure_mode_enabled = True
+    win._session_keys = None
+    win._search_var.get.return_value = ""
+    win._tree.get_children.return_value = ()
+    win._tree.insert = MagicMock()
+
+    win._load_entries()
+
+    _, kwargs = win._tree.insert.call_args
+    values = kwargs["values"]
+    assert values[1] == "Locked"
+    assert "Keymaster is locked." in win._status_var.set.call_args_list[-1].args[0]
 
 
 def test_on_recheck_selected_without_selection_sets_status(monkeypatch):
@@ -769,6 +879,110 @@ def test_auto_check_toggle_persists_setting(monkeypatch):
 
     sm.set_setting.assert_called_with(_AUTO_CHECK_SETTING_KEY, False)
     assert win._status_var.set.call_args_list[-1].args[0] == "Auto check disabled."
+
+
+def test_unlock_session_retries_after_invalid_passphrase(monkeypatch, tmp_path):
+    db_path = tmp_path / "km.db"
+    from experimental.keymaster import store as km_store
+
+    km_store.init_db(db_path)
+    with km_store.open_connection(db_path) as conn:
+        km_store.configure_passphrase(conn, "correct-pass")
+        conn.commit()
+
+    win = _make_window(monkeypatch, db_path=db_path)
+    win._secure_mode_enabled = True
+    win._session_keys = None
+    win._load_entries = MagicMock()
+    win._ask_passphrase = MagicMock(side_effect=["wrong-pass", "correct-pass"])
+
+    errors = []
+    monkeypatch.setattr(
+        "gui.components.keymaster_window.messagebox.showerror",
+        lambda *a, **kw: errors.append((a, kw)),
+    )
+
+    ok = win._unlock_session(startup=False)
+
+    assert ok is True
+    assert win._session_keys is not None
+    assert win._ask_passphrase.call_count == 2
+    assert len(errors) == 1
+    assert "Invalid passphrase." in errors[0][0][1]
+
+
+def test_forgot_passphrase_reset_clears_sidecar_and_reinitializes(monkeypatch, tmp_path):
+    db_path = tmp_path / "km.db"
+    from experimental.keymaster import store as km_store
+
+    km_store.init_db(db_path)
+    _seed_secure_key(db_path, passphrase="reset-pass")
+
+    win = _make_window(monkeypatch, db_path=db_path)
+    win._secure_mode_enabled = True
+    win._session_keys = {"encryption_key": b"x" * 32, "fingerprint_key": b"y" * 32}
+    win._initialize_security_session = MagicMock()
+    win._load_entries = MagicMock()
+    win._status_var = MagicMock()
+
+    monkeypatch.setattr(
+        "gui.components.keymaster_window.messagebox.askyesno",
+        lambda *a, **kw: True,
+    )
+
+    win._on_forgot_passphrase_reset()
+
+    with km_store.open_connection(db_path) as conn:
+        count = conn.execute("SELECT COUNT(*) AS n FROM keymaster_keys").fetchone()["n"]
+        configured = km_store.passphrase_is_configured(conn)
+        secure_enabled = km_store.secure_mode_enabled(conn)
+
+    assert int(count) == 0
+    assert configured is False
+    assert secure_enabled is True
+    assert win._session_keys is None
+    win._initialize_security_session.assert_called_once()
+    win._load_entries.assert_called_once()
+
+
+def test_secure_mode_toggle_disable_converts_and_clears_session(monkeypatch, tmp_path):
+    db_path = tmp_path / "km.db"
+    from experimental.keymaster import store as km_store
+
+    km_store.init_db(db_path)
+    _seed_secure_key(db_path, passphrase="toggle-pass")
+    with km_store.open_connection(db_path) as conn:
+        unlocked = km_store.unlock_session_keys(conn, "toggle-pass")
+
+    win = _make_window(monkeypatch, db_path=db_path)
+    win._secure_mode_enabled = True
+    win._session_keys = unlocked
+    win._status_var = MagicMock()
+    win._load_entries = MagicMock()
+    win._secure_mode_var = MagicMock()
+    win._secure_mode_var.get.return_value = False
+
+    monkeypatch.setattr(
+        "gui.components.keymaster_window.messagebox.askyesno",
+        lambda *a, **kw: True,
+    )
+
+    win._on_secure_mode_toggled()
+
+    with km_store.open_connection(db_path) as conn:
+        secure_enabled = km_store.secure_mode_enabled(conn)
+        encrypted = km_store.encrypted_row_count(conn)
+        row = conn.execute(
+            "SELECT api_key FROM keymaster_keys LIMIT 1",
+        ).fetchone()
+
+    assert secure_enabled is False
+    assert encrypted == 0
+    assert row is not None
+    assert str(row["api_key"] or "") == "SECUREKEY"
+    assert win._secure_mode_enabled is False
+    assert win._session_keys is None
+    win._load_entries.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
