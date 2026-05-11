@@ -646,7 +646,7 @@ def get_results_table_rows(
     protocol: str,
     page: int,
     page_size: int,
-    country: Optional[str],
+    search: Optional[str],
     shares_only: bool = False,
     favorites_only: bool = False,
     hide_avoid: bool = False,
@@ -678,19 +678,19 @@ def get_results_table_rows(
         params: list = []
 
         if protocol in ("all", "smb"):
-            smb_sql, smb_params = _build_smb_arm(table_columns, country)
+            smb_sql, smb_params = _build_smb_arm(table_columns, None)
             if smb_sql:
                 arms.append(smb_sql)
                 params.extend(smb_params)
 
         if protocol in ("all", "ftp"):
-            ftp_sql, ftp_params = _build_ftp_arm(table_columns, country)
+            ftp_sql, ftp_params = _build_ftp_arm(table_columns, None)
             if ftp_sql:
                 arms.append(ftp_sql)
                 params.extend(ftp_params)
 
         if protocol in ("all", "http"):
-            http_sql, http_params = _build_http_arm(table_columns, country)
+            http_sql, http_params = _build_http_arm(table_columns, None)
             if http_sql:
                 arms.append(http_sql)
                 params.extend(http_params)
@@ -706,6 +706,15 @@ def get_results_table_rows(
             filter_clauses.append("COALESCE(favorite, 0) = 1")
         if hide_avoid:
             filter_clauses.append("COALESCE(avoid, 0) != 1")
+        search_norm = (search or "").strip().lower()
+        if search_norm:
+            filter_clauses.append(
+                "("
+                "instr(lower(COALESCE(ip_address, '')), ?) > 0 "
+                "OR instr(lower(COALESCE(accessible_shares_list, '')), ?) > 0"
+                ")"
+            )
+            params.extend([search_norm, search_norm])
         filter_sql = f"WHERE {' AND '.join(filter_clauses)}" if filter_clauses else ""
 
         count_sql = f"SELECT COUNT(*) AS total_count FROM ({union_sql}) _u {filter_sql}"

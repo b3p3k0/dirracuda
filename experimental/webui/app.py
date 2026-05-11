@@ -321,13 +321,18 @@ def create_app(
         session: Session = Depends(get_session),
         page: int = Query(default=1),
         page_size: int = Query(default=_db._PAGE_SIZE_DEFAULT),
-        country: Optional[str] = Query(default=None),
+        search: Optional[str] = Query(default=None),
         shares_only: bool = Query(default=False),
         favorites_only: bool = Query(default=False),
         hide_avoid: bool = Query(default=False),
     ) -> JSONResponse:
+        if "country" in request.query_params:
+            return JSONResponse(
+                {"error": "country filter has been removed; use search instead"},
+                status_code=400,
+            )
         try:
-            p, ps, c = _db._validate_bounds(page, page_size, country)
+            p, ps, _ = _db._validate_bounds(page, page_size, None)
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         db_path = request.app.state.db_path
@@ -337,7 +342,7 @@ def create_app(
                 protocol,
                 p,
                 ps,
-                c,
+                search,
                 shares_only=shares_only,
                 favorites_only=favorites_only,
                 hide_avoid=hide_avoid,

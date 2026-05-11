@@ -12,8 +12,8 @@
 </nav>
 
 <div class="filter-bar">
-  <label for="country-filter">Country:</label>
-  <input id="country-filter" type="text" maxlength="2" placeholder="US" aria-label="Two-letter country filter">
+  <label for="search-filter">Search:</label>
+  <input id="search-filter" type="text" placeholder="Search IP or shares" aria-label="Search IP or shares">
   <label>
     <input id="shares-only-filter" type="checkbox">
     Show Only Shares &gt; 0
@@ -337,7 +337,7 @@
   }
 
   function loadResults() {
-    var country = document.getElementById('country-filter').value.trim().toUpperCase();
+    var search = document.getElementById('search-filter').value.trim();
     var sharesOnly = document.getElementById('shares-only-filter').checked;
     var favoritesOnly = document.getElementById('favorites-only-filter').checked;
     var hideAvoid = document.getElementById('hide-avoid-filter').checked;
@@ -346,7 +346,7 @@
       '&shares_only=' + (sharesOnly ? 'true' : 'false') +
       '&favorites_only=' + (favoritesOnly ? 'true' : 'false') +
       '&hide_avoid=' + (hideAvoid ? 'true' : 'false');
-    if (country) url += '&country=' + encodeURIComponent(country);
+    if (search) url += '&search=' + encodeURIComponent(search);
 
     var tbody = document.getElementById('results-body');
     closeOpenDetail();
@@ -403,6 +403,13 @@
   document.getElementById('load-btn').addEventListener('click', function() {
     currentPage = 1;
     loadResults();
+  });
+  document.getElementById('search-filter').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      currentPage = 1;
+      loadResults();
+    }
   });
 
   document.getElementById('first-btn').addEventListener('click', function() {

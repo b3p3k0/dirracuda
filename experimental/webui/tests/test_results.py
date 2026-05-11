@@ -244,9 +244,15 @@ def test_results_page_defaults_to_all_and_autoload(logged_in_client):
 def test_results_page_renders_filter_controls(logged_in_client):
     r = logged_in_client.get("/results")
     assert r.status_code == 200
+    assert 'id="search-filter"' in r.text
+    assert "Search IP or shares" in r.text
     assert "Show Only Shares &gt; 0" in r.text
     assert "Favorites Only" in r.text
     assert "Hide Avoid" in r.text
+    assert "country-filter" not in r.text
+    assert "&search=" in r.text
+    assert "&country=" not in r.text
+    assert "search-filter').addEventListener('keydown'" in r.text
     m = re.search(r"writeSection\('results', \{([^}]*)\}\);", r.text, re.S)
     assert m is not None
     body = m.group(1)
@@ -269,14 +275,10 @@ def test_pagination_bounds_rejected(logged_in_client):
     assert logged_in_client.get("/api/results/all?page_size=201").status_code == 400
 
 
-def test_country_validation_rejected(logged_in_client):
-    assert logged_in_client.get("/api/results/all?country=1A").status_code == 400
-    assert logged_in_client.get("/api/results/all?country=USA").status_code == 400
-
-
-def test_country_sql_injection_rejected(logged_in_client):
-    r = logged_in_client.get("/api/results/all?country='; DROP TABLE smb_servers; --")
+def test_legacy_country_filter_rejected(logged_in_client):
+    r = logged_in_client.get("/api/results/all?country=US")
     assert r.status_code == 400
+    assert "country filter has been removed" in r.json()["error"]
 
 
 def test_all_protocol_results_mixed_rows_and_metadata(creds, cfg_no_tls, db_all_protocols):
@@ -357,22 +359,49 @@ def test_protocol_filter_rows_match_host_type(creds, cfg_no_tls, db_all_protocol
     assert http_rows[0]["host_type"] == "H"
 
 
-def test_country_filter_on_all_protocols(creds, cfg_no_tls, db_all_protocols):
+def test_search_by_ip_substring_on_all_protocols(creds, cfg_no_tls, db_all_protocols):
     c = _logged_in_client_for_db(creds, cfg_no_tls, db_all_protocols)
-    r = c.get("/api/results/all?country=DE")
+    r = c.get("/api/results/all?search=10.0.0.20")
     assert r.status_code == 200
     rows = r.json()["results"]
     assert len(rows) == 1
     assert rows[0]["host_type"] == "F"
-    assert rows[0]["country"] == "Germany"
+    assert rows[0]["ip_address"] == "10.0.0.20"
 
 
-def test_country_filter_lowercase_normalized(logged_in_client):
-    r = logged_in_client.get("/api/results/all?country=us")
+def test_search_by_accessible_share_substring_case_insensitive(
+    creds, cfg_no_tls, db_all_protocols
+):
+    c = _logged_in_client_for_db(creds, cfg_no_tls, db_all_protocols)
+    r = c.get("/api/results/all?search=PUB")
     assert r.status_code == 200
     rows = r.json()["results"]
-    assert len(rows) == 1
-    assert rows[0]["country"] == "United States"
+    assert len(rows) == 2
+    assert [row["host_type"] for row in rows] == ["S", "F"]
+    assert rows[0]["accessible_shares_list"] == "Public"
+    assert rows[1]["accessible_shares_list"] == "pub,docs"
+
+
+def test_search_no_match_returns_empty_with_metadata(creds, cfg_no_tls, db_all_protocols):
+    c = _logged_in_client_for_db(creds, cfg_no_tls, db_all_protocols)
+    r = c.get("/api/results/all?search=does-not-exist")
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["results"] == []
+    assert payload["total_count"] == 0
+    assert payload["total_pages"] == 1
+    assert payload["page"] == 1
+    assert payload["page_size"] == 50
+
+
+def test_search_protocol_scoped_filters_by_protocol_and_search(
+    creds, cfg_no_tls, db_all_protocols
+):
+    c = _logged_in_client_for_db(creds, cfg_no_tls, db_all_protocols)
+    r = c.get("/api/results/smb?search=10.0.0.2")
+    assert r.status_code == 200
+    rows = r.json()["results"]
+    assert rows == []
 
 
 def test_shares_only_filter_excludes_zero_share_rows(logged_in_client):
