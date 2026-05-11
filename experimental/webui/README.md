@@ -1,12 +1,14 @@
 # Web UI
 
-An optional browser-based companion to the desktop GUI. Run scans, browse results, and export the database from any machine on your network without opening Tkinter. **Experimental — v1 scope only.**
+Optional browser companion to the desktop app for scan control, results review, export, and Web UI configuration.
+
+Status: active experimental feature (current implementation under `experimental/webui`).
 
 ---
 
 ## Prerequisites
 
-Web UI dependencies are separate from the main install to avoid bloating the default runtime:
+Install Web UI dependencies separately from the main desktop install:
 
 ```bash
 pip install -r experimental/webui/requirements-web.txt
@@ -16,133 +18,159 @@ Packages: `fastapi`, `uvicorn`, `jinja2`, `httpx`.
 
 ---
 
-## First-Time Credential Setup
+## Quick Start
 
-There's no setup wizard yet. Run this once from your venv to create a login:
+1. Create credentials (choose one path):
 
-```bash
-./venv/bin/python -c "
+   - Desktop: `Experimental -> Web UI -> Manage Credentials`
+   - CLI helper:
+
+   ```bash
+   ./venv/bin/python -c "
 from experimental.webui.auth import set_password
 set_password('admin', 'your_password_here')
 "
-```
+   ```
 
-Credentials are hashed (PBKDF2-HMAC-SHA256, 600k iterations) and stored in `~/.dirracuda/conf/webui_creds.json` with permissions `0600`. Run the same command again to change a password or add more users.
-
----
-
-## Starting the Server
+2. Start server:
 
 ```bash
 ./venv/bin/python -m experimental.webui.server
 ```
 
-Default: binds to `127.0.0.1:5480`. Open `http://127.0.0.1:5480` and log in.
+3. Open `http://127.0.0.1:5480` and log in.
 
-Optional flags:
+Default bind: `127.0.0.1:5480`.
+
+### Optional startup flags
 
 | Flag | Default | Notes |
 |------|---------|-------|
-| `--host` | `127.0.0.1` | Override bind address |
-| `--port` | `5480` | Override port |
-| `--config` | auto | Path to a specific `webui.json` |
-
-The desktop GUI also controls the service: `⚗ Experimental → Web UI` exposes `Manage Credentials`, `WebUI Config` (with `Save` and `Save & Restart`), and Start/Stop/Open Browser controls. No terminal required.
+| `--host` | from config (`127.0.0.1`) | Bind override, re-validated at startup |
+| `--port` | from config (`5480`) | Port override, re-validated at startup |
+| `--config` | default webui config path | Load/save a specific `webui.json` |
 
 ---
 
-## What You Can Do
+## Desktop Control Surface
 
-**Dashboard** — shows service mode/URL, queue state, and Shodan query-credit status. Balance lookup is server-side only (the API key is never exposed to the browser). Dashboard balance uses manual refresh plus a short 150-second server cache; failures are shown with sanitized reason labels only.
+From the desktop app: `Experimental -> Web UI`
 
-**Scans** — submit and cancel SMB, FTP, or HTTP discovery runs. One scan runs at a time (same FIFO queue as the desktop GUI); the web UI uses the same CLI subprocess boundary. Web UI SMB runs default to legacy mode (`--legacy`) so SMB1-capable targets are included. The scan form’s max-results value is passed through and enforced via per-task query-limit overrides. The optional probe toggle runs a protocol-aware post-scan probe pass for SMB/FTP/HTTP verified hosts. With explicit user opt-in, non-sensitive scan form toggles are remembered in this browser via `localStorage`.
+Available controls:
 
-**Results** — paginated host summaries per protocol with desktop-style search (case-insensitive substring match on IP address and accessible-shares text) plus row filters. Click any host row to expand an inline details accordion directly under that row: a compact overview appears first, and a nested **Show full details** toggle reveals a read-only scroll box (10 lines) with captured protocol-specific detail text and notes. Share names, accessible directory counts, and HTTP access details are shown when the relevant tables exist in the DB — older databases degrade cleanly without errors. The page updates on demand using **Refresh** (no automatic background refresh). With explicit user opt-in, non-sensitive results toggles and selected protocol are remembered in this browser via `localStorage`.
+- Service status (`Running` / `Stopped` / `Failed: ...`)
+- Start / Stop / Open in Browser / Copy URL
+- `Manage Credentials` dialog
+- `WebUI Config` dialog with `Save` and `Save & Restart`
 
-**Export** — creates a clean, defragmented SQLite copy (`VACUUM INTO`) and downloads it. Exports land in `~/.dirracuda/exports/` with a timestamped filename. The download endpoint only serves files matching that naming pattern.
+---
 
-**Configuration** — view and save web UI settings at `/config` without restarting. CSRF-protected.
+## Feature Overview
 
-**Not in v1:** file browser, DB import/merge, file manifests, API token auth. See [Known Limitations](#known-limitations).
+### Dashboard (`/dashboard`)
+
+- Service mode and URL summary
+- Queue snapshot (active + queued tasks)
+- Shodan query-credit status
+
+Shodan balance is fetched server-side only. The API key is never sent to the browser. Balance checks are manual-refresh with a 150-second server cache and sanitized failure reasons.
+
+### Scans (`/scans`)
+
+- Queue SMB / FTP / HTTP scan tasks (single active task, FIFO queue)
+- Per-task max-results is enforced (`max_shodan_results`)
+- SMB scans run in legacy mode by default (includes SMB1-capable targets)
+- Optional protocol-aware post-scan probe pass (SMB / FTP / HTTP)
+- Task progress, status polling, and cancel support
+
+### Results (`/results`)
+
+- Default protocol view is `ALL` and loads on page open
+- Search is desktop-style: case-insensitive substring match on IP and accessible-share text
+- Row filters:
+  - `Show Only Shares > 0`
+  - `Favorites Only`
+  - `Hide Avoid`
+- Manual refresh model (`Refresh` button), no auto-refresh
+- Pagination controls: First / Prev / Next / Last / Jump to
+- Row click opens inline details accordion:
+  - compact overview + read-only notes
+  - nested full-details scrollbox (`Show full details + probe tree`)
+  - includes stored probe snapshot tree when present
+  - falls back gracefully on older DB schemas
+
+### Export (`/api/export`)
+
+- Creates a clean DB copy using `VACUUM INTO`
+- Writes artifacts to `~/.dirracuda/exports/`
+- Download endpoint serves only generated export filenames (allowlist + directory containment checks)
+
+### Config (`/config`)
+
+- Edit Web UI bind, remote mode, TLS, allowlist, and session timeouts
+- Includes browser preference storage controls (enable / disable / clear)
+- Config save is CSRF-protected
+- **Changes take effect on restart**
+
+---
+
+## Configuration
+
+Config file: `~/.dirracuda/conf/webui.json`
+
+If the file is absent, safe in-memory defaults are used. The file is created when config is explicitly saved.
+
+Key fields:
+
+- `bind_address`, `port`
+- `remote_enabled`
+- `allowed_cidrs`
+- `session_timeout_idle`, `session_timeout_absolute` (seconds)
+- `tls.enabled`, `tls.cert_file`, `tls.key_file`, `tls.allow_insecure_remote`
 
 ---
 
 ## Localhost vs Remote Mode
 
-### Localhost (default)
+### Localhost mode (default)
 
-Binds to `127.0.0.1`. TLS is optional — the server starts plain HTTP when no cert is configured. This is the only mode that permits TLS disabled without an additional flag.
+- Loopback bind (`127.0.0.1` or `::1`)
+- TLS may be disabled
 
 ### Remote mode
 
-Requires all three conditions in `~/.dirracuda/conf/webui.json`:
+Non-loopback bind requires:
 
-```json
-{
-  "bind_address": "0.0.0.0",
-  "remote_enabled": true,
-  "allowed_cidrs": ["10.0.0.0/8"],
-  "tls": {
-    "enabled": true,
-    "cert_file": "/path/to/cert.pem",
-    "key_file": "/path/to/key.pem"
-  }
-}
-```
+- `remote_enabled=true`
+- non-empty `allowed_cidrs`
+- TLS configured with cert/key, **or** explicit insecure override (`tls.allow_insecure_remote=true`)
 
-To run remote without TLS (not recommended), add `"allow_insecure_remote": true` inside the `tls` block. You'll get a startup warning.
+Startup fails fast on unsafe combinations (no silent downgrade).
 
-**Startup hard-fails** on unsafe combinations: non-loopback bind without `remote_enabled`, empty `allowed_cidrs`, or TLS enabled without cert/key files. No silent fallback — if the config is wrong, the server exits with an explicit error.
+### Allowlist behavior
+
+Allowlist checks run as HTTP middleware only when `remote_enabled=true`.
+
+The check uses `request.client.host` (TCP peer as seen by Uvicorn). If you run behind a reverse proxy, configure trusted forwarded headers correctly, or allowlist behavior will be wrong.
 
 ---
 
-## Configuration Reference
+## Security Notes
 
-Config file: `~/.dirracuda/conf/webui.json`. Not created until you save from `/config` — safe defaults are used in the meantime.
-
-| Key | Type | Default | Valid range |
-|-----|------|---------|-------------|
-| `bind_address` | string | `"127.0.0.1"` | Any valid IP |
-| `port` | int | `5480` | 1–65535 |
-| `remote_enabled` | bool | `false` | Required `true` for non-loopback bind |
-| `allowed_cidrs` | list | `["127.0.0.1/32", "::1/128"]` | Required when `remote_enabled=true` |
-| `session_timeout_idle` | int (sec) | `1800` | 300–14400 (5 min–4 hr) |
-| `session_timeout_absolute` | int (sec) | `28800` | 3600–86400 (1–24 hr) |
-| `tls.enabled` | bool | `true` | `false` allowed for localhost only |
-| `tls.cert_file` | string | `""` | Required if TLS enabled |
-| `tls.key_file` | string | `""` | Required if TLS enabled |
-| `tls.allow_insecure_remote` | bool | `false` | Permits non-loopback HTTP |
-
----
-
-## Security Considerations
-
-**Sessions are in-memory.** Restarting the server logs everyone out. There's no persistent session store in v1.
-
-**Preference persistence is browser-local only.** Optional UI preference memory uses `localStorage` keys (`dirracuda_pref_consent_v1`, `dirracuda_pref_data_v1`), not cookies. Only allowlisted non-sensitive toggles/selectors are stored, never credentials, CSRF/session tokens, or free-text filter fields. Users can enable/disable/clear from `/config`.
-
-**TLS cert rotation requires a restart.** Cert and key files are read once at startup.
-
-**The allowlist is IP-based.** No DNS resolution. On networks where source IPs can be spoofed, this is not a strong control on its own.
-
-**Export files persist on disk.** `~/.dirracuda/exports/` accumulates full database copies until you clean them up manually.
-
-**Password hashing uses PBKDF2-HMAC-SHA256** (stdlib, 600k iterations). Argon2id would be stronger but adds a dependency — tracked as a future option if the dep is acceptable.
-
-**Run as a normal user, not root.** Config and credential files are `0600`; running as root negates that.
-
-This is experimental software. Don't expose it to untrusted networks without reviewing the setup and understanding what you're opening up.
+- Credentials are hashed with PBKDF2-HMAC-SHA256 (600k iterations) and stored at `~/.dirracuda/conf/webui_creds.json` (`0600` permissions).
+- Session cookies are HttpOnly + SameSite=Strict; session store is in-memory.
+- CSRF checks are enforced on mutating routes.
+- Shodan key handling stays server-side only.
+- Browser preference persistence uses `localStorage` (not cookies), opt-in only, and stores allowlisted non-sensitive toggles/selectors only.
+- Export files are full DB copies and persist on disk until manually cleaned up.
 
 ---
 
 ## Known Limitations
 
-These are intentional v1 scope cuts, not bugs awaiting fixes:
-
-- No in-browser file explorer or target file downloads
-- No database import or merge from the web UI
-- No API token authentication — session cookies only
-- No systemd unit — process management is on you
-- Single-task scan queue — one scan runs at a time
-- Sessions lost on server restart — no persistent session store
-- TLS cert rotation requires a restart
+- No in-browser file explorer or target file download workflows
+- No web-based DB import/merge
+- No token-based API auth (session-cookie auth only)
+- Single active scan task at a time
+- Sessions are lost on server restart
+- No automatic results/dashboard refresh polling
