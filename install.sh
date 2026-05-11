@@ -40,6 +40,7 @@ echo "    [5] Set launcher permissions"
 echo "    [6] Configure your Shodan API key       (optional)"
 echo "    [7] Import an existing database         (optional)"
 echo "    [8] ClamAV antivirus / RAM quarantine   (optional)"
+echo "    [9] Web UI setup                       (optional)"
 echo
 
 pause
@@ -64,6 +65,8 @@ source "$SCRIPT_DIR/scripts/install_scripts/step6_shodan.sh"
 source "$SCRIPT_DIR/scripts/install_scripts/step7_db_import.sh"
 # shellcheck source=scripts/install_scripts/step8_clamav.sh
 source "$SCRIPT_DIR/scripts/install_scripts/step8_clamav.sh"
+# shellcheck source=scripts/install_scripts/step9_webui.sh
+source "$SCRIPT_DIR/scripts/install_scripts/step9_webui.sh"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Post-install summary
