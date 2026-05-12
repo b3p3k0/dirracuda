@@ -122,7 +122,6 @@ def dispatch_probe_run(
     shares: Optional[List[str]] = None,
     username=_UNSET,
     password=_UNSET,
-    enable_rce: bool = False,
     allow_empty: bool = False,
 ) -> Dict[str, Any]:
     """Dispatch a probe run to the correct protocol runner.
@@ -211,7 +210,6 @@ def dispatch_probe_run(
         "max_directories": max_directories,
         "max_files": max_files,
         "timeout_seconds": timeout_seconds,
-        "enable_rce_analysis": enable_rce,
         "cancel_event": cancel_event,
         "allow_empty": allow_empty,
         "db_accessor": db_reader,

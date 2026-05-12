@@ -101,7 +101,6 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self.db_reader = db_reader
         self.theme = get_theme()
         self.window_data = window_data or {}
-        self._rce_unlocked = bool(self.window_data.get("_rce_unlocked", False))
         self.settings_manager = settings_manager
         self.on_database_changed = on_database_changed
         self.probe_status_map = {}
@@ -541,7 +540,6 @@ class ServerListWindow(ServerListWindowActionsMixin):
             self.window,
             self.theme,
             table_callbacks,
-            show_rce_column=self._rce_unlocked,
         )
 
         self._create_context_menu(self.tree)
@@ -1157,8 +1155,6 @@ class ServerListWindow(ServerListWindowActionsMixin):
             probe_callback=self._launch_probe_from_detail,
             extract_callback=self._launch_extract_from_detail,
             browse_callback=self._launch_browse_from_detail,
-            rce_status_callback=self._handle_rce_status_update,
-            show_rce_controls=self._rce_unlocked,
         )
 
     def _notify_database_changed(self) -> None:

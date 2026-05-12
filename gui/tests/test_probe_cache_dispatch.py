@@ -403,7 +403,7 @@ def test_dispatch_smb_explicit_creds_forwarded():
 
 
 def test_dispatch_smb_kwargs_forwarding():
-    """SMB: allow_empty, enable_rce_analysis, db_accessor, cancel_event forwarded correctly."""
+    """SMB: allow_empty, db_accessor, cancel_event forwarded correctly."""
     cancel = _threading.Event()
     db_mock = _MagicMock()
     with patch("gui.utils.probe_cache_dispatch.probe_runner") as pr_m:
@@ -416,12 +416,10 @@ def test_dispatch_smb_kwargs_forwarding():
             cancel_event=cancel,
             max_depth=3,
             shares=["share1"],
-            enable_rce=True,
             allow_empty=True,
             db_reader=db_mock,
         )
     kw = pr_m.run_probe.call_args.kwargs
-    assert kw["enable_rce_analysis"] is True
     assert kw["allow_empty"] is True
     assert kw["db_accessor"] is db_mock
     assert kw["cancel_event"] is cancel

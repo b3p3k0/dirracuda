@@ -12,24 +12,7 @@ from datetime import datetime
 from typing import Dict, List, Any, Callable, Optional, Tuple
 import re
 
-# RCE status emoji/text mappings
-RCE_STATUS_EMOJI = {
-    "not_run": "⭘",
-    "clean": "✓",
-    "flagged": "✖",
-    "unknown": "?",
-    "error": "⚠",
-}
-
-RCE_STATUS_TEXT = {
-    "not_run": "Not analyzed",
-    "clean": "No vulnerabilities found",
-    "flagged": "Potential vulnerability detected",
-    "unknown": "Assessment inconclusive",
-    "error": "Analysis failed",
-}
-
-def create_server_table(parent, theme, callbacks, show_rce_column: bool = True):
+def create_server_table(parent, theme, callbacks):
     """
     Create server data table with scrollbars.
 
@@ -37,7 +20,6 @@ def create_server_table(parent, theme, callbacks, show_rce_column: bool = True):
         parent: Parent widget for the table
         theme: Theme object for styling
         callbacks: Dict of callback functions for table events
-        show_rce_column: Whether to display the RCE status column
 
     Returns:
         tuple: (table_frame, tree_widget, scrollbar_v, scrollbar_h)
@@ -46,12 +28,11 @@ def create_server_table(parent, theme, callbacks, show_rce_column: bool = True):
     table_frame = tk.Frame(parent)
     theme.apply_to_widget(table_frame, "main_window")
 
-    # Define columns - updated for enhanced share tracking with favorites, avoid, and RCE
+    # Define columns - updated for enhanced share tracking with favorites and avoid
     columns = (
         "favorite",
         "avoid",
         "probe",
-        "rce",
         "extracted",
         "Type",
         "IP Address",
@@ -66,17 +47,16 @@ def create_server_table(parent, theme, callbacks, show_rce_column: bool = True):
     tree = ttk.Treeview(
         table_frame,
         columns=columns,
-        displaycolumns=columns if show_rce_column else tuple(col for col in columns if col != "rce"),
+        displaycolumns=columns,
         show="tree headings",
         selectmode="extended"
     )
 
-    # Configure columns - optimized dimensions for enhanced share tracking with favorites, avoid, and RCE
+    # Configure columns - optimized dimensions for enhanced share tracking with favorites and avoid
     tree.column("#0", width=0, stretch=False)  # Hide tree column
     tree.column("favorite", width=80, anchor="center")  # Favorite star column
     tree.column("avoid", width=55, anchor="center")  # Avoid skull column
     tree.column("probe", width=65, anchor="center")
-    tree.column("rce", width=40 if show_rce_column else 0, anchor="center", stretch=show_rce_column)  # RCE status column
     tree.column("extracted", width=85, anchor="center")
     tree.column("Type", width=40, anchor="center")  # Protocol type: S or F
     tree.column("IP Address", width=135, anchor="w")
@@ -91,7 +71,6 @@ def create_server_table(parent, theme, callbacks, show_rce_column: bool = True):
         "favorite": "Favorite",
         "avoid": "Avoid",
         "probe": "Probed",
-        "rce": "RCE",
         "extracted": "Extracted",
         "Type": "Type",
     }
@@ -186,7 +165,6 @@ def update_table_display(tree, filtered_servers: List[Dict[str, Any]], settings_
         avoid_icon    = "✖" if server.get("avoid", 0)    else "○"
 
         probe_emoji = server.get("probe_status_emoji", "⚪")
-        rce_emoji = server.get("rce_status_emoji", "⭘")
         extracted_emoji = server.get("extract_status_emoji", "○")
 
         # Insert row — iid is the row_key so selection/lookups are protocol-aware
@@ -194,7 +172,7 @@ def update_table_display(tree, filtered_servers: List[Dict[str, Any]], settings_
             "",
             "end",
             iid=row_key,
-            values=(favorite_icon, avoid_icon, probe_emoji, rce_emoji, extracted_emoji,
+            values=(favorite_icon, avoid_icon, probe_emoji, extracted_emoji,
                     host_type, ip_addr, shares_count, accessible_shares, denied_count, last_seen, country)
         )
 

@@ -480,14 +480,6 @@ def execute_batch_probe(dash, servers: List[Dict[str, Any]]) -> List[Dict[str, A
     timeout_seconds = int(dash.settings_manager.get_setting('probe.share_timeout_seconds', 10))
     max_depth = int(dash.settings_manager.get_setting('probe.max_depth_levels', 1))
     max_depth = max(1, min(3, max_depth))
-    enable_rce = bool(
-        (dash.current_scan_options or {}).get(
-            "rce_enabled",
-            dash.settings_manager.get_setting('scan_dialog.rce_enabled', False)
-        )
-    )
-    if not bool(getattr(dash, "_rce_unlocked", True)):
-        enable_rce = False
 
     results: List[Dict[str, Any]] = []
     cancel_event = _d("threading").Event()
@@ -573,7 +565,6 @@ def execute_batch_probe(dash, servers: List[Dict[str, Any]]) -> List[Dict[str, A
                         max_files,
                         timeout_seconds,
                         max_depth,
-                        enable_rce,
                         cancel_event
                     ): server for server in servers
                 }
@@ -681,7 +672,6 @@ def probe_single_server(
     max_files: int,
     timeout_seconds: int,
     max_depth: int = 1,
-    enable_rce: bool = False,
     cancel_event: Optional[threading.Event] = None,
 ) -> Dict[str, Any]:
     """Probe a single server (SMB, FTP, or HTTP)."""
@@ -882,7 +872,6 @@ def probe_single_server(
             shares=shares,
             username=username,
             password=password,
-            enable_rce=enable_rce,
             allow_empty=True,
             db_reader=dash.db_reader,
         )
@@ -913,7 +902,7 @@ def probe_single_server(
             "protocol": protocol_label,
             "action": "probe",
             "status": "success",
-            "notes": dash._build_probe_notes(len(shares), enable_rce, issue_detected, analysis, result)
+            "notes": dash._build_probe_notes(len(shares), issue_detected, analysis, result)
         }
     except Exception as e:
         status = "cancelled" if "cancel" in str(e).lower() else "failed"
@@ -937,7 +926,6 @@ def protocol_label_for_result(dash, result: Dict[str, Any]) -> str:
 def build_probe_notes(
     dash,
     share_count: int,
-    enable_rce: bool,
     issue_detected: bool,
     analysis: Dict[str, Any],
     result: Dict[str, Any],
@@ -947,14 +935,6 @@ def build_probe_notes(
         notes.append(f"{share_count} share(s)")
     else:
         notes.append("No accessible shares")
-
-    if enable_rce and result.get("rce_analysis"):
-        rce_status = result["rce_analysis"].get("rce_status", "not_run")
-        notes.append(f"RCE: {rce_status}")
-        try:
-            dash._handle_rce_status_update(result.get("ip_address") or "", rce_status)
-        except Exception:
-            pass
 
     if issue_detected:
         match_count = len(analysis.get("matches", [])) if isinstance(analysis, dict) else 0

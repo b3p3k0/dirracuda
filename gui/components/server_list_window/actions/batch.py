@@ -49,10 +49,6 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
     def _start_batch_job(self, job_type: str, targets: List[Dict[str, Any]], options: Dict[str, Any]) -> None:
         if not targets:
             return
-        rce_unlocked = bool(getattr(self, "_rce_unlocked", False))
-        if job_type == "probe" and not rce_unlocked and bool((options or {}).get("enable_rce", False)):
-            options = {**(options or {}), "enable_rce": False}
-
         # Enforce max concurrent jobs
         if len(self.active_jobs) >= 3:
             messagebox.showinfo("Too many tasks", "Please wait for an existing task to finish before starting another.")
@@ -355,9 +351,6 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
         max_files = max(1, int(limits.get("max_files", 5)))
         timeout_seconds = max(1, int(limits.get("timeout_seconds", 10)))
         max_depth = max(1, min(3, int(limits.get("max_depth", 1))))
-        rce_unlocked = bool(getattr(self, "_rce_unlocked", False))
-        enable_rce = bool(options.get("enable_rce", False)) if rce_unlocked else False
-
         username, password = details._derive_credentials(target.get("auth_method", ""))
 
         try:
@@ -371,7 +364,6 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                 shares=shares,
                 username=username,
                 password=password,
-                enable_rce=enable_rce,
                 allow_empty=True,
                 db_reader=self.db_reader,
             )
@@ -414,14 +406,6 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
             notes.append(f"{share_count} share(s)")
         else:
             notes.append("No accessible shares")
-
-        if enable_rce and result.get("rce_analysis"):
-            rce_status = result["rce_analysis"].get("rce_status", "not_run")
-            notes.append(f"RCE: {rce_status}")
-            try:
-                self._handle_rce_status_update(ip_address, rce_status, row_key=row_key)
-            except Exception:
-                pass
 
         if issue_detected:
             notes.append("Indicators detected")

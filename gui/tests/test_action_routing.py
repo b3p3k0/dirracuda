@@ -7,7 +7,6 @@ a minimal stub object that mixes in the relevant classes.
 Covers:
 - _server_data_to_target: row_key + host_type propagation and defaults
 - _handle_probe_status_update: row_key-keyed match; no S+F cross-bleed
-- _handle_rce_status_update: same isolation pattern
 - _handle_extracted_update: row_key match; uses upsert_extracted_flag_for_host
 - delete routing: SMB-only, FTP-only, mixed; probe cache cleared for SMB only
 - _execute_probe_target: F row runs FTP probe/units=1; S row returns units=1
@@ -325,28 +324,6 @@ def test_probe_status_update_no_row_key_smb_only_fallback():
     f_row = next(r for r in stub.all_servers if r["host_type"] == "F")
     assert s_row["probe_status"] == "issue"
     assert f_row["probe_status"] == "unprobed"
-
-
-# ---------------------------------------------------------------------------
-# _handle_rce_status_update
-# ---------------------------------------------------------------------------
-
-
-def test_rce_status_update_by_row_key_matches_only_correct_row():
-    stub = _BatchMixinStub()
-    stub.all_servers = [
-        {"ip_address": "1.2.3.4", "host_type": "S", "row_key": "S:1",
-         "rce_status": "not_run", "rce_status_emoji": "⭘"},
-        {"ip_address": "1.2.3.4", "host_type": "F", "row_key": "F:2",
-         "rce_status": "not_run", "rce_status_emoji": "⭘"},
-    ]
-
-    stub._handle_rce_status_update("1.2.3.4", "flagged", row_key="S:1")
-
-    s_row = next(r for r in stub.all_servers if r["host_type"] == "S")
-    f_row = next(r for r in stub.all_servers if r["host_type"] == "F")
-    assert s_row["rce_status"] == "flagged"
-    assert f_row["rce_status"] == "not_run", "F sibling must not be updated"
 
 
 # ---------------------------------------------------------------------------
@@ -839,50 +816,6 @@ def test_probe_smb_row_returns_units_1(monkeypatch):
     assert result["status"] == "success"
     assert result["units"] == 1, "units must be 1 regardless of share count"
     assert "3 share(s)" in result["notes"]
-
-
-def test_probe_smb_rce_is_forced_off_when_session_locked(monkeypatch):
-    """_execute_probe_target ignores enable_rce when session RCE gate is locked."""
-    stub = _BatchMixinStub()
-    stub._rce_unlocked = False
-    target = {
-        "ip_address": "1.2.3.4",
-        "host_type": "S",
-        "row_key": "S:42",
-        "shares": ["docs"],
-        "auth_method": "anonymous",
-    }
-
-    dispatch_calls = []
-
-    monkeypatch.setitem(
-        stub._execute_probe_target.__globals__,
-        "dispatch_probe_run",
-        lambda *args, **kwargs: dispatch_calls.append((args, kwargs)) or {
-            "shares": [{"share_name": "docs"}],
-            "rce_analysis": {"rce_status": "flagged"},
-        },
-    )
-    monkeypatch.setitem(
-        stub._execute_probe_target.__globals__,
-        "probe_patterns",
-        types.SimpleNamespace(attach_indicator_analysis=lambda _r, _p: {"is_suspicious": False, "matches": []}),
-    )
-    stub.db_reader.upsert_probe_snapshot_for_host = MagicMock(return_value=1)
-    stub.db_reader.upsert_probe_cache_for_host = MagicMock()
-
-    result = stub._execute_probe_target(
-        "job-1",
-        target,
-        {"limits": {}, "enable_rce": True},
-        threading.Event(),
-    )
-
-    assert result["status"] == "success"
-    assert "RCE:" not in result["notes"]
-    assert dispatch_calls, "dispatch_probe_run should be called"
-    assert dispatch_calls[0][1]["enable_rce"] is False
-    assert dispatch_calls[0][1]["max_depth"] == 1
 
 
 # ---------------------------------------------------------------------------

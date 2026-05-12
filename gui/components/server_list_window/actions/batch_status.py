@@ -595,48 +595,8 @@ class ServerListWindowBatchStatusMixin:
                 status = server.get("probe_status") or self._determine_probe_status(ip, host_type)
                 server["probe_status"] = status
                 server["probe_status_emoji"] = self._probe_status_to_emoji(status)
-                # Attach RCE status from database (protocol-aware)
-                rce_status = server.get("rce_status") or self._determine_rce_status(ip, host_type)
-                server["rce_status"] = rce_status
-                server["rce_status_emoji"] = self._rce_status_to_emoji(rce_status)
                 extracted_flag = server.get("extracted", 0)
                 server["extract_status_emoji"] = self._extract_status_to_emoji(extracted_flag)
-
-        def _determine_rce_status(self, ip_address: Optional[str], host_type: str = "S") -> str:
-            """Determine RCE status from database probe cache."""
-            if not ip_address or not self.db_reader:
-                return 'not_run'
-
-            try:
-                result = self.db_reader.get_rce_status_for_host(ip_address, host_type)
-                return result or 'not_run'
-            except Exception:
-                return 'not_run'
-
-        def _handle_rce_status_update(self, ip_address: str, status: str, row_key: Optional[str] = None) -> None:
-            """Handle RCE status update from probe/analysis."""
-            if not ip_address:
-                return
-
-            for server in self.all_servers:
-                if row_key is not None:
-                    if server.get("row_key") == row_key:
-                        server["rce_status"] = status
-                        server["rce_status_emoji"] = self._rce_status_to_emoji(status)
-                else:
-                    # Legacy fallback: IP match, SMB rows only
-                    if server.get("ip_address") == ip_address and server.get("host_type", "S") == "S":
-                        server["rce_status"] = status
-                        server["rce_status_emoji"] = self._rce_status_to_emoji(status)
-
-            if self._is_batch_active():
-                if not self._pending_table_refresh:
-                    self._pending_selection = self._get_selected_row_keys()
-                self._pending_table_refresh = True
-            else:
-                selected_ips = self._get_selected_row_keys()
-                self._apply_filters()
-                self._restore_selection(selected_ips)
 
         def _determine_probe_status(self, ip_address: Optional[str], host_type: str = "S") -> str:
             if not ip_address:
@@ -686,20 +646,6 @@ class ServerListWindowBatchStatusMixin:
                 'unprobed': '○'
             }
             return mapping.get(status, '⚪')
-
-        def _rce_status_to_emoji(self, status: str) -> str:
-            """
-            Map rce_status to display icon.
-            IMPORTANT: INSUFFICIENT_DATA renders as ⭘ (not run), not ✓ (clean)
-            """
-            mapping = {
-                'not_run': '⭘',
-                'clean': '✓',
-                'flagged': '✖',
-                'unknown': '?',
-                'error': '⚠'
-            }
-            return mapping.get(status, '⭘')
 
         def _extract_status_to_emoji(self, extracted: Any) -> str:
             try:

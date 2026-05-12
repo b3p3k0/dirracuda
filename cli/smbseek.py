@@ -327,11 +327,6 @@ Documentation: docs/USER_GUIDE.md
         help='Custom Shodan filters to append to base query (e.g., "port:445 os:Windows")'
     )
     parser.add_argument(
-        '--check-rce',
-        action='store_true',
-        help='Enable RCE vulnerability analysis during share access testing (opt-in)'
-    )
-    parser.add_argument(
         '--version',
         action='version',
         version='SMBSeek 3.0.0'

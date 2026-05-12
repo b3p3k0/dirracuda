@@ -165,11 +165,6 @@ def start_unified_scan(dash, scan_request: dict) -> None:
         )
         return
 
-    # Hidden RCE controls are session-gated; force runtime off when locked.
-    if not bool(getattr(dash, "_rce_unlocked", True)):
-        scan_request = dict(scan_request or {})
-        scan_request["rce_enabled"] = False
-
     # Single protocol: run directly (no queue wrapper).
     if len(protocols) == 1:
         dash._clear_queued_scan_state()
@@ -201,7 +196,6 @@ def build_protocol_scan_options(protocol: str, common_options: Dict[str, Any]) -
     bulk_probe = bool(common_options.get("bulk_probe_enabled", False))
     bulk_extract = bool(common_options.get("bulk_extract_enabled", False))
     skip_indicator_extract = bool(common_options.get("bulk_extract_skip_indicators", True))
-    rce_enabled = bool(common_options.get("rce_enabled", False))
 
     def _coerce_budget(value: Any, default: int = 1) -> int:
         try:
@@ -263,7 +257,6 @@ def build_protocol_scan_options(protocol: str, common_options: Dict[str, Any]) -
             "connection_timeout": shared_timeout,
             "security_mode": security_mode,
             "verbose": verbose,
-            "rce_enabled": rce_enabled,
             "bulk_probe_enabled": bulk_probe,
             "bulk_extract_enabled": bulk_extract,
             "bulk_extract_skip_indicators": skip_indicator_extract,
@@ -285,7 +278,6 @@ def build_protocol_scan_options(protocol: str, common_options: Dict[str, Any]) -
             "auth_timeout": shared_timeout,
             "listing_timeout": shared_timeout,
             "verbose": verbose,
-            "rce_enabled": rce_enabled,
             "bulk_probe_enabled": bulk_probe,
             "bulk_extract_enabled": bulk_extract,
             "bulk_extract_skip_indicators": skip_indicator_extract,
@@ -311,7 +303,6 @@ def build_protocol_scan_options(protocol: str, common_options: Dict[str, Any]) -
         "verify_https": True,
         "allow_insecure_tls": allow_insecure_tls,
         "verbose": verbose,
-        "rce_enabled": rce_enabled,
         "bulk_probe_enabled": bulk_probe,
         "bulk_extract_enabled": bulk_extract,
         "bulk_extract_skip_indicators": skip_indicator_extract,

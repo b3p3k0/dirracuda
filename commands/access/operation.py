@@ -27,7 +27,7 @@ from shared.smb_adapter import AUTH_METHODS_DEFAULT
 
 from .models import AccessResult
 from .smb_support import SMB_AVAILABLE
-from . import share_enumerator, share_tester, rce_analyzer
+from . import share_enumerator, share_tester
 
 
 class FatalAccessError(RuntimeError):
@@ -39,13 +39,12 @@ class AccessOperation:
     SMB share access verification operation.
     """
 
-    def __init__(self, config, output, database, session_id, cautious_mode=False, check_rce=False):
+    def __init__(self, config, output, database, session_id, cautious_mode=False):
         self.config = config
         self.output = output
         self.database = database
         self.session_id = session_id
         self.cautious_mode = cautious_mode
-        self.check_rce = check_rce
 
         self.results = []
         self.total_targets = 0
@@ -61,9 +60,6 @@ class AccessOperation:
 
     def _extract_nt_status(self, message: str) -> Optional[str]:
         return share_tester._extract_nt_status(message)
-
-    def _analyze_rce_vulnerabilities(self, target_result: Dict[str, Any]) -> None:
-        return rce_analyzer.analyze_rce_vulnerabilities(self, target_result)
 
     def execute(self, target_ips: Set[str], recent_hours=None) -> AccessResult:
         """
@@ -101,17 +97,6 @@ class AccessOperation:
 
         self.total_targets = len(authenticated_hosts)
         self.output.info(f"Testing share access on {self.total_targets} authenticated hosts")
-
-        # Create shared SafeProbeRunner for this scan (used by RCE analysis)
-        self._probe_runner = None
-        if self.check_rce:
-            try:
-                from shared.rce_scanner.probes import SafeProbeRunner
-                legacy_mode = getattr(self, 'legacy_mode', False)
-                self._probe_runner = SafeProbeRunner(self.config, legacy_mode=legacy_mode)
-            except Exception as e:
-                self.output.error(f"Failed to initialize RCE probe runner: {e}")
-                self._probe_runner = None
 
         max_concurrent = self.config.get_max_concurrent_hosts()
         max_workers = min(max_concurrent, len(authenticated_hosts) or 1)
@@ -236,8 +221,6 @@ class AccessOperation:
 
             if not shares:
                 self.output.warning(f"No non-administrative shares found on {ip}")
-                if self.check_rce:
-                    self._analyze_rce_vulnerabilities(target_result)
                 return target_result
 
             self.output.success(f"Found {len(shares)} shares to test on {ip}")
@@ -286,9 +269,6 @@ class AccessOperation:
                 self.output.success(f"{accessible_count}/{total_count} shares accessible on {ip}: {', '.join(target_result['accessible_shares'])}")
             else:
                 self.output.warning(f"0/{total_count} shares accessible on {ip}")
-
-            if self.check_rce:
-                self._analyze_rce_vulnerabilities(target_result)
 
         except FatalAccessError:
             raise

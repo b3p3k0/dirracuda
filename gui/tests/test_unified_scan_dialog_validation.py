@@ -191,15 +191,6 @@ def test_start_valid_request_invokes_callback(monkeypatch):
     assert dlg.dialog.destroyed is True
 
 
-def test_build_scan_request_forces_rce_disabled_when_controls_hidden():
-    dlg = _make_dialog(show_rce_controls=False)
-    dlg.rce_enabled_var.set(True)
-
-    payload = dlg._build_scan_request()
-
-    assert payload["rce_enabled"] is False
-
-
 def test_no_live_max_results_clamp_method_exists():
     assert not hasattr(UnifiedScanDialog, "_validate_max_results")
 

@@ -1132,7 +1132,6 @@ class DashboardWidget:
             settings_manager=getattr(self, "settings_manager", None),
             config_editor_callback=self._open_config_editor_from_scan,
             query_editor_callback=self._open_config_editor,
-            show_rce_controls=False,
         )
 
     def _open_config_editor_from_scan(self, config_path: str) -> None:

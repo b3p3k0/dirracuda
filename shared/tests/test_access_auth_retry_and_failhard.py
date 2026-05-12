@@ -59,7 +59,6 @@ def _make_operation(hosts=None, *, verbose_enabled=False):
         _DatabaseStub(hosts),
         session_id=777,
         cautious_mode=False,
-        check_rce=False,
     )
 
 

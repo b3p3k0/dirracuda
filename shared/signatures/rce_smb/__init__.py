@@ -11,7 +11,6 @@ security principles - no automatic signature downloads or updates.
 
 from .loader import SignatureLoader
 from .validator import SignatureValidator
-from .rules import RuleEngine
 
 __version__ = "1.0.0"
-__all__ = ["SignatureLoader", "SignatureValidator", "RuleEngine"]
+__all__ = ["SignatureLoader", "SignatureValidator"]
