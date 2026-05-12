@@ -1,7 +1,7 @@
 """
 Server List Batch Operations Mixin
 
-Handles probe, extract, browse, pry, delete, and batch job lifecycle logic.
+Handles probe, extract, browse, delete, and batch job lifecycle logic.
 Extracted from batch.py to shrink file size while preserving behavior.
 """
 
@@ -20,8 +20,7 @@ from typing import Dict, List, Any, Optional
 
 from gui.components.server_list_window import export, details, filters, table
 from gui.components.batch_extract_dialog import BatchExtractSettingsDialog
-from gui.components.pry_dialog import PryDialog
-from gui.utils import probe_patterns, probe_runner, extract_runner, pry_runner, session_flags
+from gui.utils import probe_patterns, probe_runner, extract_runner, session_flags
 from gui.utils.probe_cache_dispatch import dispatch_probe_run
 from gui.utils.probe_snapshot_summary import summarize_probe_snapshot
 from gui.utils.dialog_helpers import ensure_dialog_focus
@@ -739,70 +738,6 @@ class ServerListWindowBatchOperationsMixin:
         targets = self._build_selected_targets()
         self._launch_extract_workflow(targets)
 
-    def _on_pry_selected(self) -> None:
-        self._hide_context_menu()
-        if not getattr(self, "_pry_unlocked", False):
-            messagebox.showwarning(
-                "Pry Disabled",
-                "Pry is disabled for this session.",
-                parent=self.window,
-            )
-            return
-        targets = self._build_selected_targets()
-        ftp_targets = [t for t in targets if t.get("host_type") == "F"]
-        if ftp_targets:
-            messagebox.showwarning(
-                "Pry Not Supported",
-                "Pry is an SMB-only action and cannot run on FTP server rows.",
-                parent=self.window,
-            )
-            return
-        if len(targets) != 1:
-            messagebox.showwarning("Select one server", "Choose exactly one server to run Pry.", parent=self.window)
-            return
-
-        target = targets[0]
-        ip_addr = target.get("ip_address") or ""
-
-        config_path = None
-        if self.settings_manager:
-            config_path = self.settings_manager.get_setting('backend.config_path', None)
-            if not config_path and hasattr(self.settings_manager, "get_smbseek_config_path"):
-                config_path = self.settings_manager.get_smbseek_config_path()
-
-        # Build share choices from share_access data
-        shares = []
-        try:
-            shares = self.db_reader.get_denied_shares(ip_addr, limit=100)
-            # Also include accessible shares for completeness
-            shares += self.db_reader.get_accessible_shares(ip_addr)
-            # Mark accessible flag for combobox badge
-            for s in shares:
-                s.setdefault("accessible", bool(s.get("permissions") or False))
-        except Exception:
-            shares = []
-
-        dialog = PryDialog(
-            parent=self.window,
-            theme=self.theme,
-            settings_manager=self.settings_manager,
-            config_path=config_path,
-            target_label=ip_addr,
-            shares=shares
-        )
-        dialog_result = dialog.show()
-        if not dialog_result:
-            return
-
-        options = dialog_result.get("options", {})
-        options.update({
-            "username": dialog_result.get("username", ""),
-            "share_name": dialog_result.get("share_name", ""),
-            "wordlist_path": dialog_result.get("wordlist_path", ""),
-            "worker_count": 1
-        })
-        self._start_batch_job("pry", [target], options)
-
     def _on_file_browser_selected(self) -> None:
         self._hide_context_menu()
         targets = self._build_selected_targets()
@@ -1122,7 +1057,7 @@ class ServerListWindowBatchOperationsMixin:
     def _prompt_probe_batch_settings(self, target_count: int) -> Optional[Dict[str, Any]]:
         config = details._load_probe_config(self.settings_manager)
         default_workers = 3
-        rce_unlocked = bool(getattr(self, "_rce_unlocked", getattr(self, "_pry_unlocked", False)))
+        rce_unlocked = bool(getattr(self, "_rce_unlocked", False))
         enable_rce_default = False
         if self.settings_manager:
             default_workers = int(self.settings_manager.get_setting('probe.batch_max_workers', default_workers))

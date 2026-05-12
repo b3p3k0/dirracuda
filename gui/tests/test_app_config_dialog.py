@@ -11,7 +11,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from gui.components.app_config_dialog import AppConfigDialog, open_app_config_dialog
-from gui.components.pry_dialog import PryDialog
 from gui.utils.default_gui_settings import DEFAULT_GUI_SETTINGS
 
 
@@ -72,7 +71,6 @@ def _build_dialog(validation_results: dict, *, parent=None, dialog=None) -> AppC
     dlg.config_editor_callback = None
     dlg.main_config = None
     dlg.refresh_callback = None
-    dlg.show_pry_controls = True
 
     dlg.validation_results = validation_results
 
@@ -81,7 +79,6 @@ def _build_dialog(validation_results: dict, *, parent=None, dialog=None) -> AppC
     dlg.config_var = _Var("/tmp/config.json")
     dlg.api_key_var = _Var("APIKEY")
     dlg.quarantine_var = _Var("/tmp/quarantine")
-    dlg.wordlist_var = _Var("/tmp/wordlist.txt")
     dlg.smb_dork_var = _Var("smb authentication: disabled")
     dlg.ftp_dork_var = _Var('port:21 "230 Login successful"')
     dlg.http_dork_var = _Var('http.title:"Index of /"')
@@ -91,7 +88,6 @@ def _build_dialog(validation_results: dict, *, parent=None, dialog=None) -> AppC
     dlg.config_path = "/tmp/config.json"
     dlg.api_key = "APIKEY"
     dlg.quarantine_path = "/tmp/quarantine"
-    dlg.wordlist_path = ""
     dlg.smb_dork = "smb authentication: disabled"
     dlg.ftp_dork = 'port:21 "230 Login successful"'
     dlg.http_dork = 'http.title:"Index of /"'
@@ -119,14 +115,13 @@ def _set_clamav_form_vars(dlg: AppConfigDialog, *, enabled: bool) -> None:
     dlg.quarantine_tmpfs_enabled_var = _BoolVar(False)
 
 
-def _base_validation(*, api_key_valid=True, wordlist_valid=True) -> dict:
+def _base_validation(*, api_key_valid=True) -> dict:
     return {
         "smbseek": {"valid": True, "message": ""},
         "database": {"valid": True, "message": ""},
         "config": {"valid": True, "message": ""},
         "api_key": {"valid": api_key_valid, "message": ""},
         "quarantine": {"valid": True, "message": ""},
-        "wordlist": {"valid": wordlist_valid, "message": ""},
         "smb_dork": {"valid": True, "message": ""},
         "ftp_dork": {"valid": True, "message": ""},
         "http_dork": {"valid": True, "message": ""},
@@ -147,47 +142,6 @@ def test_validate_and_save_invalid_required_uses_dialog_parent(monkeypatch):
     assert dlg._validate_and_save() is False
     assert len(calls) == 1
     assert calls[0][1]["parent"] is dlg.dialog
-
-
-def test_validate_and_save_wordlist_warning_uses_dialog_parent(monkeypatch):
-    dlg = _build_dialog(_base_validation(api_key_valid=True, wordlist_valid=False))
-    dlg.main_config = _MainConfigStub()
-
-    monkeypatch.setattr("gui.components.app_config_dialog.normalize_database_path", lambda *_args, **_kwargs: Path("/tmp/smbseek.db"))
-
-    warning_calls = []
-    monkeypatch.setattr(
-        "gui.components.app_config_dialog.messagebox.showwarning",
-        lambda *args, **kwargs: warning_calls.append((args, kwargs)),
-    )
-    monkeypatch.setattr("gui.components.app_config_dialog.messagebox.showerror", lambda *_args, **_kwargs: None)
-
-    assert dlg._validate_and_save() is True
-    assert len(warning_calls) == 1
-    assert warning_calls[0][1]["parent"] is dlg.dialog
-
-
-def test_validate_and_save_skips_wordlist_warning_when_pry_controls_hidden(monkeypatch):
-    dlg = _build_dialog(_base_validation(api_key_valid=True, wordlist_valid=False))
-    dlg.show_pry_controls = False
-    dlg.wordlist_var = None
-    dlg.wordlist_path = "/tmp/persisted_wordlist.txt"
-    dlg.main_config = _MainConfigStub()
-
-    monkeypatch.setattr(
-        "gui.components.app_config_dialog.normalize_database_path",
-        lambda *_args, **_kwargs: Path("/tmp/smbseek.db"),
-    )
-
-    warning_calls = []
-    monkeypatch.setattr(
-        "gui.components.app_config_dialog.messagebox.showwarning",
-        lambda *args, **kwargs: warning_calls.append((args, kwargs)),
-    )
-    monkeypatch.setattr("gui.components.app_config_dialog.messagebox.showerror", lambda *_args, **_kwargs: None)
-
-    assert dlg._validate_and_save() is True
-    assert warning_calls == []
 
 
 def test_validate_and_save_exception_uses_dialog_parent(monkeypatch):
@@ -369,79 +323,6 @@ def test_open_app_config_dialog_failure_uses_parent(monkeypatch):
 
     assert len(calls) == 1
     assert calls[0][1]["parent"] is parent
-
-
-def test_app_config_load_clears_missing_legacy_wordlist(tmp_path):
-    config_path = tmp_path / "conf" / "config.json"
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(
-        json.dumps({"pry": {"wordlist_path": "conf/wordlists/rockyou.txt"}}),
-        encoding="utf-8",
-    )
-
-    dlg = AppConfigDialog.__new__(AppConfigDialog)
-    dlg.api_key = ""
-    dlg.wordlist_path = "placeholder"
-    dlg.quarantine_path = "~/.dirracuda/quarantine"
-
-    dlg._load_runtime_settings_from_config(str(config_path))
-
-    assert dlg.wordlist_path == ""
-
-
-def test_app_config_load_preserves_existing_legacy_wordlist(tmp_path):
-    config_path = tmp_path / "conf" / "config.json"
-    wordlist_path = tmp_path / "conf" / "wordlists" / "rockyou.txt"
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    wordlist_path.parent.mkdir(parents=True, exist_ok=True)
-    wordlist_path.write_text("password\n", encoding="utf-8")
-    config_path.write_text(
-        json.dumps({"pry": {"wordlist_path": "conf/wordlists/rockyou.txt"}}),
-        encoding="utf-8",
-    )
-
-    dlg = AppConfigDialog.__new__(AppConfigDialog)
-    dlg.api_key = ""
-    dlg.wordlist_path = ""
-    dlg.quarantine_path = "~/.dirracuda/quarantine"
-
-    dlg._load_runtime_settings_from_config(str(config_path))
-
-    assert dlg.wordlist_path == "conf/wordlists/rockyou.txt"
-
-
-def test_pry_defaults_clear_missing_legacy_wordlist(tmp_path):
-    config_path = tmp_path / "conf" / "config.json"
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(
-        json.dumps({"pry": {"wordlist_path": "conf/wordlists/rockyou.txt"}}),
-        encoding="utf-8",
-    )
-
-    dialog = PryDialog.__new__(PryDialog)
-    dialog.settings = None
-    dialog.config_path = config_path
-
-    defaults = dialog._load_defaults()
-
-    assert defaults["wordlist_path"] == ""
-
-
-def test_pry_defaults_preserve_custom_wordlist(tmp_path):
-    config_path = tmp_path / "conf" / "config.json"
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(
-        json.dumps({"pry": {"wordlist_path": "custom/not-there.txt"}}),
-        encoding="utf-8",
-    )
-
-    dialog = PryDialog.__new__(PryDialog)
-    dialog.settings = None
-    dialog.config_path = config_path
-
-    defaults = dialog._load_defaults()
-
-    assert defaults["wordlist_path"] == "custom/not-there.txt"
 
 
 def test_default_gui_settings_wordlist_is_blank():

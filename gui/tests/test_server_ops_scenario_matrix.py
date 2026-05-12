@@ -10,7 +10,6 @@ from types import SimpleNamespace
 import pytest
 
 from gui.utils.dirracuda_loader import load_dirracuda_module
-import gui.components.server_list_window.actions.batch_operations as batch_ops_module
 import gui.components.se_dork_browser_window as se_dork_module
 from gui.components.se_dork_browser_window import SeDorkBrowserWindow
 from gui.utils.running_tasks import (
@@ -26,7 +25,6 @@ from gui.tests._server_ops_harness import (
     FakeSeDorkDialog,
     InlineExecutor,
     JobRecord,
-    PryOperationsHarness,
     create_active_job,
     make_dashboard_batch_task_stub,
     make_dashboard_scan_task_stub,
@@ -100,30 +98,6 @@ def test_s2_extract_monitor_cancel_and_terminal_cleanup_idempotent() -> None:
     job["completed"] = job["total"]
     harness._finalize_batch_job("extract-1", job["dialog"], show_summary=False)
     assert registry.count() == 0
-
-
-@pytest.mark.scenario
-def test_s3_pry_mixed_selection_blocks_launch() -> None:
-    selected_targets = [
-        {"host_type": "S", "ip_address": "198.51.100.10"},
-        {"host_type": "F", "ip_address": "198.51.100.20"},
-    ]
-    harness = PryOperationsHarness(selected_targets)
-
-    warnings = []
-
-    def _capture_warning(title, _body, **_kwargs):
-        warnings.append(title)
-
-    original = batch_ops_module.messagebox.showwarning
-    batch_ops_module.messagebox.showwarning = _capture_warning
-    try:
-        harness._on_pry_selected()
-    finally:
-        batch_ops_module.messagebox.showwarning = original
-
-    assert warnings == ["Pry Not Supported"]
-    assert harness._started_jobs == []
 
 
 @pytest.mark.scenario

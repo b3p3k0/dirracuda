@@ -57,7 +57,6 @@ def _import_window_module():
     # Stub only modules known to pull optional/runtime-heavy dependencies
     # (impacket, image stack, etc.) during import.
     stubs = {
-        "gui.components.pry_dialog": {"PryDialog": type("PryDialog", (), {})},
         "gui.components.pry_status_dialog": {"BatchStatusDialog": type("BatchStatusDialog", (), {})},
         "gui.components.batch_extract_dialog": {
             "BatchExtractSettingsDialog": type("BatchExtractSettingsDialog", (), {})
@@ -699,7 +698,6 @@ def _import_batch_ops_mixin():
         "gui.components.server_list_window.table",
         "gui.components.server_list_window.actions",
         "gui.components.server_list_window.actions.batch_operations",
-        "gui.components.pry_dialog",
         "gui.components.pry_status_dialog",
         "gui.components.batch_extract_dialog",
     ]
@@ -712,7 +710,6 @@ def _import_batch_ops_mixin():
             sys.modules.pop(name, None)
 
         for name, attrs in (
-            ("gui.components.pry_dialog", {"PryDialog": type("PryDialog", (), {})}),
             ("gui.components.pry_status_dialog", {"BatchStatusDialog": type("BatchStatusDialog", (), {})}),
             ("gui.components.batch_extract_dialog", {"BatchExtractSettingsDialog": type("BatchExtractSettingsDialog", (), {})}),
         ):

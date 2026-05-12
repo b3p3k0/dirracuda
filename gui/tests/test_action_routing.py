@@ -39,7 +39,6 @@ def _import_batch_mixins_isolated():
     sentinel = object()
     prior_modules = {}
     module_names = [
-        "gui.components.pry_dialog",
         "gui.components.pry_status_dialog",
         "gui.components.batch_extract_dialog",
         "gui.components.server_list_window",
@@ -69,7 +68,6 @@ def _import_batch_mixins_isolated():
             sys.modules[name] = mod
 
         # Lightweight GUI stubs for optional runtime dependencies.
-        _stub_module("gui.components.pry_dialog", {"PryDialog": type("PryDialog", (), {})})
         _stub_module(
             "gui.components.pry_status_dialog",
             {"BatchStatusDialog": type("BatchStatusDialog", (), {})},
@@ -218,12 +216,10 @@ class _BatchMixinStub(ServerListWindowBatchMixin):
         self.status_label = None
         self.probe_button = None
         self.extract_button = None
-        self.pry_button = None
         self.browser_button = None
         self.delete_button = None
         self.stop_button = None
         self.details_button = None
-        self.pry_status_button = None
         self.context_menu = None
         self.batch_status_dialog = None
         self.active_jobs: Dict[str, Any] = {}
@@ -244,7 +240,6 @@ class _BatchMixinStub(ServerListWindowBatchMixin):
         self.mode_button = MagicMock()
         self.search_text = MagicMock()
         self.country_listbox = None
-        self._pry_unlocked = True
         self._rce_unlocked = True
         self._notify_database_changed = MagicMock()
 
@@ -1200,76 +1195,6 @@ def test_attach_probe_status_ftp_row_does_not_use_smb_cache():
 
     assert calls_to_determine == [], "_determine_probe_status must NOT be called for F rows"
     assert servers[0]["probe_status"] == "clean"
-
-
-# ---------------------------------------------------------------------------
-# _on_pry_selected: FTP guard
-# ---------------------------------------------------------------------------
-
-
-def test_pry_blocked_for_ftp_row():
-    """_on_pry_selected with F row target shows warning and returns without launching pry."""
-    stub = _BatchMixinStub()
-    stub.filtered_servers = [
-        {"ip_address": "1.2.3.4", "host_type": "F", "row_key": "F:1",
-         "auth_method": "", "accessible_shares_list": ""}
-    ]
-    stub.tree._items = {"F:1": True}
-    stub.tree._selection = ["F:1"]
-
-    warning_shown = []
-    pry_started = []
-
-    with patch("tkinter.messagebox.showwarning", side_effect=lambda t, m, **kw: warning_shown.append(t)):
-        with patch.object(stub, "_start_batch_job", side_effect=lambda *a, **kw: pry_started.append(a)):
-            stub._on_pry_selected()
-
-    assert len(warning_shown) == 1, "Warning dialog must be shown"
-    assert "Pry" in warning_shown[0]
-    assert pry_started == [], "Pry must not be launched for FTP rows"
-
-
-def test_pry_blocked_when_session_locked():
-    """_on_pry_selected returns early when pry is locked for the session."""
-    stub = _BatchMixinStub()
-    stub._pry_unlocked = False
-    stub.filtered_servers = [
-        {"ip_address": "1.2.3.4", "host_type": "S", "row_key": "S:1", "auth_method": "anonymous"}
-    ]
-    stub.tree._items = {"S:1": True}
-    stub.tree._selection = ["S:1"]
-
-    warnings = []
-    pry_started = []
-    with patch(
-        "gui.components.server_list_window.actions.batch_operations.messagebox.showwarning",
-        side_effect=lambda title, _msg, **_kw: warnings.append(title),
-    ):
-        with patch.object(stub, "_start_batch_job", side_effect=lambda *a, **kw: pry_started.append((a, kw))):
-            stub._on_pry_selected()
-
-    assert warnings == ["Pry Disabled"]
-    assert pry_started == []
-
-
-def test_start_batch_job_pry_blocked_when_session_locked():
-    """_start_batch_job hard-gates pry when unlock flag is not active."""
-    stub = _BatchMixinStub()
-    stub._pry_unlocked = False
-
-    warnings = []
-    with patch(
-        "gui.components.server_list_window.actions.batch.messagebox.showwarning",
-        side_effect=lambda title, _msg, **_kw: warnings.append(title),
-    ):
-        stub._start_batch_job(
-            "pry",
-            [{"ip_address": "1.2.3.4", "host_type": "S", "row_key": "S:1"}],
-            {},
-        )
-
-    assert warnings == ["Pry Disabled"]
-    assert stub.active_jobs == {}
 
 
 # ---------------------------------------------------------------------------

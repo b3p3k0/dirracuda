@@ -18,24 +18,12 @@ def test_required_fields_no_longer_include_discovery_dorks():
 
 def test_validate_all_fields_skips_discovery_dork_fields():
     dlg = AppConfigDialog.__new__(AppConfigDialog)
-    dlg.show_pry_controls = False
     visited = []
     dlg._validate_field = lambda field: visited.append(field)
 
     dlg._validate_all_fields()
 
     assert visited == ["smbseek", "database", "config", "api_key", "quarantine"]
-
-
-def test_validate_all_fields_includes_wordlist_when_pry_controls_enabled():
-    dlg = AppConfigDialog.__new__(AppConfigDialog)
-    dlg.show_pry_controls = True
-    visited = []
-    dlg._validate_field = lambda field: visited.append(field)
-
-    dlg._validate_all_fields()
-
-    assert visited == ["smbseek", "database", "config", "api_key", "quarantine", "wordlist"]
 
 
 def test_apply_runtime_settings_preserves_existing_dork_keys():
@@ -57,7 +45,6 @@ def test_apply_runtime_settings_preserves_existing_dork_keys():
         config_data,
         api_key="NEW",
         quarantine_path="~/.dirracuda/quarantine",
-        wordlist_path="/tmp/words.txt",
     )
 
     assert config_data["shodan"]["api_key"] == "NEW"

@@ -28,7 +28,6 @@ from gui.utils.keybindings import (
     bind_submit_shortcuts,
 )
 from gui.utils.style import get_theme
-from gui.utils.wordlist_path import normalize_wordlist_path
 from shared.db_path_resolution import (
     auto_detect_database_path,
     normalize_database_path,
@@ -134,7 +133,6 @@ class AppConfigDialog:
         "config": "Dirracuda Config",
         "api_key": "Shodan API Key",
         "quarantine": "Quarantine Directory",
-        "wordlist": "Pry Wordlist Path",
         "smb_dork": "SMB Base Query",
         "ftp_dork": "FTP Base Query",
         "http_dork": "HTTP Base Query",
@@ -147,14 +145,12 @@ class AppConfigDialog:
         config_editor_callback: Optional[Callable[[str], None]] = None,
         main_config=None,
         refresh_callback: Optional[Callable[[], None]] = None,
-        show_pry_controls: bool = False,
     ):
         self.parent = parent
         self.settings_manager = settings_manager
         self.config_editor_callback = config_editor_callback
         self.main_config = main_config
         self.refresh_callback = refresh_callback
-        self.show_pry_controls = bool(show_pry_controls)
         self.theme = get_theme()
 
         self.smbseek_path = ""
@@ -162,7 +158,6 @@ class AppConfigDialog:
         self.database_path = ""
         self.api_key = ""
         self.quarantine_path = str(_DEFAULT_QUARANTINE_PATH)
-        self.wordlist_path = ""
         self.smb_dork = self.DORK_DEFAULTS["smb_dork"]
         self.ftp_dork = self.DORK_DEFAULTS["ftp_dork"]
         self.http_dork = self.DORK_DEFAULTS["http_dork"]
@@ -177,7 +172,6 @@ class AppConfigDialog:
             "config": {"valid": False, "message": ""},
             "api_key": {"valid": False, "message": ""},
             "quarantine": {"valid": False, "message": ""},
-            "wordlist": {"valid": False, "message": ""},
         }
 
         self.dialog: Optional[tk.Toplevel] = None
@@ -188,7 +182,6 @@ class AppConfigDialog:
         self.config_var: Optional[tk.StringVar] = None
         self.api_key_var: Optional[tk.StringVar] = None
         self.quarantine_var: Optional[tk.StringVar] = None
-        self.wordlist_var: Optional[tk.StringVar] = None
         self.smb_dork_var: Optional[tk.StringVar] = None
         self.ftp_dork_var: Optional[tk.StringVar] = None
         self.http_dork_var: Optional[tk.StringVar] = None
@@ -254,7 +247,7 @@ class AppConfigDialog:
         self._load_runtime_settings_from_config(self.config_path)
 
     def _load_runtime_settings_from_config(self, config_path: str) -> None:
-        """Load API key, pry wordlist, and quarantine path from config.json."""
+        """Load API key and quarantine path from config.json."""
         path_obj = Path(config_path).expanduser()
         if not path_obj.exists():
             return
@@ -265,8 +258,6 @@ class AppConfigDialog:
             return
 
         self.api_key = str(_get_nested(config_data, ("shodan", "api_key"), "") or "")
-        raw_wordlist = str(_get_nested(config_data, ("pry", "wordlist_path"), "") or "")
-        self.wordlist_path = normalize_wordlist_path(raw_wordlist, config_path=path_obj)
 
         quarantine_candidates = [
             _get_nested(config_data, ("file_browser", "quarantine_root"), ""),
@@ -382,7 +373,7 @@ class AppConfigDialog:
         container.pack(fill=tk.BOTH, expand=True, padx=18, pady=(0, 8))
 
         self._create_compact_card(container, "Core Paths", ("smbseek", "database", "config"))
-        runtime_fields = ("api_key", "quarantine", "wordlist") if self.show_pry_controls else ("api_key", "quarantine")
+        runtime_fields = ("api_key", "quarantine")
         self._create_compact_card(container, "Runtime Settings", runtime_fields)
         self._create_tmpfs_card(container)
         self._create_clamav_card(container)
@@ -651,7 +642,7 @@ class AppConfigDialog:
             self.api_key_toggle_btn = toggle_button
             self._update_api_key_mask_ui()
 
-        browse_needed = field in {"smbseek", "database", "config", "quarantine", "wordlist"}
+        browse_needed = field in {"smbseek", "database", "config", "quarantine"}
         if browse_needed:
             browse_button = tk.Button(
                 row,
@@ -758,10 +749,6 @@ class AppConfigDialog:
             if self.http_dork_var is None:
                 self.http_dork_var = tk.StringVar(value=self.http_dork)
             return self.http_dork_var
-        if field == "wordlist":
-            if self.wordlist_var is None:
-                self.wordlist_var = tk.StringVar(value=self.wordlist_path)
-            return self.wordlist_var
         if self.quarantine_var is None:
             self.quarantine_var = tk.StringVar(value=self.quarantine_path)
         return self.quarantine_var
@@ -833,20 +820,6 @@ class AppConfigDialog:
                 self.quarantine_var.set(selected)
             return
 
-        if field == "wordlist" and self.wordlist_var:
-            initial = os.path.dirname(self.wordlist_var.get()) or str(_PATHS.wordlists_dir)
-            selected = filedialog.askopenfilename(
-                title="Select Pry Wordlist File",
-                initialdir=initial,
-                filetypes=[
-                    ("Text files", "*.txt *.lst *.list"),
-                    ("All files", "*.*"),
-                ],
-            )
-            if selected:
-                self.wordlist_var.set(selected)
-            return
-
         if field == "clamav_extracted_root" and self.clamav_extracted_root_var:
             initial = str(
                 Path(self.clamav_extracted_root_var.get()).expanduser().parent
@@ -897,13 +870,6 @@ class AppConfigDialog:
             result = self._validate_api_key(self.api_key_var.get())
             self.validation_results["api_key"] = result
             self._update_status_label("api_key", result)
-            return
-
-        if field == "wordlist":
-            value = self.wordlist_var.get() if self.wordlist_var else self.wordlist_path
-            result = self._validate_wordlist_path(value)
-            self.validation_results["wordlist"] = result
-            self._update_status_label("wordlist", result)
             return
 
         result = self._validate_quarantine_path(self.quarantine_var.get())
@@ -1019,19 +985,6 @@ class AppConfigDialog:
             return {"valid": False, "message": "Parent directory does not exist."}
         return {"valid": True, "message": "Quarantine directory will be created."}
 
-    def _validate_wordlist_path(self, path: str) -> Dict[str, Any]:
-        path = str(path or "").strip()
-        if not path:
-            # Optional field: leaving this unset should not block Save.
-            return {"valid": True, "message": "Wordlist not set."}
-
-        path_obj = Path(path).expanduser()
-        if not path_obj.exists():
-            return {"valid": False, "message": "Wordlist file not found."}
-        if not path_obj.is_file():
-            return {"valid": False, "message": "Wordlist path is not a file."}
-        return {"valid": True, "message": "Wordlist file is valid."}
-
     def _update_status_label(self, field: str, result: Dict[str, Any]) -> None:
         label = self.status_labels.get(field)
         if not label:
@@ -1045,10 +998,7 @@ class AppConfigDialog:
         label.config(text=symbol, fg=color)
 
     def _validate_all_fields(self) -> None:
-        fields = ["smbseek", "database", "config", "api_key", "quarantine"]
-        if self.show_pry_controls:
-            fields.append("wordlist")
-        for field in fields:
+        for field in ["smbseek", "database", "config", "api_key", "quarantine"]:
             self._validate_field(field)
 
     def _messagebox_parent(self) -> tk.Widget:
@@ -1119,10 +1069,6 @@ class AppConfigDialog:
         new_config_path = self.config_var.get().strip()
         new_api_key = self.api_key_var.get().strip()
         new_quarantine = self.quarantine_var.get().strip()
-        if self.show_pry_controls and self.wordlist_var is not None:
-            new_wordlist = self.wordlist_var.get().strip()
-        else:
-            new_wordlist = self.wordlist_path
 
         _timeout_var = getattr(self, "clamav_timeout_var", None)
         try:
@@ -1202,7 +1148,6 @@ class AppConfigDialog:
                     config_data,
                     new_api_key,
                     new_quarantine,
-                    new_wordlist,
                     clamav_settings=new_clamav,
                     quarantine_tmpfs_settings=new_quarantine_tmpfs,
                 )
@@ -1224,7 +1169,6 @@ class AppConfigDialog:
                     config_data,
                     new_api_key,
                     new_quarantine,
-                    new_wordlist,
                     clamav_settings=new_clamav,
                     quarantine_tmpfs_settings=new_quarantine_tmpfs,
                 )
@@ -1237,7 +1181,6 @@ class AppConfigDialog:
             self.config_path = new_config_path
             self.api_key = new_api_key
             self.quarantine_path = new_quarantine
-            self.wordlist_path = new_wordlist
             self.clamav_enabled = new_clamav["enabled"]
             self.clamav_backend = new_clamav["backend"]
             self.clamav_timeout = new_clamav["timeout_seconds"]
@@ -1269,14 +1212,6 @@ class AppConfigDialog:
                     "Discovery scans will fail until a valid key is set.",
                     parent=self._messagebox_parent(),
                 )
-            if self.show_pry_controls and not self.validation_results["wordlist"]["valid"]:
-                messagebox.showwarning(
-                    "Configuration Saved",
-                    "Settings were saved, but the Pry wordlist path is invalid.\n"
-                    "Pry operations may fail until this path is corrected.",
-                    parent=self._messagebox_parent(),
-                )
-
             return True
         except Exception as exc:
             messagebox.showerror(
@@ -1319,7 +1254,7 @@ class AppConfigDialog:
         config_data: Dict[str, Any],
         api_key: str,
         quarantine_path: str,
-        wordlist_path: str,
+        wordlist_path: str = "",
         clamav_settings: Optional[Dict[str, Any]] = None,
         quarantine_tmpfs_settings: Optional[Dict[str, Any]] = None,
     ) -> None:
@@ -1331,7 +1266,6 @@ class AppConfigDialog:
         _set_nested(config_data, ("ftp_browser", "quarantine_base"), quarantine_path)
         _set_nested(config_data, ("http_browser", "quarantine_base"), quarantine_path)
         _set_nested(config_data, ("file_collection", "quarantine_base"), quarantine_path)
-        _set_nested(config_data, ("pry", "wordlist_path"), wordlist_path)
 
         if clamav_settings is not None:
             _set_nested(config_data, ("clamav", "enabled"), clamav_settings["enabled"])
@@ -1356,7 +1290,6 @@ def open_app_config_dialog(
     config_editor_callback: Optional[Callable[[str], None]] = None,
     main_config=None,
     refresh_callback: Optional[Callable[[], None]] = None,
-    show_pry_controls: bool = False,
 ) -> None:
     """Open application configuration dialog."""
     try:
@@ -1366,7 +1299,6 @@ def open_app_config_dialog(
             config_editor_callback,
             main_config,
             refresh_callback,
-            show_pry_controls=show_pry_controls,
         )
     except Exception as exc:
         messagebox.showerror(

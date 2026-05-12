@@ -125,7 +125,6 @@ class ServerListWindowBatchStatusMixin:
             label = {
                 "probe": "Probe",
                 "extract": "Extract",
-                "pry": "Pry",
             }.get(job_type, job_type.title() or "Batch")
             return f"Server List {label} Batch"
 
@@ -352,9 +351,6 @@ class ServerListWindowBatchStatusMixin:
             latest = list(self.active_jobs.values())[-1]
             return latest.get("type")
 
-        def _is_pry_batch_active(self) -> bool:
-            return any(job.get("type") == "pry" and job.get("completed", 0) < job.get("total", 0) for job in self.active_jobs.values())
-
         def _is_probe_batch_active(self) -> bool:
             return any(job.get("type") == "probe" and job.get("completed", 0) < job.get("total", 0) for job in self.active_jobs.values())
 
@@ -367,18 +363,6 @@ class ServerListWindowBatchStatusMixin:
                     self.status_label.configure(text=message)
                 except Exception:
                     pass
-
-        def _set_pry_status_button_visible(self, visible: bool) -> None:
-            return
-
-        def _show_pry_status_dialog(self) -> None:
-            if self.batch_status_dialog:
-                self.batch_status_dialog.show()
-                return
-            if not self.active_jobs:
-                return
-            latest_job_id = list(self.active_jobs.keys())[-1]
-            self._reopen_batch_monitor_dialog(latest_job_id)
 
         def _init_batch_status_dialog(self, job_type: str, fields: Dict[str, str], cancel_event: threading.Event, total: Optional[int] = None) -> BatchStatusDialog:
             """Create a fresh batch status dialog for the active run."""
@@ -418,127 +402,13 @@ class ServerListWindowBatchStatusMixin:
                     pass
             self.batch_status_dialog = None
 
-        def _persist_pry_success(self, target: Dict[str, Any], share_label: str, username: str, password: str) -> None:
-            """
-            Persist Pry success to DB: mark share accessible and store credentials.
-            """
-            if not self.settings_manager:
-                return
-            db_path = None
-            try:
-                db_path = self.settings_manager.get_database_path()
-            except Exception:
-                return
-            if not db_path:
-                return
-
-            ip_address = target.get("ip_address")
-            auth_method = target.get("auth_method", "")
-            share_name = self._normalize_share_name(share_label)
-            if not ip_address or not share_name:
-                return
-
-            try:
-                run_migrations(db_path)
-            except Exception:
-                # Continue even if migration logging fails
-                pass
-
-            now_ts = get_standard_timestamp()
-            conn = sqlite3.connect(db_path)
-            conn.row_factory = sqlite3.Row
-            cur = conn.cursor()
-            try:
-                # Ensure server row
-                cur.execute("SELECT id, auth_method FROM smb_servers WHERE ip_address = ?", (ip_address,))
-                row = cur.fetchone()
-                if row:
-                    server_id = row["id"]
-                    cur.execute("UPDATE smb_servers SET last_seen = ? WHERE id = ?", (now_ts, server_id))
-                else:
-                    cur.execute(
-                        """
-                        INSERT INTO smb_servers (ip_address, auth_method, first_seen, last_seen, scan_count)
-                        VALUES (?, ?, ?, ?, 1)
-                        """,
-                        (ip_address, auth_method, now_ts, now_ts),
-                    )
-                    server_id = cur.lastrowid
-
-                # Create a minimal pry session
-                cur.execute(
-                    """
-                    INSERT INTO scan_sessions (tool_name, scan_type, status, started_at, completed_at, total_targets, successful_targets, failed_targets, notes)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    ("dirracuda", "pry", "completed", now_ts, now_ts, 1, 1, 0, f"Pry credential stored for {ip_address}"),
-                )
-                session_id = cur.lastrowid
-
-                # Upsert share_access
-                cur.execute(
-                    "SELECT id FROM share_access WHERE server_id = ? AND share_name = ?",
-                    (server_id, share_name),
-                )
-                row = cur.fetchone()
-                if row:
-                    cur.execute(
-                        """
-                        UPDATE share_access
-                        SET accessible = 1,
-                            auth_status = ?,
-                            error_message = NULL,
-                            test_timestamp = ?,
-                            session_id = ?
-                        WHERE id = ?
-                        """,
-                        ("pry", now_ts, session_id, row["id"]),
-                    )
-                else:
-                    cur.execute(
-                        """
-                        INSERT INTO share_access (server_id, session_id, share_name, accessible, auth_status, test_timestamp)
-                        VALUES (?, ?, ?, 1, ?, ?)
-                        """,
-                        (server_id, session_id, share_name, "pry", now_ts),
-                    )
-
-                # Upsert share_credentials
-                cur.execute(
-                    """
-                    UPDATE share_credentials
-                    SET username = ?, password = ?, last_verified_at = ?, updated_at = ?
-                    WHERE server_id = ? AND share_name = ? AND source = 'pry'
-                    """,
-                    (username, password, now_ts, now_ts, server_id, share_name),
-                )
-                if cur.rowcount == 0:
-                    cur.execute(
-                        """
-                        INSERT INTO share_credentials (server_id, share_name, username, password, source, session_id, last_verified_at, updated_at)
-                        VALUES (?, ?, ?, ?, 'pry', ?, ?, ?)
-                        """,
-                        (server_id, share_name, username, password, session_id, now_ts, now_ts),
-                    )
-
-                conn.commit()
-            except Exception as exc:
-                try:
-                    conn.rollback()
-                except Exception:
-                    pass
-                # Log warning; avoid breaking UI
-                _logger.warning("Failed to persist Pry credential for %s/%s: %s", ip_address, share_name, exc)
-            finally:
-                conn.close()
-
         def _update_action_buttons_state(self) -> None:
             has_selection = bool(self.tree and self.tree.selection())
             batch_active = self._is_batch_active()
 
             # Allow browsing/details/export during running batches (read-only), but block starting new batches
             start_state = tk.NORMAL if has_selection and len(self.active_jobs) < 3 else tk.DISABLED
-            for button in (self.probe_button, self.extract_button, self.pry_button):
+            for button in (self.probe_button, self.extract_button):
                 if button:
                     button.configure(state=start_state)
             # Browse stays enabled during batch
