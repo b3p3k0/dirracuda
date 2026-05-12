@@ -104,7 +104,7 @@ def _load_clamav(dlg: AppConfigDialog, config_data: Dict[str, Any]) -> None:
 
 def _apply(dlg: AppConfigDialog, config_data: Dict[str, Any], clamav: Optional[Dict] = None) -> None:
     """Call _apply_runtime_settings with the given args."""
-    dlg._apply_runtime_settings(config_data, "", "", "", clamav_settings=clamav)
+    dlg._apply_runtime_settings(config_data, "", "", clamav_settings=clamav)
 
 
 # ---------------------------------------------------------------------------

@@ -61,14 +61,6 @@
     "verbose_by_default": false,
     "executive_summary": true
   },
-  "pry": {
-    "wordlist_path": "",
-    "user_as_pass": true,
-    "stop_on_lockout": true,
-    "verbose": false,
-    "attempt_delay": 1.0,
-    "max_attempts": 0
-  },
   "_note": "Global scans (no country filter) are performed when --country is not specified. To limit scans to specific countries, use: ./cli/smbseek.py --country US,GB,CA",
   "file_collection": {
     "max_files_per_target": 3,
@@ -234,24 +226,5 @@
     "known_bad_subdir": "known_bad",
     "show_results": true,
     "auto_promote_clean_files": false
-  },
-  "rce": {
-    "enabled_default": false,
-    "safe_active_budget": {
-      "max_requests": 2,
-      "per_host_timeout_seconds": 5,
-      "retry_count": 0,
-      "jitter_ms": 250
-    },
-    "ms17_010": {
-      "enabled": true
-    },
-    "smbghost": {
-      "enabled": true
-    },
-    "logging": {
-      "jsonl_path": "~/.dirracuda/logs/rce_analysis.jsonl"
-    },
-    "intrusive_mode_enabled": false
   }
 }

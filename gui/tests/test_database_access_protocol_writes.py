@@ -355,35 +355,6 @@ def test_extracted_protocol_isolation(monkeypatch):
         os.unlink(path)
 
 
-def test_rce_protocol_isolation(monkeypatch):
-    """S rce='flagged' → host_probe_cache; F rce='clean' → ftp_probe_cache."""
-    path = _make_db(smb=True, ftp=True)
-    try:
-        conn = sqlite3.connect(path)
-        conn.execute("INSERT INTO smb_servers (id, ip_address, status) VALUES (1,?,?)", ("7.7.7.7", "active"))
-        conn.execute("INSERT INTO ftp_servers (id, ip_address, status) VALUES (1,?,?)", ("7.7.7.7", "active"))
-        conn.commit()
-        conn.close()
-
-        reader = _reader(path, monkeypatch)
-        reader.upsert_rce_status_for_host("7.7.7.7", "S", "flagged", '{"count":1}')
-        reader.upsert_rce_status_for_host("7.7.7.7", "F", "clean", None)
-
-        conn = sqlite3.connect(path)
-        smb_rce = conn.execute(
-            "SELECT rce_status, rce_verdict_summary FROM host_probe_cache WHERE server_id=1"
-        ).fetchone()
-        ftp_rce = conn.execute(
-            "SELECT rce_status, rce_verdict_summary FROM ftp_probe_cache WHERE server_id=1"
-        ).fetchone()
-        conn.close()
-
-        assert smb_rce[0] == "flagged" and smb_rce[1] == '{"count":1}'
-        assert ftp_rce[0] == "clean" and ftp_rce[1] is None
-    finally:
-        os.unlink(path)
-
-
 # ---------------------------------------------------------------------------
 # Compatibility shims: all four existing methods default to SMB
 # ---------------------------------------------------------------------------
@@ -462,32 +433,6 @@ def test_wrapper_upsert_extracted_flag_defaults_to_smb(monkeypatch):
         conn.close()
 
         assert smb_row is not None and smb_row[0] == 1
-        assert ftp_count == 0
-    finally:
-        os.unlink(path)
-
-
-def test_wrapper_upsert_rce_status_defaults_to_smb(monkeypatch):
-    """Old upsert_rce_status signature writes SMB only; ftp_probe_cache untouched."""
-    path = _make_db(smb=True, ftp=True)
-    try:
-        conn = sqlite3.connect(path)
-        conn.execute("INSERT INTO smb_servers (ip_address, status) VALUES (?,?)", ("8.8.8.8", "active"))
-        conn.commit()
-        conn.close()
-
-        reader = _reader(path, monkeypatch)
-        reader.upsert_rce_status("8.8.8.8", "flagged", '{"x":1}')
-
-        conn = sqlite3.connect(path)
-        smb_row = conn.execute(
-            "SELECT rce_status FROM host_probe_cache WHERE server_id="
-            "(SELECT id FROM smb_servers WHERE ip_address='8.8.8.8')"
-        ).fetchone()
-        ftp_count = conn.execute("SELECT COUNT(*) FROM ftp_probe_cache").fetchone()[0]
-        conn.close()
-
-        assert smb_row is not None and smb_row[0] == "flagged"
         assert ftp_count == 0
     finally:
         os.unlink(path)
@@ -657,30 +602,6 @@ def test_ftp_probe_writes_accessible_dirs_fields(monkeypatch):
         assert row[0] == "clean"
         assert row[1] == 2
         assert row[2] == "pub,incoming"
-    finally:
-        os.unlink(path)
-
-
-def test_rce_invalid_status_normalized_to_unknown(monkeypatch):
-    """Invalid rce_status value → stored as 'unknown' (normalization regression test)."""
-    path = _make_db(smb=True, ftp=True)
-    try:
-        conn = sqlite3.connect(path)
-        conn.execute("INSERT INTO smb_servers (ip_address, status) VALUES (?,?)", ("12.12.12.12", "active"))
-        conn.commit()
-        conn.close()
-
-        reader = _reader(path, monkeypatch)
-        reader.upsert_rce_status_for_host("12.12.12.12", "S", "GARBAGE_STATUS")
-
-        conn = sqlite3.connect(path)
-        row = conn.execute(
-            "SELECT rce_status FROM host_probe_cache WHERE server_id="
-            "(SELECT id FROM smb_servers WHERE ip_address='12.12.12.12')"
-        ).fetchone()
-        conn.close()
-
-        assert row is not None and row[0] == "unknown"
     finally:
         os.unlink(path)
 
@@ -879,27 +800,6 @@ def test_extracted_for_host_ftp_missing_tables_no_exception(monkeypatch):
 
         reader = _reader(path, monkeypatch)
         reader.upsert_extracted_flag_for_host("1.1.1.3", "F", extracted=True)
-
-        conn = sqlite3.connect(path)
-        smb_count = conn.execute("SELECT COUNT(*) FROM host_probe_cache").fetchone()[0]
-        conn.close()
-
-        assert smb_count == 0
-    finally:
-        os.unlink(path)
-
-
-def test_rce_for_host_ftp_missing_tables_no_exception(monkeypatch):
-    """SMB-only DB; upsert_rce_status_for_host('F') → no exception; SMB table untouched."""
-    path = _make_db(smb=True, ftp=False)
-    try:
-        conn = sqlite3.connect(path)
-        conn.execute("INSERT INTO smb_servers (ip_address, status) VALUES (?,?)", ("1.1.1.4", "active"))
-        conn.commit()
-        conn.close()
-
-        reader = _reader(path, monkeypatch)
-        reader.upsert_rce_status_for_host("1.1.1.4", "F", "flagged")
 
         conn = sqlite3.connect(path)
         smb_count = conn.execute("SELECT COUNT(*) FROM host_probe_cache").fetchone()[0]

@@ -353,7 +353,6 @@ def upsert_probe_snapshot_for_host(
             # Keep child tables deterministic/idempotent by replacing rows for snapshot_id.
             cur.execute("DELETE FROM probe_snapshot_entries WHERE snapshot_id = ?", (snapshot_id,))
             cur.execute("DELETE FROM probe_snapshot_errors WHERE snapshot_id = ?", (snapshot_id,))
-            cur.execute("DELETE FROM probe_snapshot_rce WHERE snapshot_id = ?", (snapshot_id,))
 
             entry_rows = list(_iter_snapshot_entries(snapshot) or [])
             if entry_rows:
@@ -393,24 +392,6 @@ def upsert_probe_snapshot_for_host(
                         )
                         for item in error_rows
                     ],
-                )
-
-            rce = snapshot.get("rce_analysis")
-            if isinstance(rce, dict) and rce:
-                cur.execute(
-                    """
-                    INSERT INTO probe_snapshot_rce
-                        (snapshot_id, rce_status, verdict_summary, analysis_json, created_at)
-                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-                    """,
-                    (
-                        snapshot_id,
-                        rce.get("rce_status"),
-                        json.dumps(rce.get("verdict_summary"), default=str)
-                        if isinstance(rce.get("verdict_summary"), (dict, list))
-                        else rce.get("verdict_summary"),
-                        json.dumps(rce, default=str),
-                    ),
                 )
 
             conn.commit()
@@ -745,72 +726,6 @@ def upsert_extracted_flag_for_host(self, ip_address: str, host_type: str,
                     updated_at=CURRENT_TIMESTAMP
                 """,
                 (server_id, 1 if extracted else 0),
-            )
-            conn.commit()
-    except sqlite3.OperationalError as exc:
-        msg = str(exc).lower()
-        if host_type == 'F' and "no such table: ftp_" in msg:
-            return
-        if host_type == 'H' and "no such table: http_" in msg:
-            return
-        raise
-    self.clear_cache()
-
-def upsert_rce_status_for_host(self, ip_address: str, host_type: str,
-                                rce_status: str,
-                                verdict_summary: Optional[str] = None,
-                                protocol_server_id: Optional[int] = None,
-                                port: Optional[int] = None) -> None:
-    """Route RCE analysis status write to SMB or FTP tables based on host_type.
-
-    Args:
-        ip_address: IP address of the host
-        host_type: 'S' for SMB (writes host_probe_cache), 'F' for FTP (writes ftp_probe_cache)
-        rce_status: Status string ('not_run', 'clean', 'flagged', 'unknown', 'error');
-                    invalid values are normalized to 'unknown'
-        verdict_summary: Optional JSON summary of verdicts
-
-    No-op for invalid host_type or unknown IP.
-    FTP branch degrades gracefully when ftp_ tables are absent (pre-migration).
-    """
-    host_type = (host_type or "").upper()
-    if not ip_address or host_type not in ('S', 'F', 'H'):
-        return
-    valid_statuses = {'not_run', 'clean', 'flagged', 'unknown', 'error'}
-    if rce_status not in valid_statuses:
-        rce_status = 'unknown'
-    if host_type == 'S':
-        server_table = 'smb_servers'
-        cache_table  = 'host_probe_cache'
-    elif host_type == 'F':
-        server_table = 'ftp_servers'
-        cache_table  = 'ftp_probe_cache'
-    else:
-        server_table = 'http_servers'
-        cache_table  = 'http_probe_cache'
-    try:
-        with self._get_connection() as conn:
-            cur = conn.cursor()
-            server_id = self._resolve_protocol_server_id(
-                cur,
-                ip_address=ip_address,
-                host_type=host_type,
-                server_table=server_table,
-                protocol_server_id=protocol_server_id,
-                port=port,
-            )
-            if server_id is None:
-                return
-            cur.execute(
-                f"""
-                INSERT INTO {cache_table} (server_id, rce_status, rce_verdict_summary, updated_at)
-                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(server_id) DO UPDATE SET
-                    rce_status=excluded.rce_status,
-                    rce_verdict_summary=excluded.rce_verdict_summary,
-                    updated_at=CURRENT_TIMESTAMP
-                """,
-                (server_id, rce_status, verdict_summary),
             )
             conn.commit()
     except sqlite3.OperationalError as exc:
@@ -1474,76 +1389,6 @@ def get_share_credentials(self, ip_address: str) -> List[Dict[str, Any]]:
             for row in rows
         ]
 
-# --- RCE status helpers ---------------------------------------------
-
-def get_rce_status(self, ip_address: str) -> Optional[str]:
-    """
-    Get RCE analysis status for a host.
-
-    Args:
-        ip_address: IP address of the host
-
-    Returns:
-        RCE status string: 'not_run', 'clean', 'flagged', 'unknown', or 'error'
-        Returns 'not_run' if no status found.
-    """
-    query = """
-        SELECT pc.rce_status
-        FROM host_probe_cache pc
-        JOIN smb_servers s ON pc.server_id = s.id
-        WHERE s.ip_address = ?
-    """
-    with self._get_connection() as conn:
-        row = conn.execute(query, (ip_address,)).fetchone()
-        return row["rce_status"] if row and row["rce_status"] else "not_run"
-
-def get_rce_status_for_host(self, ip_address: str, host_type: str) -> str:
-    """
-    Get RCE analysis status for a host, protocol-aware.
-
-    Args:
-        ip_address: IP address of the host
-        host_type:  'S' → query host_probe_cache JOIN smb_servers
-                    'F' → query ftp_probe_cache JOIN ftp_servers
-
-    Returns:
-        RCE status string, or 'not_run' if not found or table absent.
-    """
-    host_type = (host_type or "S").upper()
-    if host_type == "S":
-        return self.get_rce_status(ip_address)
-    if host_type == "H":
-        try:
-            query = """
-                SELECT pc.rce_status
-                FROM http_probe_cache pc
-                JOIN http_servers s ON pc.server_id = s.id
-                WHERE s.ip_address = ?
-            """
-            with self._get_connection() as conn:
-                row = conn.execute(query, (ip_address,)).fetchone()
-                return row["rce_status"] if row and row["rce_status"] else "not_run"
-        except sqlite3.OperationalError:
-            return "not_run"
-    # FTP path
-    try:
-        query = """
-            SELECT pc.rce_status
-            FROM ftp_probe_cache pc
-            JOIN ftp_servers s ON pc.server_id = s.id
-            WHERE s.ip_address = ?
-        """
-        with self._get_connection() as conn:
-            row = conn.execute(query, (ip_address,)).fetchone()
-            return row["rce_status"] if row and row["rce_status"] else "not_run"
-    except sqlite3.OperationalError:
-        return "not_run"
-
-def upsert_rce_status(self, ip_address: str, rce_status: str,
-                      verdict_summary: Optional[str] = None) -> None:
-    """SMB-compatible shim. Delegates to upsert_rce_status_for_host with host_type='S'."""
-    self.upsert_rce_status_for_host(ip_address, 'S', rce_status, verdict_summary)
-
 # ------------------------------------------------------------------
 # FTP sidecar read methods
 # All methods guard against OperationalError in case the migration has
@@ -1599,7 +1444,6 @@ def bind_database_access_write_methods(reader_cls, shared_symbols: Dict[str, Any
         "get_probe_snapshot_for_host",
         "set_latest_probe_snapshot_for_host",
         "upsert_extracted_flag_for_host",
-        "upsert_rce_status_for_host",
         "upsert_manual_server_record",
         "bulk_delete_servers",
         "bulk_delete_rows",
@@ -1611,9 +1455,6 @@ def bind_database_access_write_methods(reader_cls, shared_symbols: Dict[str, Any
         "get_denied_shares",
         "get_denied_share_counts",
         "get_share_credentials",
-        "get_rce_status",
-        "get_rce_status_for_host",
-        "upsert_rce_status",
         "get_ftp_servers",
         "get_ftp_server_count",
     )

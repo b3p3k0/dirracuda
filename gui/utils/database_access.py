@@ -66,12 +66,6 @@ class DatabaseReader:
         except Exception:
             pass
 
-        # Ensure new RCE columns exist even on older databases (idempotent)
-        try:
-            self._ensure_rce_columns()
-        except Exception:
-            pass
-
         # Ensure legacy HTTP optional columns exist on older/minimal schemas.
         try:
             self._ensure_http_columns()

@@ -56,7 +56,6 @@ DEFAULT_GUI_SETTINGS = {
         'rate_limit_delay': 1,
         'share_access_delay': 1,
         'remember_api_key': False,
-        'rce_enabled': False,
         'verbose': False
     },
     'unified_scan_dialog': {
@@ -70,7 +69,6 @@ DEFAULT_GUI_SETTINGS = {
         'bulk_probe_enabled': False,
         'bulk_extract_enabled': False,
         'bulk_extract_skip_indicators': True,
-        'rce_enabled': False,
         'security_mode': 'cautious',
         'allow_insecure_tls': True,
         'region_africa': False,
@@ -113,14 +111,6 @@ DEFAULT_GUI_SETTINGS = {
         'share_timeout_seconds': 10,
         'status_by_ip': {},
         'batch_max_workers': 3
-    },
-    'pry': {
-        'wordlist_path': '',
-        'user_as_pass': True,
-        'stop_on_lockout': True,
-        'verbose': False,
-        'attempt_delay': 1.0,
-        'max_attempts': 0
     },
     'extract': {
         'last_directory': '',

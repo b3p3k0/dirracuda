@@ -323,13 +323,3 @@ def test_open_app_config_dialog_failure_uses_parent(monkeypatch):
 
     assert len(calls) == 1
     assert calls[0][1]["parent"] is parent
-
-
-def test_default_gui_settings_wordlist_is_blank():
-    assert DEFAULT_GUI_SETTINGS["pry"]["wordlist_path"] == ""
-
-
-def test_config_example_wordlist_is_blank():
-    config_example_path = Path(__file__).resolve().parents[2] / "conf" / "config.json.example"
-    parsed = json.loads(config_example_path.read_text(encoding="utf-8"))
-    assert parsed["pry"]["wordlist_path"] == ""

@@ -57,7 +57,6 @@ def _bare_dialog() -> AppConfigDialog:
     dlg.refresh_callback = None
 
     dlg.api_key = ""
-    dlg.wordlist_path = ""
     dlg.quarantine_path = "~/.dirracuda/data/quarantine"
 
     dlg.quarantine_tmpfs_enabled = False
@@ -106,7 +105,6 @@ def test_apply_runtime_settings_writes_tmpfs_keys():
         out,
         api_key="",
         quarantine_path="~/.dirracuda/data/quarantine",
-        wordlist_path="",
         clamav_settings=None,
         quarantine_tmpfs_settings={"use_tmpfs": True},
     )

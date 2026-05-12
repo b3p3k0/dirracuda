@@ -1254,7 +1254,6 @@ class AppConfigDialog:
         config_data: Dict[str, Any],
         api_key: str,
         quarantine_path: str,
-        wordlist_path: str = "",
         clamav_settings: Optional[Dict[str, Any]] = None,
         quarantine_tmpfs_settings: Optional[Dict[str, Any]] = None,
     ) -> None:
