@@ -79,7 +79,7 @@ Launch the GUI from your venv:
 | smbprotocol | ≥1.10.0 | Pure-Python SMB2/3 transport for cautious-mode sessions |
 | pyspnego | ≥0.8.0 | SPNEGO authentication support; required by smbprotocol |
 | impacket | ≥0.11.0 | SMB1/2/3 transport for legacy compatibility, share enumeration, and browser operations |
-| PyYAML | ≥6.0 | Loads RCE vulnerability signatures from `conf/signatures/rce_smb/*.yaml` |
+| PyYAML | ≥6.0 | YAML parser; used by `shared/signatures/rce_smb/loader.py`. Retained for historical signature data/tooling/tests compatibility; not used by any active runtime scanning path. |
 | Pillow | ≥8.0.0 | Image rendering in the file viewer (PNG, JPEG, GIF, WebP, BMP, TIFF) |
 
 ### System tools

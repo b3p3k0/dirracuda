@@ -515,8 +515,100 @@ Finalize documentation and closeout evidence.
 1. Doc statements match implemented code state.
 2. Final guardrail grep results captured.
 
-## Final Validation Report Template (For C6)
+## C6 Execution Report
 
-1. Card completion summary by C0-C6 with PASS/FAIL.
-2. Exact commands run and outcomes.
-3. Residual risks and recommended follow-up actions.
+**1. Issue:** Documentation in `README.md` and `docs/TECHNICAL_REFERENCE.md` still described Pry and RCE as "suspended/incomplete" features that could be re-enabled, listed removed modules (`rce_analyzer.py`, `rce_scanner/`) as present, and described `pry`/`rce` config keys as active config surfaces.
+
+**2. Root cause:** Docs were written during initial suspension of the features; C1–C5 removed the runtime but no doc pass was performed until C6. PyYAML dep description implied active scanning. Config table rows implied those keys had active runtime effect.
+
+**3. Fix:**
+- `README.md` line 82: Updated PyYAML description to "Retained for historical signature data/tooling/tests compatibility; not used by any active runtime scanning path."
+- `docs/TECHNICAL_REFERENCE.md` — 14 targeted edits:
+  - Edit A (line 15): Document Conventions notice updated from "suspended indefinitely" → "sunset and removed from runtime in C3"
+  - Edit B (line 53): Block diagram label `rce_scanner/` → `shared/signatures/rce_smb/`
+  - Edit C (line 109): Removed `rce_analyzer.py` from `commands/access/` key files column
+  - Edit D (line 120): Split `signatures/rce_smb/` row into two explicit rows: `conf/signatures/rce_smb/` (YAML data) and `shared/signatures/rce_smb/` (loader/validator)
+  - Edit E (line 138): Replaced `rce_scanner/` row in shared/ Module Map with `signatures/rce_smb/` noting loader retained, scanner removed in C3
+  - Edit F (line 165): `rce` config row marked `_(legacy)_`; description changed to "Legacy keys; tolerated in old config files but have no active runtime consumers. Runtime pipeline removed in C3."
+  - Edit G (line 168): `pry` config row marked `_(legacy)_`; same treatment; runtime removed in C2
+  - Edit H (line 676): `share_credentials` schema note updated to note Pry runtime removed in C2; table preserved for DB compat
+  - Edit I (line 890): Server List Pry action row struck through; replaced with removal note
+  - Edit J (lines 907–918): §6.7 Pry Password Audit section replaced with sunset notice; legacy pry keys language corrected per plan
+  - Edit K (lines 1115–1121): §7.4 heading updated "Suspended Feature" → "Sunset — removed in C3"; body replaced with factual removal statement
+  - Edit L (lines 1147–1151): §8.2 "Adding RCE Signatures" replaced with "Historical Data Artifacts — runtime removed in C3" section
+  - Edit M (line 1175): Glossary YAML entry updated to note historical context
+  - Edit N (line 1179): Glossary Pry entry updated to "Former built-in…; removed from runtime in C2"
+
+**4. Files changed:** `README.md`, `docs/TECHNICAL_REFERENCE.md`, `docs/dev/remove_old_tools/ROADMAP.md`, `docs/dev/remove_old_tools/TASK_CARDS.md`, `docs/dev/remove_old_tools/LESSONS_LEARNED.md`, `docs/dev/remove_old_tools/approved_plans/C6-docs-sync-closeout.md`
+
+**5. Validation run:**
+
+```
+rg -n -i "check-rce|--1337|_pry_unlocked|_rce_unlocked|PryDialog|rce_scanner|rce_analyzer|show_rce_controls|pry_runner\.py|Pry Password Audit" README.md docs/TECHNICAL_REFERENCE.md docs/dev/remove_old_tools --glob '*.md'
+```
+```
+rg -n -i "check-rce|_rce_unlocked|_pry_unlocked|show_rce_controls|rce_scanner|rce_analyzer|pry_runner|PryDialog" dirracuda gui shared cli commands conf README.md docs/TECHNICAL_REFERENCE.md
+```
+```
+xvfb-run -a ./venv/bin/python -m pytest gui/tests/test_action_routing.py -q
+xvfb-run -a ./venv/bin/python -m pytest gui/tests/test_server_ops_scenario_matrix.py -q
+./venv/bin/python -m pytest shared/tests/test_ftp_state_tables.py -q
+```
+
+**6. Result:**
+- Guardrail grep on `README.md` + `docs/TECHNICAL_REFERENCE.md`: hits found in TECHNICAL_REFERENCE.md lines 139, 676, 908, 1117 — all classified **intentional sunset references** (past-tense removal notes). Zero unexpected active-runtime claims.
+- Docs grep across `docs/dev/remove_old_tools/`: hits in SPEC.md, TASK_CARDS.md, ROADMAP.md, LESSONS_LEARNED.md, `approved_plans/` — all **historical planning references**, expected and correct.
+- Runtime code grep: **2 hits, both in TECHNICAL_REFERENCE.md sunset notes** (not production code). Zero hits in `dirracuda`, `gui/`, `shared/`, `cli/`, `commands/`, `conf/`.
+- `test_action_routing.py`: **36 passed**
+- `test_server_ops_scenario_matrix.py`: 12 passed, 1 failed (`test_s10_se_dork_probe_task_lifecycle_success`) — **pre-existing failure at C4 baseline** per C5 execution note; not a C6 regression
+- `test_ftp_state_tables.py`: **13 passed**
+
+**7. HI test needed?** No. C6 is a pure docs card; no runtime behavior changed. No manual interaction required.
+
+---
+
+## Final Validation Report (C6)
+
+### Card Completion Summary
+
+| Card | Objective | Status |
+|------|-----------|--------|
+| C0 | Contract Freeze + Touchpoint Inventory | PASS |
+| C1 | Entrypoint + Session-Gate Removal | PASS |
+| C2 | Pry Runtime Excision | PASS |
+| C3 | RCE Runtime Excision | PASS |
+| C4 | Compatibility Cleanup (No Destructive Migration) | PASS |
+| C5 | Tests + Scenario Matrix Update | PASS |
+| C6 | Docs Sync + Lessons + Closeout | PASS |
+
+### Validation Commands and Outcomes
+
+| Command | Outcome |
+|---------|---------|
+| `rg -n -i "check-rce\|--1337\|_pry_unlocked\|…" README.md docs/TECHNICAL_REFERENCE.md` | Zero unexpected active-runtime claims; all hits are intentional sunset references |
+| `rg -n -i "check-rce\|_rce_unlocked\|…" dirracuda gui shared cli commands conf README.md docs/TECHNICAL_REFERENCE.md` | 2 hits in TECHNICAL_REFERENCE.md sunset notes only; production code fully clean |
+| `pytest gui/tests/test_action_routing.py` | 36 passed |
+| `pytest gui/tests/test_server_ops_scenario_matrix.py` | 12 passed, 1 pre-existing failure (`test_s10_se_dork_probe_task_lifecycle_success`) |
+| `pytest shared/tests/test_ftp_state_tables.py` | 13 passed |
+
+### Residual Risks and Recommended Follow-up
+
+| Risk | Severity | Recommendation |
+|------|----------|----------------|
+| `test_s10_se_dork_probe_task_lifecycle_success` pre-existing failure | Low | Track separately; not related to Pry/RCE sunset |
+| `pry`/`rce` config keys tolerated in old configs but ignored | Negligible | No action; existing installations continue to parse without error |
+| `shared/signatures/rce_smb/` loader retained with no active caller | Negligible | Can be removed in a future cleanup card if desired; no security or correctness risk |
+| `conf/signatures/rce_smb/` YAML files retained | Negligible | Historical data artifacts; no runtime consumer; safe to leave |
+| `docs/guides/RCE_SIGNATURE_GUIDE.md` still exists and references the old format | Low | Mark or remove in a future docs cleanup; not maintained |
+
+### Attack Surface Reduction Summary
+
+Per OWASP Attack Surface Analysis and CISA Product Security Bad Practices guidance, this sunset removed:
+
+- 1 hidden CLI flag (`--1337`) that enabled undocumented privilege escalation paths
+- 2 session-gate boolean flags (`_pry_unlocked`, `_rce_unlocked`) propagated through the constructor chain
+- Pry credential-testing runtime (wordlist-based SMB brute-force; `pry_runner.py`, `PryDialog`, batch job type)
+- RCE scanner runtime (`shared/rce_scanner/` 7-file module, `commands/access/rce_analyzer.py`, `--check-rce` CLI option, GUI toggles)
+- Corresponding test fixture residue that could have masked re-introduction (C5)
+
+DB schema compatibility (`share_credentials`, `vulnerabilities`, probe snapshot tables) is fully preserved per NIST SP 800-171r3 least-functionality principle: remove the capability, retain the data.

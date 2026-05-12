@@ -12,7 +12,7 @@ Dirracuda scans for internet-accessible servers exposing open or weakly-authenti
 - File paths are relative to the repository root unless prefixed with `~/`.
 - Config keys are written in dot-notation (`shodan.api_key`).
 - Mermaid diagrams are used for flowcharts and the ER diagram. They render on GitHub and in VS Code with the Mermaid extension.
-- The SMB RCE vulnerability analysis feature (`--check-rce`) is **incomplete and suspended indefinitely**. There is currently no planned resumption of development; §4.2 and §8 document retained internals only, not production-ready capability.
+- The SMB RCE vulnerability analysis feature was **sunset and removed from runtime in C3**. §8.2 notes what loader infrastructure remains for historical data compatibility.
 
 ---
 
@@ -50,7 +50,7 @@ Dirracuda scans for internet-accessible servers exposing open or weakly-authenti
 │ output.py     │  │ db_schema.sql       │  │ exclusion_list.json │
 │ database.py   │  │ db_maintenance.py   │  │ ransomware_         │
 │ *_browser.py  │  │                     │  │ indicators.json     │
-│ rce_scanner/  │  └──────────┬──────────┘  └─────────────────────┘
+│ shared/signatures/rce_smb/ │  └──────────┬──────────┘  └─────────────────────┘
 └──────────────┘             │
                              ▼
                      ┌──────────────┐
@@ -106,7 +106,7 @@ This shape applies to all three protocols. Protocol-specific differences are cov
 |------|---------------|-----------|
 | `cli/` | Argument parsing; invoke workflow factory; exit cleanly on error | `smbseek.py`, `ftpseek.py`, `httpseek.py` |
 | `commands/discover/` | SMB Shodan query, host filtering, concurrent auth | `shodan_query.py`, `auth.py`, `operation.py`, `host_filter.py`, `connection_pool.py` |
-| `commands/access/` | SMB share enumeration and accessibility testing | `operation.py`, `share_enumerator.py`, `share_tester.py`, `rce_analyzer.py` |
+| `commands/access/` | SMB share enumeration and accessibility testing | `operation.py`, `share_enumerator.py`, `share_tester.py` |
 | `commands/ftp/` | FTP discovery and access stages | `shodan_query.py`, `verifier.py`, `operation.py`, `models.py` |
 | `commands/http/` | HTTP discovery and access stages (parallel to FTP) | `shodan_query.py`, `verifier.py`, `operation.py`, `models.py` |
 | `shared/` | Protocol-agnostic utilities shared by CLI and GUI | See §2.1 |
@@ -117,7 +117,8 @@ This shape applies to all three protocols. Protocol-specific differences are cov
 | `gui/components/`, `gui/dashboard/` | Tkinter windows/dialogs plus dashboard shim+implementation | `gui/components/dashboard.py` (compat shim), `gui/dashboard/widget.py`, `unified_scan_dialog.py`, `server_list_window/`, `running_tasks_window.py`, `db_tools_dialog.py`, `*_browser_window.py` |
 | `gui/utils/` | GUI infrastructure | `ui_dispatcher.py`, `scan_manager.py`, `backend_interface/`, `probe_runner.py`, `extract_runner.py`, `settings_manager.py` |
 | `tools/` | Database management utilities | `db_manager.py`, `db_schema.sql`, `db_maintenance.py`, `db_migrations.py`* |
-| `signatures/rce_smb/` | YAML CVE signature definitions | `*.yaml` |
+| `conf/signatures/rce_smb/` | Historical CVE YAML data files; retained as data artifacts; not loaded at runtime | `*.yaml` |
+| `shared/signatures/rce_smb/` | Signature loader (`loader.py`) and validator (`validator.py`); retained for historical/tooling/tests compatibility; no active runtime consumer | `loader.py`, `validator.py` |
 | `conf/` | Application configuration | `config.json.example`, `exclusion_list.json`, `ransomware_indicators.json` |
 
 *`db_migrations.py` lives in `shared/` not `tools/`.
@@ -135,7 +136,7 @@ This shape applies to all three protocols. Protocol-specific differences are cov
 | `smb_browser.py` | Read-only SMB file browser |
 | `ftp_browser.py` | `FtpNavigator` — list directories, download files, cancel mid-operation |
 | `http_browser.py` | HTTP directory/file browser |
-| `rce_scanner/` | Signature-based SMB RCE analysis (incomplete; development suspended indefinitely) |
+| `signatures/rce_smb/` | Signature YAML loader (`loader.py`) and validator (`validator.py`) — `shared/signatures/rce_smb/`. Retained for historical/tooling/tests compatibility; RCE runtime pipeline (`rce_scanner/`) removed in C3; no active runtime consumer. |
 | `db_migrations.py` | `run_migrations()` — additive schema migrations, called on startup |
 | `smb_adapter.py` | `SMBAdapter` — unified SMB backend abstraction (smbprotocol + impacket) |
 | `results.py` | `DiscoverResult`, `AccessResult` dataclasses |
@@ -161,10 +162,10 @@ All configuration lives in one JSON file, deep-merged against hardcoded defaults
 | `file_browser` | `max_entries_per_dir` (5000), `max_depth` (12), `download_chunk_mb` (4), `quarantine_root`, `download_worker_count` (1–3, default 2), `download_large_file_mb` | GUI browser limits; `download_worker_count` and `download_large_file_mb` are persisted as GUI settings keys, not loaded from this config file — they appear in the browser tuning strip; large-file threshold routing active for SMB and FTP only |
 | `ftp` | `shodan.query_components.base_query`, `verification.{connect,auth,listing}_timeout`, `discovery/access.max_concurrent_hosts` | FTP-specific settings |
 | `http` | Parallel to `ftp`; adds `verification.{allow_insecure_tls,verify_http,verify_https,subdir_timeout}` | HTTP-specific settings |
-| `rce` | `enabled_default` (false), `safe_active_budget.max_requests` (2), `intrusive_mode_enabled` (false) | RCE probe budget; intrusive mode must be explicitly enabled |
+| `rce` _(legacy)_ | `enabled_default`, `safe_active_budget.max_requests`, `intrusive_mode_enabled` | Legacy keys; tolerated in old `config.json` files but have no active runtime consumers. Runtime pipeline removed in C3. |
 | `clamav` | `enabled` (template default false; fresh setup auto-enables when a scanner is detected), `backend` ("auto"), `timeout_seconds` (60), `extracted_root`, `known_bad_subdir` | Post-extraction AV scanning |
 | `quarantine` | `use_tmpfs` (false), `tmpfs_size_mb` (512, compatibility-only) | tmpfs quarantine for file downloads (detect-only; no runtime mount/umount) |
-| `pry` | `wordlist_path`, `user_as_pass` (true), `stop_on_lockout` (true), `attempt_delay` (1.0s) | Password audit tool settings |
+| `pry` _(legacy)_ | `wordlist_path`, `user_as_pass`, `stop_on_lockout`, `attempt_delay` | Legacy keys; tolerated in old `config.json` files but have no active runtime consumers. Runtime removed in C2. |
 
 ### 3.2 `SMBSeekConfig` (shared/config.py)
 
@@ -177,7 +178,6 @@ Typed accessors of note:
 | `get_shodan_api_key()` | `str` — raises `ValueError` if empty |
 | `get_ftp_config()` | `dict` — full FTP section with defaults merged |
 | `get_http_config()` | `dict` — full HTTP section with defaults merged |
-| `get_rce_config()` | `dict` — full RCE section with safe defaults |
 | `get_clamav_config()` | `dict` — ClamAV settings with defaults |
 | `get_max_concurrent_hosts()` | `int` — SMB access concurrency, min 1 |
 | `get_max_concurrent_discovery_hosts()` | `int` — SMB discovery concurrency, min 1 |
@@ -672,7 +672,7 @@ WHERE ip_address = '1.2.3.4';
 
 **`failure_logs.session_id`** is nullable (`ON DELETE SET NULL`) so failure records survive session deletion.
 
-**`share_credentials`** is populated by the Pry password audit tool. Unique index on `(server_id, share_name, source)`.
+**`share_credentials`** was populated by the Pry password audit tool. Unique index on `(server_id, share_name, source)`. The Pry runtime was removed in C2; this table remains readable and its schema is preserved for DB compatibility.
 
 **`scan_sessions.scan_type`** values by tool:
 - `smbseek_unified` — `cli/smbseek.py`
@@ -887,7 +887,7 @@ Displays hosts from `smb_servers`, `ftp_servers`, `http_servers` in separate tab
 | Probe | `probe_runner.py` (SMB) / `ftp_probe_runner.py` / `http_probe_runner.py` — runs a quick directory listing; summary status persists in `*_probe_cache`, full snapshots persist in normalized `probe_snapshots` tables and are linked by `latest_snapshot_id` |
 | Browse | Opens `SMBBrowserWindow` / `FtpBrowserWindow` / `HttpBrowserWindow` via `smb_browser.py` / `ftp_browser.py` / `http_browser.py` |
 | Extract | `extract_runner.py` — downloads files per `file_collection` limits; optional ClamAV scan post-extract |
-| Pry | `pry_runner.py` — wordlist-based password audit; stores found credentials in `share_credentials` |
+| ~~Pry~~ | Removed in C2. `share_credentials` table retained for DB compatibility; existing credential rows remain readable. |
 | Favorite / Avoid / Compromised | Sets flags in `host_user_flags` / `ftp_user_flags` / `http_user_flags` |
 | Delete | Cascades via FK `ON DELETE CASCADE` |
 
@@ -904,18 +904,9 @@ Downloads are staged to `file_browser.quarantine_root` (`~/.dirracuda/data/quara
 
 Download concurrency is controlled by the worker-count spinbox in the browser UI (range 1–3, default 2), persisted in GUI settings under `file_browser.download_worker_count`. For SMB and FTP, a large-file threshold (GUI settings key `file_browser.download_large_file_mb`) dispatches files above that size to a dedicated large-file worker; remaining files share a separate small-file pool. HTTP uses worker-count concurrency only — there is no large-file queue routing for HTTP in the current release. The HTTP browser renders the large-file threshold control but disables it with an explanatory note.
 
-### 6.7 Pry Password Audit
+### 6.7 Pry Password Audit (Sunset — removed in C2)
 
-Pry is a proof-of-concept wordlist-based SMB credential tester. It is not a drop-in replacement for Hydra or Medusa — it lacks protocol-level optimisations and has limited error recovery.
-
-Config keys under `pry`:
-- `wordlist_path` — required; no default; empty string disables Pry
-- `user_as_pass` — also try each username as its own password
-- `stop_on_lockout` — abort on lockout detection
-- `attempt_delay` — seconds between attempts per host
-- `max_attempts` — 0 = unlimited
-
-Found credentials are stored in `share_credentials` with `source='pry'`. The unique index on `(server_id, share_name, source)` means re-running Pry upserts rather than duplicates.
+The Pry wordlist-based SMB credential tester was removed from the runtime in C2. The `share_credentials` table and its schema are preserved for DB compatibility; existing rows with `source='pry'` remain readable. Legacy `pry` keys are tolerated in old config files and ignored by active runtime paths.
 
 ### 6.8 DB Tools Dialog
 
@@ -1120,13 +1111,9 @@ Downloaded files land in `quarantine_root` (default `~/.dirracuda/data/quarantin
 
 ClamAV integration (`clamav.enabled=true`, `backend=auto`) runs `clamscan` or connects to `clamd` (auto-detected) after extraction. Fresh setup enables it automatically when a scanner binary is detected; existing configs remain authoritative, including explicit disabled settings. Flagged files are moved to `clamav.known_bad_subdir` under `extracted_root`.
 
-### 7.4 RCE Probe Limits (Suspended Feature)
+### 7.4 RCE Probe Limits (Sunset — removed in C3)
 
-RCE analysis is disabled by default (`rce.enabled_default=false`). The implementation is incomplete and development is suspended indefinitely (no planned resume). If explicitly enabled via `--check-rce`:
-- Probe budget: 2 requests per host (`safe_active_budget.max_requests`)
-- Per-host timeout: 5 seconds
-- Jitter: 250ms between probes
-- `intrusive_mode_enabled` is hardcoded off in `is_intrusive_mode_enabled()` unless explicitly set `true` in config — only do this for authorised active testing
+The RCE runtime pipeline (`shared/rce_scanner/`, `commands/access/rce_analyzer.py`, `--check-rce` flag) was removed in C3. The `rce` config block keys are tolerated in old config files but have no active runtime consumers. The signature loader (`shared/signatures/rce_smb/loader.py`) and YAML files (`conf/signatures/rce_smb/`) are retained as historical data artifacts only.
 
 ### 7.5 Ethical Use
 
@@ -1156,11 +1143,9 @@ The FTP and HTTP modules were added without touching the SMB codebase. The patte
 
 6. **GUI** — new scan dialog (`gui/components/<proto>_scan_dialog.py`), browser window (`gui/components/<proto>_browser_window.py`), probe runner (`gui/utils/<proto>_probe_runner.py`), and dispatch/load integration (`gui/utils/probe_cache_dispatch.py`) with DB-first snapshot persistence; add a tab to `ServerListWindow`
 
-### 8.2 Adding RCE Signatures
+### 8.2 RCE Signatures (Historical Data Artifacts — runtime removed in C3)
 
-Drop a YAML file into `signatures/rce_smb/`. The signature format and required fields are documented in `docs/guides/RCE_SIGNATURE_GUIDE.md`. The scanner (`shared/rce_scanner/scanner.py`) loads all `*.yaml` files from that directory at runtime.
-
-The RCE feature remains incomplete and suspended indefinitely; signatures you add will still load, but the scoring and verdict pipeline is not production-ready and is not under active development.
+The RCE runtime pipeline was removed in C3. The YAML signature files in `conf/signatures/rce_smb/` and the loader module (`shared/signatures/rce_smb/loader.py`) are retained as historical data artifacts; they are not loaded by any active runtime code path. `docs/guides/RCE_SIGNATURE_GUIDE.md` documents the historical signature format and is not maintained.
 
 ### 8.3 Adding GUI Components
 
@@ -1186,11 +1171,11 @@ The RCE feature remains incomplete and suspended indefinitely; signatures you ad
 | **CLI** | Command-Line Interface |
 | **GUI** | Graphical User Interface — the Tkinter dashboard |
 | **ERD** | Entity-Relationship Diagram |
-| **YAML** | YAML Ain't Markup Language — format used for RCE signature definitions |
+| **YAML** | YAML Ain't Markup Language — format used for historical RCE signature definitions (files retained; runtime pipeline removed in C3) |
 | **NTLM** | NT LAN Manager — Microsoft authentication protocol used in SMB sessions |
 | **tmpfs** | Temporary filesystem backed by RAM (Linux); used here for ephemeral quarantine storage |
 | **ClamAV** | Open-source antivirus engine; used for optional post-extraction scanning |
-| **Pry** | Dirracuda's built-in SMB wordlist password auditor (proof-of-concept) |
+| **Pry** | Former built-in SMB wordlist password auditor (proof-of-concept); removed from runtime in C2. Legacy schema artifacts preserved. |
 | **smbprotocol** | Pure-Python SMB2/3 library; primary SMB backend |
 | **Impacket** | Python library with SMB1/2/3 support; fallback SMB backend and share enumeration backend |
 | **Cautious mode** | SMB scan mode requiring SMB2+ and session signing; rejects SMB1 and unsigned sessions |

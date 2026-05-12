@@ -5,12 +5,12 @@ Status legend: `Not Started` | `In Progress` | `Blocked` | `Done`
 ## Card Sequence
 
 1. C0 - Contract Freeze + Touchpoint Inventory (`Done`)
-2. C1 - Entrypoint + Session-Gate Removal (`Not Started`)
-3. C2 - Pry Runtime Excision (`Not Started`)
-4. C3 - RCE Runtime Excision (`Not Started`)
-5. C4 - Compatibility Cleanup (No Destructive Migration) (`Not Started`)
+2. C1 - Entrypoint + Session-Gate Removal (`Done`)
+3. C2 - Pry Runtime Excision (`Done`)
+4. C3 - RCE Runtime Excision (`Done`)
+5. C4 - Compatibility Cleanup (No Destructive Migration) (`Done`)
 6. C5 - Tests + Scenario Matrix Update (`Done`)
-7. C6 - Docs Sync + Lessons + Closeout (`Not Started`)
+7. C6 - Docs Sync + Lessons + Closeout (`Done`)
 
 ## Gate Policy
 
@@ -32,9 +32,13 @@ C5 completed. Removed stale Pry/RCE fixture code across 8 test files: deleted `P
 ## Delivery Milestones
 
 1. M1: C0 approved — scope and touchpoint matrix frozen (`Done`).
-2. M2: C1-C3 approved (runtime entrypoints removed).
-3. M3: C4-C5 approved (compat and tests stabilized).
-4. M4: C6 approved (docs synced, lessons recorded, final closeout).
+2. M2: C1-C3 approved (runtime entrypoints removed) (`Done`).
+3. M3: C4-C5 approved (compat and tests stabilized) (`Done`).
+4. M4: C6 approved (docs synced, lessons recorded, final closeout) (`Done`).
+
+## C6 Execution Note
+
+C6 completed. Updated `README.md` (PyYAML dependency description) and `docs/TECHNICAL_REFERENCE.md` (14 targeted edits: Document Conventions notice, block diagram, directory structure table, shared/ module map, config table `rce`/`pry` rows marked legacy-only, schema notes, server list Pry action, §6.7 Pry section, §7.4 RCE section, §8.2 RCE Signatures section, and glossary entries). All stale "suspended/incomplete" language replaced with "sunset/removed" language; config keys marked as legacy-tolerated rather than active config surface. `ROADMAP.md`, `TASK_CARDS.md`, `LESSONS_LEARNED.md` updated with final card statuses, execution report, and closeout lessons. Guardrail grep on docs produces only intentional sunset-reference hits; zero unexpected active-runtime claims. Runtime code grep remains fully clean. Regression smoke: all targeted suites pass; `test_s10_se_dork_probe_task_lifecycle_success` confirmed pre-existing failure (C4 baseline). Ready for final closeout.
 
 ## Blocker Escalation
 
