@@ -48,3 +48,13 @@ Use this log to prevent repeat failures and preserve guardrails for future agent
 5. **Regression caught/avoided:** Guardrail grep on `README.md` + `TECHNICAL_REFERENCE.md` produced zero unexpected active-runtime claims. Regression smoke suites all pass. Pre-existing `test_s10_se_dork_probe_task_lifecycle_success` failure correctly classified and not masked.
 6. **New guardrail added:** When verifying a dependency (e.g., PyYAML), grep for actual usage across `shared/`, `gui/`, `cli/` before updating the dep description — the loader module at `shared/signatures/rce_smb/loader.py` remained a legitimate consumer even after the scanner was removed. "Suspended" language in docs is a signal that a runtime-removal card has not been fully closed out; always update docs on the same card that removes the code, or explicitly defer to a named follow-up card.
 7. **Follow-up needed:** `docs/guides/RCE_SIGNATURE_GUIDE.md` still exists and references the removed scanner pipeline; can be removed or archived in a future cleanup pass. `test_s10_se_dork_probe_task_lifecycle_success` is a pre-existing failure unrelated to this sunset — track separately.
+
+---
+
+1. **Date:** 2026-05-12
+2. **Card:** C7 — Full Pry/RCE Artifact Purge + Legacy Config Auto-Migration
+3. **What changed:** Removed dormant signature artifacts and tests (`shared/signatures/rce_smb/*`, `conf/signatures/rce_smb/*.yaml`, `shared/tests/test_signature_loader_paths.py`), removed `PyYAML` from `requirements.txt`, and updated README/technical docs accordingly. Added startup migration in `shared/config.py` to strip top-level legacy `pry`/`rce` keys with timestamped backup + atomic rewrite. Added fallback path that keeps sanitized in-memory config when rewrite fails. Removed path-service fields/migration ops tied only to the removed subsystem (`signatures_rce_dir`, `rce_analysis_log_file`, `flat_rce_analysis_log_file`).
+4. **Root cause prevented:** Leaving dormant artifacts and "tolerated forever" config keys creates permanent maintenance drag and misleading dependency/documentation claims.
+5. **Regression caught/avoided:** New migration tests cover both success and failure paths, ensuring runtime behavior is clean even when filesystem writes fail.
+6. **New guardrail added:** For breaking config cleanup, always pair destructive key removal with assisted migration (backup + atomic rewrite + sanitized in-memory fallback) so behavior is deterministic and recoverable.
+7. **Follow-up needed:** Pre-existing `test_s10_se_dork_probe_task_lifecycle_success` remains unrelated and tracked separately.

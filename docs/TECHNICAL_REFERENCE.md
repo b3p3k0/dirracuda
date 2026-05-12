@@ -12,7 +12,7 @@ Dirracuda scans for internet-accessible servers exposing open or weakly-authenti
 - File paths are relative to the repository root unless prefixed with `~/`.
 - Config keys are written in dot-notation (`shodan.api_key`).
 - Mermaid diagrams are used for flowcharts and the ER diagram. They render on GitHub and in VS Code with the Mermaid extension.
-- The SMB RCE vulnerability analysis feature was **sunset and removed from runtime in C3**. §8.2 notes what loader infrastructure remains for historical data compatibility.
+- The SMB RCE vulnerability analysis feature was **sunset and removed from runtime in C3**. C7 removed the remaining signature loader/data artifacts and dependency ties.
 
 ---
 
@@ -50,7 +50,7 @@ Dirracuda scans for internet-accessible servers exposing open or weakly-authenti
 │ output.py     │  │ db_schema.sql       │  │ exclusion_list.json │
 │ database.py   │  │ db_maintenance.py   │  │ ransomware_         │
 │ *_browser.py  │  │                     │  │ indicators.json     │
-│ shared/signatures/rce_smb/ │  └──────────┬──────────┘  └─────────────────────┘
+│ path_service.py │           └──────────┬──────────┘  └─────────────────────┘
 └──────────────┘             │
                              ▼
                      ┌──────────────┐
@@ -117,8 +117,6 @@ This shape applies to all three protocols. Protocol-specific differences are cov
 | `gui/components/`, `gui/dashboard/` | Tkinter windows/dialogs plus dashboard shim+implementation | `gui/components/dashboard.py` (compat shim), `gui/dashboard/widget.py`, `unified_scan_dialog.py`, `server_list_window/`, `running_tasks_window.py`, `db_tools_dialog.py`, `*_browser_window.py` |
 | `gui/utils/` | GUI infrastructure | `ui_dispatcher.py`, `scan_manager.py`, `backend_interface/`, `probe_runner.py`, `extract_runner.py`, `settings_manager.py` |
 | `tools/` | Database management utilities | `db_manager.py`, `db_schema.sql`, `db_maintenance.py`, `db_migrations.py`* |
-| `conf/signatures/rce_smb/` | Historical CVE YAML data files; retained as data artifacts; not loaded at runtime | `*.yaml` |
-| `shared/signatures/rce_smb/` | Signature loader (`loader.py`) and validator (`validator.py`); retained for historical/tooling/tests compatibility; no active runtime consumer | `loader.py`, `validator.py` |
 | `conf/` | Application configuration | `config.json.example`, `exclusion_list.json`, `ransomware_indicators.json` |
 
 *`db_migrations.py` lives in `shared/` not `tools/`.
@@ -136,7 +134,6 @@ This shape applies to all three protocols. Protocol-specific differences are cov
 | `smb_browser.py` | Read-only SMB file browser |
 | `ftp_browser.py` | `FtpNavigator` — list directories, download files, cancel mid-operation |
 | `http_browser.py` | HTTP directory/file browser |
-| `signatures/rce_smb/` | Signature YAML loader (`loader.py`) and validator (`validator.py`) — `shared/signatures/rce_smb/`. Retained for historical/tooling/tests compatibility; RCE runtime pipeline (`rce_scanner/`) removed in C3; no active runtime consumer. |
 | `db_migrations.py` | `run_migrations()` — additive schema migrations, called on startup |
 | `smb_adapter.py` | `SMBAdapter` — unified SMB backend abstraction (smbprotocol + impacket) |
 | `results.py` | `DiscoverResult`, `AccessResult` dataclasses |
@@ -162,10 +159,10 @@ All configuration lives in one JSON file, deep-merged against hardcoded defaults
 | `file_browser` | `max_entries_per_dir` (5000), `max_depth` (12), `download_chunk_mb` (4), `quarantine_root`, `download_worker_count` (1–3, default 2), `download_large_file_mb` | GUI browser limits; `download_worker_count` and `download_large_file_mb` are persisted as GUI settings keys, not loaded from this config file — they appear in the browser tuning strip; large-file threshold routing active for SMB and FTP only |
 | `ftp` | `shodan.query_components.base_query`, `verification.{connect,auth,listing}_timeout`, `discovery/access.max_concurrent_hosts` | FTP-specific settings |
 | `http` | Parallel to `ftp`; adds `verification.{allow_insecure_tls,verify_http,verify_https,subdir_timeout}` | HTTP-specific settings |
-| `rce` _(legacy)_ | `enabled_default`, `safe_active_budget.max_requests`, `intrusive_mode_enabled` | Legacy keys; tolerated in old `config.json` files but have no active runtime consumers. Runtime pipeline removed in C3. |
 | `clamav` | `enabled` (template default false; fresh setup auto-enables when a scanner is detected), `backend` ("auto"), `timeout_seconds` (60), `extracted_root`, `known_bad_subdir` | Post-extraction AV scanning |
 | `quarantine` | `use_tmpfs` (false), `tmpfs_size_mb` (512, compatibility-only) | tmpfs quarantine for file downloads (detect-only; no runtime mount/umount) |
-| `pry` _(legacy)_ | `wordlist_path`, `user_as_pass`, `stop_on_lockout`, `attempt_delay` | Legacy keys; tolerated in old `config.json` files but have no active runtime consumers. Runtime removed in C2. |
+
+Legacy migration note: if older user configs still contain top-level `pry` or `rce` blocks, startup migration (C7) strips those keys, writes a timestamped backup, and continues with a sanitized in-memory config even if rewrite fails.
 
 ### 3.2 `SMBSeekConfig` (shared/config.py)
 
@@ -906,7 +903,7 @@ Download concurrency is controlled by the worker-count spinbox in the browser UI
 
 ### 6.7 Pry Password Audit (Sunset — removed in C2)
 
-The Pry wordlist-based SMB credential tester was removed from the runtime in C2. The `share_credentials` table and its schema are preserved for DB compatibility; existing rows with `source='pry'` remain readable. Legacy `pry` keys are tolerated in old config files and ignored by active runtime paths.
+The Pry wordlist-based SMB credential tester was removed from the runtime in C2. The `share_credentials` table and its schema are preserved for DB compatibility; existing rows with `source='pry'` remain readable.
 
 ### 6.8 DB Tools Dialog
 
@@ -1113,7 +1110,7 @@ ClamAV integration (`clamav.enabled=true`, `backend=auto`) runs `clamscan` or co
 
 ### 7.4 RCE Probe Limits (Sunset — removed in C3)
 
-The RCE runtime pipeline (`shared/rce_scanner/`, `commands/access/rce_analyzer.py`, `--check-rce` flag) was removed in C3. The `rce` config block keys are tolerated in old config files but have no active runtime consumers. The signature loader (`shared/signatures/rce_smb/loader.py`) and YAML files (`conf/signatures/rce_smb/`) are retained as historical data artifacts only.
+The RCE runtime pipeline (`shared/rce_scanner/`, `commands/access/rce_analyzer.py`, `--check-rce` flag) was removed in C3. C7 removed the remaining signature-loader/data artifacts and automatically strips legacy top-level `rce` keys from user configs at startup.
 
 ### 7.5 Ethical Use
 
@@ -1143,9 +1140,9 @@ The FTP and HTTP modules were added without touching the SMB codebase. The patte
 
 6. **GUI** — new scan dialog (`gui/components/<proto>_scan_dialog.py`), browser window (`gui/components/<proto>_browser_window.py`), probe runner (`gui/utils/<proto>_probe_runner.py`), and dispatch/load integration (`gui/utils/probe_cache_dispatch.py`) with DB-first snapshot persistence; add a tab to `ServerListWindow`
 
-### 8.2 RCE Signatures (Historical Data Artifacts — runtime removed in C3)
+### 8.2 RCE Signatures (Removed in C7)
 
-The RCE runtime pipeline was removed in C3. The YAML signature files in `conf/signatures/rce_smb/` and the loader module (`shared/signatures/rce_smb/loader.py`) are retained as historical data artifacts; they are not loaded by any active runtime code path. `docs/guides/RCE_SIGNATURE_GUIDE.md` documents the historical signature format and is not maintained.
+The RCE runtime pipeline was removed in C3, and the remaining signature artifacts were removed in C7 (`shared/signatures/rce_smb/`, `conf/signatures/rce_smb/*.yaml`, and the associated PyYAML dependency).
 
 ### 8.3 Adding GUI Components
 
@@ -1171,7 +1168,7 @@ The RCE runtime pipeline was removed in C3. The YAML signature files in `conf/si
 | **CLI** | Command-Line Interface |
 | **GUI** | Graphical User Interface — the Tkinter dashboard |
 | **ERD** | Entity-Relationship Diagram |
-| **YAML** | YAML Ain't Markup Language — format used for historical RCE signature definitions (files retained; runtime pipeline removed in C3) |
+| **YAML** | YAML Ain't Markup Language — human-readable serialization format used in some project/test assets |
 | **NTLM** | NT LAN Manager — Microsoft authentication protocol used in SMB sessions |
 | **tmpfs** | Temporary filesystem backed by RAM (Linux); used here for ephemeral quarantine storage |
 | **ClamAV** | Open-source antivirus engine; used for optional post-extraction scanning |

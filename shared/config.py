@@ -9,9 +9,11 @@ import json
 import logging
 import os
 import re
+import shutil
+import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 from shared.path_service import get_paths, get_legacy_paths, resolve_runtime_config_path
 
 logger = logging.getLogger(__name__)
@@ -127,6 +129,75 @@ class SMBSeekConfig:
         
         self.config_file = config_file
         self.config = self.load_configuration()
+
+    def _legacy_key_cleanup_result(
+        self, user_config: Dict[str, Any]
+    ) -> Tuple[Dict[str, Any], bool, Optional[str], Optional[str]]:
+        """Drop top-level legacy keys and persist cleanup when possible.
+
+        Returns:
+            (sanitized_config, had_legacy_keys, backup_path, rewrite_error)
+        """
+        legacy_keys = [key for key in ("pry", "rce") if key in user_config]
+        if not legacy_keys:
+            return user_config, False, None, None
+
+        sanitized_config = dict(user_config)
+        for key in legacy_keys:
+            sanitized_config.pop(key, None)
+
+        backup_path, rewrite_error = self._rewrite_config_without_legacy_keys(sanitized_config)
+        joined_keys = ", ".join(legacy_keys)
+        if rewrite_error is None:
+            logger.warning(
+                "Legacy config keys removed from %s: %s. Backup created at %s",
+                self.config_file,
+                joined_keys,
+                backup_path,
+            )
+        else:
+            logger.warning(
+                "Legacy config keys detected in %s: %s. Failed to rewrite config file (%s). "
+                "Continuing with sanitized in-memory config only; fix file permissions and remove keys manually.",
+                self.config_file,
+                joined_keys,
+                rewrite_error,
+            )
+        return sanitized_config, True, backup_path, rewrite_error
+
+    def _rewrite_config_without_legacy_keys(self, sanitized_config: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+        """Create timestamped backup and atomically rewrite config without legacy keys."""
+        path = Path(self.config_file).expanduser()
+        if not path.exists():
+            return None, "config_file_missing"
+
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        backup_path = path.with_name(f"{path.name}.legacy_keys_backup_{timestamp}")
+
+        tmp_path: Optional[Path] = None
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, backup_path)
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=str(path.parent),
+                prefix=f".{path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as tmp:
+                json.dump(sanitized_config, tmp, indent=2)
+                tmp.write("\n")
+                tmp_path = Path(tmp.name)
+            os.replace(str(tmp_path), str(path))
+            return str(backup_path), None
+        except Exception as exc:
+            if tmp_path is not None:
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            return str(backup_path), str(exc)
     
     def load_configuration(self) -> Dict[str, Any]:
         """
@@ -227,9 +298,15 @@ class SMBSeekConfig:
         try:
             with open(self.config_file, 'r', encoding='utf-8') as f:
                 user_config = json.load(f)
+            if not isinstance(user_config, dict):
+                raise ValueError("Configuration root must be an object")
+
+            user_config, had_legacy_keys, _, _ = self._legacy_key_cleanup_result(user_config)
             
             # Merge user config with defaults (deep merge)
             merged_config = self._deep_merge(default_config, user_config)
+            if had_legacy_keys:
+                logger.info("Using sanitized config without legacy pry/rce keys for this session.")
             return merged_config
             
         except FileNotFoundError:

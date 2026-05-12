@@ -5,7 +5,6 @@
 shodan>=1.25.0
 smbprotocol>=1.10.0
 pyspnego>=0.8.0
-PyYAML>=6.0             # YAML parsing for RCE signatures
 
 # GUI-specific dependencies
 ttkthemes>=3.2.0         # Better tkinter styling

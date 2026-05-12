@@ -38,8 +38,6 @@ class DirracudaPaths:
     config_file: Path
     exclusion_list_file: Path
     ransomware_indicators_file: Path
-    signatures_dir: Path
-    signatures_rce_dir: Path
     wordlists_dir: Path
 
     data_dir: Path
@@ -69,7 +67,6 @@ class DirracudaPaths:
     migration_backups_dir: Path
 
     logs_dir: Path
-    rce_analysis_log_file: Path
     extract_logs_dir: Path
     app_logs_dir: Path
 
@@ -103,13 +100,11 @@ class LegacyPaths:
     flat_tmpfs_quarantine_dir: Path
 
     flat_extract_logs_dir: Path
-    flat_rce_analysis_log_file: Path
 
     repo_config_file: Path
     repo_config_example_file: Path
     repo_exclusion_list_file: Path
     repo_ransomware_indicators_file: Path
-    repo_signatures_dir: Path
     repo_wordlists_dir: Path
 
     repo_main_db_file: Path
@@ -143,8 +138,6 @@ def get_paths(*, home_root: Optional[Path] = None, repo_root: Optional[Path] = N
         config_file=conf_dir / "config.json",
         exclusion_list_file=conf_dir / "exclusion_list.json",
         ransomware_indicators_file=conf_dir / "ransomware_indicators.json",
-        signatures_dir=conf_dir / "signatures",
-        signatures_rce_dir=conf_dir / "signatures" / "rce_smb",
         wordlists_dir=conf_dir / "wordlists",
         data_dir=data_dir,
         main_db_file=data_dir / "dirracuda.db",
@@ -171,7 +164,6 @@ def get_paths(*, home_root: Optional[Path] = None, repo_root: Optional[Path] = N
         migration_reports_dir=migrations_dir / "reports",
         migration_backups_dir=migrations_dir / "backups",
         logs_dir=logs_dir,
-        rce_analysis_log_file=logs_dir / "rce_analysis.jsonl",
         extract_logs_dir=logs_dir / "extract",
         app_logs_dir=logs_dir / "app",
     )
@@ -206,12 +198,10 @@ def get_legacy_paths(*, paths: Optional[DirracudaPaths] = None) -> LegacyPaths:
         flat_extracted_dir=flat_root / "extracted",
         flat_tmpfs_quarantine_dir=flat_root / "quarantine_tmpfs",
         flat_extract_logs_dir=flat_root / "extract_logs",
-        flat_rce_analysis_log_file=flat_root / "rce_analysis.jsonl",
         repo_config_file=repo_conf / "config.json",
         repo_config_example_file=repo_conf / "config.json.example",
         repo_exclusion_list_file=repo_conf / "exclusion_list.json",
         repo_ransomware_indicators_file=repo_conf / "ransomware_indicators.json",
-        repo_signatures_dir=repo_conf / "signatures",
         repo_wordlists_dir=repo_conf / "wordlists",
         repo_main_db_file=p.repo_root / "dirracuda.db",
         repo_legacy_db_file=p.repo_root / "smbseek.db",
@@ -738,7 +728,6 @@ def ensure_layout_dirs(*, paths: Optional[DirracudaPaths] = None) -> Dict[str, A
         p.logs_dir,
         p.extract_logs_dir,
         p.app_logs_dir,
-        p.signatures_rce_dir,
         p.wordlists_dir,
     ]
     for d in required:
@@ -765,16 +754,6 @@ def seed_conf_assets(*, paths: Optional[DirracudaPaths] = None, legacy: Optional
 
     results.append(_copy_asset_if_missing(l.repo_exclusion_list_file, p.exclusion_list_file))
     results.append(_copy_asset_if_missing(l.repo_ransomware_indicators_file, p.ransomware_indicators_file))
-
-    if l.repo_signatures_dir.exists() and l.repo_signatures_dir.is_dir():
-        for file_path in sorted(l.repo_signatures_dir.rglob("*")):
-            rel = file_path.relative_to(l.repo_signatures_dir)
-            dst = p.signatures_dir / rel
-            if file_path.is_dir():
-                if not dst.exists():
-                    dst.mkdir(parents=True, exist_ok=True)
-                continue
-            results.append(_copy_asset_if_missing(file_path, dst))
 
     if l.repo_wordlists_dir.exists() and l.repo_wordlists_dir.is_dir():
         for file_path in sorted(l.repo_wordlists_dir.rglob("*")):
@@ -1083,10 +1062,6 @@ def run_layout_v2_migration(
         (l.legacy_home_root / "ransomware_indicators.json", p.ransomware_indicators_file, "move", "legacy_home/ransomware_indicators.json"),
         (l.legacy_home_root / "conf" / "ransomware_indicators.json", p.ransomware_indicators_file, "move", "legacy_home/conf/ransomware_indicators.json"),
 
-        (l.flat_home_root / "signatures", p.signatures_dir, "move", "home_flat/signatures"),
-        (l.flat_home_root / "conf" / "signatures", p.signatures_dir, "move", "home_flat/conf/signatures"),
-        (l.legacy_home_root / "signatures", p.signatures_dir, "move", "legacy_home/signatures"),
-        (l.legacy_home_root / "conf" / "signatures", p.signatures_dir, "move", "legacy_home/conf/signatures"),
         (l.flat_home_root / "wordlists", p.wordlists_dir, "move", "home_flat/wordlists"),
         (l.flat_home_root / "conf" / "wordlists", p.wordlists_dir, "move", "home_flat/conf/wordlists"),
         (l.legacy_home_root / "wordlists", p.wordlists_dir, "move", "legacy_home/wordlists"),
@@ -1115,7 +1090,6 @@ def run_layout_v2_migration(
         (l.flat_tmpfs_quarantine_dir, p.tmpfs_quarantine_dir, "move", f"home_flat/quarantine_tmpfs"),
 
         (l.flat_extract_logs_dir, p.extract_logs_dir, "move", f"home_flat/extract_logs"),
-        (l.flat_rce_analysis_log_file, p.rce_analysis_log_file, "move", f"home_flat/rce_analysis.jsonl"),
     ]
 
     # Legacy ~/.smbseek support (known old layout).
@@ -1135,7 +1109,6 @@ def run_layout_v2_migration(
             (l.legacy_home_root / "extracted", p.extracted_dir, "move", "legacy_home/extracted"),
             (l.legacy_home_root / "quarantine_tmpfs", p.tmpfs_quarantine_dir, "move", "legacy_home/quarantine_tmpfs"),
             (l.legacy_home_root / "extract_logs", p.extract_logs_dir, "move", "legacy_home/extract_logs"),
-            (l.legacy_home_root / "rce_analysis.jsonl", p.rce_analysis_log_file, "move", "legacy_home/rce_analysis.jsonl"),
         ]
         ops.extend(legacy_items)
 

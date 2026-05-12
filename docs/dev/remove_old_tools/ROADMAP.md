@@ -11,6 +11,7 @@ Status legend: `Not Started` | `In Progress` | `Blocked` | `Done`
 5. C4 - Compatibility Cleanup (No Destructive Migration) (`Done`)
 6. C5 - Tests + Scenario Matrix Update (`Done`)
 7. C6 - Docs Sync + Lessons + Closeout (`Done`)
+8. C7 - Full Pry/RCE Artifact Purge + Legacy Config Auto-Migration (`Done`)
 
 ## Gate Policy
 
@@ -35,10 +36,15 @@ C5 completed. Removed stale Pry/RCE fixture code across 8 test files: deleted `P
 2. M2: C1-C3 approved (runtime entrypoints removed) (`Done`).
 3. M3: C4-C5 approved (compat and tests stabilized) (`Done`).
 4. M4: C6 approved (docs synced, lessons recorded, final closeout) (`Done`).
+5. M5: C7 approved (artifact purge and breaking legacy config cleanup) (`Done`).
 
 ## C6 Execution Note
 
 C6 completed. Updated `README.md` (PyYAML dependency description) and `docs/TECHNICAL_REFERENCE.md` (14 targeted edits: Document Conventions notice, block diagram, directory structure table, shared/ module map, config table `rce`/`pry` rows marked legacy-only, schema notes, server list Pry action, §6.7 Pry section, §7.4 RCE section, §8.2 RCE Signatures section, and glossary entries). All stale "suspended/incomplete" language replaced with "sunset/removed" language; config keys marked as legacy-tolerated rather than active config surface. `ROADMAP.md`, `TASK_CARDS.md`, `LESSONS_LEARNED.md` updated with final card statuses, execution report, and closeout lessons. Guardrail grep on docs produces only intentional sunset-reference hits; zero unexpected active-runtime claims. Runtime code grep remains fully clean. Regression smoke: all targeted suites pass; `test_s10_se_dork_probe_task_lifecycle_success` confirmed pre-existing failure (C4 baseline). Ready for final closeout.
+
+## C7 Execution Note
+
+C7 completed. Removed dormant RCE signature artifacts (`shared/signatures/rce_smb/`, `conf/signatures/rce_smb/*.yaml`) and dropped `PyYAML` from runtime dependencies. Added startup legacy-config auto-migration in `shared/config.py`: detects top-level `pry`/`rce` keys, creates a timestamped backup, rewrites config atomically without those keys, and logs explicit warnings. If rewrite fails, runtime continues with sanitized in-memory config and remediation guidance. Path-service cleanup removed subsystem-only fields/references (`signatures_rce_dir`, `rce_analysis_log_file`, `flat_rce_analysis_log_file`) plus legacy migration ops tied to those paths. DB schema compatibility remains intentionally unchanged. C7 validation passed (compile, targeted tests, regression smoke, guardrail grep), with known pre-existing `test_s10_se_dork_probe_task_lifecycle_success` unchanged and classified as non-regression.
 
 ## Blocker Escalation
 

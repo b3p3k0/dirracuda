@@ -17,12 +17,10 @@ from shared.path_service import (
 
 def _seed_repo_conf(repo_root: Path) -> None:
     conf = repo_root / "conf"
-    (conf / "signatures" / "rce_smb").mkdir(parents=True, exist_ok=True)
     (conf / "wordlists").mkdir(parents=True, exist_ok=True)
     (conf / "config.json.example").write_text('{"database": {"path": "dirracuda.db"}}', encoding="utf-8")
     (conf / "exclusion_list.json").write_text('{"organizations": []}', encoding="utf-8")
     (conf / "ransomware_indicators.json").write_text('{"patterns": []}', encoding="utf-8")
-    (conf / "signatures" / "rce_smb" / "sample.yaml").write_text("name: sample\n", encoding="utf-8")
     (conf / "wordlists" / ".gitkeep").write_text("", encoding="utf-8")
 
 

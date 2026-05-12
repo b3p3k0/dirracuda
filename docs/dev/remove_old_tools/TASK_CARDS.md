@@ -580,6 +580,7 @@ xvfb-run -a ./venv/bin/python -m pytest gui/tests/test_server_ops_scenario_matri
 | C4 | Compatibility Cleanup (No Destructive Migration) | PASS |
 | C5 | Tests + Scenario Matrix Update | PASS |
 | C6 | Docs Sync + Lessons + Closeout | PASS |
+| C7 | Full Pry/RCE Artifact Purge + Legacy Config Auto-Migration | PASS |
 
 ### Validation Commands and Outcomes
 
@@ -612,3 +613,42 @@ Per OWASP Attack Surface Analysis and CISA Product Security Bad Practices guidan
 - Corresponding test fixture residue that could have masked re-introduction (C5)
 
 DB schema compatibility (`share_credentials`, `vulnerabilities`, probe snapshot tables) is fully preserved per NIST SP 800-171r3 least-functionality principle: remove the capability, retain the data.
+
+## C7 - Full Pry/RCE Artifact Purge + Legacy Config Auto-Migration
+
+**1. Issue:** Non-runtime Pry/RCE artifacts were still present after C6: dormant signature loader/data (`shared/signatures/rce_smb`, `conf/signatures/rce_smb`), `PyYAML` dependency, and tolerated legacy top-level `pry`/`rce` config keys that caused recurring maintenance overhead.
+
+**2. Root cause:** C1–C6 removed runtime execution paths and docs drift, but intentionally deferred final artifact purge and breaking cleanup of old config keys for install compatibility.
+
+**3. Fix:**
+- Deleted dormant RCE signature package, YAML artifacts, and dedicated loader tests.
+- Removed `PyYAML` from `requirements.txt` and aligned README/docs statements.
+- Added startup migration in `shared/config.py`:
+  - detect top-level `pry`/`rce` keys
+  - create timestamped backup (`config.json.legacy_keys_backup_<UTC timestamp>`)
+  - atomically rewrite config without legacy keys
+  - log one-time migration warning
+  - on rewrite failure, continue with sanitized in-memory config and explicit remediation warning
+- Removed path-service fields and migration ops tied only to this subsystem (`signatures_rce_dir`, `rce_analysis_log_file`, `flat_rce_analysis_log_file`, legacy move targets).
+- Preserved DB compatibility as required (`shared/db_migrations.py` unchanged).
+
+**4. Files changed:**
+- Deleted: `shared/signatures/rce_smb/__init__.py`, `shared/signatures/rce_smb/loader.py`, `shared/signatures/rce_smb/validator.py`, `shared/tests/test_signature_loader_paths.py`, `conf/signatures/rce_smb/CVE-*.yaml` (7 files)
+- Modified: `shared/config.py`, `shared/path_service.py`, `shared/tests/test_path_service_layout_v2.py`, `requirements.txt`, `README.md`, `docs/TECHNICAL_REFERENCE.md`
+- Process docs: `docs/dev/remove_old_tools/ROADMAP.md`, `docs/dev/remove_old_tools/LESSONS_LEARNED.md`, `docs/dev/remove_old_tools/TASK_CARDS.md`
+
+**5. Validation run:**
+- `py_compile`: `shared/config.py`, `shared/path_service.py` (+ related touched tests/modules)
+- Targeted tests:
+  - `shared/tests/test_config_legacy_key_migration.py` (new)
+  - `shared/tests/test_path_service_layout_v2.py`
+- Regression smoke:
+  - `gui/tests/test_action_routing.py`
+  - `gui/tests/test_server_ops_scenario_matrix.py`
+  - `shared/tests/test_ftp_state_tables.py`
+- Guardrail grep:
+  - zero production-code refs to removed artifacts/symbols (`shared/signatures/rce_smb`, `conf/signatures/rce_smb`, `yaml` runtime loader usage, `rce_analyzer`, `rce_scanner`, Pry runtime symbols)
+
+**6. Result:** PASS — purge complete, config migration behavior verified, DB schema compatibility preserved.
+
+**7. HI test needed?** Optional only. This card is covered by automated tests, but a manual startup with an old config file containing `pry`/`rce` keys can be run to observe backup + rewrite behavior.
