@@ -129,8 +129,7 @@ class DashboardWidget:
     """
 
     def __init__(self, parent: tk.Widget, db_reader: DatabaseReader,
-                 backend_interface: BackendInterface, config_path: str = None,
-                 rce_unlocked: bool = False):
+                 backend_interface: BackendInterface, config_path: str = None):
         """
         Initialize dashboard widget.
 
@@ -139,7 +138,6 @@ class DashboardWidget:
             db_reader: Database access instance
             backend_interface: Backend communication interface
             config_path: Path to SMBSeek configuration file (optional)
-            rce_unlocked: Session unlock state for hidden RCE controls
 
         Design Decision: Dependency injection allows easy testing with mock
         objects and clear separation of concerns.
@@ -158,7 +156,6 @@ class DashboardWidget:
         self.scan_manager = get_scan_manager()
         self.config_path = config_path
         self.settings_manager = get_settings_manager()
-        self._rce_unlocked = bool(rce_unlocked)
         self.ransomware_indicators: List[str] = []
         self.indicator_patterns = []
         self._mock_mode_notice_shown = False
@@ -1135,7 +1132,7 @@ class DashboardWidget:
             settings_manager=getattr(self, "settings_manager", None),
             config_editor_callback=self._open_config_editor_from_scan,
             query_editor_callback=self._open_config_editor,
-            show_rce_controls=bool(getattr(self, "_rce_unlocked", False)),
+            show_rce_controls=False,
         )
 
     def _open_config_editor_from_scan(self, config_path: str) -> None:

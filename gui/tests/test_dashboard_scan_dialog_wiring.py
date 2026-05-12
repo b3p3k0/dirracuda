@@ -60,7 +60,7 @@ def test_show_quick_scan_dialog_passes_query_editor_callback(monkeypatch):
 
     assert captured["config_editor_callback"] == dash._open_config_editor_from_scan
     assert captured["query_editor_callback"] == dash._open_config_editor
-    assert captured["show_rce_controls"] is True
+    assert captured["show_rce_controls"] is False
 
 
 def test_show_quick_scan_dialog_does_not_pass_reddit_grab_callback(monkeypatch):
