@@ -599,7 +599,7 @@ class SeDorkBrowserWindow:
                             probe_preview=outcome.probe_preview,
                             probe_checked_at=outcome.probe_checked_at,
                             probe_error=outcome.probe_error,
-                            probe_snapshot_payload=outcome.probe_snapshot_payload,
+                            probe_snapshot_payload=getattr(outcome, "probe_snapshot_payload", None),
                         )
                         if outcome.probe_status == "unprobed" and outcome.probe_error:
                             unprobed_errors.append(

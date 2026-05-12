@@ -304,7 +304,7 @@ def _probe_targets_for_keys(
                     probe_preview=outcome.probe_preview,
                     probe_checked_at=outcome.probe_checked_at,
                     probe_error=outcome.probe_error,
-                    probe_snapshot_payload=outcome.probe_snapshot_payload,
+                    probe_snapshot_payload=getattr(outcome, "probe_snapshot_payload", None),
                 )
                 counts["total"] += 1
                 if outcome.probe_status == PROBE_STATUS_ISSUE:
