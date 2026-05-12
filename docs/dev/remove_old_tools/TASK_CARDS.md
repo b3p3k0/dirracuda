@@ -442,6 +442,62 @@ Align tests and scenario docs with sunset behavior.
 1. Targeted pytest passes for touched suites.
 2. Guardrail `rg` checks confirm no active runtime references remain.
 
+---
+
+### C5 Execution Report
+
+1. **Issue:** Stale Pry/RCE fixture residue in 8 test files; pry scenario test removed in C2 with no replacement sunset assertion; `PryOperationsHarness` orphaned after C2.
+2. **Root cause:** C1–C4 removed runtime symbols but left test stubs/fixture attrs that still named them — creating false test coverage and a misleading picture of sunset completeness.
+3. **Fix:** Removed stale lines from all 8 files; added two sunset regression tests (`test_s3_pry_sunset_no_pry_methods_on_batch_mixin`, `test_rce_enabled_absent_from_scan_request`); removed orphaned `PryOperationsHarness` class and its `ServerListWindowBatchOperationsMixin` import.
+4. **Files changed:**
+   - `gui/tests/test_clamav_results_dialog.py` — removed `_set_pry_status_button_visible` mock
+   - `gui/tests/_server_ops_harness.py` — deleted `PryOperationsHarness` class; removed unused `ServerListWindowBatchOperationsMixin` import
+   - `gui/tests/test_server_ops_fuzz_sequences.py` — removed `"pry"` from job-type pool
+   - `gui/tests/test_unified_scan_dialog_validation.py` — removed `show_rce_controls` param + `rce_enabled_var` + `show_rce_controls` attr from `_make_dialog`; added `test_rce_enabled_absent_from_scan_request`
+   - `gui/tests/test_dashboard_scan_dialog_wiring.py` — removed `dash._rce_unlocked` from both test fixtures
+   - `gui/tests/test_action_routing.py` — removed stale `_on_pry_selected` docstring line; removed `self._rce_unlocked` from `_BatchMixinStub`
+   - `gui/tests/test_scan_preflight_probe_depth.py` — removed `"rce_enabled": False` from 4 fixture dicts
+   - `gui/tests/test_server_ops_scenario_matrix.py` — added `test_s3_pry_sunset_no_pry_methods_on_batch_mixin`
+   - `docs/dev/remove_old_tools/ROADMAP.md`, `TASK_CARDS.md`, `LESSONS_LEARNED.md` — status and evidence
+5. **Validation run:**
+   - `py_compile` all 8 touched modules: **PASS**
+   - `test_action_routing.py`: **36 passed**
+   - `test_server_ops_scenario_matrix.py`: **12 passed, 1 pre-existing failure** (`test_s10_se_dork_probe_task_lifecycle_success` — confirmed failing at C4 baseline via `git stash` rerun)
+   - `test_unified_scan_dialog_validation.py`: **19 passed**
+   - `test_dashboard_scan_dialog_wiring.py`: **2 passed**
+   - `test_server_ops_fuzz_sequences.py`: **30 passed**
+   - `test_clamav_results_dialog.py`: **25 passed**
+   - `shared/tests/test_ftp_state_tables.py`: **13 passed**
+   - `test_scan_preflight_probe_depth.py`: **5 passed**
+   - Guardrail grep: only sunset assertions and intentional compat residuals (`pry_status_dialog` stubs, schema DDL fixtures)
+6. **Result:** PASS — all targeted suites pass; no C5 regressions introduced; `test_s10` pre-existing.
+7. **HI test needed?** No new manual HI steps. Pre-existing `test_s10` failure should be tracked separately (SE Dork lifecycle test, not Pry/RCE related).
+
+**Line count rubric (post-C5):**
+
+| File | Before | After | Rubric |
+|---|---|---|---|
+| `gui/tests/test_action_routing.py` | 1355 | 1353 | Good |
+| `gui/tests/_server_ops_harness.py` | 641 | 614 | Excellent |
+| `gui/tests/test_server_ops_scenario_matrix.py` | 509 | 524 | Excellent |
+| `gui/tests/test_unified_scan_dialog_validation.py` | 392 | 400 | Excellent |
+| `gui/tests/test_clamav_results_dialog.py` | 471 | 470 | Excellent |
+| `gui/tests/test_dashboard_scan_dialog_wiring.py` | 90 | 88 | Excellent |
+| `gui/tests/test_server_ops_fuzz_sequences.py` | 319 | 319 | Excellent |
+| `gui/tests/test_scan_preflight_probe_depth.py` | 240 | 236 | Excellent |
+
+No file exceeds 1700 lines.
+
+**Guardrail grep residual classification:**
+
+| File | Lines | Symbol | Classification |
+|---|---|---|---|
+| `test_server_ops_scenario_matrix.py` | 104–116 | `_on_pry_selected`, `_execute_pry_target` | **Sunset assertions** (C5 additions) |
+| `test_unified_scan_dialog_validation.py` | 196–203 | `rce_enabled` | **Sunset assertion** (C5 addition) |
+| `test_action_routing.py` | 40, 70 | `pry_status_dialog` stubs | **Intentional** — module still exists (shared) |
+| `test_server_list_card4.py` | 60, 701, 713 | `pry_status_dialog` stubs | **Intentional** — same reason |
+| `test_db_tools_engine*.py` | multiple | `source DEFAULT 'pry'`, `'pry'` VALUES | **Intentional** — legacy DB compat schema fixtures |
+
 ## C6 - Docs Sync + Lessons + Closeout
 
 ### Objective

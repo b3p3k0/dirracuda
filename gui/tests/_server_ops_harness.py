@@ -11,9 +11,6 @@ import tkinter as tk
 from typing import Any, Dict, List, Optional
 
 from gui.utils.dirracuda_loader import load_dirracuda_module
-from gui.components.server_list_window.actions.batch_operations import (
-    ServerListWindowBatchOperationsMixin,
-)
 from gui.components.server_list_window.actions.batch_status import (
     ServerListWindowBatchStatusMixin,
 )
@@ -363,31 +360,6 @@ class BatchStatusHarness(ServerListWindowBatchStatusMixin):
 
     def _update_stop_button_style(self, _batch_active: bool):
         return None
-
-
-class PryOperationsHarness(ServerListWindowBatchOperationsMixin):
-    """Harness focused on pry-selection routing behavior."""
-
-    def __init__(self, selected_targets: List[Dict[str, Any]]) -> None:
-        self.window = SimpleNamespace()
-        self._pry_unlocked = True
-        self._selected_targets = list(selected_targets)
-        self._started_jobs: List[tuple[str, List[Dict[str, Any]], Dict[str, Any]]] = []
-        self.settings_manager = None
-        self.db_reader = SimpleNamespace(
-            get_denied_shares=lambda _ip, limit=100: [],
-            get_accessible_shares=lambda _ip: [],
-        )
-        self.theme = None
-
-    def _hide_context_menu(self) -> None:
-        return None
-
-    def _build_selected_targets(self) -> List[Dict[str, Any]]:
-        return list(self._selected_targets)
-
-    def _start_batch_job(self, job_type: str, targets: List[Dict[str, Any]], options: Dict[str, Any]) -> None:
-        self._started_jobs.append((job_type, list(targets), dict(options)))
 
 
 @dataclass

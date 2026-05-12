@@ -101,6 +101,23 @@ def test_s2_extract_monitor_cancel_and_terminal_cleanup_idempotent() -> None:
 
 
 @pytest.mark.scenario
+def test_s3_pry_sunset_no_pry_methods_on_batch_mixin() -> None:
+    """Regression: Pry dispatch methods must not exist on batch mixin layer post-C2."""
+    from gui.components.server_list_window.actions.batch_operations import (
+        ServerListWindowBatchOperationsMixin,
+    )
+    from gui.components.server_list_window.actions.batch import (
+        ServerListWindowBatchMixin,
+    )
+    assert not hasattr(ServerListWindowBatchOperationsMixin, "_on_pry_selected"), (
+        "_on_pry_selected was removed in C2; re-introduction would be a regression"
+    )
+    assert not hasattr(ServerListWindowBatchMixin, "_execute_pry_target"), (
+        "_execute_pry_target was removed in C2; re-introduction would be a regression"
+    )
+
+
+@pytest.mark.scenario
 def test_s4_running_task_count_sync_across_dashboard_and_server_list() -> None:
     registry = get_running_task_registry()
 

@@ -70,7 +70,7 @@ class _GrabDialogStub:
             raise tk.TclError("grab failed")
 
 
-def _make_dialog(*, show_rce_controls: bool = True) -> UnifiedScanDialog:
+def _make_dialog() -> UnifiedScanDialog:
     dlg = UnifiedScanDialog.__new__(UnifiedScanDialog)
     dlg.shared_concurrency_var = _Var("10")
     dlg.shared_timeout_var = _Var("10")
@@ -86,11 +86,9 @@ def _make_dialog(*, show_rce_controls: bool = True) -> UnifiedScanDialog:
     dlg.bulk_probe_enabled_var = _Var(False)
     dlg.bulk_extract_enabled_var = _Var(False)
     dlg.skip_indicator_extract_var = _Var(True)
-    dlg.rce_enabled_var = _Var(False)
     dlg.allow_insecure_tls_var = _Var(True)
     dlg._settings_manager = None
     dlg.config_path = Path("/tmp/config.json")
-    dlg.show_rce_controls = show_rce_controls
     dlg.theme = object()
     dlg.dialog = _DialogStub()
     dlg.protocol_cost_label = _LabelStub()
@@ -193,6 +191,16 @@ def test_start_valid_request_invokes_callback(monkeypatch):
 
 def test_no_live_max_results_clamp_method_exists():
     assert not hasattr(UnifiedScanDialog, "_validate_max_results")
+
+
+def test_rce_enabled_absent_from_scan_request(monkeypatch):
+    monkeypatch.setattr(
+        "gui.components.unified_scan_dialog.persist_query_budget_state",
+        lambda *_a, **_k: None,
+    )
+    dlg = _make_dialog()
+    request = dlg._build_scan_request()
+    assert "rce_enabled" not in request
 
 
 def test_protocol_estimate_lines_show_selected_protocols_only():

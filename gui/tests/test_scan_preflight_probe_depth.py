@@ -80,7 +80,6 @@ def test_scan_preflight_summary_line_includes_probe_depth(monkeypatch):
         scan_options={
             "bulk_probe_enabled": True,
             "bulk_extract_enabled": False,
-            "rce_enabled": False,
         },
         scan_description="test scan",
     )
@@ -123,7 +122,6 @@ def test_scan_preflight_always_shows_summary_even_without_optional_actions(monke
         "max_shodan_results": 1000,
         "bulk_probe_enabled": False,
         "bulk_extract_enabled": False,
-        "rce_enabled": False,
     }
     controller = ScanPreflightController(
         parent=object(),
@@ -173,7 +171,6 @@ def test_scan_preflight_mult_protocol_cost_estimate_uses_candidate_caps(monkeypa
         "max_shodan_results": 250,
         "bulk_probe_enabled": False,
         "bulk_extract_enabled": False,
-        "rce_enabled": False,
     }
     controller = ScanPreflightController(
         parent=object(),
@@ -222,7 +219,6 @@ def test_scan_preflight_hides_numeric_estimates_when_balance_unavailable(monkeyp
         "max_shodan_results": 250,
         "bulk_probe_enabled": False,
         "bulk_extract_enabled": False,
-        "rce_enabled": False,
     }
     controller = ScanPreflightController(
         parent=object(),

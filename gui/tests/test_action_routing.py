@@ -14,7 +14,6 @@ Covers:
 - _launch_browse_workflow: F row opens FtpBrowserWindow, not FileBrowserWindow
 - probe progress per-target invariant: mixed S+F batch completes correctly
 - _attach_probe_status: F row uses DB value, never calls _determine_probe_status
-- _on_pry_selected: F row shows warning, pry never launched
 """
 
 import importlib
@@ -239,7 +238,6 @@ class _BatchMixinStub(ServerListWindowBatchMixin):
         self.mode_button = MagicMock()
         self.search_text = MagicMock()
         self.country_listbox = None
-        self._rce_unlocked = True
         self._notify_database_changed = MagicMock()
 
     def _apply_filters(self, force=False):

@@ -28,3 +28,13 @@ Use this log to prevent repeat failures and preserve guardrails for future agent
 5. Regression caught/avoided:
 6. New guardrail added:
 7. Follow-up needed:
+
+---
+
+1. **Date:** 2026-05-12
+2. **Card:** C5 — Tests + Scenario Matrix Update
+3. **What changed:** Removed `PryOperationsHarness` class and its orphaned `ServerListWindowBatchOperationsMixin` import from `_server_ops_harness.py`. Stripped stale `_rce_unlocked`, `rce_enabled_var`, `show_rce_controls`, `_set_pry_status_button_visible` fixture residue from 5 test files. Removed `"pry"` from fuzz job-type pool in `test_server_ops_fuzz_sequences.py`. Removed `"rce_enabled": False` from 4 preflight fixture dicts. Added `test_s3_pry_sunset_no_pry_methods_on_batch_mixin` and `test_rce_enabled_absent_from_scan_request` as permanent regression guards.
+4. **Root cause prevented:** Stale fixture attributes (`_rce_unlocked` on DashboardWidget stub, `show_rce_controls` on UnifiedScanDialog factory) would silently pass even after re-introduction of removed symbols — producing false confidence in the sunset.
+5. **Regression caught/avoided:** `test_s10_se_dork_probe_task_lifecycle_success` was failing at the C4 baseline, not introduced by C5. Stash-and-rerun confirmed pre-existing status. Classify, don't mask.
+6. **New guardrail added:** Request-shape assertion (`"rce_enabled" not in request`) is more reliable than `hasattr` checks for instance variables. Class-level `hasattr` assertions on mixin methods catch re-introduction at the right layer — avoid checking instance state when the behavioral invariant lives on the class.
+7. **Follow-up needed:** C6 docs sync — update `README.md` and `docs/TECHNICAL_REFERENCE.md` to remove suspended Pry/RCE language; verify PyYAML dep entry before removing.

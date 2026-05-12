@@ -63,7 +63,7 @@ def _run_sequence(seed: int, *, steps: int) -> None:
 
         if action == "start" and job_id is None:
             created += 1
-            job_type = rng.choice(["probe", "extract", "pry"])
+            job_type = rng.choice(["probe", "extract"])
             total = rng.randint(1, 5)
             dialog = WrappedDialog() if rng.random() < 0.35 else FakeDialog()
             job_name = f"{job_type}-{seed}-{created}"

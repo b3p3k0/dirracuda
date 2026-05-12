@@ -433,7 +433,6 @@ class TestServerListWiring:
         stub._set_table_interaction_enabled = MagicMock()
         stub._update_stop_button_style = MagicMock()
         stub._finish_batch_status_dialog = MagicMock()
-        stub._set_pry_status_button_visible = MagicMock()
         stub._widget_exists = MagicMock(return_value=True)
 
         return stub, job_id

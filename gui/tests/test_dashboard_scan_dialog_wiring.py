@@ -40,7 +40,6 @@ def test_show_quick_scan_dialog_passes_query_editor_callback(monkeypatch):
     dash.config_path = "/tmp/config.json"
     dash.scan_manager = _ScanManagerStub()
     dash.settings_manager = object()
-    dash._rce_unlocked = True
     dash._start_unified_scan = lambda _request: None
     dash.config_editor_callback = lambda _path: None
 
@@ -80,7 +79,6 @@ def test_show_quick_scan_dialog_does_not_pass_reddit_grab_callback(monkeypatch):
     dash.config_path = "/tmp/config.json"
     dash.scan_manager = _ScanManagerStub()
     dash.settings_manager = object()
-    dash._rce_unlocked = False
     dash._start_unified_scan = lambda _request: None
     dash.config_editor_callback = lambda _path: None
 
