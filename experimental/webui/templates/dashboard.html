@@ -19,14 +19,14 @@
     <span id="shodan-balance-status" class="status-text" role="status" aria-live="polite">
       Checking...
     </span>
-    <button id="shodan-balance-refresh" type="button" style="margin-left:8px;">Refresh</button>
+    <button id="shodan-balance-refresh" type="button">Refresh</button>
   </p>
 </div>
 
 <div class="dash-card">
   <h2>Active Scan</h2>
   {% if qs.active %}
-    <p id="active-info">
+    <p id="active-info" data-task-id="{{ qs.active.task_id }}">
       <strong>{{ qs.active.task_id }}</strong>
       &mdash; {{ qs.active.protocol }}
       &mdash; <span id="active-status">{{ qs.active.status }}</span>
@@ -35,7 +35,7 @@
       {% endif %}
     </p>
   {% else %}
-    <p id="active-info" class="status-text">none</p>
+    <p id="active-info" data-task-id="" class="status-text">none</p>
   {% endif %}
 </div>
 
@@ -69,77 +69,5 @@
 {% endblock %}
 
 {% block scripts %}
-<script>
-  (function() {
-    var statusEl = document.getElementById('shodan-balance-status');
-    var refreshBtn = document.getElementById('shodan-balance-refresh');
-
-    function toStatusText(payload) {
-      if (!payload || typeof payload !== 'object') {
-        return "✔ Shodan API key configured <balance unavailable: unknown>";
-      }
-      if (payload.state === 'ok') {
-        return "✔ Shodan API key configured <query credits: " + String(payload.query_credits) + ">";
-      }
-      if (payload.state === 'no_key') {
-        return "✖ Shodan API key configured <none>";
-      }
-      var reason = String(payload.reason || 'unknown');
-      return "✔ Shodan API key configured <balance unavailable: " + reason + ">";
-    }
-
-    function loadShodanBalance(force) {
-      if (!statusEl) return;
-      statusEl.textContent = "Checking...";
-      var url = '/api/dashboard/shodan-balance';
-      if (force) {
-        url += '?force=true';
-      }
-      fetch(url)
-        .then(function(resp) {
-          return resp.json().then(function(data) {
-            if (!resp.ok) {
-              statusEl.textContent = "✔ Shodan API key configured <balance unavailable: unknown>";
-              return;
-            }
-            statusEl.textContent = toStatusText(data);
-          });
-        })
-        .catch(function() {
-          statusEl.textContent = "✔ Shodan API key configured <balance unavailable: network>";
-        });
-    }
-
-    if (refreshBtn) {
-      refreshBtn.addEventListener('click', function() {
-        loadShodanBalance(true);
-      });
-    }
-    loadShodanBalance(false);
-  })();
-</script>
-{% if qs.active %}
-<script>
-  (function() {
-    var tid = {{ qs.active.task_id | tojson }};
-    var terminal = {'done': 1, 'failed': 1, 'cancelled': 1};
-    function poll() {
-      fetch('/api/scans/' + encodeURIComponent(tid))
-        .then(function(r) { return r.ok ? r.json() : null; })
-        .then(function(data) {
-          if (!data) return;
-          var el = document.getElementById('active-status');
-          if (el) el.textContent = data.status;
-          var pr = document.getElementById('active-progress');
-          if (pr && data.progress_message) pr.textContent = data.progress_message;
-          if (!terminal[data.status]) {
-            setTimeout(poll, 3000);
-          }
-        })
-        .catch(function() {});
-    }
-    setTimeout(poll, 3000);
-  })();
-</script>
-{% endif %}
+<script src="/static/dashboard.js"></script>
 {% endblock %}

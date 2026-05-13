@@ -30,7 +30,7 @@
 
   <main class="main" id="main-content">
     {% if session %}
-    <div id="prefs-consent-banner" class="status-info" role="status" aria-live="polite" style="display:none; margin-bottom:12px;">
+    <div id="prefs-consent-banner" class="status-info hidden" role="status" aria-live="polite" hidden>
       <div>
         Store non-sensitive Web UI preferences in this browser (for example results and scan toggles) so pages remember your selections between visits.
         This storage is local to this browser profile and not used for any other purpose.
@@ -47,37 +47,7 @@
 
 {% if session %}
 <script src="/static/prefs.js"></script>
-<script>
-  (function initPrefsConsentBanner() {
-    if (!window.DirracudaPrefs || !window.DirracudaPrefs.isAvailable()) return;
-    if (window.DirracudaPrefs.getConsent() !== null) return;
-    var banner = document.getElementById('prefs-consent-banner');
-    var yesBtn = document.getElementById('prefs-consent-yes');
-    var noBtn = document.getElementById('prefs-consent-no');
-    if (!banner || !yesBtn || !noBtn) return;
-    banner.style.display = '';
-    yesBtn.addEventListener('click', function() {
-      window.DirracudaPrefs.setConsent('allow');
-      banner.style.display = 'none';
-    });
-    noBtn.addEventListener('click', function() {
-      window.DirracudaPrefs.setConsent('deny');
-      banner.style.display = 'none';
-    });
-  })();
-
-  document.getElementById('nav-logout-btn').addEventListener('click', async function() {
-    var token = document.querySelector('meta[name="csrf-token"]').content;
-    try {
-      await fetch('/logout', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json', 'X-CSRF-Token': token},
-        body: '{}'
-      });
-    } catch (_) {}
-    window.location.href = '/login';
-  });
-</script>
+<script src="/static/base.js"></script>
 {% endif %}
 
 {% block scripts %}{% endblock %}

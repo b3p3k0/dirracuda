@@ -508,6 +508,14 @@ common-password list. Passphrases are accepted without composition restrictions
 (no forced uppercase, numbers, or symbols). Logged-in users can change their
 password at any time via `Account` in the navigation bar; the change requires
 the current password for verification.
+Every response includes a centralized set of security headers:
+`Content-Security-Policy` (strict; `script-src 'self'`, no `unsafe-inline`),
+`X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`,
+`Referrer-Policy: no-referrer`, and `Cache-Control: no-store` on all dynamic
+responses. `Strict-Transport-Security` is added only when the server is
+accessed over HTTPS. All page JavaScript is served from static files under
+`/static/`; no inline scripts or inline `style=` attributes are present in
+rendered HTML.
 
 ---
 

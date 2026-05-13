@@ -154,3 +154,39 @@ Seeded before implementation. Append after every major card.
     that passes only 2999 passwords silently fails ASVS V6.2.4. Enforce
     `BLOCKLIST_MIN_SIZE` at load time and return `None` (→ fail-closed) for
     any undersized result.
+
+## O3 — Strict CSP + Security Headers
+
+38. Starlette/FastAPI middleware ordering: `@app.middleware("http")` inserts
+    each new middleware at position 0, making the last-registered the outermost
+    wrapper. Define the security-headers middleware **after** the allowlist
+    middleware so it wraps the allowlist check and applies headers to 403
+    early-return responses as well as normal responses.
+
+39. Jinja conditional class attributes cleanly replace conditional inline style
+    attributes: `class="status-warn{% if not cfg.remote_enabled %} hidden{% endif %}"`.
+    The Jinja expression renders once at response time; no server-side style
+    injection is needed. This is compatible with `style-src 'self'` in CSP.
+
+40. For JS-controlled element visibility, use `classList.add/remove('hidden')`
+    rather than `element.style.display = 'none'/''}`. Setting an empty-string
+    inline style removes the override but the CSS class still applies; the element
+    re-hides unexpectedly. With classList the intent is explicit on both sides.
+
+41. Pass server-rendered values to JS via `data-*` attributes on existing DOM
+    elements instead of Jinja interpolation inside `<script>` blocks. This is
+    required to eliminate inline scripts entirely. Example: active scan task ID
+    stored as `data-task-id="..."` on `#active-info` and read in `dashboard.js`
+    via `element.dataset.taskId`.
+
+42. Use a regex to assert no inline scripts in tests, not a bare string check.
+    `<script>` (no attributes) misses `<script type="module">`, `<script nonce="...">`,
+    etc. The correct check is `re.compile(r'<script(?![^>]*\bsrc=)[^>]*>')` — any
+    `<script>` tag without `src=` is an inline script. Similarly, `' style='` misses
+    spacing/case variants; use `re.compile(r'\sstyle\s*=', re.IGNORECASE)`.
+
+43. When migrating inline JS to static files, audit ALL webui test files for
+    assertions that checked inline JS content in HTML responses. Test files beyond
+    the primary target (`test_pages.py`, `test_login.py`) may also have stale
+    inline-content checks — in this case `test_results.py` had two that checked
+    for `loadResults();` and `&search=` in the page response text.

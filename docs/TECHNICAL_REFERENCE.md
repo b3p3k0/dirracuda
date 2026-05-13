@@ -148,6 +148,21 @@ Allowlist middleware: registered as an HTTP middleware in `create_app()`. When `
 
 **Password policy (O2 — OWASP ASVS V6.2.1/V6.2.3/V6.2.4/V6.2.5 / NIST SP 800-63B §3.1.1.2):** `experimental/webui/auth.py::set_password()` enforces: minimum 15 characters; case-insensitive match against `experimental/webui/pwlist.txt` (top-10000 common passwords, MIT-licensed SecLists data); no composition rules (passphrases accepted). `validate_password_policy()` raises `BlocklistUnavailableError(RuntimeError)` if the blocklist is absent, unreadable (`OSError`), or undersized (fewer than 3000 entries after parsing — `BLOCKLIST_MIN_SIZE`). Web routes handle `BlocklistUnavailableError` → 503 and `ValueError` → 400 separately. `verify_password()` is not affected by policy — pre-policy credentials remain verifiable. The `GET /account` + `POST /api/auth/change-password` endpoints provide authenticated credential rotation; the change requires the current password. The desktop credentials dialog (`webui_tab.py`) enforces the same separation: bootstrap (no stored creds) takes editable username/password; rotation (one stored cred) takes read-only username + current password + new password; multiple stored credentials block the dialog with an operator message directing to CLI management.
 
+**Response security headers (O3 — OWASP HTTP Headers Cheat Sheet / CSP Cheat Sheet):** `experimental/webui/app.py` registers a `_security_headers` HTTP middleware (outermost wrapper, runs after allowlist check) that applies the following headers to every response:
+
+| Header | Value |
+|---|---|
+| `Content-Security-Policy` | `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'` |
+| `X-Frame-Options` | `DENY` |
+| `X-Content-Type-Options` | `nosniff` |
+| `Referrer-Policy` | `no-referrer` |
+| `Cache-Control` | `no-store` (applied to all non-`/static/` paths; static assets are excluded) |
+| `Strict-Transport-Security` | `max-age=63072000; includeSubDomains` (only when `request.url.scheme == "https"`) |
+
+The `_CSP_POLICY` constant is defined once at module scope in `app.py`. `script-src 'self'` excludes `unsafe-inline`; all page JavaScript is served from `experimental/webui/static/*.js`. No inline `<script>` blocks or inline `style=` attributes are present in rendered HTML templates.
+
+`Cache-Control: no-store` scope: applies to all dynamic routes including authenticated HTML pages, JSON API responses, export trigger (`POST /api/export`), export download (`GET /api/export/{filename}`), and health (`GET /health`). The only exemption is the `/static/` path prefix (CSS, JS, images). This scope is intentional — the middleware has no route-level allow-list.
+
 Runtime DB error behavior: if a SQLite error occurs on `check_locked` or `record_failure` after successful startup, remote mode returns 503 (fail-closed); localhost mode logs the error and degrades gracefully (logins proceed unthrottled, health endpoint reports `"rate_limiter": "error"`). Startup behavior: remote mode refuses to start if the rate-limit DB is unavailable; localhost mode assigns a `NullRateLimiter` and starts degraded.
 
 **Reverse proxy note:** `request.client.host` reflects the TCP peer address as seen by the ASGI server. Behind a reverse proxy, this will be the proxy's address rather than the real client IP unless forwarded-header trust is correctly configured at the ASGI server layer — that configuration is deployment-specific and not managed by `experimental/webui/server.py`. Without it, allowlist decisions may be wrong (all traffic passes as the proxy address, or forwarded headers can be spoofed). See [FastAPI proxy guidance](https://fastapi.tiangolo.com/advanced/behind-a-proxy/) and [uvicorn deployment docs](https://www.uvicorn.org/deployment/) for details on trusted-proxy configuration.

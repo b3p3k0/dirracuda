@@ -249,10 +249,7 @@ def test_results_page_defaults_to_all_and_autoload(logged_in_client):
     assert r.status_code == 200
     assert 'data-proto="all"' in r.text
     assert "proto-tab active" in r.text
-    assert "loadResults();" in r.text
-    assert "/api/results/details" in r.text
-    assert "Show full details" in r.text
-    assert "rows', '10'" in r.text or 'rows="10"' in r.text
+    assert '/static/results.js' in r.text
 
 
 def test_results_page_renders_filter_controls(logged_in_client):
@@ -264,17 +261,7 @@ def test_results_page_renders_filter_controls(logged_in_client):
     assert "Favorites Only" in r.text
     assert "Hide Avoid" in r.text
     assert "country-filter" not in r.text
-    assert "&search=" in r.text
     assert "&country=" not in r.text
-    assert "search-filter').addEventListener('keydown'" in r.text
-    m = re.search(r"writeSection\('results', \{([^}]*)\}\);", r.text, re.S)
-    assert m is not None
-    body = m.group(1)
-    assert "protocol" in body
-    assert "shares_only" in body
-    assert "favorites_only" in body
-    assert "hide_avoid" in body
-    assert "country" not in body
 
 
 def test_invalid_protocol_rejected(logged_in_client):

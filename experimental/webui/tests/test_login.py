@@ -486,3 +486,37 @@ def test_change_password_success(logged_in_client, creds):
     assert r.json().get("ok") is True
     assert verify_password(_USERNAME, new_pw, creds) is True
     assert verify_password(_USERNAME, _PASSWORD, creds) is False
+
+
+# ---------------------------------------------------------------------------
+# O3 — HSTS and security headers
+# ---------------------------------------------------------------------------
+
+import re as _re
+
+_INLINE_SCRIPT_RE = _re.compile(r'<script(?![^>]*\bsrc=)[^>]*>', _re.IGNORECASE)
+
+
+def test_hsts_present_on_https_response(creds):
+    cfg = WebUIConfig(tls=TLSConfig(enabled=True))
+    app = create_app(cfg=cfg, creds_path=creds)
+    c = TestClient(app, follow_redirects=False, base_url="https://testserver")
+    r = c.get("/login")
+    assert "strict-transport-security" in {k.lower() for k in r.headers}
+
+
+def test_hsts_absent_on_http_response(client):
+    r = client.get("/login")
+    assert "strict-transport-security" not in {k.lower() for k in r.headers}
+
+
+def test_security_headers_on_login_page(client):
+    r = client.get("/login")
+    h = {k.lower(): v for k, v in r.headers.items()}
+    assert "x-frame-options" in h
+    assert "x-content-type-options" in h
+    assert "content-security-policy" in h
+    assert "unsafe-inline" not in h["content-security-policy"]
+    assert not _INLINE_SCRIPT_RE.search(r.text), (
+        "Unexpected inline <script> on /login: " + str(_INLINE_SCRIPT_RE.findall(r.text))
+    )

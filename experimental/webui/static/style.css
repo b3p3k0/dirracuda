@@ -453,6 +453,32 @@ tbody tr.selected td { background: var(--bg3); color: var(--accent); }
 }
 .dash-card h2 { margin-bottom: 6px; font-size: 0.85em; }
 
+/* --- O3: Utility and page-specific rules (replaces removed inline styles) */
+
+.hidden { display: none; }
+
+#prefs-consent-banner { margin-bottom: 12px; }
+
+#shodan-balance-refresh { margin-left: 8px; }
+
+#submit-status { margin-bottom: 8px; }
+.proto-checkbox { margin-left: 12px; }
+#max-results { max-width: 100px; }
+
+#results-status { margin-bottom: 6px; }
+#export-bar { margin-top: 16px; }
+#export-status { margin-left: 8px; }
+
+#cfg-status { margin-bottom: 12px; }
+.cfg-number-input { max-width: 100px; }
+#remote-warn { margin-top: 6px; }
+.cfg-pref-info { margin-bottom: 8px; }
+.cfg-pref-actions { margin-top: 0; }
+#prefs-storage-status { margin-top: 8px; }
+.cfg-save-hint { margin-left: 8px; font-size: 0.9em; }
+
+#account-status { margin-bottom: 12px; }
+
 /* --- Mobile reflow ----------------------------------------------------- */
 @media (max-width: 480px) {
   .layout {

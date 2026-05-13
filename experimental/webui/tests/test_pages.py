@@ -1,4 +1,4 @@
-"""Page render and auth-protection tests for C6."""
+"""Page render and auth-protection tests for C6 / O3."""
 
 import json
 import re
@@ -99,11 +99,11 @@ def test_dashboard_renders_authenticated(logged_in):
     assert "Shodan Balance:" in r.text
     assert 'id="shodan-balance-status"' in r.text
     assert 'id="shodan-balance-refresh"' in r.text
-    assert "/api/dashboard/shodan-balance" in r.text
     assert 'id="prefs-consent-banner"' in r.text
     assert 'id="prefs-consent-yes"' in r.text
     assert 'id="prefs-consent-no"' in r.text
     assert '/static/prefs.js' in r.text
+    assert '/static/dashboard.js' in r.text
 
 
 def test_scans_renders_authenticated(logged_in):
@@ -111,14 +111,7 @@ def test_scans_renders_authenticated(logged_in):
     assert r.status_code == 200
     assert "SMB" in r.text
     assert "Queue Scan" in r.text
-    assert "DirracudaPrefs.readSection('scans')" in r.text
-    assert "DirracudaPrefs.writeSection('scans'" in r.text
-    m = re.search(r"writeSection\('scans', \{([^}]*)\}\);", r.text, re.S)
-    assert m is not None
-    body = m.group(1)
-    assert "countries" not in body
-    assert "filters" not in body
-    assert "max_results" in body
+    assert '/static/scans.js' in r.text
 
 
 def test_results_renders_authenticated(logged_in):
@@ -126,8 +119,7 @@ def test_results_renders_authenticated(logged_in):
     assert r.status_code == 200
     assert "Results" in r.text
     assert "Export DB" in r.text
-    assert "DirracudaPrefs.readSection('results')" in r.text
-    assert "DirracudaPrefs.writeSection('results'" in r.text
+    assert '/static/results.js' in r.text
 
 
 def test_config_renders_authenticated(logged_in, cfg_no_tls):
@@ -259,3 +251,92 @@ def test_config_post_writes_to_tmp_path_not_home(logged_in, config_path, monkeyp
     # Home config must not have been created by this test
     if not existed_before:
         assert not home_cfg.exists()
+
+
+# ---------------------------------------------------------------------------
+# O3 — Security headers, CSP, inline-script/style elimination
+# ---------------------------------------------------------------------------
+
+_INLINE_SCRIPT_RE = re.compile(r'<script(?![^>]*\bsrc=)[^>]*>', re.IGNORECASE)
+_INLINE_STYLE_RE = re.compile(r'\sstyle\s*=', re.IGNORECASE)
+
+
+def _assert_no_inline_script(html):
+    assert not _INLINE_SCRIPT_RE.search(html), (
+        "Unexpected inline <script> tag (no src=): " + str(_INLINE_SCRIPT_RE.findall(html))
+    )
+
+
+def test_security_headers_on_html_route(logged_in):
+    r = logged_in.get("/dashboard")
+    assert r.status_code == 200
+    h = {k.lower(): v for k, v in r.headers.items()}
+    assert "content-security-policy" in h
+    csp = h["content-security-policy"]
+    assert "unsafe-inline" not in csp
+    assert "script-src 'self'" in csp
+    assert h.get("x-frame-options") == "DENY"
+    assert h.get("x-content-type-options") == "nosniff"
+    assert h.get("referrer-policy") == "no-referrer"
+    assert "no-store" in h.get("cache-control", "")
+    assert "strict-transport-security" not in h
+
+
+def test_security_headers_on_json_api_route(logged_in):
+    r = logged_in.get("/api/dashboard/shodan-balance")
+    h = {k.lower(): v for k, v in r.headers.items()}
+    assert "x-content-type-options" in h
+    assert "no-store" in h.get("cache-control", "")
+
+
+def test_cache_control_no_store_on_export_route(logged_in):
+    token = _csrf(logged_in)
+    r = logged_in.post(
+        "/api/export",
+        json={},
+        headers={"Origin": "http://testserver", "X-CSRF-Token": token},
+    )
+    h = {k.lower(): v for k, v in r.headers.items()}
+    assert "no-store" in h.get("cache-control", ""), (
+        "Export API response must have Cache-Control: no-store"
+    )
+
+
+def test_no_inline_script_in_dashboard(logged_in):
+    r = logged_in.get("/dashboard")
+    _assert_no_inline_script(r.text)
+    assert '/static/dashboard.js' in r.text
+
+
+def test_no_inline_script_in_scans(logged_in):
+    r = logged_in.get("/scans")
+    _assert_no_inline_script(r.text)
+    assert '/static/scans.js' in r.text
+
+
+def test_no_inline_script_in_results(logged_in):
+    r = logged_in.get("/results")
+    _assert_no_inline_script(r.text)
+    assert '/static/results.js' in r.text
+
+
+def test_no_inline_script_in_config(logged_in):
+    r = logged_in.get("/config")
+    _assert_no_inline_script(r.text)
+    assert '/static/config.js' in r.text
+
+
+def test_no_inline_script_in_login(client):
+    r = client.get("/login")
+    _assert_no_inline_script(r.text)
+    assert '/static/login.js' in r.text
+
+
+def test_no_inline_style_attr_on_key_routes(logged_in, client):
+    login_r = client.get("/login")
+    assert login_r.status_code == 200
+    assert not _INLINE_STYLE_RE.search(login_r.text), "Inline style= attr found on /login"
+    for path in ["/dashboard", "/scans", "/results", "/config", "/account"]:
+        r = logged_in.get(path)
+        assert r.status_code == 200, f"{path} returned {r.status_code}"
+        assert not _INLINE_STYLE_RE.search(r.text), f"Inline style= attr found on {path}"
