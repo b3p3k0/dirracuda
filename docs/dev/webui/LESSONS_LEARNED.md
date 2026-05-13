@@ -219,3 +219,21 @@ Seeded before implementation. Append after every major card.
     `PosixPath` has no writable instance `__dict__`, so `monkeypatch.setattr(p, "stat", ...)`
     will raise AttributeError. Use `monkeypatch.setattr(Path, "stat", ...)` with a
     guard `if self == target_path` to limit the mock scope.
+
+## O5 — Validation
+
+49. When a new field is added to a dataclass that test stubs replicate as
+    `types.SimpleNamespace`, the stubs must be updated in the same commit. A missing
+    field raises `AttributeError` at the call site, which a broad `except Exception`
+    block catches silently — turning a test regression into a false-pass or
+    a wrong-exception failure path that looks correct by accident (see test_s11).
+
+50. Gate 3 (`run_agent_testing_workflow.py --lane quick`) runs `scenario or fuzz`
+    markers across all of `gui/tests`, not just webui tests. Do a dry-run of Gate 3
+    before starting card work to establish a clean baseline; any failures found
+    during O5 validation can then be correctly attributed as pre-existing rather
+    than card-introduced regressions.
+
+51. Write the validation report only after all gates are green. Writing it
+    speculatively from planning-phase outputs risks stale PASS/FAIL entries if a
+    gate flips between planning and final execution.
