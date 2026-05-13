@@ -503,6 +503,11 @@ or via the desktop config dialog). The `GET /health` endpoint reports
 `"rate_limiter": "ok"` when lockout enforcement is active, or `"rate_limiter":
 "error"` when the rate-limit DB is unavailable (degraded mode). In remote mode,
 a runtime DB failure causes login to return 503 (fail-closed).
+Passwords must be at least 15 characters and are checked against a top-10000
+common-password list. Passphrases are accepted without composition restrictions
+(no forced uppercase, numbers, or symbols). Logged-in users can change their
+password at any time via `Account` in the navigation bar; the change requires
+the current password for verification.
 
 ---
 

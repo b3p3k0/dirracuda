@@ -129,3 +129,28 @@ Seeded before implementation. Append after every major card.
 33. If `/config` gains new security fields, the API model and both config
     surfaces (web page and desktop dialog) must be updated together in the same
     card to avoid save-path regressions (`422` or silent overwrite).
+
+34. Separate system faults from user-input rejections with distinct exception
+    types. `BlocklistUnavailableError(RuntimeError)` (infrastructure fault →
+    503) must not be a subclass of `ValueError` (policy rejection → 400) so
+    HTTP handlers and desktop dialogs can catch them separately. A single
+    `except ValueError` that also catches system faults routes operator-visible
+    errors to users and hides them from logs.
+
+35. Lock the username during credential rotation. Allowing the username to
+    change during a "rotate password" flow creates a race where a stale key
+    accumulates in the credential store. Rotation should only mutate the
+    hash/salt for the existing account; username changes require a separate
+    explicit create/delete flow.
+
+36. Ship static JS files from day one. Inline scripts in templates create CSP
+    debt: each inline block needs its own hash when O3 adds a Content-Security-
+    Policy header. Moving the script to a static file before O3 costs one extra
+    commit; deferring costs a per-template audit and a round of hash-generation
+    work during CSP hardening.
+
+37. Treat a blocklist with fewer entries than the compliance minimum as
+    unavailable, not as a valid degraded state. A truncated-but-readable file
+    that passes only 2999 passwords silently fails ASVS V6.2.4. Enforce
+    `BLOCKLIST_MIN_SIZE` at load time and return `None` (→ fail-closed) for
+    any undersized result.

@@ -13,7 +13,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 import experimental.webui.db as _db
-from experimental.webui.auth import verify_password
+from experimental.webui.auth import BlocklistUnavailableError, set_password, verify_password
 from experimental.webui.config import (
     AuthConfig,
     TLSConfig,
@@ -54,6 +54,11 @@ def _is_ip_allowed(host, networks) -> bool:
 class _LoginRequest(BaseModel):
     username: str
     password: str
+
+
+class _ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
 
 
 class _ConfigUpdateRequest(BaseModel):
@@ -198,6 +203,40 @@ def create_app(
             secure=tls_on,
         )
         return response
+
+    @app.get("/account", response_class=HTMLResponse)
+    async def _account_page(
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> HTMLResponse:
+        return templates.TemplateResponse(
+            request, "account.html", {"session": session, "active_page": "account"}
+        )
+
+    @app.post("/api/auth/change-password")
+    async def _change_password(
+        body: _ChangePasswordRequest,
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> JSONResponse:
+        if not same_origin(request):
+            return JSONResponse({"error": "origin check failed"}, status_code=403)
+        csrf_tok = request.headers.get("X-CSRF-Token")
+        if not validate_csrf(csrf_tok, session.csrf_token):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+        creds = request.app.state.creds_path
+        if not verify_password(session.username, body.current_password, path=creds):
+            logger.warning("change-password failed: username=%r", session.username)
+            return JSONResponse({"error": "Current password is incorrect."}, status_code=401)
+        try:
+            set_password(session.username, body.new_password, path=creds)
+        except BlocklistUnavailableError as exc:
+            logger.error("blocklist unavailable during change-password: %s", exc)
+            return JSONResponse({"error": "Service configuration error."}, status_code=503)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        logger.info("password changed: username=%r", session.username)
+        return JSONResponse({"ok": True})
 
     @app.post("/logout")
     async def _logout(request: Request) -> JSONResponse:

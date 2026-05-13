@@ -3,64 +3,73 @@
 import json
 import pytest
 
+import experimental.webui.auth as auth_module
 from experimental.webui.auth import (
+    BLOCKLIST_MIN_SIZE,
+    PASSWORD_MIN_LENGTH,
     PBKDF2_ALGORITHM,
     PBKDF2_ITERATIONS,
     MAX_PASSWORD_BYTES,
+    BlocklistUnavailableError,
     credential_exists,
+    get_credential_usernames,
     set_password,
+    validate_password_policy,
     verify_password,
+    _load_blocklist,
 )
+
+_VALID_PW = "correct-horse-battery"  # 21 chars; not in blocklist
 
 
 def test_set_and_verify_password(tmp_path):
     p = tmp_path / "creds.json"
-    set_password("admin", "correct-horse", p)
-    assert verify_password("admin", "correct-horse", p) is True
+    set_password("admin", _VALID_PW, p)
+    assert verify_password("admin", _VALID_PW, p) is True
 
 
 def test_wrong_password_returns_false(tmp_path):
     p = tmp_path / "creds.json"
-    set_password("admin", "correct-horse", p)
+    set_password("admin", _VALID_PW, p)
     assert verify_password("admin", "wrong-password", p) is False
 
 
 def test_missing_user_returns_false(tmp_path):
     p = tmp_path / "creds.json"
-    set_password("admin", "password", p)
-    assert verify_password("nobody", "password", p) is False
+    set_password("admin", _VALID_PW, p)
+    assert verify_password("nobody", _VALID_PW, p) is False
 
 
 def test_unique_salts_per_set(tmp_path):
     p = tmp_path / "creds.json"
-    set_password("user1", "pass", p)
+    set_password("user1", _VALID_PW, p)
     salt1 = json.loads(p.read_text())["user1"]["salt"]
-    set_password("user2", "pass", p)
+    set_password("user2", _VALID_PW, p)
     salt2 = json.loads(p.read_text())["user2"]["salt"]
     assert salt1 != salt2
 
 
 def test_iterations_at_minimum(tmp_path):
     p = tmp_path / "creds.json"
-    set_password("admin", "pass", p)
+    set_password("admin", _VALID_PW, p)
     record = json.loads(p.read_text())["admin"]
     assert record["iterations"] >= PBKDF2_ITERATIONS
 
 
 def test_algorithm_field_stored(tmp_path):
     p = tmp_path / "creds.json"
-    set_password("admin", "pass", p)
+    set_password("admin", _VALID_PW, p)
     record = json.loads(p.read_text())["admin"]
     assert record["algorithm"] == PBKDF2_ALGORITHM
 
 
 def test_unknown_algorithm_returns_false(tmp_path):
     p = tmp_path / "creds.json"
-    set_password("admin", "pass", p)
+    set_password("admin", _VALID_PW, p)
     data = json.loads(p.read_text())
     data["admin"]["algorithm"] = "argon2id"
     p.write_text(json.dumps(data))
-    assert verify_password("admin", "pass", p) is False
+    assert verify_password("admin", _VALID_PW, p) is False
 
 
 def test_overlong_password_raises_on_set(tmp_path):
@@ -72,7 +81,7 @@ def test_overlong_password_raises_on_set(tmp_path):
 
 def test_overlong_password_returns_false_on_verify(tmp_path):
     p = tmp_path / "creds.json"
-    set_password("admin", "short", p)
+    set_password("admin", _VALID_PW, p)
     long_pw = "x" * (MAX_PASSWORD_BYTES + 1)
     assert verify_password("admin", long_pw, p) is False
 
@@ -91,7 +100,7 @@ def test_whitespace_username_raises(tmp_path):
 
 def test_credential_exists_true(tmp_path):
     p = tmp_path / "creds.json"
-    set_password("admin", "pass", p)
+    set_password("admin", _VALID_PW, p)
     assert credential_exists(p) is True
 
 
@@ -110,11 +119,11 @@ def test_no_plaintext_in_cred_file(tmp_path):
 
 def test_malformed_hex_returns_false(tmp_path):
     p = tmp_path / "creds.json"
-    set_password("admin", "pass", p)
+    set_password("admin", _VALID_PW, p)
     data = json.loads(p.read_text())
     data["admin"]["salt"] = "not-valid-hex-ZZZZ"
     p.write_text(json.dumps(data))
-    assert verify_password("admin", "pass", p) is False
+    assert verify_password("admin", _VALID_PW, p) is False
 
 
 def test_non_string_username_raises(tmp_path):
@@ -132,6 +141,127 @@ def test_del_char_username_raises(tmp_path):
 def test_file_mode_restricted(tmp_path):
     import stat
     p = tmp_path / "creds.json"
-    set_password("admin", "pass", p)
+    set_password("admin", _VALID_PW, p)
     mode = stat.S_IMODE(p.stat().st_mode)
     assert mode == 0o600
+
+
+# ---------------------------------------------------------------------------
+# O2 — Password policy and blocklist tests
+# ---------------------------------------------------------------------------
+
+def test_set_password_too_short(tmp_path, monkeypatch):
+    p = tmp_path / "creds.json"
+    with pytest.raises(ValueError, match=str(PASSWORD_MIN_LENGTH) + " characters"):
+        set_password("admin", "tooshort12345", p)
+
+
+def test_set_password_exactly_15(tmp_path):
+    p = tmp_path / "creds.json"
+    set_password("admin", "aaaaabbbbbccccc", p)
+    assert verify_password("admin", "aaaaabbbbbccccc", p) is True
+
+
+def test_set_password_blocklisted(tmp_path, monkeypatch):
+    monkeypatch.setattr(auth_module, "_BLOCKLIST", frozenset({"blockedtestpassword123"}))
+    p = tmp_path / "creds.json"
+    with pytest.raises(ValueError, match="too common"):
+        set_password("admin", "blockedtestpassword123", p)
+
+
+def test_set_password_passphrase(tmp_path):
+    p = tmp_path / "creds.json"
+    set_password("admin", "correct horse battery staple", p)
+    assert verify_password("admin", "correct horse battery staple", p) is True
+
+
+def test_set_password_64_chars_accepted(tmp_path):
+    pw = "x" * 64
+    p = tmp_path / "creds.json"
+    set_password("admin", pw, p)
+    assert verify_password("admin", pw, p) is True
+
+
+def test_set_password_blocklist_unavailable(tmp_path, monkeypatch):
+    monkeypatch.setattr(auth_module, "_BLOCKLIST", None)
+    p = tmp_path / "creds.json"
+    with pytest.raises(BlocklistUnavailableError):
+        set_password("admin", _VALID_PW, p)
+
+
+def test_blocklist_unreadable_returns_none(monkeypatch):
+    from pathlib import Path
+
+    def _raise(*a, **kw):
+        raise PermissionError("no perm")
+
+    monkeypatch.setattr(Path, "read_text", _raise)
+    assert _load_blocklist() is None
+
+
+def test_blocklist_is_directory_returns_none(monkeypatch):
+    from pathlib import Path
+
+    def _raise(*a, **kw):
+        raise IsADirectoryError("is dir")
+
+    monkeypatch.setattr(Path, "read_text", _raise)
+    assert _load_blocklist() is None
+
+
+def test_blocklist_empty_file_returns_none(monkeypatch):
+    from pathlib import Path
+    monkeypatch.setattr(Path, "read_text", lambda *a, **kw: "")
+    assert _load_blocklist() is None
+
+
+def test_blocklist_undersized_returns_none(monkeypatch):
+    from pathlib import Path
+    content = "\n".join(f"pw{i:05d}" for i in range(2999))
+    monkeypatch.setattr(Path, "read_text", lambda *a, **kw: content)
+    assert _load_blocklist() is None
+
+
+def test_blocklist_exactly_min_size_ok(monkeypatch):
+    from pathlib import Path
+    content = "\n".join(f"pw{i:05d}" for i in range(BLOCKLIST_MIN_SIZE))
+    monkeypatch.setattr(Path, "read_text", lambda *a, **kw: content)
+    result = _load_blocklist()
+    assert result is not None
+    assert len(result) == BLOCKLIST_MIN_SIZE
+
+
+def test_blocklist_unavailable_is_not_value_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(auth_module, "_BLOCKLIST", None)
+    p = tmp_path / "creds.json"
+    exc = None
+    try:
+        set_password("admin", _VALID_PW, p)
+    except BlocklistUnavailableError as e:
+        exc = e
+    assert exc is not None
+    assert not isinstance(exc, ValueError)
+
+
+def test_verify_password_preexisting_weak_still_works(tmp_path):
+    import hashlib, os
+    p = tmp_path / "creds.json"
+    salt = os.urandom(32)
+    pw_bytes = b"weak"
+    dk = hashlib.pbkdf2_hmac("sha256", pw_bytes, salt, PBKDF2_ITERATIONS)
+    creds = {
+        "admin": {
+            "algorithm": PBKDF2_ALGORITHM,
+            "iterations": PBKDF2_ITERATIONS,
+            "salt": salt.hex(),
+            "hash": dk.hex(),
+        }
+    }
+    p.write_text(json.dumps(creds))
+    assert verify_password("admin", "weak", p) is True
+
+
+def test_validate_password_policy_exported():
+    assert callable(validate_password_policy)
+    with pytest.raises((ValueError, BlocklistUnavailableError)):
+        validate_password_policy("short")

@@ -232,6 +232,14 @@ class WebUITab:
             self._cred_dialog.focus_force()
             return
 
+        from experimental.webui.auth import credential_exists, get_credential_usernames
+
+        self._creds_existed_at_open = credential_exists()
+        stored = get_credential_usernames()
+        self._multi_cred_error = len(stored) > 1
+        self._stored_username_at_open = stored[0] if len(stored) == 1 else None
+        self._cred_current_password_var = None
+
         parent = self.frame.winfo_toplevel()
         dialog = tk.Toplevel(parent)
         dialog.title("Web UI Credentials")
@@ -245,31 +253,91 @@ class WebUITab:
         self._theme.apply_to_widget(outer, "main_window")
         outer.pack(fill=tk.BOTH, expand=True)
 
-        user_row = tk.Frame(outer)
-        self._theme.apply_to_widget(user_row, "main_window")
-        user_row.pack(fill=tk.X, pady=(0, 6))
+        first_focusable = None
 
-        user_label = tk.Label(user_row, text="Username:")
-        self._theme.apply_to_widget(user_label, "label")
-        user_label.pack(side=tk.LEFT)
+        if self._multi_cred_error:
+            err_label = tk.Label(
+                outer,
+                text=(
+                    "Multiple credentials found — manage via CLI.\n"
+                    "Expected exactly one account."
+                ),
+                justify="left",
+                anchor="w",
+                wraplength=320,
+            )
+            self._theme.apply_to_widget(err_label, "label")
+            err_label.pack(fill=tk.X, pady=(0, 10))
+        elif self._creds_existed_at_open:
+            # Rotation: username is read-only; require current password.
+            user_row = tk.Frame(outer)
+            self._theme.apply_to_widget(user_row, "main_window")
+            user_row.pack(fill=tk.X, pady=(0, 6))
+            user_label = tk.Label(user_row, text="Username:")
+            self._theme.apply_to_widget(user_label, "label")
+            user_label.pack(side=tk.LEFT)
+            stored_name_label = tk.Label(
+                user_row, text=self._stored_username_at_open or ""
+            )
+            self._theme.apply_to_widget(stored_name_label, "label")
+            stored_name_label.pack(side=tk.LEFT, padx=(8, 0))
+            self._cred_username_var = tk.StringVar(value=self._stored_username_at_open or "")
 
-        self._cred_username_var = tk.StringVar(value="")
-        user_entry = tk.Entry(user_row, textvariable=self._cred_username_var, width=32)
-        self._theme.apply_to_widget(user_entry, "entry")
-        user_entry.pack(side=tk.LEFT, padx=(8, 0))
+            cur_row = tk.Frame(outer)
+            self._theme.apply_to_widget(cur_row, "main_window")
+            cur_row.pack(fill=tk.X, pady=(0, 6))
+            cur_label = tk.Label(cur_row, text="Current Password:")
+            self._theme.apply_to_widget(cur_label, "label")
+            cur_label.pack(side=tk.LEFT)
+            self._cred_current_password_var = tk.StringVar(value="")
+            cur_entry = tk.Entry(
+                cur_row,
+                textvariable=self._cred_current_password_var,
+                show="*",
+                width=32,
+            )
+            self._theme.apply_to_widget(cur_entry, "entry")
+            cur_entry.pack(side=tk.LEFT, padx=(8, 0))
+            first_focusable = cur_entry
 
-        pass_row = tk.Frame(outer)
-        self._theme.apply_to_widget(pass_row, "main_window")
-        pass_row.pack(fill=tk.X, pady=(0, 8))
+            pass_row = tk.Frame(outer)
+            self._theme.apply_to_widget(pass_row, "main_window")
+            pass_row.pack(fill=tk.X, pady=(0, 8))
+            pass_label = tk.Label(pass_row, text="New Password:")
+            self._theme.apply_to_widget(pass_label, "label")
+            pass_label.pack(side=tk.LEFT)
+            self._cred_password_var = tk.StringVar(value="")
+            pass_entry = tk.Entry(
+                pass_row, textvariable=self._cred_password_var, show="*", width=32
+            )
+            self._theme.apply_to_widget(pass_entry, "entry")
+            pass_entry.pack(side=tk.LEFT, padx=(8, 0))
+        else:
+            # Bootstrap: no existing credential; username and password are editable.
+            user_row = tk.Frame(outer)
+            self._theme.apply_to_widget(user_row, "main_window")
+            user_row.pack(fill=tk.X, pady=(0, 6))
+            user_label = tk.Label(user_row, text="Username:")
+            self._theme.apply_to_widget(user_label, "label")
+            user_label.pack(side=tk.LEFT)
+            self._cred_username_var = tk.StringVar(value="")
+            user_entry = tk.Entry(user_row, textvariable=self._cred_username_var, width=32)
+            self._theme.apply_to_widget(user_entry, "entry")
+            user_entry.pack(side=tk.LEFT, padx=(8, 0))
+            first_focusable = user_entry
 
-        pass_label = tk.Label(pass_row, text="Password:")
-        self._theme.apply_to_widget(pass_label, "label")
-        pass_label.pack(side=tk.LEFT)
-
-        self._cred_password_var = tk.StringVar(value="")
-        pass_entry = tk.Entry(pass_row, textvariable=self._cred_password_var, show="*", width=32)
-        self._theme.apply_to_widget(pass_entry, "entry")
-        pass_entry.pack(side=tk.LEFT, padx=(8, 0))
+            pass_row = tk.Frame(outer)
+            self._theme.apply_to_widget(pass_row, "main_window")
+            pass_row.pack(fill=tk.X, pady=(0, 8))
+            pass_label = tk.Label(pass_row, text="Password:")
+            self._theme.apply_to_widget(pass_label, "label")
+            pass_label.pack(side=tk.LEFT)
+            self._cred_password_var = tk.StringVar(value="")
+            pass_entry = tk.Entry(
+                pass_row, textvariable=self._cred_password_var, show="*", width=32
+            )
+            self._theme.apply_to_widget(pass_entry, "entry")
+            pass_entry.pack(side=tk.LEFT, padx=(8, 0))
 
         status_row = tk.Frame(outer)
         self._theme.apply_to_widget(status_row, "main_window")
@@ -294,6 +362,8 @@ class WebUITab:
             command=self._on_save_credentials_dialog,
         )
         self._theme.apply_to_widget(self._save_creds_btn, "button_primary")
+        if self._multi_cred_error:
+            self._save_creds_btn.configure(state=tk.DISABLED)
         self._save_creds_btn.pack(side=tk.LEFT, padx=(0, 8))
 
         close_btn = tk.Button(btn_row, text="Close", command=self._close_credentials_dialog)
@@ -303,7 +373,8 @@ class WebUITab:
         dialog.protocol("WM_DELETE_WINDOW", self._close_credentials_dialog)
         self._cred_dialog = dialog
         ensure_dialog_focus(dialog, parent)
-        user_entry.focus_set()
+        if first_focusable is not None:
+            first_focusable.focus_set()
 
     def _close_credentials_dialog(self) -> None:
         if not self._dialog_exists():
@@ -325,50 +396,116 @@ class WebUITab:
         if success:
             self._cred_status_var.set(f"Saved credentials for '{detail}'")
             self._cred_password_var.set("")
+            if self._cred_current_password_var is not None:
+                self._cred_current_password_var.set("")
         else:
             reason = detail.strip() if detail else "credential save failed"
             self._cred_status_var.set(f"Failed: {reason}")
         self._save_creds_btn.configure(state=tk.NORMAL)
 
     def _on_save_credentials_dialog(self) -> None:
-        username = self._cred_username_var.get()
-        password = self._cred_password_var.get()
-
-        if not username.strip():
-            self._cred_status_var.set("Failed: username is required")
-            return
-        if not password:
-            self._cred_status_var.set("Failed: password is required")
+        if getattr(self, "_multi_cred_error", False):
             return
 
         self._save_creds_btn.configure(state=tk.DISABLED)
         self._cred_status_var.set("Saving...")
 
-        def _do() -> None:
-            from experimental.webui.auth import set_password
+        if self._creds_existed_at_open:
+            current_password = self._cred_current_password_var.get()
+            new_password = self._cred_password_var.get()
 
-            try:
-                set_password(username, password)
-            except ValueError as exc:
-                self._schedule_dialog_ui(
-                    lambda: self._finish_credential_save_dialog(False, str(exc))
-                )
+            if not current_password:
+                self._cred_status_var.set("Failed: current password is required")
+                self._save_creds_btn.configure(state=tk.NORMAL)
                 return
-            except Exception as exc:
-                self._schedule_dialog_ui(
-                    lambda: safe_messagebox.showerror(
-                        "Credential Save Failed", str(exc), parent=self._cred_dialog
+            if not new_password:
+                self._cred_status_var.set("Failed: new password is required")
+                self._save_creds_btn.configure(state=tk.NORMAL)
+                return
+
+            stored_username = self._stored_username_at_open
+
+            def _do_rotation() -> None:
+                from experimental.webui.auth import (
+                    BlocklistUnavailableError,
+                    set_password,
+                    verify_password,
+                )
+
+                if not verify_password(stored_username, current_password):
+                    self._schedule_dialog_ui(
+                        lambda: self._finish_credential_save_dialog(
+                            False, "Current password is incorrect"
+                        )
                     )
-                )
+                    return
+                try:
+                    set_password(stored_username, new_password)
+                except BlocklistUnavailableError:
+                    self._schedule_dialog_ui(
+                        lambda: self._finish_credential_save_dialog(
+                            False, "Configuration error: password blocklist unavailable"
+                        )
+                    )
+                    return
+                except ValueError as exc:
+                    msg = str(exc)
+                    self._schedule_dialog_ui(
+                        lambda: self._finish_credential_save_dialog(False, msg)
+                    )
+                    return
                 self._schedule_dialog_ui(
-                    lambda: self._finish_credential_save_dialog(False, str(exc))
+                    lambda: self._finish_credential_save_dialog(True, stored_username)
                 )
-                return
-            self._schedule_dialog_ui(
-                lambda: self._finish_credential_save_dialog(True, username)
-            )
 
-        threading.Thread(target=_do, daemon=True).start()
+            threading.Thread(target=_do_rotation, daemon=True).start()
+        else:
+            username = self._cred_username_var.get()
+            password = self._cred_password_var.get()
+
+            if not username.strip():
+                self._cred_status_var.set("Failed: username is required")
+                self._save_creds_btn.configure(state=tk.NORMAL)
+                return
+            if not password:
+                self._cred_status_var.set("Failed: password is required")
+                self._save_creds_btn.configure(state=tk.NORMAL)
+                return
+
+            def _do_bootstrap() -> None:
+                from experimental.webui.auth import BlocklistUnavailableError, set_password
+
+                try:
+                    set_password(username, password)
+                except BlocklistUnavailableError:
+                    self._schedule_dialog_ui(
+                        lambda: self._finish_credential_save_dialog(
+                            False, "Configuration error: password blocklist unavailable"
+                        )
+                    )
+                    return
+                except ValueError as exc:
+                    msg = str(exc)
+                    self._schedule_dialog_ui(
+                        lambda: self._finish_credential_save_dialog(False, msg)
+                    )
+                    return
+                except Exception as exc:
+                    err = str(exc)
+                    self._schedule_dialog_ui(
+                        lambda: safe_messagebox.showerror(
+                            "Credential Save Failed", err, parent=self._cred_dialog
+                        )
+                    )
+                    self._schedule_dialog_ui(
+                        lambda: self._finish_credential_save_dialog(False, err)
+                    )
+                    return
+                self._schedule_dialog_ui(
+                    lambda: self._finish_credential_save_dialog(True, username)
+                )
+
+            threading.Thread(target=_do_bootstrap, daemon=True).start()
 
     def _open_config_dialog(self) -> None:
         if self._cfg_dialog_exists():

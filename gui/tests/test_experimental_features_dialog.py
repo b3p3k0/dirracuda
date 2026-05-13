@@ -1087,6 +1087,8 @@ def test_webui_tab_on_save_credentials_dialog_empty_username():
     tab = WebUITab.__new__(WebUITab)
     tab.frame = _FrameWidget()
     tab._cred_dialog = _FrameWidget()
+    tab._multi_cred_error = False
+    tab._creds_existed_at_open = False
     tab._cred_status_var = _ValueVar("Ready")
     tab._save_creds_btn = _StatusWidget()
     tab._cred_username_var = _ValueVar("   ")
@@ -1095,7 +1097,7 @@ def test_webui_tab_on_save_credentials_dialog_empty_username():
     tab._on_save_credentials_dialog()
 
     assert tab._cred_status_var.value == "Failed: username is required"
-    assert tab._save_creds_btn.configure_calls == []
+    assert tab._save_creds_btn.configure_calls[-1] == {"state": tk.NORMAL}
 
 
 def test_webui_tab_on_save_credentials_dialog_empty_password():
@@ -1104,6 +1106,8 @@ def test_webui_tab_on_save_credentials_dialog_empty_password():
     tab = WebUITab.__new__(WebUITab)
     tab.frame = _FrameWidget()
     tab._cred_dialog = _FrameWidget()
+    tab._multi_cred_error = False
+    tab._creds_existed_at_open = False
     tab._cred_status_var = _ValueVar("Ready")
     tab._save_creds_btn = _StatusWidget()
     tab._cred_username_var = _ValueVar("admin")
@@ -1112,7 +1116,7 @@ def test_webui_tab_on_save_credentials_dialog_empty_password():
     tab._on_save_credentials_dialog()
 
     assert tab._cred_status_var.value == "Failed: password is required"
-    assert tab._save_creds_btn.configure_calls == []
+    assert tab._save_creds_btn.configure_calls[-1] == {"state": tk.NORMAL}
 
 
 def test_webui_tab_on_save_credentials_dialog_success(monkeypatch):
@@ -1141,6 +1145,9 @@ def test_webui_tab_on_save_credentials_dialog_success(monkeypatch):
     tab = WebUITab.__new__(WebUITab)
     tab.frame = _FrameWidget()
     tab._cred_dialog = _FrameWidget()
+    tab._multi_cred_error = False
+    tab._creds_existed_at_open = False
+    tab._cred_current_password_var = None
     tab._schedule_dialog_ui = lambda cb: cb()
     tab._cred_status_var = _ValueVar("Ready")
     tab._save_creds_btn = _StatusWidget()
@@ -1180,6 +1187,9 @@ def test_webui_tab_on_save_credentials_dialog_known_failure_inline(monkeypatch):
     tab = WebUITab.__new__(WebUITab)
     tab.frame = _FrameWidget()
     tab._cred_dialog = _FrameWidget()
+    tab._multi_cred_error = False
+    tab._creds_existed_at_open = False
+    tab._cred_current_password_var = None
     tab._schedule_dialog_ui = lambda cb: cb()
     tab._cred_status_var = _ValueVar("Ready")
     tab._save_creds_btn = _StatusWidget()
@@ -1222,6 +1232,9 @@ def test_webui_tab_on_save_credentials_dialog_unexpected_exception_popup(monkeyp
     tab = WebUITab.__new__(WebUITab)
     tab.frame = _FrameWidget()
     tab._cred_dialog = _FrameWidget()
+    tab._multi_cred_error = False
+    tab._creds_existed_at_open = False
+    tab._cred_current_password_var = None
     tab._schedule_dialog_ui = lambda cb: cb()
     tab._cred_status_var = _ValueVar("Ready")
     tab._save_creds_btn = _StatusWidget()
@@ -1635,3 +1648,29 @@ def test_webui_tab_save_restart_start_failure_sets_inline_status(monkeypatch):
     assert tab._cfg_save_btn.configure_calls[-1] == {"state": tk.NORMAL}
     assert tab._cfg_save_restart_btn.configure_calls[-1] == {"state": tk.NORMAL}
     tab._refresh_status.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# O2 — WebUITab credential dialog: multi-cred error guard
+# ---------------------------------------------------------------------------
+
+def test_save_credentials_multi_cred_error_is_noop(monkeypatch):
+    """_on_save_credentials_dialog with _multi_cred_error=True returns immediately.
+
+    Verifies no call to set_password and no AttributeError even when credential
+    fields are absent (simulating a dialog opened in multi-cred-error state).
+    """
+    from gui.components.experimental_features.webui_tab import WebUITab
+
+    set_password_calls = []
+    monkeypatch.setattr(
+        "experimental.webui.auth.set_password",
+        lambda *a, **kw: set_password_calls.append((a, kw)),
+    )
+
+    tab = WebUITab.__new__(WebUITab)
+    tab._multi_cred_error = True
+
+    tab._on_save_credentials_dialog()
+
+    assert set_password_calls == []

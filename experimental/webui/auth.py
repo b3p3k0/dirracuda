@@ -15,10 +15,55 @@ PBKDF2_ALGORITHM = "pbkdf2_hmac_sha256"
 SALT_BYTES = 32
 MAX_PASSWORD_BYTES = 1024
 MAX_USERNAME_BYTES = 128
+PASSWORD_MIN_LENGTH = 15
+BLOCKLIST_MIN_SIZE = 3000  # ASVS V6.2.4 minimum
 
 
 class CredentialError(Exception):
     """Raised for credential store access failures."""
+
+
+class BlocklistUnavailableError(RuntimeError):
+    """Raised when the password blocklist is absent, unreadable, or undersized."""
+
+
+def _load_blocklist():
+    """Return the blocklist as a frozenset, or None on any load failure.
+
+    Returns None for: file absent, OSError, or fewer than BLOCKLIST_MIN_SIZE
+    entries after parsing (truncated/corrupted file). All failure modes map to
+    BlocklistUnavailableError territory at call time — fail-closed.
+    """
+    p = Path(__file__).parent / "pwlist.txt"
+    try:
+        result = frozenset(
+            line.strip().lower()
+            for line in p.read_text(encoding="utf-8", errors="ignore").splitlines()
+            if line.strip() and not line.startswith("#")
+        )
+    except OSError:
+        return None
+    if len(result) < BLOCKLIST_MIN_SIZE:
+        return None
+    return result
+
+
+_BLOCKLIST = _load_blocklist()
+
+
+def validate_password_policy(password: str) -> None:
+    """Raise ValueError (policy rejection) or BlocklistUnavailableError (system fault).
+
+    No composition rules enforced — passphrase-friendly.
+    """
+    if _BLOCKLIST is None:
+        raise BlocklistUnavailableError(
+            "Password blocklist unavailable — cannot validate password safety."
+        )
+    if len(password) < PASSWORD_MIN_LENGTH:
+        raise ValueError(f"Password must be at least {PASSWORD_MIN_LENGTH} characters.")
+    if password.lower() in _BLOCKLIST:
+        raise ValueError("Password is too common. Choose a different password.")
 
 
 def _creds_path(path: Optional[Path] = None) -> Path:
@@ -56,9 +101,11 @@ def _validate_username(username: str) -> None:
 def set_password(username: str, password: str, path: Optional[Path] = None) -> None:
     """Hash and store a password for username.
 
-    Raises ValueError for invalid username or overlong password (after UTF-8 encoding).
+    Raises ValueError for invalid username, policy rejection, or overlong password.
+    Raises BlocklistUnavailableError if the blocklist cannot be loaded.
     """
     _validate_username(username)
+    validate_password_policy(password)
     pw_bytes = password.encode("utf-8")
     if len(pw_bytes) > MAX_PASSWORD_BYTES:
         raise ValueError(
@@ -115,3 +162,8 @@ def verify_password(username: str, password: str, path: Optional[Path] = None) -
 def credential_exists(path: Optional[Path] = None) -> bool:
     """Return True if the credential store exists and contains at least one entry."""
     return bool(_load_creds(path))
+
+
+def get_credential_usernames(path: Optional[Path] = None) -> list:
+    """Return the list of stored credential usernames (empty if none exist)."""
+    return list(_load_creds(path).keys())

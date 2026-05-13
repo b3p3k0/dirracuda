@@ -373,3 +373,116 @@ def test_remote_rl_record_failure_runtime_error_returns_503(creds, rl_db):
     # Wrong password triggers record_failure; remote mode must fail closed.
     r = c.post("/login", json={"username": _USERNAME, "password": "wrong"})
     assert r.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# O2 — /account page and /api/auth/change-password endpoint
+# ---------------------------------------------------------------------------
+
+def _csrf_token(lc):
+    """Extract CSRF token from the account page of an already-logged-in client."""
+    r = lc.get("/account")
+    assert r.status_code == 200
+    m = re.search(r'name="csrf-token" content="([^"]+)"', r.text)
+    assert m, "csrf-token meta tag not found"
+    return m.group(1)
+
+
+def test_account_page_requires_auth(client):
+    r = client.get("/account")
+    assert r.status_code == 303
+    assert r.headers["location"] == "/login"
+
+
+def test_account_page_accessible(logged_in_client):
+    r = logged_in_client.get("/account")
+    assert r.status_code == 200
+
+
+def test_change_password_requires_auth(client):
+    r = client.post(
+        "/api/auth/change-password",
+        json={"current_password": _PASSWORD, "new_password": "newpassword123456"},
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == "/login"
+
+
+def test_change_password_missing_csrf(logged_in_client):
+    r = logged_in_client.post(
+        "/api/auth/change-password",
+        json={"current_password": _PASSWORD, "new_password": "newpassword123456"},
+    )
+    assert r.status_code == 403
+
+
+def test_change_password_wrong_origin(logged_in_client):
+    csrf = _csrf_token(logged_in_client)
+    r = logged_in_client.post(
+        "/api/auth/change-password",
+        json={"current_password": _PASSWORD, "new_password": "newpassword123456"},
+        headers={"X-CSRF-Token": csrf, "origin": "http://attacker.com"},
+    )
+    assert r.status_code == 403
+
+
+def test_change_password_wrong_current(logged_in_client):
+    csrf = _csrf_token(logged_in_client)
+    r = logged_in_client.post(
+        "/api/auth/change-password",
+        json={"current_password": "wrong-password", "new_password": "newpassword123456"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert r.status_code == 401
+    assert "error" in r.json()
+
+
+def test_change_password_too_short(logged_in_client):
+    csrf = _csrf_token(logged_in_client)
+    r = logged_in_client.post(
+        "/api/auth/change-password",
+        json={"current_password": _PASSWORD, "new_password": "tooshort"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert r.status_code == 400
+    assert "15" in r.json().get("error", "")
+
+
+def test_change_password_common_password(logged_in_client, monkeypatch):
+    import experimental.webui.auth as auth_module
+    csrf = _csrf_token(logged_in_client)
+    monkeypatch.setattr(auth_module, "_BLOCKLIST", frozenset({"blockedtestpassword123"}))
+    r = logged_in_client.post(
+        "/api/auth/change-password",
+        json={"current_password": _PASSWORD, "new_password": "blockedtestpassword123"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert r.status_code == 400
+    assert "common" in r.json().get("error", "").lower()
+
+
+def test_change_password_blocklist_unavailable(logged_in_client, monkeypatch):
+    import experimental.webui.auth as auth_module
+    csrf = _csrf_token(logged_in_client)
+    monkeypatch.setattr(auth_module, "_BLOCKLIST", None)
+    r = logged_in_client.post(
+        "/api/auth/change-password",
+        json={"current_password": _PASSWORD, "new_password": "newpassword123456"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert r.status_code == 503
+
+
+def test_change_password_success(logged_in_client, creds):
+    from experimental.webui.auth import verify_password
+    csrf = _csrf_token(logged_in_client)
+    new_pw = "newpassword-xk7-battery"
+    r = logged_in_client.post(
+        "/api/auth/change-password",
+        json={"current_password": _PASSWORD, "new_password": new_pw},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert r.status_code == 200
+    assert r.json().get("ok") is True
+    assert verify_password(_USERNAME, new_pw, creds) is True
+    assert verify_password(_USERNAME, _PASSWORD, creds) is False

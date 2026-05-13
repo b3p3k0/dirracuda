@@ -1,6 +1,6 @@
 # OWASP Waiver Register (Web UI)
 
-Last updated: 2026-05-12
+Last updated: 2026-05-13
 Owner: VanDelay Security Group
 Review cadence: quarterly or at next auth-scope expansion, whichever comes first
 
@@ -23,6 +23,7 @@ A waiver is valid only when all fields are present:
 | W-002 | Credential store keychain/encryption migration | DEFER | Current model stores salted PBKDF2 hashes in local config area; migration adds platform-specific complexity not required for immediate OWASP wave. | Local file disclosure could expose password hashes for offline attack. | Enforce mode `0600`, strict ownership and permission checks, operator hardening guidance in docs, no plaintext secret logging. | 2026-08-15 | HI + RA |
 | W-003 | Concurrent session management UI (list/revoke sessions) | DEFER | Single-admin operational model reduces practical benefit in this wave. | Session theft cannot be revoked from an in-app multi-session console. | Short idle/absolute session timeouts, logout invalidation, lockout/backoff and brute-force controls, planned revisit if multi-user support lands. | 2026-08-15 | HI + RA |
 | W-004 | Session persistence across restart | DEFER | Current in-memory store is operationally acceptable for local admin workflows. | Users are logged out on process restart; no cross-restart revocation metadata. | Documented behavior, explicit operational expectation, secure re-auth flow with stronger password/lockout controls. | 2026-08-15 | HI + RA |
+| W-005 | ASVS V6.2.12 breached-password checking | DEFER | HIBP breach corpus is ~10 GB of SHA-1 hashes; bundling a subset is impractical. The k-anonymity API path adds an outbound network dependency to the auth write path, conflicts with offline-first architecture, and leaks password hash prefixes to an external service. | Passwords not matched against full breach corpus; users could select a breached-but-uncommon password that passes the top-10000 blocklist. | min-15 policy + top-10000 common-password blocklist (ASVS V6.2.4), account+IP lockout (O1), PBKDF2 600k iterations. | 2026-08-15 | HI + RA |
 
 ## Closed / Resolved Waivers
 
