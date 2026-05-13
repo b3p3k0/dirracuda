@@ -22,8 +22,15 @@ Read before changing files:
 - docs/dev/webui/ASCII_SKETCHES.md
 - docs/dev/webui/TASK_CARDS.md
 - docs/dev/webui/LESSONS_LEARNED.md
+- https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AI_AGENT_FIELD_GUIDE.md
+- https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AI_AGENT_ROLE_GUIDE.md
+- https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AI_AGENT_DEVELOPMENT_GUIDE.md
+- https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AI_AGENT_CODE_REVIEW_GUIDE.md
+- https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AI_AGENT_DOC_STYLE_GUIDE.md
 
 Operating rules:
+- State your active role at the top of your response (`PA`, `RA`, or `DA`).
+- If running as `DA`, implement only. If running as `PA`, produce plan only and do not edit product code.
 - Implement only the named card.
 - Do not commit.
 - Do not change unrelated behavior.
@@ -34,6 +41,7 @@ Operating rules:
 - If any touched file exceeds 1700 lines, stop and propose modularization.
 - Use subprocess argument lists with shell=False for scan execution.
 - No secrets in logs or test fixtures.
+- If HI/RA approves your plan, save it in `docs/dev/webui/approved_plans/` with card-prefixed filename before implementation starts.
 - Report exact commands run and results.
 
 Response format:
@@ -44,6 +52,23 @@ Response format:
 - Validation run:
 - Result:
 - HI test needed:
+```
+
+## PA Plan-Only Prompt
+
+```text
+You are Claude acting as PA for Dirracuda webui work. Codex is RA and will review your plan.
+
+Scope:
+- Produce a decision-complete implementation plan for exactly one task card.
+- Do not edit product code in this step.
+- Use current repo truth plus the SOP/style guides listed in the Universal Header.
+- Include: objective, non-goals, assumptions, risks, affected files, acceptance criteria,
+  validation commands, rollback, and DA handoff prompt.
+
+Approval/save rule:
+- Stop after plan output and wait for HI/RA approval.
+- When approved, save the plan to `docs/dev/webui/approved_plans/<card>_<slug>.md`.
 ```
 
 ## C0 Prompt

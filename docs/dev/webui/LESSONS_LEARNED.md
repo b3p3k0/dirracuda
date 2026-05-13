@@ -102,3 +102,30 @@ Seeded before implementation. Append after every major card.
     readable inline state (`Failed: <reason>`) with bounded diagnostics (exit
     code + short stderr fragment or timeout reason) so operators can self-debug
     without hunting console output.
+
+## O1 — Authentication Anti-Automation
+
+28. For lockout enforcement, track failures on a composite `(account, IP)` key
+    (`account:{username}:ip:{client_ip}`), not a global IP key. This keeps the
+    O1 account+IP requirement while avoiding NAT-wide lockout side effects.
+
+29. A successful authentication should clear all lockout rows for the account
+    (`DELETE ... WHERE account = ?`). This aligns with NIST guidance to
+    disregard failed-attempt counters after successful authentication.
+
+30. Startup behavior and runtime behavior must be explicit and mode-aware:
+    remote mode fails closed when lockout storage is unavailable; localhost mode
+    may start degraded with a no-op limiter, but must expose degraded state via
+    health and logs.
+
+31. Do not swallow lockout-storage runtime errors in limiter primitives.
+    Re-raise a typed runtime error and let the HTTP handler enforce
+    fail-closed/degraded behavior by mode.
+
+32. Keep the module-level `health()` helper contract stable for scaffold tests.
+    Add operational fields (like `rate_limiter`) in the route handler payload,
+    not by changing the pure helper return shape.
+
+33. If `/config` gains new security fields, the API model and both config
+    surfaces (web page and desktop dialog) must be updated together in the same
+    card to avoid save-path regressions (`422` or silent overwrite).

@@ -1365,6 +1365,10 @@ def test_webui_tab_on_save_config_dialog_success(monkeypatch):
     tab._cfg_allowlist_var = _ValueVar("127.0.0.1/32,::1/128")
     tab._cfg_idle_var = _ValueVar("30")
     tab._cfg_abs_var = _ValueVar("8")
+    tab._cfg_auth_threshold_var = _ValueVar("5")
+    tab._cfg_auth_window_var = _ValueVar("900")
+    tab._cfg_auth_base_var = _ValueVar("300")
+    tab._cfg_auth_max_var = _ValueVar("3600")
 
     tab._on_save_config_dialog()
 
@@ -1414,6 +1418,10 @@ def test_webui_tab_on_save_config_dialog_invalid_integer(monkeypatch):
     tab._cfg_allowlist_var = _ValueVar("")
     tab._cfg_idle_var = _ValueVar("30")
     tab._cfg_abs_var = _ValueVar("8")
+    tab._cfg_auth_threshold_var = _ValueVar("5")
+    tab._cfg_auth_window_var = _ValueVar("900")
+    tab._cfg_auth_base_var = _ValueVar("300")
+    tab._cfg_auth_max_var = _ValueVar("3600")
 
     tab._on_save_config_dialog()
 
@@ -1480,6 +1488,10 @@ def test_webui_tab_save_restart_when_stopped_starts_service(monkeypatch):
     tab._cfg_allowlist_var = _ValueVar("10.0.0.0/8")
     tab._cfg_idle_var = _ValueVar("30")
     tab._cfg_abs_var = _ValueVar("8")
+    tab._cfg_auth_threshold_var = _ValueVar("5")
+    tab._cfg_auth_window_var = _ValueVar("900")
+    tab._cfg_auth_base_var = _ValueVar("300")
+    tab._cfg_auth_max_var = _ValueVar("3600")
 
     tab._on_save_restart_config_dialog()
 
@@ -1544,6 +1556,10 @@ def test_webui_tab_save_restart_running_stop_failure(monkeypatch):
     tab._cfg_allowlist_var = _ValueVar("127.0.0.1/32")
     tab._cfg_idle_var = _ValueVar("30")
     tab._cfg_abs_var = _ValueVar("8")
+    tab._cfg_auth_threshold_var = _ValueVar("5")
+    tab._cfg_auth_window_var = _ValueVar("900")
+    tab._cfg_auth_base_var = _ValueVar("300")
+    tab._cfg_auth_max_var = _ValueVar("3600")
 
     tab._on_save_restart_config_dialog()
 
@@ -1608,6 +1624,10 @@ def test_webui_tab_save_restart_start_failure_sets_inline_status(monkeypatch):
     tab._cfg_allowlist_var = _ValueVar("127.0.0.1/32")
     tab._cfg_idle_var = _ValueVar("30")
     tab._cfg_abs_var = _ValueVar("8")
+    tab._cfg_auth_threshold_var = _ValueVar("5")
+    tab._cfg_auth_window_var = _ValueVar("900")
+    tab._cfg_auth_base_var = _ValueVar("300")
+    tab._cfg_auth_max_var = _ValueVar("3600")
 
     tab._on_save_restart_config_dialog()
 

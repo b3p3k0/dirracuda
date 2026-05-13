@@ -188,3 +188,188 @@ def test_session_not_reused_after_logout(logged_in_client):
     r = logged_in_client.get("/dashboard")
     assert r.status_code == 303
     assert r.headers["location"] == "/login"
+
+
+# --- Rate limiter / lockout integration ---
+
+from experimental.webui.config import AuthConfig
+from experimental.webui.rate_limiter import NullRateLimiter
+
+
+def _lockout_cfg():
+    return WebUIConfig(tls=TLSConfig(enabled=False), auth=AuthConfig(lockout_threshold=3))
+
+
+@pytest.fixture
+def rl_db(tmp_path):
+    return tmp_path / "rl.db"
+
+
+@pytest.fixture
+def lockout_client(creds, rl_db):
+    app = create_app(cfg=_lockout_cfg(), creds_path=creds, rl_db_path=rl_db)
+    return TestClient(app, follow_redirects=False)
+
+
+def test_lockout_after_repeated_failures(lockout_client):
+    for _ in range(3):
+        r = lockout_client.post("/login", json={"username": _USERNAME, "password": "wrong"})
+        assert r.status_code == 401
+    # 4th attempt — still 401 (locked)
+    r = lockout_client.post("/login", json={"username": _USERNAME, "password": "wrong"})
+    assert r.status_code == 401
+
+
+def test_locked_response_body_generic(lockout_client):
+    wrong_body = lockout_client.post(
+        "/login", json={"username": _USERNAME, "password": "wrong"}
+    ).json()
+    for _ in range(2):
+        lockout_client.post("/login", json={"username": _USERNAME, "password": "wrong"})
+    locked_body = lockout_client.post(
+        "/login", json={"username": _USERNAME, "password": "wrong"}
+    ).json()
+    assert locked_body == wrong_body
+
+
+def test_locked_no_retry_after_header(lockout_client):
+    for _ in range(3):
+        lockout_client.post("/login", json={"username": _USERNAME, "password": "wrong"})
+    r = lockout_client.post("/login", json={"username": _USERNAME, "password": "wrong"})
+    assert r.status_code == 401
+    assert "retry-after" not in {k.lower() for k in r.headers}
+
+
+def test_different_ip_not_locked(creds, rl_db):
+    app = create_app(cfg=_lockout_cfg(), creds_path=creds, rl_db_path=rl_db)
+    c1 = TestClient(app, follow_redirects=False)
+    # Trigger lockout from default TestClient IP
+    for _ in range(3):
+        c1.post("/login", json={"username": _USERNAME, "password": "wrong"})
+
+    # A second client with different headers — override client IP via custom transport
+    # TestClient uses 'testclient' as host; simulate a second source via the rate limiter
+    # directly: lockout is per (account, ip), so a new client at a different IP is unaffected.
+    from experimental.webui.rate_limiter import RateLimiter
+    from experimental.webui.config import AuthConfig
+    rl = RateLimiter(rl_db, AuthConfig(lockout_threshold=3))
+    locked_orig, _ = rl.check_locked(_USERNAME, "testclient")
+    locked_other, _ = rl.check_locked(_USERNAME, "10.0.0.99")
+    assert locked_orig
+    assert not locked_other
+
+
+def test_success_clears_lockout(creds, rl_db, monkeypatch):
+    import time
+    app = create_app(cfg=_lockout_cfg(), creds_path=creds, rl_db_path=rl_db)
+    c = TestClient(app, follow_redirects=False)
+    for _ in range(3):
+        c.post("/login", json={"username": _USERNAME, "password": "wrong"})
+    # Advance time past lockout
+    future = time.time() + 400
+    monkeypatch.setattr("experimental.webui.rate_limiter.time.time", lambda: future)
+    r = c.post("/login", json={"username": _USERNAME, "password": _PASSWORD})
+    assert r.status_code == 200
+
+
+def test_localhost_mode_lockout_applies(creds, rl_db):
+    cfg = WebUIConfig(
+        tls=TLSConfig(enabled=False),
+        remote_enabled=False,
+        auth=AuthConfig(lockout_threshold=3),
+    )
+    app = create_app(cfg=cfg, creds_path=creds, rl_db_path=rl_db)
+    c = TestClient(app, follow_redirects=False)
+    for _ in range(3):
+        c.post("/login", json={"username": _USERNAME, "password": "wrong"})
+    r = c.post("/login", json={"username": _USERNAME, "password": "wrong"})
+    assert r.status_code == 401
+
+
+def test_health_route_includes_rate_limiter_ok(creds, rl_db):
+    app = create_app(cfg=_lockout_cfg(), creds_path=creds, rl_db_path=rl_db)
+    c = TestClient(app, follow_redirects=False)
+    data = c.get("/health").json()
+    assert data["status"] == "ok"
+    assert data["rate_limiter"] == "ok"
+
+
+def test_health_route_degraded_null_limiter(creds):
+    app = create_app(cfg=_lockout_cfg(), creds_path=creds)
+    app.state.rate_limiter = NullRateLimiter()
+    c = TestClient(app, follow_redirects=False)
+    data = c.get("/health").json()
+    assert data["status"] == "ok"
+    assert data["rate_limiter"] == "error"
+
+
+# --- Runtime DB error: fail-closed (remote) and degrade (localhost) ---
+
+from experimental.webui.rate_limiter import RateLimiterRuntimeError
+
+
+class _CheckLockedBrokenRL:
+    """Rate limiter stub that raises RateLimiterRuntimeError on check_locked."""
+
+    def check_locked(self, account, ip):
+        raise RateLimiterRuntimeError("simulated disk error")
+
+    def record_failure(self, account, ip):
+        pass
+
+    def record_success(self, account):
+        pass
+
+    def health_check(self):
+        return "error"
+
+
+class _RecordFailureBrokenRL:
+    """Rate limiter stub: check_locked OK, record_failure raises."""
+
+    def check_locked(self, account, ip):
+        return False, 0
+
+    def record_failure(self, account, ip):
+        raise RateLimiterRuntimeError("simulated disk error")
+
+    def record_success(self, account):
+        pass
+
+    def health_check(self):
+        return "error"
+
+
+def test_remote_rl_check_locked_runtime_error_returns_503(creds, rl_db):
+    # Create app with remote_enabled=False so the middleware closure keeps that state
+    # and TestClient's non-IP host passes the allowlist check. Then *reassign*
+    # app.state.cfg (not mutate the original object) so the login handler — which
+    # reads request.app.state.cfg — sees remote_enabled=True and fails closed.
+    cfg = WebUIConfig(tls=TLSConfig(enabled=False))
+    app = create_app(cfg=cfg, creds_path=creds, rl_db_path=rl_db)
+    app.state.cfg = WebUIConfig(tls=TLSConfig(enabled=False), remote_enabled=True)
+    app.state.rate_limiter = _CheckLockedBrokenRL()
+    c = TestClient(app, follow_redirects=False)
+    r = c.post("/login", json={"username": _USERNAME, "password": _PASSWORD})
+    assert r.status_code == 503
+
+
+def test_localhost_rl_check_locked_runtime_error_degrades(creds, rl_db):
+    cfg = WebUIConfig(tls=TLSConfig(enabled=False), remote_enabled=False)
+    app = create_app(cfg=cfg, creds_path=creds, rl_db_path=rl_db)
+    app.state.rate_limiter = _CheckLockedBrokenRL()
+    c = TestClient(app, follow_redirects=False)
+    # Correct password: degraded mode skips lockout check and allows login.
+    r = c.post("/login", json={"username": _USERNAME, "password": _PASSWORD})
+    assert r.status_code == 200
+
+
+def test_remote_rl_record_failure_runtime_error_returns_503(creds, rl_db):
+    cfg = WebUIConfig(tls=TLSConfig(enabled=False))
+    app = create_app(cfg=cfg, creds_path=creds, rl_db_path=rl_db)
+    app.state.cfg = WebUIConfig(tls=TLSConfig(enabled=False), remote_enabled=True)
+    app.state.rate_limiter = _RecordFailureBrokenRL()
+    c = TestClient(app, follow_redirects=False)
+    # Wrong password triggers record_failure; remote mode must fail closed.
+    r = c.post("/login", json={"username": _USERNAME, "password": "wrong"})
+    assert r.status_code == 503

@@ -14,14 +14,27 @@ _DEFAULT_CONFIG_PATH = Path.home() / ".dirracuda" / "conf" / "webui.json"
 
 _TOP_LEVEL_KEYS = frozenset({
     "enabled", "bind_address", "port", "remote_enabled",
-    "allowed_cidrs", "session_timeout_idle", "session_timeout_absolute", "tls",
+    "allowed_cidrs", "session_timeout_idle", "session_timeout_absolute", "tls", "auth",
 })
 
 _TLS_KEYS = frozenset({"enabled", "cert_file", "key_file", "allow_insecure_remote"})
 
+_AUTH_KEYS = frozenset({
+    "lockout_threshold", "lockout_window_sec",
+    "lockout_base_duration_sec", "lockout_max_duration_sec",
+})
+
 
 class WebUIConfigError(ValueError):
     """Raised for invalid or unparseable web UI configuration."""
+
+
+@dataclass
+class AuthConfig:
+    lockout_threshold: int = 5
+    lockout_window_sec: int = 900
+    lockout_base_duration_sec: int = 300
+    lockout_max_duration_sec: int = 3600
 
 
 @dataclass
@@ -42,6 +55,7 @@ class WebUIConfig:
     session_timeout_idle: int = 1800
     session_timeout_absolute: int = 28800
     tls: TLSConfig = field(default_factory=TLSConfig)
+    auth: AuthConfig = field(default_factory=AuthConfig)
 
 
 def _config_path(path: Optional[Path] = None) -> Path:
@@ -91,6 +105,20 @@ def _parse_tls(raw_tls: dict) -> TLSConfig:
     return cfg
 
 
+def _parse_auth(raw_auth: dict) -> AuthConfig:
+    unknown = set(raw_auth) - _AUTH_KEYS
+    if unknown:
+        raise WebUIConfigError(f"Unknown auth keys: {sorted(unknown)}")
+    cfg = AuthConfig()
+    for fname in ("lockout_threshold", "lockout_window_sec",
+                  "lockout_base_duration_sec", "lockout_max_duration_sec"):
+        if fname in raw_auth:
+            v = raw_auth[fname]
+            _check_type(v, int, f"auth.{fname}")
+            setattr(cfg, fname, v)
+    return cfg
+
+
 def _parse_config(raw: dict) -> WebUIConfig:
     unknown = set(raw) - _TOP_LEVEL_KEYS
     if unknown:
@@ -137,6 +165,11 @@ def _parse_config(raw: dict) -> WebUIConfig:
         if not isinstance(v, dict):
             raise WebUIConfigError(f"'tls': expected dict, got {type(v).__name__}")
         cfg.tls = _parse_tls(v)
+    if "auth" in raw:
+        v = raw["auth"]
+        if not isinstance(v, dict):
+            raise WebUIConfigError(f"'auth': expected dict, got {type(v).__name__}")
+        cfg.auth = _parse_auth(v)
     return cfg
 
 
@@ -176,6 +209,15 @@ def _validate_cfg_types(cfg: WebUIConfig) -> None:
     for fname, fval in (("cert_file", cfg.tls.cert_file), ("key_file", cfg.tls.key_file)):
         if not isinstance(fval, str):
             raise WebUIConfigError(f"'tls.{fname}': expected str, got {type(fval).__name__}")
+    if not isinstance(cfg.auth, AuthConfig):
+        raise WebUIConfigError(f"'auth': expected AuthConfig, got {type(cfg.auth).__name__}")
+    for fname in ("lockout_threshold", "lockout_window_sec",
+                  "lockout_base_duration_sec", "lockout_max_duration_sec"):
+        fval = getattr(cfg.auth, fname)
+        if isinstance(fval, bool) or not isinstance(fval, int):
+            raise WebUIConfigError(
+                f"'auth.{fname}': expected int, got {type(fval).__name__}"
+            )
 
 
 def validate(cfg: WebUIConfig) -> None:
@@ -205,6 +247,27 @@ def validate(cfg: WebUIConfig) -> None:
             raise WebUIConfigError(
                 f"allowed_cidrs entry {cidr!r} is not a valid CIDR"
             )
+    a = cfg.auth
+    if not (3 <= a.lockout_threshold <= 20):
+        raise WebUIConfigError(
+            f"auth.lockout_threshold {a.lockout_threshold} out of range 3-20"
+        )
+    if not (60 <= a.lockout_window_sec <= 3600):
+        raise WebUIConfigError(
+            f"auth.lockout_window_sec {a.lockout_window_sec} out of range 60-3600"
+        )
+    if not (30 <= a.lockout_base_duration_sec <= 3600):
+        raise WebUIConfigError(
+            f"auth.lockout_base_duration_sec {a.lockout_base_duration_sec} out of range 30-3600"
+        )
+    if not (300 <= a.lockout_max_duration_sec <= 86400):
+        raise WebUIConfigError(
+            f"auth.lockout_max_duration_sec {a.lockout_max_duration_sec} out of range 300-86400"
+        )
+    if a.lockout_max_duration_sec < a.lockout_base_duration_sec:
+        raise WebUIConfigError(
+            "auth.lockout_max_duration_sec must be >= auth.lockout_base_duration_sec"
+        )
     if not _is_loopback(cfg.bind_address):
         if not cfg.remote_enabled:
             raise WebUIConfigError(
@@ -260,6 +323,12 @@ def _config_to_dict(cfg: WebUIConfig) -> dict:
             "cert_file": cfg.tls.cert_file,
             "key_file": cfg.tls.key_file,
             "allow_insecure_remote": cfg.tls.allow_insecure_remote,
+        },
+        "auth": {
+            "lockout_threshold": cfg.auth.lockout_threshold,
+            "lockout_window_sec": cfg.auth.lockout_window_sec,
+            "lockout_base_duration_sec": cfg.auth.lockout_base_duration_sec,
+            "lockout_max_duration_sec": cfg.auth.lockout_max_duration_sec,
         },
     }
 

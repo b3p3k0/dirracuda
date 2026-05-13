@@ -15,12 +15,20 @@ from pydantic import BaseModel
 import experimental.webui.db as _db
 from experimental.webui.auth import verify_password
 from experimental.webui.config import (
+    AuthConfig,
     TLSConfig,
     WebUIConfig,
     WebUIConfigError,
     load_config,
     save_config,
     validate,
+)
+from experimental.webui.rate_limiter import (
+    NullRateLimiter,
+    RateLimiter,
+    RateLimiterInitError,
+    RateLimiterRuntimeError,
+    _DEFAULT_RL_PATH,
 )
 from experimental.webui.dependencies import AuthRequired, get_session, same_origin, validate_csrf
 from experimental.webui.sessions import Session, SessionStore, cookie_name
@@ -59,6 +67,10 @@ class _ConfigUpdateRequest(BaseModel):
     allowed_cidrs: List[str] = []
     session_timeout_idle_min: int
     session_timeout_absolute_hr: int
+    auth_lockout_threshold: Optional[int] = None
+    auth_lockout_window_sec: Optional[int] = None
+    auth_lockout_base_duration_sec: Optional[int] = None
+    auth_lockout_max_duration_sec: Optional[int] = None
 
 
 def health() -> dict:
@@ -71,6 +83,7 @@ def create_app(
     db_path=None,
     config_path=None,
     main_config_path=None,
+    rl_db_path=None,
 ) -> FastAPI:
     if cfg is None:
         cfg = load_config(config_path)
@@ -101,6 +114,19 @@ def create_app(
     app.state.shodan_balance_service = ShodanBalanceService(
         main_config_path=main_config_path
     )
+    rl_path = Path(rl_db_path) if rl_db_path is not None else _DEFAULT_RL_PATH
+    try:
+        app.state.rate_limiter = RateLimiter(rl_path, cfg.auth)
+    except RateLimiterInitError as exc:
+        if cfg.remote_enabled:
+            logger.error(
+                "Rate limiter init failed in remote mode — startup refused: %s", exc
+            )
+            raise
+        logger.error(
+            "Rate limiter init failed, starting in degraded mode (localhost): %s", exc
+        )
+        app.state.rate_limiter = NullRateLimiter()
 
     if _STATIC_DIR.exists():
         app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
@@ -112,8 +138,11 @@ def create_app(
         return RedirectResponse("/login", status_code=303)
 
     @app.get("/health")
-    def _health() -> dict:
-        return health()
+    def _health(request: Request) -> dict:
+        d = dict(health())
+        rl = request.app.state.rate_limiter
+        d["rate_limiter"] = rl.health_check()
+        return d
 
     @app.get("/")
     async def _root() -> RedirectResponse:
@@ -130,9 +159,31 @@ def create_app(
         cfg_ = request.app.state.cfg
         store = request.app.state.session_store
         creds = request.app.state.creds_path
-        if not verify_password(body.username, body.password, path=creds):
-            logger.warning("login failed: username=%r", body.username)
+        rl = request.app.state.rate_limiter
+        client_ip = (request.client.host or "unknown") if request.client else "unknown"
+        try:
+            locked, _ = rl.check_locked(body.username, client_ip)
+        except RateLimiterRuntimeError as exc:
+            logger.error("rate limiter check_locked failed: %s", exc)
+            if cfg_.remote_enabled:
+                return JSONResponse({"error": "Service temporarily unavailable."}, status_code=503)
+            locked = False  # localhost degraded: proceed unthrottled
+        if locked:
+            logger.warning(
+                "login blocked by lockout: username=%r ip=%r", body.username, client_ip
+            )
             return JSONResponse({"error": "Invalid username or password."}, status_code=401)
+        if not verify_password(body.username, body.password, path=creds):
+            try:
+                rl.record_failure(body.username, client_ip)
+            except RateLimiterRuntimeError as exc:
+                logger.error("rate limiter record_failure failed: %s", exc)
+                if cfg_.remote_enabled:
+                    return JSONResponse({"error": "Service temporarily unavailable."}, status_code=503)
+                # localhost: failure not recorded; already returning 401
+            logger.warning("login failed: username=%r ip=%r", body.username, client_ip)
+            return JSONResponse({"error": "Invalid username or password."}, status_code=401)
+        rl.record_success(body.username)
         sid, _ = store.create(body.username)
         logger.info("login success: username=%r", body.username)
         tls_on = cfg_.tls.enabled
@@ -430,6 +481,21 @@ def create_app(
         if not validate_csrf(csrf_tok, session.csrf_token):
             return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
 
+        existing_auth = request.app.state.cfg.auth
+        new_auth = AuthConfig(
+            lockout_threshold=body.auth_lockout_threshold
+                if body.auth_lockout_threshold is not None
+                else existing_auth.lockout_threshold,
+            lockout_window_sec=body.auth_lockout_window_sec
+                if body.auth_lockout_window_sec is not None
+                else existing_auth.lockout_window_sec,
+            lockout_base_duration_sec=body.auth_lockout_base_duration_sec
+                if body.auth_lockout_base_duration_sec is not None
+                else existing_auth.lockout_base_duration_sec,
+            lockout_max_duration_sec=body.auth_lockout_max_duration_sec
+                if body.auth_lockout_max_duration_sec is not None
+                else existing_auth.lockout_max_duration_sec,
+        )
         new_cfg = WebUIConfig(
             enabled=request.app.state.cfg.enabled,
             bind_address=body.bind_address,
@@ -444,6 +510,7 @@ def create_app(
                 key_file=body.tls_key,
                 allow_insecure_remote=body.tls_allow_insecure_remote,
             ),
+            auth=new_auth,
         )
         try:
             validate(new_cfg)

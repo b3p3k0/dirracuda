@@ -81,6 +81,34 @@
   </div>
 
   <div class="form-section">
+    <h2>Auth Rate Limiting</h2>
+    <div class="form-row">
+      <label for="lockout-threshold">Lockout threshold (attempts)</label>
+      <input id="lockout-threshold" name="auth_lockout_threshold" type="number"
+             value="{{ cfg.auth.lockout_threshold }}"
+             min="3" max="20" style="max-width:100px">
+    </div>
+    <div class="form-row">
+      <label for="lockout-window">Observation window (seconds)</label>
+      <input id="lockout-window" name="auth_lockout_window_sec" type="number"
+             value="{{ cfg.auth.lockout_window_sec }}"
+             min="60" max="3600" style="max-width:100px">
+    </div>
+    <div class="form-row">
+      <label for="lockout-base">Base lockout duration (seconds)</label>
+      <input id="lockout-base" name="auth_lockout_base_duration_sec" type="number"
+             value="{{ cfg.auth.lockout_base_duration_sec }}"
+             min="30" max="3600" style="max-width:100px">
+    </div>
+    <div class="form-row">
+      <label for="lockout-max">Max lockout duration (seconds)</label>
+      <input id="lockout-max" name="auth_lockout_max_duration_sec" type="number"
+             value="{{ cfg.auth.lockout_max_duration_sec }}"
+             min="300" max="86400" style="max-width:100px">
+    </div>
+  </div>
+
+  <div class="form-section">
     <h2>Browser Preference Storage</h2>
     <p class="status-text" style="margin-bottom:8px;">
       Stores non-sensitive UI preferences in this browser only (via localStorage).
@@ -198,7 +226,11 @@
       tls_key: document.getElementById('tls-key').value.trim(),
       allowed_cidrs: parseCidrs(document.getElementById('allowlist').value),
       session_timeout_idle_min: parseInt(document.getElementById('idle-timeout').value, 10),
-      session_timeout_absolute_hr: parseInt(document.getElementById('abs-timeout').value, 10)
+      session_timeout_absolute_hr: parseInt(document.getElementById('abs-timeout').value, 10),
+      auth_lockout_threshold: parseInt(document.getElementById('lockout-threshold').value, 10),
+      auth_lockout_window_sec: parseInt(document.getElementById('lockout-window').value, 10),
+      auth_lockout_base_duration_sec: parseInt(document.getElementById('lockout-base').value, 10),
+      auth_lockout_max_duration_sec: parseInt(document.getElementById('lockout-max').value, 10)
     };
 
     try {

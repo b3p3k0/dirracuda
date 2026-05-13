@@ -497,6 +497,12 @@ The same tab also provides inline username/password credential setup (create or
 update) for Web UI login.
 In the Web UI scan page, `Run probe on verified hosts after scan` now applies to
 SMB, FTP, and HTTP using the shared protocol-aware probe pipeline.
+Login is protected by persistent per-account+IP lockout (configurable threshold,
+observation window, and exponential backoff via the `auth` block in `webui.json`
+or via the desktop config dialog). The `GET /health` endpoint reports
+`"rate_limiter": "ok"` when lockout enforcement is active, or `"rate_limiter":
+"error"` when the rate-limit DB is unavailable (degraded mode). In remote mode,
+a runtime DB failure causes login to return 503 (fail-closed).
 
 ---
 

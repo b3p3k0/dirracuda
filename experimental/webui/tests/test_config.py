@@ -168,3 +168,75 @@ def test_str_enabled_dataclass_rejected():
 def test_str_tls_enabled_dataclass_rejected():
     with pytest.raises(WebUIConfigError, match="'tls.enabled'"):
         validate(WebUIConfig(tls=TLSConfig(enabled="false")))
+
+
+# --- Auth block config ---
+
+from experimental.webui.config import AuthConfig
+
+
+def _auth(**kwargs) -> AuthConfig:
+    defaults = dict(
+        lockout_threshold=5,
+        lockout_window_sec=900,
+        lockout_base_duration_sec=300,
+        lockout_max_duration_sec=3600,
+    )
+    defaults.update(kwargs)
+    return AuthConfig(**defaults)
+
+
+def test_auth_config_defaults_valid():
+    validate(WebUIConfig())
+
+
+def test_auth_threshold_too_low():
+    with pytest.raises(WebUIConfigError, match="lockout_threshold"):
+        validate(WebUIConfig(auth=_auth(lockout_threshold=2)))
+
+
+def test_auth_threshold_too_high():
+    with pytest.raises(WebUIConfigError, match="lockout_threshold"):
+        validate(WebUIConfig(auth=_auth(lockout_threshold=21)))
+
+
+def test_auth_window_too_low():
+    with pytest.raises(WebUIConfigError, match="lockout_window_sec"):
+        validate(WebUIConfig(auth=_auth(lockout_window_sec=59)))
+
+
+def test_auth_window_too_high():
+    with pytest.raises(WebUIConfigError, match="lockout_window_sec"):
+        validate(WebUIConfig(auth=_auth(lockout_window_sec=3601)))
+
+
+def test_auth_max_lt_base_fails():
+    with pytest.raises(WebUIConfigError, match="lockout_max_duration_sec"):
+        validate(WebUIConfig(auth=_auth(lockout_base_duration_sec=300, lockout_max_duration_sec=299)))
+
+
+def test_auth_roundtrip(tmp_path):
+    p = tmp_path / "webui.json"
+    cfg = WebUIConfig(auth=_auth(lockout_threshold=7, lockout_window_sec=120))
+    save_config(cfg, p)
+    loaded = load_config(p)
+    assert loaded.auth.lockout_threshold == 7
+    assert loaded.auth.lockout_window_sec == 120
+    assert loaded.auth.lockout_base_duration_sec == 300
+    assert loaded.auth.lockout_max_duration_sec == 3600
+
+
+def test_unknown_auth_key_rejected(tmp_path):
+    p = tmp_path / "webui.json"
+    import json
+    p.write_text(json.dumps({"auth": {"foo": 1}}), encoding="utf-8")
+    with pytest.raises(WebUIConfigError, match="Unknown auth keys"):
+        load_config(p)
+
+
+def test_missing_auth_block_gets_defaults(tmp_path):
+    p = tmp_path / "webui.json"
+    import json
+    p.write_text(json.dumps({"port": 5481}), encoding="utf-8")
+    cfg = load_config(p)
+    assert cfg.auth == AuthConfig()

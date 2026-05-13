@@ -509,6 +509,38 @@ class WebUITab:
         self._theme.apply_to_widget(abs_entry, "entry")
         abs_entry.pack(side=tk.LEFT, padx=(8, 0))
 
+        auth_frame = tk.LabelFrame(outer, text="Auth Rate Limiting", padx=8, pady=6)
+        self._theme.apply_to_widget(auth_frame, "main_window")
+        auth_frame.pack(fill=tk.X, pady=(0, 8))
+
+        def _auth_row(label_text, var, width=8):
+            row = tk.Frame(auth_frame)
+            self._theme.apply_to_widget(row, "main_window")
+            row.pack(fill=tk.X, pady=(0, 4))
+            lbl = tk.Label(row, text=label_text)
+            self._theme.apply_to_widget(lbl, "label")
+            lbl.pack(side=tk.LEFT)
+            ent = tk.Entry(row, textvariable=var, width=width)
+            self._theme.apply_to_widget(ent, "entry")
+            ent.pack(side=tk.LEFT, padx=(8, 0))
+
+        self._cfg_auth_threshold_var = tk.StringVar(
+            value=str(cfg.auth.lockout_threshold)
+        )
+        self._cfg_auth_window_var = tk.StringVar(
+            value=str(cfg.auth.lockout_window_sec)
+        )
+        self._cfg_auth_base_var = tk.StringVar(
+            value=str(cfg.auth.lockout_base_duration_sec)
+        )
+        self._cfg_auth_max_var = tk.StringVar(
+            value=str(cfg.auth.lockout_max_duration_sec)
+        )
+        _auth_row("Lockout Threshold (attempts):", self._cfg_auth_threshold_var)
+        _auth_row("Observation Window (sec):", self._cfg_auth_window_var)
+        _auth_row("Base Lockout Duration (sec):", self._cfg_auth_base_var)
+        _auth_row("Max Lockout Duration (sec):", self._cfg_auth_max_var)
+
         status_row = tk.Frame(outer)
         self._theme.apply_to_widget(status_row, "main_window")
         status_row.pack(fill=tk.X, pady=(0, 2))
@@ -589,7 +621,7 @@ class WebUITab:
         return [part.strip() for part in raw.split(",") if part.strip()]
 
     def _build_config_from_dialog(self):
-        from experimental.webui.config import TLSConfig, WebUIConfig
+        from experimental.webui.config import AuthConfig, TLSConfig, WebUIConfig
 
         bind = self._cfg_bind_var.get().strip()
         cert = self._cfg_tls_cert_var.get().strip()
@@ -599,8 +631,12 @@ class WebUITab:
             port = int(self._cfg_port_var.get().strip())
             idle_min = int(self._cfg_idle_var.get().strip())
             absolute_hr = int(self._cfg_abs_var.get().strip())
+            auth_threshold = int(self._cfg_auth_threshold_var.get().strip())
+            auth_window = int(self._cfg_auth_window_var.get().strip())
+            auth_base = int(self._cfg_auth_base_var.get().strip())
+            auth_max = int(self._cfg_auth_max_var.get().strip())
         except ValueError as exc:
-            raise ValueError("port and timeout fields must be valid integers") from exc
+            raise ValueError("port, timeout, and auth fields must be valid integers") from exc
 
         return WebUIConfig(
             enabled=bool(getattr(self, "_cfg_enabled_value", False)),
@@ -615,6 +651,12 @@ class WebUITab:
                 cert_file=cert,
                 key_file=key,
                 allow_insecure_remote=bool(self._cfg_tls_insecure_var.get()),
+            ),
+            auth=AuthConfig(
+                lockout_threshold=auth_threshold,
+                lockout_window_sec=auth_window,
+                lockout_base_duration_sec=auth_base,
+                lockout_max_duration_sec=auth_max,
             ),
         )
 
