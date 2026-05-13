@@ -1,6 +1,7 @@
 """C2: experimental/webui/auth.py tests."""
 
 import json
+import os
 import pytest
 
 import experimental.webui.auth as auth_module
@@ -244,7 +245,7 @@ def test_blocklist_unavailable_is_not_value_error(tmp_path, monkeypatch):
 
 
 def test_verify_password_preexisting_weak_still_works(tmp_path):
-    import hashlib, os
+    import hashlib
     p = tmp_path / "creds.json"
     salt = os.urandom(32)
     pw_bytes = b"weak"
@@ -258,6 +259,7 @@ def test_verify_password_preexisting_weak_still_works(tmp_path):
         }
     }
     p.write_text(json.dumps(creds))
+    os.chmod(p, 0o600)
     assert verify_password("admin", "weak", p) is True
 
 
@@ -265,3 +267,75 @@ def test_validate_password_policy_exported():
     assert callable(validate_password_policy)
     with pytest.raises((ValueError, BlocklistUnavailableError)):
         validate_password_policy("short")
+
+
+# ---------------------------------------------------------------------------
+# O4 — Credential file permission hardening
+# ---------------------------------------------------------------------------
+
+# POSIX-only: Windows chmod does not enforce mode bits
+_posix_only = pytest.mark.skipif(os.name == "nt", reason="POSIX-only permission enforcement")
+
+
+@_posix_only
+def test_load_creds_raises_on_world_readable(tmp_path):
+    from experimental.webui.auth import CredentialError, _load_creds
+    p = tmp_path / "creds.json"
+    set_password("admin", _VALID_PW, p)
+    os.chmod(p, 0o644)
+    with pytest.raises(CredentialError, match="unsafe permissions"):
+        _load_creds(p)
+
+
+@_posix_only
+def test_verify_password_returns_false_on_bad_permissions(tmp_path):
+    p = tmp_path / "creds.json"
+    set_password("admin", _VALID_PW, p)
+    os.chmod(p, 0o644)
+    assert verify_password("admin", _VALID_PW, p) is False
+
+
+@_posix_only
+def test_set_password_raises_on_bad_permissions_existing_file(tmp_path):
+    from experimental.webui.auth import CredentialError
+    p = tmp_path / "creds.json"
+    set_password("admin", _VALID_PW, p)
+    os.chmod(p, 0o644)
+    with pytest.raises(CredentialError, match="unsafe permissions"):
+        set_password("admin", _VALID_PW, p)
+
+
+@_posix_only
+def test_credential_exists_raises_on_bad_permissions(tmp_path):
+    from experimental.webui.auth import CredentialError
+    p = tmp_path / "creds.json"
+    set_password("admin", _VALID_PW, p)
+    os.chmod(p, 0o644)
+    with pytest.raises(CredentialError):
+        credential_exists(p)
+
+
+@_posix_only
+def test_check_creds_permissions_oserror_raises_credential_error(tmp_path, monkeypatch):
+    """stat() OSError in _check_creds_permissions maps to CredentialError.
+
+    Test calls _check_creds_permissions directly (not _load_creds) so the mock
+    only needs to intercept the single stat() call inside the helper — avoiding
+    the exists() call in _load_creds which also calls stat() internally.
+    """
+    from pathlib import Path
+    from experimental.webui.auth import CredentialError, _check_creds_permissions
+
+    p = tmp_path / "creds.json"
+    set_password("admin", _VALID_PW, p)
+
+    _original_stat = Path.stat
+
+    def _bad_stat(self, *args, **kwargs):
+        if self == p:
+            raise PermissionError("no access")
+        return _original_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", _bad_stat)
+    with pytest.raises(CredentialError, match="Cannot verify permissions"):
+        _check_creds_permissions(p)

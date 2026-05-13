@@ -13,7 +13,10 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 
 import experimental.webui.db as _db
-from experimental.webui.auth import BlocklistUnavailableError, set_password, verify_password
+from experimental.webui.auth import (
+    BlocklistUnavailableError, CredentialError, check_credential_store,
+    set_password, verify_password,
+)
 from experimental.webui.config import (
     AuthConfig,
     TLSConfig,
@@ -252,6 +255,11 @@ def create_app(
         if not validate_csrf(csrf_tok, session.csrf_token):
             return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
         creds = request.app.state.creds_path
+        try:
+            check_credential_store(creds)
+        except CredentialError as exc:
+            logger.error("credential store permission error during change-password: %s", exc)
+            return JSONResponse({"error": "Credential store configuration error."}, status_code=503)
         if not verify_password(session.username, body.current_password, path=creds):
             logger.warning("change-password failed: username=%r", session.username)
             return JSONResponse({"error": "Current password is incorrect."}, status_code=401)
@@ -260,6 +268,9 @@ def create_app(
         except BlocklistUnavailableError as exc:
             logger.error("blocklist unavailable during change-password: %s", exc)
             return JSONResponse({"error": "Service configuration error."}, status_code=503)
+        except CredentialError as exc:
+            logger.error("credential store permission error (TOCTOU) during change-password: %s", exc)
+            return JSONResponse({"error": "Credential store configuration error."}, status_code=503)
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         logger.info("password changed: username=%r", session.username)

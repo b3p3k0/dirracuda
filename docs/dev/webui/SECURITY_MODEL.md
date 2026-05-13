@@ -78,6 +78,28 @@ Credential file:
 mode 0600
 ```
 
+The file is written atomically via `_atomic_write_json` (`config.py`), which sets mode
+`0600` before the final rename. On every read, `auth._load_creds()` calls
+`_check_creds_permissions()` and raises `CredentialError` if the mode is not exactly
+`0600`. Caller behaviour:
+
+- `verify_password()`: absorbs `CredentialError` and returns `False` — "never raises"
+  contract preserved.
+- `set_password()`, `credential_exists()`, `get_credential_usernames()`: propagate
+  `CredentialError` — a misconfigured store blocks all mutations until repaired.
+- Web `_change_password` route: calls `check_credential_store()` as a preflight before
+  `verify_password()`, so bad permissions surface as HTTP 503 (not 401).
+- Desktop credential dialog: catches `CredentialError` at open time and shows a repair
+  message; `_do_rotation()` also preflights before `verify_password()`.
+
+Permission enforcement is POSIX-only. On Windows the check is a no-op.
+
+Operator repair:
+
+```bash
+chmod 0600 ~/.dirracuda/conf/webui_creds.json
+```
+
 No raw passwords in logs. No password echo in UI after setup.
 
 ## Remote Mode
@@ -193,3 +215,28 @@ RestrictSUIDSGID=yes
 
 Exact values may need adjustment for user-service vs system-service mode. Claude
 must verify systemd behavior against the local target before claiming it works.
+
+## Trust Boundaries
+
+| Boundary | Mechanism |
+|---|---|
+| Browser ↔ server | Session cookie (`HttpOnly`, `SameSite=Strict`, `Secure` when TLS); per-session CSRF token validated on every mutating request |
+| Server ↔ credential file | Atomic write at mode `0600`; `_check_creds_permissions()` read check; `CredentialError` on any deviation |
+| Server ↔ subprocess (scans) | `shell=False`; argument lists only; user input becomes validated argv, never shell syntax |
+| Localhost vs remote | Loopback bind: no CIDR enforcement, TLS optional. Non-loopback: `remote_enabled=true` required, CIDR allowlist enforced per-request, TLS on by default |
+| Server behind proxy | `request.client.host` reflects the TCP peer (proxy address). Forwarded-header trust is deployment-specific and not configured by `server.py` — mis-configuration breaks allowlist decisions |
+
+## Operator Caveats
+
+- **Credential file must be mode `0600`.** All credential operations fail with
+  `CredentialError` until the file is repaired. Repair: `chmod 0600 ~/.dirracuda/conf/webui_creds.json`
+- **Session store is in-memory.** Restarting the server logs out all active users.
+  There is no cross-restart session persistence — this is intentional (see W-004).
+- **Rate-limit DB must be writable in remote mode.** If `~/.dirracuda/state/webui_ratelimit.db`
+  is unwritable at startup, remote mode refuses to start. Localhost mode degrades
+  gracefully (logins unthrottled, health reports `"rate_limiter": "error"`).
+- **TLS required for non-loopback by default.** Disabling TLS for remote requires
+  `tls.allow_insecure_remote=true` and emits a high-visibility warning.
+- **Proxy header trust is not managed here.** Without correctly configured
+  trusted-proxy settings at the ASGI/uvicorn layer, the allowlist sees proxy
+  addresses instead of real client IPs. See FastAPI and uvicorn proxy documentation.

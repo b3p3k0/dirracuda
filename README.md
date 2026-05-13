@@ -508,6 +508,9 @@ common-password list. Passphrases are accepted without composition restrictions
 (no forced uppercase, numbers, or symbols). Logged-in users can change their
 password at any time via `Account` in the navigation bar; the change requires
 the current password for verification.
+The credential store (`~/.dirracuda/conf/webui_creds.json`) is written mode
+`0600` and that permission is verified on every read — a world-readable file
+blocks all credential operations until repaired with `chmod 0600`.
 Every response includes a centralized set of security headers:
 `Content-Security-Policy` (strict; `script-src 'self'`, no `unsafe-inline`),
 `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`,

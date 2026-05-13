@@ -190,3 +190,32 @@ Seeded before implementation. Append after every major card.
     the primary target (`test_pages.py`, `test_login.py`) may also have stale
     inline-content checks — in this case `test_results.py` had two that checked
     for `loadResults();` and `&search=` in the page response text.
+
+## O4 — Credential Store Hardening + Security Docs
+
+44. Put the permission check inside `_load_creds()` so all callers inherit it. But
+    audit every upstream call site before merging: `verify_password()` swallows the
+    error (returns False), while `set_password()`, `credential_exists()`, and
+    `get_credential_usernames()` propagate it. Routes and UI code that call any of
+    those must handle `CredentialError` explicitly.
+
+45. `verify_password()` swallows `CredentialError` and returns False — so a route
+    that calls `verify_password` before `set_password` will return 401 (wrong
+    password) instead of 503 (config error) when permissions are bad. The fix is a
+    preflight `check_credential_store()` call before `verify_password`. Add a public
+    helper for this pattern rather than exporting the private `_check_creds_permissions`.
+
+46. Test fixtures that write credential files directly (bypassing `set_password()`)
+    must explicitly `os.chmod(p, 0o600)` after the write. A 0022 umask produces
+    0644, which fails the permission check. Flag any fixture that creates a creds
+    file without going through `set_password()`.
+
+47. Permission-check tests that set mode 0644 must be guarded with
+    `@pytest.mark.skipif(os.name == "nt", ...)`. Windows chmod does not enforce Unix
+    mode bits, so the tests will incorrectly pass (no error raised) on Windows CI.
+    Mark the POSIX scope at the test level, not only in docs.
+
+48. `Path.stat` must be patched at the class level, not on an instance.
+    `PosixPath` has no writable instance `__dict__`, so `monkeypatch.setattr(p, "stat", ...)`
+    will raise AttributeError. Use `monkeypatch.setattr(Path, "stat", ...)` with a
+    guard `if self == target_path` to limit the mock scope.

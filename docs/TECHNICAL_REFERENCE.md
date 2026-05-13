@@ -1218,6 +1218,28 @@ RCE analysis is disabled by default (`rce.enabled_default=false`). The implement
 
 This tool is for authorised security research and auditing only. Running it against systems you do not own or lack explicit permission to test is illegal in most jurisdictions. The Shodan dorks target publicly indexed hosts; that does not constitute permission to access them.
 
+### 7.6 Credential Store (O4)
+
+**Write path:** `auth.set_password()` calls `config._atomic_write_json()`, which writes to a temp file, calls `os.chmod(tmp, 0o600)`, then atomically renames it into place. Mode `0600` is set before the file becomes visible at the final path.
+
+**Read path:** `auth._load_creds()` calls `_check_creds_permissions()` immediately after confirming the file exists. If the mode is not exactly `0600` (POSIX only; no-op on Windows), `CredentialError` is raised. Caller behaviour:
+
+| Caller | CredentialError behaviour |
+|---|---|
+| `verify_password()` | Absorbed by outer `except Exception` → returns `False` |
+| `set_password()` | Propagates — store must be repaired before new creds can be written |
+| `credential_exists()` / `get_credential_usernames()` | Propagates |
+| Web `_change_password` route | Preflight `check_credential_store()` before `verify_password()` → HTTP 503 |
+| Desktop credential dialog | Caught at dialog-open time → operator-facing repair message |
+
+**Preflight helper:** `auth.check_credential_store(path=None)` is the public API for callers that need to surface the error before calling `verify_password()` (which swallows it). Call it when a config error should produce a distinct response code from an auth failure.
+
+**Operator repair:**
+
+```bash
+chmod 0600 ~/.dirracuda/conf/webui_creds.json
+```
+
 ---
 
 ## 8. Extensibility

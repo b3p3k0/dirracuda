@@ -232,10 +232,20 @@ class WebUITab:
             self._cred_dialog.focus_force()
             return
 
-        from experimental.webui.auth import credential_exists, get_credential_usernames
+        from experimental.webui.auth import (
+            CredentialError, credential_exists, get_credential_usernames,
+        )
 
-        self._creds_existed_at_open = credential_exists()
-        stored = get_credential_usernames()
+        try:
+            self._creds_existed_at_open = credential_exists()
+            stored = get_credential_usernames()
+        except CredentialError as exc:
+            safe_messagebox.showerror(
+                "Credential Store Error",
+                f"Cannot open credentials: {exc}\n\nRepair file permissions before continuing.",
+                parent=self.frame.winfo_toplevel(),
+            )
+            return
         self._multi_cred_error = len(stored) > 1
         self._stored_username_at_open = stored[0] if len(stored) == 1 else None
         self._cred_current_password_var = None
@@ -428,10 +438,20 @@ class WebUITab:
             def _do_rotation() -> None:
                 from experimental.webui.auth import (
                     BlocklistUnavailableError,
+                    CredentialError,
+                    check_credential_store,
                     set_password,
                     verify_password,
                 )
 
+                try:
+                    check_credential_store()
+                except CredentialError as exc:
+                    msg = str(exc)
+                    self._schedule_dialog_ui(
+                        lambda: self._finish_credential_save_dialog(False, msg)
+                    )
+                    return
                 if not verify_password(stored_username, current_password):
                     self._schedule_dialog_ui(
                         lambda: self._finish_credential_save_dialog(
@@ -446,6 +466,12 @@ class WebUITab:
                         lambda: self._finish_credential_save_dialog(
                             False, "Configuration error: password blocklist unavailable"
                         )
+                    )
+                    return
+                except CredentialError as exc:
+                    msg = str(exc)
+                    self._schedule_dialog_ui(
+                        lambda: self._finish_credential_save_dialog(False, msg)
                     )
                     return
                 except ValueError as exc:

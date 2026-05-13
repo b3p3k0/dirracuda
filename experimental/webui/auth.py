@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import os
+import stat
 from pathlib import Path
 from typing import Optional
 
@@ -72,10 +73,39 @@ def _creds_path(path: Optional[Path] = None) -> Path:
     return Path.home() / ".dirracuda" / "conf" / "webui_creds.json"
 
 
+def _check_creds_permissions(p: Path) -> None:
+    """Raise CredentialError if the credential file mode is not exactly 0600.
+
+    No-op on Windows — chmod mode bits are not enforced there.
+    """
+    if os.name == "nt":
+        return
+    try:
+        mode = stat.S_IMODE(p.stat().st_mode)
+    except OSError as exc:
+        raise CredentialError(f"Cannot verify permissions on {p}: {exc}") from exc
+    if mode != 0o600:
+        raise CredentialError(
+            f"Credential file {p} has unsafe permissions {oct(mode)}; "
+            f"expected 0600. Repair with: chmod 0600 {p}"
+        )
+
+
+def check_credential_store(path: Optional[Path] = None) -> None:
+    """Raise CredentialError if the credential store exists with unsafe permissions.
+
+    No-op when the file does not exist (bootstrap path).
+    """
+    p = _creds_path(path)
+    if p.exists():
+        _check_creds_permissions(p)
+
+
 def _load_creds(path: Optional[Path] = None) -> dict:
     p = _creds_path(path)
     if not p.exists():
         return {}
+    _check_creds_permissions(p)
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):

@@ -1,5 +1,6 @@
 """Route integration tests for login, logout, and dashboard."""
 
+import os
 import re
 
 import pytest
@@ -520,3 +521,22 @@ def test_security_headers_on_login_page(client):
     assert not _INLINE_SCRIPT_RE.search(r.text), (
         "Unexpected inline <script> on /login: " + str(_INLINE_SCRIPT_RE.findall(r.text))
     )
+
+
+# ---------------------------------------------------------------------------
+# O4 — Credential store permission hardening
+# ---------------------------------------------------------------------------
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX-only permission enforcement")
+def test_change_password_503_on_bad_cred_permissions(logged_in_client, creds):
+    csrf = _csrf_from_dashboard(logged_in_client)
+    os.chmod(creds, 0o644)
+    r = logged_in_client.post(
+        "/api/auth/change-password",
+        json={
+            "current_password": _PASSWORD,
+            "new_password": "a-brand-new-passphrase-xyz",
+        },
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert r.status_code == 503
