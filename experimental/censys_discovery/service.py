@@ -1,8 +1,9 @@
 """
-Run orchestration for the censys_discovery FTP protocol.
+Run orchestration for the censys_discovery module.
 
-Entry point:
+Entry points:
     run_ftp_discovery(options: CensysRunOptions, db_path=None) -> CensysRunResult
+    run_http_discovery(options: CensysRunOptions, db_path=None) -> CensysRunResult
 
 Transaction ownership:
     - Scope-branched preflight (get_org_credits / get_user_credits) fires before any DB I/O.
@@ -34,7 +35,7 @@ from experimental.censys_discovery.models import (
     RUN_STATUS_ERROR,
     SearchResultItem,
 )
-from experimental.censys_discovery.query_builder import build_query
+from experimental.censys_discovery.query_builder import build_query, get_extra_fields
 from experimental.censys_discovery.store import (
     init_db,
     insert_result,
@@ -56,6 +57,7 @@ def _fetch_all_pages(
     max_pages: int,
     page_size: int,
     org_id: Optional[str],
+    extra_fields: Optional[List[str]] = None,
 ) -> Tuple[List[SearchResultItem], Optional[ApiError]]:
     """
     Fetch up to max_pages from the Censys search API.
@@ -68,7 +70,8 @@ def _fetch_all_pages(
     cursor: Optional[str] = None
     for _ in range(max(1, max_pages)):
         result = client.search_query(
-            query, page_size=page_size, page_token=cursor, org_id=org_id
+            query, page_size=page_size, page_token=cursor,
+            org_id=org_id, extra_fields=extra_fields,
         )
         if not result.ok:
             return items, result.error
@@ -80,22 +83,24 @@ def _fetch_all_pages(
     return items, None
 
 
-def run_ftp_discovery(
+def _run_discovery(
     options: CensysRunOptions,
-    db_path: Optional[Path] = None,
+    db_path: Optional[Path],
+    expected_protocol: str,
+    extra_fields: Optional[List[str]] = None,
 ) -> CensysRunResult:
     """
-    Run an FTP discovery pass against the Censys search API.
+    Shared orchestration for all protocol discovery runs.
 
     Always returns CensysRunResult — never raises.
     """
     # 1. Protocol guard
     try:
-        if options.protocol.upper() != "FTP":
+        if options.protocol.upper() != expected_protocol:
             return CensysRunResult(
                 ok=False, run_id=None, fetched_count=0, deduped_count=0,
                 status=RUN_STATUS_ERROR,
-                error=f"unsupported protocol for C5 FTP service: {options.protocol!r}",
+                error=f"unsupported protocol for {expected_protocol} service: {options.protocol!r}",
             )
     except Exception as exc:
         return CensysRunResult(
@@ -158,7 +163,8 @@ def run_ftp_discovery(
     # 6. Fetch all pages, then persist
     try:
         items, page_error = _fetch_all_pages(
-            client, query_text, options.max_pages, options.page_size, options.org_id
+            client, query_text, options.max_pages, options.page_size,
+            options.org_id, extra_fields,
         )
 
         # Auth failure on any page: undo run row, return run_id=None
@@ -213,3 +219,17 @@ def run_ftp_discovery(
         ok=True, run_id=run_id, fetched_count=fetched, deduped_count=deduped,
         status=RUN_STATUS_DONE, error=None,
     )
+
+
+def run_ftp_discovery(
+    options: CensysRunOptions,
+    db_path: Optional[Path] = None,
+) -> CensysRunResult:
+    return _run_discovery(options, db_path, "FTP")
+
+
+def run_http_discovery(
+    options: CensysRunOptions,
+    db_path: Optional[Path] = None,
+) -> CensysRunResult:
+    return _run_discovery(options, db_path, "HTTP", extra_fields=get_extra_fields("HTTP"))

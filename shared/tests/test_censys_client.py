@@ -204,6 +204,24 @@ def test_search_query_fields_list_sent():
     assert "host.services.port" in body["fields"]
 
 
+def test_search_query_default_sends_exactly_required_fields():
+    from experimental.censys_discovery.client import _REQUIRED_FIELDS
+    body = _capture_body(lambda: _mk().search_query("q"))
+    assert body["fields"] == list(_REQUIRED_FIELDS)
+
+
+def test_search_query_http_extra_fields_in_request_body():
+    from experimental.censys_discovery.client import _REQUIRED_FIELDS
+    extras = ["host.services.endpoints.http.headers", "host.services.endpoints.http.body_hash_sha256"]
+    body = _capture_body(lambda: _mk().search_query("q", extra_fields=extras))
+    fields = body["fields"]
+    for f in _REQUIRED_FIELDS:
+        assert f in fields, f"required field missing: {f}"
+    for f in extras:
+        assert f in fields, f"extra field missing: {f}"
+    assert len(fields) == len(set(fields)), "duplicate fields in merged list"
+
+
 def _capture_aggregate_body(client_call) -> dict:
     captured = []
 

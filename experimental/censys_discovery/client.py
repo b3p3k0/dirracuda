@@ -150,11 +150,13 @@ class CensysClient:
         page_size: int = 100,
         page_token: Optional[str] = None,
         org_id: Optional[str] = None,
+        extra_fields: Optional[list] = None,
     ) -> ClientResult:
+        merged = list(dict.fromkeys(_REQUIRED_FIELDS + (extra_fields or [])))
         payload = {
             "query":     query,
             "page_size": page_size,
-            "fields":    _REQUIRED_FIELDS,
+            "fields":    merged,
         }
         if page_token:
             payload["page_token"] = page_token

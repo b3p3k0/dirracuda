@@ -7,7 +7,11 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from experimental.censys_discovery.query_builder import build_query
+from experimental.censys_discovery.query_builder import (
+    PROTOCOL_EXTRA_FIELDS,
+    build_query,
+    get_extra_fields,
+)
 
 
 def test_ftp_baseline_uses_nested_clause():
@@ -61,3 +65,31 @@ def test_freshness_is_outside_nested_clause():
     nested_end = result.index(")")
     freshness_start = result.find("scan_time")
     assert freshness_start > nested_end
+
+
+def test_get_extra_fields_http():
+    fields = get_extra_fields("HTTP")
+    assert "host.services.endpoints.http.headers" in fields
+    assert "host.services.endpoints.http.body_hash_sha256" in fields
+
+
+def test_get_extra_fields_ftp():
+    fields = get_extra_fields("FTP")
+    assert "host.services.ftp.banner" in fields
+    assert "host.services.ftp.implicit_tls" in fields
+    assert "host.services.ftp.status_code" in fields
+
+
+def test_get_extra_fields_case_insensitive():
+    assert get_extra_fields("http") == get_extra_fields("HTTP")
+
+
+def test_get_extra_fields_unknown_protocol():
+    result = get_extra_fields("GOPHER")
+    assert result == []
+
+
+def test_get_extra_fields_returns_copy():
+    fields = get_extra_fields("HTTP")
+    fields.append("mutated")
+    assert "mutated" not in PROTOCOL_EXTRA_FIELDS["HTTP"]

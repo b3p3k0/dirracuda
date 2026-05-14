@@ -8,6 +8,26 @@ PROTOCOL_BASELINES = {
     "SMB":  "host.services:(protocol=SMB and port=445)",
 }
 
+PROTOCOL_EXTRA_FIELDS: dict[str, list[str]] = {
+    "FTP": [
+        "host.services.ftp.banner",
+        "host.services.ftp.implicit_tls",
+        "host.services.ftp.status_code",
+    ],
+    "HTTP": [
+        "host.services.endpoints.http.headers",
+        "host.services.endpoints.http.body_hash_sha256",
+    ],
+    "SMB": [
+        "host.services.software.product",
+        "host.services.software.version",
+    ],
+}
+
+
+def get_extra_fields(protocol: str) -> list[str]:
+    return list(PROTOCOL_EXTRA_FIELDS.get(protocol.upper(), []))
+
 
 def build_query(protocol: str, query_hours: Optional[int] = None) -> str:
     proto = protocol.upper()
