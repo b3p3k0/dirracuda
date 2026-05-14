@@ -49,3 +49,35 @@ class SearchPage:
 class CreditBalance:
     balance: int
     resets_at: Optional[str]  # user credits only; None for org credits
+
+
+RUN_STATUS_RUNNING = "running"
+RUN_STATUS_DONE    = "done"
+RUN_STATUS_ERROR   = "error"
+
+
+@dataclass(repr=False)
+class CensysRunOptions:
+    pat: str
+    protocol: str
+    query_hours: Optional[int] = None
+    max_pages: int = 5
+    page_size: int = 100
+    org_id: Optional[str] = None
+
+    def __repr__(self) -> str:
+        return (
+            f"CensysRunOptions(protocol={self.protocol!r}, query_hours={self.query_hours}, "
+            f"max_pages={self.max_pages}, page_size={self.page_size}, "
+            f"org_id={self.org_id!r}, pat=<redacted>)"
+        )
+
+
+@dataclass
+class CensysRunResult:
+    ok: bool
+    run_id: Optional[int]
+    fetched_count: int
+    deduped_count: int
+    status: str
+    error: Optional[str]
