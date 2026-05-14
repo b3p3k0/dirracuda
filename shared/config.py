@@ -17,6 +17,15 @@ from typing import Dict, Any, Optional, Tuple
 from shared.path_service import get_paths, get_legacy_paths, resolve_runtime_config_path
 
 logger = logging.getLogger(__name__)
+
+_CENSYS_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+_CENSYS_VALID_CREDIT_PROFILES = frozenset({"free_starter", "search_enterprise"})
+_CENSYS_BOOL_TRUE = frozenset({"true", "1", "yes"})
+_CENSYS_BOOL_FALSE = frozenset({"false", "0", "no"})
+
 _PATHS = get_paths()
 _LEGACY = get_legacy_paths(paths=_PATHS)
 _DEFAULT_CONFIG_DB_PATH = "~/.dirracuda/data/dirracuda.db"
@@ -292,7 +301,18 @@ class SMBSeekConfig:
                 "colors_enabled": True,
                 "verbose_by_default": False,
                 "executive_summary": True
-            }
+            },
+            "censys": {
+                "personal_access_token": "",
+                "organization_id": "",
+                "credit_profile": "free_starter",
+                "defaults": {
+                    "max_pages": 5,
+                    "query_hours": 24,
+                    "page_size": 100,
+                    "ipv6_enabled": False,
+                },
+            },
         }
         
         try:
@@ -680,6 +700,82 @@ class SMBSeekConfig:
         except (TypeError, ValueError):
             merged["tmpfs_size_mb"] = 512
         return merged
+
+
+    # ------------------------------------------------------------------
+    # Censys config helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _redact_pat(value: str) -> str:
+        return "<set>" if value else "<empty>"
+
+    def _censys_section(self) -> Dict[str, Any]:
+        section = self.config.get("censys", {})
+        return section if isinstance(section, dict) else {}
+
+    def get_censys_pat(self) -> str:
+        raw = self._censys_section().get("personal_access_token", "")
+        if not raw or not raw.strip():
+            raise ValueError(
+                "censys.personal_access_token is not configured. "
+                "Set it in conf/config.json under censys.personal_access_token."
+            )
+        return raw.strip()
+
+    def get_censys_org_id(self) -> Optional[str]:
+        raw = self._censys_section().get("organization_id", "")
+        if not raw or not raw.strip():
+            return None
+        if not _CENSYS_UUID_RE.match(raw.strip()):
+            raise ValueError(
+                "censys.organization_id is not a valid UUID "
+                "(expected xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)."
+            )
+        return raw.strip()
+
+    def get_censys_credit_profile(self) -> str:
+        raw = self._censys_section().get("credit_profile", "free_starter")
+        raw_norm = str(raw).strip().lower()
+        if raw_norm not in _CENSYS_VALID_CREDIT_PROFILES:
+            logger.warning(
+                "censys.credit_profile value %r is not valid; defaulting to 'free_starter'.",
+                raw,
+            )
+            return "free_starter"
+        return raw_norm
+
+    def get_censys_defaults(self) -> Dict[str, Any]:
+        raw = self._censys_section().get("defaults", {})
+        if not isinstance(raw, dict):
+            raw = {}
+
+        def _clamp(value, lo, hi, fallback):
+            try:
+                v = int(value)
+            except (TypeError, ValueError):
+                return fallback
+            return max(lo, min(hi, v))
+
+        def _coerce_bool(value, fallback: bool) -> bool:
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, int):
+                return value != 0
+            if isinstance(value, str):
+                s = value.strip().lower()
+                if s in _CENSYS_BOOL_TRUE:
+                    return True
+                if s in _CENSYS_BOOL_FALSE:
+                    return False
+            return fallback
+
+        return {
+            "max_pages": _clamp(raw.get("max_pages", 5), 1, 100, 5),
+            "query_hours": _clamp(raw.get("query_hours", 24), 1, 168, 24),
+            "page_size": _clamp(raw.get("page_size", 100), 1, 100, 100),
+            "ipv6_enabled": _coerce_bool(raw.get("ipv6_enabled", False), False),
+        }
 
 
 def load_config(config_file: Optional[str] = None) -> SMBSeekConfig:
