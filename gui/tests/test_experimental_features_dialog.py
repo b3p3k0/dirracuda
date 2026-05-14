@@ -873,3 +873,136 @@ def test_open_keymaster_forwards_parent_settings_config(monkeypatch):
     assert calls[0]["parent"] is dash.parent
     assert calls[0]["settings_manager"] is dash.settings_manager
     assert calls[0]["config_path"] == str(resolved_path)
+
+
+# ---------------------------------------------------------------------------
+# C2 — Censys Discovery tab registration and wiring
+# ---------------------------------------------------------------------------
+
+# Sub-group A: Registry
+
+def test_registry_contains_censys_discovery_tab():
+    from gui.components.experimental_features.registry import _get_features
+    labels = [f.label for f in _get_features()]
+    assert "Censys Discovery" in labels
+
+
+def test_registry_censys_discovery_feature_id():
+    from gui.components.experimental_features.registry import _get_features
+    ids = [f.feature_id for f in _get_features()]
+    assert "censys_discovery" in ids
+
+
+def test_registry_censys_discovery_after_keymaster():
+    from gui.components.experimental_features.registry import _get_features
+    ids = [f.feature_id for f in _get_features()]
+    assert ids.index("censys_discovery") > ids.index("keymaster")
+
+
+# Sub-group B: Build (dummy widget pattern — no display required)
+
+def _make_censys_build_fixtures():
+    """Return (texts, configure_states, _DummyVar, _DummyWidget) for _build() inspection."""
+    texts = []
+    configure_states = []
+
+    class _DummyVar:
+        def __init__(self, value=None):
+            self._value = value
+
+        def get(self):
+            return self._value
+
+        def set(self, v):
+            self._value = v
+
+    class _DummyWidget:
+        def __init__(self, *a, **kw):
+            self._text = kw.get("text", "")
+            if self._text:
+                texts.append(self._text)
+
+        def pack(self, *a, **kw):
+            return None
+
+        def configure(self, **kw):
+            if "state" in kw:
+                configure_states.append((self._text, kw["state"]))
+
+        def bind(self, *a, **kw):
+            return None
+
+    return texts, configure_states, _DummyVar, _DummyWidget
+
+
+def _run_censys_build(monkeypatch, texts, configure_states, _DummyVar, _DummyWidget):
+    """Monkeypatch tk widgets in censys_discovery_tab, construct tab, call _build()."""
+    import gui.components.experimental_features.censys_discovery_tab as tab_mod
+    from gui.components.experimental_features.censys_discovery_tab import CensysDiscoveryTab
+
+    monkeypatch.setattr(tab_mod.tk, "Frame", _DummyWidget)
+    monkeypatch.setattr(tab_mod.tk, "Label", _DummyWidget)
+    monkeypatch.setattr(tab_mod.tk, "Button", _DummyWidget)
+    monkeypatch.setattr(tab_mod.tk, "Radiobutton", _DummyWidget)
+    monkeypatch.setattr(tab_mod.tk, "StringVar", _DummyVar)
+
+    tab = CensysDiscoveryTab.__new__(CensysDiscoveryTab)
+    tab._context = {}
+    tab._theme = MagicMock()
+    tab._theme.apply_to_widget = lambda *a, **kw: None
+    tab._build(_DummyWidget())
+
+
+def test_censys_discovery_tab_build_scaffold_texts_present(monkeypatch):
+    from gui.components.experimental_features.censys_discovery_tab import (
+        _PLACEHOLDER_STATUS, _PLACEHOLDER_CREDIT, _PLACEHOLDER_BALANCE,
+    )
+    texts, configure_states, _DummyVar, _DummyWidget = _make_censys_build_fixtures()
+    _run_censys_build(monkeypatch, texts, configure_states, _DummyVar, _DummyWidget)
+
+    assert _PLACEHOLDER_STATUS in texts
+    assert _PLACEHOLDER_CREDIT in texts
+    assert _PLACEHOLDER_BALANCE in texts
+    assert "Run" in texts
+    assert "Open Results" in texts
+    assert "FTP" in texts
+    assert "HTTP" in texts
+    assert "SMB" in texts
+
+
+def test_censys_discovery_tab_build_run_button_is_disabled(monkeypatch):
+    texts, configure_states, _DummyVar, _DummyWidget = _make_censys_build_fixtures()
+    _run_censys_build(monkeypatch, texts, configure_states, _DummyVar, _DummyWidget)
+    assert ("Run", "disabled") in configure_states
+
+
+def test_censys_discovery_tab_build_open_results_button_is_disabled(monkeypatch):
+    texts, configure_states, _DummyVar, _DummyWidget = _make_censys_build_fixtures()
+    _run_censys_build(monkeypatch, texts, configure_states, _DummyVar, _DummyWidget)
+    assert ("Open Results", "disabled") in configure_states
+
+
+# Sub-group C: Callback wiring
+
+def test_censys_discovery_tab_open_results_invokes_context_callback():
+    from gui.components.experimental_features.censys_discovery_tab import CensysDiscoveryTab
+    called = []
+    tab = CensysDiscoveryTab.__new__(CensysDiscoveryTab)
+    tab._context = {"open_censys_results_db": lambda: called.append(True)}
+    tab._invoke_open_results()
+    assert called == [True]
+
+
+def test_censys_discovery_tab_silent_when_no_results_callback():
+    from gui.components.experimental_features.censys_discovery_tab import CensysDiscoveryTab
+    tab = CensysDiscoveryTab.__new__(CensysDiscoveryTab)
+    tab._context = {}
+    tab._invoke_open_results()  # must not raise
+
+
+def test_censys_discovery_tab_invoke_run_is_noop():
+    from gui.components.experimental_features.censys_discovery_tab import CensysDiscoveryTab
+    tab = CensysDiscoveryTab.__new__(CensysDiscoveryTab)
+    tab._context = {}
+    result = tab._invoke_run()
+    assert result is None
