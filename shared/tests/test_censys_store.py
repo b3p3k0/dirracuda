@@ -23,6 +23,7 @@ from experimental.censys_discovery.store import (
     init_db,
     insert_result,
     insert_run,
+    list_results,
     open_connection,
     update_run,
 )
@@ -406,3 +407,53 @@ def test_insert_result_stores_all_fields(db_path: Path) -> None:
     assert row[4] == "220 Welcome"
     assert row[5] == "2026-05-14T12:00:00"
     assert '"banner"' in row[6]
+
+
+# ---------------------------------------------------------------------------
+# list_results
+# ---------------------------------------------------------------------------
+
+
+def test_list_results_empty_db_returns_empty_list(db_path: Path) -> None:
+    conn = open_connection(db_path)
+    rows = list_results(conn)
+    conn.close()
+    assert rows == []
+
+
+def test_list_results_returns_list_of_dicts_with_expected_keys(db_path: Path) -> None:
+    conn = open_connection(db_path)
+    run_id = insert_run(conn, _options(), "2026-01-01T00:00:00", "q")
+    conn.commit()
+    insert_result(conn, run_id, _item())
+    conn.commit()
+    rows = list_results(conn)
+    conn.close()
+    assert len(rows) == 1
+    expected_keys = {
+        "result_id", "run_id", "protocol", "ip_address", "port",
+        "transport_protocol", "banner", "scan_time", "source_json",
+    }
+    assert expected_keys.issubset(rows[0].keys())
+
+
+def test_list_results_multi_run_ordering(db_path: Path) -> None:
+    conn = open_connection(db_path)
+    run_id_1 = insert_run(conn, _options(), "2026-01-01T00:00:00", "q")
+    conn.commit()
+    run_id_2 = insert_run(conn, _options(), "2026-01-01T01:00:00", "q")
+    conn.commit()
+    # Use n=0 for all so _item() doesn't transform the IP; pass distinct IPs directly
+    insert_result(conn, run_id_1, _item(ip="10.0.0.1", n=0))
+    insert_result(conn, run_id_1, _item(ip="10.0.0.2", n=0))
+    insert_result(conn, run_id_2, _item(ip="10.0.1.1", n=0))
+    conn.commit()
+    rows = list_results(conn)
+    conn.close()
+    assert len(rows) == 3
+    # Newer run_id (run_id_2) rows appear before older (run_id_1)
+    assert rows[0]["run_id"] == run_id_2
+    assert rows[1]["run_id"] == run_id_1
+    assert rows[2]["run_id"] == run_id_1
+    # Within the same run, lower result_id first
+    assert rows[1]["result_id"] < rows[2]["result_id"]

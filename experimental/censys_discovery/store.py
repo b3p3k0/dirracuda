@@ -264,6 +264,17 @@ def update_run(
     )
 
 
+def list_results(conn: sqlite3.Connection) -> list[dict]:
+    """Return all censys_results rows, newest run first."""
+    cur = conn.execute(
+        "SELECT result_id, run_id, protocol, ip_address, port, "
+        "transport_protocol, banner, scan_time, source_json "
+        "FROM censys_results ORDER BY run_id DESC, result_id ASC"
+    )
+    cols = [d[0] for d in cur.description]
+    return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
 def insert_result(
     conn: sqlite3.Connection,
     run_id: int,

@@ -948,6 +948,7 @@ def _run_censys_build(monkeypatch, texts, configure_states, _DummyVar, _DummyWid
 
     tab = CensysDiscoveryTab.__new__(CensysDiscoveryTab)
     tab._context = {}
+    tab._cfg = None
     tab._theme = MagicMock()
     tab._theme.apply_to_widget = lambda *a, **kw: None
     tab._build(_DummyWidget())
@@ -1006,3 +1007,287 @@ def test_censys_discovery_tab_invoke_run_is_noop():
     tab._context = {}
     result = tab._invoke_run()
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# C8 — open_censys_results_db wiring
+# ---------------------------------------------------------------------------
+
+
+def test_experimental_context_includes_open_censys_results_db(monkeypatch):
+    """handle_experimental_button_click context exposes open_censys_results_db."""
+    dash = _make_dash()
+    dash._handle_reddit_grab_button_click = MagicMock()
+    dash._open_reddit_post_db = MagicMock()
+    captured = {}
+    monkeypatch.setattr(
+        "gui.components.experimental_features_dialog.show_experimental_features_dialog",
+        lambda parent, context, settings_manager: captured.update(
+            context=context,
+        ),
+    )
+
+    dashboard_experimental.handle_experimental_button_click(dash)
+
+    assert "open_censys_results_db" in captured["context"]
+    assert callable(captured["context"]["open_censys_results_db"])
+
+
+def test_open_censys_results_db_calls_show_censys_browser_window(monkeypatch):
+    """open_censys_results_db opens the Censys browser with expected args."""
+    dash = _make_dash()
+
+    calls = []
+    monkeypatch.setattr(
+        "gui.components.dashboard_experimental.show_censys_browser_window",
+        lambda **kw: calls.append(kw),
+    )
+
+    dashboard_experimental.open_censys_results_db(dash)
+
+    assert len(calls) == 1
+    assert calls[0]["parent"] is dash.parent
+    assert calls[0]["add_record_callback"] is None
+    assert callable(calls[0]["promote_record_callback"])
+    assert callable(calls[0]["promote_records_callback"])
+    assert calls[0]["settings_manager"] is dash.settings_manager
+
+
+def test_open_censys_results_db_does_not_call_server_list_getter(monkeypatch):
+    """open_censys_results_db must not touch _server_list_getter."""
+    dash = _make_dash()
+    dash._server_list_getter = MagicMock()
+
+    monkeypatch.setattr(
+        "gui.components.dashboard_experimental.show_censys_browser_window",
+        lambda **kw: None,
+    )
+
+    dashboard_experimental.open_censys_results_db(dash)
+
+    dash._server_list_getter.assert_not_called()
+
+
+def test_open_censys_results_db_without_db_reader_has_no_promote_callback(monkeypatch):
+    """Browser still opens, but promote callbacks are None when DB unavailable."""
+    dash = _make_dash()
+    dash.db_reader = None
+
+    calls = []
+    monkeypatch.setattr(
+        "gui.components.dashboard_experimental.show_censys_browser_window",
+        lambda **kw: calls.append(kw),
+    )
+
+    dashboard_experimental.open_censys_results_db(dash)
+
+    assert len(calls) == 1
+    assert calls[0]["promote_record_callback"] is None
+    assert calls[0]["promote_records_callback"] is None
+
+
+# ---------------------------------------------------------------------------
+# C8 — Censys tab Open Results button state
+# ---------------------------------------------------------------------------
+
+
+def test_censys_discovery_tab_build_open_results_button_enabled_when_callback_present(monkeypatch):
+    """Open Results button is NORMAL when context has the callback."""
+    texts, configure_states, _DummyVar, _DummyWidget = _make_censys_build_fixtures()
+
+    import gui.components.experimental_features.censys_discovery_tab as tab_mod
+    from gui.components.experimental_features.censys_discovery_tab import CensysDiscoveryTab
+
+    monkeypatch.setattr(tab_mod.tk, "Frame", _DummyWidget)
+    monkeypatch.setattr(tab_mod.tk, "Label", _DummyWidget)
+    monkeypatch.setattr(tab_mod.tk, "Button", _DummyWidget)
+    monkeypatch.setattr(tab_mod.tk, "Radiobutton", _DummyWidget)
+    monkeypatch.setattr(tab_mod.tk, "StringVar", _DummyVar)
+
+    tab = CensysDiscoveryTab.__new__(CensysDiscoveryTab)
+    tab._context = {"open_censys_results_db": lambda: None}
+    tab._cfg = None
+    tab._theme = MagicMock()
+    tab._theme.apply_to_widget = lambda *a, **kw: None
+    tab._build(_DummyWidget())
+
+    assert ("Open Results", "normal") in configure_states
+
+
+def test_censys_discovery_tab_build_open_results_button_disabled_when_no_callback(monkeypatch):
+    """Open Results button is DISABLED when context has no callback (existing test updated)."""
+    texts, configure_states, _DummyVar, _DummyWidget = _make_censys_build_fixtures()
+    _run_censys_build(monkeypatch, texts, configure_states, _DummyVar, _DummyWidget)
+    assert ("Open Results", "disabled") in configure_states
+
+
+# ---------------------------------------------------------------------------
+# C9 — Credit UX helpers and live balance
+# ---------------------------------------------------------------------------
+
+
+def test_censys_credit_estimate_shows_profile_from_config():
+    from gui.components.experimental_features.censys_discovery_tab import _credit_estimate_text
+    cfg = MagicMock()
+    cfg.get_censys_credit_profile.return_value = "free_starter"
+    result = _credit_estimate_text(cfg)
+    assert "free_starter" in result
+
+
+def test_censys_credit_estimate_falls_back_when_cfg_is_none():
+    from gui.components.experimental_features.censys_discovery_tab import (
+        _credit_estimate_text, _PLACEHOLDER_CREDIT,
+    )
+    assert _credit_estimate_text(None) == _PLACEHOLDER_CREDIT
+
+
+def test_censys_status_text_shows_configured_when_pat_set():
+    from gui.components.experimental_features.censys_discovery_tab import _status_text
+    cfg = MagicMock()
+    cfg.get_censys_pat.return_value = "pat-abc123"
+    result = _status_text(cfg)
+    assert "configured" in result
+    assert "not configured" not in result
+
+
+def test_censys_status_text_shows_placeholder_when_no_pat():
+    from gui.components.experimental_features.censys_discovery_tab import (
+        _status_text, _PLACEHOLDER_STATUS,
+    )
+    cfg = MagicMock()
+    cfg.get_censys_pat.side_effect = ValueError("PAT not set")
+    assert _status_text(cfg) == _PLACEHOLDER_STATUS
+
+
+def test_censys_fetch_balance_worker_updates_label_on_success(monkeypatch):
+    from experimental.censys_discovery.models import CreditBalance, ClientResult
+    from gui.components.experimental_features.censys_discovery_tab import CensysDiscoveryTab
+
+    configure_calls = []
+
+    class _FakeLabel:
+        def configure(self, **kw):
+            configure_calls.append(kw.get("text", ""))
+
+    class _FakeFrame:
+        after = staticmethod(lambda _ms, cb: cb())
+
+    tab = CensysDiscoveryTab.__new__(CensysDiscoveryTab)
+    tab._balance_label = _FakeLabel()
+    tab.frame = _FakeFrame()
+
+    monkeypatch.setattr(
+        "experimental.censys_discovery.client.CensysClient",
+        lambda pat: MagicMock(
+            get_user_credits=lambda: ClientResult(
+                ok=True, data=CreditBalance(balance=42, resets_at=None), error=None
+            )
+        ),
+    )
+
+    tab._fetch_balance_worker("fake-pat", None)
+
+    assert len(configure_calls) == 1
+    assert "42" in configure_calls[0]
+    assert "fake-pat" not in configure_calls[0]
+
+
+def test_censys_fetch_balance_worker_shows_fallback_on_error(monkeypatch):
+    from experimental.censys_discovery.models import ClientResult, ApiError
+    from gui.components.experimental_features.censys_discovery_tab import CensysDiscoveryTab
+
+    configure_calls = []
+
+    class _FakeLabel:
+        def configure(self, **kw):
+            configure_calls.append(kw.get("text", ""))
+
+    class _FakeFrame:
+        after = staticmethod(lambda _ms, cb: cb())
+
+    tab = CensysDiscoveryTab.__new__(CensysDiscoveryTab)
+    tab._balance_label = _FakeLabel()
+    tab.frame = _FakeFrame()
+
+    monkeypatch.setattr(
+        "experimental.censys_discovery.client.CensysClient",
+        lambda pat: MagicMock(
+            get_user_credits=lambda: ClientResult(
+                ok=False,
+                data=None,
+                error=ApiError(
+                    reason_code="AUTH_UNAUTHORIZED",
+                    status_code=401,
+                    message="bad token",
+                ),
+            )
+        ),
+    )
+
+    tab._fetch_balance_worker("fake-pat", None)
+
+    assert len(configure_calls) == 1
+    assert "unavailable" in configure_calls[0]
+    assert "fake-pat" not in configure_calls[0]
+
+
+def test_censys_refresh_balance_skips_when_cfg_is_none(monkeypatch):
+    import threading as _threading
+    from gui.components.experimental_features.censys_discovery_tab import CensysDiscoveryTab
+
+    started = []
+    original_start = _threading.Thread.start
+
+    def _fake_start(self):
+        started.append(True)
+
+    monkeypatch.setattr(_threading.Thread, "start", _fake_start)
+
+    tab = CensysDiscoveryTab.__new__(CensysDiscoveryTab)
+    tab._cfg = None
+    tab._refresh_balance()
+
+    assert started == []
+
+
+def test_censys_refresh_balance_sets_label_when_no_pat():
+    from gui.components.experimental_features.censys_discovery_tab import CensysDiscoveryTab
+
+    configure_calls = []
+
+    class _FakeLabel:
+        def configure(self, **kw):
+            configure_calls.append(kw.get("text", ""))
+
+    cfg = MagicMock()
+    cfg.get_censys_pat.side_effect = ValueError("not set")
+
+    tab = CensysDiscoveryTab.__new__(CensysDiscoveryTab)
+    tab._cfg = cfg
+    tab._balance_label = _FakeLabel()
+    tab._refresh_balance()
+
+    assert len(configure_calls) == 1
+    assert "PAT not configured" in configure_calls[0]
+
+
+def test_censys_refresh_balance_sets_label_on_invalid_org_id():
+    from gui.components.experimental_features.censys_discovery_tab import CensysDiscoveryTab
+
+    configure_calls = []
+
+    class _FakeLabel:
+        def configure(self, **kw):
+            configure_calls.append(kw.get("text", ""))
+
+    cfg = MagicMock()
+    cfg.get_censys_pat.return_value = "valid-pat"
+    cfg.get_censys_org_id.side_effect = ValueError("bad UUID")
+
+    tab = CensysDiscoveryTab.__new__(CensysDiscoveryTab)
+    tab._cfg = cfg
+    tab._balance_label = _FakeLabel()
+    tab._refresh_balance()
+
+    assert len(configure_calls) == 1
+    assert "invalid organization_id" in configure_calls[0]

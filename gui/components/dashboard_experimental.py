@@ -10,6 +10,7 @@ Patch path for show_reddit_browser_window in tests:
   gui.components.dashboard_experimental.show_reddit_browser_window
 """
 
+from gui.components.censys_browser_window import show_censys_browser_window
 from gui.components.reddit_browser_window import show_reddit_browser_window
 from gui.components.se_dork_browser_window import show_se_dork_browser_window
 from gui.components.dorkbook_window import show_dorkbook_window
@@ -39,6 +40,7 @@ def handle_experimental_button_click(widget) -> None:
         ),
         "open_reddit_post_db": widget._open_reddit_post_db,
         "open_se_dork_results_db": lambda: open_se_dork_results_db(widget),
+        "open_censys_results_db": lambda: open_censys_results_db(widget),
         "open_dorkbook": lambda: open_dorkbook(widget),
         "open_keymaster": lambda: open_keymaster(widget),
         "parent": widget.parent,
@@ -60,6 +62,17 @@ def open_reddit_post_db(widget) -> None:
 def open_se_dork_results_db(widget) -> None:
     """Open the SE Dork results browser with direct main-DB promotion."""
     show_se_dork_browser_window(
+        parent=widget.parent,
+        add_record_callback=None,
+        promote_record_callback=_make_sidecar_promote_callback(widget),
+        promote_records_callback=_make_sidecar_bulk_promote_callback(widget),
+        settings_manager=getattr(widget, "settings_manager", None),
+    )
+
+
+def open_censys_results_db(widget) -> None:
+    """Open the Censys Discovery results browser with direct main-DB promotion."""
+    show_censys_browser_window(
         parent=widget.parent,
         add_record_callback=None,
         promote_record_callback=_make_sidecar_promote_callback(widget),

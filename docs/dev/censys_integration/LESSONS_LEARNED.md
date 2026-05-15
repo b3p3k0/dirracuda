@@ -31,3 +31,15 @@ Guardrail added:
 Tests added/updated:
 Residual risk:
 ```
+
+## Card Log
+
+```text
+Card: C9
+Date: 2026-05-15
+What failed / almost failed: plan initially called settings_manager.config.* which doesn't exist; also planned a redundant context injection that experimental_features_dialog.py already does at line 74
+Root cause: settings_manager is a SettingsManager with no .config attribute — load_config(sm.get_smbseek_config_path()) is the correct call; context injection was already centralized in the dialog
+Guardrail added: always use load_config() to obtain SMBSeekConfig from settings_manager; verify context injection point before adding redundant wiring; catch ValueError from get_censys_org_id() separately from PAT errors; guard frame.after() in workers against widget destruction; load config once and reuse (no redundant disk reads)
+Tests added/updated: D1–D9 (credit estimate, balance success/error, PAT/org-id error paths, thread-guard)
+Residual risk: live balance fetch silently skipped if PAT removed between tab open and worker completion; acceptable for this card
+```
