@@ -78,6 +78,13 @@ def _build_dialog(validation_results: dict, *, parent=None, dialog=None) -> AppC
     dlg.database_var = _Var("/tmp/smbseek.db")
     dlg.config_var = _Var("/tmp/config.json")
     dlg.api_key_var = _Var("APIKEY")
+    dlg.censys_pat_var = _Var("")
+    dlg.censys_org_id_var = _Var("")
+    dlg.censys_credit_profile_var = _Var("free_starter")
+    dlg.censys_max_pages_var = _Var("5")
+    dlg.censys_query_hours_var = _Var("24")
+    dlg.censys_page_size_var = _Var("100")
+    dlg.censys_ipv6_enabled_var = _BoolVar(False)
     dlg.quarantine_var = _Var("/tmp/quarantine")
     dlg.smb_dork_var = _Var("smb authentication: disabled")
     dlg.ftp_dork_var = _Var('port:21 "230 Login successful"')
@@ -87,6 +94,13 @@ def _build_dialog(validation_results: dict, *, parent=None, dialog=None) -> AppC
     dlg.database_path = "/tmp/smbseek.db"
     dlg.config_path = "/tmp/config.json"
     dlg.api_key = "APIKEY"
+    dlg.censys_pat = ""
+    dlg.censys_org_id = ""
+    dlg.censys_credit_profile = "free_starter"
+    dlg.censys_max_pages = 5
+    dlg.censys_query_hours = 24
+    dlg.censys_page_size = 100
+    dlg.censys_ipv6_enabled = False
     dlg.quarantine_path = "/tmp/quarantine"
     dlg.smb_dork = "smb authentication: disabled"
     dlg.ftp_dork = 'port:21 "230 Login successful"'
@@ -121,6 +135,12 @@ def _base_validation(*, api_key_valid=True) -> dict:
         "database": {"valid": True, "message": ""},
         "config": {"valid": True, "message": ""},
         "api_key": {"valid": api_key_valid, "message": ""},
+        "censys_pat": {"valid": True, "message": ""},
+        "censys_org_id": {"valid": True, "message": ""},
+        "censys_credit_profile": {"valid": True, "message": ""},
+        "censys_max_pages": {"valid": True, "message": ""},
+        "censys_query_hours": {"valid": True, "message": ""},
+        "censys_page_size": {"valid": True, "message": ""},
         "quarantine": {"valid": True, "message": ""},
         "smb_dork": {"valid": True, "message": ""},
         "ftp_dork": {"valid": True, "message": ""},
@@ -323,3 +343,40 @@ def test_open_app_config_dialog_failure_uses_parent(monkeypatch):
 
     assert len(calls) == 1
     assert calls[0][1]["parent"] is parent
+
+
+def test_validate_and_save_rejects_invalid_censys_org_id(monkeypatch):
+    validation = _base_validation()
+    validation["censys_org_id"] = {"valid": False, "message": "Organization ID must be a valid UUID."}
+    dlg = _build_dialog(validation)
+
+    calls = []
+    monkeypatch.setattr(
+        "gui.components.app_config_dialog.messagebox.showerror",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    assert dlg._validate_and_save() is False
+    assert len(calls) == 1
+    assert "Censys settings" in calls[0][0][1]
+
+
+def test_validate_and_save_allows_empty_optional_censys_fields(monkeypatch):
+    dlg = _build_dialog(_base_validation())
+    dlg.main_config = _MainConfigStub()
+    dlg.censys_pat_var = _Var("")
+    dlg.censys_org_id_var = _Var("")
+    dlg.censys_credit_profile_var = _Var("free_starter")
+    dlg.censys_max_pages_var = _Var("5")
+    dlg.censys_query_hours_var = _Var("24")
+    dlg.censys_page_size_var = _Var("100")
+    dlg.censys_ipv6_enabled_var = _BoolVar(False)
+
+    monkeypatch.setattr(
+        "gui.components.app_config_dialog.normalize_database_path",
+        lambda *_args, **_kwargs: Path("/tmp/smbseek.db"),
+    )
+    monkeypatch.setattr("gui.components.app_config_dialog.messagebox.showwarning", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("gui.components.app_config_dialog.messagebox.showerror", lambda *_args, **_kwargs: None)
+
+    assert dlg._validate_and_save() is True

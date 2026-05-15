@@ -12,7 +12,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from experimental.censys_discovery.client import CensysClient, _redact
+from experimental.censys_discovery.client import CensysClient, _USER_AGENT, _redact
 from experimental.censys_discovery.models import (
     AUTH_FORBIDDEN,
     AUTH_UNAUTHORIZED,
@@ -51,13 +51,17 @@ def _jb(data: dict) -> bytes:
     return json.dumps(data).encode("utf-8")
 
 
-def _http_err(code: int, reason: str = "Error") -> urllib.error.HTTPError:
+def _http_err(
+    code: int,
+    reason: str = "Error",
+    body: bytes | None = None,
+) -> urllib.error.HTTPError:
     return urllib.error.HTTPError(
         url=f"{_BASE}/v3/global/search/query",
         code=code,
         msg=reason,
         hdrs={},
-        fp=io.BytesIO(b""),
+        fp=io.BytesIO(body if body is not None else b""),
     )
 
 
@@ -156,6 +160,37 @@ def test_bearer_auth_header_sent():
 
     assert len(captured) == 1
     assert captured[0].get_header("Authorization") == f"Bearer {_PAT}"
+
+
+def test_user_agent_header_sent():
+    captured = []
+
+    def _capture(req, timeout=None):
+        captured.append(req)
+        return _mock_response(_search_envelope())
+
+    with patch("urllib.request.urlopen", side_effect=_capture):
+        _mk().search_query("host.services:(protocol=FTP and port=21)")
+
+    assert len(captured) == 1
+    assert captured[0].get_header("User-agent") == _USER_AGENT
+
+
+def test_http_error_message_includes_body_detail_and_redacts_pat():
+    err_body = _jb(
+        {
+            "detail": f"Request blocked for PAT {_PAT}",
+            "error_code": 1010,
+        }
+    )
+    with patch("urllib.request.urlopen", side_effect=_http_err(403, reason="Forbidden", body=err_body)):
+        result = _mk().search_query("q")
+    assert not result.ok
+    assert result.error.reason_code == AUTH_FORBIDDEN
+    assert "HTTP 403: Forbidden" in result.error.message
+    assert "error_code=1010" in result.error.message
+    assert "<redacted>" in result.error.message
+    assert _PAT not in result.error.message
 
 
 # ---------------------------------------------------------------------------

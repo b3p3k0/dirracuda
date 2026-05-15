@@ -23,7 +23,19 @@ def test_validate_all_fields_skips_discovery_dork_fields():
 
     dlg._validate_all_fields()
 
-    assert visited == ["smbseek", "database", "config", "api_key", "quarantine"]
+    assert visited == [
+        "smbseek",
+        "database",
+        "config",
+        "api_key",
+        "censys_pat",
+        "censys_org_id",
+        "censys_credit_profile",
+        "censys_max_pages",
+        "censys_query_hours",
+        "censys_page_size",
+        "quarantine",
+    ]
 
 
 def test_apply_runtime_settings_preserves_existing_dork_keys():
@@ -51,3 +63,63 @@ def test_apply_runtime_settings_preserves_existing_dork_keys():
     assert config_data["shodan"]["query_components"]["base_query"] == "smb keep"
     assert config_data["ftp"]["shodan"]["query_components"]["base_query"] == "ftp keep"
     assert config_data["http"]["shodan"]["query_components"]["base_query"] == "http keep"
+
+
+def test_apply_runtime_settings_writes_censys_section():
+    dlg = AppConfigDialog.__new__(AppConfigDialog)
+    config_data = {}
+
+    dlg._apply_runtime_settings(
+        config_data,
+        api_key="NEW",
+        quarantine_path="~/.dirracuda/quarantine",
+        censys_settings={
+            "personal_access_token": "censys-pat",
+            "organization_id": "11111111-2222-3333-4444-555555555555",
+            "credit_profile": "search_enterprise",
+            "defaults": {
+                "max_pages": 20,
+                "query_hours": 48,
+                "page_size": 50,
+                "ipv6_enabled": True,
+            },
+        },
+    )
+
+    assert config_data["censys"]["personal_access_token"] == "censys-pat"
+    assert config_data["censys"]["organization_id"] == "11111111-2222-3333-4444-555555555555"
+    assert config_data["censys"]["credit_profile"] == "search_enterprise"
+    assert config_data["censys"]["defaults"]["max_pages"] == 20
+    assert config_data["censys"]["defaults"]["query_hours"] == 48
+    assert config_data["censys"]["defaults"]["page_size"] == 50
+    assert config_data["censys"]["defaults"]["ipv6_enabled"] is True
+
+
+def test_apply_runtime_settings_clamps_censys_defaults_and_profile():
+    dlg = AppConfigDialog.__new__(AppConfigDialog)
+    config_data = {}
+
+    dlg._apply_runtime_settings(
+        config_data,
+        api_key="NEW",
+        quarantine_path="~/.dirracuda/quarantine",
+        censys_settings={
+            "personal_access_token": "  ",
+            "organization_id": "",
+            "credit_profile": "invalid_profile",
+            "defaults": {
+                "max_pages": 9999,
+                "query_hours": -1,
+                "page_size": 0,
+                "ipv6_enabled": "yes",
+            },
+        },
+    )
+
+    assert config_data["censys"]["personal_access_token"] == ""
+    assert config_data["censys"]["organization_id"] == ""
+    assert config_data["censys"]["credit_profile"] == "free_starter"
+    assert config_data["censys"]["defaults"]["max_pages"] == 100
+    assert config_data["censys"]["defaults"]["query_hours"] == 1
+    assert config_data["censys"]["defaults"]["page_size"] == 1
+    assert config_data["censys"]["defaults"]["ipv6_enabled"] is True

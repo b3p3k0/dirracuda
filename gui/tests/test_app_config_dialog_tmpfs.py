@@ -97,6 +97,39 @@ def test_load_runtime_settings_reads_tmpfs_config(tmp_path):
     assert dlg.quarantine_tmpfs_size_mb == 1024
 
 
+def test_load_runtime_settings_reads_censys_values(tmp_path):
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        json.dumps(
+            {
+                "censys": {
+                    "personal_access_token": "pat-123",
+                    "organization_id": "11111111-2222-3333-4444-555555555555",
+                    "credit_profile": "search_enterprise",
+                    "defaults": {
+                        "max_pages": 120,
+                        "query_hours": 0,
+                        "page_size": 70,
+                        "ipv6_enabled": True,
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    dlg = _bare_dialog()
+    dlg._load_runtime_settings_from_config(str(cfg))
+
+    assert dlg.censys_pat == "pat-123"
+    assert dlg.censys_org_id == "11111111-2222-3333-4444-555555555555"
+    assert dlg.censys_credit_profile == "search_enterprise"
+    assert dlg.censys_max_pages == 100
+    assert dlg.censys_query_hours == 1
+    assert dlg.censys_page_size == 70
+    assert dlg.censys_ipv6_enabled is True
+
+
 def test_apply_runtime_settings_writes_tmpfs_keys():
     dlg = _bare_dialog()
     out = {}

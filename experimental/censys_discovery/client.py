@@ -23,6 +23,7 @@ from experimental.censys_discovery.models import (
 )
 
 _BASE_URL = "https://api.platform.censys.io"
+_USER_AGENT = "dirracuda-censys-client/0.1"
 
 _HTTP_STATUS_REASON_CODES = {
     400: QUERY_INVALID,
@@ -46,6 +47,37 @@ def _redact(text: str, pat: str) -> str:
     if not pat or not text:
         return text
     return text.replace(pat, "<redacted>")
+
+
+def _http_error_detail(exc: urllib.error.HTTPError) -> str:
+    try:
+        raw = exc.read()
+    except Exception:
+        return ""
+    if not raw:
+        return ""
+    text = raw.decode("utf-8", errors="replace").strip()
+    if not text:
+        return ""
+
+    try:
+        payload = json.loads(text)
+    except Exception:
+        payload = None
+
+    if isinstance(payload, dict):
+        detail = payload.get("detail") or payload.get("message") or payload.get("title")
+        if detail:
+            error_code = payload.get("error_code")
+            if error_code is not None:
+                return f"{detail} (error_code={error_code})"
+            return str(detail)
+
+    # Keep text compact and single-line for status surfaces.
+    compact = " ".join(text.split())
+    if len(compact) > 240:
+        compact = compact[:237] + "..."
+    return compact
 
 
 def _parse_credit_balance(payload: dict) -> CreditBalance:
@@ -120,6 +152,7 @@ class CensysClient:
         req  = urllib.request.Request(url, data=data, method=method)
         req.add_header("Authorization", f"Bearer {self._pat}")
         req.add_header("Accept", "application/json")
+        req.add_header("User-Agent", _USER_AGENT)
         if data is not None:
             req.add_header("Content-Type", "application/json")
         try:
@@ -132,7 +165,11 @@ class CensysClient:
                 reason_code = SERVER_ERROR
             else:
                 reason_code = CLIENT_ERROR
-            message = _redact(f"HTTP {exc.code}: {exc.reason}", self._pat)
+            detail = _http_error_detail(exc)
+            message = f"HTTP {exc.code}: {exc.reason}"
+            if detail:
+                message += f" - {detail}"
+            message = _redact(message, self._pat)
             return ClientResult(ok=False, data=None, error=ApiError(reason_code, exc.code, message))
         except urllib.error.URLError as exc:
             message = _redact(str(exc.reason), self._pat)

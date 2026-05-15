@@ -239,6 +239,7 @@ def _make_dash():
     dash.parent = MagicMock()
     dash._server_list_getter = None
     dash._open_drill_down = MagicMock()
+    dash._open_config_editor = MagicMock()
     dash.settings_manager = MagicMock()
     dash.refresh_after_database_change = MagicMock()
     dash.db_reader = MagicMock()
@@ -943,12 +944,14 @@ def _run_censys_build(monkeypatch, texts, configure_states, _DummyVar, _DummyWid
     monkeypatch.setattr(tab_mod.tk, "Frame", _DummyWidget)
     monkeypatch.setattr(tab_mod.tk, "Label", _DummyWidget)
     monkeypatch.setattr(tab_mod.tk, "Button", _DummyWidget)
-    monkeypatch.setattr(tab_mod.tk, "Radiobutton", _DummyWidget)
-    monkeypatch.setattr(tab_mod.tk, "StringVar", _DummyVar)
+    monkeypatch.setattr(tab_mod.tk, "Checkbutton", _DummyWidget)
+    monkeypatch.setattr(tab_mod.tk, "BooleanVar", _DummyVar)
 
     tab = CensysDiscoveryTab.__new__(CensysDiscoveryTab)
     tab._context = {}
     tab._cfg = None
+    tab._protocol_vars = {}
+    tab._protocol_checkbuttons = []
     tab._theme = MagicMock()
     tab._theme.apply_to_widget = lambda *a, **kw: None
     tab._build(_DummyWidget())
@@ -965,16 +968,17 @@ def test_censys_discovery_tab_build_scaffold_texts_present(monkeypatch):
     assert _PLACEHOLDER_CREDIT in texts
     assert _PLACEHOLDER_BALANCE in texts
     assert "Run" in texts
+    assert "Config" in texts
     assert "Open Results" in texts
     assert "FTP" in texts
     assert "HTTP" in texts
     assert "SMB" in texts
 
 
-def test_censys_discovery_tab_build_run_button_is_disabled(monkeypatch):
+def test_censys_discovery_tab_build_run_button_is_enabled(monkeypatch):
     texts, configure_states, _DummyVar, _DummyWidget = _make_censys_build_fixtures()
     _run_censys_build(monkeypatch, texts, configure_states, _DummyVar, _DummyWidget)
-    assert ("Run", "disabled") in configure_states
+    assert ("Run", "normal") in configure_states
 
 
 def test_censys_discovery_tab_build_open_results_button_is_disabled(monkeypatch):
@@ -994,6 +998,16 @@ def test_censys_discovery_tab_open_results_invokes_context_callback():
     assert called == [True]
 
 
+def test_censys_discovery_tab_open_config_invokes_context_callback():
+    from gui.components.experimental_features.censys_discovery_tab import CensysDiscoveryTab
+
+    called = []
+    tab = CensysDiscoveryTab.__new__(CensysDiscoveryTab)
+    tab._context = {"open_app_config": lambda: called.append(True)}
+    tab._invoke_open_config()
+    assert called == [True]
+
+
 def test_censys_discovery_tab_silent_when_no_results_callback():
     from gui.components.experimental_features.censys_discovery_tab import CensysDiscoveryTab
     tab = CensysDiscoveryTab.__new__(CensysDiscoveryTab)
@@ -1001,12 +1015,31 @@ def test_censys_discovery_tab_silent_when_no_results_callback():
     tab._invoke_open_results()  # must not raise
 
 
-def test_censys_discovery_tab_invoke_run_is_noop():
+def test_censys_discovery_tab_invoke_run_requires_selected_protocol():
     from gui.components.experimental_features.censys_discovery_tab import CensysDiscoveryTab
+
+    calls = []
+
+    class _Var:
+        def __init__(self, value):
+            self._value = value
+
+        def get(self):
+            return self._value
+
+    class _Label:
+        def configure(self, **kw):
+            calls.append(kw.get("text", ""))
+
     tab = CensysDiscoveryTab.__new__(CensysDiscoveryTab)
     tab._context = {}
-    result = tab._invoke_run()
-    assert result is None
+    tab._protocol_vars = {"FTP": _Var(False), "HTTP": _Var(False), "SMB": _Var(False)}
+    tab._status_label = _Label()
+
+    tab._invoke_run()
+
+    assert calls
+    assert "Select at least one protocol" in calls[-1]
 
 
 # ---------------------------------------------------------------------------
@@ -1031,6 +1064,26 @@ def test_experimental_context_includes_open_censys_results_db(monkeypatch):
 
     assert "open_censys_results_db" in captured["context"]
     assert callable(captured["context"]["open_censys_results_db"])
+
+
+def test_experimental_context_includes_open_app_config(monkeypatch):
+    """handle_experimental_button_click context exposes open_app_config."""
+    dash = _make_dash()
+    dash._handle_reddit_grab_button_click = MagicMock()
+    dash._open_reddit_post_db = MagicMock()
+    dash._open_config_editor = MagicMock()
+    captured = {}
+    monkeypatch.setattr(
+        "gui.components.experimental_features_dialog.show_experimental_features_dialog",
+        lambda parent, context, settings_manager: captured.update(
+            context=context,
+        ),
+    )
+
+    dashboard_experimental.handle_experimental_button_click(dash)
+
+    assert "open_app_config" in captured["context"]
+    assert callable(captured["context"]["open_app_config"])
 
 
 def test_open_censys_results_db_calls_show_censys_browser_window(monkeypatch):
@@ -1101,12 +1154,14 @@ def test_censys_discovery_tab_build_open_results_button_enabled_when_callback_pr
     monkeypatch.setattr(tab_mod.tk, "Frame", _DummyWidget)
     monkeypatch.setattr(tab_mod.tk, "Label", _DummyWidget)
     monkeypatch.setattr(tab_mod.tk, "Button", _DummyWidget)
-    monkeypatch.setattr(tab_mod.tk, "Radiobutton", _DummyWidget)
-    monkeypatch.setattr(tab_mod.tk, "StringVar", _DummyVar)
+    monkeypatch.setattr(tab_mod.tk, "Checkbutton", _DummyWidget)
+    monkeypatch.setattr(tab_mod.tk, "BooleanVar", _DummyVar)
 
     tab = CensysDiscoveryTab.__new__(CensysDiscoveryTab)
     tab._context = {"open_censys_results_db": lambda: None}
     tab._cfg = None
+    tab._protocol_vars = {}
+    tab._protocol_checkbuttons = []
     tab._theme = MagicMock()
     tab._theme.apply_to_widget = lambda *a, **kw: None
     tab._build(_DummyWidget())
@@ -1291,3 +1346,153 @@ def test_censys_refresh_balance_sets_label_on_invalid_org_id():
 
     assert len(configure_calls) == 1
     assert "invalid organization_id" in configure_calls[0]
+
+
+def test_censys_invoke_run_shows_pat_not_configured_when_missing():
+    from gui.components.experimental_features.censys_discovery_tab import CensysDiscoveryTab
+
+    messages = []
+
+    class _Var:
+        def __init__(self, value):
+            self._value = value
+
+        def get(self):
+            return self._value
+
+    class _Label:
+        def configure(self, **kw):
+            messages.append(kw.get("text", ""))
+
+    cfg = MagicMock()
+    cfg.get_censys_pat.side_effect = ValueError("missing")
+
+    tab = CensysDiscoveryTab.__new__(CensysDiscoveryTab)
+    tab._context = {}
+    tab._protocol_vars = {"FTP": _Var(True), "HTTP": _Var(False), "SMB": _Var(False)}
+    tab._status_label = _Label()
+    tab._load_config_from_settings = lambda: cfg
+
+    tab._invoke_run()
+
+    assert messages
+    assert "PAT is not configured" in messages[-1]
+
+
+def test_censys_invoke_run_shows_config_unavailable_when_cfg_missing():
+    from gui.components.experimental_features.censys_discovery_tab import CensysDiscoveryTab
+
+    messages = []
+
+    class _Var:
+        def __init__(self, value):
+            self._value = value
+
+        def get(self):
+            return self._value
+
+    class _Label:
+        def configure(self, **kw):
+            messages.append(kw.get("text", ""))
+
+    tab = CensysDiscoveryTab.__new__(CensysDiscoveryTab)
+    tab._context = {}
+    tab._protocol_vars = {"FTP": _Var(True), "HTTP": _Var(False), "SMB": _Var(False)}
+    tab._status_label = _Label()
+    tab._load_config_from_settings = lambda: None
+
+    tab._invoke_run()
+
+    assert messages
+    assert "configuration unavailable" in messages[-1]
+
+
+def test_censys_run_stack_worker_calls_protocols_in_order_and_stops_on_failure(monkeypatch):
+    from experimental.censys_discovery.models import CensysRunResult, RUN_STATUS_DONE, RUN_STATUS_ERROR
+    from gui.components.experimental_features.censys_discovery_tab import CensysDiscoveryTab
+
+    call_order = []
+    captured = {}
+
+    def _run_ftp(_options):
+        call_order.append("FTP")
+        return CensysRunResult(
+            ok=True,
+            run_id=1,
+            fetched_count=5,
+            deduped_count=4,
+            status=RUN_STATUS_DONE,
+            error=None,
+        )
+
+    def _run_http(_options):
+        call_order.append("HTTP")
+        return CensysRunResult(
+            ok=False,
+            run_id=2,
+            fetched_count=3,
+            deduped_count=3,
+            status=RUN_STATUS_ERROR,
+            error="boom",
+        )
+
+    def _run_smb(_options):
+        call_order.append("SMB")
+        raise AssertionError("SMB should not be called after HTTP failure")
+
+    monkeypatch.setattr("experimental.censys_discovery.service.run_ftp_discovery", _run_ftp)
+    monkeypatch.setattr("experimental.censys_discovery.service.run_http_discovery", _run_http)
+    monkeypatch.setattr("experimental.censys_discovery.service.run_smb_discovery", _run_smb)
+
+    class _Frame:
+        after = staticmethod(lambda _ms, cb: cb())
+
+    tab = CensysDiscoveryTab.__new__(CensysDiscoveryTab)
+    tab.frame = _Frame()
+    tab._on_run_stack_done = lambda summaries, failed_protocol, failed_message: captured.update(
+        summaries=summaries,
+        failed_protocol=failed_protocol,
+        failed_message=failed_message,
+    )
+
+    tab._run_stack_worker(["FTP", "HTTP", "SMB"], "pat", None, 24, 5, 100)
+
+    assert call_order == ["FTP", "HTTP"]
+    assert captured["failed_protocol"] == "HTTP"
+    assert captured["failed_message"] == "boom"
+    assert len(captured["summaries"]) == 2
+
+
+def test_censys_on_run_stack_done_formats_partial_failure_summary():
+    from experimental.censys_discovery.models import CensysRunResult, RUN_STATUS_DONE
+    from gui.components.experimental_features.censys_discovery_tab import CensysDiscoveryTab
+
+    messages = []
+    running_flags = []
+    refreshed = []
+
+    class _Label:
+        def configure(self, **kw):
+            messages.append(kw.get("text", ""))
+
+    tab = CensysDiscoveryTab.__new__(CensysDiscoveryTab)
+    tab._status_label = _Label()
+    tab._set_controls_running = lambda running: running_flags.append(running)
+    tab._load_config_from_settings = lambda: None
+    tab._refresh_balance = lambda: refreshed.append(True)
+
+    ok_result = CensysRunResult(
+        ok=True,
+        run_id=1,
+        fetched_count=4,
+        deduped_count=3,
+        status=RUN_STATUS_DONE,
+        error=None,
+    )
+    tab._on_run_stack_done([("FTP", ok_result)], "HTTP", "network down")
+
+    assert messages
+    assert "Run failed at HTTP: network down" in messages[-1]
+    assert "Completed: FTP: fetched 4, stored 3" in messages[-1]
+    assert running_flags == [False]
+    assert refreshed == [True]

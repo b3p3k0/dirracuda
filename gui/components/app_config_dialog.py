@@ -8,6 +8,7 @@ to scan, browse, and extract workflows.
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tkinter as tk
@@ -46,6 +47,13 @@ _CLAMAV_BACKENDS = frozenset(("auto", "clamdscan", "clamscan"))
 _TMPFS_SIZE_MIN_MB = 64
 _TMPFS_SIZE_MAX_MB = 4096
 _TMPFS_SIZE_DEFAULT_MB = 512
+_CENSYS_CREDIT_PROFILES = ("free_starter", "search_enterprise")
+_CENSYS_DEFAULT_MAX_PAGES = 5
+_CENSYS_DEFAULT_QUERY_HOURS = 24
+_CENSYS_DEFAULT_PAGE_SIZE = 100
+_CENSYS_ORG_ID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
 _PATHS = get_paths()
 _LEGACY = get_legacy_paths(paths=_PATHS)
 _DEFAULT_CONFIG_PATH = resolve_runtime_config_path(paths=_PATHS, legacy=_LEGACY)
@@ -121,6 +129,7 @@ class AppConfigDialog:
     - SMBSeek config.json path
     - Database path
     - Shodan API key
+    - Censys PAT / org/profile/defaults
     - Quarantine directory (shared SMB/FTP/HTTP browser + extract default)
     """
 
@@ -132,6 +141,11 @@ class AppConfigDialog:
         "database": "Database File",
         "config": "Dirracuda Config",
         "api_key": "Shodan API Key",
+        "censys_pat": "Censys PAT",
+        "censys_org_id": "Censys Organization ID",
+        "censys_max_pages": "Censys Max Pages",
+        "censys_query_hours": "Censys Query Hours",
+        "censys_page_size": "Censys Page Size",
         "quarantine": "Quarantine Directory",
         "smb_dork": "SMB Base Query",
         "ftp_dork": "FTP Base Query",
@@ -157,6 +171,13 @@ class AppConfigDialog:
         self.config_path = ""
         self.database_path = ""
         self.api_key = ""
+        self.censys_pat = ""
+        self.censys_org_id = ""
+        self.censys_credit_profile = "free_starter"
+        self.censys_max_pages = _CENSYS_DEFAULT_MAX_PAGES
+        self.censys_query_hours = _CENSYS_DEFAULT_QUERY_HOURS
+        self.censys_page_size = _CENSYS_DEFAULT_PAGE_SIZE
+        self.censys_ipv6_enabled = False
         self.quarantine_path = str(_DEFAULT_QUARANTINE_PATH)
         self.smb_dork = self.DORK_DEFAULTS["smb_dork"]
         self.ftp_dork = self.DORK_DEFAULTS["ftp_dork"]
@@ -171,6 +192,12 @@ class AppConfigDialog:
             "database": {"valid": False, "message": ""},
             "config": {"valid": False, "message": ""},
             "api_key": {"valid": False, "message": ""},
+            "censys_pat": {"valid": False, "message": ""},
+            "censys_org_id": {"valid": False, "message": ""},
+            "censys_credit_profile": {"valid": False, "message": ""},
+            "censys_max_pages": {"valid": False, "message": ""},
+            "censys_query_hours": {"valid": False, "message": ""},
+            "censys_page_size": {"valid": False, "message": ""},
             "quarantine": {"valid": False, "message": ""},
         }
 
@@ -181,6 +208,13 @@ class AppConfigDialog:
         self.database_var: Optional[tk.StringVar] = None
         self.config_var: Optional[tk.StringVar] = None
         self.api_key_var: Optional[tk.StringVar] = None
+        self.censys_pat_var: Optional[tk.StringVar] = None
+        self.censys_org_id_var: Optional[tk.StringVar] = None
+        self.censys_credit_profile_var: Optional[tk.StringVar] = None
+        self.censys_max_pages_var: Optional[tk.StringVar] = None
+        self.censys_query_hours_var: Optional[tk.StringVar] = None
+        self.censys_page_size_var: Optional[tk.StringVar] = None
+        self.censys_ipv6_enabled_var: Optional[tk.BooleanVar] = None
         self.quarantine_var: Optional[tk.StringVar] = None
         self.smb_dork_var: Optional[tk.StringVar] = None
         self.ftp_dork_var: Optional[tk.StringVar] = None
@@ -189,7 +223,10 @@ class AppConfigDialog:
         self.quarantine_browse_button: Optional[tk.Button] = None
         self.api_key_entry: Optional[tk.Entry] = None
         self.api_key_toggle_btn: Optional[tk.Button] = None
+        self.censys_pat_entry: Optional[tk.Entry] = None
+        self.censys_pat_toggle_btn: Optional[tk.Button] = None
         self.api_key_masked = True
+        self.censys_pat_masked = True
 
         self.clamav_enabled: bool = False
         self.clamav_backend: str = "auto"
@@ -258,6 +295,38 @@ class AppConfigDialog:
             return
 
         self.api_key = str(_get_nested(config_data, ("shodan", "api_key"), "") or "")
+
+        censys_raw = config_data.get("censys")
+        censys_cfg = censys_raw if isinstance(censys_raw, dict) else {}
+        self.censys_pat = str(censys_cfg.get("personal_access_token", "") or "").strip()
+        self.censys_org_id = str(censys_cfg.get("organization_id", "") or "").strip()
+        raw_profile = str(censys_cfg.get("credit_profile", "free_starter") or "").strip().lower()
+        self.censys_credit_profile = (
+            raw_profile if raw_profile in _CENSYS_CREDIT_PROFILES else "free_starter"
+        )
+        censys_defaults = _ensure_dict(censys_cfg.get("defaults"))
+        self.censys_max_pages = _coerce_int_cfg(
+            censys_defaults.get("max_pages"),
+            _CENSYS_DEFAULT_MAX_PAGES,
+            minimum=1,
+            maximum=100,
+        )
+        self.censys_query_hours = _coerce_int_cfg(
+            censys_defaults.get("query_hours"),
+            _CENSYS_DEFAULT_QUERY_HOURS,
+            minimum=1,
+            maximum=168,
+        )
+        self.censys_page_size = _coerce_int_cfg(
+            censys_defaults.get("page_size"),
+            _CENSYS_DEFAULT_PAGE_SIZE,
+            minimum=1,
+            maximum=100,
+        )
+        self.censys_ipv6_enabled = _coerce_bool_cfg(
+            censys_defaults.get("ipv6_enabled"),
+            False,
+        )
 
         quarantine_candidates = [
             _get_nested(config_data, ("file_browser", "quarantine_root"), ""),
@@ -330,6 +399,7 @@ class AppConfigDialog:
         self.dialog.grab_set()
         # Default to masked every time the dialog is opened.
         self.api_key_masked = True
+        self.censys_pat_masked = True
 
         self._center_window()
         self._create_header()
@@ -375,6 +445,7 @@ class AppConfigDialog:
         self._create_compact_card(container, "Core Paths", ("smbseek", "database", "config"))
         runtime_fields = ("api_key", "quarantine")
         self._create_compact_card(container, "Runtime Settings", runtime_fields)
+        self._create_censys_card(container)
         self._create_tmpfs_card(container)
         self._create_clamav_card(container)
         self._sync_quarantine_controls_for_tmpfs()
@@ -405,6 +476,73 @@ class AppConfigDialog:
 
         for field in fields:
             self._create_field_row(card, field)
+
+    def _create_censys_card(self, parent: tk.Widget) -> None:
+        card = tk.Frame(parent, highlightthickness=1, bd=0)
+        self.theme.apply_to_widget(card, "card")
+        try:
+            card.configure(
+                highlightbackground=self.theme.colors["border"],
+                highlightcolor=self.theme.colors["border"],
+            )
+        except tk.TclError:
+            pass
+        card.pack(fill=tk.X, pady=(0, 10))
+
+        heading = self.theme.create_styled_label(card, "Censys", "body")
+        heading.pack(anchor=tk.W, padx=12, pady=(10, 6))
+
+        for field in (
+            "censys_pat",
+            "censys_org_id",
+            "censys_max_pages",
+            "censys_query_hours",
+            "censys_page_size",
+        ):
+            self._create_field_row(card, field)
+
+        profile_row = tk.Frame(card)
+        self.theme.apply_to_widget(profile_row, "card")
+        profile_row.pack(fill=tk.X, padx=10, pady=(0, 8))
+
+        profile_label = self.theme.create_styled_label(
+            profile_row,
+            "Censys Credit Profile:",
+            "small",
+            fg=self.theme.colors["text_secondary"],
+        )
+        profile_label.pack(side=tk.LEFT, padx=(0, 8))
+
+        if self.censys_credit_profile_var is None:
+            self.censys_credit_profile_var = tk.StringVar(value=self.censys_credit_profile)
+        profile_menu = tk.OptionMenu(
+            profile_row,
+            self.censys_credit_profile_var,
+            *_CENSYS_CREDIT_PROFILES,
+        )
+        self.theme.apply_to_widget(profile_menu, "button_secondary")
+        profile_menu.pack(side=tk.LEFT)
+        self.censys_credit_profile_var.trace_add(
+            "write", lambda *_args: self._validate_field("censys_credit_profile")
+        )
+
+        profile_status_label = tk.Label(profile_row, text="", font=("Arial", 11, "bold"), width=2)
+        self.theme.apply_to_widget(profile_status_label, "text")
+        profile_status_label.pack(side=tk.RIGHT)
+        self.status_labels["censys_credit_profile"] = profile_status_label
+
+        ipv6_row = tk.Frame(card)
+        self.theme.apply_to_widget(ipv6_row, "card")
+        ipv6_row.pack(fill=tk.X, padx=10, pady=(0, 8))
+
+        self.censys_ipv6_enabled_var = tk.BooleanVar(value=self.censys_ipv6_enabled)
+        ipv6_cb = tk.Checkbutton(
+            ipv6_row,
+            text="Censys IPv6 Enabled",
+            variable=self.censys_ipv6_enabled_var,
+        )
+        self.theme.apply_to_widget(ipv6_cb, "checkbox")
+        ipv6_cb.pack(anchor=tk.W)
 
     def _create_dork_card(self, parent: tk.Widget) -> None:
         card = tk.Frame(parent, highlightthickness=1, bd=0)
@@ -623,7 +761,7 @@ class AppConfigDialog:
         label.pack(side=tk.LEFT, padx=(0, 8))
 
         variable = self._field_var(field)
-        show_mask = "*" if field == "api_key" else ""
+        show_mask = "*" if field in {"api_key", "censys_pat"} else ""
         entry = tk.Entry(row, textvariable=variable, font=("Arial", 10), show=show_mask)
         self.theme.apply_to_widget(entry, "entry")
         entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
@@ -641,6 +779,18 @@ class AppConfigDialog:
             toggle_button.pack(side=tk.LEFT, padx=(0, 8))
             self.api_key_toggle_btn = toggle_button
             self._update_api_key_mask_ui()
+        if field == "censys_pat":
+            self.censys_pat_entry = entry
+            toggle_button = tk.Button(
+                row,
+                text="👁️",
+                width=3,
+                command=self._toggle_censys_pat_mask,
+            )
+            self.theme.apply_to_widget(toggle_button, "button_secondary")
+            toggle_button.pack(side=tk.LEFT, padx=(0, 8))
+            self.censys_pat_toggle_btn = toggle_button
+            self._update_censys_pat_mask_ui()
 
         browse_needed = field in {"smbseek", "database", "config", "quarantine"}
         if browse_needed:
@@ -720,6 +870,18 @@ class AppConfigDialog:
         self.api_key_masked = not self.api_key_masked
         self._update_api_key_mask_ui()
 
+    def _update_censys_pat_mask_ui(self) -> None:
+        if self.censys_pat_entry:
+            self.censys_pat_entry.configure(show="*" if self.censys_pat_masked else "")
+        if self.censys_pat_toggle_btn:
+            self.censys_pat_toggle_btn.configure(
+                text="👁️" if self.censys_pat_masked else "🕶️"
+            )
+
+    def _toggle_censys_pat_mask(self) -> None:
+        self.censys_pat_masked = not self.censys_pat_masked
+        self._update_censys_pat_mask_ui()
+
     def _field_var(self, field: str) -> tk.StringVar:
         if field == "smbseek":
             if self.smbseek_var is None:
@@ -737,6 +899,26 @@ class AppConfigDialog:
             if self.api_key_var is None:
                 self.api_key_var = tk.StringVar(value=self.api_key)
             return self.api_key_var
+        if field == "censys_pat":
+            if self.censys_pat_var is None:
+                self.censys_pat_var = tk.StringVar(value=self.censys_pat)
+            return self.censys_pat_var
+        if field == "censys_org_id":
+            if self.censys_org_id_var is None:
+                self.censys_org_id_var = tk.StringVar(value=self.censys_org_id)
+            return self.censys_org_id_var
+        if field == "censys_max_pages":
+            if self.censys_max_pages_var is None:
+                self.censys_max_pages_var = tk.StringVar(value=str(self.censys_max_pages))
+            return self.censys_max_pages_var
+        if field == "censys_query_hours":
+            if self.censys_query_hours_var is None:
+                self.censys_query_hours_var = tk.StringVar(value=str(self.censys_query_hours))
+            return self.censys_query_hours_var
+        if field == "censys_page_size":
+            if self.censys_page_size_var is None:
+                self.censys_page_size_var = tk.StringVar(value=str(self.censys_page_size))
+            return self.censys_page_size_var
         if field == "smb_dork":
             if self.smb_dork_var is None:
                 self.smb_dork_var = tk.StringVar(value=self.smb_dork)
@@ -872,6 +1054,50 @@ class AppConfigDialog:
             self._update_status_label("api_key", result)
             return
 
+        if field == "censys_pat":
+            result = self._validate_optional_api_key(self.censys_pat_var.get())
+            self.validation_results["censys_pat"] = result
+            self._update_status_label("censys_pat", result)
+            return
+
+        if field == "censys_org_id":
+            result = self._validate_optional_censys_org_id(self.censys_org_id_var.get())
+            self.validation_results["censys_org_id"] = result
+            self._update_status_label("censys_org_id", result)
+            return
+
+        if field == "censys_credit_profile":
+            result = self._validate_censys_credit_profile(
+                self.censys_credit_profile_var.get()
+            )
+            self.validation_results["censys_credit_profile"] = result
+            self._update_status_label("censys_credit_profile", result)
+            return
+
+        if field == "censys_max_pages":
+            result = self._validate_bounded_integer(
+                self.censys_max_pages_var.get(), "Max pages", minimum=1, maximum=100
+            )
+            self.validation_results["censys_max_pages"] = result
+            self._update_status_label("censys_max_pages", result)
+            return
+
+        if field == "censys_query_hours":
+            result = self._validate_bounded_integer(
+                self.censys_query_hours_var.get(), "Query hours", minimum=1, maximum=168
+            )
+            self.validation_results["censys_query_hours"] = result
+            self._update_status_label("censys_query_hours", result)
+            return
+
+        if field == "censys_page_size":
+            result = self._validate_bounded_integer(
+                self.censys_page_size_var.get(), "Page size", minimum=1, maximum=100
+            )
+            self.validation_results["censys_page_size"] = result
+            self._update_status_label("censys_page_size", result)
+            return
+
         result = self._validate_quarantine_path(self.quarantine_var.get())
         self.validation_results["quarantine"] = result
         self._update_status_label("quarantine", result)
@@ -971,6 +1197,45 @@ class AppConfigDialog:
             return {"valid": False, "message": "API key should not contain whitespace."}
         return {"valid": True, "message": "API key set."}
 
+    def _validate_optional_api_key(self, value: str) -> Dict[str, Any]:
+        api_key = str(value or "").strip()
+        if not api_key:
+            return {"valid": True, "message": "Optional API key is empty."}
+        if any(ch.isspace() for ch in api_key):
+            return {"valid": False, "message": "API key should not contain whitespace."}
+        return {"valid": True, "message": "API key set."}
+
+    def _validate_optional_censys_org_id(self, value: str) -> Dict[str, Any]:
+        org_id = str(value or "").strip()
+        if not org_id:
+            return {"valid": True, "message": "Optional organization ID is empty."}
+        if not _CENSYS_ORG_ID_RE.match(org_id):
+            return {"valid": False, "message": "Organization ID must be a valid UUID."}
+        return {"valid": True, "message": "Organization ID is valid."}
+
+    def _validate_censys_credit_profile(self, value: str) -> Dict[str, Any]:
+        profile = str(value or "").strip().lower()
+        if profile in _CENSYS_CREDIT_PROFILES:
+            return {"valid": True, "message": "Credit profile is valid."}
+        return {"valid": False, "message": "Credit profile is invalid."}
+
+    def _validate_bounded_integer(
+        self, value: str, label: str, *, minimum: int, maximum: int
+    ) -> Dict[str, Any]:
+        raw = str(value or "").strip()
+        if not raw:
+            return {"valid": False, "message": f"{label} is required."}
+        try:
+            parsed = int(raw)
+        except (TypeError, ValueError):
+            return {"valid": False, "message": f"{label} must be a whole number."}
+        if parsed < minimum or parsed > maximum:
+            return {
+                "valid": False,
+                "message": f"{label} must be between {minimum} and {maximum}.",
+            }
+        return {"valid": True, "message": f"{label} is valid."}
+
     def _validate_quarantine_path(self, path: str) -> Dict[str, Any]:
         path = str(path or "").strip()
         if not path:
@@ -998,7 +1263,19 @@ class AppConfigDialog:
         label.config(text=symbol, fg=color)
 
     def _validate_all_fields(self) -> None:
-        for field in ["smbseek", "database", "config", "api_key", "quarantine"]:
+        for field in [
+            "smbseek",
+            "database",
+            "config",
+            "api_key",
+            "censys_pat",
+            "censys_org_id",
+            "censys_credit_profile",
+            "censys_max_pages",
+            "censys_query_hours",
+            "censys_page_size",
+            "quarantine",
+        ]:
             self._validate_field(field)
 
     def _messagebox_parent(self) -> tk.Widget:
@@ -1064,10 +1341,65 @@ class AppConfigDialog:
             )
             return False
 
+        invalid_censys = [
+            field
+            for field in (
+                "censys_pat",
+                "censys_org_id",
+                "censys_credit_profile",
+                "censys_max_pages",
+                "censys_query_hours",
+                "censys_page_size",
+            )
+            if not self.validation_results[field]["valid"]
+        ]
+        if invalid_censys:
+            details = "\n".join(
+                f"- {self.FIELD_LABELS[field]}: {self.validation_results[field]['message']}"
+                for field in invalid_censys
+            )
+            messagebox.showerror(
+                "Configuration Validation Failed",
+                f"Please fix the following Censys settings:\n\n{details}",
+                parent=self._messagebox_parent(),
+            )
+            return False
+
         new_smbseek = self.smbseek_var.get().strip()
         new_database = self.database_var.get().strip()
         new_config_path = self.config_var.get().strip()
         new_api_key = self.api_key_var.get().strip()
+        new_censys_pat = self.censys_pat_var.get().strip()
+        new_censys_org_id = self.censys_org_id_var.get().strip()
+        raw_censys_profile = self.censys_credit_profile_var.get().strip().lower()
+        new_censys_profile = (
+            raw_censys_profile
+            if raw_censys_profile in _CENSYS_CREDIT_PROFILES
+            else "free_starter"
+        )
+        new_censys_defaults = {
+            "max_pages": _coerce_int_cfg(
+                self.censys_max_pages_var.get(),
+                _CENSYS_DEFAULT_MAX_PAGES,
+                minimum=1,
+                maximum=100,
+            ),
+            "query_hours": _coerce_int_cfg(
+                self.censys_query_hours_var.get(),
+                _CENSYS_DEFAULT_QUERY_HOURS,
+                minimum=1,
+                maximum=168,
+            ),
+            "page_size": _coerce_int_cfg(
+                self.censys_page_size_var.get(),
+                _CENSYS_DEFAULT_PAGE_SIZE,
+                minimum=1,
+                maximum=100,
+            ),
+            "ipv6_enabled": bool(self.censys_ipv6_enabled_var.get())
+            if self.censys_ipv6_enabled_var
+            else False,
+        }
         new_quarantine = self.quarantine_var.get().strip()
 
         _timeout_var = getattr(self, "clamav_timeout_var", None)
@@ -1150,6 +1482,12 @@ class AppConfigDialog:
                     new_quarantine,
                     clamav_settings=new_clamav,
                     quarantine_tmpfs_settings=new_quarantine_tmpfs,
+                    censys_settings={
+                        "personal_access_token": new_censys_pat,
+                        "organization_id": new_censys_org_id,
+                        "credit_profile": new_censys_profile,
+                        "defaults": new_censys_defaults,
+                    },
                 )
                 path_obj.parent.mkdir(parents=True, exist_ok=True)
                 path_obj.write_text(json.dumps(config_data, indent=2), encoding="utf-8")
@@ -1171,6 +1509,12 @@ class AppConfigDialog:
                     new_quarantine,
                     clamav_settings=new_clamav,
                     quarantine_tmpfs_settings=new_quarantine_tmpfs,
+                    censys_settings={
+                        "personal_access_token": new_censys_pat,
+                        "organization_id": new_censys_org_id,
+                        "credit_profile": new_censys_profile,
+                        "defaults": new_censys_defaults,
+                    },
                 )
                 path_obj = Path(new_config_path).expanduser()
                 path_obj.parent.mkdir(parents=True, exist_ok=True)
@@ -1180,6 +1524,13 @@ class AppConfigDialog:
             self.database_path = normalized_database_str
             self.config_path = new_config_path
             self.api_key = new_api_key
+            self.censys_pat = new_censys_pat
+            self.censys_org_id = new_censys_org_id
+            self.censys_credit_profile = new_censys_profile
+            self.censys_max_pages = new_censys_defaults["max_pages"]
+            self.censys_query_hours = new_censys_defaults["query_hours"]
+            self.censys_page_size = new_censys_defaults["page_size"]
+            self.censys_ipv6_enabled = new_censys_defaults["ipv6_enabled"]
             self.quarantine_path = new_quarantine
             self.clamav_enabled = new_clamav["enabled"]
             self.clamav_backend = new_clamav["backend"]
@@ -1256,6 +1607,7 @@ class AppConfigDialog:
         quarantine_path: str,
         clamav_settings: Optional[Dict[str, Any]] = None,
         quarantine_tmpfs_settings: Optional[Dict[str, Any]] = None,
+        censys_settings: Optional[Dict[str, Any]] = None,
     ) -> None:
         # Shodan API key drives scan processes.
         _set_nested(config_data, ("shodan", "api_key"), api_key)
@@ -1281,6 +1633,59 @@ class AppConfigDialog:
 
         if quarantine_tmpfs_settings is not None:
             _set_nested(config_data, ("quarantine", "use_tmpfs"), quarantine_tmpfs_settings["use_tmpfs"])
+
+        if censys_settings is not None:
+            _set_nested(
+                config_data,
+                ("censys", "personal_access_token"),
+                str(censys_settings.get("personal_access_token", "") or "").strip(),
+            )
+            _set_nested(
+                config_data,
+                ("censys", "organization_id"),
+                str(censys_settings.get("organization_id", "") or "").strip(),
+            )
+            profile = str(censys_settings.get("credit_profile", "free_starter") or "").strip().lower()
+            if profile not in _CENSYS_CREDIT_PROFILES:
+                profile = "free_starter"
+            _set_nested(config_data, ("censys", "credit_profile"), profile)
+
+            defaults = _ensure_dict(censys_settings.get("defaults"))
+            _set_nested(
+                config_data,
+                ("censys", "defaults", "max_pages"),
+                _coerce_int_cfg(
+                    defaults.get("max_pages"),
+                    _CENSYS_DEFAULT_MAX_PAGES,
+                    minimum=1,
+                    maximum=100,
+                ),
+            )
+            _set_nested(
+                config_data,
+                ("censys", "defaults", "query_hours"),
+                _coerce_int_cfg(
+                    defaults.get("query_hours"),
+                    _CENSYS_DEFAULT_QUERY_HOURS,
+                    minimum=1,
+                    maximum=168,
+                ),
+            )
+            _set_nested(
+                config_data,
+                ("censys", "defaults", "page_size"),
+                _coerce_int_cfg(
+                    defaults.get("page_size"),
+                    _CENSYS_DEFAULT_PAGE_SIZE,
+                    minimum=1,
+                    maximum=100,
+                ),
+            )
+            _set_nested(
+                config_data,
+                ("censys", "defaults", "ipv6_enabled"),
+                bool(defaults.get("ipv6_enabled", False)),
+            )
 
 
 def open_app_config_dialog(

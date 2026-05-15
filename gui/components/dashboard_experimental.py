@@ -41,6 +41,7 @@ def handle_experimental_button_click(widget) -> None:
         "open_reddit_post_db": widget._open_reddit_post_db,
         "open_se_dork_results_db": lambda: open_se_dork_results_db(widget),
         "open_censys_results_db": lambda: open_censys_results_db(widget),
+        "open_app_config": widget._open_config_editor,
         "open_dorkbook": lambda: open_dorkbook(widget),
         "open_keymaster": lambda: open_keymaster(widget),
         "parent": widget.parent,
