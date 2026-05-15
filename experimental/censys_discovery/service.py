@@ -4,6 +4,7 @@ Run orchestration for the censys_discovery module.
 Entry points:
     run_ftp_discovery(options: CensysRunOptions, db_path=None) -> CensysRunResult
     run_http_discovery(options: CensysRunOptions, db_path=None) -> CensysRunResult
+    run_smb_discovery(options: CensysRunOptions, db_path=None) -> CensysRunResult
 
 Transaction ownership:
     - Scope-branched preflight (get_org_credits / get_user_credits) fires before any DB I/O.
@@ -233,3 +234,10 @@ def run_http_discovery(
     db_path: Optional[Path] = None,
 ) -> CensysRunResult:
     return _run_discovery(options, db_path, "HTTP", extra_fields=get_extra_fields("HTTP"))
+
+
+def run_smb_discovery(
+    options: CensysRunOptions,
+    db_path: Optional[Path] = None,
+) -> CensysRunResult:
+    return _run_discovery(options, db_path, "SMB", extra_fields=get_extra_fields("SMB"))

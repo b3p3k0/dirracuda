@@ -80,6 +80,12 @@ def test_get_extra_fields_ftp():
     assert "host.services.ftp.status_code" in fields
 
 
+def test_get_extra_fields_smb():
+    fields = get_extra_fields("SMB")
+    assert "host.services.software.product" in fields
+    assert "host.services.software.version" in fields
+
+
 def test_get_extra_fields_case_insensitive():
     assert get_extra_fields("http") == get_extra_fields("HTTP")
 
