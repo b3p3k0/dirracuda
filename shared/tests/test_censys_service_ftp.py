@@ -35,7 +35,13 @@ from experimental.censys_discovery.service import run_ftp_discovery
 
 
 def _options(**kwargs) -> CensysRunOptions:
-    defaults = dict(pat="testpat-secret", protocol="FTP", max_pages=3, page_size=50)
+    defaults = dict(
+        pat="testpat-secret",
+        protocol="FTP",
+        max_pages=3,
+        page_size=50,
+        org_id="11111111-2222-3333-4444-555555555555",
+    )
     defaults.update(kwargs)
     return CensysRunOptions(**defaults)
 
@@ -94,7 +100,7 @@ def _count_rows(db: Path, table: str) -> int:
 def test_run_ftp_discovery_auth_unauthorized_no_db_write(tmp_path: Path) -> None:
     db = tmp_path / "censys.db"
     with patch("experimental.censys_discovery.service.CensysClient") as mock_cls:
-        mock_cls.return_value.get_user_credits.return_value = _fail_auth(AUTH_UNAUTHORIZED)
+        mock_cls.return_value.get_org_credits.return_value = _fail_auth(AUTH_UNAUTHORIZED)
         result = run_ftp_discovery(_options(), db_path=db)
 
     assert result.ok is False
@@ -106,7 +112,7 @@ def test_run_ftp_discovery_auth_unauthorized_no_db_write(tmp_path: Path) -> None
 def test_run_ftp_discovery_auth_forbidden_no_db_write(tmp_path: Path) -> None:
     db = tmp_path / "censys.db"
     with patch("experimental.censys_discovery.service.CensysClient") as mock_cls:
-        mock_cls.return_value.get_user_credits.return_value = _fail_auth(AUTH_FORBIDDEN)
+        mock_cls.return_value.get_org_credits.return_value = _fail_auth(AUTH_FORBIDDEN)
         result = run_ftp_discovery(_options(), db_path=db)
 
     assert result.ok is False
@@ -122,7 +128,7 @@ def test_run_ftp_discovery_preflight_network_error_no_db_write(tmp_path: Path) -
         error=ApiError(NETWORK_ERROR, None, "connection refused"),
     )
     with patch("experimental.censys_discovery.service.CensysClient") as mock_cls:
-        mock_cls.return_value.get_user_credits.return_value = net_err
+        mock_cls.return_value.get_org_credits.return_value = net_err
         result = run_ftp_discovery(_options(), db_path=db)
 
     assert result.ok is False
@@ -134,7 +140,7 @@ def test_run_ftp_discovery_preflight_network_error_no_db_write(tmp_path: Path) -
 def test_run_ftp_discovery_preflight_exception_no_db_write(tmp_path: Path) -> None:
     db = tmp_path / "censys.db"
     with patch("experimental.censys_discovery.service.CensysClient") as mock_cls:
-        mock_cls.return_value.get_user_credits.side_effect = RuntimeError("unexpected")
+        mock_cls.return_value.get_org_credits.side_effect = RuntimeError("unexpected")
         result = run_ftp_discovery(_options(), db_path=db)
 
     assert result.ok is False
@@ -172,6 +178,17 @@ def test_run_ftp_discovery_org_scope_auth_fail_no_db_write(tmp_path: Path) -> No
     assert not db.exists()
 
 
+def test_run_ftp_discovery_requires_org_id(tmp_path: Path) -> None:
+    db = tmp_path / "censys.db"
+    result = run_ftp_discovery(_options(org_id=None), db_path=db)
+
+    assert result.ok is False
+    assert result.run_id is None
+    assert result.status == RUN_STATUS_ERROR
+    assert "organization_id" in (result.error or "")
+    assert not db.exists()
+
+
 # ---------------------------------------------------------------------------
 # DB setup failure
 # ---------------------------------------------------------------------------
@@ -180,7 +197,7 @@ def test_run_ftp_discovery_org_scope_auth_fail_no_db_write(tmp_path: Path) -> No
 def test_run_ftp_discovery_db_setup_failure(tmp_path: Path) -> None:
     db = tmp_path / "censys.db"
     with patch("experimental.censys_discovery.service.CensysClient") as mock_cls:
-        mock_cls.return_value.get_user_credits.return_value = _ok_credits()
+        mock_cls.return_value.get_org_credits.return_value = _ok_credits()
         with patch("experimental.censys_discovery.service.init_db", side_effect=RuntimeError("disk full")):
             result = run_ftp_discovery(_options(), db_path=db)
 
@@ -198,7 +215,7 @@ def test_run_ftp_discovery_page1_auth_unauthorized_deletes_run_row(tmp_path: Pat
     db = tmp_path / "censys.db"
     with patch("experimental.censys_discovery.service.CensysClient") as mock_cls:
         inst = mock_cls.return_value
-        inst.get_user_credits.return_value = _ok_credits()
+        inst.get_org_credits.return_value = _ok_credits()
         inst.search_query.return_value = _fail_auth(AUTH_UNAUTHORIZED)
         result = run_ftp_discovery(_options(), db_path=db)
 
@@ -213,7 +230,7 @@ def test_run_ftp_discovery_page1_auth_forbidden_deletes_run_row(tmp_path: Path) 
     db = tmp_path / "censys.db"
     with patch("experimental.censys_discovery.service.CensysClient") as mock_cls:
         inst = mock_cls.return_value
-        inst.get_user_credits.return_value = _ok_credits()
+        inst.get_org_credits.return_value = _ok_credits()
         inst.search_query.return_value = _fail_auth(AUTH_FORBIDDEN)
         result = run_ftp_discovery(_options(), db_path=db)
 
@@ -233,7 +250,7 @@ def test_run_ftp_discovery_page2_auth_forbidden_deletes_run_row_no_results(tmp_p
     db = tmp_path / "censys.db"
     with patch("experimental.censys_discovery.service.CensysClient") as mock_cls:
         inst = mock_cls.return_value
-        inst.get_user_credits.return_value = _ok_credits()
+        inst.get_org_credits.return_value = _ok_credits()
         inst.search_query.side_effect = [
             _search_page(_items(3), cursor="tok1"),
             _fail_auth(AUTH_FORBIDDEN),
@@ -256,7 +273,7 @@ def test_run_ftp_discovery_page2_network_error_commits_partial_data(tmp_path: Pa
     db = tmp_path / "censys.db"
     with patch("experimental.censys_discovery.service.CensysClient") as mock_cls:
         inst = mock_cls.return_value
-        inst.get_user_credits.return_value = _ok_credits()
+        inst.get_org_credits.return_value = _ok_credits()
         inst.search_query.side_effect = [
             _search_page(_items(3), cursor="tok1"),
             _search_error(NETWORK_ERROR),
@@ -280,7 +297,7 @@ def test_run_ftp_discovery_network_error_after_commit1(tmp_path: Path) -> None:
     db = tmp_path / "censys.db"
     with patch("experimental.censys_discovery.service.CensysClient") as mock_cls:
         inst = mock_cls.return_value
-        inst.get_user_credits.return_value = _ok_credits()
+        inst.get_org_credits.return_value = _ok_credits()
         inst.search_query.return_value = _search_error(NETWORK_ERROR)
         result = run_ftp_discovery(_options(), db_path=db)
 
@@ -304,7 +321,7 @@ def test_run_ftp_discovery_success_returns_ok(tmp_path: Path) -> None:
     db = tmp_path / "censys.db"
     with patch("experimental.censys_discovery.service.CensysClient") as mock_cls:
         inst = mock_cls.return_value
-        inst.get_user_credits.return_value = _ok_credits()
+        inst.get_org_credits.return_value = _ok_credits()
         inst.search_query.return_value = _search_page(_items(5), cursor=None)
         result = run_ftp_discovery(_options(), db_path=db)
 
@@ -320,7 +337,7 @@ def test_run_ftp_discovery_success_persists_to_db(tmp_path: Path) -> None:
     db = tmp_path / "censys.db"
     with patch("experimental.censys_discovery.service.CensysClient") as mock_cls:
         inst = mock_cls.return_value
-        inst.get_user_credits.return_value = _ok_credits()
+        inst.get_org_credits.return_value = _ok_credits()
         inst.search_query.return_value = _search_page(_items(4), cursor=None)
         result = run_ftp_discovery(_options(), db_path=db)
 
@@ -339,7 +356,7 @@ def test_run_ftp_discovery_deduped_count_correct(tmp_path: Path) -> None:
     )
     with patch("experimental.censys_discovery.service.CensysClient") as mock_cls:
         inst = mock_cls.return_value
-        inst.get_user_credits.return_value = _ok_credits()
+        inst.get_org_credits.return_value = _ok_credits()
         inst.search_query.return_value = _search_page([same_item, same_item], cursor=None)
         result = run_ftp_discovery(_options(), db_path=db)
 
@@ -352,7 +369,7 @@ def test_run_ftp_discovery_respects_max_pages(tmp_path: Path) -> None:
     db = tmp_path / "censys.db"
     with patch("experimental.censys_discovery.service.CensysClient") as mock_cls:
         inst = mock_cls.return_value
-        inst.get_user_credits.return_value = _ok_credits()
+        inst.get_org_credits.return_value = _ok_credits()
         # Always returns a cursor — would loop unbounded without the max_pages cap
         inst.search_query.return_value = _search_page(_items(2), cursor="always")
         run_ftp_discovery(_options(max_pages=3), db_path=db)
@@ -364,7 +381,7 @@ def test_run_ftp_discovery_stops_when_no_next_cursor(tmp_path: Path) -> None:
     db = tmp_path / "censys.db"
     with patch("experimental.censys_discovery.service.CensysClient") as mock_cls:
         inst = mock_cls.return_value
-        inst.get_user_credits.return_value = _ok_credits()
+        inst.get_org_credits.return_value = _ok_credits()
         inst.search_query.return_value = _search_page(_items(2), cursor=None)
         run_ftp_discovery(_options(max_pages=5), db_path=db)
 
@@ -380,7 +397,7 @@ def test_run_ftp_discovery_error_message_never_contains_pat(tmp_path: Path) -> N
     unique_pat = "SUPER-SECRET-PAT-XYZ-12345"
     db = tmp_path / "censys.db"
     with patch("experimental.censys_discovery.service.CensysClient") as mock_cls:
-        mock_cls.return_value.get_user_credits.return_value = _fail_auth(AUTH_UNAUTHORIZED)
+        mock_cls.return_value.get_org_credits.return_value = _fail_auth(AUTH_UNAUTHORIZED)
         result = run_ftp_discovery(_options(pat=unique_pat), db_path=db)
 
     assert result.error is not None
@@ -395,7 +412,7 @@ def test_run_ftp_discovery_error_message_never_contains_pat(tmp_path: Path) -> N
 def test_run_ftp_discovery_insert_run_fails_returns_no_run_id(tmp_path: Path) -> None:
     db = tmp_path / "censys.db"
     with patch("experimental.censys_discovery.service.CensysClient") as mock_cls:
-        mock_cls.return_value.get_user_credits.return_value = _ok_credits()
+        mock_cls.return_value.get_org_credits.return_value = _ok_credits()
         with patch("experimental.censys_discovery.service.insert_run", side_effect=RuntimeError("DB locked")):
             result = run_ftp_discovery(_options(), db_path=db)
 

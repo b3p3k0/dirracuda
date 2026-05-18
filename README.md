@@ -485,26 +485,18 @@ Key Preview format: keys longer than 8 characters show as `first4 + asterisks + 
 
 ### Censys Discovery
 
-Censys Discovery queries the Censys Platform v3 API for open FTP, HTTP, and SMB services and stores results in a sidecar DB for review and promotion.
+Development status: **suspended**.
 
-Quick start:
-1. Add your Censys PAT to `censys.personal_access_token` in `conf/config.json` (or via GUI Settings).
-2. Dashboard → `⚗ Experimental` → `Censys Discovery` tab.
-3. The tab shows your credit profile and live balance on open.
-4. Click `Open Results` to browse prior scan results, promote to the main DB, or view details.
+Reason:
+- Free-tier Censys API access does not provide candidate-list query endpoints required for in-app discovery runs.
 
-Sidecar DB path: `~/.dirracuda/data/experimental/censys_discovery.db`
+What is retained:
+- Backend module and config contract remain in-repo for future reactivation.
+- Sidecar DB path remains `~/.dirracuda/data/experimental/censys_discovery.db`.
 
-Credit profile:
-- `free_starter` — default; lower page limits
-- `search_enterprise` — set `censys.credit_profile` in `conf/config.json`
-
-Optional: set `censys.organization_id` (UUID) to scope credit queries to your org.
-
-Results browser:
-- Columns: `Protocol`, `IP Address`, `Port`, `Transport`, `Banner`, `Scanned`
-- Actions: right-click → `Add to dirracuda DB` (single) or multi-select bulk import with progress/cancel; double-click opens read-only details
-- Promotion note: bulk import runs in background with BatchStatusDialog; new rows may be hidden by active filters
+Current UI state:
+- No Censys tab in Experimental Features.
+- No Censys settings tab in Application Configuration.
 
 ## Advanced
 

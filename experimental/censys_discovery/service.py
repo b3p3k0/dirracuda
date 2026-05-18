@@ -7,7 +7,7 @@ Entry points:
     run_smb_discovery(options: CensysRunOptions, db_path=None) -> CensysRunResult
 
 Transaction ownership:
-    - Scope-branched preflight (get_org_credits / get_user_credits) fires before any DB I/O.
+    - Org-scoped preflight (get_org_credits) fires before any DB I/O.
       Any preflight failure returns ERROR with run_id=None and no DB writes.
     - init_db() + open_connection() handle DB setup; failures return structured RunResult.
     - COMMIT 1 durably records the run row before any search network I/O.
@@ -46,6 +46,10 @@ from experimental.censys_discovery.store import (
 )
 
 _AUTH_REASON_CODES = frozenset({AUTH_UNAUTHORIZED, AUTH_FORBIDDEN})
+_ORG_REQUIRED_ERROR = (
+    "Censys API discovery requires censys.organization_id. "
+    "Set a valid organization UUID in config before running."
+)
 
 
 def _utcnow() -> str:
@@ -109,13 +113,20 @@ def _run_discovery(
             status=RUN_STATUS_ERROR, error=str(exc),
         )
 
-    # 2. Scope-branched auth preflight — no DB I/O before this resolves
+    if not options.org_id:
+        return CensysRunResult(
+            ok=False,
+            run_id=None,
+            fetched_count=0,
+            deduped_count=0,
+            status=RUN_STATUS_ERROR,
+            error=_ORG_REQUIRED_ERROR,
+        )
+
+    # 2. Org-scoped auth preflight — no DB I/O before this resolves
     try:
         client = CensysClient(pat=options.pat)
-        if options.org_id:
-            preflight = client.get_org_credits(options.org_id)
-        else:
-            preflight = client.get_user_credits()
+        preflight = client.get_org_credits(options.org_id)
     except Exception as exc:
         return CensysRunResult(
             ok=False, run_id=None, fetched_count=0, deduped_count=0,
@@ -126,7 +137,10 @@ def _run_discovery(
         return CensysRunResult(
             ok=False, run_id=None, fetched_count=0, deduped_count=0,
             status=RUN_STATUS_ERROR,
-            error=f"Preflight failed ({err.reason_code}): {err.message}",
+            error=(
+                f"Preflight failed ({err.reason_code}): {err.message} "
+                "Verify org ID and Censys API entitlements for this organization."
+            ),
         )
 
     # 3. DB setup
@@ -175,7 +189,10 @@ def _run_discovery(
             return CensysRunResult(
                 ok=False, run_id=None, fetched_count=0, deduped_count=0,
                 status=RUN_STATUS_ERROR,
-                error=f"Search auth failed ({page_error.reason_code}): {page_error.message}",
+                error=(
+                    f"Search API access denied ({page_error.reason_code}): {page_error.message} "
+                    "Confirm organization API access and search permissions."
+                ),
             )
 
         # Insert accumulated items

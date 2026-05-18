@@ -42,4 +42,12 @@ Root cause: settings_manager is a SettingsManager with no .config attribute — 
 Guardrail added: always use load_config() to obtain SMBSeekConfig from settings_manager; verify context injection point before adding redundant wiring; catch ValueError from get_censys_org_id() separately from PAT errors; guard frame.after() in workers against widget destruction; load config once and reuse (no redundant disk reads)
 Tests added/updated: D1–D9 (credit estimate, balance success/error, PAT/org-id error paths, thread-guard)
 Residual risk: live balance fetch silently skipped if PAT removed between tab open and worker completion; acceptable for this card
+
+Card: C10.z
+Date: 2026-05-18
+What failed / almost failed: free-tier API constraints made query-endpoint UX appear broken even when PAT/balance surfaces looked healthy
+Root cause: free-tier Censys API entitlements are lookup-only; candidate-list query endpoints required by discovery runs are not generally available
+Guardrail added: suspend Censys UI surfaces until entitlement-aware candidate generation is designed; retain backend module/config contract unchanged for controlled reactivation
+Tests added/updated: experimental registry/context absence checks; App Config hidden-Censys validation/preservation coverage
+Residual risk: stale docs or dormant code confusion if suspension status is not kept explicit in future cards
 ```

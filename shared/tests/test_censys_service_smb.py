@@ -36,7 +36,13 @@ from experimental.censys_discovery.service import run_smb_discovery
 
 
 def _options(**kwargs) -> CensysRunOptions:
-    defaults = dict(pat="testpat-secret", protocol="SMB", max_pages=3, page_size=50)
+    defaults = dict(
+        pat="testpat-secret",
+        protocol="SMB",
+        max_pages=3,
+        page_size=50,
+        org_id="11111111-2222-3333-4444-555555555555",
+    )
     defaults.update(kwargs)
     return CensysRunOptions(**defaults)
 
@@ -110,7 +116,7 @@ def test_smb_wrong_protocol_rejected(tmp_path: Path) -> None:
 def test_smb_preflight_unauthorized_no_write(tmp_path: Path) -> None:
     db = tmp_path / "censys.db"
     with patch("experimental.censys_discovery.service.CensysClient") as mock_cls:
-        mock_cls.return_value.get_user_credits.return_value = _fail_auth(AUTH_UNAUTHORIZED)
+        mock_cls.return_value.get_org_credits.return_value = _fail_auth(AUTH_UNAUTHORIZED)
         result = run_smb_discovery(_options(), db_path=db)
 
     assert result.ok is False
@@ -122,7 +128,7 @@ def test_smb_preflight_unauthorized_no_write(tmp_path: Path) -> None:
 def test_smb_preflight_forbidden_no_write(tmp_path: Path) -> None:
     db = tmp_path / "censys.db"
     with patch("experimental.censys_discovery.service.CensysClient") as mock_cls:
-        mock_cls.return_value.get_user_credits.return_value = _fail_auth(AUTH_FORBIDDEN)
+        mock_cls.return_value.get_org_credits.return_value = _fail_auth(AUTH_FORBIDDEN)
         result = run_smb_discovery(_options(), db_path=db)
 
     assert result.ok is False
@@ -138,7 +144,7 @@ def test_smb_preflight_network_error_no_write(tmp_path: Path) -> None:
         error=ApiError(NETWORK_ERROR, None, "connection refused"),
     )
     with patch("experimental.censys_discovery.service.CensysClient") as mock_cls:
-        mock_cls.return_value.get_user_credits.return_value = net_err
+        mock_cls.return_value.get_org_credits.return_value = net_err
         result = run_smb_discovery(_options(), db_path=db)
 
     assert result.ok is False
@@ -172,7 +178,7 @@ def test_smb_org_scoped_preflight(tmp_path: Path) -> None:
 def test_smb_db_setup_failure(tmp_path: Path) -> None:
     db = tmp_path / "censys.db"
     with patch("experimental.censys_discovery.service.CensysClient") as mock_cls:
-        mock_cls.return_value.get_user_credits.return_value = _ok_credits()
+        mock_cls.return_value.get_org_credits.return_value = _ok_credits()
         with patch("experimental.censys_discovery.service.init_db", side_effect=RuntimeError("disk full")):
             result = run_smb_discovery(_options(), db_path=db)
 
@@ -190,7 +196,7 @@ def test_smb_page1_auth_failure_deletes_run_row(tmp_path: Path) -> None:
     db = tmp_path / "censys.db"
     with patch("experimental.censys_discovery.service.CensysClient") as mock_cls:
         inst = mock_cls.return_value
-        inst.get_user_credits.return_value = _ok_credits()
+        inst.get_org_credits.return_value = _ok_credits()
         inst.search_query.return_value = _fail_auth(AUTH_UNAUTHORIZED)
         result = run_smb_discovery(_options(), db_path=db)
 
@@ -211,7 +217,7 @@ def test_smb_page2_auth_failure_deletes_run_row(tmp_path: Path) -> None:
     db = tmp_path / "censys.db"
     with patch("experimental.censys_discovery.service.CensysClient") as mock_cls:
         inst = mock_cls.return_value
-        inst.get_user_credits.return_value = _ok_credits()
+        inst.get_org_credits.return_value = _ok_credits()
         inst.search_query.side_effect = [
             _search_page(_items(3), cursor="tok1"),
             _fail_auth(AUTH_FORBIDDEN),
@@ -234,7 +240,7 @@ def test_smb_partial_non_auth_error_commits_partial(tmp_path: Path) -> None:
     db = tmp_path / "censys.db"
     with patch("experimental.censys_discovery.service.CensysClient") as mock_cls:
         inst = mock_cls.return_value
-        inst.get_user_credits.return_value = _ok_credits()
+        inst.get_org_credits.return_value = _ok_credits()
         inst.search_query.side_effect = [
             _search_page(_items(3), cursor="tok1"),
             _search_error(NETWORK_ERROR),
@@ -258,7 +264,7 @@ def test_smb_success_single_page(tmp_path: Path) -> None:
     db = tmp_path / "censys.db"
     with patch("experimental.censys_discovery.service.CensysClient") as mock_cls:
         inst = mock_cls.return_value
-        inst.get_user_credits.return_value = _ok_credits()
+        inst.get_org_credits.return_value = _ok_credits()
         inst.search_query.return_value = _search_page(_items(5), cursor=None)
         result = run_smb_discovery(_options(), db_path=db)
 
@@ -276,7 +282,7 @@ def test_smb_success_multi_page(tmp_path: Path) -> None:
     db = tmp_path / "censys.db"
     with patch("experimental.censys_discovery.service.CensysClient") as mock_cls:
         inst = mock_cls.return_value
-        inst.get_user_credits.return_value = _ok_credits()
+        inst.get_org_credits.return_value = _ok_credits()
         inst.search_query.side_effect = [
             _search_page(_items(3, base="10.1.0"), cursor="tok1"),
             _search_page(_items(2, base="10.2.0"), cursor=None),
@@ -303,7 +309,7 @@ def test_smb_deduplication(tmp_path: Path) -> None:
     )
     with patch("experimental.censys_discovery.service.CensysClient") as mock_cls:
         inst = mock_cls.return_value
-        inst.get_user_credits.return_value = _ok_credits()
+        inst.get_org_credits.return_value = _ok_credits()
         inst.search_query.return_value = _search_page([same_item, same_item], cursor=None)
         result = run_smb_discovery(_options(), db_path=db)
 
@@ -321,7 +327,7 @@ def test_smb_pat_not_in_error_on_preflight_failure(tmp_path: Path) -> None:
     unique_pat = "SMB-SECRET-PAT-ABC-99999"
     db = tmp_path / "censys.db"
     with patch("experimental.censys_discovery.service.CensysClient") as mock_cls:
-        mock_cls.return_value.get_user_credits.return_value = _fail_auth(AUTH_UNAUTHORIZED)
+        mock_cls.return_value.get_org_credits.return_value = _fail_auth(AUTH_UNAUTHORIZED)
         result = run_smb_discovery(_options(pat=unique_pat), db_path=db)
 
     assert result.error is not None
@@ -333,7 +339,7 @@ def test_smb_pat_not_in_error_on_search_failure(tmp_path: Path) -> None:
     db = tmp_path / "censys.db"
     with patch("experimental.censys_discovery.service.CensysClient") as mock_cls:
         inst = mock_cls.return_value
-        inst.get_user_credits.return_value = _ok_credits()
+        inst.get_org_credits.return_value = _ok_credits()
         inst.search_query.return_value = _search_error(NETWORK_ERROR, msg="connection reset")
         result = run_smb_discovery(_options(pat=unique_pat), db_path=db)
 
@@ -349,7 +355,7 @@ def test_smb_pat_not_in_error_on_search_failure(tmp_path: Path) -> None:
 def test_smb_run_insert_failure(tmp_path: Path) -> None:
     db = tmp_path / "censys.db"
     with patch("experimental.censys_discovery.service.CensysClient") as mock_cls:
-        mock_cls.return_value.get_user_credits.return_value = _ok_credits()
+        mock_cls.return_value.get_org_credits.return_value = _ok_credits()
         with patch("experimental.censys_discovery.service.insert_run", side_effect=RuntimeError("DB locked")):
             result = run_smb_discovery(_options(), db_path=db)
 
@@ -368,7 +374,7 @@ def test_smb_protocol_tag_stored_as_SMB(tmp_path: Path) -> None:
     db = tmp_path / "censys.db"
     with patch("experimental.censys_discovery.service.CensysClient") as mock_cls:
         inst = mock_cls.return_value
-        inst.get_user_credits.return_value = _ok_credits()
+        inst.get_org_credits.return_value = _ok_credits()
         inst.search_query.return_value = _search_page(_items(1), cursor=None)
         result = run_smb_discovery(_options(), db_path=db)
 
@@ -389,7 +395,7 @@ def test_smb_extra_fields_passed_to_search_query(tmp_path: Path) -> None:
     db = tmp_path / "censys.db"
     with patch("experimental.censys_discovery.service.CensysClient") as mock_cls:
         inst = mock_cls.return_value
-        inst.get_user_credits.return_value = _ok_credits()
+        inst.get_org_credits.return_value = _ok_credits()
         inst.search_query.return_value = _search_page([], cursor=None)
         run_smb_discovery(_options(), db_path=db)
 

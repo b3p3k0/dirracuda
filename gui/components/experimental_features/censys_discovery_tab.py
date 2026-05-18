@@ -19,6 +19,10 @@ _PROTOCOLS = ("FTP", "HTTP", "SMB")
 _PLACEHOLDER_STATUS = "Provider: Censys Platform v3 (not configured)"
 _PLACEHOLDER_CREDIT = "Credit estimate: — (PAT not configured)"
 _PLACEHOLDER_BALANCE = "Live balance: — (not available)"
+_ORG_REQUIRED_STATUS = (
+    "Run blocked: set censys.organization_id in App Config. "
+    "Censys API candidate queries require organization-scoped API access."
+)
 
 
 def _credit_estimate_text(cfg) -> str:
@@ -252,6 +256,9 @@ class CensysDiscoveryTab:
                 text="Run failed: invalid censys.organization_id in config."
             )
             return
+        if not org_id:
+            self._status_label.configure(text=_ORG_REQUIRED_STATUS)
+            return
 
         defaults = {}
         try:
@@ -264,9 +271,7 @@ class CensysDiscoveryTab:
         page_size = int(defaults.get("page_size", 100))
 
         self._set_controls_running(True)
-        self._status_label.configure(
-            text=f"Running Censys discovery: {', '.join(selected)}..."
-        )
+        self._status_label.configure(text="Checking Censys Search API access...")
 
         t = threading.Thread(
             target=self._run_stack_worker,
@@ -275,11 +280,57 @@ class CensysDiscoveryTab:
         )
         t.start()
 
+    def _probe_search_access(
+        self,
+        *,
+        protocol: str,
+        pat: str,
+        org_id: str,
+        query_hours: int,
+        page_size: int,
+    ) -> tuple[bool, Optional[str]]:
+        from experimental.censys_discovery.client import CensysClient
+        from experimental.censys_discovery.models import AUTH_FORBIDDEN, AUTH_UNAUTHORIZED
+        from experimental.censys_discovery.query_builder import build_query
+
+        try:
+            query = build_query(protocol, query_hours)
+            client = CensysClient(pat=pat)
+            result = client.search_query(query, page_size=max(1, page_size), org_id=org_id)
+        except Exception as exc:
+            return False, f"Search probe failed: {exc}"
+
+        if result.ok:
+            return True, None
+
+        err = result.error
+        if err is None:
+            return False, "Search probe failed: unknown error."
+        if err.reason_code == AUTH_FORBIDDEN:
+            return (
+                False,
+                "Censys Search API access denied (403). "
+                "Verify organization_id and API entitlements for Global Search.",
+            )
+        if err.reason_code == AUTH_UNAUTHORIZED:
+            return (
+                False,
+                "Censys API key rejected for search (401). "
+                "Verify PAT and organization scope.",
+            )
+        return False, f"Search probe failed ({err.reason_code}): {err.message}"
+
+    def _on_probe_failed(self, message: str) -> None:
+        self._set_controls_running(False)
+        self._status_label.configure(text=message)
+        self._cfg = self._load_config_from_settings()
+        self._refresh_balance()
+
     def _run_stack_worker(
         self,
         selected: List[str],
         pat: str,
-        org_id: Optional[str],
+        org_id: str,
         query_hours: int,
         max_pages: int,
         page_size: int,
@@ -296,6 +347,30 @@ class CensysDiscoveryTab:
             "HTTP": run_http_discovery,
             "SMB": run_smb_discovery,
         }
+
+        probe_ok, probe_error = self._probe_search_access(
+            protocol=selected[0],
+            pat=pat,
+            org_id=org_id,
+            query_hours=query_hours,
+            page_size=1,
+        )
+        if not probe_ok:
+            try:
+                self.frame.after(0, lambda: self._on_probe_failed(probe_error or "Search probe failed."))
+            except Exception:
+                pass
+            return
+
+        try:
+            self.frame.after(
+                0,
+                lambda: self._status_label.configure(
+                    text=f"Running Censys discovery: {', '.join(selected)}..."
+                ),
+            )
+        except Exception:
+            pass
 
         summaries: List[Tuple[str, Any]] = []
         failed_protocol: Optional[str] = None

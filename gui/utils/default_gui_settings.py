@@ -131,6 +131,12 @@ DEFAULT_GUI_SETTINGS = {
     'runtime_warnings': {
         'tmpfs_legacy_mount_dismissed': False,
     },
+    'se_dork': {
+        'instance_url': 'http://your.searxng.server:port',
+        'query': 'site:* intitle:"index of /"',
+        'max_results': 50,
+        'bulk_probe_enabled': False,
+    },
     'reddit_grab': {
         'mode': 'feed',
         'sort': 'new',
@@ -142,6 +148,12 @@ DEFAULT_GUI_SETTINGS = {
         'include_nsfw': False,
         'replace_cache': False,
         'bulk_probe_enabled': False
+    },
+    'keymaster': {
+        'auto_check_query_credits': True,
+    },
+    'dorkbook': {
+        'active_protocol_tab': 'SMB',
     },
     'backend': {
         'mock_mode': False,

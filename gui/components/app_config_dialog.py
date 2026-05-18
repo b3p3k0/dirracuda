@@ -13,7 +13,7 @@ import subprocess
 import sys
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog
+from tkinter import filedialog, ttk
 from gui.utils import safe_messagebox as messagebox
 from typing import Any, Callable, Dict, Optional
 
@@ -51,6 +51,25 @@ _CENSYS_CREDIT_PROFILES = ("free_starter", "search_enterprise")
 _CENSYS_DEFAULT_MAX_PAGES = 5
 _CENSYS_DEFAULT_QUERY_HOURS = 24
 _CENSYS_DEFAULT_PAGE_SIZE = 100
+_SE_DORK_DEFAULT_INSTANCE_URL = "http://your.searxng.server:port"
+_SE_DORK_DEFAULT_QUERY = 'site:* intitle:"index of /"'
+_SE_DORK_DEFAULT_MAX_RESULTS = 50
+_SE_DORK_DEFAULT_BULK_PROBE_ENABLED = False
+_SE_DORK_DEFAULT_PROBE_WORKERS = 3
+_REDDIT_MODES = ("feed", "search", "user")
+_REDDIT_SORTS = ("new", "top")
+_REDDIT_TOP_WINDOWS = ("hour", "day", "week", "month", "year", "all")
+_REDDIT_DEFAULT_MODE = "feed"
+_REDDIT_DEFAULT_SORT = "new"
+_REDDIT_DEFAULT_TOP_WINDOW = "week"
+_REDDIT_DEFAULT_QUERY = ""
+_REDDIT_DEFAULT_USERNAME = ""
+_REDDIT_DEFAULT_MAX_POSTS = 50
+_REDDIT_DEFAULT_PARSE_BODY = True
+_REDDIT_DEFAULT_INCLUDE_NSFW = False
+_REDDIT_DEFAULT_REPLACE_CACHE = False
+_REDDIT_DEFAULT_BULK_PROBE_ENABLED = False
+_DORKBOOK_PROTOCOLS = ("SMB", "FTP", "HTTP")
 _CENSYS_ORG_ID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
@@ -129,18 +148,33 @@ class AppConfigDialog:
     - SMBSeek config.json path
     - Database path
     - Shodan API key
-    - Censys PAT / org/profile/defaults
     - Quarantine directory (shared SMB/FTP/HTTP browser + extract default)
+
+    Note:
+    - Censys settings remain supported in config.json but are currently hidden
+      from this dialog while the feature is development-suspended.
     """
 
     DORK_DEFAULTS = dict(SHARED_DORK_DEFAULTS)
     DORK_FIELDS = tuple(DORK_DEFAULTS.keys())
+    TOP_LEVEL_TABS = ("Core Paths", "Runtime", "Security", "Experimental")
+    EXPERIMENTAL_TABS = ("SearXNG", "Reddit", "Keymaster", "Dorkbook")
     REQUIRED_FIELDS = ("smbseek", "database", "config", "quarantine")
     FIELD_LABELS = {
         "smbseek": "Dirracuda Root",
         "database": "Database File",
         "config": "Dirracuda Config",
         "api_key": "Shodan API Key",
+        "se_dork_instance_url": "SearXNG Instance URL",
+        "se_dork_query": "SearXNG Query",
+        "se_dork_max_results": "SearXNG Max Results",
+        "se_dork_probe_workers": "Probe Worker Count",
+        "reddit_mode": "Reddit Mode",
+        "reddit_sort": "Reddit Sort",
+        "reddit_top_window": "Reddit Top Window",
+        "reddit_query": "Reddit Query",
+        "reddit_username": "Reddit Username",
+        "reddit_max_posts": "Reddit Max Posts",
         "censys_pat": "Censys PAT",
         "censys_org_id": "Censys Organization ID",
         "censys_max_pages": "Censys Max Pages",
@@ -171,6 +205,23 @@ class AppConfigDialog:
         self.config_path = ""
         self.database_path = ""
         self.api_key = ""
+        self.se_dork_instance_url = _SE_DORK_DEFAULT_INSTANCE_URL
+        self.se_dork_query = _SE_DORK_DEFAULT_QUERY
+        self.se_dork_max_results = _SE_DORK_DEFAULT_MAX_RESULTS
+        self.se_dork_bulk_probe_enabled = _SE_DORK_DEFAULT_BULK_PROBE_ENABLED
+        self.se_dork_probe_workers = _SE_DORK_DEFAULT_PROBE_WORKERS
+        self.reddit_mode = _REDDIT_DEFAULT_MODE
+        self.reddit_sort = _REDDIT_DEFAULT_SORT
+        self.reddit_top_window = _REDDIT_DEFAULT_TOP_WINDOW
+        self.reddit_query = _REDDIT_DEFAULT_QUERY
+        self.reddit_username = _REDDIT_DEFAULT_USERNAME
+        self.reddit_max_posts = _REDDIT_DEFAULT_MAX_POSTS
+        self.reddit_parse_body = _REDDIT_DEFAULT_PARSE_BODY
+        self.reddit_include_nsfw = _REDDIT_DEFAULT_INCLUDE_NSFW
+        self.reddit_replace_cache = _REDDIT_DEFAULT_REPLACE_CACHE
+        self.reddit_bulk_probe_enabled = _REDDIT_DEFAULT_BULK_PROBE_ENABLED
+        self.keymaster_auto_check_query_credits = True
+        self.dorkbook_active_protocol_tab = "SMB"
         self.censys_pat = ""
         self.censys_org_id = ""
         self.censys_credit_profile = "free_starter"
@@ -192,6 +243,16 @@ class AppConfigDialog:
             "database": {"valid": False, "message": ""},
             "config": {"valid": False, "message": ""},
             "api_key": {"valid": False, "message": ""},
+            "se_dork_instance_url": {"valid": False, "message": ""},
+            "se_dork_query": {"valid": False, "message": ""},
+            "se_dork_max_results": {"valid": False, "message": ""},
+            "se_dork_probe_workers": {"valid": False, "message": ""},
+            "reddit_mode": {"valid": False, "message": ""},
+            "reddit_sort": {"valid": False, "message": ""},
+            "reddit_top_window": {"valid": False, "message": ""},
+            "reddit_query": {"valid": False, "message": ""},
+            "reddit_username": {"valid": False, "message": ""},
+            "reddit_max_posts": {"valid": False, "message": ""},
             "censys_pat": {"valid": False, "message": ""},
             "censys_org_id": {"valid": False, "message": ""},
             "censys_credit_profile": {"valid": False, "message": ""},
@@ -208,6 +269,22 @@ class AppConfigDialog:
         self.database_var: Optional[tk.StringVar] = None
         self.config_var: Optional[tk.StringVar] = None
         self.api_key_var: Optional[tk.StringVar] = None
+        self.se_dork_instance_url_var: Optional[tk.StringVar] = None
+        self.se_dork_query_var: Optional[tk.StringVar] = None
+        self.se_dork_max_results_var: Optional[tk.StringVar] = None
+        self.se_dork_bulk_probe_enabled_var: Optional[tk.BooleanVar] = None
+        self.se_dork_probe_workers_var: Optional[tk.StringVar] = None
+        self.reddit_mode_var: Optional[tk.StringVar] = None
+        self.reddit_sort_var: Optional[tk.StringVar] = None
+        self.reddit_top_window_var: Optional[tk.StringVar] = None
+        self.reddit_query_var: Optional[tk.StringVar] = None
+        self.reddit_username_var: Optional[tk.StringVar] = None
+        self.reddit_max_posts_var: Optional[tk.StringVar] = None
+        self.reddit_parse_body_var: Optional[tk.BooleanVar] = None
+        self.reddit_include_nsfw_var: Optional[tk.BooleanVar] = None
+        self.reddit_replace_cache_var: Optional[tk.BooleanVar] = None
+        self.reddit_bulk_probe_enabled_var: Optional[tk.BooleanVar] = None
+        self.keymaster_auto_check_query_credits_var: Optional[tk.BooleanVar] = None
         self.censys_pat_var: Optional[tk.StringVar] = None
         self.censys_org_id_var: Optional[tk.StringVar] = None
         self.censys_credit_profile_var: Optional[tk.StringVar] = None
@@ -282,6 +359,112 @@ class AppConfigDialog:
             self.database_path = str(_DEFAULT_DATABASE_PATH)
 
         self._load_runtime_settings_from_config(self.config_path)
+        self._load_experimental_settings_from_settings_manager()
+
+    def _load_experimental_settings_from_settings_manager(self) -> None:
+        """Load experimental-feature settings persisted in GUI settings."""
+        sm = self.settings_manager
+        if sm is None:
+            return
+        try:
+            self.se_dork_instance_url = str(
+                sm.get_setting("se_dork.instance_url", _SE_DORK_DEFAULT_INSTANCE_URL)
+                or _SE_DORK_DEFAULT_INSTANCE_URL
+            ).strip() or _SE_DORK_DEFAULT_INSTANCE_URL
+            self.se_dork_query = str(
+                sm.get_setting("se_dork.query", _SE_DORK_DEFAULT_QUERY)
+                or _SE_DORK_DEFAULT_QUERY
+            )
+            self.se_dork_max_results = _coerce_int_cfg(
+                sm.get_setting("se_dork.max_results", _SE_DORK_DEFAULT_MAX_RESULTS),
+                _SE_DORK_DEFAULT_MAX_RESULTS,
+                minimum=1,
+                maximum=500,
+            )
+            self.se_dork_bulk_probe_enabled = _coerce_bool_cfg(
+                sm.get_setting(
+                    "se_dork.bulk_probe_enabled",
+                    _SE_DORK_DEFAULT_BULK_PROBE_ENABLED,
+                ),
+                _SE_DORK_DEFAULT_BULK_PROBE_ENABLED,
+            )
+            self.se_dork_probe_workers = _coerce_int_cfg(
+                sm.get_setting("probe.batch_max_workers", _SE_DORK_DEFAULT_PROBE_WORKERS),
+                _SE_DORK_DEFAULT_PROBE_WORKERS,
+                minimum=1,
+                maximum=8,
+            )
+
+            raw_mode = str(
+                sm.get_setting("reddit_grab.mode", _REDDIT_DEFAULT_MODE)
+                or _REDDIT_DEFAULT_MODE
+            ).strip()
+            self.reddit_mode = raw_mode if raw_mode in _REDDIT_MODES else _REDDIT_DEFAULT_MODE
+            raw_sort = str(
+                sm.get_setting("reddit_grab.sort", _REDDIT_DEFAULT_SORT)
+                or _REDDIT_DEFAULT_SORT
+            ).strip()
+            self.reddit_sort = raw_sort if raw_sort in _REDDIT_SORTS else _REDDIT_DEFAULT_SORT
+            raw_top = str(
+                sm.get_setting("reddit_grab.top_window", _REDDIT_DEFAULT_TOP_WINDOW)
+                or _REDDIT_DEFAULT_TOP_WINDOW
+            ).strip()
+            self.reddit_top_window = (
+                raw_top if raw_top in _REDDIT_TOP_WINDOWS else _REDDIT_DEFAULT_TOP_WINDOW
+            )
+            self.reddit_query = str(
+                sm.get_setting("reddit_grab.query", _REDDIT_DEFAULT_QUERY)
+                or _REDDIT_DEFAULT_QUERY
+            )
+            self.reddit_username = str(
+                sm.get_setting("reddit_grab.username", _REDDIT_DEFAULT_USERNAME)
+                or _REDDIT_DEFAULT_USERNAME
+            )
+            self.reddit_max_posts = _coerce_int_cfg(
+                sm.get_setting("reddit_grab.max_posts", _REDDIT_DEFAULT_MAX_POSTS),
+                _REDDIT_DEFAULT_MAX_POSTS,
+                minimum=1,
+                maximum=200,
+            )
+            self.reddit_parse_body = _coerce_bool_cfg(
+                sm.get_setting("reddit_grab.parse_body", _REDDIT_DEFAULT_PARSE_BODY),
+                _REDDIT_DEFAULT_PARSE_BODY,
+            )
+            self.reddit_include_nsfw = _coerce_bool_cfg(
+                sm.get_setting(
+                    "reddit_grab.include_nsfw",
+                    _REDDIT_DEFAULT_INCLUDE_NSFW,
+                ),
+                _REDDIT_DEFAULT_INCLUDE_NSFW,
+            )
+            self.reddit_replace_cache = _coerce_bool_cfg(
+                sm.get_setting(
+                    "reddit_grab.replace_cache",
+                    _REDDIT_DEFAULT_REPLACE_CACHE,
+                ),
+                _REDDIT_DEFAULT_REPLACE_CACHE,
+            )
+            self.reddit_bulk_probe_enabled = _coerce_bool_cfg(
+                sm.get_setting(
+                    "reddit_grab.bulk_probe_enabled",
+                    _REDDIT_DEFAULT_BULK_PROBE_ENABLED,
+                ),
+                _REDDIT_DEFAULT_BULK_PROBE_ENABLED,
+            )
+            self.keymaster_auto_check_query_credits = _coerce_bool_cfg(
+                sm.get_setting("keymaster.auto_check_query_credits", True),
+                True,
+            )
+            raw_active_tab = str(
+                sm.get_setting("dorkbook.active_protocol_tab", "SMB")
+                or "SMB"
+            ).strip().upper()
+            self.dorkbook_active_protocol_tab = (
+                raw_active_tab if raw_active_tab in _DORKBOOK_PROTOCOLS else "SMB"
+            )
+        except Exception:
+            # Keep defaults if settings lookup fails.
+            return
 
     def _load_runtime_settings_from_config(self, config_path: str) -> None:
         """Load API key and quarantine path from config.json."""
@@ -392,7 +575,7 @@ class AppConfigDialog:
     def _create_dialog(self) -> None:
         self.dialog = tk.Toplevel(self.parent)
         self.dialog.title("Dirracuda - Application Configuration")
-        self.dialog.geometry("760x860")
+        self.dialog.geometry("860x760")
         self.dialog.minsize(720, 680)
         self.theme.apply_to_widget(self.dialog, "main_window")
         self.dialog.transient(self.parent)
@@ -442,15 +625,18 @@ class AppConfigDialog:
         self.theme.apply_to_widget(container, "main_window")
         container.pack(fill=tk.BOTH, expand=True, padx=18, pady=(0, 8))
 
-        self._create_compact_card(container, "Core Paths", ("smbseek", "database", "config"))
-        runtime_fields = ("api_key", "quarantine")
-        self._create_compact_card(container, "Runtime Settings", runtime_fields)
-        self._create_censys_card(container)
-        self._create_tmpfs_card(container)
-        self._create_clamav_card(container)
-        self._sync_quarantine_controls_for_tmpfs()
+        top_notebook = ttk.Notebook(container)
+        top_notebook.pack(fill=tk.BOTH, expand=True)
 
-        action_row = tk.Frame(container)
+        top_tabs = self._build_top_level_tabs(top_notebook)
+        core_tab = top_tabs["Core Paths"]
+        runtime_tab = top_tabs["Runtime"]
+        security_tab = top_tabs["Security"]
+        experimental_tab = top_tabs["Experimental"]
+
+        self._create_compact_card(core_tab, "Core Paths", ("smbseek", "database", "config"))
+
+        action_row = tk.Frame(core_tab)
         self.theme.apply_to_widget(action_row, "main_window")
         action_row.pack(fill=tk.X, padx=8, pady=(4, 0))
 
@@ -461,6 +647,242 @@ class AppConfigDialog:
         )
         self.theme.apply_to_widget(edit_button, "button_secondary")
         edit_button.pack(anchor=tk.W)
+
+        self._create_compact_card(runtime_tab, "Runtime Settings", ("api_key", "quarantine"))
+
+        self._create_tmpfs_card(security_tab)
+        self._create_clamav_card(security_tab)
+
+        experimental_tabs = self._build_experimental_tabs(experimental_tab)
+        self._create_se_dork_card(experimental_tabs["SearXNG"])
+        self._create_reddit_card(experimental_tabs["Reddit"])
+        self._create_keymaster_card(experimental_tabs["Keymaster"])
+        self._create_dorkbook_card(experimental_tabs["Dorkbook"])
+
+        self._sync_quarantine_controls_for_tmpfs()
+
+    def _build_top_level_tabs(self, notebook: ttk.Notebook) -> Dict[str, tk.Frame]:
+        tabs: Dict[str, tk.Frame] = {}
+        for label in self.TOP_LEVEL_TABS:
+            frame = tk.Frame(notebook)
+            self.theme.apply_to_widget(frame, "main_window")
+            notebook.add(frame, text=label)
+            tabs[label] = frame
+        return tabs
+
+    def _build_experimental_tabs(self, parent: tk.Widget) -> Dict[str, tk.Frame]:
+        notebook = ttk.Notebook(parent)
+        notebook.pack(fill=tk.BOTH, expand=True)
+        tabs: Dict[str, tk.Frame] = {}
+        for label in self.EXPERIMENTAL_TABS:
+            frame = tk.Frame(notebook)
+            self.theme.apply_to_widget(frame, "main_window")
+            notebook.add(frame, text=label)
+            tabs[label] = frame
+        return tabs
+
+    def _create_se_dork_card(self, parent: tk.Widget) -> None:
+        card = tk.Frame(parent, highlightthickness=1, bd=0)
+        self.theme.apply_to_widget(card, "card")
+        try:
+            card.configure(
+                highlightbackground=self.theme.colors["border"],
+                highlightcolor=self.theme.colors["border"],
+            )
+        except tk.TclError:
+            pass
+        card.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+
+        heading = self.theme.create_styled_label(card, "SearXNG Defaults", "body")
+        heading.pack(anchor=tk.W, padx=12, pady=(10, 6))
+
+        for field in (
+            "se_dork_instance_url",
+            "se_dork_query",
+            "se_dork_max_results",
+            "se_dork_probe_workers",
+        ):
+            self._create_field_row(card, field)
+
+        row = tk.Frame(card)
+        self.theme.apply_to_widget(row, "card")
+        row.pack(fill=tk.X, padx=10, pady=(0, 10))
+        self.se_dork_bulk_probe_enabled_var = tk.BooleanVar(
+            value=self.se_dork_bulk_probe_enabled
+        )
+        cb = tk.Checkbutton(
+            row,
+            text="Run Probe on Results by default",
+            variable=self.se_dork_bulk_probe_enabled_var,
+        )
+        self.theme.apply_to_widget(cb, "checkbox")
+        cb.pack(anchor=tk.W)
+
+    def _create_reddit_card(self, parent: tk.Widget) -> None:
+        card = tk.Frame(parent, highlightthickness=1, bd=0)
+        self.theme.apply_to_widget(card, "card")
+        try:
+            card.configure(
+                highlightbackground=self.theme.colors["border"],
+                highlightcolor=self.theme.colors["border"],
+            )
+        except tk.TclError:
+            pass
+        card.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+
+        heading = self.theme.create_styled_label(card, "Reddit Grab Defaults", "body")
+        heading.pack(anchor=tk.W, padx=12, pady=(10, 6))
+
+        mode_row = tk.Frame(card)
+        self.theme.apply_to_widget(mode_row, "card")
+        mode_row.pack(fill=tk.X, padx=10, pady=(0, 8))
+        mode_label = self.theme.create_styled_label(
+            mode_row,
+            "Mode:",
+            "small",
+            fg=self.theme.colors["text_secondary"],
+        )
+        mode_label.pack(side=tk.LEFT, padx=(0, 8))
+        self.reddit_mode_var = tk.StringVar(value=self.reddit_mode)
+        mode_menu = tk.OptionMenu(mode_row, self.reddit_mode_var, *_REDDIT_MODES)
+        self.theme.apply_to_widget(mode_menu, "button_secondary")
+        mode_menu.pack(side=tk.LEFT)
+        mode_status = tk.Label(mode_row, text="", font=("Arial", 11, "bold"), width=2)
+        self.theme.apply_to_widget(mode_status, "text")
+        mode_status.pack(side=tk.RIGHT)
+        self.status_labels["reddit_mode"] = mode_status
+        self.reddit_mode_var.trace_add(
+            "write",
+            lambda *_args: (
+                self._validate_field("reddit_mode"),
+                self._validate_field("reddit_query"),
+                self._validate_field("reddit_username"),
+            ),
+        )
+
+        sort_row = tk.Frame(card)
+        self.theme.apply_to_widget(sort_row, "card")
+        sort_row.pack(fill=tk.X, padx=10, pady=(0, 8))
+        sort_label = self.theme.create_styled_label(
+            sort_row,
+            "Sort:",
+            "small",
+            fg=self.theme.colors["text_secondary"],
+        )
+        sort_label.pack(side=tk.LEFT, padx=(0, 8))
+        self.reddit_sort_var = tk.StringVar(value=self.reddit_sort)
+        sort_menu = tk.OptionMenu(sort_row, self.reddit_sort_var, *_REDDIT_SORTS)
+        self.theme.apply_to_widget(sort_menu, "button_secondary")
+        sort_menu.pack(side=tk.LEFT)
+        sort_status = tk.Label(sort_row, text="", font=("Arial", 11, "bold"), width=2)
+        self.theme.apply_to_widget(sort_status, "text")
+        sort_status.pack(side=tk.RIGHT)
+        self.status_labels["reddit_sort"] = sort_status
+        self.reddit_sort_var.trace_add("write", lambda *_args: self._validate_field("reddit_sort"))
+
+        top_row = tk.Frame(card)
+        self.theme.apply_to_widget(top_row, "card")
+        top_row.pack(fill=tk.X, padx=10, pady=(0, 8))
+        top_label = self.theme.create_styled_label(
+            top_row,
+            "Top Window:",
+            "small",
+            fg=self.theme.colors["text_secondary"],
+        )
+        top_label.pack(side=tk.LEFT, padx=(0, 8))
+        self.reddit_top_window_var = tk.StringVar(value=self.reddit_top_window)
+        top_menu = tk.OptionMenu(top_row, self.reddit_top_window_var, *_REDDIT_TOP_WINDOWS)
+        self.theme.apply_to_widget(top_menu, "button_secondary")
+        top_menu.pack(side=tk.LEFT)
+        top_status = tk.Label(top_row, text="", font=("Arial", 11, "bold"), width=2)
+        self.theme.apply_to_widget(top_status, "text")
+        top_status.pack(side=tk.RIGHT)
+        self.status_labels["reddit_top_window"] = top_status
+        self.reddit_top_window_var.trace_add(
+            "write", lambda *_args: self._validate_field("reddit_top_window")
+        )
+
+        for field in ("reddit_query", "reddit_username", "reddit_max_posts"):
+            self._create_field_row(card, field)
+
+        self.reddit_parse_body_var = tk.BooleanVar(value=self.reddit_parse_body)
+        self.reddit_include_nsfw_var = tk.BooleanVar(value=self.reddit_include_nsfw)
+        self.reddit_replace_cache_var = tk.BooleanVar(value=self.reddit_replace_cache)
+        self.reddit_bulk_probe_enabled_var = tk.BooleanVar(value=self.reddit_bulk_probe_enabled)
+
+        for text, var in (
+            ("Parse body", self.reddit_parse_body_var),
+            ("Include NSFW", self.reddit_include_nsfw_var),
+            ("Replace cache", self.reddit_replace_cache_var),
+            ("Run Probe on Results by default", self.reddit_bulk_probe_enabled_var),
+        ):
+            row = tk.Frame(card)
+            self.theme.apply_to_widget(row, "card")
+            row.pack(fill=tk.X, padx=10, pady=(0, 4))
+            cb = tk.Checkbutton(row, text=text, variable=var)
+            self.theme.apply_to_widget(cb, "checkbox")
+            cb.pack(anchor=tk.W)
+
+    def _create_keymaster_card(self, parent: tk.Widget) -> None:
+        card = tk.Frame(parent, highlightthickness=1, bd=0)
+        self.theme.apply_to_widget(card, "card")
+        try:
+            card.configure(
+                highlightbackground=self.theme.colors["border"],
+                highlightcolor=self.theme.colors["border"],
+            )
+        except tk.TclError:
+            pass
+        card.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+
+        heading = self.theme.create_styled_label(card, "Keymaster Defaults", "body")
+        heading.pack(anchor=tk.W, padx=12, pady=(10, 6))
+
+        self.keymaster_auto_check_query_credits_var = tk.BooleanVar(
+            value=self.keymaster_auto_check_query_credits
+        )
+        row = tk.Frame(card)
+        self.theme.apply_to_widget(row, "card")
+        row.pack(fill=tk.X, padx=10, pady=(0, 8))
+        cb = tk.Checkbutton(
+            row,
+            text="Auto-check query credits on Keymaster open",
+            variable=self.keymaster_auto_check_query_credits_var,
+        )
+        self.theme.apply_to_widget(cb, "checkbox")
+        cb.pack(anchor=tk.W)
+
+    def _create_dorkbook_card(self, parent: tk.Widget) -> None:
+        card = tk.Frame(parent, highlightthickness=1, bd=0)
+        self.theme.apply_to_widget(card, "card")
+        try:
+            card.configure(
+                highlightbackground=self.theme.colors["border"],
+                highlightcolor=self.theme.colors["border"],
+            )
+        except tk.TclError:
+            pass
+        card.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+
+        heading = self.theme.create_styled_label(card, "Dorkbook", "body")
+        heading.pack(anchor=tk.W, padx=12, pady=(10, 6))
+
+        note = self.theme.create_styled_label(
+            card,
+            "No global App Config options yet for Dorkbook.\n"
+            "Protocol-tab persistence is managed automatically in the Dorkbook window.",
+            "small",
+            fg=self.theme.colors["text_secondary"],
+        )
+        note.pack(anchor=tk.W, padx=12, pady=(0, 8))
+
+        active = self.theme.create_styled_label(
+            card,
+            f"Current saved active protocol tab: {self.dorkbook_active_protocol_tab}",
+            "small",
+            fg=self.theme.colors["text_secondary"],
+        )
+        active.pack(anchor=tk.W, padx=12, pady=(0, 10))
 
     def _create_compact_card(self, parent: tk.Widget, title: str, fields: tuple[str, ...]) -> None:
         card = tk.Frame(parent, highlightthickness=1, bd=0)
@@ -491,6 +913,15 @@ class AppConfigDialog:
 
         heading = self.theme.create_styled_label(card, "Censys", "body")
         heading.pack(anchor=tk.W, padx=12, pady=(10, 6))
+
+        note = self.theme.create_styled_label(
+            card,
+            "API candidate queries require organization-scoped access.\n"
+            "Set a valid censys.organization_id UUID for discovery runs.",
+            "small",
+            fg=self.theme.colors["text_secondary"],
+        )
+        note.pack(anchor=tk.W, padx=12, pady=(0, 8))
 
         for field in (
             "censys_pat",
@@ -899,6 +1330,34 @@ class AppConfigDialog:
             if self.api_key_var is None:
                 self.api_key_var = tk.StringVar(value=self.api_key)
             return self.api_key_var
+        if field == "se_dork_instance_url":
+            if self.se_dork_instance_url_var is None:
+                self.se_dork_instance_url_var = tk.StringVar(value=self.se_dork_instance_url)
+            return self.se_dork_instance_url_var
+        if field == "se_dork_query":
+            if self.se_dork_query_var is None:
+                self.se_dork_query_var = tk.StringVar(value=self.se_dork_query)
+            return self.se_dork_query_var
+        if field == "se_dork_max_results":
+            if self.se_dork_max_results_var is None:
+                self.se_dork_max_results_var = tk.StringVar(value=str(self.se_dork_max_results))
+            return self.se_dork_max_results_var
+        if field == "se_dork_probe_workers":
+            if self.se_dork_probe_workers_var is None:
+                self.se_dork_probe_workers_var = tk.StringVar(value=str(self.se_dork_probe_workers))
+            return self.se_dork_probe_workers_var
+        if field == "reddit_query":
+            if self.reddit_query_var is None:
+                self.reddit_query_var = tk.StringVar(value=self.reddit_query)
+            return self.reddit_query_var
+        if field == "reddit_username":
+            if self.reddit_username_var is None:
+                self.reddit_username_var = tk.StringVar(value=self.reddit_username)
+            return self.reddit_username_var
+        if field == "reddit_max_posts":
+            if self.reddit_max_posts_var is None:
+                self.reddit_max_posts_var = tk.StringVar(value=str(self.reddit_max_posts))
+            return self.reddit_max_posts_var
         if field == "censys_pat":
             if self.censys_pat_var is None:
                 self.censys_pat_var = tk.StringVar(value=self.censys_pat)
@@ -1052,6 +1511,109 @@ class AppConfigDialog:
             result = self._validate_api_key(self.api_key_var.get())
             self.validation_results["api_key"] = result
             self._update_status_label("api_key", result)
+            return
+
+        if field == "se_dork_instance_url":
+            result = self._validate_required_text(
+                self.se_dork_instance_url_var.get(),
+                "SearXNG instance URL",
+            )
+            self.validation_results["se_dork_instance_url"] = result
+            self._update_status_label("se_dork_instance_url", result)
+            return
+
+        if field == "se_dork_query":
+            result = self._validate_required_text(
+                self.se_dork_query_var.get(),
+                "SearXNG query",
+            )
+            self.validation_results["se_dork_query"] = result
+            self._update_status_label("se_dork_query", result)
+            return
+
+        if field == "se_dork_max_results":
+            result = self._validate_bounded_integer(
+                self.se_dork_max_results_var.get(),
+                "SearXNG max results",
+                minimum=1,
+                maximum=500,
+            )
+            self.validation_results["se_dork_max_results"] = result
+            self._update_status_label("se_dork_max_results", result)
+            return
+
+        if field == "se_dork_probe_workers":
+            result = self._validate_bounded_integer(
+                self.se_dork_probe_workers_var.get(),
+                "Probe worker count",
+                minimum=1,
+                maximum=8,
+            )
+            self.validation_results["se_dork_probe_workers"] = result
+            self._update_status_label("se_dork_probe_workers", result)
+            return
+
+        if field == "reddit_mode":
+            result = self._validate_enum_value(
+                self.reddit_mode_var.get(),
+                "Reddit mode",
+                _REDDIT_MODES,
+            )
+            self.validation_results["reddit_mode"] = result
+            self._update_status_label("reddit_mode", result)
+            return
+
+        if field == "reddit_sort":
+            result = self._validate_enum_value(
+                self.reddit_sort_var.get(),
+                "Reddit sort",
+                _REDDIT_SORTS,
+            )
+            self.validation_results["reddit_sort"] = result
+            self._update_status_label("reddit_sort", result)
+            return
+
+        if field == "reddit_top_window":
+            result = self._validate_enum_value(
+                self.reddit_top_window_var.get(),
+                "Reddit top window",
+                _REDDIT_TOP_WINDOWS,
+            )
+            self.validation_results["reddit_top_window"] = result
+            self._update_status_label("reddit_top_window", result)
+            return
+
+        if field == "reddit_query":
+            mode = (
+                self.reddit_mode_var.get().strip()
+                if self.reddit_mode_var is not None
+                else self.reddit_mode
+            )
+            result = self._validate_reddit_query(self.reddit_query_var.get(), mode)
+            self.validation_results["reddit_query"] = result
+            self._update_status_label("reddit_query", result)
+            return
+
+        if field == "reddit_username":
+            mode = (
+                self.reddit_mode_var.get().strip()
+                if self.reddit_mode_var is not None
+                else self.reddit_mode
+            )
+            result = self._validate_reddit_username(self.reddit_username_var.get(), mode)
+            self.validation_results["reddit_username"] = result
+            self._update_status_label("reddit_username", result)
+            return
+
+        if field == "reddit_max_posts":
+            result = self._validate_bounded_integer(
+                self.reddit_max_posts_var.get(),
+                "Reddit max posts",
+                minimum=1,
+                maximum=200,
+            )
+            self.validation_results["reddit_max_posts"] = result
+            self._update_status_label("reddit_max_posts", result)
             return
 
         if field == "censys_pat":
@@ -1236,6 +1798,46 @@ class AppConfigDialog:
             }
         return {"valid": True, "message": f"{label} is valid."}
 
+    def _validate_required_text(self, value: str, label: str) -> Dict[str, Any]:
+        text = str(value or "").strip()
+        if not text:
+            return {"valid": False, "message": f"{label} is required."}
+        return {"valid": True, "message": f"{label} is valid."}
+
+    def _validate_enum_value(
+        self,
+        value: str,
+        label: str,
+        allowed_values: tuple[str, ...],
+    ) -> Dict[str, Any]:
+        text = str(value or "").strip()
+        if text in allowed_values:
+            return {"valid": True, "message": f"{label} is valid."}
+        return {
+            "valid": False,
+            "message": f"{label} must be one of: {', '.join(allowed_values)}.",
+        }
+
+    def _validate_reddit_query(self, value: str, mode: str) -> Dict[str, Any]:
+        query = str(value or "").strip()
+        mode_norm = str(mode or "").strip()
+        if mode_norm == "search" and not query:
+            return {"valid": False, "message": "Reddit query is required for search mode."}
+        return {"valid": True, "message": "Reddit query is valid."}
+
+    def _validate_reddit_username(self, value: str, mode: str) -> Dict[str, Any]:
+        username = str(value or "").strip()
+        mode_norm = str(mode or "").strip()
+        if mode_norm == "user":
+            if not username:
+                return {"valid": False, "message": "Reddit username is required for user mode."}
+            if any(ch.isspace() for ch in username):
+                return {"valid": False, "message": "Reddit username must not contain spaces."}
+            return {"valid": True, "message": "Reddit username is valid."}
+        if username and any(ch.isspace() for ch in username):
+            return {"valid": False, "message": "Reddit username must not contain spaces."}
+        return {"valid": True, "message": "Reddit username is valid."}
+
     def _validate_quarantine_path(self, path: str) -> Dict[str, Any]:
         path = str(path or "").strip()
         if not path:
@@ -1268,12 +1870,16 @@ class AppConfigDialog:
             "database",
             "config",
             "api_key",
-            "censys_pat",
-            "censys_org_id",
-            "censys_credit_profile",
-            "censys_max_pages",
-            "censys_query_hours",
-            "censys_page_size",
+            "se_dork_instance_url",
+            "se_dork_query",
+            "se_dork_max_results",
+            "se_dork_probe_workers",
+            "reddit_mode",
+            "reddit_sort",
+            "reddit_top_window",
+            "reddit_query",
+            "reddit_username",
+            "reddit_max_posts",
             "quarantine",
         ]:
             self._validate_field(field)
@@ -1328,7 +1934,11 @@ class AppConfigDialog:
     def _validate_and_save(self) -> bool:
         self._validate_all_fields()
 
-        invalid_required = [field for field in self.REQUIRED_FIELDS if not self.validation_results[field]["valid"]]
+        invalid_required = [
+            field
+            for field in self.REQUIRED_FIELDS
+            if not self.validation_results.get(field, {"valid": True}).get("valid", True)
+        ]
         if invalid_required:
             details = "\n".join(
                 f"- {self.FIELD_LABELS[field]}: {self.validation_results[field]['message']}"
@@ -1341,66 +1951,139 @@ class AppConfigDialog:
             )
             return False
 
-        invalid_censys = [
+        invalid_experimental = [
             field
             for field in (
-                "censys_pat",
-                "censys_org_id",
-                "censys_credit_profile",
-                "censys_max_pages",
-                "censys_query_hours",
-                "censys_page_size",
+                "se_dork_instance_url",
+                "se_dork_query",
+                "se_dork_max_results",
+                "se_dork_probe_workers",
+                "reddit_mode",
+                "reddit_sort",
+                "reddit_top_window",
+                "reddit_query",
+                "reddit_username",
+                "reddit_max_posts",
             )
-            if not self.validation_results[field]["valid"]
+            if not self.validation_results.get(field, {"valid": True}).get("valid", True)
         ]
-        if invalid_censys:
+        if invalid_experimental:
             details = "\n".join(
-                f"- {self.FIELD_LABELS[field]}: {self.validation_results[field]['message']}"
-                for field in invalid_censys
+                f"- {self.FIELD_LABELS.get(field, field)}: {self.validation_results[field]['message']}"
+                for field in invalid_experimental
             )
             messagebox.showerror(
                 "Configuration Validation Failed",
-                f"Please fix the following Censys settings:\n\n{details}",
+                f"Please fix the following experimental feature settings:\n\n{details}",
                 parent=self._messagebox_parent(),
             )
             return False
 
-        new_smbseek = self.smbseek_var.get().strip()
-        new_database = self.database_var.get().strip()
-        new_config_path = self.config_var.get().strip()
-        new_api_key = self.api_key_var.get().strip()
-        new_censys_pat = self.censys_pat_var.get().strip()
-        new_censys_org_id = self.censys_org_id_var.get().strip()
-        raw_censys_profile = self.censys_credit_profile_var.get().strip().lower()
-        new_censys_profile = (
-            raw_censys_profile
-            if raw_censys_profile in _CENSYS_CREDIT_PROFILES
-            else "free_starter"
+        new_smbseek = self.smbseek_var.get().strip() if self.smbseek_var else self.smbseek_path
+        new_database = self.database_var.get().strip() if self.database_var else self.database_path
+        new_config_path = self.config_var.get().strip() if self.config_var else self.config_path
+        new_api_key = self.api_key_var.get().strip() if self.api_key_var else self.api_key
+
+        new_se_dork_instance_url = (
+            self.se_dork_instance_url_var.get().strip()
+            if self.se_dork_instance_url_var
+            else str(self.se_dork_instance_url or "").strip()
         )
-        new_censys_defaults = {
-            "max_pages": _coerce_int_cfg(
-                self.censys_max_pages_var.get(),
-                _CENSYS_DEFAULT_MAX_PAGES,
-                minimum=1,
-                maximum=100,
-            ),
-            "query_hours": _coerce_int_cfg(
-                self.censys_query_hours_var.get(),
-                _CENSYS_DEFAULT_QUERY_HOURS,
-                minimum=1,
-                maximum=168,
-            ),
-            "page_size": _coerce_int_cfg(
-                self.censys_page_size_var.get(),
-                _CENSYS_DEFAULT_PAGE_SIZE,
-                minimum=1,
-                maximum=100,
-            ),
-            "ipv6_enabled": bool(self.censys_ipv6_enabled_var.get())
-            if self.censys_ipv6_enabled_var
-            else False,
-        }
-        new_quarantine = self.quarantine_var.get().strip()
+        new_se_dork_query = (
+            self.se_dork_query_var.get()
+            if self.se_dork_query_var
+            else str(self.se_dork_query or "")
+        )
+        new_se_dork_max_results = _coerce_int_cfg(
+            self.se_dork_max_results_var.get()
+            if self.se_dork_max_results_var
+            else self.se_dork_max_results,
+            _SE_DORK_DEFAULT_MAX_RESULTS,
+            minimum=1,
+            maximum=500,
+        )
+        new_se_dork_bulk_probe_enabled = (
+            bool(self.se_dork_bulk_probe_enabled_var.get())
+            if self.se_dork_bulk_probe_enabled_var
+            else bool(self.se_dork_bulk_probe_enabled)
+        )
+        new_se_dork_probe_workers = _coerce_int_cfg(
+            self.se_dork_probe_workers_var.get()
+            if self.se_dork_probe_workers_var
+            else self.se_dork_probe_workers,
+            _SE_DORK_DEFAULT_PROBE_WORKERS,
+            minimum=1,
+            maximum=8,
+        )
+
+        raw_reddit_mode = (
+            self.reddit_mode_var.get().strip()
+            if self.reddit_mode_var
+            else str(self.reddit_mode or "").strip()
+        )
+        new_reddit_mode = raw_reddit_mode if raw_reddit_mode in _REDDIT_MODES else _REDDIT_DEFAULT_MODE
+        raw_reddit_sort = (
+            self.reddit_sort_var.get().strip()
+            if self.reddit_sort_var
+            else str(self.reddit_sort or "").strip()
+        )
+        new_reddit_sort = raw_reddit_sort if raw_reddit_sort in _REDDIT_SORTS else _REDDIT_DEFAULT_SORT
+        raw_reddit_top_window = (
+            self.reddit_top_window_var.get().strip()
+            if self.reddit_top_window_var
+            else str(self.reddit_top_window or "").strip()
+        )
+        new_reddit_top_window = (
+            raw_reddit_top_window
+            if raw_reddit_top_window in _REDDIT_TOP_WINDOWS
+            else _REDDIT_DEFAULT_TOP_WINDOW
+        )
+        new_reddit_query = (
+            self.reddit_query_var.get() if self.reddit_query_var else str(self.reddit_query or "")
+        )
+        new_reddit_username = (
+            self.reddit_username_var.get().strip()
+            if self.reddit_username_var
+            else str(self.reddit_username or "").strip()
+        )
+        new_reddit_max_posts = _coerce_int_cfg(
+            self.reddit_max_posts_var.get()
+            if self.reddit_max_posts_var
+            else self.reddit_max_posts,
+            _REDDIT_DEFAULT_MAX_POSTS,
+            minimum=1,
+            maximum=200,
+        )
+        new_reddit_parse_body = (
+            bool(self.reddit_parse_body_var.get())
+            if self.reddit_parse_body_var
+            else bool(self.reddit_parse_body)
+        )
+        new_reddit_include_nsfw = (
+            bool(self.reddit_include_nsfw_var.get())
+            if self.reddit_include_nsfw_var
+            else bool(self.reddit_include_nsfw)
+        )
+        new_reddit_replace_cache = (
+            bool(self.reddit_replace_cache_var.get())
+            if self.reddit_replace_cache_var
+            else bool(self.reddit_replace_cache)
+        )
+        new_reddit_bulk_probe_enabled = (
+            bool(self.reddit_bulk_probe_enabled_var.get())
+            if self.reddit_bulk_probe_enabled_var
+            else bool(self.reddit_bulk_probe_enabled)
+        )
+
+        new_keymaster_auto_check_query_credits = (
+            bool(self.keymaster_auto_check_query_credits_var.get())
+            if self.keymaster_auto_check_query_credits_var
+            else bool(self.keymaster_auto_check_query_credits)
+        )
+
+        new_quarantine = (
+            self.quarantine_var.get().strip() if self.quarantine_var else self.quarantine_path
+        )
 
         _timeout_var = getattr(self, "clamav_timeout_var", None)
         try:
@@ -1456,6 +2139,54 @@ class AppConfigDialog:
                 self.settings_manager.set_setting("backend.config_path", new_config_path)
                 # Keeps on-demand extract defaults aligned with shared quarantine.
                 self.settings_manager.set_setting("extract.last_directory", new_quarantine)
+                self.settings_manager.set_setting("se_dork.instance_url", new_se_dork_instance_url)
+                self.settings_manager.set_setting("se_dork.query", new_se_dork_query)
+                self.settings_manager.set_setting("se_dork.max_results", new_se_dork_max_results)
+                self.settings_manager.set_setting(
+                    "se_dork.bulk_probe_enabled",
+                    new_se_dork_bulk_probe_enabled,
+                )
+                self.settings_manager.set_setting(
+                    "probe.batch_max_workers",
+                    new_se_dork_probe_workers,
+                )
+
+                self.settings_manager.set_setting("reddit_grab.mode", new_reddit_mode)
+                self.settings_manager.set_setting("reddit_grab.sort", new_reddit_sort)
+                self.settings_manager.set_setting(
+                    "reddit_grab.top_window",
+                    new_reddit_top_window,
+                )
+                self.settings_manager.set_setting("reddit_grab.query", new_reddit_query)
+                self.settings_manager.set_setting(
+                    "reddit_grab.username",
+                    new_reddit_username,
+                )
+                self.settings_manager.set_setting(
+                    "reddit_grab.max_posts",
+                    new_reddit_max_posts,
+                )
+                self.settings_manager.set_setting(
+                    "reddit_grab.parse_body",
+                    new_reddit_parse_body,
+                )
+                self.settings_manager.set_setting(
+                    "reddit_grab.include_nsfw",
+                    new_reddit_include_nsfw,
+                )
+                self.settings_manager.set_setting(
+                    "reddit_grab.replace_cache",
+                    new_reddit_replace_cache,
+                )
+                self.settings_manager.set_setting(
+                    "reddit_grab.bulk_probe_enabled",
+                    new_reddit_bulk_probe_enabled,
+                )
+
+                self.settings_manager.set_setting(
+                    "keymaster.auto_check_query_credits",
+                    new_keymaster_auto_check_query_credits,
+                )
 
             # Persist runtime config fields in the active config.json.
             if self.main_config and hasattr(self.main_config, "set_config_path"):
@@ -1482,12 +2213,6 @@ class AppConfigDialog:
                     new_quarantine,
                     clamav_settings=new_clamav,
                     quarantine_tmpfs_settings=new_quarantine_tmpfs,
-                    censys_settings={
-                        "personal_access_token": new_censys_pat,
-                        "organization_id": new_censys_org_id,
-                        "credit_profile": new_censys_profile,
-                        "defaults": new_censys_defaults,
-                    },
                 )
                 path_obj.parent.mkdir(parents=True, exist_ok=True)
                 path_obj.write_text(json.dumps(config_data, indent=2), encoding="utf-8")
@@ -1509,12 +2234,6 @@ class AppConfigDialog:
                     new_quarantine,
                     clamav_settings=new_clamav,
                     quarantine_tmpfs_settings=new_quarantine_tmpfs,
-                    censys_settings={
-                        "personal_access_token": new_censys_pat,
-                        "organization_id": new_censys_org_id,
-                        "credit_profile": new_censys_profile,
-                        "defaults": new_censys_defaults,
-                    },
                 )
                 path_obj = Path(new_config_path).expanduser()
                 path_obj.parent.mkdir(parents=True, exist_ok=True)
@@ -1524,13 +2243,22 @@ class AppConfigDialog:
             self.database_path = normalized_database_str
             self.config_path = new_config_path
             self.api_key = new_api_key
-            self.censys_pat = new_censys_pat
-            self.censys_org_id = new_censys_org_id
-            self.censys_credit_profile = new_censys_profile
-            self.censys_max_pages = new_censys_defaults["max_pages"]
-            self.censys_query_hours = new_censys_defaults["query_hours"]
-            self.censys_page_size = new_censys_defaults["page_size"]
-            self.censys_ipv6_enabled = new_censys_defaults["ipv6_enabled"]
+            self.se_dork_instance_url = new_se_dork_instance_url
+            self.se_dork_query = new_se_dork_query
+            self.se_dork_max_results = new_se_dork_max_results
+            self.se_dork_bulk_probe_enabled = new_se_dork_bulk_probe_enabled
+            self.se_dork_probe_workers = new_se_dork_probe_workers
+            self.reddit_mode = new_reddit_mode
+            self.reddit_sort = new_reddit_sort
+            self.reddit_top_window = new_reddit_top_window
+            self.reddit_query = new_reddit_query
+            self.reddit_username = new_reddit_username
+            self.reddit_max_posts = new_reddit_max_posts
+            self.reddit_parse_body = new_reddit_parse_body
+            self.reddit_include_nsfw = new_reddit_include_nsfw
+            self.reddit_replace_cache = new_reddit_replace_cache
+            self.reddit_bulk_probe_enabled = new_reddit_bulk_probe_enabled
+            self.keymaster_auto_check_query_credits = new_keymaster_auto_check_query_credits
             self.quarantine_path = new_quarantine
             self.clamav_enabled = new_clamav["enabled"]
             self.clamav_backend = new_clamav["backend"]

@@ -877,27 +877,28 @@ def test_open_keymaster_forwards_parent_settings_config(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# C2 — Censys Discovery tab registration and wiring
+# C10.z — Censys Discovery UI suspended
 # ---------------------------------------------------------------------------
 
 # Sub-group A: Registry
 
-def test_registry_contains_censys_discovery_tab():
+def test_registry_omits_censys_discovery_tab():
     from gui.components.experimental_features.registry import _get_features
     labels = [f.label for f in _get_features()]
-    assert "Censys Discovery" in labels
+    assert "Censys Discovery" not in labels
 
 
-def test_registry_censys_discovery_feature_id():
+def test_registry_omits_censys_discovery_feature_id():
     from gui.components.experimental_features.registry import _get_features
     ids = [f.feature_id for f in _get_features()]
-    assert "censys_discovery" in ids
+    assert "censys_discovery" not in ids
 
 
-def test_registry_censys_discovery_after_keymaster():
+def test_registry_no_censys_after_keymaster():
     from gui.components.experimental_features.registry import _get_features
     ids = [f.feature_id for f in _get_features()]
-    assert ids.index("censys_discovery") > ids.index("keymaster")
+    assert "keymaster" in ids
+    assert ids[-1] == "keymaster"
 
 
 # Sub-group B: Build (dummy widget pattern — no display required)
@@ -1043,12 +1044,12 @@ def test_censys_discovery_tab_invoke_run_requires_selected_protocol():
 
 
 # ---------------------------------------------------------------------------
-# C8 — open_censys_results_db wiring
+# C10.z — no Censys results launcher in experimental context
 # ---------------------------------------------------------------------------
 
 
-def test_experimental_context_includes_open_censys_results_db(monkeypatch):
-    """handle_experimental_button_click context exposes open_censys_results_db."""
+def test_experimental_context_omits_open_censys_results_db(monkeypatch):
+    """handle_experimental_button_click should not expose suspended Censys launcher."""
     dash = _make_dash()
     dash._handle_reddit_grab_button_click = MagicMock()
     dash._open_reddit_post_db = MagicMock()
@@ -1062,8 +1063,7 @@ def test_experimental_context_includes_open_censys_results_db(monkeypatch):
 
     dashboard_experimental.handle_experimental_button_click(dash)
 
-    assert "open_censys_results_db" in captured["context"]
-    assert callable(captured["context"]["open_censys_results_db"])
+    assert "open_censys_results_db" not in captured["context"]
 
 
 def test_experimental_context_includes_open_app_config(monkeypatch):
@@ -1086,61 +1086,8 @@ def test_experimental_context_includes_open_app_config(monkeypatch):
     assert callable(captured["context"]["open_app_config"])
 
 
-def test_open_censys_results_db_calls_show_censys_browser_window(monkeypatch):
-    """open_censys_results_db opens the Censys browser with expected args."""
-    dash = _make_dash()
-
-    calls = []
-    monkeypatch.setattr(
-        "gui.components.dashboard_experimental.show_censys_browser_window",
-        lambda **kw: calls.append(kw),
-    )
-
-    dashboard_experimental.open_censys_results_db(dash)
-
-    assert len(calls) == 1
-    assert calls[0]["parent"] is dash.parent
-    assert calls[0]["add_record_callback"] is None
-    assert callable(calls[0]["promote_record_callback"])
-    assert callable(calls[0]["promote_records_callback"])
-    assert calls[0]["settings_manager"] is dash.settings_manager
-
-
-def test_open_censys_results_db_does_not_call_server_list_getter(monkeypatch):
-    """open_censys_results_db must not touch _server_list_getter."""
-    dash = _make_dash()
-    dash._server_list_getter = MagicMock()
-
-    monkeypatch.setattr(
-        "gui.components.dashboard_experimental.show_censys_browser_window",
-        lambda **kw: None,
-    )
-
-    dashboard_experimental.open_censys_results_db(dash)
-
-    dash._server_list_getter.assert_not_called()
-
-
-def test_open_censys_results_db_without_db_reader_has_no_promote_callback(monkeypatch):
-    """Browser still opens, but promote callbacks are None when DB unavailable."""
-    dash = _make_dash()
-    dash.db_reader = None
-
-    calls = []
-    monkeypatch.setattr(
-        "gui.components.dashboard_experimental.show_censys_browser_window",
-        lambda **kw: calls.append(kw),
-    )
-
-    dashboard_experimental.open_censys_results_db(dash)
-
-    assert len(calls) == 1
-    assert calls[0]["promote_record_callback"] is None
-    assert calls[0]["promote_records_callback"] is None
-
-
 # ---------------------------------------------------------------------------
-# C8 — Censys tab Open Results button state
+# C8 — Censys tab Open Results button state (module retained, tab unregistered)
 # ---------------------------------------------------------------------------
 
 
@@ -1407,6 +1354,38 @@ def test_censys_invoke_run_shows_config_unavailable_when_cfg_missing():
     assert "configuration unavailable" in messages[-1]
 
 
+def test_censys_invoke_run_requires_org_id_for_api_queries():
+    from gui.components.experimental_features.censys_discovery_tab import CensysDiscoveryTab
+
+    messages = []
+
+    class _Var:
+        def __init__(self, value):
+            self._value = value
+
+        def get(self):
+            return self._value
+
+    class _Label:
+        def configure(self, **kw):
+            messages.append(kw.get("text", ""))
+
+    cfg = MagicMock()
+    cfg.get_censys_pat.return_value = "pat-ok"
+    cfg.get_censys_org_id.return_value = None
+
+    tab = CensysDiscoveryTab.__new__(CensysDiscoveryTab)
+    tab._context = {}
+    tab._protocol_vars = {"FTP": _Var(True), "HTTP": _Var(False), "SMB": _Var(False)}
+    tab._status_label = _Label()
+    tab._load_config_from_settings = lambda: cfg
+
+    tab._invoke_run()
+
+    assert messages
+    assert "organization_id" in messages[-1]
+
+
 def test_censys_run_stack_worker_calls_protocols_in_order_and_stops_on_failure(monkeypatch):
     from experimental.censys_discovery.models import CensysRunResult, RUN_STATUS_DONE, RUN_STATUS_ERROR
     from gui.components.experimental_features.censys_discovery_tab import CensysDiscoveryTab
@@ -1449,18 +1428,53 @@ def test_censys_run_stack_worker_calls_protocols_in_order_and_stops_on_failure(m
 
     tab = CensysDiscoveryTab.__new__(CensysDiscoveryTab)
     tab.frame = _Frame()
+    tab._probe_search_access = lambda **_kwargs: (True, None)
     tab._on_run_stack_done = lambda summaries, failed_protocol, failed_message: captured.update(
         summaries=summaries,
         failed_protocol=failed_protocol,
         failed_message=failed_message,
     )
 
-    tab._run_stack_worker(["FTP", "HTTP", "SMB"], "pat", None, 24, 5, 100)
+    tab._run_stack_worker(["FTP", "HTTP", "SMB"], "pat", "org-123", 24, 5, 100)
 
     assert call_order == ["FTP", "HTTP"]
     assert captured["failed_protocol"] == "HTTP"
     assert captured["failed_message"] == "boom"
     assert len(captured["summaries"]) == 2
+
+
+def test_censys_run_stack_worker_stops_before_protocol_runners_when_probe_fails(monkeypatch):
+    from gui.components.experimental_features.censys_discovery_tab import CensysDiscoveryTab
+
+    called = []
+    probe_errors = []
+
+    def _run_unexpected(_options):
+        called.append(True)
+        raise AssertionError("Protocol runner should not be called when probe fails")
+
+    monkeypatch.setattr("experimental.censys_discovery.service.run_ftp_discovery", _run_unexpected)
+    monkeypatch.setattr("experimental.censys_discovery.service.run_http_discovery", _run_unexpected)
+    monkeypatch.setattr("experimental.censys_discovery.service.run_smb_discovery", _run_unexpected)
+
+    class _Frame:
+        after = staticmethod(lambda _ms, cb: cb())
+
+    tab = CensysDiscoveryTab.__new__(CensysDiscoveryTab)
+    tab.frame = _Frame()
+    tab._probe_search_access = lambda **_kwargs: (
+        False,
+        "Censys Search API access denied (403).",
+    )
+    tab._on_probe_failed = lambda message: probe_errors.append(message)
+    tab._on_run_stack_done = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("_on_run_stack_done should not fire on probe failure")
+    )
+
+    tab._run_stack_worker(["FTP", "HTTP"], "pat", "org-123", 24, 5, 100)
+
+    assert called == []
+    assert probe_errors == ["Censys Search API access denied (403)."]
 
 
 def test_censys_on_run_stack_done_formats_partial_failure_summary():

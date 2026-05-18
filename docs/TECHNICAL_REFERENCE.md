@@ -114,7 +114,7 @@ This shape applies to all three protocols. Protocol-specific differences are cov
 | `experimental/redseek/` | Reddit ingestion pipeline (client fetch, parse, sidecar persistence) | `client.py`, `service.py`, `parser.py`, `store.py` |
 | `experimental/dorkbook/` | Dorkbook sidecar persistence for reusable protocol dorks | `models.py`, `store.py` |
 | `experimental/keymaster/` | Keymaster sidecar persistence for reusable API keys | `models.py`, `store.py` |
-| `experimental/censys_discovery/` | Censys Platform v3 discovery sidecar (client, service, store, query builder, models) | `client.py`, `service.py`, `store.py`, `query_builder.py`, `models.py` |
+| `experimental/censys_discovery/` | Censys Platform v3 discovery sidecar (**development suspended**; backend retained, UI currently hidden) | `client.py`, `service.py`, `store.py`, `query_builder.py`, `models.py` |
 | `gui/components/`, `gui/dashboard/` | Tkinter windows/dialogs plus dashboard shim+implementation | `gui/components/dashboard.py` (compat shim), `gui/dashboard/widget.py`, `unified_scan_dialog.py`, `server_list_window/`, `running_tasks_window.py`, `db_tools_dialog.py`, `*_browser_window.py` |
 | `gui/utils/` | GUI infrastructure | `ui_dispatcher.py`, `scan_manager.py`, `backend_interface/`, `probe_runner.py`, `extract_runner.py`, `settings_manager.py` |
 | `tools/` | Database management utilities | `db_manager.py`, `db_schema.sql`, `db_maintenance.py`, `db_migrations.py`* |
@@ -924,7 +924,9 @@ Current tabs:
 - `SearXNG Dorking`
 - `Reddit`
 - `Keymaster`
-- `Censys Discovery`
+
+Suspended module:
+- `Censys Discovery` backend is retained in `experimental/censys_discovery/`, but its GUI surfaces are currently hidden.
 
 Warning banner behavior:
 - First open shows a warning banner with a "Don't show this notice again" checkbox
@@ -1080,24 +1082,10 @@ Delete: requires confirmation; no session-mute option in v1.
   - `Recheck Selected` remains available
 - `Auto check` is persisted in GUI settings under `keymaster.auto_check_query_credits`.
 
-Censys Discovery entry path:
-
-```text
-Dashboard -> Experimental tab -> Censys Discovery tab
-  -> CensysDiscoveryTab._refresh_balance() on UI thread (validates PAT + org_id from config)
-  -> spawns _fetch_balance_worker() on daemon thread (calls Censys credits API)
-  -> frame.after(0, ...) schedules label update back on UI thread
-  -> updates status + balance labels; no write on credit fetch
-  -> Open Results -> CensysBrowserWindow (reads ~/.dirracuda/data/experimental/censys_discovery.db)
-  -> "Add to dirracuda DB" promotes SMB/FTP/HTTP rows to main DB via sidecar promotion helpers
-  -> multi-select bulk import runs in background with BatchStatusDialog progress/cancel
-  -> double-click opens read-only result details view
-```
-
-Config keys consumed by Censys Discovery:
-- `censys.personal_access_token` — Censys Platform v3 PAT (required for live balance and future run wiring)
-- `censys.credit_profile` — `free_starter` (default) or `search_enterprise`
-- `censys.organization_id` — optional UUID; when set, credit queries are org-scoped
+Censys Discovery status:
+- Development suspended for now due free-tier API entitlement constraints on candidate-list query endpoints.
+- Backend and config contract are preserved for future reactivation.
+- Sidecar path remains `~/.dirracuda/data/experimental/censys_discovery.db`.
 
 ---
 
