@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<h1>Dashboard</h1>
+
+<div class="dash-card">
+  <h2>Service</h2>
+  <p>
+    {% if cfg.remote_enabled %}
+      Remote access enabled &mdash;
+    {% else %}
+      Localhost only &mdash;
+    {% endif %}
+    http://{{ cfg.bind_address }}:{{ cfg.port }}
+  </p>
+  <p>
+    Shodan Balance:
+    <span id="shodan-balance-status" class="status-text" role="status" aria-live="polite">
+      Checking...
+    </span>
+    <button id="shodan-balance-refresh" type="button">Refresh</button>
+  </p>
+</div>
+
+<div class="dash-card">
+  <h2>Active Scan</h2>
+  {% if qs.active %}
+    <p id="active-info" data-task-id="{{ qs.active.task_id }}">
+      <strong>{{ qs.active.task_id }}</strong>
+      &mdash; {{ qs.active.protocol }}
+      &mdash; <span id="active-status">{{ qs.active.status }}</span>
+      {% if qs.active.progress_message %}
+        &mdash; <span id="active-progress">{{ qs.active.progress_message }}</span>
+      {% endif %}
+    </p>
+  {% else %}
+    <p id="active-info" data-task-id="" class="status-text">none</p>
+  {% endif %}
+</div>
+
+<div class="dash-card">
+  <h2>Queue</h2>
+  {% if qs.queued %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Protocol</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for t in qs.queued %}
+          <tr>
+            <td>{{ t.task_id }}</td>
+            <td>{{ t.protocol }}</td>
+            <td>{{ t.status }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="status-text">Queue is empty.</p>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/dashboard.js"></script>
+{% endblock %}

@@ -404,6 +404,7 @@ def test_s10_se_dork_probe_task_lifecycle_success(monkeypatch) -> None:
         probe_preview="pub",
         probe_checked_at="2026-04-25T12:00:00",
         probe_error=None,
+        probe_snapshot_payload=None,
     )
 
     FakeSeDorkDialog.created.clear()
@@ -456,6 +457,7 @@ def test_s11_se_dork_probe_task_cleanup_on_failure(monkeypatch) -> None:
         probe_preview="pub",
         probe_checked_at="2026-04-25T12:00:00",
         probe_error=None,
+        probe_snapshot_payload=None,
     )
     infos = []
 

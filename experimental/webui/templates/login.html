@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dirracuda &#8211; Login</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="login-page">
+  <div class="login-wrap">
+    <div class="login-logo">&gt;&lt;(((°&gt;</div>
+    <div id="err" aria-live="polite" role="alert" class="status-error hidden" hidden></div>
+    <form id="lf" aria-label="Login">
+      <div class="field">
+        <label for="u">Username</label>
+        <input id="u" name="username" type="text" autocomplete="username" required>
+      </div>
+      <div class="field">
+        <label for="p">Password</label>
+        <input id="p" name="password" type="password" autocomplete="current-password" required>
+      </div>
+      <div class="form-actions">
+        <button type="submit">Sign in</button>
+      </div>
+    </form>
+    <p class="login-meta">
+      <a class="login-link" href="https://github.com/b3p3k0/dirracuda" target="_blank" rel="noopener noreferrer">GitHub</a>
+    </p>
+  </div>
+  <script src="/static/login.js"></script>
+</body>
+</html>

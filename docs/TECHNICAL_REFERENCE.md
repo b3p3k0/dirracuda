@@ -3,7 +3,7 @@
 **Version:** current (`development` branch)
 **Scope:** Internals for developers and security analysts who need more than the README and less than reading every file themselves.
 
-Dirracuda scans for internet-accessible servers exposing open or weakly-authenticated directories across three protocols: SMB, FTP, and HTTP. It discovers candidates through the Shodan API, verifies access, persists results to a local SQLite database, and provides both a CLI and a Tkinter GUI for interacting with the data.
+Dirracuda scans for internet-accessible servers exposing open or weakly-authenticated directories across three protocols: SMB, FTP, and HTTP. It discovers candidates through the Shodan API, verifies access, persists results to a local SQLite database, and provides CLI, Tkinter GUI, and optional Web UI surfaces for interacting with the data.
 
 ---
 
@@ -74,9 +74,98 @@ Dirracuda scans for internet-accessible servers exposing open or weakly-authenti
 │  gui/utils/settings_manager.py  (persists ~/.dirracuda/state/      │
 │                                  gui_settings.json)                │
 └─────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────┐
+│  Optional Web UI Layer                                              │
+│  experimental/webui/server.py -> experimental/webui/app.py (FastAPI app factory)              │
+│    ├─ auth/session/CSRF helpers                                     │
+│    ├─ tasks.py (single-active scan queue -> CLI subprocess runner)  │
+│    └─ db.py (read-only result queries + VACUUM INTO export)         │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 For SMB/FTP/HTTP scan flows, the GUI invokes CLI scripts as subprocesses via `gui/utils/backend_interface/interface.py` and parses stdout for progress data. Experimental SearXNG dorking (`experimental/se_dork`), Reddit ingestion (`experimental/redseek`), Dorkbook recipe management (`experimental/dorkbook`), and Keymaster key management (`experimental/keymaster`) are in-process paths launched from the dashboard.
+
+The optional Web UI is disabled by default and installed separately with
+`experimental/webui/requirements-web.txt`. Its C4 scan launcher follows the same CLI
+subprocess boundary as the Tkinter GUI: one active scan at a time, strict request
+validation, explicit `shell=False`, repo-root `cwd`, unbuffered Python output,
+and merged stdout/stderr progress logs. Web UI SMB tasks run with `--legacy` by
+default so SMB1-capable targets are included. When `run_probe_after_scan=true`,
+the task runner executes a protocol-aware post-scan probe stage for SMB/FTP/HTTP
+verified hosts.
+
+**Web UI routes (C4–C6):**
+
+| Route | Auth | Description |
+|-------|------|-------------|
+| `POST /api/scans` | session + CSRF | Queue one scan task (`protocol`: `smb\|ftp\|http`). Includes `max_shodan_results` (1..100000) for per-task query-limit/budget overrides. Optional `run_probe_after_scan` triggers protocol-aware post-scan probe stage for the same protocol after the scan subprocess succeeds. |
+| `GET /api/scans/{task_id}` | session | Task status/log polling for queued/running/completed scan tasks |
+| `POST /api/scans/{task_id}/cancel` | session + CSRF | Cancel queued task or request cancellation for active task (scan/probe stage) |
+| `GET /api/dashboard/shodan-balance` | session | Dashboard balance status endpoint (query credits only). Reads Shodan API key from main config server-side, never returns key material. Supports `force=true` to bypass cache. Response states: `ok`, `no_key`, `unavailable` (with sanitized reason code only). |
+| `GET /results` | session | Results page (`ALL/SMB/FTP/HTTP` tabs, desktop-style search + row filters, desktop-parity row columns, pagination with first/prev/next/last/jump-to). Search matches IP address and accessible-shares text (case-insensitive substring). Click any row to open a single inline details accordion under that row; compact overview + read-only notes are shown immediately, with a nested **Show full details** toggle exposing a 10-line scrollable text area. Refresh is manual via the **Refresh** button; no background auto-refresh/polling is performed. |
+| `GET /api/results/{protocol}` | session | Paginated JSON rows; `protocol` ∈ `all\|smb\|ftp\|http`; `page` 1–10 000; `page_size` 1–200; optional `search` (case-insensitive substring on `ip_address` and `accessible_shares_list`). Legacy `country` query is rejected with `400`. Response includes `total_count`, `total_pages`, and per-row identity keys (`row_key`, `protocol_server_id`) used for lazy details loading. |
+| `GET /api/results/details` | session | Row-details JSON for inline expansion. Query params: `host_type` (`S\|F\|H`) and `protocol_server_id` (>0). Returns identity fields, structured `overview`, read-only `notes`, and multiline `full_details_text`. Error contract: `400` invalid params, `404` not found, `500` query/runtime error. |
+| `POST /api/export` | session + CSRF | Export main DB via `VACUUM INTO`; artifact written to `~/.dirracuda/exports/`; response: `{"filename": "dirracuda_export_YYYYMMDD_HHMMSS_<8hex>.db"}` |
+| `GET /api/export/{filename}` | session | Download an export artifact; filename enforced against allowlist regex before serving |
+| `GET /config` | session | Web UI config page (bind/port/remote/TLS/allowlist/session timeout, and auth lockout fields) |
+| `POST /config` | session + CSRF | Validate and save `webui.json` fields. UI submits idle timeout in minutes and absolute timeout in hours; server converts to stored seconds before `save_config`. Auth lockout fields (`auth_lockout_threshold`, `auth_lockout_window_sec`, `auth_lockout_base_duration_sec`, `auth_lockout_max_duration_sec`) are optional in the payload; missing keys preserve the existing config values. |
+| `GET /health` | none | Liveness check. Returns `{"status": "ok", "rate_limiter": "ok"}` when the rate-limit DB is accessible, or `{"status": "ok", "rate_limiter": "error"}` when the DB is unavailable (degraded localhost mode or runtime DB failure). A `"rate_limiter": "error"` response does not prevent logins in localhost mode but signals that lockout enforcement is disabled. |
+
+Web UI preference persistence (C19): authenticated pages can optionally persist allowlisted, non-sensitive UI selectors/toggles in browser `localStorage` after explicit one-time opt-in. This uses two keys (`dirracuda_pref_consent_v1`, `dirracuda_pref_data_v1`) and never stores free-text filters, credentials, or auth/session/CSRF material. Preference-storage controls (enable/disable/clear) are available on `/config`.
+
+Dashboard balance behavior (C21): `/dashboard` fetches Shodan query-credit status on page load and via manual Refresh only (no polling). The server uses a 150-second in-memory cache keyed by non-reversible API-key fingerprint and returns sanitized failure reasons (`auth`, `timeout`, `network`, `rate_limited`, `provider`, `unknown`) without exposing provider raw errors.
+
+`experimental/webui/db.py` implements unified results readers for desktop-parity rows and `export_db`. Readers use read-only URI connections (`mode=ro`) and runtime schema guards (`sqlite_master` + `PRAGMA table_info`) so optional protocol tables/columns degrade safely on older or partial schemas. The export function opens the source with `mode=rw` (no-create) to prevent silent empty-DB creation when the source is absent.
+
+**Web UI startup and remote mode (C8):**
+
+`experimental/webui/server.py::run()` loads `webui.json` via `load_config()` (which calls `validate()`) before starting uvicorn. CLI `--host`, `--port`, and `--config` args are supported. `--host`/`--port` are treated as validated overrides over the loaded config (re-validated after merge); `--config` selects the webui.json path to load and propagates to `create_app()` so the `/config` save endpoint writes back to the same file. Startup exits immediately on any validation failure — no silent fallback. Desktop service control launches with module semantics (`python -m experimental.webui.server`) rather than direct script execution, so package imports resolve correctly after the `experimental/webui` move.
+
+Config fields relevant to remote mode:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `bind_address` | `"127.0.0.1"` | IP to bind. Loopback = localhost mode. |
+| `remote_enabled` | `false` | Must be `true` for any non-loopback bind. |
+| `allowed_cidrs` | `["127.0.0.1/32","::1/128"]` | IP allowlist enforced per-request when `remote_enabled=true`. |
+| `tls.enabled` | `true` | TLS on/off. Remote with TLS requires cert+key. |
+| `tls.cert_file` / `tls.key_file` | `""` | Paths to PEM cert and key. Required for remote TLS. |
+| `tls.allow_insecure_remote` | `false` | Allow non-loopback HTTP. Must be explicitly set; no default. |
+| `auth.lockout_threshold` | `5` | Failed attempts per (account, IP) pair before lockout. Range: 3–20. |
+| `auth.lockout_window_sec` | `900` | Observation window (seconds) in which failures are counted. Range: 60–3600. |
+| `auth.lockout_base_duration_sec` | `300` | Initial lockout duration (seconds). Doubles on each subsequent lockout (exponential backoff). Range: 30–3600. |
+| `auth.lockout_max_duration_sec` | `3600` | Maximum lockout duration (seconds) after repeated lockouts. Must be ≥ base duration. Range: 300–86400. |
+
+Startup enforcement rules (fail-closed, checked before uvicorn starts):
+- Loopback bind: always allowed with any TLS state.
+- Non-loopback: requires `remote_enabled=true`, non-empty `allowed_cidrs`, and either (TLS enabled with cert+key present) or (`tls.allow_insecure_remote=true` with TLS disabled).
+- TLS enabled for remote without cert/key files readable on disk → startup refused.
+
+Allowlist middleware: registered as an HTTP middleware in `create_app()`. When `remote_enabled=True`, each request's `request.client.host` is checked against `allowed_cidrs` (parsed as `ipaddress.ip_network` objects). Non-matching or non-parseable addresses get 403. When `remote_enabled=False`, the check is skipped entirely — localhost mode is unaffected.
+
+**Anti-automation lockout (O1 — OWASP ASVS V6.3.1 / NIST SP 800-63B §5.2.2):** `experimental/webui/rate_limiter.py` provides persistent per-`(account, IP)` login lockout backed by `~/.dirracuda/state/webui_ratelimit.db` (SQLite, mode `0600`, DELETE journal — no WAL sidecar files). Lockout key format: `account:{username}:ip:{client_ip}`. After `lockout_threshold` failures within `lockout_window_sec`, the composite key is locked for `lockout_base_duration_sec * 2^(lockout_count-1)` (capped at `lockout_max_duration_sec`). A successful login calls `DELETE FROM auth_attempts WHERE account = ?`, clearing all IP entries for the account. Stale rows are pruned in the same transaction as each `record_failure` call. All auth-state outcomes (wrong password, locked, unknown user) return an identical 401 body — no lockout state is disclosed.
+
+**Password policy (O2 — OWASP ASVS V6.2.1/V6.2.3/V6.2.4/V6.2.5 / NIST SP 800-63B §3.1.1.2):** `experimental/webui/auth.py::set_password()` enforces: minimum 15 characters; case-insensitive match against `experimental/webui/pwlist.txt` (top-10000 common passwords, MIT-licensed SecLists data); no composition rules (passphrases accepted). `validate_password_policy()` raises `BlocklistUnavailableError(RuntimeError)` if the blocklist is absent, unreadable (`OSError`), or undersized (fewer than 3000 entries after parsing — `BLOCKLIST_MIN_SIZE`). Web routes handle `BlocklistUnavailableError` → 503 and `ValueError` → 400 separately. `verify_password()` is not affected by policy — pre-policy credentials remain verifiable. The `GET /account` + `POST /api/auth/change-password` endpoints provide authenticated credential rotation; the change requires the current password. The desktop credentials dialog (`webui_tab.py`) enforces the same separation: bootstrap (no stored creds) takes editable username/password; rotation (one stored cred) takes read-only username + current password + new password; multiple stored credentials block the dialog with an operator message directing to CLI management.
+
+**Response security headers (O3 — OWASP HTTP Headers Cheat Sheet / CSP Cheat Sheet):** `experimental/webui/app.py` registers a `_security_headers` HTTP middleware (outermost wrapper, runs after allowlist check) that applies the following headers to every response:
+
+| Header | Value |
+|---|---|
+| `Content-Security-Policy` | `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'` |
+| `X-Frame-Options` | `DENY` |
+| `X-Content-Type-Options` | `nosniff` |
+| `Referrer-Policy` | `no-referrer` |
+| `Cache-Control` | `no-store` (applied to all non-`/static/` paths; static assets are excluded) |
+| `Strict-Transport-Security` | `max-age=63072000; includeSubDomains` (only when `request.url.scheme == "https"`) |
+
+The `_CSP_POLICY` constant is defined once at module scope in `app.py`. `script-src 'self'` excludes `unsafe-inline`; all page JavaScript is served from `experimental/webui/static/*.js`. No inline `<script>` blocks or inline `style=` attributes are present in rendered HTML templates.
+
+`Cache-Control: no-store` scope: applies to all dynamic routes including authenticated HTML pages, JSON API responses, export trigger (`POST /api/export`), export download (`GET /api/export/{filename}`), and health (`GET /health`). The only exemption is the `/static/` path prefix (CSS, JS, images). This scope is intentional — the middleware has no route-level allow-list.
+
+Runtime DB error behavior: if a SQLite error occurs on `check_locked` or `record_failure` after successful startup, remote mode returns 503 (fail-closed); localhost mode logs the error and degrades gracefully (logins proceed unthrottled, health endpoint reports `"rate_limiter": "error"`). Startup behavior: remote mode refuses to start if the rate-limit DB is unavailable; localhost mode assigns a `NullRateLimiter` and starts degraded.
+
+**Reverse proxy note:** `request.client.host` reflects the TCP peer address as seen by the ASGI server. Behind a reverse proxy, this will be the proxy's address rather than the real client IP unless forwarded-header trust is correctly configured at the ASGI server layer — that configuration is deployment-specific and not managed by `experimental/webui/server.py`. Without it, allowlist decisions may be wrong (all traffic passes as the proxy address, or forwarded headers can be spoofed). See [FastAPI proxy guidance](https://fastapi.tiangolo.com/advanced/behind-a-proxy/) and [uvicorn deployment docs](https://www.uvicorn.org/deployment/) for details on trusted-proxy configuration.
 
 ### 1.2 Core Workflow Flowchart
 
@@ -117,6 +206,7 @@ This shape applies to all three protocols. Protocol-specific differences are cov
 | `experimental/censys_discovery/` | Censys Platform v3 discovery sidecar (**development suspended**; backend retained, UI currently hidden) | `client.py`, `service.py`, `store.py`, `query_builder.py`, `models.py` |
 | `gui/components/`, `gui/dashboard/` | Tkinter windows/dialogs plus dashboard shim+implementation | `gui/components/dashboard.py` (compat shim), `gui/dashboard/widget.py`, `unified_scan_dialog.py`, `server_list_window/`, `running_tasks_window.py`, `db_tools_dialog.py`, `*_browser_window.py` |
 | `gui/utils/` | GUI infrastructure | `ui_dispatcher.py`, `scan_manager.py`, `backend_interface/`, `probe_runner.py`, `extract_runner.py`, `settings_manager.py` |
+| `experimental/webui/` | Optional FastAPI Web UI package; disabled by default | `app.py`, `server.py`, `config.py`, `auth.py`, `sessions.py`, `dependencies.py`, `tasks.py`, `templates/` |
 | `tools/` | Database management utilities | `db_manager.py`, `db_schema.sql`, `db_maintenance.py`, `db_migrations.py`* |
 | `conf/` | Application configuration | `config.json.example`, `exclusion_list.json`, `ransomware_indicators.json` |
 
@@ -794,13 +884,17 @@ dirracuda
    │    ├─ FTP tab
    │    └─ HTTP tab
    ├─ ExperimentalFeaturesDialog (gui/components/experimental_features_dialog.py)
+   │    ├─ SearXNG tab (gui/components/experimental_features/se_dork_tab.py)
+   │    │    └─ SeDorkBrowserWindow (gui/components/se_dork_browser_window.py)
+   │    ├─ Reddit tab (gui/components/experimental_features/reddit_tab.py)
+   │    │    ├─ RedditGrabDialog (gui/components/reddit_grab_dialog.py)
+   │    │    └─ RedditBrowserWindow (gui/components/reddit_browser_window.py)
+   │    ├─ Web UI tab (gui/components/experimental_features/webui_tab.py)
+   │    │    └─ inline controls: status/start/stop/open browser/copy URL
    │    ├─ Dorkbook tab (gui/components/experimental_features/dorkbook_tab.py)
    │    │    └─ DorkbookWindow (gui/components/dorkbook_window.py)
-   │    ├─ SearXNG Dorking tab (gui/components/experimental_features/se_dork_tab.py)
-   │    │    └─ SeDorkBrowserWindow (gui/components/se_dork_browser_window.py)
-   │    └─ Reddit tab (gui/components/experimental_features/reddit_tab.py)
-   │         ├─ RedditGrabDialog (gui/components/reddit_grab_dialog.py)
-   │         └─ RedditBrowserWindow (gui/components/reddit_browser_window.py)
+   │    └─ Keymaster tab (gui/components/experimental_features/keymaster_tab.py)
+   │         └─ KeymasterWindow (gui/components/keymaster_window.py)
    ├─ DBToolsDialog (gui/components/db_tools_dialog.py)
    │    └─ DBToolsEngine (gui/utils/db_tools_engine.py)
    ├─ RunningTasksWindow (gui/components/running_tasks_window.py)
@@ -837,7 +931,7 @@ SearXNG dorking, Reddit ingestion, and Dorkbook do not use this subprocess path.
 | Start Scan | Opens `UnifiedScanDialog` (protocol selector + scan options), then always shows preflight confirmation with live-balance + cost visibility before launch. Numeric estimates are shown only when live balance lookup succeeds. |
 | Server List | Opens `ServerListWindow` with SMB / FTP / HTTP tabs |
 | DB Tools | Opens `DBToolsDialog` |
-| Experimental | Opens `ExperimentalFeaturesDialog` (`Dorkbook`, `SearXNG Dorking`, `Reddit` tabs) |
+| Experimental | Opens `ExperimentalFeaturesDialog` (`SearXNG`, `Reddit`, `Web UI`, `Dorkbook`, `Keymaster` tabs) |
 | Configuration | Opens config editor |
 | Dark/Light toggle | Switches ttkthemes theme; persisted in `gui_settings.json` |
 | Running Tasks | Opens non-modal task manager for active/queued work; supports monitor reopen via double-click |
@@ -915,14 +1009,15 @@ Backed by `gui/utils/db_tools_engine.py`. Capabilities:
 - **Statistics** — server count by country, protocol breakdown
 - **Maintenance** — SQLite VACUUM, integrity check (`PRAGMA integrity_check`), cascade-deletion preview before purging old sessions
 
-### 6.9 Experimental Features (Dorkbook, SearXNG, Reddit, Keymaster)
+### 6.9 Experimental Features (SearXNG, Reddit, Web UI, Dorkbook, Keymaster)
 
 `ExperimentalFeaturesDialog` is a modeless tab host opened from the dashboard `Experimental` button. Tabs are registry-driven (`gui/components/experimental_features/registry.py`), so adding/removing experimental modules is a registry edit, not dialog shell surgery.
 
-Current tabs:
-- `Dorkbook`
-- `SearXNG Dorking`
+Current tabs (registry order):
+- `SearXNG`
 - `Reddit`
+- `Web UI`
+- `Dorkbook`
 - `Keymaster`
 
 Suspended module:
@@ -931,6 +1026,16 @@ Suspended module:
 Warning banner behavior:
 - First open shows a warning banner with a "Don't show this notice again" checkbox
 - Dismissal writes `experimental.warning_dismissed=true` immediately (not deferred to dialog close)
+
+Web UI tab behavior:
+- Controls are inline in the tab (no separate control window).
+- Status/start/stop use `experimental.webui.service_control` with pidfile + health checks.
+- Start failures are shown inline as `Failed: <reason>` (for example, exit code or startup timeout) instead of collapsing back to `Stopped`.
+- Credential setup opens from `Manage Credentials` into a modal dialog (`Username`, `Password`, `Save Credentials`) and calls `experimental.webui.auth.set_password(...)`; expected validation/save errors are shown inline (no popup spam).
+- `WebUI Config` opens a modal dialog with the same control surface as `/config` (`bind_address`, `port`, `remote_enabled`, TLS fields, `allowed_cidrs`, idle/absolute session timeouts, and auth lockout tuning fields).
+- Config dialog supports `Save` (persist only) and `Save & Restart` (save, then restart/start the service). Validation/save/restart outcomes are shown inline in dialog status text.
+- Open-browser and copy-URL actions use the current `webui.json` host/port values.
+- `/config` includes browser preference-storage controls for Web UI selector/toggle persistence (`localStorage`, explicit opt-in, user-clearable).
 
 Dorkbook entry path:
 
@@ -1124,6 +1229,28 @@ The RCE runtime pipeline (`shared/rce_scanner/`, `commands/access/rce_analyzer.p
 ### 7.5 Ethical Use
 
 This tool is for authorised security research and auditing only. Running it against systems you do not own or lack explicit permission to test is illegal in most jurisdictions. The Shodan dorks target publicly indexed hosts; that does not constitute permission to access them.
+
+### 7.6 Credential Store (O4)
+
+**Write path:** `auth.set_password()` calls `config._atomic_write_json()`, which writes to a temp file, calls `os.chmod(tmp, 0o600)`, then atomically renames it into place. Mode `0600` is set before the file becomes visible at the final path.
+
+**Read path:** `auth._load_creds()` calls `_check_creds_permissions()` immediately after confirming the file exists. If the mode is not exactly `0600` (POSIX only; no-op on Windows), `CredentialError` is raised. Caller behaviour:
+
+| Caller | CredentialError behaviour |
+|---|---|
+| `verify_password()` | Absorbed by outer `except Exception` → returns `False` |
+| `set_password()` | Propagates — store must be repaired before new creds can be written |
+| `credential_exists()` / `get_credential_usernames()` | Propagates |
+| Web `_change_password` route | Preflight `check_credential_store()` before `verify_password()` → HTTP 503 |
+| Desktop credential dialog | Caught at dialog-open time → operator-facing repair message |
+
+**Preflight helper:** `auth.check_credential_store(path=None)` is the public API for callers that need to surface the error before calling `verify_password()` (which swallows it). Call it when a config error should produce a distinct response code from an auth failure.
+
+**Operator repair:**
+
+```bash
+chmod 0600 ~/.dirracuda/conf/webui_creds.json
+```
 
 ---
 

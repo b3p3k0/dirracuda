@@ -344,6 +344,7 @@ Experimental work is grouped under the permanent `⚗ Experimental` button in th
 The dialog is modeless and tab-based. Current tabs:
 - `SearXNG`
 - `Reddit`
+- `Web UI`
 - `Dorkbook`
 - `Keymaster`
 
@@ -481,7 +482,7 @@ Storage behavior:
 
 Key table columns: `Label`, `Key Preview`, `Query Credits`, `Notes`, `Last Used`.
 
-Key Preview format: keys longer than 8 characters show as `first4 + asterisks + last4`; shorter keys are fully masked.
+Key Preview format: keys longer than 8 characters show as `first4 + asterisks`; shorter keys are fully masked.
 
 ### Censys Discovery
 
@@ -497,6 +498,50 @@ What is retained:
 Current UI state:
 - No Censys tab in Experimental Features.
 - No Censys settings tab in Application Configuration.
+
+## Web UI (Optional)
+
+An optional browser-based interface for scan management, results browsing, and database export. Runs as a separate service alongside the desktop GUI; disabled by default.
+
+```bash
+pip install -r experimental/webui/requirements-web.txt
+./venv/bin/python -m experimental.webui.server
+# → http://127.0.0.1:5480
+```
+
+For setup, configuration, remote mode, and security guidance, see [experimental/webui/README.md](experimental/webui/README.md).
+
+From the desktop app, use `Experimental -> Web UI` for inline service controls
+(`Start`, `Stop`, `Open in Browser`, `Copy URL`) with live status, including
+explicit startup-failure reasons when launch fails.
+The same tab also provides inline username/password credential setup (create or
+update) for Web UI login.
+In the Web UI scan page, `Run probe on verified hosts after scan` now applies to
+SMB, FTP, and HTTP using the shared protocol-aware probe pipeline.
+Login is protected by persistent per-account+IP lockout (configurable threshold,
+observation window, and exponential backoff via the `auth` block in `webui.json`
+or via the desktop config dialog). The `GET /health` endpoint reports
+`"rate_limiter": "ok"` when lockout enforcement is active, or `"rate_limiter":
+"error"` when the rate-limit DB is unavailable (degraded mode). In remote mode,
+a runtime DB failure causes login to return 503 (fail-closed).
+Passwords must be at least 15 characters and are checked against a top-10000
+common-password list. Passphrases are accepted without composition restrictions
+(no forced uppercase, numbers, or symbols). Logged-in users can change their
+password at any time via `Account` in the navigation bar; the change requires
+the current password for verification.
+The credential store (`~/.dirracuda/conf/webui_creds.json`) is written mode
+`0600` and that permission is verified on every read — a world-readable file
+blocks all credential operations until repaired with `chmod 0600`.
+Every response includes a centralized set of security headers:
+`Content-Security-Policy` (strict; `script-src 'self'`, no `unsafe-inline`),
+`X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`,
+`Referrer-Policy: no-referrer`, and `Cache-Control: no-store` on all dynamic
+responses. `Strict-Transport-Security` is added only when the server is
+accessed over HTTPS. All page JavaScript is served from static files under
+`/static/`; no inline scripts or inline `style=` attributes are present in
+rendered HTML.
+
+---
 
 ## Advanced
 

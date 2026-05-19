@@ -42,11 +42,14 @@ import gui.components.dashboard_experimental as dashboard_experimental
 
 
 class _ValueVar:
-    def __init__(self) -> None:
-        self.value = None
+    def __init__(self, value=None) -> None:
+        self.value = value
 
     def set(self, value) -> None:
         self.value = value
+
+    def get(self):
+        return self.value
 
 
 class _StatusWidget:
@@ -75,6 +78,19 @@ class _FrameWidget:
     def after(self, delay, callback):
         self.after_calls.append((delay, callback))
         return "after-id"
+
+
+class _DialogWidget(_FrameWidget):
+    def __init__(self) -> None:
+        super().__init__()
+        self.destroyed = False
+        self.released = False
+
+    def grab_release(self):
+        self.released = True
+
+    def destroy(self):
+        self.destroyed = True
 
 
 def _make_reddit_status_tab(context: dict) -> RedditTab:
@@ -275,6 +291,27 @@ def test_experimental_context_includes_reddit_grab_status_getter(monkeypatch):
     assert getter() is True
     dash._reddit_grab_running = False
     assert getter() is False
+    assert "open_webui_control" not in captured["context"]
+
+
+def test_experimental_context_includes_webui_config_path(monkeypatch):
+    dash = _make_dash()
+    dash._handle_reddit_grab_button_click = MagicMock()
+    dash._open_reddit_post_db = MagicMock()
+    dash._resolve_active_config_path = MagicMock(return_value=Path("/tmp/app-config.json"))
+    captured = {}
+    monkeypatch.setattr(
+        "gui.components.experimental_features_dialog.show_experimental_features_dialog",
+        lambda parent, context, settings_manager: captured.update(
+            parent=parent,
+            context=context,
+            settings_manager=settings_manager,
+        ),
+    )
+
+    dashboard_experimental.handle_experimental_button_click(dash)
+
+    assert captured["context"]["webui_config_path"] == "/tmp/app-config.json"
 
 
 def test_open_reddit_post_db_with_live_server_window(monkeypatch):
@@ -652,7 +689,7 @@ def test_registry_dorkbook_after_reddit():
     from gui.components.experimental_features.registry import _get_features
 
     features = _get_features()
-    assert features[2].feature_id == "dorkbook"
+    assert features[3].feature_id == "dorkbook"
 
 
 # ---------------------------------------------------------------------------
@@ -835,7 +872,7 @@ def test_registry_keymaster_feature_id():
 def test_registry_keymaster_after_dorkbook():
     from gui.components.experimental_features.registry import _get_features
     features = _get_features()
-    assert features[3].feature_id == "keymaster"
+    assert features[4].feature_id == "keymaster"
 
 
 def test_keymaster_tab_callback_invoked():
@@ -1510,3 +1547,764 @@ def test_censys_on_run_stack_done_formats_partial_failure_summary():
     assert "Completed: FTP: fetched 4, stored 3" in messages[-1]
     assert running_flags == [False]
     assert refreshed == [True]
+# C7/C10 — Web UI tab registry and inline control behavior
+# ---------------------------------------------------------------------------
+
+def test_registry_webui_tab_exists():
+    from gui.components.experimental_features.registry import _get_features
+    ids = [f.feature_id for f in _get_features()]
+    assert "webui" in ids
+
+
+def test_registry_webui_label():
+    from gui.components.experimental_features.registry import _get_features
+    labels = [f.label for f in _get_features()]
+    assert "Web UI" in labels
+
+
+def test_registry_tab_order_exact():
+    from gui.components.experimental_features.registry import _get_features
+    ids = [f.feature_id for f in _get_features()]
+    assert ids == ["se_dork", "reddit", "webui", "dorkbook", "keymaster"]
+
+
+def test_webui_tab_get_cfg_fallback(monkeypatch):
+    from gui.components.experimental_features.webui_tab import WebUITab
+
+    def _boom():
+        raise RuntimeError("fail")
+
+    monkeypatch.setattr("experimental.webui.config.load_config", _boom)
+    tab = WebUITab.__new__(WebUITab)
+    cfg = tab._get_webui_cfg()
+    assert cfg.bind_address == "127.0.0.1"
+    assert cfg.port == 5480
+
+
+def test_webui_tab_apply_status_running():
+    from gui.components.experimental_features.webui_tab import WebUITab
+
+    tab = WebUITab.__new__(WebUITab)
+    tab.frame = _FrameWidget()
+    tab._status_var = _ValueVar()
+    tab._start_btn = _StatusWidget()
+    tab._stop_btn = _StatusWidget()
+    tab._browser_btn = _StatusWidget()
+
+    tab._apply_status(True)
+
+    assert tab._status_var.value == "Running"
+    assert tab._start_btn.configure_calls[-1] == {"state": tk.DISABLED}
+    assert tab._stop_btn.configure_calls[-1] == {"state": tk.NORMAL}
+    assert tab._browser_btn.configure_calls[-1] == {"state": tk.NORMAL}
+
+
+def test_webui_tab_apply_status_stopped():
+    from gui.components.experimental_features.webui_tab import WebUITab
+
+    tab = WebUITab.__new__(WebUITab)
+    tab.frame = _FrameWidget()
+    tab._status_var = _ValueVar()
+    tab._start_btn = _StatusWidget()
+    tab._stop_btn = _StatusWidget()
+    tab._browser_btn = _StatusWidget()
+
+    tab._apply_status(False)
+
+    assert tab._status_var.value == "Stopped"
+    assert tab._start_btn.configure_calls[-1] == {"state": tk.NORMAL}
+    assert tab._stop_btn.configure_calls[-1] == {"state": tk.DISABLED}
+    assert tab._browser_btn.configure_calls[-1] == {"state": tk.DISABLED}
+
+
+def test_webui_tab_apply_status_failed():
+    from gui.components.experimental_features.webui_tab import WebUITab
+
+    tab = WebUITab.__new__(WebUITab)
+    tab.frame = _FrameWidget()
+    tab._status_var = _ValueVar()
+    tab._start_btn = _StatusWidget()
+    tab._stop_btn = _StatusWidget()
+    tab._browser_btn = _StatusWidget()
+
+    tab._apply_failed_status("process exited with code 1")
+
+    assert tab._status_var.value == "Failed: process exited with code 1"
+    assert tab._start_btn.configure_calls[-1] == {"state": tk.NORMAL}
+    assert tab._stop_btn.configure_calls[-1] == {"state": tk.DISABLED}
+    assert tab._browser_btn.configure_calls[-1] == {"state": tk.DISABLED}
+
+
+def test_webui_tab_on_start_failed_sets_inline_status(monkeypatch):
+    from gui.components.experimental_features.webui_tab import WebUITab
+
+    class _ImmediateThread:
+        def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+            self._target = target
+            self._args = args
+            self._kwargs = kwargs or {}
+
+        def start(self):
+            if self._target is not None:
+                self._target(*self._args, **self._kwargs)
+
+    monkeypatch.setattr(
+        "gui.components.experimental_features.webui_tab.threading.Thread",
+        _ImmediateThread,
+    )
+    monkeypatch.setattr(
+        "experimental.webui.service_control.start",
+        lambda *_a, **_k: types.SimpleNamespace(
+            ok=False, state="failed", reason="process exited with code 1"
+        ),
+    )
+
+    tab = WebUITab.__new__(WebUITab)
+    tab.frame = _FrameWidget()
+    tab._status_var = _ValueVar()
+    tab._start_btn = _StatusWidget()
+    tab._stop_btn = _StatusWidget()
+    tab._browser_btn = _StatusWidget()
+    tab._get_webui_cfg = lambda: types.SimpleNamespace(bind_address="127.0.0.1", port=5480)
+    tab._schedule_ui = lambda cb: cb()
+
+    tab._on_start()
+
+    assert tab._status_var.value == "Failed: process exited with code 1"
+    assert tab._start_btn.configure_calls[-1] == {"state": tk.NORMAL}
+    assert tab._stop_btn.configure_calls[-1] == {"state": tk.DISABLED}
+    assert tab._browser_btn.configure_calls[-1] == {"state": tk.DISABLED}
+
+
+def test_webui_tab_on_start_success_sets_running(monkeypatch):
+    from gui.components.experimental_features.webui_tab import WebUITab
+
+    class _ImmediateThread:
+        def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+            self._target = target
+            self._args = args
+            self._kwargs = kwargs or {}
+
+        def start(self):
+            if self._target is not None:
+                self._target(*self._args, **self._kwargs)
+
+    monkeypatch.setattr(
+        "gui.components.experimental_features.webui_tab.threading.Thread",
+        _ImmediateThread,
+    )
+    monkeypatch.setattr(
+        "experimental.webui.service_control.start",
+        lambda *_a, **_k: types.SimpleNamespace(ok=True, state="running", reason=""),
+    )
+
+    tab = WebUITab.__new__(WebUITab)
+    tab.frame = _FrameWidget()
+    tab._status_var = _ValueVar()
+    tab._start_btn = _StatusWidget()
+    tab._stop_btn = _StatusWidget()
+    tab._browser_btn = _StatusWidget()
+    tab._get_webui_cfg = lambda: types.SimpleNamespace(bind_address="127.0.0.1", port=5480)
+    tab._schedule_ui = lambda cb: cb()
+
+    tab._on_start()
+
+    assert tab._status_var.value == "Running"
+    assert tab._start_btn.configure_calls[-1] == {"state": tk.DISABLED}
+    assert tab._stop_btn.configure_calls[-1] == {"state": tk.NORMAL}
+    assert tab._browser_btn.configure_calls[-1] == {"state": tk.NORMAL}
+
+
+def test_webui_tab_on_save_credentials_dialog_empty_username():
+    from gui.components.experimental_features.webui_tab import WebUITab
+
+    tab = WebUITab.__new__(WebUITab)
+    tab.frame = _FrameWidget()
+    tab._cred_dialog = _FrameWidget()
+    tab._multi_cred_error = False
+    tab._creds_existed_at_open = False
+    tab._cred_status_var = _ValueVar("Ready")
+    tab._save_creds_btn = _StatusWidget()
+    tab._cred_username_var = _ValueVar("   ")
+    tab._cred_password_var = _ValueVar("secret1")
+
+    tab._on_save_credentials_dialog()
+
+    assert tab._cred_status_var.value == "Failed: username is required"
+    assert tab._save_creds_btn.configure_calls[-1] == {"state": tk.NORMAL}
+
+
+def test_webui_tab_on_save_credentials_dialog_empty_password():
+    from gui.components.experimental_features.webui_tab import WebUITab
+
+    tab = WebUITab.__new__(WebUITab)
+    tab.frame = _FrameWidget()
+    tab._cred_dialog = _FrameWidget()
+    tab._multi_cred_error = False
+    tab._creds_existed_at_open = False
+    tab._cred_status_var = _ValueVar("Ready")
+    tab._save_creds_btn = _StatusWidget()
+    tab._cred_username_var = _ValueVar("admin")
+    tab._cred_password_var = _ValueVar("")
+
+    tab._on_save_credentials_dialog()
+
+    assert tab._cred_status_var.value == "Failed: password is required"
+    assert tab._save_creds_btn.configure_calls[-1] == {"state": tk.NORMAL}
+
+
+def test_webui_tab_on_save_credentials_dialog_success(monkeypatch):
+    from gui.components.experimental_features.webui_tab import WebUITab
+
+    class _ImmediateThread:
+        def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+            self._target = target
+            self._args = args
+            self._kwargs = kwargs or {}
+
+        def start(self):
+            if self._target is not None:
+                self._target(*self._args, **self._kwargs)
+
+    calls = []
+    monkeypatch.setattr(
+        "gui.components.experimental_features.webui_tab.threading.Thread",
+        _ImmediateThread,
+    )
+    monkeypatch.setattr(
+        "experimental.webui.auth.set_password",
+        lambda username, password: calls.append((username, password)),
+    )
+
+    tab = WebUITab.__new__(WebUITab)
+    tab.frame = _FrameWidget()
+    tab._cred_dialog = _FrameWidget()
+    tab._multi_cred_error = False
+    tab._creds_existed_at_open = False
+    tab._cred_current_password_var = None
+    tab._schedule_dialog_ui = lambda cb: cb()
+    tab._cred_status_var = _ValueVar("Ready")
+    tab._save_creds_btn = _StatusWidget()
+    tab._cred_username_var = _ValueVar("admin")
+    tab._cred_password_var = _ValueVar("secret1")
+
+    tab._on_save_credentials_dialog()
+
+    assert calls == [("admin", "secret1")]
+    assert tab._cred_status_var.value == "Saved credentials for 'admin'"
+    assert tab._cred_password_var.value == ""
+    assert tab._save_creds_btn.configure_calls[-1] == {"state": tk.NORMAL}
+
+
+def test_webui_tab_on_save_credentials_dialog_known_failure_inline(monkeypatch):
+    from gui.components.experimental_features.webui_tab import WebUITab
+
+    class _ImmediateThread:
+        def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+            self._target = target
+            self._args = args
+            self._kwargs = kwargs or {}
+
+        def start(self):
+            if self._target is not None:
+                self._target(*self._args, **self._kwargs)
+
+    monkeypatch.setattr(
+        "gui.components.experimental_features.webui_tab.threading.Thread",
+        _ImmediateThread,
+    )
+    monkeypatch.setattr(
+        "experimental.webui.auth.set_password",
+        lambda *_a, **_k: (_ for _ in ()).throw(ValueError("username must not be empty")),
+    )
+
+    tab = WebUITab.__new__(WebUITab)
+    tab.frame = _FrameWidget()
+    tab._cred_dialog = _FrameWidget()
+    tab._multi_cred_error = False
+    tab._creds_existed_at_open = False
+    tab._cred_current_password_var = None
+    tab._schedule_dialog_ui = lambda cb: cb()
+    tab._cred_status_var = _ValueVar("Ready")
+    tab._save_creds_btn = _StatusWidget()
+    tab._cred_username_var = _ValueVar("admin")
+    tab._cred_password_var = _ValueVar("secret1")
+
+    tab._on_save_credentials_dialog()
+
+    assert tab._cred_status_var.value == "Failed: username must not be empty"
+    assert tab._save_creds_btn.configure_calls[-1] == {"state": tk.NORMAL}
+
+
+def test_webui_tab_on_save_credentials_dialog_unexpected_exception_popup(monkeypatch):
+    from gui.components.experimental_features.webui_tab import WebUITab
+
+    class _ImmediateThread:
+        def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+            self._target = target
+            self._args = args
+            self._kwargs = kwargs or {}
+
+        def start(self):
+            if self._target is not None:
+                self._target(*self._args, **self._kwargs)
+
+    popups = []
+    monkeypatch.setattr(
+        "gui.components.experimental_features.webui_tab.threading.Thread",
+        _ImmediateThread,
+    )
+    monkeypatch.setattr(
+        "experimental.webui.auth.set_password",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("disk error")),
+    )
+    monkeypatch.setattr(
+        "gui.components.experimental_features.webui_tab.safe_messagebox.showerror",
+        lambda *args, **kwargs: popups.append((args, kwargs)),
+    )
+
+    tab = WebUITab.__new__(WebUITab)
+    tab.frame = _FrameWidget()
+    tab._cred_dialog = _FrameWidget()
+    tab._multi_cred_error = False
+    tab._creds_existed_at_open = False
+    tab._cred_current_password_var = None
+    tab._schedule_dialog_ui = lambda cb: cb()
+    tab._cred_status_var = _ValueVar("Ready")
+    tab._save_creds_btn = _StatusWidget()
+    tab._cred_username_var = _ValueVar("admin")
+    tab._cred_password_var = _ValueVar("secret1")
+
+    tab._on_save_credentials_dialog()
+
+    assert tab._cred_status_var.value == "Failed: disk error"
+    assert popups
+    assert tab._save_creds_btn.configure_calls[-1] == {"state": tk.NORMAL}
+
+
+def test_webui_tab_copy_url(monkeypatch):
+    from gui.components.experimental_features.webui_tab import WebUITab
+
+    class _ClipboardFrame(_FrameWidget):
+        def __init__(self):
+            super().__init__()
+            self.cleared = False
+            self.copied = None
+
+        def clipboard_clear(self):
+            self.cleared = True
+
+        def clipboard_append(self, text):
+            self.copied = text
+
+    calls = []
+    monkeypatch.setattr(
+        "gui.components.experimental_features.webui_tab.safe_messagebox.showinfo",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    tab = WebUITab.__new__(WebUITab)
+    tab.frame = _ClipboardFrame()
+    tab._get_webui_cfg = lambda: types.SimpleNamespace(
+        bind_address="127.0.0.1", port=5480
+    )
+
+    tab._on_copy_url()
+
+    assert tab.frame.cleared is True
+    assert tab.frame.copied == "http://127.0.0.1:5480"
+    assert calls
+
+
+def test_webui_tab_get_webui_config_path_from_context():
+    from gui.components.experimental_features.webui_tab import WebUITab
+
+    tab = WebUITab.__new__(WebUITab)
+    tab._context = {"webui_config_path": "/tmp/custom-webui.json"}
+    assert tab._get_webui_config_path() == "/tmp/custom-webui.json"
+
+
+def test_webui_tab_get_webui_config_path_rejects_non_webui_filename():
+    from gui.components.experimental_features.webui_tab import WebUITab
+
+    tab = WebUITab.__new__(WebUITab)
+    tab._context = {"webui_config_path": "/tmp/app-config.json"}
+    assert tab._get_webui_config_path() is None
+
+
+def test_webui_tab_normalize_cfg_error_unknown_keys():
+    from gui.components.experimental_features.webui_tab import WebUITab
+
+    tab = WebUITab.__new__(WebUITab)
+    msg = tab._normalize_cfg_error("Unknown config keys: ['http', 'ftp']")
+    assert msg == "Selected file is not a Web UI config (expected webui.json)."
+
+
+def test_webui_tab_open_config_dialog_focuses_existing():
+    from gui.components.experimental_features.webui_tab import WebUITab
+
+    class _ExistingDialog:
+        def __init__(self):
+            self.lifted = False
+            self.focused = False
+
+        def winfo_exists(self):
+            return True
+
+        def lift(self):
+            self.lifted = True
+
+        def focus_force(self):
+            self.focused = True
+
+    tab = WebUITab.__new__(WebUITab)
+    tab._cfg_dialog = _ExistingDialog()
+    tab._open_config_dialog()
+
+    assert tab._cfg_dialog.lifted is True
+    assert tab._cfg_dialog.focused is True
+
+
+def test_webui_tab_on_save_config_dialog_success(monkeypatch):
+    from gui.components.experimental_features.webui_tab import WebUITab
+
+    class _ImmediateThread:
+        def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+            self._target = target
+            self._args = args
+            self._kwargs = kwargs or {}
+
+        def start(self):
+            if self._target is not None:
+                self._target(*self._args, **self._kwargs)
+
+    saved = []
+    monkeypatch.setattr(
+        "gui.components.experimental_features.webui_tab.threading.Thread",
+        _ImmediateThread,
+    )
+    monkeypatch.setattr(
+        "experimental.webui.config.validate",
+        lambda cfg: None,
+    )
+    monkeypatch.setattr(
+        "experimental.webui.config.save_config",
+        lambda cfg, path=None: saved.append((cfg, path)),
+    )
+
+    tab = WebUITab.__new__(WebUITab)
+    tab._context = {"webui_config_path": "/tmp/webui.json"}
+    tab.frame = _FrameWidget()
+    tab._cfg_dialog = _DialogWidget()
+    tab._schedule_cfg_dialog_ui = lambda cb: cb()
+    tab._refresh_status = MagicMock()
+    tab._cfg_status_var = _ValueVar("Ready")
+    tab._cfg_save_btn = _StatusWidget()
+    tab._cfg_save_restart_btn = _StatusWidget()
+    tab._cfg_enabled_value = False
+    tab._cfg_bind_var = _ValueVar("127.0.0.1")
+    tab._cfg_port_var = _ValueVar("5480")
+    tab._cfg_remote_var = _ValueVar(False)
+    tab._cfg_tls_enabled_var = _ValueVar(False)
+    tab._cfg_tls_insecure_var = _ValueVar(False)
+    tab._cfg_tls_cert_var = _ValueVar("")
+    tab._cfg_tls_key_var = _ValueVar("")
+    tab._cfg_allowlist_var = _ValueVar("127.0.0.1/32,::1/128")
+    tab._cfg_idle_var = _ValueVar("30")
+    tab._cfg_abs_var = _ValueVar("8")
+    tab._cfg_auth_threshold_var = _ValueVar("5")
+    tab._cfg_auth_window_var = _ValueVar("900")
+    tab._cfg_auth_base_var = _ValueVar("300")
+    tab._cfg_auth_max_var = _ValueVar("3600")
+
+    tab._on_save_config_dialog()
+
+    assert len(saved) == 1
+    assert saved[0][1] == "/tmp/webui.json"
+    assert tab._cfg_status_var.value == "Saved. Changes take effect on restart."
+    assert tab._cfg_save_btn.configure_calls[-1] == {"state": tk.NORMAL}
+    assert tab._cfg_save_restart_btn.configure_calls[-1] == {"state": tk.NORMAL}
+    tab._refresh_status.assert_called_once()
+
+
+def test_webui_tab_on_save_config_dialog_invalid_integer(monkeypatch):
+    from gui.components.experimental_features.webui_tab import WebUITab
+
+    class _ImmediateThread:
+        def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+            self._target = target
+            self._args = args
+            self._kwargs = kwargs or {}
+
+        def start(self):
+            if self._target is not None:
+                self._target(*self._args, **self._kwargs)
+
+    monkeypatch.setattr(
+        "gui.components.experimental_features.webui_tab.threading.Thread",
+        _ImmediateThread,
+    )
+
+    tab = WebUITab.__new__(WebUITab)
+    tab._context = {}
+    tab.frame = _FrameWidget()
+    tab._cfg_dialog = _DialogWidget()
+    tab._schedule_cfg_dialog_ui = lambda cb: cb()
+    tab._refresh_status = MagicMock()
+    tab._cfg_status_var = _ValueVar("Ready")
+    tab._cfg_save_btn = _StatusWidget()
+    tab._cfg_save_restart_btn = _StatusWidget()
+    tab._cfg_enabled_value = False
+    tab._cfg_bind_var = _ValueVar("127.0.0.1")
+    tab._cfg_port_var = _ValueVar("bad-port")
+    tab._cfg_remote_var = _ValueVar(False)
+    tab._cfg_tls_enabled_var = _ValueVar(False)
+    tab._cfg_tls_insecure_var = _ValueVar(False)
+    tab._cfg_tls_cert_var = _ValueVar("")
+    tab._cfg_tls_key_var = _ValueVar("")
+    tab._cfg_allowlist_var = _ValueVar("")
+    tab._cfg_idle_var = _ValueVar("30")
+    tab._cfg_abs_var = _ValueVar("8")
+    tab._cfg_auth_threshold_var = _ValueVar("5")
+    tab._cfg_auth_window_var = _ValueVar("900")
+    tab._cfg_auth_base_var = _ValueVar("300")
+    tab._cfg_auth_max_var = _ValueVar("3600")
+
+    tab._on_save_config_dialog()
+
+    assert tab._cfg_status_var.value.startswith("Failed:")
+    assert tab._cfg_save_btn.configure_calls[-1] == {"state": tk.NORMAL}
+    assert tab._cfg_save_restart_btn.configure_calls[-1] == {"state": tk.NORMAL}
+    tab._refresh_status.assert_not_called()
+
+
+def test_webui_tab_save_restart_when_stopped_starts_service(monkeypatch):
+    from gui.components.experimental_features.webui_tab import WebUITab
+
+    class _ImmediateThread:
+        def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+            self._target = target
+            self._args = args
+            self._kwargs = kwargs or {}
+
+        def start(self):
+            if self._target is not None:
+                self._target(*self._args, **self._kwargs)
+
+    start_calls = []
+    monkeypatch.setattr(
+        "gui.components.experimental_features.webui_tab.threading.Thread",
+        _ImmediateThread,
+    )
+    monkeypatch.setattr("experimental.webui.config.validate", lambda cfg: None)
+    monkeypatch.setattr("experimental.webui.config.save_config", lambda cfg, path=None: None)
+    monkeypatch.setattr(
+        "experimental.webui.service_control.is_running",
+        lambda *_a, **_k: False,
+    )
+    monkeypatch.setattr(
+        "experimental.webui.service_control.stop",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        "experimental.webui.service_control.start",
+        lambda host, port: (
+            start_calls.append((host, port))
+            or types.SimpleNamespace(ok=True, state="running", reason="")
+        ),
+    )
+
+    tab = WebUITab.__new__(WebUITab)
+    tab._context = {}
+    tab.frame = _FrameWidget()
+    tab._cfg_dialog = _DialogWidget()
+    tab._schedule_cfg_dialog_ui = lambda cb: cb()
+    tab._refresh_status = MagicMock()
+    tab._get_webui_cfg = lambda: types.SimpleNamespace(bind_address="127.0.0.1", port=5480)
+    tab._cfg_status_var = _ValueVar("Ready")
+    tab._cfg_save_btn = _StatusWidget()
+    tab._cfg_save_restart_btn = _StatusWidget()
+    tab._cfg_enabled_value = False
+    tab._cfg_bind_var = _ValueVar("0.0.0.0")
+    tab._cfg_port_var = _ValueVar("6000")
+    tab._cfg_remote_var = _ValueVar(True)
+    tab._cfg_tls_enabled_var = _ValueVar(False)
+    tab._cfg_tls_insecure_var = _ValueVar(True)
+    tab._cfg_tls_cert_var = _ValueVar("")
+    tab._cfg_tls_key_var = _ValueVar("")
+    tab._cfg_allowlist_var = _ValueVar("10.0.0.0/8")
+    tab._cfg_idle_var = _ValueVar("30")
+    tab._cfg_abs_var = _ValueVar("8")
+    tab._cfg_auth_threshold_var = _ValueVar("5")
+    tab._cfg_auth_window_var = _ValueVar("900")
+    tab._cfg_auth_base_var = _ValueVar("300")
+    tab._cfg_auth_max_var = _ValueVar("3600")
+
+    tab._on_save_restart_config_dialog()
+
+    assert start_calls == [("0.0.0.0", 6000)]
+    assert tab._cfg_status_var.value == "Saved and service started."
+    assert tab._cfg_save_btn.configure_calls[-1] == {"state": tk.NORMAL}
+    assert tab._cfg_save_restart_btn.configure_calls[-1] == {"state": tk.NORMAL}
+    tab._refresh_status.assert_called_once()
+
+
+def test_webui_tab_save_restart_running_stop_failure(monkeypatch):
+    from gui.components.experimental_features.webui_tab import WebUITab
+
+    class _ImmediateThread:
+        def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+            self._target = target
+            self._args = args
+            self._kwargs = kwargs or {}
+
+        def start(self):
+            if self._target is not None:
+                self._target(*self._args, **self._kwargs)
+
+    start_calls = []
+    monkeypatch.setattr(
+        "gui.components.experimental_features.webui_tab.threading.Thread",
+        _ImmediateThread,
+    )
+    monkeypatch.setattr("experimental.webui.config.validate", lambda cfg: None)
+    monkeypatch.setattr("experimental.webui.config.save_config", lambda cfg, path=None: None)
+    monkeypatch.setattr(
+        "experimental.webui.service_control.is_running",
+        lambda *_a, **_k: True,
+    )
+    monkeypatch.setattr("experimental.webui.service_control.stop", lambda: False)
+    monkeypatch.setattr(
+        "experimental.webui.service_control.start",
+        lambda host, port: (
+            start_calls.append((host, port))
+            or types.SimpleNamespace(ok=True, state="running", reason="")
+        ),
+    )
+
+    tab = WebUITab.__new__(WebUITab)
+    tab._context = {}
+    tab.frame = _FrameWidget()
+    tab._cfg_dialog = _DialogWidget()
+    tab._schedule_cfg_dialog_ui = lambda cb: cb()
+    tab._refresh_status = MagicMock()
+    tab._get_webui_cfg = lambda: types.SimpleNamespace(bind_address="127.0.0.1", port=5480)
+    tab._cfg_status_var = _ValueVar("Ready")
+    tab._cfg_save_btn = _StatusWidget()
+    tab._cfg_save_restart_btn = _StatusWidget()
+    tab._cfg_enabled_value = False
+    tab._cfg_bind_var = _ValueVar("127.0.0.1")
+    tab._cfg_port_var = _ValueVar("5480")
+    tab._cfg_remote_var = _ValueVar(False)
+    tab._cfg_tls_enabled_var = _ValueVar(False)
+    tab._cfg_tls_insecure_var = _ValueVar(False)
+    tab._cfg_tls_cert_var = _ValueVar("")
+    tab._cfg_tls_key_var = _ValueVar("")
+    tab._cfg_allowlist_var = _ValueVar("127.0.0.1/32")
+    tab._cfg_idle_var = _ValueVar("30")
+    tab._cfg_abs_var = _ValueVar("8")
+    tab._cfg_auth_threshold_var = _ValueVar("5")
+    tab._cfg_auth_window_var = _ValueVar("900")
+    tab._cfg_auth_base_var = _ValueVar("300")
+    tab._cfg_auth_max_var = _ValueVar("3600")
+
+    tab._on_save_restart_config_dialog()
+
+    assert start_calls == []
+    assert tab._cfg_status_var.value == (
+        "Failed: stop did not complete; service may still be running"
+    )
+    assert tab._cfg_save_btn.configure_calls[-1] == {"state": tk.NORMAL}
+    assert tab._cfg_save_restart_btn.configure_calls[-1] == {"state": tk.NORMAL}
+    tab._refresh_status.assert_not_called()
+
+
+def test_webui_tab_save_restart_start_failure_sets_inline_status(monkeypatch):
+    from gui.components.experimental_features.webui_tab import WebUITab
+
+    class _ImmediateThread:
+        def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+            self._target = target
+            self._args = args
+            self._kwargs = kwargs or {}
+
+        def start(self):
+            if self._target is not None:
+                self._target(*self._args, **self._kwargs)
+
+    monkeypatch.setattr(
+        "gui.components.experimental_features.webui_tab.threading.Thread",
+        _ImmediateThread,
+    )
+    monkeypatch.setattr("experimental.webui.config.validate", lambda cfg: None)
+    monkeypatch.setattr("experimental.webui.config.save_config", lambda cfg, path=None: None)
+    monkeypatch.setattr(
+        "experimental.webui.service_control.is_running",
+        lambda *_a, **_k: False,
+    )
+    monkeypatch.setattr("experimental.webui.service_control.stop", lambda: True)
+    monkeypatch.setattr(
+        "experimental.webui.service_control.start",
+        lambda *_a, **_k: types.SimpleNamespace(
+            ok=False, state="failed", reason="startup timeout waiting for health check"
+        ),
+    )
+
+    tab = WebUITab.__new__(WebUITab)
+    tab._context = {}
+    tab.frame = _FrameWidget()
+    tab._cfg_dialog = _DialogWidget()
+    tab._schedule_cfg_dialog_ui = lambda cb: cb()
+    tab._refresh_status = MagicMock()
+    tab._get_webui_cfg = lambda: types.SimpleNamespace(bind_address="127.0.0.1", port=5480)
+    tab._cfg_status_var = _ValueVar("Ready")
+    tab._cfg_save_btn = _StatusWidget()
+    tab._cfg_save_restart_btn = _StatusWidget()
+    tab._cfg_enabled_value = False
+    tab._cfg_bind_var = _ValueVar("127.0.0.1")
+    tab._cfg_port_var = _ValueVar("5480")
+    tab._cfg_remote_var = _ValueVar(False)
+    tab._cfg_tls_enabled_var = _ValueVar(False)
+    tab._cfg_tls_insecure_var = _ValueVar(False)
+    tab._cfg_tls_cert_var = _ValueVar("")
+    tab._cfg_tls_key_var = _ValueVar("")
+    tab._cfg_allowlist_var = _ValueVar("127.0.0.1/32")
+    tab._cfg_idle_var = _ValueVar("30")
+    tab._cfg_abs_var = _ValueVar("8")
+    tab._cfg_auth_threshold_var = _ValueVar("5")
+    tab._cfg_auth_window_var = _ValueVar("900")
+    tab._cfg_auth_base_var = _ValueVar("300")
+    tab._cfg_auth_max_var = _ValueVar("3600")
+
+    tab._on_save_restart_config_dialog()
+
+    assert tab._cfg_status_var.value == "Failed: startup timeout waiting for health check"
+    assert tab._cfg_save_btn.configure_calls[-1] == {"state": tk.NORMAL}
+    assert tab._cfg_save_restart_btn.configure_calls[-1] == {"state": tk.NORMAL}
+    tab._refresh_status.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# O2 — WebUITab credential dialog: multi-cred error guard
+# ---------------------------------------------------------------------------
+
+def test_save_credentials_multi_cred_error_is_noop(monkeypatch):
+    """_on_save_credentials_dialog with _multi_cred_error=True returns immediately.
+
+    Verifies no call to set_password and no AttributeError even when credential
+    fields are absent (simulating a dialog opened in multi-cred-error state).
+    """
+    from gui.components.experimental_features.webui_tab import WebUITab
+
+    set_password_calls = []
+    monkeypatch.setattr(
+        "experimental.webui.auth.set_password",
+        lambda *a, **kw: set_password_calls.append((a, kw)),
+    )
+
+    tab = WebUITab.__new__(WebUITab)
+    tab._multi_cred_error = True
+
+    tab._on_save_credentials_dialog()
+
+    assert set_password_calls == []

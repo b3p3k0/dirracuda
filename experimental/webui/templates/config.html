@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block title %}Config{% endblock %}
+
+{% block content %}
+<h1>Config</h1>
+
+<div role="status" id="cfg-status" aria-live="polite"></div>
+
+<form id="cfg-form" novalidate>
+  <div class="form-section">
+    <div class="form-row">
+      <label for="bind-addr">Bind address</label>
+      <input id="bind-addr" name="bind_address" type="text"
+             value="{{ cfg.bind_address }}" maxlength="64" required>
+    </div>
+    <div class="form-row">
+      <label for="port">Port</label>
+      <input id="port" name="port" type="number" class="cfg-number-input"
+             value="{{ cfg.port }}" min="1" max="65535" required>
+    </div>
+  </div>
+
+  <div class="form-section">
+    <div class="check-row">
+      <input id="remote-enabled" name="remote_enabled" type="checkbox"
+             {% if cfg.remote_enabled %}checked{% endif %}>
+      <label for="remote-enabled">Remote access enabled</label>
+    </div>
+    <div id="remote-warn" class="status-warn{% if not cfg.remote_enabled %} hidden{% endif %}">
+      Warning: remote access exposes this service on non-loopback interfaces.
+      Ensure TLS and allowlist are configured before enabling.
+    </div>
+  </div>
+
+  <div class="form-section">
+    <div class="check-row">
+      <input id="tls-enabled" name="tls_enabled" type="checkbox"
+             {% if cfg.tls.enabled %}checked{% endif %}>
+      <label for="tls-enabled">TLS enabled</label>
+    </div>
+    <div class="check-row">
+      <input id="tls-insecure" name="tls_allow_insecure_remote" type="checkbox"
+             {% if cfg.tls.allow_insecure_remote %}checked{% endif %}>
+      <label for="tls-insecure">Allow insecure remote override</label>
+    </div>
+    <div class="form-row">
+      <label for="tls-cert">TLS cert path</label>
+      <input id="tls-cert" name="tls_cert" type="text"
+             value="{{ cfg.tls.cert_file }}" maxlength="512" placeholder="/path/to/cert.pem">
+    </div>
+    <div class="form-row">
+      <label for="tls-key">TLS key path</label>
+      <input id="tls-key" name="tls_key" type="text"
+             value="{{ cfg.tls.key_file }}" maxlength="512" placeholder="/path/to/key.pem">
+    </div>
+  </div>
+
+  <div class="form-section">
+    <div class="form-row">
+      <label for="allowlist">Allowlist (CIDRs, comma-separated)</label>
+      <input id="allowlist" name="allowed_cidrs" type="text"
+             value="{{ cfg.allowed_cidrs | join(', ') }}" maxlength="1024"
+             placeholder="127.0.0.1/32, ::1/128">
+    </div>
+  </div>
+
+  <div class="form-section">
+    <div class="form-row">
+      <label for="idle-timeout">Idle timeout (minutes)</label>
+      <input id="idle-timeout" name="session_timeout_idle_min" type="number" class="cfg-number-input"
+             value="{{ (cfg.session_timeout_idle // 60) }}"
+             min="5" max="240">
+    </div>
+    <div class="form-row">
+      <label for="abs-timeout">Absolute timeout (hours)</label>
+      <input id="abs-timeout" name="session_timeout_absolute_hr" type="number" class="cfg-number-input"
+             value="{{ (cfg.session_timeout_absolute // 3600) }}"
+             min="1" max="24">
+    </div>
+  </div>
+
+  <div class="form-section">
+    <h2>Auth Rate Limiting</h2>
+    <div class="form-row">
+      <label for="lockout-threshold">Lockout threshold (attempts)</label>
+      <input id="lockout-threshold" name="auth_lockout_threshold" type="number" class="cfg-number-input"
+             value="{{ cfg.auth.lockout_threshold }}"
+             min="3" max="20">
+    </div>
+    <div class="form-row">
+      <label for="lockout-window">Observation window (seconds)</label>
+      <input id="lockout-window" name="auth_lockout_window_sec" type="number" class="cfg-number-input"
+             value="{{ cfg.auth.lockout_window_sec }}"
+             min="60" max="3600">
+    </div>
+    <div class="form-row">
+      <label for="lockout-base">Base lockout duration (seconds)</label>
+      <input id="lockout-base" name="auth_lockout_base_duration_sec" type="number" class="cfg-number-input"
+             value="{{ cfg.auth.lockout_base_duration_sec }}"
+             min="30" max="3600">
+    </div>
+    <div class="form-row">
+      <label for="lockout-max">Max lockout duration (seconds)</label>
+      <input id="lockout-max" name="auth_lockout_max_duration_sec" type="number" class="cfg-number-input"
+             value="{{ cfg.auth.lockout_max_duration_sec }}"
+             min="300" max="86400">
+    </div>
+  </div>
+
+  <div class="form-section">
+    <h2>Browser Preference Storage</h2>
+    <p class="status-text cfg-pref-info">
+      Stores non-sensitive UI preferences in this browser only (via localStorage).
+    </p>
+    <div class="form-actions cfg-pref-actions">
+      <button type="button" id="prefs-enable-btn">Enable</button>
+      <button type="button" id="prefs-disable-btn">Disable</button>
+      <button type="button" id="prefs-clear-btn">Clear Saved Preferences</button>
+    </div>
+    <div role="status" id="prefs-storage-status" aria-live="polite"></div>
+  </div>
+
+  <div class="form-actions">
+    <button type="submit" id="save-btn">Save</button>
+    <span class="status-text cfg-save-hint">
+      Changes take effect on restart.
+    </span>
+  </div>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/config.js"></script>
+{% endblock %}

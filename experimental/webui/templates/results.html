@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Results{% endblock %}
+
+{% block content %}
+<h1>Results</h1>
+
+<nav class="proto-tabs" aria-label="Protocol tabs">
+  <button data-proto="all" class="proto-tab active" type="button">ALL</button>
+  <button data-proto="smb" class="proto-tab" type="button">SMB</button>
+  <button data-proto="ftp" class="proto-tab" type="button">FTP</button>
+  <button data-proto="http" class="proto-tab" type="button">HTTP</button>
+</nav>
+
+<div class="filter-bar">
+  <label for="search-filter">Search:</label>
+  <input id="search-filter" type="text" placeholder="Search IP or shares" aria-label="Search IP or shares">
+  <label>
+    <input id="shares-only-filter" type="checkbox">
+    Show Only Shares &gt; 0
+  </label>
+  <label>
+    <input id="favorites-only-filter" type="checkbox">
+    Favorites Only
+  </label>
+  <label>
+    <input id="hide-avoid-filter" type="checkbox">
+    Hide Avoid
+  </label>
+  <button id="load-btn" type="button">Refresh</button>
+  <button id="first-btn" type="button">&laquo; First</button>
+  <button id="prev-btn" type="button">&laquo; Prev</button>
+  <button id="next-btn" type="button">Next &raquo;</button>
+  <button id="last-btn" type="button">Last &raquo;</button>
+  <label for="jump-page">Jump to:</label>
+  <input id="jump-page" type="number" min="1" step="1" aria-label="Jump to page">
+  <button id="jump-btn" type="button">Go</button>
+  <span class="page-label" id="page-label" aria-live="polite"></span>
+</div>
+
+<div role="status" id="results-status" aria-live="polite"></div>
+
+<div class="table-wrap">
+  <table id="results-table" class="results-table">
+    <thead>
+      <tr>
+        <th>Favorite</th>
+        <th>Avoid</th>
+        <th>Probed</th>
+        <th>Extracted</th>
+        <th>Type</th>
+        <th>IP Address</th>
+        <th>Shares</th>
+        <th>Accessible</th>
+        <th>Denied</th>
+        <th>Last Seen</th>
+        <th>Country</th>
+      </tr>
+    </thead>
+    <tbody id="results-body">
+      <tr><td colspan="11">Loading...</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div id="export-bar">
+  <button id="export-btn" type="button">Export DB</button>
+  <span id="export-status" role="status" aria-live="polite"></span>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/results.js"></script>
+{% endblock %}
