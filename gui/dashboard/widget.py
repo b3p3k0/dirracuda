@@ -1424,9 +1424,9 @@ class DashboardWidget:
 
     def _probe_single_server(self, server: Dict[str, Any], max_dirs: int, max_files: int,
                               timeout_seconds: int, max_depth: int = 1,
-                              enable_rce: bool = False, cancel_event: threading.Event = None) -> Dict[str, Any]:
+                              cancel_event: Optional[threading.Event] = None) -> Dict[str, Any]:
         return dashboard_batch_ops.probe_single_server(
-            self, server, max_dirs, max_files, timeout_seconds, max_depth, enable_rce, cancel_event
+            self, server, max_dirs, max_files, timeout_seconds, max_depth, cancel_event
         )
 
     def _protocol_label_from_host_type(self, host_type: Optional[str]) -> str:
@@ -1435,10 +1435,10 @@ class DashboardWidget:
     def _protocol_label_for_result(self, result: Dict[str, Any]) -> str:
         return dashboard_batch_ops.protocol_label_for_result(self, result)
 
-    def _build_probe_notes(self, share_count: int, enable_rce: bool, issue_detected: bool,
+    def _build_probe_notes(self, share_count: int, issue_detected: bool,
                             analysis: Dict[str, Any], result: Dict[str, Any]) -> str:
         return dashboard_batch_ops.build_probe_notes(
-            self, share_count, enable_rce, issue_detected, analysis, result
+            self, share_count, issue_detected, analysis, result
         )
 
     def _execute_batch_extract(self, servers: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

@@ -271,6 +271,59 @@ def test_http_post_scan_bulk_probe_uses_http_host_type_filter(monkeypatch):
     assert probe_targets[0]["host_type"] == "H"
 
 
+def test_post_scan_bulk_probe_no_positional_arg_typeerror(monkeypatch):
+    """Post-scan bulk probe should execute without wrapper signature mismatch errors."""
+    import threading
+
+    _patch_fake_probe_dialog_stack(monkeypatch)
+    dash = DashboardWidget.__new__(DashboardWidget)
+    dash.parent = _FakeParentModal()
+    dash.theme = _FakeTheme()
+    dash.settings_manager = _FakeSettingsManager()
+    dash.current_scan_options = {}
+    dash.indicator_patterns = []
+    dash.db_reader = MagicMock()
+    dash._show_scan_results = MagicMock()
+    dash._reset_scan_status = MagicMock()
+    dash._show_batch_summary = MagicMock()
+    dash._protocol_label_from_host_type = lambda _host_type: "SMB"
+
+    monkeypatch.setattr(
+        "gui.components.dashboard.dispatch_probe_run",
+        lambda *a, **kw: {"shares": [{"directories": [], "root_files": []}]},
+    )
+    monkeypatch.setattr(
+        "gui.components.dashboard.probe_patterns.attach_indicator_analysis",
+        lambda snap, patterns: {"is_suspicious": False, "matches": []},
+    )
+
+    dash._get_servers_for_bulk_ops = lambda **_kwargs: {
+        "probe": [{"ip_address": "198.51.100.55", "host_type": "S", "auth_method": "anonymous"}],
+        "extract": [],
+    }
+    dash._run_background_fetch = lambda title, message, fetch_fn: (fetch_fn(), None)
+
+    summary = dash._run_post_scan_batch_operations(
+        {
+            "bulk_probe_enabled": True,
+            "bulk_extract_enabled": False,
+            "bulk_extract_skip_indicators": True,
+        },
+        {
+            "protocol": "smb",
+            "hosts_scanned": 1,
+            "start_time": "2026-05-19T08:00:00",
+            "end_time": "2026-05-19T08:10:00",
+        },
+        schedule_reset=False,
+        show_dialogs=False,
+    )
+
+    assert summary["probe"]
+    assert summary["probe"][0]["status"] == "success"
+    assert "takes from 5 to 7 positional arguments" not in summary["probe"][0]["notes"]
+
+
 def test_get_servers_for_bulk_ops_filters_to_immediate_scan_window_ftp():
     """FTP post-scan probe targets must be constrained to the immediate scan cohort."""
     dash = DashboardWidget.__new__(DashboardWidget)
@@ -720,7 +773,7 @@ def test_probe_single_server_ftp_snapshot_path_from_dispatch(monkeypatch):
     result = dash._probe_single_server(
         {"ip_address": "10.0.0.1", "host_type": "F", "port": 21},
         max_dirs=2, max_files=5, timeout_seconds=3,
-        enable_rce=False, cancel_event=threading.Event(),
+        cancel_event=threading.Event(),
     )
 
     assert result["status"] == "success"
@@ -753,7 +806,7 @@ def test_probe_single_server_ftp_root_files_only_sets_loose_files_marker(monkeyp
     result = dash._probe_single_server(
         {"ip_address": "10.0.0.3", "host_type": "F", "port": 21},
         max_dirs=2, max_files=5, timeout_seconds=3,
-        enable_rce=False, cancel_event=threading.Event(),
+        cancel_event=threading.Event(),
     )
 
     assert result["status"] == "success"
@@ -793,7 +846,7 @@ def test_probe_single_server_http_snapshot_path_from_dispatch(monkeypatch):
     result = dash._probe_single_server(
         {"ip_address": "10.0.0.2", "host_type": "H"},
         max_dirs=2, max_files=5, timeout_seconds=3,
-        enable_rce=False, cancel_event=threading.Event(),
+        cancel_event=threading.Event(),
     )
 
     assert result["status"] == "success"
@@ -827,7 +880,7 @@ def test_probe_single_server_http_root_files_only_sets_loose_files_marker(monkey
     result = dash._probe_single_server(
         {"ip_address": "10.0.0.4", "host_type": "H"},
         max_dirs=2, max_files=5, timeout_seconds=3,
-        enable_rce=False, cancel_event=threading.Event(),
+        cancel_event=threading.Event(),
     )
 
     assert result["status"] == "success"
@@ -899,8 +952,16 @@ def test_execute_batch_probe_passes_configured_depth_to_probe_worker(monkeypatch
     dash.current_scan_options = {}
     dash._protocol_label_from_host_type = lambda _host_type: "SMB"
 
-    def _probe_single_server(server, _max_dirs, _max_files, _timeout_seconds, max_depth, _enable_rce, _cancel_event):
+    def _probe_single_server(
+        server,
+        _max_dirs,
+        _max_files,
+        _timeout_seconds,
+        max_depth,
+        cancel_event=None,
+    ):
         captured["max_depth"] = max_depth
+        assert cancel_event is not None
         return {
             "ip_address": server.get("ip_address"),
             "protocol": "SMB",

@@ -565,7 +565,7 @@ def execute_batch_probe(dash, servers: List[Dict[str, Any]]) -> List[Dict[str, A
                         max_files,
                         timeout_seconds,
                         max_depth,
-                        cancel_event
+                        cancel_event=cancel_event,
                     ): server for server in servers
                 }
 
