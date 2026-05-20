@@ -269,3 +269,21 @@ Seeded before implementation. Append after every major card.
 57. When preflight depends on external providers (Shodan), treat missing key or
     provider/network errors as informational states with explicit operator
     fallback (`developer.shodan.io/dashboard`) rather than blocking scan launch.
+
+## C24 — Results Probe Actions
+
+58. For async row actions, keep start and status routes separate
+    (`POST` start + `GET` poll) and use explicit single-active-job guards when
+    probe execution is in-process. This prevents accidental probe fan-out while
+    keeping UI behavior deterministic.
+
+59. Probe-snapshot persistence must tolerate legacy `probe_snapshots` schemas.
+    Snapshot writes can fail on older DBs (missing normalized columns) even when
+    probe-cache tables are writable; fallback to cache-only persistence rather
+    than failing the whole per-row probe outcome.
+
+60. Legacy probe-cache tables may miss newer columns (`last_probe_at`,
+    `updated_at`, etc.). Treat probe-cache writes like mixed-schema writes:
+    attempt canonical helper first, then fallback to minimal status/match upsert
+    by runtime column presence so row-level actions stay functional across older
+    databases.

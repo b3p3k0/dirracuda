@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 import experimental.webui.db as _db
 import experimental.webui.db_actions as _db_actions
+import experimental.webui.results_probe_actions as _results_probe_actions
 from experimental.webui.auth import (
     BlocklistUnavailableError, CredentialError, check_credential_store,
     set_password, verify_password,
@@ -156,6 +157,21 @@ class _ToggleActionRequest(BaseModel):
         return value
 
 
+class _ProbeActionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    targets: list[_ToggleActionTarget]
+
+    @field_validator("targets")
+    @classmethod
+    def _validate_targets(cls, value: list[_ToggleActionTarget]) -> list[_ToggleActionTarget]:
+        if len(value) < 1:
+            raise ValueError("targets must contain at least 1 row")
+        if len(value) > 200:
+            raise ValueError("targets must not exceed 200 rows")
+        return value
+
+
 def health() -> dict:
     return {"status": "ok"}
 
@@ -210,6 +226,10 @@ def create_app(
     app.state.config_path = Path(config_path) if config_path is not None else None
     app.state.shodan_balance_service = ShodanBalanceService(
         main_config_path=main_config_path
+    )
+    app.state.results_probe_jobs = _results_probe_actions.ResultsProbeJobManager(
+        db_path=app.state.db_path,
+        main_config_path=main_config_path,
     )
     rl_path = Path(rl_db_path) if rl_db_path is not None else _DEFAULT_RL_PATH
     try:
@@ -587,6 +607,66 @@ def create_app(
         except Exception:
             logger.exception("results toggle action failed: action=%s", parsed.action)
             return JSONResponse({"error": "database error"}, status_code=500)
+        return JSONResponse(payload)
+
+    @app.post("/api/results/actions/probe")
+    async def _start_results_probe_action(
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> JSONResponse:
+        if not same_origin(request):
+            return JSONResponse({"error": "origin check failed"}, status_code=403)
+        csrf_tok = request.headers.get("X-CSRF-Token")
+        if not validate_csrf(csrf_tok, session.csrf_token):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+
+        try:
+            body: Any = await request.json()
+        except Exception:
+            return JSONResponse({"error": "invalid payload"}, status_code=400)
+
+        try:
+            parsed = _ProbeActionRequest.model_validate(body)
+        except ValidationError:
+            return JSONResponse({"error": "invalid payload"}, status_code=400)
+
+        targets = [
+            {
+                "host_type": item.host_type,
+                "protocol_server_id": item.protocol_server_id,
+                "row_key": item.row_key,
+            }
+            for item in parsed.targets
+        ]
+
+        manager = request.app.state.results_probe_jobs
+        try:
+            payload = manager.start_job(targets)
+        except _results_probe_actions.ProbeJobConflictError as exc:
+            return JSONResponse(
+                {
+                    "error": "probe job already running",
+                    "job_id": exc.job_id,
+                    "poll_url": f"/api/results/actions/probe/{exc.job_id}",
+                },
+                status_code=409,
+            )
+        except Exception:
+            logger.exception("results probe action failed to start")
+            return JSONResponse({"error": "probe start failed"}, status_code=500)
+
+        return JSONResponse(payload, status_code=202)
+
+    @app.get("/api/results/actions/probe/{job_id}")
+    async def _get_results_probe_action(
+        job_id: str,
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> JSONResponse:
+        manager = request.app.state.results_probe_jobs
+        payload = manager.get_job(job_id)
+        if payload is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
         return JSONResponse(payload)
 
     @app.get("/api/results/{protocol}")

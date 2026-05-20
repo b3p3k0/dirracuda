@@ -2,6 +2,7 @@
 
 import re
 import sqlite3
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,6 +10,8 @@ from fastapi.testclient import TestClient
 from experimental.webui.app import create_app
 from experimental.webui.auth import set_password
 from experimental.webui.config import TLSConfig, WebUIConfig
+import experimental.webui.results_probe_actions as _probe_actions
+from gui.utils import probe_patterns
 
 _USERNAME = "resultsuser"
 _PASSWORD = "correct-horse-battery-staple"
@@ -248,6 +251,25 @@ def _post_toggle(client, payload, csrf=None, headers=None):
     if csrf is not None:
         req_headers["X-CSRF-Token"] = csrf
     return client.post("/api/results/actions/toggle", json=payload, headers=req_headers)
+
+
+def _post_probe(client, payload, csrf=None, headers=None):
+    req_headers = dict(headers or {})
+    if csrf is not None:
+        req_headers["X-CSRF-Token"] = csrf
+    return client.post("/api/results/actions/probe", json=payload, headers=req_headers)
+
+
+def _poll_probe_until_complete(client, job_id, timeout_s=3.0):
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        r = client.get(f"/api/results/actions/probe/{job_id}")
+        assert r.status_code == 200
+        payload = r.json()
+        if payload.get("status") != "running":
+            return payload
+        time.sleep(0.02)
+    raise AssertionError(f"probe job {job_id} did not complete within {timeout_s}s")
 
 
 def _fetch_int(db_path, sql, params):
@@ -896,3 +918,257 @@ def test_results_toggle_schema_fallback_per_target_error(creds, cfg_no_tls, tmp_
     assert len(payload["results"]) == 1
     assert payload["results"][0]["ok"] is False
     assert "missing required table/column" in payload["results"][0]["error"]
+
+
+def _fake_dispatch_probe(ip_address, host_type, **kwargs):
+    if host_type == "S":
+        return {
+            "ip_address": ip_address,
+            "shares": [
+                {
+                    "share": "Public",
+                    "directories": [{"name": "docs", "files": ["readme.txt"]}],
+                    "root_files": [],
+                }
+            ],
+        }
+    if host_type == "F":
+        return {
+            "ip_address": ip_address,
+            "shares": [
+                {
+                    "share": "ftp_root",
+                    "directories": [{"name": "pub", "files": ["notice.txt"]}],
+                    "root_files": [],
+                }
+            ],
+        }
+    return {
+        "ip_address": ip_address,
+        "shares": [
+            {
+                "share": "http_root",
+                "directories": [{"name": "/", "files": ["index.html"]}],
+                "root_files": [],
+            }
+        ],
+    }
+
+
+def _fake_indicator_analysis(snapshot, patterns):
+    ip = str((snapshot or {}).get("ip_address") or "")
+    suspicious = ip.endswith(".20") or ip.endswith(".30")
+    return {
+        "is_suspicious": suspicious,
+        "matches": [{"path": "/indicator.txt"}] if suspicious else [],
+    }
+
+
+def test_results_probe_actions_requires_auth(client):
+    r = _post_probe(
+        client,
+        {"targets": [{"host_type": "S", "protocol_server_id": 1, "row_key": "S:1"}]},
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == "/login"
+
+
+def test_results_probe_actions_missing_csrf_returns_403(creds, cfg_no_tls, db_all_protocols):
+    c = _logged_in_client_for_db(creds, cfg_no_tls, db_all_protocols)
+    r = _post_probe(
+        c,
+        {"targets": [{"host_type": "S", "protocol_server_id": 1, "row_key": "S:1"}]},
+    )
+    assert r.status_code == 403
+
+
+def test_results_probe_actions_bad_origin_returns_403(creds, cfg_no_tls, db_all_protocols):
+    c = _logged_in_client_for_db(creds, cfg_no_tls, db_all_protocols)
+    csrf = _csrf(c)
+    r = _post_probe(
+        c,
+        {"targets": [{"host_type": "S", "protocol_server_id": 1, "row_key": "S:1"}]},
+        csrf=csrf,
+        headers={"Origin": "http://attacker.com"},
+    )
+    assert r.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"targets": []},
+        {"targets": [{"host_type": "X", "protocol_server_id": 1}]},
+        {"targets": [{"host_type": "S", "protocol_server_id": 0}]},
+        {"targets": [{"host_type": "S", "protocol_server_id": 1, "extra": "x"}]},
+        {"targets": [{"host_type": "S", "protocol_server_id": 1}] * 201},
+    ],
+)
+def test_results_probe_actions_invalid_payload_returns_400(
+    creds, cfg_no_tls, db_all_protocols, payload
+):
+    c = _logged_in_client_for_db(creds, cfg_no_tls, db_all_protocols)
+    csrf = _csrf(c)
+    r = _post_probe(c, payload, csrf=csrf)
+    assert r.status_code == 400
+    assert r.json()["error"] == "invalid payload"
+
+
+def test_results_probe_start_and_poll_single_target_updates_state(
+    creds, cfg_no_tls, db_all_protocols, monkeypatch
+):
+    monkeypatch.setattr(_probe_actions, "dispatch_probe_run", _fake_dispatch_probe)
+    monkeypatch.setattr(probe_patterns, "attach_indicator_analysis", _fake_indicator_analysis)
+
+    c = _logged_in_client_for_db(creds, cfg_no_tls, db_all_protocols)
+    csrf = _csrf(c)
+    r = _post_probe(
+        c,
+        {"targets": [{"host_type": "S", "protocol_server_id": 1, "row_key": "S:1"}]},
+        csrf=csrf,
+    )
+    assert r.status_code == 202
+    started = r.json()
+    assert started["status"] == "running"
+    assert started["total_targets"] == 1
+    assert started["poll_url"].endswith(started["job_id"])
+
+    done = _poll_probe_until_complete(c, started["job_id"])
+    assert done["status"] == "completed"
+    assert done["summary"] == {"total": 1, "completed": 1, "succeeded": 1, "failed": 0}
+    assert done["results"][0]["ok"] is True
+    assert done["results"][0]["state"]["probe_status"] == "clean"
+    assert done["results"][0]["state"]["indicator_matches"] == 0
+    assert _fetch_probe(db_all_protocols, "host_probe_cache", 1) == ("clean", 0)
+
+
+def test_results_probe_bulk_s_f_h_updates_rows(creds, cfg_no_tls, db_all_protocols, monkeypatch):
+    monkeypatch.setattr(_probe_actions, "dispatch_probe_run", _fake_dispatch_probe)
+    monkeypatch.setattr(probe_patterns, "attach_indicator_analysis", _fake_indicator_analysis)
+
+    c = _logged_in_client_for_db(creds, cfg_no_tls, db_all_protocols)
+    csrf = _csrf(c)
+    r = _post_probe(
+        c,
+        {
+            "targets": [
+                {"host_type": "S", "protocol_server_id": 1, "row_key": "S:1"},
+                {"host_type": "F", "protocol_server_id": 1, "row_key": "F:1"},
+                {"host_type": "H", "protocol_server_id": 1, "row_key": "H:1"},
+            ]
+        },
+        csrf=csrf,
+    )
+    assert r.status_code == 202
+    job_id = r.json()["job_id"]
+
+    done = _poll_probe_until_complete(c, job_id)
+    assert done["status"] == "completed"
+    assert done["summary"] == {"total": 3, "completed": 3, "succeeded": 3, "failed": 0}
+    assert _fetch_probe(db_all_protocols, "host_probe_cache", 1) == ("clean", 0)
+    assert _fetch_probe(db_all_protocols, "ftp_probe_cache", 1) == ("issue", 1)
+    assert _fetch_probe(db_all_protocols, "http_probe_cache", 1) == ("issue", 1)
+
+
+def test_results_probe_partial_success_when_target_missing(
+    creds, cfg_no_tls, db_all_protocols, monkeypatch
+):
+    monkeypatch.setattr(_probe_actions, "dispatch_probe_run", _fake_dispatch_probe)
+    monkeypatch.setattr(probe_patterns, "attach_indicator_analysis", _fake_indicator_analysis)
+
+    c = _logged_in_client_for_db(creds, cfg_no_tls, db_all_protocols)
+    csrf = _csrf(c)
+    r = _post_probe(
+        c,
+        {
+            "targets": [
+                {"host_type": "S", "protocol_server_id": 1, "row_key": "S:1"},
+                {"host_type": "S", "protocol_server_id": 999, "row_key": "S:999"},
+            ]
+        },
+        csrf=csrf,
+    )
+    assert r.status_code == 202
+    job_id = r.json()["job_id"]
+
+    done = _poll_probe_until_complete(c, job_id)
+    assert done["summary"] == {"total": 2, "completed": 2, "succeeded": 1, "failed": 1}
+    failures = [item for item in done["results"] if item.get("ok") is False]
+    assert len(failures) == 1
+    assert "target not found" in failures[0].get("error", "")
+
+
+def test_results_probe_single_active_job_guard_returns_409(
+    creds, cfg_no_tls, db_all_protocols, monkeypatch
+):
+    def _slow_probe(*_args, **_kwargs):
+        time.sleep(0.2)
+        return {
+            "host_type": "S",
+            "protocol_server_id": 1,
+            "row_key": "S:1",
+            "ok": True,
+            "state": {"probe_status": "clean", "indicator_matches": 0},
+        }
+
+    monkeypatch.setattr(_probe_actions, "_probe_one_target", _slow_probe)
+
+    c = _logged_in_client_for_db(creds, cfg_no_tls, db_all_protocols)
+    csrf = _csrf(c)
+    first = _post_probe(
+        c,
+        {"targets": [{"host_type": "S", "protocol_server_id": 1, "row_key": "S:1"}]},
+        csrf=csrf,
+    )
+    assert first.status_code == 202
+    first_job_id = first.json()["job_id"]
+
+    second = _post_probe(
+        c,
+        {"targets": [{"host_type": "F", "protocol_server_id": 1, "row_key": "F:1"}]},
+        csrf=csrf,
+    )
+    assert second.status_code == 409
+    payload = second.json()
+    assert payload["job_id"] == first_job_id
+    assert payload["poll_url"].endswith(first_job_id)
+
+    done = _poll_probe_until_complete(c, first_job_id)
+    assert done["status"] == "completed"
+
+
+def test_results_probe_schema_fallback_per_target_error(creds, cfg_no_tls, tmp_path):
+    db_path = tmp_path / "probe_schema_missing_cols.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(
+        """
+        CREATE TABLE smb_servers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ip_address TEXT NOT NULL UNIQUE
+        );
+        INSERT INTO smb_servers (ip_address) VALUES ('10.8.0.10');
+
+        CREATE TABLE host_probe_cache (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            server_id INTEGER NOT NULL,
+            status TEXT
+        );
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    c = _logged_in_client_for_db(creds, cfg_no_tls, db_path)
+    csrf = _csrf(c)
+    r = _post_probe(
+        c,
+        {"targets": [{"host_type": "S", "protocol_server_id": 1, "row_key": "S:1"}]},
+        csrf=csrf,
+    )
+    assert r.status_code == 202
+    job_id = r.json()["job_id"]
+
+    done = _poll_probe_until_complete(c, job_id)
+    assert done["summary"] == {"total": 1, "completed": 1, "succeeded": 0, "failed": 1}
+    assert "missing required table/column" in done["results"][0].get("error", "")

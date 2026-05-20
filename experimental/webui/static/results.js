@@ -5,6 +5,10 @@ var totalPages = 1;
 var openDetailRowKey = null;
 var detailCache = {};
 var selectedRowKeys = new Set();
+var probeJobId = null;
+var probePollTimer = null;
+var probeRunning = false;
+var probeLatestResults = [];
 var token = document.querySelector('meta[name="csrf-token"]').content;
 
 function setResults(msg, cls) {
@@ -65,6 +69,15 @@ function _probeStatusFromEmoji(value) {
   if (value === '✖') return 'issue';
   if (value === '✔') return 'clean';
   return 'unprobed';
+}
+
+function _setProbeUiRunning(running) {
+  probeRunning = !!running;
+  var probeCells = document.querySelectorAll('#results-body td.probe-action-cell');
+  probeCells.forEach(function(td) {
+    td.setAttribute('aria-disabled', probeRunning ? 'true' : 'false');
+  });
+  _syncSelectionUi();
 }
 
 function _probeEmojiFromStatus(value) {
@@ -152,6 +165,19 @@ async function _postToggleAction(action, targets) {
       'X-CSRF-Token': token
     },
     body: JSON.stringify({action: action, targets: targets})
+  });
+  var data = await resp.json();
+  return {ok: resp.ok, status: resp.status, data: data};
+}
+
+async function _postProbeAction(targets) {
+  var resp = await fetch('/api/results/actions/probe', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-CSRF-Token': token
+    },
+    body: JSON.stringify({targets: targets})
   });
   var data = await resp.json();
   return {ok: resp.ok, status: resp.status, data: data};
@@ -261,6 +287,7 @@ function _syncSelectionUi() {
   document.getElementById('bulk-favorite-btn').disabled = !hasSelection;
   document.getElementById('bulk-avoid-btn').disabled = !hasSelection;
   document.getElementById('bulk-compromised-btn').disabled = !hasSelection;
+  document.getElementById('bulk-probe-btn').disabled = !hasSelection || probeRunning;
   document.getElementById('clear-selection-btn').disabled = !hasSelection;
 }
 
@@ -331,7 +358,8 @@ function buildRow(r) {
     ['Accessible', r.accessible_shares_list],
     ['Denied', r.denied_shares_count],
     ['Last Seen', r.last_seen],
-    ['Country', r.country]
+    ['Country', r.country],
+    ['Probe', 'Run']
   ];
 
   cells.forEach(function(pair, idx) {
@@ -353,6 +381,30 @@ function buildRow(r) {
           e.preventDefault();
           e.stopPropagation();
           _performToggleAction(action, [tr]);
+        }
+      });
+    } else if (idx === 11) {
+      td.classList.add('action-cell', 'probe-action-cell');
+      td.setAttribute('role', 'button');
+      td.setAttribute('tabindex', '0');
+      td.setAttribute('aria-disabled', probeRunning ? 'true' : 'false');
+      td.addEventListener('click', function(e) {
+        e.stopPropagation();
+        if (probeRunning) {
+          setResults('A probe job is already running.', 'status-warn');
+          return;
+        }
+        _performProbeAction([tr]);
+      });
+      td.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          e.stopPropagation();
+          if (probeRunning) {
+            setResults('A probe job is already running.', 'status-warn');
+            return;
+          }
+          _performProbeAction([tr]);
         }
       });
     }
@@ -494,7 +546,7 @@ function renderDetailError(container, msg) {
 
 function _detailColspan() {
   var cols = document.querySelectorAll('#results-table thead th').length;
-  return cols > 0 ? cols : 12;
+  return cols > 0 ? cols : 13;
 }
 
 function toggleDetailRow(baseRow) {
@@ -566,7 +618,7 @@ function loadResults() {
   closeOpenDetail();
   _resetSelection();
   tbody.innerHTML = '<tr><td colspan="' + _detailColspan() + '">Loading...</td></tr>';
-  setResults('');
+  if (!probeRunning) setResults('');
   updatePagerButtons();
 
   fetch(url).then(function(resp) {
@@ -592,6 +644,7 @@ function loadResults() {
       updatePagerLabel(Number(data.total_count || 0), currentPage, totalPages);
       updatePagerButtons();
       _syncSelectionUi();
+      _applyProbeOutcomes(probeJobId ? probeLatestResults : []);
     });
   }).catch(function() {
     setResults('Request failed.', 'status-error');
@@ -601,6 +654,121 @@ function loadResults() {
     updatePagerButtons();
     _syncSelectionUi();
   });
+}
+
+function _visibleRowsByKey() {
+  var out = {};
+  var rows = document.querySelectorAll('#results-body tr.result-row');
+  rows.forEach(function(tr) {
+    var key = tr.dataset.rowKey || '';
+    if (!key) return;
+    out[key] = tr;
+  });
+  return out;
+}
+
+function _applyProbeOutcomes(outcomes) {
+  if (!outcomes || !outcomes.length) return;
+  var byKey = _visibleRowsByKey();
+  outcomes.forEach(function(outcome) {
+    if (!outcome || outcome.ok !== true || !outcome.row_key || !outcome.state) return;
+    var tr = byKey[outcome.row_key];
+    if (!tr) return;
+    _applyRowState(tr, outcome.state);
+  });
+}
+
+function _scheduleProbePoll(jobId) {
+  if (!jobId) return;
+  if (probePollTimer) clearTimeout(probePollTimer);
+  probePollTimer = setTimeout(function() {
+    _pollProbeJob(jobId);
+  }, 1000);
+}
+
+async function _pollProbeJob(jobId) {
+  try {
+    var resp = await fetch('/api/results/actions/probe/' + encodeURIComponent(jobId));
+    var data = await resp.json();
+    if (!resp.ok) {
+      _setProbeUiRunning(false);
+      probeJobId = null;
+      probeLatestResults = [];
+      setResults('Probe status failed: ' + (data.error || resp.status), 'status-error');
+      return;
+    }
+
+    var outcomes = data.results || [];
+    probeLatestResults = outcomes;
+    _applyProbeOutcomes(outcomes);
+
+    if (data.status === 'running') {
+      var summary = data.summary || {};
+      setResults(
+        'Probe running: ' +
+        Number(summary.completed || 0) + '/' + Number(summary.total || 0) +
+        ' completed.',
+        'status-neutral'
+      );
+      _scheduleProbePoll(jobId);
+      return;
+    }
+
+    _setProbeUiRunning(false);
+    probeJobId = null;
+    var finalSummary = data.summary || {};
+    var failed = Number(finalSummary.failed || 0);
+    var succeeded = Number(finalSummary.succeeded || 0);
+    if (failed > 0) {
+      setResults('Probe complete: ' + succeeded + ' succeeded, ' + failed + ' failed.', 'status-warn');
+    } else {
+      setResults('Probe complete: ' + succeeded + ' succeeded.', 'status-ok');
+    }
+  } catch (err) {
+    _setProbeUiRunning(false);
+    probeJobId = null;
+    probeLatestResults = [];
+    setResults('Probe status failed: network error.', 'status-error');
+  }
+}
+
+async function _performProbeAction(rows) {
+  if (probeRunning) {
+    setResults('A probe job is already running.', 'status-warn');
+    return;
+  }
+  if (!rows || !rows.length) {
+    setResults('Select at least one row first.', 'status-warn');
+    return;
+  }
+  var targets = _buildToggleTargets(rows);
+  if (!targets.length) {
+    setResults('No valid rows selected for probe.', 'status-warn');
+    return;
+  }
+
+  try {
+    var result = await _postProbeAction(targets);
+    if (!result.ok) {
+      if (result.status === 409 && result.data && result.data.job_id) {
+        probeJobId = String(result.data.job_id);
+        _setProbeUiRunning(true);
+        setResults('A probe job is already running. Watching current job.', 'status-warn');
+        _scheduleProbePoll(probeJobId);
+        return;
+      }
+      setResults('Probe start failed: ' + ((result.data && result.data.error) || result.status), 'status-error');
+      return;
+    }
+
+    probeJobId = String(result.data.job_id || '');
+    probeLatestResults = [];
+    _setProbeUiRunning(true);
+    setResults('Probe job started for ' + targets.length + ' row(s).', 'status-neutral');
+    _scheduleProbePoll(probeJobId);
+  } catch (err) {
+    setResults('Probe start failed: network error.', 'status-error');
+  }
 }
 
 document.querySelectorAll('.proto-tab').forEach(function(btn) {
@@ -701,6 +869,10 @@ document.getElementById('bulk-avoid-btn').addEventListener('click', function() {
 
 document.getElementById('bulk-compromised-btn').addEventListener('click', function() {
   _performToggleAction('compromised', _collectSelectedRows());
+});
+
+document.getElementById('bulk-probe-btn').addEventListener('click', function() {
+  _performProbeAction(_collectSelectedRows());
 });
 
 document.getElementById('export-btn').addEventListener('click', async function() {

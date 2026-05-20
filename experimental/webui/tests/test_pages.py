@@ -125,8 +125,10 @@ def test_results_renders_authenticated(logged_in):
     assert "Toggle Favorite" in r.text
     assert "Toggle Avoid" in r.text
     assert "Toggle Compromised" in r.text
+    assert "Probe Selected" in r.text
     assert "Clear Selection" in r.text
     assert 'id="select-all-rows"' in r.text
+    assert "<th>Probe</th>" in r.text
     assert "Export DB" in r.text
     assert '/static/results.js' in r.text
 

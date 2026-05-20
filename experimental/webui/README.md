@@ -99,10 +99,13 @@ Shodan balance is fetched server-side only. The API key is never sent to the bro
 - Inline row actions:
   - Click `Favorite`, `Avoid`, or `Probed` cells to toggle state on that row
   - `Probed` toggle uses desktop compromised semantics (`issue/clean` with `indicator_matches` `1/0`)
+  - Click the `Probe` cell to run a protocol-aware probe for that row
 - Bulk actions (current page only):
   - Select rows with the leading checkbox column
-  - Use `Toggle Favorite`, `Toggle Avoid`, `Toggle Compromised`, or `Clear Selection`
+  - Use `Toggle Favorite`, `Toggle Avoid`, `Toggle Compromised`, `Probe Selected`, or `Clear Selection`
   - Bulk actions are per-row toggles, not force set/unset
+  - Probe actions are asynchronous; status is polled until completion
+  - Only one probe job runs at a time; overlapping starts return a conflict and reuse the active job
   - Selection resets on results reloads (filter/page/protocol changes)
 - Manual refresh model (`Refresh` button), no auto-refresh
 - Pagination controls: First / Prev / Next / Last / Jump to

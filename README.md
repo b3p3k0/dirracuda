@@ -523,9 +523,11 @@ query-credit cost, live balance when available, and estimated post-scan balance
 before queue submission.
 In the Web UI results page, `Favorite`, `Avoid`, and `Probed` cells are inline
 toggle actions. Operators can also multi-select rows on the current page and run
-bulk `Toggle Favorite`, `Toggle Avoid`, and `Toggle Compromised` actions. Bulk
-actions use per-row toggle semantics (not force set/unset), and selection resets
-on results reloads (filter/page/protocol changes).
+bulk `Toggle Favorite`, `Toggle Avoid`, `Toggle Compromised`, and `Probe Selected`
+actions. A dedicated per-row `Probe` action cell is also available. Probe actions
+run asynchronously with status polling and a single active probe-job guard.
+Bulk actions use per-row toggle semantics (not force set/unset), and selection
+resets on results reloads (filter/page/protocol changes).
 Login is protected by persistent per-account+IP lockout (configurable threshold,
 observation window, and exponential backoff via the `auth` block in `webui.json`
 or via the desktop config dialog). The `GET /health` endpoint reports

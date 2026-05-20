@@ -33,7 +33,7 @@ worklist for closing concrete behavior gaps.
 | Row detail drill-down | Desktop details and probe context | Inline accordion details + probe tree text when present | PARTIAL | `experimental/webui/README.md`; `experimental/webui/app.py` |
 | Host flag mutation | Toggle favorite/avoid/compromised from server list | Inline row actions + current-page bulk toggles (`favorite`/`avoid`/`compromised`) with desktop-compromised semantics and partial-success API outcomes | PARITY | `experimental/webui/app.py`; `experimental/webui/db_actions.py`; `experimental/webui/static/results.js` |
 | Manual host add/delete | Add record and delete selected rows | No web add/delete host operations | GAP | `README.md` Server List; `experimental/webui/app.py` |
-| Probe selected host | Probe from server list row action | No explicit web row action to probe selected hosts | GAP | `README.md` Probing Shares; `experimental/webui/app.py` |
+| Probe selected host | Probe from server list row action | Inline row `Probe` action + current-page bulk `Probe Selected` with async polling and single-active-job guard | PARITY | `experimental/webui/app.py`; `experimental/webui/results_probe_actions.py`; `experimental/webui/static/results.js` |
 | Browse shares/files | Read-only SMB/FTP/HTTP browser + file viewer | Not implemented in web | GAP | `README.md` Browsing Shares; `experimental/webui/README.md` |
 | Browser downloads | Quarantine-routed downloads with safeguards | Not implemented in web | GAP | `README.md` Browsing Shares/ClamAV/tmpfs; `experimental/webui/README.md` |
 | ClamAV post-processing | Optional scan/routing for extracted/downloaded files | No web extraction/download path to apply ClamAV | GAP | `README.md` ClamAV section |
@@ -57,7 +57,7 @@ These are the highest-leverage parity targets with low architectural risk:
    Status: shipped in Target 2 (mandatory preflight + explicit start confirmation).
 
 3. **Row-level probe action from Results (protocol-aware, no browse/download)**  
-   Why third: gives operators a usable investigation loop before tackling web browser parity.
+   Status: shipped in Target 3 (row + bulk probe actions with async polling).
 
 ## Deferred For Later Waves
 
