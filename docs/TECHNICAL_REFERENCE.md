@@ -95,6 +95,8 @@ default so SMB1-capable targets are included. When `run_probe_after_scan=true`,
 the task runner executes a protocol-aware post-scan probe stage for SMB/FTP/HTTP
 verified hosts. The `/scans` UI now requires a preflight review step (credit
 estimate + balance visibility + explicit confirmation) before any queue writes.
+Queue visibility on `/scans` is server-backed: the page hydrates active/queued
+tasks from `GET /api/scans` so entries persist across navigation and refresh.
 
 **Web UI routes (C4–C6):**
 
@@ -102,6 +104,7 @@ estimate + balance visibility + explicit confirmation) before any queue writes.
 |-------|------|-------------|
 | `POST /api/scans/preflight` | session + CSRF + same-origin | Preflight cost/balance estimator for selected protocols before queue submission. Request: `protocols` (`1..3` unique values from `smb\|ftp\|http`) and shared `max_shodan_results` (`1..100000`). Response includes estimated total/per-protocol query credits, current balance payload, estimated post-scan balance when available, and Shodan dashboard fallback URL. Error contract: `400` invalid payload, `403` origin/CSRF failure, `500` unexpected fatal error. |
 | `POST /api/scans` | session + CSRF | Queue one scan task (`protocol`: `smb\|ftp\|http`). Includes `max_shodan_results` (1..100000) for per-task query-limit/budget overrides. Optional `run_probe_after_scan` triggers protocol-aware post-scan probe stage for the same protocol after the scan subprocess succeeds. |
+| `GET /api/scans` | session | Queue snapshot endpoint for `/scans` hydration (`active` + `queued`) so queue state survives navigation and refresh. |
 | `GET /api/scans/{task_id}` | session | Task status/log polling for queued/running/completed scan tasks |
 | `POST /api/scans/{task_id}/cancel` | session + CSRF | Cancel queued task or request cancellation for active task (scan/probe stage) |
 | `GET /api/dashboard/shodan-balance` | session | Dashboard balance status endpoint (query credits only). Reads Shodan API key from main config server-side, never returns key material. Supports `force=true` to bypass cache. Response states: `ok`, `no_key`, `unavailable` (with sanitized reason code only). |

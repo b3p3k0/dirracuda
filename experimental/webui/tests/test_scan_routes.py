@@ -383,6 +383,29 @@ def test_submit_valid_http(logged_in_client, fake_queue):
     assert fake_queue.submitted[0].protocol == "http"
 
 
+def test_get_scans_queue_requires_auth(client):
+    r = client.get("/api/scans")
+    assert r.status_code == 303
+    assert r.headers["location"] == "/login"
+
+
+def test_get_scans_queue_snapshot(logged_in_client, fake_queue):
+    running = ScanTask(task_id="task-running", request=ScanRequest(protocol="smb"))
+    running.status = TaskStatus.RUNNING
+    queued = ScanTask(task_id="task-queued", request=ScanRequest(protocol="ftp"))
+    queued.status = TaskStatus.QUEUED
+    fake_queue.tasks[running.task_id] = running
+    fake_queue.tasks[queued.task_id] = queued
+
+    r = logged_in_client.get("/api/scans")
+
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["active"]["task_id"] == "task-running"
+    assert len(payload["queued"]) == 1
+    assert payload["queued"][0]["task_id"] == "task-queued"
+
+
 def test_get_scan_requires_auth(client):
     r = client.get("/api/scans/task-1")
     assert r.status_code == 303

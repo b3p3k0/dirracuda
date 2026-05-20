@@ -521,6 +521,8 @@ SMB, FTP, and HTTP using the shared protocol-aware probe pipeline.
 Web UI scans now require a preflight confirmation step that shows estimated
 query-credit cost, live balance when available, and estimated post-scan balance
 before queue submission.
+The `/scans` queue view now rehydrates from server queue state, so active/queued
+entries persist across navigation and browser refreshes.
 In the Web UI results page, `Favorite`, `Avoid`, and `Probed` cells are inline
 toggle actions. Operators can also multi-select rows on the current page and run
 bulk `Toggle Favorite`, `Toggle Avoid`, `Toggle Compromised`, and `Probe Selected`

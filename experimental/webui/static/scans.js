@@ -191,6 +191,32 @@ function upsertRow(task) {
   }
 }
 
+function _tasksFromQueueSnapshot(snapshot) {
+  var tasks = [];
+  if (!snapshot || typeof snapshot !== 'object') return tasks;
+  if (snapshot.active && snapshot.active.task_id) {
+    tasks.push(snapshot.active);
+  }
+  if (Array.isArray(snapshot.queued)) {
+    snapshot.queued.forEach(function(task) {
+      if (task && task.task_id) tasks.push(task);
+    });
+  }
+  return tasks;
+}
+
+async function hydrateQueueFromServer() {
+  try {
+    var resp = await fetch('/api/scans');
+    if (!resp.ok) return;
+    var payload = await resp.json();
+    var tasks = _tasksFromQueueSnapshot(payload);
+    if (!tasks.length) return;
+    tasks.forEach(function(task) { upsertRow(task); });
+    startPolling();
+  } catch (_err) {}
+}
+
 function cancelTask(taskId, tr) {
   fetch('/api/scans/' + encodeURIComponent(taskId) + '/cancel', {
     method: 'POST',
@@ -402,3 +428,4 @@ document.getElementById('preflight-cancel-btn').addEventListener('click', functi
 
 applyScansPrefsFromStorage();
 _resetPreflightPanel();
+hydrateQueueFromServer();

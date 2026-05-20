@@ -496,6 +496,14 @@ def create_app(
             {"task_id": task.task_id, "status": task.status.value}, status_code=202
         )
 
+    @app.get("/api/scans")
+    async def _get_scans_queue(
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> JSONResponse:
+        queue = request.app.state.scan_queue
+        return JSONResponse(queue.queue_status())
+
     @app.get("/api/scans/{task_id}")
     async def _get_scan(
         task_id: str,

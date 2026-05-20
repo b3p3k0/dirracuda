@@ -287,3 +287,10 @@ Seeded before implementation. Append after every major card.
     attempt canonical helper first, then fallback to minimal status/match upsert
     by runtime column presence so row-level actions stay functional across older
     databases.
+
+## C25 — Scans Queue Refresh Persistence
+
+61. Queue visibility on `/scans` must be hydrated from server state on page load
+    (`GET /api/scans`), not only from in-page JS memory. Client-only tracking
+    causes false-empty queues after navigation/refresh even while tasks are
+    still active/queued in the backend.
