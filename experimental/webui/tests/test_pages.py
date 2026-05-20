@@ -110,7 +110,11 @@ def test_scans_renders_authenticated(logged_in):
     r = logged_in.get("/scans")
     assert r.status_code == 200
     assert "SMB" in r.text
-    assert "Queue Scan" in r.text
+    assert "Review Preflight" in r.text
+    assert 'id="preflight-panel"' in r.text
+    assert 'id="preflight-summary"' in r.text
+    assert 'id="preflight-start-btn"' in r.text
+    assert 'id="preflight-cancel-btn"' in r.text
     assert '/static/scans.js' in r.text
 
 

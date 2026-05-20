@@ -37,7 +37,12 @@ from experimental.webui.rate_limiter import (
 from experimental.webui.dependencies import AuthRequired, get_session, same_origin, validate_csrf
 from experimental.webui.sessions import Session, SessionStore, cookie_name
 from experimental.webui.shodan_balance import ShodanBalanceService
-from experimental.webui.tasks import CancelResult, ScanQueue, ScanRequest
+from experimental.webui.tasks import (
+    CancelResult,
+    ScanQueue,
+    ScanRequest,
+    estimate_query_credits_by_protocol,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +98,31 @@ class _ConfigUpdateRequest(BaseModel):
     auth_lockout_window_sec: Optional[int] = None
     auth_lockout_base_duration_sec: Optional[int] = None
     auth_lockout_max_duration_sec: Optional[int] = None
+
+
+class _ScansPreflightRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    protocols: list[Literal["smb", "ftp", "http"]]
+    max_shodan_results: int
+
+    @field_validator("protocols")
+    @classmethod
+    def _validate_protocols(
+        cls, value: list[Literal["smb", "ftp", "http"]]
+    ) -> list[Literal["smb", "ftp", "http"]]:
+        if len(value) < 1 or len(value) > 3:
+            raise ValueError("protocols must contain 1 to 3 values")
+        if len(set(value)) != len(value):
+            raise ValueError("protocols must be unique")
+        return value
+
+    @field_validator("max_shodan_results")
+    @classmethod
+    def _validate_max_shodan_results(cls, value: int) -> int:
+        if value < 1 or value > 100000:
+            raise ValueError("max_shodan_results must be between 1 and 100000")
+        return value
 
 
 class _ToggleActionTarget(BaseModel):
@@ -377,6 +407,54 @@ def create_app(
     ) -> HTMLResponse:
         return templates.TemplateResponse(
             request, "scans.html", {"session": session, "active_page": "scans"}
+        )
+
+    @app.post("/api/scans/preflight")
+    async def _scans_preflight(
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> JSONResponse:
+        if not same_origin(request):
+            return JSONResponse({"error": "origin check failed"}, status_code=403)
+        csrf_tok = request.headers.get("X-CSRF-Token")
+        if not validate_csrf(csrf_tok, session.csrf_token):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+
+        try:
+            body: Any = await request.json()
+        except Exception:
+            return JSONResponse({"error": "invalid payload"}, status_code=400)
+
+        try:
+            parsed = _ScansPreflightRequest.model_validate(body)
+        except ValidationError:
+            return JSONResponse({"error": "invalid payload"}, status_code=400)
+
+        service = request.app.state.shodan_balance_service
+        credits_by_protocol = estimate_query_credits_by_protocol(
+            parsed.protocols, parsed.max_shodan_results
+        )
+        estimated_total = sum(credits_by_protocol.values())
+        try:
+            balance = service.get_balance(force=True)
+        except Exception:
+            balance = {"state": "unavailable", "reason": "unknown", "cached": False}
+
+        estimated_post_scan_balance: Optional[int] = None
+        if balance.get("state") == "ok":
+            try:
+                estimated_post_scan_balance = int(balance.get("query_credits")) - estimated_total
+            except Exception:
+                estimated_post_scan_balance = None
+
+        return JSONResponse(
+            {
+                "estimated_query_credits_total": estimated_total,
+                "estimated_query_credits_by_protocol": credits_by_protocol,
+                "balance": balance,
+                "estimated_post_scan_balance": estimated_post_scan_balance,
+                "dashboard_url": "https://developer.shodan.io/dashboard",
+            }
         )
 
     @app.post("/api/scans")

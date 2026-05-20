@@ -79,6 +79,11 @@ Shodan balance is fetched server-side only. The API key is never sent to the bro
 
 - Queue SMB / FTP / HTTP scan tasks (single active task, FIFO queue)
 - Per-task max-results is enforced (`max_shodan_results`)
+- Mandatory preflight confirmation before queueing:
+  - estimated query-credit cost (`ceil(max_shodan_results / 100)` per selected protocol)
+  - live Shodan balance when available
+  - estimated post-scan balance when live balance is available
+  - fallback dashboard link when balance is unavailable/no_key
 - SMB scans run in legacy mode by default (includes SMB1-capable targets)
 - Optional protocol-aware post-scan probe pass (SMB / FTP / HTTP)
 - Task progress, status polling, and cancel support

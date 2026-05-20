@@ -382,7 +382,20 @@ class ScanTask:
 
 
 def _query_credit_budget(max_results: int) -> int:
+    return estimate_query_credits_for_cap(max_results)
+
+
+def estimate_query_credits_for_cap(max_results: int) -> int:
+    """Estimate Shodan query-credit usage for a candidate cap."""
     return max(1, (int(max_results) + 99) // 100)
+
+
+def estimate_query_credits_by_protocol(
+    protocols: list[str], max_results: int
+) -> dict[str, int]:
+    """Return per-protocol credit estimates using shared cap math."""
+    credits = estimate_query_credits_for_cap(max_results)
+    return {protocol: credits for protocol in protocols}
 
 
 def _build_scan_config_overrides(request: ScanRequest) -> dict:

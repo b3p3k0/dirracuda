@@ -483,6 +483,8 @@ tbody tr.selected td { background: var(--bg3); color: var(--accent); }
 #submit-status { margin-bottom: 8px; }
 .proto-checkbox { margin-left: 12px; }
 #max-results { max-width: 100px; }
+#preflight-summary { margin-bottom: 10px; line-height: 1.45; }
+#preflight-summary a { color: var(--accent); }
 
 #results-status { margin-bottom: 6px; }
 #export-bar { margin-top: 16px; }

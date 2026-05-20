@@ -518,6 +518,9 @@ The same tab also provides inline username/password credential setup (create or
 update) for Web UI login.
 In the Web UI scan page, `Run probe on verified hosts after scan` now applies to
 SMB, FTP, and HTTP using the shared protocol-aware probe pipeline.
+Web UI scans now require a preflight confirmation step that shows estimated
+query-credit cost, live balance when available, and estimated post-scan balance
+before queue submission.
 In the Web UI results page, `Favorite`, `Avoid`, and `Probed` cells are inline
 toggle actions. Operators can also multi-select rows on the current page and run
 bulk `Toggle Favorite`, `Toggle Avoid`, and `Toggle Compromised` actions. Bulk

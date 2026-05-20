@@ -47,9 +47,18 @@
   </div>
 
   <div class="form-actions">
-    <button type="submit" id="queue-btn">Queue Scan</button>
+    <button type="submit" id="queue-btn">Review Preflight</button>
   </div>
 </form>
+
+<div id="preflight-panel" class="dash-card hidden" role="status" aria-live="polite">
+  <h2>Preflight Review</h2>
+  <div id="preflight-summary" class="status-text">Run preflight to see cost and balance estimates.</div>
+  <div class="form-actions">
+    <button type="button" id="preflight-start-btn" disabled>Start Scan</button>
+    <button type="button" id="preflight-cancel-btn" disabled>Back to Scan Options</button>
+  </div>
+</div>
 
 <div class="queue-section">
   <h2>Queue</h2>

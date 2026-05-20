@@ -254,3 +254,18 @@ Seeded before implementation. Append after every major card.
     `status=="issue"` OR `indicator_matches>0`), encode that rule in one write
     helper and assert both transitions in tests (`unprobed/0 -> issue/1`,
     `issue/N -> clean/0`) to prevent silent logic drift.
+
+## C23 — Scans Preflight Parity
+
+55. For browser scan launch flows, keep preflight as a separate read-only API
+    step (`/api/scans/preflight`) and keep queue writes in `/api/scans`. This
+    preserves deterministic side effects and keeps CSRF/same-origin checks
+    explicit on both paths.
+
+56. Reuse one shared credit-estimate helper (`ceil(cap/100)`) across preflight
+    UI responses and runtime scan config shaping. Duplicated math drifts quickly
+    and causes trust gaps between preflight messaging and queued task behavior.
+
+57. When preflight depends on external providers (Shodan), treat missing key or
+    provider/network errors as informational states with explicit operator
+    fallback (`developer.shodan.io/dashboard`) rather than blocking scan launch.

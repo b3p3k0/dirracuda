@@ -51,6 +51,16 @@ class FakeScanQueue:
         return {"active": active, "queued": queued}
 
 
+class FakeShodanBalanceService:
+    def __init__(self) -> None:
+        self.payload = {"state": "ok", "query_credits": 10, "cached": False}
+        self.calls = []
+
+    def get_balance(self, *, force=False):
+        self.calls.append(bool(force))
+        return dict(self.payload)
+
+
 @pytest.fixture
 def creds(tmp_path):
     p = tmp_path / "creds.json"
@@ -68,7 +78,9 @@ def app_and_queue(creds, cfg_no_tls):
     app = create_app(cfg=cfg_no_tls, creds_path=creds)
     fake = FakeScanQueue()
     app.state.scan_queue = fake
-    return app, fake
+    fake_balance = FakeShodanBalanceService()
+    app.state.shodan_balance_service = fake_balance
+    return app, fake, fake_balance
 
 
 @pytest.fixture
@@ -77,8 +89,13 @@ def fake_queue(app_and_queue):
 
 
 @pytest.fixture
+def fake_balance_service(app_and_queue):
+    return app_and_queue[2]
+
+
+@pytest.fixture
 def client(app_and_queue):
-    app, _ = app_and_queue
+    app = app_and_queue[0]
     return TestClient(app, follow_redirects=False)
 
 
@@ -118,7 +135,121 @@ def test_scans_page_requires_auth(client):
 def test_scans_page_authenticated(logged_in_client):
     r = logged_in_client.get("/scans")
     assert r.status_code == 200
-    assert "Queue Scan" in r.text
+    assert "Review Preflight" in r.text
+
+
+def test_preflight_requires_auth(client):
+    r = client.post(
+        "/api/scans/preflight",
+        json={"protocols": ["smb"], "max_shodan_results": 100},
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == "/login"
+
+
+def test_preflight_missing_csrf(logged_in_client):
+    r = logged_in_client.post(
+        "/api/scans/preflight",
+        json={"protocols": ["smb"], "max_shodan_results": 100},
+    )
+    assert r.status_code == 403
+
+
+def test_preflight_bad_origin(logged_in_client):
+    csrf = _csrf_from_dashboard(logged_in_client)
+    r = logged_in_client.post(
+        "/api/scans/preflight",
+        headers={"X-CSRF-Token": csrf, "origin": "http://attacker.com"},
+        json={"protocols": ["smb"], "max_shodan_results": 100},
+    )
+    assert r.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"protocols": [], "max_shodan_results": 100},
+        {"protocols": ["smb", "smb"], "max_shodan_results": 100},
+        {"protocols": ["ssh"], "max_shodan_results": 100},
+        {"protocols": ["smb"], "max_shodan_results": 0},
+        {"protocols": ["smb"], "max_shodan_results": 100, "extra": "x"},
+    ],
+)
+def test_preflight_invalid_payload_returns_400(logged_in_client, payload):
+    csrf = _csrf_from_dashboard(logged_in_client)
+    r = logged_in_client.post(
+        "/api/scans/preflight",
+        headers={"X-CSRF-Token": csrf},
+        json=payload,
+    )
+    assert r.status_code == 400
+    assert r.json()["error"] == "invalid payload"
+
+
+def test_preflight_estimates_single_protocol_and_post_balance(
+    logged_in_client, fake_balance_service
+):
+    fake_balance_service.payload = {"state": "ok", "query_credits": 11, "cached": False}
+    csrf = _csrf_from_dashboard(logged_in_client)
+    r = logged_in_client.post(
+        "/api/scans/preflight",
+        headers={"X-CSRF-Token": csrf},
+        json={"protocols": ["smb"], "max_shodan_results": 100},
+    )
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["estimated_query_credits_total"] == 1
+    assert payload["estimated_query_credits_by_protocol"] == {"smb": 1}
+    assert payload["estimated_post_scan_balance"] == 10
+    assert payload["balance"]["state"] == "ok"
+    assert payload["dashboard_url"] == "https://developer.shodan.io/dashboard"
+    assert fake_balance_service.calls[-1] is True
+
+
+def test_preflight_estimates_multi_protocol(logged_in_client, fake_balance_service):
+    fake_balance_service.payload = {"state": "ok", "query_credits": 20, "cached": False}
+    csrf = _csrf_from_dashboard(logged_in_client)
+    r = logged_in_client.post(
+        "/api/scans/preflight",
+        headers={"X-CSRF-Token": csrf},
+        json={"protocols": ["smb", "ftp", "http"], "max_shodan_results": 250},
+    )
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["estimated_query_credits_total"] == 9
+    assert payload["estimated_query_credits_by_protocol"] == {"smb": 3, "ftp": 3, "http": 3}
+    assert payload["estimated_post_scan_balance"] == 11
+
+
+def test_preflight_no_key_suppresses_post_balance(logged_in_client, fake_balance_service):
+    fake_balance_service.payload = {"state": "no_key", "cached": False}
+    csrf = _csrf_from_dashboard(logged_in_client)
+    r = logged_in_client.post(
+        "/api/scans/preflight",
+        headers={"X-CSRF-Token": csrf},
+        json={"protocols": ["ftp"], "max_shodan_results": 1000},
+    )
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["estimated_query_credits_total"] == 10
+    assert payload["estimated_post_scan_balance"] is None
+    assert payload["balance"]["state"] == "no_key"
+
+
+def test_preflight_unavailable_suppresses_post_balance(logged_in_client, fake_balance_service):
+    fake_balance_service.payload = {"state": "unavailable", "reason": "network", "cached": False}
+    csrf = _csrf_from_dashboard(logged_in_client)
+    r = logged_in_client.post(
+        "/api/scans/preflight",
+        headers={"X-CSRF-Token": csrf},
+        json={"protocols": ["http"], "max_shodan_results": 100},
+    )
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["estimated_query_credits_total"] == 1
+    assert payload["estimated_post_scan_balance"] is None
+    assert payload["balance"]["state"] == "unavailable"
 
 
 def test_submit_requires_auth(client):

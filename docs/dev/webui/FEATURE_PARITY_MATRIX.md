@@ -23,7 +23,7 @@ worklist for closing concrete behavior gaps.
 | Scan queueing | Queued task model with active task visibility | FIFO queue with one active scan, queued list, polling status | PARITY | `experimental/webui/tasks.py`; `experimental/webui/app.py` |
 | Scan cancel | Cancel queued/running scan | `POST /api/scans/{id}/cancel` with queued/running handling | PARITY | `experimental/webui/app.py`; `experimental/webui/tasks.py` |
 | Scan progress/logs | Live monitor windows and Running Tasks reopen | Polled task status + rolling logs (last 100 lines) | PARTIAL | `README.md` Running Tasks; `experimental/webui/tasks.py` |
-| Shodan balance awareness | Preflight includes balance and estimated post-scan balance | Dashboard balance endpoint + refresh; no full preflight gate on `/scans` | PARTIAL | `README.md` Shodan Credits; `experimental/webui/app.py` |
+| Shodan balance awareness | Preflight includes balance and estimated post-scan balance | `/scans` now uses mandatory preflight confirmation with credit estimate, live balance payload, post-scan estimate (when available), and fallback dashboard link | PARITY | `experimental/webui/app.py`; `experimental/webui/static/scans.js`; `README.md` |
 | Query cap controls | Per-protocol max results in scan dialog | `max_shodan_results` per task (1..100000) | PARITY | `README.md` Shodan Credits; `experimental/webui/tasks.py` |
 | Dork editing | Discovery Dorks editor + Dorkbook integration | No web dork editor / Dorkbook management | GAP | `README.md` Discovery + Dorkbook; `experimental/webui/README.md` |
 | Post-scan probe hook | Optional post-scan probe from scan flow | `run_probe_after_scan` for SMB/FTP/HTTP | PARITY | `README.md` Web UI section; `experimental/webui/tasks.py` |
@@ -54,7 +54,7 @@ These are the highest-leverage parity targets with low architectural risk:
    Status: shipped in Target 1 (inline + current-page bulk toggles).
 
 2. **Scan preflight parity on `/scans` (credit estimate + balance + confirmation)**  
-   Why second: reduces accidental spend and aligns with desktop safety workflow.
+   Status: shipped in Target 2 (mandatory preflight + explicit start confirmation).
 
 3. **Row-level probe action from Results (protocol-aware, no browse/download)**  
    Why third: gives operators a usable investigation loop before tackling web browser parity.
