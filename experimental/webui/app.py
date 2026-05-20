@@ -44,11 +44,15 @@ from experimental.webui.tasks import (
     ScanRequest,
     estimate_query_credits_by_protocol,
 )
+from shared.config import load_config as load_main_config
+from shared.db_path_resolution import normalize_database_path
+from shared.path_service import get_paths
 
 logger = logging.getLogger(__name__)
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 _STATIC_DIR = Path(__file__).parent / "static"
+_PATHS = get_paths()
 
 _CSP_POLICY = (
     "default-src 'self'; "
@@ -176,6 +180,31 @@ def health() -> dict:
     return {"status": "ok"}
 
 
+def _resolve_main_config_path(main_config_path: Optional[Path]) -> Path:
+    candidate = Path(main_config_path).expanduser() if main_config_path is not None else _PATHS.config_file
+    return candidate.resolve(strict=False)
+
+
+def _resolve_db_path_from_main_config(main_config_path: Path) -> Path:
+    try:
+        cfg = load_main_config(str(main_config_path))
+        preferred = cfg.get_database_path()
+    except Exception as exc:
+        logger.warning(
+            "webui main-config database path resolution failed; using default: %s", exc
+        )
+        return _db._DEFAULT_DB_PATH
+
+    normalized = normalize_database_path(preferred, _PATHS.repo_root)
+    if normalized is None:
+        logger.warning(
+            "webui main-config database path was invalid (%r); using default",
+            preferred,
+        )
+        return _db._DEFAULT_DB_PATH
+    return normalized
+
+
 def create_app(
     cfg: Optional[WebUIConfig] = None,
     creds_path=None,
@@ -194,6 +223,13 @@ def create_app(
         redoc_url=None,
     )
     app.state.cfg = cfg
+    resolved_main_config_path = _resolve_main_config_path(main_config_path)
+    if db_path is not None:
+        resolved_db_path = Path(db_path).expanduser().resolve(strict=False)
+        db_path_source = "override"
+    else:
+        resolved_db_path = _resolve_db_path_from_main_config(resolved_main_config_path)
+        db_path_source = "main_config"
 
     _networks = [ipaddress.ip_network(c, strict=False) for c in cfg.allowed_cidrs]
 
@@ -221,15 +257,22 @@ def create_app(
 
     app.state.session_store = SessionStore()
     app.state.creds_path = creds_path
-    app.state.scan_queue = ScanQueue()
-    app.state.db_path = Path(db_path) if db_path is not None else _db._DEFAULT_DB_PATH
+    app.state.scan_queue = ScanQueue(base_config_path=resolved_main_config_path)
+    app.state.db_path = resolved_db_path
+    app.state.main_config_path = resolved_main_config_path
     app.state.config_path = Path(config_path) if config_path is not None else None
     app.state.shodan_balance_service = ShodanBalanceService(
-        main_config_path=main_config_path
+        main_config_path=resolved_main_config_path
     )
     app.state.results_probe_jobs = _results_probe_actions.ResultsProbeJobManager(
         db_path=app.state.db_path,
-        main_config_path=main_config_path,
+        main_config_path=resolved_main_config_path,
+    )
+    logger.info(
+        "webui path resolution: main_config=%s db_path=%s source=%s",
+        resolved_main_config_path,
+        resolved_db_path,
+        db_path_source,
     )
     rl_path = Path(rl_db_path) if rl_db_path is not None else _DEFAULT_RL_PATH
     try:

@@ -79,6 +79,7 @@ Shodan balance is fetched server-side only. The API key is never sent to the bro
 
 - Queue SMB / FTP / HTTP scan tasks (single active task, FIFO queue)
 - Queue table hydrates from server-side queue state (`GET /api/scans`), so active/queued entries persist across page refresh/navigation
+- Scan writes and `/results` reads share one resolved DB source (main `config.json` database path by default; explicit `db_path` override still wins)
 - Per-task max-results is enforced (`max_shodan_results`)
 - Mandatory preflight confirmation before queueing:
   - estimated query-credit cost (`ceil(max_shodan_results / 100)` per selected protocol)

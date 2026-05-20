@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import enum
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -292,6 +293,7 @@ _VALID_COUNTRY_CODES = frozenset(
 
 _PROGRESS_RE = re.compile(r"\b(\d{1,3})%")
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
+logger = logging.getLogger(__name__)
 
 
 class TaskStatus(str, enum.Enum):
@@ -523,11 +525,15 @@ def _parse_progress(task: ScanTask, line: str) -> None:
 
 
 class ScanQueue:
-    def __init__(self) -> None:
+    def __init__(self, *, base_config_path: Optional[Path] = None) -> None:
         self._tasks: dict[str, ScanTask] = {}
         self._active: Optional[ScanTask] = None
         self._queue: deque[ScanTask] = deque()
         self._lock = threading.Lock()
+        if base_config_path is None:
+            self._base_config_path = _CONFIG_PATH
+        else:
+            self._base_config_path = Path(base_config_path).expanduser().resolve(strict=False)
 
     def submit(self, request: ScanRequest) -> ScanTask:
         task = ScanTask(task_id=secrets.token_hex(8), request=request)
@@ -595,6 +601,7 @@ class ScanQueue:
 
     def _run(self, task: ScanTask) -> None:
         task_config_path: Optional[Path] = None
+        base_config_path = self._base_config_path
         try:
             with task._lock:
                 if task._cancel_requested:
@@ -606,7 +613,22 @@ class ScanQueue:
             if cancelled_before_start:
                 return
 
-            task_config_path = _create_task_config_file(task.request, _CONFIG_PATH)
+            resolved_db_path = "unknown"
+            try:
+                from shared.config import load_config as _load_core_config
+
+                resolved_db_path = _load_core_config(str(base_config_path)).get_database_path()
+            except Exception:
+                resolved_db_path = "unknown"
+            logger.info(
+                "scan runner start: task_id=%s protocol=%s config_path=%s db_path=%s",
+                task.task_id,
+                task.request.protocol,
+                base_config_path,
+                resolved_db_path,
+            )
+
+            task_config_path = _create_task_config_file(task.request, base_config_path)
             cmd = build_command(task.request, config_path=task_config_path)
             env = _build_subprocess_env()
             if sys.platform.startswith("win"):
@@ -682,7 +704,7 @@ class ScanQueue:
             if run_probe_stage:
                 probe_result = run_post_scan_probe(
                     protocol=task.request.protocol,
-                    config_path=task_config_path or _CONFIG_PATH,
+                    config_path=task_config_path or base_config_path,
                     scan_start_iso=scan_start_iso,
                     scan_end_iso=scan_end_iso,
                     cancel_event=scan_cancel_event,

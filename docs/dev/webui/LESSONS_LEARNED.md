@@ -294,3 +294,11 @@ Seeded before implementation. Append after every major card.
     (`GET /api/scans`), not only from in-page JS memory. Client-only tracking
     causes false-empty queues after navigation/refresh even while tasks are
     still active/queued in the backend.
+
+## C26 — Scans/Results DB Path Unification
+
+62. Treat Web UI scan writes and `/results` reads as one path-resolution domain.
+    Resolve both from the same main-config `database.path` at app startup
+    (unless an explicit `db_path` override is provided). Mixing repo-local scan
+    config with default results DB paths creates false-success scans that never
+    appear in `/results`.

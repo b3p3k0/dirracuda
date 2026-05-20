@@ -1,5 +1,6 @@
 """Route integration tests for Web UI scan launch and polling endpoints."""
 
+import json
 import re
 
 import pytest
@@ -74,8 +75,16 @@ def cfg_no_tls():
 
 
 @pytest.fixture
-def app_and_queue(creds, cfg_no_tls):
-    app = create_app(cfg=cfg_no_tls, creds_path=creds)
+def main_config_path(tmp_path):
+    p = tmp_path / "config.json"
+    db_path = tmp_path / "authoritative-main.db"
+    p.write_text(json.dumps({"database": {"path": str(db_path)}}), encoding="utf-8")
+    return p
+
+
+@pytest.fixture
+def app_and_queue(creds, cfg_no_tls, main_config_path):
+    app = create_app(cfg=cfg_no_tls, creds_path=creds, main_config_path=main_config_path)
     fake = FakeScanQueue()
     app.state.scan_queue = fake
     fake_balance = FakeShodanBalanceService()
@@ -124,6 +133,29 @@ def _valid_payload(**overrides):
     }
     payload.update(overrides)
     return payload
+
+
+def test_create_app_uses_main_config_db_path_when_override_absent(
+    creds, cfg_no_tls, main_config_path, tmp_path
+):
+    app = create_app(cfg=cfg_no_tls, creds_path=creds, main_config_path=main_config_path)
+    expected = (tmp_path / "authoritative-main.db").resolve(strict=False)
+    assert app.state.db_path == expected
+    assert app.state.main_config_path == main_config_path.resolve(strict=False)
+
+
+def test_create_app_db_override_takes_precedence(
+    creds, cfg_no_tls, main_config_path, tmp_path
+):
+    override = tmp_path / "db-override.db"
+    app = create_app(
+        cfg=cfg_no_tls,
+        creds_path=creds,
+        db_path=override,
+        main_config_path=main_config_path,
+    )
+    assert app.state.db_path == override.resolve(strict=False)
+    assert app.state.main_config_path == main_config_path.resolve(strict=False)
 
 
 def test_scans_page_requires_auth(client):

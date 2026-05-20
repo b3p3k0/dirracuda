@@ -523,6 +523,9 @@ query-credit cost, live balance when available, and estimated post-scan balance
 before queue submission.
 The `/scans` queue view now rehydrates from server queue state, so active/queued
 entries persist across navigation and browser refreshes.
+Web UI scan writes and `/results` reads now resolve from the same main-config
+database path (`config.json`) by default, so completed scans surface in results
+without DB-path drift.
 In the Web UI results page, `Favorite`, `Avoid`, and `Probed` cells are inline
 toggle actions. Operators can also multi-select rows on the current page and run
 bulk `Toggle Favorite`, `Toggle Avoid`, `Toggle Compromised`, and `Probe Selected`

@@ -219,6 +219,47 @@ def test_popen_called_with_correct_args(monkeypatch):
     assert calls["kwargs"]["env"]["PYTHONUNBUFFERED"] == "1"
 
 
+def test_scan_queue_uses_injected_base_config_path(monkeypatch, tmp_path):
+    calls = {}
+    base_cfg = (tmp_path / "main-config.json").resolve(strict=False)
+    base_cfg.write_text("{}", encoding="utf-8")
+    task_cfg = (tmp_path / "task-config.json").resolve(strict=False)
+    task_cfg.write_text("{}", encoding="utf-8")
+
+    class _Cfg:
+        def get_database_path(self):
+            return str(tmp_path / "authoritative.db")
+
+    class FakePopen:
+        pid = 1234
+        returncode = 0
+        stdout = iter(())
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+    def fake_create_task_config_file(request, base_config_path):
+        calls["base_config_path"] = base_config_path
+        return task_cfg
+
+    monkeypatch.setattr(task_module, "_create_task_config_file", fake_create_task_config_file)
+    monkeypatch.setattr(task_module.subprocess, "Popen", lambda *a, **k: FakePopen())
+    monkeypatch.setattr("shared.config.load_config", lambda _path=None: _Cfg())
+
+    queue = ScanQueue(base_config_path=base_cfg)
+    task = ScanTask(
+        task_id="injected-cfg",
+        request=_request(),
+        status=TaskStatus.RUNNING,
+        started_at=time.time(),
+    )
+    queue._active = task
+    queue._run(task)
+
+    assert calls["base_config_path"] == base_cfg
+    assert task.status == TaskStatus.DONE
+
+
 def test_queue_submit_starts_when_idle(monkeypatch):
     monkeypatch.setattr(ScanQueue, "_run", lambda self, task: None)
     queue = ScanQueue()

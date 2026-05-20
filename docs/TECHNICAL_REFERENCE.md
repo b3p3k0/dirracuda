@@ -97,6 +97,9 @@ verified hosts. The `/scans` UI now requires a preflight review step (credit
 estimate + balance visibility + explicit confirmation) before any queue writes.
 Queue visibility on `/scans` is server-backed: the page hydrates active/queued
 tasks from `GET /api/scans` so entries persist across navigation and refresh.
+Web UI scan writes and `/results` reads now share a single resolved DB source:
+main-config `database.path` by default, with explicit `create_app(db_path=...)`
+override precedence for tests or controlled deployments.
 
 **Web UI routes (C4–C6):**
 
