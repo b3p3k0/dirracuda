@@ -4,6 +4,7 @@ var pageSize = 50;
 var totalPages = 1;
 var openDetailRowKey = null;
 var detailCache = {};
+var selectedRowKeys = new Set();
 var token = document.querySelector('meta[name="csrf-token"]').content;
 
 function setResults(msg, cls) {
@@ -60,6 +61,236 @@ function persistResultsPrefs() {
   });
 }
 
+function _probeStatusFromEmoji(value) {
+  if (value === '✖') return 'issue';
+  if (value === '✔') return 'clean';
+  return 'unprobed';
+}
+
+function _probeEmojiFromStatus(value) {
+  var status = String(value || '').toLowerCase();
+  if (status === 'issue') return '✖';
+  if (status === 'clean') return '✔';
+  return '○';
+}
+
+function _getRowCol(tr, index) {
+  return tr.children[index] || null;
+}
+
+function _getFavoriteValue(tr) {
+  var td = _getRowCol(tr, 1);
+  return td && td.textContent.trim() === '✔' ? 1 : 0;
+}
+
+function _getAvoidValue(tr) {
+  var td = _getRowCol(tr, 2);
+  return td && td.textContent.trim() === '✖' ? 1 : 0;
+}
+
+function _getProbeStatus(tr) {
+  var td = _getRowCol(tr, 3);
+  return _probeStatusFromEmoji(td ? td.textContent.trim() : '○');
+}
+
+function _applyRowState(tr, state) {
+  if (!state || !tr) return;
+  if (Object.prototype.hasOwnProperty.call(state, 'favorite')) {
+    var favTd = _getRowCol(tr, 1);
+    if (favTd) favTd.textContent = Number(state.favorite) ? '✔' : '○';
+  }
+  if (Object.prototype.hasOwnProperty.call(state, 'avoid')) {
+    var avoidTd = _getRowCol(tr, 2);
+    if (avoidTd) avoidTd.textContent = Number(state.avoid) ? '✖' : '○';
+  }
+  if (Object.prototype.hasOwnProperty.call(state, 'probe_status')) {
+    var probeTd = _getRowCol(tr, 3);
+    if (probeTd) probeTd.textContent = _probeEmojiFromStatus(state.probe_status);
+  }
+}
+
+function _optimisticToggle(tr, action) {
+  var before = {
+    favorite: _getFavoriteValue(tr),
+    avoid: _getAvoidValue(tr),
+    probe_status: _getProbeStatus(tr)
+  };
+
+  if (action === 'favorite') {
+    _applyRowState(tr, {favorite: before.favorite ? 0 : 1});
+  } else if (action === 'avoid') {
+    _applyRowState(tr, {avoid: before.avoid ? 0 : 1});
+  } else if (action === 'compromised') {
+    var isCompromised = before.probe_status === 'issue';
+    _applyRowState(tr, {probe_status: isCompromised ? 'clean' : 'issue'});
+  }
+
+  return before;
+}
+
+function _buildToggleTargets(rows) {
+  var targets = [];
+  rows.forEach(function(tr) {
+    var hostType = tr.dataset.hostType || '';
+    var serverId = Number(tr.dataset.serverId || '0');
+    var rowKey = tr.dataset.rowKey || '';
+    if (!hostType || !Number.isInteger(serverId) || serverId <= 0) return;
+    targets.push({
+      host_type: hostType,
+      protocol_server_id: serverId,
+      row_key: rowKey
+    });
+  });
+  return targets;
+}
+
+async function _postToggleAction(action, targets) {
+  var resp = await fetch('/api/results/actions/toggle', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-CSRF-Token': token
+    },
+    body: JSON.stringify({action: action, targets: targets})
+  });
+  var data = await resp.json();
+  return {ok: resp.ok, status: resp.status, data: data};
+}
+
+async function _performToggleAction(action, rows) {
+  if (!rows || !rows.length) {
+    setResults('Select at least one row first.', 'status-warn');
+    return;
+  }
+
+  var targets = _buildToggleTargets(rows);
+  if (!targets.length) {
+    setResults('No valid rows selected for action.', 'status-warn');
+    return;
+  }
+
+  var beforeByRowKey = {};
+  rows.forEach(function(tr) {
+    var rowKey = tr.dataset.rowKey || '';
+    if (!rowKey) return;
+    beforeByRowKey[rowKey] = _optimisticToggle(tr, action);
+  });
+
+  try {
+    var result = await _postToggleAction(action, targets);
+    if (!result.ok) {
+      rows.forEach(function(tr) {
+        var rowKey = tr.dataset.rowKey || '';
+        if (!rowKey || !beforeByRowKey[rowKey]) return;
+        _applyRowState(tr, beforeByRowKey[rowKey]);
+      });
+      setResults('Action failed: ' + (result.data.error || result.status), 'status-error');
+      return;
+    }
+
+    var payload = result.data || {};
+    var outcomes = payload.results || [];
+    var byRowKey = {};
+    outcomes.forEach(function(outcome) {
+      if (!outcome || !outcome.row_key) return;
+      byRowKey[outcome.row_key] = outcome;
+    });
+
+    rows.forEach(function(tr) {
+      var rowKey = tr.dataset.rowKey || '';
+      if (!rowKey) return;
+      var outcome = byRowKey[rowKey];
+      if (!outcome || outcome.ok !== true || !outcome.state) {
+        if (beforeByRowKey[rowKey]) {
+          _applyRowState(tr, beforeByRowKey[rowKey]);
+        }
+        return;
+      }
+      _applyRowState(tr, outcome.state);
+    });
+
+    var failed = Number(payload.failed || 0);
+    var updated = Number(payload.updated || 0);
+    if (failed > 0) {
+      setResults('Action complete: ' + updated + ' updated, ' + failed + ' failed.', 'status-warn');
+    } else {
+      setResults('Action complete: ' + updated + ' updated.', 'status-ok');
+    }
+  } catch (err) {
+    rows.forEach(function(tr) {
+      var rowKey = tr.dataset.rowKey || '';
+      if (!rowKey || !beforeByRowKey[rowKey]) return;
+      _applyRowState(tr, beforeByRowKey[rowKey]);
+    });
+    setResults('Action failed: network error.', 'status-error');
+  }
+}
+
+function _setRowSelected(rowKey, selected) {
+  if (!rowKey) return;
+  if (selected) {
+    selectedRowKeys.add(rowKey);
+  } else {
+    selectedRowKeys.delete(rowKey);
+  }
+}
+
+function _syncSelectionUi() {
+  var rows = document.querySelectorAll('#results-body tr.result-row');
+  rows.forEach(function(tr) {
+    var rowKey = tr.dataset.rowKey || '';
+    var cb = tr.querySelector('input.row-select');
+    if (!cb) return;
+    cb.checked = selectedRowKeys.has(rowKey);
+  });
+
+  var allCb = document.getElementById('select-all-rows');
+  var visible = Array.from(rows).filter(function(tr) {
+    return !!tr.dataset.rowKey;
+  });
+  var checkedCount = visible.filter(function(tr) {
+    return selectedRowKeys.has(tr.dataset.rowKey || '');
+  }).length;
+
+  if (allCb) {
+    allCb.indeterminate = checkedCount > 0 && checkedCount < visible.length;
+    allCb.checked = visible.length > 0 && checkedCount === visible.length;
+  }
+
+  var hasSelection = selectedRowKeys.size > 0;
+  document.getElementById('bulk-favorite-btn').disabled = !hasSelection;
+  document.getElementById('bulk-avoid-btn').disabled = !hasSelection;
+  document.getElementById('bulk-compromised-btn').disabled = !hasSelection;
+  document.getElementById('clear-selection-btn').disabled = !hasSelection;
+}
+
+function _resetSelection() {
+  selectedRowKeys = new Set();
+  _syncSelectionUi();
+}
+
+function _collectSelectedRows() {
+  var rows = document.querySelectorAll('#results-body tr.result-row');
+  var selectedRows = [];
+  rows.forEach(function(tr) {
+    var rowKey = tr.dataset.rowKey || '';
+    if (rowKey && selectedRowKeys.has(rowKey)) {
+      selectedRows.push(tr);
+    }
+  });
+  return selectedRows;
+}
+
+function _selectAllVisibleRows(checked) {
+  var rows = document.querySelectorAll('#results-body tr.result-row');
+  rows.forEach(function(tr) {
+    var rowKey = tr.dataset.rowKey || '';
+    if (!rowKey) return;
+    _setRowSelected(rowKey, checked);
+  });
+  _syncSelectionUi();
+}
+
 function buildRow(r) {
   var tr = document.createElement('tr');
   tr.className = 'result-row';
@@ -68,6 +299,26 @@ function buildRow(r) {
   tr.dataset.hostType = r.host_type || '';
   tr.dataset.serverId = String(r.protocol_server_id || '');
   tr.dataset.ipAddress = r.ip_address || '';
+
+  var rowKey = tr.dataset.rowKey;
+
+  var selectTd = document.createElement('td');
+  selectTd.setAttribute('data-label', 'Select');
+  var selectCb = document.createElement('input');
+  selectCb.type = 'checkbox';
+  selectCb.className = 'row-select';
+  selectCb.setAttribute('aria-label', 'Select row ' + (r.ip_address || rowKey || ''));
+  selectCb.checked = selectedRowKeys.has(rowKey);
+  selectCb.addEventListener('click', function(e) {
+    e.stopPropagation();
+  });
+  selectCb.addEventListener('change', function(e) {
+    e.stopPropagation();
+    _setRowSelected(rowKey, selectCb.checked);
+    _syncSelectionUi();
+  });
+  selectTd.appendChild(selectCb);
+  tr.appendChild(selectTd);
 
   var cells = [
     ['Favorite', r.favorite],
@@ -83,18 +334,44 @@ function buildRow(r) {
     ['Country', r.country]
   ];
 
-  cells.forEach(function(pair) {
+  cells.forEach(function(pair, idx) {
     var td = document.createElement('td');
     td.setAttribute('data-label', pair[0]);
     td.textContent = pair[1] != null ? String(pair[1]) : '';
+
+    if (idx === 0 || idx === 1 || idx === 2) {
+      var action = idx === 0 ? 'favorite' : (idx === 1 ? 'avoid' : 'compromised');
+      td.classList.add('action-cell');
+      td.setAttribute('role', 'button');
+      td.setAttribute('tabindex', '0');
+      td.addEventListener('click', function(e) {
+        e.stopPropagation();
+        _performToggleAction(action, [tr]);
+      });
+      td.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          e.stopPropagation();
+          _performToggleAction(action, [tr]);
+        }
+      });
+    }
+
     tr.appendChild(td);
   });
 
-  tr.addEventListener('click', function() {
+  tr.addEventListener('click', function(e) {
+    if (e.target && e.target.closest('input, button, .action-cell')) {
+      return;
+    }
     toggleDetailRow(tr);
   });
+
   tr.addEventListener('keydown', function(e) {
     if (e.key === 'Enter' || e.key === ' ') {
+      if (e.target && e.target !== tr) {
+        return;
+      }
       e.preventDefault();
       toggleDetailRow(tr);
     }
@@ -215,6 +492,11 @@ function renderDetailError(container, msg) {
   container.textContent = msg;
 }
 
+function _detailColspan() {
+  var cols = document.querySelectorAll('#results-table thead th').length;
+  return cols > 0 ? cols : 12;
+}
+
 function toggleDetailRow(baseRow) {
   var rowKey = baseRow.dataset.rowKey || '';
   var hostType = baseRow.dataset.hostType || '';
@@ -234,7 +516,7 @@ function toggleDetailRow(baseRow) {
   detailRow.className = 'result-detail-row';
   detailRow.dataset.parentKey = rowKey;
   var detailCell = document.createElement('td');
-  detailCell.colSpan = 11;
+  detailCell.colSpan = _detailColspan();
   var detailBox = document.createElement('div');
   detailBox.className = 'result-detail-box';
   detailBox.textContent = 'Loading details...';
@@ -282,7 +564,8 @@ function loadResults() {
 
   var tbody = document.getElementById('results-body');
   closeOpenDetail();
-  tbody.innerHTML = '<tr><td colspan="11">Loading...</td></tr>';
+  _resetSelection();
+  tbody.innerHTML = '<tr><td colspan="' + _detailColspan() + '">Loading...</td></tr>';
   setResults('');
   updatePagerButtons();
 
@@ -291,14 +574,15 @@ function loadResults() {
       tbody.innerHTML = '';
       if (!resp.ok) {
         setResults('Error: ' + (data.error || resp.status), 'status-error');
-        tbody.innerHTML = '<tr><td colspan="11" class="status-text">Query failed.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="' + _detailColspan() + '" class="status-text">Query failed.</td></tr>';
         openDetailRowKey = null;
+        _syncSelectionUi();
         return;
       }
       currentPage = Number(data.page || currentPage);
       totalPages = Number(data.total_pages || 1);
       if (!data.results || !data.results.length) {
-        tbody.innerHTML = '<tr><td colspan="11" class="status-text">No results.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="' + _detailColspan() + '" class="status-text">No results.</td></tr>';
         openDetailRowKey = null;
       } else {
         data.results.forEach(function(r) {
@@ -307,13 +591,15 @@ function loadResults() {
       }
       updatePagerLabel(Number(data.total_count || 0), currentPage, totalPages);
       updatePagerButtons();
+      _syncSelectionUi();
     });
   }).catch(function() {
     setResults('Request failed.', 'status-error');
     document.getElementById('results-body').innerHTML =
-      '<tr><td colspan="11" class="status-text">Request failed.</td></tr>';
+      '<tr><td colspan="' + _detailColspan() + '" class="status-text">Request failed.</td></tr>';
     openDetailRowKey = null;
     updatePagerButtons();
+    _syncSelectionUi();
   });
 }
 
@@ -390,6 +676,31 @@ document.getElementById('jump-page').addEventListener('keydown', function(e) {
     e.preventDefault();
     document.getElementById('jump-btn').click();
   }
+});
+
+document.getElementById('select-all-rows').addEventListener('click', function(e) {
+  e.stopPropagation();
+});
+
+document.getElementById('select-all-rows').addEventListener('change', function() {
+  _selectAllVisibleRows(this.checked);
+});
+
+document.getElementById('clear-selection-btn').addEventListener('click', function() {
+  _resetSelection();
+  setResults('Selection cleared.', 'status-neutral');
+});
+
+document.getElementById('bulk-favorite-btn').addEventListener('click', function() {
+  _performToggleAction('favorite', _collectSelectedRows());
+});
+
+document.getElementById('bulk-avoid-btn').addEventListener('click', function() {
+  _performToggleAction('avoid', _collectSelectedRows());
+});
+
+document.getElementById('bulk-compromised-btn').addEventListener('click', function() {
+  _performToggleAction('compromised', _collectSelectedRows());
 });
 
 document.getElementById('export-btn').addEventListener('click', async function() {

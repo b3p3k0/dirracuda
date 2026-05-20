@@ -4,15 +4,16 @@ import ipaddress
 import logging
 import math
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
 
 from fastapi import Depends, FastAPI, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 import experimental.webui.db as _db
+import experimental.webui.db_actions as _db_actions
 from experimental.webui.auth import (
     BlocklistUnavailableError, CredentialError, check_credential_store,
     set_password, verify_password,
@@ -92,6 +93,37 @@ class _ConfigUpdateRequest(BaseModel):
     auth_lockout_window_sec: Optional[int] = None
     auth_lockout_base_duration_sec: Optional[int] = None
     auth_lockout_max_duration_sec: Optional[int] = None
+
+
+class _ToggleActionTarget(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    host_type: Literal["S", "F", "H"]
+    protocol_server_id: int
+    row_key: Optional[str] = None
+
+    @field_validator("protocol_server_id")
+    @classmethod
+    def _validate_protocol_server_id(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("protocol_server_id must be a positive integer")
+        return value
+
+
+class _ToggleActionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    action: Literal["favorite", "avoid", "compromised"]
+    targets: list[_ToggleActionTarget]
+
+    @field_validator("targets")
+    @classmethod
+    def _validate_targets(cls, value: list[_ToggleActionTarget]) -> list[_ToggleActionTarget]:
+        if len(value) < 1:
+            raise ValueError("targets must contain at least 1 row")
+        if len(value) > 200:
+            raise ValueError("targets must not exceed 200 rows")
+        return value
 
 
 def health() -> dict:
@@ -440,6 +472,43 @@ def create_app(
             return JSONResponse({"error": "database error"}, status_code=500)
         if payload is None:
             return JSONResponse({"error": "not found"}, status_code=404)
+        return JSONResponse(payload)
+
+    @app.post("/api/results/actions/toggle")
+    async def _toggle_results_actions(
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> JSONResponse:
+        if not same_origin(request):
+            return JSONResponse({"error": "origin check failed"}, status_code=403)
+        csrf_tok = request.headers.get("X-CSRF-Token")
+        if not validate_csrf(csrf_tok, session.csrf_token):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+
+        try:
+            body: Any = await request.json()
+        except Exception:
+            return JSONResponse({"error": "invalid payload"}, status_code=400)
+
+        try:
+            parsed = _ToggleActionRequest.model_validate(body)
+        except ValidationError:
+            return JSONResponse({"error": "invalid payload"}, status_code=400)
+
+        db_path = request.app.state.db_path
+        targets = [
+            {
+                "host_type": item.host_type,
+                "protocol_server_id": item.protocol_server_id,
+                "row_key": item.row_key,
+            }
+            for item in parsed.targets
+        ]
+        try:
+            payload = _db_actions.toggle_results_actions(db_path, parsed.action, targets)
+        except Exception:
+            logger.exception("results toggle action failed: action=%s", parsed.action)
+            return JSONResponse({"error": "database error"}, status_code=500)
         return JSONResponse(payload)
 
     @app.get("/api/results/{protocol}")

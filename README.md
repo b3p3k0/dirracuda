@@ -518,6 +518,11 @@ The same tab also provides inline username/password credential setup (create or
 update) for Web UI login.
 In the Web UI scan page, `Run probe on verified hosts after scan` now applies to
 SMB, FTP, and HTTP using the shared protocol-aware probe pipeline.
+In the Web UI results page, `Favorite`, `Avoid`, and `Probed` cells are inline
+toggle actions. Operators can also multi-select rows on the current page and run
+bulk `Toggle Favorite`, `Toggle Avoid`, and `Toggle Compromised` actions. Bulk
+actions use per-row toggle semantics (not force set/unset), and selection resets
+on results reloads (filter/page/protocol changes).
 Login is protected by persistent per-account+IP lockout (configurable threshold,
 observation window, and exponential backoff via the `auth` block in `webui.json`
 or via the desktop config dialog). The `GET /health` endpoint reports

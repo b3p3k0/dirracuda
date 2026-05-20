@@ -118,6 +118,11 @@ def test_results_renders_authenticated(logged_in):
     r = logged_in.get("/results")
     assert r.status_code == 200
     assert "Results" in r.text
+    assert "Toggle Favorite" in r.text
+    assert "Toggle Avoid" in r.text
+    assert "Toggle Compromised" in r.text
+    assert "Clear Selection" in r.text
+    assert 'id="select-all-rows"' in r.text
     assert "Export DB" in r.text
     assert '/static/results.js' in r.text
 

@@ -26,6 +26,10 @@
     <input id="hide-avoid-filter" type="checkbox">
     Hide Avoid
   </label>
+  <button id="bulk-favorite-btn" type="button" disabled>Toggle Favorite</button>
+  <button id="bulk-avoid-btn" type="button" disabled>Toggle Avoid</button>
+  <button id="bulk-compromised-btn" type="button" disabled>Toggle Compromised</button>
+  <button id="clear-selection-btn" type="button" disabled>Clear Selection</button>
   <button id="load-btn" type="button">Refresh</button>
   <button id="first-btn" type="button">&laquo; First</button>
   <button id="prev-btn" type="button">&laquo; Prev</button>
@@ -43,6 +47,9 @@
   <table id="results-table" class="results-table">
     <thead>
       <tr>
+        <th class="select-col">
+          <input id="select-all-rows" type="checkbox" aria-label="Select all visible rows">
+        </th>
         <th>Favorite</th>
         <th>Avoid</th>
         <th>Probed</th>
@@ -57,7 +64,7 @@
       </tr>
     </thead>
     <tbody id="results-body">
-      <tr><td colspan="11">Loading...</td></tr>
+      <tr><td colspan="12">Loading...</td></tr>
     </tbody>
   </table>
 </div>

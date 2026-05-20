@@ -237,3 +237,20 @@ Seeded before implementation. Append after every major card.
 51. Write the validation report only after all gates are green. Writing it
     speculatively from planning-phase outputs risks stale PASS/FAIL entries if a
     gate flips between planning and final execution.
+
+## C22 — Results Host-State Actions
+
+52. For mixed-schema DB compatibility, treat write paths the same way as read
+    paths: probe real runtime tables/columns before every mutation and return
+    per-target errors instead of crashing the whole action. Optional
+    protocol-specific tables (`*_user_flags`, `*_probe_cache`) can drift across
+    historical DBs.
+
+53. Keep web-side bulk actions row-scoped and explicitly current-page only.
+    Multi-select should reset on reload/filter/pagination changes so stale
+    selections cannot accidentally mutate off-screen rows.
+
+54. If product parity requires desktop semantics (like compromised =
+    `status=="issue"` OR `indicator_matches>0`), encode that rule in one write
+    helper and assert both transitions in tests (`unprobed/0 -> issue/1`,
+    `issue/N -> clean/0`) to prevent silent logic drift.

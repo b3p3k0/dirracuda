@@ -91,6 +91,14 @@ Shodan balance is fetched server-side only. The API key is never sent to the bro
   - `Show Only Shares > 0`
   - `Favorites Only`
   - `Hide Avoid`
+- Inline row actions:
+  - Click `Favorite`, `Avoid`, or `Probed` cells to toggle state on that row
+  - `Probed` toggle uses desktop compromised semantics (`issue/clean` with `indicator_matches` `1/0`)
+- Bulk actions (current page only):
+  - Select rows with the leading checkbox column
+  - Use `Toggle Favorite`, `Toggle Avoid`, `Toggle Compromised`, or `Clear Selection`
+  - Bulk actions are per-row toggles, not force set/unset
+  - Selection resets on results reloads (filter/page/protocol changes)
 - Manual refresh model (`Refresh` button), no auto-refresh
 - Pagination controls: First / Prev / Next / Last / Jump to
 - Row click opens inline details accordion:

@@ -44,6 +44,7 @@ summaries, database export, and limited web UI configuration.
 - `VALIDATION_PLAN.md` - automated and HI manual gates.
 - `RISK_REGISTER.md` - known risks and mitigations.
 - `LESSONS_LEARNED.md` - carry-forward guardrails for future agents.
+- `FEATURE_PARITY_MATRIX.md` - desktop vs Web UI capability map and early target shortlist.
 - `INITIAL_PLANNING/` - raw initial notes, preserved for traceability.
 
 ## Canonical Repo Context

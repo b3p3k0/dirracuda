@@ -114,6 +114,7 @@ def db_all_protocols(tmp_path):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             server_id INTEGER NOT NULL,
             status TEXT,
+            indicator_matches INTEGER DEFAULT 0,
             extracted INTEGER DEFAULT 0,
             latest_snapshot_id INTEGER
         );
@@ -121,6 +122,7 @@ def db_all_protocols(tmp_path):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             server_id INTEGER NOT NULL,
             status TEXT,
+            indicator_matches INTEGER DEFAULT 0,
             extracted INTEGER DEFAULT 0,
             accessible_dirs_count INTEGER DEFAULT 0,
             accessible_dirs_list TEXT,
@@ -130,6 +132,7 @@ def db_all_protocols(tmp_path):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             server_id INTEGER NOT NULL,
             status TEXT,
+            indicator_matches INTEGER DEFAULT 0,
             extracted INTEGER DEFAULT 0,
             accessible_dirs_count INTEGER DEFAULT 0,
             accessible_files_count INTEGER DEFAULT 0,
@@ -186,20 +189,20 @@ def db_all_protocols(tmp_path):
         INSERT INTO probe_snapshots (raw_snapshot_json)
         VALUES ('{"shares":[{"share":"http_root","directories":[{"name":"/","subdirectories":["admin"],"files":["index.html","admin/panel.html"]}]}]}');
 
-        INSERT INTO host_probe_cache (server_id, status, extracted, latest_snapshot_id)
-        VALUES (1, 'clean', 0, 1);
+        INSERT INTO host_probe_cache (server_id, status, indicator_matches, extracted, latest_snapshot_id)
+        VALUES (1, 'clean', 0, 0, 1);
         INSERT INTO ftp_probe_cache (
-            server_id, status, extracted, accessible_dirs_count, accessible_dirs_list, latest_snapshot_id
+            server_id, status, indicator_matches, extracted, accessible_dirs_count, accessible_dirs_list, latest_snapshot_id
         )
-        VALUES (1, 'issue', 1, 2, 'pub,docs', 2);
+        VALUES (1, 'issue', 4, 1, 2, 'pub,docs', 2);
         INSERT INTO ftp_access (
             server_id, accessible, auth_status, root_listing_available, root_entry_count, access_details, test_timestamp
         )
         VALUES (1, 1, 'anonymous', 1, 4, '["pub","docs"]', '2026-05-10T14:20:30');
         INSERT INTO http_probe_cache (
-            server_id, status, extracted, accessible_dirs_count, accessible_files_count, accessible_dirs_list, latest_snapshot_id
+            server_id, status, indicator_matches, extracted, accessible_dirs_count, accessible_files_count, accessible_dirs_list, latest_snapshot_id
         )
-        VALUES (1, 'unprobed', 0, 1, 1, '/,/admin', 3);
+        VALUES (1, 'unprobed', 0, 0, 1, 1, '/,/admin', 3);
         INSERT INTO http_access (
             server_id, accessible, status_code, is_index_page, dir_count, file_count, tls_verified, access_details, test_timestamp
         )
@@ -230,6 +233,45 @@ def _logged_in_client_for_db(creds, cfg_no_tls, db_path):
     r = c.post("/login", json={"username": _USERNAME, "password": _PASSWORD})
     assert r.status_code == 200
     return c
+
+
+def _csrf(client):
+    dash = client.get("/dashboard")
+    assert dash.status_code == 200
+    m = re.search(r'name="csrf-token" content="([^"]+)"', dash.text)
+    assert m, "csrf-token meta tag not found"
+    return m.group(1)
+
+
+def _post_toggle(client, payload, csrf=None, headers=None):
+    req_headers = dict(headers or {})
+    if csrf is not None:
+        req_headers["X-CSRF-Token"] = csrf
+    return client.post("/api/results/actions/toggle", json=payload, headers=req_headers)
+
+
+def _fetch_int(db_path, sql, params):
+    conn = sqlite3.connect(str(db_path))
+    try:
+        row = conn.execute(sql, params).fetchone()
+        return int(row[0]) if row is not None else 0
+    finally:
+        conn.close()
+
+
+def _fetch_probe(db_path, table, server_id):
+    conn = sqlite3.connect(str(db_path))
+    try:
+        row = conn.execute(
+            f"SELECT COALESCE(status, 'unprobed'), COALESCE(indicator_matches, 0) "
+            f"FROM {table} WHERE server_id = ? LIMIT 1",
+            (server_id,),
+        ).fetchone()
+        if row is None:
+            return ("unprobed", 0)
+        return (str(row[0]).lower(), int(row[1]))
+    finally:
+        conn.close()
 
 
 def test_results_page_requires_auth(client):
@@ -574,3 +616,283 @@ def test_result_details_schema_fallback_without_optional_tables(logged_in_client
     assert payload["host_type"] == "S"
     assert payload["overview"]["access_summary"] == "accessible=0, denied=0"
     assert "Protocol: SMB" in payload["full_details_text"]
+
+
+def test_results_toggle_actions_requires_auth(client):
+    r = _post_toggle(
+        client,
+        {
+            "action": "favorite",
+            "targets": [{"host_type": "S", "protocol_server_id": 1, "row_key": "S:1"}],
+        },
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == "/login"
+
+
+def test_results_toggle_actions_missing_csrf_returns_403(creds, cfg_no_tls, db_all_protocols):
+    c = _logged_in_client_for_db(creds, cfg_no_tls, db_all_protocols)
+    r = _post_toggle(
+        c,
+        {
+            "action": "favorite",
+            "targets": [{"host_type": "S", "protocol_server_id": 1, "row_key": "S:1"}],
+        },
+    )
+    assert r.status_code == 403
+
+
+def test_results_toggle_actions_bad_origin_returns_403(creds, cfg_no_tls, db_all_protocols):
+    c = _logged_in_client_for_db(creds, cfg_no_tls, db_all_protocols)
+    csrf = _csrf(c)
+    r = _post_toggle(
+        c,
+        {
+            "action": "favorite",
+            "targets": [{"host_type": "S", "protocol_server_id": 1, "row_key": "S:1"}],
+        },
+        csrf=csrf,
+        headers={"Origin": "http://attacker.com"},
+    )
+    assert r.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"action": "bogus", "targets": [{"host_type": "S", "protocol_server_id": 1}]},
+        {"action": "favorite", "targets": []},
+        {"action": "favorite", "targets": [{"host_type": "X", "protocol_server_id": 1}]},
+        {"action": "favorite", "targets": [{"host_type": "S", "protocol_server_id": 0}]},
+        {
+            "action": "favorite",
+            "targets": [{"host_type": "S", "protocol_server_id": 1, "extra": "x"}],
+        },
+        {
+            "action": "favorite",
+            "targets": [{"host_type": "S", "protocol_server_id": 1}] * 201,
+        },
+    ],
+)
+def test_results_toggle_actions_invalid_payload_returns_400(
+    creds, cfg_no_tls, db_all_protocols, payload
+):
+    c = _logged_in_client_for_db(creds, cfg_no_tls, db_all_protocols)
+    csrf = _csrf(c)
+    r = _post_toggle(c, payload, csrf=csrf)
+    assert r.status_code == 400
+    assert r.json()["error"] == "invalid payload"
+
+
+def test_results_toggle_actions_invalid_json_returns_400(creds, cfg_no_tls, db_all_protocols):
+    c = _logged_in_client_for_db(creds, cfg_no_tls, db_all_protocols)
+    csrf = _csrf(c)
+    r = c.post(
+        "/api/results/actions/toggle",
+        content="{not-json",
+        headers={"X-CSRF-Token": csrf, "Content-Type": "application/json"},
+    )
+    assert r.status_code == 400
+    assert r.json()["error"] == "invalid payload"
+
+
+@pytest.mark.parametrize(
+    "action,host_type,table,column,expected",
+    [
+        ("favorite", "S", "host_user_flags", "favorite", 0),
+        ("favorite", "F", "ftp_user_flags", "favorite", 1),
+        ("favorite", "H", "http_user_flags", "favorite", 1),
+        ("avoid", "S", "host_user_flags", "avoid", 1),
+        ("avoid", "F", "ftp_user_flags", "avoid", 0),
+        ("avoid", "H", "http_user_flags", "avoid", 1),
+    ],
+)
+def test_results_toggle_single_row_per_protocol(
+    creds, cfg_no_tls, db_all_protocols, action, host_type, table, column, expected
+):
+    c = _logged_in_client_for_db(creds, cfg_no_tls, db_all_protocols)
+    csrf = _csrf(c)
+    r = _post_toggle(
+        c,
+        {
+            "action": action,
+            "targets": [
+                {
+                    "host_type": host_type,
+                    "protocol_server_id": 1,
+                    "row_key": f"{host_type}:1",
+                }
+            ],
+        },
+        csrf=csrf,
+    )
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["updated"] == 1
+    assert payload["failed"] == 0
+    assert _fetch_int(
+        db_all_protocols,
+        f"SELECT COALESCE({column}, 0) FROM {table} WHERE server_id = ?",
+        (1,),
+    ) == expected
+
+
+def test_results_toggle_favorite_bulk_s_f_h(creds, cfg_no_tls, db_all_protocols):
+    c = _logged_in_client_for_db(creds, cfg_no_tls, db_all_protocols)
+    csrf = _csrf(c)
+    r = _post_toggle(
+        c,
+        {
+            "action": "favorite",
+            "targets": [
+                {"host_type": "S", "protocol_server_id": 1, "row_key": "S:1"},
+                {"host_type": "F", "protocol_server_id": 1, "row_key": "F:1"},
+                {"host_type": "H", "protocol_server_id": 1, "row_key": "H:1"},
+            ],
+        },
+        csrf=csrf,
+    )
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["updated"] == 3
+    assert payload["failed"] == 0
+    assert _fetch_int(
+        db_all_protocols,
+        "SELECT COALESCE(favorite, 0) FROM host_user_flags WHERE server_id = ?",
+        (1,),
+    ) == 0
+    assert _fetch_int(
+        db_all_protocols,
+        "SELECT COALESCE(favorite, 0) FROM ftp_user_flags WHERE server_id = ?",
+        (1,),
+    ) == 1
+    assert _fetch_int(
+        db_all_protocols,
+        "SELECT COALESCE(favorite, 0) FROM http_user_flags WHERE server_id = ?",
+        (1,),
+    ) == 1
+
+
+def test_results_toggle_avoid_bulk_s_f_h(creds, cfg_no_tls, db_all_protocols):
+    c = _logged_in_client_for_db(creds, cfg_no_tls, db_all_protocols)
+    csrf = _csrf(c)
+    r = _post_toggle(
+        c,
+        {
+            "action": "avoid",
+            "targets": [
+                {"host_type": "S", "protocol_server_id": 1, "row_key": "S:1"},
+                {"host_type": "F", "protocol_server_id": 1, "row_key": "F:1"},
+                {"host_type": "H", "protocol_server_id": 1, "row_key": "H:1"},
+            ],
+        },
+        csrf=csrf,
+    )
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["updated"] == 3
+    assert payload["failed"] == 0
+    assert _fetch_int(
+        db_all_protocols,
+        "SELECT COALESCE(avoid, 0) FROM host_user_flags WHERE server_id = ?",
+        (1,),
+    ) == 1
+    assert _fetch_int(
+        db_all_protocols,
+        "SELECT COALESCE(avoid, 0) FROM ftp_user_flags WHERE server_id = ?",
+        (1,),
+    ) == 0
+    assert _fetch_int(
+        db_all_protocols,
+        "SELECT COALESCE(avoid, 0) FROM http_user_flags WHERE server_id = ?",
+        (1,),
+    ) == 1
+
+
+def test_results_toggle_compromised_bulk_desktop_parity(creds, cfg_no_tls, db_all_protocols):
+    c = _logged_in_client_for_db(creds, cfg_no_tls, db_all_protocols)
+    csrf = _csrf(c)
+    r = _post_toggle(
+        c,
+        {
+            "action": "compromised",
+            "targets": [
+                {"host_type": "S", "protocol_server_id": 1, "row_key": "S:1"},
+                {"host_type": "F", "protocol_server_id": 1, "row_key": "F:1"},
+                {"host_type": "H", "protocol_server_id": 1, "row_key": "H:1"},
+            ],
+        },
+        csrf=csrf,
+    )
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["updated"] == 3
+    assert payload["failed"] == 0
+    assert _fetch_probe(db_all_protocols, "host_probe_cache", 1) == ("issue", 1)
+    assert _fetch_probe(db_all_protocols, "ftp_probe_cache", 1) == ("clean", 0)
+    assert _fetch_probe(db_all_protocols, "http_probe_cache", 1) == ("issue", 1)
+
+
+def test_results_toggle_partial_success_for_missing_target(creds, cfg_no_tls, db_all_protocols):
+    c = _logged_in_client_for_db(creds, cfg_no_tls, db_all_protocols)
+    csrf = _csrf(c)
+    r = _post_toggle(
+        c,
+        {
+            "action": "favorite",
+            "targets": [
+                {"host_type": "S", "protocol_server_id": 1, "row_key": "S:1"},
+                {"host_type": "S", "protocol_server_id": 99, "row_key": "S:99"},
+            ],
+        },
+        csrf=csrf,
+    )
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["updated"] == 1
+    assert payload["failed"] == 1
+    assert len(payload["results"]) == 2
+    failures = [item for item in payload["results"] if item.get("ok") is False]
+    assert len(failures) == 1
+    assert "target not found" in failures[0].get("error", "")
+
+
+def test_results_toggle_schema_fallback_per_target_error(creds, cfg_no_tls, tmp_path):
+    db_path = tmp_path / "toggle_schema_missing_cols.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(
+        """
+        CREATE TABLE smb_servers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ip_address TEXT NOT NULL UNIQUE
+        );
+        INSERT INTO smb_servers (ip_address) VALUES ('10.9.0.1');
+
+        CREATE TABLE host_user_flags (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            server_id INTEGER NOT NULL,
+            favorite INTEGER DEFAULT 0
+        );
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    c = _logged_in_client_for_db(creds, cfg_no_tls, db_path)
+    csrf = _csrf(c)
+    r = _post_toggle(
+        c,
+        {
+            "action": "avoid",
+            "targets": [{"host_type": "S", "protocol_server_id": 1, "row_key": "S:1"}],
+        },
+        csrf=csrf,
+    )
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["updated"] == 0
+    assert payload["failed"] == 1
+    assert len(payload["results"]) == 1
+    assert payload["results"][0]["ok"] is False
+    assert "missing required table/column" in payload["results"][0]["error"]

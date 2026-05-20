@@ -363,6 +363,25 @@ tbody tr.selected td { background: var(--bg3); color: var(--accent); }
   cursor: pointer;
 }
 
+.results-table th.select-col,
+.results-table td[data-label="Select"] {
+  width: 34px;
+  text-align: center;
+}
+
+.results-table .row-select {
+  cursor: pointer;
+}
+
+.results-table td.action-cell {
+  cursor: pointer;
+}
+
+.results-table td.action-cell:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .result-detail-row td {
   padding: 0;
   background: var(--bg2);
