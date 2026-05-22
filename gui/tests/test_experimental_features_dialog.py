@@ -1578,7 +1578,7 @@ def test_webui_tab_get_cfg_fallback(monkeypatch):
     tab = WebUITab.__new__(WebUITab)
     cfg = tab._get_webui_cfg()
     assert cfg.bind_address == "127.0.0.1"
-    assert cfg.port == 5480
+    assert cfg.port == 2600
 
 
 def test_webui_tab_apply_status_running():

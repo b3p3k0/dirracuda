@@ -3,6 +3,7 @@
 import contextlib
 import ipaddress
 import json
+import logging
 import os
 import tempfile
 from dataclasses import dataclass, field
@@ -11,6 +12,9 @@ from typing import List, Optional
 
 
 _DEFAULT_CONFIG_PATH = Path.home() / ".dirracuda" / "conf" / "webui.json"
+_DEFAULT_PORT = 2600
+_LEGACY_DEFAULT_PORT = 5480
+logger = logging.getLogger(__name__)
 
 _TOP_LEVEL_KEYS = frozenset({
     "enabled", "bind_address", "port", "remote_enabled",
@@ -49,7 +53,7 @@ class TLSConfig:
 class WebUIConfig:
     enabled: bool = False
     bind_address: str = "127.0.0.1"
-    port: int = 5480
+    port: int = _DEFAULT_PORT
     remote_enabled: bool = False
     allowed_cidrs: List[str] = field(default_factory=lambda: ["127.0.0.1/32", "::1/128"])
     session_timeout_idle: int = 1800
@@ -347,6 +351,26 @@ def load_config(path: Optional[Path] = None) -> WebUIConfig:
             f"Config must be a JSON object, got {type(raw).__name__}"
         )
     cfg = _parse_config(raw)
+    should_migrate_legacy_port = (
+        "port" in raw
+        and isinstance(raw.get("port"), int)
+        and not isinstance(raw.get("port"), bool)
+        and raw.get("port") == _LEGACY_DEFAULT_PORT
+    )
+    if should_migrate_legacy_port:
+        cfg.port = _DEFAULT_PORT
+        migrated_raw = dict(raw)
+        migrated_raw["port"] = _DEFAULT_PORT
+        try:
+            _atomic_write_json(migrated_raw, p)
+        except Exception as exc:
+            logger.warning(
+                "webui config migration: failed to persist port %s->%s at %s: %s",
+                _LEGACY_DEFAULT_PORT,
+                _DEFAULT_PORT,
+                p,
+                exc,
+            )
     validate(cfg)
     return cfg
 

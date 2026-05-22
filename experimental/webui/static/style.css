@@ -441,9 +441,24 @@ tbody tr.selected td { background: var(--bg3); color: var(--accent); }
   word-break: break-word;
 }
 
-.detail-toggle {
+.result-detail-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
   margin-top: 2px;
   margin-bottom: 6px;
+}
+
+.detail-toggle {
+  margin: 0;
+}
+
+.result-detail-caution {
+  margin-top: 2px;
+  margin-bottom: 6px;
+  color: var(--text-dim);
+  font-size: 0.9em;
 }
 
 .detail-full-wrap {

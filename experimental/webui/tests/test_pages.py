@@ -149,7 +149,7 @@ def test_config_renders_authenticated(logged_in, cfg_no_tls):
 def test_config_post_requires_csrf(logged_in):
     payload = {
         "bind_address": "127.0.0.1",
-        "port": 5480,
+        "port": 2600,
         "remote_enabled": False,
         "tls_enabled": False,
         "tls_allow_insecure_remote": False,
@@ -170,7 +170,7 @@ def test_config_post_requires_csrf(logged_in):
 def _valid_config_payload():
     return {
         "bind_address": "127.0.0.1",
-        "port": 5480,
+        "port": 2600,
         "remote_enabled": False,
         "tls_enabled": False,
         "tls_allow_insecure_remote": False,

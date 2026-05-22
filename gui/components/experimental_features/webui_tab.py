@@ -33,7 +33,7 @@ class WebUITab:
     def _build(self, frame: tk.Frame) -> None:
         description = (
             "Browser-based UI for scan control and results review.\n"
-            "Runs a local web server accessible at http://127.0.0.1:5480."
+            "Runs a local web server accessible at http://127.0.0.1:2600."
         )
         desc_label = tk.Label(
             frame,
@@ -123,7 +123,7 @@ class WebUITab:
         except Exception:
             from types import SimpleNamespace
 
-            return SimpleNamespace(bind_address="127.0.0.1", port=5480)
+            return SimpleNamespace(bind_address="127.0.0.1", port=2600)
 
     def _get_webui_config_path(self):
         cfg_path = self._context.get("webui_config_path")

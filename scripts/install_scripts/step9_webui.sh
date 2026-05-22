@@ -116,7 +116,7 @@ echo
 
 info "To start the web UI:"
 info "  ./venv/bin/python -m experimental.webui.server"
-info "  Then open: http://127.0.0.1:5480"
+info "  Then open: http://127.0.0.1:2600"
 echo
 info "Remote access, TLS, and full config: see experimental/webui/README.md"
 

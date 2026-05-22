@@ -91,6 +91,7 @@ def test_session_absolute_bounds():
 def test_missing_file_returns_defaults(tmp_path):
     cfg = load_config(tmp_path / "nonexistent.json")
     assert cfg == WebUIConfig()
+    assert cfg.port == 2600
 
 
 def test_atomic_write_and_read_back(tmp_path):
@@ -100,6 +101,45 @@ def test_atomic_write_and_read_back(tmp_path):
     loaded = load_config(p)
     assert loaded.port == 5481
     assert loaded.tls.enabled is True
+
+
+def test_load_config_migrates_legacy_default_port(tmp_path):
+    p = tmp_path / "webui.json"
+    p.write_text(json.dumps({"port": 5480}), encoding="utf-8")
+
+    loaded = load_config(p)
+
+    assert loaded.port == 2600
+    saved = json.loads(p.read_text(encoding="utf-8"))
+    assert saved["port"] == 2600
+
+
+def test_load_config_preserves_non_legacy_port(tmp_path):
+    p = tmp_path / "webui.json"
+    p.write_text(json.dumps({"port": 5481}), encoding="utf-8")
+
+    loaded = load_config(p)
+
+    assert loaded.port == 5481
+    saved = json.loads(p.read_text(encoding="utf-8"))
+    assert saved["port"] == 5481
+
+
+def test_load_config_legacy_port_migration_write_failure_warns_and_continues(tmp_path, monkeypatch, caplog):
+    p = tmp_path / "webui.json"
+    p.write_text(json.dumps({"port": 5480}), encoding="utf-8")
+
+    def _boom(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("experimental.webui.config._atomic_write_json", _boom)
+
+    with caplog.at_level("WARNING", logger="experimental.webui.config"):
+        loaded = load_config(p)
+
+    assert loaded.port == 2600
+    assert json.loads(p.read_text(encoding="utf-8"))["port"] == 5480
+    assert any("failed to persist port 5480->2600" in rec.message for rec in caplog.records)
 
 
 def test_file_mode_restricted(tmp_path):

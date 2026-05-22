@@ -27,6 +27,8 @@ _START_TIMEOUT_SECONDS = 6.0
 _START_POLL_INTERVAL_SECONDS = 0.1
 _STDERR_HISTORY_LINES = 8
 _REASON_MAX_CHARS = 220
+_DEFAULT_HOST = "127.0.0.1"
+_DEFAULT_PORT = 2600
 
 
 @dataclass(frozen=True)
@@ -134,7 +136,7 @@ def _health_ok(host: str, port: int) -> bool:
         return False
 
 
-def is_running(host: str = "127.0.0.1", port: int = 5480) -> bool:
+def is_running(host: str = _DEFAULT_HOST, port: int = _DEFAULT_PORT) -> bool:
     """Return True if the web UI service appears to be running."""
     pid = _read_pid()
     if pid is None:
@@ -149,7 +151,7 @@ def is_running(host: str = "127.0.0.1", port: int = 5480) -> bool:
     return _health_ok(host, port)
 
 
-def get_url(host: str = "127.0.0.1", port: int = 5480) -> str:
+def get_url(host: str = _DEFAULT_HOST, port: int = _DEFAULT_PORT) -> str:
     return f"http://{host}:{port}"
 
 
@@ -179,7 +181,7 @@ def _stderr_tail(sink: list[str], proc: subprocess.Popen) -> str:
     return _format_reason(remaining)
 
 
-def start(host: str = "127.0.0.1", port: int = 5480) -> StartResult:
+def start(host: str = _DEFAULT_HOST, port: int = _DEFAULT_PORT) -> StartResult:
     """Start the web UI server and wait for health to become ready."""
     if is_running(host, port):
         return StartResult(ok=True, state="already_running")

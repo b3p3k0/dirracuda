@@ -109,3 +109,28 @@ def test_start_already_running_short_circuits(monkeypatch):
     assert result.ok is True
     assert result.state == "already_running"
     assert result.reason == ""
+
+
+def test_get_url_defaults_to_new_port():
+    assert service_control.get_url() == "http://127.0.0.1:2600"
+
+
+def test_start_defaults_to_new_port(monkeypatch):
+    _patch_start_side_effects(monkeypatch)
+    monkeypatch.setattr(service_control, "is_running", lambda *_a, **_k: False)
+    monkeypatch.setattr(service_control, "_health_ok", lambda *_a, **_k: False)
+
+    captured = {}
+
+    def _fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
+        return _FakeProc([1], stderr_text="boom")
+
+    monkeypatch.setattr(service_control.subprocess, "Popen", _fake_popen)
+
+    result = service_control.start()
+
+    assert result.state == "failed"
+    assert captured["cmd"][:3] == [sys.executable, "-m", "experimental.webui.server"]
+    assert captured["cmd"][-4:] == ["--host", "127.0.0.1", "--port", "2600"]

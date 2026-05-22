@@ -508,12 +508,30 @@ function renderDetailContent(container, payload) {
   notesWrap.appendChild(notes);
   container.appendChild(notesWrap);
 
+  var actionsRow = document.createElement('div');
+  actionsRow.className = 'result-detail-actions';
+
   var toggleBtn = document.createElement('button');
   toggleBtn.type = 'button';
   toggleBtn.className = 'detail-toggle';
   toggleBtn.setAttribute('aria-expanded', 'false');
   toggleBtn.textContent = 'Show full details + probe tree ▾';
-  container.appendChild(toggleBtn);
+  actionsRow.appendChild(toggleBtn);
+
+  var openSystemBtn = document.createElement('button');
+  openSystemBtn.type = 'button';
+  openSystemBtn.className = 'detail-open-system';
+  openSystemBtn.textContent = 'Open with system';
+  actionsRow.appendChild(openSystemBtn);
+  container.appendChild(actionsRow);
+
+  var caution = document.createElement('div');
+  caution.className = 'result-detail-caution';
+  caution.textContent = (
+    'Dirracuda is not responsible for the behavior of external applications; ' +
+    'use with care or use the desktop app for host exploration.'
+  );
+  container.appendChild(caution);
 
   var fullWrap = document.createElement('div');
   fullWrap.className = 'detail-full-wrap';
@@ -535,6 +553,20 @@ function renderDetailContent(container, payload) {
         ? 'Show full details + probe tree ▾'
         : 'Hide full details + probe tree ▴'
     );
+  });
+
+  openSystemBtn.addEventListener('click', function() {
+    var openUrl = (payload && typeof payload.open_with_url === 'string')
+      ? payload.open_with_url.trim()
+      : '';
+    if (!openUrl) {
+      setResults('Open with system is unavailable for this row.', 'status-warn');
+      return;
+    }
+    var popup = window.open(openUrl, '_blank', 'noopener,noreferrer');
+    if (popup === null) {
+      setResults('Open with system was blocked by browser popup settings.', 'status-warn');
+    }
   });
 }
 
