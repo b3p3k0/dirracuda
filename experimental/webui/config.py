@@ -10,11 +10,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
+from shared.path_service import get_paths
 
-_DEFAULT_CONFIG_PATH = Path.home() / ".dirracuda" / "conf" / "webui.json"
+_PATHS = get_paths()
+_DEFAULT_CONFIG_PATH = (_PATHS.home_root / "conf.d" / "experimental" / "webui.json").resolve(strict=False)
+_LEGACY_DEFAULT_CONFIG_PATH = (_PATHS.conf_dir / "webui.json").resolve(strict=False)
 _DEFAULT_PORT = 2600
 _LEGACY_DEFAULT_PORT = 5480
 logger = logging.getLogger(__name__)
+_WEBUI_SECTION_KEY = "webui"
 
 _TOP_LEVEL_KEYS = frozenset({
     "enabled", "bind_address", "port", "remote_enabled",
@@ -63,7 +67,31 @@ class WebUIConfig:
 
 
 def _config_path(path: Optional[Path] = None) -> Path:
-    return Path(path) if path is not None else _DEFAULT_CONFIG_PATH
+    return (Path(path) if path is not None else _DEFAULT_CONFIG_PATH).expanduser().resolve(strict=False)
+
+
+def _is_canonical_default_path(path: Path) -> bool:
+    try:
+        return Path(path).expanduser().resolve(strict=False) == _DEFAULT_CONFIG_PATH
+    except Exception:
+        return False
+
+
+def _extract_config_payload(raw: dict, source_path: Path) -> tuple[dict, bool]:
+    """
+    Return (config_payload, wrapped) from a webui config file.
+
+    wrapped=True means source file used shard wrapper {"webui": {...}}.
+    wrapped=False means source file used legacy flat schema.
+    """
+    if _WEBUI_SECTION_KEY in raw:
+        nested = raw.get(_WEBUI_SECTION_KEY)
+        if not isinstance(nested, dict):
+            raise WebUIConfigError(
+                f"Config key '{_WEBUI_SECTION_KEY}' must contain a JSON object: {source_path}"
+            )
+        return nested, True
+    return raw, False
 
 
 def _is_loopback(addr: str) -> bool:
@@ -337,10 +365,43 @@ def _config_to_dict(cfg: WebUIConfig) -> dict:
     }
 
 
+def _load_legacy_default_if_needed(target_path: Path) -> Optional[WebUIConfig]:
+    """Best-effort migration helper for legacy ~/.dirracuda/conf/webui.json."""
+    if not _is_canonical_default_path(target_path):
+        return None
+    if target_path.exists() or not _LEGACY_DEFAULT_CONFIG_PATH.exists():
+        return None
+
+    try:
+        raw = json.loads(_LEGACY_DEFAULT_CONFIG_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise WebUIConfigError(
+            f"Failed to read legacy config from {_LEGACY_DEFAULT_CONFIG_PATH}: {exc}"
+        ) from exc
+    if not isinstance(raw, dict):
+        raise WebUIConfigError(
+            f"Legacy config must be a JSON object, got {type(raw).__name__}"
+        )
+
+    payload, _wrapped = _extract_config_payload(raw, _LEGACY_DEFAULT_CONFIG_PATH)
+    cfg = _parse_config(payload)
+    validate(cfg)
+    save_config(cfg, path=target_path)
+    logger.info(
+        "Migrated legacy webui config to modular shard: %s -> %s",
+        _LEGACY_DEFAULT_CONFIG_PATH,
+        target_path,
+    )
+    return cfg
+
+
 def load_config(path: Optional[Path] = None) -> WebUIConfig:
     """Load, parse, and validate webui.json. Returns safe defaults if absent."""
     p = _config_path(path)
     if not p.exists():
+        migrated = _load_legacy_default_if_needed(p)
+        if migrated is not None:
+            return migrated
         return WebUIConfig()
     try:
         raw = json.loads(p.read_text(encoding="utf-8"))
@@ -350,27 +411,40 @@ def load_config(path: Optional[Path] = None) -> WebUIConfig:
         raise WebUIConfigError(
             f"Config must be a JSON object, got {type(raw).__name__}"
         )
-    cfg = _parse_config(raw)
+    payload, wrapped = _extract_config_payload(raw, p)
+    cfg = _parse_config(payload)
     should_migrate_legacy_port = (
-        "port" in raw
-        and isinstance(raw.get("port"), int)
-        and not isinstance(raw.get("port"), bool)
-        and raw.get("port") == _LEGACY_DEFAULT_PORT
+        "port" in payload
+        and isinstance(payload.get("port"), int)
+        and not isinstance(payload.get("port"), bool)
+        and payload.get("port") == _LEGACY_DEFAULT_PORT
     )
-    if should_migrate_legacy_port:
-        cfg.port = _DEFAULT_PORT
-        migrated_raw = dict(raw)
-        migrated_raw["port"] = _DEFAULT_PORT
+    should_wrap_into_shard = _is_canonical_default_path(p) and not wrapped
+    if should_migrate_legacy_port or should_wrap_into_shard:
+        migrated_raw = dict(payload)
+        if should_migrate_legacy_port:
+            cfg.port = _DEFAULT_PORT
+            migrated_raw["port"] = _DEFAULT_PORT
         try:
-            _atomic_write_json(migrated_raw, p)
+            if _is_canonical_default_path(p):
+                _atomic_write_json({_WEBUI_SECTION_KEY: migrated_raw}, p)
+            else:
+                _atomic_write_json(migrated_raw, p)
         except Exception as exc:
-            logger.warning(
-                "webui config migration: failed to persist port %s->%s at %s: %s",
-                _LEGACY_DEFAULT_PORT,
-                _DEFAULT_PORT,
-                p,
-                exc,
-            )
+            if should_migrate_legacy_port:
+                logger.warning(
+                    "webui config migration: failed to persist port %s->%s at %s: %s",
+                    _LEGACY_DEFAULT_PORT,
+                    _DEFAULT_PORT,
+                    p,
+                    exc,
+                )
+            else:
+                logger.warning(
+                    "webui config migration: failed to wrap config into shard schema at %s: %s",
+                    p,
+                    exc,
+                )
     validate(cfg)
     return cfg
 
@@ -378,4 +452,9 @@ def load_config(path: Optional[Path] = None) -> WebUIConfig:
 def save_config(cfg: WebUIConfig, path: Optional[Path] = None) -> None:
     """Validate and atomically write cfg to webui.json with mode 0600."""
     validate(cfg)
-    _atomic_write_json(_config_to_dict(cfg), _config_path(path))
+    target_path = _config_path(path)
+    payload = _config_to_dict(cfg)
+    if _is_canonical_default_path(target_path):
+        _atomic_write_json({_WEBUI_SECTION_KEY: payload}, target_path)
+    else:
+        _atomic_write_json(payload, target_path)

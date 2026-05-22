@@ -47,11 +47,11 @@ Then:
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-mkdir -p ~/.dirracuda/conf
+mkdir -p ~/.dirracuda/conf ~/.dirracuda/conf.d/core ~/.dirracuda/conf.d/prefs ~/.dirracuda/conf.d/experimental
 cp conf/config.json.example ~/.dirracuda/conf/config.json
 ```
 
-Edit `~/.dirracuda/conf/config.json` (or launch a new scan from the dashboard) and add your Shodan API key (requires paid membership):
+Edit `~/.dirracuda/conf.d/core/scan.json` (or launch a new scan from the dashboard) and add your Shodan API key (requires paid membership):
 
 ```json
 {
@@ -60,6 +60,7 @@ Edit `~/.dirracuda/conf/config.json` (or launch a new scan from the dashboard) a
   }
 }
 ```
+`~/.dirracuda/conf/config.json` is still generated for compatibility, but runtime reads/writes are shard-authoritative under `~/.dirracuda/conf.d/`.
 
 Launch the GUI from your venv:
 
@@ -195,7 +196,7 @@ The viewer auto-detects file types: text files display with an encoding selector
 
 ![image viewer](img/pic_view.png)
 
-Files over the specified maximum (default: 5 MB) trigger a warning-you can bump that limit in `~/.dirracuda/conf/config.json` under `file_browser.viewer.max_view_size_mb`, or click "Ignore Once" to load anyway (hard cap: 1 GB).
+Files over the specified maximum (default: 5 MB) trigger a warning-you can bump that limit in `~/.dirracuda/conf.d/core/storage.json` under `file_browser.viewer.max_view_size_mb`, or click "Ignore Once" to load anyway (hard cap: 1 GB).
 
 Downloads are staged in quarantine (`~/.dirracuda/data/quarantine/`). When ClamAV is enabled, downloaded files are post-processed by verdict (clean files optionally promoted to extracted, infected files moved to known-bad). The browser never writes to remote systems.
 
@@ -224,7 +225,7 @@ Enable in **App Config**:
 
 - Check `Use memory (tmpfs) for quarantine`
 
-Or set in `~/.dirracuda/conf/config.json`:
+Or set in `~/.dirracuda/conf.d/core/storage.json`:
 
 ```json
 {
@@ -255,7 +256,7 @@ Automated file collection with configurable limits:
 - Max directory depth
 - File extension filtering
 
-All extracted files land in quarantine. The defaults are conservative - check `~/.dirracuda/conf/config.json` if you need to adjust them.
+All extracted files land in quarantine. The defaults are conservative - check `~/.dirracuda/conf.d/core/storage.json` if you need to adjust them.
 
 #### Optional ClamAV scanning (bulk extract + browser downloads)
 
@@ -326,7 +327,16 @@ Behavior notes:
 
 ![config](img/config.png)
 
-App settings are stored in `~/.dirracuda/conf/config.json`. The bundled example file (`conf/config.json.example`) documents every option.
+Runtime settings are modular and stored under `~/.dirracuda/conf.d/`:
+
+- `core/scan.json` - discovery + scan controls (`shodan`, `workflow`, `connection`, `discovery`, `access`, `ftp`, `http`)
+- `core/storage.json` - storage/runtime paths (`database`, `file_collection`, `file_browser`, `ftp_browser`, `http_browser`, `quarantine`, `clamav`, `gui_app`)
+- `core/security.json` - security integrations (`security`, `censys`)
+- `core/output.json` - output formatting settings (`output`)
+- `prefs/user-prefs.json` - GUI/user preferences (replaces legacy `state/gui_settings.json`)
+- `experimental/{se_dork,reddit_grab,dorkbook,keymaster,webui}.json` - experimental module settings
+
+`~/.dirracuda/conf/config.json` is retained as a generated compatibility view for legacy readers.
 
 Two additional files hold editable lists:
 
@@ -539,7 +549,8 @@ static warning about external-application behavior. URL path selection now
 prefers explicit probe base paths when available (for example non-root indexed
 paths) and otherwise falls back to root index `/`.
 Login is protected by persistent per-account+IP lockout (configurable threshold,
-observation window, and exponential backoff via the `auth` block in `webui.json`
+observation window, and exponential backoff via the `webui.auth` block in
+`~/.dirracuda/conf.d/experimental/webui.json`
 or via the desktop config dialog). The `GET /health` endpoint reports
 `"rate_limiter": "ok"` when lockout enforcement is active, or `"rate_limiter":
 "error"` when the rate-limit DB is unavailable (degraded mode). In remote mode,

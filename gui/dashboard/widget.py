@@ -65,6 +65,7 @@ from gui.utils.probe_cache_dispatch import get_probe_snapshot_path_for_host, dis
 from gui.utils.probe_snapshot_summary import summarize_probe_snapshot
 from gui.utils.logging_config import get_logger
 from shared.quarantine import create_quarantine_dir
+from shared.config import load_config
 from shared.path_service import get_paths
 from shared.tmpfs_quarantine import get_tmpfs_runtime_state
 
@@ -1195,15 +1196,25 @@ class DashboardWidget:
             return None
 
     def _read_shodan_api_key_from_config(self) -> str:
-        """Return shodan.api_key from active config, or empty string when absent/unreadable."""
+        """Return shodan.api_key from runtime config, or empty string when absent/unreadable."""
         config_path = self._resolve_active_config_path()
-        if not config_path or not config_path.exists():
-            return ""
         try:
-            config_data = json.loads(config_path.read_text(encoding="utf-8"))
-            if not isinstance(config_data, dict):
-                return ""
-            shodan_cfg = config_data.get("shodan", {})
+            if (
+                config_path is not None
+                and config_path.resolve(strict=False) != _PATHS.config_file.resolve(strict=False)
+            ):
+                if not config_path.exists():
+                    return ""
+                config_data = json.loads(config_path.read_text(encoding="utf-8"))
+                if not isinstance(config_data, dict):
+                    return ""
+                shodan_cfg = config_data.get("shodan", {})
+                if not isinstance(shodan_cfg, dict):
+                    return ""
+                return str(shodan_cfg.get("api_key", "") or "").strip()
+
+            cfg = load_config()
+            shodan_cfg = cfg.get("shodan", default={}) or {}
             if not isinstance(shodan_cfg, dict):
                 return ""
             return str(shodan_cfg.get("api_key", "") or "").strip()
@@ -1212,34 +1223,42 @@ class DashboardWidget:
             return ""
 
     def _persist_shodan_api_key_to_config(self, api_key: str) -> bool:
-        """Write shodan.api_key into the active config file."""
+        """Write shodan.api_key through owner-scoped runtime config persistence."""
         key = str(api_key or "").strip()
         if not key:
             return False
 
         config_path = self._resolve_active_config_path()
-        if not config_path:
-            return False
-
         try:
-            config_data: Dict[str, Any] = {}
-            if config_path.exists():
-                config_data = json.loads(config_path.read_text(encoding="utf-8"))
-                if not isinstance(config_data, dict):
-                    config_data = {}
+            if (
+                config_path is not None
+                and config_path.resolve(strict=False) != _PATHS.config_file.resolve(strict=False)
+            ):
+                config_data: Dict[str, Any] = {}
+                if config_path.exists():
+                    config_data = json.loads(config_path.read_text(encoding="utf-8"))
+                    if not isinstance(config_data, dict):
+                        config_data = {}
 
-            shodan_cfg = config_data.get("shodan")
+                shodan_cfg = config_data.get("shodan")
+                if not isinstance(shodan_cfg, dict):
+                    shodan_cfg = {}
+                    config_data["shodan"] = shodan_cfg
+                shodan_cfg["api_key"] = key
+
+                config_path.parent.mkdir(parents=True, exist_ok=True)
+                config_path.write_text(
+                    json.dumps(config_data, indent=2, ensure_ascii=True) + "\n",
+                    encoding="utf-8",
+                )
+                return True
+
+            cfg = load_config()
+            shodan_cfg = cfg.get("shodan", default={}) or {}
             if not isinstance(shodan_cfg, dict):
                 shodan_cfg = {}
-                config_data["shodan"] = shodan_cfg
             shodan_cfg["api_key"] = key
-
-            config_path.parent.mkdir(parents=True, exist_ok=True)
-            config_path.write_text(
-                json.dumps(config_data, indent=2, ensure_ascii=True) + "\n",
-                encoding="utf-8",
-            )
-            return True
+            return cfg.set_section("shodan", shodan_cfg)
         except Exception as exc:
             _logger.error("Failed to persist Shodan API key to config: %s", exc)
             return False

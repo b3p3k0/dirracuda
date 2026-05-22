@@ -14,7 +14,8 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
-from shared.path_service import get_paths, get_legacy_paths, resolve_runtime_config_path
+from shared.config_store import get_config_store
+from shared.path_service import get_paths, get_legacy_paths
 
 logger = logging.getLogger(__name__)
 
@@ -133,10 +134,15 @@ class SMBSeekConfig:
             config_file: Path to configuration file
                 (default: ~/.dirracuda/conf/config.json with legacy fallback)
         """
-        if config_file is None:
-            config_file = str(resolve_runtime_config_path(paths=_PATHS, legacy=_LEGACY))
-        
-        self.config_file = config_file
+        self._config_store = get_config_store(paths=_PATHS, legacy=_LEGACY)
+        self._explicit_config_file = (
+            Path(config_file).expanduser().resolve(strict=False)
+            if config_file
+            else None
+        )
+        self.config_file = str(
+            self._explicit_config_file if self._explicit_config_file else _PATHS.config_file
+        )
         self.config = self.load_configuration()
 
     def _legacy_key_cleanup_result(
@@ -316,19 +322,26 @@ class SMBSeekConfig:
         }
         
         try:
-            with open(self.config_file, 'r', encoding='utf-8') as f:
-                user_config = json.load(f)
+            if self._explicit_config_file is not None:
+                with open(self.config_file, "r", encoding="utf-8") as f:
+                    user_config = json.load(f)
+                migration_warning = None
+            else:
+                user_config, migration_warning = self._config_store.load_runtime_config()
+                if migration_warning:
+                    logger.warning("%s", migration_warning)
+
             if not isinstance(user_config, dict):
                 raise ValueError("Configuration root must be an object")
 
             user_config, had_legacy_keys, _, _ = self._legacy_key_cleanup_result(user_config)
-            
+
             # Merge user config with defaults (deep merge)
             merged_config = self._deep_merge(default_config, user_config)
             if had_legacy_keys:
                 logger.info("Using sanitized config without legacy pry/rce keys for this session.")
             return merged_config
-            
+
         except FileNotFoundError:
             print(f"⚠ Configuration file not found: {self.config_file}")
             print("⚠ Using default configuration values")
@@ -382,6 +395,39 @@ class SMBSeekConfig:
             return self.config[section]
         
         return self.config[section].get(key, default)
+
+    def update_sections(self, updates: Dict[str, Any]) -> bool:
+        """Owner-scoped section write for modular config shards.
+
+        For explicit file overrides (test/internal hooks), this falls back to
+        whole-file JSON writes to preserve existing behavior.
+        """
+        if not isinstance(updates, dict) or not updates:
+            return True
+
+        try:
+            if self._explicit_config_file is not None:
+                current = load_json_config(self.config_file)
+                if not isinstance(current, dict):
+                    current = {}
+                for section, value in updates.items():
+                    current[section] = value
+                if not save_json_config(self.config_file, current):
+                    return False
+                self.config = self._deep_merge(self.config, updates)
+                return True
+
+            self._config_store.update_sections(updates)
+            # Reload composed config so typed accessors see latest data.
+            self.config = self.load_configuration()
+            return True
+        except Exception as exc:
+            logger.warning("Failed to update modular config sections: %s", exc)
+            return False
+
+    def set_section(self, section: str, value: Any) -> bool:
+        """Convenience wrapper for one top-level section write."""
+        return self.update_sections({section: value})
     
     def get_shodan_api_key(self) -> str:
         """Get Shodan API key with validation."""

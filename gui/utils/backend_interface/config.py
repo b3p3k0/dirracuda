@@ -13,8 +13,24 @@ from pathlib import Path
 from typing import Dict, Any
 
 from ..logging_config import get_logger
+from shared.config import load_config as load_main_config
+from shared.path_service import get_paths
 
 _logger = get_logger("backend_interface.config")
+_CANONICAL_CONFIG_PATH = get_paths().config_file.resolve(strict=False)
+
+
+def _load_interface_config(interface) -> Dict[str, Any]:
+    """Load interface config with canonical composed-config support."""
+    try:
+        candidate = Path(interface.config_path).expanduser().resolve(strict=False)
+        if candidate == _CANONICAL_CONFIG_PATH:
+            return dict(load_main_config().config or {})
+        with open(interface.config_path, 'r', encoding='utf-8') as f:
+            loaded = json.load(f)
+        return loaded if isinstance(loaded, dict) else {}
+    except Exception:
+        return {}
 
 
 def ensure_config_exists(interface) -> None:
@@ -57,8 +73,7 @@ def validate_config(interface) -> Dict[str, Any]:
         return validation_result
 
     try:
-        with open(interface.config_path, 'r') as f:
-            config = json.load(f)
+        config = _load_interface_config(interface)
 
         # Check for required Shodan API key
         shodan_key = config.get('shodan', {}).get('api_key', '')
@@ -108,9 +123,8 @@ def load_timeout_configuration(interface) -> None:
                 interface.default_timeout = int(env_timeout)
             return
 
-        if interface.config_path.exists():
-            with open(interface.config_path, 'r') as f:
-                config = json.load(f)
+        if Path(interface.config_path).exists():
+            config = _load_interface_config(interface)
 
             gui_config = config.get('gui_app') or config.get('gui', {})
             interface.default_timeout = gui_config.get('operation_timeout_seconds', None)
@@ -137,9 +151,8 @@ def load_workflow_configuration(interface) -> None:
     Loads settings for recent filtering and other workflow parameters.
     """
     try:
-        if interface.config_path.exists():
-            with open(interface.config_path, 'r') as f:
-                config = json.load(f)
+        if Path(interface.config_path).exists():
+            config = _load_interface_config(interface)
 
             workflow_config = config.get('workflow', {})
             interface.default_recent_days = workflow_config.get('access_recent_days', 90)

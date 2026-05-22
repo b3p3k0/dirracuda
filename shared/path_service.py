@@ -256,14 +256,7 @@ def select_existing_path(canonical: Path, legacy_candidates: Iterable[Path]) -> 
 
 def resolve_runtime_config_path(*, paths: Optional[DirracudaPaths] = None, legacy: Optional[LegacyPaths] = None) -> Path:
     p = paths or get_paths()
-    l = legacy or get_legacy_paths(paths=p)
-    return select_existing_path(
-        p.config_file,
-        [
-            l.flat_home_root / "conf" / "config.json",
-            l.repo_config_file,
-        ],
-    )
+    return p.config_file
 
 
 def resolve_runtime_main_db_path(*, paths: Optional[DirracudaPaths] = None, legacy: Optional[LegacyPaths] = None) -> Path:
@@ -364,14 +357,7 @@ def resolve_runtime_main_db_for_session(
 
 def resolve_runtime_gui_settings_path(*, paths: Optional[DirracudaPaths] = None, legacy: Optional[LegacyPaths] = None) -> Path:
     p = paths or get_paths()
-    l = legacy or get_legacy_paths(paths=p)
-    return select_existing_path(
-        p.gui_settings_file,
-        [
-            l.flat_gui_settings_file,
-            l.legacy_home_root / "gui_settings.json",
-        ],
-    )
+    return p.gui_settings_file
 
 
 def _hash_file(path: Path) -> str:

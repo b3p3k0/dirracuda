@@ -282,7 +282,7 @@ Documentation: docs/USER_GUIDE.md
         '--config',
         type=str,
         metavar='FILE',
-        help=f'Configuration file path (default: {_PATHS.config_file})'
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         '--quiet', '-q',
@@ -346,6 +346,13 @@ def main():
 
     # Parse arguments
     args = parser.parse_args(cleaned_argv[1:])  # Parse modified argv
+
+    if getattr(args, "config", None) and os.environ.get("DIRRACUDA_INTERNAL_CONFIG_OVERRIDE") != "1":
+        print(
+            f"Warning: --config override is deprecated and ignored; using canonical runtime config at {_PATHS.config_file}",
+            file=sys.stderr,
+        )
+        args.config = None
 
     # Default to cautious mode when flag not provided
     if getattr(args, 'cautious', None) is None:

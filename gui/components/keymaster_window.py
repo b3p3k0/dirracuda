@@ -25,8 +25,11 @@ from experimental.keymaster.models import (
 from gui.utils import safe_messagebox as messagebox
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.style import get_theme
+from shared.config import load_config
+from shared.path_service import get_paths
 
 _WINDOW_INSTANCE = None
+_CANONICAL_CONFIG_PATH = get_paths().config_file.resolve(strict=False)
 
 _WINDOW_SETTINGS_NAME = "keymaster"
 _DEFAULT_GEOMETRY = "860x480"
@@ -1357,38 +1360,35 @@ class KeymasterWindow:
             return
 
         try:
-            if config_path.exists():
-                raw = config_path.read_text(encoding="utf-8")
-                try:
+            if config_path.resolve(strict=False) != _CANONICAL_CONFIG_PATH:
+                if config_path.exists():
+                    raw = config_path.read_text(encoding="utf-8")
                     data = json.loads(raw)
-                except Exception:
-                    messagebox.showerror(
-                        "Invalid Config",
-                        f"Config file contains invalid JSON — cannot write safely.\n{config_path}",
-                        parent=self.window,
-                    )
-                    return
-                if not isinstance(data, dict):
-                    messagebox.showerror(
-                        "Invalid Config",
-                        f"Config file root is not a JSON object — cannot write safely.\n{config_path}",
-                        parent=self.window,
-                    )
-                    return
+                    if not isinstance(data, dict):
+                        raise ValueError(
+                            f"Config file root is not a JSON object: {config_path}"
+                        )
+                else:
+                    data = {}
+
+                shodan_cfg = data.get("shodan")
+                if not isinstance(shodan_cfg, dict):
+                    shodan_cfg = {}
+                    data["shodan"] = shodan_cfg
+                shodan_cfg["api_key"] = row["api_key"]
+                config_path.parent.mkdir(parents=True, exist_ok=True)
+                config_path.write_text(
+                    json.dumps(data, indent=2, ensure_ascii=True) + "\n",
+                    encoding="utf-8",
+                )
             else:
-                data = {}
-
-            shodan_cfg = data.get("shodan")
-            if not isinstance(shodan_cfg, dict):
-                shodan_cfg = {}
-                data["shodan"] = shodan_cfg
-            shodan_cfg["api_key"] = row["api_key"]
-
-            config_path.parent.mkdir(parents=True, exist_ok=True)
-            config_path.write_text(
-                json.dumps(data, indent=2, ensure_ascii=True) + "\n",
-                encoding="utf-8",
-            )
+                cfg = load_config()
+                shodan_cfg = cfg.get("shodan", default={}) or {}
+                if not isinstance(shodan_cfg, dict):
+                    shodan_cfg = {}
+                shodan_cfg["api_key"] = row["api_key"]
+                if not cfg.set_section("shodan", shodan_cfg):
+                    raise RuntimeError("failed to persist shodan section")
         except Exception as exc:
             messagebox.showerror("Apply Failed", str(exc), parent=self.window)
             return

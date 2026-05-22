@@ -29,12 +29,15 @@ from gui.utils.keybindings import (
     bind_submit_shortcuts,
 )
 from gui.utils.style import get_theme
+from shared.config import load_config
+from shared.path_service import get_paths
 
 _PROTOCOL_TO_DORK_FIELD = {
     "SMB": "smb_dork",
     "FTP": "ftp_dork",
     "HTTP": "http_dork",
 }
+_CANONICAL_CONFIG_PATH = get_paths().config_file.resolve(strict=False)
 
 
 def _normalize_config_path(config_path: str) -> Path:
@@ -42,6 +45,13 @@ def _normalize_config_path(config_path: str) -> Path:
     if not raw:
         raise ValueError("Config path is required.")
     return Path(raw).expanduser()
+
+
+def _is_canonical_runtime_config_path(config_path: Path) -> bool:
+    try:
+        return config_path.expanduser().resolve(strict=False) == _CANONICAL_CONFIG_PATH
+    except Exception:
+        return False
 
 
 def _resolve_field_for_protocol(protocol: str) -> str:
@@ -301,6 +311,13 @@ class ScanDorkEditorDialog:
         return self.parent
 
     def _load_runtime_config_json(self, config_path: Path, *, strict: bool = False) -> Dict[str, Any]:
+        if _is_canonical_runtime_config_path(config_path):
+            try:
+                return dict(load_config().config or {})
+            except Exception as exc:
+                if strict:
+                    raise ValueError("Failed to load canonical runtime config") from exc
+                return {}
         if not config_path.exists():
             return {}
         try:
@@ -331,10 +348,26 @@ class ScanDorkEditorDialog:
             return False
 
         try:
-            config_data = self._load_runtime_config_json(self.config_path, strict=True)
-            apply_discovery_dorks(config_data, self._current_dork_settings())
-            self.config_path.parent.mkdir(parents=True, exist_ok=True)
-            self.config_path.write_text(json.dumps(config_data, indent=2), encoding="utf-8")
+            if _is_canonical_runtime_config_path(self.config_path):
+                cfg = load_config()
+                config_data = {
+                    "shodan": cfg.get("shodan", default={}) or {},
+                    "ftp": cfg.get("ftp", default={}) or {},
+                    "http": cfg.get("http", default={}) or {},
+                }
+                apply_discovery_dorks(config_data, self._current_dork_settings())
+                updates = {
+                    section: config_data[section]
+                    for section in ("shodan", "ftp", "http")
+                    if isinstance(config_data.get(section), dict)
+                }
+                if not cfg.update_sections(updates):
+                    raise RuntimeError("failed to persist discovery dork sections")
+            else:
+                config_data = self._load_runtime_config_json(self.config_path, strict=True)
+                apply_discovery_dorks(config_data, self._current_dork_settings())
+                self.config_path.parent.mkdir(parents=True, exist_ok=True)
+                self.config_path.write_text(json.dumps(config_data, indent=2), encoding="utf-8")
 
             self.smb_dork = self._field_var("smb_dork").get().strip()
             self.ftp_dork = self._field_var("ftp_dork").get().strip()

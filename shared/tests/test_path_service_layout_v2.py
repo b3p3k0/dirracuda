@@ -129,10 +129,10 @@ def test_runtime_resolvers_fall_back_when_canonical_missing(tmp_path: Path) -> N
     paths = get_paths(home_root=home_root, repo_root=repo_root)
     legacy = get_legacy_paths(paths=paths)
 
-    # Canonical config missing, repo-local fallback present.
+    # Config resolver is canonical-only and should ignore legacy/repo fallbacks.
     legacy.repo_config_file.parent.mkdir(parents=True, exist_ok=True)
     legacy.repo_config_file.write_text("{}", encoding="utf-8")
-    assert resolve_runtime_config_path(paths=paths, legacy=legacy) == legacy.repo_config_file
+    assert resolve_runtime_config_path(paths=paths, legacy=legacy) == paths.config_file
 
     # Canonical DB missing, flat-home fallback present.
     legacy.flat_home_root.mkdir(parents=True, exist_ok=True)

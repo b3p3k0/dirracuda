@@ -71,8 +71,8 @@ Dirracuda scans for internet-accessible servers exposing open or weakly-authenti
 │              ├─ db_tools_dialog.py                                  │
 │              └─ [config editor, browser windows, extract dialogs]   │
 │  gui/utils/ui_dispatcher.py  (thread-safe Tk marshaling)          │
-│  gui/utils/settings_manager.py  (persists ~/.dirracuda/state/      │
-│                                  gui_settings.json)                │
+│  gui/utils/settings_manager.py  (persists ~/.dirracuda/conf.d/     │
+│                                  prefs/user-prefs.json)           │
 └─────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -120,7 +120,7 @@ override precedence for tests or controlled deployments.
 | `POST /api/export` | session + CSRF | Export main DB via `VACUUM INTO`; artifact written to `~/.dirracuda/exports/`; response: `{"filename": "dirracuda_export_YYYYMMDD_HHMMSS_<8hex>.db"}` |
 | `GET /api/export/{filename}` | session | Download an export artifact; filename enforced against allowlist regex before serving |
 | `GET /config` | session | Web UI config page (bind/port/remote/TLS/allowlist/session timeout, and auth lockout fields) |
-| `POST /config` | session + CSRF | Validate and save `webui.json` fields. UI submits idle timeout in minutes and absolute timeout in hours; server converts to stored seconds before `save_config`. Auth lockout fields (`auth_lockout_threshold`, `auth_lockout_window_sec`, `auth_lockout_base_duration_sec`, `auth_lockout_max_duration_sec`) are optional in the payload; missing keys preserve the existing config values. |
+| `POST /config` | session + CSRF | Validate and save Web UI fields. Canonical runtime target is `~/.dirracuda/conf.d/experimental/webui.json` (stored as `{ "webui": {...} }`). UI submits idle timeout in minutes and absolute timeout in hours; server converts to stored seconds before `save_config`. Auth lockout fields (`auth_lockout_threshold`, `auth_lockout_window_sec`, `auth_lockout_base_duration_sec`, `auth_lockout_max_duration_sec`) are optional in the payload; missing keys preserve the existing config values. |
 | `GET /health` | none | Liveness check. Returns `{"status": "ok", "rate_limiter": "ok"}` when the rate-limit DB is accessible, or `{"status": "ok", "rate_limiter": "error"}` when the DB is unavailable (degraded localhost mode or runtime DB failure). A `"rate_limiter": "error"` response does not prevent logins in localhost mode but signals that lockout enforcement is disabled. |
 
 Web UI preference persistence (C19): authenticated pages can optionally persist allowlisted, non-sensitive UI selectors/toggles in browser `localStorage` after explicit one-time opt-in. This uses two keys (`dirracuda_pref_consent_v1`, `dirracuda_pref_data_v1`) and never stores free-text filters, credentials, or auth/session/CSRF material. Preference-storage controls (enable/disable/clear) are available on `/config`.
@@ -131,7 +131,7 @@ Dashboard balance behavior (C21): `/dashboard` fetches Shodan query-credit statu
 
 **Web UI startup and remote mode (C8):**
 
-`experimental/webui/server.py::run()` loads `webui.json` via `load_config()` (which calls `validate()`) before starting uvicorn. CLI `--host`, `--port`, and `--config` args are supported. `--host`/`--port` are treated as validated overrides over the loaded config (re-validated after merge); `--config` selects the webui.json path to load and propagates to `create_app()` so the `/config` save endpoint writes back to the same file. Startup exits immediately on any validation failure — no silent fallback. Desktop service control launches with module semantics (`python -m experimental.webui.server`) rather than direct script execution, so package imports resolve correctly after the `experimental/webui` move. The default bind remains `127.0.0.1:2600`; legacy explicit `port: 5480` entries in `webui.json` are auto-migrated to `2600` on load.
+`experimental/webui/server.py::run()` loads Web UI config via `load_config()` (which calls `validate()`) before starting uvicorn. Canonical runtime target is `~/.dirracuda/conf.d/experimental/webui.json` (`{ "webui": {...} }` wrapper). CLI `--host`/`--port` are treated as validated overrides over the loaded config (re-validated after merge). Startup exits immediately on any validation failure — no silent fallback. Desktop service control launches with module semantics (`python -m experimental.webui.server`) rather than direct script execution, so package imports resolve correctly after the `experimental/webui` move. The default bind remains `127.0.0.1:2600`; legacy explicit `port: 5480` entries are auto-migrated to `2600` on load.
 
 Config fields relevant to remote mode:
 
@@ -232,7 +232,7 @@ This shape applies to all three protocols. Protocol-specific differences are cov
 | `ftp_workflow.py` | `FtpWorkflow` — FTP 2-stage pipeline orchestrator |
 | `http_workflow.py` | `HttpWorkflow` — HTTP 2-stage pipeline orchestrator |
 | `database.py` | `SMBSeekWorkflowDatabase` — host filtering, session tracking, wraps `DatabaseManager` |
-| `config.py` | `SMBSeekConfig` — loads `~/.dirracuda/conf/config.json` (with fallback), deep-merge with defaults, typed accessors |
+| `config.py` | `SMBSeekConfig` — loads shard-composed runtime config (canonical home layout), deep-merge with defaults, typed accessors |
 | `output.py` | `SMBSeekOutput` — formatted console output (color, verbose, quiet modes) |
 | `smb_browser.py` | Read-only SMB file browser |
 | `ftp_browser.py` | `FtpNavigator` — list directories, download files, cancel mid-operation |
@@ -245,88 +245,61 @@ This shape applies to all three protocols. Protocol-specific differences are cov
 
 ## 3. Configuration
 
-### 3.1 `~/.dirracuda/conf/config.json`
+### 3.1 Canonical Modular Runtime Config (`~/.dirracuda/conf.d/`)
 
-All configuration lives in one JSON file, deep-merged against hardcoded defaults in `SMBSeekConfig.__init__`. Missing keys fall back to defaults silently; a missing file prints a warning and uses defaults entirely.
+Runtime config is shard-composed from canonical home paths. The compatibility file
+`~/.dirracuda/conf/config.json` is still materialized for legacy readers, but shard files are authoritative.
 
-**Key sections:**
+**Core shards**
 
-| Section | Key Fields | Notes |
-|---------|-----------|-------|
-| `shodan` | `api_key`, `query_limits.max_results` (1000), `query_limits.max_query_credits_per_scan` (1), `query_limits.min_usable_hosts_target` (50), `query_components.base_query`, `product_filter`, `additional_exclusions`, `use_organization_exclusions`, `string_filters` | SMB budget controls live under global `shodan.query_limits`; FTP/HTTP keep protocol-local `shodan` sub-blocks for query settings. |
-| `workflow` | `rescan_after_days` (30), `skip_failed_hosts` (true) | Controls rescan policy in `get_new_hosts_filter()` |
-| `connection` | `timeout` (30s), `port_check_timeout` (5s), `rate_limit_delay` (1s), `share_access_delay` (2s) | SMB connection and throttle settings |
-| `discovery` | `max_concurrent_hosts` (10), `max_worker_cap` (20), `smart_throttling` (false) | Thread pool sizing for auth stage |
-| `access` | `max_concurrent_hosts` (1 default) | SMB share enumeration concurrency |
-| `file_collection` | `max_files_per_target` (3), `max_total_size_mb` (500), `max_directory_depth` (3), `included_extensions`, `excluded_extensions` | Automated file extraction limits |
-| `file_browser` | `max_entries_per_dir` (5000), `max_depth` (12), `download_chunk_mb` (4), `quarantine_root`, `download_worker_count` (1–3, default 2), `download_large_file_mb` | GUI browser limits; `download_worker_count` and `download_large_file_mb` are persisted as GUI settings keys, not loaded from this config file — they appear in the browser tuning strip; large-file threshold routing active for SMB and FTP only |
-| `ftp` | `shodan.query_components.base_query`, `verification.{connect,auth,listing}_timeout`, `discovery/access.max_concurrent_hosts` | FTP-specific settings |
-| `http` | Parallel to `ftp`; adds `verification.{allow_insecure_tls,verify_http,verify_https,subdir_timeout}` | HTTP-specific settings |
-| `clamav` | `enabled` (template default false; fresh setup auto-enables when a scanner is detected), `backend` ("auto"), `timeout_seconds` (60), `extracted_root`, `known_bad_subdir` | Post-extraction AV scanning |
-| `quarantine` | `use_tmpfs` (false), `tmpfs_size_mb` (512, compatibility-only) | tmpfs quarantine for file downloads (detect-only; no runtime mount/umount) |
+| Shard | Owned Top-Level Sections |
+|-------|---------------------------|
+| `conf.d/core/scan.json` | `shodan`, `workflow`, `connection`, `discovery`, `access`, `ftp`, `http`, `exclusion_progress_interval` |
+| `conf.d/core/storage.json` | `database`, `file_collection`, `file_browser`, `ftp_browser`, `http_browser`, `quarantine`, `clamav`, `gui_app` |
+| `conf.d/core/security.json` | `security`, `censys` |
+| `conf.d/core/output.json` | `output` |
 
-Legacy migration note: if older user configs still contain top-level `pry` or `rce` blocks, startup migration (C7) strips those keys, writes a timestamped backup, and continues with a sanitized in-memory config even if rewrite fails.
+**Experimental shards**
 
-### 3.2 `SMBSeekConfig` (shared/config.py)
+| Shard | Owned Section |
+|-------|----------------|
+| `conf.d/experimental/se_dork.json` | `se_dork` |
+| `conf.d/experimental/reddit_grab.json` | `reddit_grab` |
+| `conf.d/experimental/dorkbook.json` | `dorkbook` |
+| `conf.d/experimental/keymaster.json` | `keymaster` |
+| `conf.d/experimental/webui.json` | `webui` |
 
-`load_config(config_file=None)` is the factory. Returns an `SMBSeekConfig` instance with `~/.dirracuda/conf/config.json` as the default path.
+Dedicated standalone files remain unchanged:
 
-Typed accessors of note:
+- `~/.dirracuda/conf/exclusion_list.json`
+- `~/.dirracuda/conf/ransomware_indicators.json`
 
-| Method | Returns |
-|--------|---------|
-| `get_shodan_api_key()` | `str` — raises `ValueError` if empty |
-| `get_ftp_config()` | `dict` — full FTP section with defaults merged |
-| `get_http_config()` | `dict` — full HTTP section with defaults merged |
-| `get_clamav_config()` | `dict` — ClamAV settings with defaults |
-| `get_max_concurrent_hosts()` | `int` — SMB access concurrency, min 1 |
-| `get_max_concurrent_discovery_hosts()` | `int` — SMB discovery concurrency, min 1 |
-| `get_max_concurrent_ftp_discovery_hosts()` | `int` — FTP discovery concurrency, min 1 |
-| `validate_configuration()` | `bool` — checks API key, exclusion file, bounds |
-| `resolve_target_countries(args_country)` | `list[str]` — parses comma-separated `--country` arg; empty list = global scan |
-| `should_rescan_host(last_seen_days)` | `bool` — compares against `rescan_after_days` |
-| `get_exclusion_list()` | `list[str]` — org names loaded from `~/.dirracuda/conf/exclusion_list.json` (with legacy fallback) |
-| `get_ransomware_indicators()` | `list[str]` — patterns from `~/.dirracuda/conf/ransomware_indicators.json` (with legacy fallback) |
+### 3.2 `SMBSeekConfig` + Config Store
 
-### 3.3 Two-Config System (GUI)
+`load_config(config_file=None)` returns `SMBSeekConfig`. Default mode uses canonical shard-composed runtime config and preserves typed accessor behavior.
 
-The GUI maintains a separation between application config and user preferences:
+- Owner-scoped writes use section ownership (`update_sections(...)`, `set_section(...)`).
+- On first modular startup, legacy `config.json` + `gui_settings.json` are split into shards with timestamped backups and migration reports under `~/.dirracuda/state/migrations/`.
+- Dual-read transition: shards are authoritative when present; legacy read is used only when migration fails and no shards exist.
 
-- **`~/.dirracuda/conf/config.json`** — application settings (home-canonical)
-- **`~/.dirracuda/state/gui_settings.json`** — user preferences managed by `gui/utils/settings_manager.py` (window geometry, last-used template, theme, backend path)
+Typed accessors (`get_shodan_api_key()`, `get_ftp_config()`, `get_http_config()`, etc.) remain stable for callers.
 
-Config resolution order for GUI settings: CLI arg → `gui_settings.json` value → `~/.dirracuda/conf/config.json` fallback. This prevents app updates from resetting window positions or scan templates.
+### 3.3 GUI/User Preferences
 
-Path drift guard: layout-v2 bootstrap/migration includes a self-heal pass for stale/missing legacy path fields (`database.path`, `gui_app.database_path`, `backend.database_path`, `backend.last_database_path`, `backend.config_path`). Known legacy/repo-local targets are reset to canonical home paths; canonical and explicit custom paths are preserved.
+GUI/user prefs are now canonical in:
 
-SearXNG Dorking experimental UI settings persisted in `gui_settings.json`:
+- `~/.dirracuda/conf.d/prefs/user-prefs.json`
 
-- `se_dork.instance_url`
-- `se_dork.query`
-- `se_dork.max_results`
+Experimental module UI prefs are persisted in their module shards:
 
-Reddit experimental UI settings currently persisted in `gui_settings.json`:
+- `~/.dirracuda/conf.d/experimental/se_dork.json`
+- `~/.dirracuda/conf.d/experimental/reddit_grab.json`
+- `~/.dirracuda/conf.d/experimental/dorkbook.json`
+- `~/.dirracuda/conf.d/experimental/keymaster.json`
 
-- `experimental.warning_dismissed`
-- `reddit_grab.mode`
-- `reddit_grab.sort`
-- `reddit_grab.top_window`
-- `reddit_grab.query`
-- `reddit_grab.username`
-- `reddit_grab.max_posts`
-- `reddit_grab.parse_body`
-- `reddit_grab.include_nsfw`
-- `reddit_grab.replace_cache`
-- `reddit_grab.bulk_probe_enabled`
+Legacy `~/.dirracuda/state/gui_settings.json` is migrated forward automatically on first modular startup.
 
-Dorkbook UI settings currently persisted in `gui_settings.json`:
-
-- `windows.dorkbook.geometry`
-- `dorkbook.active_protocol_tab`
-
-Runtime warning preferences currently persisted in `gui_settings.json`:
-
-- `runtime_warnings.tmpfs_legacy_mount_dismissed`
+Path policy: runtime config resolution is canonical-only (`~/.dirracuda`). User-facing `--config` style runtime overrides are deprecated/ignored.
 
 ---
 
@@ -450,7 +423,7 @@ The success marker is only emitted on the non-error path; its absence signals fa
 
 Structurally identical to FTP. Implementation lives in `commands/http/operation.py`.
 
-**Shodan dork:** defaults to `http.title:"Index of /"` from `http.shodan.query_components.base_query` in `~/.dirracuda/conf/config.json` (page-based fetch with HTTP budget cap).
+**Shodan dork:** defaults to `http.title:"Index of /"` from `http.shodan.query_components.base_query` in `~/.dirracuda/conf.d/core/scan.json` (page-based fetch with HTTP budget cap).
 Operators can edit SMB/FTP/HTTP discovery dorks from `Start Scan -> Edit Queries` (Discovery Dorks editor). GUI scan dialogs do not expose a per-scan custom-filter text box; that surface is intentionally centralized to avoid conflicting query-control paths.
 
 **Verifier** checks both HTTP and HTTPS on the discovered port; `allow_insecure_tls` controls whether TLS cert errors are fatal. `is_index_page` flag on `http_access` records rows distinguishes confirmed open-directory indexes from other accessible responses.
@@ -945,7 +918,7 @@ SearXNG dorking, Reddit ingestion, and Dorkbook do not use this subprocess path.
 | DB Tools | Opens `DBToolsDialog` |
 | Experimental | Opens `ExperimentalFeaturesDialog` (`SearXNG`, `Reddit`, `Web UI`, `Dorkbook`, `Keymaster` tabs) |
 | Configuration | Opens config editor |
-| Dark/Light toggle | Switches ttkthemes theme; persisted in `gui_settings.json` |
+| Dark/Light toggle | Switches ttkthemes theme; persisted in `~/.dirracuda/conf.d/prefs/user-prefs.json` |
 | Running Tasks | Opens non-modal task manager for active/queued work; supports monitor reopen via double-click |
 
 #### Keyboard Contract (Phase 1 + Phase 2)
@@ -1046,7 +1019,7 @@ Web UI tab behavior:
 - Credential setup opens from `Manage Credentials` into a modal dialog (`Username`, `Password`, `Save Credentials`) and calls `experimental.webui.auth.set_password(...)`; expected validation/save errors are shown inline (no popup spam).
 - `WebUI Config` opens a modal dialog with the same control surface as `/config` (`bind_address`, `port`, `remote_enabled`, TLS fields, `allowed_cidrs`, idle/absolute session timeouts, and auth lockout tuning fields).
 - Config dialog supports `Save` (persist only) and `Save & Restart` (save, then restart/start the service). Validation/save/restart outcomes are shown inline in dialog status text.
-- Open-browser and copy-URL actions use the current `webui.json` host/port values.
+- Open-browser and copy-URL actions use the current `webui` config host/port values from `~/.dirracuda/conf.d/experimental/webui.json`.
 - `/config` includes browser preference-storage controls for Web UI selector/toggle persistence (`localStorage`, explicit opt-in, user-clearable).
 
 Dorkbook entry path:
@@ -1159,15 +1132,14 @@ Apply operation (double-click row, context menu Apply, or Apply button):
 
 ```text
 KeymasterWindow._apply_selected_key()
-  -> write shodan.api_key to active config path (targeted key write only)
+  -> write `shodan.api_key` via owner-scoped runtime config update (canonical shard-backed write)
   -> km_store.touch_last_used(conn, key_id)
   -> active-scan behavior: running scans keep start-time key; apply affects future scans only
 ```
 
-Config path resolution order:
-1. Explicit path passed from dashboard (`config_path` argument).
-2. `settings_manager` key `backend.config_path` when present.
-3. `settings_manager.get_smbseek_config_path()` fallback.
+Config path resolution:
+1. Canonical runtime config path (`~/.dirracuda/conf/config.json` compatibility view over shards).
+2. Explicit non-canonical paths are treated as internal/test-only compatibility surfaces.
 
 Key table columns: `Label`, `Key Preview`, `Query Credits`, `Notes`, `Last Used`.
 

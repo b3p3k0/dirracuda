@@ -39,6 +39,7 @@ from shared.db_path_resolution import (
     normalize_database_path,
     resolve_database_path,
 )
+from shared.config import load_config as load_runtime_config
 from shared.path_service import (
     bootstrap_layout_v2,
     get_legacy_paths,
@@ -104,11 +105,13 @@ class XSMBSeekConfig:
             _logger.warning("Layout bootstrap warning during config init: %s", exc)
 
         default_path = resolve_runtime_config_path(paths=_LAYOUT_PATHS, legacy=_LAYOUT_LEGACY)
+        self._canonical_config_file = default_path.resolve(strict=False)
         self.config_file = (
             Path(config_file).expanduser().resolve(strict=False)
             if config_file
-            else default_path.resolve(strict=False)
+            else self._canonical_config_file
         )
+        self._use_modular_runtime = self.config_file == self._canonical_config_file
         self.config = self._load_config()
     
     def _load_config(self) -> Dict[str, Any]:
@@ -158,6 +161,16 @@ class XSMBSeekConfig:
             strict: When True, raise on any read/parse error. When False,
                 return an empty dict on errors.
         """
+        if self._use_modular_runtime:
+            try:
+                cfg = load_runtime_config()
+                data = dict(cfg.config or {})
+                return data if isinstance(data, dict) else {}
+            except Exception:
+                if strict:
+                    raise
+                return {}
+
         try:
             with open(self.config_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
@@ -236,6 +249,19 @@ class XSMBSeekConfig:
         return self.config[self.GUI_SECTION]
 
     def _write_config(self, data: Dict[str, Any]) -> None:
+        if self._use_modular_runtime:
+            cfg = load_runtime_config()
+            updates: Dict[str, Any] = {}
+            gui_data = data.get(self.GUI_SECTION)
+            if isinstance(gui_data, dict):
+                updates[self.GUI_SECTION] = copy.deepcopy(gui_data)
+            db_data = data.get("database")
+            if isinstance(db_data, dict):
+                updates["database"] = copy.deepcopy(db_data)
+            if updates and not cfg.update_sections(updates):
+                raise RuntimeError("Failed to persist managed runtime config sections")
+            return
+
         config_path = self.config_file
         config_path.parent.mkdir(parents=True, exist_ok=True)
         with open(config_path, 'w', encoding='utf-8') as f:
@@ -331,8 +357,20 @@ class XSMBSeekConfig:
         config so existing runtime keys are preserved.
         """
         new_path = Path(config_path).expanduser().resolve()
+
+        if self._use_modular_runtime and new_path != self._canonical_config_file:
+            _logger.warning(
+                "Ignoring non-canonical config path override: %s (runtime is fixed to %s)",
+                new_path,
+                self._canonical_config_file,
+            )
+            self.config_file = self._canonical_config_file
+            self.config = self._load_config()
+            return
+
         current_config = self.config if isinstance(self.config, dict) else {}
         self.config_file = new_path
+        self._use_modular_runtime = self.config_file == self._canonical_config_file
 
         if not new_path.exists():
             new_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1568,7 +1606,7 @@ def main():
         "--config",
         type=str,
         metavar="FILE",
-        help=f"Path to Dirracuda configuration file (default: {resolve_runtime_config_path(paths=_LAYOUT_PATHS, legacy=_LAYOUT_LEGACY)})"
+        help=argparse.SUPPRESS,
     )
     
     parser.add_argument(
@@ -1599,6 +1637,13 @@ def main():
     )
     
     args = parser.parse_args()
+
+    if args.config:
+        _logger.warning(
+            "CLI --config override is deprecated and ignored; using canonical runtime config at %s",
+            resolve_runtime_config_path(paths=_LAYOUT_PATHS, legacy=_LAYOUT_LEGACY),
+        )
+        args.config = None
 
     # Set debug environment variable if requested
     if args.debug:
