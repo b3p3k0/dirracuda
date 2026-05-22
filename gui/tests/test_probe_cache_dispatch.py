@@ -266,6 +266,7 @@ def test_dispatch_ftp_kwargs_and_cancel_event():
     assert result is _FAKE_FTP_SNAP
     kw = ftp_m.run_ftp_probe.call_args.kwargs
     assert kw["port"] == 2121
+    assert kw["start_path"] == "/"
     assert kw["max_entries"] == 15  # max(1, 3*5)
     assert kw["max_directories"] == 3
     assert kw["max_files"] == 5
@@ -273,6 +274,22 @@ def test_dispatch_ftp_kwargs_and_cancel_event():
     assert kw["request_timeout"] == 10
     assert kw["cancel_event"] is cancel
     assert kw["max_depth"] == 3
+
+
+def test_dispatch_ftp_start_path_normalized():
+    cancel = _threading.Event()
+    with patch("gui.utils.probe_cache_dispatch.ftp_probe_runner") as ftp_m:
+        ftp_m.run_ftp_probe.return_value = _FAKE_FTP_SNAP
+        dispatch_probe_run(
+            _IP, "F",
+            max_directories=2,
+            max_files=4,
+            timeout_seconds=7,
+            cancel_event=cancel,
+            start_path=" pub/releases/?q=1#frag ",
+        )
+    kw = ftp_m.run_ftp_probe.call_args.kwargs
+    assert kw["start_path"] == "/pub/releases/"
 
 
 def test_dispatch_http_explicit_scheme_skips_db_lookup():

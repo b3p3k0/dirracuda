@@ -38,16 +38,17 @@ set_password('admin', 'your_password_here')
 ./venv/bin/python -m experimental.webui.server
 ```
 
-3. Open `http://127.0.0.1:5480` and log in.
+3. Open `http://127.0.0.1:2600` and log in.
 
-Default bind: `127.0.0.1:5480`.
+Default bind: `127.0.0.1:2600`.
+Legacy explicit `port: 5480` entries in `webui.json` are auto-migrated to `2600` on load.
 
 ### Optional startup flags
 
 | Flag | Default | Notes |
 |------|---------|-------|
 | `--host` | from config (`127.0.0.1`) | Bind override, re-validated at startup |
-| `--port` | from config (`5480`) | Port override, re-validated at startup |
+| `--port` | from config (`2600`) | Port override, re-validated at startup |
 | `--config` | default webui config path | Load/save a specific `webui.json` |
 
 ---
@@ -114,6 +115,9 @@ Shodan balance is fetched server-side only. The API key is never sent to the bro
 - Row click opens inline details accordion:
   - compact overview + read-only notes
   - nested full-details scrollbox (`Show full details + probe tree`)
+  - `Open with system` action in the details panel (new-tab/window handoff)
+  - open-path selection uses explicit probe base path when present; otherwise `/`
+  - external-app caution is always shown in details; private/incognito mode cannot be forced from browser JS
   - includes stored probe snapshot tree when present
   - falls back gracefully on older DB schemas
 

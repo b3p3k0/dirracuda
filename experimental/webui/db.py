@@ -8,6 +8,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from experimental.webui.open_with_url import (
+    build_open_with_url as _build_open_with_url,
+    safe_port as _safe_port,
+    snapshot_explicit_base_path as _snapshot_explicit_base_path,
+    snapshot_open_path_candidates as _snapshot_open_path_candidates,
+    split_csv_items as _split_csv_items,
+)
+
 _DEFAULT_DB_PATH = Path.home() / ".dirracuda" / "data" / "dirracuda.db"
 _EXPORT_DIR = Path.home() / ".dirracuda" / "exports"
 
@@ -1084,6 +1092,15 @@ def _get_smb_detail(
     )
     tree_fallback = ", ".join(accessible_names) if accessible_names else "(none)"
     tree_lines = _probe_tree_lines(snapshot, fallback_paths=tree_fallback)
+    open_path_candidates = list(accessible_names)
+    open_path_candidates.extend(
+        _snapshot_open_path_candidates(snapshot, include_share_names=True)
+    )
+    open_with_url = _build_open_with_url(
+        scheme="smb",
+        host=data.get("ip_address"),
+        path_candidates=open_path_candidates,
+    )
 
     full_lines = [
         "Protocol: SMB",
@@ -1117,6 +1134,7 @@ def _get_smb_detail(
         "protocol": "SMB",
         "protocol_server_id": _to_int(data.get("protocol_server_id")),
         "ip_address": _clean_text(data.get("ip_address")),
+        "open_with_url": open_with_url,
         "overview": {
             "protocol": "SMB",
             "status": _clean_text(data.get("status")) or "unknown",
@@ -1273,6 +1291,17 @@ def _get_ftp_detail(
         snapshot,
         fallback_paths=_clean_text(data.get("accessible_dirs_list")) or "(none)",
     )
+    open_path_candidates = _split_csv_items(data.get("accessible_dirs_list"))
+    open_path_candidates.extend(_snapshot_open_path_candidates(snapshot))
+    open_base_path = _snapshot_explicit_base_path(snapshot)
+    open_with_url = _build_open_with_url(
+        scheme="ftp",
+        host=data.get("ip_address"),
+        default_port=_safe_port(data.get("port"), 21),
+        path_candidates=open_path_candidates,
+        explicit_base_path=open_base_path,
+        prefer_root_when_ambiguous=True,
+    )
 
     full_lines = [
         "Protocol: FTP",
@@ -1315,6 +1344,7 @@ def _get_ftp_detail(
         "protocol": "FTP",
         "protocol_server_id": _to_int(data.get("protocol_server_id")),
         "ip_address": _clean_text(data.get("ip_address")),
+        "open_with_url": open_with_url,
         "overview": {
             "protocol": "FTP",
             "status": _clean_text(data.get("status")) or "unknown",
@@ -1484,6 +1514,21 @@ def _get_http_detail(
         snapshot,
         fallback_paths=_clean_text(data.get("accessible_dirs_list")) or "(none)",
     )
+    open_scheme = _clean_text(data.get("scheme")).lower()
+    if open_scheme not in {"http", "https"}:
+        open_scheme = "http"
+    open_default_port = 443 if open_scheme == "https" else 80
+    open_path_candidates = _split_csv_items(data.get("accessible_dirs_list"))
+    open_path_candidates.extend(_snapshot_open_path_candidates(snapshot))
+    open_base_path = _snapshot_explicit_base_path(snapshot)
+    open_with_url = _build_open_with_url(
+        scheme=open_scheme,
+        host=data.get("ip_address"),
+        default_port=_safe_port(data.get("port"), open_default_port),
+        path_candidates=open_path_candidates,
+        explicit_base_path=open_base_path,
+        prefer_root_when_ambiguous=True,
+    )
 
     full_lines = [
         "Protocol: HTTP",
@@ -1529,6 +1574,7 @@ def _get_http_detail(
         "protocol": "HTTP",
         "protocol_server_id": _to_int(data.get("protocol_server_id")),
         "ip_address": _clean_text(data.get("ip_address")),
+        "open_with_url": open_with_url,
         "overview": {
             "protocol": "HTTP",
             "status": _clean_text(data.get("status")) or "unknown",

@@ -302,3 +302,24 @@ Seeded before implementation. Append after every major card.
     (unless an explicit `db_path` override is provided). Mixing repo-local scan
     config with default results DB paths creates false-success scans that never
     appear in `/results`.
+
+## C27 — Web UI Default Port Migration
+
+63. When changing a shipped default in `webui.json` (for example port
+    `5480` -> `2600`), migrate only the explicit legacy-default value during
+    load and keep custom operator values intact. If migration persistence
+    fails, warn and continue with safe in-memory defaults for the current
+    process rather than hard-failing startup.
+
+## C28 — Results External Open Handoff
+
+64. For web-side “Open with system” actions, derive protocol URLs server-side
+    from structured fields (`host_type`, `ip`, `port`, `scheme`, best-known
+    paths) rather than parsing UI text. Keep the browser action as a user-click
+    handoff (`window.open`), show a static caution about external applications,
+    and document that private/incognito launch cannot be forced from browser JS.
+
+65. For HTTP/FTP `Open with system`, never infer target path from the “first
+    discovered directory” when base-path intent is ambiguous. Prefer explicit
+    probe snapshot `start_path` when present, and otherwise open root index `/`.
+    This avoids incorrect deep-link jumps on Shodan-style root index listings.

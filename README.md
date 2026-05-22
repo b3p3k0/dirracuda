@@ -506,7 +506,7 @@ An optional browser-based interface for scan management, results browsing, and d
 ```bash
 pip install -r experimental/webui/requirements-web.txt
 ./venv/bin/python -m experimental.webui.server
-# → http://127.0.0.1:5480
+# → http://127.0.0.1:2600
 ```
 
 For setup, configuration, remote mode, and security guidance, see [experimental/webui/README.md](experimental/webui/README.md).
@@ -533,6 +533,11 @@ actions. A dedicated per-row `Probe` action cell is also available. Probe action
 run asynchronously with status polling and a single active probe-job guard.
 Bulk actions use per-row toggle semantics (not force set/unset), and selection
 resets on results reloads (filter/page/protocol changes).
+Expanded result details now include an `Open with system` action that hands a
+protocol URL to browser/system handlers in a new tab/window context, plus a
+static warning about external-application behavior. URL path selection now
+prefers explicit probe base paths when available (for example non-root indexed
+paths) and otherwise falls back to root index `/`.
 Login is protected by persistent per-account+IP lockout (configurable threshold,
 observation window, and exponential backoff via the `auth` block in `webui.json`
 or via the desktop config dialog). The `GET /health` endpoint reports

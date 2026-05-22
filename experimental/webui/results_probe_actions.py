@@ -282,8 +282,9 @@ def _resolve_target_row(db_path: Path, target: _ProbeTarget) -> dict[str, Any]:
         if target.host_type == "F":
             ftp_cols = table_columns.get("ftp_servers", set())
             port_expr = "port" if "port" in ftp_cols else "NULL"
+            probe_path_expr = "probe_path" if "probe_path" in ftp_cols else "NULL"
             row = conn.execute(
-                f"SELECT id, ip_address, {port_expr} AS port "
+                f"SELECT id, ip_address, {port_expr} AS port, {probe_path_expr} AS probe_path "
                 "FROM ftp_servers WHERE id = ? LIMIT 1",
                 (target.protocol_server_id,),
             ).fetchone()
@@ -296,6 +297,7 @@ def _resolve_target_row(db_path: Path, target: _ProbeTarget) -> dict[str, Any]:
                 "row_key": target.row_key,
                 "ip_address": str(row["ip_address"]),
                 "port": _as_int(row["port"], 21),
+                "probe_path": _normalize_http_path(row["probe_path"]),
             }
 
         http_cols = table_columns.get("http_servers", set())
@@ -380,6 +382,7 @@ def _probe_one_target(
         )
     elif host_type == "F":
         kwargs["port"] = _as_int(resolved.get("port"), 21)
+        kwargs["start_path"] = _normalize_http_path(resolved.get("probe_path"))
     elif host_type == "H":
         kwargs["port"] = _as_int(resolved.get("port"), 80)
         kwargs["scheme"] = str(resolved.get("scheme") or "http")

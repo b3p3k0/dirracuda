@@ -260,6 +260,57 @@ def test_depth_three_includes_nested_relative_paths(tmp_path, monkeypatch):
     assert snapshot["limits"]["max_depth"] == 3
 
 
+def test_run_ftp_probe_respects_explicit_start_path(tmp_path, monkeypatch):
+    monkeypatch.setattr("gui.utils.ftp_probe_cache.FTP_CACHE_DIR", tmp_path)
+
+    base_result = ListResult(
+        entries=[Entry(name="pub", is_dir=True, size=0, modified_time=None)],
+        truncated=False,
+    )
+    pub_result = ListResult(entries=[], truncated=False)
+
+    mock_nav = MagicMock()
+    mock_nav.connect.return_value = None
+    mock_nav.list_dir.side_effect = [base_result, pub_result]
+    mock_nav.disconnect.return_value = None
+
+    with patch("gui.utils.ftp_probe_runner.FtpNavigator", return_value=mock_nav):
+        snapshot = run_ftp_probe(
+            "10.0.0.10",
+            port=21,
+            start_path="/archives/",
+            max_directories=2,
+            max_files=2,
+        )
+
+    assert snapshot["start_path"] == "/archives/"
+    assert mock_nav.list_dir.call_args_list[0].args[0] == "/archives/"
+    assert mock_nav.list_dir.call_args_list[1].args[0] == "/archives/pub"
+
+
+def test_run_ftp_probe_falls_back_to_root_when_start_path_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr("gui.utils.ftp_probe_cache.FTP_CACHE_DIR", tmp_path)
+
+    root_result = ListResult(entries=[], truncated=False)
+
+    mock_nav = MagicMock()
+    mock_nav.connect.return_value = None
+    mock_nav.list_dir.side_effect = [RuntimeError("550 not found"), root_result]
+    mock_nav.disconnect.return_value = None
+
+    with patch("gui.utils.ftp_probe_runner.FtpNavigator", return_value=mock_nav):
+        snapshot = run_ftp_probe(
+            "10.0.0.11",
+            port=21,
+            start_path="/missing/",
+        )
+
+    assert snapshot["start_path"] == "/"
+    assert mock_nav.list_dir.call_args_list[0].args[0] == "/missing/"
+    assert mock_nav.list_dir.call_args_list[1].args[0] == "/"
+    assert any("falling back to /" in err for err in snapshot["errors"])
+
+
 # ---------------------------------------------------------------------------
 # probe_patterns compatibility — empty patterns → not suspicious
 # ---------------------------------------------------------------------------

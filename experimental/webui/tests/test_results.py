@@ -188,9 +188,9 @@ def db_all_protocols(tmp_path):
         INSERT INTO probe_snapshots (raw_snapshot_json)
         VALUES ('{"shares":[{"share":"Public","directories":[{"name":"pub","subdirectories":["docs"],"files":["docs/readme.txt","users.csv"]}],"root_files":["top.txt"]}]}');
         INSERT INTO probe_snapshots (raw_snapshot_json)
-        VALUES ('{"shares":[{"share":"ftp_root","directories":[{"name":"pub","subdirectories":["docs"],"files":["docs/readme.txt","users.csv"]},{"name":"incoming","files":["drop.zip"]}]}]}');
+        VALUES ('{"start_path":"/pub","shares":[{"share":"ftp_root","directories":[{"name":"pub","subdirectories":["docs"],"files":["docs/readme.txt","users.csv"]},{"name":"incoming","files":["drop.zip"]}]}]}');
         INSERT INTO probe_snapshots (raw_snapshot_json)
-        VALUES ('{"shares":[{"share":"http_root","directories":[{"name":"/","subdirectories":["admin"],"files":["index.html","admin/panel.html"]}]}]}');
+        VALUES ('{"start_path":"/admin","shares":[{"share":"http_root","directories":[{"name":"/","subdirectories":["admin"],"files":["index.html","admin/panel.html"]}]}]}');
 
         INSERT INTO host_probe_cache (server_id, status, indicator_matches, extracted, latest_snapshot_id)
         VALUES (1, 'clean', 0, 0, 1);
@@ -569,6 +569,7 @@ def test_result_details_smb_success(creds, cfg_no_tls, db_all_protocols):
     assert payload["host_type"] == "S"
     assert payload["protocol"] == "SMB"
     assert payload["ip_address"] == "10.0.0.10"
+    assert payload["open_with_url"] == "smb://10.0.0.10/Public"
     assert payload["overview"]["access_summary"] == "accessible=1, denied=1"
     assert "Protocol: SMB" in payload["full_details_text"]
     assert "Accessible Shares (1): Public" in payload["full_details_text"]
@@ -585,6 +586,7 @@ def test_result_details_ftp_success(creds, cfg_no_tls, db_all_protocols):
     assert payload["row_key"] == "F:1"
     assert payload["host_type"] == "F"
     assert payload["protocol"] == "FTP"
+    assert payload["open_with_url"] == "ftp://10.0.0.20:21/pub"
     assert payload["overview"]["access_summary"] == "dirs=2, denied=0"
     assert "Protocol: FTP" in payload["full_details_text"]
     assert "Probe Snapshot Tree (stored):" in payload["full_details_text"]
@@ -602,12 +604,88 @@ def test_result_details_http_success(creds, cfg_no_tls, db_all_protocols):
     assert payload["row_key"] == "H:1"
     assert payload["host_type"] == "H"
     assert payload["protocol"] == "HTTP"
+    assert payload["open_with_url"] == "http://10.0.0.30:80/admin"
     assert payload["overview"]["access_summary"] == "dirs=1, files=1"
     assert "Protocol: HTTP" in payload["full_details_text"]
     assert "Probe Snapshot Tree (stored):" in payload["full_details_text"]
     assert "Share: http_root" in payload["full_details_text"]
     assert "Status Code: 200" in payload["full_details_text"]
     assert "Access Details:" not in payload["full_details_text"]
+
+
+def test_result_details_open_with_url_prefers_root_without_explicit_base_path(
+    creds, cfg_no_tls, tmp_path
+):
+    db_path = tmp_path / "open_with_root_fallback.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(
+        """
+        CREATE TABLE ftp_servers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ip_address TEXT NOT NULL UNIQUE,
+            port INTEGER
+        );
+        CREATE TABLE http_servers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ip_address TEXT NOT NULL UNIQUE,
+            port INTEGER,
+            scheme TEXT
+        );
+        CREATE TABLE ftp_probe_cache (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            server_id INTEGER NOT NULL,
+            status TEXT,
+            indicator_matches INTEGER DEFAULT 0,
+            extracted INTEGER DEFAULT 0,
+            accessible_dirs_count INTEGER DEFAULT 0,
+            accessible_dirs_list TEXT,
+            latest_snapshot_id INTEGER
+        );
+        CREATE TABLE http_probe_cache (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            server_id INTEGER NOT NULL,
+            status TEXT,
+            indicator_matches INTEGER DEFAULT 0,
+            extracted INTEGER DEFAULT 0,
+            accessible_dirs_count INTEGER DEFAULT 0,
+            accessible_files_count INTEGER DEFAULT 0,
+            accessible_dirs_list TEXT,
+            latest_snapshot_id INTEGER
+        );
+        CREATE TABLE probe_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            raw_snapshot_json TEXT NOT NULL
+        );
+
+        INSERT INTO ftp_servers (ip_address, port) VALUES ('10.7.0.20', 21);
+        INSERT INTO http_servers (ip_address, port, scheme) VALUES ('10.7.0.30', 80, 'http');
+
+        INSERT INTO probe_snapshots (raw_snapshot_json)
+        VALUES ('{"shares":[{"share":"ftp_root","directories":[{"name":"pub","subdirectories":["docs"]}]}]}');
+        INSERT INTO probe_snapshots (raw_snapshot_json)
+        VALUES ('{"shares":[{"share":"http_root","directories":[{"name":"/","subdirectories":["admin"]}]}]}');
+
+        INSERT INTO ftp_probe_cache (
+            server_id, status, indicator_matches, extracted, accessible_dirs_count, accessible_dirs_list, latest_snapshot_id
+        )
+        VALUES (1, 'clean', 0, 0, 2, 'pub,docs', 1);
+        INSERT INTO http_probe_cache (
+            server_id, status, indicator_matches, extracted, accessible_dirs_count, accessible_files_count, accessible_dirs_list, latest_snapshot_id
+        )
+        VALUES (1, 'clean', 0, 0, 2, 0, '/,/admin', 2);
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    c = _logged_in_client_for_db(creds, cfg_no_tls, db_path)
+    ftp_resp = c.get("/api/results/details?host_type=F&protocol_server_id=1")
+    assert ftp_resp.status_code == 200
+    assert ftp_resp.json()["open_with_url"] == "ftp://10.7.0.20:21/"
+
+    http_resp = c.get("/api/results/details?host_type=H&protocol_server_id=1")
+    assert http_resp.status_code == 200
+    assert http_resp.json()["open_with_url"] == "http://10.7.0.30:80/"
 
 
 def test_result_details_invalid_params_rejected(logged_in_client):
@@ -636,8 +714,76 @@ def test_result_details_schema_fallback_without_optional_tables(logged_in_client
     assert r.status_code == 200
     payload = r.json()
     assert payload["host_type"] == "S"
+    assert payload["open_with_url"] == "smb://10.0.0.10/"
     assert payload["overview"]["access_summary"] == "accessible=0, denied=0"
     assert "Protocol: SMB" in payload["full_details_text"]
+
+
+def test_result_details_open_with_url_percent_encodes_paths(creds, cfg_no_tls, tmp_path):
+    db_path = tmp_path / "open_with_encode.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(
+        """
+        CREATE TABLE smb_servers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ip_address TEXT NOT NULL UNIQUE,
+            last_seen TEXT
+        );
+        CREATE TABLE share_access (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            server_id INTEGER NOT NULL,
+            share_name TEXT NOT NULL,
+            accessible BOOLEAN NOT NULL DEFAULT 0
+        );
+        INSERT INTO smb_servers (ip_address, last_seen)
+        VALUES ('10.9.9.9', '2026-05-10T14:22:00');
+        INSERT INTO share_access (server_id, share_name, accessible)
+        VALUES (1, 'Public Docs', 1);
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    c = _logged_in_client_for_db(creds, cfg_no_tls, db_path)
+    r = c.get("/api/results/details?host_type=S&protocol_server_id=1")
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["open_with_url"] == "smb://10.9.9.9/Public%20Docs"
+
+
+def test_result_details_open_with_url_defaults_for_minimal_ftp_http_schemas(
+    creds, cfg_no_tls, tmp_path
+):
+    db_path = tmp_path / "open_with_defaults.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(
+        """
+        CREATE TABLE ftp_servers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ip_address TEXT NOT NULL UNIQUE
+        );
+        CREATE TABLE http_servers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ip_address TEXT NOT NULL UNIQUE
+        );
+        INSERT INTO ftp_servers (ip_address) VALUES ('10.8.0.20');
+        INSERT INTO http_servers (ip_address) VALUES ('10.8.0.30');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    c = _logged_in_client_for_db(creds, cfg_no_tls, db_path)
+
+    ftp_resp = c.get("/api/results/details?host_type=F&protocol_server_id=1")
+    assert ftp_resp.status_code == 200
+    ftp_payload = ftp_resp.json()
+    assert ftp_payload["open_with_url"] == "ftp://10.8.0.20:21/"
+
+    http_resp = c.get("/api/results/details?host_type=H&protocol_server_id=1")
+    assert http_resp.status_code == 200
+    http_payload = http_resp.json()
+    assert http_payload["open_with_url"] == "http://10.8.0.30:80/"
 
 
 def test_results_toggle_actions_requires_auth(client):
