@@ -160,7 +160,10 @@ def test_scans_reddit_renders_authenticated(logged_in):
     r = logged_in.get("/scans/reddit")
     assert r.status_code == 200
     assert "Reddit Discovery" in r.text
-    assert "full workflow until this page is activated" in r.text
+    assert 'id="run-btn"' in r.text
+    assert 'id="probe-btn"' in r.text
+    assert 'id="promote-btn"' in r.text
+    assert '/static/reddit.js' in r.text
 
 
 def test_results_renders_authenticated(logged_in):
