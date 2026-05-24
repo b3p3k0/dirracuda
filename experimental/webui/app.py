@@ -12,8 +12,28 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
+from experimental.redseek.service import IngestOptions as RedditIngestOptions, run_ingest
+from experimental.se_dork.client import run_preflight as run_searxng_preflight
+from experimental.se_dork.models import RUN_STATUS_DONE as SEARXNG_RUN_STATUS_DONE
+from experimental.se_dork.models import RunOptions as SearxngRunOptions
+from experimental.se_dork.service import run_dork_search
 import experimental.webui.db as _db
 import experimental.webui.db_actions as _db_actions
+from experimental.webui.experimental_features import (
+    load_reddit_rows,
+    load_searxng_rows,
+    probe_reddit_rows,
+    probe_searxng_rows,
+    promote_reddit_rows,
+    promote_searxng_rows,
+)
+from experimental.webui.experimental_models import (
+    RedditActionRequest,
+    RedditRunRequest,
+    SearxngActionRequest,
+    SearxngPreflightRequest,
+    SearxngRunRequest,
+)
 import experimental.webui.results_probe_actions as _results_probe_actions
 from experimental.webui.auth import (
     BlocklistUnavailableError, CredentialError, check_credential_store,
@@ -35,6 +55,7 @@ from experimental.webui.rate_limiter import (
     RateLimiterRuntimeError,
     _DEFAULT_RL_PATH,
 )
+from experimental.webui.shared_jobs import SharedCancelResult, SharedJobQueue
 from experimental.webui.dependencies import AuthRequired, get_session, same_origin, validate_csrf
 from experimental.webui.sessions import Session, SessionStore, cookie_name
 from experimental.webui.shodan_balance import ShodanBalanceService
@@ -258,6 +279,7 @@ def create_app(
     app.state.session_store = SessionStore()
     app.state.creds_path = creds_path
     app.state.scan_queue = ScanQueue(base_config_path=resolved_main_config_path)
+    app.state.shared_jobs = SharedJobQueue(app.state.scan_queue)
     app.state.db_path = resolved_db_path
     app.state.main_config_path = resolved_main_config_path
     app.state.config_path = Path(config_path) if config_path is not None else None
@@ -463,14 +485,364 @@ def create_app(
             payload = {"state": "unavailable", "reason": "unknown", "cached": False}
         return JSONResponse(payload)
 
-    @app.get("/scans", response_class=HTMLResponse)
-    async def _scans_page(
+    @app.get("/scans/shodan", response_class=HTMLResponse)
+    async def _scans_shodan_page(
         request: Request,
         session: Session = Depends(get_session),
     ) -> HTMLResponse:
         return templates.TemplateResponse(
-            request, "scans.html", {"session": session, "active_page": "scans"}
+            request, "scans.html", {"session": session, "active_page": "scans_shodan"}
         )
+
+    @app.get("/scans/searxng", response_class=HTMLResponse)
+    async def _scans_searxng_page(
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> HTMLResponse:
+        return templates.TemplateResponse(
+            request, "searxng.html", {"session": session, "active_page": "scans_searxng"}
+        )
+
+    @app.get("/scans/reddit", response_class=HTMLResponse)
+    async def _scans_reddit_page(
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> HTMLResponse:
+        return templates.TemplateResponse(
+            request, "reddit.html", {"session": session, "active_page": "scans_reddit"}
+        )
+
+    @app.post("/api/searxng/preflight")
+    async def _searxng_preflight(
+        body: SearxngPreflightRequest,
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> JSONResponse:
+        if not same_origin(request):
+            return JSONResponse({"error": "origin check failed"}, status_code=403)
+        csrf_tok = request.headers.get("X-CSRF-Token")
+        if not validate_csrf(csrf_tok, session.csrf_token):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+        try:
+            result = run_searxng_preflight(body.instance_url)
+        except Exception as exc:
+            return JSONResponse(
+                {"ok": False, "reason_code": "unknown", "message": str(exc)},
+                status_code=200,
+            )
+        return JSONResponse(
+            {
+                "ok": bool(result.ok),
+                "reason_code": result.reason_code,
+                "message": result.message,
+            }
+        )
+
+    @app.post("/api/searxng/run")
+    async def _searxng_run(
+        body: SearxngRunRequest,
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> JSONResponse:
+        if not same_origin(request):
+            return JSONResponse({"error": "origin check failed"}, status_code=403)
+        csrf_tok = request.headers.get("X-CSRF-Token")
+        if not validate_csrf(csrf_tok, session.csrf_token):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+
+        shared_jobs = request.app.state.shared_jobs
+        config_path = str(request.app.state.main_config_path)
+
+        def _runner(job):
+            job.set_progress("Running SearXNG discovery...", 5.0)
+            options = SearxngRunOptions(
+                instance_url=body.instance_url,
+                query=body.query,
+                max_results=body.max_results,
+                bulk_probe_enabled=body.bulk_probe_enabled,
+                probe_config_path=config_path,
+                probe_worker_count=body.probe_worker_count,
+            )
+            result = run_dork_search(options)
+            if result.status != SEARXNG_RUN_STATUS_DONE:
+                raise RuntimeError(result.error or "SearXNG run failed")
+            job.set_metadata(
+                run_id=result.run_id,
+                fetched_count=result.fetched_count,
+                retained_count=result.deduped_count,
+                verified_count=result.verified_count,
+                probe_total=result.probe_total,
+                probe_clean=result.probe_clean,
+                probe_issue=result.probe_issue,
+                probe_unprobed=result.probe_unprobed,
+            )
+            job.set_progress(
+                f"SearXNG run complete: {result.deduped_count} retained row(s).",
+                100.0,
+            )
+
+        queued = shared_jobs.submit_external(
+            source="searxng",
+            kind="run",
+            label=f"SearXNG run: {body.query[:60]}",
+            runner=_runner,
+            metadata={"query": body.query, "max_results": body.max_results},
+        )
+        return JSONResponse(
+            {"job_id": queued.job_id, "status": queued.status.value},
+            status_code=202,
+        )
+
+    @app.get("/api/searxng/results")
+    async def _searxng_results(
+        request: Request,
+        session: Session = Depends(get_session),
+        search: Optional[str] = Query(default=None),
+        limit: int = Query(default=500, ge=1, le=2000),
+    ) -> JSONResponse:
+        try:
+            rows = load_searxng_rows(None)
+        except Exception as exc:
+            logger.exception("searxng results load failed")
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
+        search_norm = str(search or "").strip().lower()
+        if search_norm:
+            rows = [
+                row for row in rows
+                if search_norm in str(row.get("url") or "").lower()
+                or search_norm in str(row.get("probe_preview") or "").lower()
+                or search_norm in str(row.get("verdict") or "").lower()
+            ]
+
+        rows = rows[:limit]
+        return JSONResponse({"results": rows, "count": len(rows)})
+
+    @app.post("/api/searxng/actions/probe")
+    async def _searxng_probe(
+        body: SearxngActionRequest,
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> JSONResponse:
+        if not same_origin(request):
+            return JSONResponse({"error": "origin check failed"}, status_code=403)
+        csrf_tok = request.headers.get("X-CSRF-Token")
+        if not validate_csrf(csrf_tok, session.csrf_token):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+
+        shared_jobs = request.app.state.shared_jobs
+        config_path = str(request.app.state.main_config_path)
+        result_ids = list(body.result_ids)
+
+        def _runner(job):
+            job.set_progress("Starting SearXNG probe batch...", 2.0)
+
+            def _progress(done: int, total: int, message: str) -> None:
+                pct = (float(done) / float(total) * 100.0) if total else 100.0
+                job.set_progress(message, pct)
+
+            summary = probe_searxng_rows(
+                None,
+                result_ids,
+                config_path=config_path,
+                cancel_event=job.cancel_event,
+                progress_callback=_progress,
+            )
+            job.set_metadata(summary=summary)
+            job.set_progress(
+                f"SearXNG probe complete: {summary.get('processed', 0)} row(s) processed.",
+                100.0,
+            )
+
+        queued = shared_jobs.submit_external(
+            source="searxng",
+            kind="probe",
+            label=f"SearXNG probe batch ({len(result_ids)} rows)",
+            runner=_runner,
+            metadata={"result_ids": result_ids},
+        )
+        return JSONResponse(
+            {"job_id": queued.job_id, "status": queued.status.value},
+            status_code=202,
+        )
+
+    @app.post("/api/searxng/actions/promote")
+    async def _searxng_promote(
+        body: SearxngActionRequest,
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> JSONResponse:
+        if not same_origin(request):
+            return JSONResponse({"error": "origin check failed"}, status_code=403)
+        csrf_tok = request.headers.get("X-CSRF-Token")
+        if not validate_csrf(csrf_tok, session.csrf_token):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+        try:
+            rows = load_searxng_rows(None)
+            summary = promote_searxng_rows(request.app.state.db_path, rows, body.result_ids)
+        except Exception as exc:
+            logger.exception("searxng promote failed")
+            return JSONResponse({"error": str(exc)}, status_code=500)
+        return JSONResponse(summary)
+
+    @app.post("/api/reddit/run")
+    async def _reddit_run(
+        body: RedditRunRequest,
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> JSONResponse:
+        if not same_origin(request):
+            return JSONResponse({"error": "origin check failed"}, status_code=403)
+        csrf_tok = request.headers.get("X-CSRF-Token")
+        if not validate_csrf(csrf_tok, session.csrf_token):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+
+        shared_jobs = request.app.state.shared_jobs
+        config_path = str(request.app.state.main_config_path)
+        request_data = body.model_dump()
+
+        def _runner(job):
+            job.set_progress("Running Reddit ingest...", 5.0)
+            options = RedditIngestOptions(
+                sort=request_data["sort"],
+                max_posts=request_data["max_posts"],
+                parse_body=request_data["parse_body"],
+                include_nsfw=request_data["include_nsfw"],
+                replace_cache=request_data["replace_cache"],
+                max_pages=request_data["max_pages"],
+                subreddit="opendirectories",
+                top_window=request_data["top_window"],
+                mode=request_data["mode"],
+                query=request_data["query"],
+                username=request_data["username"],
+                bulk_probe_enabled=request_data["bulk_probe_enabled"],
+                probe_config_path=config_path,
+                probe_worker_count=request_data.get("probe_worker_count"),
+            )
+            result = run_ingest(options)
+            if result.error:
+                raise RuntimeError(result.error)
+            job.set_metadata(
+                pages_fetched=result.pages_fetched,
+                posts_stored=result.posts_stored,
+                posts_skipped=result.posts_skipped,
+                targets_stored=result.targets_stored,
+                targets_deduped=result.targets_deduped,
+                probe_total=result.probe_total,
+                probe_clean=result.probe_clean,
+                probe_issue=result.probe_issue,
+                probe_unprobed=result.probe_unprobed,
+                probe_skipped=result.probe_skipped,
+            )
+            job.set_progress(
+                f"Reddit ingest complete: {result.targets_stored} target(s) stored.",
+                100.0,
+            )
+
+        queued = shared_jobs.submit_external(
+            source="reddit",
+            kind="run",
+            label=f"Reddit {body.mode} run ({body.sort})",
+            runner=_runner,
+            metadata=request_data,
+        )
+        return JSONResponse(
+            {"job_id": queued.job_id, "status": queued.status.value},
+            status_code=202,
+        )
+
+    @app.get("/api/reddit/results")
+    async def _reddit_results(
+        request: Request,
+        session: Session = Depends(get_session),
+        search: Optional[str] = Query(default=None),
+        limit: int = Query(default=500, ge=1, le=5000),
+    ) -> JSONResponse:
+        try:
+            rows = load_reddit_rows(None)
+        except Exception as exc:
+            logger.exception("reddit results load failed")
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
+        search_norm = str(search or "").strip().lower()
+        if search_norm:
+            rows = [
+                row for row in rows
+                if search_norm in str(row.get("target_normalized") or "").lower()
+                or search_norm in str(row.get("host") or "").lower()
+                or search_norm in str(row.get("post_author") or "").lower()
+                or search_norm in str(row.get("post_title") or "").lower()
+                or search_norm in str(row.get("probe_preview") or "").lower()
+            ]
+        rows = rows[:limit]
+        return JSONResponse({"results": rows, "count": len(rows)})
+
+    @app.post("/api/reddit/actions/probe")
+    async def _reddit_probe(
+        body: RedditActionRequest,
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> JSONResponse:
+        if not same_origin(request):
+            return JSONResponse({"error": "origin check failed"}, status_code=403)
+        csrf_tok = request.headers.get("X-CSRF-Token")
+        if not validate_csrf(csrf_tok, session.csrf_token):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+
+        shared_jobs = request.app.state.shared_jobs
+        config_path = str(request.app.state.main_config_path)
+        target_ids = list(body.target_ids)
+
+        def _runner(job):
+            job.set_progress("Starting Reddit probe batch...", 2.0)
+
+            def _progress(done: int, total: int, message: str) -> None:
+                pct = (float(done) / float(total) * 100.0) if total else 100.0
+                job.set_progress(message, pct)
+
+            summary = probe_reddit_rows(
+                None,
+                target_ids,
+                config_path=config_path,
+                cancel_event=job.cancel_event,
+                progress_callback=_progress,
+            )
+            job.set_metadata(summary=summary)
+            job.set_progress(
+                f"Reddit probe complete: {summary.get('processed', 0)} row(s) processed.",
+                100.0,
+            )
+
+        queued = shared_jobs.submit_external(
+            source="reddit",
+            kind="probe",
+            label=f"Reddit probe batch ({len(target_ids)} rows)",
+            runner=_runner,
+            metadata={"target_ids": target_ids},
+        )
+        return JSONResponse(
+            {"job_id": queued.job_id, "status": queued.status.value},
+            status_code=202,
+        )
+
+    @app.post("/api/reddit/actions/promote")
+    async def _reddit_promote(
+        body: RedditActionRequest,
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> JSONResponse:
+        if not same_origin(request):
+            return JSONResponse({"error": "origin check failed"}, status_code=403)
+        csrf_tok = request.headers.get("X-CSRF-Token")
+        if not validate_csrf(csrf_tok, session.csrf_token):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+        try:
+            rows = load_reddit_rows(None)
+            summary = promote_reddit_rows(request.app.state.db_path, rows, body.target_ids)
+        except Exception as exc:
+            logger.exception("reddit promote failed")
+            return JSONResponse({"error": str(exc)}, status_code=500)
+        return JSONResponse(summary)
 
     @app.post("/api/scans/preflight")
     async def _scans_preflight(
@@ -583,6 +955,49 @@ def create_app(
         logger.info("scan cancel requested: task_id=%s", task_id)
         return JSONResponse({"ok": True})
 
+    @app.get("/api/jobs")
+    async def _get_jobs_queue(
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> JSONResponse:
+        shared_jobs = request.app.state.shared_jobs
+        return JSONResponse(shared_jobs.queue_status())
+
+    @app.get("/api/jobs/{job_id}")
+    async def _get_job(
+        job_id: str,
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> JSONResponse:
+        shared_jobs = request.app.state.shared_jobs
+        payload = shared_jobs.get_job(job_id)
+        if payload is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return JSONResponse(payload)
+
+    @app.post("/api/jobs/{job_id}/cancel")
+    async def _cancel_job(
+        job_id: str,
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> JSONResponse:
+        if not same_origin(request):
+            return JSONResponse({"error": "origin check failed"}, status_code=403)
+        csrf_tok = request.headers.get("X-CSRF-Token")
+        if not validate_csrf(csrf_tok, session.csrf_token):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+
+        shared_jobs = request.app.state.shared_jobs
+        result = shared_jobs.cancel(job_id)
+        if result == SharedCancelResult.NOT_FOUND:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        if result == SharedCancelResult.TERMINAL:
+            payload = shared_jobs.get_job(job_id)
+            status = payload.get("status") if isinstance(payload, dict) else "unknown"
+            return JSONResponse({"ok": False, "status": status}, status_code=409)
+        logger.info("job cancel requested: job_id=%s", job_id)
+        return JSONResponse({"ok": True})
+
     @app.get("/results", response_class=HTMLResponse)
     async def _results_page(
         request: Request,
@@ -590,6 +1005,15 @@ def create_app(
     ) -> HTMLResponse:
         return templates.TemplateResponse(
             request, "results.html", {"session": session, "active_page": "results"}
+        )
+
+    @app.get("/export", response_class=HTMLResponse)
+    async def _export_page(
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> HTMLResponse:
+        return templates.TemplateResponse(
+            request, "export.html", {"session": session, "active_page": "export"}
         )
 
     @app.get("/api/results/details")
@@ -822,6 +1246,24 @@ def create_app(
                 "cfg": request.app.state.cfg,
                 "active_page": "config",
             }
+        )
+
+    @app.get("/extras/dorkbook", response_class=HTMLResponse)
+    async def _extras_dorkbook_page(
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> HTMLResponse:
+        return templates.TemplateResponse(
+            request, "dorkbook.html", {"session": session, "active_page": "extras_dorkbook"}
+        )
+
+    @app.get("/extras/keymaster", response_class=HTMLResponse)
+    async def _extras_keymaster_page(
+        request: Request,
+        session: Session = Depends(get_session),
+    ) -> HTMLResponse:
+        return templates.TemplateResponse(
+            request, "keymaster.html", {"session": session, "active_page": "extras_keymaster"}
         )
 
     @app.post("/config")

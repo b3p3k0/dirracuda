@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Export{% endblock %}
+
+{% block content %}
+<h1>Export</h1>
+<p class="status-text">Download a timestamped snapshot of the current primary database.</p>
+
+<div id="export-bar">
+  <button id="export-btn" type="button">Export DB</button>
+  <span id="export-status" role="status" aria-live="polite"></span>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/export.js"></script>
+{% endblock %}

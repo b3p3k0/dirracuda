@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from experimental.webui.app import create_app
 from experimental.webui.auth import set_password
 from experimental.webui.config import TLSConfig, WebUIConfig
+from experimental.webui.shared_jobs import SharedJobQueue
 from experimental.webui.tasks import CancelResult, ScanRequest, ScanTask, TaskStatus
 
 _USERNAME = "scanuser"
@@ -86,7 +87,12 @@ def main_config_path(tmp_path):
 def app_and_queue(creds, cfg_no_tls, main_config_path):
     app = create_app(cfg=cfg_no_tls, creds_path=creds, main_config_path=main_config_path)
     fake = FakeScanQueue()
+    try:
+        app.state.shared_jobs.shutdown()
+    except Exception:
+        pass
     app.state.scan_queue = fake
+    app.state.shared_jobs = SharedJobQueue(fake)
     fake_balance = FakeShodanBalanceService()
     app.state.shodan_balance_service = fake_balance
     return app, fake, fake_balance
@@ -159,13 +165,13 @@ def test_create_app_db_override_takes_precedence(
 
 
 def test_scans_page_requires_auth(client):
-    r = client.get("/scans")
+    r = client.get("/scans/shodan")
     assert r.status_code == 303
     assert r.headers["location"] == "/login"
 
 
 def test_scans_page_authenticated(logged_in_client):
-    r = logged_in_client.get("/scans")
+    r = logged_in_client.get("/scans/shodan")
     assert r.status_code == 200
     assert "Review Preflight" in r.text
 
@@ -501,6 +507,97 @@ def test_cancel_valid(logged_in_client, fake_queue):
     csrf = _csrf_from_dashboard(logged_in_client)
     r = logged_in_client.post(
         "/api/scans/task-1/cancel", headers={"X-CSRF-Token": csrf}, json={}
+    )
+    assert r.status_code == 200
+    assert r.json() == {"ok": True}
+
+
+def test_get_jobs_requires_auth(client):
+    r = client.get("/api/jobs")
+    assert r.status_code == 303
+    assert r.headers["location"] == "/login"
+
+
+def test_get_jobs_queue_snapshot(logged_in_client, fake_queue):
+    running = ScanTask(task_id="task-running", request=ScanRequest(protocol="smb"))
+    running.status = TaskStatus.RUNNING
+    queued = ScanTask(task_id="task-queued", request=ScanRequest(protocol="ftp"))
+    queued.status = TaskStatus.QUEUED
+    fake_queue.tasks[running.task_id] = running
+    fake_queue.tasks[queued.task_id] = queued
+
+    r = logged_in_client.get("/api/jobs")
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["active"]["job_id"] == "task-running"
+    assert payload["active"]["source"] == "shodan"
+    assert payload["active"]["kind"] == "run"
+    assert payload["active"]["metadata"]["protocol"] == "smb"
+    assert len(payload["queued"]) == 1
+    assert payload["queued"][0]["job_id"] == "task-queued"
+
+
+def test_get_job_requires_auth(client):
+    r = client.get("/api/jobs/task-1")
+    assert r.status_code == 303
+    assert r.headers["location"] == "/login"
+
+
+def test_get_job_not_found(logged_in_client):
+    r = logged_in_client.get("/api/jobs/missing")
+    assert r.status_code == 404
+
+
+def test_get_job_valid_for_scan_task(logged_in_client, fake_queue):
+    task = ScanTask(task_id="task-1", request=ScanRequest(protocol="http"))
+    task.status = TaskStatus.QUEUED
+    fake_queue.tasks[task.task_id] = task
+
+    r = logged_in_client.get("/api/jobs/task-1")
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["job_id"] == "task-1"
+    assert payload["source"] == "shodan"
+    assert payload["kind"] == "run"
+    assert payload["metadata"]["protocol"] == "http"
+
+
+def test_cancel_job_requires_auth(client):
+    r = client.post("/api/jobs/task-1/cancel")
+    assert r.status_code == 303
+    assert r.headers["location"] == "/login"
+
+
+def test_cancel_job_missing_csrf(logged_in_client, fake_queue):
+    fake_queue.tasks["task-1"] = ScanTask(task_id="task-1", request=ScanRequest(protocol="smb"))
+    r = logged_in_client.post("/api/jobs/task-1/cancel", json={})
+    assert r.status_code == 403
+
+
+def test_cancel_job_not_found(logged_in_client):
+    csrf = _csrf_from_dashboard(logged_in_client)
+    r = logged_in_client.post(
+        "/api/jobs/missing/cancel", headers={"X-CSRF-Token": csrf}, json={}
+    )
+    assert r.status_code == 404
+
+
+def test_cancel_job_terminal(logged_in_client, fake_queue):
+    fake_queue.cancel_result = CancelResult.TERMINAL
+    fake_queue.tasks["task-1"] = ScanTask(task_id="task-1", request=ScanRequest(protocol="smb"))
+    csrf = _csrf_from_dashboard(logged_in_client)
+    r = logged_in_client.post(
+        "/api/jobs/task-1/cancel", headers={"X-CSRF-Token": csrf}, json={}
+    )
+    assert r.status_code == 409
+    assert r.json() == {"ok": False, "status": "done"}
+
+
+def test_cancel_job_valid(logged_in_client, fake_queue):
+    fake_queue.tasks["task-1"] = ScanTask(task_id="task-1", request=ScanRequest(protocol="smb"))
+    csrf = _csrf_from_dashboard(logged_in_client)
+    r = logged_in_client.post(
+        "/api/jobs/task-1/cancel", headers={"X-CSRF-Token": csrf}, json={}
     )
     assert r.status_code == 200
     assert r.json() == {"ok": True}

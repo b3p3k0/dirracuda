@@ -12,11 +12,31 @@
 <div class="layout">
   <nav class="nav" aria-label="Main navigation">
     <div class="nav-brand">Dirracuda</div>
+    {% set scans_pages = ['scans_shodan', 'scans_searxng', 'scans_reddit'] %}
+    {% set extras_pages = ['extras_dorkbook', 'extras_keymaster'] %}
     <ul>
       <li><a href="/dashboard"{% if active_page == 'dashboard' %} class="active"{% endif %}>Dashboard</a></li>
-      <li><a href="/scans"{% if active_page == 'scans' %} class="active"{% endif %}>Scans</a></li>
+      <li class="nav-group-item">
+        <details class="nav-group"{% if active_page in scans_pages %} open{% endif %}>
+          <summary class="nav-group-summary{% if active_page in scans_pages %} active{% endif %}">Scans</summary>
+          <ul class="nav-sublist">
+            <li><a href="/scans/shodan"{% if active_page == 'scans_shodan' %} class="active"{% endif %}>Shodan</a></li>
+            <li><a href="/scans/searxng"{% if active_page == 'scans_searxng' %} class="active"{% endif %}>SearXNG</a></li>
+            <li><a href="/scans/reddit"{% if active_page == 'scans_reddit' %} class="active"{% endif %}>Reddit</a></li>
+          </ul>
+        </details>
+      </li>
       <li><a href="/results"{% if active_page == 'results' %} class="active"{% endif %}>Results</a></li>
-      <li><a href="/results"{% if active_page == 'export' %} class="active"{% endif %}>Export</a></li>
+      <li><a href="/export"{% if active_page == 'export' %} class="active"{% endif %}>Export</a></li>
+      <li class="nav-group-item">
+        <details class="nav-group"{% if active_page in extras_pages %} open{% endif %}>
+          <summary class="nav-group-summary{% if active_page in extras_pages %} active{% endif %}">Extras</summary>
+          <ul class="nav-sublist">
+            <li><a href="/extras/dorkbook"{% if active_page == 'extras_dorkbook' %} class="active"{% endif %}>Dorkbook</a></li>
+            <li><a href="/extras/keymaster"{% if active_page == 'extras_keymaster' %} class="active"{% endif %}>Keymaster</a></li>
+          </ul>
+        </details>
+      </li>
       <li><a href="/config"{% if active_page == 'config' %} class="active"{% endif %}>Config</a></li>
       <li><a href="/account"{% if active_page == 'account' %} class="active"{% endif %}>Account</a></li>
     </ul>

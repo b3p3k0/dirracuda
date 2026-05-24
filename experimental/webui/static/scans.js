@@ -4,6 +4,11 @@ var pollTimer = null;
 var pendingPreflightPlan = null;
 var TERMINAL = {done: 1, failed: 1, cancelled: 1};
 
+function _taskId(task) {
+  if (!task || typeof task !== 'object') return '';
+  return String(task.task_id || task.job_id || '');
+}
+
 function parseCountries(value) {
   if (!value) return [];
   return value.split(',').map(function(s) { return s.trim().toUpperCase(); }).filter(Boolean);
@@ -159,13 +164,15 @@ function persistScansPrefs() {
 }
 
 function upsertRow(task) {
+  var taskId = _taskId(task);
+  if (!taskId) return;
   var tbody = document.getElementById('queue-body');
-  var existing = trackedTasks[task.task_id];
+  var existing = trackedTasks[taskId];
   if (!existing) {
     var placeholder = tbody.querySelector('[colspan]');
     if (placeholder) placeholder.parentNode.remove();
     var tr = document.createElement('tr');
-    tr.dataset.taskId = task.task_id;
+    tr.dataset.taskId = taskId;
     tr.innerHTML =
       '<td class="cell-id"></td>' +
       '<td class="cell-proto"></td>' +
@@ -175,14 +182,19 @@ function upsertRow(task) {
     var cancelBtn = document.createElement('button');
     cancelBtn.textContent = 'Cancel';
     cancelBtn.type = 'button';
-    cancelBtn.addEventListener('click', function() { cancelTask(task.task_id, tr); });
+    cancelBtn.addEventListener('click', function() { cancelTask(taskId, tr); });
     tr.querySelector('.cell-action').appendChild(cancelBtn);
     tbody.appendChild(tr);
-    trackedTasks[task.task_id] = tr;
+    trackedTasks[taskId] = tr;
     existing = tr;
   }
-  existing.querySelector('.cell-id').textContent = task.task_id.slice(0, 8);
-  existing.querySelector('.cell-proto').textContent = task.protocol;
+  var proto = task.protocol;
+  if (!proto && task.metadata && task.metadata.protocol) proto = task.metadata.protocol;
+  if (!proto && task.source) proto = task.source;
+  if (!proto && task.label) proto = task.label;
+
+  existing.querySelector('.cell-id').textContent = taskId.slice(0, 8);
+  existing.querySelector('.cell-proto').textContent = String(proto || '').toUpperCase();
   existing.querySelector('.cell-state').textContent = task.status;
   existing.querySelector('.cell-progress').textContent = task.progress_message || '';
   if (TERMINAL[task.status]) {
@@ -194,12 +206,12 @@ function upsertRow(task) {
 function _tasksFromQueueSnapshot(snapshot) {
   var tasks = [];
   if (!snapshot || typeof snapshot !== 'object') return tasks;
-  if (snapshot.active && snapshot.active.task_id) {
+  if (snapshot.active && _taskId(snapshot.active)) {
     tasks.push(snapshot.active);
   }
   if (Array.isArray(snapshot.queued)) {
     snapshot.queued.forEach(function(task) {
-      if (task && task.task_id) tasks.push(task);
+      if (task && _taskId(task)) tasks.push(task);
     });
   }
   return tasks;
@@ -207,7 +219,7 @@ function _tasksFromQueueSnapshot(snapshot) {
 
 async function hydrateQueueFromServer() {
   try {
-    var resp = await fetch('/api/scans');
+    var resp = await fetch('/api/jobs');
     if (!resp.ok) return;
     var payload = await resp.json();
     var tasks = _tasksFromQueueSnapshot(payload);
@@ -218,7 +230,7 @@ async function hydrateQueueFromServer() {
 }
 
 function cancelTask(taskId, tr) {
-  fetch('/api/scans/' + encodeURIComponent(taskId) + '/cancel', {
+  fetch('/api/jobs/' + encodeURIComponent(taskId) + '/cancel', {
     method: 'POST',
     headers: {'Content-Type': 'application/json', 'X-CSRF-Token': token},
     body: '{}'
@@ -239,7 +251,7 @@ function pollAll() {
   });
   if (!active.length) return;
   active.forEach(function(id) {
-    fetch('/api/scans/' + encodeURIComponent(id))
+    fetch('/api/jobs/' + encodeURIComponent(id))
       .then(function(r) { return r.ok ? r.json() : null; })
       .then(function(data) { if (data) upsertRow(data); })
       .catch(function() {});
@@ -315,7 +327,16 @@ async function _queueTasksForPlan(plan) {
       });
       var data = await resp.json();
       if (resp.status === 202) {
-        upsertRow(data);
+        upsertRow({
+          task_id: data.task_id,
+          status: data.status,
+          protocol: proto,
+          source: 'shodan',
+          kind: 'run',
+          label: proto.toUpperCase() + ' scan',
+          progress_message: '',
+          metadata: {protocol: proto}
+        });
         queued++;
       } else {
         var msg = (data && data.detail) ? JSON.stringify(data.detail) : (data && data.error) || 'Request failed.';

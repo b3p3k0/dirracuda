@@ -71,8 +71,8 @@ def test_dashboard_redirects_unauthenticated(client):
     assert "/login" in r.headers["location"]
 
 
-def test_scans_redirects_unauthenticated(client):
-    r = client.get("/scans")
+def test_shodan_scans_redirects_unauthenticated(client):
+    r = client.get("/scans/shodan")
     assert r.status_code == 303
     assert "/login" in r.headers["location"]
 
@@ -87,6 +87,22 @@ def test_config_redirects_unauthenticated(client):
     r = client.get("/config")
     assert r.status_code == 303
     assert "/login" in r.headers["location"]
+
+
+def test_export_redirects_unauthenticated(client):
+    r = client.get("/export")
+    assert r.status_code == 303
+    assert "/login" in r.headers["location"]
+
+
+def test_scans_root_not_found(client):
+    r = client.get("/scans")
+    assert r.status_code == 404
+
+
+def test_extras_root_not_found(client):
+    r = client.get("/extras")
+    assert r.status_code == 404
 
 
 # --- Authenticated page renders ---
@@ -106,9 +122,21 @@ def test_dashboard_renders_authenticated(logged_in):
     assert '/static/dashboard.js' in r.text
 
 
-def test_scans_renders_authenticated(logged_in):
-    r = logged_in.get("/scans")
+def test_dashboard_nav_includes_scans_and_extras_groups(logged_in):
+    r = logged_in.get("/dashboard")
     assert r.status_code == 200
+    assert "/scans/shodan" in r.text
+    assert "/scans/searxng" in r.text
+    assert "/scans/reddit" in r.text
+    assert "/extras/dorkbook" in r.text
+    assert "/extras/keymaster" in r.text
+    assert "<summary" in r.text
+
+
+def test_scans_shodan_renders_authenticated(logged_in):
+    r = logged_in.get("/scans/shodan")
+    assert r.status_code == 200
+    assert "Shodan Scans" in r.text
     assert "SMB" in r.text
     assert "Review Preflight" in r.text
     assert 'id="preflight-panel"' in r.text
@@ -116,6 +144,20 @@ def test_scans_renders_authenticated(logged_in):
     assert 'id="preflight-start-btn"' in r.text
     assert 'id="preflight-cancel-btn"' in r.text
     assert '/static/scans.js' in r.text
+
+
+def test_scans_searxng_renders_authenticated(logged_in):
+    r = logged_in.get("/scans/searxng")
+    assert r.status_code == 200
+    assert "SearXNG Discovery" in r.text
+    assert "full workflow until this page is activated" in r.text
+
+
+def test_scans_reddit_renders_authenticated(logged_in):
+    r = logged_in.get("/scans/reddit")
+    assert r.status_code == 200
+    assert "Reddit Discovery" in r.text
+    assert "full workflow until this page is activated" in r.text
 
 
 def test_results_renders_authenticated(logged_in):
@@ -129,8 +171,29 @@ def test_results_renders_authenticated(logged_in):
     assert "Clear Selection" in r.text
     assert 'id="select-all-rows"' in r.text
     assert "<th>Probe</th>" in r.text
-    assert "Export DB" in r.text
     assert '/static/results.js' in r.text
+
+
+def test_export_renders_authenticated(logged_in):
+    r = logged_in.get("/export")
+    assert r.status_code == 200
+    assert "Export" in r.text
+    assert "Export DB" in r.text
+    assert '/static/export.js' in r.text
+
+
+def test_extras_dorkbook_renders_authenticated(logged_in):
+    r = logged_in.get("/extras/dorkbook")
+    assert r.status_code == 200
+    assert "Dorkbook" in r.text
+    assert "Desktop currently includes the full workflow." in r.text
+
+
+def test_extras_keymaster_renders_authenticated(logged_in):
+    r = logged_in.get("/extras/keymaster")
+    assert r.status_code == 200
+    assert "Keymaster" in r.text
+    assert "desktop-only in this wave." in r.text
 
 
 def test_config_renders_authenticated(logged_in, cfg_no_tls):
@@ -320,7 +383,7 @@ def test_no_inline_script_in_dashboard(logged_in):
 
 
 def test_no_inline_script_in_scans(logged_in):
-    r = logged_in.get("/scans")
+    r = logged_in.get("/scans/shodan")
     _assert_no_inline_script(r.text)
     assert '/static/scans.js' in r.text
 
@@ -347,7 +410,18 @@ def test_no_inline_style_attr_on_key_routes(logged_in, client):
     login_r = client.get("/login")
     assert login_r.status_code == 200
     assert not _INLINE_STYLE_RE.search(login_r.text), "Inline style= attr found on /login"
-    for path in ["/dashboard", "/scans", "/results", "/config", "/account"]:
+    for path in [
+        "/dashboard",
+        "/scans/shodan",
+        "/scans/searxng",
+        "/scans/reddit",
+        "/results",
+        "/export",
+        "/extras/dorkbook",
+        "/extras/keymaster",
+        "/config",
+        "/account",
+    ]:
         r = logged_in.get(path)
         assert r.status_code == 200, f"{path} returned {r.status_code}"
         assert not _INLINE_STYLE_RE.search(r.text), f"Inline style= attr found on {path}"

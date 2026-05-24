@@ -907,30 +907,5 @@ document.getElementById('bulk-probe-btn').addEventListener('click', function() {
   _performProbeAction(_collectSelectedRows());
 });
 
-document.getElementById('export-btn').addEventListener('click', async function() {
-  var es = document.getElementById('export-status');
-  es.textContent = 'Exporting...';
-  es.className = '';
-  try {
-    var resp = await fetch('/api/export', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json', 'X-CSRF-Token': token},
-      body: '{}'
-    });
-    var data = await resp.json();
-    if (resp.ok && data.filename) {
-      es.textContent = 'Export ready: ' + data.filename;
-      es.className = 'status-text ok';
-      window.location.href = '/api/export/' + encodeURIComponent(data.filename);
-    } else {
-      es.textContent = 'Export failed: ' + (data.error || resp.status);
-      es.className = 'status-text error';
-    }
-  } catch (ex) {
-    es.textContent = 'Export failed: network error';
-    es.className = 'status-text error';
-  }
-});
-
 applyResultsPrefsFromStorage();
 loadResults();
