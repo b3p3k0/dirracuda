@@ -192,7 +192,14 @@ def test_extras_dorkbook_renders_authenticated(logged_in):
     r = logged_in.get("/extras/dorkbook")
     assert r.status_code == 200
     assert "Dorkbook" in r.text
-    assert "Desktop currently includes the full workflow." in r.text
+    assert "dorkbook.js" in r.text
+
+
+def test_no_inline_script_in_dorkbook(logged_in):
+    import re as _re
+    r = logged_in.get("/extras/dorkbook")
+    assert r.status_code == 200
+    assert not _re.search(r"<script[^>]*>[^<]+</script>", r.text)
 
 
 def test_extras_keymaster_renders_authenticated(logged_in):

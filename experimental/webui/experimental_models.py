@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Literal, Optional
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 def _validate_http_url(value: str, *, field_name: str) -> str:
@@ -166,3 +166,18 @@ class RedditActionRequest(BaseModel):
         if len(deduped) > 200:
             raise ValueError("target_ids must not exceed 200 IDs")
         return deduped
+
+
+class DorkbookEntryCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    protocol: Literal["SMB", "FTP", "HTTP"]
+    nickname: str = Field(default="", max_length=200)
+    query: str = Field(min_length=1, max_length=2000)
+    notes: str = Field(default="", max_length=2000)
+
+
+class DorkbookPrefillRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    entry_id: int

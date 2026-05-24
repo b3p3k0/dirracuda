@@ -189,7 +189,7 @@ def test_confirm_delete_sets_mute_flag_when_requested(monkeypatch):
     assert set_calls == [(dorkbook_window.DORKBOOK_DELETE_CONFIRM_MUTE_KEY, True)]
 
 
-def test_on_use_in_discovery_dorks_populates_editor_and_sets_status(monkeypatch):
+def test_on_use_in_discovery_dorks_applies_immediately_and_sets_status(monkeypatch):
     win = dorkbook_window.DorkbookWindow.__new__(dorkbook_window.DorkbookWindow)
     win.window = MagicMock()
     win.settings_manager = MagicMock()
@@ -212,17 +212,16 @@ def test_on_use_in_discovery_dorks_populates_editor_and_sets_status(monkeypatch)
     calls = []
     monkeypatch.setattr(
         dorkbook_window,
-        "populate_discovery_dork_from_dorkbook",
-        lambda **kwargs: calls.append(kwargs),
+        "_apply_dork_to_config",
+        lambda config_path, protocol, query: calls.append((config_path, protocol, query)),
     )
 
     win._on_use_in_discovery_dorks("HTTP")
 
     assert len(calls) == 1
-    assert calls[0]["protocol"] == "HTTP"
-    assert calls[0]["query"] == "http.title:\"Index of /\""
-    assert calls[0]["config_path"] == "/tmp/config.json"
-    assert "Click Save there to persist" in status.value
+    assert calls[0] == ("/tmp/config.json", "HTTP", "http.title:\"Index of /\"")
+    assert "Applied" in status.value
+    assert "Click Save" not in status.value
 
 
 def test_on_use_in_discovery_dorks_warns_when_context_missing(monkeypatch):

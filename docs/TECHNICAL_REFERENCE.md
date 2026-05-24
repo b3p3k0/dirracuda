@@ -1046,12 +1046,13 @@ Per-tab behavior:
 - Double-click row is an alias of "Use in Discovery Dorks"
 - Built-ins are seeded/read-only and italicized
 - Delete confirmation can be muted for the current app session
-- "Use in Discovery Dorks" populates the protocol-matched editor field as unsaved/manual-save state
+- "Use in Discovery Dorks" writes the selected query immediately to the canonical discovery config (immediate-persist; no separate Save step)
 - If no scan-config context is available, use-action warns and performs no write
 
 Integration seam:
-- `DorkbookWindow` routes all use-actions through `populate_discovery_dork_from_dorkbook(...)`
-- The seam opens/focuses `ScanDorkEditorDialog` and updates the matched field only; config is unchanged until explicit Save
+- `DorkbookWindow` routes all use-actions through `_apply_dork_to_config(config_path, protocol, query)`
+- Canonical path: uses `load_config()` + `cfg.update_sections()`; non-canonical: direct JSON read/write
+- Web surface (`/extras/dorkbook`) applies the same immediate-persist contract via `POST /api/dorkbook/prefill`
 
 SearXNG Dorking entry path:
 
