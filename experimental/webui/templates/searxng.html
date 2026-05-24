@@ -3,10 +3,98 @@
 
 {% block content %}
 <h1>SearXNG Discovery</h1>
-<div class="dash-card">
-  <p class="status-text">
-    WebUI support for SearXNG dork search/results/probe/promote is being wired in this rollout.
-    Use desktop for full workflow until this page is activated.
-  </p>
+<div role="status" id="submit-status" aria-live="polite"></div>
+
+<form id="searxng-form" novalidate>
+  <div class="form-section">
+    <div class="form-row">
+      <label for="instance-url">SearXNG instance URL</label>
+      <input id="instance-url" name="instance-url" type="url" placeholder="http://searxng.example.com" maxlength="500">
+    </div>
+    <div class="form-row">
+      <label for="query">Query</label>
+      <input id="query" name="query" type="text" placeholder="inurl:index.of filetype:zip" maxlength="500">
+    </div>
+    <div class="form-row">
+      <label for="max-results">Max results</label>
+      <input id="max-results" name="max-results" type="number" value="50" min="1" max="500">
+    </div>
+    <div class="check-row">
+      <input id="bulk-probe" name="bulk-probe" type="checkbox">
+      <label for="bulk-probe">Bulk probe after run</label>
+    </div>
+    <div class="form-row" id="probe-workers-row">
+      <label for="probe-workers">Probe workers</label>
+      <select id="probe-workers" name="probe-workers">
+        <option value="1">1</option>
+        <option value="2">2</option>
+        <option value="3" selected>3</option>
+        <option value="4">4</option>
+        <option value="8">8</option>
+      </select>
+    </div>
+  </div>
+  <div class="form-actions">
+    <button type="submit" id="run-btn">Run Discovery</button>
+  </div>
+</form>
+
+<div class="queue-section">
+  <h2>Queue</h2>
+  <div class="table-wrap">
+    <table id="queue-table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Source</th>
+          <th>State</th>
+          <th>Progress</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody id="queue-body">
+        <tr><td colspan="5" class="status-text">No active or queued jobs.</td></tr>
+      </tbody>
+    </table>
+  </div>
 </div>
+
+<div class="results-section">
+  <h2>Results</h2>
+  <div class="form-row">
+    <label for="result-search">Filter</label>
+    <input id="result-search" name="result-search" type="text" placeholder="URL, preview, verdict" maxlength="200">
+    <button type="button" id="refresh-btn">Refresh</button>
+  </div>
+  <div class="form-actions">
+    <input id="select-all-rows" type="checkbox">
+    <label for="select-all-rows">Select all</label>
+    <button type="button" id="probe-btn">Probe Selected</button>
+    <button type="button" id="promote-btn">Promote Selected</button>
+    <button type="button" id="clear-selection-btn">Clear Selection</button>
+  </div>
+  <div role="status" id="results-status" aria-live="polite"></div>
+  <div class="table-wrap">
+    <table id="results-table">
+      <thead>
+        <tr>
+          <th></th>
+          <th>ID</th>
+          <th>URL</th>
+          <th>Probe</th>
+          <th>Verdict</th>
+          <th>Preview</th>
+        </tr>
+      </thead>
+      <tbody id="results-body">
+        <tr><td colspan="6" class="status-text">No results yet. Run a discovery job to populate.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="status-text">Full run history and per-run breakdown are available in the desktop client.</p>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/searxng.js"></script>
 {% endblock %}

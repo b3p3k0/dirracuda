@@ -150,7 +150,10 @@ def test_scans_searxng_renders_authenticated(logged_in):
     r = logged_in.get("/scans/searxng")
     assert r.status_code == 200
     assert "SearXNG Discovery" in r.text
-    assert "full workflow until this page is activated" in r.text
+    assert 'id="run-btn"' in r.text
+    assert 'id="probe-btn"' in r.text
+    assert 'id="promote-btn"' in r.text
+    assert '/static/searxng.js' in r.text
 
 
 def test_scans_reddit_renders_authenticated(logged_in):
@@ -386,6 +389,12 @@ def test_no_inline_script_in_scans(logged_in):
     r = logged_in.get("/scans/shodan")
     _assert_no_inline_script(r.text)
     assert '/static/scans.js' in r.text
+
+
+def test_no_inline_script_in_searxng(logged_in):
+    r = logged_in.get("/scans/searxng")
+    _assert_no_inline_script(r.text)
+    assert '/static/searxng.js' in r.text
 
 
 def test_no_inline_script_in_results(logged_in):
