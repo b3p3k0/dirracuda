@@ -181,3 +181,111 @@ class DorkbookPrefillRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     entry_id: int
+
+
+class KeymasterUnlockRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    passphrase: str
+
+    @field_validator("passphrase")
+    @classmethod
+    def _validate_passphrase(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("passphrase is required")
+        if len(text.encode("utf-8")) > 1024:
+            raise ValueError("passphrase exceeds 1024 bytes")
+        return value
+
+
+class KeymasterKeyCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    provider: str = "SHODAN"
+    label: str
+    api_key: str
+    notes: str = ""
+
+    @field_validator("provider")
+    @classmethod
+    def _validate_provider(cls, value: str) -> str:
+        v = str(value or "").strip().upper()
+        if v not in {"SHODAN"}:
+            raise ValueError(f"unsupported provider: {value!r}")
+        return v
+
+    @field_validator("label")
+    @classmethod
+    def _validate_label(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("label is required")
+        if len(text) > 128:
+            raise ValueError("label must not exceed 128 characters")
+        return value
+
+    @field_validator("api_key")
+    @classmethod
+    def _validate_api_key(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("api_key is required")
+        if len(text) > 256:
+            raise ValueError("api_key must not exceed 256 characters")
+        return value
+
+    @field_validator("notes")
+    @classmethod
+    def _validate_notes(cls, value: str) -> str:
+        text = str(value or "")
+        if len(text) > 512:
+            raise ValueError("notes must not exceed 512 characters")
+        return text
+
+
+class KeymasterKeyUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    label: str
+    api_key: str = ""
+    notes: str = ""
+
+    @field_validator("label")
+    @classmethod
+    def _validate_label(cls, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError("label is required")
+        if len(text) > 128:
+            raise ValueError("label must not exceed 128 characters")
+        return value
+
+    @field_validator("api_key")
+    @classmethod
+    def _validate_api_key(cls, value: str) -> str:
+        text = str(value or "")
+        if len(text) > 256:
+            raise ValueError("api_key must not exceed 256 characters")
+        return text
+
+    @field_validator("notes")
+    @classmethod
+    def _validate_notes(cls, value: str) -> str:
+        text = str(value or "")
+        if len(text) > 512:
+            raise ValueError("notes must not exceed 512 characters")
+        return text
+
+
+class KeymasterApplyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    key_id: int
+
+    @field_validator("key_id")
+    @classmethod
+    def _validate_key_id(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("key_id must be a positive integer")
+        return value

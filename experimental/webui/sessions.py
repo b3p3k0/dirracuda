@@ -8,7 +8,7 @@ import secrets
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 
 SESSION_ID_BYTES = 32   # 256 bits of entropy
 CSRF_TOKEN_BYTES = 32   # 256 bits of entropy
@@ -23,6 +23,7 @@ class Session:
     csrf_token: str
     created_at: float = field(default_factory=time.time)
     last_accessed: float = field(default_factory=time.time)
+    keymaster_session_keys: Optional[Dict[str, Any]] = field(default=None)
 
 
 class SessionStore:

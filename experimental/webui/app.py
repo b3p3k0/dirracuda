@@ -244,6 +244,7 @@ def create_app(
     config_path=None,
     main_config_path=None,
     rl_db_path=None,
+    keymaster_db_path=None,
 ) -> FastAPI:
     if cfg is None:
         cfg = load_config(config_path)
@@ -287,6 +288,12 @@ def create_app(
             response.headers["Cache-Control"] = "no-store"
         return response
 
+    resolved_km_db_path = (
+        Path(keymaster_db_path).expanduser().resolve(strict=False)
+        if keymaster_db_path is not None
+        else None
+    )
+
     app.state.session_store = SessionStore()
     app.state.creds_path = creds_path
     app.state.scan_queue = ScanQueue(base_config_path=resolved_main_config_path)
@@ -294,6 +301,7 @@ def create_app(
     app.state.db_path = resolved_db_path
     app.state.main_config_path = resolved_main_config_path
     app.state.config_path = Path(config_path) if config_path is not None else None
+    app.state.keymaster_db_path = resolved_km_db_path
     app.state.shodan_balance_service = ShodanBalanceService(
         main_config_path=resolved_main_config_path
     )
@@ -1411,6 +1419,9 @@ def create_app(
         return templates.TemplateResponse(
             request, "keymaster.html", {"session": session, "active_page": "extras_keymaster"}
         )
+
+    from experimental.webui.keymaster_routes import keymaster_router
+    app.include_router(keymaster_router)
 
     @app.post("/config")
     async def _config_save(

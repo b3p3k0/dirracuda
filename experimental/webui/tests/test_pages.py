@@ -207,6 +207,7 @@ def test_extras_keymaster_renders_authenticated(logged_in):
     assert r.status_code == 200
     assert "Keymaster" in r.text
     assert "desktop-only in this wave." in r.text
+    assert 'src="/static/keymaster.js"' in r.text
 
 
 def test_config_renders_authenticated(logged_in, cfg_no_tls):
