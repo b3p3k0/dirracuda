@@ -36,3 +36,13 @@ def test_single_protocol_wording_remains_specific() -> None:
     assert smb._success_subtitle() == "SMB security scan has finished successfully."
     assert smb._shares_label() == "Shares Found:"
     assert smb._access_phrase() == "accessible SMB shares"
+
+
+def test_searxng_wording() -> None:
+    dialog = _dialog("searxng")
+    assert dialog._is_searxng_scan()
+    assert "SearXNG" in dialog._success_subtitle()
+    assert dialog._shares_label() == "Open Index URLs:"
+    assert "open-index" in dialog._access_phrase()
+    assert not dialog._is_ftp_scan()
+    assert not dialog._is_multi_scan()

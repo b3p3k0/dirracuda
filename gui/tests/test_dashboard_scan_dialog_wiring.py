@@ -86,3 +86,28 @@ def test_show_quick_scan_dialog_does_not_pass_reddit_grab_callback(monkeypatch):
 
     # Key must be absent entirely — not merely None — after C2 legacy removal.
     assert "reddit_grab_callback" not in captured
+
+
+def test_show_quick_scan_dialog_blocked_when_searxng_running(monkeypatch):
+    dash = DashboardWidget.__new__(DashboardWidget)
+    dash.parent = object()
+    dash.config_path = "/tmp/config.json"
+    dash.scan_manager = _ScanManagerStub()
+    dash.settings_manager = object()
+    dash._searxng_scan_running = True
+
+    dialog_opened = []
+    monkeypatch.setattr(
+        "gui.components.dashboard.show_unified_scan_dialog",
+        lambda **k: dialog_opened.append(True),
+    )
+    warnings = []
+    monkeypatch.setattr(
+        "gui.components.dashboard.messagebox.showwarning",
+        lambda *a, **k: warnings.append(a),
+    )
+
+    dash._show_quick_scan_dialog()
+
+    assert dialog_opened == [], "Dialog must not open when SearXNG scan is active"
+    assert warnings, "showwarning must fire"

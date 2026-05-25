@@ -69,6 +69,10 @@ class ScanResultsDialog:
         protocols = self.scan_results.get("protocols") or []
         return isinstance(protocols, list) and len(protocols) > 1
 
+    def _is_searxng_scan(self) -> bool:
+        """Return True when rendering results for a SearXNG dork search."""
+        return self.protocol == "searxng"
+
     def _ordered_protocols(self) -> list[str]:
         """Return ordered normalized protocol list for display."""
         protocols = self.scan_results.get("protocols") or []
@@ -85,6 +89,8 @@ class ScanResultsDialog:
 
     def _success_subtitle(self) -> str:
         """Protocol-aware success subtitle text."""
+        if self._is_searxng_scan():
+            return "SearXNG dork search has finished successfully."
         if self._is_multi_scan():
             return "Multi-protocol scan queue has finished successfully."
         if self._is_ftp_scan():
@@ -93,6 +99,8 @@ class ScanResultsDialog:
 
     def _shares_label(self) -> str:
         """Protocol-aware label for the final summary metric."""
+        if self._is_searxng_scan():
+            return "Open Index URLs:"
         if self._is_multi_scan():
             return "Resources Found:"
         if self._is_ftp_scan():
@@ -101,6 +109,8 @@ class ScanResultsDialog:
 
     def _access_phrase(self) -> str:
         """Protocol-aware phrase describing successful access."""
+        if self._is_searxng_scan():
+            return "retained open-index URLs"
         if self._is_multi_scan():
             return "resources"
         if self._is_ftp_scan():
@@ -254,8 +264,8 @@ class ScanResultsDialog:
         stats = [
             ("Scan Target:", country if country else "Global"),
             ("Duration:", duration),
-            ("Hosts Scanned:", f"{hosts_scanned:,}"),
-            ("Accessible Hosts:", f"{accessible_hosts:,}"),
+            ("URLs Fetched:" if self._is_searxng_scan() else "Hosts Scanned:", f"{hosts_scanned:,}"),
+            ("URLs Retained:" if self._is_searxng_scan() else "Accessible Hosts:", f"{accessible_hosts:,}"),
             (self._shares_label(), f"{shares_found:,}"),
             ("Completion Time:", scan_time)
         ]
@@ -312,35 +322,36 @@ class ScanResultsDialog:
     
     def _create_success_details(self, parent: tk.Widget) -> None:
         """Create details for successful scan completion."""
-        # Check if we have an enhanced summary message from scan results
         summary_message = self.scan_results.get("summary_message")
 
-        if summary_message:
-            # Use enhanced summary message if available
-            details_text = f"{summary_message}\n\n"
-            details_text += f"Discovered {self.scan_results.get('accessible_hosts', 0)} servers with accessible "
-            details_text += f"{self._access_phrase()} out of {self.scan_results.get('hosts_scanned', 0)} servers tested."
+        if self._is_searxng_scan():
+            # SearXNG: show summary_message as-is; skip "servers tested" and shares block
+            details_text = summary_message or "Results stored in SearXNG sidecar database."
         else:
-            # Fallback to default message for compatibility with existing mocks/tests
-            details_text = (
-                "Scan completed successfully! The database has been updated with new findings.\n\n"
-                f"Discovered {self.scan_results.get('accessible_hosts', 0)} servers with accessible "
-                f"{self._access_phrase()} out of {self.scan_results.get('hosts_scanned', 0)} servers tested."
-            )
-
-        if self.scan_results.get('shares_found', 0) > 0:
-            if self._is_multi_scan():
-                share_term = "resources"
+            if summary_message:
+                details_text = f"{summary_message}\n\n"
+                details_text += f"Discovered {self.scan_results.get('accessible_hosts', 0)} servers with accessible "
+                details_text += f"{self._access_phrase()} out of {self.scan_results.get('hosts_scanned', 0)} servers tested."
             else:
-                share_term = "directories" if self._is_ftp_scan() else "shares"
-            details_text += f"\n\nFound {self.scan_results.get('shares_found', 0)} total {share_term} "
-            details_text += "available for further analysis."
+                details_text = (
+                    "Scan completed successfully! The database has been updated with new findings.\n\n"
+                    f"Discovered {self.scan_results.get('accessible_hosts', 0)} servers with accessible "
+                    f"{self._access_phrase()} out of {self.scan_results.get('hosts_scanned', 0)} servers tested."
+                )
 
-        if self._is_multi_scan():
-            protocols = self._ordered_protocols()
-            if protocols:
-                proto_display = ", ".join(p.upper() for p in protocols)
-                details_text += f"\n\nProtocols: {proto_display}"
+            if self.scan_results.get('shares_found', 0) > 0:
+                if self._is_multi_scan():
+                    share_term = "resources"
+                else:
+                    share_term = "directories" if self._is_ftp_scan() else "shares"
+                details_text += f"\n\nFound {self.scan_results.get('shares_found', 0)} total {share_term} "
+                details_text += "available for further analysis."
+
+            if self._is_multi_scan():
+                protocols = self._ordered_protocols()
+                if protocols:
+                    proto_display = ", ".join(p.upper() for p in protocols)
+                    details_text += f"\n\nProtocols: {proto_display}"
 
         details_label = self.theme.create_styled_label(
             parent,

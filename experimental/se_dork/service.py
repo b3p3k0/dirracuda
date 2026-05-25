@@ -24,7 +24,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 from experimental.se_dork.client import run_preflight
 from experimental.se_dork.models import (
@@ -66,6 +66,7 @@ def _fetch_results(
     query: str,
     max_results: int,
     timeout: int = _FETCH_TIMEOUT,
+    progress_cb: Optional[Callable[[str], None]] = None,
 ) -> List[dict]:
     """
     Fetch up to max_results raw result dicts from SearXNG.
@@ -80,6 +81,11 @@ def _fetch_results(
     accumulated: List[dict] = []
 
     for page in range(1, _HARD_PAGE_CAP + 1):
+        if progress_cb:
+            try:
+                progress_cb(f"Querying SearXNG page {page}...")
+            except Exception:
+                pass
         params = urllib.parse.urlencode({
             "q": query,
             "format": "json",
@@ -96,6 +102,13 @@ def _fetch_results(
             break
 
         accumulated.extend(results)
+        if progress_cb:
+            try:
+                progress_cb(
+                    f"Page {page}: received {len(results)} results ({len(accumulated)} total)."
+                )
+            except Exception:
+                pass
         if len(accumulated) >= max_results:
             break
 
@@ -111,6 +124,7 @@ def _classify_run_results(
     run_id: int,
     db_path: Optional[Path],
     timeout: float = 10.0,
+    progress_cb: Optional[Callable[[str], None]] = None,
 ) -> int:
     """
     Open a fresh connection, classify all pending results for run_id,
@@ -123,9 +137,11 @@ def _classify_run_results(
         conn = open_connection(db_path)
         try:
             rows = get_pending_results(conn, run_id)
+            total = len(rows)
+            step = max(1, total // 10)
             checked_at = _utcnow()
             verified = 0
-            for row in rows:
+            for i, row in enumerate(rows):
                 result = classify_url(row["url"], timeout=timeout)
                 update_result_verdict(
                     conn,
@@ -136,6 +152,11 @@ def _classify_run_results(
                     checked_at,
                 )
                 verified += 1
+                if progress_cb and total > 0 and ((i + 1) % step == 0 or i + 1 == total):
+                    try:
+                        progress_cb(f"Classifying {i + 1}/{total}...")
+                    except Exception:
+                        pass
             update_run_verified_count(conn, run_id, verified)
             conn.commit()
             return verified
@@ -176,6 +197,7 @@ def _probe_run_results(
     max_files: int = 5,
     timeout_seconds: int = 10,
     worker_count: int = 3,
+    progress_cb: Optional[Callable[[str], None]] = None,
 ) -> dict[str, int]:
     """
     Probe retained rows for one run and persist probe state.
@@ -209,6 +231,8 @@ def _probe_run_results(
         rows = get_results_for_run(conn, run_id)
         if not rows:
             return counts
+        total_rows = len(rows)
+        step = max(1, total_rows // 10)
 
         patterns = build_indicator_patterns(config_path)
         try:
@@ -268,6 +292,13 @@ def _probe_run_results(
                 else:
                     counts["unprobed"] += 1
 
+                if (progress_cb and total_rows > 0
+                        and (counts["total"] % step == 0 or counts["total"] == total_rows)):
+                    try:
+                        progress_cb(f"Probing {counts['total']}/{total_rows}...")
+                    except Exception:
+                        pass
+
         conn.commit()
         return counts
     except Exception:
@@ -288,12 +319,20 @@ def _probe_run_results(
 def run_dork_search(
     options: RunOptions,
     db_path: Optional[Path] = None,
+    progress_cb: Optional[Callable[[str], None]] = None,
 ) -> RunResult:
     """
     Run a dork search against the configured SearXNG instance.
 
     Always returns a RunResult — never raises.
     """
+    def _emit(msg: str) -> None:
+        if progress_cb:
+            try:
+                progress_cb(msg)
+            except Exception:
+                pass
+
     # 1. Preflight — no DB I/O yet
     bulk_probe_enabled = bool(getattr(options, "bulk_probe_enabled", False))
     probe_config_path = getattr(options, "probe_config_path", None)
@@ -307,9 +346,11 @@ def run_dork_search(
     except (TypeError, ValueError):
         probe_worker_count = 3
 
+    _emit(f"Preflight: checking {options.instance_url}...")
     try:
         preflight = run_preflight(options.instance_url)
     except Exception as exc:
+        _emit(f"Preflight error: {exc}")
         return RunResult(
             run_id=None,
             fetched_count=0,
@@ -319,6 +360,7 @@ def run_dork_search(
             probe_enabled=bulk_probe_enabled,
         )
     if not preflight.ok:
+        _emit(f"Preflight failed: {preflight.message}")
         return RunResult(
             run_id=None,
             fetched_count=0,
@@ -327,12 +369,15 @@ def run_dork_search(
             error=f"Preflight failed ({preflight.reason_code}): {preflight.message}",
             probe_enabled=bulk_probe_enabled,
         )
+    _emit("Preflight OK")
 
     # 2. DB setup — structured error if this fails
+    _emit("Opening database...")
     try:
         init_db(db_path)
         conn = open_connection(db_path)
     except Exception as exc:
+        _emit(f"Database error: {exc}")
         return RunResult(
             run_id=None,
             fetched_count=0,
@@ -361,6 +406,7 @@ def run_dork_search(
         conn.commit()  # COMMIT 1: run row is durable before any network I/O
     except Exception as exc:
         conn.close()
+        _emit(f"Run setup failed: {exc}")
         return RunResult(
             run_id=None,
             fetched_count=0,
@@ -369,22 +415,28 @@ def run_dork_search(
             error=f"Run insert failed: {exc}",
             probe_enabled=bulk_probe_enabled,
         )
+    _emit(f"Run registered (#{run_id}). Starting fetch...")
 
     # 4. Fetch + persist results
     try:
         raw_rows = _fetch_results(
-            options.instance_url, options.query, max_results
+            options.instance_url, options.query, max_results, progress_cb=_emit
         )
         capped = raw_rows[:max_results]
         fetched = len(capped)
         deduped = 0
-        for row in capped:
+        step = max(1, fetched // 10)
+        for i, row in enumerate(capped):
             if insert_result(conn, run_id, row):
                 deduped += 1
+            if fetched > 0 and ((i + 1) % step == 0 or i + 1 == fetched):
+                _emit(f"Storing {i + 1}/{fetched} results...")
         update_run(conn, run_id, _utcnow(), fetched, deduped, RUN_STATUS_DONE)
         conn.commit()  # COMMIT 2: results + final status
+        _emit(f"Fetched {fetched}, stored {deduped} results.")
     except Exception as exc:
         conn.rollback()  # undo partial result inserts
+        _emit(f"Fetch error: {exc}")
         try:
             update_run(conn, run_id, _utcnow(), 0, 0, RUN_STATUS_ERROR, str(exc))
             conn.commit()
@@ -402,18 +454,22 @@ def run_dork_search(
         conn.close()  # always closes — on success and on exception path
 
     # 5. Classify results (COMMIT 3 — best-effort, never fails the run)
+    _emit("Classifying results...")
     verified_count = 0
     try:
-        verified_count = _classify_run_results(run_id, db_path)
+        verified_count = _classify_run_results(run_id, db_path, progress_cb=_emit)
     except Exception:
         pass
+    _emit(f"Classification done: {verified_count} verified.")
 
     # 6. Retain OPEN_INDEX only (best-effort). deduped_count becomes retained count.
+    _emit("Applying retention filter...")
     retained_count = deduped
     try:
         retained_count = _retain_open_index_only_for_run(run_id, fetched, db_path)
     except Exception:
         pass
+    _emit(f"Retained {retained_count} open-index results.")
 
     # 7. Optional bulk probe over retained rows only (best-effort).
     probe_total = 0
@@ -421,16 +477,21 @@ def run_dork_search(
     probe_issue = 0
     probe_unprobed = 0
     if bulk_probe_enabled:
+        _emit(f"Probing {retained_count} URLs...")
         summary = _probe_run_results(
             run_id,
             db_path,
             config_path=probe_config_path,
             worker_count=probe_worker_count,
+            progress_cb=_emit,
         )
         probe_total = summary.get("total", 0)
         probe_clean = summary.get("clean", 0)
         probe_issue = summary.get("issue", 0)
         probe_unprobed = summary.get("unprobed", 0)
+        _emit(
+            f"Probe done: {probe_clean} clean, {probe_issue} flagged, {probe_unprobed} unprobed."
+        )
 
     return RunResult(
         run_id=run_id,

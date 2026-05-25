@@ -246,6 +246,8 @@ class DashboardWidget:
         self.http_scan_button = None
         self.reddit_grab_button = None
         self._reddit_grab_running = False
+        self._searxng_scan_running = False
+        self._searxng_task_id: Optional[str] = None
         self._queued_scan_active = False
         self._queued_scan_protocols: List[str] = []
         self._queued_scan_common_options: Optional[Dict[str, Any]] = None
@@ -783,6 +785,23 @@ class DashboardWidget:
         self._scan_task_id = None
         self._queued_scan_total = 0
 
+    def _set_searxng_task_running(self, country: Optional[str] = None) -> None:
+        if self._searxng_task_id:
+            self._remove_running_task(self._searxng_task_id)
+            self._searxng_task_id = None
+        target = str(country or "").strip() or "Global"
+        self._searxng_task_id = self._register_running_task(
+            task_type="scan",
+            name=f"SearXNG Scan ({target})",
+            state="running",
+            progress="running",
+            reopen_callback=self._reopen_scan_output_dialog,
+        )
+
+    def _clear_searxng_task(self) -> None:
+        self._remove_running_task(self._searxng_task_id)
+        self._searxng_task_id = None
+
     def has_active_or_queued_work(self) -> bool:
         """Return True when scans/tasks are still active and monitorable."""
         registry = getattr(self, "running_tasks_registry", None)
@@ -1117,6 +1136,12 @@ class DashboardWidget:
 
     def _show_quick_scan_dialog(self) -> None:
         """Show scan configuration dialog and start scan."""
+        if getattr(self, "_searxng_scan_running", False):
+            _mb().showwarning(
+                "SearXNG Busy",
+                "A SearXNG search is already running. Please wait for it to complete before starting a new scan."
+            )
+            return
         # Check if scan is already active
         if self.scan_manager.is_scan_active():
             _mb().showwarning(

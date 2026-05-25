@@ -55,6 +55,9 @@ def _make_dialog() -> UnifiedScanDialog:
     dlg.provider_shodan_var = _Var(True)
     dlg.provider_searxng_var = _Var(False)
     dlg.provider_reddit_var = _Var(False)
+    dlg.searxng_instance_url_var = _Var("http://searxng.example.com")
+    dlg.searxng_query_var = _Var("inurl:index.of")
+    dlg.searxng_max_results_var = _Var("50")
     dlg.protocol_smb_var = _Var(True)
     dlg.protocol_ftp_var = _Var(False)
     dlg.protocol_http_var = _Var(False)
@@ -161,12 +164,16 @@ def test_build_scan_request_no_provider_raises():
         dlg._build_scan_request()
 
 
-def test_build_scan_request_non_shodan_provider_raises():
+def test_build_scan_request_searxng_only_is_valid(monkeypatch):
+    monkeypatch.setattr("gui.components.unified_scan_dialog.persist_query_budget_state", lambda *_a, **_k: None)
     dlg = _make_dialog()
     dlg.provider_shodan_var.set(False)
     dlg.provider_searxng_var.set(True)
-    with pytest.raises(ValueError, match="not yet available"):
-        dlg._build_scan_request()
+    request = dlg._build_scan_request()
+    assert "searxng" in request["providers"]
+    assert "shodan" not in request["providers"]
+    assert request["protocols"] == []
+    assert request["searxng_instance_url"] == "http://searxng.example.com"
 
 
 def test_build_scan_request_reddit_only_raises():
@@ -174,6 +181,24 @@ def test_build_scan_request_reddit_only_raises():
     dlg.provider_shodan_var.set(False)
     dlg.provider_reddit_var.set(True)
     with pytest.raises(ValueError, match="not yet available"):
+        dlg._build_scan_request()
+
+
+def test_build_scan_request_searxng_missing_instance_url_raises():
+    dlg = _make_dialog()
+    dlg.provider_shodan_var.set(False)
+    dlg.provider_searxng_var.set(True)
+    dlg.searxng_instance_url_var.set("")
+    with pytest.raises(ValueError, match="instance URL is required"):
+        dlg._build_scan_request()
+
+
+def test_build_scan_request_searxng_missing_query_raises():
+    dlg = _make_dialog()
+    dlg.provider_shodan_var.set(False)
+    dlg.provider_searxng_var.set(True)
+    dlg.searxng_query_var.set("")
+    with pytest.raises(ValueError, match="search query is required"):
         dlg._build_scan_request()
 
 
@@ -200,23 +225,43 @@ def test_start_no_provider_shows_showerror(monkeypatch):
     assert dlg.dialog.destroyed is False
 
 
-def test_start_searxng_only_shows_not_available_error(monkeypatch):
+def test_start_searxng_only_skips_preflight(monkeypatch):
+    """SearXNG-only launch must not invoke Shodan preflight (M5)."""
     dlg = _make_dialog()
     dlg.provider_shodan_var.set(False)
     dlg.provider_searxng_var.set(True)
-    calls = []
-    monkeypatch.setattr(
-        "gui.components.unified_scan_dialog.messagebox.showerror",
-        lambda *args, **kwargs: calls.append(args),
-    )
+    monkeypatch.setattr("gui.components.unified_scan_dialog.persist_query_budget_state", lambda *_a, **_k: None)
     monkeypatch.setattr(
         "gui.components.unified_scan_dialog.run_preflight",
-        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("preflight must not run")),
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("preflight must not be called for SearXNG-only")),
+    )
+    captured = {}
+    dlg.scan_start_callback = lambda payload: captured.setdefault("payload", payload)
+    errors = []
+    monkeypatch.setattr(
+        "gui.components.unified_scan_dialog.messagebox.showerror",
+        lambda *args, **kwargs: errors.append(args),
     )
     dlg._start()
-    assert len(calls) == 1
-    assert "not yet available" in calls[0][1]
-    assert dlg.dialog.destroyed is False
+    assert errors == [], f"Unexpected error dialogs: {errors}"
+    assert "payload" in captured
+    assert dlg.dialog.destroyed is True
+
+
+def test_start_shodan_provider_calls_preflight(monkeypatch):
+    """Shodan provider must still invoke preflight (M5 complement)."""
+    dlg = _make_dialog()
+    dlg.provider_shodan_var.set(True)
+    dlg.theme = None
+    monkeypatch.setattr("gui.components.unified_scan_dialog.persist_query_budget_state", lambda *_a, **_k: None)
+    preflight_called = []
+    monkeypatch.setattr(
+        "gui.components.unified_scan_dialog.run_preflight",
+        lambda _dlg, _theme, _sm, request, _desc: preflight_called.append(True) or request,
+    )
+    dlg.scan_start_callback = lambda _: None
+    dlg._start()
+    assert preflight_called == [True]
 
 
 # ---------------------------------------------------------------------------

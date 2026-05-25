@@ -13,6 +13,7 @@ gui.components.dashboard.messagebox still intercept.
 import json
 import os
 import sys
+import threading
 import time
 import tkinter as tk
 from datetime import datetime
@@ -152,7 +153,21 @@ def start_unified_scan(dash, scan_request: dict) -> None:
     Start scans from unified dialog request.
 
     If multiple protocols are selected, scans execute sequentially.
+    SearXNG runs independently of the Shodan protocol queue.
     """
+    providers = [
+        str(p).strip().lower()
+        for p in (scan_request.get("providers") or ["shodan"])
+    ]
+
+    # SearXNG dispatch — independent background run, does not block Shodan queue
+    if "searxng" in providers:
+        start_searxng_scan(dash, scan_request)
+
+    # Shodan protocol queue — existing sequential queue logic
+    if "shodan" not in providers:
+        return
+
     protocols = [
         str(p).strip().lower()
         for p in (scan_request.get("protocols") or [])
@@ -534,6 +549,212 @@ def check_external_scans(dash) -> None:
         _logger.warning("Error checking external scans: %s", e)
         # Fallback to idle state
         dash._update_scan_button_state("idle")
+
+
+# ── SearXNG launch handlers ───────────────────────────────────────────────────
+
+def start_searxng_scan(dash, scan_request: dict) -> bool:
+    """Launch a SearXNG dork search in a background thread.
+
+    Returns True if the thread was started, False if validation failed.
+    Errors during the run are reported via _on_searxng_scan_done on the UI thread.
+    """
+    if getattr(dash, "_searxng_scan_running", False):
+        _mb().showwarning(
+            "SearXNG Busy",
+            "A SearXNG search is already running. Please wait for it to complete."
+        )
+        return False
+
+    instance_url = str(scan_request.get("searxng_instance_url") or "").strip()
+    if not instance_url:
+        _mb().showerror("SearXNG Error", "SearXNG instance URL is required.")
+        return False
+    query = str(scan_request.get("searxng_query") or "").strip()
+    if not query:
+        _mb().showerror("SearXNG Error", "SearXNG search query is required.")
+        return False
+
+    from experimental.se_dork.models import RunOptions, RunResult, RUN_STATUS_ERROR
+    from experimental.se_dork.service import run_dork_search
+    from shared.path_service import get_paths
+
+    # Resolve probe config and worker count from settings (mirrors se_dork_tab.py)
+    sm = getattr(dash, "settings_manager", None)
+    probe_config_path = None
+    probe_worker_count = 3
+    if sm is not None:
+        if hasattr(sm, "get_smbseek_config_path"):
+            try:
+                probe_config_path = sm.get_smbseek_config_path()
+            except Exception:
+                pass
+        try:
+            probe_worker_count = max(1, min(8, int(
+                sm.get_setting("probe.batch_max_workers", probe_worker_count)
+            )))
+        except Exception:
+            pass
+
+    options = RunOptions(
+        instance_url=instance_url,
+        query=query,
+        max_results=max(1, min(500, _to_int(scan_request.get("searxng_max_results", 50)))),
+        bulk_probe_enabled=bool(scan_request.get("bulk_probe_enabled", False)),
+        probe_config_path=probe_config_path,
+        probe_worker_count=probe_worker_count,
+    )
+    db_path = get_paths().se_dork_db_file
+    country = scan_request.get("country")
+    _started_at = datetime.now()
+
+    try:
+        dash._searxng_scan_running = True
+    except Exception:
+        pass
+
+    _call_dashboard_hook(dash, "_show_scan_output_dialog", "SearXNG", country)
+    _call_dashboard_hook(dash, "_reset_log_output", country)
+    _call_dashboard_hook(dash, "_set_searxng_task_running", country)
+    _call_dashboard_hook(dash, "_log_status_event",
+        f'SearXNG search started: {instance_url} | query: "{query}"')
+
+    _providers = [str(p).strip().lower() for p in (scan_request.get("providers") or [])]
+    _searxng_only = "shodan" not in _providers
+
+    def _ui_log(msg: str) -> None:
+        """Marshal progress from worker thread to log + (if SearXNG-only) summary bar.
+
+        Skips _update_progress_summary when Shodan is also running to avoid
+        overwriting Shodan's own progress display.
+        """
+        def _dispatch(m=msg):
+            _call_dashboard_hook(dash, "_log_status_event", m)
+            if _searxng_only:
+                _call_dashboard_hook(dash, "_update_progress_summary", "SearXNG", m)
+        try:
+            dash.parent.after(0, _dispatch)
+        except Exception:
+            pass
+
+    def _worker():
+        try:
+            result = run_dork_search(options, db_path=db_path, progress_cb=_ui_log)
+        except Exception as exc:
+            result = RunResult(
+                run_id=None,
+                fetched_count=0,
+                deduped_count=0,
+                status=RUN_STATUS_ERROR,
+                error=str(exc),
+            )
+        try:
+            dash.parent.after(0, lambda: _on_searxng_scan_done(
+                dash, result,
+                instance_url=options.instance_url,
+                query=options.query,
+                searxng_only=_searxng_only,
+                started_at=_started_at,
+            ))
+        except Exception:
+            # Tk scheduling failed — minimal cleanup, no UI calls
+            try:
+                dash._searxng_scan_running = False
+            except Exception:
+                pass
+            _call_dashboard_hook(dash, "_clear_searxng_task")
+
+    try:
+        threading.Thread(
+            target=_worker,
+            name="dashboard-searxng-scan",
+            daemon=True,
+        ).start()
+        return True
+    except Exception as exc:
+        try:
+            dash._searxng_scan_running = False
+        except Exception:
+            pass
+        _call_dashboard_hook(dash, "_clear_searxng_task")
+        _mb().showerror("SearXNG Error", f"Failed to start SearXNG scan: {exc}")
+        return False
+
+
+def _on_searxng_scan_done(
+    dash,
+    result,
+    *,
+    instance_url: str = "",
+    query: str = "",
+    searxng_only: bool = True,
+    started_at: Optional[datetime] = None,
+) -> None:
+    """Handle SearXNG scan completion on the UI thread.
+
+    In mixed SearXNG+Shodan runs (searxng_only=False) the completion dialog is
+    intentionally suppressed — the Shodan queue may still be active and a modal
+    would interrupt it. Completion is signalled via live status lines only.
+    """
+    from experimental.se_dork.models import RUN_STATUS_ERROR
+
+    try:
+        dash._searxng_scan_running = False
+    except Exception:
+        pass
+    _call_dashboard_hook(dash, "_clear_searxng_task")
+
+    if result.status == RUN_STATUS_ERROR or result.error:
+        _call_dashboard_hook(dash, "_log_status_event",
+            f"SearXNG search failed: {result.error or 'unknown error'}")
+        _mb().showerror(
+            "SearXNG Scan Error",
+            f"SearXNG search failed: {result.error or 'unknown error'}",
+        )
+        return
+
+    _call_dashboard_hook(dash, "_log_status_event",
+        f"SearXNG search complete. Fetched: {result.fetched_count}, stored: {result.deduped_count}")
+    if result.probe_enabled:
+        _call_dashboard_hook(dash, "_log_status_event",
+            f"Probe: {result.probe_total} attempted"
+            f" — {result.probe_clean} clean"
+            f", {result.probe_issue} flagged"
+            f", {result.probe_unprobed} unprobed")
+
+    if searxng_only:
+        end_dt = datetime.now()
+        duration_seconds = (end_dt - started_at).total_seconds() if started_at else 0.0
+        summary_lines = [
+            f"SearXNG dork search complete. {result.fetched_count} URLs fetched, "
+            f"{result.deduped_count} retained as open-index results.",
+        ]
+        if query:
+            summary_lines += ["", f"Query: {query}"]
+        summary_lines += [
+            "",
+            "Results are stored in the SearXNG sidecar database and can be promoted "
+            "to the main database via the SearXNG browser.",
+        ]
+        if result.probe_enabled:
+            summary_lines += [
+                "",
+                f"Probe: {result.probe_total} attempted — {result.probe_clean} clean, "
+                f"{result.probe_issue} flagged, {result.probe_unprobed} unprobed.",
+            ]
+        scan_results = {
+            "protocol": "searxng",
+            "status": "completed",
+            "hosts_scanned": result.fetched_count,
+            "accessible_hosts": result.deduped_count,
+            "shares_found": result.deduped_count,
+            "country": instance_url or "SearXNG instance",
+            "summary_message": "\n".join(summary_lines),
+            "end_time": end_dt.isoformat(),
+            "duration_seconds": duration_seconds,
+        }
+        _call_dashboard_hook(dash, "_show_scan_results", scan_results)
+    _call_dashboard_hook(dash, "_refresh_dashboard_data")
 
 
 # ── Protocol launch handlers ──────────────────────────────────────────────────

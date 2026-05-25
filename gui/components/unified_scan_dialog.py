@@ -83,10 +83,15 @@ class UnifiedScanDialog:
         self.protocol_ftp_var = tk.BooleanVar(value=True)
         self.protocol_http_var = tk.BooleanVar(value=True)
 
-        # Provider selections (Shodan on by default; SearXNG/Reddit wired in C3/C4)
+        # Provider selections (Shodan on by default; SearXNG promoted in C3; Reddit in C4)
         self.provider_shodan_var = tk.BooleanVar(value=True)
         self.provider_searxng_var = tk.BooleanVar(value=False)
         self.provider_reddit_var = tk.BooleanVar(value=False)
+
+        # SearXNG options (active when SearXNG provider is selected)
+        self.searxng_instance_url_var = tk.StringVar(value="")
+        self.searxng_query_var = tk.StringVar(value="")
+        self.searxng_max_results_var = tk.StringVar(value="50")
 
         # Shared targeting
         self.country_var = tk.StringVar()
@@ -204,6 +209,15 @@ class UnifiedScanDialog:
                 or self.provider_reddit_var.get()
             ):
                 self.provider_shodan_var.set(True)
+            self.searxng_instance_url_var.set(
+                str(self._settings_manager.get_setting("unified_scan_dialog.searxng_instance_url", "") or "")
+            )
+            self.searxng_query_var.set(
+                str(self._settings_manager.get_setting("unified_scan_dialog.searxng_query", "") or "")
+            )
+            self.searxng_max_results_var.set(
+                str(self._settings_manager.get_setting("unified_scan_dialog.searxng_max_results", "50") or "50")
+            )
             self.country_var.set(str(self._settings_manager.get_setting("unified_scan_dialog.country_code", "")))
 
             self.shared_concurrency_var.set(
@@ -289,6 +303,9 @@ class UnifiedScanDialog:
             self._settings_manager.set_setting("unified_scan_dialog.provider_shodan", bool(self.provider_shodan_var.get()))
             self._settings_manager.set_setting("unified_scan_dialog.provider_searxng", bool(self.provider_searxng_var.get()))
             self._settings_manager.set_setting("unified_scan_dialog.provider_reddit", bool(self.provider_reddit_var.get()))
+            self._settings_manager.set_setting("unified_scan_dialog.searxng_instance_url", self.searxng_instance_url_var.get().strip())
+            self._settings_manager.set_setting("unified_scan_dialog.searxng_query", self.searxng_query_var.get().strip())
+            self._settings_manager.set_setting("unified_scan_dialog.searxng_max_results", self.searxng_max_results_var.get().strip())
 
             shared_concurrency = _coerce_int(self.shared_concurrency_var.get(), 1, _CONCURRENCY_UPPER)
             if shared_concurrency is not None:
@@ -602,6 +619,11 @@ class UnifiedScanDialog:
                 "searxng": self.provider_searxng_var.get(),
                 "reddit": self.provider_reddit_var.get(),
             },
+            "searxng_options": {
+                "instance_url": self.searxng_instance_url_var.get(),
+                "query": self.searxng_query_var.get(),
+                "max_results": self.searxng_max_results_var.get(),
+            },
             "protocols": {
                 "smb": self.protocol_smb_var.get(),
                 "ftp": self.protocol_ftp_var.get(),
@@ -631,6 +653,17 @@ class UnifiedScanDialog:
         self.provider_shodan_var.set(bool(providers_state.get("shodan", True)))
         self.provider_searxng_var.set(bool(providers_state.get("searxng", False)))
         self.provider_reddit_var.set(bool(providers_state.get("reddit", False)))
+
+        searxng_opts = state.get("searxng_options", {})
+        _url_var = getattr(self, "searxng_instance_url_var", None)
+        if _url_var is not None and "instance_url" in searxng_opts:
+            _url_var.set(str(searxng_opts["instance_url"]))
+        _q_var = getattr(self, "searxng_query_var", None)
+        if _q_var is not None and "query" in searxng_opts:
+            _q_var.set(str(searxng_opts["query"]))
+        _mr_var = getattr(self, "searxng_max_results_var", None)
+        if _mr_var is not None and "max_results" in searxng_opts:
+            _mr_var.set(str(searxng_opts["max_results"]))
 
         protocols = state.get("protocols", {})
         self.protocol_smb_var.set(bool(protocols.get("smb", True)))
@@ -709,13 +742,33 @@ class UnifiedScanDialog:
 
         searxng_cb = tk.Checkbutton(
             container,
-            text="SearXNG  (coming soon)",
+            text="SearXNG",
             variable=self.provider_searxng_var,
-            state=tk.DISABLED,
+            command=self._sync_searxng_options_state,
             font=self.theme.fonts["small"],
         )
         self.theme.apply_to_widget(searxng_cb, "checkbox")
         searxng_cb.pack(anchor="w", padx=10, pady=2)
+
+        # SearXNG options sub-section
+        searxng_opts_frame = tk.Frame(container)
+        self.theme.apply_to_widget(searxng_opts_frame, "card")
+        searxng_opts_frame.pack(fill=tk.X, padx=(24, 10), pady=(0, 4))
+        self._searxng_opts_frame = searxng_opts_frame
+
+        for _label, _var, _width in (
+            ("Instance URL", self.searxng_instance_url_var, 36),
+            ("Query", self.searxng_query_var, 36),
+            ("Max Results", self.searxng_max_results_var, 8),
+        ):
+            row = tk.Frame(searxng_opts_frame)
+            self.theme.apply_to_widget(row, "card")
+            row.pack(fill=tk.X, pady=1)
+            lbl = self.theme.create_styled_label(row, _label, "small")
+            lbl.pack(side=tk.LEFT, padx=(6, 4))
+            ent = tk.Entry(row, textvariable=_var, width=_width, font=self.theme.fonts["small"])
+            self.theme.apply_to_widget(ent, "entry")
+            ent.pack(side=tk.LEFT, padx=(0, 6))
 
         reddit_cb = tk.Checkbutton(
             container,
@@ -729,10 +782,27 @@ class UnifiedScanDialog:
 
         self.theme.create_styled_label(
             container,
-            "SearXNG and Reddit launch support is coming in a future update.",
+            "Reddit launch support is coming in a future update.",
             "small",
             fg=self.theme.colors["text_secondary"],
         ).pack(anchor="w", padx=15, pady=(0, 5))
+
+        # L2: sync initial enabled/disabled state for SearXNG entries
+        self._sync_searxng_options_state()
+
+    def _sync_searxng_options_state(self, *_args) -> None:
+        """Enable or disable SearXNG option entries based on the SearXNG checkbox state."""
+        frame = getattr(self, "_searxng_opts_frame", None)
+        if frame is None:
+            return
+        new_state = tk.NORMAL if self.provider_searxng_var.get() else tk.DISABLED
+        for child in frame.winfo_children():
+            for widget in ([child] + list(child.winfo_children() if hasattr(child, "winfo_children") else [])):
+                if isinstance(widget, tk.Entry):
+                    try:
+                        widget.configure(state=new_state)
+                    except tk.TclError:
+                        pass
 
     def _create_protocol_selection(self, parent: tk.Frame) -> None:
         container = tk.Frame(parent)
@@ -1416,10 +1486,9 @@ class UnifiedScanDialog:
         providers = self._resolve_selected_providers()
         if not providers:
             raise ValueError("Select at least one discovery provider (Shodan, SearXNG, or Reddit).")
-        if "shodan" not in providers:
+        if "reddit" in providers:
             raise ValueError(
-                "SearXNG and Reddit discovery launch is not yet available. "
-                "Select Shodan to run a scan."
+                "Reddit discovery is not yet available. Deselect Reddit to continue."
             )
 
         shared_concurrency = self._parse_positive_int(
@@ -1435,10 +1504,31 @@ class UnifiedScanDialog:
             maximum=_TIMEOUT_UPPER,
         )
 
-        protocols = self._resolve_selected_protocols()
+        # Protocols only required when Shodan is selected
+        if "shodan" in providers:
+            protocols = self._resolve_selected_protocols()
+            if not protocols:
+                raise ValueError("Select at least one protocol (SMB, FTP, or HTTP).")
+        else:
+            protocols = []
 
-        if not protocols:
-            raise ValueError("Select at least one protocol (SMB, FTP, or HTTP).")
+        # SearXNG options required when SearXNG is selected
+        instance_url = ""
+        searxng_query = ""
+        searxng_max_results = 50
+        if "searxng" in providers:
+            _url_var = getattr(self, "searxng_instance_url_var", None)
+            instance_url = str(_url_var.get() if _url_var else "").strip()
+            if not instance_url:
+                raise ValueError("SearXNG instance URL is required when SearXNG is selected.")
+            _q_var = getattr(self, "searxng_query_var", None)
+            searxng_query = str(_q_var.get() if _q_var else "").strip()
+            if not searxng_query:
+                raise ValueError("SearXNG search query is required when SearXNG is selected.")
+            _mr_var = getattr(self, "searxng_max_results_var", None)
+            searxng_max_results = max(1, _cap_coerce_int(
+                _mr_var.get() if _mr_var else "50", 50, minimum=1, maximum=500
+            ))
 
         manual_input = self.country_var.get().strip()
         countries, err = self._get_all_selected_countries(manual_input)
@@ -1465,7 +1555,7 @@ class UnifiedScanDialog:
 
         self._persist_dialog_state()
 
-        return {
+        request: Dict[str, Any] = {
             "providers": providers,
             "protocols": protocols,
             "country": country_param,
@@ -1484,6 +1574,11 @@ class UnifiedScanDialog:
             "ftp_max_query_credits_per_scan": _credits_for_cap(ftp_cap),
             "http_max_query_credits_per_scan": _credits_for_cap(http_cap),
         }
+        if "searxng" in providers:
+            request["searxng_instance_url"] = instance_url
+            request["searxng_query"] = searxng_query
+            request["searxng_max_results"] = searxng_max_results
+        return request
 
     def _start(self) -> None:
         self._persist_dialog_state()
@@ -1493,22 +1588,34 @@ class UnifiedScanDialog:
             messagebox.showerror("Invalid Input", str(exc), parent=self.dialog)
             return
 
+        # Build scan description including provider and protocol context (M1)
+        provider_label = ", ".join(p.upper() for p in scan_request["providers"])
         protocol_label = ", ".join(p.upper() for p in scan_request["protocols"])
         country_desc = scan_request.get("country") or "global"
-        scan_desc = f"protocols: {protocol_label}; target: {country_desc}"
+        if protocol_label:
+            scan_desc = f"providers: {provider_label}; protocols: {protocol_label}; target: {country_desc}"
+        else:
+            scan_desc = f"providers: {provider_label}; target: {country_desc}"
 
-        preflight_result = run_preflight(
-            self.dialog,
-            self.theme,
-            self._settings_manager,
-            scan_request,
-            scan_desc,
-        )
-        if preflight_result is None:
-            return
+        # Extract is Shodan protocol-completion only — silence it for SearXNG-only (M4)
+        if "shodan" not in scan_request.get("providers", []):
+            scan_request["bulk_extract_enabled"] = False
+
+        # Skip Shodan preflight (credit estimate, API key gate) for SearXNG-only (M1/M5)
+        if "shodan" in scan_request.get("providers", []):
+            preflight_result = run_preflight(
+                self.dialog,
+                self.theme,
+                self._settings_manager,
+                scan_request,
+                scan_desc,
+            )
+            if preflight_result is None:
+                return
+            scan_request = preflight_result
 
         self.result = "start"
-        self.scan_start_callback(preflight_result)
+        self.scan_start_callback(scan_request)
         self.dialog.destroy()
 
     def _cancel(self) -> None:

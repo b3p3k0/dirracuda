@@ -379,7 +379,7 @@ Inputs (persisted across opens/restarts):
 
 What each action does:
 - **Test** checks server reachability and JSON search support.
-- **Run** executes the query, keeps only confirmed open-index results, and updates status with fetched/stored counts. If probe is enabled, the status line also shows probe totals (`✔/✖/○`).
+- **Run** executes the query, keeps only confirmed open-index results, and updates status with fetched/stored counts. If probe is enabled, the status line also shows probe totals (`✔/✖/○`). On completion, a summary dialog shows URLs fetched, retained open-index count, probe totals (when enabled), and a note that results are stored in the SearXNG sidecar database (not the main DB). In mixed SearXNG+Shodan runs the dialog is suppressed to avoid interrupting the active Shodan queue; completion is signalled via live status lines only.
 - **Open Results DB** opens the results browser backed by `~/.dirracuda/data/experimental/se_dork.db`.
 
 ![searxng db](img/searxng_db.png)

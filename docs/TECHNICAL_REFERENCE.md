@@ -834,6 +834,8 @@ WHERE ip_address = '1.2.3.4';
 
 The SearXNG Dorking module (`experimental/se_dork`) writes runtime workflow data to a separate SQLite database.
 
+**Storage contract**: `run_dork_search` writes exclusively to this sidecar DB, never to the main `dirracuda.db`. The GUI completion dialog surfaces this explicitly. Promotion to main DB is manual via the SearXNG browser (`Add to dirracuda DB`). In mixed SearXNG+Shodan runs the completion dialog is intentionally suppressed (Shodan queue may still be active); completion is signalled via live status lines only.
+
 Dirracuda now also supports one-time targeted startup import of resolvable host entities from this sidecar into `dirracuda.db` for shareability/portability. Sidecar tables remain authoritative for SearXNG module internals.
 
 Tables:
