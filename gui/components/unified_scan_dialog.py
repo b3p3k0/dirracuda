@@ -83,6 +83,11 @@ class UnifiedScanDialog:
         self.protocol_ftp_var = tk.BooleanVar(value=True)
         self.protocol_http_var = tk.BooleanVar(value=True)
 
+        # Provider selections (Shodan on by default; SearXNG/Reddit wired in C3/C4)
+        self.provider_shodan_var = tk.BooleanVar(value=True)
+        self.provider_searxng_var = tk.BooleanVar(value=False)
+        self.provider_reddit_var = tk.BooleanVar(value=False)
+
         # Shared targeting
         self.country_var = tk.StringVar()
         self.africa_var = tk.BooleanVar(value=False)
@@ -184,6 +189,21 @@ class UnifiedScanDialog:
             self.protocol_http_var.set(
                 _coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.protocol_http", True), True)
             )
+            self.provider_shodan_var.set(
+                _coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.provider_shodan", True), True)
+            )
+            self.provider_searxng_var.set(
+                _coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.provider_searxng", False), False)
+            )
+            self.provider_reddit_var.set(
+                _coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.provider_reddit", False), False)
+            )
+            if not (
+                self.provider_shodan_var.get()
+                or self.provider_searxng_var.get()
+                or self.provider_reddit_var.get()
+            ):
+                self.provider_shodan_var.set(True)
             self.country_var.set(str(self._settings_manager.get_setting("unified_scan_dialog.country_code", "")))
 
             self.shared_concurrency_var.set(
@@ -266,6 +286,9 @@ class UnifiedScanDialog:
             self._settings_manager.set_setting("unified_scan_dialog.protocol_smb", bool(self.protocol_smb_var.get()))
             self._settings_manager.set_setting("unified_scan_dialog.protocol_ftp", bool(self.protocol_ftp_var.get()))
             self._settings_manager.set_setting("unified_scan_dialog.protocol_http", bool(self.protocol_http_var.get()))
+            self._settings_manager.set_setting("unified_scan_dialog.provider_shodan", bool(self.provider_shodan_var.get()))
+            self._settings_manager.set_setting("unified_scan_dialog.provider_searxng", bool(self.provider_searxng_var.get()))
+            self._settings_manager.set_setting("unified_scan_dialog.provider_reddit", bool(self.provider_reddit_var.get()))
 
             shared_concurrency = _coerce_int(self.shared_concurrency_var.get(), 1, _CONCURRENCY_UPPER)
             if shared_concurrency is not None:
@@ -304,7 +327,7 @@ class UnifiedScanDialog:
     def _create_dialog(self) -> None:
         self.dialog = tk.Toplevel(self.parent)
         self.dialog.title("Start Scan")
-        self.dialog.geometry("1120x880")
+        self.dialog.geometry("1120x1030")
         self.dialog.resizable(True, True)
         self.theme.apply_to_widget(self.dialog, "main_window")
         self.dialog.transient(self.parent)
@@ -391,6 +414,7 @@ class UnifiedScanDialog:
         options_frame.pack(fill=tk.X, padx=20, pady=5)
 
         self._create_template_toolbar(options_frame)
+        self._create_provider_selection(options_frame)
 
         self.theme.create_styled_label(
             options_frame,
@@ -573,6 +597,11 @@ class UnifiedScanDialog:
 
     def _capture_form_state(self) -> Dict[str, Any]:
         return {
+            "providers": {
+                "shodan": self.provider_shodan_var.get(),
+                "searxng": self.provider_searxng_var.get(),
+                "reddit": self.provider_reddit_var.get(),
+            },
             "protocols": {
                 "smb": self.protocol_smb_var.get(),
                 "ftp": self.protocol_ftp_var.get(),
@@ -598,6 +627,11 @@ class UnifiedScanDialog:
         }
 
     def _apply_form_state(self, state: Dict[str, Any]) -> None:
+        providers_state = state.get("providers", {})
+        self.provider_shodan_var.set(bool(providers_state.get("shodan", True)))
+        self.provider_searxng_var.set(bool(providers_state.get("searxng", False)))
+        self.provider_reddit_var.set(bool(providers_state.get("reddit", False)))
+
         protocols = state.get("protocols", {})
         self.protocol_smb_var.set(bool(protocols.get("smb", True)))
         self.protocol_ftp_var.set(bool(protocols.get("ftp", True)))
@@ -656,6 +690,49 @@ class UnifiedScanDialog:
     # ------------------------------------------------------------------
     # Sections
     # ------------------------------------------------------------------
+
+    def _create_provider_selection(self, parent: tk.Frame) -> None:
+        container = tk.Frame(parent)
+        self.theme.apply_to_widget(container, "card")
+        container.pack(fill=tk.X, padx=15, pady=(10, 0))
+
+        self._create_accent_heading(container, "Discovery Provider").pack(fill=tk.X)
+
+        shodan_cb = tk.Checkbutton(
+            container,
+            text="Shodan",
+            variable=self.provider_shodan_var,
+            font=self.theme.fonts["small"],
+        )
+        self.theme.apply_to_widget(shodan_cb, "checkbox")
+        shodan_cb.pack(anchor="w", padx=10, pady=(5, 2))
+
+        searxng_cb = tk.Checkbutton(
+            container,
+            text="SearXNG  (coming soon)",
+            variable=self.provider_searxng_var,
+            state=tk.DISABLED,
+            font=self.theme.fonts["small"],
+        )
+        self.theme.apply_to_widget(searxng_cb, "checkbox")
+        searxng_cb.pack(anchor="w", padx=10, pady=2)
+
+        reddit_cb = tk.Checkbutton(
+            container,
+            text="Reddit  (coming soon)",
+            variable=self.provider_reddit_var,
+            state=tk.DISABLED,
+            font=self.theme.fonts["small"],
+        )
+        self.theme.apply_to_widget(reddit_cb, "checkbox")
+        reddit_cb.pack(anchor="w", padx=10, pady=(2, 5))
+
+        self.theme.create_styled_label(
+            container,
+            "SearXNG and Reddit launch support is coming in a future update.",
+            "small",
+            fg=self.theme.colors["text_secondary"],
+        ).pack(anchor="w", padx=15, pady=(0, 5))
 
     def _create_protocol_selection(self, parent: tk.Frame) -> None:
         container = tk.Frame(parent)
@@ -1183,6 +1260,19 @@ class UnifiedScanDialog:
             raise ValueError(f"{field_name} must be {maximum} or less.")
         return v
 
+    def _resolve_selected_providers(self) -> list[str]:
+        providers: list[str] = []
+        shodan_var = getattr(self, "provider_shodan_var", None)
+        if shodan_var is None or shodan_var.get():
+            providers.append("shodan")
+        searxng_var = getattr(self, "provider_searxng_var", None)
+        if searxng_var is not None and searxng_var.get():
+            providers.append("searxng")
+        reddit_var = getattr(self, "provider_reddit_var", None)
+        if reddit_var is not None and reddit_var.get():
+            providers.append("reddit")
+        return providers
+
     def _resolve_selected_protocols(self) -> list[str]:
         protocols: list[str] = []
         if bool(self.protocol_smb_var.get()):
@@ -1323,6 +1413,15 @@ class UnifiedScanDialog:
     # ------------------------------------------------------------------
 
     def _build_scan_request(self) -> Dict[str, Any]:
+        providers = self._resolve_selected_providers()
+        if not providers:
+            raise ValueError("Select at least one discovery provider (Shodan, SearXNG, or Reddit).")
+        if "shodan" not in providers:
+            raise ValueError(
+                "SearXNG and Reddit discovery launch is not yet available. "
+                "Select Shodan to run a scan."
+            )
+
         shared_concurrency = self._parse_positive_int(
             self.shared_concurrency_var.get().strip(),
             "Backend concurrency",
@@ -1367,6 +1466,7 @@ class UnifiedScanDialog:
         self._persist_dialog_state()
 
         return {
+            "providers": providers,
             "protocols": protocols,
             "country": country_param,
             "shared_concurrency": shared_concurrency,
