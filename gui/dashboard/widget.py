@@ -382,7 +382,7 @@ class DashboardWidget:
 
         self.experimental_button = tk.Button(
             actions_grid,
-            text="⚗ Experimental",
+            text="⚗ Accessories",
             command=self._handle_experimental_button_click,
         )
         self.theme.apply_to_widget(self.experimental_button, "button_secondary")

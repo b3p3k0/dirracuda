@@ -27,9 +27,10 @@ from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.keybindings import add_shortcut_hint, bind_close_shortcuts, bind_submit_shortcuts
 
 _DISMISSED_KEY = "experimental.warning_dismissed"
+_DIALOG_TITLE = "Accessories"
 _WARNING_TEXT = (
-    "These features are experimental and may be unstable or incomplete.\n"
-    "Use them with care in production environments."
+    "Some items here may require additional setup before first use.\n"
+    "Check per-tool documentation for dependencies and configuration."
 )
 
 
@@ -55,7 +56,7 @@ class ExperimentalFeaturesDialog:
 
     def _build(self, parent: tk.Widget, context: dict, settings_manager: Any) -> None:
         dialog = tk.Toplevel(parent)
-        dialog.title("Experimental Features")
+        dialog.title(_DIALOG_TITLE)
         dialog.geometry("580x420")
         dialog.resizable(True, True)
         self._theme.apply_to_widget(dialog, "main_window")

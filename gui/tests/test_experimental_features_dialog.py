@@ -141,7 +141,7 @@ def test_experimental_button_packed_between_db_tools_and_config(monkeypatch):
     dash._build_header_section()
 
     db_idx = next(i for i, t in enumerate(packed_texts) if "DB Tools" in t)
-    exp_idx = next(i for i, t in enumerate(packed_texts) if "Experimental" in t)
+    exp_idx = next(i for i, t in enumerate(packed_texts) if "Accessories" in t)
     cfg_idx = next(i for i, t in enumerate(packed_texts) if "Config" in t)
     assert db_idx < exp_idx < cfg_idx
 
@@ -544,6 +544,63 @@ def test_set_server_list_getter_stores_callable():
     getter = lambda: None
     dashboard_experimental.set_server_list_getter(dash, getter)
     assert dash._server_list_getter is getter
+
+
+# ---------------------------------------------------------------------------
+# C1 — Accessories rename: constant values and runtime title wiring
+# ---------------------------------------------------------------------------
+
+def test_accessories_dialog_title_constant():
+    """_DIALOG_TITLE must be the Accessories string, not the legacy Experimental value."""
+    from gui.components.experimental_features_dialog import _DIALOG_TITLE
+    assert _DIALOG_TITLE == "Accessories"
+
+
+def test_warning_text_does_not_use_experimental_language():
+    """_WARNING_TEXT must not carry over the legacy 'experimental' framing."""
+    from gui.components.experimental_features_dialog import _WARNING_TEXT
+    assert "experimental" not in _WARNING_TEXT.lower()
+
+
+def test_dialog_title_is_set_from_constant(monkeypatch):
+    """_build() must call dialog.title() with _DIALOG_TITLE, not a hardcoded string."""
+    from gui.components.experimental_features_dialog import ExperimentalFeaturesDialog, _DIALOG_TITLE
+
+    captured_title = []
+
+    class _FakeToplevel:
+        def __init__(self, *a, **kw): pass
+        def title(self, t): captured_title.append(t)
+        def geometry(self, *a): pass
+        def resizable(self, *a): pass
+        def transient(self, *a): pass
+        def protocol(self, *a): pass
+        def destroy(self): pass
+        def winfo_exists(self): return True
+
+    monkeypatch.setattr(tk, "Toplevel", _FakeToplevel)
+    monkeypatch.setattr(tk, "Frame", lambda *a, **kw: MagicMock())
+    monkeypatch.setattr(tk, "Button", lambda *a, **kw: MagicMock(pack=lambda **k: None))
+
+    d = ExperimentalFeaturesDialog.__new__(ExperimentalFeaturesDialog)
+    d._theme = MagicMock()
+    d._warning_frame_built = False
+    d.dismiss_var = None
+
+    monkeypatch.setattr(d, "_build_warning_section", lambda *a: None)
+    monkeypatch.setattr(
+        "gui.components.experimental_features.registry.build_all_tabs",
+        lambda *a, **kw: None,
+    )
+    monkeypatch.setattr(
+        "gui.components.experimental_features_dialog.ensure_dialog_focus",
+        lambda *a, **kw: None,
+    )
+
+    d._build(MagicMock(), {}, MagicMock())
+
+    assert len(captured_title) == 1
+    assert captured_title[0] == _DIALOG_TITLE
 
 
 # ---------------------------------------------------------------------------
