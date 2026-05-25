@@ -123,6 +123,47 @@ override precedence for tests or controlled deployments.
 | `POST /config` | session + CSRF | Validate and save Web UI fields. Canonical runtime target is `~/.dirracuda/conf.d/experimental/webui.json` (stored as `{ "webui": {...} }`). UI submits idle timeout in minutes and absolute timeout in hours; server converts to stored seconds before `save_config`. Auth lockout fields (`auth_lockout_threshold`, `auth_lockout_window_sec`, `auth_lockout_base_duration_sec`, `auth_lockout_max_duration_sec`) are optional in the payload; missing keys preserve the existing config values. |
 | `GET /health` | none | Liveness check. Returns `{"status": "ok", "rate_limiter": "ok"}` when the rate-limit DB is accessible, or `{"status": "ok", "rate_limiter": "error"}` when the DB is unavailable (degraded localhost mode or runtime DB failure). A `"rate_limiter": "error"` response does not prevent logins in localhost mode but signals that lockout enforcement is disabled. |
 
+**Web UI routes (C29–C34):**
+
+| Route | Auth | Description |
+|-------|------|-------------|
+| `GET /scans` | n/a | Route not registered; returns 404. Use `/scans/shodan`, `/scans/searxng`, or `/scans/reddit`. |
+| `GET /scans/searxng` | session | SearXNG discovery page (run/results/probe/promote). |
+| `GET /scans/reddit` | session | Reddit ingestion page (feed/search/user modes). |
+| `GET /extras` | n/a | Route not registered; returns 404. Use `/extras/dorkbook` or `/extras/keymaster`. |
+| `GET /extras/dorkbook` | session | Dorkbook recipe management. |
+| `GET /extras/keymaster` | session | Keymaster unlock/manage/apply. |
+| `GET /export` | session | Dedicated export page (moved off `/results` in C29). |
+| `POST /api/searxng/preflight` | session + CSRF + same-origin | Validate SearXNG instance URL. |
+| `POST /api/searxng/run` | session + CSRF + same-origin | Queue SearXNG discovery run; 202 + job_id. |
+| `GET /api/searxng/results` | session | Cached SearXNG results (`search`, `limit` params). |
+| `POST /api/searxng/actions/probe` | session + CSRF + same-origin | Probe 1–200 SearXNG result rows. |
+| `POST /api/searxng/actions/promote` | session + CSRF + same-origin | Promote results to main DB. |
+| `POST /api/reddit/run` | session + CSRF + same-origin | Queue Reddit ingest run; 202 + job_id. |
+| `GET /api/reddit/results` | session | Cached Reddit results (`search`, `limit` params). |
+| `POST /api/reddit/actions/probe` | session + CSRF + same-origin | Probe 1–200 Reddit result rows. |
+| `POST /api/reddit/actions/promote` | session + CSRF + same-origin | Promote to main DB. |
+| `GET /api/dorkbook/entries` | session | List Dorkbook entries by protocol (SMB/FTP/HTTP) + optional search. |
+| `POST /api/dorkbook/entries` | session + CSRF + same-origin | Create entry in Dorkbook sidecar DB. |
+| `DELETE /api/dorkbook/entries/{entry_id}` | session + CSRF + same-origin | Delete custom dork entry (built-in dorks cannot be deleted). |
+| `POST /api/dorkbook/prefill` | session + CSRF + same-origin | Apply selected dork to canonical discovery config (immediate-persist). |
+| `GET /api/keymaster/status` | session | Passphrase configured + lock state. |
+| `GET /api/keymaster/keys` | session | List keys; response includes `api_key_masked` (first 4 + last 4 chars only); no key material. |
+| `POST /api/keymaster/unlock` | session + CSRF + same-origin | Unlock with passphrase; session keys stored in `session.keymaster_session_keys`. |
+| `POST /api/keymaster/keys` | session + CSRF + same-origin | Create key; 409 on duplicate api_key. |
+| `PATCH /api/keymaster/keys/{key_id}` | session + CSRF + same-origin | Update label/notes/key; blank `api_key` preserves existing. |
+| `DELETE /api/keymaster/keys/{key_id}` | session + CSRF + same-origin | Delete key. |
+| `POST /api/keymaster/apply` | session + CSRF + same-origin | Write `shodan.api_key` to main config. 200 on success; 403 if keymaster locked; 422 if key_id invalid/missing from body; 404 if key not found or no config file present; 500 on write error. |
+| `GET /api/jobs` | session | Shared queue snapshot for scan tasks plus SearXNG/Reddit run+probe jobs (promotions excluded). |
+| `GET /api/jobs/{job_id}` | session | Job status for any async run/probe job. |
+| `POST /api/jobs/{job_id}/cancel` | session + CSRF + same-origin | Cancel run/probe job. |
+
+Navigation and IA (C29): the left nav sidebar groups Scans (shodan, searxng, reddit) and Extras (dorkbook, keymaster) as toggle-only parents. Root `/scans` and `/extras` are not registered routes and return 404. `/export` is a standalone page; export controls no longer live on `/results`.
+
+Shared job queue (C30): `/api/jobs*` is additive to the existing `/api/scans*` contract, which is unchanged. The queue tracks scan tasks plus SearXNG/Reddit run and probe jobs with a normalized shape: `job_id`, `source`, `kind`, `status`, `progress`. Promotions are excluded from the queue.
+
+Keymaster apply missing-config behavior (C34): `POST /api/keymaster/apply` resolves the main config via two branches — canonical path (matches repo `config_file`) calls `load_main_config()` + `update_sections`; non-canonical path reads and writes JSON directly. Returns 422 when `key_id` is invalid or absent from the request body. Returns 404 when the key row is not found in the DB or when no config file is present on disk. The 404-on-missing-config is the intended contract, not a 500.
+
 Web UI preference persistence (C19): authenticated pages can optionally persist allowlisted, non-sensitive UI selectors/toggles in browser `localStorage` after explicit one-time opt-in. This uses two keys (`dirracuda_pref_consent_v1`, `dirracuda_pref_data_v1`) and never stores free-text filters, credentials, or auth/session/CSRF material. Preference-storage controls (enable/disable/clear) are available on `/config`.
 
 Dashboard balance behavior (C21): `/dashboard` fetches Shodan query-credit status on page load and via manual Refresh only (no polling). The server uses a 150-second in-memory cache keyed by non-reversible API-key fingerprint and returns sanitized failure reasons (`auth`, `timeout`, `network`, `rate_limited`, `provider`, `unknown`) without exposing provider raw errors.

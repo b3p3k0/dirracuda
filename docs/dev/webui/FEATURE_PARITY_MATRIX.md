@@ -120,3 +120,24 @@ Ordered by leverage vs. architectural complexity, drawn from the Partials and up
 - `experimental/webui/static/results.js`
 - `docs/KBD_QUICKREF.md`
 - `docs/dev/webui/LESSONS_LEARNED.md`
+
+---
+
+## Active Wave Focus (C29–C35)
+
+| Card | Objective | Status | Commit(s) | Date |
+|------|-----------|--------|-----------|------|
+| C29 | IA/nav cutover + `/export` page + root route hard-cut | SHIPPED | 23faba4, 5702957 | 2026-05-24 |
+| C30 | Shared queue model for runs + probes | SHIPPED | 5702957 | 2026-05-24 |
+| C31 | SearXNG web flow | SHIPPED | 8bbdebb | 2026-05-24 |
+| C32 | Reddit web flow | SHIPPED | 3c6d1a4 | 2026-05-24 |
+| C33 | Dorkbook immediate-persist parity | SHIPPED | 2caadd1 | 2026-05-24 |
+| C34 | Keymaster unlock/manage/apply web MVP | SHIPPED | b890903 | 2026-05-24 |
+| C35 | Docs/lessons/parity/regression closeout | IN PROGRESS | — | 2026-05-24 |
+
+### Wave Constraints
+
+- Shared queue includes runs and probes only (no promotions).
+- Canonical Shodan route is `/scans/shodan` only.
+- `Scans` and `Extras` are toggle-only parent entries in nav.
+- Mutating endpoints keep same-origin + CSRF protections.

@@ -402,3 +402,286 @@ HI test needed:
 
 - Full manual smoke: desktop tab, control dialog, web login, queue scan, view
   results, export DB, remote mode warning/config.
+
+---
+
+## Active Wave: C29-C35 (Experimental Feature Exposure)
+
+This section supersedes older roadmap assumptions for active execution.
+Follow one card at a time. Do not merge card scopes.
+
+### Wave Completion Status
+
+| Card | Status | Commit(s) | Date |
+|------|--------|-----------|------|
+| C29 | SHIPPED | 23faba4, 5702957 | 2026-05-24 |
+| C30 | SHIPPED | 5702957 | 2026-05-24 |
+| C31 | SHIPPED | 8bbdebb | 2026-05-24 |
+| C32 | SHIPPED | 3c6d1a4 | 2026-05-24 |
+| C33 | SHIPPED | 2caadd1 | 2026-05-24 |
+| C34 | SHIPPED | b890903 | 2026-05-24 |
+| C35 | IN PROGRESS | — | 2026-05-24 |
+
+### Wave Guardrails (Mandatory)
+
+- Preserve canonical entrypoints: `./dirracuda` (GUI) and `./venv/bin/python -m experimental.webui.server` (WebUI service).
+- Keep existing auth/session/CSRF/same-origin protections on all mutating routes.
+- Preserve `shell=False` subprocess safety.
+- Keep `/api/scans*` compatibility while expanding shared queue behavior.
+- Check touched-file line counts before and after each card.
+- Line-count rubric:
+  - `<=1200` excellent
+  - `1201-1500` good
+  - `1501-1800` acceptable
+  - `1801-2000` poor
+  - `>2000` unacceptable unless HI explicitly approves and docs justify it
+- If any touched file exceeds 1700 lines, stop and propose modularization before continuing.
+- No commits unless HI explicitly says `commit`.
+
+### C29 - IA/Nav Cutover + Export Page
+
+Issue:
+WebUI navigation and route map still reflect flat/legacy scan surfaces.
+
+Root cause:
+Original `/scans`-centric layout predates experimental module exposure requirements.
+
+Scope:
+
+- Left nav IA cutover.
+- Route cutover to nested `scans/*` and `extras/*` paths.
+- Move export controls from `/results` to dedicated `/export` page.
+
+Requirements:
+
+1. `Scans` becomes toggle-only parent in left nav.
+2. Children under Scans: `shodan`, `searxng`, `reddit`.
+3. Canonical Shodan route is `/scans/shodan` only.
+4. Add `Extras` nav group between `Export` and `Config`.
+5. Children under Extras: `dorkbook`, `keymaster`.
+6. `/scans` and `/extras` root routes return 404.
+7. Add `/export` page and move export controls there.
+
+Validation:
+
+```bash
+./venv/bin/python -m pytest experimental/webui/tests/test_pages.py -q
+```
+
+HI test needed:
+
+- Login and verify nav order/groups.
+- Verify dropdown behavior on desktop and phone width.
+
+### C30 - Shared Queue Generalization (Runs + Probes)
+
+Issue:
+Queue model is scan-task specific and does not represent experimental run/probe jobs.
+
+Root cause:
+`ScanQueue` and route usage are scoped to SMB/FTP/HTTP scan submission paths.
+
+Scope:
+
+- Introduce shared job representation for runs + probes.
+- Maintain `/api/scans*` compatibility for Shodan submit flow.
+
+Requirements:
+
+1. Add shared queue APIs for cross-page job visibility.
+2. Include run + probe jobs in global queue snapshots.
+3. Exclude promotions from queue.
+4. Preserve deterministic cancellation/status behavior.
+5. Preserve existing Shodan flow compatibility.
+
+Validation:
+
+```bash
+./venv/bin/python -m pytest experimental/webui/tests/test_tasks.py experimental/webui/tests/test_scan_routes.py -q
+```
+
+HI test needed:
+
+- Submit mixed tasks from multiple pages.
+- Confirm queue persistence across navigation/refresh.
+
+### C31 - SearXNG Web Flow (Run/Results/Probe/Promote)
+
+Issue:
+No complete WebUI surface for SearXNG discovery workflow.
+
+Root cause:
+Feature remains desktop-only despite reusable service/store primitives.
+
+Scope:
+
+- `/scans/searxng` UI + API.
+- Run/results/probe/promote behavior.
+- Shared queue integration for run/probe.
+
+Requirements:
+
+1. Add preflight/run/results endpoints.
+2. Add row + bulk probe actions.
+3. Add row + bulk promote actions.
+4. Enforce same-origin + CSRF on mutating endpoints.
+5. Use helper text for desktop-only capabilities not in this wave.
+
+Validation:
+
+```bash
+./venv/bin/python -m pytest experimental/webui/tests/test_pages.py -q
+./venv/bin/python -m pytest experimental/webui/tests/test_searxng_routes.py -q
+```
+
+HI test needed:
+
+- Run query.
+- Probe one+many rows.
+- Promote one+many rows.
+- Confirm run/probe queue entries appear in shared queue.
+
+### C32 - Reddit Web Flow (Run/Results/Probe/Promote)
+
+Issue:
+No complete WebUI surface for Reddit ingestion workflow.
+
+Root cause:
+Feature remains desktop-only despite reusable service/store primitives.
+
+Scope:
+
+- `/scans/reddit` UI + API.
+- Run/results/probe/promote behavior.
+- Shared queue integration for run/probe.
+
+Requirements:
+
+1. Support `feed`, `search`, and `user` modes with validation parity.
+2. Add row + bulk probe actions.
+3. Add row + bulk promote actions.
+4. Enforce same-origin + CSRF on mutating endpoints.
+
+Validation:
+
+```bash
+./venv/bin/python -m pytest experimental/webui/tests/test_pages.py -q
+./venv/bin/python -m pytest experimental/webui/tests/test_reddit_routes.py -q
+```
+
+HI test needed:
+
+- Run each mode at least once.
+- Probe one+many rows.
+- Promote one+many rows.
+- Verify shared queue behavior.
+
+### C33 - Dorkbook Web + Desktop Consistency
+
+Issue:
+Dorkbook web exposure is missing and persistence behavior is inconsistent across surfaces.
+
+Root cause:
+Desktop behavior uses populate-then-save semantics not aligned with desired immediate-persist contract.
+
+Scope:
+
+- `/extras/dorkbook` page.
+- Immediate persist in web and desktop behavior alignment.
+
+Requirements:
+
+1. Add manage + prefill web flow.
+2. Persist immediately to canonical discovery config.
+3. Update desktop behavior to same contract.
+4. Add helper text where desktop still has additional capabilities.
+
+Validation:
+
+```bash
+./venv/bin/python -m pytest experimental/webui/tests/test_dorkbook_routes.py -q
+xvfb-run -a ./venv/bin/python -m pytest gui/tests/test_dorkbook_window.py -q
+```
+
+HI test needed:
+
+- Apply same recipe in web and desktop.
+- Confirm immediate shared config update.
+
+### C34 - Keymaster Web MVP (Unlock + Manage + Apply)
+
+Issue:
+Keymaster day-to-day operations are desktop-only.
+
+Root cause:
+No WebUI page/API for unlock/session/key CRUD/apply path.
+
+Scope:
+
+- `/extras/keymaster` page.
+- Unlock/manage/apply web flow.
+- Explicit defer of secure-mode toggle/reset.
+
+Requirements:
+
+1. Implement unlock flow.
+2. Implement key CRUD + apply.
+3. Enforce same-origin + CSRF on mutating endpoints.
+4. Do not leak key material in logs/responses.
+5. Add helper text directing deferred controls to desktop.
+
+Validation:
+
+```bash
+./venv/bin/python -m pytest experimental/webui/tests/test_keymaster_routes.py -q
+./venv/bin/python -m pytest experimental/webui/tests/test_sessions.py experimental/webui/tests/test_csrf.py -q
+```
+
+HI test needed:
+
+- Unlock.
+- Add/edit/delete key.
+- Apply key and verify config update.
+
+### C35 - Docs/Parity Matrix/Lessons + Regression Closeout
+
+Issue:
+Docs and planning artifacts drift after feature/IA cutover work.
+
+Root cause:
+Existing docs describe older route and feature scope.
+
+Scope:
+
+- Update README, technical reference, and webui planning artifacts.
+- Run regression gates and record exact outcomes.
+
+Requirements:
+
+1. Update `README.md` and `docs/TECHNICAL_REFERENCE.md` to implementation truth.
+2. Update `docs/dev/webui/TASK_CARDS.md`, `ROADMAP.md`, `LESSONS_LEARNED.md`, `FEATURE_PARITY_MATRIX.md`.
+3. Record exact pass/fail command output summaries.
+
+Validation:
+
+```bash
+./venv/bin/python -m pytest experimental/webui/tests -q
+xvfb-run -a ./venv/bin/python -m pytest gui/tests/test_experimental_features_dialog.py -q
+./venv/bin/python scripts/run_agent_testing_workflow.py --lane quick
+```
+
+HI test needed:
+
+- Full desktop + web smoke for nav/routes and experimental flows.
+
+### RA Acceptance Checklist (Before Accepting Any Card)
+
+- Card stayed within single-card scope.
+- Root cause stated and plausible.
+- Fix is minimal and reversible.
+- No hidden redirects/shims beyond explicit card requirements.
+- Validation commands run exactly as declared.
+- PASS/FAIL reported honestly.
+- Touched-file line-count report included.
+- If behavior changed, README + `docs/TECHNICAL_REFERENCE.md` reviewed and updated.
+- No commit created unless HI explicitly said `commit`.

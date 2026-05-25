@@ -2,77 +2,81 @@
 
 Work one card at a time. Do not batch cards unless HI explicitly asks.
 
-## Phase 0 - Contract Freeze
+## Status
 
-Goal: prove the current app state and lock the implementation boundary.
+- Prior waves (C0–C28): foundational WebUI shipped (auth/session/CSRF, scans/results/export/config, hardening).
+- C29–C34: **SHIPPED** (2026-05-24; see Wave Completion Status in TASK_CARDS.md).
+- Active: **C35** (docs/regression closeout, in progress).
+- Operating mode: RA-supervised, DA-executed, single-card delivery.
 
-- Record branch/status.
-- Record line counts for likely touched files.
-- Confirm existing Experimental tab order.
-- Confirm baseline tests and known failures.
-- Confirm no web UI package exists yet.
+## Phase A - IA And Route Cutover (C29)
 
-## Phase 1 - Service Skeleton
+**SHIPPED — 2026-05-24.** Replaced flat IA with grouped navigation and canonical nested routes.
 
-Goal: start a local authenticated FastAPI service with no scan side effects.
+- `Scans` became toggle-only parent with children: `shodan`, `searxng`, `reddit`.
+- `Extras` became toggle-only parent with children: `dorkbook`, `keymaster`.
+- Added `/export` as a real page and moved export controls off `/results`.
+- Hard-cut root `/scans` and `/extras` surfaces (404).
+- Canonical Shodan route is `/scans/shodan` only.
 
-- Add web-only dependencies in `experimental/webui/requirements-web.txt`.
-- Add `experimental/webui/` package.
-- Add config loader for `webui.json`.
-- Add credential setup/verification.
-- Add login/logout/session middleware.
-- Add `/health`.
-- Add minimal templates/static.
+## Phase B - Shared Job Queue (C30)
 
-## Phase 2 - Scan Queue
+**SHIPPED — 2026-05-24.** Introduced one queue view for run/probe workloads across scan surfaces.
 
-Goal: queue and run existing CLI scans safely.
+- Kept existing `/api/scans*` contract stable for Shodan submit flow.
+- Generalized queue snapshot APIs for cross-page visibility via `/api/jobs*`.
+- Included runs + probes in global queue model.
+- Excluded promotions from queue model.
 
-- Add validated scan request schema.
-- Add task registry and one-active-scan worker.
-- Launch CLI subprocesses with argument lists.
-- Parse progress conservatively.
-- Add cancel.
-- Add tests for validation and subprocess command construction.
+## Phase C - SearXNG Web Flow (C31)
 
-## Phase 3 - Read-Only Data Surfaces
+**SHIPPED — 2026-05-24.** Delivered functional SearXNG page with run/results/probe/promote.
 
-Goal: show useful data without browser-side target file access.
+- Added `/scans/searxng` page and API endpoints.
+- Supported preflight/run/results.
+- Supported row and bulk probe + promote actions.
+- Routed run/probe jobs into shared queue.
 
-- Add results summary endpoints/pages for SMB, FTP, HTTP.
-- Include share/directory summary fields where existing DB/probe data supports
-  them.
-- Support post-scan probe status from web-launched scans.
-- Add endpoint copy values.
-- Add database export.
-- Keep queries parameterized and legacy-shape tolerant.
+## Phase D - Reddit Web Flow (C32)
 
-## Phase 4 - Desktop Integration
+**SHIPPED — 2026-05-24.** Delivered functional Reddit page with run/results/probe/promote.
 
-Goal: add the Web UI control surface without redesigning Experimental.
+- Added `/scans/reddit` page and API endpoints.
+- Supported feed/search/user modes with validation parity.
+- Supported row and bulk probe + promote actions.
+- Routed run/probe jobs into shared queue.
 
-- Add `webui_tab.py`.
-- Insert tab after `Reddit` and before `Dorkbook`.
-- Add `webui_control_dialog.py`.
-- Wire dashboard context callback.
-- Add focused registry/tab/control tests.
+## Phase E - Dorkbook Consistency (C33)
 
-## Phase 5 - Remote and Packaging
+**SHIPPED — 2026-05-24.** Delivered web exposure plus desktop/web behavioral alignment.
 
-Goal: support remote mode only when explicitly and safely configured.
+- Added `/extras/dorkbook` manage/prefill surface.
+- Persisted prefill changes immediately to canonical discovery config.
+- Aligned desktop behavior to the same immediate-persist contract.
 
-- Enable TLS by default and require explicit override to disable it.
-- Enforce allowlist for non-loopback bind.
-- Add service command docs.
-- Add systemd unit template if HI wants daemon management in v1.
-- Add installer/control-dialog hooks only after manual review.
+## Phase F - Keymaster Web MVP (C34)
 
-## Phase 6 - Closeout ← active (C9)
+**SHIPPED — 2026-05-24.** Delivered day-to-day key workflows in web without overreaching.
 
-Goal: make the docs match reality and leave a clean handoff.
+- Added `/extras/keymaster` with unlock/manage/apply.
+- Kept secure-mode awareness explicit.
+- Deferred secure-mode toggle/reset; provided clear desktop-only helper text.
 
-- Update root `README.md`.
-- Update `docs/TECHNICAL_REFERENCE.md`.
-- Update this planning workspace with final status and lessons.
-- Run focused and wider validation.
-- Leave HI manual gates explicit.
+## Phase G - Docs, Lessons, Regression (C35)
+
+Goal: sync documentation to runtime truth and close validation.
+
+- Update `README.md` and `docs/TECHNICAL_REFERENCE.md` to reflect final route/feature behavior.
+- Update `docs/dev/webui/*` planning artifacts (`TASK_CARDS`, `ROADMAP`, `LESSONS_LEARNED`, `FEATURE_PARITY_MATRIX`).
+- Run focused and wider regression gates and record exact results.
+
+## Execution Rules (All Cards)
+
+- Confirm issue reproduction first.
+- State root cause explicitly.
+- Apply smallest safe fix.
+- Run targeted validation; broaden only when risk warrants.
+- Report exact commands and PASS/FAIL honestly.
+- Check touched-file line counts before and after.
+- If touched file exceeds 1700 lines: stop and propose modularization before continuing.
+- Never commit unless HI explicitly says `commit`.

@@ -521,56 +521,23 @@ pip install -r experimental/webui/requirements-web.txt
 
 For setup, configuration, remote mode, and security guidance, see [experimental/webui/README.md](experimental/webui/README.md).
 
-From the desktop app, use `Experimental -> Web UI` for inline service controls
-(`Start`, `Stop`, `Open in Browser`, `Copy URL`) with live status, including
-explicit startup-failure reasons when launch fails.
-The same tab also provides inline username/password credential setup (create or
-update) for Web UI login.
-In the Web UI scan page, `Run probe on verified hosts after scan` now applies to
-SMB, FTP, and HTTP using the shared protocol-aware probe pipeline.
-Web UI scans now require a preflight confirmation step that shows estimated
-query-credit cost, live balance when available, and estimated post-scan balance
-before queue submission.
-The `/scans` queue view now rehydrates from server queue state, so active/queued
-entries persist across navigation and browser refreshes.
-Web UI scan writes and `/results` reads now resolve from the same main-config
-database path (`config.json`) by default, so completed scans surface in results
-without DB-path drift.
-In the Web UI results page, `Favorite`, `Avoid`, and `Probed` cells are inline
-toggle actions. Operators can also multi-select rows on the current page and run
-bulk `Toggle Favorite`, `Toggle Avoid`, `Toggle Compromised`, and `Probe Selected`
-actions. A dedicated per-row `Probe` action cell is also available. Probe actions
-run asynchronously with status polling and a single active probe-job guard.
-Bulk actions use per-row toggle semantics (not force set/unset), and selection
-resets on results reloads (filter/page/protocol changes).
-Expanded result details now include an `Open with system` action that hands a
-protocol URL to browser/system handlers in a new tab/window context, plus a
-static warning about external-application behavior. URL path selection now
-prefers explicit probe base paths when available (for example non-root indexed
-paths) and otherwise falls back to root index `/`.
-Login is protected by persistent per-account+IP lockout (configurable threshold,
-observation window, and exponential backoff via the `webui.auth` block in
-`~/.dirracuda/conf.d/experimental/webui.json`
-or via the desktop config dialog). The `GET /health` endpoint reports
-`"rate_limiter": "ok"` when lockout enforcement is active, or `"rate_limiter":
-"error"` when the rate-limit DB is unavailable (degraded mode). In remote mode,
-a runtime DB failure causes login to return 503 (fail-closed).
-Passwords must be at least 15 characters and are checked against a top-10000
-common-password list. Passphrases are accepted without composition restrictions
-(no forced uppercase, numbers, or symbols). Logged-in users can change their
-password at any time via `Account` in the navigation bar; the change requires
-the current password for verification.
-The credential store (`~/.dirracuda/conf/webui_creds.json`) is written mode
-`0600` and that permission is verified on every read — a world-readable file
-blocks all credential operations until repaired with `chmod 0600`.
-Every response includes a centralized set of security headers:
-`Content-Security-Policy` (strict; `script-src 'self'`, no `unsafe-inline`),
-`X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`,
-`Referrer-Policy: no-referrer`, and `Cache-Control: no-store` on all dynamic
-responses. `Strict-Transport-Security` is added only when the server is
-accessed over HTTPS. All page JavaScript is served from static files under
-`/static/`; no inline scripts or inline `style=` attributes are present in
-rendered HTML.
+From the desktop app, use `Experimental -> Web UI` to start/stop the service.
+
+Current Web UI layout:
+- `Scans` (dropdown): `shodan`, `searxng`, `reddit`
+- `Results`
+- `Export`
+- `Extras` (dropdown): `dorkbook`, `keymaster`
+- `Config`, `Account`
+
+Notes:
+- Root `/scans` and `/extras` are intentionally not registered and return 404.
+- Queue state is shared and survives page navigation/refresh.
+- Dorkbook prefill is immediate-persist to discovery config.
+- Keymaster `apply` writes `shodan.api_key`; secure-mode toggle/reset stays desktop-only for now.
+
+For route-level behavior, API contracts, and security/runtime details, see
+[docs/TECHNICAL_REFERENCE.md](docs/TECHNICAL_REFERENCE.md).
 
 ---
 

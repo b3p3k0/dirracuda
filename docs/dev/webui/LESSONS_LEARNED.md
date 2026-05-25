@@ -323,3 +323,40 @@ Seeded before implementation. Append after every major card.
     discovered directory” when base-path intent is ambiguous. Prefer explicit
     probe snapshot `start_path` when present, and otherwise open root index `/`.
     This avoids incorrect deep-link jumps on Shodan-style root index listings.
+
+## C29-C35 Wave Kickoff (Experimental Exposure)
+
+66. Do not start C31/C32 implementation before C29/C30 acceptance gates are green.
+A partial feature page swap (for example replacing placeholder copy) can fail existing C29 tests and leave the branch in a non-shippable mixed state.
+
+67. Keep card boundaries hard: C29 is IA/routes/export only. If C31/C32 logic starts in the same patch, reviewability drops and rollback safety gets worse.
+
+68. For nav cutovers, avoid temporary compatibility aliases unless HI explicitly asks. Hidden route aliases (`/scans` -> new page) delay broken-link discovery and hide consumer drift.
+
+69. Shared queue work (C30) must preserve `/api/scans*` behavioral compatibility. Additive queue APIs are safer than mutating existing payload contracts.
+
+70. Runs + probes belong in shared queue snapshots for cross-page visibility. Promotions stay out of queue to keep queue semantics focused on asynchronous execution.
+
+71. In mixed scan/experimental queue UIs, use a normalized job shape (`job_id`, `source`, `kind`, `status`, `progress`) so pages can render without endpoint-specific branching.
+
+72. Experimental mutation endpoints must enforce both same-origin checks and CSRF token validation, even when they are behind authenticated sessions.
+
+73. Dorkbook consistency work is contract-level, not cosmetic. If web prefill is immediate-persist, desktop must match in the same wave to avoid operator confusion and stale config assumptions.
+
+74. Keymaster web MVP must avoid implied parity claims. If secure-mode toggle/reset are deferred, UI copy should say that directly and point users to desktop.
+
+75. Route-module extraction is the first response when `experimental/webui/app.py` keeps growing. If touched size approaches 1500+, plan extraction before adding new endpoint families.
+
+76. End every accepted card by reviewing `README.md` and `docs/TECHNICAL_REFERENCE.md`. Behavior docs that lag implementation create repeated rework in later cards.
+
+## C29–C34 Shipment Observations
+
+77. Commit scope drift between C29 and C30 is acceptable when a single commit covers the boundary naturally (5702957 ships both the route cutover and the shared queue baseline). Document this in the commit summary and the wave table so reviewers do not infer scope creep.
+
+78. Keymaster apply returning 404 (not 500) on a missing config file is an explicit behavior contract, not an error case. Document it in route tables and surface it in UI copy so operators know to configure a path first.
+
+79. Dorkbook create (`POST /api/dorkbook/entries`) and prefill (`POST /api/dorkbook/prefill`) are separate operations with separate semantics: create writes to the sidecar DB only; prefill propagates a sidecar entry to canonical discovery config. Keep them separate in route tables and UI copy to avoid the false impression that all dork writes touch the main config.
+
+80. `app.py` at 1481 lines at C34 close stays within the acceptable band. No extraction was needed in this wave; the 1500-line guardrail (lesson 75) remains standing for future cards.
+
+81. All six C29–C34 commits landed on the same calendar date. Status tables in planning artifacts should use commit-log dates rather than sprint estimates to avoid drift on fast-delivery waves.
