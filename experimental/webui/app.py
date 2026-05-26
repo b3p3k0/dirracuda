@@ -754,7 +754,8 @@ def create_app(
                 probe_skipped=result.probe_skipped,
             )
             job.set_progress(
-                f"Reddit ingest complete: {result.targets_stored} target(s) stored.",
+                f"Reddit ingest complete: {result.targets_stored} target(s) stored "
+                f"in sidecar (reddit_od.db). Use Reddit browser to promote to main database.",
                 100.0,
             )
 

@@ -1136,11 +1136,9 @@ class DashboardWidget:
 
     def _show_quick_scan_dialog(self) -> None:
         """Show scan configuration dialog and start scan."""
-        if getattr(self, "_searxng_scan_running", False):
-            _mb().showwarning(
-                "SearXNG Busy",
-                "A SearXNG search is already running. Please wait for it to complete before starting a new scan."
-            )
+        if getattr(self, "_searxng_scan_running", False) or getattr(self, "_reddit_scan_running", False) or getattr(self, "_reddit_grab_running", False):
+            _mb().showwarning("Provider Busy",
+                "A SearXNG or Reddit ingest is already running. Please wait for it to complete.")
             return
         # Check if scan is already active
         if self.scan_manager.is_scan_active():

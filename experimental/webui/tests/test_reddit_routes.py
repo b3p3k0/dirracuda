@@ -3,6 +3,7 @@
 import json
 import re
 import types
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -264,6 +265,54 @@ def test_reddit_promote_requires_auth(client):
 def test_reddit_promote_missing_csrf(logged_in_client):
     r = logged_in_client.post("/api/reddit/actions/promote", json={"target_ids": [1]})
     assert r.status_code == 403
+
+
+def test_reddit_run_completion_message_mentions_sidecar(
+    logged_in_client, app_and_queue, monkeypatch
+):
+    """Runner closure must emit sidecar storage text in its final progress message."""
+    app, _ = app_and_queue
+    monkeypatch.setattr(
+        "experimental.webui.app.run_ingest",
+        lambda opts, db_path=None: _fake_ingest_result(),
+    )
+
+    captured = []
+
+    def _capture_runner(*, source, kind, label, runner, metadata=None, cancel_callback=None):
+        captured.append(runner)
+        return MagicMock(job_id="j1", status=MagicMock(value="queued"))
+
+    monkeypatch.setattr(app.state.shared_jobs, "submit_external", _capture_runner)
+
+    csrf = _csrf_from_dashboard(logged_in_client)
+    logged_in_client.post(
+        "/api/reddit/run",
+        json=_run_payload(),
+        headers={"X-CSRF-Token": csrf},
+    )
+
+    assert captured, "submit_external was not called — runner not captured"
+
+    class _FakeJob:
+        def __init__(self):
+            self.messages = []
+
+        def set_progress(self, msg, pct):
+            self.messages.append(msg)
+
+        def set_metadata(self, **kw):
+            pass
+
+    job = _FakeJob()
+    captured[0](job)
+
+    completion = [m for m in job.messages if "complete" in m.lower()]
+    assert completion, f"No completion message found in: {job.messages}"
+    assert any(
+        "sidecar" in m.lower() or "reddit_od.db" in m
+        for m in completion
+    ), f"Sidecar wording absent from completion message: {completion}"
 
 
 def test_reddit_promote_ok(logged_in_client, monkeypatch):

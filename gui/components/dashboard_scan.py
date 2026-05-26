@@ -164,6 +164,10 @@ def start_unified_scan(dash, scan_request: dict) -> None:
     if "searxng" in providers:
         start_searxng_scan(dash, scan_request)
 
+    # Reddit dispatch — independent background run, does not block Shodan queue
+    if "reddit" in providers:
+        start_reddit_scan(dash, scan_request)
+
     # Shodan protocol queue — existing sequential queue logic
     if "shodan" not in providers:
         return
@@ -620,7 +624,7 @@ def start_searxng_scan(dash, scan_request: dict) -> bool:
         f'SearXNG search started: {instance_url} | query: "{query}"')
 
     _providers = [str(p).strip().lower() for p in (scan_request.get("providers") or [])]
-    _searxng_only = "shodan" not in _providers
+    _searxng_only = set(_providers) == {"searxng"}
 
     def _ui_log(msg: str) -> None:
         """Marshal progress from worker thread to log + (if SearXNG-only) summary bar.
@@ -749,6 +753,197 @@ def _on_searxng_scan_done(
             "accessible_hosts": result.deduped_count,
             "shares_found": result.deduped_count,
             "country": instance_url or "SearXNG instance",
+            "summary_message": "\n".join(summary_lines),
+            "end_time": end_dt.isoformat(),
+            "duration_seconds": duration_seconds,
+        }
+        _call_dashboard_hook(dash, "_show_scan_results", scan_results)
+    _call_dashboard_hook(dash, "_refresh_dashboard_data")
+
+
+def start_reddit_scan(dash, scan_request: dict) -> bool:
+    """Launch a background Reddit ingest from a unified-scan request dict.
+
+    Cross-guards against both _reddit_scan_running (this path) and
+    _reddit_grab_running (legacy accessory path) to prevent DB lock contention.
+    Returns True if the worker thread started, False otherwise.
+    """
+    if getattr(dash, "_reddit_scan_running", False) or getattr(dash, "_reddit_grab_running", False):
+        _mb().showwarning("Reddit Busy",
+            "A Reddit ingest is already running. Please wait for it to complete.")
+        return False
+
+    from experimental.redseek.service import IngestOptions, run_ingest
+    from shared.path_service import get_paths
+
+    mode = str(scan_request.get("reddit_mode") or "feed").strip()
+    sort = str(scan_request.get("reddit_sort") or "new").strip()
+    top_window = str(scan_request.get("reddit_top_window") or "week").strip()
+    max_posts = max(1, min(200, _to_int(scan_request.get("reddit_max_posts", 50))))
+    query = str(scan_request.get("reddit_query") or "").strip()
+    username = str(scan_request.get("reddit_username") or "").strip()
+    parse_body = bool(scan_request.get("reddit_parse_body", True))
+    include_nsfw = bool(scan_request.get("reddit_include_nsfw", False))
+
+    sm = getattr(dash, "settings_manager", None)
+    probe_config_path = None
+    probe_worker_count = 3
+    if sm is not None:
+        if hasattr(sm, "get_smbseek_config_path"):
+            try:
+                probe_config_path = sm.get_smbseek_config_path()
+            except Exception:
+                pass
+        try:
+            probe_worker_count = max(1, min(8, int(
+                sm.get_setting("probe.batch_max_workers", probe_worker_count)
+            )))
+        except Exception:
+            pass
+
+    options = IngestOptions(
+        sort=sort,
+        max_posts=max_posts,
+        parse_body=parse_body,
+        include_nsfw=include_nsfw,
+        replace_cache=False,
+        max_pages=3,
+        subreddit="opendirectories",
+        top_window=top_window,
+        mode=mode,
+        query=query,
+        username=username,
+        bulk_probe_enabled=bool(scan_request.get("bulk_probe_enabled", False)),
+        probe_config_path=probe_config_path,
+        probe_worker_count=probe_worker_count,
+    )
+    db_path = get_paths().reddit_od_db_file
+    _started_at = datetime.now()
+
+    try:
+        dash._reddit_scan_running = True
+    except Exception:
+        pass
+
+    _providers = [str(p).strip().lower() for p in (scan_request.get("providers") or [])]
+    _reddit_only = set(_providers) == {"reddit"}
+
+    _call_dashboard_hook(dash, "_show_scan_output_dialog", "Reddit", None)
+    _call_dashboard_hook(dash, "_reset_log_output", None)
+    _call_dashboard_hook(dash, "_set_reddit_task_running", None)
+    _call_dashboard_hook(dash, "_log_status_event",
+        f'Reddit {mode} ingest started (sort: {sort}, max_posts: {max_posts})')
+
+    def _ui_log(msg: str) -> None:
+        def _dispatch(m=msg):
+            _call_dashboard_hook(dash, "_log_status_event", m)
+            if _reddit_only:
+                _call_dashboard_hook(dash, "_update_progress_summary", "Reddit", m)
+        try:
+            dash.parent.after(0, _dispatch)
+        except Exception:
+            pass
+
+    def _worker():
+        try:
+            _ui_log("Fetching Reddit posts...")
+            result = run_ingest(options, db_path=db_path)
+        except Exception as exc:
+            from experimental.redseek.service import IngestResult
+            result = IngestResult(
+                sort=sort, subreddit="opendirectories",
+                pages_fetched=0, posts_stored=0, posts_skipped=0,
+                targets_stored=0, targets_deduped=0, parse_errors=0,
+                stopped_by_cursor=False, stopped_by_max_posts=False,
+                replace_cache_done=False, rate_limited=False,
+                error=str(exc),
+                probe_enabled=False, probe_total=0, probe_clean=0,
+                probe_issue=0, probe_unprobed=0, probe_skipped=0,
+            )
+        try:
+            dash.parent.after(0, lambda: _on_reddit_scan_done(
+                dash, result,
+                mode=mode,
+                reddit_only=_reddit_only,
+                started_at=_started_at,
+            ))
+        except Exception:
+            try:
+                dash._reddit_scan_running = False
+            except Exception:
+                pass
+            _call_dashboard_hook(dash, "_clear_reddit_task")
+
+    try:
+        threading.Thread(
+            target=_worker,
+            name="dashboard-reddit-scan",
+            daemon=True,
+        ).start()
+        return True
+    except Exception as exc:
+        try:
+            dash._reddit_scan_running = False
+        except Exception:
+            pass
+        _call_dashboard_hook(dash, "_clear_reddit_task")
+        _mb().showerror("Reddit Error", f"Failed to start Reddit ingest: {exc}")
+        return False
+
+
+def _on_reddit_scan_done(
+    dash,
+    result,
+    *,
+    mode: str = "feed",
+    reddit_only: bool = True,
+    started_at: Optional[datetime] = None,
+) -> None:
+    """Handle Reddit ingest completion on the UI thread."""
+    try:
+        dash._reddit_scan_running = False
+    except Exception:
+        pass
+    _call_dashboard_hook(dash, "_clear_reddit_task")
+
+    if result.error:
+        _call_dashboard_hook(dash, "_log_status_event",
+            f"Reddit ingest failed: {result.error}")
+        _mb().showerror("Reddit Ingest Error", f"Reddit ingest failed: {result.error}")
+        return
+
+    _call_dashboard_hook(dash, "_log_status_event",
+        f"Reddit ingest complete. Posts stored: {result.posts_stored}, targets: {result.targets_stored}")
+    if result.probe_enabled:
+        _call_dashboard_hook(dash, "_log_status_event",
+            f"Probe: {result.probe_total} attempted"
+            f" — {result.probe_clean} clean"
+            f", {result.probe_issue} flagged"
+            f", {result.probe_unprobed} unprobed")
+
+    if reddit_only:
+        end_dt = datetime.now()
+        duration_seconds = (end_dt - started_at).total_seconds() if started_at else 0.0
+        summary_lines = [
+            f"Reddit {mode} ingest complete. {result.posts_stored} posts stored, "
+            f"{result.targets_stored} targets retained.",
+            "",
+            "Results are stored in the Reddit sidecar database (reddit_od.db) and can be "
+            "promoted to the main database via the Reddit browser.",
+        ]
+        if result.probe_enabled:
+            summary_lines += [
+                "",
+                f"Probe: {result.probe_total} attempted — {result.probe_clean} clean, "
+                f"{result.probe_issue} flagged, {result.probe_unprobed} unprobed.",
+            ]
+        scan_results = {
+            "protocol": "reddit",
+            "status": "completed",
+            "hosts_scanned": result.posts_stored,
+            "accessible_hosts": result.targets_stored,
+            "shares_found": result.targets_stored,
+            "country": "Reddit /r/opendirectories",
             "summary_message": "\n".join(summary_lines),
             "end_time": end_dt.isoformat(),
             "duration_seconds": duration_seconds,

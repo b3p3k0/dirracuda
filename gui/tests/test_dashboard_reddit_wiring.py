@@ -227,11 +227,30 @@ class TestClickHandlerGuards:
             "gui.components.dashboard.show_reddit_grab_dialog",
             lambda **_k: dialog_opened.append(True),
         )
+        monkeypatch.setattr("gui.components.dashboard.messagebox.showwarning", lambda *a, **k: None)
 
         dash._handle_reddit_grab_button_click()
 
         assert check_called == []
         assert dialog_opened == []
+
+    def test_does_not_open_dialog_if_reddit_scan_running(self, monkeypatch):
+        """Core Reddit scan blocks legacy grab click handler."""
+        dash = _make_dash()
+        dash._reddit_scan_running = True
+        check_called = []
+        dialog_opened = []
+        warnings = []
+
+        monkeypatch.setattr(dash, "_check_external_scans", lambda: check_called.append(True), raising=False)
+        monkeypatch.setattr("gui.components.dashboard.show_reddit_grab_dialog", lambda **_k: dialog_opened.append(True))
+        monkeypatch.setattr("gui.components.dashboard.messagebox.showwarning", lambda *a, **k: warnings.append(a))
+
+        dash._handle_reddit_grab_button_click()
+
+        assert check_called == []
+        assert dialog_opened == []
+        assert warnings, "Warning must be shown when core Reddit scan is running"
 
     def test_does_not_call_maybe_warn_mock_mode(self, monkeypatch):
         """Reddit path must never call _maybe_warn_mock_mode_persistence."""
@@ -360,6 +379,24 @@ class TestWorkerExceptionPath:
             dash.scan_button_state = "scanning"
 
         monkeypatch.setattr(dash, "_check_external_scans", _check_side_effect, raising=False)
+        monkeypatch.setattr(
+            "gui.components.dashboard.threading.Thread",
+            lambda **_k: type("T", (), {"start": lambda self: thread_started.append(True)})(),
+        )
+        dash._log_status_event = lambda _msg: None
+
+        dash._handle_reddit_grab_start(_make_options())
+
+        assert dash._reddit_grab_running is False
+        assert thread_started == []
+
+    def test_grab_start_blocked_if_reddit_scan_running(self, monkeypatch):
+        """Legacy grab start must abort when a core Reddit scan is active."""
+        dash = _make_dash()
+        dash._reddit_scan_running = True
+        thread_started = []
+
+        monkeypatch.setattr(dash, "_check_external_scans", lambda: None, raising=False)
         monkeypatch.setattr(
             "gui.components.dashboard.threading.Thread",
             lambda **_k: type("T", (), {"start": lambda self: thread_started.append(True)})(),

@@ -46,3 +46,14 @@ def test_searxng_wording() -> None:
     assert "open-index" in dialog._access_phrase()
     assert not dialog._is_ftp_scan()
     assert not dialog._is_multi_scan()
+
+
+def test_reddit_wording() -> None:
+    dialog = _dialog("reddit")
+    assert dialog._is_reddit_scan()
+    assert "Reddit" in dialog._success_subtitle()
+    assert "Targets" in dialog._shares_label()
+    assert "sidecar" in dialog._access_phrase()
+    assert not dialog._is_searxng_scan()
+    assert not dialog._is_ftp_scan()
+    assert not dialog._is_multi_scan()

@@ -45,6 +45,7 @@ from experimental.se_dork.models import (
     RUN_STATUS_DONE,
     RUN_STATUS_ERROR,
 )
+from experimental.redseek.service import IngestResult
 
 
 # ---------------------------------------------------------------------------
@@ -79,6 +80,8 @@ def _make_dash() -> DashboardWidget:
     dash._set_searxng_task_running = lambda *_: None
     dash._log_status_event = lambda *_: None
     dash._show_scan_results = lambda *_: None
+    dash._set_reddit_task_running = lambda *_: None
+    dash._clear_reddit_task = lambda *_: None
     return dash
 
 
@@ -104,6 +107,49 @@ def _searxng_request(**overrides):
     )
     base.update(overrides)
     return base
+
+
+def _reddit_request(**overrides):
+    base = dict(
+        providers=["reddit"],
+        reddit_mode="feed",
+        reddit_sort="new",
+        reddit_top_window="week",
+        reddit_max_posts=50,
+        reddit_query="",
+        reddit_username="",
+        reddit_parse_body=True,
+        reddit_include_nsfw=False,
+        bulk_probe_enabled=False,
+    )
+    base.update(overrides)
+    return base
+
+
+def _make_reddit_result(**kwargs) -> IngestResult:
+    defaults = dict(
+        sort="new",
+        subreddit="opendirectories",
+        pages_fetched=2,
+        posts_stored=30,
+        posts_skipped=5,
+        targets_stored=12,
+        targets_deduped=3,
+        parse_errors=0,
+        stopped_by_cursor=False,
+        stopped_by_max_posts=False,
+        replace_cache_done=False,
+        rate_limited=False,
+        error=None,
+        probe_enabled=False,
+        probe_total=0,
+        probe_clean=0,
+        probe_issue=0,
+        probe_unprobed=0,
+        probe_skipped=0,
+    )
+    defaults.update(kwargs)
+    return IngestResult(**defaults)
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +206,45 @@ class TestStartUnifiedScanRouting:
         )
         ds.start_unified_scan(dash, _searxng_request(protocols=[]))
         assert errors == [], "SearXNG-only scan must not trigger 'No protocols selected' error"
+
+    def test_reddit_only_calls_start_reddit_scan(self, monkeypatch):
+        dash = _make_dash()
+        called = []
+        monkeypatch.setattr(ds, "start_reddit_scan", lambda d, r: called.append(True) or True)
+        ds.start_unified_scan(dash, _reddit_request())
+        assert called == [True]
+
+    def test_reddit_only_skips_protocol_queue(self, monkeypatch):
+        dash = _make_dash()
+        monkeypatch.setattr(ds, "start_reddit_scan", lambda d, r: True)
+        errors = []
+        monkeypatch.setattr(
+            "gui.components.dashboard.messagebox.showerror",
+            lambda *a, **k: errors.append(a),
+        )
+        ds.start_unified_scan(dash, _reddit_request(protocols=[]))
+        assert errors == [], "Reddit-only scan must not trigger 'No protocols selected' error"
+
+    def test_shodan_only_does_not_call_reddit(self, monkeypatch):
+        dash = _make_dash()
+        called = []
+        monkeypatch.setattr(ds, "start_reddit_scan", lambda d, r: called.append(True) or True)
+        monkeypatch.setattr(
+            "gui.components.dashboard.messagebox.showerror",
+            lambda *a, **k: None,
+        )
+        ds.start_unified_scan(dash, {"providers": ["shodan"], "protocols": []})
+        assert called == []
+
+    def test_reddit_and_shodan_calls_both(self, monkeypatch):
+        dash = _make_dash()
+        reddit_calls = []
+        monkeypatch.setattr(ds, "start_reddit_scan", lambda d, r: reddit_calls.append(True) or True)
+        monkeypatch.setattr(ds, "start_new_scan", lambda d, o: True)
+        monkeypatch.setattr(ds, "_call_dashboard_hook", lambda *_a, **_k: None)
+        request = _reddit_request(providers=["shodan", "reddit"], protocols=["smb"])
+        ds.start_unified_scan(dash, request)
+        assert reddit_calls == [True]
 
 
 # ---------------------------------------------------------------------------
@@ -534,3 +619,258 @@ class TestSearxngProgressCallback:
         ds.start_searxng_scan(dash, _searxng_request())
         assert dash._searxng_scan_running is False
         assert clear_calls == [True]
+
+
+# ---------------------------------------------------------------------------
+# D — start_reddit_scan
+# ---------------------------------------------------------------------------
+
+_REDDIT_DB = Path("/tmp/reddit_od.db")
+
+
+def _fake_paths_reddit():
+    return MagicMock(reddit_od_db_file=_REDDIT_DB)
+
+
+class TestStartRedditScan:
+    def test_already_running_returns_false_and_warns(self, monkeypatch):
+        dash = _make_dash()
+        dash._reddit_scan_running = True
+        warnings = []
+        monkeypatch.setattr(
+            "gui.components.dashboard.messagebox.showwarning",
+            lambda *a, **k: warnings.append(a),
+        )
+        result = ds.start_reddit_scan(dash, _reddit_request())
+        assert result is False
+        assert warnings
+
+    def test_grab_running_blocks_core_scan(self, monkeypatch):
+        dash = _make_dash()
+        dash._reddit_grab_running = True
+        warnings = []
+        monkeypatch.setattr(
+            "gui.components.dashboard.messagebox.showwarning",
+            lambda *a, **k: warnings.append(a),
+        )
+        result = ds.start_reddit_scan(dash, _reddit_request())
+        assert result is False
+        assert warnings
+
+    def test_builds_ingest_options_feed_mode(self, monkeypatch):
+        dash = _make_dash()
+        captured = []
+
+        def _fake_run(options, db_path=None):
+            captured.append(options)
+            return _make_reddit_result()
+
+        monkeypatch.setattr("experimental.redseek.service.run_ingest", _fake_run)
+        monkeypatch.setattr("shared.path_service.get_paths", _fake_paths_reddit)
+        result = ds.start_reddit_scan(dash, _reddit_request(
+            reddit_mode="feed", reddit_sort="top", reddit_max_posts=75,
+            reddit_parse_body=False, reddit_include_nsfw=True,
+        ))
+        assert result is True
+
+        for t in threading.enumerate():
+            if t.name == "dashboard-reddit-scan":
+                t.join(timeout=5)
+                break
+
+        assert len(captured) == 1
+        opts = captured[0]
+        assert opts.sort == "top"
+        assert opts.max_posts == 75
+        assert opts.parse_body is False
+        assert opts.include_nsfw is True
+        assert opts.replace_cache is False
+
+    def test_builds_ingest_options_search_mode(self, monkeypatch):
+        dash = _make_dash()
+        captured = []
+
+        def _fake_run(options, db_path=None):
+            captured.append(options)
+            return _make_reddit_result()
+
+        monkeypatch.setattr("experimental.redseek.service.run_ingest", _fake_run)
+        monkeypatch.setattr("shared.path_service.get_paths", _fake_paths_reddit)
+        ds.start_reddit_scan(dash, _reddit_request(reddit_mode="search", reddit_query="open directories"))
+
+        for t in threading.enumerate():
+            if t.name == "dashboard-reddit-scan":
+                t.join(timeout=5)
+                break
+
+        assert captured[0].query == "open directories"
+        assert captured[0].mode == "search"
+
+    def test_builds_ingest_options_user_mode(self, monkeypatch):
+        dash = _make_dash()
+        captured = []
+
+        def _fake_run(options, db_path=None):
+            captured.append(options)
+            return _make_reddit_result()
+
+        monkeypatch.setattr("experimental.redseek.service.run_ingest", _fake_run)
+        monkeypatch.setattr("shared.path_service.get_paths", _fake_paths_reddit)
+        ds.start_reddit_scan(dash, _reddit_request(reddit_mode="user", reddit_username="testuser"))
+
+        for t in threading.enumerate():
+            if t.name == "dashboard-reddit-scan":
+                t.join(timeout=5)
+                break
+
+        assert captured[0].username == "testuser"
+        assert captured[0].mode == "user"
+
+    def test_required_bool_fields_default_correctly(self, monkeypatch):
+        dash = _make_dash()
+        captured = []
+
+        def _fake_run(options, db_path=None):
+            captured.append(options)
+            return _make_reddit_result()
+
+        monkeypatch.setattr("experimental.redseek.service.run_ingest", _fake_run)
+        monkeypatch.setattr("shared.path_service.get_paths", _fake_paths_reddit)
+        ds.start_reddit_scan(dash, _reddit_request())
+
+        for t in threading.enumerate():
+            if t.name == "dashboard-reddit-scan":
+                t.join(timeout=5)
+                break
+
+        opts = captured[0]
+        assert opts.parse_body is True
+        assert opts.include_nsfw is False
+        assert opts.replace_cache is False
+
+    def test_max_posts_clamped_to_200(self, monkeypatch):
+        dash = _make_dash()
+        captured = []
+
+        def _fake_run(options, db_path=None):
+            captured.append(options)
+            return _make_reddit_result()
+
+        monkeypatch.setattr("experimental.redseek.service.run_ingest", _fake_run)
+        monkeypatch.setattr("shared.path_service.get_paths", _fake_paths_reddit)
+        ds.start_reddit_scan(dash, _reddit_request(reddit_max_posts=9999))
+
+        for t in threading.enumerate():
+            if t.name == "dashboard-reddit-scan":
+                t.join(timeout=5)
+                break
+
+        assert captured[0].max_posts <= 200
+
+    def test_probe_config_resolved_from_settings_manager(self, monkeypatch):
+        dash = _make_dash()
+        sm = MagicMock()
+        sm.get_smbseek_config_path.return_value = "/cfg/probe.json"
+        sm.get_setting.return_value = 5
+        dash.settings_manager = sm
+        captured = []
+
+        def _fake_run(options, db_path=None):
+            captured.append(options)
+            return _make_reddit_result()
+
+        monkeypatch.setattr("experimental.redseek.service.run_ingest", _fake_run)
+        monkeypatch.setattr("shared.path_service.get_paths", _fake_paths_reddit)
+        ds.start_reddit_scan(dash, _reddit_request())
+
+        for t in threading.enumerate():
+            if t.name == "dashboard-reddit-scan":
+                t.join(timeout=5)
+                break
+
+        assert captured[0].probe_config_path == "/cfg/probe.json"
+        assert captured[0].probe_worker_count == 5
+
+
+# ---------------------------------------------------------------------------
+# E — _on_reddit_scan_done
+# ---------------------------------------------------------------------------
+
+class TestOnRedditScanDone:
+    def test_error_result_shows_showerror(self, monkeypatch):
+        dash = _make_dash()
+        errors = []
+        monkeypatch.setattr(
+            "gui.components.dashboard.messagebox.showerror",
+            lambda *a, **k: errors.append(a),
+        )
+        result = _make_reddit_result(error="rate limited")
+        ds._on_reddit_scan_done(dash, result)
+        assert len(errors) == 1
+        assert "rate limited" in errors[0][1]
+
+    def test_success_reddit_only_shows_scan_results(self, monkeypatch):
+        dash = _make_dash()
+        dialog_calls = []
+        dash._show_scan_results = lambda r: dialog_calls.append(r)
+        ds._on_reddit_scan_done(
+            dash, _make_reddit_result(posts_stored=20, targets_stored=8),
+            reddit_only=True,
+        )
+        assert len(dialog_calls) == 1
+        r = dialog_calls[0]
+        assert r["protocol"] == "reddit"
+        assert r["hosts_scanned"] == 20
+        assert r["accessible_hosts"] == 8
+        assert "duration_seconds" in r
+        assert "end_time" in r
+
+    def test_success_reddit_only_summary_mentions_sidecar(self, monkeypatch):
+        dash = _make_dash()
+        dialog_calls = []
+        dash._show_scan_results = lambda r: dialog_calls.append(r)
+        ds._on_reddit_scan_done(
+            dash, _make_reddit_result(posts_stored=10, targets_stored=4),
+            reddit_only=True,
+        )
+        summary = dialog_calls[0].get("summary_message", "")
+        assert "reddit_od.db" in summary or "sidecar" in summary.lower(), \
+            f"Sidecar storage note missing from summary: {summary!r}"
+
+    def test_success_mixed_suppresses_modal_logs_only(self, monkeypatch):
+        dash = _make_dash()
+        dialog_calls = []
+        dash._show_scan_results = lambda r: dialog_calls.append(r)
+        ds._on_reddit_scan_done(
+            dash, _make_reddit_result(),
+            reddit_only=False,
+        )
+        assert dialog_calls == [], "Mixed run must not show completion dialog"
+
+    def test_probe_summary_included_in_reddit_only_result(self, monkeypatch):
+        dash = _make_dash()
+        log_msgs = []
+        dash._log_status_event = lambda m: log_msgs.append(m)
+        ds._on_reddit_scan_done(dash, _make_reddit_result(
+            probe_enabled=True, probe_total=10, probe_clean=9, probe_issue=1, probe_unprobed=0,
+        ))
+        assert any("10" in m for m in log_msgs), f"probe total missing: {log_msgs}"
+
+    def test_clears_running_flag_on_completion(self, monkeypatch):
+        dash = _make_dash()
+        dash._reddit_scan_running = True
+        clear_calls = []
+        dash._clear_reddit_task = lambda: clear_calls.append(True)
+        ds._on_reddit_scan_done(dash, _make_reddit_result())
+        assert dash._reddit_scan_running is False
+        assert clear_calls == [True]
+
+    def test_clears_running_flag_on_error(self, monkeypatch):
+        dash = _make_dash()
+        dash._reddit_scan_running = True
+        monkeypatch.setattr(
+            "gui.components.dashboard.messagebox.showerror",
+            lambda *a, **k: None,
+        )
+        ds._on_reddit_scan_done(dash, _make_reddit_result(error="timeout"))
+        assert dash._reddit_scan_running is False

@@ -73,6 +73,10 @@ class ScanResultsDialog:
         """Return True when rendering results for a SearXNG dork search."""
         return self.protocol == "searxng"
 
+    def _is_reddit_scan(self) -> bool:
+        """Return True when rendering results for a Reddit ingest run."""
+        return self.protocol == "reddit"
+
     def _ordered_protocols(self) -> list[str]:
         """Return ordered normalized protocol list for display."""
         protocols = self.scan_results.get("protocols") or []
@@ -89,6 +93,8 @@ class ScanResultsDialog:
 
     def _success_subtitle(self) -> str:
         """Protocol-aware success subtitle text."""
+        if self._is_reddit_scan():
+            return "Reddit ingest has finished successfully."
         if self._is_searxng_scan():
             return "SearXNG dork search has finished successfully."
         if self._is_multi_scan():
@@ -99,6 +105,8 @@ class ScanResultsDialog:
 
     def _shares_label(self) -> str:
         """Protocol-aware label for the final summary metric."""
+        if self._is_reddit_scan():
+            return "Targets Stored:"
         if self._is_searxng_scan():
             return "Open Index URLs:"
         if self._is_multi_scan():
@@ -109,6 +117,8 @@ class ScanResultsDialog:
 
     def _access_phrase(self) -> str:
         """Protocol-aware phrase describing successful access."""
+        if self._is_reddit_scan():
+            return "retained sidecar targets"
         if self._is_searxng_scan():
             return "retained open-index URLs"
         if self._is_multi_scan():

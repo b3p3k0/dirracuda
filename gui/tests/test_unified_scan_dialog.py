@@ -58,6 +58,14 @@ def _make_dialog() -> UnifiedScanDialog:
     dlg.searxng_instance_url_var = _Var("http://searxng.example.com")
     dlg.searxng_query_var = _Var("inurl:index.of")
     dlg.searxng_max_results_var = _Var("50")
+    dlg.reddit_mode_var = _Var("feed")
+    dlg.reddit_sort_var = _Var("new")
+    dlg.reddit_top_window_var = _Var("week")
+    dlg.reddit_max_posts_var = _Var("50")
+    dlg.reddit_query_var = _Var("")
+    dlg.reddit_username_var = _Var("")
+    dlg.reddit_parse_body_var = _Var(True)
+    dlg.reddit_include_nsfw_var = _Var(False)
     dlg.protocol_smb_var = _Var(True)
     dlg.protocol_ftp_var = _Var(False)
     dlg.protocol_http_var = _Var(False)
@@ -176,12 +184,89 @@ def test_build_scan_request_searxng_only_is_valid(monkeypatch):
     assert request["searxng_instance_url"] == "http://searxng.example.com"
 
 
-def test_build_scan_request_reddit_only_raises():
+def test_build_scan_request_reddit_feed_valid(monkeypatch):
+    monkeypatch.setattr("gui.components.unified_scan_dialog.persist_query_budget_state", lambda *_a, **_k: None)
     dlg = _make_dialog()
     dlg.provider_shodan_var.set(False)
     dlg.provider_reddit_var.set(True)
-    with pytest.raises(ValueError, match="not yet available"):
+    dlg.reddit_mode_var.set("feed")
+    request = dlg._build_scan_request()
+    assert "reddit" in request["providers"]
+    assert request["reddit_mode"] == "feed"
+    assert request["reddit_parse_body"] is True
+    assert request["reddit_include_nsfw"] is False
+    assert request["reddit_replace_cache"] is False if "reddit_replace_cache" in request else True
+
+
+def test_build_scan_request_reddit_search_valid(monkeypatch):
+    monkeypatch.setattr("gui.components.unified_scan_dialog.persist_query_budget_state", lambda *_a, **_k: None)
+    dlg = _make_dialog()
+    dlg.provider_shodan_var.set(False)
+    dlg.provider_reddit_var.set(True)
+    dlg.reddit_mode_var.set("search")
+    dlg.reddit_query_var.set("open directories")
+    request = dlg._build_scan_request()
+    assert request["reddit_mode"] == "search"
+    assert request["reddit_query"] == "open directories"
+
+
+def test_build_scan_request_reddit_search_missing_query_raises():
+    dlg = _make_dialog()
+    dlg.provider_shodan_var.set(False)
+    dlg.provider_reddit_var.set(True)
+    dlg.reddit_mode_var.set("search")
+    dlg.reddit_query_var.set("")
+    with pytest.raises(ValueError, match="search mode requires a query"):
         dlg._build_scan_request()
+
+
+def test_build_scan_request_reddit_user_valid(monkeypatch):
+    monkeypatch.setattr("gui.components.unified_scan_dialog.persist_query_budget_state", lambda *_a, **_k: None)
+    dlg = _make_dialog()
+    dlg.provider_shodan_var.set(False)
+    dlg.provider_reddit_var.set(True)
+    dlg.reddit_mode_var.set("user")
+    dlg.reddit_username_var.set("testuser")
+    request = dlg._build_scan_request()
+    assert request["reddit_mode"] == "user"
+    assert request["reddit_username"] == "testuser"
+
+
+def test_build_scan_request_reddit_user_missing_username_raises():
+    dlg = _make_dialog()
+    dlg.provider_shodan_var.set(False)
+    dlg.provider_reddit_var.set(True)
+    dlg.reddit_mode_var.set("user")
+    dlg.reddit_username_var.set("")
+    with pytest.raises(ValueError, match="user mode requires a username"):
+        dlg._build_scan_request()
+
+
+def test_build_scan_request_reddit_invalid_mode_raises():
+    dlg = _make_dialog()
+    dlg.provider_shodan_var.set(False)
+    dlg.provider_reddit_var.set(True)
+    dlg.reddit_mode_var.set("invalid_mode")
+    with pytest.raises(ValueError, match="Invalid Reddit mode"):
+        dlg._build_scan_request()
+
+
+def test_build_scan_request_reddit_includes_all_required_fields(monkeypatch):
+    monkeypatch.setattr("gui.components.unified_scan_dialog.persist_query_budget_state", lambda *_a, **_k: None)
+    dlg = _make_dialog()
+    dlg.provider_shodan_var.set(False)
+    dlg.provider_reddit_var.set(True)
+    dlg.reddit_parse_body_var.set(True)
+    dlg.reddit_include_nsfw_var.set(False)
+    dlg.reddit_sort_var.set("top")
+    dlg.reddit_top_window_var.set("month")
+    dlg.reddit_max_posts_var.set("80")
+    request = dlg._build_scan_request()
+    for field in ("reddit_parse_body", "reddit_include_nsfw", "reddit_sort", "reddit_top_window", "reddit_max_posts"):
+        assert field in request, f"Missing field: {field}"
+    assert request["reddit_sort"] == "top"
+    assert request["reddit_top_window"] == "month"
+    assert request["reddit_max_posts"] == 80
 
 
 def test_build_scan_request_searxng_missing_instance_url_raises():
@@ -308,3 +393,63 @@ def test_apply_form_state_providers_roundtrip():
     assert dlg.provider_shodan_var.get() is True
     assert dlg.provider_searxng_var.get() is False
     assert dlg.provider_reddit_var.get() is False
+
+
+def test_capture_form_state_includes_reddit_options_block():
+    dlg = _make_dialog()
+    dlg.reddit_mode_var.set("search")
+    dlg.reddit_sort_var.set("top")
+    dlg.reddit_query_var.set("open dirs")
+    state = dlg._capture_form_state()
+    assert "reddit_options" in state
+    opts = state["reddit_options"]
+    assert opts["mode"] == "search"
+    assert opts["sort"] == "top"
+    assert opts["query"] == "open dirs"
+    for key in ("top_window", "max_posts", "username", "parse_body", "include_nsfw"):
+        assert key in opts, f"Missing reddit_options key: {key}"
+
+
+def test_apply_form_state_restores_reddit_options():
+    dlg = _make_dialog()
+    state = {
+        "reddit_options": {
+            "mode": "user",
+            "sort": "new",
+            "top_window": "day",
+            "max_posts": "30",
+            "query": "some query",
+            "username": "reddit_user",
+            "parse_body": False,
+            "include_nsfw": True,
+        }
+    }
+    dlg._apply_form_state(state)
+    assert dlg.reddit_mode_var.get() == "user"
+    assert dlg.reddit_username_var.get() == "reddit_user"
+    assert dlg.reddit_parse_body_var.get() is False
+    assert dlg.reddit_include_nsfw_var.get() is True
+
+
+def test_start_reddit_only_skips_preflight(monkeypatch):
+    """Reddit-only launch must not invoke Shodan preflight."""
+    dlg = _make_dialog()
+    dlg.provider_shodan_var.set(False)
+    dlg.provider_reddit_var.set(True)
+    dlg.reddit_mode_var.set("feed")
+    monkeypatch.setattr("gui.components.unified_scan_dialog.persist_query_budget_state", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        "gui.components.unified_scan_dialog.run_preflight",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("preflight must not be called for Reddit-only")),
+    )
+    captured = {}
+    dlg.scan_start_callback = lambda payload: captured.setdefault("payload", payload)
+    errors = []
+    monkeypatch.setattr(
+        "gui.components.unified_scan_dialog.messagebox.showerror",
+        lambda *args, **kwargs: errors.append(args),
+    )
+    dlg._start()
+    assert errors == [], f"Unexpected error dialogs: {errors}"
+    assert "payload" in captured
+    assert dlg.dialog.destroyed is True
