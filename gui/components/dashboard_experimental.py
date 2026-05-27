@@ -10,6 +10,14 @@ Patch path for show_reddit_browser_window in tests:
   gui.components.dashboard_experimental.show_reddit_browser_window
 """
 
+import sys
+import threading
+import tkinter as tk
+
+from gui.utils import safe_messagebox as _fallback_msgbox
+from gui.utils.dialog_helpers import ensure_dialog_focus
+from gui.utils.db_unification import execute_sidecar_migration_now
+from gui.utils.style import apply_theme_to_window
 from gui.components.reddit_browser_window import show_reddit_browser_window
 from gui.components.se_dork_browser_window import show_se_dork_browser_window
 from gui.components.dorkbook_window import show_dorkbook_window
@@ -21,6 +29,13 @@ from gui.utils.sidecar_promotion import (
 from gui.utils.logging_config import get_logger
 
 _logger = get_logger("dashboard")
+
+
+def _mb():
+    mod = sys.modules.get("gui.components.dashboard")
+    if mod is not None and hasattr(mod, "messagebox"):
+        return mod.messagebox
+    return _fallback_msgbox
 
 
 def set_server_list_getter(widget, getter) -> None:
@@ -79,6 +94,50 @@ def open_se_dork_results_db(widget) -> None:
         promote_records_callback=_make_sidecar_bulk_promote_callback(widget),
         settings_manager=getattr(widget, "settings_manager", None),
     )
+
+
+def open_sidecar_legacy_db(widget) -> None:
+    dialog = tk.Toplevel(widget.parent)
+    dialog.title("[Legacy] Sidecar Data")
+    dialog.transient(widget.parent)
+    dialog.resizable(False, False)
+    theme = getattr(widget, "theme", None)
+    if theme:
+        apply_theme_to_window(dialog)
+
+    def _pick(choice: str) -> None:
+        dialog.destroy()
+        if choice == "se_dork":
+            open_se_dork_results_db(widget)
+        elif choice == "reddit":
+            open_reddit_post_db(widget)
+        elif choice == "migrate":
+            db_reader = getattr(widget, "db_reader", None)
+            if db_reader is None:
+                _mb().showerror("No Database", "No database is currently loaded.",
+                                parent=widget.parent)
+                return
+            def _worker():
+                try:
+                    execute_sidecar_migration_now(db_reader)
+                except Exception:
+                    pass
+                try:
+                    widget.parent.after(0, widget.refresh_after_database_change)
+                except Exception:
+                    pass
+            threading.Thread(target=_worker, daemon=True).start()
+
+    for label, key in [
+        ("SearXNG Dork Results", "se_dork"),
+        ("Reddit Open Directory Posts", "reddit"),
+        ("Migrate All to Main DB", "migrate"),
+    ]:
+        btn = tk.Button(dialog, text=label, command=lambda k=key: _pick(k))
+        if theme:
+            theme.apply_to_widget(btn, "button_secondary")
+        btn.pack(fill="x", padx=12, pady=4)
+    ensure_dialog_focus(dialog, widget.parent)
 
 
 def open_dorkbook(widget) -> None:

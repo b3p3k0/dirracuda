@@ -562,6 +562,8 @@ try:
     from gui.utils.db_unification import (
         apply_probe_cleanup_choice,
         run_startup_db_unification,
+        defer_sidecar_migration,
+        execute_sidecar_migration_now,
     )
     from gui.utils.backend_interface import BackendInterface
     from gui.utils.style import get_theme, apply_theme_to_window
@@ -1012,13 +1014,12 @@ class XSMBSeekGUI:
             self.root,
             actions_by_digit={
                 "1": lambda: self.dashboard._handle_scan_button_click(),
-                "2": lambda: self.dashboard._open_drill_down("server_list"),
-                "3": lambda: self.dashboard._open_db_tools(),
-                "4": lambda: self.dashboard._handle_experimental_button_click(),
-                "5": lambda: self.dashboard._open_config_editor(),
-                "6": lambda: self.dashboard._open_about_dialog(),
+                "2": lambda: self.dashboard._open_db_surface(),
+                "3": lambda: self.dashboard._handle_experimental_button_click(),
+                "4": lambda: self.dashboard._open_config_editor(),
+                "5": lambda: self.dashboard._open_about_dialog(),
             },
-            reserved_digits=("7", "8", "9", "0"),
+            reserved_digits=("6", "7", "8", "9", "0"),
         )
     
     def _enable_mock_mode(self) -> None:
@@ -1248,7 +1249,6 @@ class XSMBSeekGUI:
         worker.start()
 
     def _run_db_unification_worker(self, db_path: str) -> None:
-        """Background worker for startup DB unification."""
         try:
             result = run_startup_db_unification(db_path)
         except Exception as exc:
@@ -1256,8 +1256,8 @@ class XSMBSeekGUI:
                 "success": False,
                 "errors": [str(exc)],
                 "probe_backfill": {},
-                "sidecar_import": {},
                 "prompt_cleanup": False,
+                "prompt_sidecar_migration": False,
             }
         if self.root is None:
             return
@@ -1267,7 +1267,6 @@ class XSMBSeekGUI:
             self._db_unification_running = False
 
     def _handle_db_unification_result(self, result: Dict[str, Any]) -> None:
-        """UI-thread handler for startup DB-unification completion."""
         self._db_unification_running = False
         if self.root is None or not self.root.winfo_exists():
             return
@@ -1288,6 +1287,8 @@ class XSMBSeekGUI:
         except Exception as exc:
             _logger.warning("Probe cache cleanup prompt failed: %s", exc)
 
+        if result.get("prompt_sidecar_migration"):
+            self.root.after(500, self._check_sidecar_migration_prompt)
         if result.get("success"):
             return
 
@@ -1317,6 +1318,36 @@ class XSMBSeekGUI:
             retry = False
         if retry:
             self._start_db_unification_tasks()
+
+    def _check_sidecar_migration_prompt(self) -> None:
+        if (self.mock_mode or not self.db_reader or not self.root
+                or getattr(self, "_sidecar_prompt_shown", False)):
+            return
+        try:
+            migrate = messagebox.askyesno(
+                "Sidecar Data Migration",
+                "Legacy SearXNG/Reddit sidecar data detected.\n\n"
+                "Migrate it into the main database now?\n\nYes = migrate now.\n"
+                "No = defer (won't prompt again at startup).",
+                parent=self.root,
+            )
+        except Exception:
+            return
+        self._sidecar_prompt_shown = True
+        if migrate:
+            def _worker():
+                try:
+                    execute_sidecar_migration_now(self.db_reader)
+                except Exception:
+                    pass
+                if self.root is not None and self.dashboard is not None:
+                    try:
+                        self.root.after(0, self._refresh_dashboard)
+                    except tk.TclError:
+                        pass
+            threading.Thread(target=_worker, daemon=True).start()
+        else:
+            defer_sidecar_migration(self.db_reader)
 
     def _bootstrap_tmpfs_runtime(self) -> None:
         """Initialize tmpfs quarantine runtime and surface fallback warning once."""

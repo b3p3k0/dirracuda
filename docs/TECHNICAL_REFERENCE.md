@@ -957,10 +957,10 @@ SearXNG dorking, Reddit ingestion, and Dorkbook do not use this subprocess path.
 | Control | Function |
 |---------|---------|
 | Start Scan | Opens `UnifiedScanDialog` (protocol selector + scan options), then always shows preflight confirmation with live-balance + cost visibility before launch. Numeric estimates are shown only when live balance lookup succeeds. |
-| Server List | Opens `ServerListWindow` with SMB / FTP / HTTP tabs |
-| DB Tools | Opens `DBToolsDialog` |
-| Experimental | Opens `ExperimentalFeaturesDialog` (`SearXNG`, `Reddit`, `Web UI`, `Dorkbook`, `Keymaster` tabs) |
+| Database | Opens consolidated DB surface (`View Servers`, `DB Tools`, `[Legacy] Sidecar Data`) |
+| Accessories (Experimental) | Opens `ExperimentalFeaturesDialog` (`SearXNG`, `Reddit`, `Web UI`, `Dorkbook`, `Keymaster` tabs) |
 | Configuration | Opens config editor |
+| About | Opens about dialog |
 | Dark/Light toggle | Switches ttkthemes theme; persisted in `~/.dirracuda/conf.d/prefs/user-prefs.json` |
 | Running Tasks | Opens non-modal task manager for active/queued work; supports monitor reopen via double-click |
 
@@ -968,12 +968,11 @@ SearXNG dorking, Reddit ingestion, and Dorkbook do not use this subprocess path.
 
 - Dashboard Alt mappings:
   - `Alt+1` Start Scan
-  - `Alt+2` Server List
-  - `Alt+3` DB Tools
-  - `Alt+4` Experimental
-  - `Alt+5` Config
-  - `Alt+6` About
-  - `Alt+7..0` reserved no-op (consumed, not shown in UI helper text)
+  - `Alt+2` Database
+  - `Alt+3` Accessories (Experimental)
+  - `Alt+4` Config
+  - `Alt+5` About
+  - `Alt+6..0` reserved no-op (consumed, not shown in UI helper text)
 - App-global bindings (via `bind_all`):
   - `Ctrl/Cmd+Q` quit through existing close-confirm flow
   - `Ctrl/Cmd+H` open User Manual dialog

@@ -66,6 +66,21 @@
     <p class="status-text">Queue is empty.</p>
   {% endif %}
 </div>
+{% if migration.state in ["deferred", "failed", "in_progress"] %}
+<div class="dash-card">
+  <h2>Migration Status</h2>
+  <p>
+    Sidecar data migration: <strong>{{ migration.state }}</strong>.
+    {% if migration.state == "deferred" %}
+      Migration was deferred on the desktop. Use the desktop app: Database &rarr; [Legacy] Sidecar Data &rarr; Migrate All to Main DB.
+    {% elif migration.state == "failed" %}
+      Migration failed: {{ migration.error | default("unknown error") }}. Use the desktop app: Database &rarr; [Legacy] Sidecar Data &rarr; Migrate All to Main DB.
+    {% elif migration.state == "in_progress" %}
+      Migration is in progress on the desktop app.
+    {% endif %}
+  </p>
+</div>
+{% endif %}
 {% endblock %}
 
 {% block scripts %}

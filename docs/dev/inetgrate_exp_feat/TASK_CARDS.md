@@ -192,9 +192,13 @@ Validation:
 ```
 
 HI test needed:
-- Open consolidated DB dialog.
-- Exercise each option path once.
-- Restart desktop app and verify one-time migration prompt behavior (first run with pending sidecars, then no automatic prompt after defer).
+- Open consolidated `Database` dialog and verify `View Servers` opens the server list.
+- Re-open `Database` dialog and verify `DB Tools` opens the DB tools dialog.
+- Re-open `Database` dialog, open `[Legacy] Sidecar Data`, then verify `SearXNG Dork Results` route opens.
+- Re-open `[Legacy] Sidecar Data`, then verify `Reddit Open Directory Posts` route opens.
+- Re-open `[Legacy] Sidecar Data`, then verify `Migrate All to Main DB` starts migration when a DB reader is active.
+- Verify `Migrate All to Main DB` shows a safe error and does not start a worker when no DB reader is active.
+- Restart desktop app and verify one-time startup migration prompt behavior (prompt appears with pending sidecar data, then no future automatic prompt after defer).
 
 ---
 

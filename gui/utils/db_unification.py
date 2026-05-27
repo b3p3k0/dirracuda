@@ -27,6 +27,9 @@ _PROBE_BACKFILL_ERROR_KEY = "db_unification.probe_backfill.last_error"
 _PROBE_CLEANUP_PROMPT_KEY = "db_unification.probe_cleanup.prompted"
 _SIDECAR_IMPORT_DONE_KEY = "db_unification.sidecar_import.completed"
 _SIDECAR_IMPORT_ERROR_KEY = "db_unification.sidecar_import.last_error"
+_SIDECAR_PROMPT_STATE_KEY = "db_unification.sidecar_prompt.state"
+_SIDECAR_PROMPT_SUMMARY_KEY = "db_unification.sidecar_prompt.last_summary"
+_SIDECAR_PROMPT_ERROR_KEY = "db_unification.sidecar_prompt.last_error"
 
 
 def _legacy_probe_dirs() -> Dict[str, Path]:
@@ -472,6 +475,69 @@ def _import_redseek(reader: DatabaseReader) -> Dict[str, int]:
     return counts
 
 
+def _has_pending_sidecar_data() -> bool:
+    paths = get_paths()
+    legacy = get_legacy_paths(paths=paths)
+    checks = [
+        (
+            select_existing_path(
+                paths.se_dork_db_file,
+                [legacy.flat_sidecar_se_dork_file, legacy.legacy_home_root / "se_dork.db"],
+            ),
+            "dork_results",
+        ),
+        (
+            select_existing_path(
+                paths.reddit_od_db_file,
+                [legacy.flat_sidecar_reddit_od_file, legacy.legacy_home_root / "reddit_od.db"],
+            ),
+            "reddit_targets",
+        ),
+    ]
+    for sidecar_path, table in checks:
+        if not sidecar_path.is_file():
+            continue
+        try:
+            conn = sqlite3.connect(f"file:{sidecar_path}?mode=ro", uri=True)
+            try:
+                row = conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone()
+            finally:
+                conn.close()
+            if row:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def detect_pending_sidecar_migration(reader: DatabaseReader) -> bool:
+    state = reader.get_migration_state(_SIDECAR_PROMPT_STATE_KEY, "not_started")
+    if state in ("deferred", "completed", "in_progress", "failed"):
+        return False
+    if str(reader.get_migration_state(_SIDECAR_IMPORT_DONE_KEY, "0")) == "1":
+        reader.set_migration_state(_SIDECAR_PROMPT_STATE_KEY, "completed")
+        return False
+    return _has_pending_sidecar_data()
+
+
+def defer_sidecar_migration(reader: DatabaseReader) -> None:
+    reader.set_migration_state(_SIDECAR_PROMPT_STATE_KEY, "deferred")
+
+
+def execute_sidecar_migration_now(reader: DatabaseReader) -> Dict[str, Any]:
+    reader.set_migration_state(_SIDECAR_PROMPT_STATE_KEY, "in_progress")
+    try:
+        result = run_targeted_sidecar_import(reader)
+        reader.set_migration_state(_SIDECAR_PROMPT_STATE_KEY, "completed")
+        reader.set_migration_state(_SIDECAR_PROMPT_SUMMARY_KEY, json.dumps(result))
+        reader.set_migration_state(_SIDECAR_PROMPT_ERROR_KEY, None)
+        return {**result, "status": "completed"}
+    except Exception as exc:
+        reader.set_migration_state(_SIDECAR_PROMPT_STATE_KEY, "failed")
+        reader.set_migration_state(_SIDECAR_PROMPT_ERROR_KEY, str(exc))
+        return {"status": "failed", "error": str(exc)}
+
+
 def run_targeted_sidecar_import(reader: DatabaseReader) -> Dict[str, Any]:
     if str(reader.get_migration_state(_SIDECAR_IMPORT_DONE_KEY, "0")) == "1":
         return {"status": "already_done", "imported": 0, "skipped": 0, "errors": 0}
@@ -516,8 +582,8 @@ def run_startup_db_unification(db_path: str) -> Dict[str, Any]:
         "success": True,
         "errors": [],
         "probe_backfill": {},
-        "sidecar_import": {},
         "prompt_cleanup": False,
+        "prompt_sidecar_migration": False,
     }
 
     try:
@@ -531,12 +597,9 @@ def run_startup_db_unification(db_path: str) -> Dict[str, Any]:
         _logger.warning("Probe snapshot backfill failed: %s", exc)
 
     try:
-        result["sidecar_import"] = run_targeted_sidecar_import(reader)
+        result["prompt_sidecar_migration"] = detect_pending_sidecar_migration(reader)
     except Exception as exc:
-        result["success"] = False
-        result["errors"].append(f"sidecar import failed: {exc}")
-        reader.set_migration_state(_SIDECAR_IMPORT_ERROR_KEY, str(exc))
-        _logger.warning("Sidecar targeted import failed: %s", exc)
+        _logger.warning("Sidecar migration detection failed: %s", exc)
 
     return result
 
@@ -545,5 +608,8 @@ __all__ = [
     "apply_probe_cleanup_choice",
     "cleanup_legacy_probe_cache_files",
     "count_legacy_probe_cache_files",
+    "detect_pending_sidecar_migration",
+    "defer_sidecar_migration",
+    "execute_sidecar_migration_now",
     "run_startup_db_unification",
 ]

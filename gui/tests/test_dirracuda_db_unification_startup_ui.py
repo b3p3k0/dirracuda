@@ -132,3 +132,120 @@ def test_handle_db_unification_failure_prompt_paths_are_non_blocking_when_dialog
     assert app._pending_db_unification_error == "probe backfill failed: boom"
     assert status_messages == ["DB unification warning: startup migration failed. Retry available."]
     assert retries["count"] == 0
+
+
+class _FakeRootWithAfter(_FakeRoot):
+    def __init__(self):
+        self.after_calls = []
+
+    def after(self, delay, callback):
+        self.after_calls.append((delay, callback))
+
+
+def test_handle_db_unification_schedules_sidecar_prompt_when_flagged(monkeypatch):
+    app = _make_app_stub()
+    app.root = _FakeRootWithAfter()
+    app.dashboard = SimpleNamespace(_show_status_bar=lambda _msg: None)
+
+    app._handle_db_unification_result({
+        "success": True,
+        "errors": [],
+        "prompt_cleanup": False,
+        "prompt_sidecar_migration": True,
+    })
+
+    assert any(cb == app._check_sidecar_migration_prompt for _delay, cb in app.root.after_calls)
+
+
+def test_handle_db_unification_no_sidecar_prompt_when_flag_absent(monkeypatch):
+    app = _make_app_stub()
+    app.root = _FakeRootWithAfter()
+    app.dashboard = SimpleNamespace(_show_status_bar=lambda _msg: None)
+
+    app._handle_db_unification_result({
+        "success": True,
+        "errors": [],
+        "prompt_cleanup": False,
+        "prompt_sidecar_migration": False,
+    })
+
+    assert not any(cb == app._check_sidecar_migration_prompt for _delay, cb in app.root.after_calls)
+
+
+def test_check_sidecar_migration_prompt_defers_on_no(monkeypatch):
+    app = _make_app_stub()
+    app.mock_mode = False
+    deferred = []
+    monkeypatch.setattr(DIRRACUDA.messagebox, "askyesno", lambda *a, **k: False)
+    monkeypatch.setattr(DIRRACUDA, "defer_sidecar_migration",
+                        lambda _reader: deferred.append(True))
+
+    app._check_sidecar_migration_prompt()
+
+    assert deferred == [True]
+
+
+def test_check_sidecar_migration_prompt_starts_worker_on_yes(monkeypatch):
+    import threading as _threading
+    app = _make_app_stub()
+    app.mock_mode = False
+    app.dashboard = SimpleNamespace()
+
+    thread_calls = []
+
+    class _FakeThread:
+        def __init__(self, target, daemon=False):
+            thread_calls.append({"target": target, "daemon": daemon})
+        def start(self):
+            pass
+
+    monkeypatch.setattr(DIRRACUDA.messagebox, "askyesno", lambda *a, **k: True)
+    monkeypatch.setattr(DIRRACUDA.threading, "Thread", _FakeThread)
+
+    app._check_sidecar_migration_prompt()
+
+    assert len(thread_calls) == 1
+    assert thread_calls[0]["daemon"] is True
+    # Worker must be callable
+    assert callable(thread_calls[0]["target"])
+
+
+def test_check_sidecar_migration_prompt_noop_in_mock_mode(monkeypatch):
+    app = _make_app_stub()
+    app.mock_mode = True
+    prompt_shown = []
+    monkeypatch.setattr(DIRRACUDA.messagebox, "askyesno",
+                        lambda *a, **k: prompt_shown.append(True) or False)
+
+    app._check_sidecar_migration_prompt()
+
+    assert prompt_shown == []
+
+
+def test_check_sidecar_migration_prompt_transient_dialog_failure_does_not_consume_prompt(monkeypatch):
+    app = _make_app_stub()
+    app.mock_mode = False
+    deferred = []
+    calls = {"count": 0}
+
+    def _askyesno(*_args, **_kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RuntimeError("transient dialog failure")
+        return False
+
+    monkeypatch.setattr(DIRRACUDA.messagebox, "askyesno", _askyesno)
+    monkeypatch.setattr(DIRRACUDA, "defer_sidecar_migration",
+                        lambda _reader: deferred.append(True))
+
+    # First attempt fails before choice is returned; prompt must remain eligible.
+    app._check_sidecar_migration_prompt()
+    assert calls["count"] == 1
+    assert deferred == []
+    assert getattr(app, "_sidecar_prompt_shown", False) is False
+
+    # Second attempt should still prompt and process defer.
+    app._check_sidecar_migration_prompt()
+    assert calls["count"] == 2
+    assert deferred == [True]
+    assert app._sidecar_prompt_shown is True

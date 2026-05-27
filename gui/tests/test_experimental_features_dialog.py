@@ -105,10 +105,10 @@ def _make_reddit_status_tab(context: dict) -> RedditTab:
 
 
 # ---------------------------------------------------------------------------
-# C5 Group A — Experimental button packed between DB Tools and Config
+# C5 Group A — Database button packed before Accessories and Config
 # ---------------------------------------------------------------------------
 
-def test_experimental_button_packed_between_db_tools_and_config(monkeypatch):
+def test_database_button_packed_before_accessories_and_config(monkeypatch):
     """
     Verifies button layout order by recording the text of each tk.Button
     at its .pack() call. pack() is called in source order, so position in
@@ -140,7 +140,7 @@ def test_experimental_button_packed_between_db_tools_and_config(monkeypatch):
 
     dash._build_header_section()
 
-    db_idx = next(i for i, t in enumerate(packed_texts) if "DB Tools" in t)
+    db_idx = next(i for i, t in enumerate(packed_texts) if "Database" in t)
     exp_idx = next(i for i, t in enumerate(packed_texts) if "Accessories" in t)
     cfg_idx = next(i for i, t in enumerate(packed_texts) if "Config" in t)
     assert db_idx < exp_idx < cfg_idx

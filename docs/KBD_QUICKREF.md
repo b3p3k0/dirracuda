@@ -1,6 +1,6 @@
 # Keyboard Quick Reference (Dirracuda)
 
-Updated: 2026-05-07
+Updated: 2026-05-27
 
 ## Global (Any Focused Window)
 
@@ -15,12 +15,11 @@ Updated: 2026-05-07
 | Context | Shortcut | Action |
 |---|---|---|
 | Dashboard | `Alt+1` | Start Scan |
-| Dashboard | `Alt+2` | Servers |
-| Dashboard | `Alt+3` | DB Tools |
-| Dashboard | `Alt+4` | Experimental |
-| Dashboard | `Alt+5` | Config |
-| Dashboard | `Alt+6` | About |
-| Dashboard | `Alt+7..0` | Reserved no-op (consumed) |
+| Dashboard | `Alt+2` | Database |
+| Dashboard | `Alt+3` | Accessories (Experimental) |
+| Dashboard | `Alt+4` | Config |
+| Dashboard | `Alt+5` | About |
+| Dashboard | `Alt+6..0` | Reserved no-op (consumed) |
 
 ## Shared Dialog/Window Contract
 

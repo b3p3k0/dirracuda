@@ -440,14 +440,98 @@ def test_startup_unification_reports_failures_without_raising(monkeypatch):
     )
     monkeypatch.setattr(
         db_unification,
-        "run_targeted_sidecar_import",
-        lambda _reader: (_ for _ in ()).throw(RuntimeError("sidecar failure")),
+        "detect_pending_sidecar_migration",
+        lambda _reader: (_ for _ in ()).throw(RuntimeError("detection failure")),
     )
 
     result = db_unification.run_startup_db_unification("/tmp/dirracuda.db")
 
     assert result["success"] is False
     assert "probe backfill failed: probe failure" in result["errors"]
-    assert "sidecar import failed: sidecar failure" in result["errors"]
+    # Detection failure is warn-only — must NOT appear in result["errors"]
+    assert not any("detection" in e for e in result["errors"])
     assert reader.state["db_unification.probe_backfill.last_error"] == "probe failure"
-    assert reader.state["db_unification.sidecar_import.last_error"] == "sidecar failure"
+
+
+def test_detect_pending_returns_false_when_deferred():
+    reader = _FakeReader()
+    reader.state[db_unification._SIDECAR_PROMPT_STATE_KEY] = "deferred"
+    assert db_unification.detect_pending_sidecar_migration(reader) is False
+
+
+def test_detect_pending_returns_false_when_completed():
+    reader = _FakeReader()
+    reader.state[db_unification._SIDECAR_PROMPT_STATE_KEY] = "completed"
+    assert db_unification.detect_pending_sidecar_migration(reader) is False
+
+
+def test_detect_pending_returns_false_when_failed():
+    reader = _FakeReader()
+    reader.state[db_unification._SIDECAR_PROMPT_STATE_KEY] = "failed"
+    assert db_unification.detect_pending_sidecar_migration(reader) is False
+
+
+def test_detect_pending_maps_old_import_done_key_to_completed():
+    reader = _FakeReader()
+    reader.state[db_unification._SIDECAR_IMPORT_DONE_KEY] = "1"
+    result = db_unification.detect_pending_sidecar_migration(reader)
+    assert result is False
+    assert reader.state[db_unification._SIDECAR_PROMPT_STATE_KEY] == "completed"
+
+
+def test_detect_pending_returns_false_when_no_sidecar_data(monkeypatch):
+    reader = _FakeReader()
+    monkeypatch.setattr(db_unification, "_has_pending_sidecar_data", lambda: False)
+    assert db_unification.detect_pending_sidecar_migration(reader) is False
+
+
+def test_detect_pending_returns_true_when_data_present(monkeypatch):
+    reader = _FakeReader()
+    monkeypatch.setattr(db_unification, "_has_pending_sidecar_data", lambda: True)
+    assert db_unification.detect_pending_sidecar_migration(reader) is True
+
+
+def test_defer_sidecar_migration_sets_state():
+    reader = _FakeReader()
+    db_unification.defer_sidecar_migration(reader)
+    assert reader.state[db_unification._SIDECAR_PROMPT_STATE_KEY] == "deferred"
+
+
+def test_execute_sidecar_migration_now_success_returns_completed_status(monkeypatch):
+    reader = _FakeReader()
+    monkeypatch.setattr(
+        db_unification,
+        "run_targeted_sidecar_import",
+        lambda _r: {"status": "done", "imported": 3, "skipped": 0, "errors": 0},
+    )
+    result = db_unification.execute_sidecar_migration_now(reader)
+    # "completed" must win over inner "done"
+    assert result["status"] == "completed"
+    assert result["imported"] == 3
+    assert reader.state[db_unification._SIDECAR_PROMPT_STATE_KEY] == "completed"
+
+
+def test_execute_sidecar_migration_now_partial_errors_still_completed(monkeypatch):
+    # Partial row errors (errors > 0) with no exception → state = "completed" (intentional)
+    reader = _FakeReader()
+    monkeypatch.setattr(
+        db_unification,
+        "run_targeted_sidecar_import",
+        lambda _r: {"status": "done", "imported": 2, "skipped": 1, "errors": 1},
+    )
+    result = db_unification.execute_sidecar_migration_now(reader)
+    assert result["status"] == "completed"
+    assert reader.state[db_unification._SIDECAR_PROMPT_STATE_KEY] == "completed"
+
+
+def test_execute_sidecar_migration_now_failure_sets_failed_state(monkeypatch):
+    reader = _FakeReader()
+    monkeypatch.setattr(
+        db_unification,
+        "run_targeted_sidecar_import",
+        lambda _r: (_ for _ in ()).throw(RuntimeError("import boom")),
+    )
+    result = db_unification.execute_sidecar_migration_now(reader)
+    assert result["status"] == "failed"
+    assert "import boom" in result["error"]
+    assert reader.state[db_unification._SIDECAR_PROMPT_STATE_KEY] == "failed"

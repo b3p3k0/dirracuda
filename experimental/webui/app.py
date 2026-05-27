@@ -482,12 +482,14 @@ def create_app(
     ) -> HTMLResponse:
         queue = request.app.state.scan_queue
         cfg_ = request.app.state.cfg
+        migration = _db.get_sidecar_migration_status(request.app.state.db_path)
         return templates.TemplateResponse(
             request, "dashboard.html", {
                 "session": session,
                 "cfg": cfg_,
                 "qs": queue.queue_status(),
                 "active_page": "dashboard",
+                "migration": migration,
             }
         )
 

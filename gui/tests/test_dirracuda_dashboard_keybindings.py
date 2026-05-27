@@ -30,6 +30,9 @@ class _DashboardStub:
     def _open_drill_down(self, window_type: str):
         self._calls.append(f"drill:{window_type}")
 
+    def _open_db_surface(self):
+        self._calls.append("db_surface")
+
     def _open_db_tools(self):
         self._calls.append("db_tools")
 
@@ -100,12 +103,10 @@ def test_dashboard_alt_shortcuts_dispatch_expected_actions() -> None:
     app.root.bindings["<Alt-KeyPress-3>"](None)
     app.root.bindings["<Alt-KeyPress-4>"](None)
     app.root.bindings["<Alt-KeyPress-5>"](None)
-    app.root.bindings["<Alt-KeyPress-6>"](None)
 
     assert calls == [
         "scan",
-        "drill:server_list",
-        "db_tools",
+        "db_surface",
         "experimental",
         "config",
         "about",
@@ -116,7 +117,7 @@ def test_reserved_alt_digits_are_consumed_without_action() -> None:
     app, calls = _build_app_stub()
     DIRRACUDA.XSMBSeekGUI._setup_event_handlers(app)
 
-    for seq in ("<Alt-KeyPress-7>", "<Alt-KeyPress-8>", "<Alt-KeyPress-9>", "<Alt-KeyPress-0>"):
+    for seq in ("<Alt-KeyPress-6>", "<Alt-KeyPress-7>", "<Alt-KeyPress-8>", "<Alt-KeyPress-9>", "<Alt-KeyPress-0>"):
         result = app.root.bindings[seq](None)
         assert result == "break"
 

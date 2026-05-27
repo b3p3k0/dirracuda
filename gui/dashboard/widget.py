@@ -34,6 +34,7 @@ from gui.components.http_scan_dialog import show_http_scan_dialog
 from gui.components.reddit_grab_dialog import show_reddit_grab_dialog
 from experimental.redseek.service import IngestOptions, IngestResult, run_ingest
 from gui.components import dashboard_experimental
+from gui.components import dashboard_database
 from gui.components.scan_results_dialog import show_scan_results_dialog
 from gui.components.batch_summary_dialog import show_batch_summary_dialog
 from gui.utils.settings_manager import get_settings_manager
@@ -168,6 +169,7 @@ class DashboardWidget:
         self.scan_button = None
         self.servers_button = None
         self.db_tools_button = None
+        self.db_button = None
         self.experimental_button = None
         self.config_button = None
         self.about_button = None
@@ -366,21 +368,13 @@ class DashboardWidget:
         self.theme.apply_to_widget(self.scan_button, "button_primary")
         self.scan_button.grid(row=0, column=0, padx=(0, 6), pady=(0, 6), sticky="ew")
 
-        self.servers_button = tk.Button(
+        self.db_button = tk.Button(
             actions_grid,
-            text="📋 Servers",
-            command=lambda: self._open_drill_down("server_list"),
+            text="\U0001F5C4 Database",
+            command=self._open_db_surface,
         )
-        self.theme.apply_to_widget(self.servers_button, "button_secondary")
-        self.servers_button.grid(row=0, column=1, padx=3, pady=(0, 6), sticky="ew")
-
-        self.db_tools_button = tk.Button(
-            actions_grid,
-            text="\U0001F5C4 DB Tools",
-            command=self._open_db_tools,
-        )
-        self.theme.apply_to_widget(self.db_tools_button, "button_secondary")
-        self.db_tools_button.grid(row=0, column=2, padx=(6, 0), pady=(0, 6), sticky="ew")
+        self.theme.apply_to_widget(self.db_button, "button_secondary")
+        self.db_button.grid(row=0, column=1, padx=3, pady=(0, 6), sticky="ew")
 
         self.experimental_button = tk.Button(
             actions_grid,
@@ -388,7 +382,7 @@ class DashboardWidget:
             command=self._handle_experimental_button_click,
         )
         self.theme.apply_to_widget(self.experimental_button, "button_secondary")
-        self.experimental_button.grid(row=1, column=0, padx=(0, 6), pady=(0, 0), sticky="ew")
+        self.experimental_button.grid(row=0, column=2, padx=(6, 0), pady=(0, 6), sticky="ew")
 
         self.config_button = tk.Button(
             actions_grid,
@@ -396,7 +390,7 @@ class DashboardWidget:
             command=self._open_config_editor,
         )
         self.theme.apply_to_widget(self.config_button, "button_secondary")
-        self.config_button.grid(row=1, column=1, padx=3, pady=(0, 0), sticky="ew")
+        self.config_button.grid(row=1, column=0, padx=(0, 6), pady=(0, 0), sticky="ew")
 
         self.about_button = tk.Button(
             actions_grid,
@@ -404,7 +398,7 @@ class DashboardWidget:
             command=self._open_about_dialog,
         )
         self.theme.apply_to_widget(self.about_button, "button_secondary")
-        self.about_button.grid(row=1, column=2, padx=(6, 0), pady=(0, 0), sticky="ew")
+        self.about_button.grid(row=1, column=1, padx=3, pady=(0, 0), sticky="ew")
 
     def _theme_toggle_button_text(self) -> str:
         """Return dashboard button label for switching to the opposite theme."""
@@ -417,8 +411,7 @@ class DashboardWidget:
         self.log_placeholder_color = self.theme.colors.get("log_placeholder", "#9ea4b3")
 
         for button in (
-            getattr(self, "servers_button", None),
-            getattr(self, "db_tools_button", None),
+            getattr(self, "db_button", None),
             getattr(self, "experimental_button", None),
             getattr(self, "config_button", None),
             getattr(self, "about_button", None),
@@ -487,7 +480,7 @@ class DashboardWidget:
         """Place keyboard helper text below status box content."""
         self.theme.create_styled_label(
             self.main_frame,
-            "Alt+1..6 launch dashboard actions  •  Ctrl/Cmd+T theme  •  Ctrl/Cmd+H help  •  Ctrl/Cmd+Q quit",
+            "Alt+1..5 launch dashboard actions  •  Ctrl/Cmd+T theme  •  Ctrl/Cmd+H help  •  Ctrl/Cmd+Q quit",
             "small",
             fg=self.theme.colors["text_secondary"],
         ).pack(anchor="w", pady=(0, 4))
@@ -1534,28 +1527,11 @@ class DashboardWidget:
         if self.drill_down_callback:
             self.drill_down_callback("app_config", {})
 
+    def _open_db_surface(self) -> None:
+        dashboard_database.open_db_surface(self)
+
     def _open_db_tools(self) -> None:
-        """Open database tools dialog."""
-        from gui.components.db_tools_dialog import show_db_tools_dialog
-
-        if not self.db_reader:
-            _mb().showerror(
-                "Database Not Found",
-                "No database is currently loaded."
-            )
-            return
-
-        db_path = str(self.db_reader.db_path)
-
-        show_db_tools_dialog(
-            parent=self.parent,
-            db_path=db_path,
-            on_database_changed=self._refresh_after_db_tools
-        )
-
-    def _refresh_after_db_tools(self) -> None:
-        """Refresh dashboard after DB tools operation."""
-        self.refresh_after_database_change(refresh_runtime_status=False)
+        self._open_db_surface()
 
     def _open_about_dialog(self) -> None:
         dialog = tk.Toplevel(self.parent)

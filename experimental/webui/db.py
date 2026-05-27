@@ -1658,3 +1658,30 @@ def export_db(db_path: Path, export_dir: Path) -> Path:
     finally:
         conn.close()
     return dest_path
+
+
+_SIDECAR_PROMPT_STATE_KEY = "db_unification.sidecar_prompt.state"
+_SIDECAR_PROMPT_SUMMARY_KEY = "db_unification.sidecar_prompt.last_summary"
+_SIDECAR_PROMPT_ERROR_KEY = "db_unification.sidecar_prompt.last_error"
+
+
+def get_sidecar_migration_status(db_path: Path) -> dict:
+    """Return migration state for the dashboard notice. Read-only, never raises."""
+    def _get(conn, key):
+        row = conn.execute(
+            "SELECT value FROM app_migration_state WHERE key=?", (key,)
+        ).fetchone()
+        return row[0] if row else None
+
+    conn = None
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        state = _get(conn, _SIDECAR_PROMPT_STATE_KEY) or "not_started"
+        summary = _get(conn, _SIDECAR_PROMPT_SUMMARY_KEY)
+        error = _get(conn, _SIDECAR_PROMPT_ERROR_KEY)
+        return {"state": state, "summary": summary, "error": error}
+    except Exception:
+        return {"state": "unknown", "summary": None, "error": None}
+    finally:
+        if conn is not None:
+            conn.close()
