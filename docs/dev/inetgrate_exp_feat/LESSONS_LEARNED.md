@@ -1,7 +1,7 @@
 # Integrate Experimental Features Into Main - LESSONS LEARNED
 
 Status: Seeded
-Last updated: 2026-05-25
+Last updated: 2026-05-28
 
 ## Carry Forward
 
@@ -20,6 +20,7 @@ Last updated: 2026-05-25
 13. One-time migration prompts must be stateful (`not_started`, `deferred`, `completed`, `failed`) to avoid operator fatigue and ambiguous behavior.
 14. Defer means defer: once operator chooses `No defer`, do not auto-prompt again; require explicit manual migration trigger.
 15. File-size hard-stop modularization rule applies to production code, not test/docs files (which should still be kept practical).
+16. Canonical runtime docs can drift even when runtime is stable. After config-path/port migrations, verify all operator and agent docs (`README.md`, `docs/TECHNICAL_REFERENCE.md`, `AGENTS.md`, `CLAUDE.md`, and `experimental/webui/README.md`) still match current WebUI defaults/paths in the same closeout wave (C8), not later.
 
 ## Additions During Execution
 
