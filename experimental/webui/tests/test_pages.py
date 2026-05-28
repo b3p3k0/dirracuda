@@ -151,8 +151,8 @@ def test_scans_searxng_renders_authenticated(logged_in):
     assert r.status_code == 200
     assert "SearXNG Discovery" in r.text
     assert 'id="run-btn"' in r.text
-    assert 'id="probe-btn"' in r.text
-    assert 'id="promote-btn"' in r.text
+    assert 'id="probe-btn"' not in r.text
+    assert 'id="promote-btn"' not in r.text
     assert '/static/searxng.js' in r.text
 
 
@@ -161,8 +161,8 @@ def test_scans_reddit_renders_authenticated(logged_in):
     assert r.status_code == 200
     assert "Reddit Discovery" in r.text
     assert 'id="run-btn"' in r.text
-    assert 'id="probe-btn"' in r.text
-    assert 'id="promote-btn"' in r.text
+    assert 'id="probe-btn"' not in r.text
+    assert 'id="promote-btn"' not in r.text
     assert '/static/reddit.js' in r.text
 
 

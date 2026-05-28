@@ -16,30 +16,33 @@ def test_required_fields_no_longer_include_discovery_dorks():
     assert "http_dork" not in AppConfigDialog.REQUIRED_FIELDS
 
 
-def test_validate_all_fields_skips_discovery_dork_fields():
+def test_experimental_fields_absent_from_validation_results():
+    import inspect
+    src = inspect.getsource(AppConfigDialog.__init__)
+    for removed_key in (
+        "se_dork_instance_url", "se_dork_query", "se_dork_max_results", "se_dork_probe_workers",
+        "reddit_mode", "reddit_sort", "reddit_top_window", "reddit_query",
+        "reddit_username", "reddit_max_posts",
+    ):
+        assert f'"{removed_key}"' not in src, (
+            f"Removed key {removed_key!r} still found in AppConfigDialog.__init__"
+        )
+
+
+def test_validate_all_fields_skips_experimental_fields():
     dlg = AppConfigDialog.__new__(AppConfigDialog)
     visited = []
     dlg._validate_field = lambda field: visited.append(field)
 
     dlg._validate_all_fields()
 
-    assert visited == [
-        "smbseek",
-        "database",
-        "config",
-        "api_key",
-        "se_dork_instance_url",
-        "se_dork_query",
-        "se_dork_max_results",
-        "se_dork_probe_workers",
-        "reddit_mode",
-        "reddit_sort",
-        "reddit_top_window",
-        "reddit_query",
-        "reddit_username",
-        "reddit_max_posts",
-        "quarantine",
-    ]
+    assert visited == ["smbseek", "database", "config", "api_key", "quarantine"]
+    for removed in (
+        "se_dork_instance_url", "se_dork_query", "se_dork_max_results", "se_dork_probe_workers",
+        "reddit_mode", "reddit_sort", "reddit_top_window", "reddit_query",
+        "reddit_username", "reddit_max_posts",
+    ):
+        assert removed not in visited
 
 
 def test_apply_runtime_settings_preserves_existing_dork_keys():

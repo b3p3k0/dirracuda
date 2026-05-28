@@ -14,6 +14,7 @@ from experimental.webui.config import TLSConfig, WebUIConfig
 
 _USERNAME = "km_tester"
 _PASSWORD = "correct-horse-battery-staple"
+_KEYMASTER_PASSPHRASE = "Km passphrase 123!"
 
 
 @pytest.fixture
@@ -88,6 +89,35 @@ def _create_key(client, csrf, *, label="test-key", api_key="abc123"):
         json={"provider": "SHODAN", "label": label, "api_key": api_key, "notes": ""},
         headers={"X-CSRF-Token": csrf, **_origin_header()},
     )
+
+
+def _build_secure_logged_in_client(tmp_path, cfg_no_tls) -> TestClient:
+    creds = tmp_path / "creds.json"
+    set_password(_USERNAME, _PASSWORD, path=creds)
+
+    main_config_path = tmp_path / "config.json"
+    main_config_path.write_text(json.dumps({"shodan": {}}), encoding="utf-8")
+
+    km_db_path = tmp_path / "keymaster-secure.db"
+    km_store.init_db(km_db_path)
+    conn = km_store.open_connection(km_db_path)
+    try:
+        km_store.set_secure_mode(conn, True)
+        km_store.configure_passphrase(conn, _KEYMASTER_PASSPHRASE)
+        conn.commit()
+    finally:
+        conn.close()
+
+    app = create_app(
+        cfg=cfg_no_tls,
+        creds_path=creds,
+        main_config_path=main_config_path,
+        keymaster_db_path=km_db_path,
+    )
+    client = TestClient(app, follow_redirects=False)
+    r = client.post("/login", json={"username": _USERNAME, "password": _PASSWORD})
+    assert r.status_code == 200
+    return client
 
 
 # ---------------------------------------------------------------------------
@@ -417,3 +447,33 @@ def test_keymaster_unlock_bad_passphrase(logged_in_client, monkeypatch):
     )
     assert r.status_code == 400
     assert "invalid passphrase" in r.json()["error"]
+
+
+def test_keymaster_unlock_success_sets_session(tmp_path, cfg_no_tls):
+    client = _build_secure_logged_in_client(tmp_path, cfg_no_tls)
+    csrf = _csrf(client)
+    r = client.post(
+        "/api/keymaster/unlock",
+        json={"passphrase": _KEYMASTER_PASSPHRASE},
+        headers={"X-CSRF-Token": csrf, **_origin_header()},
+    )
+    assert r.status_code == 200
+    assert r.json().get("ok") is True
+
+    status = client.get("/api/keymaster/status")
+    assert status.status_code == 200
+    payload = status.json()
+    assert payload["secure_mode"] is True
+    assert payload["is_unlocked"] is True
+
+
+def test_keymaster_unlock_accepts_trimmed_passphrase(tmp_path, cfg_no_tls):
+    client = _build_secure_logged_in_client(tmp_path, cfg_no_tls)
+    csrf = _csrf(client)
+    r = client.post(
+        "/api/keymaster/unlock",
+        json={"passphrase": f"  {_KEYMASTER_PASSPHRASE}\n"},
+        headers={"X-CSRF-Token": csrf, **_origin_header()},
+    )
+    assert r.status_code == 200
+    assert r.json().get("ok") is True

@@ -24,12 +24,6 @@ function setStatus(msg, cls) {
   el.className = cls ? cls : '';
 }
 
-function setResultsStatus(msg, cls) {
-  var el = document.getElementById('results-status');
-  el.textContent = msg;
-  el.className = cls ? cls : '';
-}
-
 function upsertRow(task) {
   var taskId = _taskId(task);
   if (!taskId) return;
@@ -121,9 +115,6 @@ function pollAll() {
         upsertRow(data);
         if (!wasTerminal && TERMINAL[data.status]) {
           terminalSeen[id] = true;
-          if (data.kind === 'run' && data.source === 'searxng') {
-            loadResults();
-          }
         }
       })
       .catch(function() {});
@@ -134,123 +125,6 @@ function pollAll() {
 function startPolling() {
   if (pollTimer) clearTimeout(pollTimer);
   pollTimer = setTimeout(pollAll, 3000);
-}
-
-function renderResultsTable(rows) {
-  var tbody = document.getElementById('results-body');
-  if (!rows || !rows.length) {
-    tbody.innerHTML = '<tr><td colspan="6" class="status-text">No results. Run a discovery job to populate.</td></tr>';
-    document.getElementById('select-all-rows').checked = false;
-    return;
-  }
-  var html = '';
-  rows.forEach(function(row) {
-    var rid = escHtml(String(row.result_id || ''));
-    var url = escHtml(String(row.url || ''));
-    var probe = escHtml(String(row.probe_status || ''));
-    var verdict = escHtml(String(row.verdict || ''));
-    var preview = escHtml(String(row.probe_preview || ''));
-    html +=
-      '<tr>' +
-      '<td><input type="checkbox" class="row-check" data-result-id="' + rid + '"></td>' +
-      '<td>' + rid + '</td>' +
-      '<td class="cell-url">' + url + '</td>' +
-      '<td>' + probe + '</td>' +
-      '<td>' + verdict + '</td>' +
-      '<td class="cell-preview">' + preview + '</td>' +
-      '</tr>';
-  });
-  tbody.innerHTML = html;
-  document.getElementById('select-all-rows').checked = false;
-}
-
-async function loadResults() {
-  var search = (document.getElementById('result-search').value || '').trim();
-  var url = '/api/searxng/results?limit=500';
-  if (search) url += '&search=' + encodeURIComponent(search);
-  try {
-    var resp = await fetch(url);
-    if (!resp.ok) {
-      setResultsStatus('Failed to load results.', 'status-error');
-      return;
-    }
-    var data = await resp.json();
-    renderResultsTable(data.results || []);
-    setResultsStatus('');
-  } catch (_err) {
-    setResultsStatus('Network error loading results.', 'status-error');
-  }
-}
-
-function getSelectedIds() {
-  var checks = document.querySelectorAll('#results-body .row-check:checked');
-  var ids = [];
-  checks.forEach(function(cb) {
-    var id = parseInt(cb.dataset.resultId, 10);
-    if (id > 0) ids.push(id);
-  });
-  return ids;
-}
-
-async function probeSelected() {
-  var ids = getSelectedIds();
-  if (!ids.length) {
-    setResultsStatus('Select at least one row to probe.', 'status-warn');
-    return;
-  }
-  setResultsStatus('Queueing probe job…', 'status-neutral');
-  try {
-    var resp = await fetch('/api/searxng/actions/probe', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json', 'X-CSRF-Token': token},
-      body: JSON.stringify({result_ids: ids})
-    });
-    var data = await resp.json();
-    if (!resp.ok) {
-      setResultsStatus('Probe failed: ' + (data.error || resp.status), 'status-error');
-      return;
-    }
-    upsertRow({
-      job_id: data.job_id,
-      status: data.status,
-      source: 'searxng',
-      kind: 'probe',
-      label: 'SearXNG probe (' + ids.length + ' rows)',
-      progress_message: ''
-    });
-    startPolling();
-    setResultsStatus('Probe job queued.', 'status-ok');
-  } catch (_err) {
-    setResultsStatus('Network error queueing probe.', 'status-error');
-  }
-}
-
-async function promoteSelected() {
-  var ids = getSelectedIds();
-  if (!ids.length) {
-    setResultsStatus('Select at least one row to promote.', 'status-warn');
-    return;
-  }
-  setResultsStatus('Promoting…', 'status-neutral');
-  try {
-    var resp = await fetch('/api/searxng/actions/promote', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json', 'X-CSRF-Token': token},
-      body: JSON.stringify({result_ids: ids})
-    });
-    var data = await resp.json();
-    if (!resp.ok) {
-      setResultsStatus('Promote failed: ' + (data.error || resp.status), 'status-error');
-      return;
-    }
-    var msg = 'Promote complete: ' +
-      (data.inserted || 0) + ' inserted, ' +
-      (data.updated || 0) + ' updated, ' +
-      (data.skipped || 0) + ' skipped.';
-    setResultsStatus(msg, 'status-ok');
-  } catch (_err) {
-    setResultsStatus('Network error promoting.', 'status-error');
-  }
 }
 
 function applyPrefs() {
@@ -304,26 +178,6 @@ document.getElementById('bulk-probe').addEventListener('change', function() {
 document.getElementById('instance-url').addEventListener('change', persistPrefs);
 document.getElementById('max-results').addEventListener('change', persistPrefs);
 document.getElementById('probe-workers').addEventListener('change', persistPrefs);
-
-document.getElementById('refresh-btn').addEventListener('click', loadResults);
-document.getElementById('probe-btn').addEventListener('click', probeSelected);
-document.getElementById('promote-btn').addEventListener('click', promoteSelected);
-
-document.getElementById('clear-selection-btn').addEventListener('click', function() {
-  document.querySelectorAll('#results-body .row-check').forEach(function(cb) {
-    cb.checked = false;
-  });
-  document.getElementById('select-all-rows').checked = false;
-});
-
-document.getElementById('select-all-rows').addEventListener('change', function() {
-  var checked = this.checked;
-  document.querySelectorAll('#results-body .row-check').forEach(function(cb) {
-    cb.checked = checked;
-  });
-});
-
-document.getElementById('result-search').addEventListener('input', loadResults);
 
 document.getElementById('searxng-form').addEventListener('submit', async function(e) {
   e.preventDefault();
@@ -413,4 +267,3 @@ document.getElementById('searxng-form').addEventListener('submit', async functio
 
 applyPrefs();
 hydrateQueueFromServer();
-loadResults();

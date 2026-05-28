@@ -189,84 +189,6 @@ def test_reddit_run_user_missing_username(logged_in_client):
     assert r.status_code == 422
 
 
-# ---------------------------------------------------------------------------
-# /api/reddit/results
-# ---------------------------------------------------------------------------
-
-def test_reddit_results_requires_auth(client):
-    r = client.get("/api/reddit/results")
-    assert r.status_code == 303
-
-
-def test_reddit_results_ok(logged_in_client, monkeypatch):
-    fake_rows = [
-        {
-            "id": 1,
-            "target_normalized": "http://example.com/files/",
-            "host": "example.com",
-            "protocol": "http",
-            "probe_status": "unprobed",
-            "probe_preview": None,
-            "post_title": "cool share",
-            "post_author": "user1",
-        },
-    ]
-    monkeypatch.setattr(
-        "experimental.webui.app.load_reddit_rows",
-        lambda db_path: fake_rows,
-    )
-    r = logged_in_client.get("/api/reddit/results")
-    assert r.status_code == 200
-    data = r.json()
-    assert data["count"] == 1
-    assert data["results"][0]["target_normalized"] == "http://example.com/files/"
-
-
-# ---------------------------------------------------------------------------
-# /api/reddit/actions/probe
-# ---------------------------------------------------------------------------
-
-def test_reddit_probe_requires_auth(client):
-    r = client.post("/api/reddit/actions/probe", json={"target_ids": [1]})
-    assert r.status_code == 303
-
-
-def test_reddit_probe_missing_csrf(logged_in_client):
-    r = logged_in_client.post("/api/reddit/actions/probe", json={"target_ids": [1]})
-    assert r.status_code == 403
-
-
-def test_reddit_probe_queues_job(logged_in_client, monkeypatch):
-    monkeypatch.setattr(
-        "experimental.webui.app.probe_reddit_rows",
-        lambda db_path, target_ids, **kw: {"processed": len(target_ids), "updated": len(target_ids)},
-    )
-    csrf = _csrf_from_dashboard(logged_in_client)
-    r = logged_in_client.post(
-        "/api/reddit/actions/probe",
-        headers={"X-CSRF-Token": csrf},
-        json={"target_ids": [1, 2]},
-    )
-    assert r.status_code == 202
-    data = r.json()
-    assert "job_id" in data
-    assert data["status"] in {"queued", "running", "done", "failed"}
-
-
-# ---------------------------------------------------------------------------
-# /api/reddit/actions/promote
-# ---------------------------------------------------------------------------
-
-def test_reddit_promote_requires_auth(client):
-    r = client.post("/api/reddit/actions/promote", json={"target_ids": [1]})
-    assert r.status_code == 303
-
-
-def test_reddit_promote_missing_csrf(logged_in_client):
-    r = logged_in_client.post("/api/reddit/actions/promote", json={"target_ids": [1]})
-    assert r.status_code == 403
-
-
 def test_reddit_run_completion_message_mentions_sidecar(
     logged_in_client, app_and_queue, monkeypatch
 ):
@@ -315,24 +237,3 @@ def test_reddit_run_completion_message_mentions_sidecar(
     ), f"Sidecar wording absent from completion message: {completion}"
 
 
-def test_reddit_promote_ok(logged_in_client, monkeypatch):
-    fake_row = {"id": 1, "target_normalized": "http://example.com/files/"}
-    fake_summary = {"selected": 1, "processed": 1, "inserted": 1, "updated": 0, "skipped": 0, "failed": 0}
-    monkeypatch.setattr(
-        "experimental.webui.app.load_reddit_rows",
-        lambda db_path: [fake_row],
-    )
-    monkeypatch.setattr(
-        "experimental.webui.app.promote_reddit_rows",
-        lambda db_path, rows, target_ids: fake_summary,
-    )
-    csrf = _csrf_from_dashboard(logged_in_client)
-    r = logged_in_client.post(
-        "/api/reddit/actions/promote",
-        headers={"X-CSRF-Token": csrf},
-        json={"target_ids": [1]},
-    )
-    assert r.status_code == 200
-    data = r.json()
-    assert data["inserted"] == 1
-    assert data["processed"] == 1

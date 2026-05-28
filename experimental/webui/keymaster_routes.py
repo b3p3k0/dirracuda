@@ -154,11 +154,27 @@ async def _km_unlock(
         return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
 
     db_path = _km_db_path(request)
+    raw_passphrase = body.passphrase
+    # UX hardening: clipboard copies can include trailing whitespace/newlines.
+    # Try exact first, then a trimmed fallback.
+    candidate_passphrases = [raw_passphrase]
+    trimmed = raw_passphrase.strip()
+    if trimmed and trimmed != raw_passphrase:
+        candidate_passphrases.append(trimmed)
     try:
         km_store.init_db(db_path)
         conn = km_store.open_connection(db_path)
         try:
-            session_keys = km_store.unlock_session_keys(conn, body.passphrase)
+            session_keys = None
+            last_invalid = None
+            for candidate in candidate_passphrases:
+                try:
+                    session_keys = km_store.unlock_session_keys(conn, candidate)
+                    break
+                except InvalidPassphraseError as exc:
+                    last_invalid = exc
+            if session_keys is None and last_invalid is not None:
+                raise last_invalid
         finally:
             conn.close()
     except InvalidPassphraseError:

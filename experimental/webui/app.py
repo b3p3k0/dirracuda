@@ -21,20 +21,10 @@ from experimental.se_dork.models import RunOptions as SearxngRunOptions
 from experimental.se_dork.service import run_dork_search
 import experimental.webui.db as _db
 import experimental.webui.db_actions as _db_actions
-from experimental.webui.experimental_features import (
-    load_reddit_rows,
-    load_searxng_rows,
-    probe_reddit_rows,
-    probe_searxng_rows,
-    promote_reddit_rows,
-    promote_searxng_rows,
-)
 from experimental.webui.experimental_models import (
     DorkbookEntryCreateRequest,
     DorkbookPrefillRequest,
-    RedditActionRequest,
     RedditRunRequest,
-    SearxngActionRequest,
     SearxngPreflightRequest,
     SearxngRunRequest,
 )
@@ -614,98 +604,6 @@ def create_app(
             status_code=202,
         )
 
-    @app.get("/api/searxng/results")
-    async def _searxng_results(
-        request: Request,
-        session: Session = Depends(get_session),
-        search: Optional[str] = Query(default=None),
-        limit: int = Query(default=500, ge=1, le=2000),
-    ) -> JSONResponse:
-        try:
-            rows = load_searxng_rows(None)
-        except Exception as exc:
-            logger.exception("searxng results load failed")
-            return JSONResponse({"error": str(exc)}, status_code=500)
-
-        search_norm = str(search or "").strip().lower()
-        if search_norm:
-            rows = [
-                row for row in rows
-                if search_norm in str(row.get("url") or "").lower()
-                or search_norm in str(row.get("probe_preview") or "").lower()
-                or search_norm in str(row.get("verdict") or "").lower()
-            ]
-
-        rows = rows[:limit]
-        return JSONResponse({"results": rows, "count": len(rows)})
-
-    @app.post("/api/searxng/actions/probe")
-    async def _searxng_probe(
-        body: SearxngActionRequest,
-        request: Request,
-        session: Session = Depends(get_session),
-    ) -> JSONResponse:
-        if not same_origin(request):
-            return JSONResponse({"error": "origin check failed"}, status_code=403)
-        csrf_tok = request.headers.get("X-CSRF-Token")
-        if not validate_csrf(csrf_tok, session.csrf_token):
-            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
-
-        shared_jobs = request.app.state.shared_jobs
-        config_path = str(request.app.state.main_config_path)
-        result_ids = list(body.result_ids)
-
-        def _runner(job):
-            job.set_progress("Starting SearXNG probe batch...", 2.0)
-
-            def _progress(done: int, total: int, message: str) -> None:
-                pct = (float(done) / float(total) * 100.0) if total else 100.0
-                job.set_progress(message, pct)
-
-            summary = probe_searxng_rows(
-                None,
-                result_ids,
-                config_path=config_path,
-                cancel_event=job.cancel_event,
-                progress_callback=_progress,
-            )
-            job.set_metadata(summary=summary)
-            job.set_progress(
-                f"SearXNG probe complete: {summary.get('processed', 0)} row(s) processed.",
-                100.0,
-            )
-
-        queued = shared_jobs.submit_external(
-            source="searxng",
-            kind="probe",
-            label=f"SearXNG probe batch ({len(result_ids)} rows)",
-            runner=_runner,
-            metadata={"result_ids": result_ids},
-        )
-        return JSONResponse(
-            {"job_id": queued.job_id, "status": queued.status.value},
-            status_code=202,
-        )
-
-    @app.post("/api/searxng/actions/promote")
-    async def _searxng_promote(
-        body: SearxngActionRequest,
-        request: Request,
-        session: Session = Depends(get_session),
-    ) -> JSONResponse:
-        if not same_origin(request):
-            return JSONResponse({"error": "origin check failed"}, status_code=403)
-        csrf_tok = request.headers.get("X-CSRF-Token")
-        if not validate_csrf(csrf_tok, session.csrf_token):
-            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
-        try:
-            rows = load_searxng_rows(None)
-            summary = promote_searxng_rows(request.app.state.db_path, rows, body.result_ids)
-        except Exception as exc:
-            logger.exception("searxng promote failed")
-            return JSONResponse({"error": str(exc)}, status_code=500)
-        return JSONResponse(summary)
-
     @app.post("/api/reddit/run")
     async def _reddit_run(
         body: RedditRunRequest,
@@ -772,99 +670,6 @@ def create_app(
             {"job_id": queued.job_id, "status": queued.status.value},
             status_code=202,
         )
-
-    @app.get("/api/reddit/results")
-    async def _reddit_results(
-        request: Request,
-        session: Session = Depends(get_session),
-        search: Optional[str] = Query(default=None),
-        limit: int = Query(default=500, ge=1, le=5000),
-    ) -> JSONResponse:
-        try:
-            rows = load_reddit_rows(None)
-        except Exception as exc:
-            logger.exception("reddit results load failed")
-            return JSONResponse({"error": str(exc)}, status_code=500)
-
-        search_norm = str(search or "").strip().lower()
-        if search_norm:
-            rows = [
-                row for row in rows
-                if search_norm in str(row.get("target_normalized") or "").lower()
-                or search_norm in str(row.get("host") or "").lower()
-                or search_norm in str(row.get("post_author") or "").lower()
-                or search_norm in str(row.get("post_title") or "").lower()
-                or search_norm in str(row.get("probe_preview") or "").lower()
-            ]
-        rows = rows[:limit]
-        return JSONResponse({"results": rows, "count": len(rows)})
-
-    @app.post("/api/reddit/actions/probe")
-    async def _reddit_probe(
-        body: RedditActionRequest,
-        request: Request,
-        session: Session = Depends(get_session),
-    ) -> JSONResponse:
-        if not same_origin(request):
-            return JSONResponse({"error": "origin check failed"}, status_code=403)
-        csrf_tok = request.headers.get("X-CSRF-Token")
-        if not validate_csrf(csrf_tok, session.csrf_token):
-            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
-
-        shared_jobs = request.app.state.shared_jobs
-        config_path = str(request.app.state.main_config_path)
-        target_ids = list(body.target_ids)
-
-        def _runner(job):
-            job.set_progress("Starting Reddit probe batch...", 2.0)
-
-            def _progress(done: int, total: int, message: str) -> None:
-                pct = (float(done) / float(total) * 100.0) if total else 100.0
-                job.set_progress(message, pct)
-
-            summary = probe_reddit_rows(
-                None,
-                target_ids,
-                config_path=config_path,
-                cancel_event=job.cancel_event,
-                progress_callback=_progress,
-            )
-            job.set_metadata(summary=summary)
-            job.set_progress(
-                f"Reddit probe complete: {summary.get('processed', 0)} row(s) processed.",
-                100.0,
-            )
-
-        queued = shared_jobs.submit_external(
-            source="reddit",
-            kind="probe",
-            label=f"Reddit probe batch ({len(target_ids)} rows)",
-            runner=_runner,
-            metadata={"target_ids": target_ids},
-        )
-        return JSONResponse(
-            {"job_id": queued.job_id, "status": queued.status.value},
-            status_code=202,
-        )
-
-    @app.post("/api/reddit/actions/promote")
-    async def _reddit_promote(
-        body: RedditActionRequest,
-        request: Request,
-        session: Session = Depends(get_session),
-    ) -> JSONResponse:
-        if not same_origin(request):
-            return JSONResponse({"error": "origin check failed"}, status_code=403)
-        csrf_tok = request.headers.get("X-CSRF-Token")
-        if not validate_csrf(csrf_tok, session.csrf_token):
-            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
-        try:
-            rows = load_reddit_rows(None)
-            summary = promote_reddit_rows(request.app.state.db_path, rows, body.target_ids)
-        except Exception as exc:
-            logger.exception("reddit promote failed")
-            return JSONResponse({"error": str(exc)}, status_code=500)
-        return JSONResponse(summary)
 
     @app.post("/api/scans/preflight")
     async def _scans_preflight(

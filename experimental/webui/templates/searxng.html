@@ -59,40 +59,6 @@
   </div>
 </div>
 
-<div class="results-section">
-  <h2>Results</h2>
-  <div class="form-row">
-    <label for="result-search">Filter</label>
-    <input id="result-search" name="result-search" type="text" placeholder="URL, preview, verdict" maxlength="200">
-    <button type="button" id="refresh-btn">Refresh</button>
-  </div>
-  <div class="form-actions">
-    <input id="select-all-rows" type="checkbox">
-    <label for="select-all-rows">Select all</label>
-    <button type="button" id="probe-btn">Probe Selected</button>
-    <button type="button" id="promote-btn">Promote Selected</button>
-    <button type="button" id="clear-selection-btn">Clear Selection</button>
-  </div>
-  <div role="status" id="results-status" aria-live="polite"></div>
-  <div class="table-wrap">
-    <table id="results-table">
-      <thead>
-        <tr>
-          <th></th>
-          <th>ID</th>
-          <th>URL</th>
-          <th>Probe</th>
-          <th>Verdict</th>
-          <th>Preview</th>
-        </tr>
-      </thead>
-      <tbody id="results-body">
-        <tr><td colspan="6" class="status-text">No results yet. Run a discovery job to populate.</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <p class="status-text">Full run history and per-run breakdown are available in the desktop client.</p>
-</div>
 {% endblock %}
 
 {% block scripts %}
