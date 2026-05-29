@@ -1,7 +1,7 @@
 # Integrate Experimental Features Into Main - RISK REGISTER
 
 Status: Active
-Last updated: 2026-05-25
+Last updated: 2026-05-29
 
 ## Open Risks
 
@@ -17,7 +17,12 @@ Last updated: 2026-05-25
 | R8 | External API behavior/policy changes invalidate assumptions | Medium | Medium | Re-check vendor docs at planning points; cite current sources in contracts | RA | All |
 | R9 | Regression gaps due incomplete test targeting | Medium | High | Card-level targeted tests + quick-lane before closeout | DA + RA | C7 |
 | R10 | One-time migration prompt logic repeats too often or not at all | Medium | Medium | Persist explicit migration state machine and test first-run/defer/resume branches | DA + RA | C5 |
-| R11 | WebUI continues exposing sidecar DB surfaces after promotion | Medium | Medium | Add explicit WebUI cleanup requirements and page-level regression assertions | DA | C3-C6 |
+
+## Closed Risks
+
+| ID | Risk | Resolution |
+| --- | --- | --- |
+| R11 | WebUI continues exposing sidecar DB surfaces after promotion | Mitigated in C6: SearXNG/Reddit sidecar result-browse/probe/promote API routes removed from `app.py`. Dorkbook and Keymaster WebUI management APIs remain intentionally registered (`app.py:1087`, `keymaster_routes.py:69`). Desktop-owned migration messaging in place per lesson 12. |
 
 ## Monitoring Notes
 

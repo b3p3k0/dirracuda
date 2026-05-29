@@ -107,7 +107,7 @@ Default:
 
 - `enabled=false`
 - `bind_address=127.0.0.1`
-- `port=5480`
+- `port=2600`
 - `tls.enabled=true`
 - `tls.allow_insecure_remote=false`
 

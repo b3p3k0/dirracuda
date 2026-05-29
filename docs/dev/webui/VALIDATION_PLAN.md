@@ -95,7 +95,7 @@ Manual gates are required before calling the feature done.
    `./venv/bin/python -m experimental.webui.server`
    or
    `./venv/bin/uvicorn experimental.webui.app:create_app --factory`.
-2. Open `http://127.0.0.1:5480`.
+2. Open `http://127.0.0.1:2600`.
 3. Confirm login is required.
 4. Log in.
 5. Navigate Dashboard, Scans, Results, Export, Config.

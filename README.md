@@ -112,7 +112,7 @@ You're connecting to machines you don't control. A few baseline precautions befo
 The main window. From here you can:
 
 - Launch discovery from one **▶ Start Scan** button - pick one protocol or queue multiple protocols in sequence from the same dialog
-- Access [Experimental Features](#experimental-features) 
+- Access [Accessories](#accessories) 
 - Open the Server List Browser to work with hosts you've found
 - Manage your database (import, export, merge, maintenance)
 - Edit configuration
@@ -347,9 +347,9 @@ These are separate so you can customize or share them without touching app setti
 
 The GUI includes a built-in config editor for common settings and an integrated simple text editor for full configuration.
 
-## Experimental Features
+## Accessories
 
-Experimental work is grouped under the permanent `⚗ Experimental` button in the dashboard header.
+Accessories are grouped under the `⚗ Accessories` button in the dashboard header.
 
 The dialog is modeless and tab-based. Current tabs:
 - `SearXNG`
@@ -365,7 +365,7 @@ The dialog is modeless and tab-based. Current tabs:
 Use this tab to run open-directory dork queries against a SearXNG server, keep confirmed open indexes, and review/promote the results.
 
 Quick start:
-1. Dashboard → `⚗ Experimental` → `SearXNG` tab.
+1. Dashboard → `⚗ Accessories` → `SearXNG` tab.
 2. Fill in your server and query.
 3. Click `Test` to confirm the server is reachable and JSON search is enabled.
 4. Click `Run` to collect results.
@@ -453,7 +453,7 @@ Known limitations:
 Dorkbook is a notebook for reusable search queries.
 
 Quick start:
-1. Dashboard → `⚗ Experimental` → `Dorkbook` tab.
+1. Dashboard → `⚗ Accessories` → `Dorkbook` tab.
 2. Click `Open Dorkbook`.
 3. Use `SMB` / `FTP` / `HTTP` tabs to manage recipes.
 
@@ -470,7 +470,7 @@ Behavior:
 Keymaster stores reusable Shodan API keys for rapid key rotation during testing.
 
 Quick start:
-1. Dashboard → `⚗ Experimental` → `Keymaster` tab.
+1. Dashboard → `⚗ Accessories` → `Keymaster` tab.
 2. Click `Open Keymaster`.
 3. On first secure-mode use, set a dedicated Keymaster passphrase.
 4. Unlock once per app session.
@@ -506,7 +506,7 @@ What is retained:
 - Sidecar DB path remains `~/.dirracuda/data/experimental/censys_discovery.db`.
 
 Current UI state:
-- No Censys tab in Experimental Features.
+- No Censys tab in Accessories.
 - No Censys settings tab in Application Configuration.
 
 ## Web UI (Optional)
@@ -521,7 +521,7 @@ pip install -r experimental/webui/requirements-web.txt
 
 For setup, configuration, remote mode, and security guidance, see [experimental/webui/README.md](experimental/webui/README.md).
 
-From the desktop app, use `Experimental -> Web UI` to start/stop the service.
+From the desktop app, use `Accessories → Web UI` to start/stop the service.
 
 Current Web UI layout:
 - `Scans` (dropdown): `shodan`, `searxng`, `reddit`

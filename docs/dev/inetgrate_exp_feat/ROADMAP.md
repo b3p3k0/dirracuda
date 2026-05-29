@@ -2,21 +2,21 @@
 
 Status: Active
 Mode: PA/RA supervised, DA implemented, one card at a time
-Last updated: 2026-05-25
+Last updated: 2026-05-29
 
 ## Card Status
 
 | Card | Title | Status |
 | --- | --- | --- |
 | C0 | Baseline Contracts Freeze | COMPLETE |
-| C1 | Accessories Shell Cutover | PLANNED |
-| C2 | Core Provider Registry For Start Scan | PLANNED |
-| C3 | SearXNG Core Promotion Path | PLANNED |
-| C4 | Reddit Core Promotion Path | PLANNED |
-| C5 | Database Surface Consolidation | PLANNED |
-| C6 | Provider-Scoped Config Localization | PLANNED |
-| C7 | Runtime Hardening + Regression | PLANNED |
-| C8 | Docs/Reference Closeout | PLANNED |
+| C1 | Accessories Shell Cutover | COMPLETE |
+| C2 | Core Provider Registry For Start Scan | COMPLETE |
+| C3 | SearXNG Core Promotion Path | COMPLETE |
+| C4 | Reddit Core Promotion Path | COMPLETE |
+| C5 | Database Surface Consolidation | COMPLETE |
+| C6 | Provider-Scoped Config Localization | COMPLETE |
+| C7 | Runtime Hardening + Regression | COMPLETE |
+| C8 | Docs/Reference Closeout | COMPLETE |
 
 ## Phase A - Contract And Baseline
 

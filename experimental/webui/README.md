@@ -138,7 +138,7 @@ Shodan balance is fetched server-side only. The API key is never sent to the bro
 
 ## Configuration
 
-Config file: `~/.dirracuda/conf/webui.json`
+Config file: `~/.dirracuda/conf.d/experimental/webui.json`
 
 If the file is absent, safe in-memory defaults are used. The file is created when config is explicitly saved.
 

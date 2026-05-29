@@ -38,8 +38,8 @@ pip install -r experimental/webui/requirements-web.txt
 ./cli/httpseek.py --country US
 
 # Web UI
-./venv/bin/python -m experimental.webui.server          # default: 127.0.0.1:5480
-./venv/bin/python -m experimental.webui.server --host 0.0.0.0 --port 5480
+./venv/bin/python -m experimental.webui.server          # default: 127.0.0.1:2600
+./venv/bin/python -m experimental.webui.server --host 0.0.0.0 --port 2600
 ```
 
 > **Entrypoint guardrail**: `./dirracuda` is the only valid runtime entrypoint.
@@ -122,7 +122,7 @@ GUI tabs for these surfaces live in `gui/components/experimental_features/`.
 | Keymaster | `experimental/keymaster/store.py` | Multi-key API key store; selecting a key updates active Shodan key in memory |
 | Redseek | `experimental/redseek/service.py` | Reddit ingestion; extracts SMB/FTP/HTTP targets from post text |
 | SearXNG Dork | `experimental/se_dork/service.py` | SearXNG-based dork search; two-commit transaction model |
-| Censys Discovery | `experimental/censys_discovery/service.py` | Censys Platform v3 alternative discovery; requires org-scoped PAT |
+| Censys Discovery | `experimental/censys_discovery/service.py` | Censys Platform v3 alternative discovery; requires org-scoped PAT. **Suspended** — free-tier API does not provide candidate-list endpoints required for in-app runs. |
 
 ## Test Conventions
 

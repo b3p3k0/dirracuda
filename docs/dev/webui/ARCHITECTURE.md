@@ -128,7 +128,7 @@ helper is needed, keep it narrow: source DB path in, export artifact path out.
 New config files:
 
 ```text
-~/.dirracuda/conf/webui.json
+~/.dirracuda/conf.d/experimental/webui.json
 ~/.dirracuda/conf/webui_creds.json
 ```
 

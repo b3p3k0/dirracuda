@@ -128,7 +128,7 @@ override precedence for tests or controlled deployments.
 | Route | Auth | Description |
 |-------|------|-------------|
 | `GET /scans` | n/a | Route not registered; returns 404. Use `/scans/shodan`, `/scans/searxng`, or `/scans/reddit`. |
-| `GET /scans/searxng` | session | SearXNG discovery page (run/results/probe/promote). |
+| `GET /scans/searxng` | session | SearXNG discovery page (run with optional inline probe pass). |
 | `GET /scans/reddit` | session | Reddit ingestion page (feed/search/user modes). |
 | `GET /extras` | n/a | Route not registered; returns 404. Use `/extras/dorkbook` or `/extras/keymaster`. |
 | `GET /extras/dorkbook` | session | Dorkbook recipe management. |
@@ -136,13 +136,7 @@ override precedence for tests or controlled deployments.
 | `GET /export` | session | Dedicated export page (moved off `/results` in C29). |
 | `POST /api/searxng/preflight` | session + CSRF + same-origin | Validate SearXNG instance URL. |
 | `POST /api/searxng/run` | session + CSRF + same-origin | Queue SearXNG discovery run; 202 + job_id. |
-| `GET /api/searxng/results` | session | Cached SearXNG results (`search`, `limit` params). |
-| `POST /api/searxng/actions/probe` | session + CSRF + same-origin | Probe 1–200 SearXNG result rows. |
-| `POST /api/searxng/actions/promote` | session + CSRF + same-origin | Promote results to main DB. |
 | `POST /api/reddit/run` | session + CSRF + same-origin | Queue Reddit ingest run; 202 + job_id. |
-| `GET /api/reddit/results` | session | Cached Reddit results (`search`, `limit` params). |
-| `POST /api/reddit/actions/probe` | session + CSRF + same-origin | Probe 1–200 Reddit result rows. |
-| `POST /api/reddit/actions/promote` | session + CSRF + same-origin | Promote to main DB. |
 | `GET /api/dorkbook/entries` | session | List Dorkbook entries by protocol (SMB/FTP/HTTP) + optional search. |
 | `POST /api/dorkbook/entries` | session + CSRF + same-origin | Create entry in Dorkbook sidecar DB. |
 | `DELETE /api/dorkbook/entries/{entry_id}` | session + CSRF + same-origin | Delete custom dork entry (built-in dorks cannot be deleted). |
@@ -154,13 +148,13 @@ override precedence for tests or controlled deployments.
 | `PATCH /api/keymaster/keys/{key_id}` | session + CSRF + same-origin | Update label/notes/key; blank `api_key` preserves existing. |
 | `DELETE /api/keymaster/keys/{key_id}` | session + CSRF + same-origin | Delete key. |
 | `POST /api/keymaster/apply` | session + CSRF + same-origin | Write `shodan.api_key` to main config. 200 on success; 403 if keymaster locked; 422 if key_id invalid/missing from body; 404 if key not found or no config file present; 500 on write error. |
-| `GET /api/jobs` | session | Shared queue snapshot for scan tasks plus SearXNG/Reddit run+probe jobs (promotions excluded). |
+| `GET /api/jobs` | session | Shared queue snapshot for scan tasks plus SearXNG/Reddit run jobs. |
 | `GET /api/jobs/{job_id}` | session | Job status for any async run/probe job. |
 | `POST /api/jobs/{job_id}/cancel` | session + CSRF + same-origin | Cancel run/probe job. |
 
 Navigation and IA (C29): the left nav sidebar groups Scans (shodan, searxng, reddit) and Extras (dorkbook, keymaster) as toggle-only parents. Root `/scans` and `/extras` are not registered routes and return 404. `/export` is a standalone page; export controls no longer live on `/results`.
 
-Shared job queue (C30): `/api/jobs*` is additive to the existing `/api/scans*` contract, which is unchanged. The queue tracks scan tasks plus SearXNG/Reddit run and probe jobs with a normalized shape: `job_id`, `source`, `kind`, `status`, `progress`. Promotions are excluded from the queue.
+Shared job queue (C30): `/api/jobs*` is additive to the existing `/api/scans*` contract, which is unchanged. The queue tracks scan tasks plus SearXNG/Reddit run jobs with a normalized shape: `job_id`, `source`, `kind`, `status`, `progress`. Promotions are excluded from the queue.
 
 Keymaster apply missing-config behavior (C34): `POST /api/keymaster/apply` resolves the main config via two branches — canonical path (matches repo `config_file`) calls `load_main_config()` + `update_sections`; non-canonical path reads and writes JSON directly. Returns 422 when `key_id` is invalid or absent from the request body. Returns 404 when the key row is not found in the DB or when no config file is present on disk. The 404-on-missing-config is the intended contract, not a 500.
 
@@ -958,7 +952,7 @@ SearXNG dorking, Reddit ingestion, and Dorkbook do not use this subprocess path.
 |---------|---------|
 | Start Scan | Opens `UnifiedScanDialog` (protocol selector + scan options), then always shows preflight confirmation with live-balance + cost visibility before launch. Numeric estimates are shown only when live balance lookup succeeds. |
 | Database | Opens consolidated DB surface (`View Servers`, `DB Tools`, `[Legacy] Sidecar Data`) |
-| Accessories (Experimental) | Opens `ExperimentalFeaturesDialog` (`SearXNG`, `Reddit`, `Web UI`, `Dorkbook`, `Keymaster` tabs) |
+| Accessories | Opens `ExperimentalFeaturesDialog` (`SearXNG`, `Reddit`, `Web UI`, `Dorkbook`, `Keymaster` tabs) |
 | Configuration | Opens config editor |
 | About | Opens about dialog |
 | Dark/Light toggle | Switches ttkthemes theme; persisted in `~/.dirracuda/conf.d/prefs/user-prefs.json` |
@@ -969,7 +963,7 @@ SearXNG dorking, Reddit ingestion, and Dorkbook do not use this subprocess path.
 - Dashboard Alt mappings:
   - `Alt+1` Start Scan
   - `Alt+2` Database
-  - `Alt+3` Accessories (Experimental)
+  - `Alt+3` Accessories
   - `Alt+4` Config
   - `Alt+5` About
   - `Alt+6..0` reserved no-op (consumed, not shown in UI helper text)
@@ -1036,9 +1030,9 @@ Backed by `gui/utils/db_tools_engine.py`. Capabilities:
 - **Statistics** — server count by country, protocol breakdown
 - **Maintenance** — SQLite VACUUM, integrity check (`PRAGMA integrity_check`), cascade-deletion preview before purging old sessions
 
-### 6.9 Experimental Features (SearXNG, Reddit, Web UI, Dorkbook, Keymaster)
+### 6.9 Accessories (SearXNG, Reddit, Web UI, Dorkbook, Keymaster)
 
-`ExperimentalFeaturesDialog` is a modeless tab host opened from the dashboard `Experimental` button. Tabs are registry-driven (`gui/components/experimental_features/registry.py`), so adding/removing experimental modules is a registry edit, not dialog shell surgery.
+`ExperimentalFeaturesDialog` is a modeless tab host opened from the dashboard `Accessories` button. Tabs are registry-driven (`gui/components/experimental_features/registry.py`), so adding/removing experimental modules is a registry edit, not dialog shell surgery.
 
 Current tabs (registry order):
 - `SearXNG`
@@ -1067,7 +1061,7 @@ Web UI tab behavior:
 Dorkbook entry path:
 
 ```text
-Dashboard -> Experimental tab -> Open Dorkbook
+Dashboard -> Accessories tab -> Open Dorkbook
   -> DorkbookWindow (reads/writes ~/.dirracuda/data/experimental/dorkbook.db)
   -> singleton modeless window (focus existing on repeated open)
 ```
@@ -1099,20 +1093,20 @@ Integration seam:
 SearXNG Dorking entry path:
 
 ```
-Dashboard -> Experimental tab -> Test (preflight)
+Dashboard -> Accessories tab -> Test (preflight)
   -> SeDorkTab._invoke_test -> run_preflight(url) on worker thread
   -> status label shows pass/fail with reason code
 ```
 
 ```
-Dashboard -> Experimental tab -> Run (dork search)
+Dashboard -> Accessories tab -> Run (dork search)
   -> SeDorkTab._invoke_run -> run_dork_search(options) on worker thread
   -> writes dork_runs + dork_results rows to ~/.dirracuda/data/experimental/se_dork.db
   -> status label shows fetched/stored counts
 ```
 
 ```
-Dashboard -> Experimental tab -> Open Results DB
+Dashboard -> Accessories tab -> Open Results DB
   -> SeDorkBrowserWindow (reads ~/.dirracuda/data/experimental/se_dork.db)
   -> "Add to dirracuda DB" promotes directly to the main DB via DatabaseReader
   -> multi-select bulk import runs in background with BatchStatusDialog progress/cancel and best-effort summary counts
@@ -1128,7 +1122,7 @@ SearXNG preflight checks (`experimental/se_dork/client.py`):
 Reddit ingest entry path:
 
 ```
-Dashboard -> Experimental tab -> Open Reddit Grab
+Dashboard -> Accessories tab -> Open Reddit Grab
   -> RedditGrabDialog -> run_ingest(options) on worker thread
   -> optional explicit bulk probe pass for current-run HTTP/HTTPS/FTP targets
   -> result dialog (counts, dedupe, probe totals, rate-limit errors)
@@ -1137,7 +1131,7 @@ Dashboard -> Experimental tab -> Open Reddit Grab
 Reddit Post DB entry path:
 
 ```
-Dashboard -> Experimental tab -> Open Reddit Post DB
+Dashboard -> Accessories tab -> Open Reddit Post DB
   -> RedditBrowserWindow (reads ~/.dirracuda/data/experimental/reddit_od.db)
   -> "Probe Selected" stores cacheable probe summaries and full snapshots in reddit_targets
   -> "Add to dirracuda DB" promotes SMB/FTP/HTTP rows directly to the main DB
@@ -1157,7 +1151,7 @@ Top windows for `sort=top`: `hour`, `day`, `week`, `month`, `year`, `all`.
 Keymaster entry path:
 
 ```text
-Dashboard -> Experimental tab -> Open Keymaster
+Dashboard -> Accessories tab -> Open Keymaster
   -> KeymasterWindow (reads/writes ~/.dirracuda/data/experimental/keymaster.db)
   -> singleton modeless window (focus existing on repeated open)
 ```

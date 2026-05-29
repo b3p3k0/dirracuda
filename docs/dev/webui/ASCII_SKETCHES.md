@@ -39,7 +39,7 @@ Launched by the single button in the tab.
 Web UI Control
 +------------------------------------------------------------+
 | Status: stopped                                            |
-| URL:    http://127.0.0.1:5480                              |
+| URL:    http://127.0.0.1:2600                              |
 | Mode:   localhost only                                     |
 |                                                            |
 | [Start] [Stop] [Restart] [Open Browser] [Copy URL]         |
@@ -77,7 +77,7 @@ No marketing hero. No decorative dashboard before auth.
 Dirracuda                                  admin | Logout
 +------------+-----------------------------------------------+
 | Dashboard  | Service                                       |
-| Scans      |   Localhost only  http://127.0.0.1:5480       |
+| Scans      |   Localhost only  http://127.0.0.1:2600       |
 | Results    |                                               |
 | Export     | Active Scan                                   |
 | Config     |   none                                        |
@@ -141,7 +141,7 @@ downloads are not.
 ```text
 Config
 +------------------------------------------------------------+
-| Bind address [127.0.0.1_________]  Port [5480____]         |
+| Bind address [127.0.0.1_________]  Port [2600____]         |
 | Remote access [ ] enabled                                  |
 | TLS         [x] enabled   [ ] allow insecure remote override|
 | TLS cert     [____________________]                        |

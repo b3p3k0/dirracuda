@@ -1,7 +1,7 @@
 # Integrate Experimental Features Into Main - LESSONS LEARNED
 
 Status: Seeded
-Last updated: 2026-05-28
+Last updated: 2026-05-29
 
 ## Carry Forward
 
@@ -23,6 +23,17 @@ Last updated: 2026-05-28
 16. Canonical runtime docs can drift even when runtime is stable. After config-path/port migrations, verify all operator and agent docs (`README.md`, `docs/TECHNICAL_REFERENCE.md`, `AGENTS.md`, `CLAUDE.md`, and `experimental/webui/README.md`) still match current WebUI defaults/paths in the same closeout wave (C8), not later.
 
 ## Additions During Execution
+
+**C8 (2026-05-29):**
+- Drift found across 13 files: port 5480 (5 files), conf/webui.json path (4 files),
+  Experimental→Accessories label (README.md, TECHNICAL_REFERENCE.md, CLAUDE.md), stale RCE
+  section in CLAUDE.md (module files gone since C3/C7), 6 stale sidecar-browse route rows in
+  TECHNICAL_REFERENCE.md (removed from app.py in C6), missing Censys suspension note in AGENTS.md.
+- ROADMAP.md card statuses were not updated past C0; each card should close its own status row.
+- docs/dev/webui/ active planning docs (non-approved_plans) also drifted on port and config path;
+  include them explicitly in any future closeout scope.
+- Validation commands in task cards can drift; `gui/tests/test_readme_examples.py` was referenced by C8 but does not exist.
+  Add a preflight check that each scripted validation target exists before promoting it to required evidence.
 
 Append new lessons after each completed card:
 - What failed or nearly failed.
