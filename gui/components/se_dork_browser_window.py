@@ -89,6 +89,7 @@ class SeDorkBrowserWindow:
         add_record_callback=None,
         promote_record_callback=None,
         promote_records_callback=None,
+        allow_promotion: bool = True,
         settings_manager=None,
     ) -> None:
         self.parent = parent
@@ -97,6 +98,7 @@ class SeDorkBrowserWindow:
         self._add_record_callback = add_record_callback
         self._promote_record_callback = promote_record_callback
         self._promote_records_callback = promote_records_callback
+        self._allow_promotion = bool(allow_promotion)
         self._settings_manager = settings_manager
 
         self._row_by_iid: dict[str, dict] = {}
@@ -155,11 +157,12 @@ class SeDorkBrowserWindow:
             label="Probe URL",
             command=self._on_context_probe_url,
         )
-        self._context_menu.add_separator()
-        self._context_menu.add_command(
-            label="Add to dirracuda DB",
-            command=self._on_add_to_db,
-        )
+        if self._allow_promotion:
+            self._context_menu.add_separator()
+            self._context_menu.add_command(
+                label="Add to dirracuda DB",
+                command=self._on_add_to_db,
+            )
         self.tree.bind("<Button-3>", self._on_right_click)
         self.tree.bind("<Double-1>", self._on_double_click)
 
@@ -773,6 +776,13 @@ class SeDorkBrowserWindow:
 
     def _on_add_to_db(self) -> None:
         self._hide_context_menu()
+        if not self._allow_promotion:
+            messagebox.showinfo(
+                "Promotion disabled",
+                "Rows from this view are already synced to the main database.",
+                parent=self.window,
+            )
+            return
         rows = self._selected_rows()
         if not rows:
             messagebox.showinfo("No selection", "Select a row first.", parent=self.window)
@@ -1041,6 +1051,7 @@ def show_se_dork_browser_window(
     add_record_callback=None,
     promote_record_callback=None,
     promote_records_callback=None,
+    allow_promotion: bool = True,
     settings_manager=None,
 ) -> None:
     """Open the SE Dork results browser window."""
@@ -1050,5 +1061,6 @@ def show_se_dork_browser_window(
         add_record_callback=add_record_callback,
         promote_record_callback=promote_record_callback,
         promote_records_callback=promote_records_callback,
+        allow_promotion=allow_promotion,
         settings_manager=settings_manager,
     )

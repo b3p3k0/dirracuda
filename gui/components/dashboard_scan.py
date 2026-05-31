@@ -17,6 +17,7 @@ import threading
 import time
 import tkinter as tk
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from gui.utils import safe_messagebox as _fallback_msgbox
@@ -66,6 +67,36 @@ def _parse_iso(ts: Any) -> Optional[datetime]:
         return datetime.fromisoformat(str(ts))
     except Exception:
         return None
+
+
+def _resolve_main_db_path(dash) -> Path:
+    """
+    Resolve active primary DB path for dashboard-owned runs.
+
+    Preference:
+      1) live dashboard db_reader.db_path
+      2) canonical runtime main DB path from path_service
+    """
+    reader = getattr(dash, "db_reader", None)
+    reader_path = getattr(reader, "db_path", None)
+    if reader_path:
+        try:
+            return Path(reader_path).expanduser().resolve(strict=False)
+        except Exception:
+            pass
+
+    try:
+        from shared.path_service import (
+            get_legacy_paths,
+            get_paths,
+            resolve_runtime_main_db_path,
+        )
+
+        paths = get_paths()
+        legacy = get_legacy_paths(paths=paths)
+        return resolve_runtime_main_db_path(paths=paths, legacy=legacy)
+    except Exception:
+        return Path("dirracuda.db").resolve(strict=False)
 
 
 def _merge_queued_scan_results(results_list: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -579,9 +610,9 @@ def start_searxng_scan(dash, scan_request: dict) -> bool:
         _mb().showerror("SearXNG Error", "SearXNG search query is required.")
         return False
 
+    from experimental.se_dork.main_db_sync import sync_run_to_main_db
     from experimental.se_dork.models import RunOptions, RunResult, RUN_STATUS_ERROR
     from experimental.se_dork.service import run_dork_search
-    from shared.path_service import get_paths
 
     # Resolve probe config and worker count from settings (mirrors se_dork_tab.py)
     sm = getattr(dash, "settings_manager", None)
@@ -608,7 +639,7 @@ def start_searxng_scan(dash, scan_request: dict) -> bool:
         probe_config_path=probe_config_path,
         probe_worker_count=probe_worker_count,
     )
-    db_path = get_paths().se_dork_db_file
+    db_path = _resolve_main_db_path(dash)
     country = scan_request.get("country")
     _started_at = datetime.now()
 
@@ -642,8 +673,11 @@ def start_searxng_scan(dash, scan_request: dict) -> bool:
             pass
 
     def _worker():
+        sync_summary = None
         try:
             result = run_dork_search(options, db_path=db_path, progress_cb=_ui_log)
+            if result.status != RUN_STATUS_ERROR and not result.error:
+                sync_summary = sync_run_to_main_db(result.run_id, db_path=db_path)
         except Exception as exc:
             result = RunResult(
                 run_id=None,
@@ -659,6 +693,7 @@ def start_searxng_scan(dash, scan_request: dict) -> bool:
                 query=options.query,
                 searxng_only=_searxng_only,
                 started_at=_started_at,
+                sync_summary=sync_summary,
             ))
         except Exception:
             # Tk scheduling failed — minimal cleanup, no UI calls
@@ -693,6 +728,7 @@ def _on_searxng_scan_done(
     query: str = "",
     searxng_only: bool = True,
     started_at: Optional[datetime] = None,
+    sync_summary: Optional[dict] = None,
 ) -> None:
     """Handle SearXNG scan completion on the UI thread.
 
@@ -725,6 +761,18 @@ def _on_searxng_scan_done(
             f" — {result.probe_clean} clean"
             f", {result.probe_issue} flagged"
             f", {result.probe_unprobed} unprobed")
+    if isinstance(sync_summary, dict):
+        _call_dashboard_hook(
+            dash,
+            "_log_status_event",
+            "Primary DB sync: "
+            f"processed {int(sync_summary.get('processed', 0) or 0)}"
+            f" (inserted {int(sync_summary.get('inserted', 0) or 0)},"
+            f" updated {int(sync_summary.get('updated', 0) or 0)},"
+            f" skipped {int(sync_summary.get('skipped', 0) or 0)},"
+            f" failed {int(sync_summary.get('failed', 0) or 0)},"
+            f" cancelled {int(sync_summary.get('cancelled', 0) or 0)}).",
+        )
 
     if searxng_only:
         end_dt = datetime.now()
@@ -737,9 +785,18 @@ def _on_searxng_scan_done(
             summary_lines += ["", f"Query: {query}"]
         summary_lines += [
             "",
-            "Results are stored in the SearXNG sidecar database and can be promoted "
-            "to the main database via the SearXNG browser.",
+            "Retained results were written to the primary Dirracuda database during this run.",
         ]
+        if isinstance(sync_summary, dict):
+            summary_lines += [
+                "",
+                "Primary DB sync: "
+                f"{int(sync_summary.get('processed', 0) or 0)} processed "
+                f"({int(sync_summary.get('inserted', 0) or 0)} inserted, "
+                f"{int(sync_summary.get('updated', 0) or 0)} updated, "
+                f"{int(sync_summary.get('skipped', 0) or 0)} skipped, "
+                f"{int(sync_summary.get('failed', 0) or 0)} failed).",
+            ]
         if result.probe_enabled:
             summary_lines += [
                 "",

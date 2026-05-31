@@ -336,7 +336,7 @@ class ScanResultsDialog:
 
         if self._is_searxng_scan():
             # SearXNG: show summary_message as-is; skip "servers tested" and shares block
-            details_text = summary_message or "Results stored in SearXNG sidecar database."
+            details_text = summary_message or "Results written to the active primary database."
         else:
             if summary_message:
                 details_text = f"{summary_message}\n\n"

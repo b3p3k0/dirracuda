@@ -35,6 +35,11 @@ Last updated: 2026-05-29
 - Validation commands in task cards can drift; `gui/tests/test_readme_examples.py` was referenced by C8 but does not exist.
   Add a preflight check that each scripted validation target exists before promoting it to required evidence.
 
+**C9 (2026-05-29):**
+- Provider cutovers need entrypoint parity, not just service changes. SearXNG required updates in dashboard scan launch, Accessories tab run flow, and WebUI `/api/searxng/run` to prevent split-write behavior.
+- Auto-sync summaries must be deterministic and non-throwing (`selected/processed/inserted/updated/skipped/failed/cancelled`) so UI/job layers can report outcomes without branching on exceptions.
+- Primary-backed browser mode should disable obsolete actions rather than silently no-op. Hiding `Add to dirracuda DB` in SearXNG primary mode reduced operator ambiguity while preserving a legacy sidecar path for historical data.
+
 Append new lessons after each completed card:
 - What failed or nearly failed.
 - Which guardrail prevented recurrence.

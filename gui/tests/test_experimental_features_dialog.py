@@ -259,6 +259,7 @@ def _make_dash():
     dash.settings_manager = MagicMock()
     dash.refresh_after_database_change = MagicMock()
     dash.db_reader = MagicMock()
+    dash.db_reader.db_path = Path("/tmp/test-main.db")
     dash.db_reader.upsert_manual_server_record.return_value = {
         "host_type": "H",
         "protocol_server_id": 3,
@@ -755,7 +756,7 @@ def test_registry_dorkbook_after_reddit():
 
 
 def test_open_se_dork_results_db_with_live_server_window(monkeypatch):
-    """SE Dork promotion wiring does not depend on a live Server List Browser."""
+    """SE Dork browser opens in primary-DB mode without promotion actions."""
     dash = _make_dash()
     mock_win = MagicMock()
     mock_win.window.winfo_exists.return_value = True
@@ -771,23 +772,17 @@ def test_open_se_dork_results_db_with_live_server_window(monkeypatch):
 
     assert len(calls) == 1
     assert calls[0]["parent"] is dash.parent
+    assert str(calls[0]["db_path"]) == str(dash.db_reader.db_path)
     assert calls[0]["add_record_callback"] is None
-    assert callable(calls[0]["promote_record_callback"])
-    assert callable(calls[0]["promote_records_callback"])
+    assert calls[0]["promote_record_callback"] is None
+    assert calls[0]["promote_records_callback"] is None
+    assert calls[0]["allow_promotion"] is False
     assert calls[0]["settings_manager"] is dash.settings_manager
     dash._server_list_getter.assert_not_called()
 
-    calls[0]["promote_record_callback"]({
-        "host_type": "H",
-        "host": "1.2.3.4",
-        "port": 80,
-        "scheme": "http",
-    })
-    dash.refresh_after_database_change.assert_called_once_with(refresh_runtime_status=False)
-
 
 def test_open_se_dork_results_db_fallback_when_no_server_window(monkeypatch):
-    """Getter=None still opens with direct promotion wiring."""
+    """Getter=None still opens in primary-DB mode."""
     dash = _make_dash()
     dash._server_list_getter = None
 
@@ -801,14 +796,16 @@ def test_open_se_dork_results_db_fallback_when_no_server_window(monkeypatch):
 
     assert len(calls) == 1
     assert calls[0]["parent"] is dash.parent
+    assert str(calls[0]["db_path"]) == str(dash.db_reader.db_path)
     assert calls[0]["add_record_callback"] is None
-    assert callable(calls[0]["promote_record_callback"])
-    assert callable(calls[0]["promote_records_callback"])
+    assert calls[0]["promote_record_callback"] is None
+    assert calls[0]["promote_records_callback"] is None
+    assert calls[0]["allow_promotion"] is False
     assert calls[0]["settings_manager"] is dash.settings_manager
 
 
 def test_open_se_dork_results_db_treats_dead_window_as_none(monkeypatch):
-    """Dead windows are irrelevant to direct promotion wiring."""
+    """Dead windows are irrelevant to primary-DB browse wiring."""
     dash = _make_dash()
     mock_win = MagicMock()
     mock_win.window.winfo_exists.return_value = False
@@ -824,15 +821,17 @@ def test_open_se_dork_results_db_treats_dead_window_as_none(monkeypatch):
 
     assert len(calls) == 1
     assert calls[0]["parent"] is dash.parent
+    assert str(calls[0]["db_path"]) == str(dash.db_reader.db_path)
     assert calls[0]["add_record_callback"] is None
-    assert callable(calls[0]["promote_record_callback"])
-    assert callable(calls[0]["promote_records_callback"])
+    assert calls[0]["promote_record_callback"] is None
+    assert calls[0]["promote_records_callback"] is None
+    assert calls[0]["allow_promotion"] is False
     assert calls[0]["settings_manager"] is dash.settings_manager
     dash._server_list_getter.assert_not_called()
 
 
 def test_open_se_dork_results_db_fallback_when_getter_raises(monkeypatch):
-    """Getter exceptions cannot block direct promotion wiring."""
+    """Getter exceptions cannot block primary-DB browse wiring."""
     dash = _make_dash()
     getter_calls = {"count": 0}
 
@@ -852,9 +851,11 @@ def test_open_se_dork_results_db_fallback_when_getter_raises(monkeypatch):
 
     assert len(calls) == 1
     assert calls[0]["parent"] is dash.parent
+    assert str(calls[0]["db_path"]) == str(dash.db_reader.db_path)
     assert calls[0]["add_record_callback"] is None
-    assert callable(calls[0]["promote_record_callback"])
-    assert callable(calls[0]["promote_records_callback"])
+    assert calls[0]["promote_record_callback"] is None
+    assert calls[0]["promote_records_callback"] is None
+    assert calls[0]["allow_promotion"] is False
     assert calls[0]["settings_manager"] is dash.settings_manager
     assert getter_calls["count"] == 0
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock
 
 
@@ -57,16 +58,22 @@ def _run_migrate_button(monkeypatch, widget=None):
     return migrate_cmd, widget, pick_registry
 
 
-def test_se_dork_branch_calls_open_se_dork_results_db(monkeypatch):
+def test_se_dork_branch_opens_sidecar_browser(monkeypatch):
     import gui.components.dashboard_experimental as _mod
     widget = _make_widget(db_reader=MagicMock())
     calls = []
-    monkeypatch.setattr(_mod, "open_se_dork_results_db", lambda w: calls.append(w))
+    monkeypatch.setattr(_mod, "_resolve_se_dork_sidecar_path", lambda: Path("/tmp/se_dork.db"))
+    monkeypatch.setattr(_mod, "show_se_dork_browser_window", lambda **kw: calls.append(kw))
 
     cmd, _widget, _ = _run_pick(monkeypatch, "SearXNG Dork Results", widget)
     cmd()
 
-    assert calls == [widget]
+    assert len(calls) == 1
+    assert calls[0]["parent"] is widget.parent
+    assert str(calls[0]["db_path"]) == str(Path("/tmp/se_dork.db"))
+    assert calls[0]["allow_promotion"] is True
+    assert callable(calls[0]["promote_record_callback"])
+    assert callable(calls[0]["promote_records_callback"])
 
 
 def test_reddit_branch_calls_open_reddit_post_db(monkeypatch):

@@ -12,6 +12,8 @@ import types
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 # Lightweight impacket stub so GUI modules import cleanly in headless test env.
@@ -40,6 +42,22 @@ from gui.components.experimental_features.se_dork_tab import (
     _SETTINGS_KEY_URL,
     _SETTINGS_KEY_BULK_PROBE_ENABLED,
 )
+
+
+@pytest.fixture(autouse=True)
+def _stub_main_db_sync(monkeypatch):
+    monkeypatch.setattr(
+        "experimental.se_dork.main_db_sync.sync_run_to_main_db",
+        lambda *_a, **_k: {
+            "selected": 0,
+            "processed": 0,
+            "inserted": 0,
+            "updated": 0,
+            "skipped": 0,
+            "failed": 0,
+            "cancelled": 0,
+        },
+    )
 
 
 def test_build_uses_updated_labels_and_max_helper_text(monkeypatch):
@@ -397,21 +415,23 @@ def test_invoke_run_calls_service(monkeypatch):
 
     monkeypatch.setattr(
         "experimental.se_dork.service.run_dork_search",
-        lambda opts, **kw: calls.append(opts) or fake_result,
+        lambda opts, **kw: calls.append((opts, kw)) or fake_result,
     )
     _sync_thread(monkeypatch)
 
-    tab = _make_run_tab({"settings_manager": sm})
+    tab = _make_run_tab({"settings_manager": sm, "main_db_path": "/tmp/main.db"})
     tab._bulk_probe_var.get.return_value = True
     tab._invoke_run()
 
     assert len(calls) == 1
-    assert calls[0].instance_url == "http://test:8090"
-    assert calls[0].query == "site:*"
-    assert calls[0].max_results == 10
-    assert calls[0].bulk_probe_enabled is True
-    assert calls[0].probe_config_path == "/tmp/smbseek.json"
-    assert calls[0].probe_worker_count == 6
+    opts, kwargs = calls[0]
+    assert opts.instance_url == "http://test:8090"
+    assert opts.query == "site:*"
+    assert opts.max_results == 10
+    assert opts.bulk_probe_enabled is True
+    assert opts.probe_config_path == "/tmp/smbseek.json"
+    assert opts.probe_worker_count == 6
+    assert str(kwargs.get("db_path")) == str(Path("/tmp/main.db"))
 
 
 def test_invoke_run_updates_status_on_success(monkeypatch):
@@ -427,6 +447,33 @@ def test_invoke_run_updates_status_on_success(monkeypatch):
     final_text = tab._status_label.configure.call_args_list[-1][1].get("text", "")
     assert "5" in final_text
     assert "4" in final_text
+
+
+def test_invoke_run_status_includes_primary_sync_summary(monkeypatch):
+    monkeypatch.setattr(
+        "experimental.se_dork.service.run_dork_search",
+        lambda opts, **kw: _fake_run_result(status="done", fetched=2, deduped=2),
+    )
+    monkeypatch.setattr(
+        "experimental.se_dork.main_db_sync.sync_run_to_main_db",
+        lambda *_a, **_k: {
+            "selected": 2,
+            "processed": 2,
+            "inserted": 1,
+            "updated": 1,
+            "skipped": 0,
+            "failed": 0,
+            "cancelled": 0,
+        },
+    )
+    _sync_thread(monkeypatch)
+
+    tab = _make_run_tab({})
+    tab._invoke_run()
+
+    final_text = tab._status_label.configure.call_args_list[-1][1].get("text", "")
+    assert "Primary DB sync" in final_text
+    assert "inserted" in final_text
 
 
 def test_invoke_run_includes_probe_summary_when_enabled(monkeypatch):

@@ -824,13 +824,13 @@ WHERE ip_address = '1.2.3.4';
 
 **`commands/ftp/operation.py` and equivalent HTTP file use `FtpPersistence` / `HttpPersistence`** (also in `shared/database.py`) which connect directly to the DB path without going through `SMBSeekWorkflowDatabase`.
 
-### 5.5 SearXNG Dork Sidecar Database (`~/.dirracuda/data/experimental/se_dork.db`)
+### 5.5 SearXNG Runtime Tables (Primary DB Context)
 
-The SearXNG Dorking module (`experimental/se_dork`) writes runtime workflow data to a separate SQLite database.
+The SearXNG Dorking module (`experimental/se_dork`) now writes runtime workflow tables into the active primary DB context (same DB path used by the running GUI/WebUI session).
 
-**Storage contract**: `run_dork_search` writes exclusively to this sidecar DB, never to the main `dirracuda.db`. The GUI completion dialog surfaces this explicitly. Promotion to main DB is manual via the SearXNG browser (`Add to dirracuda DB`). In mixed SearXNG+Shodan runs the completion dialog is intentionally suppressed (Shodan queue may still be active); completion is signalled via live status lines only.
+**Storage contract**: `run_dork_search` persists `dork_runs`/`dork_results` in the active primary DB path and auto-syncs retained HTTP/HTTPS rows into main protocol host tables during run completion. Manual promotion is not required for new runs. In mixed SearXNG+Shodan runs the completion dialog is intentionally suppressed (Shodan queue may still be active); completion is signalled via live status lines only.
 
-Dirracuda now also supports one-time targeted startup import of resolvable host entities from this sidecar into `dirracuda.db` for shareability/portability. Sidecar tables remain authoritative for SearXNG module internals.
+Legacy sidecar files (for example `~/.dirracuda/data/experimental/se_dork.db`) may still exist for historical browsing/migration paths, but they are no longer the default write target for new SearXNG runs.
 
 Tables:
 - `dork_runs` — one row per dork search run (`run_id` PK), with `instance_url`, `query`, `max_results`, `fetched_count`, `deduped_count`, `verified_count`, `status`, `error_message`, `started_at`, `finished_at`
@@ -1101,18 +1101,17 @@ Dashboard -> Accessories tab -> Test (preflight)
 ```
 Dashboard -> Accessories tab -> Run (dork search)
   -> SeDorkTab._invoke_run -> run_dork_search(options) on worker thread
-  -> writes dork_runs + dork_results rows to ~/.dirracuda/data/experimental/se_dork.db
-  -> status label shows fetched/stored counts
+  -> writes dork_runs + dork_results rows in active primary DB context
+  -> sync_run_to_main_db(run_id, db_path=primary_db) upserts retained rows into main HTTP tables
+  -> status label shows fetched/stored + sync counts
 ```
 
 ```
 Dashboard -> Accessories tab -> Open Results DB
-  -> SeDorkBrowserWindow (reads ~/.dirracuda/data/experimental/se_dork.db)
-  -> "Add to dirracuda DB" promotes directly to the main DB via DatabaseReader
-  -> multi-select bulk import runs in background with BatchStatusDialog progress/cancel and best-effort summary counts
-  -> cacheable se_dork probe summaries and full snapshots are copied into main probe tables
-  -> double-click opens a read-only row details view from sidecar metadata and stored probe snapshots
-  -> unresolved/non-IPv4 hosts are rejected with an explicit Cannot promote message
+  -> SeDorkBrowserWindow (reads active primary DB context for new runs)
+  -> allow_promotion=False in primary-backed mode (manual Add-to-DB UI hidden)
+  -> double-click opens a read-only row details view from retained metadata and stored probe snapshots
+  -> legacy sidecar browser path remains available for historical data and manual promotion
 ```
 
 SearXNG preflight checks (`experimental/se_dork/client.py`):

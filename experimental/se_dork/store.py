@@ -378,6 +378,32 @@ def get_results_for_run(
     return [dict(zip(cols, row)) for row in cursor.fetchall()]
 
 
+def get_full_results_for_run(
+    conn: sqlite3.Connection,
+    run_id: int,
+) -> list[dict]:
+    """
+    Return full retained rows for one run in insertion order.
+
+    Dict keys match dork_results column names used by browser/promotion paths.
+    """
+    cursor = conn.execute(
+        """
+        SELECT result_id, run_id, url, url_normalized, title, snippet,
+               source_engine, source_engines_json,
+               verdict, reason_code, http_status, checked_at,
+               probe_status, probe_indicator_matches, probe_preview,
+               probe_checked_at, probe_error, probe_snapshot_json
+          FROM dork_results
+         WHERE run_id = ?
+         ORDER BY result_id ASC
+        """,
+        (run_id,),
+    )
+    cols = [d[0] for d in cursor.description]
+    return [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+
 def update_result_verdict(
     conn: sqlite3.Connection,
     result_id: int,

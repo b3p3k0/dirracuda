@@ -59,6 +59,22 @@ def _suppress_messageboxes(monkeypatch):
     monkeypatch.setattr("gui.components.dashboard.messagebox.showerror", lambda *a, **k: None)
     monkeypatch.setattr("gui.components.dashboard.messagebox.showwarning", lambda *a, **k: None)
     monkeypatch.setattr("gui.components.dashboard.messagebox.showinfo", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "gui.components.dashboard_scan._resolve_main_db_path",
+        lambda _dash: Path("/tmp/dirracuda.db"),
+    )
+    monkeypatch.setattr(
+        "experimental.se_dork.main_db_sync.sync_run_to_main_db",
+        lambda *_a, **_k: {
+            "selected": 0,
+            "processed": 0,
+            "inserted": 0,
+            "updated": 0,
+            "skipped": 0,
+            "failed": 0,
+            "cancelled": 0,
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -461,7 +477,7 @@ class TestOnSearxngScanDone:
         assert "connection refused" in errors[0][1]
 
     def test_success_shows_results_dialog_with_counts(self, monkeypatch):
-        """SearXNG-only success must call _show_scan_results with counts and storage note."""
+        """SearXNG-only success must call _show_scan_results with counts and primary DB note."""
         dash = _make_dash()
         dialog_calls = []
         dash._show_scan_results = lambda r: dialog_calls.append(r)
@@ -475,7 +491,7 @@ class TestOnSearxngScanDone:
         assert r["protocol"] == "searxng"
         assert r["hosts_scanned"] == 42
         assert r["accessible_hosts"] == 15
-        assert "sidecar" in r.get("summary_message", ""), f"storage note missing: {r}"
+        assert "primary" in r.get("summary_message", "").lower(), f"storage note missing: {r}"
         assert "duration_seconds" in r
         assert "end_time" in r
 
@@ -501,6 +517,24 @@ class TestOnSearxngScanDone:
         assert any("20" in m for m in log_msgs), f"probe total missing: {log_msgs}"
         assert any("18" in m for m in log_msgs), f"clean missing: {log_msgs}"
         assert any("2" in m for m in log_msgs), f"issue missing: {log_msgs}"
+
+    def test_sync_summary_logged_when_available(self):
+        dash = _make_dash()
+        log_msgs = []
+        dash._log_status_event = lambda m: log_msgs.append(m)
+        ds._on_searxng_scan_done(
+            dash,
+            _make_result(),
+            sync_summary={
+                "processed": 6,
+                "inserted": 2,
+                "updated": 3,
+                "skipped": 1,
+                "failed": 0,
+                "cancelled": 0,
+            },
+        )
+        assert any("Primary DB sync:" in m for m in log_msgs), log_msgs
 
     def test_done_clears_searxng_task_only_not_shodan_task(self, monkeypatch):
         """done handler must call _clear_searxng_task but never touch _scan_task_id."""

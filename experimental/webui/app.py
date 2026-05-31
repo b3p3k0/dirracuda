@@ -16,6 +16,7 @@ from experimental.dorkbook import store as dork_store
 from experimental.dorkbook.models import ROW_KIND_BUILTIN, DuplicateEntryError, ReadOnlyEntryError
 from experimental.redseek.service import IngestOptions as RedditIngestOptions, run_ingest
 from experimental.se_dork.client import run_preflight as run_searxng_preflight
+from experimental.se_dork.main_db_sync import sync_run_to_main_db
 from experimental.se_dork.models import RUN_STATUS_DONE as SEARXNG_RUN_STATUS_DONE
 from experimental.se_dork.models import RunOptions as SearxngRunOptions
 from experimental.se_dork.service import run_dork_search
@@ -563,6 +564,7 @@ def create_app(
 
         shared_jobs = request.app.state.shared_jobs
         config_path = str(request.app.state.main_config_path)
+        primary_db_path = request.app.state.db_path
 
         def _runner(job):
             job.set_progress("Running SearXNG discovery...", 5.0)
@@ -574,9 +576,10 @@ def create_app(
                 probe_config_path=config_path,
                 probe_worker_count=body.probe_worker_count,
             )
-            result = run_dork_search(options)
+            result = run_dork_search(options, db_path=primary_db_path)
             if result.status != SEARXNG_RUN_STATUS_DONE:
                 raise RuntimeError(result.error or "SearXNG run failed")
+            sync_summary = sync_run_to_main_db(result.run_id, db_path=primary_db_path)
             job.set_metadata(
                 run_id=result.run_id,
                 fetched_count=result.fetched_count,
@@ -586,9 +589,16 @@ def create_app(
                 probe_clean=result.probe_clean,
                 probe_issue=result.probe_issue,
                 probe_unprobed=result.probe_unprobed,
+                sync_processed=int(sync_summary.get("processed", 0) or 0),
+                sync_inserted=int(sync_summary.get("inserted", 0) or 0),
+                sync_updated=int(sync_summary.get("updated", 0) or 0),
+                sync_skipped=int(sync_summary.get("skipped", 0) or 0),
+                sync_failed=int(sync_summary.get("failed", 0) or 0),
+                sync_cancelled=int(sync_summary.get("cancelled", 0) or 0),
             )
             job.set_progress(
-                f"SearXNG run complete: {result.deduped_count} retained row(s).",
+                f"SearXNG run complete: {result.deduped_count} retained row(s), "
+                f"{int(sync_summary.get('processed', 0) or 0)} synced.",
                 100.0,
             )
 

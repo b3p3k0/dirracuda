@@ -13,6 +13,7 @@ Patch path for show_reddit_browser_window in tests:
 import sys
 import threading
 import tkinter as tk
+from pathlib import Path
 
 from gui.utils import safe_messagebox as _fallback_msgbox
 from gui.utils.dialog_helpers import ensure_dialog_focus
@@ -43,6 +44,45 @@ def set_server_list_getter(widget, getter) -> None:
     widget._server_list_getter = getter
 
 
+def _resolve_main_db_path(widget) -> Path:
+    """Resolve current primary DB path from dashboard state with runtime fallback."""
+    db_reader = getattr(widget, "db_reader", None)
+    reader_path = getattr(db_reader, "db_path", None)
+    if reader_path:
+        try:
+            return Path(reader_path).expanduser().resolve(strict=False)
+        except Exception:
+            pass
+
+    try:
+        from shared.path_service import (
+            get_legacy_paths,
+            get_paths,
+            resolve_runtime_main_db_path,
+        )
+
+        paths = get_paths()
+        legacy = get_legacy_paths(paths=paths)
+        return resolve_runtime_main_db_path(paths=paths, legacy=legacy)
+    except Exception:
+        return Path("dirracuda.db").resolve(strict=False)
+
+
+def _resolve_se_dork_sidecar_path() -> Path:
+    """Resolve canonical/legacy SearXNG sidecar DB path for legacy browsing."""
+    try:
+        from shared.path_service import get_legacy_paths, get_paths, select_existing_path
+
+        paths = get_paths()
+        legacy = get_legacy_paths(paths=paths)
+        return select_existing_path(
+            paths.se_dork_db_file,
+            [legacy.flat_sidecar_se_dork_file, legacy.legacy_home_root / "se_dork.db"],
+        )
+    except Exception:
+        return Path("se_dork.db").resolve(strict=False)
+
+
 def handle_experimental_button_click(widget) -> None:
     """Open the Experimental Features dialog from the dashboard."""
     from gui.components.experimental_features_dialog import show_experimental_features_dialog
@@ -68,6 +108,7 @@ def handle_experimental_button_click(widget) -> None:
         "open_dorkbook": lambda: open_dorkbook(widget),
         "open_keymaster": lambda: open_keymaster(widget),
         "parent": widget.parent,
+        "main_db_path": str(_resolve_main_db_path(widget)),
     }
     if config_path is not None:
         context["webui_config_path"] = config_path
@@ -86,12 +127,14 @@ def open_reddit_post_db(widget) -> None:
 
 
 def open_se_dork_results_db(widget) -> None:
-    """Open the SE Dork results browser with direct main-DB promotion."""
+    """Open the SE Dork results browser in primary-DB mode (promotion disabled)."""
     show_se_dork_browser_window(
         parent=widget.parent,
+        db_path=_resolve_main_db_path(widget),
         add_record_callback=None,
-        promote_record_callback=_make_sidecar_promote_callback(widget),
-        promote_records_callback=_make_sidecar_bulk_promote_callback(widget),
+        promote_record_callback=None,
+        promote_records_callback=None,
+        allow_promotion=False,
         settings_manager=getattr(widget, "settings_manager", None),
     )
 
@@ -108,7 +151,15 @@ def open_sidecar_legacy_db(widget) -> None:
     def _pick(choice: str) -> None:
         dialog.destroy()
         if choice == "se_dork":
-            open_se_dork_results_db(widget)
+            show_se_dork_browser_window(
+                parent=widget.parent,
+                db_path=_resolve_se_dork_sidecar_path(),
+                add_record_callback=None,
+                promote_record_callback=_make_sidecar_promote_callback(widget),
+                promote_records_callback=_make_sidecar_bulk_promote_callback(widget),
+                allow_promotion=True,
+                settings_manager=getattr(widget, "settings_manager", None),
+            )
         elif choice == "reddit":
             open_reddit_post_db(widget)
         elif choice == "migrate":

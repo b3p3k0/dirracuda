@@ -2,6 +2,7 @@
 
 import json
 import re
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -190,15 +191,28 @@ def test_searxng_run_bad_origin(logged_in_client):
     )
     assert r.status_code == 403
 
-def test_searxng_run_queues_job(logged_in_client, monkeypatch):
+def test_searxng_run_queues_job(logged_in_client, app_and_queue, monkeypatch):
     from experimental.se_dork.models import RunResult, RUN_STATUS_DONE
+    calls = []
     fake_result = RunResult(
         run_id=1, fetched_count=5, deduped_count=3,
         status=RUN_STATUS_DONE, error=None, verified_count=3,
     )
     monkeypatch.setattr(
         "experimental.webui.app.run_dork_search",
-        lambda opts: fake_result,
+        lambda opts, **kw: calls.append(kw) or fake_result,
+    )
+    monkeypatch.setattr(
+        "experimental.webui.app.sync_run_to_main_db",
+        lambda *_a, **_k: {
+            "selected": 3,
+            "processed": 3,
+            "inserted": 1,
+            "updated": 2,
+            "skipped": 0,
+            "failed": 0,
+            "cancelled": 0,
+        },
     )
     csrf = _csrf_from_dashboard(logged_in_client)
     r = logged_in_client.post(
@@ -210,4 +224,20 @@ def test_searxng_run_queues_job(logged_in_client, monkeypatch):
     data = r.json()
     assert "job_id" in data
     assert data["status"] in {"queued", "running", "done", "failed"}
+    assert calls, "run_dork_search should be invoked for queued job"
+    assert calls[-1].get("db_path") == app_and_queue[0].state.db_path
 
+    job_id = data["job_id"]
+    job_snapshot = None
+    for _ in range(40):
+        jr = logged_in_client.get(f"/api/jobs/{job_id}")
+        assert jr.status_code == 200
+        job_snapshot = jr.json()
+        if job_snapshot.get("status") in {"done", "failed", "cancelled"}:
+            break
+        time.sleep(0.05)
+    assert job_snapshot is not None
+    assert job_snapshot.get("status") == "done"
+    metadata = job_snapshot.get("metadata") or {}
+    assert metadata.get("sync_processed") == 3
+    assert metadata.get("sync_inserted") == 1

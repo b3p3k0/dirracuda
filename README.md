@@ -362,14 +362,14 @@ The dialog is modeless and tab-based. Current tabs:
 
 ![SearXNG](img/searxng.png)
 
-Use this tab to run open-directory dork queries against a SearXNG server, keep confirmed open indexes, and review/promote the results.
+Use this tab to run open-directory dork queries against a SearXNG server, keep confirmed open indexes, and review/probe the results.
 
 Quick start:
 1. Dashboard → `⚗ Accessories` → `SearXNG` tab.
 2. Fill in your server and query.
 3. Click `Test` to confirm the server is reachable and JSON search is enabled.
 4. Click `Run` to collect results.
-5. Click `Open Results DB` to review, probe, and promote hosts.
+5. Click `Open Results DB` to review and probe retained URLs.
 
 Inputs (persisted across opens/restarts):
 - **SearXNG Server** — server URL (default placeholder: `http://your.searxng.server:port`)
@@ -379,15 +379,15 @@ Inputs (persisted across opens/restarts):
 
 What each action does:
 - **Test** checks server reachability and JSON search support.
-- **Run** executes the query, keeps only confirmed open-index results, and updates status with fetched/stored counts. If probe is enabled, the status line also shows probe totals (`✔/✖/○`). On completion, a summary dialog shows URLs fetched, retained open-index count, probe totals (when enabled), and a note that results are stored in the SearXNG sidecar database (not the main DB). In mixed SearXNG+Shodan runs the dialog is suppressed to avoid interrupting the active Shodan queue; completion is signalled via live status lines only.
-- **Open Results DB** opens the results browser backed by `~/.dirracuda/data/experimental/se_dork.db`.
+- **Run** executes the query, keeps only confirmed open-index results, and updates status with fetched/stored counts. If probe is enabled, the status line also shows probe totals (`✔/✖/○`). On completion, retained SearXNG rows are written in the active primary DB context and auto-synced into main HTTP server surfaces (insert/update/skip counts are shown in status and summary text). In mixed SearXNG+Shodan runs the dialog is suppressed to avoid interrupting the active Shodan queue; completion is signalled via live status lines only.
+- **Open Results DB** opens the SearXNG browser against the active primary DB context for new runs. Historical sidecar data is still available from the legacy sidecar browser path.
 
 ![searxng db](img/searxng_db.png)
 
 Results browser:
 - Columns: `URL`, `Probed`, `Probe Preview`, `Checked`
-- Actions: `Copy URL`, `Open in Explorer`, `Open in system browser`, `Probe Selected` / `Probe URL`, `Add to dirracuda DB`; double-click opens a read-only result details view.
-- Promotion note: `Add to dirracuda DB` promotes resolvable IPv4 targets directly into the main Dirracuda DB, and multi-select imports run in the background with progress/cancel plus a best-effort summary. Probe snapshots from newer SearXNG results are carried into the main DB so SLB can render probe trees without re-probing (older summary-only rows keep summary data until re-probed). The Server List Browser does not need to be open, and new rows may be hidden by active filters.
+- Actions: `Copy URL`, `Open in Explorer`, `Open in system browser`, `Probe Selected` / `Probe URL`; double-click opens a read-only result details view.
+- Primary-backed mode hides manual promotion controls because retained SearXNG rows are synced during run completion. Legacy sidecar browsing keeps promotion controls for historical rows.
 
 #### SearXNG `format=json` and 403 troubleshooting
 

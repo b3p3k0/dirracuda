@@ -9,6 +9,7 @@ persisted. Run summary shown in status area.
 
 from __future__ import annotations
 
+from pathlib import Path
 import threading
 import tkinter as tk
 from types import SimpleNamespace
@@ -68,6 +69,28 @@ def _resolve_probe_worker_count(settings_manager: Any, default: int = _DEFAULT_P
         return max(1, min(8, int(raw)))
     except Exception:
         return default
+
+
+def _resolve_main_db_path(context: dict) -> Path:
+    """Resolve the active primary DB path for tab-triggered SearXNG runs."""
+    explicit = context.get("main_db_path")
+    if explicit:
+        try:
+            return Path(explicit).expanduser().resolve(strict=False)
+        except Exception:
+            pass
+    try:
+        from shared.path_service import (
+            get_legacy_paths,
+            get_paths,
+            resolve_runtime_main_db_path,
+        )
+
+        paths = get_paths()
+        legacy = get_legacy_paths(paths=paths)
+        return resolve_runtime_main_db_path(paths=paths, legacy=legacy)
+    except Exception:
+        return Path("dirracuda.db").resolve(strict=False)
 
 
 class SeDorkTab:
@@ -307,6 +330,7 @@ class SeDorkTab:
                 probe_config_path = None
 
         from experimental.se_dork.models import RunOptions
+        main_db_path = _resolve_main_db_path(self._context)
         options = RunOptions(
             instance_url=url,
             query=query,
@@ -317,9 +341,13 @@ class SeDorkTab:
         )
 
         def _run() -> None:
+            sync_summary = None
             try:
+                from experimental.se_dork.main_db_sync import sync_run_to_main_db
                 from experimental.se_dork.service import run_dork_search
-                result = run_dork_search(options)
+                result = run_dork_search(options, db_path=main_db_path)
+                if result.status == "done" and not result.error:
+                    sync_summary = sync_run_to_main_db(result.run_id, db_path=main_db_path)
             except Exception as exc:
                 from experimental.se_dork.models import RunResult, RUN_STATUS_ERROR
                 result = RunResult(
@@ -329,7 +357,7 @@ class SeDorkTab:
                     status=RUN_STATUS_ERROR,
                     error=str(exc),
                 )
-            self.frame.after(0, lambda: self._on_run_done(result))
+            self.frame.after(0, lambda: self._on_run_done(result, sync_summary=sync_summary))
 
         threading.Thread(target=_run, daemon=True).start()
 
@@ -348,17 +376,27 @@ class SeDorkTab:
             from gui.components.se_dork_browser_window import show_se_dork_browser_window
             show_se_dork_browser_window(
                 self.frame,
+                db_path=_resolve_main_db_path(self._context),
                 add_record_callback=None,
                 promote_record_callback=None,
+                allow_promotion=False,
                 settings_manager=self._context.get("settings_manager"),
             )
 
-    def _on_run_done(self, result: Any) -> None:
+    def _on_run_done(self, result: Any, sync_summary: Optional[dict] = None) -> None:
         """Called on the main thread once the run thread completes."""
         self._test_btn.configure(state="normal")
         self._run_btn.configure(state="normal")
         if result.status == "done":
             message = f"Done \u2014 fetched {result.fetched_count}, stored {result.deduped_count} unique."
+            if isinstance(sync_summary, dict):
+                message += (
+                    f"\nPrimary DB sync: {int(sync_summary.get('processed', 0) or 0)} processed"
+                    f" ({int(sync_summary.get('inserted', 0) or 0)} inserted"
+                    f", {int(sync_summary.get('updated', 0) or 0)} updated"
+                    f", {int(sync_summary.get('skipped', 0) or 0)} skipped"
+                    f", {int(sync_summary.get('failed', 0) or 0)} failed)."
+                )
             if getattr(result, "probe_enabled", False):
                 message += (
                     f"\nProbe: {getattr(result, 'probe_total', 0)} rows \u2022 "

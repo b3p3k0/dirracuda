@@ -56,6 +56,7 @@ def _make_browser(**kwargs) -> SeDorkBrowserWindow:
     obj._add_record_callback = kwargs.get("add_record_callback", None)
     obj._promote_record_callback = kwargs.get("promote_record_callback", None)
     obj._promote_records_callback = kwargs.get("promote_records_callback", None)
+    obj._allow_promotion = kwargs.get("allow_promotion", True)
     obj._settings_manager = kwargs.get("settings_manager", None)
     obj._row_by_iid = {}
     obj._context_menu_visible = False
@@ -280,6 +281,18 @@ def test_build_prefill_empty_url():
 # ---------------------------------------------------------------------------
 # _on_add_to_db — no promotion context
 # ---------------------------------------------------------------------------
+
+
+def test_on_add_to_db_disabled_mode_shows_notice():
+    b = _make_browser(allow_promotion=False)
+    b.tree.selection.return_value = ["1"]
+    b._row_by_iid["1"] = {"url": "http://192.168.1.1/"}
+
+    with patch("gui.components.se_dork_browser_window.messagebox") as mock_mb:
+        b._on_add_to_db()
+
+    mock_mb.showinfo.assert_called_once()
+    assert mock_mb.showinfo.call_args[0][0] == "Promotion disabled"
 
 
 def test_on_add_to_db_no_callback_shows_main_db_unavailable():
