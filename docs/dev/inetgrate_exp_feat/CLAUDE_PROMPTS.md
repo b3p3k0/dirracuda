@@ -150,6 +150,83 @@ Goal:
 - Update lessons learned and risk register outcomes.
 ```
 
+## C9 Prompt (Complete)
+
+```text
+C9 is already complete in commit 09543dc.
+
+Behavior shipped:
+- New SearXNG runs write runtime tables in the active primary DB context.
+- Retained HTTP/HTTPS rows auto-sync into main HTTP protocol tables.
+- Standard SearXNG browser mode hides manual promotion.
+- Legacy SearXNG sidecar browsing remains available for historical data.
+```
+
+## C10 Planning Prompt
+
+```text
+Use the Universal Header.
+
+You are Claude acting as DA, but this is a planning-only pass. Do not edit runtime code yet.
+
+Goal:
+- Produce a decision-complete plan for C10: Reddit hard cutover to primary DB.
+- Scope is Reddit/Redseek only.
+- Censys remains suspended and out of scope.
+- C9 SearXNG is the pattern to study, not code to rewrite.
+
+Read these additional files before planning:
+- docs/dev/inetgrate_exp_feat/C10_REDDIT_PRIMARY_DB_PLANNING.md
+- experimental/se_dork/main_db_sync.py
+- shared/tests/test_se_dork_main_db_sync.py
+- experimental/redseek/store.py
+- experimental/redseek/service.py
+- gui/components/dashboard_scan.py
+- gui/components/dashboard_experimental.py
+- gui/components/reddit_browser_window.py
+- experimental/webui/app.py
+- shared/tests/test_redseek_service.py
+- shared/tests/test_redseek_store.py
+- gui/tests/test_reddit_browser_window.py
+- experimental/webui/tests/test_reddit_routes.py
+
+Current problem:
+- New Reddit runs still use `reddit_od.db` sidecar storage and require manual promotion.
+- We want new runs to write Reddit runtime tables to the active primary DB context and auto-sync parsed SMB/FTP/HTTP targets into main protocol tables during run completion.
+- Legacy Reddit sidecar browsing must remain available for historical data.
+
+External/current sources to use in your plan:
+- Reddit API docs: https://www.reddit.com/dev/api/
+- Reddit Developer Terms: https://redditinc.com/policies/developer-terms
+- Reddit Data API Terms: https://redditinc.com/policies/data-api-terms
+- SQLite foreign keys: https://www.sqlite.org/foreignkeys.html
+- SQLite PRAGMA reference: https://www.sqlite.org/pragma.html
+- SQLite WAL: https://www.sqlite.org/wal.html
+
+Planning deliverable:
+Return a plan only. Include:
+1. Current-state confirmation with exact files/functions.
+2. Root cause.
+3. Proposed smallest safe implementation.
+4. Open decisions requiring HI/RA approval, especially:
+   - whether additive Reddit runtime tables in primary DB are acceptable,
+   - how `replace_cache=True` should behave in primary-backed mode,
+   - how current-run sync scope will be selected without all-runs scans.
+5. Test plan with exact commands.
+6. File-size risk check before implementation.
+7. Docs updates needed after implementation.
+8. Risks/assumptions.
+
+Do not:
+- Commit.
+- Push.
+- Change requirements.
+- Change auth.
+- Change Reddit fetch behavior beyond DB path/sync plumbing.
+- Remove legacy sidecar browsing.
+- Touch Censys.
+```
+
 ## RA Review Prompt (Findings-Only)
 
 ```text

@@ -289,3 +289,88 @@ Validation:
 
 HI test needed:
 - Spot-check updated docs against UI behavior.
+
+---
+
+## C9 - SearXNG Hard Cutover To Primary DB (COMPLETE)
+
+Issue:
+New SearXNG runs still wrote runtime artifacts to `se_dork.db`, requiring manual promotion before primary DB surfaces showed results.
+
+Root cause:
+Dashboard, Accessories, and WebUI SearXNG entrypoints still selected the sidecar path and did not run an automatic primary DB sync after completion.
+
+Delivered:
+- `experimental/se_dork/main_db_sync.py`
+- SearXNG run entrypoints now pass the active primary DB path.
+- Retained HTTP/HTTPS SearXNG rows auto-sync into main HTTP tables.
+- Primary-backed SearXNG browser hides manual promotion.
+- Legacy sidecar browsing remains available for historical data.
+
+Validation:
+```bash
+./venv/bin/python -m pytest gui/tests/test_dashboard_scan.py -q
+./venv/bin/python -m pytest gui/tests/test_se_dork_tab.py -q
+./venv/bin/python -m pytest experimental/webui/tests/test_searxng_routes.py -q
+./venv/bin/python -m pytest gui/tests/test_se_dork_browser_window.py -q
+./venv/bin/python -m pytest shared/tests/test_se_dork_main_db_sync.py -q
+./venv/bin/python scripts/run_agent_testing_workflow.py --lane quick
+```
+
+Known caveat:
+- `shared/tests/test_se_dork_service.py::test_run_dork_search_classifies_results` remains a pre-existing mock-call mismatch (`progress_cb` argument), not introduced by C9.
+
+---
+
+## C10 - Reddit Hard Cutover To Primary DB (COMPLETE)
+
+Issue:
+New Reddit runs still write posts, targets, probe artifacts, and ingest cursor state to `reddit_od.db`. Operators must manually promote rows before primary DB protocol surfaces show results.
+
+Root cause:
+Reddit entrypoints still select the sidecar DB path or call `run_ingest(options)` without `db_path`, and there is no C9-style automatic sync helper for retained Reddit targets.
+
+Planning scope:
+- Produce a decision-complete implementation plan before code changes.
+- Scope is locked to Reddit/Redseek only.
+- Preserve legacy Reddit sidecar browsing for historical data.
+- Do not change Reddit network fetch behavior, terms/policy posture, auth, requirements, or DB schema/migration logic without explicit HI approval.
+
+Likely implementation scope after plan approval:
+1. Add focused read helpers in `experimental/redseek/store.py` for full target rows by current-run dedupe keys or run-equivalent scope.
+2. Add a Reddit primary-sync helper modeled on C9's SearXNG helper, returning deterministic `selected/processed/inserted/updated/skipped/failed/cancelled` counts and never raising.
+3. Repoint Start Scan Reddit path (`gui/components/dashboard_scan.py`) to active primary DB path and call sync after successful ingest/probe.
+4. Repoint WebUI `/api/reddit/run` (`experimental/webui/app.py`) to `request.app.state.db_path` and include sync totals in job metadata.
+5. Repoint standard Reddit browser open path to primary-backed mode and hide `Add to dirracuda DB`; keep legacy sidecar route available from `[Legacy] Sidecar Data`.
+6. Update completion/status copy to remove new-run sidecar/manual-promotion language.
+7. Update README, Technical Reference, lessons learned, and relevant tests after implementation.
+
+Open planning decisions:
+- Whether `replace_cache=True` should wipe only Reddit runtime tables in the active primary DB context or be disabled/translated for primary-backed runs.
+- Whether `reddit_posts`, `reddit_targets`, and `reddit_ingest_state` can be safely created in the primary DB by `redseek.store.init_db(db_path)` without migration changes, or whether that requires explicit HI approval as a schema-contract change.
+- Whether current-run sync should use `_probe_candidate_keys`, `created_at`/`last_seen_at`, or a new explicit ingest-run identifier to avoid all-runs scans.
+- Whether primary-backed Reddit browser should show only Reddit runtime targets or all rows in `reddit_targets` from the active DB.
+
+Planning validation:
+```bash
+git status --short
+rg -n "reddit_od_db_file|run_ingest\\(|show_reddit_browser_window|Add to dirracuda DB|reddit sidecar" gui experimental docs README.md
+wc -l gui/components/dashboard_scan.py gui/components/reddit_browser_window.py experimental/redseek/store.py experimental/redseek/service.py experimental/webui/app.py
+```
+
+Implementation validation candidates after plan approval:
+```bash
+./venv/bin/python -m pytest gui/tests/test_dashboard_scan.py -q
+./venv/bin/python -m pytest gui/tests/test_dashboard_reddit_wiring.py -q
+./venv/bin/python -m pytest gui/tests/test_reddit_browser_window.py -q
+./venv/bin/python -m pytest experimental/webui/tests/test_reddit_routes.py -q
+./venv/bin/python -m pytest shared/tests/test_redseek_service.py -q
+./venv/bin/python -m pytest shared/tests/test_redseek_store.py -q
+./venv/bin/python scripts/run_agent_testing_workflow.py --lane quick
+```
+
+HI test needed after implementation:
+- `./dirracuda` -> Start Scan -> Reddit feed/search/user as applicable.
+- Confirm new entries appear in primary DB protocol surfaces without manual promotion.
+- Accessories -> Reddit -> Open Post DB should hide manual promotion in primary-backed mode.
+- Database -> `[Legacy] Sidecar Data` -> Reddit should still open historical sidecar data.

@@ -831,7 +831,6 @@ def start_reddit_scan(dash, scan_request: dict) -> bool:
         return False
 
     from experimental.redseek.service import IngestOptions, run_ingest
-    from shared.path_service import get_paths
 
     mode = str(scan_request.get("reddit_mode") or "feed").strip()
     sort = str(scan_request.get("reddit_sort") or "new").strip()
@@ -874,7 +873,7 @@ def start_reddit_scan(dash, scan_request: dict) -> bool:
         probe_config_path=probe_config_path,
         probe_worker_count=probe_worker_count,
     )
-    db_path = get_paths().reddit_od_db_file
+    db_path = _resolve_main_db_path(dash)
     _started_at = datetime.now()
 
     try:
@@ -902,6 +901,8 @@ def start_reddit_scan(dash, scan_request: dict) -> bool:
             pass
 
     def _worker():
+        from experimental.redseek.main_db_sync import sync_targets_to_main_db
+        sync_summary: dict = {}
         try:
             _ui_log("Fetching Reddit posts...")
             result = run_ingest(options, db_path=db_path)
@@ -917,12 +918,17 @@ def start_reddit_scan(dash, scan_request: dict) -> bool:
                 probe_enabled=False, probe_total=0, probe_clean=0,
                 probe_issue=0, probe_unprobed=0, probe_skipped=0,
             )
+        else:
+            if not result.error:
+                keys = list(getattr(result, "_probe_candidate_keys", ()))
+                sync_summary = sync_targets_to_main_db(keys, db_path=db_path)
         try:
             dash.parent.after(0, lambda: _on_reddit_scan_done(
                 dash, result,
                 mode=mode,
                 reddit_only=_reddit_only,
                 started_at=_started_at,
+                sync_summary=sync_summary,
             ))
         except Exception:
             try:
@@ -955,6 +961,7 @@ def _on_reddit_scan_done(
     mode: str = "feed",
     reddit_only: bool = True,
     started_at: Optional[datetime] = None,
+    sync_summary: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Handle Reddit ingest completion on the UI thread."""
     try:
@@ -978,16 +985,27 @@ def _on_reddit_scan_done(
             f", {result.probe_issue} flagged"
             f", {result.probe_unprobed} unprobed")
 
+    ss = sync_summary or {}
+    if ss:
+        _call_dashboard_hook(dash, "_log_status_event",
+            f"Auto-synced to main DB: {_to_int(ss.get('inserted'))} new, "
+            f"{_to_int(ss.get('updated'))} updated, "
+            f"{_to_int(ss.get('skipped'))} skipped")
+
     if reddit_only:
         end_dt = datetime.now()
         duration_seconds = (end_dt - started_at).total_seconds() if started_at else 0.0
         summary_lines = [
             f"Reddit {mode} ingest complete. {result.posts_stored} posts stored, "
             f"{result.targets_stored} targets retained.",
-            "",
-            "Results are stored in the Reddit sidecar database (reddit_od.db) and can be "
-            "promoted to the main database via the Reddit browser.",
         ]
+        if ss:
+            summary_lines += [
+                "",
+                f"Auto-synced to main DB: {_to_int(ss.get('inserted'))} new, "
+                f"{_to_int(ss.get('updated'))} updated, "
+                f"{_to_int(ss.get('skipped'))} skipped.",
+            ]
         if result.probe_enabled:
             summary_lines += [
                 "",

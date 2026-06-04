@@ -2,7 +2,7 @@
 
 Status: Active
 Mode: PA/RA supervised, DA implemented, one card at a time
-Last updated: 2026-05-29
+Last updated: 2026-06-04
 
 ## Card Status
 
@@ -17,6 +17,8 @@ Last updated: 2026-05-29
 | C6 | Provider-Scoped Config Localization | COMPLETE |
 | C7 | Runtime Hardening + Regression | COMPLETE |
 | C8 | Docs/Reference Closeout | COMPLETE |
+| C9 | SearXNG Hard Cutover To Primary DB | COMPLETE |
+| C10 | Reddit Hard Cutover To Primary DB | COMPLETE |
 
 ## Phase A - Contract And Baseline
 
@@ -77,6 +79,21 @@ Last updated: 2026-05-29
 
 - Update `README.md` and `docs/TECHNICAL_REFERENCE.md` to exact runtime truth.
 - Update lessons learned and risk register outcomes.
+
+## Phase F - Primary DB Cutovers
+
+### C9 - SearXNG Hard Cutover To Primary DB (COMPLETE)
+
+- New SearXNG runs write `dork_runs` / `dork_results` into the active primary DB context.
+- Retained HTTP/HTTPS rows auto-sync into main HTTP server surfaces during run completion.
+- Standard SearXNG browser mode hides manual promotion; legacy sidecar browsing remains for historical data.
+
+### C10 - Reddit Hard Cutover To Primary DB (COMPLETE)
+
+- New Reddit runs write `reddit_posts`, `reddit_targets`, and `reddit_ingest_state` into the active primary DB context.
+- Parsed SMB/FTP/HTTP targets sync into primary protocol tables during run completion.
+- Primary-backed Reddit browser mode hides manual promotion and clear actions.
+- Legacy Reddit sidecar browsing remains available for historical data.
 
 ## Execution Rules (All Cards)
 

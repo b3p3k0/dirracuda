@@ -406,15 +406,17 @@ Then restart SearXNG and run `Test` again.
 
 ![reddit](img/reddit.png)
 
-redseek ingests submissions from `r/opendirectories` into a sidecar DB (`~/.dirracuda/data/experimental/reddit_od.db`) for review. 
+redseek ingests submissions from `r/opendirectories`. New runs write `reddit_posts`, `reddit_targets`, and `reddit_ingest_state` directly to the active primary DB, and parsed SMB/FTP/HTTP targets are automatically promoted into the main protocol tables at run completion. No manual "Add to dirracuda DB" step is needed for new runs.
 
-Ingest modes in `Reddit Grab`:
+Legacy data already in `~/.dirracuda/data/experimental/reddit_od.db` remains accessible under Accessories → Legacy Sidecar Data → Reddit, with manual promotion still available from that view.
+
+Ingest modes in `Reddit Grab` (Accessories):
 
 | Mode | Endpoint | Required input | Notes |
 |------|----------|----------------|-------|
 | `feed` | `/r/opendirectories/{sort}.json` | none | Default mode |
 | `search` | `/r/opendirectories/search.json` with `restrict_sr=1` | query | Subreddit-scoped keyword search |
-| `user` | `/r/opendirectories/search.json` with `q=author:<user> subreddit:opendirectories`, `restrict_sr=1`, `type=link` | username | Service still runtime-checks subreddit and author before writes |
+| `user` | `/r/opendirectories/search.json` with `q=author:<user> subreddit:opendirectories`, `restrict_sr=1`, `type=link` | username | Service runtime-checks subreddit and author before writes |
 
 Sort options:
 - `new`
@@ -423,15 +425,15 @@ Sort options:
 Only submissions are processed. Comments/replies are not.
 
 Reddit Grab options:
-- **Run probe on results** — optional explicit probe pass for concrete HTTP/HTTPS/FTP targets found during that ingest run. Unknown-protocol rows are skipped with a clear notice instead of guessing a protocol.
+- **Run probe on results** — optional explicit probe pass for concrete HTTP/HTTPS/FTP targets found during that ingest run. Unknown-protocol rows are skipped with a clear notice instead of guessing a protocol. Probe summaries and snapshots are carried into the primary DB automatically.
 
 ![reddit db](img/reddit_db.png)
 
-Reddit Post DB:
+Reddit Post DB (current runs — primary DB):
 - Columns include target metadata plus probe status, preview, and checked time.
-- `Probe Selected` runs the same full-featured probe stack used elsewhere and stores the full probe snapshot in the Reddit sidecar for HTTP/HTTPS/FTP targets.
+- `Probe Selected` runs the full probe stack for HTTP/HTTPS/FTP targets and stores the probe snapshot.
 - Double-click opens a read-only details view with Reddit metadata and the probe tree when a snapshot is available.
-- `Add to dirracuda DB` promotes resolvable IPv4 targets directly into the main Dirracuda DB, and multi-select imports run in the background with progress/cancel plus a best-effort summary. Reddit probe summaries and snapshots are carried into the main DB so SLB can render probe trees without re-probing, while unknown-protocol rows are skipped with a clear message. The Server List Browser does not need to be open, and new rows may be hidden by active filters.
+- Rows from new runs are already synced to the main database; manual promotion is not available from this view.
 
 Disclaimer:
 

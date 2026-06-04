@@ -24,6 +24,7 @@ from experimental.redseek.store import (
     upsert_post,
     upsert_targets,
     wipe_all,
+    wipe_ingest_state,
 )
 
 # ---------------------------------------------------------------------------
@@ -585,3 +586,44 @@ def test_check_schema_raises_on_missing_fk(tmp_path):
     with pytest.raises(RuntimeError, match="missing FK"):
         _check_schema(conn)
     conn.close()
+
+
+# ---------------------------------------------------------------------------
+# wipe_ingest_state
+# ---------------------------------------------------------------------------
+
+def test_wipe_ingest_state_preserves_posts_and_targets(tmp_path):
+    db = tmp_path / "test.db"
+    init_db(db)
+    with open_connection(db) as conn:
+        post = _make_post("p1")
+        upsert_post(conn, post)
+        upsert_targets(conn, [_make_target("p1", "key1")])
+        save_ingest_state(conn, RedditIngestState(
+            subreddit="opendirectories",
+            sort_mode="new",
+            last_post_created_utc=1_700_000_000.0,
+            last_post_id="p1",
+            last_scrape_time=_NOW,
+        ))
+        conn.commit()
+
+    wipe_ingest_state(db)
+
+    with open_connection(db) as conn:
+        posts = conn.execute("SELECT COUNT(*) FROM reddit_posts").fetchone()[0]
+        targets = conn.execute("SELECT COUNT(*) FROM reddit_targets").fetchone()[0]
+        state = conn.execute("SELECT COUNT(*) FROM reddit_ingest_state").fetchone()[0]
+
+    assert posts == 1
+    assert targets == 1
+    assert state == 0
+
+
+def test_wipe_ingest_state_is_idempotent(tmp_path):
+    db = tmp_path / "test.db"
+    wipe_ingest_state(db)  # tables did not exist before; init_db called internally
+    wipe_ingest_state(db)  # second call on empty tables must not raise
+    with open_connection(db) as conn:
+        state = conn.execute("SELECT COUNT(*) FROM reddit_ingest_state").fetchone()[0]
+    assert state == 0

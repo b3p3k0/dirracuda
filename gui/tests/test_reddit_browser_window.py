@@ -215,6 +215,7 @@ def _make_win(monkeypatch=None) -> RedditBrowserWindow:
     win._add_record_callback = None
     win._promote_record_callback = None
     win._promote_records_callback = None
+    win._allow_promotion = True
     win._settings_manager = None
     return win
 
@@ -1237,3 +1238,137 @@ class TestContextMenuLifecycle:
 
         win._context_menu.unpost.assert_called_once()
         assert called == [True]
+
+
+# ---------------------------------------------------------------------------
+# Group E — allow_promotion guards (C10)
+# ---------------------------------------------------------------------------
+
+import gui.components.reddit_browser_window as _rbw_mod
+
+
+def _make_win_built(monkeypatch, allow_promotion: bool):
+    """
+    Return (window, context_menu_mock, button_texts) with _build_window executed
+    against mocked Tk constructors.  No display required.
+    """
+    context_menu_mock = MagicMock()
+    button_texts: list[str] = []
+
+    def _fake_button(parent=None, text="", command=None, **kw):
+        button_texts.append(text)
+        m = MagicMock()
+        m.pack = MagicMock()
+        return m
+
+    monkeypatch.setattr(_rbw_mod.tk, "Frame", lambda *a, **kw: MagicMock())
+    monkeypatch.setattr(_rbw_mod.tk, "Label", lambda *a, **kw: MagicMock())
+    monkeypatch.setattr(_rbw_mod.tk, "Entry", lambda *a, **kw: MagicMock())
+    monkeypatch.setattr(_rbw_mod.tk, "StringVar", lambda *a, **kw: _StrVar())
+    monkeypatch.setattr(_rbw_mod.tk, "Button", _fake_button)
+    monkeypatch.setattr(_rbw_mod.ttk, "Scrollbar", lambda *a, **kw: MagicMock())
+    monkeypatch.setattr(_rbw_mod.ttk, "Treeview", lambda *a, **kw: MagicMock())
+    monkeypatch.setattr(_rbw_mod.tk, "Menu", lambda *a, **kw: context_menu_mock)
+
+    win = RedditBrowserWindow.__new__(RedditBrowserWindow)
+    win.parent = MagicMock()
+    win.db_path = None
+    win.theme = MagicMock()
+    win._row_by_iid = {}
+    win._all_rows = []
+    win._sort_col = None
+    win._sort_reverse = False
+    win._context_menu_visible = False
+    win._context_menu_bindings = []
+    win._allow_promotion = allow_promotion
+    win._add_record_callback = None
+    win._promote_record_callback = None
+    win._promote_records_callback = None
+    win._settings_manager = None
+    win.window = MagicMock()
+
+    win._build_window()
+
+    return win, context_menu_mock, button_texts
+
+
+class TestAllowPromotionGuards:
+
+    def test_allow_promotion_false_hides_add_to_db_in_context_menu(self, monkeypatch):
+        _, ctx_menu, _ = _make_win_built(monkeypatch, allow_promotion=False)
+        labels = [
+            c.kwargs.get("label") or (c.args[0] if c.args else None)
+            for c in ctx_menu.add_command.call_args_list
+        ]
+        assert "Add to dirracuda DB" not in labels
+
+    def test_allow_promotion_true_includes_add_to_db_in_context_menu(self, monkeypatch):
+        _, ctx_menu, _ = _make_win_built(monkeypatch, allow_promotion=True)
+        labels = [
+            c.kwargs.get("label") or (c.args[0] if c.args else None)
+            for c in ctx_menu.add_command.call_args_list
+        ]
+        assert "Add to dirracuda DB" in labels
+
+    def test_allow_promotion_false_hides_clear_db_button(self, monkeypatch):
+        _, _, button_texts = _make_win_built(monkeypatch, allow_promotion=False)
+        assert "Clear DB" not in button_texts
+
+    def test_allow_promotion_true_includes_clear_db_button(self, monkeypatch):
+        _, _, button_texts = _make_win_built(monkeypatch, allow_promotion=True)
+        assert "Clear DB" in button_texts
+
+    def test_on_add_to_db_blocked_at_call_time_when_allow_promotion_false(self, monkeypatch):
+        win = _make_win()
+        win._allow_promotion = False
+        info_calls: list = []
+        monkeypatch.setattr(
+            "gui.components.reddit_browser_window.messagebox",
+            SimpleNamespace(
+                showinfo=lambda *a, **kw: info_calls.append(a),
+                showerror=MagicMock(),
+                askyesno=MagicMock(return_value=False),
+            ),
+        )
+        callback_called = []
+        win._promote_record_callback = lambda *a: callback_called.append(a)
+        win._on_add_to_db()
+        assert len(info_calls) == 1
+        assert not callback_called
+
+    def test_on_clear_db_blocked_at_call_time_when_allow_promotion_false(self, monkeypatch):
+        win = _make_win()
+        win._allow_promotion = False
+        info_calls: list = []
+        wipe_calls: list = []
+        monkeypatch.setattr(
+            "gui.components.reddit_browser_window.messagebox",
+            SimpleNamespace(
+                showinfo=lambda *a, **kw: info_calls.append(a),
+                showerror=MagicMock(),
+                askyesno=MagicMock(return_value=True),
+            ),
+        )
+        monkeypatch.setattr(
+            "gui.components.reddit_browser_window.store.wipe_all",
+            lambda *a, **kw: wipe_calls.append(a),
+        )
+        win._on_clear_db()
+        assert len(info_calls) == 1
+        assert not wipe_calls
+
+    def test_browser_opens_empty_against_primary_db_with_no_reddit_tables(
+        self, monkeypatch, tmp_path
+    ):
+        """Opening the browser against a fresh primary DB (no Reddit tables) shows 0 targets."""
+        db = tmp_path / "main.db"
+
+        win = _make_win()
+        win.db_path = db
+        win.status_var = _StrVar()
+        win._filter_var = _StrVar()
+
+        # _load_rows calls store.init_db then open_connection — let them run for real
+        win._load_rows()
+
+        assert "0 targets loaded" in win.status_var.get()

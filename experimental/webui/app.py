@@ -1,5 +1,6 @@
 """Web UI FastAPI application factory."""
 
+import dataclasses
 import ipaddress
 import logging
 import math
@@ -14,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from experimental.dorkbook import store as dork_store
 from experimental.dorkbook.models import ROW_KIND_BUILTIN, DuplicateEntryError, ReadOnlyEntryError
+from experimental.redseek.main_db_sync import sync_targets_to_main_db as sync_reddit_to_main_db
 from experimental.redseek.service import IngestOptions as RedditIngestOptions, run_ingest
 from experimental.se_dork.client import run_preflight as run_searxng_preflight
 from experimental.se_dork.main_db_sync import sync_run_to_main_db
@@ -628,29 +630,35 @@ def create_app(
 
         shared_jobs = request.app.state.shared_jobs
         config_path = str(request.app.state.main_config_path)
+        primary_db_path = request.app.state.db_path
         request_data = body.model_dump()
 
         def _runner(job):
             job.set_progress("Running Reddit ingest...", 5.0)
-            options = RedditIngestOptions(
-                sort=request_data["sort"],
-                max_posts=request_data["max_posts"],
-                parse_body=request_data["parse_body"],
-                include_nsfw=request_data["include_nsfw"],
-                replace_cache=request_data["replace_cache"],
-                max_pages=request_data["max_pages"],
-                subreddit="opendirectories",
-                top_window=request_data["top_window"],
-                mode=request_data["mode"],
-                query=request_data["query"],
-                username=request_data["username"],
-                bulk_probe_enabled=request_data["bulk_probe_enabled"],
-                probe_config_path=config_path,
-                probe_worker_count=request_data.get("probe_worker_count"),
+            options = dataclasses.replace(
+                RedditIngestOptions(
+                    sort=request_data["sort"],
+                    max_posts=request_data["max_posts"],
+                    parse_body=request_data["parse_body"],
+                    include_nsfw=request_data["include_nsfw"],
+                    replace_cache=request_data["replace_cache"],
+                    max_pages=request_data["max_pages"],
+                    subreddit="opendirectories",
+                    top_window=request_data["top_window"],
+                    mode=request_data["mode"],
+                    query=request_data["query"],
+                    username=request_data["username"],
+                    bulk_probe_enabled=request_data["bulk_probe_enabled"],
+                    probe_config_path=config_path,
+                    probe_worker_count=request_data.get("probe_worker_count"),
+                ),
+                replace_cache_scope="state_only",
             )
-            result = run_ingest(options)
+            result = run_ingest(options, db_path=primary_db_path)
             if result.error:
                 raise RuntimeError(result.error)
+            keys = list(getattr(result, "_probe_candidate_keys", ()))
+            sync_summary = sync_reddit_to_main_db(keys, db_path=primary_db_path)
             job.set_metadata(
                 pages_fetched=result.pages_fetched,
                 posts_stored=result.posts_stored,
@@ -662,10 +670,17 @@ def create_app(
                 probe_issue=result.probe_issue,
                 probe_unprobed=result.probe_unprobed,
                 probe_skipped=result.probe_skipped,
+                sync_processed=int(sync_summary.get("processed", 0) or 0),
+                sync_inserted=int(sync_summary.get("inserted", 0) or 0),
+                sync_updated=int(sync_summary.get("updated", 0) or 0),
+                sync_skipped=int(sync_summary.get("skipped", 0) or 0),
+                sync_failed=int(sync_summary.get("failed", 0) or 0),
+                sync_cancelled=int(sync_summary.get("cancelled", 0) or 0),
             )
             job.set_progress(
-                f"Reddit ingest complete: {result.targets_stored} target(s) stored "
-                f"in sidecar (reddit_od.db). Use Reddit browser to promote to main database.",
+                f"Reddit ingest complete: {result.targets_stored} target(s) stored. "
+                f"Synced to main DB: {int(sync_summary.get('inserted', 0))} new, "
+                f"{int(sync_summary.get('updated', 0))} updated.",
                 100.0,
             )
 

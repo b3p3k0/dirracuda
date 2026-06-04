@@ -247,7 +247,7 @@ This shape applies to all three protocols. Protocol-specific differences are cov
 | `commands/http/` | HTTP discovery and access stages (parallel to FTP) | `shodan_query.py`, `verifier.py`, `operation.py`, `models.py` |
 | `shared/` | Protocol-agnostic utilities shared by CLI and GUI | See §2.1 |
 | `experimental/se_dork/` | SearXNG dork search pipeline (client, service, store, classifier, models) | `client.py`, `service.py`, `store.py`, `classifier.py`, `models.py` |
-| `experimental/redseek/` | Reddit ingestion pipeline (client fetch, parse, sidecar persistence) | `client.py`, `service.py`, `parser.py`, `store.py` |
+| `experimental/redseek/` | Reddit ingestion pipeline (client fetch, parse, primary-DB persistence, auto-sync) | `client.py`, `service.py`, `parser.py`, `store.py`, `mapper.py`, `main_db_sync.py` |
 | `experimental/dorkbook/` | Dorkbook sidecar persistence for reusable protocol dorks | `models.py`, `store.py` |
 | `experimental/keymaster/` | Keymaster sidecar persistence for reusable API keys | `models.py`, `store.py` |
 | `experimental/censys_discovery/` | Censys Platform v3 discovery sidecar (**development suspended**; backend retained, UI currently hidden) | `client.py`, `service.py`, `store.py`, `query_builder.py`, `models.py` |
@@ -840,13 +840,11 @@ Verdict values: `OPEN_INDEX`, `MAYBE`, `NOISE`, `ERROR`.
 
 URL normalization (`store.normalize_url`): scheme and netloc lowercased; path case preserved; trailing slash stripped from path; query string and fragment dropped.
 
-### 5.6 Reddit Sidecar Database (`~/.dirracuda/data/experimental/reddit_od.db`)
+### 5.6 Reddit Runtime Tables (primary DB, `dirracuda.db`)
 
-The Reddit module (`experimental/redseek`) writes runtime workflow data to a separate SQLite database.
+The Reddit module (`experimental/redseek`) writes new run data directly to the active primary DB alongside the main SMB/FTP/HTTP tables. After each run completes, `experimental/redseek/main_db_sync.sync_targets_to_main_db` promotes parsed targets into the primary protocol tables automatically, using `_probe_candidate_keys` from `IngestResult` to scope the sync to the current run only.
 
-Dirracuda now also supports one-time targeted startup import of resolvable host entities from this sidecar into `dirracuda.db` for shareability/portability. Sidecar tables remain authoritative for Reddit module internals.
-
-Tables:
+Tables (created on first run via `store.init_db(db_path)`):
 - `reddit_posts` — one row per Reddit post (`post_id` PK), with `source_sort` values `new`, `top`, `search`, or `user`
 - `reddit_targets` — extracted targets from post text/title, deduped by unique `dedupe_key`; stores probe summary fields and optional `probe_snapshot_json` for full probe-tree carry-forward
 - `reddit_ingest_state` — per-mode state rows keyed by `(subreddit, sort_mode)`
@@ -858,6 +856,10 @@ Current `sort_mode` keys:
 - `user:<sort>:<window_or_na>:<normalized_username>`
 
 Compatibility note: legacy `top` state is migrated to `top:week` on first week-top run; legacy row is left in place.
+
+`replace_cache` behavior: `replace_cache_scope="state_only"` is always used when the primary DB is the target — only `reddit_ingest_state` is cleared (cursor reset), never `reddit_posts` or `reddit_targets`.
+
+**Legacy sidecar** (`~/.dirracuda/data/experimental/reddit_od.db`): historical data from runs before C10 remains available under Accessories → Legacy Sidecar Data → Reddit. The sidecar is no longer written by new runs.
 
 ### 5.7 Dorkbook Sidecar Database (`~/.dirracuda/data/experimental/dorkbook.db`)
 
@@ -1122,22 +1124,30 @@ Reddit ingest entry path:
 
 ```
 Dashboard -> Accessories tab -> Open Reddit Grab
-  -> RedditGrabDialog -> run_ingest(options) on worker thread
+  -> RedditGrabDialog -> run_ingest(options, db_path=primary_db)
   -> optional explicit bulk probe pass for current-run HTTP/HTTPS/FTP targets
-  -> result dialog (counts, dedupe, probe totals, rate-limit errors)
+  -> sync_targets_to_main_db(_probe_candidate_keys, db_path=primary_db)
+  -> result dialog (counts, dedupe, probe totals, sync totals, rate-limit errors)
 ```
 
 Reddit Post DB entry path:
 
 ```
 Dashboard -> Accessories tab -> Open Reddit Post DB
-  -> RedditBrowserWindow (reads ~/.dirracuda/data/experimental/reddit_od.db)
+  -> RedditBrowserWindow (reads reddit_targets in the active primary DB)
+  -> "Add to dirracuda DB" and "Clear DB" are hidden and blocked in primary-backed mode
   -> "Probe Selected" stores cacheable probe summaries and full snapshots in reddit_targets
-  -> "Add to dirracuda DB" promotes SMB/FTP/HTTP rows directly to the main DB
-  -> multi-select bulk import runs in background with BatchStatusDialog progress/cancel and best-effort summary counts
-  -> cacheable Reddit probe summaries and full snapshots are copied into main probe tables
-  -> double-click opens a read-only row details view from sidecar metadata and stored probe snapshots
+  -> double-click opens a read-only row details view from Reddit metadata and stored probe snapshots
   -> unknown-protocol rows are skipped with explicit Cannot promote/probe messages
+```
+
+Legacy Reddit sidecar entry path:
+
+```
+Dashboard -> Database -> [Legacy] Sidecar Data -> Reddit
+  -> RedditBrowserWindow (reads ~/.dirracuda/data/experimental/reddit_od.db)
+  -> legacy "Add to dirracuda DB" promotion remains enabled for historical rows
+  -> multi-select bulk import runs in background with BatchStatusDialog progress/cancel and best-effort summary counts
 ```
 
 Reddit modes exposed in `RedditGrabDialog`:

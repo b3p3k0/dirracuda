@@ -25,6 +25,7 @@ from experimental.redseek.store import (
     save_ingest_state,
 )
 from experimental.redseek.service import IngestOptions, IngestResult, _make_preview_note, run_ingest
+from experimental.redseek.store import wipe_all, wipe_ingest_state
 from gui.utils.sidecar_probe import SidecarProbeOutcome
 
 # ---------------------------------------------------------------------------
@@ -1245,3 +1246,87 @@ def test_user_mode_nonstring_subreddit_and_author_does_not_raise(tmp_path, monke
     assert result.error is None
     assert result.posts_stored == 0
     assert result.posts_skipped == 2
+
+
+# ---------------------------------------------------------------------------
+# replace_cache_scope (D2 guard tests)
+# ---------------------------------------------------------------------------
+
+def test_replace_cache_state_only_does_not_call_wipe_all(tmp_path, monkeypatch):
+    """replace_cache_scope='state_only' must route to wipe_ingest_state, never wipe_all."""
+    db = tmp_path / "test.db"
+    wipe_all_called = {"value": False}
+    wipe_state_called = {"value": False}
+
+    def _fake_wipe_all(path=None):
+        wipe_all_called["value"] = True
+
+    def _fake_wipe_state(path=None):
+        wipe_state_called["value"] = True
+
+    monkeypatch.setattr(_svc, "wipe_all", _fake_wipe_all)
+    monkeypatch.setattr(_svc, "wipe_ingest_state", _fake_wipe_state)
+    monkeypatch.setattr(_svc, "fetch_posts", lambda *a, **kw: _make_fetch([]))
+
+    opts = IngestOptions(
+        sort="new",
+        max_posts=10,
+        parse_body=False,
+        include_nsfw=True,
+        replace_cache=True,
+        replace_cache_scope="state_only",
+    )
+    run_ingest(opts, db_path=db)
+
+    assert not wipe_all_called["value"], "wipe_all must not be called in state_only mode"
+    assert wipe_state_called["value"], "wipe_ingest_state must be called in state_only mode"
+
+
+def test_replace_cache_full_calls_wipe_all(tmp_path, monkeypatch):
+    """replace_cache_scope='full' must route to wipe_all."""
+    db = tmp_path / "test.db"
+    wipe_all_called = {"value": False}
+
+    def _fake_wipe_all(path=None):
+        wipe_all_called["value"] = True
+
+    monkeypatch.setattr(_svc, "wipe_all", _fake_wipe_all)
+    monkeypatch.setattr(_svc, "fetch_posts", lambda *a, **kw: _make_fetch([]))
+
+    opts = IngestOptions(
+        sort="new",
+        max_posts=10,
+        parse_body=False,
+        include_nsfw=True,
+        replace_cache=True,
+        replace_cache_scope="full",
+    )
+    run_ingest(opts, db_path=db)
+
+    assert wipe_all_called["value"]
+
+
+def test_replace_cache_invalid_scope_returns_error_result(tmp_path, monkeypatch):
+    """An unrecognised replace_cache_scope must return an error result without touching the DB."""
+    db = tmp_path / "test.db"
+    wipe_all_called = {"value": False}
+    wipe_state_called = {"value": False}
+
+    monkeypatch.setattr(_svc, "wipe_all", lambda *a, **kw: wipe_all_called.update({"value": True}))
+    monkeypatch.setattr(_svc, "wipe_ingest_state", lambda *a, **kw: wipe_state_called.update({"value": True}))
+    monkeypatch.setattr(_svc, "fetch_posts", lambda *a, **kw: _make_fetch([]))
+
+    opts = IngestOptions(
+        sort="new",
+        max_posts=10,
+        parse_body=False,
+        include_nsfw=True,
+        replace_cache=True,
+        replace_cache_scope="typo_value",  # type: ignore[arg-type]
+    )
+    result = run_ingest(opts, db_path=db)
+
+    assert result.error is not None
+    assert "invalid replace_cache_scope" in result.error
+    assert not wipe_all_called["value"]
+    assert not wipe_state_called["value"]

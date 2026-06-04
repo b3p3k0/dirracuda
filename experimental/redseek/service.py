@@ -14,9 +14,13 @@ Transaction ownership:
       are caught before the write-phase try/except and return a clean error result.
 
 replace_cache semantics:
-    If replace_cache=True, wipe_all() runs and commits before any fetch.
-    If the fetch or write phase later fails the DB remains wiped — by design.
-    IngestResult.replace_cache_done=True signals this state to the caller.
+    If replace_cache=True, the scope is determined by options.replace_cache_scope:
+      "full"       — wipe_all() deletes all three tables (sidecar/legacy use only).
+      "state_only" — wipe_ingest_state() resets cursors; posts/targets intact
+                     (required when db_path points to the primary DB).
+      Any other value — returns an error result without touching the DB.
+    If the fetch or write phase later fails the DB remains in the wiped state —
+    by design. IngestResult.replace_cache_done=True signals this to the caller.
 """
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -24,7 +28,7 @@ import datetime
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from experimental.redseek.client import (
     FetchError,
@@ -46,6 +50,7 @@ from experimental.redseek.store import (
     upsert_post,
     upsert_targets,
     wipe_all,
+    wipe_ingest_state,
 )
 
 
@@ -69,6 +74,7 @@ class IngestOptions:
     bulk_probe_enabled: bool = False
     probe_config_path: Optional[str] = None
     probe_worker_count: Optional[int] = None
+    replace_cache_scope: Literal["full", "state_only"] = "full"
 
 
 @dataclass
@@ -931,12 +937,20 @@ def run_ingest(options: IngestOptions, db_path: Optional[Path] = None) -> Ingest
             return _error_result(options, False, error=f"invalid username: {options.username!r}")
 
     # --- Setup (wipe + schema init) ---
-    # wipe_all commits its own transaction before init_db or fetch run.
-    # If fetch later fails, the DB remains wiped — replace_cache_done=True signals this.
+    # Wipe function commits its own transaction before init_db or fetch run.
+    # If fetch later fails, the DB remains in the wiped state — replace_cache_done=True signals this.
     replace_cache_done = False
     try:
         if options.replace_cache:
-            wipe_all(db_path)
+            if options.replace_cache_scope == "full":
+                wipe_all(db_path)
+            elif options.replace_cache_scope == "state_only":
+                wipe_ingest_state(db_path)
+            else:
+                return _error_result(
+                    options, False,
+                    error=f"invalid replace_cache_scope: {options.replace_cache_scope!r}",
+                )
             replace_cache_done = True
         init_db(db_path)
     except (sqlite3.Error, OSError) as e:

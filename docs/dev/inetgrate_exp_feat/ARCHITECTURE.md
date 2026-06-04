@@ -1,38 +1,35 @@
 # Integrate Experimental Features Into Main - ARCHITECTURE
 
-Status: Draft canonical contract (PA/RA maintained)
-Last updated: 2026-05-25
+Status: Updated through C10
+Last updated: 2026-06-04
 
-## Current Runtime Shape (Observed)
+## Current Runtime Shape (As of C10)
 
 ```text
 Dashboard
   -> Start Scan (UnifiedScanDialog)
-     -> SMB/FTP/HTTP protocol queue only
-  -> Experimental button
-     -> ExperimentalFeaturesDialog (Notebook tabs)
-        -> SearXNG tab (sidecar DB flow)
-        -> Reddit tab (sidecar DB flow)
-        -> Web UI tab
-        -> Dorkbook tab
-        -> Keymaster tab
-  -> Servers button (main DB viewer/drilldown)
-  -> DB Tools button
+     -> SMB/FTP/HTTP protocol queue
+     -> SearXNG provider (primary DB write, auto-sync)
+     -> Reddit provider (primary DB write, auto-sync)
+  -> Accessories button
+     -> Reddit Grab (primary DB write, auto-sync)
+     -> SearXNG Dork (primary DB write, auto-sync)
+     -> Web UI, Dorkbook, Keymaster
+     -> Legacy Sidecar Data
+        -> SearXNG Dork Results (sidecar browse, promotion enabled)
+        -> Reddit Open Directory Posts (sidecar browse, promotion enabled)
+        -> Migrate All to Main DB
 
 WebUI
-  -> /scans/shodan
-  -> /scans/searxng
-  -> /scans/reddit
-  -> current provider pages include sidecar-oriented results/probe/promote flows
+  -> /scans/shodan, /scans/searxng, /scans/reddit
+  -> all provider pages operate on primary DB; no sidecar-oriented browse/promote flows
 ```
 
 Data/storage:
-- Main DB: runtime server/probe records.
-- Sidecars:
-  - `~/.dirracuda/data/experimental/se_dork.db`
-  - `~/.dirracuda/data/experimental/reddit_od.db`
-  - plus accessory sidecars (`dorkbook`, `keymaster`).
-- Existing direct sidecar promotion path exists via `gui/utils/sidecar_promotion.py`.
+- Main DB (`dirracuda.db`): runtime server/probe records **plus** SearXNG and Reddit runtime tables (`se_dork_runs`, `se_dork_results`, `reddit_posts`, `reddit_targets`, `reddit_ingest_state`).
+- Accessory sidecars (unchanged): `dorkbook.db`, `keymaster.db`.
+- Legacy sidecars (browse-only): `se_dork.db`, `reddit_od.db` — written by runs before C9/C10; no longer the write target for new runs.
+- Sidecar promotion path (`gui/utils/sidecar_promotion.py`) still used for legacy-browse → primary-DB promotion.
 
 ## Target Architecture (This Wave)
 

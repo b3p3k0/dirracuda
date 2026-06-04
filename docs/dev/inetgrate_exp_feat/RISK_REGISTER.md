@@ -1,7 +1,7 @@
 # Integrate Experimental Features Into Main - RISK REGISTER
 
 Status: Active
-Last updated: 2026-05-29
+Last updated: 2026-06-04
 
 ## Open Risks
 
@@ -17,16 +17,21 @@ Last updated: 2026-05-29
 | R8 | External API behavior/policy changes invalidate assumptions | Medium | Medium | Re-check vendor docs at planning points; cite current sources in contracts | RA | All |
 | R9 | Regression gaps due incomplete test targeting | Medium | High | Card-level targeted tests + quick-lane before closeout | DA + RA | C7 |
 | R10 | One-time migration prompt logic repeats too often or not at all | Medium | Medium | Persist explicit migration state machine and test first-run/defer/resume branches | DA + RA | C5 |
+| R15 | Reddit runtime tables in primary DB increase migration surface area | Low | Low | Tables are additive; no FK links to main protocol tables; `init_db` is idempotent | DA | C10+ |
 
 ## Closed Risks
 
 | ID | Risk | Resolution |
 | --- | --- | --- |
 | R11 | WebUI continues exposing sidecar DB surfaces after promotion | Mitigated in C6: SearXNG/Reddit sidecar result-browse/probe/promote API routes removed from `app.py`. Dorkbook and Keymaster WebUI management APIs remain intentionally registered (`app.py:1087`, `keymaster_routes.py:69`). Desktop-owned migration messaging in place per lesson 12. |
+| R12 | Reddit primary DB cutover expands primary DB schema without explicit operator awareness | Mitigated in C10: `init_db` uses `CREATE TABLE IF NOT EXISTS`; tables created on first run. HI/RA approval (D1) recorded in C10 planning doc before implementation. |
+| R13 | Reddit `replace_cache=True` wipes primary-backed runtime tables unexpectedly | Mitigated in C10: explicit `replace_cache_scope: Literal["full", "state_only"]` on `IngestOptions`; primary-DB callers always pass `"state_only"`; invalid scope returns error result without touching DB; `wipe_all` unreachable from any primary-DB call path. Tests verify at service, WebUI route, and Reddit Grab worker levels. |
+| R14 | Reddit current-run sync scans historical target rows or double-counts deduped targets | Mitigated in C10: sync scoped by `_probe_candidate_keys` from current-run `IngestResult`; idempotency verified by test (first call inserts, second updates, no double-count). |
 
 ## Monitoring Notes
 
 - Re-check Shodan credit semantics before finalizing cost copy in UI.
 - Re-check Reddit terms/rate-limit policy before changing ingestion defaults.
+- For C10, do not broaden Reddit fetch behavior; DB target changes must not increase request volume.
 - Keep Censys notes documentation-only while module remains suspended.
 - Treat migration execution as desktop-owned and WebUI notice as informational-only.

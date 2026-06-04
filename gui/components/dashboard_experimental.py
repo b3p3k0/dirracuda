@@ -68,6 +68,21 @@ def _resolve_main_db_path(widget) -> Path:
         return Path("dirracuda.db").resolve(strict=False)
 
 
+def _resolve_reddit_sidecar_path() -> Path:
+    """Resolve canonical/legacy Reddit sidecar DB path for legacy browsing."""
+    try:
+        from shared.path_service import get_legacy_paths, get_paths, select_existing_path
+
+        paths = get_paths()
+        legacy = get_legacy_paths(paths=paths)
+        return select_existing_path(
+            paths.reddit_od_db_file,
+            [legacy.flat_sidecar_reddit_od_file, legacy.legacy_home_root / "reddit_od.db"],
+        )
+    except Exception:
+        return Path("reddit_od.db").resolve(strict=False)
+
+
 def _resolve_se_dork_sidecar_path() -> Path:
     """Resolve canonical/legacy SearXNG sidecar DB path for legacy browsing."""
     try:
@@ -116,12 +131,14 @@ def handle_experimental_button_click(widget) -> None:
 
 
 def open_reddit_post_db(widget) -> None:
-    """Open the Reddit Post DB browser with direct main-DB promotion."""
+    """Open the Reddit Post DB browser in primary-DB mode (promotion disabled)."""
     show_reddit_browser_window(
         parent=widget.parent,
+        db_path=_resolve_main_db_path(widget),
         add_record_callback=None,
-        promote_record_callback=_make_sidecar_promote_callback(widget),
-        promote_records_callback=_make_sidecar_bulk_promote_callback(widget),
+        promote_record_callback=None,
+        promote_records_callback=None,
+        allow_promotion=False,
         settings_manager=getattr(widget, "settings_manager", None),
     )
 
@@ -161,7 +178,15 @@ def open_sidecar_legacy_db(widget) -> None:
                 settings_manager=getattr(widget, "settings_manager", None),
             )
         elif choice == "reddit":
-            open_reddit_post_db(widget)
+            show_reddit_browser_window(
+                parent=widget.parent,
+                db_path=_resolve_reddit_sidecar_path(),
+                add_record_callback=None,
+                promote_record_callback=_make_sidecar_promote_callback(widget),
+                promote_records_callback=_make_sidecar_bulk_promote_callback(widget),
+                allow_promotion=True,
+                settings_manager=getattr(widget, "settings_manager", None),
+            )
         elif choice == "migrate":
             db_reader = getattr(widget, "db_reader", None)
             if db_reader is None:

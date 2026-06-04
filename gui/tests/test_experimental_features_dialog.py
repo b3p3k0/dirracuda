@@ -315,12 +315,9 @@ def test_experimental_context_includes_webui_config_path(monkeypatch):
     assert captured["context"]["webui_config_path"] == "/tmp/app-config.json"
 
 
-def test_open_reddit_post_db_with_live_server_window(monkeypatch):
-    """Promotion wiring no longer depends on a live Server List Browser."""
+def test_open_reddit_post_db_opens_primary_db_without_promotion(monkeypatch):
+    """C10: open_reddit_post_db opens primary DB with allow_promotion=False."""
     dash = _make_dash()
-    mock_win = MagicMock()
-    mock_win.window.winfo_exists.return_value = True
-    dash._server_list_getter = MagicMock(return_value=mock_win)
 
     calls = []
     monkeypatch.setattr(
@@ -333,25 +330,10 @@ def test_open_reddit_post_db_with_live_server_window(monkeypatch):
     assert len(calls) == 1
     assert calls[0]["parent"] is dash.parent
     assert calls[0]["add_record_callback"] is None
-    assert callable(calls[0]["promote_record_callback"])
-    assert callable(calls[0]["promote_records_callback"])
+    assert calls[0]["promote_record_callback"] is None
+    assert calls[0]["promote_records_callback"] is None
+    assert calls[0]["allow_promotion"] is False
     assert calls[0]["settings_manager"] is dash.settings_manager
-    dash._server_list_getter.assert_not_called()
-
-    result = calls[0]["promote_record_callback"]({
-        "host_type": "H",
-        "host": "1.2.3.4",
-        "port": 80,
-        "scheme": "http",
-    })
-    dash.db_reader.upsert_manual_server_record.assert_called_once_with({
-        "host_type": "H",
-        "ip_address": "1.2.3.4",
-        "port": 80,
-        "scheme": "http",
-    })
-    assert result["result"]["row_key"] == "H:3"
-    dash.refresh_after_database_change.assert_called_once_with(refresh_runtime_status=False)
 
 
 def test_sidecar_bulk_promotion_callback_refreshes_once(monkeypatch):
@@ -404,11 +386,10 @@ def test_sidecar_promotion_callback_does_not_refresh_when_promotion_fails(monkey
     dash.refresh_after_database_change.assert_not_called()
 
 
-def test_open_reddit_post_db_fallback_when_no_server_window(monkeypatch):
-    """Getter=None path still opens with direct promotion wiring."""
+def test_open_reddit_post_db_primary_db_ignores_server_list_getter(monkeypatch):
+    """C10: primary-DB Reddit browser does not use the server list getter."""
     dash = _make_dash()
     dash._server_list_getter = MagicMock(return_value=None)
-    dash._open_drill_down = MagicMock()
 
     calls = []
     monkeypatch.setattr(
@@ -419,22 +400,17 @@ def test_open_reddit_post_db_fallback_when_no_server_window(monkeypatch):
     dashboard_experimental.open_reddit_post_db(dash)
 
     assert len(calls) == 1
-    assert calls[0]["parent"] is dash.parent
-    assert calls[0]["add_record_callback"] is None
-    assert callable(calls[0]["promote_record_callback"])
-    assert callable(calls[0]["promote_records_callback"])
-    assert calls[0]["settings_manager"] is dash.settings_manager
-    dash._open_drill_down.assert_not_called()
+    assert calls[0]["allow_promotion"] is False
+    assert calls[0]["promote_record_callback"] is None
     dash._server_list_getter.assert_not_called()
 
 
-def test_open_reddit_post_db_treats_dead_window_as_none(monkeypatch):
-    """Dead windows are irrelevant to direct sidecar promotion wiring."""
+def test_open_reddit_post_db_primary_db_dead_window_irrelevant(monkeypatch):
+    """C10: primary-DB mode does not inspect server list window state."""
     dash = _make_dash()
     mock_win = MagicMock()
     mock_win.window.winfo_exists.return_value = False
     dash._server_list_getter = MagicMock(return_value=mock_win)
-    dash._open_drill_down = MagicMock()
 
     calls = []
     monkeypatch.setattr(
@@ -445,17 +421,13 @@ def test_open_reddit_post_db_treats_dead_window_as_none(monkeypatch):
     dashboard_experimental.open_reddit_post_db(dash)
 
     assert len(calls) == 1
-    assert calls[0]["parent"] is dash.parent
-    assert calls[0]["add_record_callback"] is None
-    assert callable(calls[0]["promote_record_callback"])
-    assert callable(calls[0]["promote_records_callback"])
-    assert calls[0]["settings_manager"] is dash.settings_manager
-    dash._open_drill_down.assert_not_called()
+    assert calls[0]["allow_promotion"] is False
+    assert calls[0]["promote_record_callback"] is None
     dash._server_list_getter.assert_not_called()
 
 
-def test_open_reddit_post_db_does_not_open_server_list_on_fallback(monkeypatch):
-    """Fallback path must not open Server List as a side effect."""
+def test_open_reddit_post_db_primary_db_no_side_effects_on_server_list(monkeypatch):
+    """C10: opening primary-DB Reddit browser has no server-list side effects."""
     dash = _make_dash()
     dash._server_list_getter = MagicMock(return_value=None)
     dash._open_drill_down = MagicMock()
@@ -469,17 +441,14 @@ def test_open_reddit_post_db_does_not_open_server_list_on_fallback(monkeypatch):
     dashboard_experimental.open_reddit_post_db(dash)
 
     assert len(calls) == 1
-    assert calls[0]["parent"] is dash.parent
-    assert calls[0]["add_record_callback"] is None
-    assert callable(calls[0]["promote_record_callback"])
-    assert callable(calls[0]["promote_records_callback"])
-    assert calls[0]["settings_manager"] is dash.settings_manager
+    assert calls[0]["allow_promotion"] is False
+    assert calls[0]["promote_record_callback"] is None
     dash._open_drill_down.assert_not_called()
     dash._server_list_getter.assert_not_called()
 
 
-def test_open_reddit_post_db_fallback_when_getter_raises(monkeypatch):
-    """Getter exceptions cannot block direct sidecar promotion wiring."""
+def test_open_reddit_post_db_primary_db_getter_never_consulted(monkeypatch):
+    """C10: primary-DB mode never consults the server list getter."""
     dash = _make_dash()
     getter_calls = {"count": 0}
 
@@ -491,28 +460,17 @@ def test_open_reddit_post_db_fallback_when_getter_raises(monkeypatch):
     dash._open_drill_down = MagicMock()
 
     calls = []
-    log_warnings = []
     monkeypatch.setattr(
         "gui.components.dashboard_experimental.show_reddit_browser_window",
         lambda **kw: calls.append(kw),
-    )
-    monkeypatch.setattr(
-        dashboard_experimental._logger,
-        "warning",
-        lambda msg, *args: log_warnings.append(msg % args if args else msg),
     )
 
     dashboard_experimental.open_reddit_post_db(dash)
 
     assert len(calls) == 1
-    assert calls[0]["parent"] is dash.parent
-    assert calls[0]["add_record_callback"] is None
-    assert callable(calls[0]["promote_record_callback"])
-    assert callable(calls[0]["promote_records_callback"])
-    assert calls[0]["settings_manager"] is dash.settings_manager
-    dash._open_drill_down.assert_not_called()
+    assert calls[0]["allow_promotion"] is False
+    assert calls[0]["promote_record_callback"] is None
     assert getter_calls["count"] == 0
-    assert log_warnings == []
 
 
 def test_open_reddit_post_db_without_db_reader_has_no_promote_callback(monkeypatch):

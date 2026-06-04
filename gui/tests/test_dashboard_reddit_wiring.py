@@ -301,18 +301,19 @@ class TestWorkerExceptionPath:
         dash = _make_dash()
         after_calls = []
         dash.parent = MagicMock()
-        dash.parent.after.side_effect = lambda delay, fn, result: after_calls.append((delay, fn, result))
+        dash.parent.after.side_effect = lambda *args: after_calls.append(args)
 
         monkeypatch.setattr(
             "gui.components.dashboard.run_ingest",
-            lambda _opts: (_ for _ in ()).throw(RuntimeError("boom")),
+            lambda _opts, db_path=None: (_ for _ in ()).throw(RuntimeError("boom")),
         )
 
         options = _make_options()
         dash._reddit_grab_worker(options)
 
         assert len(after_calls) == 1
-        delay, fn, result = after_calls[0]
+        call_args = after_calls[0]
+        delay, fn, result = call_args[0], call_args[1], call_args[2]
         assert delay == 0
         assert fn == dash._on_reddit_grab_done
         assert result.error is not None
@@ -449,3 +450,122 @@ class TestWorkerExceptionPath:
 
         assert "Probe: 3 attempted" in messages[0][1]
         assert "1 skipped" in messages[0][1]
+
+
+# ---------------------------------------------------------------------------
+# Group D — C10 primary DB cutover wiring
+# ---------------------------------------------------------------------------
+
+import threading
+
+
+class TestRedditGrabPrimaryDB:
+
+    def _make_resolved_dash(self, monkeypatch) -> DashboardWidget:
+        """Return a dash stub with _resolve_main_db_path patched to a fixed path."""
+        import gui.components.dashboard_scan as _ds
+        dash = _make_dash()
+        monkeypatch.setattr(_ds, "_resolve_main_db_path", lambda _d: Path("/tmp/primary.db"))
+        return dash
+
+    def test_reddit_grab_worker_passes_primary_db_not_sidecar(self, monkeypatch):
+        """_reddit_grab_worker must pass the primary DB path, not the sidecar path."""
+        dash = self._make_resolved_dash(monkeypatch)
+        captured_db: list = []
+
+        def _fake_run(opts, db_path=None):
+            captured_db.append(db_path)
+            return _make_ingest_result()
+
+        monkeypatch.setattr("gui.components.dashboard.run_ingest", _fake_run)
+
+        dash._reddit_grab_worker(_make_options())
+
+        assert len(captured_db) == 1
+        assert str(captured_db[0]) == "/tmp/primary.db"
+        assert "reddit_od" not in str(captured_db[0]).lower()
+
+    def test_reddit_grab_worker_sets_state_only_scope(self, monkeypatch):
+        """Options passed to run_ingest must always have replace_cache_scope='state_only'."""
+        dash = self._make_resolved_dash(monkeypatch)
+        captured_opts: list = []
+
+        def _fake_run(opts, db_path=None):
+            captured_opts.append(opts)
+            return _make_ingest_result()
+
+        monkeypatch.setattr("gui.components.dashboard.run_ingest", _fake_run)
+
+        # User passed replace_cache=True — scope must still be state_only
+        opts = IngestOptions(
+            sort="new", max_posts=50, parse_body=True,
+            include_nsfw=False, replace_cache=True,
+        )
+        dash._reddit_grab_worker(opts)
+
+        assert len(captured_opts) == 1
+        assert captured_opts[0].replace_cache_scope == "state_only"
+
+    def test_reddit_grab_worker_replace_cache_true_does_not_call_wipe_all(self, monkeypatch):
+        """Even when replace_cache=True, wipe_all must not be called in primary-DB mode."""
+        import experimental.redseek.store as _store
+        dash = self._make_resolved_dash(monkeypatch)
+        wipe_all_called = []
+        monkeypatch.setattr(_store, "wipe_all", lambda *a, **k: wipe_all_called.append(True))
+        monkeypatch.setattr("gui.components.dashboard.run_ingest",
+                            lambda opts, db_path=None: _make_ingest_result())
+
+        opts = IngestOptions(
+            sort="new", max_posts=50, parse_body=True,
+            include_nsfw=False, replace_cache=True,
+        )
+        dash._reddit_grab_worker(opts)
+
+        assert not wipe_all_called
+
+    def test_reddit_grab_worker_calls_sync_with_candidate_keys(self, monkeypatch):
+        """After a successful ingest, sync_targets_to_main_db is called with _probe_candidate_keys."""
+        import experimental.redseek.main_db_sync as _sync
+        dash = self._make_resolved_dash(monkeypatch)
+
+        ingest_result = _make_ingest_result()
+        # Attach fake candidate keys the way the service does
+        setattr(ingest_result, "_probe_candidate_keys", ("k1", "k2"))
+
+        sync_calls: list = []
+
+        def _fake_run(opts, db_path=None):
+            return ingest_result
+
+        def _fake_sync(keys, db_path=None):
+            sync_calls.append((list(keys), db_path))
+            return {"inserted": 2, "updated": 0, "skipped": 0}
+
+        monkeypatch.setattr("gui.components.dashboard.run_ingest", _fake_run)
+        monkeypatch.setattr(_sync, "sync_targets_to_main_db", _fake_sync)
+
+        dash._reddit_grab_worker(_make_options())
+
+        assert len(sync_calls) == 1
+        assert sync_calls[0][0] == ["k1", "k2"]
+        assert str(sync_calls[0][1]) == "/tmp/primary.db"
+
+    def test_on_reddit_grab_done_shows_sync_totals(self, monkeypatch):
+        """Completion summary must include sync count lines when sync_summary is provided."""
+        dash = _make_dash()
+        messages: list = []
+        monkeypatch.setattr(
+            "gui.components.dashboard.messagebox.showinfo",
+            lambda *a, **k: messages.append(a),
+        )
+
+        dash._on_reddit_grab_done(
+            _make_ingest_result(posts_stored=10, targets_stored=4),
+            {"inserted": 3, "updated": 1, "skipped": 0},
+        )
+
+        assert messages, "showinfo was not called"
+        body = messages[0][1]
+        assert "3" in body, f"sync insert count missing: {body!r}"
+        assert "synced" in body.lower() or "main db" in body.lower(), \
+            f"sync label missing: {body!r}"

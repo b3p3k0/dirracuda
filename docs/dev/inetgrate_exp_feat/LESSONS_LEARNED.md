@@ -40,6 +40,16 @@ Last updated: 2026-05-29
 - Auto-sync summaries must be deterministic and non-throwing (`selected/processed/inserted/updated/skipped/failed/cancelled`) so UI/job layers can report outcomes without branching on exceptions.
 - Primary-backed browser mode should disable obsolete actions rather than silently no-op. Hiding `Add to dirracuda DB` in SearXNG primary mode reduced operator ambiguity while preserving a legacy sidecar path for historical data.
 
+**C10 (2026-06-04):**
+- Three entrypoints, not two: `dashboard_scan.py`, `gui/dashboard/scan_controls.py`, and `webui/app.py` all needed to be repointed. Missing `scan_controls.py` was identified during planning review; always enumerate every call site that reaches `run_ingest` before starting cutover work.
+- `replace_cache=True` in `scan_controls.py` accepts user input from the dialog, making it the highest-blast-radius path before the D2 guard was in place. Hard sequencing rule (D2 guard tests must pass before any entrypoint repoint) prevented this from being a live wipe risk.
+- Path inference (`_is_sidecar_path(db_path)`) for replace_cache scope is too fragile. Explicit `replace_cache_scope: Literal["full", "state_only"]` on `IngestOptions` with a hard error for unknown values is the correct pattern. A bare `else` in the dispatch would have silently routed unknown scopes.
+- Mapper duplication is a real maintenance hazard. `_build_prefill` (browser) and `_row_to_prefill` (sync) were functionally identical; extracting `experimental/redseek/mapper.py` as the shared source eliminated the divergence risk. Both callers now explicitly pass `promotion_source` and `snapshot_source` labels rather than having them hardcoded in the mapper.
+- Probe metadata carry-forward (probe cache, snapshot) must be explicit in planning. It was easy to forget that the sync path needed `_probe_cache`, `_probe_snapshot_source`, and `_probe_snapshot` fields — not just host/port. The mapper handles this now for both paths.
+- Browser `_build_prefill` tests that called the callback directly (asserting specific return values) became stale when the function was refactored to delegate to the mapper. Update callback-invocation tests whenever the callback implementation changes, not just the signature.
+- 5 tests in `test_experimental_features_dialog.py` tested the OLD server-list-getter–based promotion wiring of `open_reddit_post_db`. After C10, that function opens primary DB with `allow_promotion=False`. These tests needed updating — they were asserting behavior that no longer exists. When changing a function's contract, scan all tests that call it directly, not just the ones in the same file.
+- Snapshot source label for sync path should not contain "sidecar" (`reddit:run_sync`, not `sidecar:reddit:run_sync`) — mirrors C9's `searxng:run_sync`. Keep labels consistent with the actual storage context.
+
 Append new lessons after each completed card:
 - What failed or nearly failed.
 - Which guardrail prevented recurrence.

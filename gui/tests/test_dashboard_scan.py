@@ -859,7 +859,8 @@ class TestOnRedditScanDone:
         assert "duration_seconds" in r
         assert "end_time" in r
 
-    def test_success_reddit_only_summary_mentions_sidecar(self, monkeypatch):
+    def test_success_reddit_only_summary_does_not_mention_sidecar(self, monkeypatch):
+        """C10: sidecar/manual-promotion copy must no longer appear in summary."""
         dash = _make_dash()
         dialog_calls = []
         dash._show_scan_results = lambda r: dialog_calls.append(r)
@@ -868,8 +869,10 @@ class TestOnRedditScanDone:
             reddit_only=True,
         )
         summary = dialog_calls[0].get("summary_message", "")
-        assert "reddit_od.db" in summary or "sidecar" in summary.lower(), \
-            f"Sidecar storage note missing from summary: {summary!r}"
+        assert "reddit_od.db" not in summary, \
+            f"Stale sidecar path in summary: {summary!r}"
+        assert "promoted" not in summary.lower(), \
+            f"Stale manual-promotion copy in summary: {summary!r}"
 
     def test_success_mixed_suppresses_modal_logs_only(self, monkeypatch):
         dash = _make_dash()
@@ -908,3 +911,45 @@ class TestOnRedditScanDone:
         )
         ds._on_reddit_scan_done(dash, _make_reddit_result(error="timeout"))
         assert dash._reddit_scan_running is False
+
+    def test_on_reddit_scan_done_logs_sync_totals(self):
+        """C10: sync totals must appear in completion log when sync_summary is provided."""
+        dash = _make_dash()
+        log_msgs: list = []
+        dash._log_status_event = lambda m: log_msgs.append(m)
+        ds._on_reddit_scan_done(
+            dash,
+            _make_reddit_result(posts_stored=10, targets_stored=4),
+            sync_summary={"inserted": 3, "updated": 1, "skipped": 0, "failed": 0},
+        )
+        assert any("3" in m and ("new" in m or "inserted" in m or "synced" in m.lower())
+                   for m in log_msgs), f"sync total not in log: {log_msgs}"
+
+
+class TestStartRedditScanPrimaryDB:
+
+    def test_start_reddit_scan_uses_primary_db_not_sidecar(self, monkeypatch):
+        """C10: run_ingest must receive the primary DB path, not reddit_od_db_file."""
+        dash = _make_dash()
+        captured_db: list = []
+
+        def _fake_run(options, db_path=None):
+            captured_db.append(db_path)
+            return _make_reddit_result()
+
+        monkeypatch.setattr("experimental.redseek.service.run_ingest", _fake_run)
+
+        ds.start_reddit_scan(dash, _reddit_request())
+
+        for t in threading.enumerate():
+            if t.name == "dashboard-reddit-scan":
+                t.join(timeout=5)
+                break
+
+        assert len(captured_db) == 1
+        db = captured_db[0]
+        assert db is not None, "db_path must not be None"
+        assert str(db) == str(Path("/tmp/dirracuda.db")), \
+            f"Expected primary DB path, got {db!r}"
+        assert "reddit_od" not in str(db).lower(), \
+            f"Sidecar path leaked into run_ingest: {db!r}"

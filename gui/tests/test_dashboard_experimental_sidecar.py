@@ -76,16 +76,23 @@ def test_se_dork_branch_opens_sidecar_browser(monkeypatch):
     assert callable(calls[0]["promote_records_callback"])
 
 
-def test_reddit_branch_calls_open_reddit_post_db(monkeypatch):
+def test_reddit_branch_opens_sidecar_with_promotion_enabled(monkeypatch):
+    """C10: legacy Reddit branch passes sidecar path and allow_promotion=True."""
     import gui.components.dashboard_experimental as _mod
     widget = _make_widget(db_reader=MagicMock())
     calls = []
-    monkeypatch.setattr(_mod, "open_reddit_post_db", lambda w: calls.append(w))
+    monkeypatch.setattr(_mod, "_resolve_reddit_sidecar_path", lambda: Path("/tmp/reddit_od.db"))
+    monkeypatch.setattr(_mod, "show_reddit_browser_window", lambda **kw: calls.append(kw))
 
     cmd, _widget, _ = _run_pick(monkeypatch, "Reddit Open Directory Posts", widget)
     cmd()
 
-    assert calls == [widget]
+    assert len(calls) == 1
+    assert str(calls[0]["db_path"]) == str(Path("/tmp/reddit_od.db"))
+    assert calls[0]["allow_promotion"] is True
+    assert calls[0]["promote_record_callback"] is not None
+    assert calls[0]["promote_records_callback"] is not None
+    assert calls[0]["parent"] is widget.parent
 
 
 def test_migrate_branch_starts_daemon_thread(monkeypatch):

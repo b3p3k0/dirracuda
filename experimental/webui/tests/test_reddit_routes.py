@@ -189,14 +189,18 @@ def test_reddit_run_user_missing_username(logged_in_client):
     assert r.status_code == 422
 
 
-def test_reddit_run_completion_message_mentions_sidecar(
+def test_reddit_run_completion_message_does_not_mention_sidecar(
     logged_in_client, app_and_queue, monkeypatch
 ):
-    """Runner closure must emit sidecar storage text in its final progress message."""
+    """C10: runner completion message must not reference sidecar or manual promotion."""
     app, _ = app_and_queue
     monkeypatch.setattr(
         "experimental.webui.app.run_ingest",
         lambda opts, db_path=None: _fake_ingest_result(),
+    )
+    monkeypatch.setattr(
+        "experimental.webui.app.sync_reddit_to_main_db",
+        lambda keys, db_path=None: {"inserted": 0, "updated": 0, "skipped": 0, "processed": 0, "failed": 0, "cancelled": 0},
     )
 
     captured = []
@@ -219,21 +223,118 @@ def test_reddit_run_completion_message_mentions_sidecar(
     class _FakeJob:
         def __init__(self):
             self.messages = []
+            self.metadata: dict = {}
 
         def set_progress(self, msg, pct):
             self.messages.append(msg)
 
         def set_metadata(self, **kw):
-            pass
+            self.metadata.update(kw)
 
     job = _FakeJob()
     captured[0](job)
 
     completion = [m for m in job.messages if "complete" in m.lower()]
     assert completion, f"No completion message found in: {job.messages}"
-    assert any(
-        "sidecar" in m.lower() or "reddit_od.db" in m
-        for m in completion
-    ), f"Sidecar wording absent from completion message: {completion}"
+    assert not any("sidecar" in m.lower() or "reddit_od.db" in m for m in completion), \
+        f"Stale sidecar wording in completion message: {completion}"
+
+
+# ---------------------------------------------------------------------------
+# C10 primary DB cutover tests
+# ---------------------------------------------------------------------------
+
+def _run_the_runner(app, monkeypatch, fake_run, fake_sync, logged_in_client):
+    """Helper: capture and execute the runner closure via a fake submit_external."""
+    monkeypatch.setattr("experimental.webui.app.run_ingest", fake_run)
+    monkeypatch.setattr("experimental.webui.app.sync_reddit_to_main_db", fake_sync)
+
+    captured = []
+
+    def _capture(*, source, kind, label, runner, metadata=None, cancel_callback=None):
+        captured.append(runner)
+        return MagicMock(job_id="j1", status=MagicMock(value="queued"))
+
+    monkeypatch.setattr(app.state.shared_jobs, "submit_external", _capture)
+    csrf = _csrf_from_dashboard(logged_in_client)
+    logged_in_client.post("/api/reddit/run", json=_run_payload(),
+                          headers={"X-CSRF-Token": csrf})
+    assert captured, "submit_external was not called"
+
+    class _FakeJob:
+        def __init__(self):
+            self.meta: dict = {}
+
+        def set_progress(self, msg, pct):
+            pass
+
+        def set_metadata(self, **kw):
+            self.meta.update(kw)
+
+    job = _FakeJob()
+    captured[0](job)
+    return job
+
+
+def test_reddit_run_passes_primary_db_path(
+    logged_in_client, app_and_queue, monkeypatch
+):
+    """C10: run_ingest must be called with db_path=app.state.db_path."""
+    app, _ = app_and_queue
+    captured_db: list = []
+
+    def _fake_run(opts, db_path=None):
+        captured_db.append(db_path)
+        return _fake_ingest_result()
+
+    _run_the_runner(
+        app, monkeypatch,
+        fake_run=_fake_run,
+        fake_sync=lambda keys, db_path=None: {"inserted": 0, "updated": 0, "skipped": 0, "processed": 0, "failed": 0, "cancelled": 0},
+        logged_in_client=logged_in_client,
+    )
+
+    assert len(captured_db) == 1
+    assert captured_db[0] == app.state.db_path
+
+
+def test_reddit_run_job_metadata_includes_sync_totals(
+    logged_in_client, app_and_queue, monkeypatch
+):
+    """C10: job metadata must include sync_inserted, sync_updated, sync_skipped etc."""
+    app, _ = app_and_queue
+
+    job = _run_the_runner(
+        app, monkeypatch,
+        fake_run=lambda opts, db_path=None: _fake_ingest_result(),
+        fake_sync=lambda keys, db_path=None: {
+            "inserted": 2, "updated": 1, "skipped": 0,
+            "processed": 3, "failed": 0, "cancelled": 0,
+        },
+        logged_in_client=logged_in_client,
+    )
+
+    assert job.meta.get("sync_inserted") == 2
+    assert job.meta.get("sync_updated") == 1
+    assert "sync_skipped" in job.meta
+
+
+def test_reddit_run_replace_cache_true_does_not_call_wipe_all(
+    logged_in_client, app_and_queue, monkeypatch
+):
+    """C10: even with replace_cache=True, wipe_all must not be called on primary DB."""
+    import experimental.redseek.store as _store
+    app, _ = app_and_queue
+    wipe_all_called = []
+    monkeypatch.setattr(_store, "wipe_all", lambda *a, **k: wipe_all_called.append(True))
+
+    _run_the_runner(
+        app, monkeypatch,
+        fake_run=lambda opts, db_path=None: _fake_ingest_result(),
+        fake_sync=lambda keys, db_path=None: {"inserted": 0, "updated": 0, "skipped": 0, "processed": 0, "failed": 0, "cancelled": 0},
+        logged_in_client=logged_in_client,
+    )
+
+    assert not wipe_all_called, "wipe_all must not be called in WebUI primary-DB mode"
 
 
