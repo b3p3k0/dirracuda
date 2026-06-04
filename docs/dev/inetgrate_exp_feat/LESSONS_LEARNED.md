@@ -1,7 +1,7 @@
 # Integrate Experimental Features Into Main - LESSONS LEARNED
 
 Status: Seeded
-Last updated: 2026-05-29
+Last updated: 2026-06-04
 
 ## Carry Forward
 
@@ -49,6 +49,12 @@ Last updated: 2026-05-29
 - Browser `_build_prefill` tests that called the callback directly (asserting specific return values) became stale when the function was refactored to delegate to the mapper. Update callback-invocation tests whenever the callback implementation changes, not just the signature.
 - 5 tests in `test_experimental_features_dialog.py` tested the OLD server-list-getter–based promotion wiring of `open_reddit_post_db`. After C10, that function opens primary DB with `allow_promotion=False`. These tests needed updating — they were asserting behavior that no longer exists. When changing a function's contract, scan all tests that call it directly, not just the ones in the same file.
 - Snapshot source label for sync path should not contain "sidecar" (`reddit:run_sync`, not `sidecar:reddit:run_sync`) — mirrors C9's `searxng:run_sync`. Keep labels consistent with the actual storage context.
+
+**C10.1 (2026-06-04):**
+- Platform-owned unofficial endpoints can disappear without a local regression. Reddit's unauthenticated JSON listing/search endpoints began returning 403, so the safe adaptation was an anonymous RSS cutover rather than OAuth, browser-token reuse, proxy scraping, or HTML scraping.
+- Preserve internal contracts when adapting transport. Mapping Atom entries back into the existing raw-post dict shape kept C10's primary-DB write/sync flow intact and avoided broad service rewrites.
+- Removed modes need explicit stale-config handling. `user` mode is hidden in normal UI, coerced to `feed` from saved preferences, and rejected directly by service/WebUI/dashboard guards with a clear anonymous-RSS message.
+- RSS has reduced metadata and no cursor. Document single-snapshot behavior and best-effort NSFW handling instead of implying old JSON pagination still exists.
 
 Append new lessons after each completed card:
 - What failed or nearly failed.

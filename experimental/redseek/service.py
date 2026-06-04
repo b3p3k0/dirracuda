@@ -36,7 +36,6 @@ from experimental.redseek.client import (
     RateLimitError,
     fetch_posts,
     fetch_search_posts,
-    fetch_user_posts,
 )
 from experimental.redseek.models import RedditIngestState, RedditPost
 from experimental.redseek.parser import extract_targets
@@ -68,9 +67,9 @@ class IngestOptions:
     max_pages: int = 3           # 1–3, passed to fetch_posts
     subreddit: str = "opendirectories"  # locked in Card 3; client URL is hardcoded
     top_window: str = "week"     # time window for top sort: hour|day|week|month|year|all
-    mode: str = "feed"           # "feed" | "search" | "user"
+    mode: str = "feed"           # "feed" | "search"; "user" is historical/unsupported
     query: str = ""              # required non-empty when mode="search"
-    username: str = ""           # required non-empty when mode="user"; may include leading u/
+    username: str = ""           # historical compatibility; ignored by RSS feed/search
     bulk_probe_enabled: bool = False
     probe_config_path: Optional[str] = None
     probe_worker_count: Optional[int] = None
@@ -168,18 +167,6 @@ def _extract_post_meta(raw: dict) -> Optional[dict]:
         "selftext": raw.get("selftext"),
         "is_nsfw": int(bool(raw.get("over_18", False))),
     }
-
-
-# ---------------------------------------------------------------------------
-# Username normalization helper
-# ---------------------------------------------------------------------------
-
-def _normalize_username(raw: str) -> str:
-    """Strip leading u/ prefix and surrounding whitespace. Returns original case."""
-    s = raw.strip()
-    if s.lower().startswith("u/"):
-        s = s[2:].strip()
-    return s
 
 
 # ---------------------------------------------------------------------------
@@ -765,136 +752,6 @@ def _run_search(
         conn.close()
 
 
-def _run_user(
-    options: "IngestOptions",
-    fetch_result: FetchResult,
-    db_path: Optional[Path],
-    now_str: str,
-    replace_cache_done: bool,
-) -> "IngestResult":
-    try:
-        conn = open_connection(db_path)
-    except (RuntimeError, FileNotFoundError, sqlite3.Error) as e:
-        return _error_result(options, replace_cache_done, error=str(e))
-
-    try:
-        _uname = _normalize_username(options.username)
-        posts_visited = 0
-        stopped_by_max_posts = False
-        posts_stored = 0
-        posts_skipped = 0
-        targets_stored = 0
-        targets_deduped = 0
-        parse_errors = 0
-        probe_candidate_keys: list[str] = []
-
-        window = options.top_window if options.sort == "top" else "na"
-        state_key = f"user:{options.sort}:{window}:{_uname.lower()}"
-
-        for raw in fetch_result.posts:
-            # Runtime guards: enforce subreddit and author scope before any writes.
-            # Out-of-scope rows count as skipped but do NOT consume max_posts budget.
-            if str(raw.get("subreddit") or "").lower() != "opendirectories":
-                posts_skipped += 1
-                continue
-            if str(raw.get("author") or "").lower() != _uname.lower():
-                posts_skipped += 1
-                continue
-
-            meta = _extract_post_meta(raw)
-            if meta is None:
-                posts_skipped += 1
-                continue
-
-            if posts_visited >= options.max_posts:
-                stopped_by_max_posts = True
-                break
-
-            posts_visited += 1
-
-            if not options.include_nsfw and meta["is_nsfw"]:
-                posts_skipped += 1
-                continue
-
-            try:
-                targets = extract_targets(
-                    meta["id"],
-                    meta["title"],
-                    meta["selftext"],
-                    options.parse_body,
-                    now_str,
-                )
-            except Exception:
-                targets = []
-                parse_errors += 1
-            probe_candidate_keys.extend(t.dedupe_key for t in targets)
-
-            post_obj = RedditPost(
-                post_id=meta["id"],
-                post_title=meta["title"],
-                post_author=meta["author"],
-                post_created_utc=meta["created_utc"],
-                is_nsfw=meta["is_nsfw"],
-                had_targets=1 if targets else 0,
-                source_sort="user",
-                last_seen_at=now_str,
-            )
-            upsert_post(conn, post_obj)
-            preview_note = _make_preview_note(
-                meta["title"],
-                meta["selftext"] if options.parse_body else None,
-            )
-            for t in targets:
-                t.notes = preview_note
-            before = conn.total_changes
-            upsert_targets(conn, targets)
-            actually_inserted = conn.total_changes - before
-            targets_stored += actually_inserted
-            targets_deduped += len(targets) - actually_inserted
-            posts_stored += 1
-
-        save_ingest_state(
-            conn,
-            RedditIngestState(
-                subreddit=options.subreddit,
-                sort_mode=state_key,
-                last_post_created_utc=None,
-                last_post_id=None,
-                last_scrape_time=now_str,
-            ),
-        )
-
-        conn.commit()
-        return _with_probe_candidate_keys(
-            IngestResult(
-                sort=options.sort,
-                subreddit=options.subreddit,
-                pages_fetched=fetch_result.pages_fetched,
-                posts_stored=posts_stored,
-                posts_skipped=posts_skipped,
-                targets_stored=targets_stored,
-                targets_deduped=targets_deduped,
-                parse_errors=parse_errors,
-                stopped_by_cursor=False,
-                stopped_by_max_posts=stopped_by_max_posts,
-                replace_cache_done=replace_cache_done,
-                rate_limited=False,
-                error=None,
-            ),
-            probe_candidate_keys,
-        )
-    except sqlite3.Error as e:
-        conn.rollback()
-        return _error_result(
-            options,
-            replace_cache_done,
-            pages_fetched=fetch_result.pages_fetched,
-            error=str(e),
-        )
-    finally:
-        conn.close()
-
-
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -925,16 +782,16 @@ def run_ingest(options: IngestOptions, db_path: Optional[Path] = None) -> Ingest
     _VALID_TOP_WINDOWS = {"hour", "day", "week", "month", "year", "all"}
     if options.sort == "top" and options.top_window not in _VALID_TOP_WINDOWS:
         return _error_result(options, False, error=f"invalid top_window: {options.top_window!r}")
-    if options.mode not in {"feed", "search", "user"}:
+    if options.mode == "user":
+        return _error_result(
+            options,
+            False,
+            error="user mode is unavailable; anonymous Reddit RSS supports feed/search only",
+        )
+    if options.mode not in {"feed", "search"}:
         return _error_result(options, False, error=f"invalid mode: {options.mode!r}")
     if options.mode == "search" and not options.query.strip():
         return _error_result(options, False, error="query is required for search mode")
-    if options.mode == "user":
-        _uname_check = _normalize_username(options.username)
-        if not _uname_check:
-            return _error_result(options, False, error="username is required for user mode")
-        if " " in _uname_check:
-            return _error_result(options, False, error=f"invalid username: {options.username!r}")
 
     # --- Setup (wipe + schema init) ---
     # Wipe function commits its own transaction before init_db or fetch run.
@@ -967,13 +824,6 @@ def run_ingest(options: IngestOptions, db_path: Optional[Path] = None) -> Ingest
                 max_pages=options.max_pages,
                 top_window=options.top_window,
             )
-        elif options.mode == "user":
-            fetch_result = fetch_user_posts(
-                _normalize_username(options.username),
-                options.sort,
-                max_pages=options.max_pages,
-                top_window=options.top_window,
-            )
         else:
             fetch_result = fetch_posts(
                 options.sort,
@@ -988,8 +838,6 @@ def run_ingest(options: IngestOptions, db_path: Optional[Path] = None) -> Ingest
     # --- Dispatch ---
     if options.mode == "search":
         result = _run_search(options, fetch_result, db_path, now_str, replace_cache_done)
-    elif options.mode == "user":
-        result = _run_user(options, fetch_result, db_path, now_str, replace_cache_done)
     elif options.sort == "new":
         result = _run_new(options, fetch_result, db_path, now_str, replace_cache_done)
     else:

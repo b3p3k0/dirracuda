@@ -129,7 +129,7 @@ override precedence for tests or controlled deployments.
 |-------|------|-------------|
 | `GET /scans` | n/a | Route not registered; returns 404. Use `/scans/shodan`, `/scans/searxng`, or `/scans/reddit`. |
 | `GET /scans/searxng` | session | SearXNG discovery page (run with optional inline probe pass). |
-| `GET /scans/reddit` | session | Reddit ingestion page (feed/search/user modes). |
+| `GET /scans/reddit` | session | Reddit ingestion page (anonymous RSS feed/search modes). |
 | `GET /extras` | n/a | Route not registered; returns 404. Use `/extras/dorkbook` or `/extras/keymaster`. |
 | `GET /extras/dorkbook` | session | Dorkbook recipe management. |
 | `GET /extras/keymaster` | session | Keymaster unlock/manage/apply. |
@@ -845,7 +845,7 @@ URL normalization (`store.normalize_url`): scheme and netloc lowercased; path ca
 The Reddit module (`experimental/redseek`) writes new run data directly to the active primary DB alongside the main SMB/FTP/HTTP tables. After each run completes, `experimental/redseek/main_db_sync.sync_targets_to_main_db` promotes parsed targets into the primary protocol tables automatically, using `_probe_candidate_keys` from `IngestResult` to scope the sync to the current run only.
 
 Tables (created on first run via `store.init_db(db_path)`):
-- `reddit_posts` — one row per Reddit post (`post_id` PK), with `source_sort` values `new`, `top`, `search`, or `user`
+- `reddit_posts` — one row per Reddit post (`post_id` PK), with current `source_sort` values `new`, `top`, or `search`; historical rows may still contain `user`
 - `reddit_targets` — extracted targets from post text/title, deduped by unique `dedupe_key`; stores probe summary fields and optional `probe_snapshot_json` for full probe-tree carry-forward
 - `reddit_ingest_state` — per-mode state rows keyed by `(subreddit, sort_mode)`
 
@@ -853,7 +853,8 @@ Current `sort_mode` keys:
 - `new`
 - `top:<window>` where `<window>` is `hour|day|week|month|year|all`
 - `search:<sort>:<window_or_na>:<normalized_query>`
-- `user:<sort>:<window_or_na>:<normalized_username>`
+
+Historical `sort_mode` keys may include `user:<sort>:<window_or_na>:<normalized_username>` from pre-C10.1 runs. New anonymous RSS runs support feed/search only.
 
 Compatibility note: legacy `top` state is migrated to `top:week` on first week-top run; legacy row is left in place.
 
@@ -1125,6 +1126,7 @@ Reddit ingest entry path:
 ```
 Dashboard -> Accessories tab -> Open Reddit Grab
   -> RedditGrabDialog -> run_ingest(options, db_path=primary_db)
+  -> fetches one anonymous Reddit Atom/RSS snapshot (feed or subreddit-scoped search)
   -> optional explicit bulk probe pass for current-run HTTP/HTTPS/FTP targets
   -> sync_targets_to_main_db(_probe_candidate_keys, db_path=primary_db)
   -> result dialog (counts, dedupe, probe totals, sync totals, rate-limit errors)
@@ -1151,11 +1153,11 @@ Dashboard -> Database -> [Legacy] Sidecar Data -> Reddit
 ```
 
 Reddit modes exposed in `RedditGrabDialog`:
-- `feed` — fetches `/r/opendirectories/{new|top}.json`
-- `search` — fetches `/r/opendirectories/search.json` with user query and `restrict_sr=1`
-- `user` — fetches subreddit-scoped author query with `type=link`; service runtime-guards subreddit+author before writes
+- `feed` — fetches `/r/opendirectories/{new|top}.rss`
+- `search` — fetches `/r/opendirectories/search.rss` with user query and `restrict_sr=1`
 
 Top windows for `sort=top`: `hour`, `day`, `week`, `month`, `year`, `all`.
+RSS does not expose Reddit's old JSON `after` cursor; `max_pages` is accepted for compatibility, but each run fetches one feed snapshot. User/author mode is unavailable in anonymous RSS mode, while historical `user` rows remain readable from existing databases.
 
 Keymaster entry path:
 

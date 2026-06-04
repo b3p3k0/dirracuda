@@ -47,7 +47,7 @@ def build_reddit_sub_panel(
     """Build the Reddit options inline frame.
 
     vars_dict keys: ``mode``, ``sort``, ``top_window``, ``max_posts``, ``query``,
-    ``username``, ``parse_body``, ``include_nsfw``.
+    ``parse_body``, ``include_nsfw``.
 
     All fields are always visible; mode-conditional validation happens at submit time.
     Returns the frame so the caller can store it for enable/disable syncing.
@@ -56,7 +56,7 @@ def build_reddit_sub_panel(
     theme.apply_to_widget(frame, "card")
 
     # Mode selector
-    _add_option_row(frame, "Mode", vars_dict["mode"], ["feed", "search", "user"], theme, width=10)
+    _add_option_row(frame, "Mode", vars_dict["mode"], ["feed", "search"], theme, width=10)
 
     # Sort + top-window
     _add_option_row(frame, "Sort", vars_dict["sort"], ["new", "top"], theme, width=6)
@@ -70,9 +70,6 @@ def build_reddit_sub_panel(
 
     # Query (validated when mode=search)
     _add_entry_row(frame, "Query", vars_dict["query"], theme, width=30)
-
-    # Username (validated when mode=user)
-    _add_entry_row(frame, "Username", vars_dict["username"], theme, width=20)
 
     # Boolean options
     _add_checkbutton_row(frame, "Parse body", vars_dict["parse_body"], theme)
@@ -187,12 +184,13 @@ def _coerce_bool(value: Any, default: bool) -> bool:
 def load_reddit_settings(dialog: Any, sm: Any) -> None:
     """Load persisted Reddit option vars onto *dialog* from settings manager *sm*."""
     g = sm.get_setting
-    dialog.reddit_mode_var.set(str(g("unified_scan_dialog.reddit_mode", "feed") or "feed"))
+    mode = str(g("unified_scan_dialog.reddit_mode", "feed") or "feed")
+    dialog.reddit_mode_var.set(mode if mode in {"feed", "search"} else "feed")
     dialog.reddit_sort_var.set(str(g("unified_scan_dialog.reddit_sort", "new") or "new"))
     dialog.reddit_top_window_var.set(str(g("unified_scan_dialog.reddit_top_window", "week") or "week"))
     dialog.reddit_max_posts_var.set(str(g("unified_scan_dialog.reddit_max_posts", "50") or "50"))
     dialog.reddit_query_var.set(str(g("unified_scan_dialog.reddit_query", "") or ""))
-    dialog.reddit_username_var.set(str(g("unified_scan_dialog.reddit_username", "") or ""))
+    dialog.reddit_username_var.set("")
     dialog.reddit_parse_body_var.set(_coerce_bool(g("unified_scan_dialog.reddit_parse_body", True), True))
     dialog.reddit_include_nsfw_var.set(_coerce_bool(g("unified_scan_dialog.reddit_include_nsfw", False), False))
 
@@ -204,7 +202,6 @@ def persist_reddit_settings(dialog: Any, sm: Any) -> None:
     sm.set_setting("unified_scan_dialog.reddit_top_window", dialog.reddit_top_window_var.get().strip())
     sm.set_setting("unified_scan_dialog.reddit_max_posts", dialog.reddit_max_posts_var.get().strip())
     sm.set_setting("unified_scan_dialog.reddit_query", dialog.reddit_query_var.get().strip())
-    sm.set_setting("unified_scan_dialog.reddit_username", dialog.reddit_username_var.get().strip())
     sm.set_setting("unified_scan_dialog.reddit_parse_body", bool(dialog.reddit_parse_body_var.get()))
     sm.set_setting("unified_scan_dialog.reddit_include_nsfw", bool(dialog.reddit_include_nsfw_var.get()))
 
@@ -216,14 +213,11 @@ def validate_reddit_scan_options(raw: Dict[str, Any]) -> Dict[str, Any]:
     Returns a flat dict ready for merging into the scan request.
     """
     mode = str(raw.get("mode") or "feed").strip() or "feed"
-    if mode not in {"feed", "search", "user"}:
-        raise ValueError(f"Invalid Reddit mode: {mode!r}. Select feed, search, or user.")
+    if mode not in {"feed", "search"}:
+        raise ValueError(f"Invalid Reddit mode: {mode!r}. Select feed or search.")
     query = str(raw.get("query") or "").strip()
     if mode == "search" and not query:
         raise ValueError("Reddit search mode requires a query.")
-    username = str(raw.get("username") or "").strip()
-    if mode == "user" and not username:
-        raise ValueError("Reddit user mode requires a username.")
     sort = str(raw.get("sort") or "new").strip() or "new"
     top_window = str(raw.get("top_window") or "week").strip() or "week"
     try:
@@ -238,7 +232,7 @@ def validate_reddit_scan_options(raw: Dict[str, Any]) -> Dict[str, Any]:
         "reddit_top_window": top_window,
         "reddit_max_posts": max_posts,
         "reddit_query": query,
-        "reddit_username": username,
+        "reddit_username": "",
         "reddit_parse_body": parse_body,
         "reddit_include_nsfw": include_nsfw,
     }
@@ -247,11 +241,12 @@ def validate_reddit_scan_options(raw: Dict[str, Any]) -> Dict[str, Any]:
 def apply_reddit_form_state(dialog: Any, opts: Dict[str, Any]) -> None:
     """Restore Reddit option vars on *dialog* from a saved form-state dict."""
     _s = lambda attr, val: getattr(dialog, attr, None) and getattr(dialog, attr).set(val)
-    _s("reddit_mode_var", str(opts.get("mode", "feed") or "feed"))
+    mode = str(opts.get("mode", "feed") or "feed")
+    _s("reddit_mode_var", mode if mode in {"feed", "search"} else "feed")
     _s("reddit_sort_var", str(opts.get("sort", "new") or "new"))
     _s("reddit_top_window_var", str(opts.get("top_window", "week") or "week"))
     _s("reddit_max_posts_var", str(opts.get("max_posts", "50") or "50"))
     _s("reddit_query_var", str(opts.get("query", "") or ""))
-    _s("reddit_username_var", str(opts.get("username", "") or ""))
+    _s("reddit_username_var", "")
     _s("reddit_parse_body_var", bool(opts.get("parse_body", True)))
     _s("reddit_include_nsfw_var", bool(opts.get("include_nsfw", False)))

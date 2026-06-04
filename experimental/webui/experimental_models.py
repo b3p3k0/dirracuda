@@ -93,7 +93,7 @@ class SearxngActionRequest(BaseModel):
 class RedditRunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    mode: Literal["feed", "search", "user"] = "feed"
+    mode: str = "feed"
     sort: Literal["new", "top"] = "new"
     top_window: Literal["hour", "day", "week", "month", "year", "all"] = "week"
     max_posts: int = 100
@@ -142,12 +142,20 @@ class RedditRunRequest(BaseModel):
             raise ValueError("probe_worker_count must be between 1 and 8")
         return value
 
+    @field_validator("mode")
+    @classmethod
+    def _validate_mode(cls, value: str) -> str:
+        text = str(value or "feed").strip() or "feed"
+        if text == "user":
+            raise ValueError("user mode is unavailable; anonymous Reddit RSS supports feed/search only")
+        if text not in {"feed", "search"}:
+            raise ValueError("mode must be feed or search")
+        return text
+
     @model_validator(mode="after")
     def _validate_mode_specific_fields(self):
         if self.mode == "search" and not self.query:
             raise ValueError("query is required for search mode")
-        if self.mode == "user" and not self.username:
-            raise ValueError("username is required for user mode")
         return self
 
 

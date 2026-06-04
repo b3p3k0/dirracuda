@@ -1,30 +1,32 @@
 """
-Reddit JSON endpoint client for the redseek module.
+Anonymous Reddit RSS/Atom client for the redseek module.
 
-Fetches posts from r/opendirectories using public JSON endpoints.
-No API key required. Uses urllib.request (stdlib only; no external deps).
+Reddit's unauthenticated ``.json`` listing endpoints now return HTTP 403 for
+direct script access. This client uses public Atom/RSS feeds instead and maps
+entries into the raw-post dict shape that ``service.py`` already consumes.
 
-429 contract:
-  fetch_page raises RateLimitError on HTTP 429 — no retry, no swallow.
-  fetch_posts propagates RateLimitError uncaught; no FetchResult on 429.
-  Service layer (Card 3) owns error reporting.
-
-Rate-limit pacing:
-  1-second delay between pages (not before the first request).
-  Hard cap: max_pages <= 3.
+RSS contract:
+  - one anonymous feed snapshot per request; no Reddit JSON cursor pagination
+  - ``max_pages`` is accepted for compatibility but effective pages fetched is 1
+  - no OAuth, cookies, browser token reuse, or HTML scraping
 """
 
-import json
-import time
+from __future__ import annotations
+
+import datetime
+import html
+from dataclasses import dataclass
+from html.parser import HTMLParser
+from typing import Optional
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
-from typing import Optional
+import xml.etree.ElementTree as ET
 
-_BASE_URL = "https://www.reddit.com/r/opendirectories/{sort}.json"
-_SEARCH_URL = "https://www.reddit.com/r/opendirectories/search.json"
-_USER_AGENT = "dirracuda:reddit_ingest:v1.0"
+_BASE_URL = "https://www.reddit.com/r/opendirectories/{sort}.rss"
+_SEARCH_URL = "https://www.reddit.com/r/opendirectories/search.rss"
+_USER_AGENT = "dirracuda:reddit_rss_ingest:v1.0"
+_ATOM_NS = "{http://www.w3.org/2005/Atom}"
 
 
 class RateLimitError(Exception):
@@ -32,19 +34,173 @@ class RateLimitError(Exception):
 
 
 class FetchError(Exception):
-    """Network failure, decode error, or unexpected response shape."""
+    """Network failure, decode error, malformed XML, or unexpected feed shape."""
 
 
 @dataclass
 class PageResult:
-    posts: list          # list[dict] — raw Reddit post data dicts (kind=t3 only)
-    next_after: Optional[str]  # pagination cursor; None if this is the last page
+    posts: list          # list[dict] — raw Reddit-like post data dicts
+    next_after: Optional[str]  # RSS has no JSON cursor; always None
 
 
 @dataclass
 class FetchResult:
-    posts: list          # list[dict] — all posts across all fetched pages
+    posts: list          # list[dict] — posts from one RSS snapshot
     pages_fetched: int
+
+
+class _ContentExtractor(HTMLParser):
+    """Extract visible text plus href targets from Reddit Atom content HTML."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self.hrefs: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
+        tag_name = tag.lower().split(":", 1)[-1]
+        if tag_name == "a":
+            for key, value in attrs:
+                attr_name = key.lower().split(":", 1)[-1]
+                if attr_name == "href" and value:
+                    self.hrefs.append(html.unescape(value))
+
+    def handle_data(self, data: str) -> None:
+        text = " ".join((data or "").split())
+        if text:
+            self.parts.append(text)
+
+    def text(self) -> str:
+        seen = set()
+        hrefs = []
+        for href in self.hrefs:
+            if href not in seen:
+                seen.add(href)
+                hrefs.append(href)
+        return " ".join([*self.parts, *hrefs]).strip()
+
+
+def _request_feed(url: str, timeout: int) -> bytes:
+    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read()
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            raise RateLimitError("HTTP 429") from e
+        raise FetchError(f"HTTP {e.code}") from e
+    except urllib.error.URLError as e:
+        raise FetchError(str(e.reason)) from e
+
+
+def _text(node: Optional[ET.Element], tag: str) -> str:
+    if node is None:
+        return ""
+    child = node.find(f"{_ATOM_NS}{tag}")
+    if child is None:
+        child = node.find(tag)
+    return str(child.text or "") if child is not None else ""
+
+
+def _author_name(entry: ET.Element) -> Optional[str]:
+    author = entry.find(f"{_ATOM_NS}author")
+    if author is None:
+        author = entry.find("author")
+    raw = _text(author, "name")
+    if not raw:
+        return None
+    text = raw.strip()
+    if text.lower().startswith("/u/"):
+        text = text[3:].strip()
+    elif text.lower().startswith("u/"):
+        text = text[2:].strip()
+    return text or None
+
+
+def _entry_link(entry: ET.Element) -> str:
+    for link in list(entry.findall(f"{_ATOM_NS}link")) + list(entry.findall("link")):
+        href = str(link.attrib.get("href") or "").strip()
+        if href:
+            return href
+    return ""
+
+
+def _parse_created_utc(entry: ET.Element) -> Optional[float]:
+    raw = _text(entry, "published") or _text(entry, "updated")
+    if not raw:
+        return None
+    try:
+        dt = datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    return float(dt.timestamp())
+
+
+def _entry_content_text(entry: ET.Element) -> str:
+    content = entry.find(f"{_ATOM_NS}content")
+    if content is None:
+        content = entry.find("content")
+    raw = ""
+    if content is not None:
+        raw = str(content.text or "")
+        if not raw.strip() and list(content):
+            raw = " ".join(
+                ET.tostring(child, encoding="unicode", method="html")
+                for child in list(content)
+            )
+    if not raw:
+        return ""
+    parser = _ContentExtractor()
+    try:
+        parser.feed(html.unescape(raw))
+        parser.close()
+    except Exception:
+        return " ".join(html.unescape(raw).split())
+    return parser.text()
+
+
+def _entry_id(entry: ET.Element) -> str:
+    raw = _text(entry, "id").strip()
+    if raw.lower().startswith("t3_"):
+        raw = raw[3:]
+    return raw
+
+
+def _entry_to_post(entry: ET.Element) -> Optional[dict]:
+    post_id = _entry_id(entry)
+    created_utc = _parse_created_utc(entry)
+    if not post_id or created_utc is None:
+        return None
+    link = _entry_link(entry)
+    return {
+        "id": post_id,
+        "created_utc": created_utc,
+        "title": _text(entry, "title"),
+        "author": _author_name(entry),
+        "selftext": _entry_content_text(entry),
+        "over_18": False,
+        "subreddit": "opendirectories",
+        "permalink": link,
+        "url": link,
+    }
+
+
+def _parse_feed(raw: bytes) -> list[dict]:
+    try:
+        body = raw.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise FetchError("decode error") from e
+    try:
+        root = ET.fromstring(body)
+    except ET.ParseError as e:
+        raise FetchError("malformed RSS/Atom") from e
+
+    entries = root.findall(f"{_ATOM_NS}entry")
+    if not entries:
+        entries = root.findall("entry")
+    return [post for entry in entries if (post := _entry_to_post(entry)) is not None]
 
 
 def fetch_page(
@@ -54,62 +210,25 @@ def fetch_page(
     top_window: str = "week",
 ) -> PageResult:
     """
-    Fetch one page of posts from r/opendirectories.
+    Fetch one RSS snapshot from r/opendirectories.
 
-    sort:       "new" or "top"
-    after:      pagination cursor from a prior PageResult.next_after (None = first page)
-    timeout:    seconds before network timeout
-    top_window: time window for top sort — "hour|day|week|month|year|all" (ignored for new)
-
-    Raises:
-        RateLimitError: HTTP 429 received
-        FetchError:     any other HTTP error, network failure, decode error,
-                        or unexpected response shape
+    ``after`` is accepted for compatibility with the old JSON client but RSS
+    does not expose a cursor, so it is ignored and ``next_after`` is always
+    ``None``.
     """
-    params: dict = {}
+    if sort not in {"new", "top"}:
+        raise ValueError(f"sort must be 'new' or 'top', got {sort!r}")
+
+    params: dict[str, str] = {}
     if sort == "top":
         params["t"] = top_window
-    if after is not None:
-        params["after"] = after
-        params["count"] = "25"
 
     url = _BASE_URL.format(sort=sort)
     if params:
         url = f"{url}?{urllib.parse.urlencode(params)}"
 
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read()
-    except urllib.error.HTTPError as e:
-        if e.code == 429:
-            raise RateLimitError("HTTP 429") from e
-        raise FetchError(f"HTTP {e.code}") from e
-    except urllib.error.URLError as e:
-        raise FetchError(str(e.reason)) from e
-
-    try:
-        body = raw.decode("utf-8")
-    except UnicodeDecodeError as e:
-        raise FetchError("decode error") from e
-
-    try:
-        payload = json.loads(body)
-    except json.JSONDecodeError as e:
-        raise FetchError("malformed JSON") from e
-
-    try:
-        children = payload["data"]["children"]
-        if not isinstance(children, list):
-            raise TypeError
-    except (KeyError, TypeError):
-        raise FetchError("unexpected response shape")
-
-    posts = [child["data"] for child in children if child.get("kind") == "t3"]
-    next_after = payload["data"].get("after")  # JSON null → Python None
-
-    return PageResult(posts=posts, next_after=next_after)
+    posts = _parse_feed(_request_feed(url, timeout))
+    return PageResult(posts=posts, next_after=None)
 
 
 def fetch_posts(
@@ -119,38 +238,18 @@ def fetch_posts(
     top_window: str = "week",
 ) -> FetchResult:
     """
-    Fetch up to max_pages pages of posts from r/opendirectories.
+    Fetch one anonymous RSS snapshot from r/opendirectories.
 
-    sort:       "new" or "top"
-    max_pages:  1–3 (hard cap enforced)
-    timeout:    seconds per page request
-    top_window: time window for top sort — "hour|day|week|month|year|all" (ignored for new)
-
-    Raises:
-        ValueError:      invalid sort or max_pages
-        RateLimitError:  HTTP 429 (propagated uncaught from fetch_page)
-        FetchError:      network or response errors (propagated uncaught)
+    ``max_pages`` retains the historical 1–3 validation contract, but RSS
+    feeds have no JSON ``after`` cursor. The returned ``pages_fetched`` is 1.
     """
     if sort not in {"new", "top"}:
         raise ValueError(f"sort must be 'new' or 'top', got {sort!r}")
     if not (1 <= max_pages <= 3):
         raise ValueError(f"max_pages must be 1–3, got {max_pages}")
 
-    all_posts: list = []
-    after: Optional[str] = None
-    pages = 0
-
-    while pages < max_pages:
-        if pages > 0:
-            time.sleep(1)
-        page = fetch_page(sort=sort, after=after, timeout=timeout, top_window=top_window)
-        all_posts.extend(page.posts)
-        pages += 1
-        if page.next_after is None:
-            break
-        after = page.next_after
-
-    return FetchResult(posts=all_posts, pages_fetched=pages)
+    page = fetch_page(sort=sort, after=None, timeout=timeout, top_window=top_window)
+    return FetchResult(posts=page.posts, pages_fetched=1)
 
 
 def fetch_search_page(
@@ -161,60 +260,24 @@ def fetch_search_page(
     top_window: str = "week",
 ) -> PageResult:
     """
-    Fetch one page of search results from r/opendirectories.
+    Fetch one subreddit-scoped RSS search snapshot from r/opendirectories.
 
-    query:      keyword search string (non-empty)
-    sort:       "new" or "top"
-    after:      pagination cursor from a prior PageResult.next_after (None = first page)
-    timeout:    seconds before network timeout
-    top_window: time window for top sort — "hour|day|week|month|year|all" (ignored for new)
-
-    Raises:
-        RateLimitError: HTTP 429 received
-        FetchError:     any other HTTP error, network failure, decode error,
-                        or unexpected response shape
+    ``after`` is accepted for compatibility and ignored because RSS has no
+    cursor pagination.
     """
-    params: dict = {"q": query, "restrict_sr": "1", "sort": sort}
+    q = str(query or "").strip()
+    if not q:
+        raise ValueError("query is required")
+    if sort not in {"new", "top"}:
+        raise ValueError(f"sort must be 'new' or 'top', got {sort!r}")
+
+    params: dict[str, str] = {"q": q, "restrict_sr": "1", "sort": sort}
     if sort == "top":
         params["t"] = top_window
-    if after is not None:
-        params["after"] = after
-        params["count"] = "25"
-
     url = f"{_SEARCH_URL}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
 
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read()
-    except urllib.error.HTTPError as e:
-        if e.code == 429:
-            raise RateLimitError("HTTP 429") from e
-        raise FetchError(f"HTTP {e.code}") from e
-    except urllib.error.URLError as e:
-        raise FetchError(str(e.reason)) from e
-
-    try:
-        body = raw.decode("utf-8")
-    except UnicodeDecodeError as e:
-        raise FetchError("decode error") from e
-
-    try:
-        payload = json.loads(body)
-    except json.JSONDecodeError as e:
-        raise FetchError("malformed JSON") from e
-
-    try:
-        children = payload["data"]["children"]
-        if not isinstance(children, list):
-            raise TypeError
-    except (KeyError, TypeError):
-        raise FetchError("unexpected response shape")
-
-    posts = [child["data"] for child in children if child.get("kind") == "t3"]
-    next_after = payload["data"].get("after")
-
-    return PageResult(posts=posts, next_after=next_after)
+    posts = _parse_feed(_request_feed(url, timeout))
+    return PageResult(posts=posts, next_after=None)
 
 
 def fetch_search_posts(
@@ -225,157 +288,21 @@ def fetch_search_posts(
     top_window: str = "week",
 ) -> FetchResult:
     """
-    Fetch up to max_pages pages of search results from r/opendirectories.
+    Fetch one anonymous RSS search snapshot from r/opendirectories.
 
-    query:      keyword search string (non-empty)
-    sort:       "new" or "top"
-    max_pages:  1–3 (hard cap enforced)
-    timeout:    seconds per page request
-    top_window: time window for top sort — "hour|day|week|month|year|all" (ignored for new)
-
-    Raises:
-        ValueError:      invalid sort or max_pages
-        RateLimitError:  HTTP 429 (propagated uncaught from fetch_search_page)
-        FetchError:      network or response errors (propagated uncaught)
+    ``max_pages`` retains the historical 1–3 validation contract, but RSS
+    feeds have no JSON ``after`` cursor. The returned ``pages_fetched`` is 1.
     """
     if sort not in {"new", "top"}:
         raise ValueError(f"sort must be 'new' or 'top', got {sort!r}")
     if not (1 <= max_pages <= 3):
         raise ValueError(f"max_pages must be 1–3, got {max_pages}")
 
-    all_posts: list = []
-    after: Optional[str] = None
-    pages = 0
-
-    while pages < max_pages:
-        if pages > 0:
-            time.sleep(1)
-        page = fetch_search_page(
-            query=query, sort=sort, after=after, timeout=timeout, top_window=top_window
-        )
-        all_posts.extend(page.posts)
-        pages += 1
-        if page.next_after is None:
-            break
-        after = page.next_after
-
-    return FetchResult(posts=all_posts, pages_fetched=pages)
-
-
-def fetch_user_page(
-    username: str,
-    sort: str,
-    after: Optional[str] = None,
-    timeout: int = 20,
-    top_window: str = "week",
-) -> PageResult:
-    """
-    Fetch one page of r/opendirectories posts by a specific author.
-
-    Uses the subreddit search endpoint with author: and subreddit: operators,
-    restrict_sr=1, and type=link (link posts only) to guarantee subreddit
-    scoping at the request level. Service layer adds runtime guards as a second
-    safety layer.
-
-    username:   Reddit username (no leading u/; already normalized by caller)
-    sort:       "new" or "top"
-    after:      pagination cursor from a prior PageResult.next_after (None = first page)
-    timeout:    seconds before network timeout
-    top_window: time window for top sort — "hour|day|week|month|year|all" (ignored for new)
-
-    Raises:
-        RateLimitError: HTTP 429 received
-        FetchError:     any other HTTP error, network failure, decode error,
-                        or unexpected response shape
-    """
-    params: dict = {
-        "q": f"author:{username} subreddit:opendirectories",
-        "restrict_sr": "1",
-        "sort": sort,
-        "type": "link",
-    }
-    if sort == "top":
-        params["t"] = top_window
-    if after is not None:
-        params["after"] = after
-        params["count"] = "25"
-
-    url = f"{_SEARCH_URL}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read()
-    except urllib.error.HTTPError as e:
-        if e.code == 429:
-            raise RateLimitError("HTTP 429") from e
-        raise FetchError(f"HTTP {e.code}") from e
-    except urllib.error.URLError as e:
-        raise FetchError(str(e.reason)) from e
-
-    try:
-        body = raw.decode("utf-8")
-    except UnicodeDecodeError as e:
-        raise FetchError("decode error") from e
-
-    try:
-        payload = json.loads(body)
-    except json.JSONDecodeError as e:
-        raise FetchError("malformed JSON") from e
-
-    try:
-        children = payload["data"]["children"]
-        if not isinstance(children, list):
-            raise TypeError
-    except (KeyError, TypeError):
-        raise FetchError("unexpected response shape")
-
-    posts = [child["data"] for child in children if child.get("kind") == "t3"]
-    next_after = payload["data"].get("after")
-
-    return PageResult(posts=posts, next_after=next_after)
-
-
-def fetch_user_posts(
-    username: str,
-    sort: str,
-    max_pages: int = 3,
-    timeout: int = 20,
-    top_window: str = "week",
-) -> FetchResult:
-    """
-    Fetch up to max_pages pages of r/opendirectories posts by a specific author.
-
-    username:   Reddit username (no leading u/; already normalized by caller)
-    sort:       "new" or "top"
-    max_pages:  1–3 (hard cap enforced)
-    timeout:    seconds per page request
-    top_window: time window for top sort — "hour|day|week|month|year|all" (ignored for new)
-
-    Raises:
-        ValueError:      invalid sort or max_pages
-        RateLimitError:  HTTP 429 (propagated uncaught from fetch_user_page)
-        FetchError:      network or response errors (propagated uncaught)
-    """
-    if sort not in {"new", "top"}:
-        raise ValueError(f"sort must be 'new' or 'top', got {sort!r}")
-    if not (1 <= max_pages <= 3):
-        raise ValueError(f"max_pages must be 1–3, got {max_pages}")
-
-    all_posts: list = []
-    after: Optional[str] = None
-    pages = 0
-
-    while pages < max_pages:
-        if pages > 0:
-            time.sleep(1)
-        page = fetch_user_page(
-            username=username, sort=sort, after=after, timeout=timeout, top_window=top_window
-        )
-        all_posts.extend(page.posts)
-        pages += 1
-        if page.next_after is None:
-            break
-        after = page.next_after
-
-    return FetchResult(posts=all_posts, pages_fetched=pages)
+    page = fetch_search_page(
+        query=query,
+        sort=sort,
+        after=None,
+        timeout=timeout,
+        top_window=top_window,
+    )
+    return FetchResult(posts=page.posts, pages_fetched=1)

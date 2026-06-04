@@ -833,6 +833,15 @@ def start_reddit_scan(dash, scan_request: dict) -> bool:
     from experimental.redseek.service import IngestOptions, run_ingest
 
     mode = str(scan_request.get("reddit_mode") or "feed").strip()
+    if mode == "user":
+        _mb().showerror(
+            "Reddit Error",
+            "Reddit user mode is unavailable; anonymous Reddit RSS supports feed/search only.",
+        )
+        return False
+    if mode not in {"feed", "search"}:
+        _mb().showerror("Reddit Error", "Reddit mode must be feed or search.")
+        return False
     sort = str(scan_request.get("reddit_sort") or "new").strip()
     top_window = str(scan_request.get("reddit_top_window") or "week").strip()
     max_posts = max(1, min(200, _to_int(scan_request.get("reddit_max_posts", 50))))

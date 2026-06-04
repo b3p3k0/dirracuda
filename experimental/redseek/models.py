@@ -10,7 +10,7 @@ class RedditPost:
     post_created_utc: float
     is_nsfw: int          # 0 or 1
     had_targets: int      # 0 or 1
-    source_sort: str      # "new", "top", "search", or "user"
+    source_sort: str      # "new", "top", "search"; "user" may exist in historical rows
     last_seen_at: str     # UTC datetime string: "YYYY-MM-DD HH:MM:SS"
 
 
@@ -37,7 +37,7 @@ class RedditTarget:
 @dataclass
 class RedditIngestState:
     subreddit: str
-    sort_mode: str                       # "new", "top:<window>", "search:<sort>:<window_or_na>:<query>", or "user:<sort>:<window_or_na>:<username>"
+    sort_mode: str                       # "new", "top:<window>", "search:<sort>:<window_or_na>:<query>"; historical rows may use "user:*"
     last_post_created_utc: Optional[float]
     last_post_id: Optional[str]
     last_scrape_time: Optional[str]      # UTC datetime string

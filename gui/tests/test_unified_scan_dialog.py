@@ -220,25 +220,12 @@ def test_build_scan_request_reddit_search_missing_query_raises():
         dlg._build_scan_request()
 
 
-def test_build_scan_request_reddit_user_valid(monkeypatch):
-    monkeypatch.setattr("gui.components.unified_scan_dialog.persist_query_budget_state", lambda *_a, **_k: None)
+def test_build_scan_request_reddit_user_mode_raises():
     dlg = _make_dialog()
     dlg.provider_shodan_var.set(False)
     dlg.provider_reddit_var.set(True)
     dlg.reddit_mode_var.set("user")
-    dlg.reddit_username_var.set("testuser")
-    request = dlg._build_scan_request()
-    assert request["reddit_mode"] == "user"
-    assert request["reddit_username"] == "testuser"
-
-
-def test_build_scan_request_reddit_user_missing_username_raises():
-    dlg = _make_dialog()
-    dlg.provider_shodan_var.set(False)
-    dlg.provider_reddit_var.set(True)
-    dlg.reddit_mode_var.set("user")
-    dlg.reddit_username_var.set("")
-    with pytest.raises(ValueError, match="user mode requires a username"):
+    with pytest.raises(ValueError, match="Select feed or search"):
         dlg._build_scan_request()
 
 
@@ -425,8 +412,8 @@ def test_apply_form_state_restores_reddit_options():
         }
     }
     dlg._apply_form_state(state)
-    assert dlg.reddit_mode_var.get() == "user"
-    assert dlg.reddit_username_var.get() == "reddit_user"
+    assert dlg.reddit_mode_var.get() == "feed"
+    assert dlg.reddit_username_var.get() == ""
     assert dlg.reddit_parse_body_var.get() is False
     assert dlg.reddit_include_nsfw_var.get() is True
 

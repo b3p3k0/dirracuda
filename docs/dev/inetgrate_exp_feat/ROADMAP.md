@@ -19,6 +19,7 @@ Last updated: 2026-06-04
 | C8 | Docs/Reference Closeout | COMPLETE |
 | C9 | SearXNG Hard Cutover To Primary DB | COMPLETE |
 | C10 | Reddit Hard Cutover To Primary DB | COMPLETE |
+| C10.1 | Reddit Anonymous RSS Cutover | COMPLETE |
 
 ## Phase A - Contract And Baseline
 
@@ -94,6 +95,12 @@ Last updated: 2026-06-04
 - Parsed SMB/FTP/HTTP targets sync into primary protocol tables during run completion.
 - Primary-backed Reddit browser mode hides manual promotion and clear actions.
 - Legacy Reddit sidecar browsing remains available for historical data.
+
+### C10.1 - Reddit Anonymous RSS Cutover (COMPLETE)
+
+- Replace discontinued unauthenticated Reddit `.json` listing/search endpoints with public Atom/RSS feeds.
+- Keep anonymous feed/search modes only; user/author mode is unsupported for new runs.
+- Preserve C10 primary-DB write and sync flow; no sidecar write path restored.
 
 ## Execution Rules (All Cards)
 

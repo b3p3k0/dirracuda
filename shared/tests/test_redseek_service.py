@@ -1032,220 +1032,35 @@ def test_feed_mode_calls_fetch_posts_not_fetch_search_posts(tmp_path, monkeypatc
 
 
 # ---------------------------------------------------------------------------
-# user mode — validation
+# user mode — discontinued JSON path
 # ---------------------------------------------------------------------------
 
-def test_user_mode_empty_username_returns_error():
-    result = run_ingest(_make_opts(mode="user", username=""))
-    assert result.error == "username is required for user mode"
-    assert result.posts_stored == 0
-
-
-def test_user_mode_whitespace_only_username_returns_error():
-    result = run_ingest(_make_opts(mode="user", username="   "))
-    assert result.error == "username is required for user mode"
-    assert result.posts_stored == 0
-
-
-def test_user_mode_username_with_space_returns_error():
-    result = run_ingest(_make_opts(mode="user", username="bad user"))
-    assert result.error is not None
-    assert "invalid username" in result.error
-
-
-# ---------------------------------------------------------------------------
-# user mode — fetch dispatch
-# ---------------------------------------------------------------------------
-
-def test_user_mode_calls_fetch_user_posts(tmp_path, monkeypatch):
-    """mode=user must call fetch_user_posts with the normalized username."""
+def test_user_mode_returns_unsupported_error_without_fetch_or_db_init(tmp_path, monkeypatch):
+    """Anonymous RSS mode supports feed/search only; user mode must stop before side effects."""
     db = tmp_path / "test.db"
-    calls = []
+    fetch_called = {"value": False}
+    init_called = {"value": False}
 
-    def fake_fetch_user(username, sort, **kw):
-        calls.append({"username": username, "sort": sort, **kw})
-        return _make_fetch([])
-
-    monkeypatch.setattr(_svc, "fetch_user_posts", fake_fetch_user)
-    run_ingest(_make_opts(mode="user", username="testuser"), db_path=db)
-
-    assert len(calls) == 1
-    assert calls[0]["username"] == "testuser"
-    assert calls[0]["sort"] == "new"
-
-
-def test_user_mode_u_prefix_normalization(tmp_path, monkeypatch):
-    """u/foo should be normalized to foo before passing to fetch_user_posts."""
-    db = tmp_path / "test.db"
-    calls = []
-
-    def fake_fetch_user(username, sort, **kw):
-        calls.append(username)
-        return _make_fetch([])
-
-    monkeypatch.setattr(_svc, "fetch_user_posts", fake_fetch_user)
-    run_ingest(_make_opts(mode="user", username="u/testuser"), db_path=db)
-
-    assert calls == ["testuser"]
-
-
-def test_user_mode_top_window_passthrough(tmp_path, monkeypatch):
-    """sort=top + top_window=month must be forwarded to fetch_user_posts."""
-    db = tmp_path / "test.db"
-    calls = []
-
-    def fake_fetch_user(username, sort, **kw):
-        calls.append({"sort": sort, "top_window": kw.get("top_window")})
-        return _make_fetch([])
-
-    monkeypatch.setattr(_svc, "fetch_user_posts", fake_fetch_user)
-    run_ingest(_make_opts(mode="user", username="foo", sort="top", top_window="month"), db_path=db)
-
-    assert calls[0]["sort"] == "top"
-    assert calls[0]["top_window"] == "month"
-
-
-# ---------------------------------------------------------------------------
-# user mode — runtime guards
-# ---------------------------------------------------------------------------
-
-def _make_raw_user_post(
-    post_id: str,
-    author: str = "testuser",
-    subreddit: str = "opendirectories",
-    created_utc: float = 1_700_000_000.0,
-    title: str = "No URL",
-    selftext: str = "",
-    over_18: bool = False,
-) -> dict:
-    return {
-        "id": post_id,
-        "created_utc": created_utc,
-        "title": title,
-        "author": author,
-        "selftext": selftext,
-        "over_18": over_18,
-        "subreddit": subreddit,
-    }
-
-
-def test_user_mode_basic_stores_matching_post(tmp_path, monkeypatch):
-    """Post with matching subreddit and author is written to DB."""
-    db = tmp_path / "test.db"
-    post = _make_raw_user_post("abc123", author="testuser", subreddit="opendirectories")
-    monkeypatch.setattr(_svc, "fetch_user_posts", lambda *a, **kw: _make_fetch([post]))
-
-    result = run_ingest(_make_opts(mode="user", username="testuser"), db_path=db)
-
-    assert result.posts_stored == 1
-    assert result.error is None
-
-
-def test_user_mode_skips_wrong_subreddit(tmp_path, monkeypatch):
-    """Post with subreddit != opendirectories must be skipped and not written."""
-    db = tmp_path / "test.db"
-    post = _make_raw_user_post("abc123", author="testuser", subreddit="pics")
-    monkeypatch.setattr(_svc, "fetch_user_posts", lambda *a, **kw: _make_fetch([post]))
-
-    result = run_ingest(_make_opts(mode="user", username="testuser"), db_path=db)
-
-    assert result.posts_stored == 0
-    assert result.posts_skipped == 1
-
-    conn = open_connection(db)
-    rows = conn.execute("SELECT post_id FROM reddit_posts").fetchall()
-    conn.close()
-    assert rows == []
-
-
-def test_user_mode_skips_wrong_author(tmp_path, monkeypatch):
-    """Post whose author != requested username must be skipped and not written."""
-    db = tmp_path / "test.db"
-    post = _make_raw_user_post("abc123", author="someoneelse", subreddit="opendirectories")
-    monkeypatch.setattr(_svc, "fetch_user_posts", lambda *a, **kw: _make_fetch([post]))
-
-    result = run_ingest(_make_opts(mode="user", username="testuser"), db_path=db)
-
-    assert result.posts_stored == 0
-    assert result.posts_skipped == 1
-
-    conn = open_connection(db)
-    rows = conn.execute("SELECT post_id FROM reddit_posts").fetchall()
-    conn.close()
-    assert rows == []
-
-
-def test_user_mode_case_insensitive_guard(tmp_path, monkeypatch):
-    """Guards must be case-insensitive: OpenDirectories / FOO match."""
-    db = tmp_path / "test.db"
-    post = _make_raw_user_post("abc123", author="FOO", subreddit="OpenDirectories")
-    monkeypatch.setattr(_svc, "fetch_user_posts", lambda *a, **kw: _make_fetch([post]))
-
-    result = run_ingest(_make_opts(mode="user", username="foo"), db_path=db)
-
-    assert result.posts_stored == 1
-    assert result.posts_skipped == 0
-
-
-# ---------------------------------------------------------------------------
-# user mode — state key
-# ---------------------------------------------------------------------------
-
-def test_user_mode_state_key_format(tmp_path, monkeypatch):
-    """State row must be saved under user:<sort>:<window>:<username>."""
-    db = tmp_path / "test.db"
-    monkeypatch.setattr(_svc, "fetch_user_posts", lambda *a, **kw: _make_fetch([]))
-
-    run_ingest(_make_opts(mode="user", username="testuser", sort="new"), db_path=db)
-
-    conn = open_connection(db)
-    rows = conn.execute(
-        "SELECT sort_mode FROM reddit_ingest_state WHERE subreddit='opendirectories'"
-    ).fetchall()
-    conn.close()
-    keys = [r[0] for r in rows]
-    assert any(k.startswith("user:new:na:testuser") for k in keys)
-
-
-def test_user_mode_state_key_top_includes_window(tmp_path, monkeypatch):
-    """State key for sort=top must include the top window."""
-    db = tmp_path / "test.db"
-    monkeypatch.setattr(_svc, "fetch_user_posts", lambda *a, **kw: _make_fetch([]))
-
-    run_ingest(_make_opts(mode="user", username="testuser", sort="top", top_window="month"), db_path=db)
-
-    conn = open_connection(db)
-    rows = conn.execute(
-        "SELECT sort_mode FROM reddit_ingest_state WHERE subreddit='opendirectories'"
-    ).fetchall()
-    conn.close()
-    keys = [r[0] for r in rows]
-    assert any(k.startswith("user:top:month:testuser") for k in keys)
-
-
-# ---------------------------------------------------------------------------
-# user mode — guard robustness (non-string subreddit/author)
-# ---------------------------------------------------------------------------
-
-def test_user_mode_nonstring_subreddit_and_author_does_not_raise(tmp_path, monkeypatch):
-    """Guards must not raise when subreddit or author is None or a non-string truthy value."""
-    db = tmp_path / "test.db"
-    posts = [
-        # Post 1: falsy non-string (None)
-        {"id": "p1", "created_utc": 1_700_000_000.0, "title": "t", "selftext": "",
-         "over_18": False, "subreddit": None, "author": None},
-        # Post 2: truthy non-string (int)
-        {"id": "p2", "created_utc": 1_700_000_001.0, "title": "t", "selftext": "",
-         "over_18": False, "subreddit": 123, "author": 456},
-    ]
-    monkeypatch.setattr(_svc, "fetch_user_posts", lambda *a, **kw: _make_fetch(posts))
+    monkeypatch.setattr(
+        _svc,
+        "fetch_posts",
+        lambda *a, **kw: fetch_called.update(value=True) or _make_fetch([]),
+    )
+    monkeypatch.setattr(
+        _svc,
+        "fetch_search_posts",
+        lambda *a, **kw: fetch_called.update(value=True) or _make_fetch([]),
+    )
+    monkeypatch.setattr(_svc, "init_db", lambda *a, **kw: init_called.update(value=True))
 
     result = run_ingest(_make_opts(mode="user", username="testuser"), db_path=db)
 
     assert isinstance(result, IngestResult)
-    assert result.error is None
+    assert result.error == "user mode is unavailable; anonymous Reddit RSS supports feed/search only"
     assert result.posts_stored == 0
-    assert result.posts_skipped == 2
+    assert fetch_called["value"] is False
+    assert init_called["value"] is False
+    assert not db.exists()
 
 
 # ---------------------------------------------------------------------------

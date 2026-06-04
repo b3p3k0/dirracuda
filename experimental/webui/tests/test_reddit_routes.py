@@ -179,7 +179,7 @@ def test_reddit_run_search_missing_query(logged_in_client):
     assert r.status_code == 422
 
 
-def test_reddit_run_user_missing_username(logged_in_client):
+def test_reddit_run_user_mode_unsupported(logged_in_client):
     csrf = _csrf_from_dashboard(logged_in_client)
     r = logged_in_client.post(
         "/api/reddit/run",
@@ -187,6 +187,7 @@ def test_reddit_run_user_missing_username(logged_in_client):
         json={"mode": "user", "sort": "new", "max_posts": 10, "max_pages": 1},
     )
     assert r.status_code == 422
+    assert "anonymous Reddit RSS supports feed/search only" in r.text
 
 
 def test_reddit_run_completion_message_does_not_mention_sidecar(
@@ -336,5 +337,4 @@ def test_reddit_run_replace_cache_true_does_not_call_wipe_all(
     )
 
     assert not wipe_all_called, "wipe_all must not be called in WebUI primary-DB mode"
-
 

@@ -48,10 +48,6 @@ def _make_dialog() -> RedditGrabDialog:
     d.query_var.get.return_value = ""
     d._query_lbl = MagicMock()
     d._query_entry = MagicMock()
-    d.username_var = MagicMock()
-    d.username_var.get.return_value = ""
-    d._username_lbl = MagicMock()
-    d._username_entry = MagicMock()
     d.sort_var = MagicMock()
     d.sort_var.get.return_value = "new"
     d.top_window_var = MagicMock()
@@ -206,49 +202,30 @@ def test_validate_feed_mode_returns_mode_feed_query_empty():
     assert result.query == ""
 
 
-# ---------------------------------------------------------------------------
-# user mode — _on_mode_changed visibility
-# ---------------------------------------------------------------------------
-
-def test_mode_user_shows_username_hides_query():
-    """mode=user shows username widgets and hides query widgets."""
-    d = _make_dialog()
-    d.mode_var.get.return_value = "user"
-    d._on_mode_changed()
-    d._username_lbl.grid.assert_called_once()
-    d._username_entry.grid.assert_called_once()
-    d._query_lbl.grid_remove.assert_called_once()
-    d._query_entry.grid_remove.assert_called_once()
-
-
-def test_mode_feed_hides_both_username_and_query():
-    """mode=feed hides both query and username widgets."""
+def test_mode_feed_hides_query():
+    """mode=feed hides query widgets."""
     d = _make_dialog()
     d.mode_var.get.return_value = "feed"
     d._on_mode_changed()
     d._query_lbl.grid_remove.assert_called_once()
     d._query_entry.grid_remove.assert_called_once()
-    d._username_lbl.grid_remove.assert_called_once()
-    d._username_entry.grid_remove.assert_called_once()
 
 
-def test_mode_search_hides_username_shows_query():
-    """mode=search shows query widgets and hides username widgets."""
+def test_mode_search_shows_query():
+    """mode=search shows query widgets."""
     d = _make_dialog()
     d.mode_var.get.return_value = "search"
     d._on_mode_changed()
     d._query_lbl.grid.assert_called_once()
     d._query_entry.grid.assert_called_once()
-    d._username_lbl.grid_remove.assert_called_once()
-    d._username_entry.grid_remove.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
-# user mode — _validate
+# discontinued user mode — _validate
 # ---------------------------------------------------------------------------
 
-def test_validate_user_mode_empty_username_returns_none(monkeypatch):
-    """Empty username shows showerror and returns None."""
+def test_validate_user_mode_returns_none(monkeypatch):
+    """mode=user is no longer supported by anonymous RSS mode."""
     calls = []
     monkeypatch.setattr(
         "gui.components.reddit_grab_dialog.messagebox.showerror",
@@ -256,37 +233,9 @@ def test_validate_user_mode_empty_username_returns_none(monkeypatch):
     )
     d = _make_dialog()
     d.mode_var.get.return_value = "user"
-    d.username_var.get.return_value = ""
     result = d._validate()
     assert result is None
     assert len(calls) == 1
-
-
-def test_validate_user_mode_username_with_space_returns_none(monkeypatch):
-    """Username with internal space shows showerror and returns None."""
-    calls = []
-    monkeypatch.setattr(
-        "gui.components.reddit_grab_dialog.messagebox.showerror",
-        lambda *a, **kw: calls.append(a),
-    )
-    d = _make_dialog()
-    d.mode_var.get.return_value = "user"
-    d.username_var.get.return_value = "bad user"
-    result = d._validate()
-    assert result is None
-    assert len(calls) == 1
-
-
-def test_validate_user_mode_returns_options_with_username():
-    """Valid username passes validation and is set in IngestOptions.username."""
-    d = _make_dialog()
-    d.mode_var.get.return_value = "user"
-    d.username_var.get.return_value = "testuser"
-    result = d._validate()
-    assert result is not None
-    assert result.mode == "user"
-    assert result.username == "testuser"
-    assert result.query == ""
 
 
 # ---------------------------------------------------------------------------
@@ -333,6 +282,14 @@ def test_load_settings_invalid_mode_falls_back_to_feed():
     """Stored mode='invalid' falls back to 'feed'."""
     d = _make_dialog()
     d.settings = _make_settings_mock({'reddit_grab.mode': 'invalid'})
+    d._load_settings()
+    d.mode_var.set.assert_called_with('feed')
+
+
+def test_load_settings_user_mode_falls_back_to_feed():
+    """Stored mode='user' falls back to feed after RSS cutover."""
+    d = _make_dialog()
+    d.settings = _make_settings_mock({'reddit_grab.mode': 'user'})
     d._load_settings()
     d.mode_var.set.assert_called_with('feed')
 
@@ -411,14 +368,14 @@ def test_save_settings_no_op_when_settings_none():
     d._save_settings()  # must not raise
 
 
-def test_save_settings_writes_all_ten_fields():
-    """_save_settings calls set_setting exactly 10 times."""
+def test_save_settings_writes_all_supported_fields():
+    """_save_settings persists the supported feed/search settings."""
     d = _make_dialog()
     sm = MagicMock()
     d.settings = sm
     d.max_posts_var.get.return_value = "75"
     d._save_settings()
-    assert sm.set_setting.call_count == 10
+    assert sm.set_setting.call_count == 9
     sm.set_setting.assert_any_call('reddit_grab.bulk_probe_enabled', False)
 
 

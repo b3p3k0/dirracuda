@@ -1140,19 +1140,6 @@ class AppConfigDialog:
             return {"valid": False, "message": "Reddit query is required for search mode."}
         return {"valid": True, "message": "Reddit query is valid."}
 
-    def _validate_reddit_username(self, value: str, mode: str) -> Dict[str, Any]:
-        username = str(value or "").strip()
-        mode_norm = str(mode or "").strip()
-        if mode_norm == "user":
-            if not username:
-                return {"valid": False, "message": "Reddit username is required for user mode."}
-            if any(ch.isspace() for ch in username):
-                return {"valid": False, "message": "Reddit username must not contain spaces."}
-            return {"valid": True, "message": "Reddit username is valid."}
-        if username and any(ch.isspace() for ch in username):
-            return {"valid": False, "message": "Reddit username must not contain spaces."}
-        return {"valid": True, "message": "Reddit username is valid."}
-
     def _validate_quarantine_path(self, path: str) -> Dict[str, Any]:
         path = str(path or "").strip()
         if not path:

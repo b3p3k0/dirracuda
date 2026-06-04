@@ -130,16 +130,10 @@ function startPolling() {
 function _syncModeFields() {
   var mode = document.getElementById('mode').value;
   var queryRow = document.getElementById('query-row');
-  var usernameRow = document.getElementById('username-row');
   if (mode === 'search') {
     queryRow.classList.remove('hidden');
-    usernameRow.classList.add('hidden');
-  } else if (mode === 'user') {
-    queryRow.classList.add('hidden');
-    usernameRow.classList.remove('hidden');
   } else {
     queryRow.classList.add('hidden');
-    usernameRow.classList.add('hidden');
   }
 }
 
@@ -168,8 +162,9 @@ function applyPrefs() {
     var saved = window.DirracudaPrefs.readSection('reddit');
     if (saved.mode) {
       var modeEl = document.getElementById('mode');
+      var mode = (saved.mode === 'feed' || saved.mode === 'search') ? saved.mode : 'feed';
       for (var i = 0; i < modeEl.options.length; i++) {
-        if (modeEl.options[i].value === saved.mode) { modeEl.selectedIndex = i; break; }
+        if (modeEl.options[i].value === mode) { modeEl.selectedIndex = i; break; }
       }
     }
     if (saved.sort) {
@@ -236,7 +231,6 @@ document.getElementById('reddit-form').addEventListener('submit', async function
   var sort = document.getElementById('sort').value;
   var topWindow = document.getElementById('top-window').value;
   var query = (document.getElementById('query').value || '').trim();
-  var username = (document.getElementById('username').value || '').trim();
   var maxPosts = parseInt(document.getElementById('max-posts').value, 10);
   var maxPages = parseInt(document.getElementById('max-pages').value, 10);
   var parseBody = document.getElementById('parse-body').checked;
@@ -247,11 +241,6 @@ document.getElementById('reddit-form').addEventListener('submit', async function
 
   if (mode === 'search' && !query) {
     setStatus('Query is required for search mode.', 'status-warn');
-    btn.disabled = false;
-    return;
-  }
-  if (mode === 'user' && !username) {
-    setStatus('Username is required for user mode.', 'status-warn');
     btn.disabled = false;
     return;
   }
@@ -273,7 +262,6 @@ document.getElementById('reddit-form').addEventListener('submit', async function
       sort: sort,
       top_window: topWindow,
       query: query,
-      username: username,
       max_posts: maxPosts,
       max_pages: maxPages,
       parse_body: parseBody,

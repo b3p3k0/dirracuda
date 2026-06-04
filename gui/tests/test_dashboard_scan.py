@@ -740,25 +740,26 @@ class TestStartRedditScan:
         assert captured[0].query == "open directories"
         assert captured[0].mode == "search"
 
-    def test_builds_ingest_options_user_mode(self, monkeypatch):
+    def test_rejects_user_mode_before_worker_start(self, monkeypatch):
         dash = _make_dash()
-        captured = []
+        errors = []
 
         def _fake_run(options, db_path=None):
-            captured.append(options)
-            return _make_reddit_result()
+            raise AssertionError("run_ingest should not be called for unsupported user mode")
 
         monkeypatch.setattr("experimental.redseek.service.run_ingest", _fake_run)
         monkeypatch.setattr("shared.path_service.get_paths", _fake_paths_reddit)
-        ds.start_reddit_scan(dash, _reddit_request(reddit_mode="user", reddit_username="testuser"))
+        monkeypatch.setattr(
+            "gui.components.dashboard.messagebox.showerror",
+            lambda *a, **k: errors.append(a),
+        )
 
-        for t in threading.enumerate():
-            if t.name == "dashboard-reddit-scan":
-                t.join(timeout=5)
-                break
-
-        assert captured[0].username == "testuser"
-        assert captured[0].mode == "user"
+        assert ds.start_reddit_scan(
+            dash,
+            _reddit_request(reddit_mode="user", reddit_username="testuser"),
+        ) is False
+        assert errors
+        assert "anonymous Reddit RSS supports feed/search only" in errors[0][1]
 
     def test_required_bool_fields_default_correctly(self, monkeypatch):
         dash = _make_dash()

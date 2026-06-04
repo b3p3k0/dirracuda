@@ -122,7 +122,7 @@ GUI tabs for these surfaces live in `gui/components/experimental_features/`.
 | Web UI | `experimental/webui/server.py` | config/state | FastAPI companion; cookie sessions, CSRF protection; remote mode requires TLS + allowlist |
 | Dorkbook | `experimental/dorkbook/store.py` | sidecar | Shodan query library; built-in read-only dorks + user customs |
 | Keymaster | `experimental/keymaster/store.py` | sidecar | Multi-key API key store; selecting a key updates active Shodan key in memory |
-| Redseek | `experimental/redseek/service.py` | **primary** | Reddit ingestion; new runs write to primary DB, auto-sync SMB/FTP/HTTP targets; legacy data in `reddit_od.db` |
+| Redseek | `experimental/redseek/service.py` | **primary** | Reddit ingestion via anonymous RSS feed/search only; new runs write to primary DB, auto-sync SMB/FTP/HTTP targets; legacy data in `reddit_od.db` |
 | SearXNG Dork | `experimental/se_dork/service.py` | **primary** | SearXNG-based dork search; two-commit transaction model; auto-sync to primary protocol tables |
 | Censys Discovery | `experimental/censys_discovery/service.py` | sidecar | Censys Platform v3 alternative discovery; requires org-scoped PAT. **Suspended** — free-tier API does not provide candidate-list endpoints required for in-app runs. |
 

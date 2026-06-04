@@ -414,15 +414,16 @@ Ingest modes in `Reddit Grab` (Accessories):
 
 | Mode | Endpoint | Required input | Notes |
 |------|----------|----------------|-------|
-| `feed` | `/r/opendirectories/{sort}.json` | none | Default mode |
-| `search` | `/r/opendirectories/search.json` with `restrict_sr=1` | query | Subreddit-scoped keyword search |
-| `user` | `/r/opendirectories/search.json` with `q=author:<user> subreddit:opendirectories`, `restrict_sr=1`, `type=link` | username | Service runtime-checks subreddit and author before writes |
+| `feed` | `/r/opendirectories/{sort}.rss` | none | Default anonymous RSS mode |
+| `search` | `/r/opendirectories/search.rss` with `restrict_sr=1` | query | Subreddit-scoped keyword search |
 
 Sort options:
 - `new`
 - `top` with window `hour`, `day`, `week`, `month`, `year`, or `all`
 
-Only submissions are processed. Comments/replies are not.
+Only submissions exposed by Reddit's public Atom/RSS feeds are processed. Comments/replies are not.
+RSS does not expose the old JSON cursor, so each run reads one anonymous feed snapshot; `Max posts` still limits retained entries, while `Max pages` is kept only for compatibility.
+User/author mode is unavailable in anonymous RSS mode. Historical rows from older user-mode runs remain viewable in existing databases.
 
 Reddit Grab options:
 - **Run probe on results** — optional explicit probe pass for concrete HTTP/HTTPS/FTP targets found during that ingest run. Unknown-protocol rows are skipped with a clear notice instead of guessing a protocol. Probe summaries and snapshots are carried into the primary DB automatically.
@@ -437,13 +438,14 @@ Reddit Post DB (current runs — primary DB):
 
 Disclaimer:
 
-> Dirracuda's Reddit ingestion feature uses publicly accessible JSON endpoints to retrieve posts from `r/opendirectories`.
+> Dirracuda's Reddit ingestion feature uses publicly accessible Atom/RSS feeds to retrieve posts from `r/opendirectories`.
 > No authentication is required, and only publicly available data is accessed.
 > This method is not part of Reddit's official API and may change or break at any time.
 
 Known limitations:
-- Reddit JSON endpoints are unofficial and may change without notice
+- Reddit RSS feeds are unofficial and may change without notice
 - Data availability is limited and not a complete historical archive
+- RSS has reduced metadata compared with the discontinued JSON listing endpoint; NSFW filtering is best-effort
 - Rate limiting may interrupt runs (HTTP 429 aborts the current run)
 - Some posts contain no usable targets
 - Data quality depends entirely on user-submitted content
