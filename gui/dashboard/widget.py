@@ -329,7 +329,7 @@ class DashboardWidget:
         self._process_log_queue()
 
     def _build_header_section(self) -> None:
-        """Build compact header with title/toggle row and 2x3 action grid."""
+        """Build compact header with title/toggle row and centered action grid."""
         header_frame = tk.Frame(self.main_frame)
         self.theme.apply_to_widget(header_frame, "main_window")
         header_frame.pack(fill=tk.X, pady=(0, 10))
@@ -356,9 +356,8 @@ class DashboardWidget:
         actions_grid = tk.Frame(header_frame)
         self.theme.apply_to_widget(actions_grid, "main_window")
         actions_grid.pack(fill=tk.X)
-        actions_grid.columnconfigure(0, weight=1)
-        actions_grid.columnconfigure(1, weight=1)
-        actions_grid.columnconfigure(2, weight=1)
+        for column in range(6):
+            actions_grid.columnconfigure(column, weight=1)
 
         self.scan_button = tk.Button(
             actions_grid,
@@ -366,7 +365,7 @@ class DashboardWidget:
             command=self._handle_scan_button_click,
         )
         self.theme.apply_to_widget(self.scan_button, "button_primary")
-        self.scan_button.grid(row=0, column=0, padx=(0, 6), pady=(0, 6), sticky="ew")
+        self.scan_button.grid(row=0, column=0, columnspan=2, padx=(0, 6), pady=(0, 6), sticky="ew")
 
         self.db_button = tk.Button(
             actions_grid,
@@ -374,7 +373,7 @@ class DashboardWidget:
             command=self._open_db_surface,
         )
         self.theme.apply_to_widget(self.db_button, "button_secondary")
-        self.db_button.grid(row=0, column=1, padx=3, pady=(0, 6), sticky="ew")
+        self.db_button.grid(row=0, column=2, columnspan=2, padx=3, pady=(0, 6), sticky="ew")
 
         self.experimental_button = tk.Button(
             actions_grid,
@@ -382,7 +381,7 @@ class DashboardWidget:
             command=self._handle_experimental_button_click,
         )
         self.theme.apply_to_widget(self.experimental_button, "button_secondary")
-        self.experimental_button.grid(row=0, column=2, padx=(6, 0), pady=(0, 6), sticky="ew")
+        self.experimental_button.grid(row=0, column=4, columnspan=2, padx=(6, 0), pady=(0, 6), sticky="ew")
 
         self.config_button = tk.Button(
             actions_grid,
@@ -390,7 +389,7 @@ class DashboardWidget:
             command=self._open_config_editor,
         )
         self.theme.apply_to_widget(self.config_button, "button_secondary")
-        self.config_button.grid(row=1, column=0, padx=(0, 6), pady=(0, 0), sticky="ew")
+        self.config_button.grid(row=1, column=1, columnspan=2, padx=(0, 6), pady=(0, 0), sticky="ew")
 
         self.about_button = tk.Button(
             actions_grid,
@@ -398,7 +397,7 @@ class DashboardWidget:
             command=self._open_about_dialog,
         )
         self.theme.apply_to_widget(self.about_button, "button_secondary")
-        self.about_button.grid(row=1, column=1, padx=3, pady=(0, 0), sticky="ew")
+        self.about_button.grid(row=1, column=3, columnspan=2, padx=(6, 0), pady=(0, 0), sticky="ew")
 
     def _theme_toggle_button_text(self) -> str:
         """Return dashboard button label for switching to the opposite theme."""
