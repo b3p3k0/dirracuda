@@ -65,6 +65,9 @@ Last updated: 2026-06-05
 - A correct saved URL contract includes scheme, port, hostname, and path. Server List browsing used only scheme/port, so virtual-hosted results opened the IP root even though Copy URL was correct.
 - Copy, browse, and background probe actions should share one endpoint resolver. The IP remains the database/cache identity while `probe_host` and `probe_path` drive HTTP authority, HTTPS SNI, and initial navigation.
 
+**Server List action data (2026-06-05):**
+- Command actions must use row-key-backed model data, not positional Treeview values. Display columns can be inserted or reordered, silently turning a hardcoded IP index into another field such as the rendered share count.
+
 Append new lessons after each completed card:
 - What failed or nearly failed.
 - Which guardrail prevented recurrence.

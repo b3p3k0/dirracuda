@@ -631,15 +631,12 @@ class ServerListWindowBatchOperationsMixin:
         self._hide_context_menu()
         if not self.tree:
             return
-        selected = self.tree.selection()
-        if not selected:
-            return
-
-        ips = []
-        for item in selected:
-            values = self.tree.item(item)["values"]
-            if len(values) >= 7:
-                ips.append(str(values[6]))  # IP at index 6 (after fav/avoid/probe/rce/extracted/Type)
+        targets = self._build_selected_targets()
+        ips = [
+            str(target.get("ip_address") or "").strip()
+            for target in targets
+            if str(target.get("ip_address") or "").strip()
+        ]
 
         if ips:
             try:

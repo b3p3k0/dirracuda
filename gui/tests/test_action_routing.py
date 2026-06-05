@@ -1338,6 +1338,57 @@ def test_copy_url_mixed_selection_builds_protocol_urls():
     )
 
 
+def test_copy_ip_uses_model_data_not_tree_display_columns():
+    """Copy IP must ignore the rendered Shares cell and use row-key model data."""
+    stub = _BatchMixinStub()
+    stub.filtered_servers = [
+        {
+            "ip_address": "184.171.253.117",
+            "host_type": "H",
+            "row_key": "H:55",
+            "accessible_shares": 12,
+        },
+    ]
+    stub.all_servers = list(stub.filtered_servers)
+    stub.tree._items = {"H:55": {"values": ("○", "○", "⚪", "○", "H", "184.171.253.117", "📁 12")}}
+    stub.tree._selection = ["H:55"]
+
+    stub._on_copy_ip()
+
+    assert stub.window.clipboard_value == "184.171.253.117"
+
+
+def test_copy_ip_mixed_selection_preserves_model_order():
+    stub = _BatchMixinStub()
+    stub.filtered_servers = [
+        {"ip_address": "10.0.0.1", "host_type": "S", "row_key": "S:1"},
+        {"ip_address": "10.0.0.2", "host_type": "F", "row_key": "F:2"},
+        {"ip_address": "10.0.0.3", "host_type": "H", "row_key": "H:3"},
+    ]
+    stub.all_servers = list(stub.filtered_servers)
+    stub.tree._items = {"S:1": True, "F:2": True, "H:3": True}
+    stub.tree._selection = ["S:1", "F:2", "H:3"]
+
+    stub._on_copy_ip()
+
+    assert stub.window.clipboard_value == "10.0.0.1\n10.0.0.2\n10.0.0.3"
+
+
+def test_copy_ip_skips_malformed_rows_without_reading_tree_values():
+    stub = _BatchMixinStub()
+    stub.filtered_servers = [
+        {"ip_address": "", "host_type": "S", "row_key": "S:1"},
+        {"ip_address": "192.0.2.20", "host_type": "H", "row_key": "H:2"},
+    ]
+    stub.all_servers = list(stub.filtered_servers)
+    stub.tree._items = {"S:1": True, "H:2": True}
+    stub.tree._selection = ["S:1", "H:2"]
+
+    stub._on_copy_ip()
+
+    assert stub.window.clipboard_value == "192.0.2.20"
+
+
 def test_copy_url_http_prefers_probe_host_and_path_from_detail():
     """HTTP Copy URL should prefer db detail probe_host/probe_path over row values."""
     stub = _BatchMixinStub()
