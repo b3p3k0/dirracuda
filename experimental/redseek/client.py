@@ -23,6 +23,8 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 
+from experimental.redseek.models import DEFAULT_MAX_POSTS, MAX_POSTS
+
 _BASE_URL = "https://www.reddit.com/r/opendirectories/{sort}.rss"
 _SEARCH_URL = "https://www.reddit.com/r/opendirectories/search.rss"
 _USER_AGENT = "dirracuda:reddit_rss_ingest:v1.0"
@@ -208,6 +210,7 @@ def fetch_page(
     after: Optional[str] = None,
     timeout: int = 20,
     top_window: str = "week",
+    max_posts: int = DEFAULT_MAX_POSTS,
 ) -> PageResult:
     """
     Fetch one RSS snapshot from r/opendirectories.
@@ -218,14 +221,15 @@ def fetch_page(
     """
     if sort not in {"new", "top"}:
         raise ValueError(f"sort must be 'new' or 'top', got {sort!r}")
+    if not (1 <= max_posts <= MAX_POSTS):
+        raise ValueError(f"max_posts must be 1-{MAX_POSTS}, got {max_posts}")
 
-    params: dict[str, str] = {}
+    params: dict[str, str] = {"limit": str(max_posts)}
     if sort == "top":
         params["t"] = top_window
 
     url = _BASE_URL.format(sort=sort)
-    if params:
-        url = f"{url}?{urllib.parse.urlencode(params)}"
+    url = f"{url}?{urllib.parse.urlencode(params)}"
 
     posts = _parse_feed(_request_feed(url, timeout))
     return PageResult(posts=posts, next_after=None)
@@ -236,6 +240,7 @@ def fetch_posts(
     max_pages: int = 3,
     timeout: int = 20,
     top_window: str = "week",
+    max_posts: int = DEFAULT_MAX_POSTS,
 ) -> FetchResult:
     """
     Fetch one anonymous RSS snapshot from r/opendirectories.
@@ -248,8 +253,14 @@ def fetch_posts(
     if not (1 <= max_pages <= 3):
         raise ValueError(f"max_pages must be 1–3, got {max_pages}")
 
-    page = fetch_page(sort=sort, after=None, timeout=timeout, top_window=top_window)
-    return FetchResult(posts=page.posts, pages_fetched=1)
+    page = fetch_page(
+        sort=sort,
+        after=None,
+        timeout=timeout,
+        top_window=top_window,
+        max_posts=max_posts,
+    )
+    return FetchResult(posts=page.posts[:max_posts], pages_fetched=1)
 
 
 def fetch_search_page(
@@ -258,6 +269,7 @@ def fetch_search_page(
     after: Optional[str] = None,
     timeout: int = 20,
     top_window: str = "week",
+    max_posts: int = DEFAULT_MAX_POSTS,
 ) -> PageResult:
     """
     Fetch one subreddit-scoped RSS search snapshot from r/opendirectories.
@@ -270,8 +282,15 @@ def fetch_search_page(
         raise ValueError("query is required")
     if sort not in {"new", "top"}:
         raise ValueError(f"sort must be 'new' or 'top', got {sort!r}")
+    if not (1 <= max_posts <= MAX_POSTS):
+        raise ValueError(f"max_posts must be 1-{MAX_POSTS}, got {max_posts}")
 
-    params: dict[str, str] = {"q": q, "restrict_sr": "1", "sort": sort}
+    params: dict[str, str] = {
+        "q": q,
+        "restrict_sr": "1",
+        "sort": sort,
+        "limit": str(max_posts),
+    }
     if sort == "top":
         params["t"] = top_window
     url = f"{_SEARCH_URL}?{urllib.parse.urlencode(params)}"
@@ -286,6 +305,7 @@ def fetch_search_posts(
     max_pages: int = 3,
     timeout: int = 20,
     top_window: str = "week",
+    max_posts: int = DEFAULT_MAX_POSTS,
 ) -> FetchResult:
     """
     Fetch one anonymous RSS search snapshot from r/opendirectories.
@@ -304,5 +324,6 @@ def fetch_search_posts(
         after=None,
         timeout=timeout,
         top_window=top_window,
+        max_posts=max_posts,
     )
-    return FetchResult(posts=page.posts, pages_fetched=1)
+    return FetchResult(posts=page.posts[:max_posts], pages_fetched=1)

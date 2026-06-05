@@ -22,7 +22,7 @@ from experimental.se_dork.models import (
     RUN_STATUS_DONE,
     RUN_STATUS_ERROR,
 )
-from experimental.se_dork.service import run_dork_search
+from experimental.se_dork.service import _HARD_PAGE_CAP, _fetch_results, run_dork_search
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +214,7 @@ def test_run_dork_search_dedupe(tmp_path: Path) -> None:
                 result = run_dork_search(_options(max_results=10), db_path=tmp_path / "se_dork.db")
 
     assert result.status == RUN_STATUS_DONE
-    assert result.fetched_count == 2
+    assert result.fetched_count == 1
     assert result.deduped_count == 1
 
 
@@ -447,7 +447,55 @@ def test_run_dork_search_persists_clamped_max_results(tmp_path: Path) -> None:
         persisted = conn.execute(
             "SELECT max_results FROM dork_runs WHERE run_id=?", (result.run_id,)
         ).fetchone()[0]
-    assert persisted == 500
+    assert persisted == 1000
+
+
+def test_fetch_results_continues_beyond_page_ten() -> None:
+    responses = [
+        _searxng_response([{
+            "url": f"http://example.com/page{page}/",
+            "title": f"Page {page}",
+        }])
+        for page in range(1, 13)
+    ]
+    responses.append(_searxng_response([]))
+
+    with patch("urllib.request.urlopen", side_effect=responses) as mock_open:
+        rows = _fetch_results("http://searxng.local", "index of", 1000)
+
+    assert len(rows) == 12
+    assert "pageno=11" in mock_open.call_args_list[10].args[0]
+
+
+def test_fetch_results_stops_at_hard_page_cap() -> None:
+    with patch(
+        "urllib.request.urlopen",
+        return_value=_searxng_response([{"url": "http://example.com/repeated/"}]),
+    ) as mock_open:
+        rows = _fetch_results("http://searxng.local", "index of", 1000)
+
+    assert len(rows) == 1
+    assert mock_open.call_count == _HARD_PAGE_CAP == 40
+
+
+def test_fetch_results_counts_unique_urls_toward_requested_budget() -> None:
+    page_one = [
+        {"url": "http://example.com/files/"},
+        {"url": "http://example.com/files"},
+    ]
+    page_two = [{"url": "http://example.com/other/"}]
+
+    with patch("urllib.request.urlopen", side_effect=[
+        _searxng_response(page_one),
+        _searxng_response(page_two),
+    ]) as mock_open:
+        rows = _fetch_results("http://searxng.local", "index of", 2)
+
+    assert [row["url"] for row in rows] == [
+        "http://example.com/files/",
+        "http://example.com/other/",
+    ]
+    assert mock_open.call_count == 2
 
 
 # ---------------------------------------------------------------------------
@@ -647,7 +695,7 @@ def test_run_dork_search_preflight_exception_returns_structured_error(tmp_path: 
 
 
 def test_run_dork_search_non_int_max_results_returns_structured_result_not_raise(tmp_path: Path) -> None:
-    """Non-int options.max_results must not raise — falls back to 50 and continues."""
+    """Non-int options.max_results must not raise; it uses the current default."""
     from experimental.se_dork.models import RunOptions as _RO
 
     # Bypass the RunOptions type annotation with a plain namespace

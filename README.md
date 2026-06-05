@@ -374,12 +374,12 @@ Quick start:
 Inputs (persisted across opens/restarts):
 - **SearXNG Server** — server URL (default placeholder: `http://your.searxng.server:port`)
 - **Query** — dork query (default: `site:* intitle:"index of /"`)
-- **Max results** — fetch cap per run (default 50, max 500)
+- **Max results** — unique-result fetch cap per run (default 500, max 1,000)
 - **Run Probe on Results** — optional bulk probe pass for retained results
 
 What each action does:
 - **Test** checks server reachability and JSON search support.
-- **Run** executes the query, keeps only confirmed open-index results, and updates status with fetched/stored counts. If probe is enabled, the status line also shows probe totals (`✔/✖/○`). On completion, retained SearXNG rows are written in the active primary DB context and auto-synced into main HTTP server surfaces. A result popup shows the immediate outcome, while Live Scan Output keeps a Shodan-style rollup with fetched/verified/retained, probe, sync, and database totals. In mixed SearXNG+Shodan runs the popup is suppressed to avoid interrupting the active Shodan queue; the live-output rollup still records completion.
+- **Run** executes the query, keeps only confirmed open-index results, and updates status with fetched/stored counts. Fetching deduplicates normalized URLs while paging and stops at the requested unique-result count, 40 pages, or the first empty page. The 1,000-result setting is a ceiling, not a guarantee, because upstream engines may exhaust results earlier. If probe is enabled, the status line also shows probe totals (`✔/✖/○`). On completion, retained SearXNG rows are written in the active primary DB context and auto-synced into main HTTP server surfaces. A result popup shows the immediate outcome, while Live Scan Output keeps a Shodan-style rollup with fetched/verified/retained, probe, sync, and database totals. In mixed SearXNG+Shodan runs the popup is suppressed to avoid interrupting the active Shodan queue; the live-output rollup still records completion.
 - **Open Results DB** opens the SearXNG browser against the active primary DB context for new runs. Historical sidecar data is still available from the legacy sidecar browser path.
 
 ![searxng db](img/searxng_db.png)
@@ -422,7 +422,7 @@ Sort options:
 - `top` with window `hour`, `day`, `week`, `month`, `year`, or `all`
 
 Only submissions exposed by Reddit's public Atom/RSS feeds are processed. Comments/replies are not.
-RSS does not expose the old JSON cursor, so each run reads one anonymous feed snapshot; `Max posts` still limits retained entries, while `Max pages` is kept only for compatibility.
+RSS does not expose the old JSON cursor, so each run makes one anonymous feed request. Dirracuda sends `limit=<Max posts>` and supports 1–100 posts per snapshot (default and maximum: 100); Reddit may still return fewer. `Max pages` is kept only for compatibility.
 User/author mode is unavailable in anonymous RSS mode. Historical rows from older user-mode runs remain viewable in existing databases.
 
 Reddit Grab options:

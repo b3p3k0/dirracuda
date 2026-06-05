@@ -102,6 +102,7 @@ def test_fetch_page_uses_rss_endpoint():
     req = mock_open.call_args[0][0]
     assert "/r/opendirectories/new.rss" in req.full_url
     assert ".json" not in req.full_url
+    assert "limit=100" in req.full_url
 
 
 def test_fetch_page_top_sort_includes_t_param():
@@ -138,6 +139,26 @@ def test_fetch_posts_accepts_max_pages_but_fetches_one_snapshot():
     assert [p["id"] for p in result.posts] == ["p1"]
 
 
+def test_fetch_posts_requests_and_trims_to_requested_snapshot_limit():
+    entries = "".join(_entry(post_id=f"t3_p{i}") for i in range(3))
+    resp = _mock_resp(_feed(entries))
+    with patch("urllib.request.urlopen", return_value=resp) as mock_open:
+        result = fetch_posts("new", max_posts=2)
+
+    req = mock_open.call_args[0][0]
+    assert "limit=2" in req.full_url
+    assert [post["id"] for post in result.posts] == ["p0", "p1"]
+
+
+def test_fetch_posts_accepts_full_100_entry_snapshot():
+    entries = "".join(_entry(post_id=f"t3_p{i}") for i in range(100))
+    resp = _mock_resp(_feed(entries))
+    with patch("urllib.request.urlopen", return_value=resp):
+        result = fetch_posts("new", max_posts=100)
+
+    assert len(result.posts) == 100
+
+
 def test_fetch_posts_invalid_sort_raises_value_error():
     with pytest.raises(ValueError, match="sort"):
         fetch_posts("hot")
@@ -157,6 +178,7 @@ def test_fetch_search_page_uses_search_rss_with_query_and_restrict_sr():
     assert "q=ftp+files" in req.full_url or "q=ftp%20files" in req.full_url
     assert "restrict_sr=1" in req.full_url
     assert "sort=new" in req.full_url
+    assert "limit=100" in req.full_url
 
 
 def test_fetch_search_page_top_includes_t_param():
@@ -186,6 +208,11 @@ def test_fetch_search_posts_accepts_max_pages_but_fetches_one_snapshot():
 def test_fetch_search_posts_empty_query_raises_value_error():
     with pytest.raises(ValueError, match="query"):
         fetch_search_posts("", "new")
+
+
+def test_fetch_posts_rejects_limit_above_rss_snapshot_cap():
+    with pytest.raises(ValueError, match="max_posts"):
+        fetch_posts("new", max_posts=101)
 
 
 def test_fetch_page_429_raises_rate_limit_error():

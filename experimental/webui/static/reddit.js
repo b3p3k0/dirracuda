@@ -173,8 +173,8 @@ function applyPrefs() {
         if (sortEl.options[j].value === saved.sort) { sortEl.selectedIndex = j; break; }
       }
     }
-    if (Number.isInteger(saved.max_posts) && saved.max_posts >= 1 && saved.max_posts <= 200) {
-      document.getElementById('max-posts').value = String(saved.max_posts);
+    if (Number.isInteger(saved.max_posts)) {
+      document.getElementById('max-posts').value = String(Math.max(1, Math.min(100, saved.max_posts)));
     }
     if (saved.bulk_probe !== undefined) {
       document.getElementById('bulk-probe').checked = !!saved.bulk_probe;
@@ -197,7 +197,7 @@ function persistPrefs() {
   window.DirracudaPrefs.writeSection('reddit', {
     mode: document.getElementById('mode').value,
     sort: document.getElementById('sort').value,
-    max_posts: (maxPosts >= 1 && maxPosts <= 200) ? maxPosts : 100,
+    max_posts: (maxPosts >= 1 && maxPosts <= 100) ? maxPosts : 100,
     bulk_probe: document.getElementById('bulk-probe').checked,
     probe_workers: parseInt(document.getElementById('probe-workers').value, 10) || 3
   });
@@ -244,8 +244,8 @@ document.getElementById('reddit-form').addEventListener('submit', async function
     btn.disabled = false;
     return;
   }
-  if (!(maxPosts >= 1 && maxPosts <= 200)) {
-    setStatus('Max posts must be between 1 and 200.', 'status-warn');
+  if (!(maxPosts >= 1 && maxPosts <= 100)) {
+    setStatus('Max posts must be between 1 and 100.', 'status-warn');
     btn.disabled = false;
     return;
   }

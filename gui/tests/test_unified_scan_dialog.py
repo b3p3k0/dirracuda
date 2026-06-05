@@ -19,6 +19,12 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from gui.components.unified_scan_dialog import UnifiedScanDialog
+from gui.components.scan_provider_options import (
+    REDDIT_MAX_REMINDER,
+    SEARXNG_MAX_REMINDER,
+    load_reddit_settings,
+    load_searxng_settings,
+)
 
 
 class _Var:
@@ -97,6 +103,31 @@ def _make_dialog() -> UnifiedScanDialog:
     dlg._persist_dialog_state = lambda: None
     dlg._get_all_selected_countries = lambda _manual: ([], "")
     return dlg
+
+
+def test_provider_maximum_reminders_are_exact():
+    assert SEARXNG_MAX_REMINDER == "Maximum: 1,000 unique results per run."
+    assert REDDIT_MAX_REMINDER == "Maximum: 100 posts per RSS snapshot."
+
+
+def test_provider_saved_caps_are_coerced_to_current_maximums():
+    dlg = _make_dialog()
+
+    class _Settings:
+        values = {
+            "unified_scan_dialog.searxng_max_results": 5000,
+            "unified_scan_dialog.reddit_max_posts": 200,
+        }
+
+        def get_setting(self, key, default=None):
+            return self.values.get(key, default)
+
+    settings = _Settings()
+    load_searxng_settings(dlg, settings)
+    load_reddit_settings(dlg, settings)
+
+    assert dlg.searxng_max_results_var.get() == "1000"
+    assert dlg.reddit_max_posts_var.get() == "100"
 
 
 # ---------------------------------------------------------------------------

@@ -131,8 +131,8 @@ function applyPrefs() {
   if (!window.DirracudaPrefs || !window.DirracudaPrefs.isAvailable()) return;
   var saved = window.DirracudaPrefs.readSection('searxng');
   if (saved.instance_url) document.getElementById('instance-url').value = saved.instance_url;
-  if (Number.isInteger(saved.max_results) && saved.max_results >= 1 && saved.max_results <= 500) {
-    document.getElementById('max-results').value = String(saved.max_results);
+  if (Number.isInteger(saved.max_results)) {
+    document.getElementById('max-results').value = String(Math.max(1, Math.min(1000, saved.max_results)));
   }
   if (saved.bulk_probe !== undefined) {
     document.getElementById('bulk-probe').checked = !!saved.bulk_probe;
@@ -154,7 +154,7 @@ function persistPrefs() {
   var maxResults = parseInt(document.getElementById('max-results').value, 10);
   window.DirracudaPrefs.writeSection('searxng', {
     instance_url: document.getElementById('instance-url').value,
-    max_results: (maxResults >= 1 && maxResults <= 500) ? maxResults : 50,
+    max_results: (maxResults >= 1 && maxResults <= 1000) ? maxResults : 500,
     bulk_probe: document.getElementById('bulk-probe').checked,
     probe_workers: parseInt(document.getElementById('probe-workers').value, 10) || 3
   });
@@ -201,8 +201,8 @@ document.getElementById('searxng-form').addEventListener('submit', async functio
     btn.disabled = false;
     return;
   }
-  if (!(maxResults >= 1 && maxResults <= 500)) {
-    setStatus('Max results must be between 1 and 500.', 'status-warn');
+  if (!(maxResults >= 1 && maxResults <= 1000)) {
+    setStatus('Max results must be between 1 and 1000.', 'status-warn');
     btn.disabled = false;
     return;
   }

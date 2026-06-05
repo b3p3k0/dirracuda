@@ -36,6 +36,7 @@ if "impacket" not in sys.modules:
 from experimental.se_dork.models import PreflightResult
 from gui.components.experimental_features.se_dork_tab import (
     SeDorkTab,
+    _coerce_max_results,
     _resolve_initial_url,
     _resolve_probe_worker_count,
     _DEFAULT_INSTANCE_URL,
@@ -105,7 +106,7 @@ def test_build_uses_updated_labels_and_max_helper_text(monkeypatch):
 
     assert "SearXNG Server:" in texts
     assert "Run Probe on Results" in texts
-    assert "Maximum 500" in texts
+    assert "Maximum 1,000" in texts
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +153,13 @@ def test_resolve_probe_worker_count_clamps_and_falls_back():
     sm.get_setting.return_value = "bad"
     assert _resolve_probe_worker_count(sm) == 3
     assert _resolve_probe_worker_count(None) == 3
+
+
+def test_coerce_max_results_uses_current_default_and_ceiling():
+    assert _coerce_max_results(None) == 500
+    assert _coerce_max_results("bad") == 500
+    assert _coerce_max_results(0) == 1
+    assert _coerce_max_results(5000) == 1000
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +211,7 @@ def test_save_settings_persists_bulk_probe_flag():
     tab._save_settings()
 
     sm.set_setting.assert_any_call(_SETTINGS_KEY_BULK_PROBE_ENABLED, True)
+    sm.set_setting.assert_any_call("se_dork.max_results", "10")
 
 
 # ---------------------------------------------------------------------------

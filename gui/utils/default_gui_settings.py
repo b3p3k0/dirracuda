@@ -134,7 +134,7 @@ DEFAULT_GUI_SETTINGS = {
     'se_dork': {
         'instance_url': 'http://your.searxng.server:port',
         'query': 'site:* intitle:"index of /"',
-        'max_results': 50,
+        'max_results': 500,
         'bulk_probe_enabled': False,
     },
     'reddit_grab': {
@@ -143,7 +143,7 @@ DEFAULT_GUI_SETTINGS = {
         'top_window': 'week',
         'query': '',
         'username': '',
-        'max_posts': 50,
+        'max_posts': 100,
         'parse_body': True,
         'include_nsfw': False,
         'replace_cache': False,

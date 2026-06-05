@@ -365,7 +365,7 @@ class TestStartSearxngScan:
         assert opts.probe_config_path == "/fake/config.json"
         assert opts.probe_worker_count == 4
 
-    def test_max_results_clamped_to_500(self, monkeypatch):
+    def test_max_results_clamped_to_1000(self, monkeypatch):
         dash = _make_dash()
         captured_opts = []
 
@@ -385,7 +385,7 @@ class TestStartSearxngScan:
                 break
 
         assert len(captured_opts) == 1
-        assert captured_opts[0].max_results <= 500
+        assert captured_opts[0].max_results == 1000
 
     def test_concurrent_searxng_launch_is_blocked(self, monkeypatch):
         dash = _make_dash()
@@ -847,7 +847,7 @@ class TestStartRedditScan:
         assert opts.include_nsfw is False
         assert opts.replace_cache is False
 
-    def test_max_posts_clamped_to_200(self, monkeypatch):
+    def test_max_posts_clamped_to_100(self, monkeypatch):
         dash = _make_dash()
         captured = []
 
@@ -864,7 +864,7 @@ class TestStartRedditScan:
                 t.join(timeout=5)
                 break
 
-        assert captured[0].max_posts <= 200
+        assert captured[0].max_posts == 100
 
     def test_probe_config_resolved_from_settings_manager(self, monkeypatch):
         dash = _make_dash()

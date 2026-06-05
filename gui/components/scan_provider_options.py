@@ -8,6 +8,13 @@ from __future__ import annotations
 import tkinter as tk
 from typing import Any, Dict
 
+from experimental.redseek.models import DEFAULT_MAX_POSTS, MAX_POSTS
+from experimental.se_dork.models import DEFAULT_MAX_RESULTS, MAX_RESULTS
+
+
+SEARXNG_MAX_REMINDER = f"Maximum: {MAX_RESULTS:,} unique results per run."
+REDDIT_MAX_REMINDER = f"Maximum: {MAX_POSTS} posts per RSS snapshot."
+
 
 def build_searxng_sub_panel(
     container: tk.Widget,
@@ -36,6 +43,7 @@ def build_searxng_sub_panel(
         theme.apply_to_widget(ent, "entry")
         ent.pack(side=tk.LEFT, padx=(0, 6))
 
+    _add_hint_row(frame, SEARXNG_MAX_REMINDER, theme)
     return frame
 
 
@@ -67,6 +75,7 @@ def build_reddit_sub_panel(
 
     # Max posts
     _add_entry_row(frame, "Max Posts", vars_dict["max_posts"], theme, width=6)
+    _add_hint_row(frame, REDDIT_MAX_REMINDER, theme)
 
     # Query (validated when mode=search)
     _add_entry_row(frame, "Query", vars_dict["query"], theme, width=30)
@@ -143,6 +152,11 @@ def _add_checkbutton_row(
     cb.pack(anchor="w", padx=10, pady=1)
 
 
+def _add_hint_row(parent: tk.Widget, text: str, theme: Any) -> None:
+    hint = theme.create_styled_label(parent, text, "small")
+    hint.pack(anchor="w", padx=10, pady=(0, 2))
+
+
 def _apply_state_recursive(widget: tk.Widget, state: str) -> None:
     """Recursively set *state* on Entry, Checkbutton, and OptionMenu menubuttons."""
     if isinstance(widget, (tk.Entry, tk.Checkbutton)):
@@ -164,7 +178,7 @@ def _apply_state_recursive(widget: tk.Widget, state: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Reddit settings persistence helpers (called from UnifiedScanDialog)
+# Provider settings persistence helpers (called from UnifiedScanDialog)
 # ---------------------------------------------------------------------------
 
 def _coerce_bool(value: Any, default: bool) -> bool:
@@ -181,6 +195,36 @@ def _coerce_bool(value: Any, default: bool) -> bool:
     return default
 
 
+def load_searxng_settings(dialog: Any, sm: Any) -> None:
+    """Load persisted SearXNG options with current cap coercion."""
+    g = sm.get_setting
+    dialog.searxng_instance_url_var.set(
+        str(g("unified_scan_dialog.searxng_instance_url", "") or "")
+    )
+    dialog.searxng_query_var.set(
+        str(g("unified_scan_dialog.searxng_query", "") or "")
+    )
+    dialog.searxng_max_results_var.set(str(validate_searxng_max_results(
+        g("unified_scan_dialog.searxng_max_results", DEFAULT_MAX_RESULTS)
+    )))
+
+
+def persist_searxng_settings(dialog: Any, sm: Any) -> None:
+    """Persist normalized SearXNG options."""
+    sm.set_setting(
+        "unified_scan_dialog.searxng_instance_url",
+        dialog.searxng_instance_url_var.get().strip(),
+    )
+    sm.set_setting(
+        "unified_scan_dialog.searxng_query",
+        dialog.searxng_query_var.get().strip(),
+    )
+    sm.set_setting(
+        "unified_scan_dialog.searxng_max_results",
+        str(validate_searxng_max_results(dialog.searxng_max_results_var.get())),
+    )
+
+
 def load_reddit_settings(dialog: Any, sm: Any) -> None:
     """Load persisted Reddit option vars onto *dialog* from settings manager *sm*."""
     g = sm.get_setting
@@ -188,7 +232,10 @@ def load_reddit_settings(dialog: Any, sm: Any) -> None:
     dialog.reddit_mode_var.set(mode if mode in {"feed", "search"} else "feed")
     dialog.reddit_sort_var.set(str(g("unified_scan_dialog.reddit_sort", "new") or "new"))
     dialog.reddit_top_window_var.set(str(g("unified_scan_dialog.reddit_top_window", "week") or "week"))
-    dialog.reddit_max_posts_var.set(str(g("unified_scan_dialog.reddit_max_posts", "50") or "50"))
+    raw_max = g("unified_scan_dialog.reddit_max_posts", DEFAULT_MAX_POSTS)
+    dialog.reddit_max_posts_var.set(str(_coerce_bounded_int(
+        raw_max, DEFAULT_MAX_POSTS, maximum=MAX_POSTS
+    )))
     dialog.reddit_query_var.set(str(g("unified_scan_dialog.reddit_query", "") or ""))
     dialog.reddit_username_var.set("")
     dialog.reddit_parse_body_var.set(_coerce_bool(g("unified_scan_dialog.reddit_parse_body", True), True))
@@ -200,7 +247,12 @@ def persist_reddit_settings(dialog: Any, sm: Any) -> None:
     sm.set_setting("unified_scan_dialog.reddit_mode", dialog.reddit_mode_var.get().strip())
     sm.set_setting("unified_scan_dialog.reddit_sort", dialog.reddit_sort_var.get().strip())
     sm.set_setting("unified_scan_dialog.reddit_top_window", dialog.reddit_top_window_var.get().strip())
-    sm.set_setting("unified_scan_dialog.reddit_max_posts", dialog.reddit_max_posts_var.get().strip())
+    sm.set_setting(
+        "unified_scan_dialog.reddit_max_posts",
+        str(_coerce_bounded_int(
+            dialog.reddit_max_posts_var.get(), DEFAULT_MAX_POSTS, maximum=MAX_POSTS
+        )),
+    )
     sm.set_setting("unified_scan_dialog.reddit_query", dialog.reddit_query_var.get().strip())
     sm.set_setting("unified_scan_dialog.reddit_parse_body", bool(dialog.reddit_parse_body_var.get()))
     sm.set_setting("unified_scan_dialog.reddit_include_nsfw", bool(dialog.reddit_include_nsfw_var.get()))
@@ -220,10 +272,9 @@ def validate_reddit_scan_options(raw: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("Reddit search mode requires a query.")
     sort = str(raw.get("sort") or "new").strip() or "new"
     top_window = str(raw.get("top_window") or "week").strip() or "week"
-    try:
-        max_posts = max(1, min(200, int(str(raw.get("max_posts") or "50"))))
-    except (ValueError, TypeError):
-        max_posts = 50
+    max_posts = _coerce_bounded_int(
+        raw.get("max_posts"), DEFAULT_MAX_POSTS, maximum=MAX_POSTS
+    )
     parse_body = bool(raw.get("parse_body", True))
     include_nsfw = bool(raw.get("include_nsfw", False))
     return {
@@ -245,8 +296,34 @@ def apply_reddit_form_state(dialog: Any, opts: Dict[str, Any]) -> None:
     _s("reddit_mode_var", mode if mode in {"feed", "search"} else "feed")
     _s("reddit_sort_var", str(opts.get("sort", "new") or "new"))
     _s("reddit_top_window_var", str(opts.get("top_window", "week") or "week"))
-    _s("reddit_max_posts_var", str(opts.get("max_posts", "50") or "50"))
+    _s("reddit_max_posts_var", str(_coerce_bounded_int(
+        opts.get("max_posts"), DEFAULT_MAX_POSTS, maximum=MAX_POSTS
+    )))
     _s("reddit_query_var", str(opts.get("query", "") or ""))
     _s("reddit_username_var", "")
     _s("reddit_parse_body_var", bool(opts.get("parse_body", True)))
     _s("reddit_include_nsfw_var", bool(opts.get("include_nsfw", False)))
+
+
+def apply_searxng_form_state(dialog: Any, opts: Dict[str, Any]) -> None:
+    """Restore SearXNG form state while enforcing the current result ceiling."""
+    _s = lambda attr, val: getattr(dialog, attr, None) and getattr(dialog, attr).set(val)
+    _s("searxng_instance_url_var", str(opts.get("instance_url", "") or ""))
+    _s("searxng_query_var", str(opts.get("query", "") or ""))
+    _s(
+        "searxng_max_results_var",
+        str(validate_searxng_max_results(opts.get("max_results"))),
+    )
+
+
+def validate_searxng_max_results(value: Any) -> int:
+    """Return a bounded SearXNG result cap with the current default fallback."""
+    return _coerce_bounded_int(value, DEFAULT_MAX_RESULTS, maximum=MAX_RESULTS)
+
+
+def _coerce_bounded_int(value: Any, default: int, *, maximum: int) -> int:
+    candidate = default if value is None or str(value).strip() == "" else value
+    try:
+        return max(1, min(maximum, int(str(candidate))))
+    except (TypeError, ValueError):
+        return default

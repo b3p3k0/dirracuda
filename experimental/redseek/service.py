@@ -37,7 +37,7 @@ from experimental.redseek.client import (
     fetch_posts,
     fetch_search_posts,
 )
-from experimental.redseek.models import RedditIngestState, RedditPost
+from experimental.redseek.models import MAX_POSTS, RedditIngestState, RedditPost
 from experimental.redseek.parser import extract_targets
 from experimental.redseek.store import (
     get_ingest_state,
@@ -60,7 +60,7 @@ from experimental.redseek.store import (
 @dataclass
 class IngestOptions:
     sort: str                    # "new" | "top"
-    max_posts: int               # hard loop bound on valid posts visited (1–200)
+    max_posts: int               # hard loop bound on valid posts visited (1–100)
     parse_body: bool
     include_nsfw: bool
     replace_cache: bool
@@ -766,7 +766,7 @@ def run_ingest(options: IngestOptions, db_path: Optional[Path] = None) -> Ingest
     # --- Validation ---
     if options.sort not in {"new", "top"}:
         return _error_result(options, False, error=f"invalid sort: {options.sort!r}")
-    if not (1 <= options.max_posts <= 200):
+    if not (1 <= options.max_posts <= MAX_POSTS):
         return _error_result(options, False, error=f"invalid max_posts: {options.max_posts}")
     if not (1 <= options.max_pages <= 3):
         return _error_result(options, False, error=f"invalid max_pages: {options.max_pages}")
@@ -823,12 +823,14 @@ def run_ingest(options: IngestOptions, db_path: Optional[Path] = None) -> Ingest
                 options.sort,
                 max_pages=options.max_pages,
                 top_window=options.top_window,
+                max_posts=options.max_posts,
             )
         else:
             fetch_result = fetch_posts(
                 options.sort,
                 max_pages=options.max_pages,
                 top_window=options.top_window,
+                max_posts=options.max_posts,
             )
     except RateLimitError:
         return _error_result(options, replace_cache_done, rate_limited=True, error="HTTP 429")

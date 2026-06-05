@@ -68,6 +68,10 @@ Last updated: 2026-06-05
 **Server List action data (2026-06-05):**
 - Command actions must use row-key-backed model data, not positional Treeview values. Display columns can be inserted or reordered, silently turning a hardcoded IP index into another field such as the rendered share count.
 
+**Provider yield limits (2026-06-05):**
+- UI limits and upstream transport limits are different contracts. Reddit accepted a 200-post preference while the RSS request omitted `limit`, yielding only the upstream default 25 entries; live checks established a 100-entry snapshot ceiling.
+- A high result setting is ineffective when a hidden page cap is lower. SearXNG's fetch loop stopped at page 10 even when the configured instance still returned results, so page safety caps and unique-result deduplication must be reviewed together when increasing yield.
+
 Append new lessons after each completed card:
 - What failed or nearly failed.
 - Which guardrail prevented recurrence.

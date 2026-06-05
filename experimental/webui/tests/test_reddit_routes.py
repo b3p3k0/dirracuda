@@ -152,6 +152,17 @@ def test_reddit_run_bad_origin(logged_in_client):
     assert r.status_code == 403
 
 
+def test_reddit_run_rejects_more_than_one_rss_snapshot(logged_in_client):
+    csrf = _csrf_from_dashboard(logged_in_client)
+    r = logged_in_client.post(
+        "/api/reddit/run",
+        headers={"X-CSRF-Token": csrf},
+        json=_run_payload(max_posts=101),
+    )
+    assert r.status_code == 422
+    assert "between 1 and 100" in r.text
+
+
 def test_reddit_run_queues_job(logged_in_client, monkeypatch):
     monkeypatch.setattr(
         "experimental.webui.app.run_ingest",
@@ -337,4 +348,3 @@ def test_reddit_run_replace_cache_true_does_not_call_wipe_all(
     )
 
     assert not wipe_all_called, "wipe_all must not be called in WebUI primary-DB mode"
-

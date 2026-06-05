@@ -620,7 +620,7 @@ def start_searxng_scan(dash, scan_request: dict) -> bool:
         return False
 
     from experimental.se_dork.main_db_sync import sync_run_to_main_db
-    from experimental.se_dork.models import RunOptions, RunResult, RUN_STATUS_ERROR
+    from experimental.se_dork.models import MAX_RESULTS, RunOptions, RunResult, RUN_STATUS_ERROR
     from experimental.se_dork.service import run_dork_search
 
     # Resolve probe config and worker count from settings (mirrors se_dork_tab.py)
@@ -643,7 +643,7 @@ def start_searxng_scan(dash, scan_request: dict) -> bool:
     options = RunOptions(
         instance_url=instance_url,
         query=query,
-        max_results=max(1, min(500, _to_int(scan_request.get("searxng_max_results", 50)))),
+        max_results=max(1, min(MAX_RESULTS, _to_int(scan_request.get("searxng_max_results", 500)))),
         bulk_probe_enabled=bool(scan_request.get("bulk_probe_enabled", False)),
         probe_config_path=probe_config_path,
         probe_worker_count=probe_worker_count,
@@ -831,6 +831,7 @@ def start_reddit_scan(dash, scan_request: dict) -> bool:
             "A Reddit ingest is already running. Please wait for it to complete.")
         return False
 
+    from experimental.redseek.models import DEFAULT_MAX_POSTS, MAX_POSTS
     from experimental.redseek.service import IngestOptions, run_ingest
 
     mode = str(scan_request.get("reddit_mode") or "feed").strip()
@@ -845,7 +846,9 @@ def start_reddit_scan(dash, scan_request: dict) -> bool:
         return False
     sort = str(scan_request.get("reddit_sort") or "new").strip()
     top_window = str(scan_request.get("reddit_top_window") or "week").strip()
-    max_posts = max(1, min(200, _to_int(scan_request.get("reddit_max_posts", 50))))
+    max_posts = max(1, min(MAX_POSTS, _to_int(
+        scan_request.get("reddit_max_posts", DEFAULT_MAX_POSTS)
+    )))
     query = str(scan_request.get("reddit_query") or "").strip()
     username = str(scan_request.get("reddit_username") or "").strip()
     parse_body = bool(scan_request.get("reddit_parse_body", True))

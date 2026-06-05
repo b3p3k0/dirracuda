@@ -16,6 +16,8 @@ INSTANCE_FORMAT_FORBIDDEN = "instance_format_forbidden"
 INSTANCE_NON_JSON = "instance_non_json"
 SEARCH_HTTP_ERROR = "search_http_error"
 SEARCH_PARSE_ERROR = "search_parse_error"
+DEFAULT_MAX_RESULTS = 500
+MAX_RESULTS = 1000
 
 
 @dataclass
@@ -42,7 +44,7 @@ class RunOptions:
 
     instance_url: str
     query: str
-    max_results: int = 50
+    max_results: int = DEFAULT_MAX_RESULTS
     bulk_probe_enabled: bool = False
     probe_config_path: Optional[str] = None
     probe_worker_count: Optional[int] = None

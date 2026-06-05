@@ -28,6 +28,8 @@ from typing import Callable, List, Optional
 
 from experimental.se_dork.client import run_preflight
 from experimental.se_dork.models import (
+    DEFAULT_MAX_RESULTS,
+    MAX_RESULTS,
     RunOptions,
     RunResult,
     RUN_STATUS_DONE,
@@ -41,6 +43,7 @@ from experimental.se_dork.store import (
     init_db,
     insert_result,
     insert_run,
+    normalize_url,
     open_connection,
     update_result_probe,
     update_result_verdict,
@@ -48,7 +51,7 @@ from experimental.se_dork.store import (
     update_run_verified_count,
 )
 
-_HARD_PAGE_CAP = 10
+_HARD_PAGE_CAP = 40
 _FETCH_TIMEOUT = 15
 
 
@@ -69,7 +72,7 @@ def _fetch_results(
     progress_cb: Optional[Callable[[str], None]] = None,
 ) -> List[dict]:
     """
-    Fetch up to max_results raw result dicts from SearXNG.
+    Fetch up to max_results unique result dicts from SearXNG.
 
     Paginates using the ``pageno`` parameter (SearXNG's canonical name).
     Stops when accumulated >= max_results, SearXNG returns an empty results
@@ -79,6 +82,7 @@ def _fetch_results(
     """
     base = base_url.rstrip("/")
     accumulated: List[dict] = []
+    seen_urls: set[str] = set()
 
     for page in range(1, _HARD_PAGE_CAP + 1):
         if progress_cb:
@@ -101,11 +105,23 @@ def _fetch_results(
         if not isinstance(results, list) or not results:
             break
 
-        accumulated.extend(results)
+        added = 0
+        for row in results:
+            if not isinstance(row, dict):
+                continue
+            normalized_url = normalize_url(str(row.get("url") or "").strip())
+            if not normalized_url or normalized_url in seen_urls:
+                continue
+            seen_urls.add(normalized_url)
+            accumulated.append(row)
+            added += 1
+            if len(accumulated) >= max_results:
+                break
         if progress_cb:
             try:
                 progress_cb(
-                    f"Page {page}: received {len(results)} results ({len(accumulated)} total)."
+                    f"Page {page}: received {len(results)} results, "
+                    f"{added} new ({len(accumulated)} unique total)."
                 )
             except Exception:
                 pass
@@ -389,9 +405,9 @@ def run_dork_search(
 
     # 3. Clamp max_results; insert durable run row (COMMIT 1 + clamping fix)
     try:
-        max_results = max(1, min(500, int(options.max_results)))
+        max_results = max(1, min(MAX_RESULTS, int(options.max_results)))
     except (TypeError, ValueError):
-        max_results = 50
+        max_results = DEFAULT_MAX_RESULTS
     clamped_opts = RunOptions(
         instance_url=options.instance_url,
         query=options.query,

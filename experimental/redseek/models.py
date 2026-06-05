@@ -2,6 +2,10 @@ from dataclasses import dataclass
 from typing import Optional
 
 
+DEFAULT_MAX_POSTS = 100
+MAX_POSTS = 100
+
+
 @dataclass
 class RedditPost:
     post_id: str

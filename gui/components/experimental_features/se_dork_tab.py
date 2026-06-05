@@ -15,17 +15,27 @@ import tkinter as tk
 from types import SimpleNamespace
 from typing import Any, Optional
 
+from experimental.se_dork.models import DEFAULT_MAX_RESULTS, MAX_RESULTS
 from gui.utils.style import get_theme
 
 _DEFAULT_INSTANCE_URL = "http://your.searxng.server:port"
 _DEFAULT_QUERY = 'site:* intitle:"index of /"'
-_DEFAULT_MAX_RESULTS = "50"
+_DEFAULT_MAX_RESULTS = str(DEFAULT_MAX_RESULTS)
 _DEFAULT_BULK_PROBE_ENABLED = False
 _DEFAULT_PROBE_WORKERS = 3
 _SETTINGS_KEY_URL = "se_dork.instance_url"
 _SETTINGS_KEY_QUERY = "se_dork.query"
 _SETTINGS_KEY_MAX_RESULTS = "se_dork.max_results"
 _SETTINGS_KEY_BULK_PROBE_ENABLED = "se_dork.bulk_probe_enabled"
+
+
+def _coerce_max_results(value: object) -> int:
+    """Normalize saved/user SearXNG limits to the current supported range."""
+    candidate = _DEFAULT_MAX_RESULTS if value is None or str(value).strip() == "" else value
+    try:
+        return max(1, min(MAX_RESULTS, int(str(candidate))))
+    except (TypeError, ValueError):
+        return int(_DEFAULT_MAX_RESULTS)
 
 
 def _resolve_initial_url(settings_manager: Any, default: str) -> str:
@@ -165,10 +175,12 @@ class SeDorkTab:
         initial_max = _DEFAULT_MAX_RESULTS
         if sm is not None:
             try:
-                initial_max = sm.get_setting(_SETTINGS_KEY_MAX_RESULTS, _DEFAULT_MAX_RESULTS) or _DEFAULT_MAX_RESULTS
+                initial_max = _coerce_max_results(
+                    sm.get_setting(_SETTINGS_KEY_MAX_RESULTS, _DEFAULT_MAX_RESULTS)
+                )
             except Exception:
                 pass
-        self._max_results_var = tk.StringVar(value=initial_max)
+        self._max_results_var = tk.StringVar(value=str(initial_max))
         max_entry = tk.Entry(max_row, textvariable=self._max_results_var, width=8)
         self._theme.apply_to_widget(max_entry, "entry")
         max_entry.pack(side=tk.LEFT, padx=(6, 0))
@@ -204,7 +216,7 @@ class SeDorkTab:
         self._theme.apply_to_widget(max_hint_spacer, "label")
         max_hint_spacer.pack(side=tk.LEFT)
 
-        max_hint_label = tk.Label(max_hint_row, text="Maximum 500", anchor="w")
+        max_hint_label = tk.Label(max_hint_row, text=f"Maximum {MAX_RESULTS:,}", anchor="w")
         self._theme.apply_to_widget(max_hint_label, "label")
         max_hint_label.pack(side=tk.LEFT, padx=(6, 0))
 
@@ -256,7 +268,10 @@ class SeDorkTab:
         try:
             sm.set_setting(_SETTINGS_KEY_URL, self._url_var.get().strip())
             sm.set_setting(_SETTINGS_KEY_QUERY, self._query_var.get().strip())
-            sm.set_setting(_SETTINGS_KEY_MAX_RESULTS, self._max_results_var.get().strip())
+            sm.set_setting(
+                _SETTINGS_KEY_MAX_RESULTS,
+                str(_coerce_max_results(self._max_results_var.get())),
+            )
             sm.set_setting(_SETTINGS_KEY_BULK_PROBE_ENABLED, bool(self._bulk_probe_var.get()))
         except Exception:
             pass
@@ -310,10 +325,7 @@ class SeDorkTab:
             self._status_label.configure(text="Enter instance URL and query first.")
             return
 
-        try:
-            max_results = max(1, min(500, int(self._max_results_var.get().strip() or _DEFAULT_MAX_RESULTS)))
-        except (ValueError, TypeError):
-            max_results = int(_DEFAULT_MAX_RESULTS)
+        max_results = _coerce_max_results(self._max_results_var.get())
 
         self._save_settings()
         self._test_btn.configure(state="disabled")

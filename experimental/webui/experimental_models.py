@@ -7,6 +7,9 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from experimental.redseek.models import DEFAULT_MAX_POSTS, MAX_POSTS
+from experimental.se_dork.models import DEFAULT_MAX_RESULTS, MAX_RESULTS
+
 
 def _validate_http_url(value: str, *, field_name: str) -> str:
     text = str(value or "").strip()
@@ -37,7 +40,7 @@ class SearxngRunRequest(BaseModel):
 
     instance_url: str
     query: str
-    max_results: int = 50
+    max_results: int = DEFAULT_MAX_RESULTS
     bulk_probe_enabled: bool = False
     probe_worker_count: Optional[int] = None
 
@@ -59,8 +62,8 @@ class SearxngRunRequest(BaseModel):
     @field_validator("max_results")
     @classmethod
     def _validate_max_results(cls, value: int) -> int:
-        if value < 1 or value > 500:
-            raise ValueError("max_results must be between 1 and 500")
+        if value < 1 or value > MAX_RESULTS:
+            raise ValueError(f"max_results must be between 1 and {MAX_RESULTS}")
         return value
 
     @field_validator("probe_worker_count")
@@ -96,7 +99,7 @@ class RedditRunRequest(BaseModel):
     mode: str = "feed"
     sort: Literal["new", "top"] = "new"
     top_window: Literal["hour", "day", "week", "month", "year", "all"] = "week"
-    max_posts: int = 100
+    max_posts: int = DEFAULT_MAX_POSTS
     max_pages: int = 3
     parse_body: bool = True
     include_nsfw: bool = False
@@ -109,8 +112,8 @@ class RedditRunRequest(BaseModel):
     @field_validator("max_posts")
     @classmethod
     def _validate_max_posts(cls, value: int) -> int:
-        if value < 1 or value > 200:
-            raise ValueError("max_posts must be between 1 and 200")
+        if value < 1 or value > MAX_POSTS:
+            raise ValueError(f"max_posts must be between 1 and {MAX_POSTS}")
         return value
 
     @field_validator("max_pages")

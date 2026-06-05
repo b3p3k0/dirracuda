@@ -319,19 +319,19 @@ def test_load_settings_max_posts_clamped_below_min():
 
 
 def test_load_settings_max_posts_clamped_above_max():
-    """Stored max_posts=999 is clamped to 200."""
+    """Stored max_posts=999 is clamped to the RSS snapshot maximum."""
     d = _make_dialog()
     d.settings = _make_settings_mock({'reddit_grab.max_posts': 999})
     d._load_settings()
-    d.max_posts_var.set.assert_called_with('200')
+    d.max_posts_var.set.assert_called_with('100')
 
 
 def test_load_settings_max_posts_non_integer_fallback():
-    """Non-integer max_posts falls back to 50."""
+    """Non-integer max_posts falls back to the 100-post default."""
     d = _make_dialog()
     d.settings = _make_settings_mock({'reddit_grab.max_posts': 'abc'})
     d._load_settings()
-    d.max_posts_var.set.assert_called_with('50')
+    d.max_posts_var.set.assert_called_with('100')
 
 
 def test_load_settings_query_coerced_to_string():

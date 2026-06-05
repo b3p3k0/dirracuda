@@ -191,6 +191,18 @@ def test_searxng_run_bad_origin(logged_in_client):
     )
     assert r.status_code == 403
 
+
+def test_searxng_run_rejects_more_than_one_thousand_results(logged_in_client):
+    csrf = _csrf_from_dashboard(logged_in_client)
+    r = logged_in_client.post(
+        "/api/searxng/run",
+        headers={"X-CSRF-Token": csrf},
+        json=_run_payload(max_results=1001),
+    )
+    assert r.status_code == 422
+    assert "between 1 and 1000" in r.text
+
+
 def test_searxng_run_queues_job(logged_in_client, app_and_queue, monkeypatch):
     from experimental.se_dork.models import RunResult, RUN_STATUS_DONE
     calls = []

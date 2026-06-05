@@ -10,7 +10,7 @@ Options:
   sort          "new" | "top"
   top_window    "hour" | "day" | "week" | "month" | "year" | "all"
   query         str (search mode only)
-  max_posts     integer 1–200
+  max_posts     integer 1-100
   parse_body    bool
   include_nsfw  bool
   replace_cache bool
@@ -24,6 +24,7 @@ from gui.utils import safe_messagebox as messagebox
 from typing import Callable
 
 from gui.utils.style import get_theme
+from experimental.redseek.models import DEFAULT_MAX_POSTS, MAX_POSTS
 from experimental.redseek.service import IngestOptions
 
 _log = logging.getLogger("dirracuda_gui.reddit_grab_dialog")
@@ -53,7 +54,7 @@ class RedditGrabDialog:
         self.query_var = tk.StringVar(value="")
         self.sort_var = tk.StringVar(value="new")
         self.top_window_var = tk.StringVar(value="week")
-        self.max_posts_var = tk.StringVar(value="50")
+        self.max_posts_var = tk.StringVar(value=str(DEFAULT_MAX_POSTS))
         self.parse_body_var = tk.BooleanVar(value=True)
         self.include_nsfw_var = tk.BooleanVar(value=False)
         self.replace_cache_var = tk.BooleanVar(value=False)
@@ -245,15 +246,15 @@ class RedditGrabDialog:
         except ValueError:
             messagebox.showerror(
                 "Invalid input",
-                "Max posts must be a whole number between 1 and 200.",
+                f"Max posts must be a whole number between 1 and {MAX_POSTS}.",
                 parent=self.dialog,
             )
             return None
 
-        if not (1 <= max_posts <= 200):
+        if not (1 <= max_posts <= MAX_POSTS):
             messagebox.showerror(
                 "Invalid input",
-                f"Max posts must be between 1 and 200 (got {max_posts}).",
+                f"Max posts must be between 1 and {MAX_POSTS} (got {max_posts}).",
                 parent=self.dialog,
             )
             return None
@@ -325,11 +326,11 @@ class RedditGrabDialog:
 
             self.query_var.set(str(self.settings.get_setting('reddit_grab.query', '')))
 
-            raw_max = self.settings.get_setting('reddit_grab.max_posts', 50)
+            raw_max = self.settings.get_setting('reddit_grab.max_posts', DEFAULT_MAX_POSTS)
             try:
-                max_posts = max(1, min(200, int(raw_max)))
+                max_posts = max(1, min(MAX_POSTS, int(raw_max)))
             except (ValueError, TypeError):
-                max_posts = 50
+                max_posts = DEFAULT_MAX_POSTS
             self.max_posts_var.set(str(max_posts))
 
             self.parse_body_var.set(
@@ -357,9 +358,9 @@ class RedditGrabDialog:
             self.settings.set_setting('reddit_grab.query', self.query_var.get())
             raw = self.max_posts_var.get().strip()
             try:
-                max_posts = max(1, min(200, int(raw)))
+                max_posts = max(1, min(MAX_POSTS, int(raw)))
             except (ValueError, TypeError):
-                max_posts = 50
+                max_posts = DEFAULT_MAX_POSTS
             self.settings.set_setting('reddit_grab.max_posts', max_posts)
             self.settings.set_setting('reddit_grab.parse_body', bool(self.parse_body_var.get()))
             self.settings.set_setting('reddit_grab.include_nsfw', bool(self.include_nsfw_var.get()))

@@ -1110,6 +1110,9 @@ Dashboard -> Accessories tab -> Test (preflight)
 ```
 Dashboard -> Accessories tab -> Run (dork search)
   -> SeDorkTab._invoke_run -> run_dork_search(options) on worker thread
+  -> fetches up to 500 unique URLs by default (1,000 maximum)
+  -> deduplicates normalized URLs while paging; stops at 40 pages,
+     the requested unique-result count, or the first empty page
   -> writes dork_runs + dork_results rows in active primary DB context
   -> sync_run_to_main_db(run_id, db_path=primary_db) upserts retained rows into main HTTP tables
   -> status label shows fetched/stored + sync counts
@@ -1165,7 +1168,7 @@ Reddit modes exposed in `RedditGrabDialog`:
 - `search` — fetches `/r/opendirectories/search.rss` with user query and `restrict_sr=1`
 
 Top windows for `sort=top`: `hour`, `day`, `week`, `month`, `year`, `all`.
-RSS does not expose Reddit's old JSON `after` cursor; `max_pages` is accepted for compatibility, but each run fetches one feed snapshot. User/author mode is unavailable in anonymous RSS mode, while historical `user` rows remain readable from existing databases.
+RSS does not expose Reddit's old JSON `after` cursor; `max_pages` is accepted for compatibility, but each run makes one feed request with `limit=<max_posts>`. `max_posts` defaults to 100 and is bounded to 1–100 because Reddit caps an anonymous snapshot at 100 entries. User/author mode is unavailable in anonymous RSS mode, while historical `user` rows remain readable from existing databases.
 
 Keymaster entry path:
 

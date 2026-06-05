@@ -91,13 +91,13 @@ class UnifiedScanDialog:
         # SearXNG options (active when SearXNG provider is selected)
         self.searxng_instance_url_var = tk.StringVar(value="")
         self.searxng_query_var = tk.StringVar(value="")
-        self.searxng_max_results_var = tk.StringVar(value="50")
+        self.searxng_max_results_var = tk.StringVar(value="500")
 
         # Reddit options (active when Reddit provider is selected; C4)
         self.reddit_mode_var = tk.StringVar(value="feed")
         self.reddit_sort_var = tk.StringVar(value="new")
         self.reddit_top_window_var = tk.StringVar(value="week")
-        self.reddit_max_posts_var = tk.StringVar(value="50")
+        self.reddit_max_posts_var = tk.StringVar(value="100")
         self.reddit_query_var = tk.StringVar(value="")
         self.reddit_username_var = tk.StringVar(value="")
         self.reddit_parse_body_var = tk.BooleanVar(value=True)
@@ -219,16 +219,8 @@ class UnifiedScanDialog:
                 or self.provider_reddit_var.get()
             ):
                 self.provider_shodan_var.set(True)
-            self.searxng_instance_url_var.set(
-                str(self._settings_manager.get_setting("unified_scan_dialog.searxng_instance_url", "") or "")
-            )
-            self.searxng_query_var.set(
-                str(self._settings_manager.get_setting("unified_scan_dialog.searxng_query", "") or "")
-            )
-            self.searxng_max_results_var.set(
-                str(self._settings_manager.get_setting("unified_scan_dialog.searxng_max_results", "50") or "50")
-            )
-            from gui.components.scan_provider_options import load_reddit_settings
+            from gui.components.scan_provider_options import load_reddit_settings, load_searxng_settings
+            load_searxng_settings(self, self._settings_manager)
             load_reddit_settings(self, self._settings_manager)
             self.country_var.set(str(self._settings_manager.get_setting("unified_scan_dialog.country_code", "")))
 
@@ -315,10 +307,8 @@ class UnifiedScanDialog:
             self._settings_manager.set_setting("unified_scan_dialog.provider_shodan", bool(self.provider_shodan_var.get()))
             self._settings_manager.set_setting("unified_scan_dialog.provider_searxng", bool(self.provider_searxng_var.get()))
             self._settings_manager.set_setting("unified_scan_dialog.provider_reddit", bool(self.provider_reddit_var.get()))
-            self._settings_manager.set_setting("unified_scan_dialog.searxng_instance_url", self.searxng_instance_url_var.get().strip())
-            self._settings_manager.set_setting("unified_scan_dialog.searxng_query", self.searxng_query_var.get().strip())
-            self._settings_manager.set_setting("unified_scan_dialog.searxng_max_results", self.searxng_max_results_var.get().strip())
-            from gui.components.scan_provider_options import persist_reddit_settings
+            from gui.components.scan_provider_options import persist_reddit_settings, persist_searxng_settings
+            persist_searxng_settings(self, self._settings_manager)
             persist_reddit_settings(self, self._settings_manager)
 
             shared_concurrency = _coerce_int(self.shared_concurrency_var.get(), 1, _CONCURRENCY_UPPER)
@@ -669,11 +659,8 @@ class UnifiedScanDialog:
         self.provider_searxng_var.set(bool(providers_state.get("searxng", False)))
         self.provider_reddit_var.set(bool(providers_state.get("reddit", False)))
 
-        searxng_opts = state.get("searxng_options", {})
-        for _a, _k in (("searxng_instance_url_var", "instance_url"), ("searxng_query_var", "query"), ("searxng_max_results_var", "max_results")):
-            _v = getattr(self, _a, None)
-            if _v and _k in searxng_opts: _v.set(str(searxng_opts[_k]))
-        from gui.components.scan_provider_options import apply_reddit_form_state
+        from gui.components.scan_provider_options import apply_reddit_form_state, apply_searxng_form_state
+        apply_searxng_form_state(self, state.get("searxng_options") or {})
         apply_reddit_form_state(self, state.get("reddit_options") or {})
 
         protocols = state.get("protocols", {})
@@ -1528,7 +1515,7 @@ class UnifiedScanDialog:
         # SearXNG options required when SearXNG is selected
         instance_url = ""
         searxng_query = ""
-        searxng_max_results = 50
+        searxng_max_results = 500
         if "searxng" in providers:
             _url_var = getattr(self, "searxng_instance_url_var", None)
             instance_url = str(_url_var.get() if _url_var else "").strip()
@@ -1538,10 +1525,9 @@ class UnifiedScanDialog:
             searxng_query = str(_q_var.get() if _q_var else "").strip()
             if not searxng_query:
                 raise ValueError("SearXNG search query is required when SearXNG is selected.")
+            from gui.components.scan_provider_options import validate_searxng_max_results
             _mr_var = getattr(self, "searxng_max_results_var", None)
-            searxng_max_results = max(1, _cap_coerce_int(
-                _mr_var.get() if _mr_var else "50", 50, minimum=1, maximum=500
-            ))
+            searxng_max_results = validate_searxng_max_results(_mr_var.get() if _mr_var else "500")
 
         reddit_opts: Dict[str, Any] = {}
         if "reddit" in providers:

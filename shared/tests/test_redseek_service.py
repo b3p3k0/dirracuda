@@ -189,7 +189,12 @@ def test_new_max_posts_cap(tmp_path):
         result = run_ingest(_make_opts(sort="new", max_posts=1), db_path=db)
 
     assert result.stopped_by_max_posts is True
-    assert result.posts_stored == 1
+
+
+def test_max_posts_above_rss_snapshot_cap_returns_error(tmp_path):
+    result = run_ingest(_make_opts(sort="new", max_posts=101), db_path=tmp_path / "reddit.db")
+    assert result.error == "invalid max_posts: 101"
+    assert result.posts_stored == 0
 
 
 def test_new_nsfw_filtered_cursor_advances(tmp_path):

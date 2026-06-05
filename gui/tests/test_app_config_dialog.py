@@ -571,6 +571,7 @@ def test_default_gui_settings_include_experimental_sections():
     assert "se_dork" in DEFAULT_GUI_SETTINGS
     assert "keymaster" in DEFAULT_GUI_SETTINGS
     assert "dorkbook" in DEFAULT_GUI_SETTINGS
-    assert DEFAULT_GUI_SETTINGS["se_dork"]["max_results"] == 50
+    assert DEFAULT_GUI_SETTINGS["se_dork"]["max_results"] == 500
+    assert DEFAULT_GUI_SETTINGS["reddit_grab"]["max_posts"] == 100
     assert DEFAULT_GUI_SETTINGS["keymaster"]["auto_check_query_credits"] is True
     assert DEFAULT_GUI_SETTINGS["dorkbook"]["active_protocol_tab"] == "SMB"
