@@ -6,6 +6,7 @@ This includes backend paths plus runtime settings that should propagate
 to scan, browse, and extract workflows.
 """
 
+import copy
 import json
 import os
 import re
@@ -35,6 +36,7 @@ from shared.db_path_resolution import (
     normalize_database_path,
     resolve_database_path,
 )
+from shared.config import load_config as load_main_config
 from shared.path_service import (
     get_legacy_paths,
     get_paths,
@@ -74,6 +76,17 @@ _DEFAULT_EXTRACTED_ROOT = select_existing_path(
     ],
 )
 _DEFAULT_TMPFS_QUARANTINE_PATH = _PATHS.tmpfs_quarantine_dir
+_APP_CONFIG_RUNTIME_SECTIONS = (
+    "shodan",
+    "database",
+    "file_collection",
+    "file_browser",
+    "ftp_browser",
+    "http_browser",
+    "quarantine",
+    "clamav",
+    "gui_app",
+)
 
 
 def _coerce_bool_cfg(value: Any, default: bool) -> bool:
@@ -119,6 +132,10 @@ def _set_nested(data: Dict[str, Any], path: tuple[str, ...], value: Any) -> None
             current[key] = next_value
         current = next_value
     current[path[-1]] = value
+
+
+def _is_canonical_runtime_config_path(path: Path) -> bool:
+    return path.expanduser().resolve(strict=False) == _PATHS.config_file.resolve(strict=False)
 
 
 class AppConfigDialog:
@@ -1307,7 +1324,8 @@ class AppConfigDialog:
                 # Keeps on-demand extract defaults aligned with shared quarantine.
                 self.settings_manager.set_setting("extract.last_directory", new_quarantine)
 
-            # Persist runtime config fields in the active config.json.
+            # Resolve the active config target after the main config manager has
+            # applied canonical-path policy.
             if self.main_config and hasattr(self.main_config, "set_config_path"):
                 self.main_config.set_config_path(new_config_path)
                 self.main_config.set_smbseek_path(new_smbseek)
@@ -1316,47 +1334,48 @@ class AppConfigDialog:
                     path_obj = Path(self.main_config.get_config_path()).expanduser()
                 else:
                     path_obj = Path(new_config_path).expanduser()
+            else:
+                path_obj = Path(new_config_path).expanduser()
+
+            owner_config = None
+            if _is_canonical_runtime_config_path(path_obj):
+                owner_config = load_main_config()
+                config_data = copy.deepcopy(owner_config.config)
+            else:
                 config_data = self._load_runtime_config_json(
                     str(path_obj),
                     fallback_from=old_config_path,
                 )
-                gui_app = _ensure_dict(config_data.get("gui_app"))
-                gui_app["backend_path"] = new_smbseek
-                gui_app.pop("smbseek_path", None)
-                gui_app["database_path"] = normalized_database_str
-                config_data["gui_app"] = gui_app
-                _set_nested(config_data, ("database", "path"), normalized_database_str)
-                self._apply_runtime_settings(
-                    config_data,
-                    new_api_key,
-                    new_quarantine,
-                    clamav_settings=new_clamav,
-                    quarantine_tmpfs_settings=new_quarantine_tmpfs,
-                )
-                path_obj.parent.mkdir(parents=True, exist_ok=True)
-                path_obj.write_text(json.dumps(config_data, indent=2), encoding="utf-8")
-                self.main_config.config = config_data
+
+            gui_app = _ensure_dict(config_data.get("gui_app"))
+            gui_app["backend_path"] = new_smbseek
+            gui_app.pop("smbseek_path", None)
+            gui_app["database_path"] = normalized_database_str
+            config_data["gui_app"] = gui_app
+            _set_nested(config_data, ("database", "path"), normalized_database_str)
+            self._apply_runtime_settings(
+                config_data,
+                new_api_key,
+                new_quarantine,
+                clamav_settings=new_clamav,
+                quarantine_tmpfs_settings=new_quarantine_tmpfs,
+            )
+
+            if owner_config is not None:
+                updates = {
+                    section: copy.deepcopy(config_data[section])
+                    for section in _APP_CONFIG_RUNTIME_SECTIONS
+                    if section in config_data
+                }
+                if not owner_config.update_sections(updates):
+                    raise RuntimeError("Failed to persist modular runtime config sections")
+                config_data = copy.deepcopy(owner_config.config)
             else:
-                config_data = self._load_runtime_config_json(
-                    new_config_path,
-                    fallback_from=old_config_path,
-                )
-                gui_app = _ensure_dict(config_data.get("gui_app"))
-                gui_app["backend_path"] = new_smbseek
-                gui_app.pop("smbseek_path", None)
-                gui_app["database_path"] = normalized_database_str
-                config_data["gui_app"] = gui_app
-                _set_nested(config_data, ("database", "path"), normalized_database_str)
-                self._apply_runtime_settings(
-                    config_data,
-                    new_api_key,
-                    new_quarantine,
-                    clamav_settings=new_clamav,
-                    quarantine_tmpfs_settings=new_quarantine_tmpfs,
-                )
-                path_obj = Path(new_config_path).expanduser()
                 path_obj.parent.mkdir(parents=True, exist_ok=True)
                 path_obj.write_text(json.dumps(config_data, indent=2), encoding="utf-8")
+
+            if self.main_config is not None:
+                self.main_config.config = config_data
 
             self.smbseek_path = new_smbseek
             self.database_path = normalized_database_str

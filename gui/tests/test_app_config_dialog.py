@@ -13,6 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from gui.components.app_config_dialog import AppConfigDialog, open_app_config_dialog
 from gui.utils.default_gui_settings import DEFAULT_GUI_SETTINGS
+from shared.config_store import ConfigStore
+from shared.path_service import get_legacy_paths, get_paths
 
 
 class _Var:
@@ -328,6 +330,121 @@ def test_validate_and_save_persists_clamav_toggle_with_real_main_config(tmp_path
     persisted = json.loads(cfg_path.read_text(encoding="utf-8"))
     assert persisted["clamav"]["enabled"] is False
     assert dlg.main_config.config["clamav"]["enabled"] is False
+
+
+def test_validate_and_save_persists_tmpfs_toggle_to_canonical_storage_shard(
+    tmp_path,
+    monkeypatch,
+):
+    repo_root = tmp_path / "repo"
+    home_root = tmp_path / ".dirracuda"
+    db_path = home_root / "data" / "dirracuda.db"
+    config_example = repo_root / "conf" / "config.json.example"
+    config_example.parent.mkdir(parents=True)
+    config_example.write_text(
+        json.dumps(
+            {
+                "shodan": {"api_key": "OLD"},
+                "database": {"path": str(db_path)},
+                "file_collection": {"quarantine_base": "/disk/quarantine"},
+                "file_browser": {
+                    "quarantine_root": "/disk/quarantine",
+                    "preserve_me": "browser-setting",
+                },
+                "ftp_browser": {"quarantine_base": "/disk/quarantine"},
+                "http_browser": {"quarantine_base": "/disk/quarantine"},
+                "quarantine": {
+                    "use_tmpfs": False,
+                    "tmpfs_size_mb": 512,
+                    "preserve_me": "quarantine-setting",
+                },
+                "clamav": {"enabled": False, "backend": "auto"},
+                "gui_app": {
+                    "backend_path": str(repo_root),
+                    "database_path": str(db_path),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    paths = get_paths(home_root=home_root, repo_root=repo_root)
+    store = ConfigStore(paths=paths, legacy=get_legacy_paths(paths=paths))
+    store.ensure_migrated()
+
+    class _OwnerConfig:
+        def __init__(self):
+            self.config, _warning = store.load_runtime_config()
+
+        def update_sections(self, updates):
+            store.update_sections(updates)
+            self.config, _warning = store.load_runtime_config()
+            return True
+
+    class _CanonicalMainConfig:
+        def __init__(self):
+            self.config, _warning = store.load_runtime_config()
+
+        def set_config_path(self, _value):
+            return None
+
+        def set_smbseek_path(self, _value):
+            return None
+
+        def set_database_path(self, _value):
+            return None
+
+        def get_config_path(self):
+            return paths.config_file
+
+    monkeypatch.setattr("gui.components.app_config_dialog._PATHS", paths)
+    monkeypatch.setattr(
+        "gui.components.app_config_dialog.load_main_config",
+        _OwnerConfig,
+    )
+    monkeypatch.setattr(
+        "gui.components.app_config_dialog.messagebox.showwarning",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "gui.components.app_config_dialog.messagebox.showerror",
+        lambda *_args, **_kwargs: None,
+    )
+
+    dlg = _build_dialog(_base_validation())
+    dlg.main_config = _CanonicalMainConfig()
+    dlg.smbseek_var = _Var(str(repo_root))
+    dlg.database_var = _Var(str(db_path))
+    dlg.config_var = _Var(str(paths.config_file))
+    dlg.quarantine_var = _Var("/disk/quarantine")
+    dlg.quarantine_tmpfs_enabled = False
+    dlg.quarantine_tmpfs_size_mb = 512
+    dlg._tmpfs_supported_platform = True
+    _set_clamav_form_vars(dlg, enabled=False)
+    dlg.quarantine_tmpfs_enabled_var = _BoolVar(True)
+
+    assert dlg._validate_and_save() is True
+
+    storage_path = store.conf_d_dir / "core" / "storage.json"
+    storage = json.loads(storage_path.read_text(encoding="utf-8"))
+    compatibility = json.loads(paths.config_file.read_text(encoding="utf-8"))
+    composed, _warning = store.load_runtime_config()
+    assert storage["quarantine"]["use_tmpfs"] is True
+    assert compatibility["quarantine"]["use_tmpfs"] is True
+    assert composed["quarantine"]["use_tmpfs"] is True
+    assert storage["quarantine"]["tmpfs_size_mb"] == 512
+    assert storage["quarantine"]["preserve_me"] == "quarantine-setting"
+    assert storage["file_browser"]["preserve_me"] == "browser-setting"
+
+    dlg.quarantine_tmpfs_enabled_var = _BoolVar(False)
+    assert dlg._validate_and_save() is True
+
+    storage = json.loads(storage_path.read_text(encoding="utf-8"))
+    compatibility = json.loads(paths.config_file.read_text(encoding="utf-8"))
+    composed, _warning = store.load_runtime_config()
+    assert storage["quarantine"]["use_tmpfs"] is False
+    assert compatibility["quarantine"]["use_tmpfs"] is False
+    assert composed["quarantine"]["use_tmpfs"] is False
 
 
 def test_open_app_config_dialog_failure_uses_parent(monkeypatch):

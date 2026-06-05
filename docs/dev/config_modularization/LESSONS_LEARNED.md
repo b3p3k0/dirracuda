@@ -8,3 +8,4 @@
 6. For runtime safety, modular migration should fail soft: emit a warning, keep session alive, and provide concrete recovery/report paths.
 7. Treat GUI prefs and experimental module prefs separately (`prefs/user-prefs.json` + module shards) so non-module UI state stays isolated.
 8. Update docs and tests in the same card as config-path changes; stale path assumptions are the most common regression source.
+9. Canonical App Config writes must update authoritative `conf.d` section owners; writing only the materialized `conf/config.json` compatibility file is transient and will be overwritten on the next composed-config load.
