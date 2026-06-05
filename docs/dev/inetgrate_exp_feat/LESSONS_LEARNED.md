@@ -72,6 +72,11 @@ Last updated: 2026-06-05
 - UI limits and upstream transport limits are different contracts. Reddit accepted a 200-post preference while the RSS request omitted `limit`, yielding only the upstream default 25 entries; live checks established a 100-entry snapshot ceiling.
 - A high result setting is ineffective when a hidden page cap is lower. SearXNG's fetch loop stopped at page 10 even when the configured instance still returned results, so page safety caps and unique-result deduplication must be reviewed together when increasing yield.
 
+**Unified provider serialization (2026-06-05):**
+- WAL permits readers alongside a writer but does not permit multiple simultaneous SQLite writers. Launching Shodan, SearXNG, and Reddit together after primary-DB cutover created deterministic lock contention.
+- Serialize provider workflows above their existing internal queues and advance only after persistence plus sync complete. Generation tokens prevent duplicate or cancelled callbacks from restarting pending work.
+- Keep provider order registry-driven with numeric priorities so adding a future provider does not require rewriting a fixed three-provider sequence.
+
 Append new lessons after each completed card:
 - What failed or nearly failed.
 - Which guardrail prevented recurrence.

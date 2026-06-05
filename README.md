@@ -111,7 +111,7 @@ You're connecting to machines you don't control. A few baseline precautions befo
 
 The main window. From here you can:
 
-- Launch discovery from one **▶ Start Scan** button - pick one protocol or queue multiple protocols in sequence from the same dialog
+- Launch discovery from one **▶ Start Scan** button - selected providers run one at a time (`Reddit` → `SearXNG` → `Shodan`), and Shodan queues selected SMB/FTP/HTTP protocols in sequence
 - Access [Accessories](#accessories) 
 - Open the Server List Browser to work with hosts you've found
 - Manage your database (import, export, merge, maintenance)
@@ -379,7 +379,7 @@ Inputs (persisted across opens/restarts):
 
 What each action does:
 - **Test** checks server reachability and JSON search support.
-- **Run** executes the query, keeps only confirmed open-index results, and updates status with fetched/stored counts. Fetching deduplicates normalized URLs while paging and stops at the requested unique-result count, 40 pages, or the first empty page. The 1,000-result setting is a ceiling, not a guarantee, because upstream engines may exhaust results earlier. If probe is enabled, the status line also shows probe totals (`✔/✖/○`). On completion, retained SearXNG rows are written in the active primary DB context and auto-synced into main HTTP server surfaces. A result popup shows the immediate outcome, while Live Scan Output keeps a Shodan-style rollup with fetched/verified/retained, probe, sync, and database totals. In mixed SearXNG+Shodan runs the popup is suppressed to avoid interrupting the active Shodan queue; the live-output rollup still records completion.
+- **Run** executes the query, keeps only confirmed open-index results, and updates status with fetched/stored counts. Fetching deduplicates normalized URLs while paging and stops at the requested unique-result count, 40 pages, or the first empty page. The 1,000-result setting is a ceiling, not a guarantee, because upstream engines may exhaust results earlier. If probe is enabled, the status line also shows probe totals (`✔/✖/○`). On completion, retained SearXNG rows are written in the active primary DB context and auto-synced into main HTTP server surfaces. A standalone run shows a result popup, while Live Scan Output always keeps a Shodan-style rollup with fetched/verified/retained, probe, sync, and database totals. In a multi-provider Start Scan run, the popup is suppressed while the serial provider queue continues.
 - **Open Results DB** opens the SearXNG browser against the active primary DB context for new runs. Historical sidecar data is still available from the legacy sidecar browser path.
 
 ![searxng db](img/searxng_db.png)
@@ -428,9 +428,11 @@ User/author mode is unavailable in anonymous RSS mode. Historical rows from olde
 Reddit Grab options:
 - **Run probe on results** — optional explicit probe pass for concrete HTTP/HTTPS/FTP targets found during that ingest run. Unknown-protocol rows are skipped with a clear notice instead of guessing a protocol. Probe summaries and snapshots are carried into the primary DB automatically.
 
-Successful Reddit runs keep the existing result popup and also append a Shodan-style
-completion rollup to Live Scan Output. The console copy records posts, discovered/new
-targets, optional probe and sync totals, and the active primary database path.
+Successful standalone Reddit runs keep the existing result popup and also append a
+Shodan-style completion rollup to Live Scan Output. Multi-provider Start Scan runs
+suppress the popup while the serial queue continues. The console copy records posts,
+discovered/new targets, optional probe and sync totals, and the active primary database
+path.
 
 ![reddit db](img/reddit_db.png)
 

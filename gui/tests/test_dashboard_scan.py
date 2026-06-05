@@ -264,6 +264,49 @@ class TestStartUnifiedScanRouting:
         assert reddit_calls == [True]
 
 
+def test_searxng_managed_completion_advances_after_rollup(monkeypatch):
+    dash = _make_dash()
+    events = []
+    dash._handle_scan_log_line = lambda _line: events.append("rollup")
+    monkeypatch.setattr(
+        "gui.components.dashboard_provider_queue.complete_provider",
+        lambda *_args, **_kwargs: events.append("complete") or True,
+    )
+
+    ds._on_searxng_scan_done(
+        dash,
+        _make_result(),
+        query="index of",
+        searxng_only=False,
+        queue_managed=True,
+        provider_generation=4,
+        db_path=Path("/tmp/dirracuda.db"),
+    )
+
+    assert events == ["rollup", "complete"]
+
+
+def test_reddit_managed_completion_advances_after_rollup(monkeypatch):
+    dash = _make_dash()
+    events = []
+    dash._handle_scan_log_line = lambda _line: events.append("rollup")
+    monkeypatch.setattr(
+        "gui.components.dashboard_provider_queue.complete_provider",
+        lambda *_args, **_kwargs: events.append("complete") or True,
+    )
+
+    ds._on_reddit_scan_done(
+        dash,
+        _make_reddit_result(),
+        reddit_only=False,
+        queue_managed=True,
+        provider_generation=5,
+        db_path=Path("/tmp/dirracuda.db"),
+    )
+
+    assert events == ["rollup", "complete"]
+
+
 # ---------------------------------------------------------------------------
 # B — start_searxng_scan validation and RunOptions construction
 # ---------------------------------------------------------------------------
@@ -458,6 +501,28 @@ class TestStartSearxngScan:
         assert "reset_log" in hook_calls
         assert "set_task_running" in hook_calls
         assert "log_status" in hook_calls
+
+    def test_managed_launch_does_not_reset_shared_live_output(self, monkeypatch):
+        dash = _make_dash()
+        reset_calls = []
+        dash._reset_log_output = lambda country: reset_calls.append(country)
+
+        class _NoOpThread:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def start(self):
+                pass
+
+        monkeypatch.setattr("gui.components.dashboard_scan.threading.Thread", _NoOpThread)
+        assert ds.start_searxng_scan(
+            dash,
+            _searxng_request(
+                _provider_queue_managed=True,
+                _provider_queue_generation=1,
+            ),
+        )
+        assert reset_calls == []
 
 
 # ---------------------------------------------------------------------------
@@ -889,6 +954,28 @@ class TestStartRedditScan:
 
         assert captured[0].probe_config_path == "/cfg/probe.json"
         assert captured[0].probe_worker_count == 5
+
+    def test_managed_launch_does_not_reset_shared_live_output(self, monkeypatch):
+        dash = _make_dash()
+        reset_calls = []
+        dash._reset_log_output = lambda country: reset_calls.append(country)
+
+        class _NoOpThread:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def start(self):
+                pass
+
+        monkeypatch.setattr("gui.components.dashboard_scan.threading.Thread", _NoOpThread)
+        assert ds.start_reddit_scan(
+            dash,
+            _reddit_request(
+                _provider_queue_managed=True,
+                _provider_queue_generation=1,
+            ),
+        )
+        assert reset_calls == []
 
 
 # ---------------------------------------------------------------------------

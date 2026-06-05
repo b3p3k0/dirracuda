@@ -319,6 +319,12 @@ class SeDorkTab:
 
     def _invoke_run(self) -> None:
         """Kick off a threaded dork search run."""
+        queue_active_getter = self._context.get("provider_queue_active_getter")
+        if callable(queue_active_getter) and queue_active_getter():
+            self._status_label.configure(
+                text="A unified provider queue is running. Wait for it to complete."
+            )
+            return
         url = self._url_var.get().strip()
         query = self._query_var.get().strip()
         if not url or not query:

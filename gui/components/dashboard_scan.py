@@ -24,6 +24,10 @@ from gui.components.dashboard_scan_rollup import (
     format_reddit_rollup,
     format_searxng_rollup,
 )
+from gui.components.dashboard_provider_queue import (
+    is_current_provider,
+    report_launch_error,
+)
 from gui.utils import safe_messagebox as _fallback_msgbox
 from gui.utils.logging_config import get_logger
 
@@ -189,28 +193,15 @@ def clear_queued_scan_state(dash) -> None:
 
 
 def start_unified_scan(dash, scan_request: dict) -> None:
-    """
-    Start scans from unified dialog request.
+    """Start a serial provider queue from one unified dialog request."""
+    from gui.components.dashboard_provider_queue import start_provider_queue
 
-    If multiple protocols are selected, scans execute sequentially.
-    SearXNG runs independently of the Shodan protocol queue.
-    """
-    providers = [
-        str(p).strip().lower()
-        for p in (scan_request.get("providers") or ["shodan"])
-    ]
+    start_provider_queue(dash, scan_request)
 
-    # SearXNG dispatch — independent background run, does not block Shodan queue
-    if "searxng" in providers:
-        start_searxng_scan(dash, scan_request)
 
-    # Reddit dispatch — independent background run, does not block Shodan queue
-    if "reddit" in providers:
-        start_reddit_scan(dash, scan_request)
-
-    # Shodan protocol queue — existing sequential queue logic
-    if "shodan" not in providers:
-        return
+def start_shodan_provider(dash, scan_request: dict) -> bool:
+    """Launch Shodan as one provider containing its protocol sub-queue."""
+    queue_managed = bool(scan_request.get("_provider_queue_managed", False))
 
     protocols = [
         str(p).strip().lower()
@@ -218,21 +209,22 @@ def start_unified_scan(dash, scan_request: dict) -> None:
         if str(p).strip().lower() in {"smb", "ftp", "http"}
     ]
     if not protocols:
-        _mb().showerror(
-            "Scan Error",
-            "No protocols selected. Please select at least one protocol."
-        )
-        return
+        if not queue_managed:
+            _mb().showerror(
+                "Scan Error",
+                "No protocols selected. Please select at least one protocol.",
+            )
+        return False
 
-    # Single protocol: run directly (no queue wrapper).
-    if len(protocols) == 1:
+    # Standalone callers retain the direct single-protocol path.
+    if len(protocols) == 1 and not queue_managed:
         dash._clear_queued_scan_state()
         protocol = protocols[0]
         options = dash._build_protocol_scan_options(protocol, scan_request)
-        dash._start_protocol_scan(protocol, options)
-        return
+        return bool(dash._start_protocol_scan(protocol, options))
 
-    # Multi-protocol queue.
+    # Provider-managed Shodan always uses the sub-queue, including one protocol,
+    # so completion can return to the provider scheduler through one path.
     dash._queued_scan_active = True
     dash._queued_scan_protocols = list(protocols)
     dash._queued_scan_common_options = dict(scan_request)
@@ -242,7 +234,7 @@ def start_unified_scan(dash, scan_request: dict) -> None:
     dash._queued_scan_results = []
     dash._queued_scan_batch_rows = {"probe": [], "extract": []}
     _call_dashboard_hook(dash, "_set_scan_task_queued", protocols, scan_request.get("country"))
-    dash._launch_next_queued_scan()
+    return bool(dash._launch_next_queued_scan())
 
 
 def build_protocol_scan_options(protocol: str, common_options: Dict[str, Any]) -> Dict[str, Any]:
@@ -395,10 +387,27 @@ def abort_queued_scan_on_failure(
     """Abort remaining queued protocol scans after a failure."""
     remaining = [p.upper() for p in dash._queued_scan_protocols if p]
     skipped_text = ", ".join(remaining) if remaining else "None"
+    common = dict(getattr(dash, "_queued_scan_common_options", {}) or {})
+    provider_managed = bool(common.get("_provider_queue_managed", False))
+    provider_generation = _to_int(common.get("_provider_queue_generation"))
 
     dash._queued_scan_failures.append({"protocol": protocol, "reason": reason})
     dash._clear_queued_scan_state()
     _call_dashboard_hook(dash, "_clear_scan_task")
+    if provider_managed:
+        from gui.components.dashboard_provider_queue import complete_provider
+
+        complete_provider(
+            dash,
+            "shodan",
+            provider_generation,
+            success=False,
+            error=(
+                f"{protocol.upper()} scan failed: {reason}. "
+                f"Skipped Shodan protocols: {skipped_text}"
+            ),
+        )
+        return
     _mb().showwarning(
         title,
         f"{protocol.upper()} scan failed. Remaining queued scans were not started.\n\n"
@@ -407,10 +416,10 @@ def abort_queued_scan_on_failure(
     )
 
 
-def launch_next_queued_scan(dash) -> None:
+def launch_next_queued_scan(dash) -> bool:
     """Start the next protocol in queue, if any remain."""
     if not dash._queued_scan_active:
-        return
+        return False
 
     if not dash._queued_scan_protocols:
         if dash._queued_scan_failures:
@@ -424,7 +433,7 @@ def launch_next_queued_scan(dash) -> None:
             )
         dash._clear_queued_scan_state()
         _call_dashboard_hook(dash, "_clear_scan_task")
-        return
+        return True
 
     protocol = dash._queued_scan_protocols.pop(0)
     dash._queued_scan_current_protocol = protocol
@@ -438,7 +447,8 @@ def launch_next_queued_scan(dash) -> None:
             "failed to start",
             title="Protocol Start Failed",
         )
-        return
+        return False
+    return True
 
 
 def handle_queued_scan_completion(dash, results: Dict[str, Any]) -> None:
@@ -451,10 +461,19 @@ def handle_queued_scan_completion(dash, results: Dict[str, Any]) -> None:
     success = bool(results.get("success", False))
     error = str(results.get("error", "") or "").strip()
 
-    # User cancellation stops the queue.
+    common = dict(getattr(dash, "_queued_scan_common_options", {}) or {})
+    provider_managed = bool(common.get("_provider_queue_managed", False))
+    provider_generation = _to_int(common.get("_provider_queue_generation"))
+
+    # User cancellation stops both the Shodan sub-queue and provider queue.
     if status == "cancelled":
         dash._clear_queued_scan_state()
         _call_dashboard_hook(dash, "_clear_scan_task")
+        if provider_managed:
+            from gui.components.dashboard_provider_queue import cancel_provider_queue
+
+            cancel_provider_queue(dash, notify=False)
+            return
         _mb().showinfo(
             "Queued Scans Cancelled",
             "Scan queue cancelled by user. Remaining protocols were not started.",
@@ -492,23 +511,43 @@ def handle_queued_scan_completion(dash, results: Dict[str, Any]) -> None:
         except tk.TclError:
             pass
     else:
-        # Queue complete: show combined summaries + combined scan results.
+        # Queue complete: build the Shodan summary and either defer it to the
+        # provider queue or show it immediately for standalone protocol queues.
         combined_probe = list((dash._queued_scan_batch_rows or {}).get("probe", []))
         combined_extract = list((dash._queued_scan_batch_rows or {}).get("extract", []))
+        queued_results = list(getattr(dash, "_queued_scan_results", []))
+        combined_results = (
+            dict(queued_results[0])
+            if len(queued_results) == 1
+            else _merge_queued_scan_results(queued_results)
+        )
+        dash._clear_queued_scan_state()
+        _call_dashboard_hook(dash, "_clear_scan_task")
+        if provider_managed:
+            from gui.components.dashboard_provider_queue import complete_provider
+
+            complete_provider(
+                dash,
+                "shodan",
+                provider_generation,
+                success=True,
+                result_payload=combined_results,
+                batch_payload={
+                    "probe": combined_probe,
+                    "extract": combined_extract,
+                },
+            )
+            return
+
         if combined_probe:
             dash._show_batch_summary(combined_probe, job_type="probe")
         if combined_extract:
             dash._show_batch_summary(combined_extract, job_type="extract")
-
-        combined_results = _merge_queued_scan_results(getattr(dash, "_queued_scan_results", []))
         dash._show_scan_results(combined_results)
         try:
             dash.parent.after(5000, dash._reset_scan_status)
         except Exception:
             pass
-
-        dash._clear_queued_scan_state()
-        _call_dashboard_hook(dash, "_clear_scan_task")
 
 
 # ── Pre-scan checks ───────────────────────────────────────────────────────────
@@ -603,20 +642,42 @@ def start_searxng_scan(dash, scan_request: dict) -> bool:
     Returns True if the thread was started, False if validation failed.
     Errors during the run are reported via _on_searxng_scan_done on the UI thread.
     """
+    queue_managed = bool(scan_request.get("_provider_queue_managed", False))
+    provider_generation = _to_int(scan_request.get("_provider_queue_generation"))
+    if not queue_managed:
+        from gui.components.dashboard_provider_queue import is_provider_queue_active
+
+        if is_provider_queue_active(dash):
+            _mb().showwarning(
+                "Provider Queue Busy",
+                "A unified provider queue is running. Please wait for it to complete.",
+            )
+            return False
     if getattr(dash, "_searxng_scan_running", False):
-        _mb().showwarning(
-            "SearXNG Busy",
-            "A SearXNG search is already running. Please wait for it to complete."
-        )
+        if not queue_managed:
+            _mb().showwarning(
+                "SearXNG Busy",
+                "A SearXNG search is already running. Please wait for it to complete.",
+            )
         return False
 
     instance_url = str(scan_request.get("searxng_instance_url") or "").strip()
     if not instance_url:
-        _mb().showerror("SearXNG Error", "SearXNG instance URL is required.")
+        report_launch_error(
+            dash,
+            queue_managed=queue_managed,
+            title="SearXNG Error",
+            message="SearXNG instance URL is required.",
+        )
         return False
     query = str(scan_request.get("searxng_query") or "").strip()
     if not query:
-        _mb().showerror("SearXNG Error", "SearXNG search query is required.")
+        report_launch_error(
+            dash,
+            queue_managed=queue_managed,
+            title="SearXNG Error",
+            message="SearXNG search query is required.",
+        )
         return False
 
     from experimental.se_dork.main_db_sync import sync_run_to_main_db
@@ -658,7 +719,8 @@ def start_searxng_scan(dash, scan_request: dict) -> bool:
         pass
 
     _call_dashboard_hook(dash, "_show_scan_output_dialog", "SearXNG", country)
-    _call_dashboard_hook(dash, "_reset_log_output", country)
+    if not queue_managed:
+        _call_dashboard_hook(dash, "_reset_log_output", country)
     _call_dashboard_hook(dash, "_set_searxng_task_running", country)
     _call_dashboard_hook(dash, "_log_status_event",
         f'SearXNG search started: {instance_url} | query: "{query}"')
@@ -704,6 +766,8 @@ def start_searxng_scan(dash, scan_request: dict) -> bool:
                 started_at=_started_at,
                 sync_summary=sync_summary,
                 db_path=db_path,
+                queue_managed=queue_managed,
+                provider_generation=provider_generation,
             ))
         except Exception:
             # Tk scheduling failed — minimal cleanup, no UI calls
@@ -726,7 +790,12 @@ def start_searxng_scan(dash, scan_request: dict) -> bool:
         except Exception:
             pass
         _call_dashboard_hook(dash, "_clear_searxng_task")
-        _mb().showerror("SearXNG Error", f"Failed to start SearXNG scan: {exc}")
+        report_launch_error(
+            dash,
+            queue_managed=queue_managed,
+            title="SearXNG Error",
+            message=f"Failed to start SearXNG scan: {exc}",
+        )
         return False
 
 
@@ -740,12 +809,14 @@ def _on_searxng_scan_done(
     started_at: Optional[datetime] = None,
     sync_summary: Optional[dict] = None,
     db_path: Optional[Path | str] = None,
+    queue_managed: bool = False,
+    provider_generation: int = 0,
 ) -> None:
     """Handle SearXNG scan completion on the UI thread.
 
-    In mixed SearXNG+Shodan runs (searxng_only=False) the completion dialog is
-    intentionally suppressed — the Shodan queue may still be active and a modal
-    would interrupt it. Completion is signalled via live status lines only.
+    In multi-provider runs (searxng_only=False), the completion dialog is
+    suppressed while the serial provider queue continues. Live output retains
+    the durable completion rollup.
     """
     from experimental.se_dork.models import RUN_STATUS_ERROR
 
@@ -756,12 +827,20 @@ def _on_searxng_scan_done(
     _call_dashboard_hook(dash, "_clear_searxng_task")
 
     if result.status == RUN_STATUS_ERROR or result.error:
-        _call_dashboard_hook(dash, "_log_status_event",
-            f"SearXNG search failed: {result.error or 'unknown error'}")
-        _mb().showerror(
-            "SearXNG Scan Error",
-            f"SearXNG search failed: {result.error or 'unknown error'}",
-        )
+        error = result.error or "unknown error"
+        _call_dashboard_hook(dash, "_log_status_event", f"SearXNG search failed: {error}")
+        if queue_managed:
+            from gui.components.dashboard_provider_queue import complete_provider
+
+            complete_provider(
+                dash,
+                "searxng",
+                provider_generation,
+                success=False,
+                error=error,
+            )
+        else:
+            _mb().showerror("SearXNG Scan Error", f"SearXNG search failed: {error}")
         return
 
     resolved_db_path = db_path or _resolve_main_db_path(dash)
@@ -817,6 +896,15 @@ def _on_searxng_scan_done(
         }
         _call_dashboard_hook(dash, "_show_scan_results", scan_results)
     _call_dashboard_hook(dash, "_refresh_dashboard_data")
+    if queue_managed:
+        from gui.components.dashboard_provider_queue import complete_provider
+
+        complete_provider(
+            dash,
+            "searxng",
+            provider_generation,
+            success=True,
+        )
 
 
 def start_reddit_scan(dash, scan_request: dict) -> bool:
@@ -826,9 +914,23 @@ def start_reddit_scan(dash, scan_request: dict) -> bool:
     _reddit_grab_running (legacy accessory path) to prevent DB lock contention.
     Returns True if the worker thread started, False otherwise.
     """
+    queue_managed = bool(scan_request.get("_provider_queue_managed", False))
+    provider_generation = _to_int(scan_request.get("_provider_queue_generation"))
+    if not queue_managed:
+        from gui.components.dashboard_provider_queue import is_provider_queue_active
+
+        if is_provider_queue_active(dash):
+            _mb().showwarning(
+                "Provider Queue Busy",
+                "A unified provider queue is running. Please wait for it to complete.",
+            )
+            return False
     if getattr(dash, "_reddit_scan_running", False) or getattr(dash, "_reddit_grab_running", False):
-        _mb().showwarning("Reddit Busy",
-            "A Reddit ingest is already running. Please wait for it to complete.")
+        if not queue_managed:
+            _mb().showwarning(
+                "Reddit Busy",
+                "A Reddit ingest is already running. Please wait for it to complete.",
+            )
         return False
 
     from experimental.redseek.models import DEFAULT_MAX_POSTS, MAX_POSTS
@@ -836,13 +938,23 @@ def start_reddit_scan(dash, scan_request: dict) -> bool:
 
     mode = str(scan_request.get("reddit_mode") or "feed").strip()
     if mode == "user":
-        _mb().showerror(
-            "Reddit Error",
-            "Reddit user mode is unavailable; anonymous Reddit RSS supports feed/search only.",
+        report_launch_error(
+            dash,
+            queue_managed=queue_managed,
+            title="Reddit Error",
+            message=(
+                "Reddit user mode is unavailable; anonymous Reddit RSS supports "
+                "feed/search only."
+            ),
         )
         return False
     if mode not in {"feed", "search"}:
-        _mb().showerror("Reddit Error", "Reddit mode must be feed or search.")
+        report_launch_error(
+            dash,
+            queue_managed=queue_managed,
+            title="Reddit Error",
+            message="Reddit mode must be feed or search.",
+        )
         return False
     sort = str(scan_request.get("reddit_sort") or "new").strip()
     top_window = str(scan_request.get("reddit_top_window") or "week").strip()
@@ -898,7 +1010,8 @@ def start_reddit_scan(dash, scan_request: dict) -> bool:
     _reddit_only = set(_providers) == {"reddit"}
 
     _call_dashboard_hook(dash, "_show_scan_output_dialog", "Reddit", None)
-    _call_dashboard_hook(dash, "_reset_log_output", None)
+    if not queue_managed:
+        _call_dashboard_hook(dash, "_reset_log_output", None)
     _call_dashboard_hook(dash, "_set_reddit_task_running", None)
     _call_dashboard_hook(dash, "_log_status_event",
         f'Reddit {mode} ingest started (sort: {sort}, max_posts: {max_posts})')
@@ -944,6 +1057,8 @@ def start_reddit_scan(dash, scan_request: dict) -> bool:
                 started_at=_started_at,
                 sync_summary=sync_summary,
                 db_path=db_path,
+                queue_managed=queue_managed,
+                provider_generation=provider_generation,
             ))
         except Exception:
             try:
@@ -965,7 +1080,12 @@ def start_reddit_scan(dash, scan_request: dict) -> bool:
         except Exception:
             pass
         _call_dashboard_hook(dash, "_clear_reddit_task")
-        _mb().showerror("Reddit Error", f"Failed to start Reddit ingest: {exc}")
+        report_launch_error(
+            dash,
+            queue_managed=queue_managed,
+            title="Reddit Error",
+            message=f"Failed to start Reddit ingest: {exc}",
+        )
         return False
 
 
@@ -979,6 +1099,8 @@ def _on_reddit_scan_done(
     started_at: Optional[datetime] = None,
     sync_summary: Optional[Dict[str, Any]] = None,
     db_path: Optional[Path | str] = None,
+    queue_managed: bool = False,
+    provider_generation: int = 0,
 ) -> None:
     """Handle Reddit ingest completion on the UI thread."""
     try:
@@ -988,9 +1110,19 @@ def _on_reddit_scan_done(
     _call_dashboard_hook(dash, "_clear_reddit_task")
 
     if result.error:
-        _call_dashboard_hook(dash, "_log_status_event",
-            f"Reddit ingest failed: {result.error}")
-        _mb().showerror("Reddit Ingest Error", f"Reddit ingest failed: {result.error}")
+        _call_dashboard_hook(dash, "_log_status_event", f"Reddit ingest failed: {result.error}")
+        if queue_managed:
+            from gui.components.dashboard_provider_queue import complete_provider
+
+            complete_provider(
+                dash,
+                "reddit",
+                provider_generation,
+                success=False,
+                error=result.error,
+            )
+        else:
+            _mb().showerror("Reddit Ingest Error", f"Reddit ingest failed: {result.error}")
         return
 
     ss = sync_summary or {}
@@ -1039,12 +1171,22 @@ def _on_reddit_scan_done(
         }
         _call_dashboard_hook(dash, "_show_scan_results", scan_results)
     _call_dashboard_hook(dash, "_refresh_dashboard_data")
+    if queue_managed:
+        from gui.components.dashboard_provider_queue import complete_provider
+
+        complete_provider(
+            dash,
+            "reddit",
+            provider_generation,
+            success=True,
+        )
 
 
 # ── Protocol launch handlers ──────────────────────────────────────────────────
 
 def start_new_scan(dash, scan_options: dict) -> bool:
     """Start new scan with specified options."""
+    provider_managed = is_current_provider(dash, "shodan")
     try:
         # Final check for external scans before starting
         dash._check_external_scans()
@@ -1074,7 +1216,8 @@ def start_new_scan(dash, scan_options: dict) -> bool:
             _call_dashboard_hook(dash, "_show_scan_output_dialog", "SMB", scan_options.get("country"))
 
             # Reset viewer and note which scan is running
-            dash._reset_log_output(scan_options.get('country'))
+            if not provider_managed:
+                dash._reset_log_output(scan_options.get('country'))
             _call_dashboard_hook(dash, "_set_scan_task_running", "SMB", scan_options.get("country"))
 
             # Update button state to scanning
@@ -1115,7 +1258,8 @@ def start_new_scan(dash, scan_options: dict) -> bool:
             else:
                 detailed_msg = "Failed to start scan. Another scan may already be running."
 
-            _mb().showerror("Scan Error", detailed_msg)
+            if not provider_managed:
+                _mb().showerror("Scan Error", detailed_msg)
             return False
     except Exception as e:
         error_msg = str(e)
@@ -1142,12 +1286,14 @@ def start_new_scan(dash, scan_options: dict) -> bool:
                 "Please try again or check the configuration settings."
             )
 
-        _mb().showerror("Scan Error", detailed_msg)
+        if not provider_managed:
+            _mb().showerror("Scan Error", detailed_msg)
         return False
 
 
 def start_ftp_scan(dash, scan_options: dict) -> bool:
     """Start FTP scan with options from dialog. Mirrors start_new_scan()."""
+    provider_managed = is_current_provider(dash, "shodan")
     # Final race-condition check before acquiring scan lock.
     dash._check_external_scans()
     if dash.scan_button_state != "idle":
@@ -1171,24 +1317,27 @@ def start_ftp_scan(dash, scan_options: dict) -> bool:
     if started:
         dash.current_scan_options = scan_options
         _call_dashboard_hook(dash, "_show_scan_output_dialog", "FTP", scan_options.get("country"))
-        dash._reset_log_output(scan_options.get("country"))
+        if not provider_managed:
+            dash._reset_log_output(scan_options.get("country"))
         _call_dashboard_hook(dash, "_set_scan_task_running", "FTP", scan_options.get("country"))
         dash._update_scan_button_state("scanning")
         dash._show_scan_progress(scan_options.get("country"))
         dash._monitor_scan_completion()
         return True
     else:
-        _mb().showerror(
-            "FTP Scan Error",
-            "Could not start FTP scan.\n"
-            "A scan may already be running.",
-            parent=dash.parent,
-        )
+        if not provider_managed:
+            _mb().showerror(
+                "FTP Scan Error",
+                "Could not start FTP scan.\n"
+                "A scan may already be running.",
+                parent=dash.parent,
+            )
         return False
 
 
 def start_http_scan(dash, scan_options: dict) -> bool:
     """Start HTTP scan with options from dialog. Mirrors start_ftp_scan()."""
+    provider_managed = is_current_provider(dash, "shodan")
     # Final race-condition check before acquiring scan lock.
     dash._check_external_scans()
     if dash.scan_button_state != "idle":
@@ -1212,19 +1361,21 @@ def start_http_scan(dash, scan_options: dict) -> bool:
     if started:
         dash.current_scan_options = scan_options
         _call_dashboard_hook(dash, "_show_scan_output_dialog", "HTTP", scan_options.get("country"))
-        dash._reset_log_output(scan_options.get("country"))
+        if not provider_managed:
+            dash._reset_log_output(scan_options.get("country"))
         _call_dashboard_hook(dash, "_set_scan_task_running", "HTTP", scan_options.get("country"))
         dash._update_scan_button_state("scanning")
         dash._show_scan_progress(scan_options.get("country"))
         dash._monitor_scan_completion()
         return True
     else:
-        _mb().showerror(
-            "HTTP Scan Error",
-            "Could not start HTTP scan.\n"
-            "A scan may already be running.",
-            parent=dash.parent,
-        )
+        if not provider_managed:
+            _mb().showerror(
+                "HTTP Scan Error",
+                "Could not start HTTP scan.\n"
+                "A scan may already be running.",
+                parent=dash.parent,
+            )
         return False
 
 
@@ -1295,11 +1446,8 @@ def monitor_scan_completion(dash) -> None:
                     return
 
             if not dash.scan_manager.is_scanning:
-                # Get results first to check status
                 results = dash.scan_manager.get_scan_results()
                 is_queued_run = bool(dash._queued_scan_active)
-
-                # Reset button state to idle
                 dash._update_scan_button_state("idle")
 
                 # Handle cancelled scans differently
@@ -1384,8 +1532,14 @@ def monitor_scan_completion(dash) -> None:
                 if is_queued_run and results:
                     dash._handle_queued_scan_completion(results)
                 elif is_queued_run and not results:
-                    dash._clear_queued_scan_state()
-                    _call_dashboard_hook(dash, "_clear_scan_task")
+                    if is_current_provider(dash, "shodan"):
+                        dash._abort_queued_scan_on_failure(
+                            getattr(dash, "_queued_scan_current_protocol", None) or "shodan",
+                            "scan completed without a result payload",
+                        )
+                    else:
+                        dash._clear_queued_scan_state()
+                        _call_dashboard_hook(dash, "_clear_scan_task")
                 else:
                     _call_dashboard_hook(dash, "_clear_scan_task")
             else:
@@ -1398,6 +1552,12 @@ def monitor_scan_completion(dash) -> None:
 
         except Exception as e:
             # Critical error in monitoring, show error and stop
+            if is_current_provider(dash, "shodan"):
+                dash._abort_queued_scan_on_failure(
+                    getattr(dash, "_queued_scan_current_protocol", None) or "shodan",
+                    f"scan monitoring error: {e}",
+                )
+                return
             try:
                 _mb().showerror(
                     "Scan Monitoring Error",

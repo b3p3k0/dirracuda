@@ -800,12 +800,18 @@ class DashboardWidget:
         registry_has_tasks = bool(registry.has_tasks()) if registry is not None else False
         return bool(
             self.scan_manager.is_scanning
+            or getattr(self, "_provider_queue_active", False)
             or self._queued_scan_active
             or registry_has_tasks
         )
 
     def request_cancel_active_or_queued_work(self) -> None:
         """Request cancellation for scan + queued + running monitor tasks."""
+        try:
+            from gui.components.dashboard_provider_queue import cancel_provider_queue
+            cancel_provider_queue(self, notify=False)
+        except Exception:
+            pass
         try:
             if self._queued_scan_active or self._queued_scan_protocols:
                 self._clear_queued_scan_state()
@@ -1128,9 +1134,9 @@ class DashboardWidget:
 
     def _show_quick_scan_dialog(self) -> None:
         """Show scan configuration dialog and start scan."""
-        if getattr(self, "_searxng_scan_running", False) or getattr(self, "_reddit_scan_running", False) or getattr(self, "_reddit_grab_running", False):
+        if getattr(self, "_provider_queue_active", False) or getattr(self, "_searxng_scan_running", False) or getattr(self, "_reddit_scan_running", False) or getattr(self, "_reddit_grab_running", False):
             _mb().showwarning("Provider Busy",
-                "A SearXNG or Reddit ingest is already running. Please wait for it to complete.")
+                "A provider scan is already running. Please wait for it to complete.")
             return
         # Check if scan is already active
         if self.scan_manager.is_scan_active():
@@ -1185,9 +1191,9 @@ class DashboardWidget:
         """Abort remaining queued protocol scans after a failure."""
         dashboard_scan.abort_queued_scan_on_failure(self, protocol, reason, title=title)
 
-    def _launch_next_queued_scan(self) -> None:
+    def _launch_next_queued_scan(self) -> bool:
         """Start the next protocol in queue, if any remain."""
-        dashboard_scan.launch_next_queued_scan(self)
+        return dashboard_scan.launch_next_queued_scan(self)
 
     def _handle_queued_scan_completion(self, results: Dict[str, Any]) -> None:
         """Handle queue continuation after each protocol scan completes."""

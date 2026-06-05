@@ -87,6 +87,12 @@ def _handle_http_scan_button_click(self) -> None:
 
 def _handle_reddit_grab_button_click(self) -> None:
     """Handle Reddit Grab button click — opens Reddit Grab dialog."""
+    if getattr(self, "_provider_queue_active", False):
+        _mb().showwarning(
+            "Provider Queue Busy",
+            "A unified provider queue is running. Please wait for it to complete.",
+        )
+        return
     if self._reddit_grab_running or getattr(self, "_reddit_scan_running", False):
         _mb().showwarning("Reddit Busy",
             "A Reddit ingest is already running. Please wait for it to complete.")
@@ -104,7 +110,12 @@ def _handle_reddit_grab_start(self, options: IngestOptions) -> None:
     """Callback from Reddit Grab dialog — launches background ingest worker."""
     # Second state check: dialog may have been open while scan state changed.
     self._check_external_scans()
-    if self.scan_button_state != "idle" or self._reddit_grab_running or getattr(self, "_reddit_scan_running", False):
+    if (
+        getattr(self, "_provider_queue_active", False)
+        or self.scan_button_state != "idle"
+        or self._reddit_grab_running
+        or getattr(self, "_reddit_scan_running", False)
+    ):
         return
 
     if getattr(options, "bulk_probe_enabled", False):

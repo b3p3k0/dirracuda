@@ -242,3 +242,142 @@ def test_monitor_scan_completion_nonqueued_keeps_existing_dialog_flags(monkeypat
     assert kwargs["show_dialogs"] is True
     assert kwargs["schedule_reset"] is True
     dash._handle_queued_scan_completion.assert_not_called()
+
+
+def test_managed_shodan_completion_defers_result_to_provider_queue(monkeypatch):
+    """Final Shodan protocol completion must hand its result to the outer queue."""
+    completed = []
+    monkeypatch.setattr(
+        "gui.components.dashboard_provider_queue.complete_provider",
+        lambda *args, **kwargs: completed.append((args, kwargs)) or True,
+    )
+
+    dash = SimpleNamespace()
+    dash.parent = _RecordingParent()
+    dash._queued_scan_active = True
+    dash._queued_scan_protocols = []
+    dash._queued_scan_current_protocol = "smb"
+    dash._queued_scan_common_options = {
+        "_provider_queue_managed": True,
+        "_provider_queue_generation": 7,
+    }
+    dash._queued_scan_failures = []
+    dash._queued_scan_results = []
+    dash._queued_scan_batch_rows = {"probe": [], "extract": []}
+    dash._show_scan_results = MagicMock()
+    dash._clear_scan_task = MagicMock()
+    dash._clear_queued_scan_state = MagicMock(
+        side_effect=lambda: dashboard_scan.clear_queued_scan_state(dash)
+    )
+
+    dashboard_scan.handle_queued_scan_completion(
+        dash,
+        {
+            "protocol": "smb",
+            "status": "completed",
+            "success": True,
+            "hosts_scanned": 4,
+            "accessible_hosts": 2,
+            "shares_found": 3,
+        },
+    )
+
+    dash._show_scan_results.assert_not_called()
+    assert len(completed) == 1
+    args, kwargs = completed[0]
+    assert args[1:3] == ("shodan", 7)
+    assert kwargs["success"] is True
+    assert kwargs["result_payload"]["protocol"] == "smb"
+
+
+def test_managed_shodan_failure_advances_outer_queue_without_modal(monkeypatch):
+    completed = []
+    box = SimpleNamespace(
+        showwarning=MagicMock(),
+        showinfo=MagicMock(),
+        showerror=MagicMock(),
+    )
+    monkeypatch.setattr(dashboard_scan, "_mb", lambda: box)
+    monkeypatch.setattr(
+        "gui.components.dashboard_provider_queue.complete_provider",
+        lambda *args, **kwargs: completed.append((args, kwargs)) or True,
+    )
+
+    dash = SimpleNamespace()
+    dash._queued_scan_protocols = ["ftp", "http"]
+    dash._queued_scan_failures = []
+    dash._queued_scan_common_options = {
+        "_provider_queue_managed": True,
+        "_provider_queue_generation": 9,
+    }
+    dash._clear_scan_task = MagicMock()
+    dash._clear_queued_scan_state = MagicMock(
+        side_effect=lambda: dashboard_scan.clear_queued_scan_state(dash)
+    )
+
+    dashboard_scan.abort_queued_scan_on_failure(dash, "smb", "backend failed")
+
+    box.showwarning.assert_not_called()
+    assert len(completed) == 1
+    args, kwargs = completed[0]
+    assert args[1:3] == ("shodan", 9)
+    assert kwargs["success"] is False
+    assert "Skipped Shodan protocols: FTP, HTTP" in kwargs["error"]
+
+
+def test_managed_shodan_missing_result_aborts_provider_queue(monkeypatch):
+    monkeypatch.setattr(dashboard_scan, "_mb", _noop_messagebox)
+    dash = SimpleNamespace(
+        parent=_RecordingParent(run_1s_callbacks=True),
+        scan_button_state="scanning",
+        stopping_started_time=None,
+        scan_manager=SimpleNamespace(
+            is_scanning=False,
+            get_scan_results=lambda: None,
+        ),
+        _queued_scan_active=True,
+        _queued_scan_current_protocol="http",
+        _provider_queue_active=True,
+        _provider_queue_current="shodan",
+        current_scan_options={},
+        _update_scan_button_state=MagicMock(),
+        _reset_scan_status=MagicMock(),
+        _refresh_after_scan_completion=MagicMock(),
+        _abort_queued_scan_on_failure=MagicMock(),
+    )
+
+    dashboard_scan.monitor_scan_completion(dash)
+
+    dash._abort_queued_scan_on_failure.assert_called_once_with(
+        "http",
+        "scan completed without a result payload",
+    )
+
+
+def test_managed_shodan_monitor_error_aborts_provider_queue(monkeypatch):
+    monkeypatch.setattr(dashboard_scan, "_mb", _noop_messagebox)
+
+    def raise_monitor_error():
+        raise RuntimeError("result channel closed")
+
+    dash = SimpleNamespace(
+        parent=_RecordingParent(run_1s_callbacks=True),
+        scan_button_state="scanning",
+        stopping_started_time=None,
+        scan_manager=SimpleNamespace(
+            is_scanning=False,
+            get_scan_results=raise_monitor_error,
+        ),
+        _queued_scan_active=True,
+        _queued_scan_current_protocol="smb",
+        _provider_queue_active=True,
+        _provider_queue_current="shodan",
+        _abort_queued_scan_on_failure=MagicMock(),
+    )
+
+    dashboard_scan.monitor_scan_completion(dash)
+
+    dash._abort_queued_scan_on_failure.assert_called_once_with(
+        "smb",
+        "scan monitoring error: result channel closed",
+    )

@@ -111,3 +111,28 @@ def test_show_quick_scan_dialog_blocked_when_searxng_running(monkeypatch):
 
     assert dialog_opened == [], "Dialog must not open when SearXNG scan is active"
     assert warnings, "showwarning must fire"
+
+
+def test_show_quick_scan_dialog_blocked_when_provider_queue_active(monkeypatch):
+    dash = DashboardWidget.__new__(DashboardWidget)
+    dash.parent = object()
+    dash.config_path = "/tmp/config.json"
+    dash.scan_manager = _ScanManagerStub()
+    dash.settings_manager = object()
+    dash._provider_queue_active = True
+
+    dialog_opened = []
+    monkeypatch.setattr(
+        "gui.components.dashboard.show_unified_scan_dialog",
+        lambda **_kwargs: dialog_opened.append(True),
+    )
+    warnings = []
+    monkeypatch.setattr(
+        "gui.components.dashboard.messagebox.showwarning",
+        lambda *args, **_kwargs: warnings.append(args),
+    )
+
+    dash._show_quick_scan_dialog()
+
+    assert dialog_opened == []
+    assert warnings

@@ -828,7 +828,7 @@ WHERE ip_address = '1.2.3.4';
 
 The SearXNG Dorking module (`experimental/se_dork`) now writes runtime workflow tables into the active primary DB context (same DB path used by the running GUI/WebUI session).
 
-**Storage contract**: `run_dork_search` persists `dork_runs`/`dork_results` in the active primary DB path and auto-syncs retained HTTP/HTTPS rows into main protocol host tables during run completion. Manual promotion is not required for new runs. Successful runs append a Shodan-style rollup to Live Scan Output and keep the existing result popup. In mixed SearXNG+Shodan runs the popup is intentionally suppressed because the Shodan queue may still be active; the live-output rollup still records completion.
+**Storage contract**: `run_dork_search` persists `dork_runs`/`dork_results` in the active primary DB path and auto-syncs retained HTTP/HTTPS rows into main protocol host tables during run completion. Manual promotion is not required for new runs. Successful runs append a Shodan-style rollup to Live Scan Output. Standalone runs keep the result popup; multi-provider Start Scan runs suppress it while the serial provider queue continues.
 
 Legacy sidecar files (for example `~/.dirracuda/data/experimental/se_dork.db`) may still exist for historical browsing/migration paths, but they are no longer the default write target for new SearXNG runs.
 
@@ -949,11 +949,18 @@ Internally: `schedule()` pushes `(callback, args, kwargs)` to a `queue.Queue`. T
 
 SearXNG dorking, Reddit ingestion, and Dorkbook do not use this subprocess path. `DashboardWidget` dispatches these features in-process through their GUI modules and service/store layers.
 
+Unified desktop provider scheduling is owned by `dashboard_provider_queue.py`. It
+launches exactly one selected provider at a time because every provider now writes to
+the active primary SQLite database. Completion advances only after provider persistence
+and main-DB sync finish. Provider failures are recorded and remaining providers continue;
+user cancellation invalidates the queue generation so stale callbacks cannot restart it.
+WebUI jobs are outside this desktop scheduler.
+
 ### 6.4 Dashboard Controls
 
 | Control | Function |
 |---------|---------|
-| Start Scan | Opens `UnifiedScanDialog` (protocol selector + scan options), then always shows preflight confirmation with live-balance + cost visibility before launch. Numeric estimates are shown only when live balance lookup succeeds. |
+| Start Scan | Opens `UnifiedScanDialog` (provider/protocol selector + scan options), then always shows preflight confirmation with live-balance + cost visibility before launch. Selected providers run serially by registered priority (`Reddit=100`, `SearXNG=200`, `Shodan=300`); Shodan retains its nested SMB/FTP/HTTP protocol queue. Numeric estimates are shown only when live balance lookup succeeds. |
 | Database | Opens consolidated DB surface (`View Servers`, `DB Tools`, `[Legacy] Sidecar Data`) |
 | Accessories | Opens `ExperimentalFeaturesDialog` (`SearXNG`, `Reddit`, `Web UI`, `Dorkbook`, `Keymaster` tabs) |
 | Configuration | Opens config editor |

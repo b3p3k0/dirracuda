@@ -235,6 +235,25 @@ class TestClickHandlerGuards:
         assert check_called == []
         assert dialog_opened == []
 
+    def test_does_not_open_dialog_if_provider_queue_running(self, monkeypatch):
+        dash = _make_dash()
+        dash._provider_queue_active = True
+        dialog_opened = []
+        warnings = []
+        monkeypatch.setattr(
+            "gui.components.dashboard.show_reddit_grab_dialog",
+            lambda **_k: dialog_opened.append(True),
+        )
+        monkeypatch.setattr(
+            "gui.components.dashboard.messagebox.showwarning",
+            lambda *args, **_kwargs: warnings.append(args),
+        )
+
+        dash._handle_reddit_grab_button_click()
+
+        assert dialog_opened == []
+        assert warnings
+
     def test_does_not_open_dialog_if_reddit_scan_running(self, monkeypatch):
         """Core Reddit scan blocks legacy grab click handler."""
         dash = _make_dash()
@@ -404,6 +423,23 @@ class TestWorkerExceptionPath:
             lambda **_k: type("T", (), {"start": lambda self: thread_started.append(True)})(),
         )
         dash._log_status_event = lambda _msg: None
+
+        dash._handle_reddit_grab_start(_make_options())
+
+        assert dash._reddit_grab_running is False
+        assert thread_started == []
+
+    def test_grab_start_blocked_if_provider_queue_running(self, monkeypatch):
+        dash = _make_dash()
+        dash._provider_queue_active = True
+        thread_started = []
+        monkeypatch.setattr(dash, "_check_external_scans", lambda: None, raising=False)
+        monkeypatch.setattr(
+            "gui.components.dashboard.threading.Thread",
+            lambda **_k: type(
+                "T", (), {"start": lambda self: thread_started.append(True)}
+            )(),
+        )
 
         dash._handle_reddit_grab_start(_make_options())
 

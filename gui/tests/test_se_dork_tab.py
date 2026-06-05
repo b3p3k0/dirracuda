@@ -214,6 +214,17 @@ def test_save_settings_persists_bulk_probe_flag():
     sm.set_setting.assert_any_call("se_dork.max_results", "10")
 
 
+def test_invoke_run_blocked_while_unified_provider_queue_active():
+    tab = SeDorkTab.__new__(SeDorkTab)
+    tab._context = {"provider_queue_active_getter": lambda: True}
+    tab._status_label = MagicMock()
+
+    tab._invoke_run()
+
+    tab._status_label.configure.assert_called_once()
+    assert "provider queue" in tab._status_label.configure.call_args.kwargs["text"]
+
+
 # ---------------------------------------------------------------------------
 # _invoke_test wiring (thread runs synchronously via monkeypatch)
 # ---------------------------------------------------------------------------

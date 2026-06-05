@@ -117,6 +117,9 @@ def handle_experimental_button_click(widget) -> None:
         "reddit_grab_status_getter": lambda: bool(
             getattr(widget, "_reddit_grab_running", False)
         ),
+        "provider_queue_active_getter": lambda: bool(
+            getattr(widget, "_provider_queue_active", False)
+        ),
         "open_reddit_post_db": widget._open_reddit_post_db,
         "open_se_dork_results_db": lambda: open_se_dork_results_db(widget),
         "open_app_config": widget._open_config_editor,
