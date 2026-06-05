@@ -95,6 +95,7 @@ def _make_dash() -> DashboardWidget:
     dash._reset_log_output = lambda *_: None
     dash._set_searxng_task_running = lambda *_: None
     dash._log_status_event = lambda *_: None
+    dash._handle_scan_log_line = lambda *_: None
     dash._show_scan_results = lambda *_: None
     dash._set_reddit_task_running = lambda *_: None
     dash._clear_reddit_task = lambda *_: None
@@ -510,7 +511,7 @@ class TestOnSearxngScanDone:
         """Probe summary must appear in log when probe was enabled."""
         dash = _make_dash()
         log_msgs = []
-        dash._log_status_event = lambda m: log_msgs.append(m)
+        dash._handle_scan_log_line = lambda m: log_msgs.append(m)
         ds._on_searxng_scan_done(dash, _make_result(
             probe_enabled=True, probe_total=20, probe_clean=18, probe_issue=2, probe_unprobed=0,
         ))
@@ -521,7 +522,7 @@ class TestOnSearxngScanDone:
     def test_sync_summary_logged_when_available(self):
         dash = _make_dash()
         log_msgs = []
-        dash._log_status_event = lambda m: log_msgs.append(m)
+        dash._handle_scan_log_line = lambda m: log_msgs.append(m)
         ds._on_searxng_scan_done(
             dash,
             _make_result(),
@@ -534,7 +535,70 @@ class TestOnSearxngScanDone:
                 "cancelled": 0,
             },
         )
-        assert any("Primary DB sync:" in m for m in log_msgs), log_msgs
+        assert any("Primary DB Sync:" in m for m in log_msgs), log_msgs
+
+    def test_success_emits_exact_live_rollup_and_keeps_popup(self):
+        dash = _make_dash()
+        live_output = []
+        dialog_calls = []
+        dash._handle_scan_log_line = live_output.append
+        dash._show_scan_results = dialog_calls.append
+
+        ds._on_searxng_scan_done(
+            dash,
+            _make_result(
+                fetched_count=42,
+                verified_count=42,
+                deduped_count=15,
+                probe_enabled=True,
+                probe_total=15,
+                probe_clean=13,
+                probe_issue=2,
+                probe_unprobed=0,
+            ),
+            query='site:* intitle:"index of /"',
+            db_path=Path("/tmp/dirracuda.db"),
+            sync_summary={
+                "processed": 15,
+                "inserted": 10,
+                "updated": 4,
+                "skipped": 1,
+                "failed": 0,
+                "cancelled": 0,
+            },
+        )
+
+        assert live_output == [
+            "\n".join(
+                [
+                    "Dirracuda Scan Summary",
+                    "======================",
+                    '🌍 SearXNG Query: site:* intitle:"index of /"',
+                    "📊 URLs Fetched: 42",
+                    "🔓 URLs Verified: 42",
+                    "📁 Open Indexes Retained: 15",
+                    "🧪 Probe Results: 15 attempted (13 clean, 2 flagged, 0 unprobed)",
+                    "🔄 Primary DB Sync: 15 processed "
+                    "(10 inserted, 4 updated, 1 skipped, 0 failed)",
+                    "💾 Results saved to: /tmp/dirracuda.db",
+                    "✓ Scan completed: Found 15 open indexes",
+                ]
+            )
+        ]
+        assert len(dialog_calls) == 1
+
+    def test_zero_results_rollup_uses_info_completion(self):
+        dash = _make_dash()
+        live_output = []
+        dash._handle_scan_log_line = live_output.append
+
+        ds._on_searxng_scan_done(
+            dash,
+            _make_result(fetched_count=0, verified_count=0, deduped_count=0),
+            db_path=Path("/tmp/dirracuda.db"),
+        )
+
+        assert live_output[0].endswith("ℹ Scan completed: No open indexes found")
 
     def test_done_clears_searxng_task_only_not_shodan_task(self, monkeypatch):
         """done handler must call _clear_searxng_task but never touch _scan_task_id."""
@@ -888,7 +952,7 @@ class TestOnRedditScanDone:
     def test_probe_summary_included_in_reddit_only_result(self, monkeypatch):
         dash = _make_dash()
         log_msgs = []
-        dash._log_status_event = lambda m: log_msgs.append(m)
+        dash._handle_scan_log_line = lambda m: log_msgs.append(m)
         ds._on_reddit_scan_done(dash, _make_reddit_result(
             probe_enabled=True, probe_total=10, probe_clean=9, probe_issue=1, probe_unprobed=0,
         ))
@@ -917,7 +981,7 @@ class TestOnRedditScanDone:
         """C10: sync totals must appear in completion log when sync_summary is provided."""
         dash = _make_dash()
         log_msgs: list = []
-        dash._log_status_event = lambda m: log_msgs.append(m)
+        dash._handle_scan_log_line = lambda m: log_msgs.append(m)
         ds._on_reddit_scan_done(
             dash,
             _make_reddit_result(posts_stored=10, targets_stored=4),
@@ -925,6 +989,107 @@ class TestOnRedditScanDone:
         )
         assert any("3" in m and ("new" in m or "inserted" in m or "synced" in m.lower())
                    for m in log_msgs), f"sync total not in log: {log_msgs}"
+
+    def test_feed_success_emits_exact_live_rollup_and_keeps_popup(self):
+        dash = _make_dash()
+        live_output = []
+        dialog_calls = []
+        dash._handle_scan_log_line = live_output.append
+        dash._show_scan_results = dialog_calls.append
+
+        ds._on_reddit_scan_done(
+            dash,
+            _make_reddit_result(
+                posts_stored=30,
+                posts_skipped=5,
+                targets_stored=12,
+                targets_deduped=3,
+                probe_enabled=True,
+                probe_total=12,
+                probe_clean=9,
+                probe_issue=1,
+                probe_unprobed=1,
+                probe_skipped=1,
+            ),
+            mode="feed",
+            db_path=Path("/tmp/dirracuda.db"),
+            sync_summary={
+                "processed": 12,
+                "inserted": 8,
+                "updated": 3,
+                "skipped": 1,
+                "failed": 0,
+                "cancelled": 0,
+            },
+        )
+
+        assert live_output == [
+            "\n".join(
+                [
+                    "Dirracuda Scan Summary",
+                    "======================",
+                    "🌍 Reddit Source: r/opendirectories RSS (feed, new)",
+                    "📊 Posts Stored: 30 (5 skipped)",
+                    "🔓 Targets Discovered: 15",
+                    "📁 New Targets Stored: 12",
+                    "🧪 Probe Results: 12 attempted "
+                    "(9 clean, 1 flagged, 1 unprobed, 1 skipped)",
+                    "🔄 Primary DB Sync: 12 processed "
+                    "(8 inserted, 3 updated, 1 skipped, 0 failed)",
+                    "💾 Results saved to: /tmp/dirracuda.db",
+                    "✓ Scan completed: Found 15 Reddit targets (12 new)",
+                ]
+            )
+        ]
+        assert len(dialog_calls) == 1
+
+    def test_search_rollup_uses_query_and_reports_cancelled_sync(self):
+        dash = _make_dash()
+        live_output = []
+        dash._handle_scan_log_line = live_output.append
+
+        ds._on_reddit_scan_done(
+            dash,
+            _make_reddit_result(posts_stored=2, targets_stored=0, targets_deduped=0),
+            mode="search",
+            query="linux iso",
+            db_path=Path("/tmp/dirracuda.db"),
+            sync_summary={
+                "processed": 0,
+                "inserted": 0,
+                "updated": 0,
+                "skipped": 0,
+                "failed": 0,
+                "cancelled": 2,
+            },
+        )
+
+        assert '🌍 Reddit Query: "linux iso" in r/opendirectories RSS (new)' in live_output[0]
+        assert "0 failed, 2 cancelled" in live_output[0]
+        assert live_output[0].endswith(
+            "ℹ Scan completed: No usable Reddit targets found"
+        )
+
+    def test_rollup_reports_sync_failures(self):
+        dash = _make_dash()
+        live_output = []
+        dash._handle_scan_log_line = live_output.append
+
+        ds._on_reddit_scan_done(
+            dash,
+            _make_reddit_result(posts_stored=1, targets_stored=1, targets_deduped=0),
+            db_path=Path("/tmp/dirracuda.db"),
+            sync_summary={
+                "processed": 1,
+                "inserted": 0,
+                "updated": 0,
+                "skipped": 0,
+                "failed": 1,
+                "cancelled": 0,
+            },
+        )
+
+        assert "0 skipped, 1 failed)" in live_output[0]
 
 
 class TestStartRedditScanPrimaryDB:

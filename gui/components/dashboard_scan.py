@@ -20,6 +20,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from gui.components.dashboard_scan_rollup import (
+    format_reddit_rollup,
+    format_searxng_rollup,
+)
 from gui.utils import safe_messagebox as _fallback_msgbox
 from gui.utils.logging_config import get_logger
 
@@ -57,6 +61,11 @@ def _call_dashboard_hook(dash, method_name: str, *args, **kwargs) -> None:
         method(*args, **kwargs)
     except Exception:
         return
+
+
+def _emit_live_rollup(dash, rollup: str) -> None:
+    """Append one untimestamped completion block to Live Scan Output."""
+    _call_dashboard_hook(dash, "_handle_scan_log_line", rollup)
 
 
 def _parse_iso(ts: Any) -> Optional[datetime]:
@@ -694,6 +703,7 @@ def start_searxng_scan(dash, scan_request: dict) -> bool:
                 searxng_only=_searxng_only,
                 started_at=_started_at,
                 sync_summary=sync_summary,
+                db_path=db_path,
             ))
         except Exception:
             # Tk scheduling failed — minimal cleanup, no UI calls
@@ -729,6 +739,7 @@ def _on_searxng_scan_done(
     searxng_only: bool = True,
     started_at: Optional[datetime] = None,
     sync_summary: Optional[dict] = None,
+    db_path: Optional[Path | str] = None,
 ) -> None:
     """Handle SearXNG scan completion on the UI thread.
 
@@ -753,26 +764,16 @@ def _on_searxng_scan_done(
         )
         return
 
-    _call_dashboard_hook(dash, "_log_status_event",
-        f"SearXNG search complete. Fetched: {result.fetched_count}, stored: {result.deduped_count}")
-    if result.probe_enabled:
-        _call_dashboard_hook(dash, "_log_status_event",
-            f"Probe: {result.probe_total} attempted"
-            f" — {result.probe_clean} clean"
-            f", {result.probe_issue} flagged"
-            f", {result.probe_unprobed} unprobed")
-    if isinstance(sync_summary, dict):
-        _call_dashboard_hook(
-            dash,
-            "_log_status_event",
-            "Primary DB sync: "
-            f"processed {int(sync_summary.get('processed', 0) or 0)}"
-            f" (inserted {int(sync_summary.get('inserted', 0) or 0)},"
-            f" updated {int(sync_summary.get('updated', 0) or 0)},"
-            f" skipped {int(sync_summary.get('skipped', 0) or 0)},"
-            f" failed {int(sync_summary.get('failed', 0) or 0)},"
-            f" cancelled {int(sync_summary.get('cancelled', 0) or 0)}).",
-        )
+    resolved_db_path = db_path or _resolve_main_db_path(dash)
+    _emit_live_rollup(
+        dash,
+        format_searxng_rollup(
+            result,
+            query=query,
+            db_path=resolved_db_path,
+            sync_summary=sync_summary,
+        ),
+    )
 
     if searxng_only:
         end_dt = datetime.now()
@@ -935,9 +936,11 @@ def start_reddit_scan(dash, scan_request: dict) -> bool:
             dash.parent.after(0, lambda: _on_reddit_scan_done(
                 dash, result,
                 mode=mode,
+                query=query,
                 reddit_only=_reddit_only,
                 started_at=_started_at,
                 sync_summary=sync_summary,
+                db_path=db_path,
             ))
         except Exception:
             try:
@@ -968,9 +971,11 @@ def _on_reddit_scan_done(
     result,
     *,
     mode: str = "feed",
+    query: str = "",
     reddit_only: bool = True,
     started_at: Optional[datetime] = None,
     sync_summary: Optional[Dict[str, Any]] = None,
+    db_path: Optional[Path | str] = None,
 ) -> None:
     """Handle Reddit ingest completion on the UI thread."""
     try:
@@ -985,21 +990,18 @@ def _on_reddit_scan_done(
         _mb().showerror("Reddit Ingest Error", f"Reddit ingest failed: {result.error}")
         return
 
-    _call_dashboard_hook(dash, "_log_status_event",
-        f"Reddit ingest complete. Posts stored: {result.posts_stored}, targets: {result.targets_stored}")
-    if result.probe_enabled:
-        _call_dashboard_hook(dash, "_log_status_event",
-            f"Probe: {result.probe_total} attempted"
-            f" — {result.probe_clean} clean"
-            f", {result.probe_issue} flagged"
-            f", {result.probe_unprobed} unprobed")
-
     ss = sync_summary or {}
-    if ss:
-        _call_dashboard_hook(dash, "_log_status_event",
-            f"Auto-synced to main DB: {_to_int(ss.get('inserted'))} new, "
-            f"{_to_int(ss.get('updated'))} updated, "
-            f"{_to_int(ss.get('skipped'))} skipped")
+    resolved_db_path = db_path or _resolve_main_db_path(dash)
+    _emit_live_rollup(
+        dash,
+        format_reddit_rollup(
+            result,
+            mode=mode,
+            query=query,
+            db_path=resolved_db_path,
+            sync_summary=sync_summary,
+        ),
+    )
 
     if reddit_only:
         end_dt = datetime.now()

@@ -1,7 +1,7 @@
 # Integrate Experimental Features Into Main - LESSONS LEARNED
 
 Status: Seeded
-Last updated: 2026-06-04
+Last updated: 2026-06-05
 
 ## Carry Forward
 
@@ -55,6 +55,11 @@ Last updated: 2026-06-04
 - Preserve internal contracts when adapting transport. Mapping Atom entries back into the existing raw-post dict shape kept C10's primary-DB write/sync flow intact and avoided broad service rewrites.
 - Removed modes need explicit stale-config handling. `user` mode is hidden in normal UI, coerced to `feed` from saved preferences, and rejected directly by service/WebUI/dashboard guards with a clear anonymous-RSS message.
 - RSS has reduced metadata and no cursor. Document single-snapshot behavior and best-effort NSFW handling instead of implying old JSON pagination still exists.
+
+**Live completion rollups (2026-06-05):**
+- In-process providers do not inherit CLI completion output automatically. SearXNG and Reddit needed an explicit raw-log rollup to match the Shodan completion signal.
+- Keep transient and durable completion surfaces separate: the popup gives immediate results, while Live Scan Output preserves the final counts after the popup closes.
+- Emit a multiline rollup as one queue item. This preserves ordering and avoids timestamping every metric as a separate controller status event.
 
 Append new lessons after each completed card:
 - What failed or nearly failed.

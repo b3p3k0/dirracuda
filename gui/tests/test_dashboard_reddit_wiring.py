@@ -60,6 +60,7 @@ def _make_dash() -> DashboardWidget:
     dash.parent = MagicMock()
     # log helper used by handler methods
     dash._log_status_event = lambda _msg: None
+    dash._handle_scan_log_line = lambda _msg: None
     return dash
 
 
@@ -569,3 +570,33 @@ class TestRedditGrabPrimaryDB:
         assert "3" in body, f"sync insert count missing: {body!r}"
         assert "synced" in body.lower() or "main db" in body.lower(), \
             f"sync label missing: {body!r}"
+
+    def test_on_reddit_grab_done_keeps_popup_and_emits_search_rollup(self, monkeypatch):
+        dash = _make_dash()
+        messages: list = []
+        live_output: list[str] = []
+        dash._handle_scan_log_line = live_output.append
+        monkeypatch.setattr(
+            "gui.components.dashboard.messagebox.showinfo",
+            lambda *a, **k: messages.append(a),
+        )
+
+        dash._on_reddit_grab_done(
+            _make_ingest_result(
+                sort="top",
+                posts_stored=4,
+                posts_skipped=1,
+                targets_stored=2,
+                targets_deduped=1,
+            ),
+            {"processed": 3, "inserted": 2, "updated": 0, "skipped": 1},
+            Path("/tmp/dirracuda.db"),
+            "search",
+            "linux iso",
+        )
+
+        assert len(messages) == 1
+        assert len(live_output) == 1
+        assert '🌍 Reddit Query: "linux iso" in r/opendirectories RSS (top)' in live_output[0]
+        assert "🔓 Targets Discovered: 3" in live_output[0]
+        assert "💾 Results saved to: /tmp/dirracuda.db" in live_output[0]

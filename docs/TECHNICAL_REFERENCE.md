@@ -828,7 +828,7 @@ WHERE ip_address = '1.2.3.4';
 
 The SearXNG Dorking module (`experimental/se_dork`) now writes runtime workflow tables into the active primary DB context (same DB path used by the running GUI/WebUI session).
 
-**Storage contract**: `run_dork_search` persists `dork_runs`/`dork_results` in the active primary DB path and auto-syncs retained HTTP/HTTPS rows into main protocol host tables during run completion. Manual promotion is not required for new runs. In mixed SearXNG+Shodan runs the completion dialog is intentionally suppressed (Shodan queue may still be active); completion is signalled via live status lines only.
+**Storage contract**: `run_dork_search` persists `dork_runs`/`dork_results` in the active primary DB path and auto-syncs retained HTTP/HTTPS rows into main protocol host tables during run completion. Manual promotion is not required for new runs. Successful runs append a Shodan-style rollup to Live Scan Output and keep the existing result popup. In mixed SearXNG+Shodan runs the popup is intentionally suppressed because the Shodan queue may still be active; the live-output rollup still records completion.
 
 Legacy sidecar files (for example `~/.dirracuda/data/experimental/se_dork.db`) may still exist for historical browsing/migration paths, but they are no longer the default write target for new SearXNG runs.
 
@@ -1129,7 +1129,9 @@ Dashboard -> Accessories tab -> Open Reddit Grab
   -> fetches one anonymous Reddit Atom/RSS snapshot (feed or subreddit-scoped search)
   -> optional explicit bulk probe pass for current-run HTTP/HTTPS/FTP targets
   -> sync_targets_to_main_db(_probe_candidate_keys, db_path=primary_db)
-  -> result dialog (counts, dedupe, probe totals, sync totals, rate-limit errors)
+  -> success: result dialog plus persistent Live Scan Output rollup
+     (counts, dedupe, probe totals, sync totals, DB path)
+  -> failure: error dialog plus timestamped Live Scan Output status
 ```
 
 Reddit Post DB entry path:

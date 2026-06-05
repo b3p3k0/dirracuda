@@ -166,9 +166,24 @@ def _reddit_grab_worker(self, options: IngestOptions) -> None:
         if not result.error:
             keys = list(getattr(result, "_probe_candidate_keys", ()))
             sync_summary = sync_targets_to_main_db(keys, db_path=main_db_path)
-    self.parent.after(0, self._on_reddit_grab_done, result, sync_summary)
+    self.parent.after(
+        0,
+        self._on_reddit_grab_done,
+        result,
+        sync_summary,
+        main_db_path,
+        options.mode,
+        options.query,
+    )
 
-def _on_reddit_grab_done(self, result: IngestResult, sync_summary: dict = None) -> None:
+def _on_reddit_grab_done(
+    self,
+    result: IngestResult,
+    sync_summary: dict = None,
+    db_path=None,
+    mode: str = "feed",
+    query: str = "",
+) -> None:
     """Main-thread completion handler for a Reddit Grab run."""
     self._reddit_grab_running = False
     if self.reddit_grab_button is not None and self.scan_button_state == "idle":
@@ -215,9 +230,16 @@ def _on_reddit_grab_done(self, result: IngestResult, sync_summary: dict = None) 
             )
         if result.replace_cache_done:
             summary += "\nCursor state was reset before run."
-        self._log_status_event(
-            f"Reddit Grab done — {result.posts_stored} posts, "
-            f"{result.targets_stored} targets"
+        resolved_db_path = db_path or dashboard_scan._resolve_main_db_path(self)
+        dashboard_scan._emit_live_rollup(
+            self,
+            dashboard_scan.format_reddit_rollup(
+                result,
+                mode=mode,
+                query=query,
+                db_path=resolved_db_path,
+                sync_summary=sync_summary,
+            ),
         )
         _mb().showinfo("Reddit Grab Complete", summary, parent=self.parent)
 
