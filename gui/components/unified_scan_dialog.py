@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import tkinter as tk
 from pathlib import Path
-from tkinter import ttk, simpledialog
+from tkinter import simpledialog
 from gui.utils import safe_messagebox as messagebox
 from typing import Any, Callable, Dict, Optional
 
@@ -28,11 +28,6 @@ from gui.components.query_budget_dialog import (
 from gui.components.scan_dork_editor_dialog import show_scan_dork_editor_dialog
 from gui.components.scan_preflight import run_preflight
 from gui.utils.dialog_helpers import ensure_dialog_focus
-from gui.utils.keybindings import (
-    add_shortcut_hint,
-    bind_close_shortcuts,
-    bind_submit_shortcuts,
-)
 from gui.utils.style import get_theme
 from gui.utils.template_store import TemplateStore
 
@@ -346,168 +341,9 @@ class UnifiedScanDialog:
     # ------------------------------------------------------------------
 
     def _create_dialog(self) -> None:
-        self.dialog = tk.Toplevel(self.parent)
-        self.dialog.title("Start Scan")
-        self.dialog.geometry("1120x1030")
-        self.dialog.resizable(True, True)
-        self.theme.apply_to_widget(self.dialog, "main_window")
-        self.dialog.transient(self.parent)
-        self._center_dialog()
+        from gui.components.unified_scan_layout import build_dialog
 
-        wrapper = tk.Frame(self.dialog, bg=self.theme.colors["primary_bg"])
-        wrapper.pack(fill=tk.BOTH, expand=True)
-        scrollbar = ttk.Scrollbar(wrapper, orient=tk.VERTICAL)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-        self._canvas = tk.Canvas(
-            wrapper,
-            highlightthickness=0,
-            borderwidth=0,
-            bg=self.theme.colors["primary_bg"],
-            yscrollcommand=scrollbar.set,
-        )
-        self._canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.configure(command=self._canvas.yview)
-
-        self._content = tk.Frame(self._canvas, bg=self.theme.colors["primary_bg"])
-        self._canvas.create_window((0, 0), window=self._content, anchor="nw")
-        self._content.bind(
-            "<Configure>",
-            lambda _e: self._canvas.configure(scrollregion=self._canvas.bbox("all")),
-        )
-        for w in (self._canvas, self._content):
-            w.bind("<MouseWheel>", self._on_mousewheel)
-            w.bind("<Button-4>", self._on_mousewheel)
-            w.bind("<Button-5>", self._on_mousewheel)
-
-        self._create_header()
-        self._create_options()
-        self._create_config_section()
-        self._create_button_panel()
-
-        self.dialog.protocol("WM_DELETE_WINDOW", self._cancel)
-        bind_submit_shortcuts(self.dialog, self._start)
-        bind_close_shortcuts(self.dialog, self._cancel)
-        self.country_var.trace_add("write", self._validate_country_input)
-
-        if self.country_entry:
-            self.country_entry.focus_set()
-
-        self._refresh_template_toolbar()
-        self._update_region_status()
-        self.theme.apply_theme_to_application(self.dialog)
-        ensure_dialog_focus(self.dialog, self.parent)
-
-    def _center_dialog(self) -> None:
-        self.dialog.update_idletasks()
-        px, py = self.parent.winfo_x(), self.parent.winfo_y()
-        pw, ph = self.parent.winfo_width(), self.parent.winfo_height()
-        w, h = self.dialog.winfo_width(), self.dialog.winfo_height()
-        self.dialog.geometry(f"{w}x{h}+{px + pw // 2 - w // 2}+{py + ph // 2 - h // 2}")
-
-    def _on_mousewheel(self, event) -> None:
-        delta = 0
-        if getattr(event, "delta", 0):
-            delta = -1 if event.delta > 0 else 1
-        elif getattr(event, "num", None) == 4:
-            delta = -1
-        elif getattr(event, "num", None) == 5:
-            delta = 1
-        if delta:
-            self._canvas.yview_scroll(delta, "units")
-
-    def _create_header(self) -> None:
-        frame = tk.Frame(self._content)
-        self.theme.apply_to_widget(frame, "main_window")
-        frame.pack(fill=tk.X, padx=20, pady=(15, 5))
-
-        self.theme.create_styled_label(frame, "Start Scan", "heading").pack(anchor="w")
-        self.theme.create_styled_label(
-            frame,
-            "Launch SMB, FTP, and HTTP scans from one dialog. Selected protocols run sequentially and stop on first failure.",
-            "body",
-            fg=self.theme.colors["text_secondary"],
-        ).pack(anchor="w", pady=(5, 0))
-
-    def _create_options(self) -> None:
-        options_frame = tk.Frame(self._content)
-        self.theme.apply_to_widget(options_frame, "card")
-        options_frame.pack(fill=tk.X, padx=20, pady=5)
-
-        self._create_template_toolbar(options_frame)
-        self._create_provider_selection(options_frame)
-
-        self.theme.create_styled_label(
-            options_frame,
-            "Scan Parameters",
-            "heading",
-        ).pack(anchor="w", padx=15, pady=(10, 5))
-
-        columns = tk.Frame(options_frame)
-        self.theme.apply_to_widget(columns, "card")
-        columns.pack(fill=tk.BOTH, padx=15, pady=(0, 10))
-
-        left = tk.Frame(columns)
-        self.theme.apply_to_widget(left, "card")
-        left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 8))
-
-        right = tk.Frame(columns)
-        self.theme.apply_to_widget(right, "card")
-        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        self._create_protocol_selection(left)
-        self._create_country_option(left)
-        self._create_region_selection(left)
-
-        self._create_shared_runtime_options(right)
-        self._create_protocol_specific_options(right)
-
-    def _create_accent_heading(self, parent: tk.Widget, text: str) -> tk.Label:
-        return tk.Label(
-            parent,
-            text=text,
-            anchor="w",
-            padx=10,
-            pady=4,
-            bg=self.theme.colors["accent"],
-            fg="white",
-            font=self.theme.fonts["heading"],
-        )
-
-    def _create_template_toolbar(self, parent_frame: tk.Frame) -> None:
-        toolbar = tk.Frame(parent_frame)
-        self.theme.apply_to_widget(toolbar, "card")
-        toolbar.pack(fill=tk.X, padx=15, pady=(10, 0))
-
-        label = self.theme.create_styled_label(toolbar, "Templates:", "body")
-        label.pack(side=tk.LEFT)
-
-        self.template_dropdown = ttk.Combobox(
-            toolbar,
-            textvariable=self.template_var,
-            state="readonly",
-            width=32,
-        )
-        self.template_dropdown.pack(side=tk.LEFT, padx=(10, 10))
-        self.template_dropdown.bind("<<ComboboxSelected>>", self._handle_template_selected)
-
-        save_button = tk.Button(
-            toolbar,
-            text="Save Current",
-            command=self._prompt_save_template,
-            font=self.theme.fonts["small"],
-        )
-        self.theme.apply_to_widget(save_button, "button_secondary")
-        save_button.pack(side=tk.LEFT, padx=(0, 5))
-
-        self.delete_template_button = tk.Button(
-            toolbar,
-            text="Delete",
-            command=self._delete_selected_template,
-            font=self.theme.fonts["small"],
-        )
-        self.theme.apply_to_widget(self.delete_template_button, "button_secondary")
-        self.delete_template_button.pack(side=tk.LEFT)
+        build_dialog(self)
 
     # ------------------------------------------------------------------
     # Template handling
@@ -696,8 +532,9 @@ class UnifiedScanDialog:
         self.allow_insecure_tls_var.set(bool(state.get("allow_insecure_tls", True)))
         self._sync_skip_indicator_extract_state()
 
-        self._update_region_status()
+        self._sync_targeting_mode_state()
         self._refresh_protocol_estimate_lines()
+        self._sync_shodan_options_state()
         self._sync_searxng_options_state()
         self._sync_reddit_options_state()
 
@@ -721,434 +558,40 @@ class UnifiedScanDialog:
         self._selected_template_slug = slug
 
     # ------------------------------------------------------------------
-    # Sections
+    # Layout state
     # ------------------------------------------------------------------
 
-    def _create_provider_selection(self, parent: tk.Frame) -> None:
-        container = tk.Frame(parent)
-        self.theme.apply_to_widget(container, "card")
-        container.pack(fill=tk.X, padx=15, pady=(10, 0))
+    def _refresh_provider_queue_label(self) -> str:
+        from gui.components.unified_scan_layout import refresh_provider_queue_label
 
-        self._create_accent_heading(container, "Discovery Provider").pack(fill=tk.X)
+        return refresh_provider_queue_label(self)
 
-        shodan_cb = tk.Checkbutton(
-            container,
-            text="Shodan",
-            variable=self.provider_shodan_var,
-            font=self.theme.fonts["small"],
+    def _sync_shodan_options_state(self, *_args) -> None:
+        from gui.components.scan_provider_options import sync_option_entries
+
+        sync_option_entries(
+            getattr(self, "_shodan_opts_frame", None),
+            self.provider_shodan_var.get(),
         )
-        self.theme.apply_to_widget(shodan_cb, "checkbox")
-        shodan_cb.pack(anchor="w", padx=10, pady=(5, 2))
-
-        searxng_cb = tk.Checkbutton(
-            container,
-            text="SearXNG",
-            variable=self.provider_searxng_var,
-            command=self._sync_searxng_options_state,
-            font=self.theme.fonts["small"],
-        )
-        self.theme.apply_to_widget(searxng_cb, "checkbox")
-        searxng_cb.pack(anchor="w", padx=10, pady=2)
-
-        # SearXNG options sub-section (built by module helper)
-        from gui.components.scan_provider_options import build_searxng_sub_panel, build_reddit_sub_panel
-        self._searxng_opts_frame = build_searxng_sub_panel(
-            container,
-            {
-                "instance_url": self.searxng_instance_url_var,
-                "query": self.searxng_query_var,
-                "max_results": self.searxng_max_results_var,
-            },
-            self.theme,
-        )
-        self._searxng_opts_frame.pack(fill=tk.X, padx=(24, 10), pady=(0, 4))
-
-        reddit_cb = tk.Checkbutton(
-            container,
-            text="Reddit",
-            variable=self.provider_reddit_var,
-            command=self._sync_reddit_options_state,
-            font=self.theme.fonts["small"],
-        )
-        self.theme.apply_to_widget(reddit_cb, "checkbox")
-        reddit_cb.pack(anchor="w", padx=10, pady=(2, 2))
-
-        # Reddit options sub-section (built by module helper)
-        self._reddit_opts_frame = build_reddit_sub_panel(
-            container,
-            {
-                "mode": self.reddit_mode_var,
-                "sort": self.reddit_sort_var,
-                "top_window": self.reddit_top_window_var,
-                "max_posts": self.reddit_max_posts_var,
-                "query": self.reddit_query_var,
-                "username": self.reddit_username_var,
-                "parse_body": self.reddit_parse_body_var,
-                "include_nsfw": self.reddit_include_nsfw_var,
-            },
-            self.theme,
-        )
-        self._reddit_opts_frame.pack(fill=tk.X, padx=(24, 10), pady=(0, 6))
-
-        # Sync initial enabled/disabled state for both provider sub-panels
-        self._sync_searxng_options_state()
-        self._sync_reddit_options_state()
+        self._refresh_provider_queue_label()
 
     def _sync_searxng_options_state(self, *_args) -> None:
         from gui.components.scan_provider_options import sync_option_entries
+
         sync_option_entries(
             getattr(self, "_searxng_opts_frame", None),
             self.provider_searxng_var.get(),
         )
+        self._refresh_provider_queue_label()
 
     def _sync_reddit_options_state(self, *_args) -> None:
-        from gui.components.scan_provider_options import sync_option_entries
-        sync_option_entries(
+        from gui.components.scan_provider_options import sync_reddit_option_state
+
+        sync_reddit_option_state(
             getattr(self, "_reddit_opts_frame", None),
             self.provider_reddit_var.get(),
         )
-
-    def _create_protocol_selection(self, parent: tk.Frame) -> None:
-        container = tk.Frame(parent)
-        self.theme.apply_to_widget(container, "card")
-        container.pack(fill=tk.X, padx=15, pady=(0, 10))
-
-        self._create_accent_heading(container, "Protocols").pack(fill=tk.X)
-
-        btn_row = tk.Frame(container)
-        self.theme.apply_to_widget(btn_row, "card")
-        btn_row.pack(fill=tk.X, pady=(5, 0))
-
-        edit_queries_btn = tk.Button(
-            btn_row,
-            text="Edit Queries",
-            command=self._open_query_editor,
-            font=self.theme.fonts["small"],
-        )
-        self.theme.apply_to_widget(edit_queries_btn, "button_secondary")
-        edit_queries_btn.pack(side=tk.RIGHT, padx=(0, 10))
-
-        for proto_text, cb_var, results_var in (
-            ("SMB", self.protocol_smb_var, self.smb_max_results_var),
-            ("FTP", self.protocol_ftp_var, self.ftp_max_results_var),
-            ("HTTP", self.protocol_http_var, self.http_max_results_var),
-        ):
-            proto_row = tk.Frame(container)
-            self.theme.apply_to_widget(proto_row, "card")
-            proto_row.pack(fill=tk.X, pady=(2, 0))
-
-            cb = tk.Checkbutton(
-                proto_row,
-                text=proto_text,
-                variable=cb_var,
-                command=self._refresh_protocol_estimate_lines,
-                font=self.theme.fonts["small"],
-            )
-            self.theme.apply_to_widget(cb, "checkbox")
-            cb.pack(side=tk.LEFT, padx=(10, 8), pady=2)
-
-            cap_label = self.theme.create_styled_label(proto_row, "Max Shodan Results", "small")
-            cap_label.pack(side=tk.LEFT, padx=(0, 4))
-
-            cap_entry = tk.Entry(
-                proto_row,
-                textvariable=results_var,
-                width=8,
-                font=self.theme.fonts["small"],
-            )
-            self.theme.apply_to_widget(cap_entry, "entry")
-            cap_entry.pack(side=tk.LEFT, pady=2)
-
-        self.protocol_cost_label = self.theme.create_styled_label(
-            container,
-            "",
-            "small",
-            fg=self.theme.colors["text_secondary"],
-        )
-        self.protocol_cost_label.pack(anchor="w", padx=15, pady=(0, 2))
-
-        self.protocol_results_label = self.theme.create_styled_label(
-            container,
-            "",
-            "small",
-            fg=self.theme.colors["text_secondary"],
-        )
-        self.protocol_results_label.pack(anchor="w", padx=15, pady=(0, 2))
-
-        estimate_help_link = tk.Label(
-            container,
-            text="How cost & result estimates work",
-            fg=self.theme.colors["accent"],
-            cursor="hand2",
-            font=self.theme.fonts["small"],
-        )
-        estimate_help_link.pack(anchor="w", padx=15, pady=(0, 3))
-        estimate_help_link.bind("<Button-1>", self._on_cost_estimate_help_clicked)
-
-        info = self.theme.create_styled_label(
-            container,
-            "Selected protocols run sequentially in one queue and stop on first failure.",
-            "small",
-            fg=self.theme.colors["text_secondary"],
-        )
-        info.pack(anchor="w", padx=15, pady=(0, 5))
-        self._refresh_protocol_estimate_lines()
-
-    def _create_country_option(self, parent: tk.Frame) -> None:
-        container = tk.Frame(parent)
-        self.theme.apply_to_widget(container, "card")
-        container.pack(fill=tk.X, padx=15, pady=(0, 10))
-
-        heading = self._create_accent_heading(container, "Country Code (optional)")
-        heading.pack(fill=tk.X)
-
-        row = tk.Frame(container)
-        self.theme.apply_to_widget(row, "card")
-        row.pack(fill=tk.X, pady=(5, 0))
-
-        self.country_entry = tk.Entry(
-            row,
-            textvariable=self.country_var,
-            width=10,
-            font=self.theme.fonts["body"],
-        )
-        self.theme.apply_to_widget(self.country_entry, "entry")
-        self.country_entry.pack(side=tk.LEFT)
-
-        hint = self.theme.create_styled_label(
-            row,
-            "  (e.g., US, GB, CA — combines with region selections below)",
-            "small",
-            fg=self.theme.colors["text_secondary"],
-        )
-        hint.configure(font=(self.theme.fonts["small"][0], self.theme.fonts["small"][1], "italic"))
-        hint.pack(side=tk.LEFT)
-
-    def _create_region_selection(self, parent: tk.Frame) -> None:
-        container = tk.Frame(parent)
-        self.theme.apply_to_widget(container, "card")
-        container.pack(fill=tk.X, padx=15, pady=(0, 10))
-
-        self._create_accent_heading(container, "Region Selection").pack(fill=tk.X, pady=(0, 10))
-
-        checkboxes = tk.Frame(container)
-        self.theme.apply_to_widget(checkboxes, "card")
-        checkboxes.pack(fill=tk.X, pady=(5, 5))
-
-        region_vars = [
-            ("Africa", self.africa_var),
-            ("Asia", self.asia_var),
-            ("Europe", self.europe_var),
-            ("North America", self.north_america_var),
-            ("Oceania", self.oceania_var),
-            ("South America", self.south_america_var),
-        ]
-
-        for i, (name, var) in enumerate(region_vars):
-            cb = tk.Checkbutton(
-                checkboxes,
-                text=f"{name} ({len(REGIONS[name])})",
-                variable=var,
-                font=self.theme.fonts["small"],
-                command=self._update_region_status,
-            )
-            self.theme.apply_to_widget(cb, "checkbox")
-            cb.grid(row=i // 3, column=i % 3, sticky="w", padx=5, pady=2)
-
-        bottom = tk.Frame(container)
-        self.theme.apply_to_widget(bottom, "card")
-        bottom.pack(fill=tk.X, pady=(5, 10))
-
-        actions = tk.Frame(bottom)
-        self.theme.apply_to_widget(actions, "card")
-        actions.pack(side=tk.LEFT)
-
-        for label, cmd in (("Select All", self._select_all_regions), ("Clear All", self._clear_all_regions)):
-            btn = tk.Button(actions, text=label, command=cmd, font=self.theme.fonts["small"])
-            self.theme.apply_to_widget(btn, "button_secondary")
-            btn.pack(side=tk.LEFT, padx=(0, 5))
-
-        self.region_status_label = self.theme.create_styled_label(
-            bottom,
-            "",
-            "small",
-            fg=self.theme.colors["text_secondary"],
-        )
-        self.region_status_label.pack(side=tk.RIGHT, padx=(10, 5))
-
-    def _create_shared_runtime_options(self, parent: tk.Frame) -> None:
-        container = tk.Frame(parent)
-        self.theme.apply_to_widget(container, "card")
-        container.pack(fill=tk.X, padx=15, pady=(0, 10))
-
-        self._create_accent_heading(container, "Shared Runtime").pack(fill=tk.X)
-
-        validate_cmd = self.dialog.register(self._validate_integer_input)
-
-        conc_row = tk.Frame(container)
-        self.theme.apply_to_widget(conc_row, "card")
-        conc_row.pack(fill=tk.X, pady=(6, 0))
-
-        self.theme.create_styled_label(conc_row, "Backend concurrency:", "small").pack(side=tk.LEFT)
-        conc_entry = tk.Entry(
-            conc_row,
-            textvariable=self.shared_concurrency_var,
-            width=6,
-            validate="key",
-            validatecommand=(validate_cmd, "%P"),
-        )
-        self.theme.apply_to_widget(conc_entry, "entry")
-        conc_entry.pack(side=tk.LEFT, padx=(8, 0))
-
-        timeout_row = tk.Frame(container)
-        self.theme.apply_to_widget(timeout_row, "card")
-        timeout_row.pack(fill=tk.X, pady=(6, 0))
-
-        self.theme.create_styled_label(timeout_row, "Shared timeout:", "small").pack(side=tk.LEFT)
-        timeout_entry = tk.Entry(
-            timeout_row,
-            textvariable=self.shared_timeout_var,
-            width=6,
-            validate="key",
-            validatecommand=(validate_cmd, "%P"),
-        )
-        self.theme.apply_to_widget(timeout_entry, "entry")
-        timeout_entry.pack(side=tk.LEFT, padx=(8, 0))
-
-        self.theme.create_styled_label(
-            container,
-            f"Allowed ranges: concurrency 1–{_CONCURRENCY_UPPER}, timeout 1–{_TIMEOUT_UPPER} seconds",
-            "small",
-            fg=self.theme.colors["text_secondary"],
-        ).pack(anchor="w", pady=(6, 2))
-
-        self.theme.create_styled_label(
-            container,
-            "SMB rate/share delays continue to use configuration defaults to avoid unintended scan throttling.",
-            "small",
-            fg=self.theme.colors["text_secondary"],
-        ).pack(anchor="w", pady=(0, 4))
-
-        verbose_cb = tk.Checkbutton(
-            container,
-            text="Verbose backend output",
-            variable=self.verbose_var,
-            font=self.theme.fonts["small"],
-        )
-        self.theme.apply_to_widget(verbose_cb, "checkbox")
-        verbose_cb.pack(anchor="w", padx=10, pady=(2, 2))
-
-        probe_cb = tk.Checkbutton(
-            container,
-            text="Run bulk probe after each scan",
-            variable=self.bulk_probe_enabled_var,
-            font=self.theme.fonts["small"],
-        )
-        self.theme.apply_to_widget(probe_cb, "checkbox")
-        probe_cb.pack(anchor="w", padx=10, pady=(2, 2))
-
-        extract_cb = tk.Checkbutton(
-            container,
-            text="Run bulk extract after each scan",
-            variable=self.bulk_extract_enabled_var,
-            command=self._sync_skip_indicator_extract_state,
-            font=self.theme.fonts["small"],
-        )
-        self.theme.apply_to_widget(extract_cb, "checkbox")
-        extract_cb.pack(anchor="w", padx=10, pady=(2, 2))
-
-        skip_cb = tk.Checkbutton(
-            container,
-            text="Skip extract on hosts with malware indicators (recommended)",
-            variable=self.skip_indicator_extract_var,
-            font=self.theme.fonts["small"],
-        )
-        self.theme.apply_to_widget(skip_cb, "checkbox")
-        skip_cb.pack(anchor="w", padx=10, pady=(2, 2))
-        self.skip_indicator_extract_checkbox = skip_cb
-        self._sync_skip_indicator_extract_state()
-
-        extract_hint = self.theme.create_styled_label(
-            container,
-            "Bulk extract supports SMB, FTP, and HTTP/HTTPS hosts.",
-            "small",
-            fg=self.theme.colors["text_secondary"],
-        )
-        extract_hint.pack(anchor="w", padx=15, pady=(0, 5))
-
-    def _create_protocol_specific_options(self, parent: tk.Frame) -> None:
-        container = tk.Frame(parent)
-        self.theme.apply_to_widget(container, "card")
-        container.pack(fill=tk.X, padx=15, pady=(0, 10))
-
-        self._create_accent_heading(container, "Protocol-specific").pack(fill=tk.X)
-
-        smb_frame = tk.Frame(container)
-        self.theme.apply_to_widget(smb_frame, "card")
-        smb_frame.pack(fill=tk.X, pady=(6, 2))
-
-        self.theme.create_styled_label(smb_frame, "SMB Security Mode", "small").pack(anchor="w", padx=10, pady=(0, 2))
-        cautious_radio = tk.Radiobutton(
-            smb_frame,
-            text="Cautious – signed SMB2+/SMB3 only",
-            variable=self.security_mode_var,
-            value="cautious",
-            font=self.theme.fonts["small"],
-        )
-        self.theme.apply_to_widget(cautious_radio, "checkbox")
-        cautious_radio.pack(anchor="w", padx=10)
-
-        legacy_radio = tk.Radiobutton(
-            smb_frame,
-            text="Legacy – allow SMB1/unsigned connections",
-            variable=self.security_mode_var,
-            value="legacy",
-            font=self.theme.fonts["small"],
-        )
-        self.theme.apply_to_widget(legacy_radio, "checkbox")
-        legacy_radio.pack(anchor="w", padx=10, pady=(0, 2))
-
-        http_frame = tk.Frame(container)
-        self.theme.apply_to_widget(http_frame, "card")
-        http_frame.pack(fill=tk.X, pady=(2, 5))
-
-        tls_cb = tk.Checkbutton(
-            http_frame,
-            text="HTTP: Allow insecure HTTPS certificates",
-            variable=self.allow_insecure_tls_var,
-            font=self.theme.fonts["small"],
-        )
-        self.theme.apply_to_widget(tls_cb, "checkbox")
-        tls_cb.pack(anchor="w", padx=10, pady=(2, 2))
-
-    def _create_config_section(self) -> None:
-        config_frame = tk.Frame(self._content)
-        self.theme.apply_to_widget(config_frame, "card")
-        config_frame.pack(fill=tk.X, padx=20, pady=(0, 5))
-
-        title = self.theme.create_styled_label(config_frame, "Configuration", "heading")
-        title.pack(anchor="w", padx=15, pady=(10, 5))
-
-        info_frame = tk.Frame(config_frame)
-        self.theme.apply_to_widget(info_frame, "card")
-        info_frame.pack(fill=tk.X, padx=15, pady=(0, 5))
-
-        info_text = f"Using configuration from:\n{self.config_path}"
-        self.theme.create_styled_label(
-            info_frame,
-            info_text,
-            "small",
-            fg=self.theme.colors["text_secondary"],
-            justify="left",
-        ).pack(anchor="w")
-
-        btn_frame = tk.Frame(config_frame)
-        self.theme.apply_to_widget(btn_frame, "card")
-        btn_frame.pack(fill=tk.X, padx=15, pady=(0, 10))
-
-        edit_btn = tk.Button(btn_frame, text="Edit Configuration", command=self._open_config_editor)
-        self.theme.apply_to_widget(edit_btn, "button_secondary")
-        edit_btn.pack(side=tk.LEFT)
+        self._refresh_provider_queue_label()
 
     def _open_config_editor(self) -> None:
         if not self.config_editor_callback:
@@ -1276,29 +719,6 @@ class UnifiedScanDialog:
             # Some Tk/WM combos reject grab while viewability is racing; keep dialog usable.
             pass
 
-    def _create_button_panel(self) -> None:
-        frame = tk.Frame(self.dialog)
-        self.theme.apply_to_widget(frame, "main_window")
-        frame.pack(fill=tk.X, padx=20, pady=(5, 15))
-
-        add_shortcut_hint(
-            frame,
-            self.theme,
-            "Enter start scan  •  Esc cancel  •  Ctrl/Cmd+W close",
-        )
-
-        btns = tk.Frame(frame)
-        self.theme.apply_to_widget(btns, "main_window")
-        btns.pack(side=tk.RIGHT)
-
-        cancel_btn = tk.Button(btns, text="Cancel", command=self._cancel)
-        self.theme.apply_to_widget(cancel_btn, "button_secondary")
-        cancel_btn.pack(side=tk.LEFT, padx=(0, 10))
-
-        start_btn = tk.Button(btns, text="Start Scan", command=self._start)
-        self.theme.apply_to_widget(start_btn, "button_primary")
-        start_btn.pack(side=tk.LEFT)
-
     def _open_reddit_grab(self) -> None:
         """Close this dialog and open the Reddit Grab flow via callback."""
         if not self.reddit_grab_callback:
@@ -1320,6 +740,7 @@ class UnifiedScanDialog:
         upper = raw.upper()
         if upper != raw:
             self.country_var.set(upper)
+        self._sync_targeting_mode_state()
 
     def _parse_positive_int(self, value_str: str, field_name: str, *, minimum: int = 1, maximum: int) -> int:
         if not value_str.strip():
@@ -1420,6 +841,11 @@ class UnifiedScanDialog:
         return out
 
     def _get_all_selected_countries(self, manual_input: str) -> tuple[list[str], str]:
+        if manual_input.strip() and self._get_selected_region_countries():
+            return [], (
+                "Use either individual country codes or region selections, not both."
+            )
+
         manual, err = self._parse_and_validate_countries(manual_input)
         if err:
             return [], err
@@ -1458,6 +884,42 @@ class UnifiedScanDialog:
             text = ""
         self.region_status_label.configure(text=text)
 
+    def _sync_targeting_mode_state(self) -> None:
+        """Keep manual country entry and region targeting mutually exclusive."""
+        manual_active = bool(self.country_var.get().strip())
+        region_vars = (
+            self.africa_var,
+            self.asia_var,
+            self.europe_var,
+            self.north_america_var,
+            self.oceania_var,
+            self.south_america_var,
+        )
+        region_active = any(bool(var.get()) for var in region_vars)
+
+        # Explicit country codes win when restoring an older conflicting state.
+        if manual_active and region_active:
+            for var in region_vars:
+                var.set(False)
+            region_active = False
+            self._update_region_status()
+
+        country_entry = getattr(self, "country_entry", None)
+        if country_entry is not None:
+            country_entry.configure(
+                state=tk.DISABLED if region_active else tk.NORMAL
+            )
+
+        region_state = tk.DISABLED if manual_active else tk.NORMAL
+        for widget in getattr(self, "_region_checkbuttons", ()):
+            widget.configure(state=region_state)
+        for widget in getattr(self, "_region_action_buttons", ()):
+            widget.configure(state=region_state)
+
+    def _on_region_selection_changed(self) -> None:
+        self._update_region_status()
+        self._sync_targeting_mode_state()
+
     def _select_all_regions(self) -> None:
         for var in (
             self.africa_var,
@@ -1468,7 +930,7 @@ class UnifiedScanDialog:
             self.south_america_var,
         ):
             var.set(True)
-        self._update_region_status()
+        self._on_region_selection_changed()
 
     def _clear_all_regions(self) -> None:
         for var in (
@@ -1480,7 +942,7 @@ class UnifiedScanDialog:
             self.south_america_var,
         ):
             var.set(False)
-        self._update_region_status()
+        self._on_region_selection_changed()
 
     # ------------------------------------------------------------------
     # Build/start/cancel

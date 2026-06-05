@@ -77,6 +77,11 @@ Last updated: 2026-06-05
 - Serialize provider workflows above their existing internal queues and advance only after persistence plus sync complete. Generation tokens prevent duplicate or cancelled callbacks from restarting pending work.
 - Keep provider order registry-driven with numeric priorities so adding a future provider does not require rewriting a fixed three-provider sequence.
 
+**Compact operational dialogs (2026-06-05):**
+- Dense operator workflows benefit from responsive grids, restrained separators, and a fixed action footer more than nested cards and oversized section bars. Keep scrolling as a small-screen fallback, not the default layout.
+- Extract layout construction into a satellite before redesigning a near-limit controller. This keeps persistence, validation, and launch behavior stable while making visual iteration easier to test and reverse.
+- Enforce mutually exclusive input modes at three layers: widget state, saved-state restoration, and request validation. This prevents templates or programmatic callers from bypassing a visual guard.
+
 Append new lessons after each completed card:
 - What failed or nearly failed.
 - Which guardrail prevented recurrence.

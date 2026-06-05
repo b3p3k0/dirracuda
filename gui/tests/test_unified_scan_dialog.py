@@ -413,6 +413,38 @@ def test_apply_form_state_providers_roundtrip():
     assert dlg.provider_reddit_var.get() is False
 
 
+def test_apply_form_state_country_codes_win_over_regions():
+    dlg = _make_dialog()
+    dlg._apply_form_state(
+        {
+            "country_code": "US,CA",
+            "regions": {
+                "africa": True,
+                "asia": True,
+            },
+        }
+    )
+
+    assert dlg.country_var.get() == "US,CA"
+    assert dlg.africa_var.get() is False
+    assert dlg.asia_var.get() is False
+
+
+def test_build_scan_request_rejects_mixed_country_and_region_targeting():
+    dlg = _make_dialog()
+    dlg.country_var.set("US")
+    dlg.africa_var.set(True)
+    dlg._get_all_selected_countries = (
+        UnifiedScanDialog._get_all_selected_countries.__get__(
+            dlg,
+            UnifiedScanDialog,
+        )
+    )
+
+    with pytest.raises(ValueError, match="either individual country codes or region"):
+        dlg._build_scan_request()
+
+
 def test_capture_form_state_includes_reddit_options_block():
     dlg = _make_dialog()
     dlg.reddit_mode_var.set("search")

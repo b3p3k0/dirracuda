@@ -21,29 +21,38 @@ def build_searxng_sub_panel(
     vars_dict: Dict[str, Any],
     theme: Any,
 ) -> tk.Frame:
-    """Build the SearXNG options inline frame.
+    """Build compact SearXNG controls for the unified scan dialog."""
+    from tkinter import ttk
 
-    vars_dict keys: ``instance_url``, ``query``, ``max_results`` — each a tk.StringVar.
-    Returns the frame so the caller can store it for enable/disable syncing.
-    """
     frame = tk.Frame(container)
-    theme.apply_to_widget(frame, "card")
+    theme.apply_to_widget(frame, "main_window")
+    frame.grid_columnconfigure(1, weight=1)
+    frame.grid_columnconfigure(2, weight=1)
 
-    for _label, _var, _width in (
-        ("Instance URL", vars_dict["instance_url"], 36),
-        ("Query", vars_dict["query"], 36),
-        ("Max Results", vars_dict["max_results"], 8),
-    ):
-        row = tk.Frame(frame)
-        theme.apply_to_widget(row, "card")
-        row.pack(fill=tk.X, pady=1)
-        lbl = theme.create_styled_label(row, _label, "small")
-        lbl.pack(side=tk.LEFT, padx=(6, 4))
-        ent = tk.Entry(row, textvariable=_var, width=_width, font=theme.fonts["small"])
-        theme.apply_to_widget(ent, "entry")
-        ent.pack(side=tk.LEFT, padx=(0, 6))
+    _grid_label(frame, "Instance", 0, 0, theme)
+    instance_entry = ttk.Entry(frame, textvariable=vars_dict["instance_url"])
+    instance_entry.grid(row=0, column=1, sticky="ew", padx=(4, 12), pady=2)
 
-    _add_hint_row(frame, SEARXNG_MAX_REMINDER, theme)
+    _grid_label(frame, "Query", 1, 0, theme)
+    query_entry = ttk.Entry(frame, textvariable=vars_dict["query"])
+    query_entry.grid(
+        row=1,
+        column=1,
+        sticky="ew",
+        padx=(4, 12),
+        pady=2,
+    )
+
+    _grid_label(frame, "Results", 2, 0, theme)
+    results_entry = ttk.Entry(frame, textvariable=vars_dict["max_results"], width=8)
+    results_entry.grid(row=2, column=1, sticky="w", padx=(4, 0), pady=2)
+
+    hint = _small_label(frame, SEARXNG_MAX_REMINDER, theme)
+    hint.grid(row=3, column=0, columnspan=3, sticky="w", pady=(0, 2))
+    frame._helper_label = hint  # type: ignore[attr-defined]
+    frame._searxng_instance_entry = instance_entry  # type: ignore[attr-defined]
+    frame._searxng_query_entry = query_entry  # type: ignore[attr-defined]
+    frame._searxng_results_entry = results_entry  # type: ignore[attr-defined]
     return frame
 
 
@@ -51,121 +60,176 @@ def build_reddit_sub_panel(
     container: tk.Widget,
     vars_dict: Dict[str, Any],
     theme: Any,
+    *,
+    on_state_change=None,
 ) -> tk.Frame:
-    """Build the Reddit options inline frame.
+    """Build compact Reddit controls with feed/search conditional fields."""
+    from tkinter import ttk
 
-    vars_dict keys: ``mode``, ``sort``, ``top_window``, ``max_posts``, ``query``,
-    ``parse_body``, ``include_nsfw``.
-
-    All fields are always visible; mode-conditional validation happens at submit time.
-    Returns the frame so the caller can store it for enable/disable syncing.
-    """
     frame = tk.Frame(container)
-    theme.apply_to_widget(frame, "card")
+    theme.apply_to_widget(frame, "main_window")
+    frame.grid_columnconfigure(7, weight=1)
 
-    # Mode selector
-    _add_option_row(frame, "Mode", vars_dict["mode"], ["feed", "search"], theme, width=10)
+    _grid_label(frame, "Mode", 0, 0, theme)
+    mode_combo = ttk.Combobox(
+        frame,
+        textvariable=vars_dict["mode"],
+        values=("feed", "search"),
+        state="readonly",
+        width=8,
+    )
+    mode_combo.grid(row=0, column=1, sticky="w", padx=(4, 12), pady=2)
 
-    # Sort + top-window
-    _add_option_row(frame, "Sort", vars_dict["sort"], ["new", "top"], theme, width=6)
-    _add_option_row(
-        frame, "Top Window", vars_dict["top_window"],
-        ["week", "day", "hour", "month", "year", "all"], theme, width=8,
+    _grid_label(frame, "Sort", 0, 2, theme)
+    sort_combo = ttk.Combobox(
+        frame,
+        textvariable=vars_dict["sort"],
+        values=("new", "top"),
+        state="readonly",
+        width=7,
+    )
+    sort_combo.grid(row=0, column=3, sticky="w", padx=(4, 12), pady=2)
+
+    _grid_label(frame, "Window", 0, 4, theme)
+    top_window_combo = ttk.Combobox(
+        frame,
+        textvariable=vars_dict["top_window"],
+        values=("hour", "day", "week", "month", "year", "all"),
+        state="readonly",
+        width=8,
+    )
+    top_window_combo.grid(row=0, column=5, sticky="w", padx=(4, 12), pady=2)
+
+    _grid_label(frame, "Posts", 0, 6, theme)
+    max_posts_entry = ttk.Entry(frame, textvariable=vars_dict["max_posts"], width=7)
+    max_posts_entry.grid(row=0, column=7, sticky="w", padx=(4, 0), pady=2)
+
+    query_label = _grid_label(frame, "Query", 1, 0, theme)
+    query_entry = ttk.Entry(frame, textvariable=vars_dict["query"])
+    query_entry.grid(
+        row=1,
+        column=1,
+        columnspan=7,
+        sticky="ew",
+        padx=(4, 0),
+        pady=2,
     )
 
-    # Max posts
-    _add_entry_row(frame, "Max Posts", vars_dict["max_posts"], theme, width=6)
-    _add_hint_row(frame, REDDIT_MAX_REMINDER, theme)
+    options = tk.Frame(frame)
+    theme.apply_to_widget(options, "main_window")
+    options.grid(row=2, column=0, columnspan=8, sticky="w", pady=(1, 2))
+    parse_body = ttk.Checkbutton(
+        options,
+        text="Parse body",
+        variable=vars_dict["parse_body"],
+    )
+    parse_body.pack(side=tk.LEFT)
+    include_nsfw = ttk.Checkbutton(
+        options,
+        text="Include NSFW",
+        variable=vars_dict["include_nsfw"],
+    )
+    include_nsfw.pack(side=tk.LEFT, padx=(12, 0))
 
-    # Query (validated when mode=search)
-    _add_entry_row(frame, "Query", vars_dict["query"], theme, width=30)
+    hint = _small_label(frame, REDDIT_MAX_REMINDER, theme)
+    hint.grid(row=3, column=0, columnspan=8, sticky="w", pady=(0, 2))
 
-    # Boolean options
-    _add_checkbutton_row(frame, "Parse body", vars_dict["parse_body"], theme)
-    _add_checkbutton_row(frame, "Include NSFW", vars_dict["include_nsfw"], theme)
+    frame._reddit_mode_var = vars_dict["mode"]  # type: ignore[attr-defined]
+    frame._reddit_sort_var = vars_dict["sort"]  # type: ignore[attr-defined]
+    frame._reddit_query_widgets = (query_label, query_entry)  # type: ignore[attr-defined]
+    frame._reddit_top_window_combo = top_window_combo  # type: ignore[attr-defined]
+    frame._helper_label = hint  # type: ignore[attr-defined]
+
+    if callable(on_state_change):
+        mode_combo.bind("<<ComboboxSelected>>", lambda _event: on_state_change())
+        sort_combo.bind("<<ComboboxSelected>>", lambda _event: on_state_change())
+        vars_dict["mode"].trace_add("write", lambda *_args: on_state_change())
+        vars_dict["sort"].trace_add("write", lambda *_args: on_state_change())
 
     return frame
 
 
 def sync_option_entries(frame: tk.Widget | None, enabled: bool) -> None:
-    """Enable or disable all stateful child widgets in *frame*.
-
-    Handles tk.Entry, tk.Checkbutton, and the menubutton inside tk.OptionMenu.
-    Safe to call with frame=None.
-    """
+    """Enable or disable stateful controls in a provider panel."""
     if frame is None:
         return
     new_state = tk.NORMAL if enabled else tk.DISABLED
     _apply_state_recursive(frame, new_state)
 
 
+def sync_reddit_option_state(frame: tk.Widget | None, enabled: bool) -> None:
+    """Apply provider, mode, and sort state to the Reddit controls."""
+    if frame is None:
+        return
+    sync_option_entries(frame, enabled)
+
+    mode_var = getattr(frame, "_reddit_mode_var", None)
+    sort_var = getattr(frame, "_reddit_sort_var", None)
+    query_widgets = getattr(frame, "_reddit_query_widgets", ())
+    mode = str(mode_var.get() if mode_var is not None else "feed").strip().lower()
+    sort = str(sort_var.get() if sort_var is not None else "new").strip().lower()
+
+    for widget in query_widgets:
+        if mode == "search":
+            widget.grid()
+        else:
+            widget.grid_remove()
+
+    top_window_combo = getattr(frame, "_reddit_top_window_combo", None)
+    if top_window_combo is not None:
+        top_window_combo.configure(
+            state="readonly" if enabled and sort == "top" else tk.DISABLED
+        )
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _add_option_row(
+def _grid_label(
     parent: tk.Widget,
-    label: str,
-    var: tk.StringVar,
-    choices: list[str],
+    text: str,
+    row: int,
+    column: int,
     theme: Any,
-    *,
-    width: int = 10,
-) -> None:
-    row = tk.Frame(parent)
-    theme.apply_to_widget(row, "card")
-    row.pack(fill=tk.X, pady=1)
-    lbl = theme.create_styled_label(row, label, "small")
-    lbl.pack(side=tk.LEFT, padx=(6, 4))
-    om = tk.OptionMenu(row, var, *choices)
-    om.config(font=theme.fonts["small"], width=width)
-    theme.apply_to_widget(om, "button_secondary")
-    om.pack(side=tk.LEFT, padx=(0, 6))
+) -> tk.Label:
+    label = theme.create_styled_label(parent, text, "small")
+    label.grid(row=row, column=column, sticky="w", pady=2)
+    return label
 
 
-def _add_entry_row(
-    parent: tk.Widget,
-    label: str,
-    var: tk.StringVar,
-    theme: Any,
-    *,
-    width: int = 20,
-) -> None:
-    row = tk.Frame(parent)
-    theme.apply_to_widget(row, "card")
-    row.pack(fill=tk.X, pady=1)
-    lbl = theme.create_styled_label(row, label, "small")
-    lbl.pack(side=tk.LEFT, padx=(6, 4))
-    ent = tk.Entry(row, textvariable=var, width=width, font=theme.fonts["small"])
-    theme.apply_to_widget(ent, "entry")
-    ent.pack(side=tk.LEFT, padx=(0, 6))
-
-
-def _add_checkbutton_row(
-    parent: tk.Widget,
-    label: str,
-    var: tk.BooleanVar,
-    theme: Any,
-) -> None:
-    cb = tk.Checkbutton(parent, text=label, variable=var, font=theme.fonts["small"])
-    theme.apply_to_widget(cb, "checkbox")
-    cb.pack(anchor="w", padx=10, pady=1)
-
-
-def _add_hint_row(parent: tk.Widget, text: str, theme: Any) -> None:
-    hint = theme.create_styled_label(parent, text, "small")
-    hint.pack(anchor="w", padx=10, pady=(0, 2))
+def _small_label(parent: tk.Widget, text: str, theme: Any) -> tk.Label:
+    return theme.create_styled_label(
+        parent,
+        text,
+        "small",
+        fg=theme.colors["text_secondary"],
+    )
 
 
 def _apply_state_recursive(widget: tk.Widget, state: str) -> None:
-    """Recursively set *state* on Entry, Checkbutton, and OptionMenu menubuttons."""
-    if isinstance(widget, (tk.Entry, tk.Checkbutton)):
+    """Recursively set state on Tk and ttk input controls."""
+    from tkinter import ttk
+
+    if isinstance(widget, ttk.Combobox):
         try:
-            widget.configure(state=state)
+            widget.configure(state="readonly" if state == tk.NORMAL else tk.DISABLED)
         except tk.TclError:
             pass
-    elif isinstance(widget, tk.Menubutton):
-        # OptionMenu is a Menubutton; configure it directly.
+    elif isinstance(
+        widget,
+        (
+            tk.Entry,
+            tk.Checkbutton,
+            tk.Radiobutton,
+            tk.Button,
+            tk.Menubutton,
+            ttk.Entry,
+            ttk.Checkbutton,
+            ttk.Radiobutton,
+            ttk.Button,
+        ),
+    ):
         try:
             widget.configure(state=state)
         except tk.TclError:
