@@ -61,6 +61,10 @@ Last updated: 2026-06-05
 - Keep transient and durable completion surfaces separate: the popup gives immediate results, while Live Scan Output preserves the final counts after the popup closes.
 - Emit a multiline rollup as one queue item. This preserves ordering and avoids timestamping every metric as a separate controller status event.
 
+**HTTP browser endpoint fidelity (2026-06-05):**
+- A correct saved URL contract includes scheme, port, hostname, and path. Server List browsing used only scheme/port, so virtual-hosted results opened the IP root even though Copy URL was correct.
+- Copy, browse, and background probe actions should share one endpoint resolver. The IP remains the database/cache identity while `probe_host` and `probe_path` drive HTTP authority, HTTPS SNI, and initial navigation.
+
 Append new lessons after each completed card:
 - What failed or nearly failed.
 - Which guardrail prevented recurrence.

@@ -168,7 +168,7 @@ The **preflight screen** shows your live balance and an estimated post-scan bala
 | 📋 Copy IP | Copy selected server IP address to clipboard |
 | 🔍 Probe Selected | Enumerate shares, detect ransomware indicators |
 | 📦 Extract Selected | Collect files with hard limits on count, size, and time |
-| 🗂️ Browse Selected | Read-only exploration of accessible shares |
+| 🗂️ Browse Selected | Read-only exploration of accessible shares; HTTP rows open at their saved hostname/path when available |
 | ⭐ Toggle Favorite | Mark/unmark selected servers as favorites |
 | 🚫 Toggle Avoid | Mark/unmark selected servers to avoid |
 | ⚠ Toggle Compromised | Mark/unmark selected servers as likely compromised |

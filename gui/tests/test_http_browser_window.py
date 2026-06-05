@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from gui.components.unified_browser_window import HttpBrowserWindow
+from shared.http_browser import HttpNavigator
 
 
 class _IntVar:
@@ -57,6 +58,7 @@ def _make_window() -> HttpBrowserWindow:
     win.ip_address = "10.20.30.40"
     win.port = 80
     win.scheme = "http"
+    win.request_host = None
     win.window = MagicMock()
     win.theme = None
     win._set_status = MagicMock()
@@ -243,6 +245,111 @@ def test_init_navigates_to_root_when_initial_path_missing():
             ip_address="1.2.3.4",
         )
     mock_nav.assert_called_once_with("/")
+
+
+def test_init_passes_request_host_to_navigator_and_uses_saved_path():
+    with patch.object(HttpBrowserWindow, "_build_window"), \
+         patch.object(HttpBrowserWindow, "_run_probe_background"), \
+         patch.object(HttpBrowserWindow, "_apply_probe_snapshot"), \
+         patch.object(HttpBrowserWindow, "_navigate_to") as mock_nav, \
+         patch("shared.http_browser.HttpNavigator") as navigator_cls, \
+         patch("gui.components.unified_browser_window.threading.Thread", _NoopThread), \
+         patch("gui.utils.probe_cache_dispatch.load_probe_result_for_host", return_value=None):
+        win = HttpBrowserWindow(
+            parent=MagicMock(),
+            ip_address="184.171.253.117",
+            port=443,
+            scheme="https",
+            request_host="www.sellingyourscreenplay.com",
+            initial_path="/wp-content/uploads/screenplay/scripts/",
+        )
+
+    assert win.ip_address == "184.171.253.117"
+    assert win.request_host == "www.sellingyourscreenplay.com"
+    navigator_cls.assert_called_once_with(
+        ip="184.171.253.117",
+        port=443,
+        scheme="https",
+        request_host="www.sellingyourscreenplay.com",
+        allow_insecure_tls=True,
+        connect_timeout=10.0,
+        request_timeout=15.0,
+        max_entries=5000,
+        max_file_bytes=26_214_400,
+    )
+    mock_nav.assert_called_once_with("/wp-content/uploads/screenplay/scripts/")
+
+
+def test_navigator_uses_request_host_for_authority_and_listing(monkeypatch):
+    captured = {}
+
+    def _fake_request(host, port, scheme, allow_insecure_tls, timeout, **kwargs):
+        captured.update(
+            host=host,
+            port=port,
+            scheme=scheme,
+            request_host=kwargs.get("request_host"),
+            path=kwargs.get("path"),
+        )
+        return (
+            200,
+            '<title>Index of /files/</title><a href="report.txt">report.txt</a>',
+            False,
+            "",
+        )
+
+    monkeypatch.setattr("commands.http.verifier.try_http_request", _fake_request)
+    navigator = HttpNavigator(
+        ip="184.171.253.117",
+        port=443,
+        scheme="https",
+        request_host="www.sellingyourscreenplay.com",
+    )
+
+    result = navigator.list_dir("/files/")
+
+    assert captured == {
+        "host": "www.sellingyourscreenplay.com",
+        "port": 443,
+        "scheme": "https",
+        "request_host": "www.sellingyourscreenplay.com",
+        "path": "/files/",
+    }
+    assert navigator._make_url("/files/report.txt") == (
+        "https://www.sellingyourscreenplay.com:443/files/report.txt"
+    )
+    assert [entry.name for entry in result.entries] == ["/files/report.txt"]
+
+
+def test_background_probe_uses_saved_request_host_and_initial_path(monkeypatch):
+    win = HttpBrowserWindow.__new__(HttpBrowserWindow)
+    win.ip_address = "184.171.253.117"
+    win.port = 443
+    win.scheme = "https"
+    win.request_host = "www.sellingyourscreenplay.com"
+    win._initial_path = "/wp-content/uploads/screenplay/scripts/"
+    win._cancel_event = threading.Event()
+    win.config = {
+        "max_entries": 5000,
+        "connect_timeout": 10,
+        "request_timeout": 15,
+    }
+    win.window = MagicMock()
+    win._set_status = MagicMock()
+    win._apply_probe_snapshot = MagicMock()
+    captured = {}
+
+    def _fake_probe(**kwargs):
+        captured.update(kwargs)
+        return {"errors": []}
+
+    monkeypatch.setattr("gui.utils.http_probe_runner.run_http_probe", _fake_probe)
+
+    win._run_probe_background()
+
+    assert captured["ip"] == "184.171.253.117"
+    assert captured["request_host"] == "www.sellingyourscreenplay.com"
+    assert captured["start_path"] == "/wp-content/uploads/screenplay/scripts/"
 
 
 def test_init_loads_worker_count_from_settings_manager():

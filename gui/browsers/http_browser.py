@@ -80,6 +80,7 @@ class HttpBrowserWindow(UnifiedBrowserCore):
         db_reader=None,
         theme=None,
         settings_manager=None,
+        request_host: Optional[str] = None,
     ) -> None:
         from shared.http_browser import HttpNavigator
         from gui.utils.probe_cache_dispatch import load_probe_result_for_host
@@ -87,6 +88,7 @@ class HttpBrowserWindow(UnifiedBrowserCore):
         self.ip_address = ip_address
         self.port = port
         self.scheme = scheme
+        self.request_host = str(request_host or "").strip() or None
         self._initial_path = self._normalize_initial_path(initial_path)
         self.db_reader = db_reader
         self.theme = theme
@@ -100,6 +102,7 @@ class HttpBrowserWindow(UnifiedBrowserCore):
             ip=ip_address,
             port=port,
             scheme=scheme,
+            request_host=self.request_host,
             allow_insecure_tls=True,
             connect_timeout=float(self.config["connect_timeout"]),
             request_timeout=float(self.config["request_timeout"]),
@@ -155,7 +158,7 @@ class HttpBrowserWindow(UnifiedBrowserCore):
     # ------------------------------------------------------------------
 
     def _adapt_window_title(self) -> str:
-        return f"HTTP Browser \u2014 {self.scheme}://{self.ip_address}:{self.port}"
+        return f"HTTP Browser \u2014 {self.scheme}://{self._display_host()}:{self.port}"
 
     def _adapt_banner_label(self) -> str:
         return "Banner/Title:"
@@ -201,6 +204,9 @@ class HttpBrowserWindow(UnifiedBrowserCore):
         if not cleaned:
             return "/"
         return f"/{cleaned.lstrip('/')}"
+
+    def _display_host(self) -> str:
+        return getattr(self, "request_host", None) or self.ip_address
 
     # ------------------------------------------------------------------
     # Navigation
@@ -312,7 +318,7 @@ class HttpBrowserWindow(UnifiedBrowserCore):
         # Lazy import preserves gui.components.unified_browser_window.open_file_viewer
         # as a valid monkeypatch target (BASELINE_CONTRACTS §2c).
         from gui.components.unified_browser_window import open_file_viewer
-        display_path = f"{self.scheme}://{self.ip_address}:{self.port}{remote_path}"
+        display_path = f"{self.scheme}://{self._display_host()}:{self.port}{remote_path}"
 
         def save_callback() -> None:
             self._start_download_thread([(remote_path, 0)])
@@ -339,7 +345,7 @@ class HttpBrowserWindow(UnifiedBrowserCore):
         # Lazy import preserves gui.components.unified_browser_window.open_image_viewer
         # as a valid monkeypatch target (BASELINE_CONTRACTS §2c).
         from gui.components.unified_browser_window import open_image_viewer
-        display_path = f"{self.scheme}://{self.ip_address}:{self.port}{remote_path}"
+        display_path = f"{self.scheme}://{self._display_host()}:{self.port}{remote_path}"
 
         def save_callback() -> None:
             self._start_download_thread([(remote_path, file_size)])
@@ -577,6 +583,8 @@ class HttpBrowserWindow(UnifiedBrowserCore):
                 ip=self.ip_address,
                 port=self.port,
                 scheme=self.scheme,
+                request_host=self.request_host,
+                start_path=self._initial_path,
                 allow_insecure_tls=True,
                 max_entries=int(self.config["max_entries"]),
                 connect_timeout=int(self.config["connect_timeout"]),

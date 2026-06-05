@@ -1001,7 +1001,7 @@ Displays hosts from `smb_servers`, `ftp_servers`, `http_servers` in separate tab
 |--------|---------|
 | Copy IP | Clipboard |
 | Probe | `probe_runner.py` (SMB) / `ftp_probe_runner.py` / `http_probe_runner.py` — runs a quick directory listing; summary status persists in `*_probe_cache`, full snapshots persist in normalized `probe_snapshots` tables and are linked by `latest_snapshot_id` |
-| Browse | Opens `SMBBrowserWindow` / `FtpBrowserWindow` / `HttpBrowserWindow` via `smb_browser.py` / `ftp_browser.py` / `http_browser.py` |
+| Browse | Opens `SMBBrowserWindow` / `FtpBrowserWindow` / `HttpBrowserWindow` via `smb_browser.py` / `ftp_browser.py` / `http_browser.py`. HTTP rows resolve `scheme`, `port`, `probe_host`, and `probe_path` from the authoritative endpoint row; the browser defaults to `/` only when no path is saved. |
 | Extract | `extract_runner.py` — downloads files per `file_collection` limits; optional ClamAV scan post-extract |
 | ~~Pry~~ | Removed in C2. `share_credentials` table retained for DB compatibility; existing credential rows remain readable. |
 | Favorite / Avoid / Compromised | Sets flags in `host_user_flags` / `ftp_user_flags` / `http_user_flags` |
@@ -1015,6 +1015,12 @@ All three protocol browsers are read-only. Navigation traverses directories up t
 - Text files: decoded as UTF-8 (fallback to Latin-1) up to `viewer.max_view_size_mb` (5MB)
 - Image files: displayed inline up to `viewer.max_image_size_mb` (15MB) / `max_image_pixels` (20M px)
 - Binary files: hex view at 16 bytes/row
+
+The HTTP browser keeps the server IP as its database, cache, and quarantine identity.
+When `http_servers.probe_host` is present, requests use that hostname as the URL
+authority (including HTTPS SNI), and startup navigation uses
+`http_servers.probe_path`. This matches Server List `Copy URL` behavior and supports
+virtual-hosted directory indexes.
 
 Downloads are staged to `file_browser.quarantine_root` (`~/.dirracuda/data/quarantine` by default). If `quarantine.use_tmpfs` is true, Dirracuda uses a pre-mounted tmpfs when detected (canonical-first: `~/.dirracuda/data/tmpfs_quarantine`, then legacy fallbacks).
 

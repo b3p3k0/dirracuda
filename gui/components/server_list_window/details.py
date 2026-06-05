@@ -36,8 +36,42 @@ from gui.utils.database_access import DatabaseReader
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.keybindings import add_shortcut_hint, bind_close_shortcuts, bind_submit_shortcuts
 from gui.components.batch_extract_dialog import BatchExtractSettingsDialog
+from gui.components.server_list_window.http_endpoint import (
+    open_http_server_browser,
+    resolve_http_endpoint,
+)
 from shared.quarantine import create_quarantine_dir
 from shared.path_service import get_paths, get_legacy_paths, select_existing_path
+
+
+def _open_http_detail_browser(parent, server_data, theme, settings_manager=None) -> None:
+    """Open an HTTP detail row using its saved host and path metadata."""
+    db_reader = None
+    if settings_manager:
+        try:
+            db_reader = DatabaseReader(settings_manager.get_database_path())
+        except Exception:
+            db_reader = None
+
+    endpoint = resolve_http_endpoint(
+        server_data.get("ip_address", ""),
+        server_data,
+        db_reader=db_reader,
+    )
+    config_path = None
+    if settings_manager:
+        config_path = settings_manager.get_setting("backend.config_path", None)
+        if not config_path and hasattr(settings_manager, "get_smbseek_config_path"):
+            config_path = settings_manager.get_smbseek_config_path()
+
+    open_http_server_browser(
+        endpoint,
+        parent=parent,
+        db_reader=db_reader,
+        config_path=config_path,
+        theme=theme,
+        settings_manager=settings_manager,
+    )
 
 
 def show_server_detail_popup(parent_window, server_data, theme, settings_manager=None,
@@ -166,45 +200,11 @@ def show_server_detail_popup(parent_window, server_data, theme, settings_manager
 
     def _open_browse_window() -> None:
         if host_type == "H":
-            _db = None
-            if settings_manager:
-                try:
-                    _db = DatabaseReader(settings_manager.get_database_path())
-                except Exception:
-                    pass
-            row_psid = server_data.get("protocol_server_id")
-            row_port = server_data.get("port")
-            detail = (
-                _db.get_http_server_detail(
-                    ip_address,
-                    protocol_server_id=row_psid,
-                    port=row_port,
-                )
-                if _db else None
-            )
-            try:
-                port = int((detail or {}).get("port") or row_port or 80)
-            except (TypeError, ValueError):
-                port = 80
-            scheme = (detail or {}).get("scheme") or ("https" if port == 443 else "http")
-            config_path = None
-            if settings_manager:
-                config_path = settings_manager.get_setting('backend.config_path', None)
-                if not config_path and hasattr(settings_manager, "get_smbseek_config_path"):
-                    config_path = settings_manager.get_smbseek_config_path()
-            from gui.components.unified_browser_window import open_ftp_http_browser
-            open_ftp_http_browser(
-                "H",
-                parent=detail_window,
-                ip_address=ip_address,
-                port=port,
-                scheme=scheme,
-                db_reader=_db,
-                config_path=config_path,
-                theme=theme,
+            _open_http_detail_browser(
+                detail_window,
+                server_data,
                 settings_manager=settings_manager,
-                # banner intentionally omitted: current details path does not pass banner
-                # to HttpBrowserWindow; factory default (None) preserves that behavior.
+                theme=theme,
             )
             return
 

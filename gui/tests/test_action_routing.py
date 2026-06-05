@@ -40,6 +40,7 @@ def _import_batch_mixins_isolated():
         "gui.components.pry_status_dialog",
         "gui.components.batch_extract_dialog",
         "gui.components.server_list_window",
+        "gui.components.server_list_window.http_endpoint",
         "gui.components.server_list_window.export",
         "gui.components.server_list_window.details",
         "gui.components.server_list_window.filters",
@@ -974,13 +975,22 @@ def test_browse_ftp_row_opens_ftp_browser():
 def test_browse_http_row_opens_http_browser():
     """_launch_browse_workflow with host_type='H' instantiates HttpBrowserWindow."""
     stub = _BatchMixinStub()
-    stub.db_reader.get_http_server_detail.return_value = {"port": 8080, "scheme": "http"}
+    stub.db_reader.get_http_server_detail.return_value = {
+        "port": 443,
+        "scheme": "https",
+        "probe_host": "www.example.test",
+        "probe_path": "/files/archive/",
+    }
     target = {
         "ip_address": "10.0.0.2",
         "host_type": "H",
         "row_key": "H:4",
         "auth_method": "",
-        "data": {"banner": "nginx/1.24"},
+        "data": {
+            "protocol_server_id": 4,
+            "port": 443,
+            "banner": "nginx/1.24",
+        },
     }
 
     http_instances = []
@@ -994,9 +1004,38 @@ def test_browse_http_row_opens_http_browser():
 
     assert len(http_instances) == 1
     assert http_instances[0]["ip_address"] == "10.0.0.2"
-    assert http_instances[0]["port"] == 8080
-    assert http_instances[0]["scheme"] == "http"
+    assert http_instances[0]["port"] == 443
+    assert http_instances[0]["scheme"] == "https"
+    assert http_instances[0]["request_host"] == "www.example.test"
+    assert http_instances[0]["initial_path"] == "/files/archive/"
     assert http_instances[0]["banner"] == "nginx/1.24"
+
+
+def test_browse_http_row_defaults_to_root_when_path_missing():
+    stub = _BatchMixinStub()
+    stub.db_reader.get_http_server_detail.return_value = {
+        "port": 80,
+        "scheme": "http",
+        "probe_host": None,
+        "probe_path": None,
+    }
+    target = {
+        "ip_address": "10.0.0.3",
+        "host_type": "H",
+        "row_key": "H:5",
+        "data": {"port": 80},
+    }
+    http_instances = []
+
+    class FakeHttpBrowserWindow:
+        def __init__(self, **kwargs):
+            http_instances.append(kwargs)
+
+    with patch("gui.components.unified_browser_window.HttpBrowserWindow", FakeHttpBrowserWindow):
+        stub._launch_browse_workflow(target)
+
+    assert http_instances[0]["request_host"] is None
+    assert http_instances[0]["initial_path"] == "/"
 
 
 def test_ftp_server_picker_browse_routes_via_factory(monkeypatch):

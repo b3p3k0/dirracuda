@@ -124,6 +124,7 @@ class HttpNavigator:
         ip: str,
         port: int,
         scheme: str,
+        request_host: Optional[str] = None,
         allow_insecure_tls: bool = True,
         connect_timeout: float = 10.0,
         request_timeout: float = 15.0,
@@ -133,6 +134,7 @@ class HttpNavigator:
         self.ip = ip
         self.port = port
         self.scheme = scheme
+        self.request_host = str(request_host or "").strip() or None
         self.allow_insecure_tls = allow_insecure_tls
         self.connect_timeout = connect_timeout
         self.request_timeout = request_timeout
@@ -155,7 +157,8 @@ class HttpNavigator:
 
     def _make_url(self, path: str) -> str:
         clean_path = "/" + path.lstrip("/")
-        return f"{self.scheme}://{self.ip}:{self.port}{clean_path}"
+        authority = self.request_host or self.ip
+        return f"{self.scheme}://{authority}:{self.port}{clean_path}"
 
     # ------------------------------------------------------------------
     # list_dir
@@ -174,12 +177,13 @@ class HttpNavigator:
         from commands.http.verifier import try_http_request, validate_index_page
 
         status_code, body, _tls_verified, reason = try_http_request(
-            self.ip,
+            self.request_host or self.ip,
             self.port,
             self.scheme,
             self.allow_insecure_tls,
             self.request_timeout,
             path=path,
+            request_host=self.request_host,
         )
 
         if reason:

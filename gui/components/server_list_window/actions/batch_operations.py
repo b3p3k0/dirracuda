@@ -650,11 +650,9 @@ class ServerListWindowBatchOperationsMixin:
 
     @staticmethod
     def _normalize_url_path(path: Any) -> str:
-        raw = str(path or "").strip()
-        normalized = raw.split("?", 1)[0].split("#", 1)[0].strip() or "/"
-        if not normalized.startswith("/"):
-            normalized = "/" + normalized.lstrip("/")
-        return normalized
+        from gui.components.server_list_window.http_endpoint import normalize_http_path
+
+        return normalize_http_path(path)
 
     def _build_copy_url_for_target(self, target: Dict[str, Any]) -> Optional[str]:
         host_type = str(target.get("host_type") or "S").strip().upper()
@@ -676,35 +674,9 @@ class ServerListWindowBatchOperationsMixin:
             return f"ftp://{ip_address}:{port}/"
 
         if host_type == "H":
-            row_data = target.get("data") or {}
-            row_port = target.get("port", row_data.get("port"))
-            detail = None
-            if self.db_reader:
-                try:
-                    detail = self.db_reader.get_http_server_detail(
-                        ip_address,
-                        protocol_server_id=target.get("protocol_server_id"),
-                        port=row_port,
-                    )
-                except Exception:
-                    detail = None
+            from gui.components.server_list_window.http_endpoint import resolve_http_target
 
-            try:
-                port = int((detail or {}).get("port") or row_port or 80)
-            except (TypeError, ValueError):
-                port = 80
-
-            scheme = str(
-                (detail or {}).get("scheme")
-                or row_data.get("scheme")
-                or ("https" if port == 443 else "http")
-            ).strip().lower()
-            if scheme not in {"http", "https"}:
-                scheme = "https" if port == 443 else "http"
-
-            host = str((detail or {}).get("probe_host") or row_data.get("probe_host") or ip_address).strip() or ip_address
-            path = self._normalize_url_path((detail or {}).get("probe_path") or row_data.get("probe_path") or "/")
-            return f"{scheme}://{host}:{port}{path}"
+            return resolve_http_target(target, db_reader=self.db_reader).url
 
         return None
 
@@ -1214,30 +1186,16 @@ class ServerListWindowBatchOperationsMixin:
             return
 
         elif host_type == "H":
-            row_data = target.get("data", {}) or {}
-            row_psid = row_data.get("protocol_server_id")
-            row_port = row_data.get("port")
-            detail = (
-                self.db_reader.get_http_server_detail(
-                    ip_addr,
-                    protocol_server_id=row_psid,
-                    port=row_port,
-                )
-                if self.db_reader else None
+            from gui.components.server_list_window.http_endpoint import (
+                open_http_server_browser,
+                resolve_http_target,
             )
-            try:
-                port = int((detail or {}).get("port") or row_port or 80)
-            except (TypeError, ValueError):
-                port = 80
-            scheme = (detail or {}).get("scheme") or ("https" if port == 443 else "http")
+
+            endpoint = resolve_http_target(target, db_reader=self.db_reader)
             banner = target.get("data", {}).get("banner")
-            from gui.components.unified_browser_window import open_ftp_http_browser
-            open_ftp_http_browser(
-                "H",
+            open_http_server_browser(
+                endpoint,
                 parent=self.window,
-                ip_address=ip_addr,
-                port=port,
-                scheme=scheme,
                 banner=banner,
                 config_path=config_path,
                 db_reader=self.db_reader,
