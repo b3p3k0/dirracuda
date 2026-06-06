@@ -13,6 +13,9 @@ from experimental.se_dork.models import DEFAULT_MAX_RESULTS, MAX_RESULTS
 
 
 SEARXNG_MAX_REMINDER = f"Maximum: {MAX_RESULTS:,} unique results per run."
+SEARXNG_PACING_REMINDER = (
+    "Large runs are automatically paced to protect upstream engines."
+)
 REDDIT_MAX_REMINDER = f"Maximum: {MAX_POSTS} posts per RSS snapshot."
 
 
@@ -47,7 +50,11 @@ def build_searxng_sub_panel(
     results_entry = ttk.Entry(frame, textvariable=vars_dict["max_results"], width=8)
     results_entry.grid(row=2, column=1, sticky="w", padx=(4, 0), pady=2)
 
-    hint = _small_label(frame, SEARXNG_MAX_REMINDER, theme)
+    hint = _small_label(
+        frame,
+        f"{SEARXNG_MAX_REMINDER} {SEARXNG_PACING_REMINDER}",
+        theme,
+    )
     hint.grid(row=3, column=0, columnspan=3, sticky="w", pady=(0, 2))
     frame._helper_label = hint  # type: ignore[attr-defined]
     frame._searxng_instance_entry = instance_entry  # type: ignore[attr-defined]

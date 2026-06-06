@@ -65,3 +65,11 @@ class RunResult:
     probe_clean: int = 0
     probe_issue: int = 0
     probe_unprobed: int = 0
+    pages_fetched: int = 0
+    pacing_delay_seconds: float = 0.0
+    throttled_page_count: int = 0
+    hard_retry_count: int = 0
+    hard_retry_delay_seconds: float = 0.0
+    throttle_engines: tuple[str, ...] = ()
+    stopped_early: bool = False
+    fetch_warning: Optional[str] = None

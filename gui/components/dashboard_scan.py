@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional
 
 from gui.components.dashboard_scan_rollup import (
     format_reddit_rollup,
+    format_searxng_popup_summary,
     format_searxng_rollup,
 )
 from gui.components.dashboard_provider_queue import (
@@ -857,32 +858,6 @@ def _on_searxng_scan_done(
     if searxng_only:
         end_dt = datetime.now()
         duration_seconds = (end_dt - started_at).total_seconds() if started_at else 0.0
-        summary_lines = [
-            f"SearXNG dork search complete. {result.fetched_count} URLs fetched, "
-            f"{result.deduped_count} retained as open-index results.",
-        ]
-        if query:
-            summary_lines += ["", f"Query: {query}"]
-        summary_lines += [
-            "",
-            "Retained results were written to the primary Dirracuda database during this run.",
-        ]
-        if isinstance(sync_summary, dict):
-            summary_lines += [
-                "",
-                "Primary DB sync: "
-                f"{int(sync_summary.get('processed', 0) or 0)} processed "
-                f"({int(sync_summary.get('inserted', 0) or 0)} inserted, "
-                f"{int(sync_summary.get('updated', 0) or 0)} updated, "
-                f"{int(sync_summary.get('skipped', 0) or 0)} skipped, "
-                f"{int(sync_summary.get('failed', 0) or 0)} failed).",
-            ]
-        if result.probe_enabled:
-            summary_lines += [
-                "",
-                f"Probe: {result.probe_total} attempted — {result.probe_clean} clean, "
-                f"{result.probe_issue} flagged, {result.probe_unprobed} unprobed.",
-            ]
         scan_results = {
             "protocol": "searxng",
             "status": "completed",
@@ -890,7 +865,11 @@ def _on_searxng_scan_done(
             "accessible_hosts": result.deduped_count,
             "shares_found": result.deduped_count,
             "country": instance_url or "SearXNG instance",
-            "summary_message": "\n".join(summary_lines),
+            "summary_message": format_searxng_popup_summary(
+                result,
+                query=query,
+                sync_summary=sync_summary,
+            ),
             "end_time": end_dt.isoformat(),
             "duration_seconds": duration_seconds,
         }

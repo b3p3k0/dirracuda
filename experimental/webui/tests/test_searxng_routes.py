@@ -3,6 +3,7 @@
 import json
 import re
 import time
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -203,12 +204,28 @@ def test_searxng_run_rejects_more_than_one_thousand_results(logged_in_client):
     assert "between 1 and 1000" in r.text
 
 
+def test_searxng_browser_run_does_not_auto_call_preflight():
+    source = (
+        Path(__file__).resolve().parents[1] / "static" / "searxng.js"
+    ).read_text(encoding="utf-8")
+
+    assert "fetch('/api/searxng/preflight'" not in source
+    assert "fetch('/api/searxng/run'" in source
+
+
 def test_searxng_run_queues_job(logged_in_client, app_and_queue, monkeypatch):
     from experimental.se_dork.models import RunResult, RUN_STATUS_DONE
     calls = []
     fake_result = RunResult(
         run_id=1, fetched_count=5, deduped_count=3,
         status=RUN_STATUS_DONE, error=None, verified_count=3,
+        pages_fetched=4,
+        pacing_delay_seconds=8.5,
+        throttled_page_count=2,
+        hard_retry_count=1,
+        hard_retry_delay_seconds=30,
+        throttle_engines=("bing",),
+        fetch_warning="Upstream availability recovered after 1 retry (bing).",
     )
     monkeypatch.setattr(
         "experimental.webui.app.run_dork_search",
@@ -253,3 +270,12 @@ def test_searxng_run_queues_job(logged_in_client, app_and_queue, monkeypatch):
     metadata = job_snapshot.get("metadata") or {}
     assert metadata.get("sync_processed") == 3
     assert metadata.get("sync_inserted") == 1
+    assert metadata.get("pages_fetched") == 4
+    assert metadata.get("pacing_delay_seconds") == 8.5
+    assert metadata.get("throttled_page_count") == 2
+    assert metadata.get("hard_retry_count") == 1
+    assert metadata.get("hard_retry_delay_seconds") == 30
+    assert metadata.get("throttle_engines") == ["bing"]
+    assert metadata.get("fetch_warning") == (
+        "Upstream availability recovered after 1 retry (bing)."
+    )

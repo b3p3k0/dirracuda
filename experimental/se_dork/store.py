@@ -1,12 +1,13 @@
 """
-Sidecar SQLite store for the se_dork module.
+SQLite runtime store for the se_dork module.
 
-DB path: ~/.dirracuda/data/experimental/se_dork.db (separate from main dirracuda.db)
+New runs receive the active primary DB path explicitly. Legacy callers may
+still resolve the historical sidecar path for read/migration workflows.
 
 Transaction ownership:
   - init_db() and open_connection() own their setup; init_db() commits internally.
-  - insert_run(), update_run(), and insert_result() accept a caller-supplied
-    connection and do NOT commit. The caller owns BEGIN / commit / rollback.
+  - CRUD helpers accept a caller-supplied connection and do NOT commit.
+    The caller owns BEGIN / commit / rollback.
 """
 
 from __future__ import annotations
@@ -95,7 +96,7 @@ _PROBE_COLUMN_ALTERS = (
 
 
 def get_db_path(override: Optional[Path] = None) -> Path:
-    """Return sidecar DB path. ``override`` enables test injection."""
+    """Return the explicit runtime path or historical sidecar fallback."""
     if override is not None:
         return override
     paths = get_paths()
@@ -116,7 +117,7 @@ def get_db_path(override: Optional[Path] = None) -> Path:
 
 def init_db(path: Optional[Path] = None) -> None:
     """
-    Create sidecar DB and tables if they do not exist.
+    Create runtime tables if they do not exist.
 
     Idempotent — safe to call multiple times. Creates parent directories.
     """
@@ -169,7 +170,7 @@ def _check_schema(conn: sqlite3.Connection) -> None:
         missing = required_cols - present
         if missing:
             raise RuntimeError(
-                f"se_dork sidecar schema: {table} missing columns {missing}"
+                f"se_dork runtime schema: {table} missing columns {missing}"
             )
 
     # Verify exact UNIQUE(run_id, url_normalized) on dork_results
@@ -185,7 +186,7 @@ def _check_schema(conn: sqlite3.Connection) -> None:
     )
     if not unique_ok:
         raise RuntimeError(
-            "se_dork sidecar schema: dork_results missing UNIQUE(run_id, url_normalized)"
+            "se_dork runtime schema: dork_results missing UNIQUE(run_id, url_normalized)"
         )
 
     # Verify FK dork_results.run_id → dork_runs(run_id)
@@ -196,7 +197,7 @@ def _check_schema(conn: sqlite3.Connection) -> None:
     )
     if not fk_ok:
         raise RuntimeError(
-            "se_dork sidecar schema: dork_results missing FK run_id → dork_runs(run_id)"
+            "se_dork runtime schema: dork_results missing FK run_id → dork_runs(run_id)"
         )
 
 
@@ -207,7 +208,7 @@ def _check_schema(conn: sqlite3.Connection) -> None:
 
 def open_connection(path: Optional[Path] = None) -> sqlite3.Connection:
     """
-    Open a write connection to the sidecar DB with WAL + FK enabled.
+    Open a write connection to the runtime DB with WAL + FK enabled.
 
     Validates schema before returning. Caller is responsible for
     commit / rollback / close.
@@ -300,16 +301,36 @@ def update_run(
     )
 
 
-def insert_result(
+def update_run_progress(
+    conn: sqlite3.Connection,
+    run_id: int,
+    fetched_count: int,
+    deduped_count: int,
+    verified_count: int,
+) -> None:
+    """Update cumulative counts while leaving status and finished_at unchanged."""
+    conn.execute(
+        """
+        UPDATE dork_runs
+           SET fetched_count  = ?,
+               deduped_count  = ?,
+               verified_count = ?
+         WHERE run_id = ?
+        """,
+        (fetched_count, deduped_count, verified_count, run_id),
+    )
+
+
+def insert_result_id(
     conn: sqlite3.Connection,
     run_id: int,
     row: dict,
-) -> bool:
+) -> Optional[int]:
     """
     Insert a dork_results row for the given run.
 
     Deduplication: INSERT OR IGNORE on UNIQUE (run_id, url_normalized).
-    Returns True if the row was inserted, False if it was a duplicate.
+    Returns the new result_id, or None if the row was a duplicate.
 
     Expected dict keys: url, title, content (->snippet), engine (->source_engine),
     engines (->source_engines_json list).
@@ -336,7 +357,36 @@ def insert_result(
             engines_json,
         ),
     )
-    return cur.rowcount == 1
+    if cur.rowcount != 1:
+        return None
+    return int(cur.lastrowid)
+
+
+def insert_result(
+    conn: sqlite3.Connection,
+    run_id: int,
+    row: dict,
+) -> bool:
+    """Insert one result and report whether a new row was created."""
+    return insert_result_id(conn, run_id, row) is not None
+
+
+def insert_page_results(
+    conn: sqlite3.Connection,
+    run_id: int,
+    rows: list[dict],
+) -> list[dict]:
+    """Insert one fetched page and return IDs/URLs for newly created rows."""
+    inserted: list[dict] = []
+    for row in rows:
+        result_id = insert_result_id(conn, run_id, row)
+        if result_id is None:
+            continue
+        inserted.append({
+            "result_id": result_id,
+            "url": str(row.get("url") or ""),
+        })
+    return inserted
 
 
 # ---------------------------------------------------------------------------
@@ -373,6 +423,27 @@ def get_results_for_run(
     cursor = conn.execute(
         "SELECT result_id, url FROM dork_results WHERE run_id = ? ORDER BY result_id ASC",
         (run_id,),
+    )
+    cols = [d[0] for d in cursor.description]
+    return [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+
+def get_results_by_ids(
+    conn: sqlite3.Connection,
+    result_ids: list[int],
+) -> list[dict]:
+    """Return result_id/url rows for a page-scoped ID set."""
+    if not result_ids:
+        return []
+    placeholders = ",".join("?" for _ in result_ids)
+    cursor = conn.execute(
+        f"""
+        SELECT result_id, url
+          FROM dork_results
+         WHERE result_id IN ({placeholders})
+         ORDER BY result_id ASC
+        """,
+        tuple(result_ids),
     )
     cols = [d[0] for d in cursor.description]
     return [dict(zip(cols, row)) for row in cursor.fetchall()]
@@ -508,6 +579,44 @@ def delete_non_open_results(
             """,
             (run_id,),
         )
+    return cur.rowcount
+
+
+def delete_non_open_results_by_ids(
+    conn: sqlite3.Connection,
+    result_ids: list[int],
+) -> int:
+    """Delete non-OPEN_INDEX rows within one fetched page."""
+    if not result_ids:
+        return 0
+    placeholders = ",".join("?" for _ in result_ids)
+    cur = conn.execute(
+        f"""
+        DELETE FROM dork_results
+         WHERE result_id IN ({placeholders})
+           AND (verdict IS NULL OR verdict != 'OPEN_INDEX')
+        """,
+        tuple(result_ids),
+    )
+    return cur.rowcount
+
+
+def delete_unclassified_results_by_ids(
+    conn: sqlite3.Connection,
+    result_ids: list[int],
+) -> int:
+    """Best-effort cleanup for a page whose verdicts could not be persisted."""
+    if not result_ids:
+        return 0
+    placeholders = ",".join("?" for _ in result_ids)
+    cur = conn.execute(
+        f"""
+        DELETE FROM dork_results
+         WHERE result_id IN ({placeholders})
+           AND verdict IS NULL
+        """,
+        tuple(result_ids),
+    )
     return cur.rowcount
 
 

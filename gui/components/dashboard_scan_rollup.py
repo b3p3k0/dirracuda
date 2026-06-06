@@ -60,6 +60,36 @@ def format_searxng_rollup(
         ]
     )
 
+    pages_fetched = _count(getattr(result, "pages_fetched", 0))
+    pacing_seconds = _count(round(getattr(result, "pacing_delay_seconds", 0.0)))
+    if pages_fetched:
+        lines.append(
+            f"⏱ Fetch Pacing: {pages_fetched} pages, "
+            f"{pacing_seconds}s delayed"
+        )
+    throttled_pages = _count(getattr(result, "throttled_page_count", 0))
+    engines = tuple(getattr(result, "throttle_engines", ()) or ())
+    if throttled_pages:
+        lines.append(
+            "⚠ Upstream Engine Warnings: "
+            f"{len(engines)} engines across {throttled_pages} pages; "
+            "continued with soft backoff"
+        )
+    hard_retry_count = _count(getattr(result, "hard_retry_count", 0))
+    if hard_retry_count:
+        retry_seconds = _count(
+            round(getattr(result, "hard_retry_delay_seconds", 0.0))
+        )
+        outcome = (
+            "pagination stopped early"
+            if bool(getattr(result, "stopped_early", False))
+            else "recovered"
+        )
+        lines.append(
+            f"⏳ Upstream Retry: {retry_seconds}s across "
+            f"{hard_retry_count} retries; {outcome}"
+        )
+
     if bool(getattr(result, "probe_enabled", False)):
         lines.append(
             "🧪 Probe Results: "
@@ -76,6 +106,50 @@ def format_searxng_rollup(
         lines.append(f"✓ Scan completed: Found {retained} open indexes")
     else:
         lines.append("ℹ Scan completed: No open indexes found")
+    return "\n".join(lines)
+
+
+def format_searxng_popup_summary(
+    result: Any,
+    *,
+    query: str = "",
+    sync_summary: Optional[Mapping[str, Any]] = None,
+) -> str:
+    """Build the standalone SearXNG completion-dialog message."""
+    lines = [
+        f"SearXNG dork search complete. {_count(getattr(result, 'fetched_count', 0))} "
+        f"URLs fetched, {_count(getattr(result, 'deduped_count', 0))} retained as "
+        "open-index results.",
+    ]
+    if query:
+        lines.extend(("", f"Query: {query}"))
+    lines.extend(
+        (
+            "",
+            "Retained results were written to the primary Dirracuda database "
+            "during this run.",
+        )
+    )
+    if isinstance(sync_summary, Mapping):
+        sync_text = _sync_line(sync_summary).replace(
+            "🔄 Primary DB Sync",
+            "Primary DB sync",
+            1,
+        )
+        lines.extend(("", f"{sync_text}."))
+    if bool(getattr(result, "probe_enabled", False)):
+        lines.extend(
+            (
+                "",
+                f"Probe: {_count(getattr(result, 'probe_total', 0))} attempted — "
+                f"{_count(getattr(result, 'probe_clean', 0))} clean, "
+                f"{_count(getattr(result, 'probe_issue', 0))} flagged, "
+                f"{_count(getattr(result, 'probe_unprobed', 0))} unprobed.",
+            )
+        )
+    warning = str(getattr(result, "fetch_warning", "") or "").strip()
+    if warning:
+        lines.extend(("", f"Upstream warning: {warning}"))
     return "\n".join(lines)
 
 
@@ -141,4 +215,8 @@ def format_reddit_rollup(
     return "\n".join(lines)
 
 
-__all__ = ["format_reddit_rollup", "format_searxng_rollup"]
+__all__ = [
+    "format_reddit_rollup",
+    "format_searxng_popup_summary",
+    "format_searxng_rollup",
+]

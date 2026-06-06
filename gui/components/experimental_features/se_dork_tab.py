@@ -216,7 +216,14 @@ class SeDorkTab:
         self._theme.apply_to_widget(max_hint_spacer, "label")
         max_hint_spacer.pack(side=tk.LEFT)
 
-        max_hint_label = tk.Label(max_hint_row, text=f"Maximum {MAX_RESULTS:,}", anchor="w")
+        max_hint_label = tk.Label(
+            max_hint_row,
+            text=(
+                f"Maximum {MAX_RESULTS:,}. "
+                "Large runs are automatically paced to protect upstream engines."
+            ),
+            anchor="w",
+        )
         self._theme.apply_to_widget(max_hint_label, "label")
         max_hint_label.pack(side=tk.LEFT, padx=(6, 0))
 
@@ -407,6 +414,13 @@ class SeDorkTab:
         self._run_btn.configure(state="normal")
         if result.status == "done":
             message = f"Done \u2014 fetched {result.fetched_count}, stored {result.deduped_count} unique."
+            if getattr(result, "pages_fetched", 0):
+                message += (
+                    f"\nFetch pacing: {int(result.pages_fetched)} pages, "
+                    f"{int(round(getattr(result, 'pacing_delay_seconds', 0.0)))}s delayed."
+                )
+            if getattr(result, "fetch_warning", None):
+                message += f"\nWarning: {result.fetch_warning}"
             if isinstance(sync_summary, dict):
                 message += (
                     f"\nPrimary DB sync: {int(sync_summary.get('processed', 0) or 0)} processed"

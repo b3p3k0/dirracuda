@@ -19,30 +19,22 @@ class _FakeResponse:
     def read(self): return self._data
 
 
-def _wire_store(monkeypatch):
-    """Patch all store functions to no-op stubs."""
-    for name in (
-        "init_db", "update_run", "update_run_verified_count",
-        "update_result_verdict", "delete_non_open_results", "update_result_probe",
-    ):
-        monkeypatch.setattr(f"experimental.se_dork.service.{name}", lambda *a, **k: None)
-    monkeypatch.setattr("experimental.se_dork.service.open_connection", lambda *a: MagicMock())
-    monkeypatch.setattr("experimental.se_dork.service.insert_run", lambda *a, **k: 1)
-    monkeypatch.setattr("experimental.se_dork.service.insert_result", lambda *a, **k: True)
-    monkeypatch.setattr("experimental.se_dork.service.count_open_index_results", lambda *a, **k: 3)
-    _rows = [{"result_id": i, "url": f"http://ex{i}.com/files/"} for i in range(3)]
-    monkeypatch.setattr("experimental.se_dork.service.get_pending_results", lambda *a, **k: _rows)
-    monkeypatch.setattr("experimental.se_dork.service.get_results_for_run", lambda *a, **k: _rows)
+@pytest.fixture(autouse=True)
+def _skip_real_pacing_waits(monkeypatch):
+    monkeypatch.setattr("experimental.se_dork.service.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        "experimental.se_dork.service.random.uniform",
+        lambda low, high: (low + high) / 2,
+    )
 
 
-def test_progress_emits_page_store_classify_probe(monkeypatch):
+def test_progress_emits_page_store_classify_probe(monkeypatch, tmp_path):
     """Happy path: all four progress phases emit at least one message."""
     from experimental.se_dork.service import run_dork_search
     from experimental.se_dork.models import RunOptions
 
     ok = MagicMock(); ok.ok = True; ok.message = "OK"
-    monkeypatch.setattr("experimental.se_dork.service.run_preflight", lambda url: ok)
-    _wire_store(monkeypatch)
+    monkeypatch.setattr("experimental.se_dork.service.run_reachability_check", lambda url: ok)
 
     _calls = []
     def _fake_urlopen(url, timeout=None):
@@ -68,23 +60,24 @@ def test_progress_emits_page_store_classify_probe(monkeypatch):
     run_dork_search(
         RunOptions(instance_url="http://test.local", query="test",
                    max_results=5, bulk_probe_enabled=True),
+        db_path=tmp_path / "se_dork.db",
         progress_cb=lambda m: msgs.append(m),
     )
 
     assert any("Querying SearXNG page" in m for m in msgs), f"page missing: {msgs}"
-    assert any("Storing" in m for m in msgs), f"store missing: {msgs}"
-    assert any("Classifying" in m for m in msgs), f"classify missing: {msgs}"
-    assert any("Probing" in m for m in msgs), f"probe missing: {msgs}"
+    assert any("stored" in m for m in msgs), f"store missing: {msgs}"
+    assert any("classifying" in m for m in msgs), f"classify missing: {msgs}"
+    assert any("probing" in m for m in msgs), f"probe missing: {msgs}"
 
 
-def test_progress_emits_terminal_on_preflight_exception(monkeypatch):
-    """Preflight exception must emit a terminal progress line before returning."""
+def test_progress_emits_terminal_on_reachability_exception(monkeypatch):
+    """Reachability exception must emit a terminal progress line before returning."""
     from experimental.se_dork.service import run_dork_search
     from experimental.se_dork.models import RunOptions
 
     def _failing_preflight(url):
         raise ConnectionError("host unreachable")
-    monkeypatch.setattr("experimental.se_dork.service.run_preflight", _failing_preflight)
+    monkeypatch.setattr("experimental.se_dork.service.run_reachability_check", _failing_preflight)
 
     msgs = []
     result = run_dork_search(
@@ -93,19 +86,18 @@ def test_progress_emits_terminal_on_preflight_exception(monkeypatch):
     )
 
     assert result.status == "error"
-    assert any("Preflight error" in m for m in msgs), (
-        f"Expected terminal preflight error message in: {msgs}"
+    assert any("Reachability error" in m for m in msgs), (
+        f"Expected terminal reachability error message in: {msgs}"
     )
 
 
-def test_progress_emits_terminal_on_fetch_exception(monkeypatch):
+def test_progress_emits_terminal_on_fetch_exception(monkeypatch, tmp_path):
     """Fetch failure must emit a terminal progress line before returning."""
     from experimental.se_dork.service import run_dork_search
     from experimental.se_dork.models import RunOptions
 
     ok = MagicMock(); ok.ok = True; ok.message = "OK"
-    monkeypatch.setattr("experimental.se_dork.service.run_preflight", lambda url: ok)
-    _wire_store(monkeypatch)
+    monkeypatch.setattr("experimental.se_dork.service.run_reachability_check", lambda url: ok)
 
     def _failing_urlopen(url, timeout=None):
         raise ConnectionError("network timeout")
@@ -114,6 +106,7 @@ def test_progress_emits_terminal_on_fetch_exception(monkeypatch):
     msgs = []
     result = run_dork_search(
         RunOptions(instance_url="http://test.local", query="test"),
+        db_path=tmp_path / "se_dork.db",
         progress_cb=lambda m: msgs.append(m),
     )
 

@@ -106,7 +106,8 @@ def test_build_uses_updated_labels_and_max_helper_text(monkeypatch):
 
     assert "SearXNG Server:" in texts
     assert "Run Probe on Results" in texts
-    assert "Maximum 1,000" in texts
+    assert any("Maximum 1,000" in text for text in texts)
+    assert any("automatically paced" in text for text in texts)
 
 
 # ---------------------------------------------------------------------------
@@ -410,6 +411,9 @@ def _fake_run_result(
     probe_clean: int = 0,
     probe_issue: int = 0,
     probe_unprobed: int = 0,
+    pages_fetched: int = 0,
+    pacing_delay_seconds: float = 0.0,
+    fetch_warning: str | None = None,
 ):
     from experimental.se_dork.models import RunResult
     return RunResult(
@@ -423,6 +427,9 @@ def _fake_run_result(
         probe_clean=probe_clean,
         probe_issue=probe_issue,
         probe_unprobed=probe_unprobed,
+        pages_fetched=pages_fetched,
+        pacing_delay_seconds=pacing_delay_seconds,
+        fetch_warning=fetch_warning,
     )
 
 
@@ -467,6 +474,25 @@ def test_invoke_run_updates_status_on_success(monkeypatch):
     final_text = tab._status_label.configure.call_args_list[-1][1].get("text", "")
     assert "5" in final_text
     assert "4" in final_text
+
+
+def test_invoke_run_status_includes_pacing_warning(monkeypatch):
+    monkeypatch.setattr(
+        "experimental.se_dork.service.run_dork_search",
+        lambda opts, **kw: _fake_run_result(
+            pages_fetched=12,
+            pacing_delay_seconds=63.6,
+            fetch_warning="Upstream cooldown recovered after retry (bing).",
+        ),
+    )
+    _sync_thread(monkeypatch)
+
+    tab = _make_run_tab({})
+    tab._invoke_run()
+
+    final_text = tab._status_label.configure.call_args_list[-1][1].get("text", "")
+    assert "Fetch pacing: 12 pages, 64s delayed." in final_text
+    assert "Warning: Upstream cooldown recovered after retry (bing)." in final_text
 
 
 def test_invoke_run_status_includes_primary_sync_summary(monkeypatch):

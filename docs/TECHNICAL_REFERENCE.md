@@ -828,7 +828,9 @@ WHERE ip_address = '1.2.3.4';
 
 The SearXNG Dorking module (`experimental/se_dork`) now writes runtime workflow tables into the active primary DB context (same DB path used by the running GUI/WebUI session).
 
-**Storage contract**: `run_dork_search` persists `dork_runs`/`dork_results` in the active primary DB path and auto-syncs retained HTTP/HTTPS rows into main protocol host tables during run completion. Manual promotion is not required for new runs. Successful runs append a Shodan-style rollup to Live Scan Output. Standalone runs keep the result popup; multi-provider Start Scan runs suppress it while the serial provider queue continues.
+**Storage contract**: `run_dork_search` persists `dork_runs`/`dork_results` in the active primary DB path and auto-syncs retained HTTP/HTTPS rows into main protocol host tables during run completion. Each page commits raw rows, performs classification and probing without an open SQLite transaction, then commits verdict/probe state before fetching the next page. Main protocol-table sync still runs once at completion. Manual promotion is not required for new runs. Successful runs append a Shodan-style rollup to Live Scan Output. Standalone runs keep the result popup; multi-provider Start Scan runs suppress it while the serial provider queue continues.
+
+**Upstream pacing contract**: page 1 runs immediately. The next-page deadline starts when a response arrives. Storing, classifying, filtering, and optional probing run sequentially and consume that window; the service sleeps only for the remainder. Normal deadlines use ±20% jitter around 2 seconds for pages 2–5, 4 seconds for pages 6–10, 6 seconds for pages 11–20, and 8 seconds for pages 21–40. A non-empty response remains productive when `unresponsive_engines` reports 403/429, access denied, rate limit, CAPTCHA, or Cloudflare conditions. Such pages use 10, 20, and then at most 30 seconds for consecutive affected pages; a clean page resets normal pacing. Empty throttled pages use a run-wide two-retry ladder (30 seconds, then 180 seconds). Direct HTTP 429 responses consume the same retry budget and honor `Retry-After` within 1–300 seconds. Completed pages remain durable when a later fetch fails and finish as a partial run with a warning. Zero-row exhaustion returns a structured run error.
 
 Legacy sidecar files (for example `~/.dirracuda/data/experimental/se_dork.db`) may still exist for historical browsing/migration paths, but they are no longer the default write target for new SearXNG runs.
 
@@ -1133,9 +1135,11 @@ Dashboard -> Accessories tab -> Open Results DB
   -> legacy sidecar browser path remains available for historical data and manual promotion
 ```
 
-SearXNG preflight checks (`experimental/se_dork/client.py`):
+Explicit SearXNG Test/preflight checks (`experimental/se_dork/client.py`):
 1. GET `/config` — reachability probe
 2. GET `/search?q=hello&format=json` — JSON capability check; HTTP 403 maps to `INSTANCE_FORMAT_FORBIDDEN` (fix: enable `search.formats: [json]` in SearXNG `settings.yml`)
+
+Normal Run uses only the `/config` reachability step before opening the run row. The actual page-1 query validates JSON search support, avoiding a redundant `q=hello` request that would otherwise fan out to upstream engines before every run. The WebUI queues `/api/searxng/run` directly; `/api/searxng/preflight` remains available as an explicit compatibility/test endpoint.
 
 Reddit ingest entry path:
 

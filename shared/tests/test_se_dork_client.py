@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from experimental.se_dork.client import run_preflight
+from experimental.se_dork.client import run_preflight, run_reachability_check
 from experimental.se_dork.models import (
     INSTANCE_FORMAT_FORBIDDEN,
     INSTANCE_NON_JSON,
@@ -75,6 +75,21 @@ def test_preflight_success():
     assert result.ok is True
     assert result.reason_code is None
     assert "OK" in result.message
+
+
+def test_reachability_check_does_not_issue_search():
+    config_resp = _mock_response(b"{}", 200)
+    captured_urls = []
+
+    def _capture(url, timeout=None):
+        captured_urls.append(url)
+        return config_resp
+
+    with patch("urllib.request.urlopen", side_effect=_capture):
+        result = run_reachability_check("http://sx:8090")
+
+    assert result.ok is True
+    assert captured_urls == ["http://sx:8090/config"]
 
 
 def test_preflight_instance_unreachable_on_config():

@@ -665,6 +665,60 @@ class TestOnSearxngScanDone:
 
         assert live_output[0].endswith("ℹ Scan completed: No open indexes found")
 
+    def test_rollup_reports_pacing_and_soft_engine_warnings(self):
+        dash = _make_dash()
+        live_output = []
+        dash._handle_scan_log_line = live_output.append
+
+        ds._on_searxng_scan_done(
+            dash,
+            _make_result(
+                pages_fetched=12,
+                pacing_delay_seconds=63.6,
+                throttled_page_count=2,
+                throttle_engines=("bing", "google", "brave", "startpage"),
+                fetch_warning=(
+                    "Temporary upstream engine failures affected 2 pages; "
+                    "continued with soft backoff."
+                ),
+            ),
+            db_path=Path("/tmp/dirracuda.db"),
+        )
+
+        assert "⏱ Fetch Pacing: 12 pages, 64s delayed" in live_output[0]
+        assert (
+            "⚠ Upstream Engine Warnings: 4 engines across 2 pages; "
+            "continued with soft backoff"
+            in live_output[0]
+        )
+
+    def test_rollup_reports_hard_retry_exhaustion(self):
+        dash = _make_dash()
+        live_output = []
+        dash._handle_scan_log_line = live_output.append
+
+        ds._on_searxng_scan_done(
+            dash,
+            _make_result(
+                pages_fetched=4,
+                pacing_delay_seconds=6,
+                hard_retry_count=2,
+                hard_retry_delay_seconds=210,
+                throttle_engines=("bing",),
+                stopped_early=True,
+                fetch_warning=(
+                    "Upstream throttling persisted after 2 retries; "
+                    "pagination stopped early (bing)."
+                ),
+            ),
+            db_path=Path("/tmp/dirracuda.db"),
+        )
+
+        assert (
+            "⏳ Upstream Retry: 210s across 2 retries; pagination stopped early"
+            in live_output[0]
+        )
+
     def test_done_clears_searxng_task_only_not_shodan_task(self, monkeypatch):
         """done handler must call _clear_searxng_task but never touch _scan_task_id."""
         dash = _make_dash()

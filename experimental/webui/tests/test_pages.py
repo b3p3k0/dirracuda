@@ -153,6 +153,7 @@ def test_scans_searxng_renders_authenticated(logged_in):
     assert 'id="run-btn"' in r.text
     assert 'id="probe-btn"' not in r.text
     assert 'id="promote-btn"' not in r.text
+    assert "automatically paced to protect upstream engines" in r.text
     assert '/static/searxng.js' in r.text
 
 

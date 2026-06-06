@@ -22,6 +22,7 @@ from gui.components.unified_scan_dialog import UnifiedScanDialog
 from gui.components.scan_provider_options import (
     REDDIT_MAX_REMINDER,
     SEARXNG_MAX_REMINDER,
+    SEARXNG_PACING_REMINDER,
     load_reddit_settings,
     load_searxng_settings,
 )
@@ -107,6 +108,9 @@ def _make_dialog() -> UnifiedScanDialog:
 
 def test_provider_maximum_reminders_are_exact():
     assert SEARXNG_MAX_REMINDER == "Maximum: 1,000 unique results per run."
+    assert SEARXNG_PACING_REMINDER == (
+        "Large runs are automatically paced to protect upstream engines."
+    )
     assert REDDIT_MAX_REMINDER == "Maximum: 100 posts per RSS snapshot."
 
 

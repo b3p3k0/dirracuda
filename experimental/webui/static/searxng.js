@@ -207,25 +207,6 @@ document.getElementById('searxng-form').addEventListener('submit', async functio
     return;
   }
 
-  setStatus('Checking instance…', 'status-neutral');
-  try {
-    var pfResp = await fetch('/api/searxng/preflight', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json', 'X-CSRF-Token': token},
-      body: JSON.stringify({instance_url: instanceUrl})
-    });
-    var pfData = await pfResp.json();
-    if (!pfData.ok) {
-      setStatus('Instance check failed: ' + (pfData.message || 'unknown'), 'status-error');
-      btn.disabled = false;
-      return;
-    }
-  } catch (_err) {
-    setStatus('Instance check failed: network error.', 'status-error');
-    btn.disabled = false;
-    return;
-  }
-
   setStatus('Queueing discovery job…', 'status-neutral');
   try {
     var runBody = {

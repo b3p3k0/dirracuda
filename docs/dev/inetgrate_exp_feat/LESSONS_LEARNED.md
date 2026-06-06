@@ -1,7 +1,7 @@
 # Integrate Experimental Features Into Main - LESSONS LEARNED
 
 Status: Seeded
-Last updated: 2026-06-05
+Last updated: 2026-06-06
 
 ## Carry Forward
 
@@ -81,6 +81,14 @@ Last updated: 2026-06-05
 - Dense operator workflows benefit from responsive grids, restrained separators, and a fixed action footer more than nested cards and oversized section bars. Keep scrolling as a small-screen fallback, not the default layout.
 - Extract layout construction into a satellite before redesigning a near-limit controller. This keeps persistence, validation, and launch behavior stable while making visual iteration easier to test and reverse.
 - Enforce mutually exclusive input modes at three layers: widget state, saved-state restoration, and request validation. This prevents templates or programmatic callers from bypassing a visual guard.
+
+**SearXNG upstream pacing (2026-06-06):**
+- A healthy self-hosted SearXNG process does not imply healthy upstream engines. Back-to-back pagination can cause SearXNG to suspend shared engines even when the local server has ample capacity.
+- Apply adaptive delay before later pages and inspect `unresponsive_engines`; transport success alone is not evidence that every upstream engine accepted the request.
+- Do not equate individual engine suspension with query failure. If SearXNG still returns results, preserve them and continue with escalating soft backoff; reserve hard retries for empty throttled pages or direct instance-level HTTP 429 responses.
+- Bound hard recovery attempts across the entire run. A 30-second then 180-second retry ladder preserves useful partial results without turning a throttled run into an unbounded wait loop.
+- Explicit capability tests and normal execution have different request budgets. Normal runs should not issue a throwaway search before the real page-1 query.
+- Use pacing windows for real sequential work before adding concurrency. Persisting, classifying, filtering, and probing one page before requesting the next reduced idle delay while keeping SQLite writes short and deterministic.
 
 Append new lessons after each completed card:
 - What failed or nearly failed.
