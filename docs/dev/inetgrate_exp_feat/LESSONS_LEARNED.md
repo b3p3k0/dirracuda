@@ -90,6 +90,18 @@ Last updated: 2026-06-06
 - Explicit capability tests and normal execution have different request budgets. Normal runs should not issue a throwaway search before the real page-1 query.
 - Use pacing windows for real sequential work before adding concurrency. Persisting, classifying, filtering, and probing one page before requesting the next reduced idle delay while keeping SQLite writes short and deterministic.
 
+**C11A — SearXNG retry shortening and cancellation (2026-06-06):**
+- `_paginate_results` must catch `_Cancelled` internally and return a partial `_FetchOutcome`; propagating the sentinel to the caller loses all accumulated pagination telemetry (pages fetched, retry counts, delays, engine labels).
+- Delay telemetry must be recorded from the return value of cooldown/pacing helpers after the wait, not from the requested delay before it. Helper functions should return actual elapsed seconds and let the caller decide whether to raise.
+- Classification cleanup requires a `classification_committed` flag wrapping both classification and persistence; an exception caught at one level without the flag either over-cleans (deletes committed data) or under-cleans (leaks unclassified rows).
+- `try/finally` around run-row insertion guarantees the connection closes on every path: cancel return, exception, and success. An explicit close before each early return is fragile and easy to miss on new paths.
+- Both `start_searxng_scan` and `_on_searxng_scan_done` must be re-exported from `dashboard_scan.py` after satellite extraction; a single re-export misses direct calls from tests, and an omission of either misses provider-queue dispatch or test coverage of the completion handler.
+- `_set_searxng_task_running` lifecycle stubs in tests must accept `**kwargs`; `_call_dashboard_hook` swallows `TypeError`, making a missing kwarg in the mock invisible at runtime.
+- Bounded probe submission (`FIRST_COMPLETED` refill loop) is required to limit futures in flight; an unconstrained submit loop can enqueue every row before a cancel check fires, making the cancel check ineffective at stopping unnecessary work.
+- Queue-managed and standalone cancel callbacks must differ: queue-managed routes through `cancel_provider_queue` (which then signals the event); standalone goes directly to the event. A single `event.set` callback from a queue-managed task would strand the provider queue without advancing or cancelling it.
+- Cancel events must be cleared on every terminal path, including the `parent.after(...)` scheduling failure inside the worker, not only on thread startup failure.
+- Sync must use an explicit allowlist of terminal states (`DONE | CANCELLED`); `status != ERROR` could sync unknown future status values silently.
+
 Append new lessons after each completed card:
 - What failed or nearly failed.
 - Which guardrail prevented recurrence.

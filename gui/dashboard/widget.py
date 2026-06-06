@@ -777,7 +777,12 @@ class DashboardWidget:
         self._scan_task_id = None
         self._queued_scan_total = 0
 
-    def _set_searxng_task_running(self, country: Optional[str] = None) -> None:
+    def _set_searxng_task_running(
+        self,
+        country: Optional[str] = None,
+        *,
+        cancel_callback: Optional[Callable[[], None]] = None,
+    ) -> None:
         if self._searxng_task_id:
             self._remove_running_task(self._searxng_task_id)
             self._searxng_task_id = None
@@ -788,6 +793,7 @@ class DashboardWidget:
             state="running",
             progress="running",
             reopen_callback=self._reopen_scan_output_dialog,
+            cancel_callback=cancel_callback,
         )
 
     def _clear_searxng_task(self) -> None:

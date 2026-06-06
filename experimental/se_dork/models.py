@@ -36,6 +36,7 @@ class PreflightResult:
 RUN_STATUS_RUNNING = "running"
 RUN_STATUS_DONE = "done"
 RUN_STATUS_ERROR = "error"
+RUN_STATUS_CANCELLED = "cancelled"
 
 
 @dataclass
@@ -48,6 +49,9 @@ class RunOptions:
     bulk_probe_enabled: bool = False
     probe_config_path: Optional[str] = None
     probe_worker_count: Optional[int] = None
+    request_timeout: int = 15
+    short_retry_delay: int = 30
+    long_retry_delay: int = 180
 
 
 @dataclass

@@ -677,7 +677,7 @@ def test_run_dork_search_commit1_exception_returns_structured_error(tmp_path: Pa
 
     assert result.status == RUN_STATUS_ERROR
     assert result.run_id is None
-    assert "Run insert failed" in result.error
+    assert "Run setup failed" in result.error
 
 
 def test_run_dork_search_persists_clamped_max_results(tmp_path: Path) -> None:

@@ -153,6 +153,73 @@ def format_searxng_popup_summary(
     return "\n".join(lines)
 
 
+def format_searxng_cancelled_rollup(
+    result: Any,
+    *,
+    query: str = "",
+    db_path: Path | str,
+    sync_summary: Optional[Mapping[str, Any]] = None,
+) -> str:
+    """Build the completion block for a cancelled SearXNG run.
+
+    Omits URLs Verified (classification may be partial). Terminal line uses ⚠
+    (warning class) to distinguish cancellation from failure; C11C will color
+    it yellow.
+    """
+    fetched = _count(getattr(result, "fetched_count", 0))
+    retained = _count(getattr(result, "deduped_count", 0))
+
+    lines = [SUMMARY_TITLE, SUMMARY_DIVIDER]
+    if str(query or "").strip():
+        lines.append(f"🌍 SearXNG Query: {str(query).strip()}")
+    lines.extend(
+        [
+            f"📊 URLs Fetched: {fetched}",
+            f"📁 Open Indexes Retained: {retained}",
+        ]
+    )
+
+    pages_fetched = _count(getattr(result, "pages_fetched", 0))
+    pacing_seconds = _count(round(getattr(result, "pacing_delay_seconds", 0.0)))
+    if pages_fetched:
+        lines.append(
+            f"⏱ Fetch Pacing: {pages_fetched} pages, {pacing_seconds}s delayed"
+        )
+    throttled_pages = _count(getattr(result, "throttled_page_count", 0))
+    engines = tuple(getattr(result, "throttle_engines", ()) or ())
+    if throttled_pages:
+        lines.append(
+            "⚠ Upstream Engine Warnings: "
+            f"{len(engines)} engines across {throttled_pages} pages; "
+            "continued with soft backoff"
+        )
+    hard_retry_count = _count(getattr(result, "hard_retry_count", 0))
+    if hard_retry_count:
+        retry_seconds = _count(round(getattr(result, "hard_retry_delay_seconds", 0.0)))
+        lines.append(
+            f"⏳ Upstream Retry: {retry_seconds}s across "
+            f"{hard_retry_count} retries; pagination stopped early"
+        )
+
+    if bool(getattr(result, "probe_enabled", False)):
+        lines.append(
+            "🧪 Probe Results: "
+            f"{_count(getattr(result, 'probe_total', 0))} attempted "
+            f"({_count(getattr(result, 'probe_clean', 0))} clean, "
+            f"{_count(getattr(result, 'probe_issue', 0))} flagged, "
+            f"{_count(getattr(result, 'probe_unprobed', 0))} unprobed)"
+        )
+    if isinstance(sync_summary, Mapping):
+        lines.append(_sync_line(sync_summary))
+
+    lines.append(f"💾 Results saved to: {db_path}")
+    if retained:
+        lines.append(f"⚠ Scan cancelled: {retained} open indexes retained")
+    else:
+        lines.append("⚠ Scan cancelled: no open indexes retained")
+    return "\n".join(lines)
+
+
 def format_reddit_rollup(
     result: Any,
     *,
@@ -217,6 +284,7 @@ def format_reddit_rollup(
 
 __all__ = [
     "format_reddit_rollup",
+    "format_searxng_cancelled_rollup",
     "format_searxng_popup_summary",
     "format_searxng_rollup",
 ]

@@ -830,7 +830,19 @@ The SearXNG Dorking module (`experimental/se_dork`) now writes runtime workflow 
 
 **Storage contract**: `run_dork_search` persists `dork_runs`/`dork_results` in the active primary DB path and auto-syncs retained HTTP/HTTPS rows into main protocol host tables during run completion. Each page commits raw rows, performs classification and probing without an open SQLite transaction, then commits verdict/probe state before fetching the next page. Main protocol-table sync still runs once at completion. Manual promotion is not required for new runs. Successful runs append a Shodan-style rollup to Live Scan Output. Standalone runs keep the result popup; multi-provider Start Scan runs suppress it while the serial provider queue continues.
 
-**Upstream pacing contract**: page 1 runs immediately. The next-page deadline starts when a response arrives. Storing, classifying, filtering, and optional probing run sequentially and consume that window; the service sleeps only for the remainder. Normal deadlines use ±20% jitter around 2 seconds for pages 2–5, 4 seconds for pages 6–10, 6 seconds for pages 11–20, and 8 seconds for pages 21–40. A non-empty response remains productive when `unresponsive_engines` reports 403/429, access denied, rate limit, CAPTCHA, or Cloudflare conditions. Such pages use 10, 20, and then at most 30 seconds for consecutive affected pages; a clean page resets normal pacing. Empty throttled pages use a run-wide two-retry ladder (30 seconds, then 180 seconds). Direct HTTP 429 responses consume the same retry budget and honor `Retry-After` within 1–300 seconds. Completed pages remain durable when a later fetch fails and finish as a partial run with a warning. Zero-row exhaustion returns a structured run error.
+**Upstream pacing contract**: page 1 runs immediately. The next-page deadline starts when a response arrives. Storing, classifying, filtering, and optional probing run sequentially and consume that window; the service sleeps only for the remainder. Normal deadlines use ±20% jitter around 2 seconds for pages 2–5, 4 seconds for pages 6–10, 6 seconds for pages 11–20, and 8 seconds for pages 21–40. A non-empty response remains productive when `unresponsive_engines` reports 403/429, access denied, rate limit, CAPTCHA, or Cloudflare conditions. Such pages use 10, 20, and then at most 30 seconds for consecutive affected pages; a clean page resets normal pacing. Empty throttled pages use a run-wide retry ladder. Direct HTTP 429 responses consume the same retry budget and honor `Retry-After` within 1–300 seconds. Completed pages remain durable when a later fetch fails and finish as a partial run with a warning. Zero-row exhaustion returns a structured run error.
+
+**Runtime policy (C11A)**: `RunOptions` exposes three clamped fields used at the service layer.
+
+| Field | Default | Clamp | Effect |
+|---|---|---|---|
+| `request_timeout` | 15 s | 5–60 | Timeout for reachability check and each fetch call |
+| `short_retry_delay` | 30 s | 5–60 | First hard-retry cooldown (early and mature runs) |
+| `long_retry_delay` | 180 s | 60–300 | Second hard-retry cooldown (early runs only) |
+
+A run becomes **mature** after 5 productive pages or 50 unique URLs (whichever comes first). A productive page adds at least one unique URL and completes the full persist/classify/retain/probe pipeline. Early runs allow two retry slots (short then long); mature runs allow only one (short). `Accessories` and WebUI callers use defaults and are not affected in C11A.
+
+**`dork_runs.status` values**: `running`, `done`, `error`, `cancelled`. Status `cancelled` is set when the caller signals the optional `cancel_event: threading.Event` passed to `run_dork_search`. Cancellation is not an error: `error_message` is null, and the run remains accessible in the results browser. The primary-table sync still runs for cancelled runs that created a `run_id`, preserving any retained rows.
 
 Legacy sidecar files (for example `~/.dirracuda/data/experimental/se_dork.db`) may still exist for historical browsing/migration paths, but they are no longer the default write target for new SearXNG runs.
 

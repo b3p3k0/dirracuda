@@ -23,6 +23,7 @@ class RunningTasksWindow:
         self.window: Optional[tk.Toplevel] = None
         self.tree: Optional[ttk.Treeview] = None
         self.empty_label: Optional[tk.Label] = None
+        self._cancel_btn: Optional[tk.Button] = None
         self._subscribed = False
 
     def show(self) -> None:
@@ -42,6 +43,7 @@ class RunningTasksWindow:
         self.window = None
         self.tree = None
         self.empty_label = None
+        self._cancel_btn = None
 
     def _build(self) -> None:
         self.window = tk.Toplevel(self.parent)
@@ -75,6 +77,21 @@ class RunningTasksWindow:
         self.tree.bind("<Double-1>", self._on_row_double_click, add="+")
         bind_tree_enter_shortcut(self.tree, self._on_row_double_click)
 
+        btn_row = tk.Frame(frame)
+        if self.theme:
+            self.theme.apply_to_widget(btn_row, "main_window")
+        btn_row.pack(fill=tk.X, pady=(4, 0))
+
+        self._cancel_btn = tk.Button(
+            btn_row,
+            text="Cancel Task",
+            state="disabled",
+            command=self._cancel_selected_task,
+        )
+        if self.theme:
+            self.theme.apply_to_widget(self._cancel_btn, "button_secondary")
+        self._cancel_btn.pack(side=tk.LEFT)
+
         self.empty_label = tk.Label(
             frame,
             text="No active or queued tasks.",
@@ -89,6 +106,7 @@ class RunningTasksWindow:
             self.theme.apply_theme_to_application(self.window)
 
         bind_close_shortcuts(self.window, self.destroy)
+        self.tree.bind("<<TreeviewSelect>>", self._on_selection_changed, add="+")
         self.registry.subscribe(self._on_tasks_changed)
         self._subscribed = True
         self.window.lift()
@@ -119,9 +137,38 @@ class RunningTasksWindow:
 
         if self.empty_label:
             if tasks:
-                self.empty_label.configure(text="Double-click or press Enter to reopen a task monitor dialog.")
+                self.empty_label.configure(
+                    text="Double-click or Enter to reopen · select and Cancel to stop."
+                )
             else:
                 self.empty_label.configure(text="No active or queued tasks.")
+
+        self._on_selection_changed()
+
+    def _on_selection_changed(self, _event=None) -> None:
+        if not (self.tree and self._cancel_btn):
+            return
+        selected = self.tree.selection()
+        if not selected:
+            self._cancel_btn.configure(state="disabled")
+            return
+        task = self.registry.get_task(selected[0])
+        new_state = "normal" if (task and task.cancel_callback) else "disabled"
+        self._cancel_btn.configure(state=new_state)
+
+    def _cancel_selected_task(self) -> None:
+        if not self.tree:
+            return
+        selected = self.tree.selection()
+        if not selected:
+            return
+        task = self.registry.get_task(selected[0])
+        if not task or not task.cancel_callback:
+            return
+        try:
+            task.cancel_callback()
+        except Exception:
+            pass
 
     def _on_row_double_click(self, _event=None) -> None:
         if not self.tree:

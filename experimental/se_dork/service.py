@@ -19,12 +19,18 @@ Transaction ownership:
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import (
+    CancelledError,
+    FIRST_COMPLETED,
+    ThreadPoolExecutor,
+    wait as _futures_wait,
+)
 import datetime
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 import json
 import random
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -38,6 +44,7 @@ from experimental.se_dork.models import (
     MAX_RESULTS,
     RunOptions,
     RunResult,
+    RUN_STATUS_CANCELLED,
     RUN_STATUS_DONE,
     RUN_STATUS_ERROR,
 )
@@ -61,9 +68,23 @@ _HARD_PAGE_CAP = 40
 _FETCH_TIMEOUT = 15
 _MAX_RETRY_AFTER_SECONDS = 300
 _COOLDOWN_PROGRESS_INTERVAL = 30
-_HARD_RETRY_DELAYS = (30, 180)
-_MAX_HARD_RETRIES = len(_HARD_RETRY_DELAYS)
 _SOFT_BACKOFF_DELAYS = (10.0, 20.0, 30.0)
+
+
+class _Cancelled(Exception):
+    """Raised internally at safe boundaries when cancel_event fires."""
+
+
+def _coerce_policy_seconds(value: object, *, default: int, lo: int, hi: int) -> int:
+    """Clamp a policy value to [lo, hi]; return default on non-numeric input."""
+    try:
+        return max(lo, min(hi, int(float(str(value)))))
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
+def _is_mature(productive_pages: int, unique_count: int) -> bool:
+    return productive_pages >= 5 or unique_count >= 50
 _THROTTLE_MARKERS = (
     "403",
     "429",
@@ -105,6 +126,50 @@ class _PageProcessTotals:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _make_run_result(
+    status: str,
+    error: "Optional[str]",
+    *,
+    run_id: "Optional[int]",
+    totals: _PageProcessTotals,
+    fetch_outcome: _FetchOutcome,
+    probe_enabled: bool,
+) -> "RunResult":
+    return RunResult(
+        run_id=run_id,
+        fetched_count=totals.fetched,
+        deduped_count=totals.retained,
+        status=status,
+        error=error,
+        verified_count=totals.verified,
+        probe_enabled=probe_enabled,
+        probe_total=totals.probe_total,
+        probe_clean=totals.probe_clean,
+        probe_issue=totals.probe_issue,
+        probe_unprobed=totals.probe_unprobed,
+        pages_fetched=fetch_outcome.pages_fetched,
+        pacing_delay_seconds=fetch_outcome.pacing_delay_seconds,
+        throttled_page_count=fetch_outcome.throttled_page_count,
+        hard_retry_count=fetch_outcome.hard_retry_count,
+        hard_retry_delay_seconds=fetch_outcome.hard_retry_delay_seconds,
+        throttle_engines=fetch_outcome.throttle_engines,
+        stopped_early=fetch_outcome.stopped_early,
+        fetch_warning=fetch_outcome.warning,
+    )
+
+
+def _finalize_run_status(db_path, run_id, totals, status, error_text=None):
+    c = open_connection(db_path)
+    try:
+        update_run(c, run_id, _utcnow(), totals.fetched, totals.retained, status, error_text)
+        c.commit()
+    finally:
+        try:
+            c.close()
+        except Exception:
+            pass
 
 
 def _utcnow() -> str:
@@ -223,27 +288,37 @@ def _wait_for_cooldown(
     seconds: int,
     *,
     retry_number: int,
+    max_retries: int = 2,
     progress_cb: Optional[Callable[[str], None]] = None,
     sleep_fn: Optional[Callable[[float], None]] = None,
-) -> None:
-    """Wait in reporting intervals before a bounded hard retry."""
+    cancel_event: Optional[threading.Event] = None,
+) -> float:
     sleeper = sleep_fn or time.sleep
     remaining = max(1, int(seconds))
+    elapsed = 0.0
     _emit_progress(
         progress_cb,
-        f"Upstream retry {retry_number}/{_MAX_HARD_RETRIES}: "
-        f"waiting {remaining}s...",
+        f"Upstream retry {retry_number}/{max_retries}: waiting {remaining}s...",
     )
     while remaining > 0:
         interval = min(_COOLDOWN_PROGRESS_INTERVAL, remaining)
-        sleeper(interval)
+        if cancel_event is not None:
+            t_before = time.monotonic()
+            fired = cancel_event.wait(interval)
+            elapsed += min(interval, time.monotonic() - t_before)
+            if fired:
+                return elapsed
+        else:
+            sleeper(interval)
+            elapsed += interval
         remaining -= interval
         if remaining:
             _emit_progress(
                 progress_cb,
-                f"Upstream retry {retry_number}/{_MAX_HARD_RETRIES}: "
+                f"Upstream retry {retry_number}/{max_retries}: "
                 f"{remaining}s remaining...",
             )
+    return elapsed
 
 
 def _throttle_message(
@@ -306,8 +381,8 @@ def _sleep_for_remaining_pacing(
     progress_cb: Optional[Callable[[str], None]],
     sleep_fn: Callable[[float], None],
     monotonic_fn: Callable[[], float],
+    cancel_event: Optional[threading.Event] = None,
 ) -> float:
-    """Sleep only the pacing window not already consumed by page processing."""
     remaining = max(0.0, deadline - monotonic_fn())
     if remaining <= 0:
         _emit_progress(
@@ -322,8 +397,14 @@ def _sleep_for_remaining_pacing(
         f"Page {completed_page}: processing complete; waiting "
         f"{remaining:.1f}s before page {next_page}.",
     )
-    sleep_fn(remaining)
-    return remaining
+    t0 = monotonic_fn()
+    if cancel_event is not None:
+        cancel_event.wait(remaining)
+        elapsed = min(remaining, monotonic_fn() - t0)
+    else:
+        sleep_fn(remaining)
+        elapsed = remaining
+    return elapsed
 
 
 def _paginate_results(
@@ -338,8 +419,10 @@ def _paginate_results(
     sleep_fn: Optional[Callable[[float], None]] = None,
     jitter_fn: Optional[Callable[[float, float], float]] = None,
     monotonic_fn: Optional[Callable[[], float]] = None,
+    short_retry: int = 30,
+    long_retry: int = 180,
+    cancel_event: Optional[threading.Event] = None,
 ) -> _FetchOutcome:
-    """Page through unique results and process each productive page in order."""
     accumulated: list[dict] = []
     seen_urls: set[str] = set()
     pages_seen: set[int] = set()
@@ -348,26 +431,60 @@ def _paginate_results(
     pacing_delay = 0.0
     hard_retry_delay = 0.0
     hard_retry_count = 0
+    productive_pages = 0
     soft_throttle_streak = 0
     retrying_page = False
     stopped_early = False
     stop_warning: Optional[str] = None
     sleeper = sleep_fn or time.sleep
+
+    def _exec_retry(retry_delay: int) -> Optional[bool]:
+        # Returns None → stopped_early (caller breaks); True → cancelled; False → continue.
+        nonlocal hard_retry_count, hard_retry_delay, retrying_page, stopped_early
+        is_m = _is_mature(productive_pages, len(seen_urls))
+        mx = 1 if is_m else 2
+        if hard_retry_count >= mx:
+            stopped_early = True
+            return None
+        hard_retry_count += 1
+        w = _wait_for_cooldown(retry_delay, retry_number=hard_retry_count, max_retries=mx,
+                               progress_cb=progress_cb, sleep_fn=sleeper, cancel_event=cancel_event)
+        hard_retry_delay += w
+        retrying_page = True
+        return bool(cancel_event and cancel_event.is_set())
     monotonic = monotonic_fn or time.monotonic
 
-    page = 1
-    while page <= _HARD_PAGE_CAP:
-        suffix = " (retry)" if retrying_page else ""
-        _emit_progress(progress_cb, f"Querying SearXNG page {page}{suffix}...")
-        try:
-            results, page_throttles = _fetch_page(
-                base_url,
-                query,
-                page,
-                timeout=timeout,
-            )
-        except urllib.error.HTTPError as exc:
-            if exc.code != 429:
+    try:
+        page = 1
+        while page <= _HARD_PAGE_CAP:
+            if cancel_event and cancel_event.is_set():
+                raise _Cancelled()
+            suffix = " (retry)" if retrying_page else ""
+            _emit_progress(progress_cb, f"Querying SearXNG page {page}{suffix}...")
+            try:
+                results, page_throttles = _fetch_page(
+                    base_url,
+                    query,
+                    page,
+                    timeout=timeout,
+                )
+            except urllib.error.HTTPError as exc:
+                if exc.code != 429:
+                    if seen_urls:
+                        stopped_early = True
+                        stop_warning = (
+                            f"SearXNG pagination stopped after page {page - 1}: {exc}"
+                        )
+                        break
+                    raise
+                retry_after = _retry_after_seconds(exc)
+                rd = (retry_after if retry_after is not None
+                      else (short_retry if hard_retry_count == 0 else long_retry))
+                r = _exec_retry(rd)
+                if r is None: break
+                if r: raise _Cancelled()
+                continue
+            except Exception as exc:
                 if seen_urls:
                     stopped_early = True
                     stop_warning = (
@@ -375,119 +492,95 @@ def _paginate_results(
                     )
                     break
                 raise
-            if hard_retry_count >= _MAX_HARD_RETRIES:
-                stopped_early = True
-                break
-            retry_after = _retry_after_seconds(exc)
-            retry_delay = (
-                retry_after
-                if retry_after is not None
-                else _HARD_RETRY_DELAYS[hard_retry_count]
+
+            if cancel_event and cancel_event.is_set():
+                raise _Cancelled()
+
+            response_received_at = monotonic()
+            pages_seen.add(page)
+
+            new_rows: list[dict] = []
+            for row in results:
+                if not isinstance(row, dict):
+                    continue
+                normalized_url = normalize_url(str(row.get("url") or "").strip())
+                if not normalized_url or normalized_url in seen_urls:
+                    continue
+                seen_urls.add(normalized_url)
+                new_rows.append(row)
+                if len(seen_urls) >= max_results:
+                    break
+            if collect_rows:
+                accumulated.extend(new_rows)
+            _emit_progress(
+                progress_cb,
+                f"Page {page}: received {len(results)} results, "
+                f"{len(new_rows)} new ({len(seen_urls)} unique total).",
             )
-            hard_retry_count += 1
-            hard_retry_delay += retry_delay
-            _wait_for_cooldown(
-                retry_delay,
-                retry_number=hard_retry_count,
-                progress_cb=progress_cb,
-                sleep_fn=sleeper,
-            )
-            retrying_page = True
-            continue
-        except Exception as exc:
-            if seen_urls:
-                stopped_early = True
-                stop_warning = (
-                    f"SearXNG pagination stopped after page {page - 1}: {exc}"
+
+            if results:
+                if new_rows and page_processor is not None:
+                    page_processor(page, new_rows)
+                    productive_pages += 1
+
+                if len(seen_urls) >= max_results or page >= _HARD_PAGE_CAP:
+                    break
+
+                for engine in page_throttles:
+                    if engine not in throttle_labels:
+                        throttle_labels.append(engine)
+                if page_throttles:
+                    throttled_pages.add(page)
+                    soft_throttle_streak = min(
+                        soft_throttle_streak + 1,
+                        len(_SOFT_BACKOFF_DELAYS),
+                    )
+                    _emit_progress(
+                        progress_cb,
+                        f"Page {page}: {len(page_throttles)} upstream engine "
+                        "warning(s); continuing with soft backoff.",
+                    )
+                else:
+                    soft_throttle_streak = 0
+
+                next_page = page + 1
+                delay = (
+                    _soft_backoff_seconds(soft_throttle_streak)
+                    or _page_delay_seconds(next_page, jitter_fn=jitter_fn)
                 )
-                break
-            raise
-
-        response_received_at = monotonic()
-        pages_seen.add(page)
-
-        new_rows: list[dict] = []
-        for row in results:
-            if not isinstance(row, dict):
+                if delay:
+                    pacing_delay += _sleep_for_remaining_pacing(
+                        completed_page=page,
+                        next_page=next_page,
+                        delay_seconds=delay,
+                        deadline=response_received_at + delay,
+                        progress_cb=progress_cb,
+                        sleep_fn=sleeper,
+                        monotonic_fn=monotonic,
+                        cancel_event=cancel_event,
+                    )
+                    if cancel_event and cancel_event.is_set():
+                        raise _Cancelled()
+                retrying_page = False
+                page = next_page
                 continue
-            normalized_url = normalize_url(str(row.get("url") or "").strip())
-            if not normalized_url or normalized_url in seen_urls:
-                continue
-            seen_urls.add(normalized_url)
-            new_rows.append(row)
-            if len(seen_urls) >= max_results:
-                break
-        if collect_rows:
-            accumulated.extend(new_rows)
-        _emit_progress(
-            progress_cb,
-            f"Page {page}: received {len(results)} results, "
-            f"{len(new_rows)} new ({len(seen_urls)} unique total).",
-        )
-
-        if results:
-            if new_rows and page_processor is not None:
-                page_processor(page, new_rows)
-
-            if len(seen_urls) >= max_results or page >= _HARD_PAGE_CAP:
-                break
 
             for engine in page_throttles:
                 if engine not in throttle_labels:
                     throttle_labels.append(engine)
             if page_throttles:
-                throttled_pages.add(page)
-                soft_throttle_streak = min(
-                    soft_throttle_streak + 1,
-                    len(_SOFT_BACKOFF_DELAYS),
-                )
-                _emit_progress(
-                    progress_cb,
-                    f"Page {page}: {len(page_throttles)} upstream engine "
-                    "warning(s); continuing with soft backoff.",
-                )
-            else:
-                soft_throttle_streak = 0
+                rd = short_retry if hard_retry_count == 0 else long_retry
+                r = _exec_retry(rd)
+                if r is None: break
+                if r: raise _Cancelled()
+                continue
 
-            next_page = page + 1
-            delay = (
-                _soft_backoff_seconds(soft_throttle_streak)
-                or _page_delay_seconds(next_page, jitter_fn=jitter_fn)
-            )
-            if delay:
-                pacing_delay += _sleep_for_remaining_pacing(
-                    completed_page=page,
-                    next_page=next_page,
-                    delay_seconds=delay,
-                    deadline=response_received_at + delay,
-                    progress_cb=progress_cb,
-                    sleep_fn=sleeper,
-                    monotonic_fn=monotonic,
-                )
-            retrying_page = False
-            page = next_page
-            continue
+            break
 
-        for engine in page_throttles:
-            if engine not in throttle_labels:
-                throttle_labels.append(engine)
-        if page_throttles:
-            if hard_retry_count >= _MAX_HARD_RETRIES:
-                stopped_early = True
-                break
-            retry_delay = _HARD_RETRY_DELAYS[hard_retry_count]
-            hard_retry_count += 1
-            hard_retry_delay += retry_delay
-            _wait_for_cooldown(
-                retry_delay,
-                retry_number=hard_retry_count,
-                progress_cb=progress_cb,
-                sleep_fn=sleeper,
-            )
-            retrying_page = True
-            continue
-
-        break
+    except _Cancelled:
+        stopped_early = True
+        if not stop_warning:
+            stop_warning = "Cancelled."
 
     warning = None
     error = None
@@ -526,29 +619,8 @@ def _paginate_results(
     )
 
 
-def _fetch_results(
-    base_url: str,
-    query: str,
-    max_results: int,
-    timeout: int = _FETCH_TIMEOUT,
-    progress_cb: Optional[Callable[[str], None]] = None,
-    *,
-    sleep_fn: Optional[Callable[[float], None]] = None,
-    jitter_fn: Optional[Callable[[float, float], float]] = None,
-    monotonic_fn: Optional[Callable[[], float]] = None,
-) -> _FetchOutcome:
-    """Compatibility wrapper that collects rows from the pagination controller."""
-    return _paginate_results(
-        base_url,
-        query,
-        max_results,
-        timeout=timeout,
-        progress_cb=progress_cb,
-        collect_rows=True,
-        sleep_fn=sleep_fn,
-        jitter_fn=jitter_fn,
-        monotonic_fn=monotonic_fn,
-    )
+# _fetch_results: collect_rows=True is already the default in _paginate_results.
+_fetch_results = _paginate_results
 
 
 # ---------------------------------------------------------------------------
@@ -580,6 +652,7 @@ def _classify_page_rows(
     *,
     timeout: float = 10.0,
     progress_cb: Optional[Callable[[str], None]] = None,
+    cancel_event: Optional[threading.Event] = None,
 ) -> list[tuple[dict, object]]:
     """Classify one page without holding a database connection."""
     from experimental.se_dork.classifier import (
@@ -592,6 +665,8 @@ def _classify_page_rows(
     total = len(rows)
     step = max(1, total // 10)
     for index, row in enumerate(rows):
+        if cancel_event and cancel_event.is_set():
+            raise _Cancelled()
         try:
             outcome = classify_url(row["url"], timeout=timeout)
         except Exception as exc:
@@ -658,8 +733,8 @@ def _probe_page_rows(
     indicator_patterns: list[tuple[str, object]],
     worker_count: int,
     progress_cb: Optional[Callable[[str], None]],
+    cancel_event: Optional[threading.Event] = None,
 ) -> tuple[list[tuple[dict, object]], dict[str, int]]:
-    """Probe one retained page without holding a database connection."""
     from experimental.se_dork.probe import (
         ProbeOutcome,
         PROBE_STATUS_CLEAN,
@@ -675,12 +750,18 @@ def _probe_page_rows(
     outcomes: list[tuple[dict, object]] = []
     max_workers = max(1, min(worker_count, len(rows)))
     step = max(1, len(rows) // 10)
-    with ThreadPoolExecutor(
-        max_workers=max_workers,
-        thread_name_prefix="se-dork-probe",
-    ) as executor:
-        future_to_row = {
-            executor.submit(
+    rows_iter = iter(rows)
+    active: dict = {}  # future → row
+
+    def _fill() -> None:
+        while len(active) < max_workers:
+            if cancel_event and cancel_event.is_set():
+                return
+            try:
+                row = next(rows_iter)
+            except StopIteration:
+                return
+            f = executor.submit(
                 probe_url,
                 row["url"],
                 config_path=config_path,
@@ -688,34 +769,53 @@ def _probe_page_rows(
                 max_files=5,
                 timeout_seconds=10,
                 indicator_patterns=indicator_patterns,
-            ): row
-            for row in rows
-        }
-        for future in as_completed(future_to_row):
-            row = future_to_row[future]
-            try:
-                outcome = future.result()
-            except Exception as exc:
-                outcome = ProbeOutcome(
-                    probe_status=PROBE_STATUS_UNPROBED,
-                    probe_indicator_matches=0,
-                    probe_preview=None,
-                    probe_checked_at=_utcnow(),
-                    probe_error=str(exc),
-                )
-            outcomes.append((row, outcome))
-            counts["total"] += 1
-            if outcome.probe_status == PROBE_STATUS_ISSUE:
-                counts["issue"] += 1
-            elif outcome.probe_status == PROBE_STATUS_CLEAN:
-                counts["clean"] += 1
+                cancel_event=cancel_event,
+            )
+            active[f] = row
+
+    with ThreadPoolExecutor(
+        max_workers=max_workers,
+        thread_name_prefix="se-dork-probe",
+    ) as executor:
+        _fill()
+        while active:
+            done, _ = _futures_wait(set(active), return_when=FIRST_COMPLETED)
+            for future in done:
+                row = active.pop(future)
+                try:
+                    outcome = future.result()
+                except CancelledError:
+                    continue  # cancelled before execution; skip
+                except Exception as exc:
+                    outcome = ProbeOutcome(
+                        probe_status=PROBE_STATUS_UNPROBED,
+                        probe_indicator_matches=0,
+                        probe_preview=None,
+                        probe_checked_at=_utcnow(),
+                        probe_error=str(exc),
+                    )
+                outcomes.append((row, outcome))
+                counts["total"] += 1
+                if outcome.probe_status == PROBE_STATUS_ISSUE:
+                    counts["issue"] += 1
+                elif outcome.probe_status == PROBE_STATUS_CLEAN:
+                    counts["clean"] += 1
+                else:
+                    counts["unprobed"] += 1
+                if counts["total"] % step == 0 or counts["total"] == len(rows):
+                    _emit_progress(
+                        progress_cb,
+                        f"Page {page}: probing {counts['total']}/{len(rows)}...",
+                    )
+
+            if cancel_event and cancel_event.is_set():
+                # Cancel queued futures; running ones continue and are drained.
+                for f in list(active):
+                    f.cancel()
+                # Do NOT break — continue draining until active is empty.
             else:
-                counts["unprobed"] += 1
-            if counts["total"] % step == 0 or counts["total"] == len(rows):
-                _emit_progress(
-                    progress_cb,
-                    f"Page {page}: probing {counts['total']}/{len(rows)}...",
-                )
+                _fill()
+
     return outcomes, counts
 
 
@@ -763,8 +863,12 @@ def _process_result_page(
     probe_worker_count: int,
     indicator_patterns: list[tuple[str, object]],
     progress_cb: Optional[Callable[[str], None]],
+    cancel_event: Optional[threading.Event] = None,
 ) -> None:
     """Persist, classify, retain, and optionally probe one fetched page."""
+    if cancel_event and cancel_event.is_set():
+        raise _Cancelled()
+
     conn = open_connection(db_path)
     try:
         inserted_rows = insert_page_results(conn, run_id, rows)
@@ -782,13 +886,20 @@ def _process_result_page(
     if not inserted_rows:
         return
 
-    classifications = _classify_page_rows(
-        page,
-        inserted_rows,
-        progress_cb=progress_cb,
-    )
+    # Wrap classify + persist under a committed flag so _Cancelled raised at
+    # any point before the commit triggers cleanup of unclassified rows.
     result_ids = [int(row["result_id"]) for row in inserted_rows]
+    classification_committed = False
     try:
+        if cancel_event and cancel_event.is_set():
+            raise _Cancelled()
+
+        classifications = _classify_page_rows(
+            page,
+            inserted_rows,
+            progress_cb=progress_cb,
+            cancel_event=cancel_event,
+        )
         retained_rows, retained_total = _persist_page_classification(
             run_id=run_id,
             inserted_rows=inserted_rows,
@@ -796,13 +907,20 @@ def _process_result_page(
             totals=totals,
             db_path=db_path,
         )
+        classification_committed = True
+
+        # Update totals BEFORE cancel check so they are never stale on cancel.
+        totals.fetched += len(inserted_rows)
+        totals.verified += len(classifications)
+        totals.retained = retained_total
+
+        if cancel_event and cancel_event.is_set():
+            raise _Cancelled()
     except Exception:
-        _cleanup_unclassified_page(db_path, result_ids)
+        if not classification_committed:
+            _cleanup_unclassified_page(db_path, result_ids)
         raise
 
-    totals.fetched += len(inserted_rows)
-    totals.verified += len(classifications)
-    totals.retained = retained_total
     _emit_progress(
         progress_cb,
         f"Page {page}: classified {len(classifications)}; retained "
@@ -812,6 +930,9 @@ def _process_result_page(
     if not probe_enabled or not retained_rows:
         return
 
+    if cancel_event and cancel_event.is_set():
+        raise _Cancelled()
+
     probe_outcomes, probe_counts = _probe_page_rows(
         page,
         retained_rows,
@@ -819,6 +940,7 @@ def _process_result_page(
         indicator_patterns=indicator_patterns,
         worker_count=probe_worker_count,
         progress_cb=progress_cb,
+        cancel_event=cancel_event,
     )
     try:
         _persist_probe_outcomes(db_path, probe_outcomes)
@@ -834,10 +956,15 @@ def _process_result_page(
             "unprobed": len(retained_rows),
         }
 
+    # Update probe totals BEFORE cancel check.
     totals.probe_total += probe_counts["total"]
     totals.probe_clean += probe_counts["clean"]
     totals.probe_issue += probe_counts["issue"]
     totals.probe_unprobed += probe_counts["unprobed"]
+
+    if cancel_event and cancel_event.is_set():
+        raise _Cancelled()
+
     _emit_progress(
         progress_cb,
         f"Page {page}: probed {probe_counts['total']} "
@@ -855,6 +982,8 @@ def run_dork_search(
     options: RunOptions,
     db_path: Optional[Path] = None,
     progress_cb: Optional[Callable[[str], None]] = None,
+    *,
+    cancel_event: Optional[threading.Event] = None,
 ) -> RunResult:
     """
     Run a dork search against the configured SearXNG instance.
@@ -868,7 +997,13 @@ def run_dork_search(
             except Exception:
                 pass
 
-    # 1. Preflight — no DB I/O yet
+    request_timeout = _coerce_policy_seconds(
+        getattr(options, "request_timeout", 15), default=15, lo=5, hi=60)
+    short_retry = _coerce_policy_seconds(
+        getattr(options, "short_retry_delay", 30), default=30, lo=5, hi=60)
+    long_retry = _coerce_policy_seconds(
+        getattr(options, "long_retry_delay", 180), default=180, lo=60, hi=300)
+
     bulk_probe_enabled = bool(getattr(options, "bulk_probe_enabled", False))
     probe_config_path = getattr(options, "probe_config_path", None)
     raw_probe_worker_count = getattr(options, "probe_worker_count", None)
@@ -881,9 +1016,15 @@ def run_dork_search(
     except (TypeError, ValueError):
         probe_worker_count = 3
 
+    totals = _PageProcessTotals()
+    fetch_outcome = _FetchOutcome(rows=[])
+
+    if cancel_event and cancel_event.is_set():
+        return _make_run_result(RUN_STATUS_CANCELLED, None, run_id=None, totals=totals, fetch_outcome=fetch_outcome, probe_enabled=bulk_probe_enabled)
+
     _emit(f"Reachability: checking {options.instance_url}...")
     try:
-        preflight = run_reachability_check(options.instance_url)
+        preflight = run_reachability_check(options.instance_url, request_timeout)
     except Exception as exc:
         _emit(f"Reachability error: {exc}")
         return RunResult(
@@ -909,11 +1050,12 @@ def run_dork_search(
         )
     _emit("Instance reachable")
 
-    # 2. DB setup — structured error if this fails
+    if cancel_event and cancel_event.is_set():
+        return _make_run_result(RUN_STATUS_CANCELLED, None, run_id=None, totals=totals, fetch_outcome=fetch_outcome, probe_enabled=bulk_probe_enabled)
+
     _emit("Opening database...")
     try:
         init_db(db_path)
-        conn = open_connection(db_path)
     except Exception as exc:
         _emit(f"Database error: {exc}")
         return RunResult(
@@ -925,7 +1067,10 @@ def run_dork_search(
             probe_enabled=bulk_probe_enabled,
         )
 
-    # 3. Clamp max_results; insert a durable RUNNING row.
+    if cancel_event and cancel_event.is_set():
+        return _make_run_result(RUN_STATUS_CANCELLED, None, run_id=None, totals=totals, fetch_outcome=fetch_outcome, probe_enabled=bulk_probe_enabled)
+
+    # Clamp max_results; insert a durable RUNNING row.
     try:
         max_results = max(1, min(MAX_RESULTS, int(options.max_results)))
     except (TypeError, ValueError):
@@ -939,21 +1084,23 @@ def run_dork_search(
         probe_worker_count=probe_worker_count,
     )
     started_at = _utcnow()
+    run_id: Optional[int] = None
+    conn = None
     try:
+        conn = open_connection(db_path)
+        if cancel_event and cancel_event.is_set():
+            return _make_run_result(RUN_STATUS_CANCELLED, None, run_id=None, totals=totals, fetch_outcome=fetch_outcome, probe_enabled=bulk_probe_enabled)
         run_id = insert_run(conn, clamped_opts, started_at)
         conn.commit()
     except Exception as exc:
-        conn.close()
         _emit(f"Run setup failed: {exc}")
-        return RunResult(
-            run_id=None,
-            fetched_count=0,
-            deduped_count=0,
-            status=RUN_STATUS_ERROR,
-            error=f"Run insert failed: {exc}",
-            probe_enabled=bulk_probe_enabled,
-        )
-    conn.close()
+        return _make_run_result(RUN_STATUS_ERROR, f"Run setup failed: {exc}", run_id=None, totals=totals, fetch_outcome=fetch_outcome, probe_enabled=bulk_probe_enabled)
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
     _emit(f"Run registered (#{run_id}). Starting fetch...")
 
     indicator_patterns: list[tuple[str, object]] = []
@@ -964,10 +1111,6 @@ def run_dork_search(
             indicator_patterns = build_indicator_patterns(probe_config_path)
         except Exception as exc:
             _emit(f"Probe indicator setup warning: {exc}")
-
-    # 4. Fetch and process one page at a time.
-    totals = _PageProcessTotals()
-    fetch_outcome = _FetchOutcome(rows=[])
 
     def _process_page(page: int, rows: list[dict]) -> None:
         try:
@@ -982,19 +1125,33 @@ def run_dork_search(
                 probe_worker_count=probe_worker_count,
                 indicator_patterns=indicator_patterns,
                 progress_cb=_emit,
+                cancel_event=cancel_event,
             )
+        except _Cancelled:
+            raise
         except Exception as exc:
             raise RuntimeError(f"Page {page} processing failed: {exc}") from exc
 
     try:
+        if cancel_event and cancel_event.is_set():
+            raise _Cancelled()
+
         fetch_outcome = _paginate_results(
             options.instance_url,
             options.query,
             max_results,
+            timeout=request_timeout,
             progress_cb=_emit,
             page_processor=_process_page,
             collect_rows=False,
+            short_retry=short_retry,
+            long_retry=long_retry,
+            cancel_event=cancel_event,
         )
+
+        if cancel_event and cancel_event.is_set():
+            raise _Cancelled()
+
         if fetch_outcome.error and fetch_outcome.unique_count == 0:
             raise RuntimeError(fetch_outcome.error)
 
@@ -1015,6 +1172,17 @@ def run_dork_search(
             f"Run complete: fetched {totals.fetched}, verified "
             f"{totals.verified}, retained {totals.retained} open indexes."
         )
+
+    except _Cancelled:
+        try:
+            _finalize_run_status(db_path, run_id, totals, RUN_STATUS_CANCELLED)
+            _emit("Cancelled.")
+            return _make_run_result(RUN_STATUS_CANCELLED, None, run_id=run_id, totals=totals, fetch_outcome=fetch_outcome, probe_enabled=bulk_probe_enabled)
+        except Exception as _e:
+            _fin_err = f"Cancellation finalization failed: {_e}"
+            _emit(_fin_err)
+            return _make_run_result(RUN_STATUS_ERROR, _fin_err, run_id=run_id, totals=totals, fetch_outcome=fetch_outcome, probe_enabled=bulk_probe_enabled)
+
     except Exception as exc:
         error_text = str(exc)
         error_label = (
@@ -1024,62 +1192,9 @@ def run_dork_search(
         )
         _emit(f"{error_label}: {error_text}")
         try:
-            error_conn = open_connection(db_path)
-            try:
-                update_run(
-                    error_conn,
-                    run_id,
-                    _utcnow(),
-                    totals.fetched,
-                    totals.retained,
-                    RUN_STATUS_ERROR,
-                    error_text,
-                )
-                error_conn.commit()
-            finally:
-                error_conn.close()
+            _finalize_run_status(db_path, run_id, totals, RUN_STATUS_ERROR, error_text)
         except Exception:
             pass
-        return RunResult(
-            run_id=run_id,
-            fetched_count=totals.fetched,
-            deduped_count=totals.retained,
-            status=RUN_STATUS_ERROR,
-            error=error_text,
-            verified_count=totals.verified,
-            probe_enabled=bulk_probe_enabled,
-            probe_total=totals.probe_total,
-            probe_clean=totals.probe_clean,
-            probe_issue=totals.probe_issue,
-            probe_unprobed=totals.probe_unprobed,
-            pages_fetched=fetch_outcome.pages_fetched,
-            pacing_delay_seconds=fetch_outcome.pacing_delay_seconds,
-            throttled_page_count=fetch_outcome.throttled_page_count,
-            hard_retry_count=fetch_outcome.hard_retry_count,
-            hard_retry_delay_seconds=fetch_outcome.hard_retry_delay_seconds,
-            throttle_engines=fetch_outcome.throttle_engines,
-            stopped_early=fetch_outcome.stopped_early,
-            fetch_warning=fetch_outcome.warning,
-        )
+        return _make_run_result(RUN_STATUS_ERROR, error_text, run_id=run_id, totals=totals, fetch_outcome=fetch_outcome, probe_enabled=bulk_probe_enabled)
 
-    return RunResult(
-        run_id=run_id,
-        fetched_count=totals.fetched,
-        deduped_count=totals.retained,
-        status=RUN_STATUS_DONE,
-        error=None,
-        verified_count=totals.verified,
-        probe_enabled=bulk_probe_enabled,
-        probe_total=totals.probe_total,
-        probe_clean=totals.probe_clean,
-        probe_issue=totals.probe_issue,
-        probe_unprobed=totals.probe_unprobed,
-        pages_fetched=fetch_outcome.pages_fetched,
-        pacing_delay_seconds=fetch_outcome.pacing_delay_seconds,
-        throttled_page_count=fetch_outcome.throttled_page_count,
-        hard_retry_count=fetch_outcome.hard_retry_count,
-        hard_retry_delay_seconds=fetch_outcome.hard_retry_delay_seconds,
-        throttle_engines=fetch_outcome.throttle_engines,
-        stopped_early=fetch_outcome.stopped_early,
-        fetch_warning=fetch_outcome.warning,
-    )
+    return _make_run_result(RUN_STATUS_DONE, None, run_id=run_id, totals=totals, fetch_outcome=fetch_outcome, probe_enabled=bulk_probe_enabled)

@@ -60,6 +60,10 @@ def _suppress_messageboxes(monkeypatch):
     monkeypatch.setattr("gui.components.dashboard.messagebox.showwarning", lambda *a, **k: None)
     monkeypatch.setattr("gui.components.dashboard.messagebox.showinfo", lambda *a, **k: None)
     monkeypatch.setattr(
+        "gui.components.dashboard_searxng_scan._resolve_main_db_path",
+        lambda _dash: Path("/tmp/dirracuda.db"),
+    )
+    monkeypatch.setattr(
         "gui.components.dashboard_scan._resolve_main_db_path",
         lambda _dash: Path("/tmp/dirracuda.db"),
     )
@@ -93,7 +97,7 @@ def _make_dash() -> DashboardWidget:
     # Stub UI lifecycle hooks — the real methods require a Tkinter display
     dash._show_scan_output_dialog = lambda *_: None
     dash._reset_log_output = lambda *_: None
-    dash._set_searxng_task_running = lambda *_: None
+    dash._set_searxng_task_running = lambda *_, **__: None
     dash._log_status_event = lambda *_: None
     dash._handle_scan_log_line = lambda *_: None
     dash._show_scan_results = lambda *_: None
@@ -351,7 +355,7 @@ class TestStartSearxngScan:
         dash = _make_dash()
         captured_opts = []
 
-        def _fake_run(options, *, db_path=None, progress_cb=None):
+        def _fake_run(options, *, db_path=None, progress_cb=None, cancel_event=None):
             captured_opts.append(options)
             return _make_result()
 
@@ -388,7 +392,7 @@ class TestStartSearxngScan:
         dash.settings_manager = sm
         captured_opts = []
 
-        def _fake_run(options, *, db_path=None, progress_cb=None):
+        def _fake_run(options, *, db_path=None, progress_cb=None, cancel_event=None):
             captured_opts.append(options)
             return _make_result()
 
@@ -412,7 +416,7 @@ class TestStartSearxngScan:
         dash = _make_dash()
         captured_opts = []
 
-        def _fake_run(options, *, db_path=None, progress_cb=None):
+        def _fake_run(options, *, db_path=None, progress_cb=None, cancel_event=None):
             captured_opts.append(options)
             return _make_result()
 
@@ -452,7 +456,7 @@ class TestStartSearxngScan:
             def __init__(self, *_a, **_k): pass
             def start(self): pass
 
-        monkeypatch.setattr("gui.components.dashboard_scan.threading.Thread", _NoOpThread)
+        monkeypatch.setattr("gui.components.dashboard_searxng_scan.threading.Thread", _NoOpThread)
         ds.start_searxng_scan(dash, _searxng_request())
         assert dash._searxng_scan_running is True
 
@@ -466,7 +470,7 @@ class TestStartSearxngScan:
             def __init__(self, *_a, **_k): pass
             def start(self): raise RuntimeError("thread pool exhausted")
 
-        monkeypatch.setattr("gui.components.dashboard_scan.threading.Thread", _FailThread)
+        monkeypatch.setattr("gui.components.dashboard_searxng_scan.threading.Thread", _FailThread)
         clear_calls = []
         dash._clear_searxng_task = lambda: clear_calls.append(True)
         errors = []
@@ -486,14 +490,14 @@ class TestStartSearxngScan:
         hook_calls = []
         dash._show_scan_output_dialog = lambda p, c: hook_calls.append("show_output_dialog")
         dash._reset_log_output = lambda c: hook_calls.append("reset_log")
-        dash._set_searxng_task_running = lambda c: hook_calls.append("set_task_running")
+        dash._set_searxng_task_running = lambda c, **__: hook_calls.append("set_task_running")
         dash._log_status_event = lambda m: hook_calls.append("log_status")
 
         class _NoOpThread:
             def __init__(self, *_a, **_k): pass
             def start(self): pass
 
-        monkeypatch.setattr("gui.components.dashboard_scan.threading.Thread", _NoOpThread)
+        monkeypatch.setattr("gui.components.dashboard_searxng_scan.threading.Thread", _NoOpThread)
         monkeypatch.setattr("shared.path_service.get_paths",
             lambda: MagicMock(se_dork_db_file=Path("/tmp/x.db")))
         ds.start_searxng_scan(dash, _searxng_request())
@@ -514,7 +518,7 @@ class TestStartSearxngScan:
             def start(self):
                 pass
 
-        monkeypatch.setattr("gui.components.dashboard_scan.threading.Thread", _NoOpThread)
+        monkeypatch.setattr("gui.components.dashboard_searxng_scan.threading.Thread", _NoOpThread)
         assert ds.start_searxng_scan(
             dash,
             _searxng_request(
@@ -749,7 +753,7 @@ class TestSearxngProgressCallback:
         dash = _make_dash()
         received_cb = []
 
-        def _fake_run(options, *, db_path=None, progress_cb=None):
+        def _fake_run(options, *, db_path=None, progress_cb=None, cancel_event=None):
             received_cb.append(progress_cb)
             return _make_result()
 
@@ -757,7 +761,7 @@ class TestSearxngProgressCallback:
             def __init__(self, *_a, target=None, **_k): self._target = target
             def start(self): self._target and self._target()
 
-        monkeypatch.setattr("gui.components.dashboard_scan.threading.Thread", _SyncThread)
+        monkeypatch.setattr("gui.components.dashboard_searxng_scan.threading.Thread", _SyncThread)
         monkeypatch.setattr("experimental.se_dork.service.run_dork_search", _fake_run)
         monkeypatch.setattr("shared.path_service.get_paths",
             lambda: MagicMock(se_dork_db_file=Path("/tmp/x.db")))
@@ -774,7 +778,7 @@ class TestSearxngProgressCallback:
         dash._update_progress_summary = lambda s, d: summary_calls.append((s, d))
         dash.parent.after = lambda delay, fn, *a: fn()
 
-        def _fake_run(options, *, db_path=None, progress_cb=None):
+        def _fake_run(options, *, db_path=None, progress_cb=None, cancel_event=None):
             if progress_cb:
                 progress_cb("Preflight OK")
                 progress_cb("Querying SearXNG page 1...")
@@ -784,7 +788,7 @@ class TestSearxngProgressCallback:
             def __init__(self, *_a, target=None, **_k): self._target = target
             def start(self): self._target and self._target()
 
-        monkeypatch.setattr("gui.components.dashboard_scan.threading.Thread", _SyncThread)
+        monkeypatch.setattr("gui.components.dashboard_searxng_scan.threading.Thread", _SyncThread)
         monkeypatch.setattr("experimental.se_dork.service.run_dork_search", _fake_run)
         monkeypatch.setattr("shared.path_service.get_paths",
             lambda: MagicMock(se_dork_db_file=Path("/tmp/x.db")))
@@ -799,7 +803,7 @@ class TestSearxngProgressCallback:
         dash._update_progress_summary = lambda s, d: summary_calls.append((s, d))
         dash.parent.after = lambda delay, fn, *a: fn()
 
-        def _fake_run(options, *, db_path=None, progress_cb=None):
+        def _fake_run(options, *, db_path=None, progress_cb=None, cancel_event=None):
             if progress_cb:
                 progress_cb("Querying SearXNG page 1...")
             return _make_result()
@@ -808,7 +812,7 @@ class TestSearxngProgressCallback:
             def __init__(self, *_a, target=None, **_k): self._target = target
             def start(self): self._target and self._target()
 
-        monkeypatch.setattr("gui.components.dashboard_scan.threading.Thread", _SyncThread)
+        monkeypatch.setattr("gui.components.dashboard_searxng_scan.threading.Thread", _SyncThread)
         monkeypatch.setattr("experimental.se_dork.service.run_dork_search", _fake_run)
         monkeypatch.setattr("shared.path_service.get_paths",
             lambda: MagicMock(se_dork_db_file=Path("/tmp/x.db")))
@@ -822,14 +826,14 @@ class TestSearxngProgressCallback:
         clear_calls = []
         dash._clear_searxng_task = lambda: clear_calls.append(True)
 
-        def _fake_run(options, *, db_path=None, progress_cb=None):
+        def _fake_run(options, *, db_path=None, progress_cb=None, cancel_event=None):
             return _make_result()
 
         class _SyncThread:
             def __init__(self, *_a, target=None, **_k): self._target = target
             def start(self): self._target and self._target()
 
-        monkeypatch.setattr("gui.components.dashboard_scan.threading.Thread", _SyncThread)
+        monkeypatch.setattr("gui.components.dashboard_searxng_scan.threading.Thread", _SyncThread)
         monkeypatch.setattr("experimental.se_dork.service.run_dork_search", _fake_run)
         monkeypatch.setattr("shared.path_service.get_paths",
             lambda: MagicMock(se_dork_db_file=Path("/tmp/x.db")))

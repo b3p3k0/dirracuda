@@ -333,6 +333,13 @@ def cancel_provider_queue(dash, *, notify: bool = False) -> bool:
                 scan_manager.interrupt_scan()
             except Exception:
                 pass
+    if current == "searxng":
+        _evt = getattr(dash, "_searxng_cancel_event", None)
+        if _evt is not None:
+            try:
+                _evt.set()
+            except Exception:
+                pass
     _remove_task(dash)
     _hook(dash, "_log_status_event", "Unified provider queue cancelled.")
     if notify:

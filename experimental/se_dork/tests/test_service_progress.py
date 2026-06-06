@@ -34,7 +34,7 @@ def test_progress_emits_page_store_classify_probe(monkeypatch, tmp_path):
     from experimental.se_dork.models import RunOptions
 
     ok = MagicMock(); ok.ok = True; ok.message = "OK"
-    monkeypatch.setattr("experimental.se_dork.service.run_reachability_check", lambda url: ok)
+    monkeypatch.setattr("experimental.se_dork.service.run_reachability_check", lambda url, timeout=10: ok)
 
     _calls = []
     def _fake_urlopen(url, timeout=None):
@@ -97,7 +97,7 @@ def test_progress_emits_terminal_on_fetch_exception(monkeypatch, tmp_path):
     from experimental.se_dork.models import RunOptions
 
     ok = MagicMock(); ok.ok = True; ok.message = "OK"
-    monkeypatch.setattr("experimental.se_dork.service.run_reachability_check", lambda url: ok)
+    monkeypatch.setattr("experimental.se_dork.service.run_reachability_check", lambda url, timeout=10: ok)
 
     def _failing_urlopen(url, timeout=None):
         raise ConnectionError("network timeout")
