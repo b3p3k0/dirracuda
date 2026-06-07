@@ -87,6 +87,9 @@ class UnifiedScanDialog:
         self.searxng_instance_url_var = tk.StringVar(value="")
         self.searxng_query_var = tk.StringVar(value="")
         self.searxng_max_results_var = tk.StringVar(value="500")
+        self.searxng_request_timeout_var = tk.DoubleVar(value=15.0)
+        self.searxng_short_retry_delay_var = tk.DoubleVar(value=30.0)
+        self.searxng_long_retry_delay_var = tk.DoubleVar(value=180.0)
 
         # Reddit options (active when Reddit provider is selected; C4)
         self.reddit_mode_var = tk.StringVar(value="feed")
@@ -463,6 +466,9 @@ class UnifiedScanDialog:
                 "instance_url": self.searxng_instance_url_var.get(),
                 "query": self.searxng_query_var.get(),
                 "max_results": self.searxng_max_results_var.get(),
+                "request_timeout": int(self.searxng_request_timeout_var.get()),
+                "short_retry_delay": int(self.searxng_short_retry_delay_var.get()),
+                "long_retry_delay": int(self.searxng_long_retry_delay_var.get()),
             },
             "reddit_options": {k: getattr(self, f"reddit_{k}_var").get() for k in ("mode", "sort", "top_window", "max_posts", "query", "username", "parse_body", "include_nsfw")},
             "protocols": {
@@ -576,9 +582,9 @@ class UnifiedScanDialog:
         self._refresh_provider_queue_label()
 
     def _sync_searxng_options_state(self, *_args) -> None:
-        from gui.components.scan_provider_options import sync_option_entries
+        from gui.components.scan_provider_options import sync_searxng_option_state
 
-        sync_option_entries(
+        sync_searxng_option_state(
             getattr(self, "_searxng_opts_frame", None),
             self.provider_searxng_var.get(),
         )
@@ -1044,6 +1050,27 @@ class UnifiedScanDialog:
             request["searxng_instance_url"] = instance_url
             request["searxng_query"] = searxng_query
             request["searxng_max_results"] = searxng_max_results
+            from gui.components.scan_provider_options import (
+                coerce_searxng_tuning,
+                SEARXNG_TIMEOUT_DEFAULT, SEARXNG_TIMEOUT_MIN, SEARXNG_TIMEOUT_MAX,
+                SEARXNG_SHORT_RETRY_DEFAULT, SEARXNG_SHORT_RETRY_MIN, SEARXNG_SHORT_RETRY_MAX,
+                SEARXNG_LONG_RETRY_DEFAULT, SEARXNG_LONG_RETRY_MIN, SEARXNG_LONG_RETRY_MAX,
+            )
+            request["searxng_request_timeout"] = coerce_searxng_tuning(
+                self.searxng_request_timeout_var.get(),
+                default=SEARXNG_TIMEOUT_DEFAULT, lo=SEARXNG_TIMEOUT_MIN,
+                hi=SEARXNG_TIMEOUT_MAX, step=1,
+            )
+            request["searxng_short_retry_delay"] = coerce_searxng_tuning(
+                self.searxng_short_retry_delay_var.get(),
+                default=SEARXNG_SHORT_RETRY_DEFAULT, lo=SEARXNG_SHORT_RETRY_MIN,
+                hi=SEARXNG_SHORT_RETRY_MAX, step=5,
+            )
+            request["searxng_long_retry_delay"] = coerce_searxng_tuning(
+                self.searxng_long_retry_delay_var.get(),
+                default=SEARXNG_LONG_RETRY_DEFAULT, lo=SEARXNG_LONG_RETRY_MIN,
+                hi=SEARXNG_LONG_RETRY_MAX, step=30,
+            )
         if "reddit" in providers:
             request.update(reddit_opts)
         return request

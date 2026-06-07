@@ -313,3 +313,104 @@ def test_reddit_query_and_top_window_follow_mode_and_sort(
         assert str(dialog._reddit_top_window_combo.cget("state")) == "disabled"
     finally:
         _destroy(root, dialog)
+
+
+# ---------------------------------------------------------------------------
+# C11B — SearXNG scale rows (geometry and widget presence)
+# ---------------------------------------------------------------------------
+
+def test_searxng_scale_widgets_present(monkeypatch, tmp_path):
+    """Three ttk.Scale widgets must exist inside the SearXNG options frame."""
+    from tkinter import ttk
+
+    overrides = {
+        "unified_scan_dialog.provider_searxng": True,
+    }
+    root, dialog = _build_dialog(monkeypatch, tmp_path, overrides)
+    try:
+        root.update()
+        frame = dialog._searxng_opts_frame
+        scale_widgets = getattr(frame, "_searxng_scale_widgets", [])
+        assert len(scale_widgets) == 3, (
+            f"Expected 3 ttk.Scale widgets, found {len(scale_widgets)}"
+        )
+        for sc in scale_widgets:
+            assert isinstance(sc, ttk.Scale)
+    finally:
+        _destroy(root, dialog)
+
+
+def test_searxng_value_labels_present(monkeypatch, tmp_path):
+    """Three value labels must be attached to the SearXNG options frame."""
+    overrides = {
+        "unified_scan_dialog.provider_searxng": True,
+    }
+    root, dialog = _build_dialog(monkeypatch, tmp_path, overrides)
+    try:
+        root.update()
+        frame = dialog._searxng_opts_frame
+        val_labels = getattr(frame, "_searxng_tuning_value_labels", [])
+        assert len(val_labels) == 3, (
+            f"Expected 3 value labels, found {len(val_labels)}"
+        )
+    finally:
+        _destroy(root, dialog)
+
+
+def test_searxng_controls_no_scroll_at_default_geometry(monkeypatch, tmp_path):
+    """With SearXNG enabled and sliders visible, content must not overflow canvas at 960x700."""
+    overrides = {
+        "unified_scan_dialog.provider_searxng": True,
+        "unified_scan_dialog.searxng_instance_url": "http://halcyon:8090",
+        "unified_scan_dialog.searxng_query": 'intitle:"index of /"',
+        "unified_scan_dialog.searxng_max_results": 1000,
+    }
+    root, dialog = _build_dialog(monkeypatch, tmp_path, overrides)
+    try:
+        root.update()
+        canvas_h = dialog._canvas.winfo_height()
+        content_h = dialog._content.winfo_reqheight()
+        assert content_h <= canvas_h, (
+            f"SearXNG controls overflow at 960x700: "
+            f"reqheight={content_h} > canvas={canvas_h}"
+        )
+        assert not dialog._scrollbar_visible
+    finally:
+        _destroy(root, dialog)
+
+
+def test_searxng_scale_disabled_when_searxng_unchecked(monkeypatch, tmp_path):
+    """Scale and value-label widgets must be disabled when SearXNG is unchecked."""
+    from tkinter import ttk
+
+    root, dialog = _build_dialog(monkeypatch, tmp_path)
+    try:
+        root.update()
+        dialog.provider_searxng_var.set(False)
+        dialog._sync_searxng_options_state()
+        frame = dialog._searxng_opts_frame
+        scale_widgets = getattr(frame, "_searxng_scale_widgets", [])
+        val_labels = getattr(frame, "_searxng_tuning_value_labels", [])
+        for sc in scale_widgets:
+            assert str(sc.cget("state")) == "disabled"
+        for lbl in val_labels:
+            assert str(lbl.cget("state")) == "disabled"
+    finally:
+        _destroy(root, dialog)
+
+
+def test_searxng_scale_enabled_when_searxng_checked(monkeypatch, tmp_path):
+    """Scale widgets must be enabled when SearXNG is checked."""
+    from tkinter import ttk
+
+    root, dialog = _build_dialog(monkeypatch, tmp_path)
+    try:
+        root.update()
+        dialog.provider_searxng_var.set(True)
+        dialog._sync_searxng_options_state()
+        frame = dialog._searxng_opts_frame
+        scale_widgets = getattr(frame, "_searxng_scale_widgets", [])
+        for sc in scale_widgets:
+            assert str(sc.cget("state")) == "normal"
+    finally:
+        _destroy(root, dialog)

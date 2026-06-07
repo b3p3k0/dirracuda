@@ -17,6 +17,18 @@
 | `gui/components/dashboard_scan.py` | 1,679 |
 | `gui/dashboard/widget.py` | 1,678 |
 
+## Post-C11B Line Counts
+
+| File | Lines after C11B |
+|---|---|
+| `gui/components/unified_scan_dialog.py` | 1,175 |
+| `gui/components/scan_provider_options.py` | 601 |
+| `gui/components/unified_scan_layout.py` | 633 |
+| `gui/components/dashboard_searxng_scan.py` | 399 |
+| NEW `gui/tests/test_unified_scan_dialog_searxng_controls.py` | 387 |
+| NEW `gui/tests/test_scan_provider_options_searxng_scales.py` | 157 |
+| `experimental/se_dork/service.py` | 1,200 (unchanged) |
+
 ## Post-C11A Line Counts
 
 | File | Lines after C11A |

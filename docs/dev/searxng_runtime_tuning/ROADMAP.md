@@ -5,7 +5,7 @@ Last updated: 2026-06-06
 | Card | Title | Status |
 | --- | --- | --- |
 | C11A | Retry Shortening and Cancellation | COMPLETE |
-| C11B | Start Scan Tuning Controls | PENDING |
+| C11B | Start Scan Tuning Controls | COMPLETE |
 | C11C | Semantic Live Output Colors | PENDING |
 | C11D | Reusable Live Validation | PENDING |
 

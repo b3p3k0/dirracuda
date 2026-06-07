@@ -195,14 +195,14 @@ def _section_heading(
     if right_text is not None:
         right_label = _muted_label(owner, row, right_text)
         right_label.pack(side=tk.RIGHT)
-    owner.theme.create_separator(parent).pack(fill=tk.X, pady=(4, 6))
+    owner.theme.create_separator(parent).pack(fill=tk.X, pady=(1, 3))
     return right_label
 
 
 def _build_template_row(owner: Any, parent: tk.Widget) -> None:
     row = tk.Frame(parent)
     owner.theme.apply_to_widget(row, "main_window")
-    row.pack(fill=tk.X, padx=18, pady=(8, 4))
+    row.pack(fill=tk.X, padx=18, pady=(6, 2))
     row.grid_columnconfigure(1, weight=1)
 
     owner.theme.create_styled_label(row, "Template", "body").grid(
@@ -244,7 +244,7 @@ def _build_template_row(owner: Any, parent: tk.Widget) -> None:
 def _build_provider_section(owner: Any, parent: tk.Widget) -> None:
     section = tk.Frame(parent)
     owner.theme.apply_to_widget(section, "main_window")
-    section.pack(fill=tk.X, padx=18, pady=(2, 8))
+    section.pack(fill=tk.X, padx=18, pady=(2, 4))
     owner._providers_section = section
 
     owner._provider_queue_label = _section_heading(
@@ -267,7 +267,7 @@ def _build_provider_section(owner: Any, parent: tk.Widget) -> None:
     )
     shodan_cb.grid(row=0, column=0, sticky="nw", padx=(0, 12), pady=2)
     owner._shodan_opts_frame = _build_shodan_options(owner, grid)
-    owner._shodan_opts_frame.grid(row=0, column=1, sticky="ew", pady=2)
+    owner._shodan_opts_frame.grid(row=0, column=1, sticky="ew", pady=0)
 
     searxng_cb = ttk.Checkbutton(
         grid,
@@ -275,17 +275,20 @@ def _build_provider_section(owner: Any, parent: tk.Widget) -> None:
         variable=owner.provider_searxng_var,
         command=owner._sync_searxng_options_state,
     )
-    searxng_cb.grid(row=1, column=0, sticky="nw", padx=(0, 12), pady=(5, 2))
+    searxng_cb.grid(row=1, column=0, sticky="nw", padx=(0, 12), pady=(3, 1))
     owner._searxng_opts_frame = build_searxng_sub_panel(
         grid,
         {
-            "instance_url": owner.searxng_instance_url_var,
-            "query": owner.searxng_query_var,
-            "max_results": owner.searxng_max_results_var,
+            "instance_url":      owner.searxng_instance_url_var,
+            "query":             owner.searxng_query_var,
+            "max_results":       owner.searxng_max_results_var,
+            "request_timeout":   owner.searxng_request_timeout_var,
+            "short_retry_delay": owner.searxng_short_retry_delay_var,
+            "long_retry_delay":  owner.searxng_long_retry_delay_var,
         },
         owner.theme,
     )
-    owner._searxng_opts_frame.grid(row=1, column=1, sticky="ew", pady=(5, 2))
+    owner._searxng_opts_frame.grid(row=1, column=1, sticky="ew", pady=(3, 1))
     owner._searxng_helper_label = getattr(
         owner._searxng_opts_frame,
         "_helper_label",
@@ -313,7 +316,7 @@ def _build_provider_section(owner: Any, parent: tk.Widget) -> None:
         variable=owner.provider_reddit_var,
         command=owner._sync_reddit_options_state,
     )
-    reddit_cb.grid(row=2, column=0, sticky="nw", padx=(0, 12), pady=(5, 2))
+    reddit_cb.grid(row=2, column=0, sticky="nw", padx=(0, 12), pady=(3, 1))
     owner._reddit_opts_frame = build_reddit_sub_panel(
         grid,
         {
@@ -329,7 +332,7 @@ def _build_provider_section(owner: Any, parent: tk.Widget) -> None:
         owner.theme,
         on_state_change=owner._sync_reddit_options_state,
     )
-    owner._reddit_opts_frame.grid(row=2, column=1, sticky="ew", pady=(5, 2))
+    owner._reddit_opts_frame.grid(row=2, column=1, sticky="ew", pady=(3, 1))
     owner._reddit_query_entry = getattr(
         owner._reddit_opts_frame,
         "_reddit_query_widgets",
@@ -380,7 +383,7 @@ def _build_shodan_options(owner: Any, parent: tk.Widget) -> tk.Frame:
 
     estimate_row = tk.Frame(frame)
     owner.theme.apply_to_widget(estimate_row, "main_window")
-    estimate_row.grid(row=1, column=0, columnspan=7, sticky="ew", pady=(0, 2))
+    estimate_row.grid(row=1, column=0, columnspan=7, sticky="ew", pady=0)
     owner._shodan_helper_row = estimate_row
     owner.protocol_cost_label = _muted_label(owner, estimate_row, "")
     owner.protocol_cost_label.pack(side=tk.LEFT)
@@ -402,7 +405,7 @@ def _build_shodan_options(owner: Any, parent: tk.Widget) -> tk.Frame:
 def _build_targeting_runtime(owner: Any, parent: tk.Widget) -> None:
     columns = tk.Frame(parent)
     owner.theme.apply_to_widget(columns, "main_window")
-    columns.pack(fill=tk.X, padx=18, pady=(4, 8))
+    columns.pack(fill=tk.X, padx=18, pady=(4, 4))
     owner._lower_columns = columns
     columns.grid_columnconfigure(0, weight=1, uniform="lower")
     columns.grid_columnconfigure(1, weight=1, uniform="lower")
@@ -587,7 +590,7 @@ def _bind_security_mode(owner: Any) -> None:
 def _build_config_row(owner: Any, parent: tk.Widget) -> None:
     row = tk.Frame(parent)
     owner.theme.apply_to_widget(row, "main_window")
-    row.pack(fill=tk.X, padx=18, pady=3)
+    row.pack(fill=tk.X, padx=18, pady=0)
     owner._config_row = row
 
     config_label = _muted_label(owner, row, f"Config: {owner.config_path}")
@@ -613,7 +616,7 @@ def _build_footer(owner: Any) -> None:
 
     row = tk.Frame(footer)
     owner.theme.apply_to_widget(row, "main_window")
-    row.pack(fill=tk.X, padx=18, pady=4)
+    row.pack(fill=tk.X, padx=18, pady=2)
     owner._footer_actions_row = row
     hint = _muted_label(
         owner,

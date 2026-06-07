@@ -181,6 +181,12 @@ def start_searxng_scan(dash, scan_request: dict) -> bool:
         except Exception:
             pass
 
+    from gui.components.scan_provider_options import (
+        coerce_searxng_tuning,
+        SEARXNG_TIMEOUT_DEFAULT, SEARXNG_TIMEOUT_MIN, SEARXNG_TIMEOUT_MAX,
+        SEARXNG_SHORT_RETRY_DEFAULT, SEARXNG_SHORT_RETRY_MIN, SEARXNG_SHORT_RETRY_MAX,
+        SEARXNG_LONG_RETRY_DEFAULT, SEARXNG_LONG_RETRY_MIN, SEARXNG_LONG_RETRY_MAX,
+    )
     options = RunOptions(
         instance_url=instance_url,
         query=query,
@@ -188,6 +194,21 @@ def start_searxng_scan(dash, scan_request: dict) -> bool:
         bulk_probe_enabled=bool(scan_request.get("bulk_probe_enabled", False)),
         probe_config_path=probe_config_path,
         probe_worker_count=probe_worker_count,
+        request_timeout=coerce_searxng_tuning(
+            scan_request.get("searxng_request_timeout", SEARXNG_TIMEOUT_DEFAULT),
+            default=SEARXNG_TIMEOUT_DEFAULT, lo=SEARXNG_TIMEOUT_MIN,
+            hi=SEARXNG_TIMEOUT_MAX, step=1,
+        ),
+        short_retry_delay=coerce_searxng_tuning(
+            scan_request.get("searxng_short_retry_delay", SEARXNG_SHORT_RETRY_DEFAULT),
+            default=SEARXNG_SHORT_RETRY_DEFAULT, lo=SEARXNG_SHORT_RETRY_MIN,
+            hi=SEARXNG_SHORT_RETRY_MAX, step=5,
+        ),
+        long_retry_delay=coerce_searxng_tuning(
+            scan_request.get("searxng_long_retry_delay", SEARXNG_LONG_RETRY_DEFAULT),
+            default=SEARXNG_LONG_RETRY_DEFAULT, lo=SEARXNG_LONG_RETRY_MIN,
+            hi=SEARXNG_LONG_RETRY_MAX, step=30,
+        ),
     )
     db_path = _resolve_main_db_path(dash)
     country = scan_request.get("country")

@@ -444,3 +444,93 @@ class TestEventLifecycle:
 
         start_searxng_scan(dash, {"searxng_instance_url": "http://x", "searxng_query": "q"})
         assert dash._searxng_cancel_event is None
+
+
+# ---------------------------------------------------------------------------
+# C11B — RunOptions tuning field propagation
+# ---------------------------------------------------------------------------
+
+class TestRunOptionsTuningPropagation:
+    """Verify that scan_request tuning keys are coerced and forwarded to RunOptions."""
+
+    def _capture_options(self, scan_request: dict, monkeypatch):
+        """Run start_searxng_scan with a monkeypatched run_dork_search and return
+        the RunOptions instance that was constructed."""
+        from gui.components.dashboard_searxng_scan import start_searxng_scan
+        from experimental.se_dork.models import RunResult, RUN_STATUS_DONE
+
+        captured = {}
+
+        def _fake_run(options, db_path=None, progress_cb=None, *, cancel_event=None):
+            captured["options"] = options
+            return RunResult(
+                run_id=None, fetched_count=0, deduped_count=0,
+                status=RUN_STATUS_DONE, error=None,
+            )
+
+        monkeypatch.setattr("experimental.se_dork.service.run_dork_search", _fake_run)
+        monkeypatch.setattr(
+            "experimental.se_dork.main_db_sync.sync_run_to_main_db",
+            lambda run_id, db_path: None,
+        )
+
+        dash = _make_dash()
+        dash.parent.after = lambda delay, fn: fn()
+        start_searxng_scan(dash, scan_request)
+        return captured.get("options")
+
+    def test_request_timeout_propagated(self, monkeypatch, tmp_path):
+        opts = self._capture_options({
+            "searxng_instance_url": "http://x",
+            "searxng_query": "q",
+            "searxng_request_timeout": 20,
+        }, monkeypatch)
+        assert opts is not None
+        assert opts.request_timeout == 20
+
+    def test_short_retry_propagated(self, monkeypatch, tmp_path):
+        opts = self._capture_options({
+            "searxng_instance_url": "http://x",
+            "searxng_query": "q",
+            "searxng_short_retry_delay": 45,
+        }, monkeypatch)
+        assert opts is not None
+        assert opts.short_retry_delay == 45
+
+    def test_long_retry_propagated(self, monkeypatch, tmp_path):
+        opts = self._capture_options({
+            "searxng_instance_url": "http://x",
+            "searxng_query": "q",
+            "searxng_long_retry_delay": 240,
+        }, monkeypatch)
+        assert opts is not None
+        assert opts.long_retry_delay == 240
+
+    def test_defaults_when_keys_absent(self, monkeypatch, tmp_path):
+        opts = self._capture_options({
+            "searxng_instance_url": "http://x",
+            "searxng_query": "q",
+        }, monkeypatch)
+        assert opts is not None
+        assert opts.request_timeout == 15
+        assert opts.short_retry_delay == 30
+        assert opts.long_retry_delay == 180
+
+    def test_step_snapped_not_just_clamped(self, monkeypatch, tmp_path):
+        # 12 with step=5 → 10, not just range-clamped 12
+        opts = self._capture_options({
+            "searxng_instance_url": "http://x",
+            "searxng_query": "q",
+            "searxng_short_retry_delay": 12,
+        }, monkeypatch)
+        assert opts is not None
+        assert opts.short_retry_delay == 10
+
+    def test_out_of_range_clamped(self, monkeypatch, tmp_path):
+        opts = self._capture_options({
+            "searxng_instance_url": "http://x",
+            "searxng_query": "q",
+            "searxng_long_retry_delay": 400,
+        }, monkeypatch)
+        assert opts is not None
+        assert opts.long_retry_delay == 300

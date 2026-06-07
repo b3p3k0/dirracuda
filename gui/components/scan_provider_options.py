@@ -5,8 +5,9 @@ production-code limit while SearXNG and Reddit option panels are both present.
 """
 from __future__ import annotations
 
+import math
 import tkinter as tk
-from typing import Any, Dict
+from typing import Any, Callable, Dict
 
 from experimental.redseek.models import DEFAULT_MAX_POSTS, MAX_POSTS
 from experimental.se_dork.models import DEFAULT_MAX_RESULTS, MAX_RESULTS
@@ -17,6 +18,56 @@ SEARXNG_PACING_REMINDER = (
     "Large runs are automatically paced to protect upstream engines."
 )
 REDDIT_MAX_REMINDER = f"Maximum: {MAX_POSTS} posts per RSS snapshot."
+
+# SearXNG tuning control ranges and defaults.
+SEARXNG_TIMEOUT_DEFAULT, SEARXNG_TIMEOUT_MIN, SEARXNG_TIMEOUT_MAX = 15, 5, 60
+SEARXNG_SHORT_RETRY_DEFAULT, SEARXNG_SHORT_RETRY_MIN, SEARXNG_SHORT_RETRY_MAX = 30, 5, 60
+SEARXNG_LONG_RETRY_DEFAULT, SEARXNG_LONG_RETRY_MIN, SEARXNG_LONG_RETRY_MAX = 180, 60, 300
+
+
+def coerce_searxng_tuning(
+    value: Any, *, default: int, lo: int, hi: int, step: int
+) -> int:
+    """Return a step-snapped, bounds-clamped integer policy value.
+
+    Snapping uses deterministic half-up rounding relative to lo, avoiding
+    Python round()'s ties-to-even behaviour (e.g. round(75/30)*30 == 60,
+    not 90). inf, -inf, and nan all return default.
+    """
+    try:
+        v = float(str(value))
+    except (TypeError, ValueError, OverflowError):
+        return default
+    if not math.isfinite(v):
+        return default
+    snapped = lo + int(math.floor((v - lo) / step + 0.5)) * step
+    return max(lo, min(hi, snapped))
+
+
+def _make_snap_callback(
+    dbl_var: tk.DoubleVar,
+    disp_var: tk.StringVar,
+    lo: int,
+    hi: int,
+    step: int,
+) -> Callable:
+    """Return a recursion-safe trace callback that snaps dbl_var to the nearest step."""
+    _guard = [False]
+
+    def _snap(*_: object) -> None:
+        if _guard[0]:
+            return
+        raw = dbl_var.get()
+        snapped = coerce_searxng_tuning(raw, default=lo, lo=lo, hi=hi, step=step)
+        if abs(raw - snapped) > 1e-9:
+            _guard[0] = True
+            try:
+                dbl_var.set(float(snapped))
+            finally:
+                _guard[0] = False
+        disp_var.set(f"{snapped}s")
+
+    return _snap
 
 
 def build_searxng_sub_panel(
@@ -34,7 +85,7 @@ def build_searxng_sub_panel(
 
     _grid_label(frame, "Instance", 0, 0, theme)
     instance_entry = ttk.Entry(frame, textvariable=vars_dict["instance_url"])
-    instance_entry.grid(row=0, column=1, sticky="ew", padx=(4, 12), pady=2)
+    instance_entry.grid(row=0, column=1, sticky="ew", padx=(4, 12), pady=0)
 
     _grid_label(frame, "Query", 1, 0, theme)
     query_entry = ttk.Entry(frame, textvariable=vars_dict["query"])
@@ -43,24 +94,94 @@ def build_searxng_sub_panel(
         column=1,
         sticky="ew",
         padx=(4, 12),
-        pady=2,
+        pady=0,
     )
 
     _grid_label(frame, "Results", 2, 0, theme)
     results_entry = ttk.Entry(frame, textvariable=vars_dict["max_results"], width=8)
-    results_entry.grid(row=2, column=1, sticky="w", padx=(4, 0), pady=2)
+    results_entry.grid(row=2, column=1, sticky="w", padx=(4, 0), pady=0)
 
-    hint = _small_label(
-        frame,
-        f"{SEARXNG_MAX_REMINDER} {SEARXNG_PACING_REMINDER}",
-        theme,
+    scale_widgets: list = []
+    value_labels: list = []
+    scale_subframes: list = []
+    _tuning_rows = (
+        ("Request timeout", SEARXNG_TIMEOUT_MIN, SEARXNG_TIMEOUT_MAX, 1,
+         vars_dict.get("request_timeout")),
+        ("Short retry", SEARXNG_SHORT_RETRY_MIN, SEARXNG_SHORT_RETRY_MAX, 5,
+         vars_dict.get("short_retry_delay")),
+        ("Long retry", SEARXNG_LONG_RETRY_MIN, SEARXNG_LONG_RETRY_MAX, 30,
+         vars_dict.get("long_retry_delay")),
     )
-    hint.grid(row=3, column=0, columnspan=3, sticky="w", pady=(0, 2))
+    for grid_row, (label_text, lo, hi, step, dbl_var) in enumerate(
+        _tuning_rows, start=3
+    ):
+        if dbl_var is None:
+            continue
+        sub, sc, vl = _build_scale_row(frame, grid_row, label_text, lo, hi, step, dbl_var, theme)
+        scale_widgets.append(sc)
+        value_labels.append(vl)
+        scale_subframes.append(sub)
+
+    hint_row = 3 + len(scale_widgets)
+    _hint_text = (
+        f"Max {MAX_RESULTS:,} results. Long retry skipped after 5 productive pages "
+        f"or 50 URLs. Retry-After and soft pacing are automatic."
+        if scale_widgets
+        else f"{SEARXNG_MAX_REMINDER} {SEARXNG_PACING_REMINDER}"
+    )
+    hint = _small_label(frame, _hint_text, theme)
+    hint.grid(row=hint_row, column=0, columnspan=3, sticky="w", pady=0)
     frame._helper_label = hint  # type: ignore[attr-defined]
     frame._searxng_instance_entry = instance_entry  # type: ignore[attr-defined]
     frame._searxng_query_entry = query_entry  # type: ignore[attr-defined]
     frame._searxng_results_entry = results_entry  # type: ignore[attr-defined]
+    frame._searxng_scale_widgets = scale_widgets  # type: ignore[attr-defined]
+    frame._searxng_tuning_value_labels = value_labels  # type: ignore[attr-defined]
+    frame._searxng_scale_subframes = scale_subframes  # type: ignore[attr-defined]
     return frame
+
+
+def _build_scale_row(
+    frame: tk.Widget,
+    grid_row: int,
+    label_text: str,
+    lo: int,
+    hi: int,
+    step: int,
+    dbl_var: tk.DoubleVar,
+    theme: Any,
+) -> tuple:
+    """Build one slider row inside *frame* and return (scale_widget, value_label)."""
+    from tkinter import ttk
+
+    sub = tk.Frame(frame)
+    theme.apply_to_widget(sub, "main_window")
+    sub.grid_columnconfigure(2, weight=1)
+    sub.grid(row=grid_row, column=0, columnspan=3, sticky="ew", pady=0)
+
+    lbl = theme.create_styled_label(sub, label_text, "small")
+    lbl.grid(row=0, column=0, sticky="w", padx=(0, 6))
+    lbl.configure(width=16, anchor="w")
+
+    min_lbl = theme.create_styled_label(sub, f"{lo}s", "small")
+    min_lbl.grid(row=0, column=1, sticky="e", padx=(0, 4))
+
+    scale = ttk.Scale(sub, from_=lo, to=hi, orient=tk.HORIZONTAL, variable=dbl_var)
+    scale.grid(row=0, column=2, sticky="ew")
+
+    max_lbl = theme.create_styled_label(sub, f"{hi}s", "small")
+    max_lbl.grid(row=0, column=3, sticky="w", padx=(4, 6))
+
+    initial = coerce_searxng_tuning(dbl_var.get(), default=lo, lo=lo, hi=hi, step=step)
+    disp_var = tk.StringVar(value=f"{initial}s")
+    val_lbl = theme.create_styled_label(sub, "", "small")
+    val_lbl.configure(textvariable=disp_var, width=5, anchor="w")
+    val_lbl.grid(row=0, column=4, sticky="w")
+
+    cb = _make_snap_callback(dbl_var, disp_var, lo, hi, step)
+    dbl_var.trace_add("write", cb)
+
+    return sub, scale, val_lbl
 
 
 def build_reddit_sub_panel(
@@ -119,12 +240,12 @@ def build_reddit_sub_panel(
         columnspan=7,
         sticky="ew",
         padx=(4, 0),
-        pady=2,
+        pady=0,
     )
 
     options = tk.Frame(frame)
     theme.apply_to_widget(options, "main_window")
-    options.grid(row=2, column=0, columnspan=8, sticky="w", pady=(1, 2))
+    options.grid(row=2, column=0, columnspan=8, sticky="w", pady=0)
     parse_body = ttk.Checkbutton(
         options,
         text="Parse body",
@@ -139,7 +260,7 @@ def build_reddit_sub_panel(
     include_nsfw.pack(side=tk.LEFT, padx=(12, 0))
 
     hint = _small_label(frame, REDDIT_MAX_REMINDER, theme)
-    hint.grid(row=3, column=0, columnspan=8, sticky="w", pady=(0, 2))
+    hint.grid(row=3, column=0, columnspan=8, sticky="w", pady=0)
 
     frame._reddit_mode_var = vars_dict["mode"]  # type: ignore[attr-defined]
     frame._reddit_sort_var = vars_dict["sort"]  # type: ignore[attr-defined]
@@ -162,6 +283,22 @@ def sync_option_entries(frame: tk.Widget | None, enabled: bool) -> None:
         return
     new_state = tk.NORMAL if enabled else tk.DISABLED
     _apply_state_recursive(frame, new_state)
+
+
+def sync_searxng_option_state(frame: tk.Widget | None, enabled: bool) -> None:
+    """Apply enabled state to the SearXNG panel, including tuning value labels.
+
+    Scale subframes remain visible at all times; only their state changes.
+    This follows the same visible-but-disabled pattern as Instance/Query/Results.
+    """
+    sync_option_entries(frame, enabled)
+    val_labels = getattr(frame, "_searxng_tuning_value_labels", [])
+    state = tk.NORMAL if enabled else tk.DISABLED
+    for lbl in val_labels:
+        try:
+            lbl.configure(state=state)
+        except tk.TclError:
+            pass
 
 
 def sync_reddit_option_state(frame: tk.Widget | None, enabled: bool) -> None:
@@ -235,6 +372,7 @@ def _apply_state_recursive(widget: tk.Widget, state: str) -> None:
             ttk.Checkbutton,
             ttk.Radiobutton,
             ttk.Button,
+            ttk.Scale,
         ),
     ):
         try:
@@ -278,6 +416,27 @@ def load_searxng_settings(dialog: Any, sm: Any) -> None:
     dialog.searxng_max_results_var.set(str(validate_searxng_max_results(
         g("unified_scan_dialog.searxng_max_results", DEFAULT_MAX_RESULTS)
     )))
+    _t = getattr(dialog, "searxng_request_timeout_var", None)
+    if _t is not None:
+        _t.set(float(coerce_searxng_tuning(
+            g("unified_scan_dialog.searxng_request_timeout", SEARXNG_TIMEOUT_DEFAULT),
+            default=SEARXNG_TIMEOUT_DEFAULT, lo=SEARXNG_TIMEOUT_MIN,
+            hi=SEARXNG_TIMEOUT_MAX, step=1,
+        )))
+    _s = getattr(dialog, "searxng_short_retry_delay_var", None)
+    if _s is not None:
+        _s.set(float(coerce_searxng_tuning(
+            g("unified_scan_dialog.searxng_short_retry_delay", SEARXNG_SHORT_RETRY_DEFAULT),
+            default=SEARXNG_SHORT_RETRY_DEFAULT, lo=SEARXNG_SHORT_RETRY_MIN,
+            hi=SEARXNG_SHORT_RETRY_MAX, step=5,
+        )))
+    _l = getattr(dialog, "searxng_long_retry_delay_var", None)
+    if _l is not None:
+        _l.set(float(coerce_searxng_tuning(
+            g("unified_scan_dialog.searxng_long_retry_delay", SEARXNG_LONG_RETRY_DEFAULT),
+            default=SEARXNG_LONG_RETRY_DEFAULT, lo=SEARXNG_LONG_RETRY_MIN,
+            hi=SEARXNG_LONG_RETRY_MAX, step=30,
+        )))
 
 
 def persist_searxng_settings(dialog: Any, sm: Any) -> None:
@@ -294,6 +453,27 @@ def persist_searxng_settings(dialog: Any, sm: Any) -> None:
         "unified_scan_dialog.searxng_max_results",
         str(validate_searxng_max_results(dialog.searxng_max_results_var.get())),
     )
+    _t = getattr(dialog, "searxng_request_timeout_var", None)
+    if _t is not None:
+        sm.set_setting(
+            "unified_scan_dialog.searxng_request_timeout",
+            coerce_searxng_tuning(_t.get(), default=SEARXNG_TIMEOUT_DEFAULT,
+                                   lo=SEARXNG_TIMEOUT_MIN, hi=SEARXNG_TIMEOUT_MAX, step=1),
+        )
+    _s = getattr(dialog, "searxng_short_retry_delay_var", None)
+    if _s is not None:
+        sm.set_setting(
+            "unified_scan_dialog.searxng_short_retry_delay",
+            coerce_searxng_tuning(_s.get(), default=SEARXNG_SHORT_RETRY_DEFAULT,
+                                   lo=SEARXNG_SHORT_RETRY_MIN, hi=SEARXNG_SHORT_RETRY_MAX, step=5),
+        )
+    _l = getattr(dialog, "searxng_long_retry_delay_var", None)
+    if _l is not None:
+        sm.set_setting(
+            "unified_scan_dialog.searxng_long_retry_delay",
+            coerce_searxng_tuning(_l.get(), default=SEARXNG_LONG_RETRY_DEFAULT,
+                                   lo=SEARXNG_LONG_RETRY_MIN, hi=SEARXNG_LONG_RETRY_MAX, step=30),
+        )
 
 
 def load_reddit_settings(dialog: Any, sm: Any) -> None:
@@ -385,6 +565,27 @@ def apply_searxng_form_state(dialog: Any, opts: Dict[str, Any]) -> None:
         "searxng_max_results_var",
         str(validate_searxng_max_results(opts.get("max_results"))),
     )
+    _t = getattr(dialog, "searxng_request_timeout_var", None)
+    if _t is not None:
+        _t.set(float(coerce_searxng_tuning(
+            opts.get("request_timeout", SEARXNG_TIMEOUT_DEFAULT),
+            default=SEARXNG_TIMEOUT_DEFAULT, lo=SEARXNG_TIMEOUT_MIN,
+            hi=SEARXNG_TIMEOUT_MAX, step=1,
+        )))
+    _sr = getattr(dialog, "searxng_short_retry_delay_var", None)
+    if _sr is not None:
+        _sr.set(float(coerce_searxng_tuning(
+            opts.get("short_retry_delay", SEARXNG_SHORT_RETRY_DEFAULT),
+            default=SEARXNG_SHORT_RETRY_DEFAULT, lo=SEARXNG_SHORT_RETRY_MIN,
+            hi=SEARXNG_SHORT_RETRY_MAX, step=5,
+        )))
+    _lr = getattr(dialog, "searxng_long_retry_delay_var", None)
+    if _lr is not None:
+        _lr.set(float(coerce_searxng_tuning(
+            opts.get("long_retry_delay", SEARXNG_LONG_RETRY_DEFAULT),
+            default=SEARXNG_LONG_RETRY_DEFAULT, lo=SEARXNG_LONG_RETRY_MIN,
+            hi=SEARXNG_LONG_RETRY_MAX, step=30,
+        )))
 
 
 def validate_searxng_max_results(value: Any) -> int:
