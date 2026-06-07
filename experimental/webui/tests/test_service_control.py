@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import sys
+import urllib.request
 
 import experimental.webui.service_control as service_control
 
@@ -113,6 +114,57 @@ def test_start_already_running_short_circuits(monkeypatch):
 
 def test_get_url_defaults_to_new_port():
     assert service_control.get_url() == "http://127.0.0.1:2600"
+
+
+def test_wildcard_urls_separate_listener_from_local_browser():
+    assert service_control.get_listen_url("0.0.0.0", 2600) == "http://0.0.0.0:2600"
+    assert service_control.get_url("0.0.0.0", 2600) == "http://127.0.0.1:2600"
+    assert service_control.get_listen_url("::", 2600) == "http://[::]:2600"
+    assert service_control.get_url("::", 2600) == "http://[::1]:2600"
+
+
+def test_health_check_uses_loopback_for_wildcard_listener(monkeypatch):
+    captured = {}
+
+    class _Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    def _urlopen(url, timeout):
+        captured["url"] = url
+        captured["timeout"] = timeout
+        return _Response()
+
+    monkeypatch.setattr(urllib.request, "urlopen", _urlopen)
+
+    assert service_control._health_ok("0.0.0.0", 2600) is True
+    assert captured == {"url": "http://127.0.0.1:2600/health", "timeout": 2}
+
+
+def test_start_retains_wildcard_in_command_and_pid_record(monkeypatch):
+    writes = []
+    captured = {}
+    monkeypatch.setattr(service_control, "_write_pid", lambda *args: writes.append(args))
+    monkeypatch.setattr(service_control, "_clear_pid", lambda: None)
+    monkeypatch.setattr(service_control, "is_running", lambda *_a, **_k: False)
+    monkeypatch.setattr(service_control, "_health_ok", lambda *_a, **_k: True)
+
+    def _fake_popen(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return _FakeProc([None])
+
+    monkeypatch.setattr(service_control.subprocess, "Popen", _fake_popen)
+
+    result = service_control.start("0.0.0.0", 2600)
+
+    assert result.state == "running"
+    assert captured["cmd"][-4:] == ["--host", "0.0.0.0", "--port", "2600"]
+    assert writes == [(12345, "0.0.0.0", 2600)]
 
 
 def test_start_defaults_to_new_port(monkeypatch):

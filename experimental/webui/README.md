@@ -167,6 +167,12 @@ Non-loopback bind requires:
 - non-empty `allowed_cidrs`
 - TLS configured with cert/key, **or** explicit insecure override (`tls.allow_insecure_remote=true`)
 
+When remote mode is enabled with a loopback bind, config normalization changes
+`127.0.0.1` to `0.0.0.0` or `::1` to `::`. These wildcard values are listener
+addresses, not browser destinations. Local browser and health checks use
+`127.0.0.1` or `::1`; LAN clients use the host's actual interface address, for
+example `http://192.168.1.251:2600` on the system used to validate this behavior.
+
 Startup fails fast on unsafe combinations (no silent downgrade).
 
 ### Allowlist behavior

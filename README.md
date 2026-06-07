@@ -555,6 +555,14 @@ Notes:
 - Dorkbook prefill is immediate-persist to discovery config.
 - Keymaster `apply` writes `shodan.api_key`; secure-mode toggle/reset stays desktop-only for now.
 
+Remote access requires `remote_enabled=true`, a matching CIDR allowlist, and TLS
+or the explicit insecure override. If remote access is enabled while the bind is
+still loopback, Dirracuda promotes `127.0.0.1` to `0.0.0.0` (or `::1` to `::`)
+on save/load so Uvicorn can accept non-loopback traffic. The desktop tab shows
+the wildcard listening endpoint separately from the usable local browser URL.
+LAN clients connect to the host's actual interface address; on the host used to
+verify this fix, that is `http://192.168.1.251:2600`.
+
 For route-level behavior, API contracts, and security/runtime details, see
 [docs/TECHNICAL_REFERENCE.md](docs/TECHNICAL_REFERENCE.md).
 

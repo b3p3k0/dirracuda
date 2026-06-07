@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import List, Optional
 
@@ -99,6 +99,30 @@ def _is_loopback(addr: str) -> bool:
         return ipaddress.ip_address(addr).is_loopback
     except ValueError:
         return False
+
+
+def normalize_remote_bind_address(bind_address: str, remote_enabled: bool) -> str:
+    """Promote a remote-enabled loopback bind to its IP-family wildcard."""
+    if not remote_enabled:
+        return bind_address
+    try:
+        address = ipaddress.ip_address(bind_address)
+    except ValueError:
+        return bind_address
+    if not address.is_loopback:
+        return bind_address
+    return "0.0.0.0" if address.version == 4 else "::"
+
+
+def normalize_remote_bind(cfg: WebUIConfig) -> WebUIConfig:
+    """Return a config whose remote listener can accept non-loopback traffic."""
+    bind_address = normalize_remote_bind_address(
+        cfg.bind_address,
+        cfg.remote_enabled,
+    )
+    if bind_address == cfg.bind_address:
+        return cfg
+    return replace(cfg, bind_address=bind_address)
 
 
 def _check_type(value, expected_type, field_name: str) -> None:
@@ -384,9 +408,7 @@ def _load_legacy_default_if_needed(target_path: Path) -> Optional[WebUIConfig]:
         )
 
     payload, _wrapped = _extract_config_payload(raw, _LEGACY_DEFAULT_CONFIG_PATH)
-    cfg = _parse_config(payload)
-    validate(cfg)
-    save_config(cfg, path=target_path)
+    cfg = save_config(_parse_config(payload), path=target_path)
     logger.info(
         "Migrated legacy webui config to modular shard: %s -> %s",
         _LEGACY_DEFAULT_CONFIG_PATH,
@@ -412,24 +434,37 @@ def load_config(path: Optional[Path] = None) -> WebUIConfig:
             f"Config must be a JSON object, got {type(raw).__name__}"
         )
     payload, wrapped = _extract_config_payload(raw, p)
-    cfg = _parse_config(payload)
+    parsed_cfg = _parse_config(payload)
+    cfg = normalize_remote_bind(parsed_cfg)
     should_migrate_legacy_port = (
         "port" in payload
         and isinstance(payload.get("port"), int)
         and not isinstance(payload.get("port"), bool)
         and payload.get("port") == _LEGACY_DEFAULT_PORT
     )
+    should_migrate_remote_bind = cfg.bind_address != parsed_cfg.bind_address
     should_wrap_into_shard = _is_canonical_default_path(p) and not wrapped
-    if should_migrate_legacy_port or should_wrap_into_shard:
+    if should_migrate_legacy_port:
+        cfg = replace(cfg, port=_DEFAULT_PORT)
+    validate(cfg)
+    if should_migrate_legacy_port or should_migrate_remote_bind or should_wrap_into_shard:
         migrated_raw = dict(payload)
         if should_migrate_legacy_port:
-            cfg.port = _DEFAULT_PORT
             migrated_raw["port"] = _DEFAULT_PORT
+        if should_migrate_remote_bind:
+            migrated_raw["bind_address"] = cfg.bind_address
         try:
             if _is_canonical_default_path(p):
                 _atomic_write_json({_WEBUI_SECTION_KEY: migrated_raw}, p)
             else:
                 _atomic_write_json(migrated_raw, p)
+            if should_migrate_remote_bind:
+                logger.info(
+                    "webui config migration: promoted remote bind %s->%s at %s",
+                    parsed_cfg.bind_address,
+                    cfg.bind_address,
+                    p,
+                )
         except Exception as exc:
             if should_migrate_legacy_port:
                 logger.warning(
@@ -439,22 +474,35 @@ def load_config(path: Optional[Path] = None) -> WebUIConfig:
                     p,
                     exc,
                 )
-            else:
+            if should_migrate_remote_bind:
                 logger.warning(
-                    "webui config migration: failed to wrap config into shard schema at %s: %s",
+                    "webui config migration: failed to persist remote bind %s->%s"
+                    " at %s: %s",
+                    parsed_cfg.bind_address,
+                    cfg.bind_address,
                     p,
                     exc,
                 )
-    validate(cfg)
+            if should_wrap_into_shard and not (
+                should_migrate_legacy_port or should_migrate_remote_bind
+            ):
+                logger.warning(
+                    "webui config migration: failed to wrap config into shard schema"
+                    " at %s: %s",
+                    p,
+                    exc,
+                )
     return cfg
 
 
-def save_config(cfg: WebUIConfig, path: Optional[Path] = None) -> None:
-    """Validate and atomically write cfg to webui.json with mode 0600."""
-    validate(cfg)
+def save_config(cfg: WebUIConfig, path: Optional[Path] = None) -> WebUIConfig:
+    """Normalize, validate, and atomically write cfg; return the effective config."""
+    effective_cfg = normalize_remote_bind(cfg)
+    validate(effective_cfg)
     target_path = _config_path(path)
-    payload = _config_to_dict(cfg)
+    payload = _config_to_dict(effective_cfg)
     if _is_canonical_default_path(target_path):
         _atomic_write_json({_WEBUI_SECTION_KEY: payload}, target_path)
     else:
         _atomic_write_json(payload, target_path)
+    return effective_cfg

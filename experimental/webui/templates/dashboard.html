@@ -8,12 +8,13 @@
   <h2>Service</h2>
   <p>
     {% if cfg.remote_enabled %}
-      Remote access enabled &mdash;
+      Remote access enabled
     {% else %}
-      Localhost only &mdash;
+      Localhost only
     {% endif %}
-    http://{{ cfg.bind_address }}:{{ cfg.port }}
   </p>
+  <p>Listening: {{ listen_url }}</p>
+  <p>Local URL: {{ local_url }}</p>
   <p>
     Shodan Balance:
     <span id="shodan-balance-status" class="status-text" role="status" aria-live="polite">

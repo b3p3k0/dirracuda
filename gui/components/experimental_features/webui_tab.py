@@ -33,7 +33,7 @@ class WebUITab:
     def _build(self, frame: tk.Frame) -> None:
         description = (
             "Browser-based UI for scan control and results review.\n"
-            "Runs a local web server accessible at http://127.0.0.1:2600."
+            "Runs a separate web service using the bind and access controls below."
         )
         desc_label = tk.Label(
             frame,
@@ -62,14 +62,27 @@ class WebUITab:
         self._theme.apply_to_widget(url_frame, "main_window")
         url_frame.pack(fill=tk.X, padx=16, pady=(0, 12))
 
-        url_label = tk.Label(url_frame, text="URL:")
+        url_label = tk.Label(url_frame, text="Listening:")
         self._theme.apply_to_widget(url_label, "label")
         url_label.pack(side=tk.LEFT)
 
-        self._url_var = tk.StringVar(value="")
-        url_value = tk.Label(url_frame, textvariable=self._url_var)
+        self._listen_url_var = tk.StringVar(value="")
+        url_value = tk.Label(url_frame, textvariable=self._listen_url_var)
         self._theme.apply_to_widget(url_value, "label")
         url_value.pack(side=tk.LEFT, padx=(8, 0))
+
+        local_url_frame = tk.Frame(frame)
+        self._theme.apply_to_widget(local_url_frame, "main_window")
+        local_url_frame.pack(fill=tk.X, padx=16, pady=(0, 12))
+
+        local_url_label = tk.Label(local_url_frame, text="Local URL:")
+        self._theme.apply_to_widget(local_url_label, "label")
+        local_url_label.pack(side=tk.LEFT)
+
+        self._url_var = tk.StringVar(value="")
+        local_url_value = tk.Label(local_url_frame, textvariable=self._url_var)
+        self._theme.apply_to_widget(local_url_value, "label")
+        local_url_value.pack(side=tk.LEFT, padx=(8, 0))
 
         cred_btn_frame = tk.Frame(frame)
         self._theme.apply_to_widget(cred_btn_frame, "main_window")
@@ -189,9 +202,12 @@ class WebUITab:
             pass
 
     def _refresh_status(self) -> None:
+        from experimental.webui.service_control import get_listen_url, get_url
+
         cfg = self._get_webui_cfg()
         host, port = cfg.bind_address, cfg.port
-        self._url_var.set(f"http://{host}:{port}")
+        self._listen_url_var.set(get_listen_url(host, port))
+        self._url_var.set(get_url(host, port))
 
         def _check() -> None:
             from experimental.webui.service_control import is_running
@@ -758,9 +774,32 @@ class WebUITab:
         if not self._cfg_dialog_exists():
             return
         if self._cfg_remote_var.get():
+            from experimental.webui.config import normalize_remote_bind_address
+
+            current_bind = self._cfg_bind_var.get().strip()
+            effective_bind = normalize_remote_bind_address(current_bind, True)
+            if effective_bind != current_bind:
+                self._cfg_bind_var.set(effective_bind)
+            if effective_bind == "0.0.0.0":
+                exposure = "all IPv4 interfaces (0.0.0.0)"
+            elif effective_bind == "::":
+                exposure = "all IPv6 interfaces (::)"
+            else:
+                exposure = effective_bind
+            self._cfg_remote_warn_label.configure(
+                text=(
+                    f"Warning: remote access listens on {exposure}. "
+                    "Only clients matching the allowlist may proceed."
+                )
+            )
             if not self._cfg_remote_warn_label.winfo_ismapped():
                 self._cfg_remote_warn_label.pack(fill=tk.X, pady=(0, 8))
         else:
+            current_bind = self._cfg_bind_var.get().strip()
+            if current_bind == "0.0.0.0":
+                self._cfg_bind_var.set("127.0.0.1")
+            elif current_bind == "::":
+                self._cfg_bind_var.set("::1")
             if self._cfg_remote_warn_label.winfo_ismapped():
                 self._cfg_remote_warn_label.pack_forget()
 
@@ -843,8 +882,8 @@ class WebUITab:
 
         cfg = self._build_config_from_dialog()
         validate(cfg)
-        save_config(cfg, path=self._get_webui_config_path())
-        return cfg
+        effective_cfg = save_config(cfg, path=self._get_webui_config_path())
+        return effective_cfg if effective_cfg is not None else cfg
 
     def _on_save_config_dialog(self) -> None:
         if not self._cfg_dialog_exists():
@@ -1007,12 +1046,16 @@ class WebUITab:
         threading.Thread(target=_do, daemon=True).start()
 
     def _on_open_browser(self) -> None:
+        from experimental.webui.service_control import get_url
+
         cfg = self._get_webui_cfg()
-        webbrowser.open(f"http://{cfg.bind_address}:{cfg.port}")
+        webbrowser.open(get_url(cfg.bind_address, cfg.port))
 
     def _on_copy_url(self) -> None:
+        from experimental.webui.service_control import get_url
+
         cfg = self._get_webui_cfg()
-        url = f"http://{cfg.bind_address}:{cfg.port}"
+        url = get_url(cfg.bind_address, cfg.port)
         self.frame.clipboard_clear()
         self.frame.clipboard_append(url)
         safe_messagebox.showinfo("Copied", f"URL copied: {url}", parent=self.frame)

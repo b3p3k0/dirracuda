@@ -319,6 +319,20 @@ Seeded before implementation. Append after every major card.
     handoff (`window.open`), show a static caution about external applications,
     and document that private/incognito launch cannot be forced from browser JS.
 
+## Remote Bind Normalization
+
+65. `remote_enabled=true` does not make a loopback socket remotely reachable.
+    Normalize an IPv4 loopback bind to `0.0.0.0` and an IPv6 loopback bind to
+    `::` before config persistence and startup.
+
+66. Treat listener addresses and operator URLs as separate values. Keep wildcard
+    binds in process arguments and pid metadata, but use loopback for local health,
+    browser, and copy-URL actions. Bracket IPv6 hosts when formatting URLs.
+
+67. Test both directions of coupled config invariants. The original suite proved
+    that non-loopback binds required remote mode, but did not cover remote mode
+    left on loopback, allowing a valid-looking but unreachable configuration.
+
 65. For HTTP/FTP `Open with system`, never infer target path from the “first
     discovered directory” when base-path intent is ambiguous. Prefer explicit
     probe snapshot `start_path` when present, and otherwise open root index `/`.

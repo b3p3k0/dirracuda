@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from experimental.webui.app import create_app
 from experimental.webui.config import TLSConfig, WebUIConfig, WebUIConfigError, validate
+import experimental.webui.server as server
 from experimental.webui.server import _check_remote_tls
 
 
@@ -55,6 +56,48 @@ def test_explicit_insecure_override_allowed():
         tls=TLSConfig(enabled=False, allow_insecure_remote=True),
     )
     validate(cfg)  # must not raise
+
+
+def test_server_promotes_remote_loopback_without_host_override(monkeypatch):
+    captured = {}
+    cfg = WebUIConfig(
+        bind_address="127.0.0.1",
+        remote_enabled=True,
+        allowed_cidrs=["10.0.0.0/8"],
+        tls=TLSConfig(enabled=False, allow_insecure_remote=True),
+    )
+    monkeypatch.setattr(server, "create_app", lambda **kwargs: kwargs["cfg"])
+    monkeypatch.setattr(
+        server.uvicorn,
+        "run",
+        lambda app, **kwargs: captured.update(app=app, kwargs=kwargs),
+    )
+
+    server.run(cfg=cfg)
+
+    assert captured["app"].bind_address == "0.0.0.0"
+    assert captured["kwargs"]["host"] == "0.0.0.0"
+
+
+def test_explicit_server_host_override_remains_authoritative(monkeypatch):
+    captured = {}
+    cfg = WebUIConfig(
+        bind_address="127.0.0.1",
+        remote_enabled=True,
+        allowed_cidrs=["10.0.0.0/8"],
+        tls=TLSConfig(enabled=False, allow_insecure_remote=True),
+    )
+    monkeypatch.setattr(server, "create_app", lambda **kwargs: kwargs["cfg"])
+    monkeypatch.setattr(
+        server.uvicorn,
+        "run",
+        lambda app, **kwargs: captured.update(app=app, kwargs=kwargs),
+    )
+
+    server.run(host="127.0.0.1", cfg=cfg)
+
+    assert captured["app"].bind_address == "127.0.0.1"
+    assert captured["kwargs"]["host"] == "127.0.0.1"
 
 
 # --- Remote TLS cert/key check (server-level, via _check_remote_tls()) ---

@@ -54,6 +54,7 @@ from experimental.webui.rate_limiter import (
     _DEFAULT_RL_PATH,
 )
 from experimental.webui.shared_jobs import SharedCancelResult, SharedJobQueue
+from experimental.webui.service_control import get_listen_url, get_url
 from experimental.webui.dependencies import AuthRequired, get_session, same_origin, validate_csrf
 from experimental.webui.sessions import Session, SessionStore, cookie_name
 from experimental.webui.shodan_balance import ShodanBalanceService
@@ -483,6 +484,8 @@ def create_app(
                 "qs": queue.queue_status(),
                 "active_page": "dashboard",
                 "migration": migration,
+                "listen_url": get_listen_url(cfg_.bind_address, cfg_.port),
+                "local_url": get_url(cfg_.bind_address, cfg_.port),
             }
         )
 
@@ -1312,11 +1315,15 @@ def create_app(
         except WebUIConfigError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         try:
-            save_config(new_cfg, path=request.app.state.config_path)
+            effective_cfg = save_config(new_cfg, path=request.app.state.config_path)
         except Exception:
             logger.exception("config save failed")
             return JSONResponse({"error": "failed to save config"}, status_code=500)
         logger.info("config saved by user=%r", session.username)
-        return JSONResponse({"ok": True, "note": "Changes take effect on restart."})
+        return JSONResponse({
+            "ok": True,
+            "effective_bind_address": effective_cfg.bind_address,
+            "note": "Changes take effect on restart.",
+        })
 
     return app

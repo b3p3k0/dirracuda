@@ -27,8 +27,15 @@
       <label for="remote-enabled">Remote access enabled</label>
     </div>
     <div id="remote-warn" class="status-warn{% if not cfg.remote_enabled %} hidden{% endif %}">
-      Warning: remote access exposes this service on non-loopback interfaces.
-      Ensure TLS and allowlist are configured before enabling.
+      Warning: remote access listens on
+      {% if cfg.bind_address == "0.0.0.0" %}
+        all IPv4 interfaces (0.0.0.0).
+      {% elif cfg.bind_address == "::" %}
+        all IPv6 interfaces (::).
+      {% else %}
+        {{ cfg.bind_address }}.
+      {% endif %}
+      Only clients matching the allowlist may proceed.
     </div>
   </div>
 

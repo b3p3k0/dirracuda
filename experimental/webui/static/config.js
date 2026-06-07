@@ -1,6 +1,26 @@
 var token = document.querySelector('meta[name="csrf-token"]').content;
 
+function updateRemoteBind(enabled) {
+  var bindInput = document.getElementById('bind-addr');
+  var current = bindInput.value.trim();
+  if (enabled && current === '127.0.0.1') bindInput.value = '0.0.0.0';
+  if (enabled && current === '::1') bindInput.value = '::';
+  if (!enabled && current === '0.0.0.0') bindInput.value = '127.0.0.1';
+  if (!enabled && current === '::') bindInput.value = '::1';
+}
+
+function updateRemoteWarning(bindAddress) {
+  var exposure = bindAddress;
+  if (bindAddress === '0.0.0.0') exposure = 'all IPv4 interfaces (0.0.0.0)';
+  if (bindAddress === '::') exposure = 'all IPv6 interfaces (::)';
+  document.getElementById('remote-warn').textContent =
+    'Warning: remote access listens on ' + exposure +
+    '. Only clients matching the allowlist may proceed.';
+}
+
 document.getElementById('remote-enabled').addEventListener('change', function() {
+  updateRemoteBind(this.checked);
+  updateRemoteWarning(document.getElementById('bind-addr').value.trim());
   document.getElementById('remote-warn').classList.toggle('hidden', !this.checked);
 });
 
@@ -107,6 +127,9 @@ document.getElementById('cfg-form').addEventListener('submit', async function(e)
     });
     var data = await resp.json();
     if (resp.ok) {
+      if (data.effective_bind_address) {
+        document.getElementById('bind-addr').value = data.effective_bind_address;
+      }
       setStatus('Saved. ' + (data.note || 'Changes take effect on restart.'), 'status-ok');
     } else {
       setStatus('Error: ' + (data.error || resp.status), 'status-error');

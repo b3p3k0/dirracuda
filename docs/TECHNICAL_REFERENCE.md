@@ -168,11 +168,17 @@ Dashboard balance behavior (C21): `/dashboard` fetches Shodan query-credit statu
 
 `experimental/webui/server.py::run()` loads Web UI config via `load_config()` (which calls `validate()`) before starting uvicorn. Canonical runtime target is `~/.dirracuda/conf.d/experimental/webui.json` (`{ "webui": {...} }` wrapper). CLI `--host`/`--port` are treated as validated overrides over the loaded config (re-validated after merge). Startup exits immediately on any validation failure — no silent fallback. Desktop service control launches with module semantics (`python -m experimental.webui.server`) rather than direct script execution, so package imports resolve correctly after the `experimental/webui` move. The default bind remains `127.0.0.1:2600`; legacy explicit `port: 5480` entries are auto-migrated to `2600` on load.
 
+Remote-bind normalization runs before persisted config validation and writes.
+With `remote_enabled=true`, an IPv4 loopback bind is promoted to `0.0.0.0` and
+an IPv6 loopback bind is promoted to `::`; explicit non-loopback binds are
+preserved. Existing contradictory config files are migrated atomically on load.
+An explicit server `--host` override remains authoritative for that process.
+
 Config fields relevant to remote mode:
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `bind_address` | `"127.0.0.1"` | IP to bind. Loopback = localhost mode. |
+| `bind_address` | `"127.0.0.1"` | IP to bind. Enabling remote mode promotes loopback to the matching wildcard listener. |
 | `port` | `2600` | TCP port for the Web UI listener. |
 | `remote_enabled` | `false` | Must be `true` for any non-loopback bind. |
 | `allowed_cidrs` | `["127.0.0.1/32","::1/128"]` | IP allowlist enforced per-request when `remote_enabled=true`. |
@@ -188,6 +194,12 @@ Startup enforcement rules (fail-closed, checked before uvicorn starts):
 - Loopback bind: always allowed with any TLS state.
 - Non-loopback: requires `remote_enabled=true`, non-empty `allowed_cidrs`, and either (TLS enabled with cert+key present) or (`tls.allow_insecure_remote=true` with TLS disabled).
 - TLS enabled for remote without cert/key files readable on disk → startup refused.
+
+Service control keeps listener and access endpoints distinct. Uvicorn and the
+pidfile retain the configured bind (`0.0.0.0`, `::`, or an explicit interface
+address). Health checks and local browser actions map wildcard IPv4 to
+`127.0.0.1` and wildcard IPv6 to `::1`; IPv6 URLs use brackets. LAN clients use
+the host's real interface address rather than a wildcard address.
 
 Allowlist middleware: registered as an HTTP middleware in `create_app()`. When `remote_enabled=True`, each request's `request.client.host` is checked against `allowed_cidrs` (parsed as `ipaddress.ip_network` objects). Non-matching or non-parseable addresses get 403. When `remote_enabled=False`, the check is skipped entirely — localhost mode is unaffected.
 
@@ -1090,8 +1102,9 @@ Web UI tab behavior:
 - Start failures are shown inline as `Failed: <reason>` (for example, exit code or startup timeout) instead of collapsing back to `Stopped`.
 - Credential setup opens from `Manage Credentials` into a modal dialog (`Username`, `Password`, `Save Credentials`) and calls `experimental.webui.auth.set_password(...)`; expected validation/save errors are shown inline (no popup spam).
 - `WebUI Config` opens a modal dialog with the same control surface as `/config` (`bind_address`, `port`, `remote_enabled`, TLS fields, `allowed_cidrs`, idle/absolute session timeouts, and auth lockout tuning fields).
+- Enabling remote access while the bind is loopback visibly changes the field to `0.0.0.0` or `::`; disabling it restores the matching loopback value.
 - Config dialog supports `Save` (persist only) and `Save & Restart` (save, then restart/start the service). Validation/save/restart outcomes are shown inline in dialog status text.
-- Open-browser and copy-URL actions use the current `webui` config host/port values from `~/.dirracuda/conf.d/experimental/webui.json`.
+- The tab shows the listener endpoint separately from the local URL. Open-browser and copy-URL actions use the reachable local URL, not a wildcard listener address.
 - `/config` includes browser preference-storage controls for Web UI selector/toggle persistence (`localStorage`, explicit opt-in, user-clearable).
 
 Dorkbook entry path:

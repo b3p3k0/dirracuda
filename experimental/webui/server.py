@@ -8,7 +8,13 @@ from typing import Optional
 
 import uvicorn
 from experimental.webui.app import create_app
-from experimental.webui.config import WebUIConfig, WebUIConfigError, load_config, validate
+from experimental.webui.config import (
+    WebUIConfig,
+    WebUIConfigError,
+    load_config,
+    normalize_remote_bind,
+    validate,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +65,13 @@ def run(
     if cfg is None:
         try:
             cfg = load_config(config_path)
+        except WebUIConfigError as exc:
+            logger.error("Web UI config error: %s", exc)
+            sys.exit(1)
+    else:
+        try:
+            cfg = normalize_remote_bind(cfg)
+            validate(cfg)
         except WebUIConfigError as exc:
             logger.error("Web UI config error: %s", exc)
             sys.exit(1)

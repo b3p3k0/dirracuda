@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import enum
+import ipaddress
 import json
 import os
 import signal
@@ -126,10 +127,30 @@ def _check_ownership(pid: int) -> _Ownership:
     return _Ownership.UNKNOWN
 
 
+def _local_host_for_bind(host: str) -> str:
+    """Return a locally reachable host for a listener bind address."""
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return host
+    if not address.is_unspecified:
+        return host
+    return "127.0.0.1" if address.version == 4 else "::1"
+
+
+def _format_url(host: str, port: int) -> str:
+    try:
+        is_ipv6 = ipaddress.ip_address(host).version == 6
+    except ValueError:
+        is_ipv6 = ":" in host
+    url_host = f"[{host}]" if is_ipv6 else host
+    return f"http://{url_host}:{port}"
+
+
 def _health_ok(host: str, port: int) -> bool:
     try:
         import urllib.request
-        url = f"http://{host}:{port}/health"
+        url = f"{get_url(host, port)}/health"
         with urllib.request.urlopen(url, timeout=2) as resp:
             return resp.status == 200
     except Exception:
@@ -152,7 +173,13 @@ def is_running(host: str = _DEFAULT_HOST, port: int = _DEFAULT_PORT) -> bool:
 
 
 def get_url(host: str = _DEFAULT_HOST, port: int = _DEFAULT_PORT) -> str:
-    return f"http://{host}:{port}"
+    """Return a locally usable browser URL for a configured listener."""
+    return _format_url(_local_host_for_bind(host), port)
+
+
+def get_listen_url(host: str = _DEFAULT_HOST, port: int = _DEFAULT_PORT) -> str:
+    """Return the configured listener endpoint, including wildcard binds."""
+    return _format_url(host, port)
 
 
 def _drain_stderr(stream, sink: list[str]) -> None:

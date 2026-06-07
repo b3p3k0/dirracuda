@@ -8,6 +8,8 @@ from experimental.webui.config import (
     WebUIConfig,
     WebUIConfigError,
     load_config,
+    normalize_remote_bind,
+    normalize_remote_bind_address,
     save_config,
     validate,
 )
@@ -63,6 +65,30 @@ def test_valid_remote_config_ok():
     validate(_remote_config())
 
 
+@pytest.mark.parametrize(
+    ("bind_address", "expected"),
+    [
+        ("127.0.0.1", "0.0.0.0"),
+        ("127.0.0.2", "0.0.0.0"),
+        ("::1", "::"),
+    ],
+)
+def test_remote_loopback_bind_promotes_to_family_wildcard(bind_address, expected):
+    assert normalize_remote_bind_address(bind_address, True) == expected
+
+
+def test_remote_bind_normalization_preserves_localhost_mode():
+    cfg = WebUIConfig(bind_address="127.0.0.1", remote_enabled=False)
+    assert normalize_remote_bind(cfg) is cfg
+    assert cfg.bind_address == "127.0.0.1"
+
+
+def test_remote_bind_normalization_preserves_explicit_lan_address():
+    cfg = _remote_config(bind_address="192.168.1.25")
+    assert normalize_remote_bind(cfg) is cfg
+    assert cfg.bind_address == "192.168.1.25"
+
+
 def test_bad_cidr_entry_fails():
     cfg = WebUIConfig(allowed_cidrs=["not-a-cidr"])
     with pytest.raises(WebUIConfigError, match="CIDR"):
@@ -101,6 +127,53 @@ def test_atomic_write_and_read_back(tmp_path):
     loaded = load_config(p)
     assert loaded.port == 5481
     assert loaded.tls.enabled is True
+
+
+def test_save_config_returns_and_persists_effective_remote_bind(tmp_path):
+    p = tmp_path / "webui.json"
+    cfg = WebUIConfig(
+        bind_address="127.0.0.1",
+        remote_enabled=True,
+        allowed_cidrs=["192.168.0.0/16"],
+        tls=TLSConfig(enabled=False, allow_insecure_remote=True),
+    )
+
+    effective = save_config(cfg, p)
+
+    assert effective.bind_address == "0.0.0.0"
+    assert cfg.bind_address == "127.0.0.1"
+    assert json.loads(p.read_text(encoding="utf-8"))["bind_address"] == "0.0.0.0"
+
+
+def test_load_config_migrates_remote_loopback_in_canonical_wrapper(
+    tmp_path, monkeypatch,
+):
+    import experimental.webui.config as config_module
+
+    p = (tmp_path / "webui.json").resolve()
+    monkeypatch.setattr(config_module, "_DEFAULT_CONFIG_PATH", p)
+    p.write_text(
+        json.dumps({
+            "webui": {
+                "bind_address": "127.0.0.1",
+                "remote_enabled": True,
+                "allowed_cidrs": ["192.168.0.0/16"],
+                "tls": {
+                    "enabled": False,
+                    "cert_file": "",
+                    "key_file": "",
+                    "allow_insecure_remote": True,
+                },
+            }
+        }),
+        encoding="utf-8",
+    )
+
+    loaded = load_config()
+
+    assert loaded.bind_address == "0.0.0.0"
+    saved = json.loads(p.read_text(encoding="utf-8"))
+    assert saved["webui"]["bind_address"] == "0.0.0.0"
 
 
 def test_load_config_migrates_legacy_default_port(tmp_path):

@@ -112,6 +112,8 @@ def test_dashboard_renders_authenticated(logged_in):
     assert r.status_code == 200
     assert "Dashboard" in r.text
     assert "127.0.0.1" in r.text
+    assert "Listening: http://127.0.0.1:2600" in r.text
+    assert "Local URL: http://127.0.0.1:2600" in r.text
     assert "Shodan Balance:" in r.text
     assert 'id="shodan-balance-status"' in r.text
     assert 'id="shodan-balance-refresh"' in r.text
@@ -271,6 +273,35 @@ def test_config_post_saves_valid_config(logged_in, config_path):
     data = r.json()
     assert data.get("ok") is True
     assert config_path.exists()
+
+
+def test_config_post_promotes_remote_loopback_and_returns_effective_bind(
+    logged_in, config_path,
+):
+    token = _csrf(logged_in)
+    payload = _valid_config_payload()
+    payload.update({
+        "remote_enabled": True,
+        "tls_allow_insecure_remote": True,
+        "allowed_cidrs": ["192.168.0.0/16"],
+    })
+
+    r = logged_in.post(
+        "/config",
+        json=payload,
+        headers={"Origin": "http://testserver", "X-CSRF-Token": token},
+    )
+
+    assert r.status_code == 200
+    assert r.json()["effective_bind_address"] == "0.0.0.0"
+    assert json.loads(config_path.read_text())["bind_address"] == "0.0.0.0"
+
+
+def test_config_javascript_promotes_remote_loopback(client):
+    r = client.get("/static/config.js")
+    assert r.status_code == 200
+    assert "bindInput.value = '0.0.0.0'" in r.text
+    assert "data.effective_bind_address" in r.text
 
 
 def test_config_post_unit_conversion(logged_in, config_path):
