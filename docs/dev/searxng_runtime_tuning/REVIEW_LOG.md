@@ -49,6 +49,25 @@
 | NEW `gui/components/log_semantic_color.py` | 161 |
 | NEW `gui/tests/test_log_semantic_color.py` | 567 |
 
+## Post-C11D Line Counts
+
+| File | Lines after C11D |
+|---|---|
+| NEW `scripts/__init__.py` | 1 |
+| NEW `scripts/live_test_searxng.py` | 862 |
+| NEW `scripts/tests/__init__.py` | 1 |
+| NEW `scripts/tests/test_live_test_searxng.py` | 898 |
+
+## C11D Validation
+
+- Harness unit tests: 79 passed.
+- Quick lane: 60 passed.
+- GUI smoke: PASS.
+- Full regression: 2,980 passed.
+- Live run: PASS against `http://halcyon:8090` on 2026-06-07.
+- Live telemetry: 6 pages, 100 unique URLs, 100 classified, 35 retained,
+  62.7 seconds pacing delay, 0 hard retries.
+
 ## Review Checklist
 
 - Confirm card scope before implementation.

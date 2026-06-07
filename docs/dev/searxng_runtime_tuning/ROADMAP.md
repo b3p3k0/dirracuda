@@ -7,7 +7,7 @@ Last updated: 2026-06-07
 | C11A | Retry Shortening and Cancellation | COMPLETE |
 | C11B | Start Scan Tuning Controls | COMPLETE |
 | C11C | Semantic Live Output Colors | COMPLETE |
-| C11D | Reusable Live Validation | PENDING |
+| C11D | Reusable Live Validation | COMPLETE |
 
 Cards are sequential. A later card does not begin until the prior card is
 validated, reviewed by PA/RA, and committed at HI direction.

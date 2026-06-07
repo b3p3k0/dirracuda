@@ -111,6 +111,14 @@ Last updated: 2026-06-07
 - Nonterminal errors (e.g., probe save failure at service.py:948) should be yellow, not red. The run continues; reserve red for operations that cause `run_dork_search` to return early with an error status.
 - Colorize-at-display (rather than colorize-at-emit) keeps `log_history` plain and makes Copy All correct without any special stripping. It also keeps `_log_status_event` signature unchanged, preserving all test doubles and `_hook` callers.
 
+**C11D — SearXNG live validation harness (2026-06-07):**
+- Opt-in live tests require a flag gate (`--confirm-live`) checked unconditionally before any settings read, temp-directory creation, or service call. Without this ordering, a misconfigured test environment can silently issue live requests or leak temp directories.
+- Isolate live-test state in a `tempfile.mkdtemp()` directory and pass it as an explicit `db_path` to `run_dork_search`. Never pass `None` and never open the primary DB path. Asserting on the `db_path` argument at the harness boundary is the correct and sufficient test — mocking the service also mocks its internal `init_db`/`open_connection` calls, making deeper path assertions vacuous.
+- Never inspect, query, or delete the temporary directory while a worker thread may still be writing. Non-daemon threads cannot be safely abandoned; `thread.join()` must confirm `is_alive() == False` before any cleanup or DB assertion begins.
+- Duplicate-only pages (all URLs already seen) produce no `stored` or `classified` progress messages. Stage-order checks must detect this via the `received … 0 new` line and treat it as the terminal event, not as a missing-event failure.
+- `threading.Event.wait()` returns immediately when the event is already set, creating a busy-loop if used as a poll interval after cancellation. Use `thread.join(timeout=N)` for the polling loop instead — it always blocks for up to N seconds regardless of event state.
+- For second-SIGINT escalation, call `signal.default_int_handler(signum, frame)` directly. Restoring `SIG_DFL` and then checking `is_set()` does not retroactively raise `KeyboardInterrupt` in the current frame; `default_int_handler` does.
+
 Append new lessons after each completed card:
 - What failed or nearly failed.
 - Which guardrail prevented recurrence.
