@@ -1,6 +1,6 @@
 # SearXNG Runtime Tuning - Decisions
 
-Last updated: 2026-06-06
+Last updated: 2026-06-07
 
 ## Runtime Defaults
 
@@ -31,15 +31,47 @@ increments of 1, 5, and 30 seconds respectively.
 - The run is recorded as cancelled, not failed.
 - A cancelled unified queue never advances to another provider.
 
-## Output Colors
+## Output Colors (C11C)
 
-| Meaning | Color |
-| --- | --- |
-| Routine details | Default foreground |
-| Provider starts and headings | Blue |
-| Completed checkpoints | Green |
-| Warnings, retries, partial results, cancellation | Yellow |
-| Terminal failures | Red |
+| Semantic level | ECMA-48 SGR | Meaning |
+| --- | --- | --- |
+| Normal | — | Routine metrics, pacing, storage details |
+| Blue (`\x1b[94m`) | 94 | Provider starts, reachability checks, page requests, headings |
+| Green (`\x1b[92m`) | 92 | Instance reachable, page classification/probe checkpoints, successful completion |
+| Yellow (`\x1b[93m`) | 93 | Warnings, retries, nonterminal errors, partial completion, cancellation |
+| Red (`\x1b[91m`) | 91 | Terminal reachability, fetch, processing, database, sync, or provider failure |
 
-The dashboard applies ANSI codes. Service and WebUI data remain plain text.
+### Implementation approach
 
+Color is applied **at display time** inside `append_log_line`
+(`gui/components/log_semantic_color.py::colorize_for_display`). `log_history`
+always stores the original input, so C11C adds no ANSI escapes to Copy All.
+Pre-existing Shodan subprocess ANSI remains unchanged.
+
+`_log_status_event(message)` signature is unchanged; all one-argument callers
+and test doubles continue to work.
+
+### Classification scope
+
+Only exact SearXNG, Reddit, and provider-queue message prefixes are colored.
+Generic keywords are not used — Shodan `[status …]` lines return normal.
+
+Rollup coloring is triggered only on multiline strings (`"\n" in line`);
+a standalone `SUMMARY_TITLE` line emitted by Shodan with CLI colors disabled
+passes through unchanged.
+
+### Sync-line classification rule
+
+`🔄 Primary DB Sync` lines: green requires explicit `failed == 0` (parsed from
+the line). Unknown formats (no `"N failed"` token) return normal. Failed > 0
+returns red; cancelled > 0 returns yellow.
+
+### Provider queue finished message
+
+`_finish_provider_queue` emits one of two messages so the classifier can
+distinguish outcomes without generic keyword matching:
+
+- Success: `"Provider queue finished: N/N providers completed."`
+- Partial failure: `"Provider queue finished: N/N providers attempted (K failed)."` (K ≥ 1)
+
+Service and WebUI data remain plain text.

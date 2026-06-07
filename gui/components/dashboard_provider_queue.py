@@ -386,11 +386,16 @@ def _finish_provider_queue(dash) -> None:
             "Provider Queue Completed With Failures",
             "The remaining providers were still attempted:\n\n" + "\n".join(lines),
         )
-    _hook(
-        dash,
-        "_log_status_event",
-        f"Provider queue finished: {completed}/{total} providers attempted.",
-    )
+    if failures:
+        _finished_msg = (
+            f"Provider queue finished: {completed}/{total} providers attempted "
+            f"({len(failures)} failed)."
+        )
+    else:
+        _finished_msg = (
+            f"Provider queue finished: {completed}/{total} providers completed."
+        )
+    _hook(dash, "_log_status_event", _finished_msg)
     _remove_task(dash)
     dash._provider_queue_last_summary = {
         "completed": completed,

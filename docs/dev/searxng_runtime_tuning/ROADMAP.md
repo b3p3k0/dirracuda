@@ -1,12 +1,12 @@
 # SearXNG Runtime Tuning - Roadmap
 
-Last updated: 2026-06-06
+Last updated: 2026-06-07
 
 | Card | Title | Status |
 | --- | --- | --- |
 | C11A | Retry Shortening and Cancellation | COMPLETE |
 | C11B | Start Scan Tuning Controls | COMPLETE |
-| C11C | Semantic Live Output Colors | PENDING |
+| C11C | Semantic Live Output Colors | COMPLETE |
 | C11D | Reusable Live Validation | PENDING |
 
 Cards are sequential. A later card does not begin until the prior card is

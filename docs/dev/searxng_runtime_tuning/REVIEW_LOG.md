@@ -39,6 +39,16 @@
 | NEW `gui/components/dashboard_searxng_scan.py` | 378 |
 | `gui/components/dashboard_scan_rollup.py` | 290 |
 
+## Post-C11C Line Counts
+
+| File | Lines after C11C |
+|---|---|
+| `gui/components/dashboard_logs.py` | 303 |
+| `gui/components/dashboard_provider_queue.py` | 407 |
+| `gui/dashboard/widget.py` | 1,684 (unchanged, ≤ 1,700 ✓) |
+| NEW `gui/components/log_semantic_color.py` | 161 |
+| NEW `gui/tests/test_log_semantic_color.py` | 567 |
+
 ## Review Checklist
 
 - Confirm card scope before implementation.

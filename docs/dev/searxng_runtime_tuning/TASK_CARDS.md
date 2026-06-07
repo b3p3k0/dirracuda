@@ -1,6 +1,6 @@
 # C11 Task Cards
 
-Last updated: 2026-06-06
+Last updated: 2026-06-07
 
 ## C11A - Retry Shortening and Cancellation
 
@@ -65,13 +65,15 @@ theme parser.
 
 ### Acceptance
 
-- Routine lines remain default foreground.
-- Starts/headings are blue.
-- Major completed checkpoints are green.
-- Warnings/retries/cancellation are yellow.
-- Terminal failures are red.
-- Copied/history text retains the existing log behavior.
-- Shodan output is unchanged.
+- Routine lines remain default foreground. ✓
+- Starts/headings are blue. ✓
+- Major completed checkpoints are green. ✓
+- Warnings/retries/cancellation are yellow. ✓
+- Terminal failures are red. ✓
+- Copied/history text retains the existing log behavior. ✓
+- Shodan output is unchanged. ✓
+
+**Status: COMPLETE (2026-06-07)**
 
 ## C11D - Reusable Live Validation
 

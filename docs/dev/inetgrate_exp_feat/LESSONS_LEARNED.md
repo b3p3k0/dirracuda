@@ -1,7 +1,7 @@
 # Integrate Experimental Features Into Main - LESSONS LEARNED
 
 Status: Seeded
-Last updated: 2026-06-06
+Last updated: 2026-06-07
 
 ## Carry Forward
 
@@ -101,6 +101,15 @@ Last updated: 2026-06-06
 - Queue-managed and standalone cancel callbacks must differ: queue-managed routes through `cancel_provider_queue` (which then signals the event); standalone goes directly to the event. A single `event.set` callback from a queue-managed task would strand the provider queue without advancing or cancelling it.
 - Cancel events must be cleared on every terminal path, including the `parent.after(...)` scheduling failure inside the worker, not only on thread startup failure.
 - Sync must use an explicit allowlist of terminal states (`DONE | CANCELLED`); `status != ERROR` could sync unknown future status values silently.
+
+**C11C — Semantic live output colors (2026-06-07):**
+- Generic keyword classification (e.g., checking for "completed" or "failed" anywhere in a message) recolors unrelated Shodan `[status …]` lines. Use an exact-prefix allowlist keyed to the known SearXNG/Reddit/queue message catalog; everything else returns normal.
+- A standalone `SUMMARY_TITLE` line emitted by Shodan (CLI colors disabled) matches `line.startswith(SUMMARY_TITLE)` and would enter the rollup coloring path. Guard rollup coloring on `"\n" in line` so only multiline in-process blocks are affected.
+- Sync-line green must require explicit `failed == 0`. A sync line with no `"N failed"` token (unknown format) must return normal, not green. Without this guard, a format change silently turns unverified lines green.
+- `(0 failed)` in a finished-queue message must not trigger the yellow branch. Use `([1-9]\d* failed)` or parse and check `> 0`; `\d+` matches zero.
+- `append_log_line` returns immediately when `log_text_widget is None`. A test that sets `log_text_widget=None` to test history writes will silently verify nothing. Always provide a mock Text widget.
+- Nonterminal errors (e.g., probe save failure at service.py:948) should be yellow, not red. The run continues; reserve red for operations that cause `run_dork_search` to return early with an error status.
+- Colorize-at-display (rather than colorize-at-emit) keeps `log_history` plain and makes Copy All correct without any special stripping. It also keeps `_log_status_event` signature unchanged, preserving all test doubles and `_hook` callers.
 
 Append new lessons after each completed card:
 - What failed or nearly failed.
