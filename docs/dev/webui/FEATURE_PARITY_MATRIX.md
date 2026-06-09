@@ -44,7 +44,7 @@ Capabilities where the web UI has meaningful coverage but the desktop still has 
 | Scan progress/logs | Live monitor windows and Running Tasks reopen | Polled task status + rolling logs (last 100 lines); no streaming, no persistent reopen | PARTIAL | `README.md` Running Tasks; `experimental/webui/tasks.py` |
 | Main app config editing | Desktop config editor for broad app settings | Web `/config` manages webui service/security config only; main app settings (Shodan key, concurrency, timeouts) not editable | PARTIAL | `README.md` Configuration; `experimental/webui/app.py` |
 | Result filtering | Rich server-list filtering with sortable columns | Search + `shares_only` + `favorites_only` + `hide_avoid`; results fixed to `last_seen DESC` order, no column sort | PARTIAL | `experimental/webui/app.py`; `README.md` Server List |
-| Row detail drill-down | Desktop details and probe context panels | Inline accordion + probe tree text + `Open with system` handoff (explicit non-root probe base path when known, else root `/`); less structured than desktop detail pane | PARTIAL | `experimental/webui/README.md`; `experimental/webui/app.py`; `experimental/webui/static/results.js` |
+| Row detail drill-down | Desktop details and probe context panels | Inline accordion with `Show Details` / `Hide Details`, probe tree text, `Open with system` handoff (explicit non-root probe base path when known, else root `/`), and single-host `Run Probe`; less structured than desktop detail pane | PARTIAL | `experimental/webui/README.md`; `experimental/webui/app.py`; `experimental/webui/static/results.js` |
 | Multi-protocol launch in one action | Queue multiple protocols from one submit | Protocol checkboxes + `_queueTasksForPlan()` auto-queues one task per protocol in a single user action; tasks are separate queue entries, not a unified session | PARTIAL | `README.md` Dashboard/Discovery; `experimental/webui/tasks.py`; `experimental/webui/static/scans.js` |
 
 ---
@@ -63,9 +63,9 @@ Capabilities where the web UI is functionally equivalent for normal operator use
 | Post-scan probe hook | Optional post-scan probe from scan flow | `run_probe_after_scan` for SMB/FTP/HTTP | PARITY | `README.md` Web UI section; `experimental/webui/tasks.py` |
 | Unified host results | SMB/FTP/HTTP host views | `ALL/SMB/FTP/HTTP` results with pagination/search | PARITY | `experimental/webui/README.md`; `experimental/webui/app.py` |
 | Host flag mutation | Toggle favorite/avoid/compromised from server list | Inline row actions + current-page bulk toggles (`favorite`/`avoid`/`compromised`) with desktop-compromised semantics and partial-success API outcomes | PARITY | `experimental/webui/app.py`; `experimental/webui/db_actions.py`; `experimental/webui/static/results.js` |
-| Probe selected host | Probe from server list row action | Inline row `Probe` action + current-page bulk `Probe Selected` with async polling and single-active-job guard | PARITY | `experimental/webui/app.py`; `experimental/webui/results_probe_actions.py`; `experimental/webui/static/results.js` |
+| Probe selected host | Probe from server list row action | Expanded-detail `Run Probe` action + current-page bulk `Probe Selected` with async polling and single-active-job guard | PARITY | `experimental/webui/app.py`; `experimental/webui/results_probe_actions.py`; `experimental/webui/static/results.js` |
 | DB export | Export clean DB copy | `POST /api/export` + download endpoint | PARITY | `experimental/webui/app.py`; `experimental/webui/db.py` |
-| Credential rotation UX | Desktop Web UI tab supports credential management | Web `/account` supports authenticated password change | PARITY | `README.md` Web UI; `experimental/webui/app.py` |
+| Credential rotation UX | Trusted-workstation reset without old password; matching new-password confirmation; running service restart revokes sessions | Authenticated `/account` change requires current password, origin, and CSRF | PARITY (different trust boundaries) | `README.md` Web UI; `experimental/webui/app.py` |
 
 ---
 
@@ -86,7 +86,7 @@ Capabilities where the web UI is functionally equivalent for normal operator use
    Shipped: mandatory preflight + explicit start confirmation.
 
 3. **Row-level probe action from Results (protocol-aware, no browse/download)**  
-   Shipped: row + bulk probe actions with async polling.
+   Shipped: detail-panel + bulk probe actions with async polling.
 
 4. **Results detail external-open path selection (root vs non-root intent)**  
    Shipped: explicit probe base-path precedence for HTTP/FTP, root fallback for ambiguous listings.

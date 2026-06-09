@@ -23,6 +23,10 @@ Packages: `fastapi`, `uvicorn`, `jinja2`, `httpx`.
 1. Create credentials (choose one path):
 
    - Desktop: `Experimental -> Web UI -> Manage Credentials`
+     - Existing single-account credentials can be reset without the old
+       password because the desktop workflow trusts access to the unlocked
+       workstation.
+     - New passwords must be entered twice.
    - Headless CLI:
 
    ```bash
@@ -108,8 +112,13 @@ Available controls:
 
 - Service status and active backend (`direct` / `systemd`)
 - Start / Stop / Open in Browser / Copy URL
-- `Manage Credentials` dialog
+- `Manage Credentials` dialog for first-time setup and trusted local reset
 - `WebUI Config` dialog with `Save` and `Save & Restart`
+
+After a trusted desktop reset, account-specific pair lockouts are cleared. A
+running managed service is restarted to revoke in-memory browser sessions; a
+stopped service remains stopped. Restart or lockout-cleanup problems are shown
+as warnings after the credential save rather than hiding the successful reset.
 
 ---
 
@@ -149,7 +158,6 @@ Shodan balance is fetched server-side only. The API key is never sent to the bro
 - Inline row actions:
   - Click `Favorite`, `Avoid`, or `Probed` cells to toggle state on that row
   - `Probed` toggle uses desktop compromised semantics (`issue/clean` with `indicator_matches` `1/0`)
-  - Click the `Probe` cell to run a protocol-aware probe for that row
 - Bulk actions (current page only):
   - Select rows with the leading checkbox column
   - Use `Toggle Favorite`, `Toggle Avoid`, `Toggle Compromised`, `Probe Selected`, or `Clear Selection`
@@ -161,8 +169,9 @@ Shodan balance is fetched server-side only. The API key is never sent to the bro
 - Pagination controls: First / Prev / Next / Last / Jump to
 - Row click opens inline details accordion:
   - compact overview + read-only notes
-  - nested full-details scrollbox (`Show full details + probe tree`)
+  - nested full-details scrollbox (`Show Details` / `Hide Details`)
   - `Open with system` action in the details panel (new-tab/window handoff)
+  - `Run Probe` beside `Open with system` starts a protocol-aware probe for that host
   - open-path selection uses explicit probe base path when present; otherwise `/`
   - external-app caution is always shown in details; private/incognito mode cannot be forced from browser JS
   - includes stored probe snapshot tree when present
@@ -247,6 +256,10 @@ configuration surface.
 
 - Startup fails closed when no usable Web UI credential exists.
 - Credentials are hashed with PBKDF2-HMAC-SHA256 (600k iterations) and stored at `~/.dirracuda/conf/webui_creds.json` (`0600` permissions).
+- Browser password changes require the current password, an authenticated
+  session, same-origin validation, and CSRF protection.
+- Desktop password resets trust the unlocked workstation, require confirmation
+  of the new password, and never ask for the old password.
 - Known and unknown usernames perform equivalent PBKDF2 verification work.
 - Login usernames/passwords are capped at 128/1,024 UTF-8 bytes.
 - Rate-limit subjects are hashed, pair and IP-wide lockouts are enforced, and state is capped at 4,096 rows.

@@ -549,6 +549,11 @@ command list.
 
 From the desktop app, use `Accessories → Web UI` to control the same service.
 The tab reports whether direct-process or systemd control is active.
+`Manage Credentials` is also the trusted local recovery path: it can replace
+the single configured Web UI password without the old password, requires the
+new password twice, clears that account's lockouts, and restarts a running
+managed service to sign out existing browser sessions. The browser account page
+continues to require the current password.
 
 Current Web UI layout:
 - `Scans` (dropdown): `shodan`, `searxng`, `reddit`

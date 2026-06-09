@@ -438,6 +438,16 @@ def test_change_password_wrong_current(logged_in_client):
     assert "error" in r.json()
 
 
+def test_change_password_missing_current(logged_in_client):
+    csrf = _csrf_token(logged_in_client)
+    r = logged_in_client.post(
+        "/api/auth/change-password",
+        json={"new_password": "newpassword123456"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert r.status_code == 422
+
+
 def test_change_password_too_short(logged_in_client):
     csrf = _csrf_token(logged_in_client)
     r = logged_in_client.post(

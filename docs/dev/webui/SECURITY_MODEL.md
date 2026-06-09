@@ -89,8 +89,10 @@ The file is written atomically via `_atomic_write_json` (`config.py`), which set
   `CredentialError` — a misconfigured store blocks all mutations until repaired.
 - Web `_change_password` route: calls `check_credential_store()` as a preflight before
   `verify_password()`, so bad permissions surface as HTTP 503 (not 401).
-- Desktop credential dialog: catches `CredentialError` at open time and shows a repair
-  message; `_do_rotation()` also preflights before `verify_password()`.
+- Desktop credential dialog: catches `CredentialError` at open time and shows a
+  repair message. The trusted-workstation reset path preflights permissions,
+  requires the new password twice, and writes through `set_password()` without
+  checking the old password.
 
 Permission enforcement is POSIX-only. On Windows the check is a no-op.
 
@@ -101,6 +103,14 @@ chmod 0600 ~/.dirracuda/conf/webui_creds.json
 ```
 
 No raw passwords in logs. No password echo in UI after setup.
+
+The browser and desktop use different authorization boundaries for password
+changes. The browser requires an authenticated session, current password,
+same-origin request, and CSRF token. The desktop assumes access to the unlocked
+workstation authorizes recovery. After a desktop reset, account pair lockouts
+are removed while IP-wide spray state is retained. A running managed service is
+restarted to revoke all in-memory browser sessions; stopped services remain
+stopped.
 
 ## Remote Mode
 

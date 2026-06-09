@@ -73,9 +73,12 @@ function _probeStatusFromEmoji(value) {
 
 function _setProbeUiRunning(running) {
   probeRunning = !!running;
-  var probeCells = document.querySelectorAll('#results-body td.probe-action-cell');
-  probeCells.forEach(function(td) {
-    td.setAttribute('aria-disabled', probeRunning ? 'true' : 'false');
+  var detailProbeButtons = document.querySelectorAll(
+    '#results-body button.detail-run-probe'
+  );
+  detailProbeButtons.forEach(function(btn) {
+    btn.disabled = probeRunning;
+    btn.setAttribute('aria-disabled', probeRunning ? 'true' : 'false');
   });
   _syncSelectionUi();
 }
@@ -106,6 +109,23 @@ function _getProbeStatus(tr) {
   return _probeStatusFromEmoji(td ? td.textContent.trim() : '○');
 }
 
+function _syncDetailProbeStatus(tr, status) {
+  var rowKey = tr && tr.dataset ? (tr.dataset.rowKey || '') : '';
+  if (!rowKey) return;
+
+  var cached = detailCache[rowKey];
+  if (cached && cached.overview) {
+    cached.overview.probe_status = status;
+  }
+
+  var detailRows = document.querySelectorAll('#results-body tr.result-detail-row');
+  detailRows.forEach(function(detailRow) {
+    if ((detailRow.dataset.parentKey || '') !== rowKey) return;
+    var value = detailRow.querySelector('[data-detail-field="probe-status"]');
+    if (value) value.textContent = _overviewValue(status);
+  });
+}
+
 function _applyRowState(tr, state) {
   if (!state || !tr) return;
   if (Object.prototype.hasOwnProperty.call(state, 'favorite')) {
@@ -119,6 +139,7 @@ function _applyRowState(tr, state) {
   if (Object.prototype.hasOwnProperty.call(state, 'probe_status')) {
     var probeTd = _getRowCol(tr, 3);
     if (probeTd) probeTd.textContent = _probeEmojiFromStatus(state.probe_status);
+    _syncDetailProbeStatus(tr, state.probe_status);
   }
 }
 
@@ -358,8 +379,7 @@ function buildRow(r) {
     ['Accessible', r.accessible_shares_list],
     ['Denied', r.denied_shares_count],
     ['Last Seen', r.last_seen],
-    ['Country', r.country],
-    ['Probe', 'Run']
+    ['Country', r.country]
   ];
 
   cells.forEach(function(pair, idx) {
@@ -381,30 +401,6 @@ function buildRow(r) {
           e.preventDefault();
           e.stopPropagation();
           _performToggleAction(action, [tr]);
-        }
-      });
-    } else if (idx === 11) {
-      td.classList.add('action-cell', 'probe-action-cell');
-      td.setAttribute('role', 'button');
-      td.setAttribute('tabindex', '0');
-      td.setAttribute('aria-disabled', probeRunning ? 'true' : 'false');
-      td.addEventListener('click', function(e) {
-        e.stopPropagation();
-        if (probeRunning) {
-          setResults('A probe job is already running.', 'status-warn');
-          return;
-        }
-        _performProbeAction([tr]);
-      });
-      td.addEventListener('keydown', function(e) {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          e.stopPropagation();
-          if (probeRunning) {
-            setResults('A probe job is already running.', 'status-warn');
-            return;
-          }
-          _performProbeAction([tr]);
         }
       });
     }
@@ -454,7 +450,7 @@ function _detailSummaryText(payload) {
     ' (' + (payload.protocol || payload.host_type || '?') + ')';
 }
 
-function renderDetailContent(container, payload) {
+function renderDetailContent(container, payload, baseRow) {
   container.innerHTML = '';
   container.classList.remove('status-error');
 
@@ -464,6 +460,8 @@ function renderDetailContent(container, payload) {
   container.appendChild(header);
 
   var overview = payload.overview || {};
+  var probeStatus = baseRow ? _getProbeStatus(baseRow) : overview.probe_status;
+  overview.probe_status = probeStatus;
   var rows = [
     ['Protocol', overview.protocol],
     ['Status', overview.status],
@@ -472,7 +470,7 @@ function renderDetailContent(container, payload) {
     ['Scan Count', overview.scan_count],
     ['Auth', overview.auth_method],
     ['Access', overview.access_summary],
-    ['Probe', overview.probe_status],
+    ['Probe', probeStatus],
     ['Extracted', overview.extracted]
   ];
 
@@ -489,6 +487,9 @@ function renderDetailContent(container, payload) {
 
     var v = document.createElement('span');
     v.className = 'result-detail-v';
+    if (pair[0] === 'Probe') {
+      v.setAttribute('data-detail-field', 'probe-status');
+    }
     v.textContent = _overviewValue(pair[1]);
     item.appendChild(v);
 
@@ -515,7 +516,7 @@ function renderDetailContent(container, payload) {
   toggleBtn.type = 'button';
   toggleBtn.className = 'detail-toggle';
   toggleBtn.setAttribute('aria-expanded', 'false');
-  toggleBtn.textContent = 'Show full details + probe tree ▾';
+  toggleBtn.textContent = 'Show Details';
   actionsRow.appendChild(toggleBtn);
 
   var openSystemBtn = document.createElement('button');
@@ -523,6 +524,14 @@ function renderDetailContent(container, payload) {
   openSystemBtn.className = 'detail-open-system';
   openSystemBtn.textContent = 'Open with system';
   actionsRow.appendChild(openSystemBtn);
+
+  var runProbeBtn = document.createElement('button');
+  runProbeBtn.type = 'button';
+  runProbeBtn.className = 'detail-run-probe';
+  runProbeBtn.textContent = 'Run Probe';
+  runProbeBtn.disabled = probeRunning;
+  runProbeBtn.setAttribute('aria-disabled', probeRunning ? 'true' : 'false');
+  actionsRow.appendChild(runProbeBtn);
   container.appendChild(actionsRow);
 
   var caution = document.createElement('div');
@@ -548,11 +557,7 @@ function renderDetailContent(container, payload) {
     var isOpen = !fullWrap.hidden;
     fullWrap.hidden = isOpen;
     toggleBtn.setAttribute('aria-expanded', isOpen ? 'false' : 'true');
-    toggleBtn.textContent = (
-      isOpen
-        ? 'Show full details + probe tree ▾'
-        : 'Hide full details + probe tree ▴'
-    );
+    toggleBtn.textContent = isOpen ? 'Show Details' : 'Hide Details';
   });
 
   openSystemBtn.addEventListener('click', function() {
@@ -568,6 +573,14 @@ function renderDetailContent(container, payload) {
       setResults('Open with system was blocked by browser popup settings.', 'status-warn');
     }
   });
+
+  runProbeBtn.addEventListener('click', function() {
+    if (!baseRow) {
+      setResults('Probe is unavailable for this row.', 'status-warn');
+      return;
+    }
+    _performProbeAction([baseRow]);
+  });
 }
 
 function renderDetailError(container, msg) {
@@ -578,7 +591,7 @@ function renderDetailError(container, msg) {
 
 function _detailColspan() {
   var cols = document.querySelectorAll('#results-table thead th').length;
-  return cols > 0 ? cols : 13;
+  return cols > 0 ? cols : 12;
 }
 
 function toggleDetailRow(baseRow) {
@@ -609,7 +622,7 @@ function toggleDetailRow(baseRow) {
   baseRow.insertAdjacentElement('afterend', detailRow);
 
   if (detailCache[rowKey]) {
-    renderDetailContent(detailBox, detailCache[rowKey]);
+    renderDetailContent(detailBox, detailCache[rowKey], baseRow);
     return;
   }
 
@@ -626,7 +639,7 @@ function toggleDetailRow(baseRow) {
         return;
       }
       detailCache[rowKey] = data;
-      renderDetailContent(detailBox, data);
+      renderDetailContent(detailBox, data, baseRow);
     });
   }).catch(function() {
     if (openDetailRowKey !== rowKey) return;

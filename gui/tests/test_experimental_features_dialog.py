@@ -1743,6 +1743,7 @@ def test_webui_tab_on_save_credentials_dialog_empty_username():
     tab._save_creds_btn = _StatusWidget()
     tab._cred_username_var = _ValueVar("   ")
     tab._cred_password_var = _ValueVar("secret1")
+    tab._cred_confirm_password_var = _ValueVar("secret1")
 
     tab._on_save_credentials_dialog()
 
@@ -1762,6 +1763,7 @@ def test_webui_tab_on_save_credentials_dialog_empty_password():
     tab._save_creds_btn = _StatusWidget()
     tab._cred_username_var = _ValueVar("admin")
     tab._cred_password_var = _ValueVar("")
+    tab._cred_confirm_password_var = _ValueVar("")
 
     tab._on_save_credentials_dialog()
 
@@ -1791,14 +1793,27 @@ def test_webui_tab_on_save_credentials_dialog_success(monkeypatch):
         "experimental.webui.auth.set_password",
         lambda username, password: calls.append((username, password)),
     )
+    monkeypatch.setattr(
+        "experimental.webui.rate_limiter.clear_account_lockouts",
+        lambda _username: 0,
+    )
+    monkeypatch.setattr(
+        "experimental.webui.service_control.get_status",
+        lambda *_args: types.SimpleNamespace(state="stopped", managed=False),
+    )
 
     tab = WebUITab.__new__(WebUITab)
     tab.frame = _FrameWidget()
     tab._cred_dialog = _FrameWidget()
     tab._multi_cred_error = False
     tab._creds_existed_at_open = False
-    tab._cred_current_password_var = None
+    tab._cred_confirm_password_var = _ValueVar("secret1")
     tab._schedule_dialog_ui = lambda cb: cb()
+    tab._schedule_ui = lambda cb: cb()
+    tab._refresh_status = lambda: None
+    tab._get_webui_cfg = lambda: types.SimpleNamespace(
+        bind_address="127.0.0.1", port=2600
+    )
     tab._cred_status_var = _ValueVar("Ready")
     tab._save_creds_btn = _StatusWidget()
     tab._cred_username_var = _ValueVar("admin")
@@ -1807,7 +1822,9 @@ def test_webui_tab_on_save_credentials_dialog_success(monkeypatch):
     tab._on_save_credentials_dialog()
 
     assert calls == [("admin", "secret1")]
-    assert tab._cred_status_var.value == "Saved credentials for 'admin'"
+    assert tab._cred_status_var.value == (
+        "Saved credentials for 'admin'. Service remains stopped."
+    )
     assert tab._cred_password_var.value == ""
     assert tab._save_creds_btn.configure_calls[-1] == {"state": tk.NORMAL}
 
@@ -1839,7 +1856,7 @@ def test_webui_tab_on_save_credentials_dialog_known_failure_inline(monkeypatch):
     tab._cred_dialog = _FrameWidget()
     tab._multi_cred_error = False
     tab._creds_existed_at_open = False
-    tab._cred_current_password_var = None
+    tab._cred_confirm_password_var = _ValueVar("secret1")
     tab._schedule_dialog_ui = lambda cb: cb()
     tab._cred_status_var = _ValueVar("Ready")
     tab._save_creds_btn = _StatusWidget()
@@ -1884,7 +1901,7 @@ def test_webui_tab_on_save_credentials_dialog_unexpected_exception_popup(monkeyp
     tab._cred_dialog = _FrameWidget()
     tab._multi_cred_error = False
     tab._creds_existed_at_open = False
-    tab._cred_current_password_var = None
+    tab._cred_confirm_password_var = _ValueVar("secret1")
     tab._schedule_dialog_ui = lambda cb: cb()
     tab._cred_status_var = _ValueVar("Ready")
     tab._save_creds_btn = _StatusWidget()

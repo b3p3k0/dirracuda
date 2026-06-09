@@ -75,6 +75,31 @@ def _make_key(account: str, ip: str) -> str:
     return _pair_key(subject_hash(account), subject_hash(ip))
 
 
+def clear_account_lockouts(
+    account: str,
+    db_path: Path | None = None,
+) -> int:
+    """Clear pair lockouts for one account while preserving IP-wide state."""
+    path = Path(db_path) if db_path is not None else _DEFAULT_RL_PATH
+    if not path.exists():
+        return 0
+    account_hash = subject_hash(account)
+    try:
+        conn = sqlite3.connect(str(path))
+        try:
+            with conn:
+                cursor = conn.execute(
+                    "DELETE FROM auth_attempts "
+                    "WHERE scope = ? AND account_hash = ?",
+                    (_PAIR_SCOPE, account_hash),
+                )
+                return max(0, cursor.rowcount)
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        raise RateLimiterRuntimeError(str(exc)) from exc
+
+
 class RateLimiter:
     def __init__(self, db_path: Path, cfg: "AuthConfig") -> None:
         self._path = Path(db_path)

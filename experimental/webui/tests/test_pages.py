@@ -205,7 +205,9 @@ def test_results_renders_authenticated(logged_in):
     assert "Probe Selected" in r.text
     assert "Clear Selection" in r.text
     assert 'id="select-all-rows"' in r.text
-    assert "<th>Probe</th>" in r.text
+    assert "<th>Probed</th>" in r.text
+    assert "<th>Probe</th>" not in r.text
+    assert 'colspan="12"' in r.text
     assert '/static/results.js' in r.text
 
 

@@ -13,6 +13,8 @@ from experimental.webui.rate_limiter import (
     RateLimiter,
     RateLimiterInitError,
     _make_key,
+    clear_account_lockouts,
+    subject_hash,
 )
 
 _ACCOUNT = "testuser"
@@ -92,6 +94,43 @@ def test_success_clears_all_ips(tmp_path):
     rl.record_success(_ACCOUNT, _IP1)
     assert not rl.check_locked(_ACCOUNT, _IP1)[0]
     assert not rl.check_locked(_ACCOUNT, _IP2)[0]
+
+
+def test_desktop_reset_clears_only_account_pair_rows(tmp_path):
+    path = tmp_path / "rl.db"
+    rl = RateLimiter(path, _cfg())
+    rl.record_failure(_ACCOUNT, _IP1)
+    rl.record_failure(_ACCOUNT, _IP2)
+    rl.record_failure(_ACCOUNT2, _IP1)
+
+    deleted = clear_account_lockouts(_ACCOUNT, path)
+
+    with sqlite3.connect(path) as conn:
+        account_pairs = conn.execute(
+            "SELECT COUNT(*) FROM auth_attempts "
+            "WHERE scope = 'pair' AND account_hash = ?",
+            (subject_hash(_ACCOUNT),),
+        ).fetchone()[0]
+        other_pairs = conn.execute(
+            "SELECT COUNT(*) FROM auth_attempts "
+            "WHERE scope = 'pair' AND account_hash = ?",
+            (subject_hash(_ACCOUNT2),),
+        ).fetchone()[0]
+        ip_rows = conn.execute(
+            "SELECT COUNT(*) FROM auth_attempts WHERE scope = 'ip'"
+        ).fetchone()[0]
+
+    assert deleted == 2
+    assert account_pairs == 0
+    assert other_pairs == 1
+    assert ip_rows == 2
+
+
+def test_clear_account_lockouts_does_not_create_missing_store(tmp_path):
+    path = tmp_path / "missing.db"
+
+    assert clear_account_lockouts(_ACCOUNT, path) == 0
+    assert not path.exists()
 
 
 # ------------------------------------------------------------------

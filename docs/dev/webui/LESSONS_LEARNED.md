@@ -411,3 +411,11 @@ A partial feature page swap (for example replacing placeholder copy) can fail ex
 
 91. Startup-only log rollover does not bound a long-lived daemon. The writer
     must own rotation and followers must reopen after inode replacement.
+
+92. Password recovery and authenticated password change are different trust
+    boundaries. The browser should require the current password and CSRF, while
+    a desktop recovery tool may trust access to the unlocked workstation.
+
+93. Replacing a password is not the whole recovery workflow. Clear only the
+    account's pair lockouts, preserve IP-wide spray protection, and restart a
+    running managed service so existing in-memory sessions are revoked.
