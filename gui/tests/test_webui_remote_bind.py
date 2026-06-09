@@ -42,6 +42,8 @@ def _tab(bind_address, remote_enabled):
     tab._cfg_dialog = _Dialog()
     tab._cfg_bind_var = _ValueVar(bind_address)
     tab._cfg_remote_var = _ValueVar(remote_enabled)
+    tab._cfg_tls_enabled_var = _ValueVar(True)
+    tab._cfg_tls_insecure_var = _ValueVar(False)
     tab._cfg_remote_warn_label = _WarningLabel()
     return tab
 

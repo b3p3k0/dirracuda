@@ -60,6 +60,32 @@ def test_login_page_renders_unauthenticated(client):
     assert "Sign in" in r.text
 
 
+def test_remote_plaintext_warning_is_visible_before_login(creds, tmp_path):
+    cfg = WebUIConfig(
+        bind_address="0.0.0.0",
+        remote_enabled=True,
+        allowed_cidrs=["127.0.0.1/32"],
+        tls=TLSConfig(enabled=False, allow_insecure_remote=True),
+    )
+    app = create_app(
+        cfg=cfg,
+        creds_path=creds,
+        db_path=tmp_path / "main.db",
+        rl_db_path=tmp_path / "rate.db",
+        main_config_path=tmp_path / "main.json",
+    )
+    client = TestClient(
+        app,
+        follow_redirects=False,
+        client=("127.0.0.1", 50000),
+    )
+
+    response = client.get("/login", headers={"Host": "127.0.0.1"})
+
+    assert response.status_code == 200
+    assert "Remote HTTP (plaintext)" in response.text
+
+
 def test_health_unprotected(client):
     r = client.get("/health")
     assert r.status_code == 200
@@ -284,6 +310,7 @@ def test_config_post_promotes_remote_loopback_and_returns_effective_bind(
         "remote_enabled": True,
         "tls_allow_insecure_remote": True,
         "allowed_cidrs": ["192.168.0.0/16"],
+        "acknowledge_insecure_remote": True,
     })
 
     r = logged_in.post(
@@ -297,11 +324,54 @@ def test_config_post_promotes_remote_loopback_and_returns_effective_bind(
     assert json.loads(config_path.read_text())["bind_address"] == "0.0.0.0"
 
 
+def test_config_post_requires_plaintext_transition_confirmation(logged_in):
+    token = _csrf(logged_in)
+    payload = _valid_config_payload()
+    payload.update({
+        "remote_enabled": True,
+        "tls_allow_insecure_remote": True,
+        "allowed_cidrs": ["192.168.0.0/16"],
+    })
+
+    response = logged_in.post(
+        "/config",
+        json=payload,
+        headers={"Origin": "http://testserver", "X-CSRF-Token": token},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["confirmation_required"] == "insecure_remote"
+
+
+def test_config_post_canonicalizes_and_returns_trusted_hosts(
+    logged_in, config_path,
+):
+    token = _csrf(logged_in)
+    payload = _valid_config_payload()
+    payload["trusted_hosts"] = ["ScanBox.LAN.", "bücher.example"]
+
+    response = logged_in.post(
+        "/config",
+        json=payload,
+        headers={"Origin": "http://testserver", "X-CSRF-Token": token},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["trusted_hosts"] == [
+        "scanbox.lan",
+        "xn--bcher-kva.example",
+    ]
+    saved = json.loads(config_path.read_text())
+    assert saved["trusted_hosts"] == response.json()["trusted_hosts"]
+
+
 def test_config_javascript_promotes_remote_loopback(client):
     r = client.get("/static/config.js")
     assert r.status_code == 200
     assert "bindInput.value = '0.0.0.0'" in r.text
     assert "data.effective_bind_address" in r.text
+    assert "window.confirm" in r.text
+    assert "trusted_hosts" in r.text
 
 
 def test_config_post_unit_conversion(logged_in, config_path):

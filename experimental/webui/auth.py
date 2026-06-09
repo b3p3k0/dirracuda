@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional
 
 from experimental.webui.config import _atomic_write_json
+from shared.path_service import get_paths
 
 
 PBKDF2_ITERATIONS = 600_000
@@ -18,6 +19,9 @@ MAX_PASSWORD_BYTES = 1024
 MAX_USERNAME_BYTES = 128
 PASSWORD_MIN_LENGTH = 15
 BLOCKLIST_MIN_SIZE = 3000  # ASVS V6.2.4 minimum
+_PATHS = get_paths()
+_DUMMY_SALT = hashlib.sha256(b"dirracuda-webui-unknown-user").digest()
+_DUMMY_HASH = "0" * 64
 
 
 class CredentialError(Exception):
@@ -70,7 +74,7 @@ def validate_password_policy(password: str) -> None:
 def _creds_path(path: Optional[Path] = None) -> Path:
     if path is not None:
         return Path(path)
-    return Path.home() / ".dirracuda" / "conf" / "webui_creds.json"
+    return _PATHS.conf_dir / "webui_creds.json"
 
 
 def _check_creds_permissions(p: Path) -> None:
@@ -115,7 +119,7 @@ def _load_creds(path: Optional[Path] = None) -> dict:
     return data
 
 
-def _validate_username(username: str) -> None:
+def validate_username(username: str) -> None:
     if not isinstance(username, str):
         raise ValueError("username must be a str")
     if not username:
@@ -128,13 +132,21 @@ def _validate_username(username: str) -> None:
         raise ValueError(f"username exceeds {MAX_USERNAME_BYTES} bytes")
 
 
+_validate_username = validate_username
+
+
+def account_log_id(username: str) -> str:
+    """Return a short, non-reversible identifier suitable for auth logs."""
+    return hashlib.sha256(username.encode("utf-8", errors="surrogatepass")).hexdigest()[:12]
+
+
 def set_password(username: str, password: str, path: Optional[Path] = None) -> None:
     """Hash and store a password for username.
 
     Raises ValueError for invalid username, policy rejection, or overlong password.
     Raises BlocklistUnavailableError if the blocklist cannot be loaded.
     """
-    _validate_username(username)
+    validate_username(username)
     validate_password_policy(password)
     pw_bytes = password.encode("utf-8")
     if len(pw_bytes) > MAX_PASSWORD_BYTES:
@@ -165,26 +177,28 @@ def verify_password(username: str, password: str, path: Optional[Path] = None) -
         if len(pw_bytes) > MAX_PASSWORD_BYTES:
             return False
         creds = _load_creds(path)
-        if username not in creds:
-            return False
-        record = creds[username]
-        if not isinstance(record, dict):
-            return False
-        if record.get("algorithm") != PBKDF2_ALGORITHM:
-            return False
-        iterations = record.get("iterations")
-        if isinstance(iterations, bool) or not isinstance(iterations, int):
-            return False
-        if iterations < PBKDF2_ITERATIONS:
-            return False
+        record = creds.get(username)
+        valid_record = isinstance(record, dict)
+        valid_record = valid_record and record.get("algorithm") == PBKDF2_ALGORITHM
+        iterations = record.get("iterations") if valid_record else PBKDF2_ITERATIONS
+        valid_record = (
+            valid_record
+            and not isinstance(iterations, bool)
+            and isinstance(iterations, int)
+            and iterations >= PBKDF2_ITERATIONS
+        )
         try:
-            salt = bytes.fromhex(record["salt"])
-            stored_hash = record["hash"]
+            salt = bytes.fromhex(record["salt"]) if valid_record else _DUMMY_SALT
+            stored_hash = record["hash"] if valid_record else _DUMMY_HASH
             bytes.fromhex(stored_hash)
-        except (KeyError, ValueError):
-            return False
+        except (KeyError, TypeError, ValueError):
+            valid_record = False
+            salt = _DUMMY_SALT
+            stored_hash = _DUMMY_HASH
+            iterations = PBKDF2_ITERATIONS
         dk = hashlib.pbkdf2_hmac("sha256", pw_bytes, salt, iterations)
-        return hmac.compare_digest(dk.hex(), stored_hash)
+        matched = hmac.compare_digest(dk.hex(), stored_hash)
+        return bool(valid_record and matched)
     except Exception:
         return False
 

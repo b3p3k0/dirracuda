@@ -58,6 +58,19 @@ class WebUITab:
         self._theme.apply_to_widget(status_value, "label")
         status_value.pack(side=tk.LEFT, padx=(8, 0))
 
+        backend_frame = tk.Frame(frame)
+        self._theme.apply_to_widget(backend_frame, "main_window")
+        backend_frame.pack(fill=tk.X, padx=16, pady=(0, 8))
+
+        backend_label = tk.Label(backend_frame, text="Backend:")
+        self._theme.apply_to_widget(backend_label, "label")
+        backend_label.pack(side=tk.LEFT)
+
+        self._backend_var = tk.StringVar(value="Checking...")
+        backend_value = tk.Label(backend_frame, textvariable=self._backend_var)
+        self._theme.apply_to_widget(backend_value, "label")
+        backend_value.pack(side=tk.LEFT, padx=(8, 0))
+
         url_frame = tk.Frame(frame)
         self._theme.apply_to_widget(url_frame, "main_window")
         url_frame.pack(fill=tk.X, padx=16, pady=(0, 12))
@@ -83,6 +96,24 @@ class WebUITab:
         local_url_value = tk.Label(local_url_frame, textvariable=self._url_var)
         self._theme.apply_to_widget(local_url_value, "label")
         local_url_value.pack(side=tk.LEFT, padx=(8, 0))
+
+        security_frame = tk.Frame(frame)
+        self._theme.apply_to_widget(security_frame, "main_window")
+        security_frame.pack(fill=tk.X, padx=16, pady=(0, 12))
+
+        security_label = tk.Label(security_frame, text="Security:")
+        self._theme.apply_to_widget(security_label, "label")
+        security_label.pack(side=tk.LEFT)
+
+        self._security_var = tk.StringVar(value="Checking...")
+        security_value = tk.Label(
+            security_frame,
+            textvariable=self._security_var,
+            justify="left",
+            anchor="w",
+        )
+        self._theme.apply_to_widget(security_value, "label")
+        security_value.pack(side=tk.LEFT, padx=(8, 0))
 
         cred_btn_frame = tk.Frame(frame)
         self._theme.apply_to_widget(cred_btn_frame, "main_window")
@@ -137,6 +168,11 @@ class WebUITab:
             from types import SimpleNamespace
 
             return SimpleNamespace(bind_address="127.0.0.1", port=2600)
+
+    @staticmethod
+    def _tls_active(cfg) -> bool:
+        tls = getattr(cfg, "tls", None)
+        return bool(tls and tls.enabled and tls.cert_file and tls.key_file)
 
     def _get_webui_config_path(self):
         cfg_path = self._context.get("webui_config_path")
@@ -206,16 +242,40 @@ class WebUITab:
 
         cfg = self._get_webui_cfg()
         host, port = cfg.bind_address, cfg.port
-        self._listen_url_var.set(get_listen_url(host, port))
-        self._url_var.set(get_url(host, port))
+        tls = self._tls_active(cfg)
+        self._listen_url_var.set(get_listen_url(host, port, tls=tls))
+        self._url_var.set(get_url(host, port, tls=tls))
+        security_var = getattr(self, "_security_var", None)
+        if security_var is not None:
+            remote = bool(getattr(cfg, "remote_enabled", False))
+            if remote and not tls:
+                security_var.set("Remote HTTP (plaintext)")
+            elif remote:
+                security_var.set("Remote HTTPS")
+            elif tls:
+                security_var.set("Localhost HTTPS")
+            else:
+                security_var.set("Localhost HTTP")
 
         def _check() -> None:
-            from experimental.webui.service_control import is_running
+            from experimental.webui.service_control import get_status
 
-            running = is_running(host, port)
-            self._schedule_ui(lambda: self._apply_status(running))
+            status = get_status(host, port)
+            self._schedule_ui(lambda: self._apply_service_status(status))
 
         threading.Thread(target=_check, daemon=True).start()
+
+    def _apply_service_status(self, status) -> None:
+        backend_var = getattr(self, "_backend_var", None)
+        if backend_var is not None:
+            backend_var.set(status.backend)
+        if status.running:
+            self._apply_status(True)
+            return
+        if status.state == "stopped":
+            self._apply_status(False)
+            return
+        self._apply_failed_status(status.reason or status.state)
 
     def _apply_status(self, running: bool) -> None:
         if not self.frame.winfo_exists():
@@ -565,6 +625,11 @@ class WebUITab:
             load_error = self._normalize_cfg_error(exc)
 
         self._cfg_enabled_value = bool(getattr(cfg, "enabled", False))
+        self._cfg_initial_insecure_remote = bool(
+            cfg.remote_enabled
+            and not cfg.tls.enabled
+            and cfg.tls.allow_insecure_remote
+        )
 
         parent = self.frame.winfo_toplevel()
         dialog = tk.Toplevel(parent)
@@ -635,14 +700,16 @@ class WebUITab:
             wraplength=560,
         )
         self._theme.apply_to_widget(self._cfg_remote_warn_label, "label")
-        self._update_cfg_remote_warning()
 
         self._cfg_tls_enabled_var = tk.BooleanVar(value=cfg.tls.enabled)
         tls_enabled_row = tk.Frame(outer)
         self._theme.apply_to_widget(tls_enabled_row, "main_window")
         tls_enabled_row.pack(fill=tk.X, pady=(0, 2))
         tls_enabled_cb = tk.Checkbutton(
-            tls_enabled_row, text="TLS Enabled", variable=self._cfg_tls_enabled_var
+            tls_enabled_row,
+            text="TLS Enabled",
+            variable=self._cfg_tls_enabled_var,
+            command=self._update_cfg_remote_warning,
         )
         self._theme.apply_to_widget(tls_enabled_cb, "checkbox")
         tls_enabled_cb.pack(anchor="w")
@@ -655,9 +722,11 @@ class WebUITab:
             tls_insecure_row,
             text="Allow Insecure Remote Override",
             variable=self._cfg_tls_insecure_var,
+            command=self._update_cfg_remote_warning,
         )
         self._theme.apply_to_widget(tls_insecure_cb, "checkbox")
         tls_insecure_cb.pack(anchor="w")
+        self._update_cfg_remote_warning()
 
         self._cfg_tls_cert_var = tk.StringVar(value=cfg.tls.cert_file)
         _row("TLS Cert Path:", self._cfg_tls_cert_var, width=50)
@@ -667,6 +736,11 @@ class WebUITab:
 
         self._cfg_allowlist_var = tk.StringVar(value=", ".join(cfg.allowed_cidrs))
         _row("Allowlist (CIDRs):", self._cfg_allowlist_var, width=50)
+
+        self._cfg_trusted_hosts_var = tk.StringVar(
+            value=", ".join(cfg.trusted_hosts)
+        )
+        _row("Trusted DNS Hosts:", self._cfg_trusted_hosts_var, width=50)
 
         timeout_row = tk.Frame(outer)
         self._theme.apply_to_widget(timeout_row, "main_window")
@@ -790,6 +864,15 @@ class WebUITab:
                 text=(
                     f"Warning: remote access listens on {exposure}. "
                     "Only clients matching the allowlist may proceed."
+                    + (
+                        " Remote HTTP (plaintext): credentials, cookies, and "
+                        "data are not encrypted."
+                        if (
+                            not self._cfg_tls_enabled_var.get()
+                            and self._cfg_tls_insecure_var.get()
+                        )
+                        else ""
+                    )
                 )
             )
             if not self._cfg_remote_warn_label.winfo_ismapped():
@@ -829,6 +912,10 @@ class WebUITab:
         cert = self._cfg_tls_cert_var.get().strip()
         key = self._cfg_tls_key_var.get().strip()
         allowlist = self._parse_cidrs(self._cfg_allowlist_var.get())
+        trusted_hosts_var = getattr(self, "_cfg_trusted_hosts_var", None)
+        trusted_hosts = self._parse_cidrs(
+            trusted_hosts_var.get() if trusted_hosts_var is not None else ""
+        )
         try:
             port = int(self._cfg_port_var.get().strip())
             idle_min = int(self._cfg_idle_var.get().strip())
@@ -846,6 +933,7 @@ class WebUITab:
             port=port,
             remote_enabled=bool(self._cfg_remote_var.get()),
             allowed_cidrs=allowlist,
+            trusted_hosts=trusted_hosts,
             session_timeout_idle=idle_min * 60,
             session_timeout_absolute=absolute_hr * 3600,
             tls=TLSConfig(
@@ -869,6 +957,22 @@ class WebUITab:
         self._cfg_save_btn.configure(state=state)
         self._cfg_save_restart_btn.configure(state=state)
 
+    def _confirm_insecure_remote_transition(self) -> bool:
+        entering = (
+            bool(self._cfg_remote_var.get())
+            and not bool(self._cfg_tls_enabled_var.get())
+            and bool(self._cfg_tls_insecure_var.get())
+            and not bool(getattr(self, "_cfg_initial_insecure_remote", False))
+        )
+        if not entering:
+            return True
+        return safe_messagebox.askyesno(
+            "Confirm Remote Plaintext HTTP",
+            "Remote HTTP sends credentials, session cookies, and Dirracuda "
+            "data without encryption.\n\nSave this configuration anyway?",
+            parent=self._cfg_dialog,
+        )
+
     def _finish_config_dialog(self, success: bool, message: str) -> None:
         if not self._cfg_dialog_exists():
             return
@@ -878,9 +982,9 @@ class WebUITab:
             self._refresh_status()
 
     def _save_config_from_dialog(self):
-        from experimental.webui.config import save_config, validate
+        from experimental.webui.config import normalize_config, save_config, validate
 
-        cfg = self._build_config_from_dialog()
+        cfg = normalize_config(self._build_config_from_dialog())
         validate(cfg)
         effective_cfg = save_config(cfg, path=self._get_webui_config_path())
         return effective_cfg if effective_cfg is not None else cfg
@@ -888,12 +992,22 @@ class WebUITab:
     def _on_save_config_dialog(self) -> None:
         if not self._cfg_dialog_exists():
             return
+        if not self._confirm_insecure_remote_transition():
+            self._cfg_status_var.set(
+                "Save cancelled. Remote plaintext mode was not enabled."
+            )
+            return
         self._set_config_save_controls(True)
         self._cfg_status_var.set("Saving...")
 
         def _do() -> None:
             try:
-                self._save_config_from_dialog()
+                saved_cfg = self._save_config_from_dialog()
+                self._cfg_initial_insecure_remote = bool(
+                    saved_cfg.remote_enabled
+                    and not saved_cfg.tls.enabled
+                    and saved_cfg.tls.allow_insecure_remote
+                )
             except Exception as exc:
                 self._schedule_cfg_dialog_ui(
                     lambda: self._finish_config_dialog(
@@ -912,17 +1026,25 @@ class WebUITab:
     def _on_save_restart_config_dialog(self) -> None:
         if not self._cfg_dialog_exists():
             return
+        if not self._confirm_insecure_remote_transition():
+            self._cfg_status_var.set(
+                "Save cancelled. Remote plaintext mode was not enabled."
+            )
+            return
         self._set_config_save_controls(True)
         self._cfg_status_var.set("Saving and restarting...")
-
-        current_cfg = self._get_webui_cfg()
-        old_host, old_port = current_cfg.bind_address, current_cfg.port
+        previous_cfg = self._get_webui_cfg()
 
         def _do() -> None:
-            from experimental.webui.service_control import is_running, start, stop
+            from experimental.webui.service_control import restart
 
             try:
                 new_cfg = self._save_config_from_dialog()
+                self._cfg_initial_insecure_remote = bool(
+                    new_cfg.remote_enabled
+                    and not new_cfg.tls.enabled
+                    and new_cfg.tls.allow_insecure_remote
+                )
             except Exception as exc:
                 self._schedule_cfg_dialog_ui(
                     lambda: self._finish_config_dialog(
@@ -932,36 +1054,12 @@ class WebUITab:
                 return
 
             try:
-                was_running = is_running(old_host, old_port)
-            except Exception as exc:
-                self._schedule_cfg_dialog_ui(
-                    lambda: self._finish_config_dialog(
-                        False, f"Failed: {self._normalize_cfg_error(exc)}"
-                    )
+                start_result = restart(
+                    new_cfg.bind_address,
+                    new_cfg.port,
+                    previous_host=previous_cfg.bind_address,
+                    previous_port=previous_cfg.port,
                 )
-                return
-
-            if was_running:
-                try:
-                    stopped = stop()
-                except Exception as exc:
-                    self._schedule_cfg_dialog_ui(
-                        lambda: self._finish_config_dialog(
-                            False, f"Failed: {self._normalize_cfg_error(exc)}"
-                        )
-                    )
-                    return
-                if not stopped:
-                    self._schedule_cfg_dialog_ui(
-                        lambda: self._finish_config_dialog(
-                            False,
-                            "Failed: stop did not complete; service may still be running",
-                        )
-                    )
-                    return
-
-            try:
-                start_result = start(new_cfg.bind_address, new_cfg.port)
             except Exception as exc:
                 self._schedule_cfg_dialog_ui(
                     lambda: self._finish_config_dialog(
@@ -1006,6 +1104,9 @@ class WebUITab:
                 return
 
             if result.state in ("running", "already_running"):
+                backend_var = getattr(self, "_backend_var", None)
+                if backend_var is not None:
+                    backend_var.set(getattr(result, "backend", "direct"))
                 self._schedule_ui(lambda: self._apply_status(True))
                 return
             self._schedule_ui(lambda: self._apply_failed_status(result.reason))
@@ -1049,13 +1150,15 @@ class WebUITab:
         from experimental.webui.service_control import get_url
 
         cfg = self._get_webui_cfg()
-        webbrowser.open(get_url(cfg.bind_address, cfg.port))
+        tls = self._tls_active(cfg)
+        webbrowser.open(get_url(cfg.bind_address, cfg.port, tls=tls))
 
     def _on_copy_url(self) -> None:
         from experimental.webui.service_control import get_url
 
         cfg = self._get_webui_cfg()
-        url = get_url(cfg.bind_address, cfg.port)
+        tls = self._tls_active(cfg)
+        url = get_url(cfg.bind_address, cfg.port, tls=tls)
         self.frame.clipboard_clear()
         self.frame.clipboard_append(url)
         safe_messagebox.showinfo("Copied", f"URL copied: {url}", parent=self.frame)

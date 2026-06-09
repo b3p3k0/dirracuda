@@ -29,6 +29,30 @@ def test_set_and_verify_password(tmp_path):
     assert verify_password("admin", _VALID_PW, p) is True
 
 
+def test_known_and_unknown_users_each_perform_one_pbkdf2(tmp_path, monkeypatch):
+    import experimental.webui.auth as auth
+
+    p = tmp_path / "creds.json"
+    set_password("admin", _VALID_PW, p)
+    original = auth.hashlib.pbkdf2_hmac
+    calls = []
+
+    def counted(*args, **kwargs):
+        calls.append((args, kwargs))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(auth.hashlib, "pbkdf2_hmac", counted)
+
+    assert verify_password("admin", "wrong-password", p) is False
+    known_calls = len(calls)
+    calls.clear()
+    assert verify_password("unknown", "wrong-password", p) is False
+    unknown_calls = len(calls)
+
+    assert known_calls == 1
+    assert unknown_calls == 1
+
+
 def test_wrong_password_returns_false(tmp_path):
     p = tmp_path / "creds.json"
     set_password("admin", _VALID_PW, p)

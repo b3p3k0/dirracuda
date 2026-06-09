@@ -23,19 +23,16 @@ Packages: `fastapi`, `uvicorn`, `jinja2`, `httpx`.
 1. Create credentials (choose one path):
 
    - Desktop: `Experimental -> Web UI -> Manage Credentials`
-   - CLI helper:
+   - Headless CLI:
 
    ```bash
-   ./venv/bin/python -c "
-from experimental.webui.auth import set_password
-set_password('admin', 'your_password_here')
-"
+   ./dirracuda-d credentials set admin
    ```
 
 2. Start server:
 
 ```bash
-./venv/bin/python -m experimental.webui.server
+./dirracuda-d start
 ```
 
 3. Open `http://127.0.0.1:2600` and log in.
@@ -51,6 +48,56 @@ Legacy explicit `port: 5480` entries in `webui.json` are auto-migrated to `2600`
 | `--port` | from config (`2600`) | Port override, re-validated at startup |
 | `--config` | default webui config path | Load/save a specific `webui.json` |
 
+Direct `python -m experimental.webui.server` remains available for debugging,
+but it now requires a usable credential store and exits before binding when
+credentials or runtime security configuration are invalid.
+
+---
+
+## Headless Daemon CLI
+
+`./dirracuda-d` is a display-independent wrapper around the Web UI runtime. It
+re-executes through `./venv/bin/python`; activating the virtualenv is not
+required.
+
+```bash
+./dirracuda-d start
+./dirracuda-d stop
+./dirracuda-d restart
+./dirracuda-d status
+./dirracuda-d logs -n 100
+./dirracuda-d logs --follow
+./dirracuda-d doctor
+./dirracuda-d config path
+./dirracuda-d config check
+```
+
+Add `--json` to lifecycle, status, doctor, config, credential, or non-following
+log commands for automation. Status exit codes are `0` for healthy, `3` for
+cleanly stopped, and `1` for unhealthy or ambiguous ownership.
+
+Direct background mode stores:
+
+- PID metadata: `~/.dirracuda/state/webui.pid` (`0600`)
+- Log: `~/.dirracuda/logs/app/webui.log` (`0600`, 5 MiB rotation, three backups)
+
+### Optional per-user systemd service
+
+```bash
+./dirracuda-d systemd install
+./dirracuda-d systemd status
+./dirracuda-d systemd uninstall
+```
+
+Installation writes `dirracuda-d.service` under the current user's systemd unit
+directory, enables it for the user manager, and starts it immediately. It does
+not install a system-wide unit or enable user lingering, so automatic startup
+normally begins when the user manager/login starts.
+
+When the unit is installed, daemon and desktop lifecycle controls automatically
+delegate to `systemctl --user`; otherwise they use direct background mode.
+Dirracuda refuses to overwrite or remove a unit that lacks its managed marker.
+
 ---
 
 ## Desktop Control Surface
@@ -59,7 +106,7 @@ From the desktop app: `Experimental -> Web UI`
 
 Available controls:
 
-- Service status (`Running` / `Stopped` / `Failed: ...`)
+- Service status and active backend (`direct` / `systemd`)
 - Start / Stop / Open in Browser / Copy URL
 - `Manage Credentials` dialog
 - `WebUI Config` dialog with `Save` and `Save & Restart`
@@ -129,7 +176,7 @@ Shodan balance is fetched server-side only. The API key is never sent to the bro
 
 ### Config (`/config`)
 
-- Edit Web UI bind, remote mode, TLS, allowlist, and session timeouts
+- Edit Web UI bind, remote mode, TLS, allowlist, trusted DNS hosts, and session timeouts
 - Includes browser preference storage controls (enable / disable / clear)
 - Config save is CSRF-protected
 - **Changes take effect on restart**
@@ -147,6 +194,7 @@ Key fields:
 - `bind_address`, `port`
 - `remote_enabled`
 - `allowed_cidrs`
+- `trusted_hosts`
 - `session_timeout_idle`, `session_timeout_absolute` (seconds)
 - `tls.enabled`, `tls.cert_file`, `tls.key_file`, `tls.allow_insecure_remote`
 
@@ -174,18 +222,36 @@ addresses, not browser destinations. Local browser and health checks use
 example `http://192.168.1.251:2600` on the system used to validate this behavior.
 
 Startup fails fast on unsafe combinations (no silent downgrade).
+Entering remote plaintext HTTP from either configuration UI requires explicit
+confirmation. The login page, daemon status/checks, and desktop controls retain
+a visible plaintext warning until TLS is enabled or remote mode is disabled.
 
 ### Allowlist behavior
 
 Allowlist checks run as HTTP middleware only when `remote_enabled=true`.
 
-The check uses `request.client.host` (TCP peer as seen by Uvicorn). If you run behind a reverse proxy, configure trusted forwarded headers correctly, or allowlist behavior will be wrong.
+The check uses `request.client.host` (the TCP peer). The bundled direct server
+disables forwarded-header trust; reverse-proxy deployment is outside this
+configuration surface.
+
+### Host validation
+
+- IPv4/IPv6 literal hosts and `localhost` are accepted automatically.
+- Custom DNS names must appear in `trusted_hosts`.
+- Names are stored as lowercase IDNA without trailing dots.
+- Wildcards, schemes, ports, paths, malformed names, and duplicates are rejected.
 
 ---
 
 ## Security Notes
 
+- Startup fails closed when no usable Web UI credential exists.
 - Credentials are hashed with PBKDF2-HMAC-SHA256 (600k iterations) and stored at `~/.dirracuda/conf/webui_creds.json` (`0600` permissions).
+- Known and unknown usernames perform equivalent PBKDF2 verification work.
+- Login usernames/passwords are capped at 128/1,024 UTF-8 bytes.
+- Rate-limit subjects are hashed, pair and IP-wide lockouts are enforced, and state is capped at 4,096 rows.
+- Request limits are 4 KiB for login bodies, 1 MiB for other bodies, 8 KiB for targets, and 16 KiB/100 fields for headers.
+- Direct logs rotate continuously at 5 MiB with three private backups.
 - Session cookies are HttpOnly + SameSite=Strict; session store is in-memory.
 - CSRF checks are enforced on mutating routes.
 - Shodan key handling stays server-side only.

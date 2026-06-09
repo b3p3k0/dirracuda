@@ -534,13 +534,21 @@ An optional browser-based interface for scan management, results browsing, and d
 
 ```bash
 pip install -r experimental/webui/requirements-web.txt
-./venv/bin/python -m experimental.webui.server
+./dirracuda-d credentials set admin
+./dirracuda-d start
 # → http://127.0.0.1:2600
 ```
 
 For setup, configuration, remote mode, and security guidance, see [experimental/webui/README.md](experimental/webui/README.md).
 
-From the desktop app, use `Accessories → Web UI` to start/stop the service.
+`./dirracuda-d` is the runtime-headless service manager. It automatically uses
+the repository virtualenv and provides `start`, `stop`, `restart`, `status`,
+`run`, `logs`, `doctor`, config checks, credential setup, JSON output, and
+optional per-user systemd installation. Run `./dirracuda-d --help` for the full
+command list.
+
+From the desktop app, use `Accessories → Web UI` to control the same service.
+The tab reports whether direct-process or systemd control is active.
 
 Current Web UI layout:
 - `Scans` (dropdown): `shodan`, `searxng`, `reddit`
@@ -562,6 +570,9 @@ on save/load so Uvicorn can accept non-loopback traffic. The desktop tab shows
 the wildcard listening endpoint separately from the usable local browser URL.
 LAN clients connect to the host's actual interface address; on the host used to
 verify this fix, that is `http://192.168.1.251:2600`.
+Remote plaintext HTTP is reported prominently by the CLI and both UIs.
+IP-literal Host values and `localhost` are accepted automatically; custom DNS
+names must be added to `trusted_hosts`.
 
 For route-level behavior, API contracts, and security/runtime details, see
 [docs/TECHNICAL_REFERENCE.md](docs/TECHNICAL_REFERENCE.md).

@@ -318,7 +318,7 @@ class _CheckLockedBrokenRL:
     def record_failure(self, account, ip):
         pass
 
-    def record_success(self, account):
+    def record_success(self, account, ip):
         pass
 
     def health_check(self):
@@ -334,7 +334,7 @@ class _RecordFailureBrokenRL:
     def record_failure(self, account, ip):
         raise RateLimiterRuntimeError("simulated disk error")
 
-    def record_success(self, account):
+    def record_success(self, account, ip):
         pass
 
     def health_check(self):

@@ -18,13 +18,34 @@ function updateRemoteWarning(bindAddress) {
     '. Only clients matching the allowlist may proceed.';
 }
 
+function insecureRemoteSelected() {
+  return document.getElementById('remote-enabled').checked &&
+    !document.getElementById('tls-enabled').checked &&
+    document.getElementById('tls-insecure').checked;
+}
+
+function updatePlaintextWarning() {
+  document.getElementById('plaintext-warn').classList.toggle(
+    'hidden',
+    !insecureRemoteSelected()
+  );
+}
+
 document.getElementById('remote-enabled').addEventListener('change', function() {
   updateRemoteBind(this.checked);
   updateRemoteWarning(document.getElementById('bind-addr').value.trim());
   document.getElementById('remote-warn').classList.toggle('hidden', !this.checked);
+  updatePlaintextWarning();
 });
+document.getElementById('tls-enabled').addEventListener('change', updatePlaintextWarning);
+document.getElementById('tls-insecure').addEventListener('change', updatePlaintextWarning);
 
 function parseCidrs(value) {
+  if (!value || !value.trim()) return [];
+  return value.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+}
+
+function parseHosts(value) {
   if (!value || !value.trim()) return [];
   return value.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
 }
@@ -101,6 +122,20 @@ document.getElementById('cfg-form').addEventListener('submit', async function(e)
   var btn = document.getElementById('save-btn');
   btn.disabled = true;
   setStatus('Saving...');
+  var form = this;
+  var enteringInsecureRemote =
+    insecureRemoteSelected() && form.dataset.insecureActive !== 'true';
+  if (enteringInsecureRemote) {
+    var accepted = window.confirm(
+      'Remote HTTP is plaintext. Credentials, session cookies, and Dirracuda data ' +
+      'can be observed in transit. Save this configuration anyway?'
+    );
+    if (!accepted) {
+      setStatus('Save cancelled. Remote plaintext mode was not enabled.', 'status-warn');
+      btn.disabled = false;
+      return;
+    }
+  }
 
   var payload = {
     bind_address: document.getElementById('bind-addr').value.trim(),
@@ -111,12 +146,14 @@ document.getElementById('cfg-form').addEventListener('submit', async function(e)
     tls_cert: document.getElementById('tls-cert').value.trim(),
     tls_key: document.getElementById('tls-key').value.trim(),
     allowed_cidrs: parseCidrs(document.getElementById('allowlist').value),
+    trusted_hosts: parseHosts(document.getElementById('trusted-hosts').value),
     session_timeout_idle_min: parseInt(document.getElementById('idle-timeout').value, 10),
     session_timeout_absolute_hr: parseInt(document.getElementById('abs-timeout').value, 10),
     auth_lockout_threshold: parseInt(document.getElementById('lockout-threshold').value, 10),
     auth_lockout_window_sec: parseInt(document.getElementById('lockout-window').value, 10),
     auth_lockout_base_duration_sec: parseInt(document.getElementById('lockout-base').value, 10),
-    auth_lockout_max_duration_sec: parseInt(document.getElementById('lockout-max').value, 10)
+    auth_lockout_max_duration_sec: parseInt(document.getElementById('lockout-max').value, 10),
+    acknowledge_insecure_remote: enteringInsecureRemote
   };
 
   try {
@@ -130,6 +167,7 @@ document.getElementById('cfg-form').addEventListener('submit', async function(e)
       if (data.effective_bind_address) {
         document.getElementById('bind-addr').value = data.effective_bind_address;
       }
+      form.dataset.insecureActive = insecureRemoteSelected() ? 'true' : 'false';
       setStatus('Saved. ' + (data.note || 'Changes take effect on restart.'), 'status-ok');
     } else {
       setStatus('Error: ' + (data.error || resp.status), 'status-error');
@@ -141,3 +179,4 @@ document.getElementById('cfg-form').addEventListener('submit', async function(e)
 });
 
 refreshPrefStatusSummary();
+updatePlaintextWarning();

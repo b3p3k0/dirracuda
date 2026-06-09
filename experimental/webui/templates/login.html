@@ -9,6 +9,9 @@
 <body class="login-page">
   <div class="login-wrap">
     <div class="login-logo">&gt;&lt;(((°&gt;</div>
+    {% for warning in webui_security_warnings %}
+    <div class="status-error" role="alert">{{ warning }}</div>
+    {% endfor %}
     <div id="err" aria-live="polite" role="alert" class="status-error hidden" hidden></div>
     <form id="lf" aria-label="Login">
       <div class="field">

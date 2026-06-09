@@ -374,3 +374,40 @@ A partial feature page swap (for example replacing placeholder copy) can fail ex
 80. `app.py` at 1481 lines at C34 close stays within the acceptable band. No extraction was needed in this wave; the 1500-line guardrail (lesson 75) remains standing for future cards.
 
 81. All six C29–C34 commits landed on the same calendar date. Status tables in planning artifacts should use commit-log dates rather than sprint estimates to avoid drift on fast-delivery waves.
+
+## Dirracuda Daemon v1
+
+82. A short-lived controller must not leave a daemon writing to a pipe whose
+    reader exits with the controller. Detached services need a durable log sink
+    or a service manager-owned journal.
+
+83. Health, process existence, and process ownership are separate facts. Model
+    stopped, stale, unhealthy, unmanaged, and ambiguous states explicitly
+    before allowing stop/restart operations.
+
+84. Desktop and CLI lifecycle controls must share one backend-selection facade.
+    Otherwise a systemd unit and a directly spawned process can race for the
+    same listener.
+
+85. Per-user systemd is a useful opt-in without requiring root, but enabling a
+    unit is not the same as enabling lingering. Keep login startup and
+    pre-login boot startup as separate operator decisions.
+
+86. A healthy login page is not an operable service when no credentials exist.
+    Validate the credential store before every server startup path.
+
+87. Length limits must run before Pydantic and authentication work. Otherwise
+    rejected login input can still amplify logs, limiter state, and CPU.
+
+88. Rate-limit keys are attacker-controlled storage unless subjects are hashed
+    and total rows are bounded. Expiry pruning alone does not constrain bursts.
+
+89. Identical login bodies do not prevent enumeration when unknown users skip
+    password hashing. Exercise equivalent PBKDF2 work without timing thresholds
+    in CI.
+
+90. Wildcard binds cannot define trusted Host names. Accept IP literals and
+    require explicit canonical DNS names.
+
+91. Startup-only log rollover does not bound a long-lived daemon. The writer
+    must own rotation and followers must reopen after inode replacement.

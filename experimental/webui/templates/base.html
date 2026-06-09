@@ -49,6 +49,11 @@
   </nav>
 
   <main class="main" id="main-content">
+    {% for warning in webui_security_warnings %}
+    <div class="status-error" role="alert">
+      {{ warning }}
+    </div>
+    {% endfor %}
     {% if session %}
     <div id="prefs-consent-banner" class="status-info hidden" role="status" aria-live="polite" hidden>
       <div>

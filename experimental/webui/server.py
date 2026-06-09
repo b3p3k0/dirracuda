@@ -1,6 +1,9 @@
 import argparse
 import ipaddress
+import io
 import logging
+from logging.handlers import RotatingFileHandler
+import os
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -8,18 +11,75 @@ from typing import Optional
 
 import uvicorn
 from experimental.webui.app import create_app
+from experimental.webui.auth import CredentialError, credential_exists
 from experimental.webui.config import (
     WebUIConfig,
     WebUIConfigError,
     load_config,
-    normalize_remote_bind,
+    normalize_config,
+    security_warnings,
     validate,
 )
 
 logger = logging.getLogger(__name__)
+_LOG_MAX_BYTES = 5 * 1024 * 1024
+_LOG_BACKUPS = 3
 
 
-def _check_remote_tls(cfg: WebUIConfig, bind: str) -> Optional[str]:
+class PrivateRotatingFileHandler(RotatingFileHandler):
+    """Rotating handler that creates every active log with mode 0600."""
+
+    def _open(self):
+        flags = os.O_APPEND | os.O_CREAT | os.O_WRONLY
+        fd = os.open(self.baseFilename, flags, 0o600)
+        if os.name != "nt":
+            os.chmod(self.baseFilename, 0o600)
+        return io.open(
+            fd,
+            self.mode,
+            encoding=self.encoding,
+            errors=self.errors,
+            closefd=True,
+        )
+
+
+def _file_log_config(path: Path) -> dict:
+    return {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "default": {
+                "format": "%(asctime)s %(levelname)s %(name)s: %(message)s",
+            },
+        },
+        "handlers": {
+            "file": {
+                "()": PrivateRotatingFileHandler,
+                "filename": str(path),
+                "maxBytes": _LOG_MAX_BYTES,
+                "backupCount": _LOG_BACKUPS,
+                "encoding": "utf-8",
+                "formatter": "default",
+            },
+        },
+        "root": {"handlers": ["file"], "level": "INFO"},
+        "loggers": {
+            "uvicorn": {"handlers": ["file"], "level": "INFO", "propagate": False},
+            "uvicorn.error": {
+                "handlers": ["file"],
+                "level": "INFO",
+                "propagate": False,
+            },
+            "uvicorn.access": {
+                "handlers": ["file"],
+                "level": "INFO",
+                "propagate": False,
+            },
+        },
+    }
+
+
+def runtime_config_error(cfg: WebUIConfig, bind: str) -> Optional[str]:
     """Return an error string if remote TLS is misconfigured, else None."""
     try:
         is_loopback = ipaddress.ip_address(bind).is_loopback
@@ -35,6 +95,10 @@ def _check_remote_tls(cfg: WebUIConfig, bind: str) -> Optional[str]:
         if not Path(cfg.tls.key_file).is_file():
             return f"TLS key file not found: {cfg.tls.key_file}"
     return None
+
+
+# Retain the original private name for existing imports.
+_check_remote_tls = runtime_config_error
 
 
 def _startup_lines(cfg: WebUIConfig, host: str, port: int) -> list:
@@ -61,6 +125,7 @@ def run(
     port: Optional[int] = None,
     cfg: Optional[WebUIConfig] = None,
     config_path=None,
+    log_file: Optional[str] = None,
 ) -> None:
     if cfg is None:
         try:
@@ -70,7 +135,7 @@ def run(
             sys.exit(1)
     else:
         try:
-            cfg = normalize_remote_bind(cfg)
+            cfg = normalize_config(cfg)
             validate(cfg)
         except WebUIConfigError as exc:
             logger.error("Web UI config error: %s", exc)
@@ -88,22 +153,51 @@ def run(
             logger.error("Web UI startup refused: %s", exc)
             sys.exit(1)
 
-    err = _check_remote_tls(cfg, bind)
+    err = runtime_config_error(cfg, bind)
     if err:
         logger.error("Web UI startup refused: %s", err)
+        sys.exit(1)
+    try:
+        if not credential_exists():
+            logger.error(
+                "Web UI startup refused: no usable credential exists; run "
+                "./dirracuda-d credentials set USERNAME"
+            )
+            sys.exit(1)
+    except CredentialError as exc:
+        logger.error("Web UI startup refused: %s", exc)
         sys.exit(1)
 
     for line in _startup_lines(cfg, bind, bind_port):
         logger.info("%s", line)
+    for warning in security_warnings(cfg):
+        logger.warning("%s", warning)
 
     ssl_certfile = cfg.tls.cert_file or None
     ssl_keyfile = cfg.tls.key_file or None
     app = create_app(cfg=cfg, config_path=config_path)
+    uvicorn_options = {
+        "host": bind,
+        "port": bind_port,
+        "h11_max_incomplete_event_size": 16 * 1024,
+        "limit_concurrency": 128,
+        "backlog": 128,
+        "server_header": False,
+        "proxy_headers": False,
+    }
+    if log_file:
+        log_path = Path(log_file).expanduser().resolve(strict=False)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        uvicorn_options["log_config"] = _file_log_config(log_path)
     if cfg.tls.enabled and ssl_certfile and ssl_keyfile:
-        uvicorn.run(app, host=bind, port=bind_port,
-                    ssl_certfile=ssl_certfile, ssl_keyfile=ssl_keyfile)
+        uvicorn.run(
+            app,
+            ssl_certfile=ssl_certfile,
+            ssl_keyfile=ssl_keyfile,
+            **uvicorn_options,
+        )
     else:
-        uvicorn.run(app, host=bind, port=bind_port)
+        uvicorn.run(app, **uvicorn_options)
 
 
 if __name__ == "__main__":
@@ -112,5 +206,11 @@ if __name__ == "__main__":
     parser.add_argument("--host", default=None)
     parser.add_argument("--port", type=int, default=None)
     parser.add_argument("--config", default=None, dest="config_path")
+    parser.add_argument("--log-file", default=None, help=argparse.SUPPRESS)
     args = parser.parse_args()
-    run(host=args.host, port=args.port, config_path=args.config_path)
+    run(
+        host=args.host,
+        port=args.port,
+        config_path=args.config_path,
+        log_file=args.log_file,
+    )

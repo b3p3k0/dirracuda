@@ -1,6 +1,7 @@
 """Unit tests for experimental.webui.rate_limiter."""
 
 import os
+import sqlite3
 import stat
 import time
 
@@ -88,7 +89,7 @@ def test_success_clears_all_ips(tmp_path):
         rl.record_failure(_ACCOUNT, _IP1)
     for _ in range(5):
         rl.record_failure(_ACCOUNT, _IP2)
-    rl.record_success(_ACCOUNT)
+    rl.record_success(_ACCOUNT, _IP1)
     assert not rl.check_locked(_ACCOUNT, _IP1)[0]
     assert not rl.check_locked(_ACCOUNT, _IP2)[0]
 
@@ -111,6 +112,51 @@ def test_different_account_not_blocked(rl):
         rl.record_failure(_ACCOUNT, _IP1)
     locked, _ = rl.check_locked(_ACCOUNT2, _IP1)
     assert not locked
+
+
+def test_ip_wide_spray_limit_blocks_distinct_accounts(tmp_path):
+    rl = RateLimiter(tmp_path / "rl.db", _cfg(lockout_threshold=3))
+
+    for index in range(20):
+        rl.record_failure(f"account-{index}", _IP1)
+
+    locked, retry = rl.check_locked("never-seen-account", _IP1)
+    assert locked
+    assert retry > 0
+
+
+def test_database_stores_only_hashed_subjects(tmp_path):
+    path = tmp_path / "rl.db"
+    rl = RateLimiter(path, _cfg())
+    account = "attacker-controlled-account"
+    ip = "203.0.113.77"
+
+    rl.record_failure(account, ip)
+
+    with sqlite3.connect(path) as conn:
+        rows = conn.execute(
+            "SELECT key, account_hash, ip_hash FROM auth_attempts"
+        ).fetchall()
+    assert rows
+    assert account not in repr(rows)
+    assert ip not in repr(rows)
+    assert account.encode() not in path.read_bytes()
+    assert ip.encode() not in path.read_bytes()
+
+
+def test_row_count_is_hard_capped(tmp_path, monkeypatch):
+    import experimental.webui.rate_limiter as module
+
+    monkeypatch.setattr(module, "ROW_LIMIT", 64)
+    path = tmp_path / "rl.db"
+    rl = RateLimiter(path, _cfg())
+
+    for index in range(100):
+        rl.record_failure(f"account-{index}", _IP1)
+
+    with sqlite3.connect(path) as conn:
+        count = conn.execute("SELECT COUNT(*) FROM auth_attempts").fetchone()[0]
+    assert count <= 64
 
 
 # ------------------------------------------------------------------
@@ -218,6 +264,43 @@ def test_state_survives_reinit(tmp_path):
     assert locked
 
 
+def test_legacy_schema_is_reset_and_vacuumed(tmp_path):
+    path = tmp_path / "rl.db"
+    legacy_account = "legacy-plaintext-account"
+    with sqlite3.connect(path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE auth_attempts (
+                key TEXT PRIMARY KEY,
+                account TEXT NOT NULL,
+                failures INTEGER NOT NULL,
+                window_start REAL NOT NULL,
+                locked_until REAL NOT NULL,
+                lockout_count INTEGER NOT NULL
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO auth_attempts VALUES (?, ?, 5, 1, 9999999999, 1)",
+            (f"account:{legacy_account}:ip:{_IP1}", legacy_account),
+        )
+        conn.commit()
+
+    RateLimiter(path, _cfg())
+
+    with sqlite3.connect(path) as conn:
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        count = conn.execute("SELECT COUNT(*) FROM auth_attempts").fetchone()[0]
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(auth_attempts)")
+        }
+    assert version == 2
+    assert count == 0
+    assert "account_hash" in columns
+    assert "account" not in columns
+    assert legacy_account.encode() not in path.read_bytes()
+
+
 # ------------------------------------------------------------------
 # Stale-row pruning
 # ------------------------------------------------------------------
@@ -267,7 +350,7 @@ def test_null_rate_limiter_health_is_error():
 
 def test_null_rate_limiter_success_noop():
     nrl = NullRateLimiter()
-    nrl.record_success("user")  # must not raise
+    nrl.record_success("user", "1.2.3.4")  # must not raise
 
 
 # ------------------------------------------------------------------

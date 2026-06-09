@@ -77,7 +77,10 @@ Dirracuda scans for internet-accessible servers exposing open or weakly-authenti
 
 ┌─────────────────────────────────────────────────────────────────────┐
 │  Optional Web UI Layer                                              │
-│  experimental/webui/server.py -> experimental/webui/app.py (FastAPI app factory)              │
+│  dirracuda-d -> daemon_cli.py -> service_control.py                 │
+│                         ├─ direct detached backend                  │
+│                         └─ per-user systemd backend                 │
+│  server.py -> app.py (FastAPI app factory)                          │
 │    ├─ auth/session/CSRF helpers                                     │
 │    ├─ tasks.py (single-active scan queue -> CLI subprocess runner)  │
 │    └─ db.py (read-only result queries + VACUUM INTO export)         │
@@ -166,7 +169,37 @@ Dashboard balance behavior (C21): `/dashboard` fetches Shodan query-credit statu
 
 **Web UI startup and remote mode (C8):**
 
-`experimental/webui/server.py::run()` loads Web UI config via `load_config()` (which calls `validate()`) before starting uvicorn. Canonical runtime target is `~/.dirracuda/conf.d/experimental/webui.json` (`{ "webui": {...} }` wrapper). CLI `--host`/`--port` are treated as validated overrides over the loaded config (re-validated after merge). Startup exits immediately on any validation failure — no silent fallback. Desktop service control launches with module semantics (`python -m experimental.webui.server`) rather than direct script execution, so package imports resolve correctly after the `experimental/webui` move. The default bind remains `127.0.0.1:2600`; legacy explicit `port: 5480` entries are auto-migrated to `2600` on load.
+`experimental/webui/server.py::run()` loads Web UI config via `load_config()` (which calls `validate()`) before starting uvicorn. Canonical runtime target is `~/.dirracuda/conf.d/experimental/webui.json` (`{ "webui": {...} }` wrapper). CLI `--host`/`--port` are treated as validated overrides over the loaded config (re-validated after merge). Startup exits immediately on any validation failure or missing/unsafe credential store — no silent fallback. The default bind remains `127.0.0.1:2600`; legacy explicit `port: 5480` entries are auto-migrated to `2600` on load.
+
+**Headless daemon control:**
+
+The root `dirracuda-d` bootstrap contains only standard-library imports and
+re-executes `experimental.webui.daemon_cli` through the repository virtualenv.
+The CLI exposes lifecycle, foreground, logs, diagnostics, config inspection,
+credential bootstrap, and systemd management subcommands. `--json` emits the
+stable envelope `{ok,command,state,backend,message,details}`. Exit code `3`
+means cleanly inactive; operational or ownership failures use `1`.
+
+`experimental.webui.service_control` is the shared desktop/CLI facade. Its
+structured `ServiceStatus` distinguishes `running`, `stopped`, `stale`,
+`unhealthy`, `unmanaged`, and `ambiguous`; `ActionResult` carries backend, PID,
+reason, and details. Existing `is_running()` callers remain supported.
+
+Direct mode launches `python -m experimental.webui.server` in a new process
+session, writes an atomic mode-`0600` PID record under
+`~/.dirracuda/state/webui.pid`, and redirects stdout/stderr to the mode-`0600`
+`~/.dirracuda/logs/app/webui.log`. Logs rotate at 5 MiB with three backups.
+Stop targets the owned process group, waits 15 seconds, then uses forced
+termination only if needed. PID command-line ownership is verified before any
+signal is sent.
+
+If a `dirracuda-d.service` file exists in the per-user systemd unit directory,
+the facade delegates lifecycle/status to `systemctl --user`. Managed units use
+`Type=simple`, foreground `dirracuda-d run`, `Restart=on-failure`,
+`TimeoutStopSec=15`, `KillMode=control-group`, `UMask=0077`, and
+`NoNewPrivileges=yes`. Installation enables and starts the unit but does not
+enable lingering or install system-wide state. Units without the Dirracuda
+managed marker are reported as ambiguous and are never overwritten or removed.
 
 Remote-bind normalization runs before persisted config validation and writes.
 With `remote_enabled=true`, an IPv4 loopback bind is promoted to `0.0.0.0` and
@@ -182,6 +215,7 @@ Config fields relevant to remote mode:
 | `port` | `2600` | TCP port for the Web UI listener. |
 | `remote_enabled` | `false` | Must be `true` for any non-loopback bind. |
 | `allowed_cidrs` | `["127.0.0.1/32","::1/128"]` | IP allowlist enforced per-request when `remote_enabled=true`. |
+| `trusted_hosts` | `[]` | Additional canonical DNS Host values. IP literals and `localhost` are always accepted. |
 | `tls.enabled` | `true` | TLS on/off. Remote with TLS requires cert+key. |
 | `tls.cert_file` / `tls.key_file` | `""` | Paths to PEM cert and key. Required for remote TLS. |
 | `tls.allow_insecure_remote` | `false` | Allow non-loopback HTTP. Must be explicitly set; no default. |
@@ -201,9 +235,24 @@ address). Health checks and local browser actions map wildcard IPv4 to
 `127.0.0.1` and wildcard IPv6 to `::1`; IPv6 URLs use brackets. LAN clients use
 the host's real interface address rather than a wildcard address.
 
-Allowlist middleware: registered as an HTTP middleware in `create_app()`. When `remote_enabled=True`, each request's `request.client.host` is checked against `allowed_cidrs` (parsed as `ipaddress.ip_network` objects). Non-matching or non-parseable addresses get 403. When `remote_enabled=False`, the check is skipped entirely — localhost mode is unaffected.
+Allowlist middleware checks the socket peer against `allowed_cidrs` in remote
+mode. Forwarded-header processing is disabled by the bundled server.
+Non-matching or non-parseable addresses get 403; localhost mode skips the CIDR
+check.
 
-**Anti-automation lockout (O1 — OWASP ASVS V6.3.1 / NIST SP 800-63B §5.2.2):** `experimental/webui/rate_limiter.py` provides persistent per-`(account, IP)` login lockout backed by `~/.dirracuda/state/webui_ratelimit.db` (SQLite, mode `0600`, DELETE journal — no WAL sidecar files). Lockout key format: `account:{username}:ip:{client_ip}`. After `lockout_threshold` failures within `lockout_window_sec`, the composite key is locked for `lockout_base_duration_sec * 2^(lockout_count-1)` (capped at `lockout_max_duration_sec`). A successful login calls `DELETE FROM auth_attempts WHERE account = ?`, clearing all IP entries for the account. Stale rows are pruned in the same transaction as each `record_failure` call. All auth-state outcomes (wrong password, locked, unknown user) return an identical 401 body — no lockout state is disclosed.
+**Anti-automation lockout (O1 — OWASP ASVS V6.3.1 / NIST SP 800-63B §5.2.2):**
+schema v2 stores only SHA-256 account/IP identifiers. It applies pair lockout
+plus an IP-wide spray threshold of `max(20, lockout_threshold * 5)`, caps state
+at 4,096 rows, and prunes expired/oldest records transactionally. Legacy state
+is reset and vacuumed once. Successful login clears the account pair rows and
+source-IP aggregate. Unknown users perform one dummy PBKDF2 operation.
+
+**Request and Host guard:** before route parsing, login bodies are limited to
+4 KiB, other bodies to 1 MiB, request targets to 8 KiB, and headers to
+16 KiB/100 fields. Host validation accepts IP literals and `localhost`; DNS
+names require an exact canonical `trusted_hosts` entry. Uvicorn uses a 16 KiB
+incomplete-event limit, concurrency/backlog limits of 128, no server header,
+and no forwarded-header trust.
 
 **Password policy (O2 — OWASP ASVS V6.2.1/V6.2.3/V6.2.4/V6.2.5 / NIST SP 800-63B §3.1.1.2):** `experimental/webui/auth.py::set_password()` enforces: minimum 15 characters; case-insensitive match against `experimental/webui/pwlist.txt` (top-10000 common passwords, MIT-licensed SecLists data); no composition rules (passphrases accepted). `validate_password_policy()` raises `BlocklistUnavailableError(RuntimeError)` if the blocklist is absent, unreadable (`OSError`), or undersized (fewer than 3000 entries after parsing — `BLOCKLIST_MIN_SIZE`). Web routes handle `BlocklistUnavailableError` → 503 and `ValueError` → 400 separately. `verify_password()` is not affected by policy — pre-policy credentials remain verifiable. The `GET /account` + `POST /api/auth/change-password` endpoints provide authenticated credential rotation; the change requires the current password. The desktop credentials dialog (`webui_tab.py`) enforces the same separation: bootstrap (no stored creds) takes editable username/password; rotation (one stored cred) takes read-only username + current password + new password; multiple stored credentials block the dialog with an operator message directing to CLI management.
 
@@ -224,7 +273,8 @@ The `_CSP_POLICY` constant is defined once at module scope in `app.py`. `script-
 
 Runtime DB error behavior: if a SQLite error occurs on `check_locked` or `record_failure` after successful startup, remote mode returns 503 (fail-closed); localhost mode logs the error and degrades gracefully (logins proceed unthrottled, health endpoint reports `"rate_limiter": "error"`). Startup behavior: remote mode refuses to start if the rate-limit DB is unavailable; localhost mode assigns a `NullRateLimiter` and starts degraded.
 
-**Reverse proxy note:** `request.client.host` reflects the TCP peer address as seen by the ASGI server. Behind a reverse proxy, this will be the proxy's address rather than the real client IP unless forwarded-header trust is correctly configured at the ASGI server layer — that configuration is deployment-specific and not managed by `experimental/webui/server.py`. Without it, allowlist decisions may be wrong (all traffic passes as the proxy address, or forwarded headers can be spoofed). See [FastAPI proxy guidance](https://fastapi.tiangolo.com/advanced/behind-a-proxy/) and [uvicorn deployment docs](https://www.uvicorn.org/deployment/) for details on trusted-proxy configuration.
+**Reverse proxy note:** direct Uvicorn is the supported topology. Forwarded
+headers are ignored, so a proxy appears as the client to the CIDR allowlist.
 
 ### 1.2 Core Workflow Flowchart
 
@@ -1098,7 +1148,8 @@ Warning banner behavior:
 
 Web UI tab behavior:
 - Controls are inline in the tab (no separate control window).
-- Status/start/stop use `experimental.webui.service_control` with pidfile + health checks.
+- Status/start/stop/restart use the structured `experimental.webui.service_control` facade.
+- The active lifecycle backend (`direct` or `systemd`) is shown separately from health state.
 - Start failures are shown inline as `Failed: <reason>` (for example, exit code or startup timeout) instead of collapsing back to `Stopped`.
 - Credential setup opens from `Manage Credentials` into a modal dialog (`Username`, `Password`, `Save Credentials`) and calls `experimental.webui.auth.set_password(...)`; expected validation/save errors are shown inline (no popup spam).
 - `WebUI Config` opens a modal dialog with the same control surface as `/config` (`bind_address`, `port`, `remote_enabled`, TLS fields, `allowed_cidrs`, idle/absolute session timeouts, and auth lockout tuning fields).

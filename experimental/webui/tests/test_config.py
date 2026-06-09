@@ -10,6 +10,8 @@ from experimental.webui.config import (
     load_config,
     normalize_remote_bind,
     normalize_remote_bind_address,
+    normalize_trusted_host,
+    normalize_trusted_hosts,
     save_config,
     validate,
 )
@@ -63,6 +65,47 @@ def test_nonloopback_tls_off_with_override_ok():
 
 def test_valid_remote_config_ok():
     validate(_remote_config())
+
+
+def test_trusted_hosts_normalize_dns_and_idna():
+    assert normalize_trusted_host("ScanBox.LAN.") == "scanbox.lan"
+    assert normalize_trusted_host("bücher.example") == "xn--bcher-kva.example"
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "*.example.com",
+        "https://example.com",
+        "example.com:2600",
+        "example.com/path",
+        "-bad.example",
+        "bad-.example",
+        "bad..example",
+    ],
+)
+def test_invalid_trusted_hosts_rejected(host):
+    with pytest.raises(WebUIConfigError):
+        normalize_trusted_host(host)
+
+
+def test_duplicate_trusted_hosts_rejected_after_normalization():
+    with pytest.raises(WebUIConfigError, match="duplicate"):
+        normalize_trusted_hosts(["Example.com", "example.com."])
+
+
+def test_trusted_hosts_roundtrip_canonicalized(tmp_path):
+    p = tmp_path / "webui.json"
+    effective = save_config(
+        WebUIConfig(trusted_hosts=["ScanBox.LAN.", "bücher.example"]),
+        p,
+    )
+
+    assert effective.trusted_hosts == [
+        "scanbox.lan",
+        "xn--bcher-kva.example",
+    ]
+    assert load_config(p).trusted_hosts == effective.trusted_hosts
 
 
 @pytest.mark.parametrize(

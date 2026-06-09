@@ -22,7 +22,8 @@ _WEBUI_SECTION_KEY = "webui"
 
 _TOP_LEVEL_KEYS = frozenset({
     "enabled", "bind_address", "port", "remote_enabled",
-    "allowed_cidrs", "session_timeout_idle", "session_timeout_absolute", "tls", "auth",
+    "allowed_cidrs", "trusted_hosts", "session_timeout_idle",
+    "session_timeout_absolute", "tls", "auth",
 })
 
 _TLS_KEYS = frozenset({"enabled", "cert_file", "key_file", "allow_insecure_remote"})
@@ -60,6 +61,7 @@ class WebUIConfig:
     port: int = _DEFAULT_PORT
     remote_enabled: bool = False
     allowed_cidrs: List[str] = field(default_factory=lambda: ["127.0.0.1/32", "::1/128"])
+    trusted_hosts: List[str] = field(default_factory=list)
     session_timeout_idle: int = 1800
     session_timeout_absolute: int = 28800
     tls: TLSConfig = field(default_factory=TLSConfig)
@@ -68,6 +70,11 @@ class WebUIConfig:
 
 def _config_path(path: Optional[Path] = None) -> Path:
     return (Path(path) if path is not None else _DEFAULT_CONFIG_PATH).expanduser().resolve(strict=False)
+
+
+def get_config_path(path: Optional[Path] = None) -> Path:
+    """Return the canonical or explicitly selected Web UI config path."""
+    return _config_path(path)
 
 
 def _is_canonical_default_path(path: Path) -> bool:
@@ -123,6 +130,71 @@ def normalize_remote_bind(cfg: WebUIConfig) -> WebUIConfig:
     if bind_address == cfg.bind_address:
         return cfg
     return replace(cfg, bind_address=bind_address)
+
+
+def normalize_trusted_host(host: str) -> str:
+    """Return a canonical DNS hostname or raise WebUIConfigError."""
+    if not isinstance(host, str):
+        raise WebUIConfigError(
+            f"'trusted_hosts': expected str entries, got {type(host).__name__}"
+        )
+    if not host or host != host.strip():
+        raise WebUIConfigError("trusted host must not be empty or contain outer whitespace")
+    if any(char in host for char in ("*", ":", "/", "\\", "@", "#", "?")):
+        raise WebUIConfigError(
+            f"trusted host {host!r} must be a DNS name without wildcard, scheme, port, or path"
+        )
+    candidate = host.rstrip(".")
+    if not candidate:
+        raise WebUIConfigError("trusted host must not be empty")
+    try:
+        canonical = candidate.encode("idna").decode("ascii").lower()
+    except (UnicodeError, ValueError) as exc:
+        raise WebUIConfigError(f"trusted host {host!r} is invalid") from exc
+    if len(canonical) > 253:
+        raise WebUIConfigError(f"trusted host {host!r} exceeds 253 characters")
+    labels = canonical.split(".")
+    for label in labels:
+        if (
+            not label
+            or len(label) > 63
+            or label.startswith("-")
+            or label.endswith("-")
+            or not all(char.isalnum() or char == "-" for char in label)
+        ):
+            raise WebUIConfigError(f"trusted host {host!r} has an invalid DNS label")
+    return canonical
+
+
+def normalize_trusted_hosts(hosts: List[str]) -> List[str]:
+    normalized = [normalize_trusted_host(host) for host in hosts]
+    if len(set(normalized)) != len(normalized):
+        raise WebUIConfigError("trusted_hosts contains duplicate entries")
+    return normalized
+
+
+def normalize_config(cfg: WebUIConfig) -> WebUIConfig:
+    """Return the canonical effective Web UI configuration."""
+    normalized = normalize_remote_bind(cfg)
+    trusted_hosts = normalize_trusted_hosts(normalized.trusted_hosts)
+    if trusted_hosts == normalized.trusted_hosts:
+        return normalized
+    return replace(normalized, trusted_hosts=trusted_hosts)
+
+
+def security_mode(cfg: WebUIConfig) -> str:
+    tls_active = bool(cfg.tls.enabled and cfg.tls.cert_file and cfg.tls.key_file)
+    if cfg.remote_enabled:
+        return "remote_https" if tls_active else "remote_http_plaintext"
+    return "localhost_https" if tls_active else "localhost_http"
+
+
+def security_warnings(cfg: WebUIConfig) -> List[str]:
+    if security_mode(cfg) == "remote_http_plaintext":
+        return [
+            "Remote HTTP (plaintext): credentials, cookies, and data are not encrypted."
+        ]
+    return []
 
 
 def _check_type(value, expected_type, field_name: str) -> None:
@@ -208,6 +280,18 @@ def _parse_config(raw: dict) -> WebUIConfig:
                     f"'allowed_cidrs[{i}]': expected str, got {type(item).__name__}"
                 )
         cfg.allowed_cidrs = v
+    if "trusted_hosts" in raw:
+        v = raw["trusted_hosts"]
+        if not isinstance(v, list):
+            raise WebUIConfigError(
+                f"'trusted_hosts': expected list, got {type(v).__name__}"
+            )
+        for i, item in enumerate(v):
+            if not isinstance(item, str):
+                raise WebUIConfigError(
+                    f"'trusted_hosts[{i}]': expected str, got {type(item).__name__}"
+                )
+        cfg.trusted_hosts = v
     if "session_timeout_idle" in raw:
         v = raw["session_timeout_idle"]
         _check_type(v, int, "session_timeout_idle")
@@ -253,6 +337,15 @@ def _validate_cfg_types(cfg: WebUIConfig) -> None:
         if not isinstance(item, str):
             raise WebUIConfigError(
                 f"'allowed_cidrs[{i}]': expected str, got {type(item).__name__}"
+            )
+    if not isinstance(cfg.trusted_hosts, list):
+        raise WebUIConfigError(
+            f"'trusted_hosts': expected list, got {type(cfg.trusted_hosts).__name__}"
+        )
+    for i, item in enumerate(cfg.trusted_hosts):
+        if not isinstance(item, str):
+            raise WebUIConfigError(
+                f"'trusted_hosts[{i}]': expected str, got {type(item).__name__}"
             )
     if not isinstance(cfg.tls, TLSConfig):
         raise WebUIConfigError(f"'tls': expected TLSConfig, got {type(cfg.tls).__name__}")
@@ -303,6 +396,9 @@ def validate(cfg: WebUIConfig) -> None:
             raise WebUIConfigError(
                 f"allowed_cidrs entry {cidr!r} is not a valid CIDR"
             )
+    normalized_hosts = normalize_trusted_hosts(cfg.trusted_hosts)
+    if normalized_hosts != cfg.trusted_hosts:
+        raise WebUIConfigError("trusted_hosts must use canonical lowercase DNS names")
     a = cfg.auth
     if not (3 <= a.lockout_threshold <= 20):
         raise WebUIConfigError(
@@ -372,6 +468,7 @@ def _config_to_dict(cfg: WebUIConfig) -> dict:
         "port": cfg.port,
         "remote_enabled": cfg.remote_enabled,
         "allowed_cidrs": list(cfg.allowed_cidrs),
+        "trusted_hosts": list(cfg.trusted_hosts),
         "session_timeout_idle": cfg.session_timeout_idle,
         "session_timeout_absolute": cfg.session_timeout_absolute,
         "tls": {
@@ -435,7 +532,7 @@ def load_config(path: Optional[Path] = None) -> WebUIConfig:
         )
     payload, wrapped = _extract_config_payload(raw, p)
     parsed_cfg = _parse_config(payload)
-    cfg = normalize_remote_bind(parsed_cfg)
+    cfg = normalize_config(parsed_cfg)
     should_migrate_legacy_port = (
         "port" in payload
         and isinstance(payload.get("port"), int)
@@ -443,16 +540,24 @@ def load_config(path: Optional[Path] = None) -> WebUIConfig:
         and payload.get("port") == _LEGACY_DEFAULT_PORT
     )
     should_migrate_remote_bind = cfg.bind_address != parsed_cfg.bind_address
+    should_migrate_trusted_hosts = cfg.trusted_hosts != parsed_cfg.trusted_hosts
     should_wrap_into_shard = _is_canonical_default_path(p) and not wrapped
     if should_migrate_legacy_port:
         cfg = replace(cfg, port=_DEFAULT_PORT)
     validate(cfg)
-    if should_migrate_legacy_port or should_migrate_remote_bind or should_wrap_into_shard:
+    if (
+        should_migrate_legacy_port
+        or should_migrate_remote_bind
+        or should_migrate_trusted_hosts
+        or should_wrap_into_shard
+    ):
         migrated_raw = dict(payload)
         if should_migrate_legacy_port:
             migrated_raw["port"] = _DEFAULT_PORT
         if should_migrate_remote_bind:
             migrated_raw["bind_address"] = cfg.bind_address
+        if should_migrate_trusted_hosts:
+            migrated_raw["trusted_hosts"] = list(cfg.trusted_hosts)
         try:
             if _is_canonical_default_path(p):
                 _atomic_write_json({_WEBUI_SECTION_KEY: migrated_raw}, p)
@@ -484,7 +589,9 @@ def load_config(path: Optional[Path] = None) -> WebUIConfig:
                     exc,
                 )
             if should_wrap_into_shard and not (
-                should_migrate_legacy_port or should_migrate_remote_bind
+                should_migrate_legacy_port
+                or should_migrate_remote_bind
+                or should_migrate_trusted_hosts
             ):
                 logger.warning(
                     "webui config migration: failed to wrap config into shard schema"
@@ -497,7 +604,7 @@ def load_config(path: Optional[Path] = None) -> WebUIConfig:
 
 def save_config(cfg: WebUIConfig, path: Optional[Path] = None) -> WebUIConfig:
     """Normalize, validate, and atomically write cfg; return the effective config."""
-    effective_cfg = normalize_remote_bind(cfg)
+    effective_cfg = normalize_config(cfg)
     validate(effective_cfg)
     target_path = _config_path(path)
     payload = _config_to_dict(effective_cfg)

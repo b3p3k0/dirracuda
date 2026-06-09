@@ -87,6 +87,8 @@ cat << 'EOF'
 ║                                                              ║
 ║    3. Launch the app:                                        ║
 ║         ./dirracuda                                          ║
+║       Or manage the headless Web UI:                          ║
+║         ./dirracuda-d --help                                  ║
 ║                                                              ║
 ║  IMPORTANT: The virtual environment must be active before    ║
 ║  launching. Dirracuda will not start correctly without it.   ║

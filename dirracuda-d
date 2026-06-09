@@ -1,0 +1,34 @@
+#!/usr/bin/env python3
+"""Bootstrap the Dirracuda daemon CLI through the repository virtualenv."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import sys
+
+
+def main() -> int:
+    repo_root = Path(__file__).resolve().parent
+    venv_python = repo_root / "venv" / "bin" / "python"
+    if not venv_python.is_file():
+        print(
+            "Dirracuda virtualenv not found. Run ./install.sh or create ./venv "
+            "and install the project dependencies.",
+            file=sys.stderr,
+        )
+        return 1
+    os.execv(
+        str(venv_python),
+        [
+            str(venv_python),
+            "-m",
+            "experimental.webui.daemon_cli",
+            *sys.argv[1:],
+        ],
+    )
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

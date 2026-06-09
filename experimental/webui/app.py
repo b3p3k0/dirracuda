@@ -34,8 +34,15 @@ from experimental.webui.experimental_models import (
 from gui.components.discovery_dork_config import apply_discovery_dorks, read_discovery_dorks
 import experimental.webui.results_probe_actions as _results_probe_actions
 from experimental.webui.auth import (
-    BlocklistUnavailableError, CredentialError, check_credential_store,
-    set_password, verify_password,
+    MAX_PASSWORD_BYTES,
+    MAX_USERNAME_BYTES,
+    BlocklistUnavailableError,
+    CredentialError,
+    account_log_id,
+    check_credential_store,
+    set_password,
+    validate_username,
+    verify_password,
 )
 from experimental.webui.config import (
     AuthConfig,
@@ -43,7 +50,10 @@ from experimental.webui.config import (
     WebUIConfig,
     WebUIConfigError,
     load_config,
+    normalize_config,
     save_config,
+    security_mode,
+    security_warnings,
     validate,
 )
 from experimental.webui.rate_limiter import (
@@ -53,6 +63,7 @@ from experimental.webui.rate_limiter import (
     RateLimiterRuntimeError,
     _DEFAULT_RL_PATH,
 )
+from experimental.webui.request_security import RequestSecurityMiddleware
 from experimental.webui.shared_jobs import SharedCancelResult, SharedJobQueue
 from experimental.webui.service_control import get_listen_url, get_url
 from experimental.webui.dependencies import AuthRequired, get_session, same_origin, validate_csrf
@@ -105,8 +116,32 @@ def _is_ip_allowed(host, networks) -> bool:
 
 
 class _LoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     username: str
     password: str
+
+    @field_validator("username")
+    @classmethod
+    def _validate_username(cls, value: str) -> str:
+        try:
+            validate_username(value)
+        except (UnicodeEncodeError, ValueError) as exc:
+            raise ValueError(str(exc)) from exc
+        return value
+
+    @field_validator("password")
+    @classmethod
+    def _validate_password(cls, value: str) -> str:
+        if not value:
+            raise ValueError("password must not be empty")
+        try:
+            size = len(value.encode("utf-8"))
+        except UnicodeEncodeError as exc:
+            raise ValueError("password is not valid UTF-8") from exc
+        if size > MAX_PASSWORD_BYTES:
+            raise ValueError(f"password exceeds {MAX_PASSWORD_BYTES} bytes")
+        return value
 
 
 class _ChangePasswordRequest(BaseModel):
@@ -115,6 +150,8 @@ class _ChangePasswordRequest(BaseModel):
 
 
 class _ConfigUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
     bind_address: str
     port: int
     remote_enabled: bool
@@ -123,12 +160,14 @@ class _ConfigUpdateRequest(BaseModel):
     tls_cert: str = ""
     tls_key: str = ""
     allowed_cidrs: List[str] = []
+    trusted_hosts: List[str] = []
     session_timeout_idle_min: int
     session_timeout_absolute_hr: int
     auth_lockout_threshold: Optional[int] = None
     auth_lockout_window_sec: Optional[int] = None
     auth_lockout_base_duration_sec: Optional[int] = None
     auth_lockout_max_duration_sec: Optional[int] = None
+    acknowledge_insecure_remote: bool = False
 
 
 class _ScansPreflightRequest(BaseModel):
@@ -242,6 +281,9 @@ def create_app(
 ) -> FastAPI:
     if cfg is None:
         cfg = load_config(config_path)
+    else:
+        cfg = normalize_config(cfg)
+        validate(cfg)
 
     app = FastAPI(
         title="Dirracuda Web UI",
@@ -281,6 +323,11 @@ def create_app(
         if not request.url.path.startswith("/static/"):
             response.headers["Cache-Control"] = "no-store"
         return response
+
+    app.add_middleware(
+        RequestSecurityMiddleware,
+        trusted_hosts=cfg.trusted_hosts,
+    )
 
     resolved_km_db_path = (
         Path(keymaster_db_path).expanduser().resolve(strict=False)
@@ -327,6 +374,8 @@ def create_app(
         app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
     templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
+    templates.env.globals["webui_security_mode"] = security_mode(cfg)
+    templates.env.globals["webui_security_warnings"] = security_warnings(cfg)
 
     @app.exception_handler(AuthRequired)
     async def _auth_redirect(request: Request, exc: AuthRequired) -> RedirectResponse:
@@ -356,6 +405,7 @@ def create_app(
         creds = request.app.state.creds_path
         rl = request.app.state.rate_limiter
         client_ip = (request.client.host or "unknown") if request.client else "unknown"
+        account_id = account_log_id(body.username)
         try:
             locked, _ = rl.check_locked(body.username, client_ip)
         except RateLimiterRuntimeError as exc:
@@ -365,7 +415,9 @@ def create_app(
             locked = False  # localhost degraded: proceed unthrottled
         if locked:
             logger.warning(
-                "login blocked by lockout: username=%r ip=%r", body.username, client_ip
+                "login blocked by lockout: account_id=%s ip=%r",
+                account_id,
+                client_ip,
             )
             return JSONResponse({"error": "Invalid username or password."}, status_code=401)
         if not verify_password(body.username, body.password, path=creds):
@@ -376,11 +428,13 @@ def create_app(
                 if cfg_.remote_enabled:
                     return JSONResponse({"error": "Service temporarily unavailable."}, status_code=503)
                 # localhost: failure not recorded; already returning 401
-            logger.warning("login failed: username=%r ip=%r", body.username, client_ip)
+            logger.warning(
+                "login failed: account_id=%s ip=%r", account_id, client_ip
+            )
             return JSONResponse({"error": "Invalid username or password."}, status_code=401)
-        rl.record_success(body.username)
+        rl.record_success(body.username, client_ip)
         sid, _ = store.create(body.username)
-        logger.info("login success: username=%r", body.username)
+        logger.info("login success: account_id=%s", account_id)
         tls_on = cfg_.tls.enabled
         name = cookie_name(tls_on)
         response = JSONResponse({"ok": True})
@@ -421,7 +475,10 @@ def create_app(
             logger.error("credential store permission error during change-password: %s", exc)
             return JSONResponse({"error": "Credential store configuration error."}, status_code=503)
         if not verify_password(session.username, body.current_password, path=creds):
-            logger.warning("change-password failed: username=%r", session.username)
+            logger.warning(
+                "change-password failed: account_id=%s",
+                account_log_id(session.username),
+            )
             return JSONResponse({"error": "Current password is incorrect."}, status_code=401)
         try:
             set_password(session.username, body.new_password, path=creds)
@@ -433,7 +490,9 @@ def create_app(
             return JSONResponse({"error": "Credential store configuration error."}, status_code=503)
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
-        logger.info("password changed: username=%r", session.username)
+        logger.info(
+            "password changed: account_id=%s", account_log_id(session.username)
+        )
         return JSONResponse({"ok": True})
 
     @app.post("/logout")
@@ -466,7 +525,7 @@ def create_app(
             return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
 
         store.delete(sid)
-        logger.info("logout: username=%r", s.username)
+        logger.info("logout: account_id=%s", account_log_id(s.username))
         return _clear(response)
 
     @app.get("/dashboard", response_class=HTMLResponse)
@@ -1300,6 +1359,7 @@ def create_app(
             port=body.port,
             remote_enabled=body.remote_enabled,
             allowed_cidrs=list(body.allowed_cidrs),
+            trusted_hosts=list(body.trusted_hosts),
             session_timeout_idle=body.session_timeout_idle_min * 60,
             session_timeout_absolute=body.session_timeout_absolute_hr * 3600,
             tls=TLSConfig(
@@ -1310,7 +1370,29 @@ def create_app(
             ),
             auth=new_auth,
         )
+        entering_insecure_remote = (
+            new_cfg.remote_enabled
+            and not new_cfg.tls.enabled
+            and new_cfg.tls.allow_insecure_remote
+            and not (
+                request.app.state.cfg.remote_enabled
+                and not request.app.state.cfg.tls.enabled
+                and request.app.state.cfg.tls.allow_insecure_remote
+            )
+        )
+        if entering_insecure_remote and not body.acknowledge_insecure_remote:
+            return JSONResponse(
+                {
+                    "error": (
+                        "confirmation required: remote HTTP sends credentials, "
+                        "cookies, and data without encryption"
+                    ),
+                    "confirmation_required": "insecure_remote",
+                },
+                status_code=409,
+            )
         try:
+            new_cfg = normalize_config(new_cfg)
             validate(new_cfg)
         except WebUIConfigError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
@@ -1319,10 +1401,13 @@ def create_app(
         except Exception:
             logger.exception("config save failed")
             return JSONResponse({"error": "failed to save config"}, status_code=500)
-        logger.info("config saved by user=%r", session.username)
+        logger.info(
+            "config saved: account_id=%s", account_log_id(session.username)
+        )
         return JSONResponse({
             "ok": True,
             "effective_bind_address": effective_cfg.bind_address,
+            "trusted_hosts": list(effective_cfg.trusted_hosts),
             "note": "Changes take effect on restart.",
         })
 

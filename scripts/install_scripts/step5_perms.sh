@@ -1,21 +1,25 @@
 # Sourced by install.sh — not standalone.
-# Step 5: Set execute permission on the ./dirracuda launcher.
+# Step 5: Set execute permission on the GUI and daemon launchers.
 
-section "[Step 5 of 8]  Launcher permissions"
+section "[Step 5]  Launcher permissions"
 
-echo "  The ./dirracuda launcher needs execute permission to run."
+echo "  The ./dirracuda and ./dirracuda-d launchers need execute permission."
 echo "  This is sometimes missing after downloading or cloning the project."
 echo
 
-if [[ -x dirracuda ]]; then
-    success "./dirracuda is already executable — skipping."
-else
-    if confirm "Set execute permission on ./dirracuda?"; then
-        chmod +x dirracuda
-        success "Permission set."
+for launcher in dirracuda dirracuda-d; do
+    if [[ ! -f "$launcher" ]]; then
+        warn "./$launcher is missing — skipping."
+    elif [[ -x "$launcher" ]]; then
+        success "./$launcher is already executable — skipping."
     else
-        warn "Skipped. If the app won't start, run: chmod +x dirracuda"
+        if confirm "Set execute permission on ./$launcher?"; then
+            chmod +x "$launcher"
+            success "Permission set on ./$launcher."
+        else
+            warn "Skipped. If it won't start, run: chmod +x $launcher"
+        fi
     fi
-fi
+done
 
 pause

@@ -112,11 +112,55 @@ fi
 
 echo
 
-# ── Part C: Next steps ────────────────────────────────────────────────────────
+# ── Part C: Optional user service ─────────────────────────────────────────────
+
+echo "  ┌─ Headless user service ─────────────────────────────────────────────┐"
+echo "  │  dirracuda-d can run the Web UI without the desktop GUI. On systems │"
+echo "  │  using systemd, an optional per-user unit can start at user login.   │"
+echo "  │  This does not enable lingering or install a system-wide service.    │"
+echo "  └─────────────────────────────────────────────────────────────────────┘"
+echo
+
+WEBUI_CREDS_OK=false
+if venv/bin/python3 -c \
+    "from experimental.webui.auth import credential_exists; raise SystemExit(0 if credential_exists() else 1)" \
+    2>/dev/null; then
+    WEBUI_CREDS_OK=true
+fi
+
+if [[ "$WEBUI_DEPS_OK" != "true" ]]; then
+    warn "Web UI dependencies are unavailable — skipping user-service setup."
+elif [[ "$WEBUI_CREDS_OK" != "true" ]]; then
+    warn "No usable Web UI credential exists — skipping user-service setup."
+    warn "Configure one later with: ./dirracuda-d credentials set USERNAME"
+elif ! command -v systemctl >/dev/null 2>&1; then
+    info "systemctl is unavailable — direct ./dirracuda-d control remains available."
+elif ! systemctl --user show-environment >/dev/null 2>&1; then
+    warn "The systemd user manager is unavailable in this session."
+    info "You can retry later with: ./dirracuda-d systemd install"
+elif confirm "Create, enable, and start the per-user dirracuda-d service?" "n"; then
+    echo
+    if ./dirracuda-d systemd install; then
+        success "Per-user service installed, enabled, and started."
+        info "It will start with your user manager/login; lingering was not changed."
+    else
+        warn "User-service setup failed. Review: ./dirracuda-d systemd status"
+    fi
+else
+    info "Skipped. Direct background control remains available."
+fi
+
+echo
+
+# ── Part D: Next steps ────────────────────────────────────────────────────────
 
 info "To start the web UI:"
-info "  ./venv/bin/python -m experimental.webui.server"
+info "  ./dirracuda-d start"
 info "  Then open: http://127.0.0.1:2600"
+echo
+info "Daemon help and diagnostics:"
+info "  ./dirracuda-d --help"
+info "  ./dirracuda-d doctor"
 echo
 info "Remote access, TLS, and full config: see experimental/webui/README.md"
 

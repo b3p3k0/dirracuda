@@ -6,7 +6,8 @@
 
 <div role="status" id="cfg-status" aria-live="polite"></div>
 
-<form id="cfg-form" novalidate>
+<form id="cfg-form" novalidate
+      data-insecure-active="{% if cfg.remote_enabled and not cfg.tls.enabled and cfg.tls.allow_insecure_remote %}true{% else %}false{% endif %}">
   <div class="form-section">
     <div class="form-row">
       <label for="bind-addr">Bind address</label>
@@ -50,6 +51,10 @@
              {% if cfg.tls.allow_insecure_remote %}checked{% endif %}>
       <label for="tls-insecure">Allow insecure remote override</label>
     </div>
+    <div id="plaintext-warn"
+         class="status-error{% if not (cfg.remote_enabled and not cfg.tls.enabled and cfg.tls.allow_insecure_remote) %} hidden{% endif %}">
+      Remote HTTP (plaintext): credentials, cookies, and data are not encrypted.
+    </div>
     <div class="form-row">
       <label for="tls-cert">TLS cert path</label>
       <input id="tls-cert" name="tls_cert" type="text"
@@ -69,6 +74,18 @@
              value="{{ cfg.allowed_cidrs | join(', ') }}" maxlength="1024"
              placeholder="127.0.0.1/32, ::1/128">
     </div>
+  </div>
+
+  <div class="form-section">
+    <div class="form-row">
+      <label for="trusted-hosts">Trusted DNS hosts (comma-separated)</label>
+      <input id="trusted-hosts" name="trusted_hosts" type="text"
+             value="{{ cfg.trusted_hosts | join(', ') }}" maxlength="2048"
+             placeholder="dirracuda.example.test, scanbox.lan">
+    </div>
+    <p class="status-text">
+      IP-literal addresses and localhost are always accepted. DNS names must be listed here.
+    </p>
   </div>
 
   <div class="form-section">

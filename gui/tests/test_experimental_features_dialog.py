@@ -2146,6 +2146,7 @@ def test_webui_tab_save_restart_when_stopped_starts_service(monkeypatch):
     tab._cfg_remote_var = _ValueVar(True)
     tab._cfg_tls_enabled_var = _ValueVar(False)
     tab._cfg_tls_insecure_var = _ValueVar(True)
+    tab._cfg_initial_insecure_remote = True
     tab._cfg_tls_cert_var = _ValueVar("")
     tab._cfg_tls_key_var = _ValueVar("")
     tab._cfg_allowlist_var = _ValueVar("10.0.0.0/8")

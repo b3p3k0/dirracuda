@@ -67,6 +67,7 @@ def test_server_promotes_remote_loopback_without_host_override(monkeypatch):
         tls=TLSConfig(enabled=False, allow_insecure_remote=True),
     )
     monkeypatch.setattr(server, "create_app", lambda **kwargs: kwargs["cfg"])
+    monkeypatch.setattr(server, "credential_exists", lambda: True)
     monkeypatch.setattr(
         server.uvicorn,
         "run",
@@ -77,6 +78,11 @@ def test_server_promotes_remote_loopback_without_host_override(monkeypatch):
 
     assert captured["app"].bind_address == "0.0.0.0"
     assert captured["kwargs"]["host"] == "0.0.0.0"
+    assert captured["kwargs"]["h11_max_incomplete_event_size"] == 16 * 1024
+    assert captured["kwargs"]["limit_concurrency"] == 128
+    assert captured["kwargs"]["backlog"] == 128
+    assert captured["kwargs"]["server_header"] is False
+    assert captured["kwargs"]["proxy_headers"] is False
 
 
 def test_explicit_server_host_override_remains_authoritative(monkeypatch):
@@ -88,6 +94,7 @@ def test_explicit_server_host_override_remains_authoritative(monkeypatch):
         tls=TLSConfig(enabled=False, allow_insecure_remote=True),
     )
     monkeypatch.setattr(server, "create_app", lambda **kwargs: kwargs["cfg"])
+    monkeypatch.setattr(server, "credential_exists", lambda: True)
     monkeypatch.setattr(
         server.uvicorn,
         "run",
@@ -98,6 +105,21 @@ def test_explicit_server_host_override_remains_authoritative(monkeypatch):
 
     assert captured["app"].bind_address == "127.0.0.1"
     assert captured["kwargs"]["host"] == "127.0.0.1"
+
+
+def test_server_startup_requires_credential(monkeypatch):
+    cfg = WebUIConfig(tls=TLSConfig(enabled=False))
+    monkeypatch.setattr(server, "credential_exists", lambda: False)
+    monkeypatch.setattr(
+        server.uvicorn,
+        "run",
+        lambda *_a, **_k: pytest.fail("uvicorn must not start without credentials"),
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        server.run(cfg=cfg)
+
+    assert exc.value.code == 1
 
 
 # --- Remote TLS cert/key check (server-level, via _check_remote_tls()) ---
@@ -168,13 +190,13 @@ def _remote_app(allowed_cidrs):
 def test_allowlist_blocks_disallowed_client():
     app = _remote_app(allowed_cidrs=["10.0.0.0/8"])
     client = TestClient(_with_client_ip(app, "192.168.1.5"), follow_redirects=False)
-    assert client.get("/health").status_code == 403
+    assert client.get("/health", headers={"Host": "127.0.0.1"}).status_code == 403
 
 
 def test_allowlist_permits_allowed_client():
     app = _remote_app(allowed_cidrs=["10.0.0.0/8"])
     client = TestClient(_with_client_ip(app, "10.0.1.5"), follow_redirects=False)
-    assert client.get("/health").status_code == 200
+    assert client.get("/health", headers={"Host": "127.0.0.1"}).status_code == 200
 
 
 def test_localhost_mode_skips_allowlist():
@@ -182,4 +204,4 @@ def test_localhost_mode_skips_allowlist():
     app = create_app(cfg=cfg)
     # "203.0.113.1" is not in 127.0.0.1/32 or ::1/128 — but localhost mode skips the check
     client = TestClient(_with_client_ip(app, "203.0.113.1"), follow_redirects=False)
-    assert client.get("/health").status_code == 200
+    assert client.get("/health", headers={"Host": "127.0.0.1"}).status_code == 200

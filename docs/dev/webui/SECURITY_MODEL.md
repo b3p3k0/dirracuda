@@ -112,6 +112,7 @@ Remote mode is explicit:
   "bind_address": "127.0.0.1",
   "port": 2600,
   "remote_enabled": false,
+  "trusted_hosts": [],
   "tls": {
     "enabled": true,
     "allow_insecure_remote": false,
@@ -131,6 +132,10 @@ Rules:
 - Non-loopback bind uses TLS by default.
 - Non-loopback bind without TLS requires `tls.allow_insecure_remote=true` and
   must emit a high-visibility warning.
+- Transitioning into remote plaintext mode requires confirmation in both
+  configuration UIs.
+- IP-literal Host values and `localhost` are accepted; DNS names require an
+  exact canonical `trusted_hosts` entry.
 - If remote config is invalid, startup fails with a safe error.
 
 ## Input Validation
@@ -150,9 +155,24 @@ Validate:
 - port
 - CIDR values
 - filesystem paths for cert/key/export
+- login username/password byte lengths
+- request body, target, and header sizes
+- trusted DNS Host names
 
 Reject unexpected fields. Keep coercion explicit; do not quietly turn weird text
 into dangerous defaults.
+
+Transport-level limits:
+
+- login bodies: 4 KiB
+- other request bodies: 1 MiB
+- request target: 8 KiB
+- total headers: 16 KiB and 100 fields
+- Uvicorn concurrency/backlog: 128 each
+
+Authentication limiter subjects are SHA-256 identifiers, not submitted
+usernames or raw source addresses. Pair and source-IP aggregate limits share a
+bounded 4,096-row SQLite store.
 
 ## Subprocess Safety
 
@@ -188,10 +208,12 @@ Log:
 - export creation/download
 - remote bind startup
 - insecure TLS override use
+- short account hashes for authentication events
 
 Do not log:
 
 - raw passwords
+- submitted usernames
 - password hashes unless debugging credential setup locally
 - session IDs
 - CSRF tokens
@@ -224,7 +246,7 @@ must verify systemd behavior against the local target before claiming it works.
 | Server ↔ credential file | Atomic write at mode `0600`; `_check_creds_permissions()` read check; `CredentialError` on any deviation |
 | Server ↔ subprocess (scans) | `shell=False`; argument lists only; user input becomes validated argv, never shell syntax |
 | Localhost vs remote | Loopback bind: no CIDR enforcement, TLS optional. Non-loopback: `remote_enabled=true` required, CIDR allowlist enforced per-request, TLS on by default |
-| Server behind proxy | `request.client.host` reflects the TCP peer (proxy address). Forwarded-header trust is deployment-specific and not configured by `server.py` — mis-configuration breaks allowlist decisions |
+| Server behind proxy | Unsupported by the bundled trust model. Forwarded headers are ignored and the proxy socket peer is evaluated by the allowlist. |
 
 ## Operator Caveats
 
@@ -237,6 +259,5 @@ must verify systemd behavior against the local target before claiming it works.
   gracefully (logins unthrottled, health reports `"rate_limiter": "error"`).
 - **TLS required for non-loopback by default.** Disabling TLS for remote requires
   `tls.allow_insecure_remote=true` and emits a high-visibility warning.
-- **Proxy header trust is not managed here.** Without correctly configured
-  trusted-proxy settings at the ASGI/uvicorn layer, the allowlist sees proxy
-  addresses instead of real client IPs. See FastAPI and uvicorn proxy documentation.
+- **Reverse proxy deployment is outside the supported topology.** The bundled
+  server ignores forwarded client and host headers.
