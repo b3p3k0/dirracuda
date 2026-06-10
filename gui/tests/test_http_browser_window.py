@@ -280,7 +280,8 @@ def test_init_passes_request_host_to_navigator_and_uses_saved_path():
     mock_nav.assert_called_once_with("/wp-content/uploads/screenplay/scripts/")
 
 
-def test_navigator_uses_request_host_for_authority_and_listing(monkeypatch):
+def test_navigator_uses_ip_as_socket_destination_and_request_host_for_vhost(monkeypatch):
+    """C2: list_dir must pass the IP as socket destination and request_host for Host/SNI."""
     captured = {}
 
     def _fake_request(host, port, scheme, allow_insecure_tls, timeout, **kwargs):
@@ -309,7 +310,7 @@ def test_navigator_uses_request_host_for_authority_and_listing(monkeypatch):
     result = navigator.list_dir("/files/")
 
     assert captured == {
-        "host": "www.sellingyourscreenplay.com",
+        "host": "184.171.253.117",
         "port": 443,
         "scheme": "https",
         "request_host": "www.sellingyourscreenplay.com",

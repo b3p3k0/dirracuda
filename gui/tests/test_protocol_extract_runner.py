@@ -286,3 +286,41 @@ def test_run_http_extract_clamav_passthrough_error(monkeypatch, tmp_path):
     assert summary["clamav"]["enabled"] is True
     assert summary["clamav"]["errors"] == 1
     assert any("post_processor error" in row["message"] for row in summary["errors"])
+
+
+def test_https_extract_no_hostname_retry_on_ip_failure(monkeypatch, tmp_path):
+    """C2: HTTPS extract must not retry with connect_host=hostname when IP fails."""
+    fetch_calls = []
+
+    def _fake_fetch(**kwargs):
+        fetch_calls.append(kwargs.get("connect_host"))
+        return False, [], [], "connect_fail"
+
+    monkeypatch.setattr(per, "_http_fetch_listing", _fake_fetch)
+    monkeypatch.setattr(per, "_http_download_file", lambda **k: None)
+    monkeypatch.setattr(per, "log_quarantine_event", lambda *a, **k: None)
+
+    per.run_http_extract(
+        "203.0.113.5",
+        port=443,
+        scheme="https",
+        request_host="cdn.example.org",
+        start_path="/data/",
+        allow_insecure_tls=True,
+        download_dir=tmp_path / "out",
+        max_total_bytes=10_000,
+        max_file_bytes=10_000,
+        max_file_count=10,
+        max_seconds=60,
+        max_depth=1,
+        allowed_extensions=[],
+        denied_extensions=[],
+        delay_seconds=0,
+        connection_timeout=5,
+        extension_mode="allow_all",
+        clamav_config={"enabled": False},
+    )
+
+    assert all(h == "203.0.113.5" for h in fetch_calls), (
+        f"Hostname used as socket destination: {fetch_calls}"
+    )

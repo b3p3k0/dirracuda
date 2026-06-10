@@ -145,27 +145,6 @@ def run_http_probe(
             break
         last_error_message = err_msg
 
-        # HTTPS virtual hosts can require SNI/authority matching the requested host.
-        if (
-            scheme_norm == "https"
-            and request_host_norm
-            and request_host_norm != ip
-        ):
-            success, dirs, files, err_msg = _attempt_listing(
-                candidate_path,
-                connect_host=request_host_norm,
-                host_override=request_host_norm,
-            )
-            if success:
-                root_is_valid = True
-                listing_path = candidate_path
-                all_dir_abs_paths = dirs
-                file_abs_paths = files
-                active_connect_host = request_host_norm
-                active_request_host = request_host_norm
-                break
-            last_error_message = err_msg
-
     if not root_is_valid:
         errors.append(
             {

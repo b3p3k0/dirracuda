@@ -18,6 +18,7 @@ Design invariants (ARCHITECTURE.md redirect algorithm):
 """
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import ssl
 import string
@@ -101,14 +102,58 @@ def _close_fp(fp: object) -> None:
 def _make_opener(
     ctx: Optional[ssl.SSLContext],
     redirect_handler: "urllib.request.BaseHandler",
+    server_hostname: Optional[str] = None,
 ) -> urllib.request.OpenerDirector:
     handlers = [
         urllib.request.ProxyHandler({}),  # {} disables all env-driven proxies
         redirect_handler,
     ]
     if ctx is not None:
-        handlers.append(urllib.request.HTTPSHandler(context=ctx))
+        if server_hostname:
+            handlers.append(_PinnedHTTPSHandler(ctx, server_hostname))
+        else:
+            handlers.append(urllib.request.HTTPSHandler(context=ctx))
     return urllib.request.build_opener(*handlers)
+
+
+# ---------------------------------------------------------------------------
+# Pinned-SNI HTTPS handler (C2)
+# ---------------------------------------------------------------------------
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    """
+    HTTPS handler that pins TLS SNI and certificate identity to server_hostname
+    while connecting the TCP socket to the IP in the URL authority (connect_host).
+
+    HTTPSConnection.connect() in every CPython 3.8–3.13 derives server_hostname
+    from self.host (the URL authority = IP).  We bypass it entirely:
+      1. http.client.HTTPConnection.connect() — called by name (grandparent) to
+         establish the plain TCP socket to self.host (the recorded IP).
+      2. ctx.wrap_socket(sock, server_hostname=pinned) — wraps directly using the
+         virtual hostname; avoids the self.context / self._context name split across
+         Python versions (3.8 uses self.context; 3.12+ uses self._context).
+
+    ProxyHandler({}) disables all tunneling, so _tunnel_host is always None here.
+    """
+
+    def __init__(self, context: ssl.SSLContext, server_hostname: str) -> None:
+        super().__init__(context=context)
+        self._pinned_hostname = server_hostname
+
+    def https_open(self, req) -> object:
+        pinned = self._pinned_hostname
+        ctx = self._context  # set by super().__init__(context=...)
+
+        class _Conn(http.client.HTTPSConnection):
+            def connect(inner_self) -> None:
+                # Step 1: establish TCP socket to self.host (the recorded IP).
+                http.client.HTTPConnection.connect(inner_self)
+                # Step 2: wrap with TLS; server_hostname drives SNI + cert identity.
+                inner_self.sock = ctx.wrap_socket(
+                    inner_self.sock, server_hostname=pinned
+                )
+
+        return self.do_open(_Conn, req, context=ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -321,6 +366,21 @@ def http_open(
     scheme_lower = scheme.lower()
     logical_origin = (scheme_lower, logical_host_norm, port)
 
+    # C2: ensure a context is always present for HTTPS so urllib's built-in default
+    # HTTPSHandler (which derives SNI from the IP URL authority) is never used.
+    effective_ctx = context
+    if scheme_lower == "https" and effective_ctx is None:
+        effective_ctx = ssl.create_default_context()
+
+    # C2: derive server_hostname for SNI pinning.
+    # RFC 6066: SNI must not be sent for IP literals; skip if logical host is an IP.
+    server_hostname: Optional[str] = None
+    if scheme_lower == "https" and request_host:
+        try:
+            ipaddress.ip_address(logical_host_norm.strip("[]"))
+        except ValueError:
+            server_hostname = logical_host_norm  # DNS hostname — pin as SNI
+
     redirect_handler = _SameOriginRedirectHandler(
         connect_host_raw=connect_host_norm,
         connect_host_norm=connect_host_norm,
@@ -328,6 +388,6 @@ def http_open(
         logical_host_norm=logical_host_norm,
         logical_origin=logical_origin,
     )
-    opener = _make_opener(context, redirect_handler)
+    opener = _make_opener(effective_ctx, redirect_handler, server_hostname=server_hostname)
     req = urllib.request.Request(url, headers=req_headers)
     return opener.open(req, timeout=timeout)

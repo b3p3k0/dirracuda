@@ -177,7 +177,7 @@ class HttpNavigator:
         from commands.http.verifier import try_http_request, validate_index_page
 
         status_code, body, _tls_verified, reason = try_http_request(
-            self.request_host or self.ip,
+            self.ip,
             self.port,
             self.scheme,
             self.allow_insecure_tls,
@@ -251,7 +251,7 @@ class HttpNavigator:
 
         try:
             with http_open(
-                connect_host=self.request_host or self.ip,
+                connect_host=self.ip,
                 request_host=self.request_host,
                 scheme=self.scheme, port=self.port, path=remote_path,
                 headers={"User-Agent": "Mozilla/5.0"},
@@ -332,7 +332,7 @@ class HttpNavigator:
         """Fetch and return up to max_bytes as bytes."""
         try:
             with http_open(
-                connect_host=self.request_host or self.ip,
+                connect_host=self.ip,
                 request_host=self.request_host,
                 scheme=self.scheme, port=self.port, path=remote_path,
                 headers={"User-Agent": "Mozilla/5.0"},

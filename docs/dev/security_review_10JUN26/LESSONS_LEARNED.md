@@ -37,6 +37,10 @@ Status: initial seed; append during execution
 11. IDNA normalization must cover wire values as well as comparisons. A
     Unicode hostname can compare correctly yet still fail when written raw to
     an ASCII HTTP authority or `Host` header.
+12. When a security adapter depends on standard-library internals, verify the
+    exact supported-version source and test the observable wire behavior. An
+    attribute that sounds authoritative may not be consulted by the connection
+    path at all.
 
 ## Append Format
 

@@ -1106,8 +1106,9 @@ All three protocol browsers are read-only. Navigation traverses directories up t
 - Binary files: hex view at 16 bytes/row
 
 The HTTP browser keeps the server IP as its database, cache, and quarantine identity.
-When `http_servers.probe_host` is present, requests use that hostname as the URL
-authority (including HTTPS SNI), and startup navigation uses
+When `http_servers.probe_host` is present, the recorded IP is the TCP socket
+destination; the saved hostname is used only for the HTTP `Host` header, TLS SNI,
+and certificate identity in strict mode. Startup navigation uses
 `http_servers.probe_path`. This matches Server List `Copy URL` behavior and supports
 virtual-hosted directory indexes.
 

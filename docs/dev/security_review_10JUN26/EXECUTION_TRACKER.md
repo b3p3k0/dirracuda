@@ -1,6 +1,6 @@
 # Security Review Execution Tracker
 
-Status: HI approved PA pack; Codex operating as RA; C1 accepted
+Status: HI approved PA pack; Codex operating as RA; C2 accepted
 
 ## Baseline
 
@@ -32,7 +32,7 @@ Status: HI approved PA pack; Codex operating as RA; C1 accepted
 |---|---|---|---|---|---|---|
 | C0 | ACCEPTED | n/a | PASS | n/a | n/a | Baseline unchanged from PA pack |
 | C1 | ACCEPTED | `approved_plans/C1_http_redirect_policy.md` | PASS | n/a | this commit | RA corrected IDNA wire encoding |
-| C2 | NOT STARTED |  | PENDING | PENDING |  | Recorded-IP pinning |
+| C2 | ACCEPTED | `approved_plans/C2_endpoint_pinning.md` | PASS | n/a | this commit | Broad suite has one proven pre-existing failure |
 | C3 | NOT STARTED |  | PENDING | PENDING |  | Canonical TLS policy |
 | C4 | NOT STARTED |  | PENDING | PENDING |  | SMB extraction containment |
 | C5 | NOT STARTED |  | PENDING | PENDING |  | Image pixel guard |
@@ -160,4 +160,56 @@ Populate after E12:
   - C2 still owns recorded-IP pinning with hostname-based SNI/certificate
     identity and removal of browser hostname reconnection.
   - C3 still owns canonical TLS policy resolution.
+- Final status: ACCEPTED
+
+## C2 Evidence
+
+- Plan: `approved_plans/C2_endpoint_pinning.md`
+- DA session: Claude implementation summary received 2026-06-10
+- Commit before: `834f893`
+- Commit after: C2 implementation commit (this commit)
+- Files changed:
+  - `shared/http_transport.py`
+  - `shared/http_browser.py`
+  - `gui/utils/http_probe_runner.py`
+  - `gui/utils/protocol_extract_runner.py`
+  - focused transport, browser, probe, and extraction tests
+  - `docs/TECHNICAL_REFERENCE.md`
+  - approved C2 plan and execution documents
+- Line counts:
+  - `shared/http_transport.py`: 393
+  - `shared/http_browser.py`: 362
+  - `gui/utils/http_probe_runner.py`: 304
+  - `gui/utils/protocol_extract_runner.py`: 798
+  - `shared/tests/test_http_transport.py`: 1170
+  - `gui/tests/test_http_probe.py`: 306
+  - `gui/tests/test_protocol_extract_runner.py`: 326
+  - `gui/tests/test_http_browser_window.py`: 439
+  - `docs/TECHNICAL_REFERENCE.md`: 1454
+- Commands:
+  - `./venv/bin/python -m pytest shared/tests/test_http_transport.py -q`
+  - focused HTTP browser, probe, extract, and endpoint pytest group
+  - `./venv/bin/python -m pytest shared/tests/ gui/tests/ experimental/webui/tests/ -q`
+  - exact daemon import test on current worktree and detached `834f893`
+  - compile, static no-fallback searches, and `git diff --check`
+  - local IPv6 HTTPS fixture with recorded-IP destination and hostname SNI
+- Results:
+  - transport tests: 61 passed
+  - focused caller tests: 41 passed
+  - broad suite: 3025 passed, 1 failed
+  - broad failure:
+    `experimental/webui/tests/test_daemon_cli.py::test_daemon_modules_import_without_tkinter`
+  - the same failure reproduces from detached parent commit `834f893`; unrelated
+    to C2
+  - compile, static searches, whitespace, and IPv6 fixture: PASS
+- RA findings:
+  - No implementation defects.
+  - Verified CPython 3.8 `urllib.request.HTTPSHandler` stores `_context`, and the
+    custom connection avoids version-specific `HTTPSConnection.connect()`
+    internals by calling `HTTPConnection.connect()` plus `SSLContext.wrap_socket()`.
+- Manual test: n/a; local TLS/SNI/socket fixtures exercise the platform stack
+- Residual risk:
+  - Runtime support still includes EOL Python 3.8; compatibility was source
+    verified because Python 3.8 is not installed in the review environment.
+  - C3 still owns canonical TLS policy resolution and operator controls.
 - Final status: ACCEPTED

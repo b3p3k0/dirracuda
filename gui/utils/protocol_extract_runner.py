@@ -610,28 +610,6 @@ def run_http_extract(
             break
         last_root_error = err
 
-        if (
-            scheme_norm == "https"
-            and active_request_host
-            and active_request_host != ip_address
-        ):
-            ok, dirs, files, err = _http_fetch_listing(
-                connect_host=active_request_host,
-                request_host=active_request_host,
-                port=int(port),
-                scheme=scheme_norm,
-                allow_insecure_tls=allow_insecure_tls,
-                timeout_seconds=max(1, int(connection_timeout)),
-                path=candidate,
-            )
-            if ok:
-                root_listing_ok = True
-                root_dirs, root_files = dirs, files
-                root_path_in_use = candidate
-                active_connect_host = active_request_host
-                break
-            last_root_error = err
-
     if not root_listing_ok:
         _append_error(
             summary,

@@ -23,6 +23,7 @@ import socket
 import ssl
 import tempfile
 import threading
+import urllib.error
 import urllib.request
 from typing import List, Optional, Tuple
 
@@ -170,6 +171,86 @@ def _make_https_server(
     cli_ctx.verify_mode = ssl.CERT_NONE
 
     return server, cli_ctx
+
+
+def _make_sni_recording_https_server(
+    script: List[Tuple[int, dict, bytes]],
+) -> Tuple[http.server.HTTPServer, ssl.SSLContext]:
+    """HTTPS server with set_servername_callback; appends each SNI to server._sni_log."""
+    cert_pem, key_pem = _make_self_signed_cert()
+    with (
+        tempfile.NamedTemporaryFile("w", suffix=".pem", delete=False) as cf,
+        tempfile.NamedTemporaryFile("w", suffix=".pem", delete=False) as kf,
+    ):
+        cf.write(cert_pem)
+        kf.write(key_pem)
+        cf_path, kf_path = cf.name, kf.name
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), _ScriptedHandler)
+    server._script = script  # type: ignore[attr-defined]
+    server._script_idx = 0  # type: ignore[attr-defined]
+    server._requests = []  # type: ignore[attr-defined]
+    server._hosts = []  # type: ignore[attr-defined]
+    server._sni_log = []  # type: ignore[attr-defined]
+
+    srv_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    srv_ctx.load_cert_chain(cf_path, kf_path)
+
+    def _sni_cb(ssl_socket, server_name, ssl_ctx):
+        server._sni_log.append(server_name)  # type: ignore[attr-defined]
+        return None
+
+    srv_ctx.set_servername_callback(_sni_cb)
+    server.socket = srv_ctx.wrap_socket(server.socket, server_side=True)
+
+    os.unlink(cf_path)
+    os.unlink(kf_path)
+
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+
+    insecure_ctx = ssl.create_default_context()
+    insecure_ctx.check_hostname = False
+    insecure_ctx.verify_mode = ssl.CERT_NONE
+
+    return server, insecure_ctx
+
+
+def _make_trusted_https_server(
+    script: List[Tuple[int, dict, bytes]],
+) -> Tuple[http.server.HTTPServer, ssl.SSLContext]:
+    """HTTPS server + strict client context that trusts the server's self-signed cert."""
+    cert_pem, key_pem = _make_self_signed_cert()
+    with (
+        tempfile.NamedTemporaryFile("w", suffix=".pem", delete=False) as cf,
+        tempfile.NamedTemporaryFile("w", suffix=".pem", delete=False) as kf,
+        tempfile.NamedTemporaryFile("w", suffix=".pem", delete=False) as tf,
+    ):
+        cf.write(cert_pem)
+        kf.write(key_pem)
+        tf.write(cert_pem)
+        cf_path, kf_path, trust_path = cf.name, kf.name, tf.name
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), _ScriptedHandler)
+    server._script = script  # type: ignore[attr-defined]
+    server._script_idx = 0  # type: ignore[attr-defined]
+    server._requests = []  # type: ignore[attr-defined]
+    server._hosts = []  # type: ignore[attr-defined]
+
+    srv_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    srv_ctx.load_cert_chain(cf_path, kf_path)
+    server.socket = srv_ctx.wrap_socket(server.socket, server_side=True)
+
+    os.unlink(cf_path)
+    os.unlink(kf_path)
+
+    strict_ctx = ssl.create_default_context()
+    strict_ctx.load_verify_locations(trust_path)
+    os.unlink(trust_path)
+    # check_hostname=True, verify_mode=CERT_REQUIRED by default
+
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+
+    return server, strict_ctx
 
 
 # ---------------------------------------------------------------------------
@@ -932,5 +1013,158 @@ def test_ipv6_cross_port_blocked():
         with pytest.raises(RedirectBlockedError):
             http_open(connect_host="::1", scheme="http", port=port,
                       path="/", timeout=5.0)
+    finally:
+        srv.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# C2 — Recorded-IP Endpoint Pinning tests
+# ---------------------------------------------------------------------------
+
+def test_sni_transmitted_equals_request_host():
+    """SNI value during TLS handshake equals request_host, not the connect IP."""
+    srv, insecure_ctx = _make_sni_recording_https_server([(200, {}, b"ok")])
+    port = srv.server_address[1]
+    try:
+        with http_open(
+            connect_host="127.0.0.1",
+            request_host="localhost",
+            scheme="https", port=port, path="/",
+            context=insecure_ctx, timeout=5.0,
+        ) as resp:
+            assert resp.status == 200
+        assert srv._sni_log == ["localhost"]
+    finally:
+        srv.shutdown()
+
+
+def test_pinned_https_request_host_never_dns_resolved(monkeypatch):
+    """socket.getaddrinfo must not be called with request_host.
+    Only connect_host (IP) must reach socket creation."""
+    resolved = []
+    real_getaddrinfo = socket.getaddrinfo
+
+    def _spy(host, port, *args, **kwargs):
+        resolved.append(host)
+        return real_getaddrinfo(host, port, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", _spy)
+
+    srv, insecure_ctx = _make_sni_recording_https_server([(200, {}, b"ok")])
+    port = srv.server_address[1]
+    try:
+        with http_open(
+            connect_host="127.0.0.1",
+            request_host="virtual.test",
+            scheme="https", port=port, path="/",
+            context=insecure_ctx, timeout=5.0,
+        ) as resp:
+            assert resp.status == 200
+        assert "virtual.test" not in resolved, (
+            f"request_host was DNS-resolved: {resolved}"
+        )
+        assert "virtual.test" in srv._sni_log
+    finally:
+        srv.shutdown()
+
+
+def test_pinned_sni_strict_tls_succeeds():
+    """Strict TLS succeeds when SNI is pinned to the hostname matching the cert.
+    Without C2, SNI would be '127.0.0.1' and cert validation for 'localhost' would fail."""
+    srv, strict_ctx = _make_trusted_https_server([(200, {}, b"ok")])
+    port = srv.server_address[1]
+    try:
+        with http_open(
+            connect_host="127.0.0.1",
+            request_host="localhost",
+            scheme="https", port=port, path="/",
+            context=strict_ctx, timeout=5.0,
+        ) as resp:
+            assert resp.status == 200
+    finally:
+        srv.shutdown()
+
+
+def test_ip_only_no_sni_transmitted():
+    """Python suppresses SNI for IP literals per RFC 6066.
+    Without request_host the servername callback receives None, not '127.0.0.1'."""
+    srv, insecure_ctx = _make_sni_recording_https_server([(200, {}, b"ok")])
+    port = srv.server_address[1]
+    try:
+        with http_open(
+            connect_host="127.0.0.1",
+            scheme="https", port=port, path="/",
+            context=insecure_ctx, timeout=5.0,
+        ) as resp:
+            assert resp.status == 200
+        assert srv._sni_log == [None]
+    finally:
+        srv.shutdown()
+
+
+def test_ip_only_no_request_host_strict_tls_fails():
+    """Strict TLS fails for IP-only: cert is for 'localhost', identity check uses
+    '127.0.0.1'. SNI is suppressed for IP literals — failure is cert mismatch."""
+    srv, strict_ctx = _make_trusted_https_server([(200, {}, b"ok")])
+    port = srv.server_address[1]
+    try:
+        with pytest.raises(urllib.error.URLError):
+            http_open(
+                connect_host="127.0.0.1",
+                scheme="https", port=port, path="/",
+                context=strict_ctx, timeout=5.0,
+            )
+    finally:
+        srv.shutdown()
+
+
+def test_default_context_pins_sni_without_explicit_context(monkeypatch):
+    """context=None triggers the default-context branch; SNI is still pinned to
+    request_host and request_host is never passed to socket.getaddrinfo."""
+    resolved = []
+    real_getaddrinfo = socket.getaddrinfo
+
+    def _spy(host, port, *args, **kwargs):
+        resolved.append(host)
+        return real_getaddrinfo(host, port, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", _spy)
+
+    srv, insecure_ctx = _make_sni_recording_https_server([(200, {}, b"ok")])
+    port = srv.server_address[1]
+    monkeypatch.setattr(ssl, "create_default_context", lambda *a, **kw: insecure_ctx)
+
+    try:
+        with http_open(
+            connect_host="127.0.0.1",
+            request_host="virtual.test",
+            scheme="https", port=port, path="/",
+            timeout=5.0,
+        ) as resp:
+            assert resp.status == 200
+        assert "virtual.test" not in resolved
+        assert "virtual.test" in srv._sni_log
+    finally:
+        srv.shutdown()
+
+
+def test_https_redirect_preserves_pinned_ip_and_sni():
+    """Every redirect hop retains the recorded-IP socket destination and hostname SNI."""
+    srv, insecure_ctx = _make_sni_recording_https_server([
+        (302, {}, b""),
+        (200, {}, b"ok"),
+    ])
+    port = srv.server_address[1]
+    srv._script[0] = (302, {"Location": f"https://virtual.test:{port}/new"}, b"")
+    try:
+        with http_open(
+            connect_host="127.0.0.1",
+            request_host="virtual.test",
+            scheme="https", port=port, path="/",
+            context=insecure_ctx, timeout=5.0,
+        ) as resp:
+            assert resp.status == 200
+        assert srv._requests == ["/", "/new"]
+        assert srv._sni_log == ["virtual.test", "virtual.test"]
     finally:
         srv.shutdown()

@@ -279,19 +279,18 @@ def test_start_path_falls_back_to_root_once(tmp_path, monkeypatch):
     assert snapshot["start_path"] == "/"
 
 
-def test_https_retry_uses_request_host_authority_when_ip_attempt_fails(tmp_path, monkeypatch):
+def test_https_ip_only_no_hostname_retry_on_failure(tmp_path, monkeypatch):
+    """C2: when IP-based HTTPS attempt fails, transport must not retry via hostname."""
     monkeypatch.setattr("gui.utils.http_probe_cache.HTTP_CACHE_DIR", tmp_path)
 
     request_calls = []
 
     def _fake_request(ip, port, scheme, allow_insecure_tls, timeout, path="/", request_host=None):
         request_calls.append((ip, path, request_host))
-        if len(request_calls) == 1:
-            return 0, b"", False, "connect_fail"
-        return 200, b"<body>", False, None
+        return 0, b"", False, "connect_fail"
 
     with patch("gui.utils.http_probe_runner.try_http_request", side_effect=_fake_request), \
-         patch("gui.utils.http_probe_runner.validate_index_page", return_value=True), \
+         patch("gui.utils.http_probe_runner.validate_index_page", return_value=False), \
          patch("gui.utils.http_probe_runner._parse_dir_entries", return_value=([], [])):
         snapshot = run_http_probe(
             "67.205.33.18",
@@ -301,9 +300,7 @@ def test_https_retry_uses_request_host_authority_when_ip_attempt_fails(tmp_path,
             start_path="/movies/",
         )
 
-    assert request_calls[0][0] == "67.205.33.18"
-    assert request_calls[0][1] == "/movies/"
-    assert request_calls[0][2] == "www.bound2burst.net"
-    assert request_calls[1][0] == "www.bound2burst.net"
-    assert request_calls[1][1] == "/movies/"
-    assert snapshot["errors"] == []
+    assert all(call[0] == "67.205.33.18" for call in request_calls), (
+        f"Hostname used as socket destination: {request_calls}"
+    )
+    assert len(snapshot["errors"]) > 0
