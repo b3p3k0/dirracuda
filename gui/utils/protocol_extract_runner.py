@@ -11,7 +11,6 @@ import datetime as _dt
 import os
 import stat
 import time
-import urllib.request
 import ssl
 from email.utils import parsedate_to_datetime
 from pathlib import Path, PurePosixPath
@@ -28,6 +27,7 @@ from gui.utils.extract_runner import (
 )
 from shared.ftp_browser import FtpCancelledError, FtpFileTooLargeError, FtpNavigator
 from shared.http_browser import _parse_dir_entries
+from shared.http_transport import http_open
 from shared.quarantine import log_quarantine_event
 from shared.quarantine_postprocess import PostProcessInput
 
@@ -384,19 +384,6 @@ def _build_http_context(scheme: str, allow_insecure_tls: bool) -> Optional[ssl.S
     return ctx
 
 
-def _normalize_host_header(request_host: Optional[str], scheme: str, port: int) -> Optional[str]:
-    host_header = str(request_host or "").strip()
-    if not host_header:
-        return None
-    if ":" not in host_header and not (
-        host_header.startswith("[") and host_header.endswith("]")
-    ):
-        default_port = 443 if scheme == "https" else 80
-        if port != default_port:
-            host_header = f"{host_header}:{port}"
-    return host_header
-
-
 def _http_fetch_listing(
     *,
     connect_host: str,
@@ -445,20 +432,19 @@ def _http_download_file(
     _check_cancel(cancel_event)
 
     normalized_path = "/" + str(remote_path or "/").lstrip("/")
-    url = f"{scheme}://{connect_host}:{int(port)}{normalized_path}"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    host_header = _normalize_host_header(request_host, scheme, int(port))
-    if host_header:
-        headers["Host"] = host_header
-
-    req = urllib.request.Request(url, headers=headers)
     ctx = _build_http_context(scheme, allow_insecure_tls)
 
     downloaded = 0
     mtime: Optional[float] = None
 
     try:
-        with urllib.request.urlopen(req, timeout=float(timeout_seconds), context=ctx) as resp:
+        with http_open(
+            connect_host=connect_host,
+            request_host=request_host,
+            scheme=scheme, port=int(port), path=normalized_path,
+            headers={"User-Agent": "Mozilla/5.0"},
+            context=ctx, timeout=float(timeout_seconds),
+        ) as resp:
             last_modified = resp.headers.get("Last-Modified")
             if last_modified:
                 try:

@@ -10,8 +10,9 @@ import re
 import socket
 import ssl
 import urllib.error
-import urllib.request
 from typing import List, Optional, Tuple
+
+from shared.http_transport import RedirectBlockedError, RedirectLimitError, http_open
 
 
 # ---------------------------------------------------------------------------
@@ -74,11 +75,9 @@ def try_http_request(
       urllib.error.HTTPError (subclass of URLError) must be caught first.
       socket.timeout / TimeoutError must be caught before OSError.
     """
-    authority = str(ip or "").strip()
     normalized_path = str(path or "/").strip() or "/"
     if not normalized_path.startswith("/"):
         normalized_path = "/" + normalized_path
-    url = f"{scheme}://{authority}:{port}{normalized_path}"
 
     ctx: ssl.SSLContext | None = None
     tls_verified = False
@@ -94,22 +93,14 @@ def try_http_request(
             # default ctx verifies cert; tls_verified=True on success
             tls_verified = True  # optimistic; cleared on SSLError
 
-    headers = {"User-Agent": "Mozilla/5.0"}
-    host_header = str(request_host or "").strip()
-    if host_header:
-        if (
-            ":" not in host_header
-            and not (host_header.startswith("[") and host_header.endswith("]"))
-        ):
-            default_port = 443 if scheme == "https" else 80
-            if port != default_port:
-                host_header = f"{host_header}:{port}"
-        headers["Host"] = host_header
-
-    req = urllib.request.Request(url, headers=headers)
-
     try:
-        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+        with http_open(
+            connect_host=ip,
+            request_host=request_host or None,
+            scheme=scheme, port=port, path=normalized_path,
+            headers={"User-Agent": "Mozilla/5.0"},
+            context=ctx, timeout=timeout,
+        ) as resp:
             body = resp.read(1024 * 256).decode("utf-8", errors="replace")
             return resp.status, body, tls_verified, ""
 
@@ -120,6 +111,12 @@ def try_http_request(
         except Exception:
             body = ""
         return exc.code, body, False, ""
+
+    except RedirectBlockedError:
+        return 0, "", False, "redirect_blocked"
+
+    except RedirectLimitError:
+        return 0, "", False, "redirect_limit"
 
     except ssl.SSLError:
         # Only raised when allow_insecure_tls=False and cert verification fails
