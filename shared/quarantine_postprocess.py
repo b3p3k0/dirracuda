@@ -9,9 +9,10 @@ from typing import Any, Callable, Optional
 class PostProcessInput:
     file_path: Path     # absolute path of the downloaded file
     ip_address: str
-    share: str
+    share: str          # exact remote share (identity/reporting)
     rel_display: str    # e.g. "subdir/file.txt"
     file_size: int
+    local_share: Optional[str] = None   # sanitized on-disk label; falls back to share for promotion
 
 
 @dataclass

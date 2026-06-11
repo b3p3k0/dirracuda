@@ -815,3 +815,277 @@ def test_c4_collision_resolved(tmp_path, monkeypatch):
     assert summary["files"][0]["saved_to"].endswith("a_1.txt")
     assert (tmp_path / "extracted" / "1.2.3.4" / "20260328" / "pub" / "a_1.txt").exists()
     assert target.read_bytes() == b"already here"
+
+
+# ---------------------------------------------------------------------------
+# C4 containment tests: hostile share/file names, label allocation, rejection
+# ---------------------------------------------------------------------------
+
+import itertools
+
+from gui.utils.extract_runner import (
+    ExtractError,
+    _build_share_label_map,
+    run_extract as _run_extract_fn,
+)
+
+
+def _recording_conn(filename: str = "a.txt", size: int = 3):
+    """Fake SMBConnection serving one file, recording listPath/getFile share args."""
+    entry = MagicMock()
+    entry.get_longname.return_value = filename
+    entry.is_directory.return_value = False
+    entry.get_filesize.return_value = size
+    entry.get_mtime_epoch.return_value = None
+
+    calls: Dict[str, list] = {"listPath": [], "getFile": []}
+    conn = MagicMock()
+
+    def _list(share, pattern):
+        calls["listPath"].append((share, pattern))
+        return [entry]
+
+    def _get(share, smb_path, writer):
+        calls["getFile"].append((share, smb_path))
+        writer(b"x" * size)
+
+    conn.listPath.side_effect = _list
+    conn.getFile.side_effect = _get
+    return conn, calls
+
+
+def _run_with_conn(tmp_path, monkeypatch, conn, shares, **kwargs):
+    monkeypatch.setattr(
+        "gui.utils.extract_runner.SMBConnection", lambda *a, **kw: conn
+    )
+    download_dir = tmp_path / "quarantine" / "1.2.3.4" / "20260328"
+    summary = _run_extract_fn(
+        "1.2.3.4", shares,
+        download_dir=download_dir,
+        username="", password="",
+        max_total_bytes=0, max_file_bytes=0, max_file_count=0,
+        max_seconds=0, max_depth=3,
+        allowed_extensions=[], denied_extensions=[],
+        delay_seconds=0, connection_timeout=5,
+        **kwargs,
+    )
+    return summary, download_dir
+
+
+# 1. exact remote share preserved through SMB calls and reporting
+def test_c4_exact_remote_share_preserved_through_smb_and_reporting(tmp_path, monkeypatch):
+    conn, calls = _recording_conn()
+    summary, download_dir = _run_with_conn(tmp_path, monkeypatch, conn, ["\\pub\\"])
+
+    assert calls["listPath"][0][0] == "\\pub\\"
+    assert calls["getFile"][0][0] == "\\pub\\"
+    assert summary["shares_requested"] == ["\\pub\\"]
+    assert summary["files"][0]["share"] == "\\pub\\"
+    # on disk under the sanitized label
+    assert (download_dir / "pub" / "a.txt").exists()
+
+
+# 2. (RA Low) post-processor receives both identities
+def test_c4_postprocessor_receives_both_identities(tmp_path, monkeypatch):
+    captured = {}
+
+    def capturing_pp(inp: PostProcessInput) -> PostProcessResult:
+        captured["share"] = inp.share
+        captured["local_share"] = inp.local_share
+        return PostProcessResult(
+            final_path=inp.file_path, verdict="skipped", moved=False,
+            destination="quarantine", metadata=None, error=None,
+        )
+
+    conn, _ = _recording_conn()
+    _run_with_conn(tmp_path, monkeypatch, conn, ["../../etc"], post_processor=capturing_pp)
+
+    assert captured["share"] == "../../etc"
+    assert captured["local_share"] == "etc"
+
+
+# 3. traversal share contained
+def test_c4_traversal_share_contained(tmp_path, monkeypatch):
+    conn, _ = _recording_conn()
+    summary, download_dir = _run_with_conn(tmp_path, monkeypatch, conn, ["../../etc"])
+
+    target = download_dir / "etc" / "a.txt"
+    assert target.exists()
+    assert summary["files"][0]["saved_to"] == str(target)
+    # nothing written above the resolved root
+    assert not (download_dir.parent.parent.parent / "etc" / "a.txt").exists()
+
+
+# 4. slash / backslash share contained to a single segment each
+def test_c4_slash_and_backslash_share_contained(tmp_path, monkeypatch):
+    conn, _ = _recording_conn()
+    summary, download_dir = _run_with_conn(tmp_path, monkeypatch, conn, ["a/b", "x\\y"])
+
+    assert (download_dir / "a-b" / "a.txt").exists()
+    assert (download_dir / "x-y" / "a.txt").exists()
+    for f in summary["files"]:
+        assert Path(f["saved_to"]).parent.parent == download_dir
+
+
+# 5. absolute-form share contained to a single segment
+def test_c4_absolute_share_contained(tmp_path, monkeypatch):
+    conn, _ = _recording_conn()
+    summary, download_dir = _run_with_conn(tmp_path, monkeypatch, conn, ["\\\\evil\\share"])
+
+    saved = Path(summary["files"][0]["saved_to"])
+    assert saved == download_dir / "evil-share" / "a.txt"
+    assert saved.exists()
+
+
+# 6. empty share rejected with reporting, no SMB call
+def test_c4_empty_share_rejected(tmp_path, monkeypatch):
+    conn, calls = _recording_conn()
+    summary, download_dir = _run_with_conn(tmp_path, monkeypatch, conn, ["", "pub"])
+
+    rej = [e for e in summary["errors"] if e.get("share") == "" and "empty or separator-only" in e["message"]]
+    assert rej, summary["errors"]
+    # no SMB call used the empty share
+    assert all(s != "" for s, _ in calls["listPath"])
+    assert all(s != "" for s, _ in calls["getFile"])
+    assert (download_dir / "pub" / "a.txt").exists()
+
+
+# 7. separator-only share rejected, no SMB call
+def test_c4_separator_only_share_rejected(tmp_path, monkeypatch):
+    conn, calls = _recording_conn()
+    summary, _ = _run_with_conn(tmp_path, monkeypatch, conn, ["///", "pub"])
+
+    rej = [e for e in summary["errors"] if e.get("share") == "///" and "empty or separator-only" in e["message"]]
+    assert rej
+    assert all(s != "///" for s, _ in calls["listPath"])
+    assert [s for s, _ in calls["getFile"]] == ["pub"]
+
+
+# 8. all-empty input raises
+def test_c4_all_empty_shares_raise(tmp_path, monkeypatch):
+    conn, _ = _recording_conn()
+    monkeypatch.setattr("gui.utils.extract_runner.SMBConnection", lambda *a, **kw: conn)
+    with pytest.raises(ExtractError):
+        _run_extract_fn(
+            "1.2.3.4", ["", "   "],
+            download_dir=tmp_path / "q" / "1.2.3.4" / "20260328",
+            username="", password="",
+            max_total_bytes=0, max_file_bytes=0, max_file_count=0,
+            max_seconds=0, max_depth=3,
+            allowed_extensions=[], denied_extensions=[],
+            delay_seconds=0, connection_timeout=5,
+        )
+
+
+# 9. dot-only share retained, mapped to fallback label
+def test_c4_dot_only_share_uses_fallback_label(tmp_path, monkeypatch):
+    conn, _ = _recording_conn()
+    summary, download_dir = _run_with_conn(tmp_path, monkeypatch, conn, ["."])
+
+    assert (download_dir / "share" / "a.txt").exists()
+    assert summary["files"][0]["share"] == "."
+
+
+# 10. symlink-parent escape rejected before mkdir/open; no getFile
+def test_c4_symlink_parent_escape_rejected(tmp_path, monkeypatch):
+    conn, calls = _recording_conn()
+    monkeypatch.setattr("gui.utils.extract_runner.SMBConnection", lambda *a, **kw: conn)
+
+    download_dir = tmp_path / "quarantine" / "1.2.3.4" / "20260328"
+    download_dir.mkdir(parents=True, exist_ok=True)
+    escape = tmp_path / "escape"
+    escape.mkdir()
+    (download_dir / "pub").symlink_to(escape, target_is_directory=True)
+
+    summary = _run_extract_fn(
+        "1.2.3.4", ["pub"],
+        download_dir=download_dir,
+        username="", password="",
+        max_total_bytes=0, max_file_bytes=0, max_file_count=0,
+        max_seconds=0, max_depth=3,
+        allowed_extensions=[], denied_extensions=[],
+        delay_seconds=0, connection_timeout=5,
+    )
+
+    assert summary["files"] == []
+    assert calls["getFile"] == []
+    rej = [s for s in summary["skipped"] if s.get("reason") == "path_containment"]
+    assert rej
+    assert not (escape / "a.txt").exists()
+
+
+# 11. empty sanitized relative filename rejected; no getFile
+def test_c4_empty_relative_filename_rejected(tmp_path, monkeypatch):
+    conn, calls = _recording_conn(filename="..\\..")
+    summary, download_dir = _run_with_conn(tmp_path, monkeypatch, conn, ["pub"])
+
+    assert summary["files"] == []
+    assert calls["getFile"] == []
+    rej = [s for s in summary["skipped"] if s.get("reason") == "empty_relative_path"]
+    assert rej
+
+
+# 12. hostile relative filename sanitized and contained
+def test_c4_hostile_relative_filename_sanitized(tmp_path, monkeypatch):
+    conn, _ = _recording_conn(filename="..\\x\\y")
+    summary, download_dir = _run_with_conn(tmp_path, monkeypatch, conn, ["pub"])
+
+    saved = Path(summary["files"][0]["saved_to"])
+    assert saved == download_dir / "pub" / "x" / "y"
+    assert saved.exists()
+
+
+# 13. normal share layout unchanged
+def test_c4_normal_share_layout_unchanged(tmp_path, monkeypatch):
+    conn, _ = _recording_conn()
+    summary, download_dir = _run_with_conn(tmp_path, monkeypatch, conn, ["pub"])
+
+    target = download_dir / "pub" / "a.txt"
+    assert target.exists()
+    assert summary["files"][0]["saved_to"] == str(target)
+
+
+# 14. hostile share promotes under sanitized local label (ClamAV clean)
+def test_c4_hostile_share_promotes_under_local_label(tmp_path, monkeypatch):
+    conn, _ = _recording_conn()
+    monkeypatch.setattr("gui.utils.extract_runner.SMBConnection", lambda *a, **kw: conn)
+    clean_result = _make_scan_result("clean", backend="clamscan")
+    monkeypatch.setattr(
+        "shared.clamav_scanner.ClamAVScanner.scan_file", lambda self, path: clean_result
+    )
+
+    download_dir = tmp_path / "quarantine" / "1.2.3.4" / "20260328"
+    summary = _run_extract_fn(
+        "1.2.3.4", ["../../etc"],
+        download_dir=download_dir,
+        username="", password="",
+        max_total_bytes=0, max_file_bytes=0, max_file_count=0,
+        max_seconds=0, max_depth=3,
+        allowed_extensions=[], denied_extensions=[],
+        delay_seconds=0, connection_timeout=5,
+        clamav_config={"enabled": True, "backend": "clamscan",
+                       "extracted_root": str(tmp_path / "extracted"),
+                       "auto_promote_clean_files": True},
+    )
+
+    cv = summary["clamav"]
+    assert cv["promoted"] == 1
+    assert cv["errors"] == 0
+    target = tmp_path / "extracted" / "1.2.3.4" / "20260328" / "etc" / "a.txt"
+    assert target.exists()
+    assert summary["files"][0]["saved_to"] == str(target)
+
+
+# 15. alias cannot steal a normal share's base label
+def test_c4_label_map_alias_does_not_steal_normal_base():
+    expected = {"pub": "pub", "../pub": "pub-2"}
+    assert _build_share_label_map(["../pub", "pub"]) == expected
+    assert _build_share_label_map(["pub", "../pub"]) == expected
+
+
+# 16. label allocation is permutation-invariant and reserves safe labels
+def test_c4_label_map_permutation_invariant():
+    base_input = ["../a", "..\\a", "a-2"]
+    expected = {"../a": "a", "..\\a": "a-3", "a-2": "a-2"}
+    for perm in itertools.permutations(base_input):
+        assert _build_share_label_map(list(perm)) == expected

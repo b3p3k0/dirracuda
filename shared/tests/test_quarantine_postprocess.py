@@ -135,6 +135,24 @@ def test_postprocess_input_fields_accessible(tmp_path):
     assert inp.file_size == 100
 
 
+def test_postprocess_input_local_share_defaults_none(tmp_path):
+    inp = _make_input(tmp_path / "file.txt")
+    assert inp.local_share is None
+
+
+def test_postprocess_input_local_share_set(tmp_path):
+    inp = PostProcessInput(
+        file_path=tmp_path / "file.txt",
+        ip_address="10.0.0.1",
+        share="../../etc",
+        rel_display="readme.txt",
+        file_size=100,
+        local_share="etc",
+    )
+    assert inp.share == "../../etc"
+    assert inp.local_share == "etc"
+
+
 # ---------------------------------------------------------------------------
 # Seam injection tests
 # ---------------------------------------------------------------------------

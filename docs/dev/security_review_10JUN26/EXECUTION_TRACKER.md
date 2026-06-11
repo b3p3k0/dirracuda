@@ -1,6 +1,6 @@
 # Security Review Execution Tracker
 
-Status: HI approved PA pack; Codex operating as RA; C3 accepted
+Status: HI approved PA pack; Codex operating as RA; C4 accepted
 
 ## Baseline
 
@@ -34,7 +34,7 @@ Status: HI approved PA pack; Codex operating as RA; C3 accepted
 | C1 | ACCEPTED | `approved_plans/C1_http_redirect_policy.md` | PASS | n/a | this commit | RA corrected IDNA wire encoding |
 | C2 | ACCEPTED | `approved_plans/C2_endpoint_pinning.md` | PASS | n/a | this commit | Broad suite has one proven pre-existing failure |
 | C3 | ACCEPTED | `approved_plans/C3_http_tls_policy.md` | PASS | PASS | this commit | RA corrected pre-modular explicit-value detection |
-| C4 | NOT STARTED |  | PENDING | PENDING |  | SMB extraction containment |
+| C4 | ACCEPTED | `approved_plans/C4_smb_extract_containment.md` | PASS | n/a | this commit | SMB extraction containment |
 | C5 | NOT STARTED |  | PENDING | PENDING |  | Image pixel guard |
 | C6 | NOT STARTED |  | PENDING | PENDING |  | Bounded ZIP import |
 | C7 | NOT STARTED |  | PENDING | PENDING |  | FTP controls |
@@ -279,4 +279,47 @@ Populate after E12:
     into the owning shard.
   - The `pytest -m gui_smoke` final gate is presently nonfunctional because no
     tests use the marker; the repository's executable GUI smoke passed.
+- Final status: ACCEPTED
+
+## C4 Evidence
+
+- Plan: `approved_plans/C4_smb_extract_containment.md` (Rev 3)
+- DA session: Claude implementation summary received 2026-06-11
+- Commit before: `8a3debc`
+- Commit after: C4 implementation commit (this commit)
+- Files changed:
+  - `gui/utils/extract_runner.py`
+  - `shared/quarantine_postprocess.py`
+  - focused extraction and post-processing tests
+  - approved C4 plan and execution evidence
+- Line counts:
+  - `gui/utils/extract_runner.py`: 917
+  - `shared/quarantine_postprocess.py`: 49
+  - `gui/tests/test_extract_runner_clamav.py`: 1091
+  - `shared/tests/test_quarantine_postprocess.py`: 204
+- Commands:
+  - `./venv/bin/python -m pytest gui/tests/test_extract_runner_clamav.py shared/tests/test_quarantine_postprocess.py -q`
+  - focused extraction, promotion, browser, protocol, dashboard, and virtual-root
+    regression group
+  - independent label-map permutation and symlink-containment probes
+  - `./venv/bin/python -m py_compile gui/utils/extract_runner.py shared/quarantine_postprocess.py`
+  - `git diff --check`
+- Results:
+  - card-declared focused gate: 59 passed
+  - broader touched-surface group: 177 passed
+  - adversarial probes, compile, and whitespace checks: PASS
+- RA findings:
+  - No implementation defects.
+  - Exact remote share identity remains on SMB calls and reports; deterministic
+    safe labels alone drive local storage and promotion.
+  - Empty relative paths and resolved symlink escapes are rejected before
+    filesystem mutation or `getFile`.
+  - DA report said the worktree was staged, while Git showed unstaged changes;
+    this was a reporting-only discrepancy.
+- Manual test: n/a; no live SMB target required
+- Residual risk:
+  - The containment check intentionally does not defend against concurrent
+    local filesystem mutation between validation and open.
+  - Browser promotion behavior is unchanged and continues to use the optional
+    field's compatibility fallback.
 - Final status: ACCEPTED
