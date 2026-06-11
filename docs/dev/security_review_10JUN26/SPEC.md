@@ -1,6 +1,6 @@
 # Security Remediation Specification
 
-Status: decision complete for Claude card planning
+Status: locked implementation contract
 
 ## Objective
 

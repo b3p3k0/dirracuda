@@ -11,8 +11,16 @@ Repo: /home/kevin/DEV/dirracuda
 Branch: development
 HI: Kevin
 RA: Codex
+Role: DA
 
-State your role at the top: PA or DA.
+You are the Development Agent for exactly one named card. PA is Codex's
+completed workstream-level planning role; you are not acting as PA.
+
+Each card starts in a fresh Claude instance. Your first phase is to inspect the
+current repository and present a decision-complete implementation plan for your
+assigned slice without editing files. HI/RA will review that plan in the UI.
+When they approve it, execute the approved plan immediately in this same
+session. Do not wait for a second handoff prompt and do not change roles.
 
 Read before work:
 - README.md
@@ -35,8 +43,8 @@ Read before work:
 
 Hard rules:
 - Work on exactly one named card.
-- PA sessions produce plans only and edit no product code.
-- DA sessions implement only the approved plan.
+- Before plan approval, inspect and plan only; edit no files.
+- After plan approval, implement only the approved revision.
 - Do not commit or push.
 - Do not modify requirements, DB schema/migrations, auth, or CI.
 - Preserve ./dirracuda as the GUI entrypoint.
@@ -48,12 +56,12 @@ Hard rules:
 - Report exact commands and honest PASS/FAIL.
 ```
 
-## Plan-Only Prompt
+## Card Kickoff Prompt
 
 ```text
 Use the Universal Header.
 
-Role: PA
+Role: DA
 Card: <CARD_ID>
 
 Produce a decision-complete implementation plan for only <CARD_ID> from
@@ -76,12 +84,14 @@ Plan sections:
 - Tests and exact commands
 - Line-count risk
 - Rollback
-- DA handoff prompt
 
-Do not edit files. Stop after the plan and wait for HI/RA review.
+Do not edit files before approval. Present the plan for HI/RA review. Once the
+plan is approved in the UI, implement it immediately in this same session,
+run the approved validation, and return the Required Card Report from
+SOP_CONSTRAINTS.md. Do not commit.
 ```
 
-## DA Implementation Prompt
+## DA Resume Prompt
 
 ```text
 Use the Universal Header.
@@ -91,6 +101,7 @@ Card: <CARD_ID>
 Approved plan:
 docs/dev/security_review_10JUN26/approved_plans/<PLAN_FILE>
 
+Use this only if an approved card must resume in a replacement session.
 Implement exactly the approved plan.
 
 Before editing:
@@ -143,7 +154,7 @@ Do not commit.
 ```text
 Use the Universal Header.
 
-Role: PA
+Role: DA (review-only assignment)
 Card: <CARD_ID>
 
 Review the current uncommitted implementation against:
@@ -169,7 +180,7 @@ If no issues are found, say so explicitly and identify remaining test gaps.
 ```text
 Use the Universal Header.
 
-Role: PA
+Role: DA
 Card: <E01-E12>
 
 Also read:
@@ -187,10 +198,13 @@ For each X-ID:
 - identify focused test/evidence.
 
 Do not propose blanket logging. Do not move another X-ID into scope without
-explicit RA approval. Stop after plan output.
+explicit RA approval. Do not edit files before approval. Once HI/RA approves
+the plan in the UI, implement the approved classifications in this same
+session, update the ledger, run the required validation, and return the card
+report. Do not commit.
 ```
 
-## Exception Batch DA Prompt
+## Exception Batch Resume Prompt
 
 ```text
 Use the Universal Header.
@@ -200,6 +214,8 @@ Card: <E01-E12>
 Approved plan:
 docs/dev/security_review_10JUN26/approved_plans/<PLAN_FILE>
 
+Use this only if an approved exception card must resume in a replacement
+session.
 Implement only the approved classifications and remediations.
 Update EXCEPTION_AUDIT_LEDGER.md for every assigned X-ID.
 
@@ -224,7 +240,7 @@ Use the Universal Header.
 Role: DA
 Card: C9
 
-Reconcile documentation and validation only after C1-C8 and E01-E12 are
+Reconcile documentation and validation only after C1-C8 and E0-E12 are
 accepted.
 
 Update runtime docs to implemented truth, finalize risks and lessons, record

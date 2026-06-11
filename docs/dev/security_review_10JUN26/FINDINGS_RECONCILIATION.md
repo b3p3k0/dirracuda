@@ -4,6 +4,8 @@ Date: 2026-06-10
 
 Baseline: `development` at `4320614`
 
+Implementation status: C1-C8 accepted. F5 remains open under E0-E12.
+
 ## Purpose
 
 This document reconciles three inputs:
@@ -12,8 +14,8 @@ This document reconciles three inputs:
 2. Codex's independent inspection of current repo truth.
 3. The assessing agent's response to Codex's counters.
 
-The dispositions below are final for planning. Claude may identify blockers but
-must not reopen product decisions without HI/RA approval.
+The dispositions below are locked. A DA may identify implementation blockers
+but cannot reopen product decisions without HI/RA approval.
 
 ## Disposition Matrix
 

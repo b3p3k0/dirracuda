@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | PA planning pack complete; awaiting HI approval |
+| Status | PA planning pack approved; RA-led card execution in progress |
 | Owner | VanDelay Security Group |
 | HI | Kevin |
 | PA/RA | Codex |
@@ -15,33 +15,30 @@
 This workspace converts `INITIAL_REPORT.md`, Codex verification, and the
 assessing agent's follow-up into a decision-complete remediation program.
 
-The current phase is planning only. No product code may be changed until:
-
-1. Every planning document is present and internally consistent.
-2. HI approves the completed planning pack.
-3. Codex explicitly transitions from PA to RA.
-4. Claude produces a plan for the first implementation card.
-5. HI and RA approve that card plan.
-
-Approval of this planning pack does not authorize product-code implementation.
+HI approved the planning pack and Codex is operating as RA. Cards C1-C8 are
+accepted; the exception audit (`E0`, then `E01-E12`) remains open. C9 cannot
+close until those cards produce the classification ledger and final totals.
 
 ## Roles
 
 | Role | Owner | Responsibility |
 |---|---|---|
 | HI | Kevin | Locks product decisions, approves plans, performs requested manual tests, and authorizes commits |
-| PA | Codex | Produces this planning pack only |
+| PA | Codex | Produced the workstream-level planning pack; this role is complete |
 | RA | Codex | Supervises one card at a time, reviews Claude plans and diffs, reruns validation, and accepts or rejects work |
-| DA | Claude | Plans or implements exactly one named card in separate sessions |
+| DA | Claude | Owns exactly one named card: first presents its slice-level implementation plan, then implements it in the same session after HI/RA approval |
 | AA | External assessing agent | Supplied the initial findings and reconciled technical disagreements |
 
 ## Locked Workflow
 
 1. RA refreshes the baseline using C0.
-2. Claude runs a plan-only session for one card.
+2. A fresh Claude instance starts one card as DA and presents its
+   implementation plan without editing files.
 3. RA and HI review the plan.
 4. The approved plan is saved under `approved_plans/`.
-5. A separate Claude DA session implements only that approved plan.
+5. UI approval authorizes that same Claude DA instance to implement the
+   approved plan immediately; no second handoff prompt or role transition is
+   required.
 6. RA reviews the diff and reruns the declared validation.
 7. HI performs any required manual test.
 8. RA records completion evidence in `EXECUTION_TRACKER.md`.
@@ -99,8 +96,8 @@ The 95-test baseline comprises:
 - `SMBSeekConfig` owns the persisted HTTP TLS-verification default.
 - Scan-dialog TLS choices are transient per-run overrides.
 - ZIP import never uses `extractall`.
-- The 448 pass-only handlers are audited and remediated in the current wave,
-  using risk-ordered batches of no more than 40 handlers.
+- The 448 pass-only handlers remain assigned to risk-ordered audit batches of
+  no more than 40 handlers. They are not complete until E0-E12 are accepted.
 - FTP CRLF is defense in depth, not a currently exploitable security finding.
 - Python 3.8 end-of-life is recorded but not remediated in this wave.
 

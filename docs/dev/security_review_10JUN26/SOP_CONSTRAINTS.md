@@ -51,8 +51,12 @@ a modularization plan to HI/RA.
 
 ## Card Discipline
 
-- One card per Claude plan-only session.
-- One card per Claude DA implementation session.
+- One fresh Claude DA instance per card.
+- Claude remains DA throughout the card. Its first phase is a slice-level
+  implementation plan with no file edits.
+- HI/RA approval in the UI authorizes the same Claude instance to execute that
+  approved plan immediately; no second handoff prompt is required.
+- PA refers only to Codex's completed workstream-level planning role.
 - Do not combine cards because they touch the same file.
 - Confirm the issue before editing.
 - State root cause before proposing the fix.
@@ -67,7 +71,8 @@ a modularization plan to HI/RA.
 The following are distinct approvals:
 
 1. Planning-pack approval authorizes Codex to transition from PA to RA.
-2. Card-plan approval authorizes a separate Claude DA session for that card.
+2. Card-plan approval authorizes the same Claude DA instance to begin
+   implementation immediately.
 3. Card acceptance authorizes recording the card as complete.
 4. The exact instruction `commit` authorizes one intentional commit.
 

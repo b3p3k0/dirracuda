@@ -2,7 +2,8 @@
 
 Execution model: one card at a time
 
-Planning model: Claude plan-only session before every DA session
+Planning model: each fresh Claude DA instance plans its assigned card first,
+then implements in the same session after HI/RA approval
 
 Commit model: no commit unless HI says exactly `commit`
 

@@ -1,8 +1,8 @@
 # Security Review Lessons Learned
 
-Date: 2026-06-10
+Date: 2026-06-11
 
-Status: initial seed; append during execution
+Status: execution notes through C8; exception-audit lessons remain open
 
 ## Planning Lessons
 
@@ -48,6 +48,9 @@ Status: initial seed; append during execution
     flags. Security tests for dishonest ZIP metadata must use controlled stubs
     or deliberately crafted bytes, not fixtures that silently rewrite the
     condition under test.
+15. Parse remote paths with the remote platform's semantics. A Windows-form SMB
+    path passed through POSIX `Path` can turn an entire path into one local
+    filename; validate the resulting basename before touching the filesystem.
 
 ## Append Format
 

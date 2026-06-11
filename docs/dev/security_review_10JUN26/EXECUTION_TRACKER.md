@@ -1,6 +1,6 @@
 # Security Review Execution Tracker
 
-Status: HI approved PA pack; Codex operating as RA; C7 accepted
+Status: HI approved PA pack; Codex operating as RA; C8 accepted; E0 next
 
 ## Baseline
 
@@ -38,7 +38,7 @@ Status: HI approved PA pack; Codex operating as RA; C7 accepted
 | C5 | ACCEPTED | `approved_plans/C5_image_pixel_guard.md` | PASS | PASS | this commit | Pre-decode image pixel guard |
 | C6 | ACCEPTED | `approved_plans/C6_bounded_zip_import.md` | PASS | DEFERRED BY HI | this commit | Bounded single-payload ZIP import |
 | C7 | ACCEPTED | `approved_plans/C7_ftp_remote_path_controls.md` | PASS | n/a | this commit | FTP remote-path controls |
-| C8 | NOT STARTED |  | PENDING | PENDING |  | SMB basename |
+| C8 | ACCEPTED | `approved_plans/C8_smb_windows_basename.md` | PASS | n/a | this commit | Windows basename semantics |
 | E0 | NOT STARTED |  | PENDING | n/a |  | Exception ledger freeze |
 | E01 | NOT STARTED |  | PENDING | PENDING |  | X001-X040 |
 | E02 | NOT STARTED |  | PENDING | PENDING |  | X041-X080 |
@@ -450,4 +450,38 @@ Populate after E12:
   - Hostile FTP directory names may still reach `LIST`/`MLSD`; this card owns
     file-operation `SIZE`/`RETR` paths. Files below such directories are gated
     because the complete path is validated before extraction or transfer.
+- Final status: ACCEPTED
+
+## C8 Evidence
+
+- Plan: `approved_plans/C8_smb_windows_basename.md`
+- DA session: Claude implementation summary received 2026-06-11
+- Commit before: `be48cc2`
+- Commit after: C8 implementation and documentation reconciliation (this commit)
+- Files changed:
+  - `shared/smb_browser.py`
+  - `shared/tests/test_smb_browser.py`
+  - approved C8 plan and execution evidence
+- Line counts:
+  - `shared/smb_browser.py`: 365
+  - `shared/tests/test_smb_browser.py`: 96
+- Commands:
+  - `./venv/bin/python -m pytest shared/tests/test_smb_browser.py -q`
+  - `./venv/bin/python -m pytest gui/tests/test_browser_clamav.py -q`
+  - Python compile for the product and focused test modules
+  - scoped POSIX-basename negative search
+  - `git diff --check`
+- Results:
+  - focused navigator tests: 7 passed
+  - browser/ClamAV regression tests: 31 passed
+  - compile, static search, and whitespace checks: PASS
+- RA findings:
+  - No implementation defects.
+  - Confirmed the task card's named focused test file did not exist; creating it
+    under `shared/tests/` matches repository test ownership.
+  - `PureWindowsPath` collapses a trailing `..` to a traversal basename, so the
+    approved rejection is required before joining it to `dest_dir`.
+- Manual test: n/a
+- Residual risk: the live GUI caller uses `preserve_structure=True`; this fix
+  hardens the public default branch before another caller adopts it.
 - Final status: ACCEPTED

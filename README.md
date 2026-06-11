@@ -29,7 +29,10 @@ bash install.sh
 
 **Manual setup** (other distros, or if you prefer to do it yourself):
 
-You'll need Python 3.8+ (3.10+ recommended) and Tkinter:
+You'll need Python 3.8+ and Tkinter. Python 3.8 remains compatible with this
+release but [reached upstream end of life on October 7,
+2024](https://peps.python.org/pep-0569/); use Python 3.10 or newer for an
+actively supported runtime.
 
 ```bash
 # Ubuntu/Debian
@@ -56,10 +59,11 @@ Edit `~/.dirracuda/conf.d/core/scan.json` (or launch a new scan from the dashboa
 ```json
 {
   "shodan": {
-    "api_key": "your_key_here"
+    "api_key": ""
   }
 }
 ```
+Paste the key between the quotes. Do not commit the populated file.
 `~/.dirracuda/conf/config.json` is still generated for compatibility, but runtime reads/writes are shard-authoritative under `~/.dirracuda/conf.d/`.
 
 Launch the GUI from your venv:
@@ -133,7 +137,19 @@ Triggered from **▶ Start Scan** with the protocol(s) selected. All three follo
 
 **FTP** - default dork: `port:21 "230 Login successful"`. Verification includes anonymous login and root directory listing. Failure codes: `connect_fail`, `auth_fail`, `list_fail`, `timeout`.
 
-**HTTP** - default dork: `http.title:"Index of /"`. Verification stays locked to the exact Shodan hit endpoint (same IP + same port), and tests HTTP and/or HTTPS on that port based on your config toggles.
+**HTTP** - default dork: `http.title:"Index of /"`. Verification, probing,
+browsing, and extraction connect to the recorded IP and port. A saved hostname
+is used only for the HTTP `Host` header, TLS SNI, and certificate identity.
+Redirects may follow at most three same-origin hops; a scheme, host, or
+effective-port change is rejected. Target traffic ignores ambient HTTP proxy
+environment variables.
+
+HTTPS target verification is permissive by default so self-signed directory
+indexes remain reachable. With **App Config → Security → HTTP Target TLS →
+Allow insecure TLS** enabled, certificate-chain and hostname checks are skipped;
+a machine in the middle can intercept or impersonate the target. Disable it for
+strict verification. The Start Scan checkbox overrides this default for that
+run only.
 
 `Edit Queries` in Start Scan opens the modeless `Discovery Dorks` editor (single-instance) for SMB/FTP/HTTP base queries.
 Changes there are manual-save only.
@@ -190,13 +206,17 @@ Live scan/probe/extract output is shown in monitor dialogs. Hiding a monitor doe
 
 ![file browser](img/browse.png)
 
-Read-only, protocol transparent navigation available shares. Typical file explorer behavior (double click to descend/open etc...) are supported
+The SMB, FTP, and HTTP browsers provide read-only navigation with familiar file
+explorer controls. Double-click opens a file or descends into a directory.
 
 The viewer auto-detects file types: text files display with an encoding selector (UTF-8, Latin-1, etc.), binary files switch to hex mode, and images (PNG, JPEG, GIF, WebP, BMP, TIFF) render with fit-to-window scaling.
 
 ![image viewer](img/pic_view.png)
 
-Files over the specified maximum (default: 5 MB) trigger a warning-you can bump that limit in `~/.dirracuda/conf.d/core/storage.json` under `file_browser.viewer.max_view_size_mb`, or click "Ignore Once" to load anyway (hard cap: 1 GB).
+Files over the configured maximum (default: 5 MB) trigger a warning. Change
+`file_browser.viewer.max_view_size_mb` in
+`~/.dirracuda/conf.d/core/storage.json`, or click **Ignore Once** to load the
+file up to the 1 GB hard cap.
 
 Downloads are staged in quarantine (`~/.dirracuda/data/quarantine/`). When ClamAV is enabled, downloaded files are post-processed by verdict (clean files optionally promoted to extracted, infected files moved to known-bad). The browser never writes to remote systems.
 
@@ -213,13 +233,19 @@ Dirracuda can stage quarantine files in RAM-backed `tmpfs` instead of disk.
 For setup, either:
 
 1. Run `bash install.sh` and in Step 8 choose tmpfs + optional `/etc/fstab` update.
-2. Manually add an `/etc/fstab` entry like the one below (replace `<USER>`), then run `sudo mkdir -p /home/<USER>/.dirracuda/data/tmpfs_quarantine && sudo mount -a`.
+2. Build the mount path from your actual home directory, print the matching
+   `/etc/fstab` line, and paste that line into `/etc/fstab`:
+
+```bash
+home_dir="$(getent passwd "$(id -un)" | cut -d: -f6)"
+mountpoint="$home_dir/.dirracuda/data/tmpfs_quarantine"
+sudo mkdir -p "$mountpoint"
+printf 'tmpfs  %s  tmpfs  noexec,nosuid,nodev,size=512M,noswap  0  0\n' "$mountpoint"
+# Paste the printed line into /etc/fstab, then:
+sudo mount -a
+```
 
 Dirracuda will reuse this mount when tmpfs mode is enabled.
-
-```fstab
-tmpfs  /home/<USER>/.dirracuda/data/tmpfs_quarantine  tmpfs  noexec,nosuid,nodev,size=512M,noswap  0  0
-```
 
 Enable in **App Config**:
 
@@ -372,7 +398,7 @@ Quick start:
 5. Click `Open Results DB` to review and probe retained URLs.
 
 Inputs (persisted across opens/restarts):
-- **SearXNG Server** — server URL (default placeholder: `http://your.searxng.server:port`)
+- **SearXNG Server** — base URL of the SearXNG instance you control
 - **Query** — dork query (default: `site:* intitle:"index of /"`)
 - **Max results** — unique-result fetch cap per run (default 500, max 1,000)
 - **Run Probe on Results** — optional bulk probe pass for retained results
@@ -573,8 +599,8 @@ or the explicit insecure override. If remote access is enabled while the bind is
 still loopback, Dirracuda promotes `127.0.0.1` to `0.0.0.0` (or `::1` to `::`)
 on save/load so Uvicorn can accept non-loopback traffic. The desktop tab shows
 the wildcard listening endpoint separately from the usable local browser URL.
-LAN clients connect to the host's actual interface address; on the host used to
-verify this fix, that is `http://192.168.1.251:2600`.
+LAN clients connect to the host's actual interface address, not the wildcard
+listener address.
 Remote plaintext HTTP is reported prominently by the CLI and both UIs.
 IP-literal Host values and `localhost` are accepted automatically; custom DNS
 names must be added to `trusted_hosts`.
@@ -634,7 +660,8 @@ You should only scan networks you own or have explicit permission to test. Unaut
 
 That said: security research matters. Curiosity about how systems work isn't malicious, and understanding vulnerabilities is how we fix them. This tool exists because improperly secured data is a real problem worth studying. Use it to learn, to audit, to improve defenses and responsibly disclose. Don't be a dick.
 
-If you're unsure whether something is authorized, it probably isn't. When in doubt, get it in writing (or learn how to cover your trail).
+If you're unsure whether something is authorized, do not proceed until you
+have written permission that clearly covers the planned testing.
 
 ---
 

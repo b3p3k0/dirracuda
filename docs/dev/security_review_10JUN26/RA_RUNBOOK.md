@@ -8,9 +8,10 @@ Role: Codex RA after HI approves the PA planning pack
 2. Run C0.
 3. Compare current repo truth with the approved planning baseline.
 4. Stop for HI if unrelated changes make a card unsafe or materially obsolete.
-5. Do not begin implementation personally; hand one card to Claude for planning.
+5. Start one fresh Claude DA instance for one card. Its first phase is
+   implementation planning for that card only.
 
-## Plan-Only Review
+## DA Plan Review
 
 Review Claude's proposed plan for:
 
@@ -29,16 +30,12 @@ Return findings first, ordered by severity. Claude revises until blockers are
 closed. HI locks any product tradeoff. Save only the approved revision under
 `approved_plans/`.
 
-## DA Handoff
+## Execution Authorization
 
-Use a fresh Claude session. Provide:
-
-- universal header from `CLAUDE_PROMPTS.md`;
-- named card;
-- approved-plan path;
-- current branch/commit/status;
-- explicit instruction to implement only, not redesign;
-- exact report format.
+HI/RA approval in the UI releases the same Claude DA instance directly into
+implementation. Do not send a second handoff prompt and do not relabel Claude
+as PA or transition it between roles. Claude implements only the approved
+revision and then returns the required card report without committing.
 
 ## Implementation Review
 

@@ -523,7 +523,20 @@ Structurally identical to FTP. Implementation lives in `commands/http/operation.
 **Shodan dork:** defaults to `http.title:"Index of /"` from `http.shodan.query_components.base_query` in `~/.dirracuda/conf.d/core/scan.json` (page-based fetch with HTTP budget cap).
 Operators can edit SMB/FTP/HTTP discovery dorks from `Start Scan -> Edit Queries` (Discovery Dorks editor). GUI scan dialogs do not expose a per-scan custom-filter text box; that surface is intentionally centralized to avoid conflicting query-control paths.
 
-**Verifier** checks both HTTP and HTTPS on the discovered port; `allow_insecure_tls` controls whether TLS cert errors are fatal. `is_index_page` flag on `http_access` records rows distinguishes confirmed open-directory indexes from other accessible responses.
+**Target transport** is shared by verification, probing, browsing, and
+extraction. When a recorded IP exists, it remains the socket destination. A
+saved hostname is limited to the HTTP `Host` header, TLS SNI, and certificate
+identity. Redirects are limited to three hops and must retain the normalized
+scheme, hostname, and effective port. The opener ignores `HTTP_PROXY`,
+`HTTPS_PROXY`, and their lowercase variants.
+
+`http.verification.allow_insecure_tls` is the persisted application default.
+App Config exposes it under **Security → HTTP Target TLS**; scan dialogs use the
+same value initially and may override it for one run without rewriting the
+default. The default remains `true`. In that mode, HTTPS skips certificate-chain
+and hostname checks, so the target can be intercepted or impersonated. Strict
+mode validates both. `is_index_page` on `http_access` distinguishes confirmed
+open-directory indexes from other accessible responses.
 
 ### 4.4 Rescan Policies
 

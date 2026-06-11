@@ -4,11 +4,13 @@ This directory stores one approved Claude plan per implementation card.
 
 ## Approval Contract
 
-1. Claude produces the plan in a plan-only session.
+1. A fresh Claude instance starts the card as DA and produces a slice-level
+   implementation plan without editing files.
 2. Codex RA reviews it against `SPEC.md`, `ARCHITECTURE.md`, and the card.
 3. HI locks remaining decisions.
 4. Claude or Codex saves the approved text here.
-5. Only then may a separate Claude DA session implement the card.
+5. UI approval authorizes the same Claude DA instance to implement the card
+   immediately; no separate handoff prompt or role change is required.
 
 Planning-pack approval does not pre-approve these card plans.
 
@@ -38,7 +40,6 @@ E03_exception_batch_03.md
 - Tests and exact validation commands
 - Line-count risk
 - Rollback
-- DA handoff prompt
 
 Once implementation begins, the approved plan is immutable. Any material change
 requires a revised plan, a new revision marker, and renewed HI/RA approval.

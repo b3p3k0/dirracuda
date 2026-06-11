@@ -4,8 +4,8 @@ Status: implementation design contract
 
 ## Shared HTTP Transport
 
-Create one shared transport module under `shared/`. Exact symbol names are
-chosen in the approved C1/C2 plan, but the responsibilities are fixed.
+Target HTTP operations use `shared/http_transport.py::http_open`. The transport
+owns these responsibilities:
 
 ```text
 verifier / browser / probe / extractor
@@ -64,11 +64,11 @@ Cert identity:   saved hostname in strict mode
 If no saved hostname exists, the IP is used consistently. A failed IP
 connection is not retried through DNS.
 
-Python's high-level `urllib` APIs do not cleanly separate TCP destination from
-SNI/certificate hostname in every path. The C2 plan must confirm a standard
-library implementation before code begins. If the standard library cannot
-provide the required separation without unsafe monkeypatching, C2 stops for
-HI/RA architecture review rather than weakening pinning or certificate checks.
+Python's high-level `urllib` path does not separate TCP destination from
+SNI/certificate hostname. `_PinnedHTTPSHandler` therefore opens the TCP socket
+to the URL authority (the recorded IP) and wraps that socket with the saved
+hostname as `server_hostname`. This preserves SNI and strict certificate
+identity without changing DNS destination or adding a dependency.
 
 ## TLS Policy Resolution
 
@@ -141,7 +141,7 @@ open archive
   -> copy in chunks to generated fixed temp filename
   -> enforce actual-byte cap while copying
   -> parse through existing CSV/JSON reader
-  -> temporary directory cleanup
+  -> temporary file cleanup
 ```
 
 No archive-provided path is used as a filesystem destination.

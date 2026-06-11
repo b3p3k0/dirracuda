@@ -184,9 +184,11 @@ For each E01-E12 card, Claude must:
 
 1. Reproduce the assigned handler list from the E0 ledger and report any line drift.
 2. Inspect each handler's call path, state effects, thread context, and data sensitivity.
-3. Submit a plan-only classification and proposed remediation for every assigned ID.
+3. As the card's DA, submit a classification and remediation plan for every
+   assigned ID without editing files.
 4. Wait for Codex and HI approval.
-5. In a separate DA session, implement only the approved non-intentional changes.
+5. After UI approval, implement only the approved non-intentional changes in
+   the same DA session.
 6. Update the ledger with final classification, rationale, files changed, tests, and
    residual risk.
 
