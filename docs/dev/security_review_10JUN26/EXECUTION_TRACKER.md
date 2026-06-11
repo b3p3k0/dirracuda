@@ -1,6 +1,6 @@
 # Security Review Execution Tracker
 
-Status: HI approved PA pack; Codex operating as RA; C5 accepted
+Status: HI approved PA pack; Codex operating as RA; C6 accepted
 
 ## Baseline
 
@@ -36,7 +36,7 @@ Status: HI approved PA pack; Codex operating as RA; C5 accepted
 | C3 | ACCEPTED | `approved_plans/C3_http_tls_policy.md` | PASS | PASS | this commit | RA corrected pre-modular explicit-value detection |
 | C4 | ACCEPTED | `approved_plans/C4_smb_extract_containment.md` | PASS | n/a | this commit | SMB extraction containment |
 | C5 | ACCEPTED | `approved_plans/C5_image_pixel_guard.md` | PASS | PASS | this commit | Pre-decode image pixel guard |
-| C6 | NOT STARTED |  | PENDING | PENDING |  | Bounded ZIP import |
+| C6 | ACCEPTED | `approved_plans/C6_bounded_zip_import.md` | PASS | DEFERRED BY HI | this commit | Bounded single-payload ZIP import |
 | C7 | NOT STARTED |  | PENDING | PENDING |  | FTP controls |
 | C8 | NOT STARTED |  | PENDING | PENDING |  | SMB basename |
 | E0 | NOT STARTED |  | PENDING | n/a |  | Exception ledger freeze |
@@ -361,3 +361,44 @@ Populate after E12:
   - The browser still holds the caller-provided compressed bytes and decoded
     image simultaneously, bounded by the existing byte and pixel limits.
 - Final status: ACCEPTED
+
+## C6 Evidence
+
+- Plan: `approved_plans/C6_bounded_zip_import.md`
+- DA session: Claude implementation summary received 2026-06-11
+- Commit before: `7577f1d`
+- Commit after: C6 implementation commit (this commit)
+- Files changed:
+  - `gui/utils/data_import_engine.py`
+  - `gui/tests/test_data_import_engine.py`
+  - approved C6 plan, lessons, and execution evidence
+- Line counts:
+  - `gui/utils/data_import_engine.py`: 794
+  - `gui/tests/test_data_import_engine.py`: 523
+- Commands:
+  - `./venv/bin/python -m pytest gui/tests/test_data_import_engine.py -q`
+  - `./venv/bin/python -m pytest gui/tests/test_db_tools_dialog.py -q`
+  - combined focused and related test group
+  - Python compile, no-`extractall` static search, and `git diff --check`
+  - independent hostile-name, temp-cleanup, and exact streamed-boundary probes
+  - real `DataExportEngine` ZIP through format-check, preview, and validate-only
+- Results:
+  - focused import tests: 35 passed
+  - related dialog tests: 8 passed
+  - combined group: 43 passed
+  - real exporter and adversarial probes: PASS
+  - compile, static search, and whitespace checks: PASS
+- RA findings:
+  - No implementation defects.
+  - Approved plan artifact and tracker evidence were absent and restored during
+    closeout.
+  - DA report understated the final test-file line count as 461; actual is 523.
+- Manual test:
+  - DEFERRED by HI on 2026-06-11 because no candidate export was readily
+    available. RA independently generated a real `DataExportEngine` ZIP and
+    verified format-check, preview, and validate-only import.
+- Residual risk:
+  - Format-check now performs bounded stream and parse work on the UI thread;
+    normal exports are small, while hostile payloads remain capped at 128 MiB.
+  - Stored-member CRC validation timing remains standard-library behavior.
+- Final status: ACCEPTED with HI-deferred manual gate

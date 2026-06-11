@@ -44,6 +44,10 @@ Status: initial seed; append during execution
 13. Determine whether a configuration value is explicit before migration
     materializes repository defaults. Once defaults are copied into an owning
     shard, presence alone cannot distinguish user intent from synthesis.
+14. Standard ZIP writers normalize fields such as declared size and encryption
+    flags. Security tests for dishonest ZIP metadata must use controlled stubs
+    or deliberately crafted bytes, not fixtures that silently rewrite the
+    condition under test.
 
 ## Append Format
 

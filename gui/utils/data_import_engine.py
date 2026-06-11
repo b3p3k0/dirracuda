@@ -12,7 +12,9 @@ workflow where colleagues export data and share it for import.
 import csv
 import json
 import sqlite3
+import stat
 import zipfile
+import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Union, Callable, Tuple
@@ -27,6 +29,14 @@ _TS_FIELDS = frozenset({
     "last_updated", "last_accessed",
     "test_timestamp", "last_verified_at", "last_probe_at",
 })
+
+# Bounded ZIP import limits (C6). A hostile archive must never be extracted as a
+# tree; exactly one root-level regular JSON/CSV member is streamed under fixed caps.
+_ZIP_MAX_MEMBERS = 32
+_ZIP_MAX_TOTAL_BYTES = 256 * 1024 * 1024      # 268435456
+_ZIP_MAX_SELECTED_BYTES = 128 * 1024 * 1024   # 134217728
+_ZIP_STREAM_CHUNK = 1024 * 1024
+_ZIP_METADATA_NAME = "export_metadata.json"   # exporter metadata member (exact, lower)
 
 
 class DataImportEngine:
@@ -300,29 +310,140 @@ class DataImportEngine:
         
         return data
     
+    @staticmethod
+    def _best_effort_remove(path: str) -> None:
+        """Remove a temp file without ever masking an active exception."""
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+    @staticmethod
+    def _is_regular_member(info: zipfile.ZipInfo) -> bool:
+        """
+        True when the member is a regular file (or carries no Unix file-type bits).
+
+        ZIP entries can encode symlinks and other special types in the high 16 bits
+        of external_attr. Many archives (Windows, or writestr with permission-only
+        modes like 0o600) record no file-type bits at all; those are treated as
+        regular. Only an explicitly non-regular type (symlink, block/char/fifo/socket)
+        is rejected. Directory entries are excluded separately via is_dir().
+        """
+        ftype = stat.S_IFMT(info.external_attr >> 16)
+        return ftype == 0 or ftype == stat.S_IFREG
+
+    def _select_zip_member(self, zipf: zipfile.ZipFile) -> zipfile.ZipInfo:
+        """
+        Validate archive limits and deterministically select one payload member.
+
+        Applies the C6 member-count, total-size, eligibility, duplicate-name,
+        selection, encryption, and selected-size rules in a fixed order. Reads no
+        payload bytes. Raises ValueError on any rejection.
+        """
+        infos = zipf.infolist()
+
+        if len(infos) > _ZIP_MAX_MEMBERS:
+            raise ValueError("archive has too many members")
+
+        if sum(i.file_size for i in infos) > _ZIP_MAX_TOTAL_BYTES:
+            raise ValueError("archive declared total size is too large")
+
+        eligible = [
+            i for i in infos
+            if "/" not in i.filename and "\\" not in i.filename
+            and not i.is_dir()
+            and self._is_regular_member(i)
+            and i.filename.lower().endswith((".json", ".csv"))
+            and os.path.basename(i.filename).lower() != _ZIP_METADATA_NAME
+        ]
+
+        names = [i.filename for i in eligible]
+        if len(names) != len(set(names)):
+            raise ValueError("archive contains duplicate eligible payload names")
+
+        json_eligible = sorted(
+            (i for i in eligible if i.filename.lower().endswith(".json")),
+            key=lambda i: i.filename,
+        )
+        csv_eligible = sorted(
+            (i for i in eligible if i.filename.lower().endswith(".csv")),
+            key=lambda i: i.filename,
+        )
+        selected = (
+            json_eligible[0] if json_eligible
+            else (csv_eligible[0] if csv_eligible else None)
+        )
+        if selected is None:
+            raise ValueError("No CSV or JSON files found in ZIP archive")
+
+        if selected.flag_bits & 0x1:
+            raise ValueError("selected archive member is encrypted")
+
+        if selected.file_size > _ZIP_MAX_SELECTED_BYTES:
+            raise ValueError("selected archive member is too large")
+
+        return selected
+
+    def _stream_zip_member_to_temp(self, zipf: zipfile.ZipFile,
+                                   info: zipfile.ZipInfo) -> str:
+        """
+        Stream one selected member to an engine-generated temp file.
+
+        The destination name comes from mkstemp, never from the archive member.
+        Enforces an actual-streamed-byte cap. Sole owner of the temp file on
+        failure: guarantees descriptor closure and best-effort removal without
+        masking the active exception. The actual-byte overrun and any member-decode
+        failure both surface as ValueError; unrelated environment errors propagate.
+        """
+        fd, temp_path = tempfile.mkstemp(suffix=".dirimport")
+        try:
+            dst = os.fdopen(fd, "wb")
+        except BaseException:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            self._best_effort_remove(temp_path)
+            raise
+        try:
+            with dst:
+                with zipf.open(info) as src:
+                    written = 0
+                    while True:
+                        chunk = src.read(_ZIP_STREAM_CHUNK)
+                        if not chunk:
+                            break
+                        written += len(chunk)
+                        if written > _ZIP_MAX_SELECTED_BYTES:
+                            raise ValueError(
+                                "archive member exceeded the streamed size limit"
+                            )
+                        dst.write(chunk)
+        except ValueError:
+            self._best_effort_remove(temp_path)
+            raise
+        except (zipfile.BadZipFile, zlib.error, EOFError) as exc:
+            self._best_effort_remove(temp_path)
+            raise ValueError("selected archive member is unreadable") from exc
+        except BaseException:
+            self._best_effort_remove(temp_path)
+            raise
+        return temp_path
+
     def _read_zip_file(self, file_path: str, data_type: str,
                       progress_callback: Optional[Callable[[int, str], None]]) -> List[Dict[str, Any]]:
-        """Read and parse ZIP file containing CSV/JSON."""
-        with tempfile.TemporaryDirectory() as temp_dir:
+        """Read and parse one bounded JSON/CSV payload from a ZIP archive."""
+        temp_path = None
+        try:
             with zipfile.ZipFile(file_path, 'r') as zipf:
-                zipf.extractall(temp_dir)
-                
-                # Look for CSV or JSON files
-                temp_path = Path(temp_dir)
-                csv_files = list(temp_path.glob('*.csv'))
-                json_files = list(temp_path.glob('*.json'))
-                
-                # Prefer JSON over CSV for more complete data
-                if json_files:
-                    for json_file in json_files:
-                        if 'metadata' not in json_file.name.lower():
-                            return self._read_json_file(str(json_file), data_type, progress_callback)
-                elif csv_files:
-                    return self._read_csv_file(str(csv_files[0]), data_type, progress_callback)
-                else:
-                    raise ValueError("No CSV or JSON files found in ZIP archive")
-        
-        return []
+                info = self._select_zip_member(zipf)
+                temp_path = self._stream_zip_member_to_temp(zipf, info)
+            if info.filename.lower().endswith(".json"):
+                return self._read_json_file(temp_path, data_type, progress_callback)
+            return self._read_csv_file(temp_path, data_type, progress_callback)
+        finally:
+            if temp_path is not None:
+                self._best_effort_remove(temp_path)
     
     def _validate_data(self, data: List[Dict[str, Any]], data_type: str) -> Dict[str, Any]:
         """
@@ -583,10 +704,10 @@ class DataImportEngine:
                     json.load(f)  # This will raise exception if invalid JSON
             
             elif file_ext == '.zip':
-                with zipfile.ZipFile(file_path, 'r') as zipf:
-                    files = zipf.namelist()
-                    if not any(f.endswith('.csv') or f.endswith('.json') for f in files):
-                        return {'valid': False, 'error': 'ZIP file contains no CSV or JSON files'}
+                # Run the identical bounded import pipeline (select + stream + read)
+                # for its raise-or-not side effect, so format-check, preview, and
+                # import reach the same accept/reject decision.
+                self._read_zip_file(file_path, None, None)
             
             return {
                 'valid': True,
