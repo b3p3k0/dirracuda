@@ -9,6 +9,7 @@ from typing import Optional
 
 from gui.utils.database_access import DatabaseReader
 from gui.utils.probe_cache_dispatch import dispatch_probe_run
+from shared.config import resolve_http_allow_insecure_tls
 from gui.utils import probe_patterns
 from gui.utils.probe_snapshot_summary import summarize_probe_snapshot
 
@@ -93,6 +94,7 @@ def _run_target_probe(
     max_files: int,
     timeout_seconds: int,
     max_depth: int,
+    allow_insecure_tls: Optional[bool] = None,
 ) -> None:
     ip_address = str(target.get("ip_address") or "").strip()
     if not ip_address:
@@ -137,6 +139,7 @@ def _run_target_probe(
         kwargs["port"] = port if port is not None else 80
         kwargs["scheme"] = target.get("scheme")
         kwargs["protocol_server_id"] = protocol_server_id
+        kwargs["allow_insecure_tls"] = allow_insecure_tls
 
     snapshot = dispatch_probe_run(ip_address, host_type, **kwargs)
     analysis = probe_patterns.attach_indicator_analysis(snapshot, indicator_patterns)
@@ -232,6 +235,8 @@ def run_post_scan_probe(
         db_reader = DatabaseReader(str(resolved_db_path))
         indicators = probe_patterns.load_ransomware_indicators(str(config_path))
         indicator_patterns = probe_patterns.compile_indicator_patterns(indicators)
+        # Resolve HTTP TLS policy once from the task's config; threaded to every target.
+        allow_insecure_tls = resolve_http_allow_insecure_tls(str(config_path))
         targets = _cohort_targets(db_reader, host_type, scan_start_iso, scan_end_iso)
     except Exception as exc:
         result.failed = 1
@@ -256,6 +261,7 @@ def run_post_scan_probe(
                 max_files=max_files,
                 timeout_seconds=timeout_seconds,
                 max_depth=max_depth,
+                allow_insecure_tls=allow_insecure_tls,
             )
         except Exception as exc:
             if cancel_event.is_set():

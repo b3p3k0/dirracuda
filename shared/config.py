@@ -5,6 +5,7 @@ Centralized configuration loading and management for the unified CLI.
 Handles the reorganized configuration structure while maintaining compatibility.
 """
 
+import copy
 import json
 import logging
 import os
@@ -14,7 +15,7 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
-from shared.config_store import get_config_store
+from shared.config_store import ConfigStore, get_config_store
 from shared.path_service import get_paths, get_legacy_paths
 
 logger = logging.getLogger(__name__)
@@ -118,6 +119,25 @@ def normalize_db_timestamp(ts_str: str) -> str:
     return s[:19]
 
 
+_TLS_TRUE = {"1", "true", "yes", "on"}
+_TLS_FALSE = {"0", "false", "no", "off"}
+_HTTP_TLS_MIGRATION = "http_tls_policy_v1"
+
+
+def _coerce_tls_bool(value: Any, default: bool) -> bool:
+    """Explicit true/false recognition; unrecognized/malformed -> supplied default."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    s = str(value).strip().lower()
+    if s in _TLS_TRUE:
+        return True
+    if s in _TLS_FALSE:
+        return False
+    return default
+
+
 class SMBSeekConfig:
     """
     Centralized configuration management for Dirracuda.
@@ -143,6 +163,8 @@ class SMBSeekConfig:
         self.config_file = str(
             self._explicit_config_file if self._explicit_config_file else _PATHS.config_file
         )
+        if self._explicit_config_file is None:
+            ensure_http_tls_policy_migrated(self._config_store)
         self.config = self.load_configuration()
 
     def _legacy_key_cleanup_result(
@@ -506,6 +528,13 @@ class SMBSeekConfig:
             "access": {"max_concurrent_hosts": 4},
         }
 
+    def get_http_allow_insecure_tls(self) -> bool:
+        """Canonical HTTP TLS policy (C3). True = skip cert/hostname verification."""
+        verif = self.get_http_config().get("verification")
+        if not isinstance(verif, dict):
+            return True
+        return _coerce_tls_bool(verif.get("allow_insecure_tls"), True)
+
     def get_max_concurrent_http_discovery_hosts(self) -> int:
         """Get max concurrent hosts for HTTP discovery with validation. Default 10, min 1."""
         value = self.get_http_config().get("discovery", {}).get("max_concurrent_hosts", 10)
@@ -824,13 +853,96 @@ class SMBSeekConfig:
         }
 
 
+def ensure_http_tls_policy_migrated(store: ConfigStore) -> None:
+    """One-time migration of the persisted HTTP TLS default (C3).
+
+    SPEC precedence: if the canonical key is explicitly present in the owning shard it
+    WINS (no migration). Only when it is absent: unified_scan_dialog ->
+    http_scan_dialog -> True, and the selected value is ALWAYS persisted. Idempotent via
+    a durable marker. Fully guarded: never raises into SMBSeekConfig construction.
+    """
+    try:
+        # Capture explicit policy before modularization can synthesize repo defaults
+        # into core.scan. A completed modular layout owns its shard value; an
+        # incomplete/pre-modular layout owns only values present in the legacy file.
+        layout_was_modular = store.has_any_main_shard() and store.prefs_file.exists()
+        source_config = (
+            store.read_shard_payload("core.scan")
+            if layout_was_modular
+            else store.read_legacy_runtime_payload()
+        )
+        if source_config is None:
+            return
+        source_http = source_config.get("http")
+        source_http = source_http if isinstance(source_http, dict) else {}
+        source_verif = source_http.get("verification")
+        source_verif = source_verif if isinstance(source_verif, dict) else {}
+        canonical_was_explicit = "allow_insecure_tls" in source_verif
+
+        result = store.ensure_migrated()
+        if result.status not in ("success", "already_modular"):
+            return  # modularization incomplete/failed -> retry next launch, NO marker
+        if store.is_migration_done(_HTTP_TLS_MIGRATION):
+            return
+        if not store.has_any_main_shard():
+            return  # shard layout unavailable; run on composed fallback, retry later
+
+        raw_scan = store.read_shard_payload("core.scan")
+        if raw_scan is None:
+            return  # malformed shard -> do NOT clobber; no marker; retry next launch
+
+        raw_http = raw_scan.get("http")
+        raw_http = raw_http if isinstance(raw_http, dict) else {}
+        verif = raw_http.get("verification")
+        verif = verif if isinstance(verif, dict) else {}
+
+        if canonical_was_explicit:
+            # Canonical key explicitly present -> it wins. Nothing to migrate.
+            store.mark_migration_done(_HTTP_TLS_MIGRATION)
+            return
+
+        # Canonical absent -> migrate (unified -> http -> True) and ALWAYS persist.
+        prefs = store.load_user_prefs()
+        value = True
+        for section_name in ("unified_scan_dialog", "http_scan_dialog"):
+            section = prefs.get(section_name)
+            if isinstance(section, dict) and "allow_insecure_tls" in section:
+                value = _coerce_tls_bool(section["allow_insecure_tls"], True)
+                break
+
+        new_http = copy.deepcopy(raw_http)
+        new_verif = new_http.get("verification")
+        if not isinstance(new_verif, dict):
+            new_verif = {}  # normalize a malformed verification before assignment
+        new_verif["allow_insecure_tls"] = value
+        new_http["verification"] = new_verif
+        store.update_sections({"http": new_http})  # safe: shard confirmed parseable
+        store.mark_migration_done(_HTTP_TLS_MIGRATION)
+    except Exception as exc:  # never break SMBSeekConfig construction
+        logger.warning("HTTP TLS policy migration skipped: %s", exc)
+
+
+def resolve_http_allow_insecure_tls(config_path: Optional[str] = None) -> bool:
+    """Shared C3 resolver for callers holding only an optional config path.
+
+    Canonical path (or None) -> store-mode config (migration applies); any other path ->
+    explicit-file config (file value or default true).
+    """
+    explicit: Optional[str] = None
+    if config_path:
+        candidate = Path(config_path).expanduser().resolve(strict=False)
+        if candidate != _PATHS.config_file.resolve(strict=False):
+            explicit = str(candidate)
+    return SMBSeekConfig(config_file=explicit).get_http_allow_insecure_tls()
+
+
 def load_config(config_file: Optional[str] = None) -> SMBSeekConfig:
     """
     Convenience function to load Dirracuda configuration.
-    
+
     Args:
         config_file: Path to configuration file
-        
+
     Returns:
         SMBSeekConfig instance
     """

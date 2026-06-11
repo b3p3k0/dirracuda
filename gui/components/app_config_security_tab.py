@@ -51,6 +51,44 @@ def create_tmpfs_card(dialog, security_tab) -> None:
             pass
 
 
+def create_http_tls_card(dialog, security_tab) -> None:
+    card = tk.Frame(security_tab, highlightthickness=1, bd=0)
+    dialog.theme.apply_to_widget(card, "card")
+    try:
+        card.configure(
+            highlightbackground=dialog.theme.colors["border"],
+            highlightcolor=dialog.theme.colors["border"],
+        )
+    except tk.TclError:
+        pass
+    card.pack(fill=tk.X, pady=(0, 10))
+
+    heading = dialog.theme.create_styled_label(card, "HTTP Target TLS", "body")
+    heading.pack(anchor=tk.W, padx=12, pady=(10, 6))
+
+    row1 = tk.Frame(card)
+    dialog.theme.apply_to_widget(row1, "card")
+    row1.pack(fill=tk.X, padx=10, pady=(0, 6))
+    dialog.http_tls_allow_insecure_var = tk.BooleanVar(value=dialog.http_tls_allow_insecure)
+    cb_tls = tk.Checkbutton(
+        row1,
+        text="Allow insecure TLS for HTTP targets (skip certificate verification)",
+        variable=dialog.http_tls_allow_insecure_var,
+    )
+    dialog.theme.apply_to_widget(cb_tls, "checkbox")
+    cb_tls.pack(anchor=tk.W)
+
+    note = dialog.theme.create_styled_label(
+        card,
+        "When enabled, certificate and hostname checks are skipped for HTTPS targets — "
+        "connections can be intercepted or impersonated (machine-in-the-middle). This is "
+        "the application default; a scan dialog choice applies to that run only.",
+        "small",
+        fg=dialog.theme.colors["text_secondary"],
+    )
+    note.pack(anchor=tk.W, padx=12, pady=(0, 10))
+
+
 def create_clamav_card(dialog, security_tab) -> None:
     card = tk.Frame(security_tab, highlightthickness=1, bd=0)
     dialog.theme.apply_to_widget(card, "card")

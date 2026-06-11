@@ -1465,14 +1465,16 @@ class DashboardWidget:
     def _run_background_fetch(self, title: str, message: str, fetch_fn: Callable[[], Any]) -> tuple:
         return dashboard_batch_ops.run_background_fetch(self, title, message, fetch_fn)
 
-    def _execute_batch_probe(self, servers: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        return dashboard_batch_ops.execute_batch_probe(self, servers)
+    def _execute_batch_probe(self, servers: List[Dict[str, Any]], allow_insecure_tls: Optional[bool] = None) -> List[Dict[str, Any]]:
+        return dashboard_batch_ops.execute_batch_probe(self, servers, allow_insecure_tls=allow_insecure_tls)
 
     def _probe_single_server(self, server: Dict[str, Any], max_dirs: int, max_files: int,
                               timeout_seconds: int, max_depth: int = 1,
-                              cancel_event: Optional[threading.Event] = None) -> Dict[str, Any]:
+                              cancel_event: Optional[threading.Event] = None,
+                              allow_insecure_tls: Optional[bool] = None) -> Dict[str, Any]:
         return dashboard_batch_ops.probe_single_server(
-            self, server, max_dirs, max_files, timeout_seconds, max_depth, cancel_event
+            self, server, max_dirs, max_files, timeout_seconds, max_depth, cancel_event,
+            allow_insecure_tls=allow_insecure_tls,
         )
 
     def _protocol_label_from_host_type(self, host_type: Optional[str]) -> str:
@@ -1487,8 +1489,8 @@ class DashboardWidget:
             self, share_count, issue_detected, analysis, result
         )
 
-    def _execute_batch_extract(self, servers: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        return dashboard_batch_ops.execute_batch_extract(self, servers)
+    def _execute_batch_extract(self, servers: List[Dict[str, Any]], allow_insecure_tls: Optional[bool] = None) -> List[Dict[str, Any]]:
+        return dashboard_batch_ops.execute_batch_extract(self, servers, allow_insecure_tls=allow_insecure_tls)
 
     def _extract_single_server(self, server: Dict[str, Any], max_file_mb: int, max_total_mb: int,
                                  max_time: int, max_files: int, extension_mode: str,

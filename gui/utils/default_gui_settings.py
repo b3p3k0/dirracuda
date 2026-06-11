@@ -70,7 +70,6 @@ DEFAULT_GUI_SETTINGS = {
         'bulk_extract_enabled': False,
         'bulk_extract_skip_indicators': True,
         'security_mode': 'cautious',
-        'allow_insecure_tls': True,
         'region_africa': False,
         'region_asia': False,
         'region_europe': False,

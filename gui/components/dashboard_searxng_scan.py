@@ -194,6 +194,7 @@ def start_searxng_scan(dash, scan_request: dict) -> bool:
         bulk_probe_enabled=bool(scan_request.get("bulk_probe_enabled", False)),
         probe_config_path=probe_config_path,
         probe_worker_count=probe_worker_count,
+        allow_insecure_tls=scan_request.get("allow_insecure_tls"),
         request_timeout=coerce_searxng_tuning(
             scan_request.get("searxng_request_timeout", SEARXNG_TIMEOUT_DEFAULT),
             default=SEARXNG_TIMEOUT_DEFAULT, lo=SEARXNG_TIMEOUT_MIN,

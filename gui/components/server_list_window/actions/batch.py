@@ -290,6 +290,7 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                 start_path=http_start_path,
                 protocol_server_id=protocol_server_id,
                 db_reader=self.db_reader,
+                allow_insecure_tls=options.get("http_allow_insecure_tls"),
             )
             analysis = probe_patterns.attach_indicator_analysis(snapshot, self.indicator_patterns)
             issue_detected = bool(analysis.get("is_suspicious"))

@@ -41,6 +41,9 @@ Status: initial seed; append during execution
     exact supported-version source and test the observable wire behavior. An
     attribute that sounds authoritative may not be consulted by the connection
     path at all.
+13. Determine whether a configuration value is explicit before migration
+    materializes repository defaults. Once defaults are copied into an owning
+    shard, presence alone cannot distinguish user intent from synthesis.
 
 ## Append Format
 

@@ -564,7 +564,7 @@ class TestCancellationBoundaries:
         monkeypatch.setattr("urllib.request.urlopen", _urlopen)
         classify_n = [0]
 
-        def _classify_sets_cancel(url, timeout=10):
+        def _classify_sets_cancel(url, timeout=10, allow_insecure_tls=None):
             classify_n[0] += 1
             if classify_n[0] == 2:
                 evt.set()

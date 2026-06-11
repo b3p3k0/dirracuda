@@ -25,6 +25,7 @@ from gui.utils.probe_cache_dispatch import dispatch_probe_run
 from gui.utils.probe_snapshot_summary import summarize_probe_snapshot
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.logging_config import get_logger
+from shared.config import resolve_http_allow_insecure_tls
 from shared.quarantine import create_quarantine_dir
 
 _logger = get_logger("server_list_window")
@@ -1111,6 +1112,11 @@ class ServerListWindowBatchOperationsMixin:
         if not dialog_config:
             return
 
+        # Resolve HTTP TLS policy once per launch; every worker shares it.
+        dialog_config["http_allow_insecure_tls"] = resolve_http_allow_insecure_tls(
+            self._get_config_path()
+        )
+
         self._start_batch_job("probe", targets, dialog_config)
 
     def _launch_extract_workflow(self, targets: List[Dict[str, Any]]) -> None:
@@ -1135,20 +1141,15 @@ class ServerListWindowBatchOperationsMixin:
 
         # Load clamav config once before futures start (not per-target).
         clamav_cfg: Dict[str, Any] = {}
-        http_allow_insecure_tls = True
         if config_path and Path(config_path).exists():
             try:
                 _cfg_data = json.loads(Path(config_path).read_text(encoding="utf-8"))
                 clamav_cfg = _cfg_data.get("clamav", {})
-                http_allow_insecure_tls = bool(
-                    _cfg_data.get("http", {})
-                    .get("verification", {})
-                    .get("allow_insecure_tls", True)
-                )
             except Exception:
                 pass
         dialog_config["clamav_config"] = clamav_cfg
-        dialog_config["http_allow_insecure_tls"] = http_allow_insecure_tls
+        # Resolve HTTP TLS policy once per launch via the shared resolver.
+        dialog_config["http_allow_insecure_tls"] = resolve_http_allow_insecure_tls(config_path)
 
         self._start_batch_job("extract", targets, dialog_config)
 

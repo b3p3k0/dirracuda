@@ -25,7 +25,18 @@ if "impacket" not in sys.modules:
     sys.modules["impacket.smb"] = impacket_smb_mod
     sys.modules["impacket.smbconnection"] = impacket_smbconn_mod
 
+import pytest
+
 from gui.components.dashboard import DashboardWidget
+
+
+@pytest.fixture(autouse=True)
+def _isolate_tls_resolver(monkeypatch):
+    """Never read the developer's real ~/.dirracuda for HTTP TLS policy in tests."""
+    monkeypatch.setattr(
+        "gui.components.dashboard_batch_ops.resolve_http_allow_insecure_tls",
+        lambda config_path=None: True,
+    )
 
 
 class _StubParent:
@@ -269,6 +280,81 @@ def test_http_post_scan_bulk_probe_uses_http_host_type_filter(monkeypatch):
     probe_targets = dash._execute_batch_probe.call_args[0][0]
     assert len(probe_targets) == 1
     assert probe_targets[0]["host_type"] == "H"
+
+
+def _make_post_scan_dash():
+    dash = DashboardWidget.__new__(DashboardWidget)
+    dash.parent = _StubParent()
+    dash.settings_manager = _FakeSettingsManager()
+    dash._show_scan_results = MagicMock()
+    dash._reset_scan_status = MagicMock()
+    dash._show_batch_summary = MagicMock()
+    dash._execute_batch_probe = MagicMock(return_value=[])
+    dash._execute_batch_extract = MagicMock(return_value=[])
+    dash._get_servers_for_bulk_ops = lambda **_k: {
+        "probe": [{"ip_address": "203.0.113.10", "host_type": "H"}],
+        "extract": [{"ip_address": "203.0.113.10", "host_type": "H"}],
+    }
+    dash._run_background_fetch = lambda title, message, fetch_fn: (fetch_fn(), None)
+    return dash
+
+
+def test_post_scan_threads_transient_override_to_both_ops(monkeypatch):
+    """C3: scan_options['allow_insecure_tls'] reaches probe AND extract; resolver unused."""
+    calls = {"resolve": 0}
+    monkeypatch.setattr(
+        "gui.components.dashboard_batch_ops.resolve_http_allow_insecure_tls",
+        lambda config_path=None: calls.__setitem__("resolve", calls["resolve"] + 1) or True,
+    )
+    monkeypatch.setattr("gui.components.dashboard.messagebox.showerror", lambda *a, **k: None)
+    monkeypatch.setattr("gui.components.dashboard.messagebox.showinfo", lambda *a, **k: None)
+    dash = _make_post_scan_dash()
+
+    dash._run_post_scan_batch_operations(
+        {
+            "bulk_probe_enabled": True,
+            "bulk_extract_enabled": True,
+            "bulk_extract_skip_indicators": True,
+            "allow_insecure_tls": False,
+        },
+        {"protocol": "http", "hosts_scanned": 1,
+         "start_time": "2026-06-11T00:00:00", "end_time": "2026-06-11T01:00:00"},
+        show_dialogs=False,
+    )
+
+    assert dash._execute_batch_probe.call_args.kwargs["allow_insecure_tls"] is False
+    assert dash._execute_batch_extract.call_args.kwargs["allow_insecure_tls"] is False
+    assert calls["resolve"] == 0  # transient override means no resolver call
+
+
+def test_post_scan_resolves_once_when_override_absent(monkeypatch):
+    calls = {"resolve": 0}
+
+    def _resolve(config_path=None):
+        calls["resolve"] += 1
+        return True
+
+    monkeypatch.setattr(
+        "gui.components.dashboard_batch_ops.resolve_http_allow_insecure_tls", _resolve
+    )
+    monkeypatch.setattr("gui.components.dashboard.messagebox.showerror", lambda *a, **k: None)
+    monkeypatch.setattr("gui.components.dashboard.messagebox.showinfo", lambda *a, **k: None)
+    dash = _make_post_scan_dash()
+
+    dash._run_post_scan_batch_operations(
+        {
+            "bulk_probe_enabled": True,
+            "bulk_extract_enabled": True,
+            "bulk_extract_skip_indicators": True,
+        },
+        {"protocol": "http", "hosts_scanned": 1,
+         "start_time": "2026-06-11T00:00:00", "end_time": "2026-06-11T01:00:00"},
+        show_dialogs=False,
+    )
+
+    assert calls["resolve"] == 1  # resolved once for the whole run, not per op
+    assert dash._execute_batch_probe.call_args.kwargs["allow_insecure_tls"] is True
+    assert dash._execute_batch_extract.call_args.kwargs["allow_insecure_tls"] is True
 
 
 def test_post_scan_bulk_probe_no_positional_arg_typeerror(monkeypatch):
@@ -959,6 +1045,7 @@ def test_execute_batch_probe_passes_configured_depth_to_probe_worker(monkeypatch
         _timeout_seconds,
         max_depth,
         cancel_event=None,
+        allow_insecure_tls=None,
     ):
         captured["max_depth"] = max_depth
         assert cancel_event is not None

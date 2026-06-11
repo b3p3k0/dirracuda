@@ -18,6 +18,7 @@ from gui.utils import probe_cache, ftp_probe_cache, http_probe_cache
 from gui.utils import probe_runner, ftp_probe_runner, http_probe_runner
 from gui.utils.database_access import DatabaseReader
 from gui.utils.settings_manager import get_settings_manager
+from shared.config import resolve_http_allow_insecure_tls
 
 _UNSET = object()
 _DB_READER_CACHE: Dict[str, Any] = {"path": None, "reader": None}
@@ -130,6 +131,7 @@ def dispatch_probe_run(
     username=_UNSET,
     password=_UNSET,
     allow_empty: bool = False,
+    allow_insecure_tls: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Dispatch a probe run to the correct protocol runner.
 
@@ -197,6 +199,10 @@ def dispatch_probe_run(
             start_path = (detail or {}).get("probe_path") or "/"
         start_path = _normalize_start_path(start_path)
 
+        if allow_insecure_tls is None:
+            tls = resolve_http_allow_insecure_tls()
+        else:
+            tls = bool(allow_insecure_tls)
         max_entries = max(1, max_directories * max_files)
         return http_probe_runner.run_http_probe(
             ip_address,
@@ -204,7 +210,7 @@ def dispatch_probe_run(
             scheme=scheme,
             request_host=request_host,
             start_path=start_path,
-            allow_insecure_tls=True,
+            allow_insecure_tls=tls,
             max_entries=max_entries,
             max_directories=max_directories,
             max_files=max_files,

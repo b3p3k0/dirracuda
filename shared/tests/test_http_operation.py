@@ -39,6 +39,7 @@ def _make_workflow(*, verify_http: bool = True, verify_https: bool = True):
             "verify_https": verify_https,
         }
     }
+    cfg.get_http_allow_insecure_tls.return_value = True
     cfg.get_max_concurrent_http_access_hosts.return_value = 4
     cfg.get_max_concurrent_http_discovery_hosts.return_value = 4
     cfg.get.return_value = 30

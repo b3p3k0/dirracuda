@@ -1,6 +1,6 @@
 # Security Review Execution Tracker
 
-Status: HI approved PA pack; Codex operating as RA; C2 accepted
+Status: HI approved PA pack; Codex operating as RA; C3 accepted
 
 ## Baseline
 
@@ -33,7 +33,7 @@ Status: HI approved PA pack; Codex operating as RA; C2 accepted
 | C0 | ACCEPTED | n/a | PASS | n/a | n/a | Baseline unchanged from PA pack |
 | C1 | ACCEPTED | `approved_plans/C1_http_redirect_policy.md` | PASS | n/a | this commit | RA corrected IDNA wire encoding |
 | C2 | ACCEPTED | `approved_plans/C2_endpoint_pinning.md` | PASS | n/a | this commit | Broad suite has one proven pre-existing failure |
-| C3 | NOT STARTED |  | PENDING | PENDING |  | Canonical TLS policy |
+| C3 | ACCEPTED | `approved_plans/C3_http_tls_policy.md` | PASS | PASS | this commit | RA corrected pre-modular explicit-value detection |
 | C4 | NOT STARTED |  | PENDING | PENDING |  | SMB extraction containment |
 | C5 | NOT STARTED |  | PENDING | PENDING |  | Image pixel guard |
 | C6 | NOT STARTED |  | PENDING | PENDING |  | Bounded ZIP import |
@@ -212,4 +212,71 @@ Populate after E12:
   - Runtime support still includes EOL Python 3.8; compatibility was source
     verified because Python 3.8 is not installed in the review environment.
   - C3 still owns canonical TLS policy resolution and operator controls.
+- Final status: ACCEPTED
+
+## C3 Evidence
+
+- Plan: `approved_plans/C3_http_tls_policy.md`
+- DA session: Claude implementation summary received 2026-06-11
+- Commit before: `fbbd502`
+- Commit after: C3 implementation commit (this commit)
+- Files changed:
+  - canonical TLS policy and migration in `shared/config.py` and
+    `shared/config_store.py`
+  - HTTP discovery, browser, probe, extraction, dashboard, Server List,
+    SearXNG, and Web UI post-scan consumers
+  - unified/HTTP scan dialogs and App Config security UI
+  - focused shared, GUI, SearXNG, and Web UI tests
+  - approved C3 plan, lessons, and execution evidence
+- Line counts:
+  - `shared/config.py`: 949
+  - `shared/config_store.py`: 581
+  - `gui/components/app_config_dialog.py`: 1593
+  - `gui/components/app_config_security_tab.py`: 195
+  - `gui/components/dashboard_batch_ops.py`: 1515
+  - `gui/dashboard/widget.py`: 1686
+  - `experimental/se_dork/service.py`: 1217
+  - `experimental/webui/post_scan_probe.py`: 276
+- Commands:
+  - all focused C3 pytest groups from the approved plan
+  - `./venv/bin/python -m pytest`
+  - `./venv/bin/python scripts/run_agent_testing_workflow.py --lane quick`
+  - `xvfb-run -a ./venv/bin/python -m pytest -m gui_smoke`
+  - `./venv/bin/python scripts/run_agent_testing_workflow.py --lane quick --gui-smoke`
+  - exact daemon import test in isolation
+  - compile, static retired-key/hardcoded-policy searches, and
+    `git diff --check`
+- Results:
+  - focused C3 groups: PASS
+  - full suite: 3203 passed, 1 failed
+  - broad failure:
+    `experimental/webui/tests/test_daemon_cli.py::test_daemon_modules_import_without_tkinter`
+  - the same broad import-order failure is documented from the C2 baseline;
+    the exact test passes alone on C3 and on detached `fbbd502`
+  - quick workflow: 60 passed
+  - pytest `gui_smoke` marker gate: exit 5 because zero tests are marked;
+    detached `fbbd502` has the same result
+  - actual Xvfb GUI launch smoke: PASS; `./dirracuda --mock` remained running
+    for 15 seconds
+  - compile, static searches, and whitespace: PASS
+- RA findings:
+  - Medium: a real pre-modular install without the canonical key had repository
+    defaults copied into `core.scan` before C3 checked explicit presence. The
+    synthesized `true` was mistaken for a user value, so a saved legacy
+    `false` was ignored and the marker was set.
+  - Corrected directly by determining explicitness from the pre-modular
+    runtime payload before default materialization. Added upgrade regressions
+    for an existing keyless runtime config and for no runtime config.
+  - Restored the missing approved Rev 6 plan artifact.
+- Manual test:
+  - PASS by HI on 2026-06-11: App Config default affected later HTTP
+    browser/probe behavior, and an opposite transient scan choice did not
+    rewrite the persisted default.
+- Residual risk:
+  - Already-modularized installs retain their synthesized canonical value by
+    the approved canonical-present-wins rule.
+  - App Config persists the composed `http` section, freezing current defaults
+    into the owning shard.
+  - The `pytest -m gui_smoke` final gate is presently nonfunctional because no
+    tests use the marker; the repository's executable GUI smoke passed.
 - Final status: ACCEPTED

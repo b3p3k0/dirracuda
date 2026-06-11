@@ -52,6 +52,7 @@ class RunOptions:
     request_timeout: int = 15
     short_retry_delay: int = 30
     long_retry_delay: int = 180
+    allow_insecure_tls: Optional[bool] = None  # transient scan override; None -> resolver
 
 
 @dataclass

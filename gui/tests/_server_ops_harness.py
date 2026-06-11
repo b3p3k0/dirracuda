@@ -483,6 +483,7 @@ def make_dashboard_batch_task_stub(
         _timeout_seconds,
         _max_depth,
         cancel_event=None,
+        allow_insecure_tls=None,
     ):
         assert cancel_event is not None
         state["probe_cancel_event"] = cancel_event

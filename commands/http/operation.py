@@ -206,7 +206,7 @@ def run_access_stage(workflow: "HttpWorkflow", candidates: List[HttpCandidate]) 
     verif = http_cfg.get("verification", {})
     request_timeout = float(verif.get("request_timeout", 10))
     subdir_timeout = float(verif.get("subdir_timeout", 8))
-    allow_insecure_tls = verif.get("allow_insecure_tls", True)
+    allow_insecure_tls = workflow.config.get_http_allow_insecure_tls()
     verify_http = verif.get("verify_http", True)
     verify_https = verif.get("verify_https", True)
 

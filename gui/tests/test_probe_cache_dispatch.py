@@ -18,6 +18,15 @@ _FAKE_SNAPSHOT = {"ip_address": "1.2.3.4", "shares": []}
 _IP = "1.2.3.4"
 
 
+@pytest.fixture(autouse=True)
+def _isolate_tls_resolver(monkeypatch):
+    """Keep dispatch TLS resolution off the developer's real ~/.dirracuda."""
+    monkeypatch.setattr(
+        "gui.utils.probe_cache_dispatch.resolve_http_allow_insecure_tls",
+        lambda config_path=None: True,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Protocol routing
 # ---------------------------------------------------------------------------
@@ -318,6 +327,37 @@ def test_dispatch_http_explicit_scheme_skips_db_lookup():
     assert kw["allow_insecure_tls"] is True
     assert kw["cancel_event"] is cancel
     assert kw["max_depth"] == 2
+
+
+def test_dispatch_http_honors_explicit_tls_override():
+    """C3: an explicit allow_insecure_tls overrides the resolver."""
+    cancel = _threading.Event()
+    with patch("gui.utils.probe_cache_dispatch.http_probe_runner") as http_m:
+        http_m.run_http_probe.return_value = _FAKE_HTTP_SNAP
+        dispatch_probe_run(
+            _IP, "H",
+            max_directories=3, max_files=5, timeout_seconds=10,
+            cancel_event=cancel, port=8080, scheme="https",
+            allow_insecure_tls=False,
+        )
+    assert http_m.run_http_probe.call_args.kwargs["allow_insecure_tls"] is False
+
+
+def test_dispatch_http_uses_resolved_tls_policy(monkeypatch):
+    """C3: with no override, dispatch resolves the canonical policy."""
+    monkeypatch.setattr(
+        "gui.utils.probe_cache_dispatch.resolve_http_allow_insecure_tls",
+        lambda config_path=None: False,
+    )
+    cancel = _threading.Event()
+    with patch("gui.utils.probe_cache_dispatch.http_probe_runner") as http_m:
+        http_m.run_http_probe.return_value = _FAKE_HTTP_SNAP
+        dispatch_probe_run(
+            _IP, "H",
+            max_directories=3, max_files=5, timeout_seconds=10,
+            cancel_event=cancel, port=8080, scheme="https",
+        )
+    assert http_m.run_http_probe.call_args.kwargs["allow_insecure_tls"] is False
 
 
 def test_dispatch_http_scheme_none_resolves_from_db_reader():

@@ -27,6 +27,7 @@ from gui.components.query_budget_dialog import (
 )
 from gui.components.scan_dork_editor_dialog import show_scan_dork_editor_dialog
 from gui.components.scan_preflight import run_preflight
+from shared.config import resolve_http_allow_insecure_tls
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.style import get_theme
 from gui.utils.template_store import TemplateStore
@@ -134,6 +135,7 @@ class UnifiedScanDialog:
 
         self._load_config_defaults()
         self._load_initial_values()
+        self._init_tls_policy_default()
         self._create_dialog()
 
     # ------------------------------------------------------------------
@@ -245,10 +247,6 @@ class UnifiedScanDialog:
             mode = str(self._settings_manager.get_setting("unified_scan_dialog.security_mode", "cautious")).strip().lower()
             self.security_mode_var.set(mode if mode in {"cautious", "legacy"} else "cautious")
 
-            self.allow_insecure_tls_var.set(
-                _coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.allow_insecure_tls", True), True)
-            )
-
             self.africa_var.set(_coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.region_africa", False), False))
             self.asia_var.set(_coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.region_asia", False), False))
             self.europe_var.set(_coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.region_europe", False), False))
@@ -283,6 +281,18 @@ class UnifiedScanDialog:
             self.protocol_smb_var.set(True)
             self.protocol_ftp_var.set(True)
             self.protocol_http_var.set(True)
+
+    def _init_tls_policy_default(self) -> None:
+        """Initialize the TLS checkbox from the canonical App Config default (C3).
+
+        Runs unconditionally (even without a settings manager) so the dialog never
+        reads or seeds the retired GUI TLS key.
+        """
+        try:
+            cfg_path = resolve_config_path_from_settings(self._settings_manager) or str(self.config_path)
+            self.allow_insecure_tls_var.set(resolve_http_allow_insecure_tls(cfg_path))
+        except Exception:
+            pass
 
     def _persist_dialog_state(self) -> None:
         """Best-effort persistence of dialog state."""
@@ -328,7 +338,9 @@ class UnifiedScanDialog:
             if mode not in {"cautious", "legacy"}:
                 mode = "cautious"
             self._settings_manager.set_setting("unified_scan_dialog.security_mode", mode)
-            self._settings_manager.set_setting("unified_scan_dialog.allow_insecure_tls", bool(self.allow_insecure_tls_var.get()))
+            # allow_insecure_tls is no longer persisted here (C3): it is a transient
+            # per-run override carried in the scan request; the App Config default owns
+            # the persisted value.
 
             self._settings_manager.set_setting("unified_scan_dialog.region_africa", bool(self.africa_var.get()))
             self._settings_manager.set_setting("unified_scan_dialog.region_asia", bool(self.asia_var.get()))

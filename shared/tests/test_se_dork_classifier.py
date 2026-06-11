@@ -23,6 +23,16 @@ from experimental.se_dork.classifier import (
     classify_url,
 )
 
+
+@pytest.fixture(autouse=True)
+def _isolate_tls_resolver(monkeypatch):
+    """Keep classifier TLS resolution off the developer's real ~/.dirracuda."""
+    monkeypatch.setattr(
+        "experimental.se_dork.classifier.resolve_http_allow_insecure_tls",
+        lambda config_path=None: True,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -40,6 +50,38 @@ def _mock_request(monkeypatch, status: int, body: str = "", reason: str = ""):
         "experimental.se_dork.classifier.try_http_request",
         lambda *args, **kwargs: (status, body, False, reason),
     )
+
+
+# ---------------------------------------------------------------------------
+# C3: TLS policy forwarding
+# ---------------------------------------------------------------------------
+
+def test_classify_forwards_explicit_tls_override(monkeypatch):
+    captured = {}
+
+    def _capture(*args, **kwargs):
+        captured["allow_insecure_tls"] = kwargs.get("allow_insecure_tls")
+        return (200, _VALID_INDEX_HTML, False, "")
+
+    monkeypatch.setattr("experimental.se_dork.classifier.try_http_request", _capture)
+    classify_url("http://192.168.1.1/", allow_insecure_tls=False)
+    assert captured["allow_insecure_tls"] is False
+
+
+def test_classify_resolves_tls_when_override_absent(monkeypatch):
+    captured = {}
+
+    def _capture(*args, **kwargs):
+        captured["allow_insecure_tls"] = kwargs.get("allow_insecure_tls")
+        return (200, _VALID_INDEX_HTML, False, "")
+
+    monkeypatch.setattr("experimental.se_dork.classifier.try_http_request", _capture)
+    monkeypatch.setattr(
+        "experimental.se_dork.classifier.resolve_http_allow_insecure_tls",
+        lambda config_path=None: False,
+    )
+    classify_url("http://192.168.1.1/")
+    assert captured["allow_insecure_tls"] is False
 
 
 # ---------------------------------------------------------------------------

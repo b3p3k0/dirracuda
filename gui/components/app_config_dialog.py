@@ -29,14 +29,18 @@ from gui.utils.keybindings import (
     bind_save_shortcuts,
     bind_submit_shortcuts,
 )
-from gui.components.app_config_security_tab import create_clamav_card, create_tmpfs_card
+from gui.components.app_config_security_tab import (
+    create_clamav_card,
+    create_http_tls_card,
+    create_tmpfs_card,
+)
 from gui.utils.style import get_theme
 from shared.db_path_resolution import (
     auto_detect_database_path,
     normalize_database_path,
     resolve_database_path,
 )
-from shared.config import load_config as load_main_config
+from shared.config import load_config as load_main_config, resolve_http_allow_insecure_tls
 from shared.path_service import (
     get_legacy_paths,
     get_paths,
@@ -83,6 +87,7 @@ _APP_CONFIG_RUNTIME_SECTIONS = (
     "file_browser",
     "ftp_browser",
     "http_browser",
+    "http",
     "quarantine",
     "clamav",
     "gui_app",
@@ -258,6 +263,10 @@ class AppConfigDialog:
         self.clamav_show_results: bool = True
         self.clamav_auto_promote_clean: bool = False
 
+        # HTTP target TLS policy (C3 canonical default).
+        self.http_tls_allow_insecure: bool = True
+        self.http_tls_allow_insecure_var: Optional[tk.BooleanVar] = None
+
         self.clamav_enabled_var: Optional[tk.BooleanVar] = None
         self.clamav_backend_var: Optional[tk.StringVar] = None
         self.clamav_timeout_var: Optional[tk.StringVar] = None
@@ -307,6 +316,13 @@ class AppConfigDialog:
 
     def _load_runtime_settings_from_config(self, config_path: str) -> None:
         """Load API key and quarantine path from config.json."""
+        # HTTP TLS default via the canonical resolver (triggers migration + coercion);
+        # done first so it runs even when the config file does not yet exist.
+        try:
+            self.http_tls_allow_insecure = resolve_http_allow_insecure_tls(config_path)
+        except Exception:
+            self.http_tls_allow_insecure = True
+
         path_obj = Path(config_path).expanduser()
         if not path_obj.exists():
             return
@@ -489,6 +505,7 @@ class AppConfigDialog:
         self._create_compact_card(runtime_tab, "Runtime Settings", ("api_key", "quarantine"))
 
         create_tmpfs_card(self, security_tab)
+        create_http_tls_card(self, security_tab)
         create_clamav_card(self, security_tab)
 
         self._sync_quarantine_controls_for_tmpfs()
@@ -1269,6 +1286,9 @@ class AppConfigDialog:
             self.quarantine_var.get().strip() if self.quarantine_var else self.quarantine_path
         )
 
+        _tls_var = getattr(self, "http_tls_allow_insecure_var", None)
+        new_http_tls_allow_insecure = bool(_tls_var.get()) if _tls_var else True
+
         _timeout_var = getattr(self, "clamav_timeout_var", None)
         try:
             _clamav_timeout = max(1, int(_timeout_var.get())) if _timeout_var else 60
@@ -1359,6 +1379,7 @@ class AppConfigDialog:
                 new_quarantine,
                 clamav_settings=new_clamav,
                 quarantine_tmpfs_settings=new_quarantine_tmpfs,
+                http_tls_allow_insecure=new_http_tls_allow_insecure,
             )
 
             if owner_config is not None:
@@ -1382,6 +1403,7 @@ class AppConfigDialog:
             self.config_path = new_config_path
             self.api_key = new_api_key
             self.quarantine_path = new_quarantine
+            self.http_tls_allow_insecure = new_http_tls_allow_insecure
             self.clamav_enabled = new_clamav["enabled"]
             self.clamav_backend = new_clamav["backend"]
             self.clamav_timeout = new_clamav["timeout_seconds"]
@@ -1458,9 +1480,18 @@ class AppConfigDialog:
         clamav_settings: Optional[Dict[str, Any]] = None,
         quarantine_tmpfs_settings: Optional[Dict[str, Any]] = None,
         censys_settings: Optional[Dict[str, Any]] = None,
+        http_tls_allow_insecure: Optional[bool] = None,
     ) -> None:
         # Shodan API key drives scan processes.
         _set_nested(config_data, ("shodan", "api_key"), api_key)
+
+        # Canonical HTTP TLS policy (C3).
+        if http_tls_allow_insecure is not None:
+            _set_nested(
+                config_data,
+                ("http", "verification", "allow_insecure_tls"),
+                bool(http_tls_allow_insecure),
+            )
 
         # Keep quarantine path aligned across browser and extract-adjacent sections.
         _set_nested(config_data, ("file_browser", "quarantine_root"), quarantine_path)

@@ -38,6 +38,15 @@ from gui.tests._server_ops_harness import (
 main_module = load_dirracuda_module()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_tls_resolver(monkeypatch):
+    """Keep batch-op TLS resolution off the developer's real ~/.dirracuda."""
+    monkeypatch.setattr(
+        "gui.components.dashboard_batch_ops.resolve_http_allow_insecure_tls",
+        lambda config_path=None: True,
+    )
+
+
 def setup_function() -> None:
     _reset_running_task_registry_for_tests()
 

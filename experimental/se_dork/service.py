@@ -653,6 +653,7 @@ def _classify_page_rows(
     timeout: float = 10.0,
     progress_cb: Optional[Callable[[str], None]] = None,
     cancel_event: Optional[threading.Event] = None,
+    allow_insecure_tls: Optional[bool] = None,
 ) -> list[tuple[dict, object]]:
     """Classify one page without holding a database connection."""
     from experimental.se_dork.classifier import (
@@ -668,7 +669,9 @@ def _classify_page_rows(
         if cancel_event and cancel_event.is_set():
             raise _Cancelled()
         try:
-            outcome = classify_url(row["url"], timeout=timeout)
+            outcome = classify_url(
+                row["url"], timeout=timeout, allow_insecure_tls=allow_insecure_tls
+            )
         except Exception as exc:
             outcome = ClassifyResult(
                 verdict=VERDICT_ERROR,
@@ -734,6 +737,7 @@ def _probe_page_rows(
     worker_count: int,
     progress_cb: Optional[Callable[[str], None]],
     cancel_event: Optional[threading.Event] = None,
+    allow_insecure_tls: Optional[bool] = None,
 ) -> tuple[list[tuple[dict, object]], dict[str, int]]:
     from experimental.se_dork.probe import (
         ProbeOutcome,
@@ -770,6 +774,7 @@ def _probe_page_rows(
                 timeout_seconds=10,
                 indicator_patterns=indicator_patterns,
                 cancel_event=cancel_event,
+                allow_insecure_tls=allow_insecure_tls,
             )
             active[f] = row
 
@@ -864,6 +869,7 @@ def _process_result_page(
     indicator_patterns: list[tuple[str, object]],
     progress_cb: Optional[Callable[[str], None]],
     cancel_event: Optional[threading.Event] = None,
+    allow_insecure_tls: Optional[bool] = None,
 ) -> None:
     """Persist, classify, retain, and optionally probe one fetched page."""
     if cancel_event and cancel_event.is_set():
@@ -899,6 +905,7 @@ def _process_result_page(
             inserted_rows,
             progress_cb=progress_cb,
             cancel_event=cancel_event,
+            allow_insecure_tls=allow_insecure_tls,
         )
         retained_rows, retained_total = _persist_page_classification(
             run_id=run_id,
@@ -941,6 +948,7 @@ def _process_result_page(
         worker_count=probe_worker_count,
         progress_cb=progress_cb,
         cancel_event=cancel_event,
+        allow_insecure_tls=allow_insecure_tls,
     )
     try:
         _persist_probe_outcomes(db_path, probe_outcomes)
@@ -1006,6 +1014,14 @@ def run_dork_search(
 
     bulk_probe_enabled = bool(getattr(options, "bulk_probe_enabled", False))
     probe_config_path = getattr(options, "probe_config_path", None)
+    # Resolve HTTP TLS policy once for the whole run: honor the scan's transient
+    # override (RunOptions.allow_insecure_tls), else the canonical default.
+    _run_tls_override = getattr(options, "allow_insecure_tls", None)
+    if _run_tls_override is None:
+        from shared.config import resolve_http_allow_insecure_tls
+        run_allow_insecure_tls = resolve_http_allow_insecure_tls(probe_config_path)
+    else:
+        run_allow_insecure_tls = bool(_run_tls_override)
     raw_probe_worker_count = getattr(options, "probe_worker_count", None)
     try:
         probe_worker_count = (
@@ -1126,6 +1142,7 @@ def run_dork_search(
                 indicator_patterns=indicator_patterns,
                 progress_cb=_emit,
                 cancel_event=cancel_event,
+                allow_insecure_tls=run_allow_insecure_tls,
             )
         except _Cancelled:
             raise

@@ -464,6 +464,55 @@ class ConfigStore:
         composed, _warning = self.load_runtime_config()
         return copy.deepcopy(composed.get(section, default))
 
+    def read_shard_payload(self, shard_name: str) -> Optional[Dict[str, Any]]:
+        """Raw owning-shard contents (no repo-default compose).
+
+        Returns None ONLY when the shard file exists but is unparseable, so callers
+        can avoid clobbering it. Returns {} when the file is absent or empty.
+        """
+        shard = next((s for s in MAIN_SHARDS if s.name == shard_name), None)
+        if shard is None:
+            return {}
+        path = self.shard_path(shard)
+        if not path.exists():
+            return {}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        return data if isinstance(data, dict) else None
+
+    def read_legacy_runtime_payload(self) -> Dict[str, Any]:
+        """Return the first valid legacy runtime config without repo defaults."""
+        for candidate in _legacy_main_config_candidates(self.paths, self.legacy):
+            if candidate == self.legacy.repo_config_example_file:
+                continue
+            if not candidate.exists() or not candidate.is_file():
+                continue
+            try:
+                loaded = json.loads(candidate.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if isinstance(loaded, dict):
+                return copy.deepcopy(loaded)
+        return {}
+
+    # ------------------------------------------------------------------
+    # One-time migration flags (isolated from prefs and shards)
+    # ------------------------------------------------------------------
+
+    @property
+    def _migration_flags_file(self) -> Path:
+        return self.conf_d_dir / "state" / "migration_flags.json"
+
+    def is_migration_done(self, name: str) -> bool:
+        return bool(_safe_read_json_object(self._migration_flags_file).get(name))
+
+    def mark_migration_done(self, name: str) -> None:
+        flags = _safe_read_json_object(self._migration_flags_file)
+        flags[name] = True
+        _atomic_write_json(self._migration_flags_file, flags)
+
     # ------------------------------------------------------------------
     # Preferences / module settings
     # ------------------------------------------------------------------

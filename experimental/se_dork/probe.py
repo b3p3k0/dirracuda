@@ -91,6 +91,7 @@ def probe_url(
     timeout_seconds: int = 10,
     indicator_patterns: Optional[list[tuple[str, object]]] = None,
     cancel_event: Optional[threading.Event] = None,
+    allow_insecure_tls: Optional[bool] = None,
 ) -> ProbeOutcome:
     """
     Probe one URL and return normalized probe fields.
@@ -125,6 +126,7 @@ def probe_url(
             scheme=scheme,
             request_host=host,
             start_path=start_path,
+            allow_insecure_tls=allow_insecure_tls,
         )
     except Exception as exc:
         return ProbeOutcome(

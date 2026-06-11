@@ -23,6 +23,7 @@ from gui.utils.coercion import _coerce_bool
 from gui.utils.filesize import _format_file_size
 from gui.browsers.core import UnifiedBrowserCore
 from shared.path_service import get_paths, get_legacy_paths, select_existing_path
+from shared.config import resolve_http_allow_insecure_tls
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tif", ".tiff"}
 _PATHS = get_paths()
@@ -94,6 +95,7 @@ class HttpBrowserWindow(UnifiedBrowserCore):
         self.theme = theme
         self.settings_manager = settings_manager
         self.config = _load_http_browser_config(config_path)
+        self.allow_insecure_tls = resolve_http_allow_insecure_tls(config_path)
         self._server_banner = str(banner or "")
 
         self._current_path: str = "/"
@@ -103,7 +105,7 @@ class HttpBrowserWindow(UnifiedBrowserCore):
             port=port,
             scheme=scheme,
             request_host=self.request_host,
-            allow_insecure_tls=True,
+            allow_insecure_tls=self.allow_insecure_tls,
             connect_timeout=float(self.config["connect_timeout"]),
             request_timeout=float(self.config["request_timeout"]),
             max_entries=int(self.config["max_entries"]),
@@ -585,7 +587,7 @@ class HttpBrowserWindow(UnifiedBrowserCore):
                 scheme=self.scheme,
                 request_host=self.request_host,
                 start_path=self._initial_path,
-                allow_insecure_tls=True,
+                allow_insecure_tls=self.allow_insecure_tls,
                 max_entries=int(self.config["max_entries"]),
                 connect_timeout=int(self.config["connect_timeout"]),
                 request_timeout=int(self.config["request_timeout"]),

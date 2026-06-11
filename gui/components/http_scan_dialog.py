@@ -35,6 +35,7 @@ from gui.components.query_budget_dialog import (
 )
 from gui.components.scan_preflight import run_preflight
 from gui.components.scan_dialog import ScanDialog
+from shared.config import resolve_http_allow_insecure_tls
 
 # Reuse the canonical region map — no forked copy.
 REGIONS = ScanDialog.REGIONS
@@ -137,6 +138,13 @@ class HttpScanDialog:
         self.request_timeout_var.set(
             str(_coerce(verif_cfg.get("request_timeout"), 15))
         )
+        # Initialize TLS checkbox from the canonical App Config default (C3).
+        try:
+            self.allow_insecure_tls_var.set(
+                resolve_http_allow_insecure_tls(str(self.config_path))
+            )
+        except Exception:
+            pass
 
     def _load_initial_values(self) -> None:
         """Load last-used dialog values from settings manager when available."""
@@ -166,9 +174,6 @@ class HttpScanDialog:
                 self._settings_manager.get_setting("http_scan_dialog.request_timeout", 15),
                 15,
             )
-            allow_insecure_tls = bool(
-                self._settings_manager.get_setting("http_scan_dialog.allow_insecure_tls", True)
-            )
             verbose = bool(self._settings_manager.get_setting("http_scan_dialog.verbose", False))
             bulk_probe_enabled = bool(
                 self._settings_manager.get_setting("http_scan_dialog.bulk_probe_enabled", False)
@@ -190,7 +195,8 @@ class HttpScanDialog:
             self.discovery_concurrency_var.set(str(discovery_workers))
             self.connect_timeout_var.set(str(connect_timeout))
             self.request_timeout_var.set(str(request_timeout))
-            self.allow_insecure_tls_var.set(allow_insecure_tls)
+            # allow_insecure_tls is initialized from the canonical default in
+            # _load_config_defaults (C3); not read from the retired GUI key here.
             self.verbose_var.set(verbose)
             self.bulk_probe_enabled_var.set(bulk_probe_enabled)
 
@@ -244,9 +250,7 @@ class HttpScanDialog:
 
             self._settings_manager.set_setting("http_scan_dialog.api_key_override", self.api_key_var.get().strip())
             self._settings_manager.set_setting("http_scan_dialog.country_code", self.country_var.get().strip().upper())
-            self._settings_manager.set_setting(
-                "http_scan_dialog.allow_insecure_tls", bool(self.allow_insecure_tls_var.get())
-            )
+            # allow_insecure_tls is a transient per-run override (C3); not persisted here.
             self._settings_manager.set_setting("http_scan_dialog.verbose", bool(self.verbose_var.get()))
             self._settings_manager.set_setting(
                 "http_scan_dialog.bulk_probe_enabled", bool(self.bulk_probe_enabled_var.get())
@@ -932,7 +936,7 @@ class HttpScanDialog:
                 )
                 self._settings_manager.set_setting("http_scan_dialog.connect_timeout", connect_timeout)
                 self._settings_manager.set_setting("http_scan_dialog.request_timeout", request_timeout)
-                self._settings_manager.set_setting("http_scan_dialog.allow_insecure_tls", allow_insecure_tls)
+                # allow_insecure_tls is a transient per-run override (C3); not persisted.
                 self._settings_manager.set_setting("http_scan_dialog.verbose", verbose)
                 self._settings_manager.set_setting(
                     "http_scan_dialog.bulk_probe_enabled", bool(self.bulk_probe_enabled_var.get())

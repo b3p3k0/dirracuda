@@ -11,10 +11,21 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from gui.components.unified_browser_window import HttpBrowserWindow
 from shared.http_browser import HttpNavigator
+
+
+@pytest.fixture(autouse=True)
+def _isolate_tls_resolver(monkeypatch):
+    """Never read the developer's real ~/.dirracuda for HTTP TLS policy in tests."""
+    monkeypatch.setattr(
+        "gui.browsers.http_browser.resolve_http_allow_insecure_tls",
+        lambda config_path=None: True,
+    )
 
 
 class _IntVar:
@@ -247,7 +258,12 @@ def test_init_navigates_to_root_when_initial_path_missing():
     mock_nav.assert_called_once_with("/")
 
 
-def test_init_passes_request_host_to_navigator_and_uses_saved_path():
+def test_init_passes_request_host_to_navigator_and_uses_saved_path(monkeypatch):
+    # C3: the navigator's TLS policy is config-driven via the shared resolver.
+    monkeypatch.setattr(
+        "gui.browsers.http_browser.resolve_http_allow_insecure_tls",
+        lambda config_path=None: False,
+    )
     with patch.object(HttpBrowserWindow, "_build_window"), \
          patch.object(HttpBrowserWindow, "_run_probe_background"), \
          patch.object(HttpBrowserWindow, "_apply_probe_snapshot"), \
@@ -271,7 +287,7 @@ def test_init_passes_request_host_to_navigator_and_uses_saved_path():
         port=443,
         scheme="https",
         request_host="www.sellingyourscreenplay.com",
-        allow_insecure_tls=True,
+        allow_insecure_tls=False,
         connect_timeout=10.0,
         request_timeout=15.0,
         max_entries=5000,
@@ -330,6 +346,7 @@ def test_background_probe_uses_saved_request_host_and_initial_path(monkeypatch):
     win.request_host = "www.sellingyourscreenplay.com"
     win._initial_path = "/wp-content/uploads/screenplay/scripts/"
     win._cancel_event = threading.Event()
+    win.allow_insecure_tls = True
     win.config = {
         "max_entries": 5000,
         "connect_timeout": 10,
