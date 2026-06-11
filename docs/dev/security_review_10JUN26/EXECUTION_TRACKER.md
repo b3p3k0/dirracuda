@@ -1,6 +1,6 @@
 # Security Review Execution Tracker
 
-Status: HI approved PA pack; Codex operating as RA; C4 accepted
+Status: HI approved PA pack; Codex operating as RA; C5 accepted
 
 ## Baseline
 
@@ -35,7 +35,7 @@ Status: HI approved PA pack; Codex operating as RA; C4 accepted
 | C2 | ACCEPTED | `approved_plans/C2_endpoint_pinning.md` | PASS | n/a | this commit | Broad suite has one proven pre-existing failure |
 | C3 | ACCEPTED | `approved_plans/C3_http_tls_policy.md` | PASS | PASS | this commit | RA corrected pre-modular explicit-value detection |
 | C4 | ACCEPTED | `approved_plans/C4_smb_extract_containment.md` | PASS | n/a | this commit | SMB extraction containment |
-| C5 | NOT STARTED |  | PENDING | PENDING |  | Image pixel guard |
+| C5 | ACCEPTED | `approved_plans/C5_image_pixel_guard.md` | PASS | PASS | this commit | Pre-decode image pixel guard |
 | C6 | NOT STARTED |  | PENDING | PENDING |  | Bounded ZIP import |
 | C7 | NOT STARTED |  | PENDING | PENDING |  | FTP controls |
 | C8 | NOT STARTED |  | PENDING | PENDING |  | SMB basename |
@@ -322,4 +322,42 @@ Populate after E12:
     local filesystem mutation between validation and open.
   - Browser promotion behavior is unchanged and continues to use the optional
     field's compatibility fallback.
+- Final status: ACCEPTED
+
+## C5 Evidence
+
+- Plan: `approved_plans/C5_image_pixel_guard.md`
+- DA session: Claude implementation summary received 2026-06-11
+- Commit before: `c642457`
+- Commit after: C5 implementation commit (this commit)
+- Files changed:
+  - `gui/components/image_viewer_window.py`
+  - `gui/tests/test_image_viewer_window.py`
+  - approved C5 plan and execution evidence
+- Line counts:
+  - `gui/components/image_viewer_window.py`: 215
+  - `gui/tests/test_image_viewer_window.py`: 174
+- Commands:
+  - `./venv/bin/python -m pytest gui/tests/test_image_viewer_window.py -v`
+  - locked C5 image-viewer, HTTP-browser, and FTP-browser pytest group
+  - viewer keybinding and browser import-contract regressions
+  - Python compile, Pillow threshold static search, and `git diff --check`
+- Results:
+  - focused C5 tests: 11 passed
+  - locked C5 validation group: 43 passed
+  - additional viewer/import regressions: 14 passed
+  - compile, static search, and whitespace checks: PASS
+- RA findings:
+  - Minor: the approved plan artifact and tracker evidence were absent; restored
+    during closeout.
+  - Minor: `isinstance(value, int)` accepts booleans, so a boolean dimension
+    could pass the malformed-input guard. Tightened the check to exact integers
+    and added a rejection-before-load regression.
+- Manual test:
+  - PASS by HI on 2026-06-11: a normal browser image rendered successfully.
+- Residual risk:
+  - Pillow may reject extreme declared dimensions during `Image.open()` before
+    the project limit runs; this is expected complementary protection.
+  - The browser still holds the caller-provided compressed bytes and decoded
+    image simultaneously, bounded by the existing byte and pixel limits.
 - Final status: ACCEPTED
