@@ -146,6 +146,91 @@ def test_on_view_uses_image_limits_and_dispatches_view_thread():
     )
 
 
+# ---------------------------------------------------------------------------
+# C7 — FTP view/download surfaces sanitize control-bearing names
+# ---------------------------------------------------------------------------
+
+def _has_control(s: str) -> bool:
+    return any(ord(c) <= 0x1F or ord(c) == 0x7F for c in s)
+
+
+def test_on_view_dispatch_sanitizes_display_name_keeps_raw_remote_path():
+    win = _make_window()
+    win._navigator = object()
+    win._current_path = "/pub"
+    win.config = {"viewer": {"max_view_size_mb": 5, "max_image_size_mb": 5, "max_image_pixels": 1000}}
+    win._start_view_thread = MagicMock()
+    win.tree = MagicMock()
+    win.tree.selection.return_value = ["item-1"]
+    win.tree.item.return_value = ("ev\x07il.txt", "file", "", "", "", "10")
+
+    win._on_view()
+
+    _, kwargs = win._start_view_thread.call_args
+    assert kwargs["remote_path"] == "/pub/ev\x07il.txt"        # raw path preserved for logic
+    assert kwargs["display_name"] == "ev<U+0007>il.txt"        # sanitized for display
+    assert not _has_control(kwargs["display_name"])
+
+
+def test_on_view_oversized_prompt_sanitizes_name():
+    win = _make_window()
+    win._navigator = object()
+    win._current_path = "/pub"
+    win.config = {"viewer": {"max_view_size_mb": 5, "max_image_size_mb": 5, "max_image_pixels": 1000}}
+    win._start_view_thread = MagicMock()
+    win.tree = MagicMock()
+    win.tree.selection.return_value = ["item-1"]
+    win.tree.item.return_value = ("ev\x07il.txt", "file", "", "", "", str(99 * 1024 * 1024))
+
+    with patch("gui.browsers.ftp_browser.messagebox.showerror") as mock_showerror:
+        win._on_view()
+
+    win._start_view_thread.assert_not_called()
+    mock_showerror.assert_called_once()
+    args, _ = mock_showerror.call_args
+    assert "<U+0007>" in args[1]
+    assert "ev\x07il" not in args[1]
+    assert not _has_control(args[1])
+
+
+def test_on_download_oversized_prompt_sanitizes_name():
+    win = _make_window()
+    win.busy = False
+    win.config = {"max_file_bytes": 1024}
+    win._current_path = "/pub"
+    win.tree = MagicMock()
+    win.tree.selection.return_value = ["item-1"]
+    win.tree.item.return_value = ("ev\x07il.txt", "file", "", "", "", "999999")
+
+    with patch("gui.browsers.ftp_browser.messagebox.showerror") as mock_showerror:
+        win._on_download()
+
+    win._start_download_thread.assert_not_called()
+    mock_showerror.assert_called_once()
+    args, _ = mock_showerror.call_args
+    assert "<U+0007>" in args[1]
+    assert "\x07" not in args[1]  # message template's \n is fine; the path's control char is not
+
+
+def test_on_download_directory_message_sanitizes_name():
+    win = _make_window()
+    win.busy = False
+    win.config = {"max_file_bytes": 1024}
+    win._current_path = "/pub"
+    win.tree = MagicMock()
+    win.tree.selection.return_value = ["item-1"]
+    win.tree.item.return_value = ("ev\x07ildir", "dir", "", "", "", "")
+
+    with patch("gui.browsers.ftp_browser.messagebox.showinfo") as mock_showinfo:
+        win._on_download()
+
+    win._start_download_thread.assert_not_called()
+    mock_showinfo.assert_called_once()
+    args, _ = mock_showinfo.call_args
+    assert "<U+0007>" in args[1]
+    assert "\x07" not in args[1]  # message template's \n is fine; the path's control char is not
+
+
 def test_start_view_thread_read_error_is_parented_to_active_window():
     win = _make_window()
     win._navigator = MagicMock()

@@ -1,6 +1,6 @@
 # Security Review Execution Tracker
 
-Status: HI approved PA pack; Codex operating as RA; C6 accepted
+Status: HI approved PA pack; Codex operating as RA; C7 accepted
 
 ## Baseline
 
@@ -37,7 +37,7 @@ Status: HI approved PA pack; Codex operating as RA; C6 accepted
 | C4 | ACCEPTED | `approved_plans/C4_smb_extract_containment.md` | PASS | n/a | this commit | SMB extraction containment |
 | C5 | ACCEPTED | `approved_plans/C5_image_pixel_guard.md` | PASS | PASS | this commit | Pre-decode image pixel guard |
 | C6 | ACCEPTED | `approved_plans/C6_bounded_zip_import.md` | PASS | DEFERRED BY HI | this commit | Bounded single-payload ZIP import |
-| C7 | NOT STARTED |  | PENDING | PENDING |  | FTP controls |
+| C7 | ACCEPTED | `approved_plans/C7_ftp_remote_path_controls.md` | PASS | n/a | this commit | FTP remote-path controls |
 | C8 | NOT STARTED |  | PENDING | PENDING |  | SMB basename |
 | E0 | NOT STARTED |  | PENDING | n/a |  | Exception ledger freeze |
 | E01 | NOT STARTED |  | PENDING | PENDING |  | X001-X040 |
@@ -402,3 +402,52 @@ Populate after E12:
     normal exports are small, while hostile payloads remain capped at 128 MiB.
   - Stored-member CRC validation timing remains standard-library behavior.
 - Final status: ACCEPTED with HI-deferred manual gate
+
+## C7 Evidence
+
+- Plan: `approved_plans/C7_ftp_remote_path_controls.md`
+- DA session: Claude implementation summary received 2026-06-11
+- Commit before: `ecb8540`
+- Commit after: C7 implementation commit (this commit)
+- Files changed:
+  - `shared/ftp_browser.py`
+  - `gui/browsers/ftp_browser.py`
+  - `gui/utils/protocol_extract_runner.py`
+  - focused navigator, browser-window, and protocol-extraction tests
+  - approved C7 plan and execution evidence
+- Line counts:
+  - `shared/ftp_browser.py`: 502
+  - `gui/browsers/ftp_browser.py`: 662
+  - `gui/utils/protocol_extract_runner.py`: 811
+  - `gui/tests/test_ftp_browser.py`: 408
+  - `gui/tests/test_ftp_browser_window.py`: 346
+  - `gui/tests/test_protocol_extract_runner.py`: 416
+- Commands:
+  - `./venv/bin/python -m pytest gui/tests/test_ftp_browser.py gui/tests/test_ftp_browser_window.py -q`
+  - `./venv/bin/python -m pytest gui/tests/test_protocol_extract_runner.py gui/tests/test_ftp_probe.py gui/tests/test_browser_clamav.py -q`
+  - `./venv/bin/python -m pytest -q`
+  - Python compile for all changed modules and tests
+  - `git diff --check`
+- Results:
+  - focused browser group: 114 passed
+  - focused extraction/probe group: 49 passed
+  - full suite: 3352 passed, 1 failed
+  - broad failure:
+    `experimental/webui/tests/test_daemon_cli.py::test_daemon_modules_import_without_tkinter`
+  - the same order-dependent Tkinter isolation failure is documented from the
+    C2 baseline and is unrelated to C7
+  - compile and whitespace checks: PASS
+- RA findings:
+  - Plan review found and closed raw-path leaks in download and view preflight
+    messages, shared report-builder scope drift, and extraction filesystem
+    mutation before validation.
+  - No implementation defects remained after review.
+  - Accepted the DA's use of `str(exc)` in the extraction error because the
+    exception already contains the approved prefix; repeating it would produce
+    duplicate wording.
+- Manual test: n/a; card requires no live FTP target
+- Residual risk:
+  - Hostile FTP directory names may still reach `LIST`/`MLSD`; this card owns
+    file-operation `SIZE`/`RETR` paths. Files below such directories are gated
+    because the complete path is validated before extraction or transfer.
+- Final status: ACCEPTED

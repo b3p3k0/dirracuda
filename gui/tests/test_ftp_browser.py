@@ -14,7 +14,13 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from shared.ftp_browser import FtpNavigator, FtpCancelledError, FtpFileTooLargeError
+from shared.ftp_browser import (
+    FtpNavigator,
+    FtpCancelledError,
+    FtpFileTooLargeError,
+    validate_remote_path,
+    display_safe_path,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -285,3 +291,118 @@ def test_ensure_connected_reconnects():
 
     assert len(reconnect_calls) == 1
     assert reconnect_calls[0] == ("127.0.0.1", 21)
+
+
+# ---------------------------------------------------------------------------
+# C7 — remote-path control-character contract
+# ---------------------------------------------------------------------------
+
+# NUL, CR, LF, another C0 (BEL), DEL — placed at start / middle / end.
+_CONTROL_CHARS = ["\x00", "\r", "\n", "\x07", "\x7f"]
+
+
+def _control_paths():
+    paths = []
+    for ch in _CONTROL_CHARS:
+        paths.append(f"{ch}/leading/file.txt")     # beginning
+        paths.append(f"/mid/da{ch}ta/file.txt")     # middle
+        paths.append(f"/trailing/file.txt{ch}")     # end
+    return paths
+
+
+def _assert_no_ftp_commands(nav):
+    nav._ftp.voidcmd.assert_not_called()
+    nav._ftp.sendcmd.assert_not_called()
+    nav._ftp.retrbinary.assert_not_called()
+
+
+@pytest.mark.parametrize("bad_path", _control_paths())
+def test_get_file_size_rejects_controls_before_any_command(bad_path):
+    nav = _make_nav()
+    with pytest.raises(ValueError):
+        nav.get_file_size(bad_path)
+    _assert_no_ftp_commands(nav)
+
+
+@pytest.mark.parametrize("bad_path", _control_paths())
+def test_read_file_rejects_controls_before_any_command(bad_path):
+    nav = _make_nav()
+    with pytest.raises(ValueError):
+        nav.read_file(bad_path)
+    _assert_no_ftp_commands(nav)
+
+
+@pytest.mark.parametrize("bad_path", _control_paths())
+def test_download_file_rejects_controls_before_any_command(bad_path, tmp_path):
+    nav = _make_nav()
+    with pytest.raises(ValueError):
+        nav.download_file(bad_path, tmp_path)
+    _assert_no_ftp_commands(nav)
+    # Rejection must precede the NOOP keepalive and any filesystem write.
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_error_message_has_no_raw_control_or_path():
+    hostile = "/secret/dir\x07/evil\x00.txt"
+    try:
+        validate_remote_path(hostile)
+    except ValueError as exc:
+        msg = str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+    assert all(ord(c) >= 0x20 and ord(c) != 0x7F for c in msg)
+    assert "secret" not in msg and "evil" not in msg
+    assert "U+0007" in msg  # first offending codepoint, named not echoed
+
+
+def test_validate_remote_path_accepts_ordinary_and_unicode():
+    for ok in ["/a b/c-(1).txt", "/документы/файл.txt", "/café/movie.bin", "/", "/x.txt"]:
+        validate_remote_path(ok)  # must not raise
+
+
+@pytest.mark.parametrize("code", list(range(0x00, 0x20)) + [0x7F])
+def test_display_safe_path_escapes_each_control(code):
+    raw = f"a{chr(code)}b"
+    safe = display_safe_path(raw)
+    assert chr(code) not in safe
+    assert f"<U+{code:04X}>" in safe
+    assert all(ord(c) >= 0x20 and ord(c) != 0x7F for c in safe)
+
+
+def test_display_safe_path_is_noop_for_clean_text():
+    for clean in ["plain.txt", "a b/c-(1).txt", "/документы/файл.txt", "café"]:
+        assert display_safe_path(clean) == clean
+
+
+def test_get_file_size_happy_path_issues_size_command():
+    nav = _make_nav()
+    nav._ftp.sendcmd.return_value = "213 100"
+    assert nav.get_file_size("/документы/файл.txt") == 100
+    nav._ftp.sendcmd.assert_called_once_with("SIZE /документы/файл.txt")
+
+
+def test_read_file_happy_path_issues_retr_command():
+    nav = _make_nav()
+
+    def fake_retrbinary(cmd, callback, blocksize=None):
+        assert cmd == "RETR /a b/c-(1).txt"
+        callback(b"hello")
+
+    nav._ftp.retrbinary.side_effect = fake_retrbinary
+    result = nav.read_file("/a b/c-(1).txt")
+    assert result.data == b"hello"
+    nav._ftp.retrbinary.assert_called_once()
+
+
+def test_download_file_happy_path_issues_retr_command(tmp_path):
+    nav = _make_nav()
+    nav._ftp.sendcmd.return_value = "213 5"
+
+    def fake_retrbinary(cmd, callback, blocksize=None):
+        assert cmd == "RETR /café/movie.bin"
+        callback(b"hi")
+
+    nav._ftp.retrbinary.side_effect = fake_retrbinary
+    result = nav.download_file("/café/movie.bin", tmp_path)
+    assert result.size == 2
+    nav._ftp.retrbinary.assert_called_once()

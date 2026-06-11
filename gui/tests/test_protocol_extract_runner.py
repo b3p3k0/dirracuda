@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
@@ -324,3 +325,92 @@ def test_https_extract_no_hostname_retry_on_ip_failure(monkeypatch, tmp_path):
     assert all(h == "203.0.113.5" for h in fetch_calls), (
         f"Hostname used as socket destination: {fetch_calls}"
     )
+
+
+# ---------------------------------------------------------------------------
+# C7 — FTP extractor validates control-bearing paths before filesystem ops
+# ---------------------------------------------------------------------------
+
+def _has_control(s: str) -> bool:
+    return any(ord(c) <= 0x1F or ord(c) == 0x7F for c in s)
+
+
+def _all_names_under(root: Path):
+    names = []
+    if not root.exists():
+        return names
+    for _dirpath, dirnames, filenames in os.walk(root):
+        names.extend(dirnames)
+        names.extend(filenames)
+    return names
+
+
+def _run_ftp_extract_with_tree(monkeypatch, tmp_path, tree):
+    created = []
+
+    class _Nav(_FakeFtpNavigator):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            self.download_calls = []
+            self._tree = tree
+            created.append(self)
+
+        def download_file(self, remote_path: str, dest_dir: Path):
+            self.download_calls.append(remote_path)
+            return super().download_file(remote_path, dest_dir)
+
+    monkeypatch.setattr(per, "FtpNavigator", _Nav)
+    monkeypatch.setattr(per, "log_quarantine_event", lambda *a, **k: None)
+
+    extract_root = tmp_path / "extract"
+    summary = per.run_ftp_extract(
+        "198.51.100.20",
+        port=21,
+        download_dir=extract_root,
+        max_total_bytes=10_000,
+        max_file_bytes=10_000,
+        max_file_count=10,
+        max_seconds=60,
+        max_depth=3,
+        allowed_extensions=[],
+        denied_extensions=[],
+        delay_seconds=0,
+        connection_timeout=5,
+        extension_mode="download_all",
+        clamav_config={"enabled": False},
+    )
+    return summary, created, extract_root
+
+
+def test_run_ftp_extract_rejects_nul_before_filesystem(monkeypatch, tmp_path):
+    tree = {"/": [_FakeEntry("bad\x00name.txt", False, size=10)]}
+    summary, created, extract_root = _run_ftp_extract_with_tree(monkeypatch, tmp_path, tree)
+
+    # No download attempted; previously NUL crashed mkdir with "embedded null byte".
+    assert created and created[0].download_calls == []
+    assert summary["files"] == []
+
+    err = summary["errors"]
+    assert err, "expected a recorded error for the rejected path"
+    assert any("<U+0000>" in row["path"] for row in err)
+    assert all(not _has_control(row["path"]) for row in err)
+    assert all(not _has_control(row["message"]) for row in err)
+    # No control-bearing name created on disk under the extract root.
+    assert not any(_has_control(n) for n in _all_names_under(extract_root))
+
+
+def test_run_ftp_extract_rejects_control_directory_before_mkdir(monkeypatch, tmp_path):
+    # Filesystem-valid control (\x01) inside a directory component: previously
+    # mkdir would create a control-bearing directory on disk.
+    tree = {
+        "/": [_FakeEntry("sub\x01dir", True)],
+        "/sub\x01dir": [_FakeEntry("child.txt", False, size=10)],
+    }
+    summary, created, extract_root = _run_ftp_extract_with_tree(monkeypatch, tmp_path, tree)
+
+    assert created and created[0].download_calls == []
+    assert summary["files"] == []
+    err = summary["errors"]
+    assert any("<U+0001>" in row["path"] for row in err)
+    assert all(not _has_control(row["path"]) for row in err)
+    assert not any(_has_control(n) for n in _all_names_under(extract_root))

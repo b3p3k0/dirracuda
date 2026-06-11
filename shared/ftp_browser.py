@@ -39,6 +39,36 @@ class FtpFileTooLargeError(Exception):
 
 
 # ---------------------------------------------------------------------------
+# Remote-path control-character contract (shared)
+# ---------------------------------------------------------------------------
+
+def validate_remote_path(remote_path: str) -> None:
+    """Reject ASCII C0 controls (U+0000-U+001F) and DEL (U+007F) in a remote path.
+
+    Single shared contract for FtpNavigator command paths and the FTP extractor's
+    pre-filesystem check. Defense in depth: CPython already blocks CR/LF command
+    injection. The message names the codepoint in U+XXXX form and never echoes the
+    raw character or the offending path.
+    """
+    for ch in remote_path:
+        code = ord(ch)
+        if code <= 0x1F or code == 0x7F:
+            raise ValueError(
+                f"Invalid remote path: disallowed control character U+{code:04X}"
+            )
+
+
+def display_safe_path(path: str) -> str:
+    """Render a remote path with C0/DEL controls replaced by <U+XXXX> tokens, for
+    safe display, reports, and logs. Non-control text (incl. Unicode) is unchanged."""
+    out = []
+    for ch in path:
+        code = ord(ch)
+        out.append(f"<U+{code:04X}>" if (code <= 0x1F or code == 0x7F) else ch)
+    return "".join(out)
+
+
+# ---------------------------------------------------------------------------
 # LIST-line regexes (module-level; compiled once)
 # ---------------------------------------------------------------------------
 
@@ -332,6 +362,7 @@ class FtpNavigator:
 
     def get_file_size(self, remote_path: str) -> Optional[int]:
         """Return file size via SIZE command; None if server doesn't support it."""
+        validate_remote_path(remote_path)
         try:
             self._ftp.voidcmd("TYPE I")  # type: ignore[union-attr]
             resp = self._ftp.sendcmd(f"SIZE {remote_path}")  # type: ignore[union-attr]
@@ -361,6 +392,7 @@ class FtpNavigator:
         On FtpCancelledError: partial file is removed and self._ftp is set to
         None so _ensure_connected() reconnects on the next operation.
         """
+        validate_remote_path(remote_path)
         self._ensure_connected()
         self._enforce_limits(remote_path)
 
@@ -425,6 +457,7 @@ class FtpNavigator:
         self, remote_path: str, max_bytes: int = 5_242_880
     ) -> ReadResult:
         """Read up to max_bytes from remote_path into memory."""
+        validate_remote_path(remote_path)
         self._ensure_connected()
         self._enforce_limits(remote_path)
 
@@ -460,4 +493,10 @@ class FtpNavigator:
         return ReadResult(data=buf.getvalue(), size=bytes_read, truncated=truncated)
 
 
-__all__ = ["FtpNavigator", "FtpCancelledError", "FtpFileTooLargeError"]
+__all__ = [
+    "FtpNavigator",
+    "FtpCancelledError",
+    "FtpFileTooLargeError",
+    "validate_remote_path",
+    "display_safe_path",
+]

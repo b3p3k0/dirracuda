@@ -25,7 +25,13 @@ from gui.utils.extract_runner import (
     build_browser_download_clamav_setup,
     update_browser_clamav_accum,
 )
-from shared.ftp_browser import FtpCancelledError, FtpFileTooLargeError, FtpNavigator
+from shared.ftp_browser import (
+    FtpCancelledError,
+    FtpFileTooLargeError,
+    FtpNavigator,
+    display_safe_path,
+    validate_remote_path,
+)
 from shared.http_browser import _parse_dir_entries
 from shared.http_transport import http_open
 from shared.quarantine import log_quarantine_event
@@ -252,6 +258,13 @@ def run_ftp_extract(
                 if not rel_parts:
                     rel_parts = [PurePosixPath(entry_abs).name or "download"]
                 rel_display = "/".join(rel_parts)
+                rel_display_safe = display_safe_path(rel_display)
+
+                try:
+                    validate_remote_path(entry_abs)
+                except ValueError as exc:
+                    _append_error(summary, share_name, rel_display_safe, str(exc))
+                    continue
 
                 file_size = int(getattr(entry, "size", 0) or 0)
                 should_download, skip_reason = _should_download_file(
@@ -265,7 +278,7 @@ def run_ftp_extract(
                     total_bytes,
                 )
                 if not should_download:
-                    _append_skip(summary, share_name, rel_display, str(skip_reason), file_size)
+                    _append_skip(summary, share_name, rel_display_safe, str(skip_reason), file_size)
                     if skip_reason == "total_size_limit":
                         summary["stop_reason"] = "total_size_limit"
                         break
@@ -281,7 +294,7 @@ def run_ftp_extract(
 
                 current_index = total_files + 1
                 if progress_callback:
-                    progress_callback(rel_display, current_index, max_file_count or None)
+                    progress_callback(rel_display_safe, current_index, max_file_count or None)
 
                 try:
                     result = nav.download_file(entry_abs, destination.parent)
@@ -291,10 +304,10 @@ def run_ftp_extract(
                 except FtpCancelledError as exc:
                     raise ExtractError(str(exc)) from exc
                 except FtpFileTooLargeError:
-                    _append_skip(summary, share_name, rel_display, "file_too_large", file_size)
+                    _append_skip(summary, share_name, rel_display_safe, "file_too_large", file_size)
                     continue
                 except Exception as exc:
-                    _append_error(summary, share_name, rel_display, f"Download failed: {exc}")
+                    _append_error(summary, share_name, rel_display_safe, f"Download failed: {exc}")
                     continue
 
                 saved_path = Path(result.saved_path)
@@ -302,7 +315,7 @@ def run_ftp_extract(
 
                 if max_total_bytes > 0 and (total_bytes + downloaded_size) > max_total_bytes:
                     saved_path.unlink(missing_ok=True)
-                    _append_skip(summary, share_name, rel_display, "total_size_limit", downloaded_size)
+                    _append_skip(summary, share_name, rel_display_safe, "total_size_limit", downloaded_size)
                     summary["stop_reason"] = "total_size_limit"
                     break
 
@@ -326,18 +339,18 @@ def run_ftp_extract(
                             )
                         )
                         final_path = pp_result.final_path
-                        update_browser_clamav_accum(clamav_accum, pp_result, rel_display)
+                        update_browser_clamav_accum(clamav_accum, pp_result, rel_display_safe)
                     except Exception as exc:
                         _append_error(
                             summary,
                             share_name,
-                            rel_display,
+                            rel_display_safe,
                             f"post_processor error (file kept in quarantine): {exc}",
                         )
                         if clamav_accum is not None:
                             clamav_accum["errors"] += 1
                             clamav_accum["error_items"].append(
-                                {"path": rel_display, "error": str(exc)}
+                                {"path": rel_display_safe, "error": str(exc)}
                             )
 
                 total_files += 1
@@ -346,13 +359,13 @@ def run_ftp_extract(
                 summary["files"].append(
                     {
                         "share": share_name,
-                        "path": rel_display,
+                        "path": rel_display_safe,
                         "size": downloaded_size,
                         "saved_to": str(final_path),
                     }
                 )
                 try:
-                    log_quarantine_event(download_dir, f"extracted {share_name}/{rel_display} -> {final_path}")
+                    log_quarantine_event(download_dir, f"extracted {share_name}/{rel_display_safe} -> {final_path}")
                 except Exception:
                     pass
 
