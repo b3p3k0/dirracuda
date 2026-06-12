@@ -36,8 +36,10 @@ import experimental.webui.results_probe_actions as _results_probe_actions
 from experimental.webui.auth import (
     MAX_PASSWORD_BYTES,
     MAX_USERNAME_BYTES,
+    PASSWORD_MIN_LENGTH,
     BlocklistUnavailableError,
     CredentialError,
+    PasswordPolicyError,
     account_log_id,
     check_credential_store,
     set_password,
@@ -89,6 +91,14 @@ _DORKBOOK_PROTOCOL_TO_FIELD = {
     "SMB": "smb_dork",
     "FTP": "ftp_dork",
     "HTTP": "http_dork",
+}
+
+_PASSWORD_POLICY_MESSAGES = {
+    "too_short": f"Password must be at least {PASSWORD_MIN_LENGTH} characters.",
+    "too_common": "Password is too common. Choose a different password.",
+    "too_long": (
+        f"Password exceeds {MAX_PASSWORD_BYTES} bytes after UTF-8 encoding."
+    ),
 }
 
 _CSP_POLICY = (
@@ -472,7 +482,11 @@ def create_app(
         try:
             check_credential_store(creds)
         except CredentialError as exc:
-            logger.error("credential store permission error during change-password: %s", exc)
+            logger.error(
+                "credential store permission error during change-password: "
+                "exception_class=%s",
+                type(exc).__name__,
+            )
             return JSONResponse({"error": "Credential store configuration error."}, status_code=503)
         if not verify_password(session.username, body.current_password, path=creds):
             logger.warning(
@@ -483,13 +497,30 @@ def create_app(
         try:
             set_password(session.username, body.new_password, path=creds)
         except BlocklistUnavailableError as exc:
-            logger.error("blocklist unavailable during change-password: %s", exc)
+            logger.error(
+                "blocklist unavailable during change-password: exception_class=%s",
+                type(exc).__name__,
+            )
             return JSONResponse({"error": "Service configuration error."}, status_code=503)
         except CredentialError as exc:
-            logger.error("credential store permission error (TOCTOU) during change-password: %s", exc)
+            logger.error(
+                "credential store permission error (TOCTOU) during change-password: "
+                "exception_class=%s",
+                type(exc).__name__,
+            )
             return JSONResponse({"error": "Credential store configuration error."}, status_code=503)
+        except PasswordPolicyError as exc:
+            message = _PASSWORD_POLICY_MESSAGES.get(
+                exc.reason_code,
+                "Password does not meet policy requirements.",
+            )
+            return JSONResponse({"error": message}, status_code=400)
         except ValueError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
+            logger.error(
+                "password update failed: exception_class=%s",
+                type(exc).__name__,
+            )
+            return JSONResponse({"error": "Password update failed."}, status_code=500)
         logger.info(
             "password changed: account_id=%s", account_log_id(session.username)
         )
@@ -602,8 +633,16 @@ def create_app(
         try:
             result = run_searxng_preflight(body.instance_url)
         except Exception as exc:
+            logger.error(
+                "SearXNG preflight failed: exception_class=%s",
+                type(exc).__name__,
+            )
             return JSONResponse(
-                {"ok": False, "reason_code": "unknown", "message": str(exc)},
+                {
+                    "ok": False,
+                    "reason_code": "unknown",
+                    "message": "Preflight failed unexpectedly.",
+                },
                 status_code=200,
             )
         return JSONResponse(
@@ -1085,8 +1124,11 @@ def create_app(
             )
         try:
             p, ps, _ = _db._validate_bounds(page, page_size, None)
-        except ValueError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
+        except ValueError:
+            return JSONResponse(
+                {"error": "invalid pagination parameters"},
+                status_code=400,
+            )
         db_path = request.app.state.db_path
         try:
             rows, total_count = _db.get_results_table_rows(
@@ -1191,8 +1233,11 @@ def create_app(
             with dork_store.open_connection(_PATHS.dorkbook_db_file) as conn:
                 rows = dork_store.list_entries(conn, protocol, search_text=search)
         except Exception as exc:
-            logger.warning("dorkbook list_entries failed: %s", exc)
-            return JSONResponse({"error": str(exc)}, status_code=500)
+            logger.warning(
+                "dorkbook list_entries failed: exception_class=%s",
+                type(exc).__name__,
+            )
+            return JSONResponse({"error": "dorkbook unavailable"}, status_code=500)
         return JSONResponse({"entries": rows})
 
     @app.post("/api/dorkbook/entries", status_code=201)
@@ -1217,11 +1262,17 @@ def create_app(
                     notes=body.notes,
                 )
                 conn.commit()
-        except DuplicateEntryError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=409)
+        except DuplicateEntryError:
+            return JSONResponse({"error": "query already exists"}, status_code=409)
         except Exception as exc:
-            logger.warning("dorkbook create_entry failed: %s", exc)
-            return JSONResponse({"error": str(exc)}, status_code=500)
+            logger.warning(
+                "dorkbook create_entry failed: exception_class=%s",
+                type(exc).__name__,
+            )
+            return JSONResponse(
+                {"error": "dorkbook operation failed"},
+                status_code=500,
+            )
         return JSONResponse({"entry_id": entry_id, "ok": True}, status_code=201)
 
     @app.delete("/api/dorkbook/entries/{entry_id}")
@@ -1245,12 +1296,21 @@ def create_app(
                     return JSONResponse({"error": "built-in dorks are read-only"}, status_code=403)
                 try:
                     dork_store.delete_entry(conn, entry_id)
-                except ReadOnlyEntryError as exc:
-                    return JSONResponse({"error": str(exc)}, status_code=403)
+                except ReadOnlyEntryError:
+                    return JSONResponse(
+                        {"error": "built-in dorks are read-only"},
+                        status_code=403,
+                    )
                 conn.commit()
         except Exception as exc:
-            logger.warning("dorkbook delete_entry failed: %s", exc)
-            return JSONResponse({"error": str(exc)}, status_code=500)
+            logger.warning(
+                "dorkbook delete_entry failed: exception_class=%s",
+                type(exc).__name__,
+            )
+            return JSONResponse(
+                {"error": "dorkbook operation failed"},
+                status_code=500,
+            )
         return JSONResponse({"ok": True})
 
     @app.post("/api/dorkbook/prefill")
@@ -1269,8 +1329,11 @@ def create_app(
             with dork_store.open_connection(_PATHS.dorkbook_db_file) as conn:
                 row = dork_store.get_entry(conn, body.entry_id)
         except Exception as exc:
-            logger.warning("dorkbook prefill: store access failed: %s", exc)
-            return JSONResponse({"error": str(exc)}, status_code=500)
+            logger.warning(
+                "dorkbook prefill store access failed: exception_class=%s",
+                type(exc).__name__,
+            )
+            return JSONResponse({"error": "dorkbook unavailable"}, status_code=500)
         if row is None:
             return JSONResponse({"error": "entry not found"}, status_code=404)
         protocol = str(row.get("protocol") or "").strip().upper()
@@ -1310,8 +1373,14 @@ def create_app(
                 apply_discovery_dorks(data, current)
                 main_config_path.write_text(_json.dumps(data, indent=2), encoding="utf-8")
         except Exception as exc:
-            logger.warning("dorkbook prefill: config write failed: %s", exc)
-            return JSONResponse({"error": str(exc)}, status_code=500)
+            logger.warning(
+                "dorkbook prefill config write failed: exception_class=%s",
+                type(exc).__name__,
+            )
+            return JSONResponse(
+                {"error": "failed to update discovery configuration"},
+                status_code=500,
+            )
         return JSONResponse({"ok": True, "protocol": protocol})
 
     @app.get("/extras/keymaster", response_class=HTMLResponse)
@@ -1395,7 +1464,14 @@ def create_app(
             new_cfg = normalize_config(new_cfg)
             validate(new_cfg)
         except WebUIConfigError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
+            logger.warning(
+                "Web UI config validation failed: exception_class=%s",
+                type(exc).__name__,
+            )
+            return JSONResponse(
+                {"error": "invalid Web UI configuration"},
+                status_code=400,
+            )
         try:
             effective_cfg = save_config(new_cfg, path=request.app.state.config_path)
         except Exception:

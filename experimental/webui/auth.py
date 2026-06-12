@@ -32,6 +32,14 @@ class BlocklistUnavailableError(RuntimeError):
     """Raised when the password blocklist is absent, unreadable, or undersized."""
 
 
+class PasswordPolicyError(ValueError):
+    """Raised when a password fails a known, operator-safe policy check."""
+
+    def __init__(self, reason_code: str, message: str):
+        super().__init__(message)
+        self.reason_code = reason_code
+
+
 def _load_blocklist():
     """Return the blocklist as a frozenset, or None on any load failure.
 
@@ -57,7 +65,7 @@ _BLOCKLIST = _load_blocklist()
 
 
 def validate_password_policy(password: str) -> None:
-    """Raise ValueError (policy rejection) or BlocklistUnavailableError (system fault).
+    """Raise PasswordPolicyError or BlocklistUnavailableError.
 
     No composition rules enforced — passphrase-friendly.
     """
@@ -66,9 +74,15 @@ def validate_password_policy(password: str) -> None:
             "Password blocklist unavailable — cannot validate password safety."
         )
     if len(password) < PASSWORD_MIN_LENGTH:
-        raise ValueError(f"Password must be at least {PASSWORD_MIN_LENGTH} characters.")
+        raise PasswordPolicyError(
+            "too_short",
+            f"Password must be at least {PASSWORD_MIN_LENGTH} characters.",
+        )
     if password.lower() in _BLOCKLIST:
-        raise ValueError("Password is too common. Choose a different password.")
+        raise PasswordPolicyError(
+            "too_common",
+            "Password is too common. Choose a different password.",
+        )
 
 
 def _creds_path(path: Optional[Path] = None) -> Path:
@@ -143,15 +157,17 @@ def account_log_id(username: str) -> str:
 def set_password(username: str, password: str, path: Optional[Path] = None) -> None:
     """Hash and store a password for username.
 
-    Raises ValueError for invalid username, policy rejection, or overlong password.
+    Raises ValueError for invalid username.
+    Raises PasswordPolicyError for policy rejection or an overlong password.
     Raises BlocklistUnavailableError if the blocklist cannot be loaded.
     """
     validate_username(username)
     validate_password_policy(password)
     pw_bytes = password.encode("utf-8")
     if len(pw_bytes) > MAX_PASSWORD_BYTES:
-        raise ValueError(
-            f"password exceeds {MAX_PASSWORD_BYTES} bytes after UTF-8 encoding"
+        raise PasswordPolicyError(
+            "too_long",
+            f"password exceeds {MAX_PASSWORD_BYTES} bytes after UTF-8 encoding",
         )
     salt = os.urandom(SALT_BYTES)
     dk = hashlib.pbkdf2_hmac("sha256", pw_bytes, salt, PBKDF2_ITERATIONS)

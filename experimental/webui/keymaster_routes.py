@@ -16,6 +16,7 @@ from experimental.keymaster.models import (
     InvalidPassphraseError,
     KeymasterLockedError,
     PassphraseRequiredError,
+    PROVIDERS,
 )
 from experimental.webui.dependencies import get_session, same_origin, validate_csrf
 from experimental.webui.experimental_models import (
@@ -106,6 +107,10 @@ async def _km_list_keys(
     provider: str = Query(default="SHODAN"),
     search: str = Query(default=""),
 ) -> JSONResponse:
+    normalized_provider = str(provider or "").strip().upper()
+    if normalized_provider not in PROVIDERS:
+        return JSONResponse({"error": "unsupported provider"}, status_code=422)
+
     db_path = _km_db_path(request)
     try:
         km_store.init_db(db_path)
@@ -114,16 +119,23 @@ async def _km_list_keys(
             secure = km_store.secure_mode_enabled(conn)
             rows = km_store.list_keys(
                 conn,
-                provider,
+                normalized_provider,
                 search,
                 session_keys=session.keymaster_session_keys,
             )
         finally:
             conn.close()
     except ValueError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=422)
+        logger.warning(
+            "keymaster list_keys failed: exception_class=%s",
+            type(exc).__name__,
+        )
+        return JSONResponse({"error": "keymaster db unavailable"}, status_code=503)
     except Exception as exc:
-        logger.warning("keymaster list_keys: db error: %s", exc)
+        logger.warning(
+            "keymaster list_keys db error: exception_class=%s",
+            type(exc).__name__,
+        )
         return JSONResponse({"error": "keymaster db unavailable"}, status_code=503)
 
     is_unlocked = (
@@ -228,9 +240,16 @@ async def _km_create_key(
     except DuplicateKeyError:
         return JSONResponse({"error": "duplicate key"}, status_code=409)
     except ValueError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=422)
+        logger.warning(
+            "keymaster create_key failed: exception_class=%s",
+            type(exc).__name__,
+        )
+        return JSONResponse({"error": "internal error"}, status_code=500)
     except Exception as exc:
-        logger.warning("keymaster create_key: error: %s", exc)
+        logger.warning(
+            "keymaster create_key error: exception_class=%s",
+            type(exc).__name__,
+        )
         return JSONResponse({"error": "internal error"}, status_code=500)
 
     return JSONResponse({"key_id": key_id}, status_code=201)
@@ -292,9 +311,16 @@ async def _km_update_key(
     except DuplicateKeyError:
         return JSONResponse({"error": "duplicate key"}, status_code=409)
     except ValueError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=422)
+        logger.warning(
+            "keymaster update_key failed: exception_class=%s",
+            type(exc).__name__,
+        )
+        return JSONResponse({"error": "internal error"}, status_code=500)
     except Exception as exc:
-        logger.warning("keymaster update_key %d: error: %s", key_id, exc)
+        logger.warning(
+            "keymaster update_key error: exception_class=%s",
+            type(exc).__name__,
+        )
         return JSONResponse({"error": "internal error"}, status_code=500)
 
     return JSONResponse({"ok": True})
