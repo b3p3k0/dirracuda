@@ -171,6 +171,38 @@ def test_searxng_preflight_fail(logged_in_client, monkeypatch):
     assert "Cannot reach" in data["message"]
 
 
+def test_searxng_preflight_exception_is_sanitized(
+    logged_in_client,
+    monkeypatch,
+    caplog,
+):
+    sentinel = "token=super-secret-searxng-value"
+
+    def _raise(_url):
+        raise RuntimeError(sentinel)
+
+    monkeypatch.setattr(
+        "experimental.webui.app.run_searxng_preflight",
+        _raise,
+    )
+    csrf = _csrf_from_dashboard(logged_in_client)
+    response = logged_in_client.post(
+        "/api/searxng/preflight",
+        headers={"X-CSRF-Token": csrf},
+        json={"instance_url": "http://searxng.example.com"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "ok": False,
+        "reason_code": "unknown",
+        "message": "Preflight failed unexpectedly.",
+    }
+    assert sentinel not in response.text
+    assert sentinel not in caplog.text
+    assert "exception_class=RuntimeError" in caplog.text
+
+
 # ---------------------------------------------------------------------------
 # /api/searxng/run
 # ---------------------------------------------------------------------------

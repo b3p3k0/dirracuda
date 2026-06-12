@@ -15,6 +15,18 @@ from experimental.webui.config import TLSConfig, WebUIConfig
 _USERNAME = "km_tester"
 _PASSWORD = "correct-horse-battery-staple"
 _KEYMASTER_PASSPHRASE = "Km passphrase 123!"
+_SENTINEL = "token=super-secret-keymaster-value"
+
+
+def _raise_value_error(*_args, **_kwargs):
+    raise ValueError(_SENTINEL)
+
+
+def _assert_sanitized(response, caplog, status_code, payload):
+    assert response.status_code == status_code
+    assert response.json() == payload
+    assert _SENTINEL not in response.text
+    assert _SENTINEL not in caplog.text
 
 
 @pytest.fixture
@@ -260,6 +272,38 @@ def test_keymaster_list_keys_empty(logged_in_client):
     assert "is_unlocked" in data
 
 
+def test_keymaster_list_keys_normalizes_provider_case(logged_in_client):
+    response = logged_in_client.get("/api/keymaster/keys?provider=shodan")
+
+    assert response.status_code == 200
+    assert response.json()["keys"] == []
+
+
+def test_keymaster_list_keys_rejects_provider_with_fixed_error(logged_in_client):
+    response = logged_in_client.get("/api/keymaster/keys?provider=invalid")
+
+    assert response.status_code == 422
+    assert response.json() == {"error": "unsupported provider"}
+
+
+def test_keymaster_list_value_error_is_sanitized(
+    logged_in_client,
+    monkeypatch,
+    caplog,
+):
+    monkeypatch.setattr(km_store, "list_keys", _raise_value_error)
+
+    response = logged_in_client.get("/api/keymaster/keys?provider=SHODAN")
+
+    _assert_sanitized(
+        response,
+        caplog,
+        503,
+        {"error": "keymaster db unavailable"},
+    )
+    assert "exception_class=ValueError" in caplog.text
+
+
 def test_keymaster_list_keys_response_excludes_secrets(logged_in_client):
     csrf = _csrf(logged_in_client)
     _create_key(logged_in_client, csrf, label="sec-test", api_key="myshodan1234")
@@ -309,6 +353,30 @@ def test_keymaster_create_invalid_provider_returns_422(logged_in_client):
     assert r.status_code == 422
 
 
+def test_keymaster_create_value_error_is_sanitized(
+    logged_in_client,
+    monkeypatch,
+    caplog,
+):
+    monkeypatch.setattr(km_store, "create_key", _raise_value_error)
+    csrf = _csrf(logged_in_client)
+
+    response = _create_key(
+        logged_in_client,
+        csrf,
+        label="value-error",
+        api_key="not-returned",
+    )
+
+    _assert_sanitized(
+        response,
+        caplog,
+        500,
+        {"error": "internal error"},
+    )
+    assert "exception_class=ValueError" in caplog.text
+
+
 # ---------------------------------------------------------------------------
 # PATCH /api/keymaster/keys/{key_id}
 # ---------------------------------------------------------------------------
@@ -349,6 +417,29 @@ def test_keymaster_update_blank_api_key_keeps_existing(logged_in_client):
         headers={"X-CSRF-Token": csrf, **_origin_header()},
     )
     assert r.status_code == 200
+
+
+def test_keymaster_update_value_error_is_sanitized(
+    logged_in_client,
+    monkeypatch,
+    caplog,
+):
+    monkeypatch.setattr(km_store, "update_key", _raise_value_error)
+    csrf = _csrf(logged_in_client)
+
+    response = logged_in_client.patch(
+        "/api/keymaster/keys/1",
+        json={"label": "updated", "api_key": "not-returned", "notes": ""},
+        headers={"X-CSRF-Token": csrf, **_origin_header()},
+    )
+
+    _assert_sanitized(
+        response,
+        caplog,
+        500,
+        {"error": "internal error"},
+    )
+    assert "exception_class=ValueError" in caplog.text
 
 
 # ---------------------------------------------------------------------------

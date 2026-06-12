@@ -340,6 +340,25 @@ def test_pagination_bounds_rejected(logged_in_client):
     assert logged_in_client.get("/api/results/all?page_size=201").status_code == 400
 
 
+def test_pagination_value_error_is_sanitized(
+    logged_in_client,
+    monkeypatch,
+    caplog,
+):
+    sentinel = "SECRET_PATH=/tmp/results.db"
+
+    def _raise(*_args, **_kwargs):
+        raise ValueError(sentinel)
+
+    monkeypatch.setattr("experimental.webui.app._db._validate_bounds", _raise)
+    response = logged_in_client.get("/api/results/all")
+
+    assert response.status_code == 400
+    assert response.json() == {"error": "invalid pagination parameters"}
+    assert sentinel not in response.text
+    assert sentinel not in caplog.text
+
+
 def test_legacy_country_filter_rejected(logged_in_client):
     r = logged_in_client.get("/api/results/all?country=US")
     assert r.status_code == 400

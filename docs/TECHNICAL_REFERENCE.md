@@ -163,7 +163,7 @@ Keymaster apply missing-config behavior (C34): `POST /api/keymaster/apply` resol
 
 Web UI preference persistence (C19): authenticated pages can optionally persist allowlisted, non-sensitive UI selectors/toggles in browser `localStorage` after explicit one-time opt-in. This uses two keys (`dirracuda_pref_consent_v1`, `dirracuda_pref_data_v1`) and never stores free-text filters, credentials, or auth/session/CSRF material. Preference-storage controls (enable/disable/clear) are available on `/config`.
 
-Dashboard balance behavior (C21): `/dashboard` fetches Shodan query-credit status on page load and via manual Refresh only (no polling). The server uses a 150-second in-memory cache keyed by non-reversible API-key fingerprint and returns sanitized failure reasons (`auth`, `timeout`, `network`, `rate_limited`, `provider`, `unknown`) without exposing provider raw errors.
+Dashboard balance behavior (C21): `/dashboard` fetches Shodan query-credit status on page load and via manual Refresh only (no polling). The server uses a 150-second in-memory cache keyed by a SHA-256 digest of the configured Shodan API key and returns sanitized failure reasons (`auth`, `timeout`, `network`, `rate_limited`, `provider`, `unknown`) without exposing provider raw errors. The digest exists only as a process-local dictionary key; it is never persisted, logged, returned, or used for authentication. CodeQL alert #22 treats the `api_key` variable as password material, but this is a high-entropy provider key used for short-lived cache partitioning. GitHub's [query guidance](https://codeql.github.com/codeql-query-help/python/py-weak-sensitive-data-hashing/) explicitly distinguishes password hashing from SHA-2 use on non-password data.
 
 `experimental/webui/db.py` implements unified results readers for desktop-parity rows and `export_db`. Readers use read-only URI connections (`mode=ro`) and runtime schema guards (`sqlite_master` + `PRAGMA table_info`) so optional protocol tables/columns degrade safely on older or partial schemas. The export function opens the source with `mode=rw` (no-create) to prevent silent empty-DB creation when the source is absent. Write-side results toggles live in `experimental/webui/db_actions.py`; this module uses `mode=rw` (no-create), per-target savepoints for partial success, and schema/column presence checks before each mutation. Async row/bulk probe jobs live in `experimental/webui/results_probe_actions.py` and reuse the shared protocol probe dispatch path plus protocol-aware probe-cache persistence with legacy-schema fallback.
 
@@ -1290,10 +1290,15 @@ Keymaster secure-storage behavior:
 
 - Secure storage policy defaults to enabled and is persisted in sidecar metadata.
 - First secure-mode run requires a dedicated Keymaster passphrase setup.
+- PBKDF2-HMAC-SHA256 derives the root key with 600,000 iterations and a random 32-byte salt. HMAC purpose labels derive separate encryption and fingerprint subkeys.
+- AES-GCM encrypts API keys. A keyed HMAC-SHA256 fingerprint supports equality checks and duplicate rejection without storing the fingerprint key.
+- The fingerprint is deterministic within one unlocked store, so equal saved keys have equal fingerprints. That limited equality leak is intentional; the value is never returned to either UI.
 - Successful unlock derives per-session keys and unlocks once for the app session.
 - Legacy plaintext sidecar rows are migrated in place after successful setup/unlock.
 - `Forgot Passphrase / Reset` is intentionally destructive: it clears stored rows plus passphrase metadata, then reinitializes secure mode.
 - Explicit secure-mode opt-out is available in-window; opt-out converts encrypted rows back to plaintext for compatibility with the selected policy.
+
+CodeQL alert #23 classifies the API key passed to the fingerprint HMAC as a password sent to a fast hash. The operation is keyed duplicate detection, not password storage: the HMAC key is domain-separated from the AES-GCM key, exists only after passphrase unlock, and is not persisted. The construction follows [HMAC](https://www.rfc-editor.org/info/rfc2104); passphrase derivation follows [PBKDF2](https://www.rfc-editor.org/info/rfc8018). Changing either algorithm to satisfy the alert would weaken or obscure the design, so the alert is handled as a documented false positive.
 
 Apply operation (double-click row, context menu Apply, or Apply button):
 

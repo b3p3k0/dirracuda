@@ -1,6 +1,6 @@
 # Security Review Execution Tracker
 
-Status: HI approved PA pack; Codex operating as RA; C8 accepted; E0 next
+Status: HI approved PA pack; Codex operating as RA; B0 accepted; E0 next
 
 ## Baseline
 
@@ -39,6 +39,7 @@ Status: HI approved PA pack; Codex operating as RA; C8 accepted; E0 next
 | C6 | ACCEPTED | `approved_plans/C6_bounded_zip_import.md` | PASS | DEFERRED BY HI | this commit | Bounded single-payload ZIP import |
 | C7 | ACCEPTED | `approved_plans/C7_ftp_remote_path_controls.md` | PASS | n/a | this commit | FTP remote-path controls |
 | C8 | ACCEPTED | `approved_plans/C8_smb_windows_basename.md` | PASS | n/a | this commit | Windows basename semantics |
+| B0 | ACCEPTED | `approved_plans/B0_codeql_promotion_blockers.md` | PASS | n/a | this commit | PR #12 CodeQL promotion blockers; pre-E0 |
 | E0 | NOT STARTED |  | PENDING | n/a |  | Exception ledger freeze |
 | E01 | NOT STARTED |  | PENDING | PENDING |  | X001-X040 |
 | E02 | NOT STARTED |  | PENDING | PENDING |  | X041-X080 |
@@ -484,4 +485,53 @@ Populate after E12:
 - Manual test: n/a
 - Residual risk: the live GUI caller uses `preserve_structure=True`; this fix
   hardens the public default branch before another caller adopts it.
+- Final status: ACCEPTED
+
+## B0 Evidence
+
+- Plan: `approved_plans/B0_codeql_promotion_blockers.md`
+- Implementer: Codex under RA/HI workflow
+- Commit before: `c9f63ff`
+- Commit after: B0 implementation commit (this commit)
+- Files changed:
+  - Web UI application, auth taxonomy, and Keymaster routes
+  - focused auth, route, and response-guardrail tests
+  - `docs/TECHNICAL_REFERENCE.md`
+  - approved B0 plan and execution evidence
+- Line counts:
+  - `experimental/webui/app.py`: 1490
+  - `experimental/webui/auth.py`: 229
+  - `experimental/webui/keymaster_routes.py`: 435
+  - `experimental/webui/tests/test_exception_response_guardrail.py`: 165
+  - `docs/TECHNICAL_REFERENCE.md`: 1472
+- Commands:
+  - focused eight-file Web UI pytest group
+  - `./venv/bin/python -m pytest experimental/webui/tests -q`
+  - `./venv/bin/python -m pytest -q`
+  - isolated daemon/Tkinter import guard
+  - `./venv/bin/python scripts/run_agent_testing_workflow.py --lane quick`
+  - Python compile, static response-leak search, and `git diff --check`
+- Results:
+  - focused Web UI group: 273 passed
+  - post-review auth/Keymaster/guardrail group: 86 passed
+  - full Web UI suite: 600 passed
+  - full suite: 3386 passed, 1 failed
+  - broad failure:
+    `experimental/webui/tests/test_daemon_cli.py::test_daemon_modules_import_without_tkinter`
+  - the order-dependent daemon/Tkinter test passes in isolation and matches the
+    established pre-B0 baseline
+  - quick lane: 60 passed, 1714 deselected
+  - compile, static search, and whitespace checks: PASS
+- RA findings:
+  - All 14 CodeQL response disclosures now use fixed public contracts.
+  - The AST guard rejects exception serialization and aliases while permitting
+    the controlled `job_id` and `reason_code` domain fields.
+  - Alerts #22 and #23 remain cryptographic false positives; no hashing or
+    encryption code changed.
+- Manual test: n/a
+- Residual risk:
+  - Background-job payload exception text remains assigned to the E-series
+    exception audit.
+  - CodeQL alert dismissal, promotion-branch merge, push, and PR rerun remain
+    pending separate HI approval.
 - Final status: ACCEPTED

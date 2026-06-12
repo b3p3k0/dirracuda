@@ -12,6 +12,7 @@ from experimental.webui.auth import (
     PBKDF2_ITERATIONS,
     MAX_PASSWORD_BYTES,
     BlocklistUnavailableError,
+    PasswordPolicyError,
     credential_exists,
     get_credential_usernames,
     set_password,
@@ -100,8 +101,9 @@ def test_unknown_algorithm_returns_false(tmp_path):
 def test_overlong_password_raises_on_set(tmp_path):
     p = tmp_path / "creds.json"
     long_pw = "x" * (MAX_PASSWORD_BYTES + 1)
-    with pytest.raises(ValueError, match="password exceeds"):
+    with pytest.raises(PasswordPolicyError, match="password exceeds") as raised:
         set_password("admin", long_pw, p)
+    assert raised.value.reason_code == "too_long"
 
 
 def test_overlong_password_returns_false_on_verify(tmp_path):
@@ -177,8 +179,10 @@ def test_file_mode_restricted(tmp_path):
 
 def test_set_password_too_short(tmp_path, monkeypatch):
     p = tmp_path / "creds.json"
-    with pytest.raises(ValueError, match=str(PASSWORD_MIN_LENGTH) + " characters"):
+    match = str(PASSWORD_MIN_LENGTH) + " characters"
+    with pytest.raises(PasswordPolicyError, match=match) as raised:
         set_password("admin", "tooshort12345", p)
+    assert raised.value.reason_code == "too_short"
 
 
 def test_set_password_exactly_15(tmp_path):
@@ -190,8 +194,9 @@ def test_set_password_exactly_15(tmp_path):
 def test_set_password_blocklisted(tmp_path, monkeypatch):
     monkeypatch.setattr(auth_module, "_BLOCKLIST", frozenset({"blockedtestpassword123"}))
     p = tmp_path / "creds.json"
-    with pytest.raises(ValueError, match="too common"):
+    with pytest.raises(PasswordPolicyError, match="too common") as raised:
         set_password("admin", "blockedtestpassword123", p)
+    assert raised.value.reason_code == "too_common"
 
 
 def test_set_password_passphrase(tmp_path):

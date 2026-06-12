@@ -456,7 +456,7 @@ def test_change_password_too_short(logged_in_client):
         headers={"X-CSRF-Token": csrf},
     )
     assert r.status_code == 400
-    assert "15" in r.json().get("error", "")
+    assert r.json() == {"error": "Password must be at least 15 characters."}
 
 
 def test_change_password_common_password(logged_in_client, monkeypatch):
@@ -469,7 +469,37 @@ def test_change_password_common_password(logged_in_client, monkeypatch):
         headers={"X-CSRF-Token": csrf},
     )
     assert r.status_code == 400
-    assert "common" in r.json().get("error", "").lower()
+    assert r.json() == {
+        "error": "Password is too common. Choose a different password."
+    }
+
+
+def test_change_password_unexpected_value_error_is_sanitized(
+    logged_in_client,
+    monkeypatch,
+    caplog,
+):
+    sentinel = "SECRET_PATH=/tmp/private-creds.json"
+
+    def _raise(*_args, **_kwargs):
+        raise ValueError(sentinel)
+
+    monkeypatch.setattr("experimental.webui.app.set_password", _raise)
+    csrf = _csrf_token(logged_in_client)
+    response = logged_in_client.post(
+        "/api/auth/change-password",
+        json={
+            "current_password": _PASSWORD,
+            "new_password": "newpassword123456",
+        },
+        headers={"X-CSRF-Token": csrf},
+    )
+
+    assert response.status_code == 500
+    assert response.json() == {"error": "Password update failed."}
+    assert sentinel not in response.text
+    assert sentinel not in caplog.text
+    assert "exception_class=ValueError" in caplog.text
 
 
 def test_change_password_blocklist_unavailable(logged_in_client, monkeypatch):

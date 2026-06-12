@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from experimental.webui.app import create_app
 from experimental.webui.auth import set_password
-from experimental.webui.config import TLSConfig, WebUIConfig
+from experimental.webui.config import TLSConfig, WebUIConfig, WebUIConfigError
 
 _USERNAME = "testuser"
 _PASSWORD = "correct-horse-battery-staple"
@@ -424,6 +424,27 @@ def test_config_post_rejects_invalid_bind(logged_in):
     )
     assert r.status_code == 400
     assert "error" in r.json()
+
+
+def test_config_validation_error_is_sanitized(logged_in, monkeypatch, caplog):
+    sentinel = "SECRET_PATH=/tmp/webui-private.json"
+
+    def _raise(_cfg):
+        raise WebUIConfigError(sentinel)
+
+    monkeypatch.setattr("experimental.webui.app.validate", _raise)
+    token = _csrf(logged_in)
+    response = logged_in.post(
+        "/config",
+        json=_valid_config_payload(),
+        headers={"Origin": "http://testserver", "X-CSRF-Token": token},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"error": "invalid Web UI configuration"}
+    assert sentinel not in response.text
+    assert sentinel not in caplog.text
+    assert "exception_class=WebUIConfigError" in caplog.text
 
 
 def test_config_post_writes_to_tmp_path_not_home(logged_in, config_path, monkeypatch):
