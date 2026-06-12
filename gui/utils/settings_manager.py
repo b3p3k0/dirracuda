@@ -18,6 +18,7 @@ from datetime import datetime
 
 from gui.utils.default_gui_settings import DEFAULT_GUI_SETTINGS
 from gui.utils.logging_config import get_logger
+from shared.config_store import EXPERIMENTAL_MODULES, get_config_store
 from shared.db_path_resolution import (
     auto_detect_database_path,
     normalize_database_path,
@@ -49,7 +50,10 @@ class SettingsManager:
         Args:
             settings_dir: Directory to store settings files (default: ~/.dirracuda)
         """
-        # Default canonical location is ~/.dirracuda/state/gui_settings.json
+        self._config_store = None
+        self._use_modular_store = settings_dir is None
+
+        # Canonical runtime path uses modular prefs in ~/.dirracuda/conf.d/prefs/user-prefs.json
         if settings_dir is None:
             paths = get_paths()
             ensure_layout_dirs(paths=paths)
@@ -57,8 +61,9 @@ class SettingsManager:
                 paths=paths,
                 legacy=get_legacy_paths(paths=paths),
             )
-            self.settings_file = runtime_settings
-            self.settings_dir = runtime_settings.parent
+            self._config_store = get_config_store(paths=paths, legacy=get_legacy_paths(paths=paths))
+            self.settings_file = self._config_store.prefs_file
+            self.settings_dir = self.settings_file.parent
         else:
             self.settings_dir = Path(settings_dir)
             self.settings_file = self.settings_dir / 'gui_settings.json'
@@ -81,10 +86,15 @@ class SettingsManager:
     def load_settings(self) -> None:
         """Load settings from file or create defaults."""
         try:
-            if self.settings_file.exists():
+            if self._use_modular_store:
+                file_settings = self._load_modular_settings()
+            elif self.settings_file.exists():
                 with open(self.settings_file, 'r', encoding='utf-8') as f:
                     file_settings = json.load(f)
-                
+            else:
+                file_settings = None
+
+            if file_settings is not None:
                 # Merge with defaults (in case new settings were added)
                 merged = self._merge_settings(self.default_settings, file_settings)
                 
@@ -122,15 +132,64 @@ class SettingsManager:
                 self.settings['metadata']['last_updated'] = datetime.now().isoformat()
                 # Serialize a stable snapshot so concurrent mutations cannot break json.dump
                 settings_snapshot = copy.deepcopy(self.settings)
-            
-            with open(self.settings_file, 'w', encoding='utf-8') as f:
-                json.dump(settings_snapshot, f, indent=2)
+
+            if self._use_modular_store:
+                self._save_modular_settings(settings_snapshot)
+            else:
+                with open(self.settings_file, 'w', encoding='utf-8') as f:
+                    json.dump(settings_snapshot, f, indent=2)
             
             return True
             
         except Exception as e:
             _logger.error("Failed to save settings: %s", e)
             return False
+
+    def _load_modular_settings(self) -> Optional[Dict[str, Any]]:
+        """Load canonical modular settings from conf.d prefs + experimental module shards."""
+        if self._config_store is None:
+            return None
+
+        self._config_store.ensure_migrated()
+        has_prefs_file = self._config_store.prefs_file.exists()
+        has_any_module_prefs = False
+        for module_name in EXPERIMENTAL_MODULES:
+            try:
+                if self._config_store.module_prefs_path(module_name).exists():
+                    has_any_module_prefs = True
+                    break
+            except Exception:
+                continue
+        if not has_prefs_file and not has_any_module_prefs:
+            return None
+
+        file_settings = self._config_store.load_user_prefs()
+        if not isinstance(file_settings, dict):
+            file_settings = {}
+
+        merged_settings = copy.deepcopy(file_settings)
+        for module_name in EXPERIMENTAL_MODULES:
+            try:
+                module_prefs = self._config_store.load_module_prefs(module_name)
+            except Exception:
+                module_prefs = {}
+            if isinstance(module_prefs, dict) and module_prefs:
+                merged_settings[module_name] = module_prefs
+        return merged_settings
+
+    def _save_modular_settings(self, settings_snapshot: Dict[str, Any]) -> None:
+        """Persist settings to canonical modular prefs + module shards."""
+        if self._config_store is None:
+            raise RuntimeError("modular settings store unavailable")
+
+        user_prefs_payload = copy.deepcopy(settings_snapshot)
+        for module_name in EXPERIMENTAL_MODULES:
+            module_payload = user_prefs_payload.pop(module_name, {})
+            if not isinstance(module_payload, dict):
+                module_payload = {}
+            self._config_store.save_module_prefs(module_name, module_payload)
+
+        self._config_store.save_user_prefs(user_prefs_payload)
     
     def get_setting(self, key_path: str, default: Any = None) -> Any:
         """
@@ -660,6 +719,10 @@ class SettingsManager:
         Returns:
             Path to SMBSeek config.json file
         """
+        if self._use_modular_store:
+            paths = get_paths()
+            legacy = get_legacy_paths(paths=paths)
+            return str(resolve_runtime_config_path(paths=paths, legacy=legacy))
         explicit = str(self.get_setting("backend.config_path", "") or "").strip()
         if explicit:
             return str(Path(explicit).expanduser().resolve(strict=False))
@@ -684,8 +747,8 @@ class SettingsManager:
             paths = get_paths()
             legacy = get_legacy_paths(paths=paths)
 
-            if config_path is None:
-                config_path = str(resolve_runtime_config_path(paths=paths, legacy=legacy))
+            # Canonical-only runtime config path policy.
+            config_path = str(resolve_runtime_config_path(paths=paths, legacy=legacy))
 
             if db_path is None:
                 db_path = str(paths.main_db_file)

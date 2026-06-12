@@ -191,7 +191,6 @@ class UnifiedWorkflow:
                 self.database,
                 self.session_id,
                 self.cautious_mode,
-                getattr(args, 'check_rce', False)
             )
 
             # Execute access verification with parsed arguments

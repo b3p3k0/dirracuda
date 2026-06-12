@@ -39,6 +39,7 @@ from shared.db_path_resolution import (
     normalize_database_path,
     resolve_database_path,
 )
+from shared.config import load_config as load_runtime_config
 from shared.path_service import (
     bootstrap_layout_v2,
     get_legacy_paths,
@@ -78,18 +79,6 @@ WINDOW_HEIGHT = 350
 WINDOW_GEOMETRY = f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}"
 TMPFS_LEGACY_WARNING_DISMISS_KEY = "runtime_warnings.tmpfs_legacy_mount_dismissed"
 
-LEET_MOTD_LINES = (
-    "Hack the Planet!",
-    "Would you like to play a game?",
-    "A strange game. The only winning move is not to play.",
-    "Curiosity is not a crime.",
-    "This is our world now... the world of the electron and the switch.",
-    "Wake up, $USER...",
-    "Follow the white rabbit.",
-    "It's a UNIX system! I know this!",
-)
-
-
 def _sanitize_single_line_printable(value: Any, fallback: str = "") -> str:
     text = "" if value is None else str(value)
     text = text.replace("\r", " ").replace("\n", " ")
@@ -97,44 +86,6 @@ def _sanitize_single_line_printable(value: Any, fallback: str = "") -> str:
     text = " ".join(text.split()).strip()
     return text or fallback
 
-
-def _resolve_motd_user() -> str:
-    candidates = [os.getenv("USER"), os.getenv("USERNAME")]
-    try:
-        candidates.append(getpass.getuser())
-    except Exception:
-        candidates.append(None)
-
-    for candidate in candidates:
-        resolved = _sanitize_single_line_printable(candidate)
-        if resolved:
-            return resolved
-    return "operator"
-
-
-def _render_1337_motd(
-    lines: Optional[Any] = None,
-    chooser: Optional[Any] = None,
-    username: Optional[str] = None,
-) -> str:
-    pool = tuple(lines) if lines is not None else LEET_MOTD_LINES
-    if not pool:
-        return ""
-
-    pick = chooser or random.choice
-    template = _sanitize_single_line_printable(
-        pick(pool),
-        fallback="Welcome, $USER.",
-    )
-    motd_user = (
-        _sanitize_single_line_printable(username, fallback="operator")
-        if username is not None
-        else _resolve_motd_user()
-    )
-    return _sanitize_single_line_printable(
-        template.replace("$USER", motd_user),
-        fallback=f"Welcome, {motd_user}.",
-    )
 
 # Thread-safe UI dispatcher for worker callbacks
 from gui.utils.ui_dispatcher import UIDispatcher
@@ -154,11 +105,13 @@ class XSMBSeekConfig:
             _logger.warning("Layout bootstrap warning during config init: %s", exc)
 
         default_path = resolve_runtime_config_path(paths=_LAYOUT_PATHS, legacy=_LAYOUT_LEGACY)
+        self._canonical_config_file = default_path.resolve(strict=False)
         self.config_file = (
             Path(config_file).expanduser().resolve(strict=False)
             if config_file
-            else default_path.resolve(strict=False)
+            else self._canonical_config_file
         )
+        self._use_modular_runtime = self.config_file == self._canonical_config_file
         self.config = self._load_config()
     
     def _load_config(self) -> Dict[str, Any]:
@@ -208,6 +161,16 @@ class XSMBSeekConfig:
             strict: When True, raise on any read/parse error. When False,
                 return an empty dict on errors.
         """
+        if self._use_modular_runtime:
+            try:
+                cfg = load_runtime_config()
+                data = dict(cfg.config or {})
+                return data if isinstance(data, dict) else {}
+            except Exception:
+                if strict:
+                    raise
+                return {}
+
         try:
             with open(self.config_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
@@ -286,6 +249,19 @@ class XSMBSeekConfig:
         return self.config[self.GUI_SECTION]
 
     def _write_config(self, data: Dict[str, Any]) -> None:
+        if self._use_modular_runtime:
+            cfg = load_runtime_config()
+            updates: Dict[str, Any] = {}
+            gui_data = data.get(self.GUI_SECTION)
+            if isinstance(gui_data, dict):
+                updates[self.GUI_SECTION] = copy.deepcopy(gui_data)
+            db_data = data.get("database")
+            if isinstance(db_data, dict):
+                updates["database"] = copy.deepcopy(db_data)
+            if updates and not cfg.update_sections(updates):
+                raise RuntimeError("Failed to persist managed runtime config sections")
+            return
+
         config_path = self.config_file
         config_path.parent.mkdir(parents=True, exist_ok=True)
         with open(config_path, 'w', encoding='utf-8') as f:
@@ -381,8 +357,20 @@ class XSMBSeekConfig:
         config so existing runtime keys are preserved.
         """
         new_path = Path(config_path).expanduser().resolve()
+
+        if self._use_modular_runtime and new_path != self._canonical_config_file:
+            _logger.warning(
+                "Ignoring non-canonical config path override: %s (runtime is fixed to %s)",
+                new_path,
+                self._canonical_config_file,
+            )
+            self.config_file = self._canonical_config_file
+            self.config = self._load_config()
+            return
+
         current_config = self.config if isinstance(self.config, dict) else {}
         self.config_file = new_path
+        self._use_modular_runtime = self.config_file == self._canonical_config_file
 
         if not new_path.exists():
             new_path.parent.mkdir(parents=True, exist_ok=True)
@@ -574,6 +562,8 @@ try:
     from gui.utils.db_unification import (
         apply_probe_cleanup_choice,
         run_startup_db_unification,
+        defer_sidecar_migration,
+        execute_sidecar_migration_now,
     )
     from gui.utils.backend_interface import BackendInterface
     from gui.utils.style import get_theme, apply_theme_to_window
@@ -600,7 +590,6 @@ class XSMBSeekGUI:
         config_path: Optional[str] = None,
         smbseek_path: Optional[str] = None,
         database_path: Optional[str] = None,
-        pry_unlocked: bool = False,
     ):
         """
         Initialize xsmbseek GUI application.
@@ -614,8 +603,6 @@ class XSMBSeekGUI:
         self.mock_mode = mock_mode
         self.cli_config_path = config_path
         self.cli_database_path = database_path
-        self._pry_unlocked = bool(pry_unlocked)
-        self._rce_unlocked = self._pry_unlocked
         self._layout_migration_result: Optional[Dict[str, Any]] = None
         self._runtime_fallback_paths: list[str] = []
         self._session_db_fallback_path: Optional[str] = None
@@ -1004,7 +991,6 @@ class XSMBSeekGUI:
             self.db_reader,
             self.backend_interface,
             str(smbseek_config_path),
-            rce_unlocked=self._rce_unlocked,
         )
         
         # Set callbacks
@@ -1028,13 +1014,12 @@ class XSMBSeekGUI:
             self.root,
             actions_by_digit={
                 "1": lambda: self.dashboard._handle_scan_button_click(),
-                "2": lambda: self.dashboard._open_drill_down("server_list"),
-                "3": lambda: self.dashboard._open_db_tools(),
-                "4": lambda: self.dashboard._handle_experimental_button_click(),
-                "5": lambda: self.dashboard._open_config_editor(),
-                "6": lambda: self.dashboard._open_about_dialog(),
+                "2": lambda: self.dashboard._open_db_surface(),
+                "3": lambda: self.dashboard._handle_experimental_button_click(),
+                "4": lambda: self.dashboard._open_config_editor(),
+                "5": lambda: self.dashboard._open_about_dialog(),
             },
-            reserved_digits=("7", "8", "9", "0"),
+            reserved_digits=("6", "7", "8", "9", "0"),
         )
     
     def _enable_mock_mode(self) -> None:
@@ -1161,8 +1146,6 @@ class XSMBSeekGUI:
                 else:
                     # Create new window and track it
                     window_data = dict(data or {})
-                    window_data["_pry_unlocked"] = self._pry_unlocked
-                    window_data["_rce_unlocked"] = self._rce_unlocked
                     window = open_server_list_window(
                         self.root,
                         self.db_reader,
@@ -1182,7 +1165,6 @@ class XSMBSeekGUI:
                     self._open_config_editor_direct,
                     self.config,  # Pass runtime config manager for persisted app settings.
                     self._refresh_database_connection,  # Refresh database connection after changes
-                    show_pry_controls=self._pry_unlocked,
                 )
             elif window_type == "data_import":
                 open_data_import_dialog(
@@ -1194,10 +1176,7 @@ class XSMBSeekGUI:
                 server_window = ServerListWindow(
                     self.root,
                     self.db_reader,
-                    {
-                        "_pry_unlocked": self._pry_unlocked,
-                        "_rce_unlocked": self._rce_unlocked,
-                    },
+                    {},
                     on_database_changed=self._refresh_after_database_change,
                 )
                 server_window.apply_recent_discoveries_filter()
@@ -1270,7 +1249,6 @@ class XSMBSeekGUI:
         worker.start()
 
     def _run_db_unification_worker(self, db_path: str) -> None:
-        """Background worker for startup DB unification."""
         try:
             result = run_startup_db_unification(db_path)
         except Exception as exc:
@@ -1278,8 +1256,8 @@ class XSMBSeekGUI:
                 "success": False,
                 "errors": [str(exc)],
                 "probe_backfill": {},
-                "sidecar_import": {},
                 "prompt_cleanup": False,
+                "prompt_sidecar_migration": False,
             }
         if self.root is None:
             return
@@ -1289,7 +1267,6 @@ class XSMBSeekGUI:
             self._db_unification_running = False
 
     def _handle_db_unification_result(self, result: Dict[str, Any]) -> None:
-        """UI-thread handler for startup DB-unification completion."""
         self._db_unification_running = False
         if self.root is None or not self.root.winfo_exists():
             return
@@ -1310,6 +1287,8 @@ class XSMBSeekGUI:
         except Exception as exc:
             _logger.warning("Probe cache cleanup prompt failed: %s", exc)
 
+        if result.get("prompt_sidecar_migration"):
+            self.root.after(500, self._check_sidecar_migration_prompt)
         if result.get("success"):
             return
 
@@ -1339,6 +1318,36 @@ class XSMBSeekGUI:
             retry = False
         if retry:
             self._start_db_unification_tasks()
+
+    def _check_sidecar_migration_prompt(self) -> None:
+        if (self.mock_mode or not self.db_reader or not self.root
+                or getattr(self, "_sidecar_prompt_shown", False)):
+            return
+        try:
+            migrate = messagebox.askyesno(
+                "Sidecar Data Migration",
+                "Legacy SearXNG/Reddit sidecar data detected.\n\n"
+                "Migrate it into the main database now?\n\nYes = migrate now.\n"
+                "No = defer (won't prompt again at startup).",
+                parent=self.root,
+            )
+        except Exception:
+            return
+        self._sidecar_prompt_shown = True
+        if migrate:
+            def _worker():
+                try:
+                    execute_sidecar_migration_now(self.db_reader)
+                except Exception:
+                    pass
+                if self.root is not None and self.dashboard is not None:
+                    try:
+                        self.root.after(0, self._refresh_dashboard)
+                    except tk.TclError:
+                        pass
+            threading.Thread(target=_worker, daemon=True).start()
+        else:
+            defer_sidecar_migration(self.db_reader)
 
     def _bootstrap_tmpfs_runtime(self) -> None:
         """Initialize tmpfs quarantine runtime and surface fallback warning once."""
@@ -1628,7 +1637,7 @@ def main():
         "--config",
         type=str,
         metavar="FILE",
-        help=f"Path to Dirracuda configuration file (default: {resolve_runtime_config_path(paths=_LAYOUT_PATHS, legacy=_LAYOUT_LEGACY)})"
+        help=argparse.SUPPRESS,
     )
     
     parser.add_argument(
@@ -1652,15 +1661,6 @@ def main():
         help="Enable debug output"
     )
 
-    # Easter egg: pry is intentionally hidden unless this startup flag is present.
-    parser.add_argument(
-        "--1337",
-        dest="pry_unlocked",
-        action="store_true",
-        default=False,
-        help=argparse.SUPPRESS,
-    )
-
     parser.add_argument(
         "--version",
         action="version",
@@ -1669,11 +1669,12 @@ def main():
     
     args = parser.parse_args()
 
-    pry_unlocked = bool(getattr(args, "pry_unlocked", False))
-    if pry_unlocked:
-        motd = _render_1337_motd()
-        if motd:
-            print(motd)
+    if args.config:
+        _logger.warning(
+            "CLI --config override is deprecated and ignored; using canonical runtime config at %s",
+            resolve_runtime_config_path(paths=_LAYOUT_PATHS, legacy=_LAYOUT_LEGACY),
+        )
+        args.config = None
 
     # Set debug environment variable if requested
     if args.debug:
@@ -1685,7 +1686,6 @@ def main():
             config_path=args.config,
             smbseek_path=args.backend_path,
             database_path=getattr(args, 'database_path', None),
-            pry_unlocked=pry_unlocked,
         )
         app.run()
     except KeyboardInterrupt:

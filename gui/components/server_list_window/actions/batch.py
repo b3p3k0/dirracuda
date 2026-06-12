@@ -26,7 +26,6 @@ from gui.utils.data_export_engine import get_export_engine
 from gui.utils.scan_manager import get_scan_manager
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.template_store import TemplateStore
-from gui.components.pry_dialog import PryDialog
 from gui.components.pry_status_dialog import BatchStatusDialog
 from shared.db_migrations import run_migrations
 from gui.components.server_list_window import export, details, filters, table
@@ -37,7 +36,6 @@ from gui.utils import (
     probe_runner,
     extract_runner,
     protocol_extract_runner,
-    pry_runner,
 )
 from gui.utils.probe_cache_dispatch import dispatch_probe_run
 from gui.utils.probe_snapshot_summary import summarize_probe_snapshot
@@ -51,13 +49,6 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
     def _start_batch_job(self, job_type: str, targets: List[Dict[str, Any]], options: Dict[str, Any]) -> None:
         if not targets:
             return
-        if job_type == "pry" and not getattr(self, "_pry_unlocked", False):
-            messagebox.showwarning("Pry Disabled", "Pry is disabled for this session.")
-            return
-        rce_unlocked = bool(getattr(self, "_rce_unlocked", getattr(self, "_pry_unlocked", False)))
-        if job_type == "probe" and not rce_unlocked and bool((options or {}).get("enable_rce", False)):
-            options = {**(options or {}), "enable_rce": False}
-
         # Enforce max concurrent jobs
         if len(self.active_jobs) >= 3:
             messagebox.showinfo("Too many tasks", "Please wait for an existing task to finish before starting another.")
@@ -107,21 +98,7 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
         self._set_status(f"Running {job_type} batch (0/{total_units} {unit_label})…")
         self._update_action_buttons_state()
 
-        if job_type == "pry":
-            host_label = targets[0].get("ip_address") or "-"
-            dialog = self._init_batch_status_dialog(
-                "pry",
-                {
-                    "Host": host_label,
-                    "Username": (options.get("username") or "").strip(),
-                    "Share": (options.get("share_name") or "").strip(),
-                    "Wordlist": Path(options.get("wordlist_path", "")).name if options.get("wordlist_path") else "-",
-                },
-                cancel_event,
-                total=len(targets),
-            )
-            job_record["dialog"] = dialog
-        elif job_type == "probe":
+        if job_type == "probe":
             est_shares = sum(len(t.get("shares", []) or []) for t in targets)
             dialog = self._init_batch_status_dialog(
                 "probe",
@@ -174,8 +151,6 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                 return self._execute_probe_target(job_id, target, options, cancel_event)
             if job_type == "extract":
                 return self._execute_extract_target(job_id, target, options, cancel_event)
-            if job_type == "pry":
-                return self._execute_pry_target(job_id, target, options, cancel_event)
             raise RuntimeError(f"Unknown batch job type: {job_type}")
         except Exception as exc:
             return {
@@ -315,6 +290,7 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                 start_path=http_start_path,
                 protocol_server_id=protocol_server_id,
                 db_reader=self.db_reader,
+                allow_insecure_tls=options.get("http_allow_insecure_tls"),
             )
             analysis = probe_patterns.attach_indicator_analysis(snapshot, self.indicator_patterns)
             issue_detected = bool(analysis.get("is_suspicious"))
@@ -376,9 +352,6 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
         max_files = max(1, int(limits.get("max_files", 5)))
         timeout_seconds = max(1, int(limits.get("timeout_seconds", 10)))
         max_depth = max(1, min(3, int(limits.get("max_depth", 1))))
-        rce_unlocked = bool(getattr(self, "_rce_unlocked", getattr(self, "_pry_unlocked", False)))
-        enable_rce = bool(options.get("enable_rce", False)) if rce_unlocked else False
-
         username, password = details._derive_credentials(target.get("auth_method", ""))
 
         try:
@@ -392,7 +365,6 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                 shares=shares,
                 username=username,
                 password=password,
-                enable_rce=enable_rce,
                 allow_empty=True,
                 db_reader=self.db_reader,
             )
@@ -435,14 +407,6 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
             notes.append(f"{share_count} share(s)")
         else:
             notes.append("No accessible shares")
-
-        if enable_rce and result.get("rce_analysis"):
-            rce_status = result["rce_analysis"].get("rce_status", "not_run")
-            notes.append(f"RCE: {rce_status}")
-            try:
-                self._handle_rce_status_update(ip_address, rce_status, row_key=row_key)
-            except Exception:
-                pass
 
         if issue_detected:
             notes.append("Indicators detected")
@@ -665,110 +629,6 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
             "notes": ", ".join(note_parts),
             "clamav": summary.get("clamav", {"enabled": False}),
         }
-
-    def _execute_pry_target(self, job_id: str, target: Dict[str, Any], options: Dict[str, Any], cancel_event: threading.Event) -> Dict[str, Any]:
-        ip_address = target.get("ip_address")
-        username = (options.get("username") or "").strip()
-        wordlist_path = (options.get("wordlist_path") or "").strip()
-
-        if not ip_address:
-            return {
-                "ip_address": ip_address,
-                "action": "pry",
-                "status": "failed",
-                "notes": "Missing IP address"
-            }
-        if not username:
-            return {
-                "ip_address": ip_address,
-                "action": "pry",
-                "status": "failed",
-                "notes": "Username is required"
-            }
-        if not wordlist_path:
-            return {
-                "ip_address": ip_address,
-                "action": "pry",
-                "status": "failed",
-                "notes": "Password wordlist is required"
-            }
-
-        attempt_delay = float(options.get("attempt_delay", 1.0))
-        max_attempts = int(options.get("max_attempts", 0))
-        user_as_pass = bool(options.get("user_as_pass", True))
-        stop_on_lockout = bool(options.get("stop_on_lockout", True))
-        verbose = bool(options.get("verbose", False))
-        self._last_password_tried = getattr(self, "_last_password_tried", {})
-        self._last_password_tried[job_id] = None
-
-        def progress_cb(done: int, total: Optional[int]) -> None:
-            total_display = total if total is not None and total > 0 else "?"
-            try:
-                self.window.after(0, self._set_status, f"Pry {ip_address}: tried {done}/{total_display} passwords…")
-                dialog = self.active_jobs.get(job_id, {}).get("dialog")
-                # Show the actual password tried in last event instead of repeating counts
-                last_pwd = self._last_password_tried.get(job_id)
-                last_event_msg = f"Tried {last_pwd}" if last_pwd else f"Tried {done}/{total_display}"
-                self.window.after(0, self._update_batch_status_dialog, dialog, done, total, last_event_msg)
-            except Exception:
-                pass
-
-        try:
-            result = pry_runner.run_pry(
-                ip_address=ip_address,
-                username=username,
-                wordlist_path=wordlist_path,
-                share_name=options.get("share_name", ""),
-                user_as_pass=user_as_pass,
-                stop_on_lockout=stop_on_lockout,
-                verbose=verbose,
-                attempt_delay=attempt_delay,
-                max_attempts=max_attempts,
-                cancel_event=cancel_event,
-                progress_callback=progress_cb,
-            )
-        except pry_runner.PryError as exc:
-            status = "cancelled" if "cancel" in str(exc).lower() else "failed"
-            return {
-                "ip_address": ip_address,
-                "action": "pry",
-                "status": status,
-                "notes": str(exc)
-            }
-        except Exception as exc:
-            return {
-                "ip_address": ip_address,
-                "action": "pry",
-                "status": "failed",
-                "notes": str(exc)
-            }
-
-        if result.status == "success" and result.found_password:
-            try:
-                self._persist_pry_success(target, options.get("share_name", ""), username, result.found_password)
-            except Exception:
-                pass
-            try:
-                self.db_reader.upsert_probe_cache(
-                    ip_address,
-                    status="issue",
-                    indicator_matches=0,
-                    snapshot_path=None
-                )
-            except Exception:
-                pass
-
-        notes_text = result.notes
-        if result.status == "cancelled" and result.notes.lower() == "cancelled":
-            notes_text = f"Cancelled after {result.attempts} attempts"
-
-        return {
-            "ip_address": ip_address,
-            "action": "pry",
-            "status": result.status,
-            "notes": notes_text
-        }
-
 
     # Probe status helpers
 

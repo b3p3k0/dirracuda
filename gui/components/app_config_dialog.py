@@ -6,13 +6,15 @@ This includes backend paths plus runtime settings that should propagate
 to scan, browse, and extract workflows.
 """
 
+import copy
 import json
 import os
+import re
 import subprocess
 import sys
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog
+from tkinter import filedialog, ttk
 from gui.utils import safe_messagebox as messagebox
 from typing import Any, Callable, Dict, Optional
 
@@ -27,13 +29,18 @@ from gui.utils.keybindings import (
     bind_save_shortcuts,
     bind_submit_shortcuts,
 )
+from gui.components.app_config_security_tab import (
+    create_clamav_card,
+    create_http_tls_card,
+    create_tmpfs_card,
+)
 from gui.utils.style import get_theme
-from gui.utils.wordlist_path import normalize_wordlist_path
 from shared.db_path_resolution import (
     auto_detect_database_path,
     normalize_database_path,
     resolve_database_path,
 )
+from shared.config import load_config as load_main_config, resolve_http_allow_insecure_tls
 from shared.path_service import (
     get_legacy_paths,
     get_paths,
@@ -47,6 +54,13 @@ _CLAMAV_BACKENDS = frozenset(("auto", "clamdscan", "clamscan"))
 _TMPFS_SIZE_MIN_MB = 64
 _TMPFS_SIZE_MAX_MB = 4096
 _TMPFS_SIZE_DEFAULT_MB = 512
+_CENSYS_CREDIT_PROFILES = ("free_starter", "search_enterprise")
+_CENSYS_DEFAULT_MAX_PAGES = 5
+_CENSYS_DEFAULT_QUERY_HOURS = 24
+_CENSYS_DEFAULT_PAGE_SIZE = 100
+_CENSYS_ORG_ID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
 _PATHS = get_paths()
 _LEGACY = get_legacy_paths(paths=_PATHS)
 _DEFAULT_CONFIG_PATH = resolve_runtime_config_path(paths=_PATHS, legacy=_LEGACY)
@@ -66,6 +80,18 @@ _DEFAULT_EXTRACTED_ROOT = select_existing_path(
     ],
 )
 _DEFAULT_TMPFS_QUARANTINE_PATH = _PATHS.tmpfs_quarantine_dir
+_APP_CONFIG_RUNTIME_SECTIONS = (
+    "shodan",
+    "database",
+    "file_collection",
+    "file_browser",
+    "ftp_browser",
+    "http_browser",
+    "http",
+    "quarantine",
+    "clamav",
+    "gui_app",
+)
 
 
 def _coerce_bool_cfg(value: Any, default: bool) -> bool:
@@ -113,6 +139,10 @@ def _set_nested(data: Dict[str, Any], path: tuple[str, ...], value: Any) -> None
     current[path[-1]] = value
 
 
+def _is_canonical_runtime_config_path(path: Path) -> bool:
+    return path.expanduser().resolve(strict=False) == _PATHS.config_file.resolve(strict=False)
+
+
 class AppConfigDialog:
     """
     Application configuration dialog with compact, form-based UI.
@@ -123,18 +153,27 @@ class AppConfigDialog:
     - Database path
     - Shodan API key
     - Quarantine directory (shared SMB/FTP/HTTP browser + extract default)
+
+    Note:
+    - Censys settings remain supported in config.json but are currently hidden
+      from this dialog while the feature is development-suspended.
     """
 
     DORK_DEFAULTS = dict(SHARED_DORK_DEFAULTS)
     DORK_FIELDS = tuple(DORK_DEFAULTS.keys())
+    TOP_LEVEL_TABS = ("Core Paths", "Runtime", "Security")
     REQUIRED_FIELDS = ("smbseek", "database", "config", "quarantine")
     FIELD_LABELS = {
         "smbseek": "Dirracuda Root",
         "database": "Database File",
         "config": "Dirracuda Config",
         "api_key": "Shodan API Key",
+        "censys_pat": "Censys PAT",
+        "censys_org_id": "Censys Organization ID",
+        "censys_max_pages": "Censys Max Pages",
+        "censys_query_hours": "Censys Query Hours",
+        "censys_page_size": "Censys Page Size",
         "quarantine": "Quarantine Directory",
-        "wordlist": "Pry Wordlist Path",
         "smb_dork": "SMB Base Query",
         "ftp_dork": "FTP Base Query",
         "http_dork": "HTTP Base Query",
@@ -147,22 +186,26 @@ class AppConfigDialog:
         config_editor_callback: Optional[Callable[[str], None]] = None,
         main_config=None,
         refresh_callback: Optional[Callable[[], None]] = None,
-        show_pry_controls: bool = False,
     ):
         self.parent = parent
         self.settings_manager = settings_manager
         self.config_editor_callback = config_editor_callback
         self.main_config = main_config
         self.refresh_callback = refresh_callback
-        self.show_pry_controls = bool(show_pry_controls)
         self.theme = get_theme()
 
         self.smbseek_path = ""
         self.config_path = ""
         self.database_path = ""
         self.api_key = ""
+        self.censys_pat = ""
+        self.censys_org_id = ""
+        self.censys_credit_profile = "free_starter"
+        self.censys_max_pages = _CENSYS_DEFAULT_MAX_PAGES
+        self.censys_query_hours = _CENSYS_DEFAULT_QUERY_HOURS
+        self.censys_page_size = _CENSYS_DEFAULT_PAGE_SIZE
+        self.censys_ipv6_enabled = False
         self.quarantine_path = str(_DEFAULT_QUARANTINE_PATH)
-        self.wordlist_path = ""
         self.smb_dork = self.DORK_DEFAULTS["smb_dork"]
         self.ftp_dork = self.DORK_DEFAULTS["ftp_dork"]
         self.http_dork = self.DORK_DEFAULTS["http_dork"]
@@ -176,8 +219,13 @@ class AppConfigDialog:
             "database": {"valid": False, "message": ""},
             "config": {"valid": False, "message": ""},
             "api_key": {"valid": False, "message": ""},
+            "censys_pat": {"valid": False, "message": ""},
+            "censys_org_id": {"valid": False, "message": ""},
+            "censys_credit_profile": {"valid": False, "message": ""},
+            "censys_max_pages": {"valid": False, "message": ""},
+            "censys_query_hours": {"valid": False, "message": ""},
+            "censys_page_size": {"valid": False, "message": ""},
             "quarantine": {"valid": False, "message": ""},
-            "wordlist": {"valid": False, "message": ""},
         }
 
         self.dialog: Optional[tk.Toplevel] = None
@@ -187,8 +235,14 @@ class AppConfigDialog:
         self.database_var: Optional[tk.StringVar] = None
         self.config_var: Optional[tk.StringVar] = None
         self.api_key_var: Optional[tk.StringVar] = None
+        self.censys_pat_var: Optional[tk.StringVar] = None
+        self.censys_org_id_var: Optional[tk.StringVar] = None
+        self.censys_credit_profile_var: Optional[tk.StringVar] = None
+        self.censys_max_pages_var: Optional[tk.StringVar] = None
+        self.censys_query_hours_var: Optional[tk.StringVar] = None
+        self.censys_page_size_var: Optional[tk.StringVar] = None
+        self.censys_ipv6_enabled_var: Optional[tk.BooleanVar] = None
         self.quarantine_var: Optional[tk.StringVar] = None
-        self.wordlist_var: Optional[tk.StringVar] = None
         self.smb_dork_var: Optional[tk.StringVar] = None
         self.ftp_dork_var: Optional[tk.StringVar] = None
         self.http_dork_var: Optional[tk.StringVar] = None
@@ -196,7 +250,10 @@ class AppConfigDialog:
         self.quarantine_browse_button: Optional[tk.Button] = None
         self.api_key_entry: Optional[tk.Entry] = None
         self.api_key_toggle_btn: Optional[tk.Button] = None
+        self.censys_pat_entry: Optional[tk.Entry] = None
+        self.censys_pat_toggle_btn: Optional[tk.Button] = None
         self.api_key_masked = True
+        self.censys_pat_masked = True
 
         self.clamav_enabled: bool = False
         self.clamav_backend: str = "auto"
@@ -205,6 +262,10 @@ class AppConfigDialog:
         self.clamav_known_bad_subdir: str = "known_bad"
         self.clamav_show_results: bool = True
         self.clamav_auto_promote_clean: bool = False
+
+        # HTTP target TLS policy (C3 canonical default).
+        self.http_tls_allow_insecure: bool = True
+        self.http_tls_allow_insecure_var: Optional[tk.BooleanVar] = None
 
         self.clamav_enabled_var: Optional[tk.BooleanVar] = None
         self.clamav_backend_var: Optional[tk.StringVar] = None
@@ -254,7 +315,14 @@ class AppConfigDialog:
         self._load_runtime_settings_from_config(self.config_path)
 
     def _load_runtime_settings_from_config(self, config_path: str) -> None:
-        """Load API key, pry wordlist, and quarantine path from config.json."""
+        """Load API key and quarantine path from config.json."""
+        # HTTP TLS default via the canonical resolver (triggers migration + coercion);
+        # done first so it runs even when the config file does not yet exist.
+        try:
+            self.http_tls_allow_insecure = resolve_http_allow_insecure_tls(config_path)
+        except Exception:
+            self.http_tls_allow_insecure = True
+
         path_obj = Path(config_path).expanduser()
         if not path_obj.exists():
             return
@@ -265,8 +333,38 @@ class AppConfigDialog:
             return
 
         self.api_key = str(_get_nested(config_data, ("shodan", "api_key"), "") or "")
-        raw_wordlist = str(_get_nested(config_data, ("pry", "wordlist_path"), "") or "")
-        self.wordlist_path = normalize_wordlist_path(raw_wordlist, config_path=path_obj)
+
+        censys_raw = config_data.get("censys")
+        censys_cfg = censys_raw if isinstance(censys_raw, dict) else {}
+        self.censys_pat = str(censys_cfg.get("personal_access_token", "") or "").strip()
+        self.censys_org_id = str(censys_cfg.get("organization_id", "") or "").strip()
+        raw_profile = str(censys_cfg.get("credit_profile", "free_starter") or "").strip().lower()
+        self.censys_credit_profile = (
+            raw_profile if raw_profile in _CENSYS_CREDIT_PROFILES else "free_starter"
+        )
+        censys_defaults = _ensure_dict(censys_cfg.get("defaults"))
+        self.censys_max_pages = _coerce_int_cfg(
+            censys_defaults.get("max_pages"),
+            _CENSYS_DEFAULT_MAX_PAGES,
+            minimum=1,
+            maximum=100,
+        )
+        self.censys_query_hours = _coerce_int_cfg(
+            censys_defaults.get("query_hours"),
+            _CENSYS_DEFAULT_QUERY_HOURS,
+            minimum=1,
+            maximum=168,
+        )
+        self.censys_page_size = _coerce_int_cfg(
+            censys_defaults.get("page_size"),
+            _CENSYS_DEFAULT_PAGE_SIZE,
+            minimum=1,
+            maximum=100,
+        )
+        self.censys_ipv6_enabled = _coerce_bool_cfg(
+            censys_defaults.get("ipv6_enabled"),
+            False,
+        )
 
         quarantine_candidates = [
             _get_nested(config_data, ("file_browser", "quarantine_root"), ""),
@@ -332,13 +430,14 @@ class AppConfigDialog:
     def _create_dialog(self) -> None:
         self.dialog = tk.Toplevel(self.parent)
         self.dialog.title("Dirracuda - Application Configuration")
-        self.dialog.geometry("760x860")
+        self.dialog.geometry("860x760")
         self.dialog.minsize(720, 680)
         self.theme.apply_to_widget(self.dialog, "main_window")
         self.dialog.transient(self.parent)
         self.dialog.grab_set()
         # Default to masked every time the dialog is opened.
         self.api_key_masked = True
+        self.censys_pat_masked = True
 
         self._center_window()
         self._create_header()
@@ -381,14 +480,17 @@ class AppConfigDialog:
         self.theme.apply_to_widget(container, "main_window")
         container.pack(fill=tk.BOTH, expand=True, padx=18, pady=(0, 8))
 
-        self._create_compact_card(container, "Core Paths", ("smbseek", "database", "config"))
-        runtime_fields = ("api_key", "quarantine", "wordlist") if self.show_pry_controls else ("api_key", "quarantine")
-        self._create_compact_card(container, "Runtime Settings", runtime_fields)
-        self._create_tmpfs_card(container)
-        self._create_clamav_card(container)
-        self._sync_quarantine_controls_for_tmpfs()
+        top_notebook = ttk.Notebook(container)
+        top_notebook.pack(fill=tk.BOTH, expand=True)
 
-        action_row = tk.Frame(container)
+        top_tabs = self._build_top_level_tabs(top_notebook)
+        core_tab = top_tabs["Core Paths"]
+        runtime_tab = top_tabs["Runtime"]
+        security_tab = top_tabs["Security"]
+
+        self._create_compact_card(core_tab, "Core Paths", ("smbseek", "database", "config"))
+
+        action_row = tk.Frame(core_tab)
         self.theme.apply_to_widget(action_row, "main_window")
         action_row.pack(fill=tk.X, padx=8, pady=(4, 0))
 
@@ -399,6 +501,23 @@ class AppConfigDialog:
         )
         self.theme.apply_to_widget(edit_button, "button_secondary")
         edit_button.pack(anchor=tk.W)
+
+        self._create_compact_card(runtime_tab, "Runtime Settings", ("api_key", "quarantine"))
+
+        create_tmpfs_card(self, security_tab)
+        create_http_tls_card(self, security_tab)
+        create_clamav_card(self, security_tab)
+
+        self._sync_quarantine_controls_for_tmpfs()
+
+    def _build_top_level_tabs(self, notebook: ttk.Notebook) -> Dict[str, tk.Frame]:
+        tabs: Dict[str, tk.Frame] = {}
+        for label in self.TOP_LEVEL_TABS:
+            frame = tk.Frame(notebook)
+            self.theme.apply_to_widget(frame, "main_window")
+            notebook.add(frame, text=label)
+            tabs[label] = frame
+        return tabs
 
     def _create_compact_card(self, parent: tk.Widget, title: str, fields: tuple[str, ...]) -> None:
         card = tk.Frame(parent, highlightthickness=1, bd=0)
@@ -414,6 +533,82 @@ class AppConfigDialog:
 
         for field in fields:
             self._create_field_row(card, field)
+
+    def _create_censys_card(self, parent: tk.Widget) -> None:
+        card = tk.Frame(parent, highlightthickness=1, bd=0)
+        self.theme.apply_to_widget(card, "card")
+        try:
+            card.configure(
+                highlightbackground=self.theme.colors["border"],
+                highlightcolor=self.theme.colors["border"],
+            )
+        except tk.TclError:
+            pass
+        card.pack(fill=tk.X, pady=(0, 10))
+
+        heading = self.theme.create_styled_label(card, "Censys", "body")
+        heading.pack(anchor=tk.W, padx=12, pady=(10, 6))
+
+        note = self.theme.create_styled_label(
+            card,
+            "API candidate queries require organization-scoped access.\n"
+            "Set a valid censys.organization_id UUID for discovery runs.",
+            "small",
+            fg=self.theme.colors["text_secondary"],
+        )
+        note.pack(anchor=tk.W, padx=12, pady=(0, 8))
+
+        for field in (
+            "censys_pat",
+            "censys_org_id",
+            "censys_max_pages",
+            "censys_query_hours",
+            "censys_page_size",
+        ):
+            self._create_field_row(card, field)
+
+        profile_row = tk.Frame(card)
+        self.theme.apply_to_widget(profile_row, "card")
+        profile_row.pack(fill=tk.X, padx=10, pady=(0, 8))
+
+        profile_label = self.theme.create_styled_label(
+            profile_row,
+            "Censys Credit Profile:",
+            "small",
+            fg=self.theme.colors["text_secondary"],
+        )
+        profile_label.pack(side=tk.LEFT, padx=(0, 8))
+
+        if self.censys_credit_profile_var is None:
+            self.censys_credit_profile_var = tk.StringVar(value=self.censys_credit_profile)
+        profile_menu = tk.OptionMenu(
+            profile_row,
+            self.censys_credit_profile_var,
+            *_CENSYS_CREDIT_PROFILES,
+        )
+        self.theme.apply_to_widget(profile_menu, "button_secondary")
+        profile_menu.pack(side=tk.LEFT)
+        self.censys_credit_profile_var.trace_add(
+            "write", lambda *_args: self._validate_field("censys_credit_profile")
+        )
+
+        profile_status_label = tk.Label(profile_row, text="", font=("Arial", 11, "bold"), width=2)
+        self.theme.apply_to_widget(profile_status_label, "text")
+        profile_status_label.pack(side=tk.RIGHT)
+        self.status_labels["censys_credit_profile"] = profile_status_label
+
+        ipv6_row = tk.Frame(card)
+        self.theme.apply_to_widget(ipv6_row, "card")
+        ipv6_row.pack(fill=tk.X, padx=10, pady=(0, 8))
+
+        self.censys_ipv6_enabled_var = tk.BooleanVar(value=self.censys_ipv6_enabled)
+        ipv6_cb = tk.Checkbutton(
+            ipv6_row,
+            text="Censys IPv6 Enabled",
+            variable=self.censys_ipv6_enabled_var,
+        )
+        self.theme.apply_to_widget(ipv6_cb, "checkbox")
+        ipv6_cb.pack(anchor=tk.W)
 
     def _create_dork_card(self, parent: tk.Widget) -> None:
         card = tk.Frame(parent, highlightthickness=1, bd=0)
@@ -432,50 +627,6 @@ class AppConfigDialog:
 
         for field in self.DORK_FIELDS:
             self._create_dork_row(card, field)
-
-    def _create_tmpfs_card(self, parent: tk.Widget) -> None:
-        card = tk.Frame(parent, highlightthickness=1, bd=0)
-        self.theme.apply_to_widget(card, "card")
-        try:
-            card.configure(
-                highlightbackground=self.theme.colors["border"],
-                highlightcolor=self.theme.colors["border"],
-            )
-        except tk.TclError:
-            pass
-        card.pack(fill=tk.X, pady=(0, 10))
-
-        heading = self.theme.create_styled_label(card, "In-Memory Quarantine (tmpfs)", "body")
-        heading.pack(anchor=tk.W, padx=12, pady=(10, 6))
-
-        row1 = tk.Frame(card)
-        self.theme.apply_to_widget(row1, "card")
-        row1.pack(fill=tk.X, padx=10, pady=(0, 6))
-        self.quarantine_tmpfs_enabled_var = tk.BooleanVar(value=self.quarantine_tmpfs_enabled)
-        cb_tmpfs = tk.Checkbutton(
-            row1,
-            text="Use memory (tmpfs) for quarantine",
-            variable=self.quarantine_tmpfs_enabled_var,
-            command=self._sync_quarantine_controls_for_tmpfs,
-        )
-        self.theme.apply_to_widget(cb_tmpfs, "checkbox")
-        cb_tmpfs.pack(anchor=tk.W)
-
-        self.quarantine_tmpfs_note_label = self.theme.create_styled_label(
-            card,
-            "",
-            "small",
-            fg=self.theme.colors["text_secondary"],
-        )
-        self.quarantine_tmpfs_note_label.pack(anchor=tk.W, padx=12, pady=(0, 10))
-
-        if not self._tmpfs_supported_platform:
-            if self.quarantine_tmpfs_enabled_var:
-                self.quarantine_tmpfs_enabled_var.set(False)
-            try:
-                cb_tmpfs.configure(state=tk.DISABLED)
-            except tk.TclError:
-                pass
 
     def _sync_quarantine_controls_for_tmpfs(self) -> None:
         tmpfs_enabled = bool(self.quarantine_tmpfs_enabled_var.get()) if self.quarantine_tmpfs_enabled_var else False
@@ -507,117 +658,6 @@ class AppConfigDialog:
                 )
             self.quarantine_tmpfs_note_label.configure(text=note)
 
-    def _create_clamav_card(self, parent: tk.Widget) -> None:
-        card = tk.Frame(parent, highlightthickness=1, bd=0)
-        self.theme.apply_to_widget(card, "card")
-        try:
-            card.configure(
-                highlightbackground=self.theme.colors["border"],
-                highlightcolor=self.theme.colors["border"],
-            )
-        except tk.TclError:
-            pass
-        card.pack(fill=tk.X, pady=(0, 10))
-
-        heading = self.theme.create_styled_label(card, "ClamAV Settings", "body")
-        heading.pack(anchor=tk.W, padx=12, pady=(10, 6))
-
-        # Row 1 — Enable + clean-promotion checkboxes
-        row1 = tk.Frame(card)
-        self.theme.apply_to_widget(row1, "card")
-        row1.pack(fill=tk.X, padx=10, pady=(0, 6))
-        self.clamav_enabled_var = tk.BooleanVar(value=self.clamav_enabled)
-        cb_enable = tk.Checkbutton(row1, text="Enable ClamAV scanning", variable=self.clamav_enabled_var)
-        self.theme.apply_to_widget(cb_enable, "checkbox")
-        cb_enable.pack(side=tk.LEFT)
-
-        self.clamav_auto_promote_clean_var = tk.BooleanVar(value=self.clamav_auto_promote_clean)
-        cb_promote_clean = tk.Checkbutton(
-            row1,
-            text="Automatically promote clean files",
-            variable=self.clamav_auto_promote_clean_var,
-        )
-        self.theme.apply_to_widget(cb_promote_clean, "checkbox")
-        cb_promote_clean.pack(side=tk.LEFT, padx=(14, 0))
-
-        # Row 2 — Backend selector
-        row2 = tk.Frame(card)
-        self.theme.apply_to_widget(row2, "card")
-        row2.pack(fill=tk.X, padx=10, pady=(0, 6))
-        lbl_backend = self.theme.create_styled_label(
-            row2, "Backend:", "small", fg=self.theme.colors["text_secondary"]
-        )
-        lbl_backend.pack(side=tk.LEFT, padx=(0, 8))
-        self.clamav_backend_var = tk.StringVar(value=self.clamav_backend)
-        opt_backend = tk.OptionMenu(row2, self.clamav_backend_var, "auto", "clamdscan", "clamscan")
-        self.theme.apply_to_widget(opt_backend, "button_secondary")
-        opt_backend.pack(side=tk.LEFT)
-
-        # Row 3 — Timeout
-        row3 = tk.Frame(card)
-        self.theme.apply_to_widget(row3, "card")
-        row3.pack(fill=tk.X, padx=10, pady=(0, 6))
-        lbl_timeout = self.theme.create_styled_label(
-            row3, "Timeout:", "small", fg=self.theme.colors["text_secondary"]
-        )
-        lbl_timeout.pack(side=tk.LEFT, padx=(0, 8))
-        self.clamav_timeout_var = tk.StringVar(value=str(self.clamav_timeout))
-        entry_timeout = tk.Entry(row3, textvariable=self.clamav_timeout_var, font=("Arial", 10), width=6)
-        self.theme.apply_to_widget(entry_timeout, "entry")
-        entry_timeout.pack(side=tk.LEFT)
-        lbl_sec = self.theme.create_styled_label(
-            row3, "seconds", "small", fg=self.theme.colors["text_secondary"]
-        )
-        lbl_sec.pack(side=tk.LEFT, padx=(6, 0))
-
-        # Row 4 — Extracted root path with browse
-        row4 = tk.Frame(card)
-        self.theme.apply_to_widget(row4, "card")
-        row4.pack(fill=tk.X, padx=10, pady=(0, 6))
-        lbl_root = self.theme.create_styled_label(
-            row4, "Extracted root:", "small", fg=self.theme.colors["text_secondary"]
-        )
-        lbl_root.pack(side=tk.LEFT, padx=(0, 8))
-        self.clamav_extracted_root_var = tk.StringVar(value=self.clamav_extracted_root)
-        entry_root = tk.Entry(
-            row4, textvariable=self.clamav_extracted_root_var, font=("Arial", 10)
-        )
-        self.theme.apply_to_widget(entry_root, "entry")
-        entry_root.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
-        browse_root = tk.Button(
-            row4,
-            text="Browse...",
-            command=lambda: self._browse_path("clamav_extracted_root"),
-        )
-        self.theme.apply_to_widget(browse_root, "button_secondary")
-        browse_root.pack(side=tk.LEFT)
-
-        # Row 5 — Known-bad subfolder name
-        row5 = tk.Frame(card)
-        self.theme.apply_to_widget(row5, "card")
-        row5.pack(fill=tk.X, padx=10, pady=(0, 6))
-        lbl_kb = self.theme.create_styled_label(
-            row5, "Known-bad subfolder:", "small", fg=self.theme.colors["text_secondary"]
-        )
-        lbl_kb.pack(side=tk.LEFT, padx=(0, 8))
-        self.clamav_known_bad_subdir_var = tk.StringVar(value=self.clamav_known_bad_subdir)
-        entry_kb = tk.Entry(
-            row5, textvariable=self.clamav_known_bad_subdir_var, font=("Arial", 10)
-        )
-        self.theme.apply_to_widget(entry_kb, "entry")
-        entry_kb.pack(side=tk.LEFT, fill=tk.X, expand=True)
-
-        # Row 6 — Show results dialog checkbox
-        row6 = tk.Frame(card)
-        self.theme.apply_to_widget(row6, "card")
-        row6.pack(fill=tk.X, padx=10, pady=(0, 10))
-        self.clamav_show_results_var = tk.BooleanVar(value=self.clamav_show_results)
-        cb_show = tk.Checkbutton(
-            row6, text="Show results dialog after extract", variable=self.clamav_show_results_var
-        )
-        self.theme.apply_to_widget(cb_show, "checkbox")
-        cb_show.pack(anchor=tk.W)
-
     def _create_field_row(self, parent: tk.Widget, field: str) -> None:
         row = tk.Frame(parent)
         self.theme.apply_to_widget(row, "card")
@@ -632,7 +672,7 @@ class AppConfigDialog:
         label.pack(side=tk.LEFT, padx=(0, 8))
 
         variable = self._field_var(field)
-        show_mask = "*" if field == "api_key" else ""
+        show_mask = "*" if field in {"api_key", "censys_pat"} else ""
         entry = tk.Entry(row, textvariable=variable, font=("Arial", 10), show=show_mask)
         self.theme.apply_to_widget(entry, "entry")
         entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
@@ -650,8 +690,20 @@ class AppConfigDialog:
             toggle_button.pack(side=tk.LEFT, padx=(0, 8))
             self.api_key_toggle_btn = toggle_button
             self._update_api_key_mask_ui()
+        if field == "censys_pat":
+            self.censys_pat_entry = entry
+            toggle_button = tk.Button(
+                row,
+                text="👁️",
+                width=3,
+                command=self._toggle_censys_pat_mask,
+            )
+            self.theme.apply_to_widget(toggle_button, "button_secondary")
+            toggle_button.pack(side=tk.LEFT, padx=(0, 8))
+            self.censys_pat_toggle_btn = toggle_button
+            self._update_censys_pat_mask_ui()
 
-        browse_needed = field in {"smbseek", "database", "config", "quarantine", "wordlist"}
+        browse_needed = field in {"smbseek", "database", "config", "quarantine"}
         if browse_needed:
             browse_button = tk.Button(
                 row,
@@ -729,6 +781,18 @@ class AppConfigDialog:
         self.api_key_masked = not self.api_key_masked
         self._update_api_key_mask_ui()
 
+    def _update_censys_pat_mask_ui(self) -> None:
+        if self.censys_pat_entry:
+            self.censys_pat_entry.configure(show="*" if self.censys_pat_masked else "")
+        if self.censys_pat_toggle_btn:
+            self.censys_pat_toggle_btn.configure(
+                text="👁️" if self.censys_pat_masked else "🕶️"
+            )
+
+    def _toggle_censys_pat_mask(self) -> None:
+        self.censys_pat_masked = not self.censys_pat_masked
+        self._update_censys_pat_mask_ui()
+
     def _field_var(self, field: str) -> tk.StringVar:
         if field == "smbseek":
             if self.smbseek_var is None:
@@ -746,6 +810,26 @@ class AppConfigDialog:
             if self.api_key_var is None:
                 self.api_key_var = tk.StringVar(value=self.api_key)
             return self.api_key_var
+        if field == "censys_pat":
+            if self.censys_pat_var is None:
+                self.censys_pat_var = tk.StringVar(value=self.censys_pat)
+            return self.censys_pat_var
+        if field == "censys_org_id":
+            if self.censys_org_id_var is None:
+                self.censys_org_id_var = tk.StringVar(value=self.censys_org_id)
+            return self.censys_org_id_var
+        if field == "censys_max_pages":
+            if self.censys_max_pages_var is None:
+                self.censys_max_pages_var = tk.StringVar(value=str(self.censys_max_pages))
+            return self.censys_max_pages_var
+        if field == "censys_query_hours":
+            if self.censys_query_hours_var is None:
+                self.censys_query_hours_var = tk.StringVar(value=str(self.censys_query_hours))
+            return self.censys_query_hours_var
+        if field == "censys_page_size":
+            if self.censys_page_size_var is None:
+                self.censys_page_size_var = tk.StringVar(value=str(self.censys_page_size))
+            return self.censys_page_size_var
         if field == "smb_dork":
             if self.smb_dork_var is None:
                 self.smb_dork_var = tk.StringVar(value=self.smb_dork)
@@ -758,10 +842,6 @@ class AppConfigDialog:
             if self.http_dork_var is None:
                 self.http_dork_var = tk.StringVar(value=self.http_dork)
             return self.http_dork_var
-        if field == "wordlist":
-            if self.wordlist_var is None:
-                self.wordlist_var = tk.StringVar(value=self.wordlist_path)
-            return self.wordlist_var
         if self.quarantine_var is None:
             self.quarantine_var = tk.StringVar(value=self.quarantine_path)
         return self.quarantine_var
@@ -833,20 +913,6 @@ class AppConfigDialog:
                 self.quarantine_var.set(selected)
             return
 
-        if field == "wordlist" and self.wordlist_var:
-            initial = os.path.dirname(self.wordlist_var.get()) or str(_PATHS.wordlists_dir)
-            selected = filedialog.askopenfilename(
-                title="Select Pry Wordlist File",
-                initialdir=initial,
-                filetypes=[
-                    ("Text files", "*.txt *.lst *.list"),
-                    ("All files", "*.*"),
-                ],
-            )
-            if selected:
-                self.wordlist_var.set(selected)
-            return
-
         if field == "clamav_extracted_root" and self.clamav_extracted_root_var:
             initial = str(
                 Path(self.clamav_extracted_root_var.get()).expanduser().parent
@@ -899,11 +965,48 @@ class AppConfigDialog:
             self._update_status_label("api_key", result)
             return
 
-        if field == "wordlist":
-            value = self.wordlist_var.get() if self.wordlist_var else self.wordlist_path
-            result = self._validate_wordlist_path(value)
-            self.validation_results["wordlist"] = result
-            self._update_status_label("wordlist", result)
+        if field == "censys_pat":
+            result = self._validate_optional_api_key(self.censys_pat_var.get())
+            self.validation_results["censys_pat"] = result
+            self._update_status_label("censys_pat", result)
+            return
+
+        if field == "censys_org_id":
+            result = self._validate_optional_censys_org_id(self.censys_org_id_var.get())
+            self.validation_results["censys_org_id"] = result
+            self._update_status_label("censys_org_id", result)
+            return
+
+        if field == "censys_credit_profile":
+            result = self._validate_censys_credit_profile(
+                self.censys_credit_profile_var.get()
+            )
+            self.validation_results["censys_credit_profile"] = result
+            self._update_status_label("censys_credit_profile", result)
+            return
+
+        if field == "censys_max_pages":
+            result = self._validate_bounded_integer(
+                self.censys_max_pages_var.get(), "Max pages", minimum=1, maximum=100
+            )
+            self.validation_results["censys_max_pages"] = result
+            self._update_status_label("censys_max_pages", result)
+            return
+
+        if field == "censys_query_hours":
+            result = self._validate_bounded_integer(
+                self.censys_query_hours_var.get(), "Query hours", minimum=1, maximum=168
+            )
+            self.validation_results["censys_query_hours"] = result
+            self._update_status_label("censys_query_hours", result)
+            return
+
+        if field == "censys_page_size":
+            result = self._validate_bounded_integer(
+                self.censys_page_size_var.get(), "Page size", minimum=1, maximum=100
+            )
+            self.validation_results["censys_page_size"] = result
+            self._update_status_label("censys_page_size", result)
             return
 
         result = self._validate_quarantine_path(self.quarantine_var.get())
@@ -1005,6 +1108,72 @@ class AppConfigDialog:
             return {"valid": False, "message": "API key should not contain whitespace."}
         return {"valid": True, "message": "API key set."}
 
+    def _validate_optional_api_key(self, value: str) -> Dict[str, Any]:
+        api_key = str(value or "").strip()
+        if not api_key:
+            return {"valid": True, "message": "Optional API key is empty."}
+        if any(ch.isspace() for ch in api_key):
+            return {"valid": False, "message": "API key should not contain whitespace."}
+        return {"valid": True, "message": "API key set."}
+
+    def _validate_optional_censys_org_id(self, value: str) -> Dict[str, Any]:
+        org_id = str(value or "").strip()
+        if not org_id:
+            return {"valid": True, "message": "Optional organization ID is empty."}
+        if not _CENSYS_ORG_ID_RE.match(org_id):
+            return {"valid": False, "message": "Organization ID must be a valid UUID."}
+        return {"valid": True, "message": "Organization ID is valid."}
+
+    def _validate_censys_credit_profile(self, value: str) -> Dict[str, Any]:
+        profile = str(value or "").strip().lower()
+        if profile in _CENSYS_CREDIT_PROFILES:
+            return {"valid": True, "message": "Credit profile is valid."}
+        return {"valid": False, "message": "Credit profile is invalid."}
+
+    def _validate_bounded_integer(
+        self, value: str, label: str, *, minimum: int, maximum: int
+    ) -> Dict[str, Any]:
+        raw = str(value or "").strip()
+        if not raw:
+            return {"valid": False, "message": f"{label} is required."}
+        try:
+            parsed = int(raw)
+        except (TypeError, ValueError):
+            return {"valid": False, "message": f"{label} must be a whole number."}
+        if parsed < minimum or parsed > maximum:
+            return {
+                "valid": False,
+                "message": f"{label} must be between {minimum} and {maximum}.",
+            }
+        return {"valid": True, "message": f"{label} is valid."}
+
+    def _validate_required_text(self, value: str, label: str) -> Dict[str, Any]:
+        text = str(value or "").strip()
+        if not text:
+            return {"valid": False, "message": f"{label} is required."}
+        return {"valid": True, "message": f"{label} is valid."}
+
+    def _validate_enum_value(
+        self,
+        value: str,
+        label: str,
+        allowed_values: tuple[str, ...],
+    ) -> Dict[str, Any]:
+        text = str(value or "").strip()
+        if text in allowed_values:
+            return {"valid": True, "message": f"{label} is valid."}
+        return {
+            "valid": False,
+            "message": f"{label} must be one of: {', '.join(allowed_values)}.",
+        }
+
+    def _validate_reddit_query(self, value: str, mode: str) -> Dict[str, Any]:
+        query = str(value or "").strip()
+        mode_norm = str(mode or "").strip()
+        if mode_norm == "search" and not query:
+            return {"valid": False, "message": "Reddit query is required for search mode."}
+        return {"valid": True, "message": "Reddit query is valid."}
+
     def _validate_quarantine_path(self, path: str) -> Dict[str, Any]:
         path = str(path or "").strip()
         if not path:
@@ -1019,19 +1188,6 @@ class AppConfigDialog:
             return {"valid": False, "message": "Parent directory does not exist."}
         return {"valid": True, "message": "Quarantine directory will be created."}
 
-    def _validate_wordlist_path(self, path: str) -> Dict[str, Any]:
-        path = str(path or "").strip()
-        if not path:
-            # Optional field: leaving this unset should not block Save.
-            return {"valid": True, "message": "Wordlist not set."}
-
-        path_obj = Path(path).expanduser()
-        if not path_obj.exists():
-            return {"valid": False, "message": "Wordlist file not found."}
-        if not path_obj.is_file():
-            return {"valid": False, "message": "Wordlist path is not a file."}
-        return {"valid": True, "message": "Wordlist file is valid."}
-
     def _update_status_label(self, field: str, result: Dict[str, Any]) -> None:
         label = self.status_labels.get(field)
         if not label:
@@ -1045,10 +1201,13 @@ class AppConfigDialog:
         label.config(text=symbol, fg=color)
 
     def _validate_all_fields(self) -> None:
-        fields = ["smbseek", "database", "config", "api_key", "quarantine"]
-        if self.show_pry_controls:
-            fields.append("wordlist")
-        for field in fields:
+        for field in [
+            "smbseek",
+            "database",
+            "config",
+            "api_key",
+            "quarantine",
+        ]:
             self._validate_field(field)
 
     def _messagebox_parent(self) -> tk.Widget:
@@ -1101,7 +1260,11 @@ class AppConfigDialog:
     def _validate_and_save(self) -> bool:
         self._validate_all_fields()
 
-        invalid_required = [field for field in self.REQUIRED_FIELDS if not self.validation_results[field]["valid"]]
+        invalid_required = [
+            field
+            for field in self.REQUIRED_FIELDS
+            if not self.validation_results.get(field, {"valid": True}).get("valid", True)
+        ]
         if invalid_required:
             details = "\n".join(
                 f"- {self.FIELD_LABELS[field]}: {self.validation_results[field]['message']}"
@@ -1114,15 +1277,17 @@ class AppConfigDialog:
             )
             return False
 
-        new_smbseek = self.smbseek_var.get().strip()
-        new_database = self.database_var.get().strip()
-        new_config_path = self.config_var.get().strip()
-        new_api_key = self.api_key_var.get().strip()
-        new_quarantine = self.quarantine_var.get().strip()
-        if self.show_pry_controls and self.wordlist_var is not None:
-            new_wordlist = self.wordlist_var.get().strip()
-        else:
-            new_wordlist = self.wordlist_path
+        new_smbseek = self.smbseek_var.get().strip() if self.smbseek_var else self.smbseek_path
+        new_database = self.database_var.get().strip() if self.database_var else self.database_path
+        new_config_path = self.config_var.get().strip() if self.config_var else self.config_path
+        new_api_key = self.api_key_var.get().strip() if self.api_key_var else self.api_key
+
+        new_quarantine = (
+            self.quarantine_var.get().strip() if self.quarantine_var else self.quarantine_path
+        )
+
+        _tls_var = getattr(self, "http_tls_allow_insecure_var", None)
+        new_http_tls_allow_insecure = bool(_tls_var.get()) if _tls_var else True
 
         _timeout_var = getattr(self, "clamav_timeout_var", None)
         try:
@@ -1179,7 +1344,8 @@ class AppConfigDialog:
                 # Keeps on-demand extract defaults aligned with shared quarantine.
                 self.settings_manager.set_setting("extract.last_directory", new_quarantine)
 
-            # Persist runtime config fields in the active config.json.
+            # Resolve the active config target after the main config manager has
+            # applied canonical-path policy.
             if self.main_config and hasattr(self.main_config, "set_config_path"):
                 self.main_config.set_config_path(new_config_path)
                 self.main_config.set_smbseek_path(new_smbseek)
@@ -1188,56 +1354,56 @@ class AppConfigDialog:
                     path_obj = Path(self.main_config.get_config_path()).expanduser()
                 else:
                     path_obj = Path(new_config_path).expanduser()
+            else:
+                path_obj = Path(new_config_path).expanduser()
+
+            owner_config = None
+            if _is_canonical_runtime_config_path(path_obj):
+                owner_config = load_main_config()
+                config_data = copy.deepcopy(owner_config.config)
+            else:
                 config_data = self._load_runtime_config_json(
                     str(path_obj),
                     fallback_from=old_config_path,
                 )
-                gui_app = _ensure_dict(config_data.get("gui_app"))
-                gui_app["backend_path"] = new_smbseek
-                gui_app.pop("smbseek_path", None)
-                gui_app["database_path"] = normalized_database_str
-                config_data["gui_app"] = gui_app
-                _set_nested(config_data, ("database", "path"), normalized_database_str)
-                self._apply_runtime_settings(
-                    config_data,
-                    new_api_key,
-                    new_quarantine,
-                    new_wordlist,
-                    clamav_settings=new_clamav,
-                    quarantine_tmpfs_settings=new_quarantine_tmpfs,
-                )
-                path_obj.parent.mkdir(parents=True, exist_ok=True)
-                path_obj.write_text(json.dumps(config_data, indent=2), encoding="utf-8")
-                self.main_config.config = config_data
+
+            gui_app = _ensure_dict(config_data.get("gui_app"))
+            gui_app["backend_path"] = new_smbseek
+            gui_app.pop("smbseek_path", None)
+            gui_app["database_path"] = normalized_database_str
+            config_data["gui_app"] = gui_app
+            _set_nested(config_data, ("database", "path"), normalized_database_str)
+            self._apply_runtime_settings(
+                config_data,
+                new_api_key,
+                new_quarantine,
+                clamav_settings=new_clamav,
+                quarantine_tmpfs_settings=new_quarantine_tmpfs,
+                http_tls_allow_insecure=new_http_tls_allow_insecure,
+            )
+
+            if owner_config is not None:
+                updates = {
+                    section: copy.deepcopy(config_data[section])
+                    for section in _APP_CONFIG_RUNTIME_SECTIONS
+                    if section in config_data
+                }
+                if not owner_config.update_sections(updates):
+                    raise RuntimeError("Failed to persist modular runtime config sections")
+                config_data = copy.deepcopy(owner_config.config)
             else:
-                config_data = self._load_runtime_config_json(
-                    new_config_path,
-                    fallback_from=old_config_path,
-                )
-                gui_app = _ensure_dict(config_data.get("gui_app"))
-                gui_app["backend_path"] = new_smbseek
-                gui_app.pop("smbseek_path", None)
-                gui_app["database_path"] = normalized_database_str
-                config_data["gui_app"] = gui_app
-                _set_nested(config_data, ("database", "path"), normalized_database_str)
-                self._apply_runtime_settings(
-                    config_data,
-                    new_api_key,
-                    new_quarantine,
-                    new_wordlist,
-                    clamav_settings=new_clamav,
-                    quarantine_tmpfs_settings=new_quarantine_tmpfs,
-                )
-                path_obj = Path(new_config_path).expanduser()
                 path_obj.parent.mkdir(parents=True, exist_ok=True)
                 path_obj.write_text(json.dumps(config_data, indent=2), encoding="utf-8")
+
+            if self.main_config is not None:
+                self.main_config.config = config_data
 
             self.smbseek_path = new_smbseek
             self.database_path = normalized_database_str
             self.config_path = new_config_path
             self.api_key = new_api_key
             self.quarantine_path = new_quarantine
-            self.wordlist_path = new_wordlist
+            self.http_tls_allow_insecure = new_http_tls_allow_insecure
             self.clamav_enabled = new_clamav["enabled"]
             self.clamav_backend = new_clamav["backend"]
             self.clamav_timeout = new_clamav["timeout_seconds"]
@@ -1269,14 +1435,6 @@ class AppConfigDialog:
                     "Discovery scans will fail until a valid key is set.",
                     parent=self._messagebox_parent(),
                 )
-            if self.show_pry_controls and not self.validation_results["wordlist"]["valid"]:
-                messagebox.showwarning(
-                    "Configuration Saved",
-                    "Settings were saved, but the Pry wordlist path is invalid.\n"
-                    "Pry operations may fail until this path is corrected.",
-                    parent=self._messagebox_parent(),
-                )
-
             return True
         except Exception as exc:
             messagebox.showerror(
@@ -1319,19 +1477,27 @@ class AppConfigDialog:
         config_data: Dict[str, Any],
         api_key: str,
         quarantine_path: str,
-        wordlist_path: str,
         clamav_settings: Optional[Dict[str, Any]] = None,
         quarantine_tmpfs_settings: Optional[Dict[str, Any]] = None,
+        censys_settings: Optional[Dict[str, Any]] = None,
+        http_tls_allow_insecure: Optional[bool] = None,
     ) -> None:
         # Shodan API key drives scan processes.
         _set_nested(config_data, ("shodan", "api_key"), api_key)
+
+        # Canonical HTTP TLS policy (C3).
+        if http_tls_allow_insecure is not None:
+            _set_nested(
+                config_data,
+                ("http", "verification", "allow_insecure_tls"),
+                bool(http_tls_allow_insecure),
+            )
 
         # Keep quarantine path aligned across browser and extract-adjacent sections.
         _set_nested(config_data, ("file_browser", "quarantine_root"), quarantine_path)
         _set_nested(config_data, ("ftp_browser", "quarantine_base"), quarantine_path)
         _set_nested(config_data, ("http_browser", "quarantine_base"), quarantine_path)
         _set_nested(config_data, ("file_collection", "quarantine_base"), quarantine_path)
-        _set_nested(config_data, ("pry", "wordlist_path"), wordlist_path)
 
         if clamav_settings is not None:
             _set_nested(config_data, ("clamav", "enabled"), clamav_settings["enabled"])
@@ -1349,6 +1515,59 @@ class AppConfigDialog:
         if quarantine_tmpfs_settings is not None:
             _set_nested(config_data, ("quarantine", "use_tmpfs"), quarantine_tmpfs_settings["use_tmpfs"])
 
+        if censys_settings is not None:
+            _set_nested(
+                config_data,
+                ("censys", "personal_access_token"),
+                str(censys_settings.get("personal_access_token", "") or "").strip(),
+            )
+            _set_nested(
+                config_data,
+                ("censys", "organization_id"),
+                str(censys_settings.get("organization_id", "") or "").strip(),
+            )
+            profile = str(censys_settings.get("credit_profile", "free_starter") or "").strip().lower()
+            if profile not in _CENSYS_CREDIT_PROFILES:
+                profile = "free_starter"
+            _set_nested(config_data, ("censys", "credit_profile"), profile)
+
+            defaults = _ensure_dict(censys_settings.get("defaults"))
+            _set_nested(
+                config_data,
+                ("censys", "defaults", "max_pages"),
+                _coerce_int_cfg(
+                    defaults.get("max_pages"),
+                    _CENSYS_DEFAULT_MAX_PAGES,
+                    minimum=1,
+                    maximum=100,
+                ),
+            )
+            _set_nested(
+                config_data,
+                ("censys", "defaults", "query_hours"),
+                _coerce_int_cfg(
+                    defaults.get("query_hours"),
+                    _CENSYS_DEFAULT_QUERY_HOURS,
+                    minimum=1,
+                    maximum=168,
+                ),
+            )
+            _set_nested(
+                config_data,
+                ("censys", "defaults", "page_size"),
+                _coerce_int_cfg(
+                    defaults.get("page_size"),
+                    _CENSYS_DEFAULT_PAGE_SIZE,
+                    minimum=1,
+                    maximum=100,
+                ),
+            )
+            _set_nested(
+                config_data,
+                ("censys", "defaults", "ipv6_enabled"),
+                bool(defaults.get("ipv6_enabled", False)),
+            )
+
 
 def open_app_config_dialog(
     parent: tk.Widget,
@@ -1356,7 +1575,6 @@ def open_app_config_dialog(
     config_editor_callback: Optional[Callable[[str], None]] = None,
     main_config=None,
     refresh_callback: Optional[Callable[[], None]] = None,
-    show_pry_controls: bool = False,
 ) -> None:
     """Open application configuration dialog."""
     try:
@@ -1366,7 +1584,6 @@ def open_app_config_dialog(
             config_editor_callback,
             main_config,
             refresh_callback,
-            show_pry_controls=show_pry_controls,
         )
     except Exception as exc:
         messagebox.showerror(

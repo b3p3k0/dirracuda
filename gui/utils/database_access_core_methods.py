@@ -17,28 +17,6 @@ try:
 except ImportError:
     from .error_codes import get_error, format_error_message
 
-def _ensure_rce_columns(self) -> None:
-    """
-    Best-effort migration to add RCE columns if missing.
-
-    Mirrors shared.db_migrations but runs here to protect GUI users who
-    open older databases without running CLI migrations first.
-    """
-    with sqlite3.connect(self.db_path) as conn:
-        cur = conn.execute("PRAGMA table_info(host_probe_cache)")
-        columns = [row[1] for row in cur.fetchall()]
-
-        altered = False
-        if "rce_status" not in columns:
-            conn.execute("ALTER TABLE host_probe_cache ADD COLUMN rce_status TEXT DEFAULT 'not_run'")
-            altered = True
-        if "rce_verdict_summary" not in columns:
-            conn.execute("ALTER TABLE host_probe_cache ADD COLUMN rce_verdict_summary TEXT")
-            altered = True
-
-        if altered:
-            conn.commit()
-
 def _ensure_http_columns(self) -> None:
     """
     Best-effort migration to add legacy optional HTTP columns if missing.
@@ -739,7 +717,6 @@ def _query_server_list_enhanced(self, conn: sqlite3.Connection, limit: Optional[
             "probe_status": probe.get("status", "unprobed"),
             "indicator_matches": probe.get("indicator_matches", 0),
             "extracted": probe.get("extracted", 0),
-            "rce_status": probe.get("rce_status", "not_run"),
             # Include vulnerabilities as 0 for backward compatibility
             "vulnerabilities": 0
         })
@@ -849,7 +826,6 @@ def _query_server_list_legacy(self, conn: sqlite3.Connection, limit: Optional[in
             "probe_status": probe.get("status", "unprobed"),
             "indicator_matches": probe.get("indicator_matches", 0),
             "extracted": probe.get("extracted", 0),
-            "rce_status": probe.get("rce_status", "not_run"),
         })
 
     return servers, total_count
@@ -872,7 +848,7 @@ def _load_user_flags_map(self, conn: sqlite3.Connection) -> Dict[str, Dict[str, 
 
 def _load_probe_cache_map(self, conn: sqlite3.Connection) -> Dict[str, Dict[str, Any]]:
     query = """
-    SELECT s.ip_address, pc.status, pc.indicator_matches, pc.extracted, pc.rce_status
+    SELECT s.ip_address, pc.status, pc.indicator_matches, pc.extracted
     FROM host_probe_cache pc
     JOIN smb_servers s ON s.id = pc.server_id
     """
@@ -882,7 +858,6 @@ def _load_probe_cache_map(self, conn: sqlite3.Connection) -> Dict[str, Dict[str,
             "status": row["status"] or "unprobed",
             "indicator_matches": row["indicator_matches"] or 0,
             "extracted": row["extracted"] or 0,
-            "rce_status": row["rce_status"] or "not_run",
         }
         for row in rows
     }
@@ -924,7 +899,6 @@ def bind_database_access_core_methods(reader_cls, shared_symbols: Dict[str, Any]
     """Attach extracted core/dashboard/cache methods onto DatabaseReader."""
     globals().update(shared_symbols)
     method_names = (
-        "_ensure_rce_columns",
         "_ensure_http_columns",
         "get_smbseek_schema_definition",
         "analyze_database_schema",

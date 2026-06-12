@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ session.csrf_token if session else '' }}">
+  <title>Dirracuda &#8211; {% block title %}{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  {% block head %}{% endblock %}
+</head>
+<body>
+<div class="layout">
+  <nav class="nav" aria-label="Main navigation">
+    <div class="nav-brand">Dirracuda</div>
+    {% set scans_pages = ['scans_shodan', 'scans_searxng', 'scans_reddit'] %}
+    {% set extras_pages = ['extras_dorkbook', 'extras_keymaster'] %}
+    <ul>
+      <li><a href="/dashboard"{% if active_page == 'dashboard' %} class="active"{% endif %}>Dashboard</a></li>
+      <li class="nav-group-item">
+        <details class="nav-group"{% if active_page in scans_pages %} open{% endif %}>
+          <summary class="nav-group-summary{% if active_page in scans_pages %} active{% endif %}">Scans</summary>
+          <ul class="nav-sublist">
+            <li><a href="/scans/shodan"{% if active_page == 'scans_shodan' %} class="active"{% endif %}>Shodan</a></li>
+            <li><a href="/scans/searxng"{% if active_page == 'scans_searxng' %} class="active"{% endif %}>SearXNG</a></li>
+            <li><a href="/scans/reddit"{% if active_page == 'scans_reddit' %} class="active"{% endif %}>Reddit</a></li>
+          </ul>
+        </details>
+      </li>
+      <li><a href="/results"{% if active_page == 'results' %} class="active"{% endif %}>Results</a></li>
+      <li><a href="/export"{% if active_page == 'export' %} class="active"{% endif %}>Export</a></li>
+      <li class="nav-group-item">
+        <details class="nav-group"{% if active_page in extras_pages %} open{% endif %}>
+          <summary class="nav-group-summary{% if active_page in extras_pages %} active{% endif %}">Extras</summary>
+          <ul class="nav-sublist">
+            <li><a href="/extras/dorkbook"{% if active_page == 'extras_dorkbook' %} class="active"{% endif %}>Dorkbook</a></li>
+            <li><a href="/extras/keymaster"{% if active_page == 'extras_keymaster' %} class="active"{% endif %}>Keymaster</a></li>
+          </ul>
+        </details>
+      </li>
+      <li><a href="/config"{% if active_page == 'config' %} class="active"{% endif %}>Config</a></li>
+      <li><a href="/account"{% if active_page == 'account' %} class="active"{% endif %}>Account</a></li>
+    </ul>
+    {% if session %}
+    <div class="nav-user">
+      <span class="username">{{ session.username }}</span><br>
+      <button id="nav-logout-btn" class="btn-link" type="button">Logout</button>
+    </div>
+    {% endif %}
+  </nav>
+
+  <main class="main" id="main-content">
+    {% for warning in webui_security_warnings %}
+    <div class="status-error" role="alert">
+      {{ warning }}
+    </div>
+    {% endfor %}
+    {% if session %}
+    <div id="prefs-consent-banner" class="status-info hidden" role="status" aria-live="polite" hidden>
+      <div>
+        Store non-sensitive Web UI preferences in this browser (for example results and scan toggles) so pages remember your selections between visits.
+        This storage is local to this browser profile and not used for any other purpose.
+      </div>
+      <div class="prefs-banner-actions">
+        <button id="prefs-consent-yes" type="button">Yes</button>
+        <button id="prefs-consent-no" type="button">No</button>
+      </div>
+    </div>
+    {% endif %}
+    {% block content %}{% endblock %}
+  </main>
+</div>
+
+{% if session %}
+<script src="/static/prefs.js"></script>
+<script src="/static/base.js"></script>
+{% endif %}
+
+{% block scripts %}{% endblock %}
+</body>
+</html>

@@ -7,6 +7,7 @@ stored in the Dorkbook sidecar DB.
 
 from __future__ import annotations
 
+import json
 import tkinter as tk
 from tkinter import ttk
 from tkinter import font as tkfont
@@ -23,6 +24,7 @@ from experimental.dorkbook.models import (
     DuplicateEntryError,
     ReadOnlyEntryError,
 )
+from gui.components.discovery_dork_config import apply_discovery_dorks, read_discovery_dorks
 from gui.utils import safe_messagebox as messagebox
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.session_flags import (
@@ -31,7 +33,8 @@ from gui.utils.session_flags import (
     set_flag,
 )
 from gui.utils.style import get_theme
-from gui.components.scan_dork_editor_dialog import populate_discovery_dork_from_dorkbook
+from shared.config import load_config as _load_config
+from shared.path_service import get_paths as _get_paths
 
 _WINDOW_INSTANCE = None
 
@@ -50,6 +53,48 @@ _COL_WIDTHS = {
     "notes": 240,
 }
 _COLS = ["nickname", "query", "notes"]
+
+_PROTOCOL_TO_DORK_FIELD = {
+    "SMB": "smb_dork",
+    "FTP": "ftp_dork",
+    "HTTP": "http_dork",
+}
+
+
+def _apply_dork_to_config(config_path: str, protocol: str, query: str) -> None:
+    """Write one protocol's dork directly to the discovery config (immediate-persist)."""
+    path = Path(config_path).expanduser()
+    proto_key = str(protocol).strip().upper()
+    field = _PROTOCOL_TO_DORK_FIELD.get(proto_key)
+    if field is None:
+        raise ValueError(f"unsupported protocol for discovery dorks: {protocol!r}")
+    q = str(query).strip()
+    _canonical = _get_paths().config_file.resolve(strict=False)
+    if path.resolve(strict=False) == _canonical:
+        cfg = _load_config(str(path))
+        config_data = {
+            "shodan": cfg.get("shodan", default={}) or {},
+            "ftp": cfg.get("ftp", default={}) or {},
+            "http": cfg.get("http", default={}) or {},
+        }
+        current = read_discovery_dorks(config_data)
+        current[field] = q
+        apply_discovery_dorks(config_data, current)
+        updates = {
+            s: config_data[s]
+            for s in ("shodan", "ftp", "http")
+            if isinstance(config_data.get(s), dict)
+        }
+        if not cfg.update_sections(updates):
+            raise RuntimeError("failed to persist discovery dork sections")
+    else:
+        if not path.is_file():
+            raise FileNotFoundError(f"Config not found: {config_path}")
+        data = json.loads(path.read_text(encoding="utf-8"))
+        current = read_discovery_dorks(data)
+        current[field] = q
+        apply_discovery_dorks(data, current)
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
 def _window_instance_is_live(instance) -> bool:
@@ -407,6 +452,14 @@ class DorkbookWindow:
         use_btn.pack(side=tk.LEFT, padx=(0, 6))
         use_btn.configure(state=tk.DISABLED)
 
+        use_hint = tk.Label(
+            btn_row,
+            text="Applies immediately. For full query editing: Start Scan → Edit Queries.",
+            anchor="w",
+        )
+        self.theme.apply_to_widget(use_hint, "label")
+        use_hint.pack(side=tk.LEFT, padx=(8, 0))
+
         edit_btn = tk.Button(btn_row, text="Edit", command=lambda: self._on_edit(protocol))
         self.theme.apply_to_widget(edit_btn, "button_secondary")
         delete_btn = tk.Button(btn_row, text="Delete", command=lambda: self._on_delete(protocol))
@@ -679,23 +732,17 @@ class DorkbookWindow:
             return
 
         try:
-            populate_discovery_dork_from_dorkbook(
-                parent=self.window,
-                config_path=config_path,
-                protocol=protocol,
-                query=query,
-                settings_manager=self.settings_manager,
-            )
+            _apply_dork_to_config(config_path, protocol, query)
         except Exception as exc:
             messagebox.showerror(
                 "Use Dork Failed",
-                f"Could not populate Discovery Dorks editor:\n{exc}",
+                f"Could not apply dork to config:\n{exc}",
                 parent=self.window,
             )
             return
 
         self._tab_by_protocol[protocol]["status_var"].set(
-            f"Loaded {protocol} query into Discovery Dorks editor. Click Save there to persist."
+            f"Applied {protocol} query to discovery config."
         )
 
     def _on_edit(self, protocol: str) -> None:

@@ -27,9 +27,12 @@ from . import progress
 from . import mock_operations
 from . import error_parser
 from ..logging_config import get_logger
+from shared.config import load_config as load_main_config
 from shared.db_path_resolution import resolve_database_path
+from shared.path_service import get_paths
 
 _logger = get_logger("backend_interface")
+_CANONICAL_CONFIG_PATH = get_paths().config_file.resolve(strict=False)
 
 
 class BackendInterface:
@@ -706,8 +709,11 @@ class BackendInterface:
         """
         if not config_path:
             config_path = os.path.join(self.backend_path, "conf", "config.json")
-        
+
         try:
+            candidate = Path(str(config_path)).expanduser().resolve(strict=False)
+            if candidate == _CANONICAL_CONFIG_PATH:
+                return dict(load_main_config().config or {})
             with open(config_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except Exception:
@@ -795,7 +801,10 @@ class BackendInterface:
 
         config = {}
         try:
-            if self.config_path.exists():
+            candidate = Path(self.config_path).expanduser().resolve(strict=False)
+            if candidate == _CANONICAL_CONFIG_PATH:
+                config = dict(load_main_config().config or {})
+            elif self.config_path.exists():
                 with open(self.config_path, 'r') as f:
                     config = json.load(f)
         except (FileNotFoundError, json.JSONDecodeError, PermissionError):
@@ -872,6 +881,7 @@ class BackendInterface:
         fd = None
         temp_path = None
         original_config_path = self.config_path
+        prev_internal_override = os.environ.get("DIRRACUDA_INTERNAL_CONFIG_OVERRIDE")
         try:
             fd, temp_path = tempfile.mkstemp(suffix=".json", prefix="smbseek_config_")
 
@@ -882,11 +892,16 @@ class BackendInterface:
 
             # Temporarily point interface at the temp config
             self.config_path = Path(temp_path)
+            os.environ["DIRRACUDA_INTERNAL_CONFIG_OVERRIDE"] = "1"
             yield temp_path
 
         finally:
             # Restore original config path
             self.config_path = original_config_path
+            if prev_internal_override is None:
+                os.environ.pop("DIRRACUDA_INTERNAL_CONFIG_OVERRIDE", None)
+            else:
+                os.environ["DIRRACUDA_INTERNAL_CONFIG_OVERRIDE"] = prev_internal_override
             # Cleanup: close descriptor if still open, then remove file
             if fd is not None:
                 try:

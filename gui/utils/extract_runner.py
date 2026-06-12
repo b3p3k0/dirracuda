@@ -133,7 +133,8 @@ def build_clamav_post_processor(
             )
 
         try:
-            dest = resolve_promotion_dest(verdict, inp.file_path, inp.share, promotion_cfg)
+            on_disk_share = inp.local_share or inp.share
+            dest = resolve_promotion_dest(verdict, inp.file_path, on_disk_share, promotion_cfg)
             if dest is None:
                 return PostProcessResult(
                     final_path=inp.file_path,
@@ -254,11 +255,16 @@ def run_extract(
 
     _check_cancel(cancel_event)
 
-    normalized_shares = [share.strip("\\/ ") for share in shares if share.strip("\\/ ")]
-    if not normalized_shares:
+    # Preserve the exact remote share string; only use stripping to decide which
+    # entries are usable (drives the "no shares" guard and the local-label map).
+    str_shares = [s for s in shares if isinstance(s, str)]
+    usable_shares = [s for s in str_shares if s.strip("\\/ ")]
+    if not usable_shares:
         raise ExtractError("No accessible shares provided.")
 
     download_dir.mkdir(parents=True, exist_ok=True)
+    root_resolved = download_dir.resolve()
+    share_labels = _build_share_label_map(usable_shares)
 
     allowed_set = _normalize_extensions(allowed_extensions)
     denied_set = _normalize_extensions(denied_extensions)
@@ -268,7 +274,7 @@ def run_extract(
 
     summary: Dict[str, Any] = {
         "ip_address": ip_address,
-        "shares_requested": normalized_shares,
+        "shares_requested": str_shares,
         "download_root": str(download_dir),
         "started_at": _utcnow(),
         "finished_at": None,
@@ -333,24 +339,34 @@ def run_extract(
     total_bytes = 0
     total_files = 0
 
-    for share in normalized_shares:
+    for remote_share in str_shares:
         _check_cancel(cancel_event)
+        if not remote_share.strip("\\/ "):
+            # Empty or separator-only share: reject with reporting, no SMB call.
+            summary["errors"].append({
+                "share": remote_share,
+                "message": "Rejected: empty or separator-only share name",
+            })
+            continue
         if _time_exceeded(start_time, max_seconds):
             summary["timed_out"] = True
             summary["stop_reason"] = "time_limit"
             break
+
+        local_label = share_labels[remote_share]
+
         try:
             conn = _connect(ip_address, connection_timeout)
             conn.login(username, password)
         except Exception as exc:  # pragma: no cover - network errors
             summary["errors"].append({
-                "share": share,
+                "share": remote_share,
                 "message": f"Login failed: {exc}"
             })
             continue
 
         try:
-            for file_info in _walk_files(conn, share, max_depth, summary):
+            for file_info in _walk_files(conn, remote_share, max_depth, summary):
                 _check_cancel(cancel_event)
                 if _time_exceeded(start_time, max_seconds):
                     summary["timed_out"] = True
@@ -380,7 +396,7 @@ def run_extract(
                 if not should_download:
                     summary["totals"]["files_skipped"] += 1
                     summary["skipped"].append({
-                        "share": share,
+                        "share": remote_share,
                         "path": rel_display,
                         "reason": reason,
                         "size": file_size
@@ -390,7 +406,39 @@ def run_extract(
                         break
                     continue
 
-                dest_path = download_dir / share / file_info["local_rel_path"]
+                local_rel = file_info["local_rel_path"]
+                if not local_rel.parts:
+                    # Hostile name sanitized to nothing; do not use the share root.
+                    summary["totals"]["files_skipped"] += 1
+                    summary["skipped"].append({
+                        "share": remote_share,
+                        "path": rel_display,
+                        "reason": "empty_relative_path",
+                        "size": file_size,
+                    })
+                    summary["errors"].append({
+                        "share": remote_share,
+                        "path": rel_display,
+                        "message": "Rejected: file name sanitized to an empty path",
+                    })
+                    continue
+
+                dest_path = download_dir / local_label / local_rel
+                if not _resolved_within(dest_path, root_resolved):
+                    summary["totals"]["files_skipped"] += 1
+                    summary["skipped"].append({
+                        "share": remote_share,
+                        "path": rel_display,
+                        "reason": "path_containment",
+                        "size": file_size,
+                    })
+                    summary["errors"].append({
+                        "share": remote_share,
+                        "path": rel_display,
+                        "message": "Rejected: resolved local path escapes download root",
+                    })
+                    continue
+
                 dest_path.parent.mkdir(parents=True, exist_ok=True)
 
                 current_index = total_files + 1
@@ -402,18 +450,18 @@ def run_extract(
                         outfile.write(data)
 
                     try:
-                        conn.getFile(share, smb_path, _writer)
+                        conn.getFile(remote_share, smb_path, _writer)
                     except Exception as exc:
                         if _is_access_denied(exc):
                             summary["totals"]["files_skipped"] += 1
                             summary["skipped"].append({
-                                "share": share,
+                                "share": remote_share,
                                 "path": rel_display,
                                 "reason": "access_denied",
                                 "size": file_size
                             })
                             summary["errors"].append({
-                                "share": share,
+                                "share": remote_share,
                                 "path": rel_display,
                                 "message": f"Access denied downloading file: {exc}"
                             })
@@ -424,7 +472,7 @@ def run_extract(
                                 pass
                             continue
                         summary["errors"].append({
-                            "share": share,
+                            "share": remote_share,
                             "path": rel_display,
                             "message": f"Download error: {exc}"
                         })
@@ -451,9 +499,10 @@ def run_extract(
                         _pp_inp = PostProcessInput(
                             file_path=dest_path,
                             ip_address=ip_address,
-                            share=share,
+                            share=remote_share,
                             rel_display=rel_display,
                             file_size=file_size,
+                            local_share=local_label,
                         )
                         _pp_result = _active_pp(_pp_inp)
                         final_path = _pp_result.final_path
@@ -461,7 +510,7 @@ def run_extract(
                             _update_clamav_accum(clamav_accum, _pp_result, rel_display)
                     except Exception as _pp_exc:
                         summary["errors"].append({
-                            "share": share,
+                            "share": remote_share,
                             "path": rel_display,
                             "message": f"post_processor error (file kept in quarantine): {_pp_exc}",
                         })
@@ -474,14 +523,14 @@ def run_extract(
                         # final_path stays as dest_path
 
                 summary["files"].append({
-                    "share": share,
+                    "share": remote_share,
                     "path": rel_display,
                     "size": file_size,
                     "saved_to": str(final_path)
                 })
                 try:
                     host_dir = download_dir.parent
-                    log_quarantine_event(host_dir, f"extracted {share}/{rel_display} -> {final_path}")
+                    log_quarantine_event(host_dir, f"extracted {remote_share}/{rel_display} -> {final_path}")
                 except Exception:
                     pass
 
@@ -799,6 +848,49 @@ def _safe_parts(rel_path: str) -> List[str]:
             continue
         parts.append(segment)
     return parts
+
+
+def _build_share_label_map(usable_shares: Sequence[str]) -> Dict[str, str]:
+    """Map each remote share to a unique, safe, single-segment local label.
+
+    Allocation is independent of input order: shares are processed sorted, every
+    natural base label is reserved, and within a collision group the exact safe
+    owner (remote == sanitized base) keeps the base so a hostile alias cannot
+    steal it. Synthesized ``base-N`` suffixes skip any reserved base or used
+    label.
+    """
+    uniq = sorted(set(usable_shares))
+    base_of = {s: _promo_sanitize_segment(s, fallback="share") for s in uniq}
+    reserved = set(base_of.values())
+    groups: Dict[str, List[str]] = {}
+    for s in uniq:
+        groups.setdefault(base_of[s], []).append(s)
+
+    labels: Dict[str, str] = {}
+    used: set = set()
+    for base in sorted(groups):
+        members = sorted(groups[base], key=lambda s: (s != base, s))
+        for i, s in enumerate(members):
+            if i == 0:
+                label = base
+            else:
+                n = i + 1
+                label = f"{base}-{n}"
+                while label in reserved or label in used:
+                    n += 1
+                    label = f"{base}-{n}"
+            labels[s] = label
+            used.add(label)
+    return labels
+
+
+def _resolved_within(dest: Path, root_resolved: Path) -> bool:
+    """True if *dest* resolves to a location inside *root_resolved* (3.8-safe)."""
+    try:
+        dest.resolve().relative_to(root_resolved)
+        return True
+    except (ValueError, OSError, RuntimeError):
+        return False
 
 
 def _time_exceeded(start: float, max_seconds: int) -> bool:

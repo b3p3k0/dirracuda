@@ -94,13 +94,19 @@ class ImageViewerWindow:
         self._render_image()
 
     def _load_image_safe(self, content: bytes) -> Image.Image:
-        """Decode image with pixel guard."""
+        """Decode image with a pre-decode pixel guard.
+
+        Inspects dimensions from Pillow's lazy ``open()`` and rejects malformed
+        or over-limit images before ``load()`` triggers a full decode.
+        """
         bio = io.BytesIO(content)
         img = Image.open(bio)
-        img.load()
         w, h = img.size
+        if type(w) is not int or type(h) is not int or w <= 0 or h <= 0:
+            raise RuntimeError(f"Invalid image dimensions ({w}x{h}).")
         if w * h > self.max_pixels:
             raise RuntimeError(f"Image too large ({w}x{h}). Limit: {self.max_pixels:,} pixels.")
+        img.load()
         return img
 
     def _build_window(self) -> None:

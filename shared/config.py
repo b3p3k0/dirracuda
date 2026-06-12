@@ -5,16 +5,29 @@ Centralized configuration loading and management for the unified CLI.
 Handles the reorganized configuration structure while maintaining compatibility.
 """
 
+import copy
 import json
 import logging
 import os
 import re
+import shutil
+import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, Any, Optional
-from shared.path_service import get_paths, get_legacy_paths, resolve_runtime_config_path
+from typing import Dict, Any, Optional, Tuple
+from shared.config_store import ConfigStore, get_config_store
+from shared.path_service import get_paths, get_legacy_paths
 
 logger = logging.getLogger(__name__)
+
+_CENSYS_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+_CENSYS_VALID_CREDIT_PROFILES = frozenset({"free_starter", "search_enterprise"})
+_CENSYS_BOOL_TRUE = frozenset({"true", "1", "yes"})
+_CENSYS_BOOL_FALSE = frozenset({"false", "0", "no"})
+
 _PATHS = get_paths()
 _LEGACY = get_legacy_paths(paths=_PATHS)
 _DEFAULT_CONFIG_DB_PATH = "~/.dirracuda/data/dirracuda.db"
@@ -22,9 +35,6 @@ _DEFAULT_CONFIG_QUARANTINE_PATH = "~/.dirracuda/data/quarantine"
 _DEFAULT_CONFIG_EXTRACTED_PATH = "~/.dirracuda/data/extracted"
 _DEFAULT_CONFIG_EXCLUSION_PATH = "~/.dirracuda/conf/exclusion_list.json"
 _DEFAULT_CONFIG_RANSOMWARE_PATH = "~/.dirracuda/conf/ransomware_indicators.json"
-_DEFAULT_CONFIG_RCE_JSONL_PATH = "~/.dirracuda/logs/rce_analysis.jsonl"
-
-
 def load_json_config(config_file: str) -> Dict[str, Any]:
     """
     Backward-compatible helper for GUI/CLI components expecting a simple JSON loader.
@@ -109,6 +119,25 @@ def normalize_db_timestamp(ts_str: str) -> str:
     return s[:19]
 
 
+_TLS_TRUE = {"1", "true", "yes", "on"}
+_TLS_FALSE = {"0", "false", "no", "off"}
+_HTTP_TLS_MIGRATION = "http_tls_policy_v1"
+
+
+def _coerce_tls_bool(value: Any, default: bool) -> bool:
+    """Explicit true/false recognition; unrecognized/malformed -> supplied default."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    s = str(value).strip().lower()
+    if s in _TLS_TRUE:
+        return True
+    if s in _TLS_FALSE:
+        return False
+    return default
+
+
 class SMBSeekConfig:
     """
     Centralized configuration management for Dirracuda.
@@ -125,11 +154,87 @@ class SMBSeekConfig:
             config_file: Path to configuration file
                 (default: ~/.dirracuda/conf/config.json with legacy fallback)
         """
-        if config_file is None:
-            config_file = str(resolve_runtime_config_path(paths=_PATHS, legacy=_LEGACY))
-        
-        self.config_file = config_file
+        self._config_store = get_config_store(paths=_PATHS, legacy=_LEGACY)
+        self._explicit_config_file = (
+            Path(config_file).expanduser().resolve(strict=False)
+            if config_file
+            else None
+        )
+        self.config_file = str(
+            self._explicit_config_file if self._explicit_config_file else _PATHS.config_file
+        )
+        if self._explicit_config_file is None:
+            ensure_http_tls_policy_migrated(self._config_store)
         self.config = self.load_configuration()
+
+    def _legacy_key_cleanup_result(
+        self, user_config: Dict[str, Any]
+    ) -> Tuple[Dict[str, Any], bool, Optional[str], Optional[str]]:
+        """Drop top-level legacy keys and persist cleanup when possible.
+
+        Returns:
+            (sanitized_config, had_legacy_keys, backup_path, rewrite_error)
+        """
+        legacy_keys = [key for key in ("pry", "rce") if key in user_config]
+        if not legacy_keys:
+            return user_config, False, None, None
+
+        sanitized_config = dict(user_config)
+        for key in legacy_keys:
+            sanitized_config.pop(key, None)
+
+        backup_path, rewrite_error = self._rewrite_config_without_legacy_keys(sanitized_config)
+        joined_keys = ", ".join(legacy_keys)
+        if rewrite_error is None:
+            logger.warning(
+                "Legacy config keys removed from %s: %s. Backup created at %s",
+                self.config_file,
+                joined_keys,
+                backup_path,
+            )
+        else:
+            logger.warning(
+                "Legacy config keys detected in %s: %s. Failed to rewrite config file (%s). "
+                "Continuing with sanitized in-memory config only; fix file permissions and remove keys manually.",
+                self.config_file,
+                joined_keys,
+                rewrite_error,
+            )
+        return sanitized_config, True, backup_path, rewrite_error
+
+    def _rewrite_config_without_legacy_keys(self, sanitized_config: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+        """Create timestamped backup and atomically rewrite config without legacy keys."""
+        path = Path(self.config_file).expanduser()
+        if not path.exists():
+            return None, "config_file_missing"
+
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        backup_path = path.with_name(f"{path.name}.legacy_keys_backup_{timestamp}")
+
+        tmp_path: Optional[Path] = None
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, backup_path)
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=str(path.parent),
+                prefix=f".{path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as tmp:
+                json.dump(sanitized_config, tmp, indent=2)
+                tmp.write("\n")
+                tmp_path = Path(tmp.name)
+            os.replace(str(tmp_path), str(path))
+            return str(backup_path), None
+        except Exception as exc:
+            if tmp_path is not None:
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            return str(backup_path), str(exc)
     
     def load_configuration(self) -> Dict[str, Any]:
         """
@@ -224,17 +329,41 @@ class SMBSeekConfig:
                 "colors_enabled": True,
                 "verbose_by_default": False,
                 "executive_summary": True
-            }
+            },
+            "censys": {
+                "personal_access_token": "",
+                "organization_id": "",
+                "credit_profile": "free_starter",
+                "defaults": {
+                    "max_pages": 5,
+                    "query_hours": 24,
+                    "page_size": 100,
+                    "ipv6_enabled": False,
+                },
+            },
         }
         
         try:
-            with open(self.config_file, 'r', encoding='utf-8') as f:
-                user_config = json.load(f)
-            
+            if self._explicit_config_file is not None:
+                with open(self.config_file, "r", encoding="utf-8") as f:
+                    user_config = json.load(f)
+                migration_warning = None
+            else:
+                user_config, migration_warning = self._config_store.load_runtime_config()
+                if migration_warning:
+                    logger.warning("%s", migration_warning)
+
+            if not isinstance(user_config, dict):
+                raise ValueError("Configuration root must be an object")
+
+            user_config, had_legacy_keys, _, _ = self._legacy_key_cleanup_result(user_config)
+
             # Merge user config with defaults (deep merge)
             merged_config = self._deep_merge(default_config, user_config)
+            if had_legacy_keys:
+                logger.info("Using sanitized config without legacy pry/rce keys for this session.")
             return merged_config
-            
+
         except FileNotFoundError:
             print(f"⚠ Configuration file not found: {self.config_file}")
             print("⚠ Using default configuration values")
@@ -288,6 +417,39 @@ class SMBSeekConfig:
             return self.config[section]
         
         return self.config[section].get(key, default)
+
+    def update_sections(self, updates: Dict[str, Any]) -> bool:
+        """Owner-scoped section write for modular config shards.
+
+        For explicit file overrides (test/internal hooks), this falls back to
+        whole-file JSON writes to preserve existing behavior.
+        """
+        if not isinstance(updates, dict) or not updates:
+            return True
+
+        try:
+            if self._explicit_config_file is not None:
+                current = load_json_config(self.config_file)
+                if not isinstance(current, dict):
+                    current = {}
+                for section, value in updates.items():
+                    current[section] = value
+                if not save_json_config(self.config_file, current):
+                    return False
+                self.config = self._deep_merge(self.config, updates)
+                return True
+
+            self._config_store.update_sections(updates)
+            # Reload composed config so typed accessors see latest data.
+            self.config = self.load_configuration()
+            return True
+        except Exception as exc:
+            logger.warning("Failed to update modular config sections: %s", exc)
+            return False
+
+    def set_section(self, section: str, value: Any) -> bool:
+        """Convenience wrapper for one top-level section write."""
+        return self.update_sections({section: value})
     
     def get_shodan_api_key(self) -> str:
         """Get Shodan API key with validation."""
@@ -365,6 +527,13 @@ class SMBSeekConfig:
             "discovery": {"max_concurrent_hosts": 10},
             "access": {"max_concurrent_hosts": 4},
         }
+
+    def get_http_allow_insecure_tls(self) -> bool:
+        """Canonical HTTP TLS policy (C3). True = skip cert/hostname verification."""
+        verif = self.get_http_config().get("verification")
+        if not isinstance(verif, dict):
+            return True
+        return _coerce_tls_bool(verif.get("allow_insecure_tls"), True)
 
     def get_max_concurrent_http_discovery_hosts(self) -> int:
         """Get max concurrent hosts for HTTP discovery with validation. Default 10, min 1."""
@@ -570,72 +739,6 @@ class SMBSeekConfig:
 
         return True
 
-    # RCE Module Configuration Methods
-
-    def get_rce_config(self) -> Dict[str, Any]:
-        """
-        Get RCE module configuration with defaults merged.
-
-        Returns:
-            Full RCE configuration section with safe defaults applied.
-        """
-        defaults = {
-            "enabled_default": False,
-            "safe_active_budget": {
-                "max_requests": 2,
-                "per_host_timeout_seconds": 5,
-                "retry_count": 0,
-                "jitter_ms": 250
-            },
-            "ms17_010": {"enabled": True},
-            "smbghost": {"enabled": True},
-            "logging": {"jsonl_path": _DEFAULT_CONFIG_RCE_JSONL_PATH},
-            "intrusive_mode_enabled": False
-        }
-        user_rce = self.config.get("rce", {})
-        return self._deep_merge(defaults, user_rce)
-
-    def get_rce_safe_budget(self) -> Dict[str, Any]:
-        """
-        Get safe-active probe budget configuration.
-
-        Returns:
-            Budget configuration dict with max_requests, timeout, retry, jitter.
-        """
-        return self.get_rce_config().get("safe_active_budget", {
-            "max_requests": 2,
-            "per_host_timeout_seconds": 5,
-            "retry_count": 0,
-            "jitter_ms": 250
-        })
-
-    def is_rce_enabled_by_default(self) -> bool:
-        """Check if RCE analysis is enabled by default."""
-        return self.get_rce_config().get("enabled_default", False)
-
-    def is_intrusive_mode_enabled(self) -> bool:
-        """
-        Check if intrusive RCE probes are enabled.
-
-        This is a safety guard - intrusive mode should always be False
-        unless explicitly enabled in config for authorized testing.
-        """
-        return self.get_rce_config().get("intrusive_mode_enabled", False)
-
-    def get_rce_logging_path(self) -> str:
-        """Get JSONL logging path for RCE analysis results."""
-        return self.get_rce_config().get("logging", {}).get(
-            "jsonl_path", _DEFAULT_CONFIG_RCE_JSONL_PATH
-        )
-
-    def is_ms17_010_enabled(self) -> bool:
-        """Check if MS17-010 safe probe is enabled."""
-        return self.get_rce_config().get("ms17_010", {}).get("enabled", True)
-
-    def is_smbghost_enabled(self) -> bool:
-        """Check if SMBGhost exposure check is enabled."""
-        return self.get_rce_config().get("smbghost", {}).get("enabled", True)
-
     def get_clamav_config(self) -> Dict[str, Any]:
         """
         Get ClamAV configuration with defaults merged.
@@ -674,13 +777,172 @@ class SMBSeekConfig:
         return merged
 
 
+    # ------------------------------------------------------------------
+    # Censys config helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _redact_pat(value: str) -> str:
+        return "<set>" if value else "<empty>"
+
+    def _censys_section(self) -> Dict[str, Any]:
+        section = self.config.get("censys", {})
+        return section if isinstance(section, dict) else {}
+
+    def get_censys_pat(self) -> str:
+        raw = self._censys_section().get("personal_access_token", "")
+        if not raw or not raw.strip():
+            raise ValueError(
+                "censys.personal_access_token is not configured. "
+                "Set it in conf/config.json under censys.personal_access_token."
+            )
+        return raw.strip()
+
+    def get_censys_org_id(self) -> Optional[str]:
+        raw = self._censys_section().get("organization_id", "")
+        if not raw or not raw.strip():
+            return None
+        if not _CENSYS_UUID_RE.match(raw.strip()):
+            raise ValueError(
+                "censys.organization_id is not a valid UUID "
+                "(expected xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)."
+            )
+        return raw.strip()
+
+    def get_censys_credit_profile(self) -> str:
+        raw = self._censys_section().get("credit_profile", "free_starter")
+        raw_norm = str(raw).strip().lower()
+        if raw_norm not in _CENSYS_VALID_CREDIT_PROFILES:
+            logger.warning(
+                "censys.credit_profile value %r is not valid; defaulting to 'free_starter'.",
+                raw,
+            )
+            return "free_starter"
+        return raw_norm
+
+    def get_censys_defaults(self) -> Dict[str, Any]:
+        raw = self._censys_section().get("defaults", {})
+        if not isinstance(raw, dict):
+            raw = {}
+
+        def _clamp(value, lo, hi, fallback):
+            try:
+                v = int(value)
+            except (TypeError, ValueError):
+                return fallback
+            return max(lo, min(hi, v))
+
+        def _coerce_bool(value, fallback: bool) -> bool:
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, int):
+                return value != 0
+            if isinstance(value, str):
+                s = value.strip().lower()
+                if s in _CENSYS_BOOL_TRUE:
+                    return True
+                if s in _CENSYS_BOOL_FALSE:
+                    return False
+            return fallback
+
+        return {
+            "max_pages": _clamp(raw.get("max_pages", 5), 1, 100, 5),
+            "query_hours": _clamp(raw.get("query_hours", 24), 1, 168, 24),
+            "page_size": _clamp(raw.get("page_size", 100), 1, 100, 100),
+            "ipv6_enabled": _coerce_bool(raw.get("ipv6_enabled", False), False),
+        }
+
+
+def ensure_http_tls_policy_migrated(store: ConfigStore) -> None:
+    """One-time migration of the persisted HTTP TLS default (C3).
+
+    SPEC precedence: if the canonical key is explicitly present in the owning shard it
+    WINS (no migration). Only when it is absent: unified_scan_dialog ->
+    http_scan_dialog -> True, and the selected value is ALWAYS persisted. Idempotent via
+    a durable marker. Fully guarded: never raises into SMBSeekConfig construction.
+    """
+    try:
+        # Capture explicit policy before modularization can synthesize repo defaults
+        # into core.scan. A completed modular layout owns its shard value; an
+        # incomplete/pre-modular layout owns only values present in the legacy file.
+        layout_was_modular = store.has_any_main_shard() and store.prefs_file.exists()
+        source_config = (
+            store.read_shard_payload("core.scan")
+            if layout_was_modular
+            else store.read_legacy_runtime_payload()
+        )
+        if source_config is None:
+            return
+        source_http = source_config.get("http")
+        source_http = source_http if isinstance(source_http, dict) else {}
+        source_verif = source_http.get("verification")
+        source_verif = source_verif if isinstance(source_verif, dict) else {}
+        canonical_was_explicit = "allow_insecure_tls" in source_verif
+
+        result = store.ensure_migrated()
+        if result.status not in ("success", "already_modular"):
+            return  # modularization incomplete/failed -> retry next launch, NO marker
+        if store.is_migration_done(_HTTP_TLS_MIGRATION):
+            return
+        if not store.has_any_main_shard():
+            return  # shard layout unavailable; run on composed fallback, retry later
+
+        raw_scan = store.read_shard_payload("core.scan")
+        if raw_scan is None:
+            return  # malformed shard -> do NOT clobber; no marker; retry next launch
+
+        raw_http = raw_scan.get("http")
+        raw_http = raw_http if isinstance(raw_http, dict) else {}
+        verif = raw_http.get("verification")
+        verif = verif if isinstance(verif, dict) else {}
+
+        if canonical_was_explicit:
+            # Canonical key explicitly present -> it wins. Nothing to migrate.
+            store.mark_migration_done(_HTTP_TLS_MIGRATION)
+            return
+
+        # Canonical absent -> migrate (unified -> http -> True) and ALWAYS persist.
+        prefs = store.load_user_prefs()
+        value = True
+        for section_name in ("unified_scan_dialog", "http_scan_dialog"):
+            section = prefs.get(section_name)
+            if isinstance(section, dict) and "allow_insecure_tls" in section:
+                value = _coerce_tls_bool(section["allow_insecure_tls"], True)
+                break
+
+        new_http = copy.deepcopy(raw_http)
+        new_verif = new_http.get("verification")
+        if not isinstance(new_verif, dict):
+            new_verif = {}  # normalize a malformed verification before assignment
+        new_verif["allow_insecure_tls"] = value
+        new_http["verification"] = new_verif
+        store.update_sections({"http": new_http})  # safe: shard confirmed parseable
+        store.mark_migration_done(_HTTP_TLS_MIGRATION)
+    except Exception as exc:  # never break SMBSeekConfig construction
+        logger.warning("HTTP TLS policy migration skipped: %s", exc)
+
+
+def resolve_http_allow_insecure_tls(config_path: Optional[str] = None) -> bool:
+    """Shared C3 resolver for callers holding only an optional config path.
+
+    Canonical path (or None) -> store-mode config (migration applies); any other path ->
+    explicit-file config (file value or default true).
+    """
+    explicit: Optional[str] = None
+    if config_path:
+        candidate = Path(config_path).expanduser().resolve(strict=False)
+        if candidate != _PATHS.config_file.resolve(strict=False):
+            explicit = str(candidate)
+    return SMBSeekConfig(config_file=explicit).get_http_allow_insecure_tls()
+
+
 def load_config(config_file: Optional[str] = None) -> SMBSeekConfig:
     """
     Convenience function to load Dirracuda configuration.
-    
+
     Args:
         config_file: Path to configuration file
-        
+
     Returns:
         SMBSeekConfig instance
     """

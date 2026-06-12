@@ -368,7 +368,6 @@ class ScanPreflightController:
         probe_enabled = self.scan_options.get('bulk_probe_enabled', False)
         extract_enabled = self.scan_options.get('bulk_extract_enabled', False)
         self.skip_indicator_extract = bool(self.scan_options.get('bulk_extract_skip_indicators', True))
-        rce_enabled = bool(self.scan_options.get('rce_enabled', False))
 
         config_path = resolve_config_path_from_settings(self.settings)
         shodan_cfg = load_config(config_path).get_shodan_config()
@@ -394,9 +393,8 @@ class ScanPreflightController:
                 self.scan_options['bulk_probe_enabled'] = False
                 self.summary_lines.append('Probe disabled for this scan')
             else:
-                rce_enabled_for_probe = bool(self.scan_options.get('rce_enabled', False))
                 self.summary_lines.append(
-                    f"Probe enabled • workers {outcome['workers']} • dirs {outcome['max_dirs']} • files {outcome['max_files']} • timeout {outcome['timeout']}s • depth {outcome['max_depth']} • RCE {'On' if rce_enabled_for_probe else 'Off'}"
+                    f"Probe enabled • workers {outcome['workers']} • dirs {outcome['max_dirs']} • files {outcome['max_files']} • timeout {outcome['timeout']}s • depth {outcome['max_depth']}"
                 )
                 self.scan_options['bulk_probe_enabled'] = True
         if extract_enabled:
@@ -426,13 +424,7 @@ class ScanPreflightController:
                 )
                 self.scan_options['bulk_extract_enabled'] = True
 
-        if self.scan_options.get('rce_enabled') and not self.scan_options.get('bulk_probe_enabled'):
-            self.scan_options['rce_enabled'] = False
-            self.summary_lines.append('RCE disabled (requires probe)')
-        elif self.scan_options.get('rce_enabled'):
-            self.summary_lines.append('RCE analysis will run with probe results')
-
-        if not any((probe_enabled, extract_enabled, rce_enabled)):
+        if not any((probe_enabled, extract_enabled)):
             self.summary_lines.append('No optional post-scan actions selected')
 
         ok = SummaryDialog(self.parent, self.theme, self.summary_lines, self.scan_description).show()

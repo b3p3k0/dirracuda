@@ -11,6 +11,7 @@ Snapshot schema (mirrors SMB probe_runner.py output):
     "port": int,
     "protocol": "ftp",
     "run_at": ISO-8601 UTC string,
+    "start_path": str,   # effective listing root used for traversal
     "limits": {"max_entries": int, "max_directories": int, "max_files": int, "timeout_seconds": int},
     "shares": [
       {
@@ -52,6 +53,7 @@ def run_ftp_probe(
     request_timeout: int = 15,
     cancel_event: Optional[threading.Event] = None,
     progress_callback: Optional[Callable[[str], None]] = None,
+    start_path: str = "/",
 ) -> dict:
     """
     Walk the FTP root and return a probe snapshot dict.
@@ -68,6 +70,8 @@ def run_ftp_probe(
     root_files_truncated = False
     root_dirs: List = []
     directories: List[dict] = []
+    requested_path = _normalize_start_path(start_path)
+    listing_path = requested_path
 
     directory_limit = max(1, int(max_directories)) if max_directories is not None else max(1, int(max_entries))
     file_limit = max(1, int(max_files)) if max_files is not None else max(1, int(max_entries))
@@ -89,9 +93,19 @@ def run_ftp_probe(
         errors.append(f"connect: {exc}")
     else:
         try:
-            root_result = nav.list_dir("/")
+            try:
+                root_result = nav.list_dir(requested_path)
+            except Exception as exc:
+                if requested_path == "/":
+                    raise
+                errors.append(f"list_dir({requested_path}): {exc}; falling back to /")
+                root_result = nav.list_dir("/")
+                listing_path = "/"
+            else:
+                listing_path = requested_path
+
             if root_result.warning:
-                errors.append(f"root listing: {root_result.warning}")
+                errors.append(f"{listing_path} listing: {root_result.warning}")
 
             root_dirs = [e for e in root_result.entries if e.is_dir]
             all_root_files = [e.name for e in root_result.entries if not e.is_dir]
@@ -102,7 +116,7 @@ def run_ftp_probe(
             for dir_entry in root_dirs[:directory_limit]:
                 if cancel_event is not None and cancel_event.is_set():
                     break
-                dir_path = f"/{dir_entry.name}"
+                dir_path = _build_abs_path(listing_path, dir_entry.name)
                 if progress_callback is not None:
                     progress_callback(f"Listing {dir_path}...")
                 try:
@@ -166,7 +180,7 @@ def run_ftp_probe(
                     errors.append(f"{dir_path}: {sub_exc}")
 
         except Exception as exc:
-            errors.append(f"list_dir(/): {exc}")
+            errors.append(f"list_dir({listing_path}): {exc}")
         finally:
             try:
                 nav.disconnect()
@@ -177,6 +191,7 @@ def run_ftp_probe(
         "ip_address": ip,
         "port": port,
         "protocol": "ftp",
+        "start_path": listing_path,
         "run_at": datetime.now(timezone.utc).isoformat(),
         "limits": {
             "max_entries": max_entries,
@@ -198,6 +213,13 @@ def run_ftp_probe(
     }
 
     return snapshot
+
+
+def _normalize_start_path(value: object) -> str:
+    text = str(value or "/").split("?", 1)[0].split("#", 1)[0].strip() or "/"
+    if not text.startswith("/"):
+        text = "/" + text.lstrip("/")
+    return text
 
 
 def _join_rel(parent: str, child: str) -> str:

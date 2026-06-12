@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}Reddit{% endblock %}
+
+{% block content %}
+<h1>Reddit Discovery</h1>
+<div role="status" id="submit-status" aria-live="polite"></div>
+
+<form id="reddit-form" novalidate>
+  <div class="form-section">
+    <div class="form-row">
+      <label for="mode">Mode</label>
+      <select id="mode" name="mode">
+        <option value="feed" selected>Feed</option>
+        <option value="search">Search</option>
+      </select>
+    </div>
+    <div class="form-row hidden" id="query-row">
+      <label for="query">Search query</label>
+      <input id="query" name="query" type="text" placeholder="open directory" maxlength="500">
+    </div>
+    <div class="form-row">
+      <label for="sort">Sort</label>
+      <select id="sort" name="sort">
+        <option value="new" selected>New</option>
+        <option value="top">Top</option>
+      </select>
+    </div>
+    <div class="form-row hidden" id="top-window-row">
+      <label for="top-window">Top window</label>
+      <select id="top-window" name="top-window">
+        <option value="hour">Past hour</option>
+        <option value="day">Past day</option>
+        <option value="week" selected>Past week</option>
+        <option value="month">Past month</option>
+        <option value="year">Past year</option>
+        <option value="all">All time</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label for="max-posts">Max posts</label>
+      <input id="max-posts" name="max-posts" type="number" value="100" min="1" max="100">
+    </div>
+    <div class="form-row">
+      <label for="max-pages">Max pages</label>
+      <input id="max-pages" name="max-pages" type="number" value="3" min="1" max="3">
+    </div>
+    <div class="check-row">
+      <input id="parse-body" name="parse-body" type="checkbox" checked>
+      <label for="parse-body">Parse post body</label>
+    </div>
+    <div class="check-row">
+      <input id="include-nsfw" name="include-nsfw" type="checkbox">
+      <label for="include-nsfw">Include NSFW</label>
+    </div>
+    <div class="check-row">
+      <input id="replace-cache" name="replace-cache" type="checkbox">
+      <label for="replace-cache">Replace cache (wipe existing)</label>
+    </div>
+    <div class="check-row">
+      <input id="bulk-probe" name="bulk-probe" type="checkbox">
+      <label for="bulk-probe">Bulk probe after run</label>
+    </div>
+    <div class="form-row hidden" id="probe-workers-row">
+      <label for="probe-workers">Probe workers</label>
+      <select id="probe-workers" name="probe-workers">
+        <option value="1">1</option>
+        <option value="2">2</option>
+        <option value="3" selected>3</option>
+        <option value="4">4</option>
+        <option value="8">8</option>
+      </select>
+    </div>
+  </div>
+  <div class="form-actions">
+    <button type="submit" id="run-btn">Run Discovery</button>
+  </div>
+</form>
+
+<div class="queue-section">
+  <h2>Queue</h2>
+  <div class="table-wrap">
+    <table id="queue-table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Source</th>
+          <th>State</th>
+          <th>Progress</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody id="queue-body">
+        <tr><td colspan="5" class="status-text">No active or queued jobs.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/reddit.js"></script>
+{% endblock %}

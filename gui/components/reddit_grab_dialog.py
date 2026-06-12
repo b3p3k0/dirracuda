@@ -6,12 +6,11 @@ Collects options and passes an IngestOptions instance to grab_start_callback
 when the user presses Run Grab.
 
 Options:
-  mode          "feed" | "search" | "user"
+  mode          "feed" | "search"
   sort          "new" | "top"
   top_window    "hour" | "day" | "week" | "month" | "year" | "all"
   query         str (search mode only)
-  username      str (user mode only)
-  max_posts     integer 1–200
+  max_posts     integer 1-100
   parse_body    bool
   include_nsfw  bool
   replace_cache bool
@@ -25,6 +24,7 @@ from gui.utils import safe_messagebox as messagebox
 from typing import Callable
 
 from gui.utils.style import get_theme
+from experimental.redseek.models import DEFAULT_MAX_POSTS, MAX_POSTS
 from experimental.redseek.service import IngestOptions
 
 _log = logging.getLogger("dirracuda_gui.reddit_grab_dialog")
@@ -52,10 +52,9 @@ class RedditGrabDialog:
 
         self.mode_var = tk.StringVar(value="feed")
         self.query_var = tk.StringVar(value="")
-        self.username_var = tk.StringVar(value="")
         self.sort_var = tk.StringVar(value="new")
         self.top_window_var = tk.StringVar(value="week")
-        self.max_posts_var = tk.StringVar(value="50")
+        self.max_posts_var = tk.StringVar(value=str(DEFAULT_MAX_POSTS))
         self.parse_body_var = tk.BooleanVar(value=True)
         self.include_nsfw_var = tk.BooleanVar(value=False)
         self.replace_cache_var = tk.BooleanVar(value=False)
@@ -98,7 +97,7 @@ class RedditGrabDialog:
         mode_menu = ttk.Combobox(
             grid,
             textvariable=self.mode_var,
-            values=["feed", "search", "user"],
+            values=["feed", "search"],
             state="readonly",
             width=8,
         )
@@ -139,16 +138,6 @@ class RedditGrabDialog:
         self._query_entry.grid(row=2, column=1, columnspan=3, sticky=tk.W, pady=4)
         self._query_lbl.grid_remove()
         self._query_entry.grid_remove()
-
-        # Username field (row 3 — hidden until mode=user)
-        self._username_lbl = tk.Label(grid, text="Username:", anchor=tk.W)
-        self.theme.apply_to_widget(self._username_lbl, "label")
-        self._username_lbl.grid(row=3, column=0, sticky=tk.W, pady=4, padx=(0, 12))
-        self._username_entry = tk.Entry(grid, textvariable=self.username_var, width=30)
-        self.theme.apply_to_widget(self._username_entry, "entry")
-        self._username_entry.grid(row=3, column=1, columnspan=3, sticky=tk.W, pady=4)
-        self._username_lbl.grid_remove()
-        self._username_entry.grid_remove()
 
         self.mode_var.trace_add("write", self._on_mode_changed)
         self._on_mode_changed()  # set initial field visibility
@@ -203,18 +192,9 @@ class RedditGrabDialog:
         if mode == "search":
             self._query_lbl.grid()
             self._query_entry.grid()
-            self._username_lbl.grid_remove()
-            self._username_entry.grid_remove()
-        elif mode == "user":
-            self._query_lbl.grid_remove()
-            self._query_entry.grid_remove()
-            self._username_lbl.grid()
-            self._username_entry.grid()
         else:  # feed
             self._query_lbl.grid_remove()
             self._query_entry.grid_remove()
-            self._username_lbl.grid_remove()
-            self._username_entry.grid_remove()
 
     # ------------------------------------------------------------------
     # Sort-change handler
@@ -234,7 +214,6 @@ class RedditGrabDialog:
     def _validate(self) -> IngestOptions | None:
         mode = self.mode_var.get().strip()
         query = ""
-        username = ""
         if mode == "search":
             query = self.query_var.get().strip()
             if not query:
@@ -244,22 +223,13 @@ class RedditGrabDialog:
                     parent=self.dialog,
                 )
                 return None
-        elif mode == "user":
-            username = self.username_var.get().strip()
-            if not username:
-                messagebox.showerror(
-                    "Invalid input",
-                    "Username cannot be empty.",
-                    parent=self.dialog,
-                )
-                return None
-            if " " in username:
-                messagebox.showerror(
-                    "Invalid input",
-                    "Username cannot contain spaces.",
-                    parent=self.dialog,
-                )
-                return None
+        elif mode != "feed":
+            messagebox.showerror(
+                "Invalid input",
+                "Reddit mode must be feed or search.",
+                parent=self.dialog,
+            )
+            return None
 
         sort = self.sort_var.get().strip()
         if sort not in {"new", "top"}:
@@ -276,15 +246,15 @@ class RedditGrabDialog:
         except ValueError:
             messagebox.showerror(
                 "Invalid input",
-                "Max posts must be a whole number between 1 and 200.",
+                f"Max posts must be a whole number between 1 and {MAX_POSTS}.",
                 parent=self.dialog,
             )
             return None
 
-        if not (1 <= max_posts <= 200):
+        if not (1 <= max_posts <= MAX_POSTS):
             messagebox.showerror(
                 "Invalid input",
-                f"Max posts must be between 1 and 200 (got {max_posts}).",
+                f"Max posts must be between 1 and {MAX_POSTS} (got {max_posts}).",
                 parent=self.dialog,
             )
             return None
@@ -298,7 +268,6 @@ class RedditGrabDialog:
             top_window=self.top_window_var.get(),
             mode=mode,
             query=query,
-            username=username,
             bulk_probe_enabled=bool(self.bulk_probe_var.get()),
         )
 
@@ -341,7 +310,7 @@ class RedditGrabDialog:
 
         try:
             mode = str(self.settings.get_setting('reddit_grab.mode', 'feed'))
-            if mode not in {'feed', 'search', 'user'}:
+            if mode not in {'feed', 'search'}:
                 mode = 'feed'
             self.mode_var.set(mode)
 
@@ -356,13 +325,12 @@ class RedditGrabDialog:
             self.top_window_var.set(top_window)
 
             self.query_var.set(str(self.settings.get_setting('reddit_grab.query', '')))
-            self.username_var.set(str(self.settings.get_setting('reddit_grab.username', '')))
 
-            raw_max = self.settings.get_setting('reddit_grab.max_posts', 50)
+            raw_max = self.settings.get_setting('reddit_grab.max_posts', DEFAULT_MAX_POSTS)
             try:
-                max_posts = max(1, min(200, int(raw_max)))
+                max_posts = max(1, min(MAX_POSTS, int(raw_max)))
             except (ValueError, TypeError):
-                max_posts = 50
+                max_posts = DEFAULT_MAX_POSTS
             self.max_posts_var.set(str(max_posts))
 
             self.parse_body_var.set(
@@ -388,12 +356,11 @@ class RedditGrabDialog:
             self.settings.set_setting('reddit_grab.sort', self.sort_var.get())
             self.settings.set_setting('reddit_grab.top_window', self.top_window_var.get())
             self.settings.set_setting('reddit_grab.query', self.query_var.get())
-            self.settings.set_setting('reddit_grab.username', self.username_var.get())
             raw = self.max_posts_var.get().strip()
             try:
-                max_posts = max(1, min(200, int(raw)))
+                max_posts = max(1, min(MAX_POSTS, int(raw)))
             except (ValueError, TypeError):
-                max_posts = 50
+                max_posts = DEFAULT_MAX_POSTS
             self.settings.set_setting('reddit_grab.max_posts', max_posts)
             self.settings.set_setting('reddit_grab.parse_body', bool(self.parse_body_var.get()))
             self.settings.set_setting('reddit_grab.include_nsfw', bool(self.include_nsfw_var.get()))

@@ -23,6 +23,7 @@ from gui.utils import safe_messagebox as messagebox
 from gui.utils.coercion import _coerce_bool
 from gui.utils.filesize import _format_file_size
 from gui.browsers.core import UnifiedBrowserCore
+from shared.ftp_browser import display_safe_path
 from shared.path_service import get_paths, get_legacy_paths, select_existing_path
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tif", ".tiff"}
@@ -277,6 +278,7 @@ class FtpBrowserWindow(UnifiedBrowserCore):
             return
 
         remote_path = str(PurePosixPath(self._current_path) / name)
+        display_name = display_safe_path(name)
         try:
             size_raw = int(vals[5]) if len(vals) > 5 and vals[5] else 0
         except (ValueError, IndexError):
@@ -296,14 +298,14 @@ class FtpBrowserWindow(UnifiedBrowserCore):
             limit_mb = max_image_mb if is_image else max_view_mb
             messagebox.showerror(
                 "View Error",
-                f"{name} is {_format_file_size(size_raw)}, exceeding the {limit_mb} MB view limit.",
+                f"{display_name} is {_format_file_size(size_raw)}, exceeding the {limit_mb} MB view limit.",
                 parent=self.window,
             )
             return
 
         self._start_view_thread(
             remote_path=remote_path,
-            display_name=name,
+            display_name=display_name,
             max_bytes=max_view_bytes,
             is_image=is_image,
             max_image_pixels=max_image_pixels,
@@ -382,6 +384,7 @@ class FtpBrowserWindow(UnifiedBrowserCore):
         for item_id in sel:
             vals = self.tree.item(item_id, "values")
             name, type_label = vals[0], vals[1]
+            display_name = display_safe_path(name)
             try:
                 size_raw = int(vals[5]) if vals[5] else 0
             except (ValueError, IndexError):
@@ -389,7 +392,7 @@ class FtpBrowserWindow(UnifiedBrowserCore):
             if type_label == "dir":
                 messagebox.showinfo(
                     "Download",
-                    f"'{name}' is a directory. Folder download is not supported in this version.\n\n"
+                    f"'{display_name}' is a directory. Folder download is not supported in this version.\n\n"
                     "Select individual files to download.",
                     parent=self.window,
                 )
@@ -398,7 +401,7 @@ class FtpBrowserWindow(UnifiedBrowserCore):
                 size_mb = size_raw / (1024 * 1024)
                 messagebox.showerror(
                     "File too large",
-                    f"{name} is {size_mb:.1f} MB, exceeding the "
+                    f"{display_name} is {size_mb:.1f} MB, exceeding the "
                     f"{limit // (1024 * 1024)} MB limit.\n\n"
                     f"Adjust ftp_browser.max_file_bytes in config to change this limit.",
                     parent=self.window,
@@ -489,7 +492,7 @@ class FtpBrowserWindow(UnifiedBrowserCore):
                     remote_path, file_size = item
                     if self._cancel_event.is_set():
                         break
-                    filename = PurePosixPath(remote_path).name
+                    filename = display_safe_path(PurePosixPath(remote_path).name)
                     try:
                         self.window.after(0, self._set_status, f"Downloading {filename}...")
                     except tk.TclError:

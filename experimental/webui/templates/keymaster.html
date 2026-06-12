@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}Keymaster{% endblock %}
+
+{% block content %}
+<h1>Keymaster</h1>
+
+<div id="km-status-bar" class="dash-card">
+  <div id="km-unlock-section">
+    <p class="status-text" id="km-lock-label">Keymaster is locked. Enter your passphrase to manage keys.</p>
+    <form id="km-unlock-form">
+      <label for="km-passphrase">Passphrase</label>
+      <input type="password" id="km-passphrase" name="passphrase" maxlength="256" autocomplete="current-password" required>
+      <button type="submit" id="km-unlock-btn">Unlock</button>
+    </form>
+    <div id="km-unlock-status" role="status" aria-live="polite"></div>
+  </div>
+  <div id="km-unlocked-section" hidden>
+    <p class="status-text status-ok" id="km-unlocked-label">Keymaster unlocked.</p>
+  </div>
+</div>
+
+<div id="km-keys-section" class="dash-card">
+  <div class="toolbar">
+    <input type="search" id="km-search" placeholder="Search label / notes" maxlength="128" aria-label="Search keys">
+    <button type="button" id="km-add-btn">Add Key</button>
+  </div>
+  <div id="km-keys-status" role="status" aria-live="polite"></div>
+  <table id="km-keys-table" class="data-table">
+    <thead>
+      <tr>
+        <th>Label</th>
+        <th>Key</th>
+        <th>Notes</th>
+        <th>Last used</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody id="km-keys-tbody">
+      <tr id="km-empty-row"><td colspan="5" class="status-text">No keys stored.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p class="status-text">Secure-mode toggle and reset remain desktop-only in this wave.</p>
+
+<div id="km-modal-overlay" hidden>
+  <div id="km-modal" role="dialog" aria-modal="true" aria-labelledby="km-modal-title" class="dash-card">
+    <h2 id="km-modal-title">Add Key</h2>
+    <form id="km-modal-form" novalidate>
+      <input type="hidden" id="km-modal-key-id" value="">
+      <label for="km-modal-label">Label</label>
+      <input type="text" id="km-modal-label" maxlength="128" required autocomplete="off">
+      <label for="km-modal-api-key">API Key</label>
+      <input type="text" id="km-modal-api-key" maxlength="256" autocomplete="off" spellcheck="false">
+      <small>Leave blank to keep existing key when editing.</small>
+      <label for="km-modal-notes">Notes</label>
+      <textarea id="km-modal-notes" maxlength="512" rows="3"></textarea>
+      <div id="km-modal-status" role="status" aria-live="polite"></div>
+      <div class="button-row">
+        <button type="submit" id="km-modal-save">Save</button>
+        <button type="button" id="km-modal-cancel">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/keymaster.js"></script>
+{% endblock %}

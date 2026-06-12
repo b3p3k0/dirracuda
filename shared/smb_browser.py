@@ -14,7 +14,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import List, Optional, Tuple
 
 from impacket.smbconnection import SMBConnection, SessionError  # type: ignore
@@ -208,14 +208,16 @@ class SMBNavigator:
         norm_path = self._normalize_path(remote_path)
         self._enforce_limits(norm_path)
 
-        dest_dir.mkdir(parents=True, exist_ok=True)
         if preserve_structure:
             rel_parts = _safe_parts(norm_path.lstrip("\\"))
             dest_path = dest_dir.joinpath(*rel_parts)
         else:
-            filename = Path(norm_path).name
+            filename = PureWindowsPath(norm_path).name
+            if filename in ("", ".", ".."):
+                raise ValueError("Refusing SMB download: empty or root-only basename")
             dest_path = dest_dir / filename
 
+        dest_dir.mkdir(parents=True, exist_ok=True)
         dest_path.parent.mkdir(parents=True, exist_ok=True)
         if dest_path.exists():
             raise FileExistsError(f"Destination already exists: {dest_path}")

@@ -34,6 +34,7 @@ from gui.components.http_scan_dialog import show_http_scan_dialog
 from gui.components.reddit_grab_dialog import show_reddit_grab_dialog
 from experimental.redseek.service import IngestOptions, IngestResult, run_ingest
 from gui.components import dashboard_experimental
+from gui.components import dashboard_database
 from gui.components.scan_results_dialog import show_scan_results_dialog
 from gui.components.batch_summary_dialog import show_batch_summary_dialog
 from gui.utils.settings_manager import get_settings_manager
@@ -65,6 +66,7 @@ from gui.utils.probe_cache_dispatch import get_probe_snapshot_path_for_host, dis
 from gui.utils.probe_snapshot_summary import summarize_probe_snapshot
 from gui.utils.logging_config import get_logger
 from shared.quarantine import create_quarantine_dir
+from shared.config import load_config
 from shared.path_service import get_paths
 from shared.tmpfs_quarantine import get_tmpfs_runtime_state
 
@@ -129,8 +131,7 @@ class DashboardWidget:
     """
 
     def __init__(self, parent: tk.Widget, db_reader: DatabaseReader,
-                 backend_interface: BackendInterface, config_path: str = None,
-                 rce_unlocked: bool = False):
+                 backend_interface: BackendInterface, config_path: str = None):
         """
         Initialize dashboard widget.
 
@@ -139,7 +140,6 @@ class DashboardWidget:
             db_reader: Database access instance
             backend_interface: Backend communication interface
             config_path: Path to SMBSeek configuration file (optional)
-            rce_unlocked: Session unlock state for hidden RCE controls
 
         Design Decision: Dependency injection allows easy testing with mock
         objects and clear separation of concerns.
@@ -158,7 +158,6 @@ class DashboardWidget:
         self.scan_manager = get_scan_manager()
         self.config_path = config_path
         self.settings_manager = get_settings_manager()
-        self._rce_unlocked = bool(rce_unlocked)
         self.ransomware_indicators: List[str] = []
         self.indicator_patterns = []
         self._mock_mode_notice_shown = False
@@ -170,6 +169,7 @@ class DashboardWidget:
         self.scan_button = None
         self.servers_button = None
         self.db_tools_button = None
+        self.db_button = None
         self.experimental_button = None
         self.config_button = None
         self.about_button = None
@@ -248,6 +248,8 @@ class DashboardWidget:
         self.http_scan_button = None
         self.reddit_grab_button = None
         self._reddit_grab_running = False
+        self._searxng_scan_running = False
+        self._searxng_task_id: Optional[str] = None
         self._queued_scan_active = False
         self._queued_scan_protocols: List[str] = []
         self._queued_scan_common_options: Optional[Dict[str, Any]] = None
@@ -327,7 +329,7 @@ class DashboardWidget:
         self._process_log_queue()
 
     def _build_header_section(self) -> None:
-        """Build compact header with title/toggle row and 2x3 action grid."""
+        """Build compact header with title/toggle row and centered action grid."""
         header_frame = tk.Frame(self.main_frame)
         self.theme.apply_to_widget(header_frame, "main_window")
         header_frame.pack(fill=tk.X, pady=(0, 10))
@@ -354,9 +356,8 @@ class DashboardWidget:
         actions_grid = tk.Frame(header_frame)
         self.theme.apply_to_widget(actions_grid, "main_window")
         actions_grid.pack(fill=tk.X)
-        actions_grid.columnconfigure(0, weight=1)
-        actions_grid.columnconfigure(1, weight=1)
-        actions_grid.columnconfigure(2, weight=1)
+        for column in range(6):
+            actions_grid.columnconfigure(column, weight=1)
 
         self.scan_button = tk.Button(
             actions_grid,
@@ -364,31 +365,23 @@ class DashboardWidget:
             command=self._handle_scan_button_click,
         )
         self.theme.apply_to_widget(self.scan_button, "button_primary")
-        self.scan_button.grid(row=0, column=0, padx=(0, 6), pady=(0, 6), sticky="ew")
+        self.scan_button.grid(row=0, column=0, columnspan=2, padx=(0, 6), pady=(0, 6), sticky="ew")
 
-        self.servers_button = tk.Button(
+        self.db_button = tk.Button(
             actions_grid,
-            text="📋 Servers",
-            command=lambda: self._open_drill_down("server_list"),
+            text="\U0001F5C4 Database",
+            command=self._open_db_surface,
         )
-        self.theme.apply_to_widget(self.servers_button, "button_secondary")
-        self.servers_button.grid(row=0, column=1, padx=3, pady=(0, 6), sticky="ew")
-
-        self.db_tools_button = tk.Button(
-            actions_grid,
-            text="\U0001F5C4 DB Tools",
-            command=self._open_db_tools,
-        )
-        self.theme.apply_to_widget(self.db_tools_button, "button_secondary")
-        self.db_tools_button.grid(row=0, column=2, padx=(6, 0), pady=(0, 6), sticky="ew")
+        self.theme.apply_to_widget(self.db_button, "button_secondary")
+        self.db_button.grid(row=0, column=2, columnspan=2, padx=3, pady=(0, 6), sticky="ew")
 
         self.experimental_button = tk.Button(
             actions_grid,
-            text="⚗ Experimental",
+            text="⚗ Accessories",
             command=self._handle_experimental_button_click,
         )
         self.theme.apply_to_widget(self.experimental_button, "button_secondary")
-        self.experimental_button.grid(row=1, column=0, padx=(0, 6), pady=(0, 0), sticky="ew")
+        self.experimental_button.grid(row=0, column=4, columnspan=2, padx=(6, 0), pady=(0, 6), sticky="ew")
 
         self.config_button = tk.Button(
             actions_grid,
@@ -396,7 +389,7 @@ class DashboardWidget:
             command=self._open_config_editor,
         )
         self.theme.apply_to_widget(self.config_button, "button_secondary")
-        self.config_button.grid(row=1, column=1, padx=3, pady=(0, 0), sticky="ew")
+        self.config_button.grid(row=1, column=1, columnspan=2, padx=(0, 6), pady=(0, 0), sticky="ew")
 
         self.about_button = tk.Button(
             actions_grid,
@@ -404,7 +397,7 @@ class DashboardWidget:
             command=self._open_about_dialog,
         )
         self.theme.apply_to_widget(self.about_button, "button_secondary")
-        self.about_button.grid(row=1, column=2, padx=(6, 0), pady=(0, 0), sticky="ew")
+        self.about_button.grid(row=1, column=3, columnspan=2, padx=(6, 0), pady=(0, 0), sticky="ew")
 
     def _theme_toggle_button_text(self) -> str:
         """Return dashboard button label for switching to the opposite theme."""
@@ -417,8 +410,7 @@ class DashboardWidget:
         self.log_placeholder_color = self.theme.colors.get("log_placeholder", "#9ea4b3")
 
         for button in (
-            getattr(self, "servers_button", None),
-            getattr(self, "db_tools_button", None),
+            getattr(self, "db_button", None),
             getattr(self, "experimental_button", None),
             getattr(self, "config_button", None),
             getattr(self, "about_button", None),
@@ -487,7 +479,7 @@ class DashboardWidget:
         """Place keyboard helper text below status box content."""
         self.theme.create_styled_label(
             self.main_frame,
-            "Alt+1..6 launch dashboard actions  •  Ctrl/Cmd+T theme  •  Ctrl/Cmd+H help  •  Ctrl/Cmd+Q quit",
+            "Alt+1..5 launch dashboard actions  •  Ctrl/Cmd+T theme  •  Ctrl/Cmd+H help  •  Ctrl/Cmd+Q quit",
             "small",
             fg=self.theme.colors["text_secondary"],
         ).pack(anchor="w", pady=(0, 4))
@@ -785,18 +777,47 @@ class DashboardWidget:
         self._scan_task_id = None
         self._queued_scan_total = 0
 
+    def _set_searxng_task_running(
+        self,
+        country: Optional[str] = None,
+        *,
+        cancel_callback: Optional[Callable[[], None]] = None,
+    ) -> None:
+        if self._searxng_task_id:
+            self._remove_running_task(self._searxng_task_id)
+            self._searxng_task_id = None
+        target = str(country or "").strip() or "Global"
+        self._searxng_task_id = self._register_running_task(
+            task_type="scan",
+            name=f"SearXNG Scan ({target})",
+            state="running",
+            progress="running",
+            reopen_callback=self._reopen_scan_output_dialog,
+            cancel_callback=cancel_callback,
+        )
+
+    def _clear_searxng_task(self) -> None:
+        self._remove_running_task(self._searxng_task_id)
+        self._searxng_task_id = None
+
     def has_active_or_queued_work(self) -> bool:
         """Return True when scans/tasks are still active and monitorable."""
         registry = getattr(self, "running_tasks_registry", None)
         registry_has_tasks = bool(registry.has_tasks()) if registry is not None else False
         return bool(
             self.scan_manager.is_scanning
+            or getattr(self, "_provider_queue_active", False)
             or self._queued_scan_active
             or registry_has_tasks
         )
 
     def request_cancel_active_or_queued_work(self) -> None:
         """Request cancellation for scan + queued + running monitor tasks."""
+        try:
+            from gui.components.dashboard_provider_queue import cancel_provider_queue
+            cancel_provider_queue(self, notify=False)
+        except Exception:
+            pass
         try:
             if self._queued_scan_active or self._queued_scan_protocols:
                 self._clear_queued_scan_state()
@@ -1119,6 +1140,10 @@ class DashboardWidget:
 
     def _show_quick_scan_dialog(self) -> None:
         """Show scan configuration dialog and start scan."""
+        if getattr(self, "_provider_queue_active", False) or getattr(self, "_searxng_scan_running", False) or getattr(self, "_reddit_scan_running", False) or getattr(self, "_reddit_grab_running", False):
+            _mb().showwarning("Provider Busy",
+                "A provider scan is already running. Please wait for it to complete.")
+            return
         # Check if scan is already active
         if self.scan_manager.is_scan_active():
             _mb().showwarning(
@@ -1135,7 +1160,6 @@ class DashboardWidget:
             settings_manager=getattr(self, "settings_manager", None),
             config_editor_callback=self._open_config_editor_from_scan,
             query_editor_callback=self._open_config_editor,
-            show_rce_controls=bool(getattr(self, "_rce_unlocked", False)),
         )
 
     def _open_config_editor_from_scan(self, config_path: str) -> None:
@@ -1173,9 +1197,9 @@ class DashboardWidget:
         """Abort remaining queued protocol scans after a failure."""
         dashboard_scan.abort_queued_scan_on_failure(self, protocol, reason, title=title)
 
-    def _launch_next_queued_scan(self) -> None:
+    def _launch_next_queued_scan(self) -> bool:
         """Start the next protocol in queue, if any remain."""
-        dashboard_scan.launch_next_queued_scan(self)
+        return dashboard_scan.launch_next_queued_scan(self)
 
     def _handle_queued_scan_completion(self, results: Dict[str, Any]) -> None:
         """Handle queue continuation after each protocol scan completes."""
@@ -1199,15 +1223,25 @@ class DashboardWidget:
             return None
 
     def _read_shodan_api_key_from_config(self) -> str:
-        """Return shodan.api_key from active config, or empty string when absent/unreadable."""
+        """Return shodan.api_key from runtime config, or empty string when absent/unreadable."""
         config_path = self._resolve_active_config_path()
-        if not config_path or not config_path.exists():
-            return ""
         try:
-            config_data = json.loads(config_path.read_text(encoding="utf-8"))
-            if not isinstance(config_data, dict):
-                return ""
-            shodan_cfg = config_data.get("shodan", {})
+            if (
+                config_path is not None
+                and config_path.resolve(strict=False) != _PATHS.config_file.resolve(strict=False)
+            ):
+                if not config_path.exists():
+                    return ""
+                config_data = json.loads(config_path.read_text(encoding="utf-8"))
+                if not isinstance(config_data, dict):
+                    return ""
+                shodan_cfg = config_data.get("shodan", {})
+                if not isinstance(shodan_cfg, dict):
+                    return ""
+                return str(shodan_cfg.get("api_key", "") or "").strip()
+
+            cfg = load_config()
+            shodan_cfg = cfg.get("shodan", default={}) or {}
             if not isinstance(shodan_cfg, dict):
                 return ""
             return str(shodan_cfg.get("api_key", "") or "").strip()
@@ -1216,34 +1250,42 @@ class DashboardWidget:
             return ""
 
     def _persist_shodan_api_key_to_config(self, api_key: str) -> bool:
-        """Write shodan.api_key into the active config file."""
+        """Write shodan.api_key through owner-scoped runtime config persistence."""
         key = str(api_key or "").strip()
         if not key:
             return False
 
         config_path = self._resolve_active_config_path()
-        if not config_path:
-            return False
-
         try:
-            config_data: Dict[str, Any] = {}
-            if config_path.exists():
-                config_data = json.loads(config_path.read_text(encoding="utf-8"))
-                if not isinstance(config_data, dict):
-                    config_data = {}
+            if (
+                config_path is not None
+                and config_path.resolve(strict=False) != _PATHS.config_file.resolve(strict=False)
+            ):
+                config_data: Dict[str, Any] = {}
+                if config_path.exists():
+                    config_data = json.loads(config_path.read_text(encoding="utf-8"))
+                    if not isinstance(config_data, dict):
+                        config_data = {}
 
-            shodan_cfg = config_data.get("shodan")
+                shodan_cfg = config_data.get("shodan")
+                if not isinstance(shodan_cfg, dict):
+                    shodan_cfg = {}
+                    config_data["shodan"] = shodan_cfg
+                shodan_cfg["api_key"] = key
+
+                config_path.parent.mkdir(parents=True, exist_ok=True)
+                config_path.write_text(
+                    json.dumps(config_data, indent=2, ensure_ascii=True) + "\n",
+                    encoding="utf-8",
+                )
+                return True
+
+            cfg = load_config()
+            shodan_cfg = cfg.get("shodan", default={}) or {}
             if not isinstance(shodan_cfg, dict):
                 shodan_cfg = {}
-                config_data["shodan"] = shodan_cfg
             shodan_cfg["api_key"] = key
-
-            config_path.parent.mkdir(parents=True, exist_ok=True)
-            config_path.write_text(
-                json.dumps(config_data, indent=2, ensure_ascii=True) + "\n",
-                encoding="utf-8",
-            )
-            return True
+            return cfg.set_section("shodan", shodan_cfg)
         except Exception as exc:
             _logger.error("Failed to persist Shodan API key to config: %s", exc)
             return False
@@ -1423,14 +1465,16 @@ class DashboardWidget:
     def _run_background_fetch(self, title: str, message: str, fetch_fn: Callable[[], Any]) -> tuple:
         return dashboard_batch_ops.run_background_fetch(self, title, message, fetch_fn)
 
-    def _execute_batch_probe(self, servers: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        return dashboard_batch_ops.execute_batch_probe(self, servers)
+    def _execute_batch_probe(self, servers: List[Dict[str, Any]], allow_insecure_tls: Optional[bool] = None) -> List[Dict[str, Any]]:
+        return dashboard_batch_ops.execute_batch_probe(self, servers, allow_insecure_tls=allow_insecure_tls)
 
     def _probe_single_server(self, server: Dict[str, Any], max_dirs: int, max_files: int,
                               timeout_seconds: int, max_depth: int = 1,
-                              enable_rce: bool = False, cancel_event: threading.Event = None) -> Dict[str, Any]:
+                              cancel_event: Optional[threading.Event] = None,
+                              allow_insecure_tls: Optional[bool] = None) -> Dict[str, Any]:
         return dashboard_batch_ops.probe_single_server(
-            self, server, max_dirs, max_files, timeout_seconds, max_depth, enable_rce, cancel_event
+            self, server, max_dirs, max_files, timeout_seconds, max_depth, cancel_event,
+            allow_insecure_tls=allow_insecure_tls,
         )
 
     def _protocol_label_from_host_type(self, host_type: Optional[str]) -> str:
@@ -1439,14 +1483,14 @@ class DashboardWidget:
     def _protocol_label_for_result(self, result: Dict[str, Any]) -> str:
         return dashboard_batch_ops.protocol_label_for_result(self, result)
 
-    def _build_probe_notes(self, share_count: int, enable_rce: bool, issue_detected: bool,
+    def _build_probe_notes(self, share_count: int, issue_detected: bool,
                             analysis: Dict[str, Any], result: Dict[str, Any]) -> str:
         return dashboard_batch_ops.build_probe_notes(
-            self, share_count, enable_rce, issue_detected, analysis, result
+            self, share_count, issue_detected, analysis, result
         )
 
-    def _execute_batch_extract(self, servers: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        return dashboard_batch_ops.execute_batch_extract(self, servers)
+    def _execute_batch_extract(self, servers: List[Dict[str, Any]], allow_insecure_tls: Optional[bool] = None) -> List[Dict[str, Any]]:
+        return dashboard_batch_ops.execute_batch_extract(self, servers, allow_insecure_tls=allow_insecure_tls)
 
     def _extract_single_server(self, server: Dict[str, Any], max_file_mb: int, max_total_mb: int,
                                  max_time: int, max_files: int, extension_mode: str,
@@ -1496,28 +1540,11 @@ class DashboardWidget:
         if self.drill_down_callback:
             self.drill_down_callback("app_config", {})
 
+    def _open_db_surface(self) -> None:
+        dashboard_database.open_db_surface(self)
+
     def _open_db_tools(self) -> None:
-        """Open database tools dialog."""
-        from gui.components.db_tools_dialog import show_db_tools_dialog
-
-        if not self.db_reader:
-            _mb().showerror(
-                "Database Not Found",
-                "No database is currently loaded."
-            )
-            return
-
-        db_path = str(self.db_reader.db_path)
-
-        show_db_tools_dialog(
-            parent=self.parent,
-            db_path=db_path,
-            on_database_changed=self._refresh_after_db_tools
-        )
-
-    def _refresh_after_db_tools(self) -> None:
-        """Refresh dashboard after DB tools operation."""
-        self.refresh_after_database_change(refresh_runtime_status=False)
+        self._open_db_surface()
 
     def _open_about_dialog(self) -> None:
         dialog = tk.Toplevel(self.parent)

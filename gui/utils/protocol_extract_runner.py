@@ -11,7 +11,6 @@ import datetime as _dt
 import os
 import stat
 import time
-import urllib.request
 import ssl
 from email.utils import parsedate_to_datetime
 from pathlib import Path, PurePosixPath
@@ -26,8 +25,15 @@ from gui.utils.extract_runner import (
     build_browser_download_clamav_setup,
     update_browser_clamav_accum,
 )
-from shared.ftp_browser import FtpCancelledError, FtpFileTooLargeError, FtpNavigator
+from shared.ftp_browser import (
+    FtpCancelledError,
+    FtpFileTooLargeError,
+    FtpNavigator,
+    display_safe_path,
+    validate_remote_path,
+)
 from shared.http_browser import _parse_dir_entries
+from shared.http_transport import http_open
 from shared.quarantine import log_quarantine_event
 from shared.quarantine_postprocess import PostProcessInput
 
@@ -252,6 +258,13 @@ def run_ftp_extract(
                 if not rel_parts:
                     rel_parts = [PurePosixPath(entry_abs).name or "download"]
                 rel_display = "/".join(rel_parts)
+                rel_display_safe = display_safe_path(rel_display)
+
+                try:
+                    validate_remote_path(entry_abs)
+                except ValueError as exc:
+                    _append_error(summary, share_name, rel_display_safe, str(exc))
+                    continue
 
                 file_size = int(getattr(entry, "size", 0) or 0)
                 should_download, skip_reason = _should_download_file(
@@ -265,7 +278,7 @@ def run_ftp_extract(
                     total_bytes,
                 )
                 if not should_download:
-                    _append_skip(summary, share_name, rel_display, str(skip_reason), file_size)
+                    _append_skip(summary, share_name, rel_display_safe, str(skip_reason), file_size)
                     if skip_reason == "total_size_limit":
                         summary["stop_reason"] = "total_size_limit"
                         break
@@ -281,7 +294,7 @@ def run_ftp_extract(
 
                 current_index = total_files + 1
                 if progress_callback:
-                    progress_callback(rel_display, current_index, max_file_count or None)
+                    progress_callback(rel_display_safe, current_index, max_file_count or None)
 
                 try:
                     result = nav.download_file(entry_abs, destination.parent)
@@ -291,10 +304,10 @@ def run_ftp_extract(
                 except FtpCancelledError as exc:
                     raise ExtractError(str(exc)) from exc
                 except FtpFileTooLargeError:
-                    _append_skip(summary, share_name, rel_display, "file_too_large", file_size)
+                    _append_skip(summary, share_name, rel_display_safe, "file_too_large", file_size)
                     continue
                 except Exception as exc:
-                    _append_error(summary, share_name, rel_display, f"Download failed: {exc}")
+                    _append_error(summary, share_name, rel_display_safe, f"Download failed: {exc}")
                     continue
 
                 saved_path = Path(result.saved_path)
@@ -302,7 +315,7 @@ def run_ftp_extract(
 
                 if max_total_bytes > 0 and (total_bytes + downloaded_size) > max_total_bytes:
                     saved_path.unlink(missing_ok=True)
-                    _append_skip(summary, share_name, rel_display, "total_size_limit", downloaded_size)
+                    _append_skip(summary, share_name, rel_display_safe, "total_size_limit", downloaded_size)
                     summary["stop_reason"] = "total_size_limit"
                     break
 
@@ -326,18 +339,18 @@ def run_ftp_extract(
                             )
                         )
                         final_path = pp_result.final_path
-                        update_browser_clamav_accum(clamav_accum, pp_result, rel_display)
+                        update_browser_clamav_accum(clamav_accum, pp_result, rel_display_safe)
                     except Exception as exc:
                         _append_error(
                             summary,
                             share_name,
-                            rel_display,
+                            rel_display_safe,
                             f"post_processor error (file kept in quarantine): {exc}",
                         )
                         if clamav_accum is not None:
                             clamav_accum["errors"] += 1
                             clamav_accum["error_items"].append(
-                                {"path": rel_display, "error": str(exc)}
+                                {"path": rel_display_safe, "error": str(exc)}
                             )
 
                 total_files += 1
@@ -346,13 +359,13 @@ def run_ftp_extract(
                 summary["files"].append(
                     {
                         "share": share_name,
-                        "path": rel_display,
+                        "path": rel_display_safe,
                         "size": downloaded_size,
                         "saved_to": str(final_path),
                     }
                 )
                 try:
-                    log_quarantine_event(download_dir, f"extracted {share_name}/{rel_display} -> {final_path}")
+                    log_quarantine_event(download_dir, f"extracted {share_name}/{rel_display_safe} -> {final_path}")
                 except Exception:
                     pass
 
@@ -382,19 +395,6 @@ def _build_http_context(scheme: str, allow_insecure_tls: bool) -> Optional[ssl.S
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
     return ctx
-
-
-def _normalize_host_header(request_host: Optional[str], scheme: str, port: int) -> Optional[str]:
-    host_header = str(request_host or "").strip()
-    if not host_header:
-        return None
-    if ":" not in host_header and not (
-        host_header.startswith("[") and host_header.endswith("]")
-    ):
-        default_port = 443 if scheme == "https" else 80
-        if port != default_port:
-            host_header = f"{host_header}:{port}"
-    return host_header
 
 
 def _http_fetch_listing(
@@ -445,20 +445,19 @@ def _http_download_file(
     _check_cancel(cancel_event)
 
     normalized_path = "/" + str(remote_path or "/").lstrip("/")
-    url = f"{scheme}://{connect_host}:{int(port)}{normalized_path}"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    host_header = _normalize_host_header(request_host, scheme, int(port))
-    if host_header:
-        headers["Host"] = host_header
-
-    req = urllib.request.Request(url, headers=headers)
     ctx = _build_http_context(scheme, allow_insecure_tls)
 
     downloaded = 0
     mtime: Optional[float] = None
 
     try:
-        with urllib.request.urlopen(req, timeout=float(timeout_seconds), context=ctx) as resp:
+        with http_open(
+            connect_host=connect_host,
+            request_host=request_host,
+            scheme=scheme, port=int(port), path=normalized_path,
+            headers={"User-Agent": "Mozilla/5.0"},
+            context=ctx, timeout=float(timeout_seconds),
+        ) as resp:
             last_modified = resp.headers.get("Last-Modified")
             if last_modified:
                 try:
@@ -623,28 +622,6 @@ def run_http_extract(
             active_connect_host = ip_address
             break
         last_root_error = err
-
-        if (
-            scheme_norm == "https"
-            and active_request_host
-            and active_request_host != ip_address
-        ):
-            ok, dirs, files, err = _http_fetch_listing(
-                connect_host=active_request_host,
-                request_host=active_request_host,
-                port=int(port),
-                scheme=scheme_norm,
-                allow_insecure_tls=allow_insecure_tls,
-                timeout_seconds=max(1, int(connection_timeout)),
-                path=candidate,
-            )
-            if ok:
-                root_listing_ok = True
-                root_dirs, root_files = dirs, files
-                root_path_in_use = candidate
-                active_connect_host = active_request_host
-                break
-            last_root_error = err
 
     if not root_listing_ok:
         _append_error(

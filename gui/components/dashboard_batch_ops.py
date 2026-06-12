@@ -38,6 +38,7 @@ from gui.utils.logging_config import get_logger
 from gui.utils.probe_snapshot_summary import summarize_probe_snapshot
 from gui.components.scan_results_dialog import show_scan_results_dialog
 from gui.components.batch_summary_dialog import show_batch_summary_dialog
+from shared.config import resolve_http_allow_insecure_tls
 
 _logger = get_logger("dashboard")
 
@@ -139,6 +140,16 @@ def run_post_scan_batch_operations(
         bulk_probe_enabled = scan_options.get('bulk_probe_enabled', False)
         bulk_extract_enabled = scan_options.get('bulk_extract_enabled', False)
 
+        # Resolve the run's HTTP TLS policy once: honor the scan dialog's transient
+        # override, else resolve the canonical default a single time for the whole run.
+        run_tls = scan_options.get('allow_insecure_tls')
+        if run_tls is None:
+            _sm = getattr(dash, 'settings_manager', None)
+            _cfg_path = _sm.get_setting('backend.config_path', None) if _sm else None
+            run_tls = resolve_http_allow_insecure_tls(_cfg_path)
+        else:
+            run_tls = bool(run_tls)
+
         if not (bulk_probe_enabled or bulk_extract_enabled):
             if show_dialogs:
                 dash._show_scan_results(scan_results)
@@ -226,7 +237,7 @@ def run_post_scan_batch_operations(
         extract_results: List[Dict[str, Any]] = []
 
         if bulk_probe_enabled:
-            probe_results = dash._execute_batch_probe(probe_targets)
+            probe_results = dash._execute_batch_probe(probe_targets, allow_insecure_tls=run_tls)
             summary_payload["probe"] = list(probe_results)
             summary_stack.append(("probe", probe_results))
 
@@ -242,7 +253,7 @@ def run_post_scan_batch_operations(
                 summary_payload["extract"] = list(skipped_extract)
                 summary_stack.append(("extract", skipped_extract))
             else:
-                extract_results = dash._execute_batch_extract(extract_targets)
+                extract_results = dash._execute_batch_extract(extract_targets, allow_insecure_tls=run_tls)
                 summary_payload["extract"] = list(extract_results)
                 summary_stack.append(("extract", extract_results))
 
@@ -470,8 +481,19 @@ def run_background_fetch(
 
 # ── Probe ─────────────────────────────────────────────────────────────────────
 
-def execute_batch_probe(dash, servers: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def execute_batch_probe(
+    dash,
+    servers: List[Dict[str, Any]],
+    allow_insecure_tls: Optional[bool] = None,
+) -> List[Dict[str, Any]]:
     """Execute bulk probe operation on servers."""
+    # Resolve HTTP TLS policy once (override beats resolver; resolver for direct callers).
+    if allow_insecure_tls is None:
+        probe_tls = resolve_http_allow_insecure_tls(
+            dash.settings_manager.get_setting('backend.config_path', None)
+        )
+    else:
+        probe_tls = bool(allow_insecure_tls)
     # Load probe settings
     worker_count = int(dash.settings_manager.get_setting('probe.batch_max_workers', 3))
     worker_count = max(1, min(8, worker_count))
@@ -480,14 +502,6 @@ def execute_batch_probe(dash, servers: List[Dict[str, Any]]) -> List[Dict[str, A
     timeout_seconds = int(dash.settings_manager.get_setting('probe.share_timeout_seconds', 10))
     max_depth = int(dash.settings_manager.get_setting('probe.max_depth_levels', 1))
     max_depth = max(1, min(3, max_depth))
-    enable_rce = bool(
-        (dash.current_scan_options or {}).get(
-            "rce_enabled",
-            dash.settings_manager.get_setting('scan_dialog.rce_enabled', False)
-        )
-    )
-    if not bool(getattr(dash, "_rce_unlocked", True)):
-        enable_rce = False
 
     results: List[Dict[str, Any]] = []
     cancel_event = _d("threading").Event()
@@ -573,8 +587,8 @@ def execute_batch_probe(dash, servers: List[Dict[str, Any]]) -> List[Dict[str, A
                         max_files,
                         timeout_seconds,
                         max_depth,
-                        enable_rce,
-                        cancel_event
+                        cancel_event=cancel_event,
+                        allow_insecure_tls=probe_tls,
                     ): server for server in servers
                 }
 
@@ -681,8 +695,8 @@ def probe_single_server(
     max_files: int,
     timeout_seconds: int,
     max_depth: int = 1,
-    enable_rce: bool = False,
     cancel_event: Optional[threading.Event] = None,
+    allow_insecure_tls: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Probe a single server (SMB, FTP, or HTTP)."""
     protocol_label = dash._protocol_label_from_host_type(server.get("host_type"))
@@ -804,6 +818,7 @@ def probe_single_server(
                 scheme=http_scheme,
                 protocol_server_id=protocol_server_id,
                 db_reader=dash.db_reader,
+                allow_insecure_tls=allow_insecure_tls,
             )
             analysis = _d("probe_patterns").attach_indicator_analysis(snapshot, dash.indicator_patterns)
             issue_detected = bool(analysis.get("is_suspicious"))
@@ -882,7 +897,6 @@ def probe_single_server(
             shares=shares,
             username=username,
             password=password,
-            enable_rce=enable_rce,
             allow_empty=True,
             db_reader=dash.db_reader,
         )
@@ -913,7 +927,7 @@ def probe_single_server(
             "protocol": protocol_label,
             "action": "probe",
             "status": "success",
-            "notes": dash._build_probe_notes(len(shares), enable_rce, issue_detected, analysis, result)
+            "notes": dash._build_probe_notes(len(shares), issue_detected, analysis, result)
         }
     except Exception as e:
         status = "cancelled" if "cancel" in str(e).lower() else "failed"
@@ -937,7 +951,6 @@ def protocol_label_for_result(dash, result: Dict[str, Any]) -> str:
 def build_probe_notes(
     dash,
     share_count: int,
-    enable_rce: bool,
     issue_detected: bool,
     analysis: Dict[str, Any],
     result: Dict[str, Any],
@@ -948,14 +961,6 @@ def build_probe_notes(
     else:
         notes.append("No accessible shares")
 
-    if enable_rce and result.get("rce_analysis"):
-        rce_status = result["rce_analysis"].get("rce_status", "not_run")
-        notes.append(f"RCE: {rce_status}")
-        try:
-            dash._handle_rce_status_update(result.get("ip_address") or "", rce_status)
-        except Exception:
-            pass
-
     if issue_detected:
         match_count = len(analysis.get("matches", [])) if isinstance(analysis, dict) else 0
         notes.append(f"Indicators detected ({match_count})" if match_count else "Indicators detected")
@@ -965,7 +970,11 @@ def build_probe_notes(
 
 # ── Extract ───────────────────────────────────────────────────────────────────
 
-def execute_batch_extract(dash, servers: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def execute_batch_extract(
+    dash,
+    servers: List[Dict[str, Any]],
+    allow_insecure_tls: Optional[bool] = None,
+) -> List[Dict[str, Any]]:
     """Execute bulk extract operation on servers."""
     # Load extract settings
     worker_count = int(dash.settings_manager.get_setting('extract.batch_max_workers', 2))
@@ -981,8 +990,12 @@ def execute_batch_extract(dash, servers: List[Dict[str, Any]]) -> List[Dict[str,
     excluded_extensions: List[str] = []
     quarantine_base_path: Optional[Path] = None
     clamav_cfg: Dict[str, Any] = {}
-    http_allow_insecure_tls = True
     config_path = dash.settings_manager.get_setting('backend.config_path', None) if dash.settings_manager else None
+    # HTTP TLS policy: honor the run's transient override; else resolve canonical once.
+    if allow_insecure_tls is not None:
+        http_allow_insecure_tls = bool(allow_insecure_tls)
+    else:
+        http_allow_insecure_tls = resolve_http_allow_insecure_tls(config_path)
     if config_path and Path(config_path).exists():
         try:
             config_data = json.loads(Path(config_path).read_text(encoding="utf-8"))
@@ -998,11 +1011,6 @@ def execute_batch_extract(dash, servers: List[Dict[str, Any]]) -> List[Dict[str,
             if quarantine_candidate:
                 quarantine_base_path = Path(str(quarantine_candidate)).expanduser()
             clamav_cfg = config_data.get("clamav", {})
-            http_allow_insecure_tls = bool(
-                config_data.get("http", {})
-                .get("verification", {})
-                .get("allow_insecure_tls", True)
-            )
         except Exception:
             pass
 

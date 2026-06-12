@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import tkinter as tk
 from pathlib import Path
-from tkinter import ttk, simpledialog
+from tkinter import simpledialog
 from gui.utils import safe_messagebox as messagebox
 from typing import Any, Callable, Dict, Optional
 
@@ -27,12 +27,8 @@ from gui.components.query_budget_dialog import (
 )
 from gui.components.scan_dork_editor_dialog import show_scan_dork_editor_dialog
 from gui.components.scan_preflight import run_preflight
+from shared.config import resolve_http_allow_insecure_tls
 from gui.utils.dialog_helpers import ensure_dialog_focus
-from gui.utils.keybindings import (
-    add_shortcut_hint,
-    bind_close_shortcuts,
-    bind_submit_shortcuts,
-)
 from gui.utils.style import get_theme
 from gui.utils.template_store import TemplateStore
 
@@ -57,7 +53,6 @@ class UnifiedScanDialog:
         config_editor_callback: Optional[Callable[[str], None]] = None,
         query_editor_callback: Optional[Callable[[], None]] = None,
         reddit_grab_callback: Optional[Callable[[], None]] = None,
-        show_rce_controls: bool = False,
     ) -> None:
         self.parent = parent
         self.config_path = Path(config_path).resolve()
@@ -66,7 +61,6 @@ class UnifiedScanDialog:
         self.config_editor_callback = config_editor_callback
         self.query_editor_callback = query_editor_callback
         self.reddit_grab_callback = reddit_grab_callback
-        self.show_rce_controls = bool(show_rce_controls)
         self.theme = get_theme()
         self.template_store = TemplateStore(settings_manager=settings_manager)
 
@@ -85,6 +79,29 @@ class UnifiedScanDialog:
         self.protocol_ftp_var = tk.BooleanVar(value=True)
         self.protocol_http_var = tk.BooleanVar(value=True)
 
+        # Provider selections (Shodan on by default; SearXNG promoted in C3; Reddit in C4)
+        self.provider_shodan_var = tk.BooleanVar(value=True)
+        self.provider_searxng_var = tk.BooleanVar(value=False)
+        self.provider_reddit_var = tk.BooleanVar(value=False)
+
+        # SearXNG options (active when SearXNG provider is selected)
+        self.searxng_instance_url_var = tk.StringVar(value="")
+        self.searxng_query_var = tk.StringVar(value="")
+        self.searxng_max_results_var = tk.StringVar(value="500")
+        self.searxng_request_timeout_var = tk.DoubleVar(value=15.0)
+        self.searxng_short_retry_delay_var = tk.DoubleVar(value=30.0)
+        self.searxng_long_retry_delay_var = tk.DoubleVar(value=180.0)
+
+        # Reddit options (active when Reddit provider is selected; C4)
+        self.reddit_mode_var = tk.StringVar(value="feed")
+        self.reddit_sort_var = tk.StringVar(value="new")
+        self.reddit_top_window_var = tk.StringVar(value="week")
+        self.reddit_max_posts_var = tk.StringVar(value="100")
+        self.reddit_query_var = tk.StringVar(value="")
+        self.reddit_username_var = tk.StringVar(value="")
+        self.reddit_parse_body_var = tk.BooleanVar(value=True)
+        self.reddit_include_nsfw_var = tk.BooleanVar(value=False)
+
         # Shared targeting
         self.country_var = tk.StringVar()
         self.africa_var = tk.BooleanVar(value=False)
@@ -101,7 +118,6 @@ class UnifiedScanDialog:
         self.bulk_probe_enabled_var = tk.BooleanVar(value=False)
         self.bulk_extract_enabled_var = tk.BooleanVar(value=False)
         self.skip_indicator_extract_var = tk.BooleanVar(value=True)
-        self.rce_enabled_var = tk.BooleanVar(value=False)
 
         # Protocol-specific settings
         self.security_mode_var = tk.StringVar(value="cautious")
@@ -119,6 +135,7 @@ class UnifiedScanDialog:
 
         self._load_config_defaults()
         self._load_initial_values()
+        self._init_tls_policy_default()
         self._create_dialog()
 
     # ------------------------------------------------------------------
@@ -187,6 +204,24 @@ class UnifiedScanDialog:
             self.protocol_http_var.set(
                 _coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.protocol_http", True), True)
             )
+            self.provider_shodan_var.set(
+                _coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.provider_shodan", True), True)
+            )
+            self.provider_searxng_var.set(
+                _coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.provider_searxng", False), False)
+            )
+            self.provider_reddit_var.set(
+                _coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.provider_reddit", False), False)
+            )
+            if not (
+                self.provider_shodan_var.get()
+                or self.provider_searxng_var.get()
+                or self.provider_reddit_var.get()
+            ):
+                self.provider_shodan_var.set(True)
+            from gui.components.scan_provider_options import load_reddit_settings, load_searxng_settings
+            load_searxng_settings(self, self._settings_manager)
+            load_reddit_settings(self, self._settings_manager)
             self.country_var.set(str(self._settings_manager.get_setting("unified_scan_dialog.country_code", "")))
 
             self.shared_concurrency_var.set(
@@ -208,19 +243,9 @@ class UnifiedScanDialog:
             self.skip_indicator_extract_var.set(
                 _coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.bulk_extract_skip_indicators", True), True)
             )
-            if self.show_rce_controls:
-                self.rce_enabled_var.set(
-                    _coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.rce_enabled", False), False)
-                )
-            else:
-                self.rce_enabled_var.set(False)
 
             mode = str(self._settings_manager.get_setting("unified_scan_dialog.security_mode", "cautious")).strip().lower()
             self.security_mode_var.set(mode if mode in {"cautious", "legacy"} else "cautious")
-
-            self.allow_insecure_tls_var.set(
-                _coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.allow_insecure_tls", True), True)
-            )
 
             self.africa_var.set(_coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.region_africa", False), False))
             self.asia_var.set(_coerce_bool(self._settings_manager.get_setting("unified_scan_dialog.region_asia", False), False))
@@ -257,6 +282,18 @@ class UnifiedScanDialog:
             self.protocol_ftp_var.set(True)
             self.protocol_http_var.set(True)
 
+    def _init_tls_policy_default(self) -> None:
+        """Initialize the TLS checkbox from the canonical App Config default (C3).
+
+        Runs unconditionally (even without a settings manager) so the dialog never
+        reads or seeds the retired GUI TLS key.
+        """
+        try:
+            cfg_path = resolve_config_path_from_settings(self._settings_manager) or str(self.config_path)
+            self.allow_insecure_tls_var.set(resolve_http_allow_insecure_tls(cfg_path))
+        except Exception:
+            pass
+
     def _persist_dialog_state(self) -> None:
         """Best-effort persistence of dialog state."""
         if self._settings_manager is None:
@@ -275,6 +312,12 @@ class UnifiedScanDialog:
             self._settings_manager.set_setting("unified_scan_dialog.protocol_smb", bool(self.protocol_smb_var.get()))
             self._settings_manager.set_setting("unified_scan_dialog.protocol_ftp", bool(self.protocol_ftp_var.get()))
             self._settings_manager.set_setting("unified_scan_dialog.protocol_http", bool(self.protocol_http_var.get()))
+            self._settings_manager.set_setting("unified_scan_dialog.provider_shodan", bool(self.provider_shodan_var.get()))
+            self._settings_manager.set_setting("unified_scan_dialog.provider_searxng", bool(self.provider_searxng_var.get()))
+            self._settings_manager.set_setting("unified_scan_dialog.provider_reddit", bool(self.provider_reddit_var.get()))
+            from gui.components.scan_provider_options import persist_reddit_settings, persist_searxng_settings
+            persist_searxng_settings(self, self._settings_manager)
+            persist_reddit_settings(self, self._settings_manager)
 
             shared_concurrency = _coerce_int(self.shared_concurrency_var.get(), 1, _CONCURRENCY_UPPER)
             if shared_concurrency is not None:
@@ -290,14 +333,14 @@ class UnifiedScanDialog:
             self._settings_manager.set_setting("unified_scan_dialog.bulk_probe_enabled", bool(self.bulk_probe_enabled_var.get()))
             self._settings_manager.set_setting("unified_scan_dialog.bulk_extract_enabled", bool(self.bulk_extract_enabled_var.get()))
             self._settings_manager.set_setting("unified_scan_dialog.bulk_extract_skip_indicators", bool(self.skip_indicator_extract_var.get()))
-            if self.show_rce_controls:
-                self._settings_manager.set_setting("unified_scan_dialog.rce_enabled", bool(self.rce_enabled_var.get()))
 
             mode = (self.security_mode_var.get() or "cautious").strip().lower()
             if mode not in {"cautious", "legacy"}:
                 mode = "cautious"
             self._settings_manager.set_setting("unified_scan_dialog.security_mode", mode)
-            self._settings_manager.set_setting("unified_scan_dialog.allow_insecure_tls", bool(self.allow_insecure_tls_var.get()))
+            # allow_insecure_tls is no longer persisted here (C3): it is a transient
+            # per-run override carried in the scan request; the App Config default owns
+            # the persisted value.
 
             self._settings_manager.set_setting("unified_scan_dialog.region_africa", bool(self.africa_var.get()))
             self._settings_manager.set_setting("unified_scan_dialog.region_asia", bool(self.asia_var.get()))
@@ -313,167 +356,9 @@ class UnifiedScanDialog:
     # ------------------------------------------------------------------
 
     def _create_dialog(self) -> None:
-        self.dialog = tk.Toplevel(self.parent)
-        self.dialog.title("Start Scan")
-        self.dialog.geometry("1120x880")
-        self.dialog.resizable(True, True)
-        self.theme.apply_to_widget(self.dialog, "main_window")
-        self.dialog.transient(self.parent)
-        self._center_dialog()
+        from gui.components.unified_scan_layout import build_dialog
 
-        wrapper = tk.Frame(self.dialog, bg=self.theme.colors["primary_bg"])
-        wrapper.pack(fill=tk.BOTH, expand=True)
-        scrollbar = ttk.Scrollbar(wrapper, orient=tk.VERTICAL)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-        self._canvas = tk.Canvas(
-            wrapper,
-            highlightthickness=0,
-            borderwidth=0,
-            bg=self.theme.colors["primary_bg"],
-            yscrollcommand=scrollbar.set,
-        )
-        self._canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.configure(command=self._canvas.yview)
-
-        self._content = tk.Frame(self._canvas, bg=self.theme.colors["primary_bg"])
-        self._canvas.create_window((0, 0), window=self._content, anchor="nw")
-        self._content.bind(
-            "<Configure>",
-            lambda _e: self._canvas.configure(scrollregion=self._canvas.bbox("all")),
-        )
-        for w in (self._canvas, self._content):
-            w.bind("<MouseWheel>", self._on_mousewheel)
-            w.bind("<Button-4>", self._on_mousewheel)
-            w.bind("<Button-5>", self._on_mousewheel)
-
-        self._create_header()
-        self._create_options()
-        self._create_config_section()
-        self._create_button_panel()
-
-        self.dialog.protocol("WM_DELETE_WINDOW", self._cancel)
-        bind_submit_shortcuts(self.dialog, self._start)
-        bind_close_shortcuts(self.dialog, self._cancel)
-        self.country_var.trace_add("write", self._validate_country_input)
-
-        if self.country_entry:
-            self.country_entry.focus_set()
-
-        self._refresh_template_toolbar()
-        self._update_region_status()
-        self.theme.apply_theme_to_application(self.dialog)
-        ensure_dialog_focus(self.dialog, self.parent)
-
-    def _center_dialog(self) -> None:
-        self.dialog.update_idletasks()
-        px, py = self.parent.winfo_x(), self.parent.winfo_y()
-        pw, ph = self.parent.winfo_width(), self.parent.winfo_height()
-        w, h = self.dialog.winfo_width(), self.dialog.winfo_height()
-        self.dialog.geometry(f"{w}x{h}+{px + pw // 2 - w // 2}+{py + ph // 2 - h // 2}")
-
-    def _on_mousewheel(self, event) -> None:
-        delta = 0
-        if getattr(event, "delta", 0):
-            delta = -1 if event.delta > 0 else 1
-        elif getattr(event, "num", None) == 4:
-            delta = -1
-        elif getattr(event, "num", None) == 5:
-            delta = 1
-        if delta:
-            self._canvas.yview_scroll(delta, "units")
-
-    def _create_header(self) -> None:
-        frame = tk.Frame(self._content)
-        self.theme.apply_to_widget(frame, "main_window")
-        frame.pack(fill=tk.X, padx=20, pady=(15, 5))
-
-        self.theme.create_styled_label(frame, "Start Scan", "heading").pack(anchor="w")
-        self.theme.create_styled_label(
-            frame,
-            "Launch SMB, FTP, and HTTP scans from one dialog. Selected protocols run sequentially and stop on first failure.",
-            "body",
-            fg=self.theme.colors["text_secondary"],
-        ).pack(anchor="w", pady=(5, 0))
-
-    def _create_options(self) -> None:
-        options_frame = tk.Frame(self._content)
-        self.theme.apply_to_widget(options_frame, "card")
-        options_frame.pack(fill=tk.X, padx=20, pady=5)
-
-        self._create_template_toolbar(options_frame)
-
-        self.theme.create_styled_label(
-            options_frame,
-            "Scan Parameters",
-            "heading",
-        ).pack(anchor="w", padx=15, pady=(10, 5))
-
-        columns = tk.Frame(options_frame)
-        self.theme.apply_to_widget(columns, "card")
-        columns.pack(fill=tk.BOTH, padx=15, pady=(0, 10))
-
-        left = tk.Frame(columns)
-        self.theme.apply_to_widget(left, "card")
-        left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 8))
-
-        right = tk.Frame(columns)
-        self.theme.apply_to_widget(right, "card")
-        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        self._create_protocol_selection(left)
-        self._create_country_option(left)
-        self._create_region_selection(left)
-
-        self._create_shared_runtime_options(right)
-        self._create_protocol_specific_options(right)
-
-    def _create_accent_heading(self, parent: tk.Widget, text: str) -> tk.Label:
-        return tk.Label(
-            parent,
-            text=text,
-            anchor="w",
-            padx=10,
-            pady=4,
-            bg=self.theme.colors["accent"],
-            fg="white",
-            font=self.theme.fonts["heading"],
-        )
-
-    def _create_template_toolbar(self, parent_frame: tk.Frame) -> None:
-        toolbar = tk.Frame(parent_frame)
-        self.theme.apply_to_widget(toolbar, "card")
-        toolbar.pack(fill=tk.X, padx=15, pady=(10, 0))
-
-        label = self.theme.create_styled_label(toolbar, "Templates:", "body")
-        label.pack(side=tk.LEFT)
-
-        self.template_dropdown = ttk.Combobox(
-            toolbar,
-            textvariable=self.template_var,
-            state="readonly",
-            width=32,
-        )
-        self.template_dropdown.pack(side=tk.LEFT, padx=(10, 10))
-        self.template_dropdown.bind("<<ComboboxSelected>>", self._handle_template_selected)
-
-        save_button = tk.Button(
-            toolbar,
-            text="Save Current",
-            command=self._prompt_save_template,
-            font=self.theme.fonts["small"],
-        )
-        self.theme.apply_to_widget(save_button, "button_secondary")
-        save_button.pack(side=tk.LEFT, padx=(0, 5))
-
-        self.delete_template_button = tk.Button(
-            toolbar,
-            text="Delete",
-            command=self._delete_selected_template,
-            font=self.theme.fonts["small"],
-        )
-        self.theme.apply_to_widget(self.delete_template_button, "button_secondary")
-        self.delete_template_button.pack(side=tk.LEFT)
+        build_dialog(self)
 
     # ------------------------------------------------------------------
     # Template handling
@@ -584,6 +469,20 @@ class UnifiedScanDialog:
 
     def _capture_form_state(self) -> Dict[str, Any]:
         return {
+            "providers": {
+                "shodan": self.provider_shodan_var.get(),
+                "searxng": self.provider_searxng_var.get(),
+                "reddit": self.provider_reddit_var.get(),
+            },
+            "searxng_options": {
+                "instance_url": self.searxng_instance_url_var.get(),
+                "query": self.searxng_query_var.get(),
+                "max_results": self.searxng_max_results_var.get(),
+                "request_timeout": int(self.searxng_request_timeout_var.get()),
+                "short_retry_delay": int(self.searxng_short_retry_delay_var.get()),
+                "long_retry_delay": int(self.searxng_long_retry_delay_var.get()),
+            },
+            "reddit_options": {k: getattr(self, f"reddit_{k}_var").get() for k in ("mode", "sort", "top_window", "max_posts", "query", "username", "parse_body", "include_nsfw")},
             "protocols": {
                 "smb": self.protocol_smb_var.get(),
                 "ftp": self.protocol_ftp_var.get(),
@@ -604,12 +503,20 @@ class UnifiedScanDialog:
             "bulk_probe_enabled": self.bulk_probe_enabled_var.get(),
             "bulk_extract_enabled": self.bulk_extract_enabled_var.get(),
             "bulk_extract_skip_indicators": self.skip_indicator_extract_var.get(),
-            "rce_enabled": self.rce_enabled_var.get() if self.show_rce_controls else False,
             "security_mode": self.security_mode_var.get(),
             "allow_insecure_tls": self.allow_insecure_tls_var.get(),
         }
 
     def _apply_form_state(self, state: Dict[str, Any]) -> None:
+        providers_state = state.get("providers", {})
+        self.provider_shodan_var.set(bool(providers_state.get("shodan", True)))
+        self.provider_searxng_var.set(bool(providers_state.get("searxng", False)))
+        self.provider_reddit_var.set(bool(providers_state.get("reddit", False)))
+
+        from gui.components.scan_provider_options import apply_reddit_form_state, apply_searxng_form_state
+        apply_searxng_form_state(self, state.get("searxng_options") or {})
+        apply_reddit_form_state(self, state.get("reddit_options") or {})
+
         protocols = state.get("protocols", {})
         self.protocol_smb_var.set(bool(protocols.get("smb", True)))
         self.protocol_ftp_var.set(bool(protocols.get("ftp", True)))
@@ -637,18 +544,17 @@ class UnifiedScanDialog:
         self.bulk_probe_enabled_var.set(bool(state.get("bulk_probe_enabled", False)))
         self.bulk_extract_enabled_var.set(bool(state.get("bulk_extract_enabled", False)))
         self.skip_indicator_extract_var.set(bool(state.get("bulk_extract_skip_indicators", True)))
-        if self.show_rce_controls:
-            self.rce_enabled_var.set(bool(state.get("rce_enabled", False)))
-        else:
-            self.rce_enabled_var.set(False)
 
         mode = str(state.get("security_mode", "cautious")).strip().lower()
         self.security_mode_var.set(mode if mode in {"cautious", "legacy"} else "cautious")
         self.allow_insecure_tls_var.set(bool(state.get("allow_insecure_tls", True)))
         self._sync_skip_indicator_extract_state()
 
-        self._update_region_status()
+        self._sync_targeting_mode_state()
         self._refresh_protocol_estimate_lines()
+        self._sync_shodan_options_state()
+        self._sync_searxng_options_state()
+        self._sync_reddit_options_state()
 
     def _sync_skip_indicator_extract_state(self) -> None:
         skip_checkbox = getattr(self, "skip_indicator_extract_checkbox", None)
@@ -670,373 +576,40 @@ class UnifiedScanDialog:
         self._selected_template_slug = slug
 
     # ------------------------------------------------------------------
-    # Sections
+    # Layout state
     # ------------------------------------------------------------------
 
-    def _create_protocol_selection(self, parent: tk.Frame) -> None:
-        container = tk.Frame(parent)
-        self.theme.apply_to_widget(container, "card")
-        container.pack(fill=tk.X, padx=15, pady=(0, 10))
+    def _refresh_provider_queue_label(self) -> str:
+        from gui.components.unified_scan_layout import refresh_provider_queue_label
 
-        self._create_accent_heading(container, "Protocols").pack(fill=tk.X)
+        return refresh_provider_queue_label(self)
 
-        btn_row = tk.Frame(container)
-        self.theme.apply_to_widget(btn_row, "card")
-        btn_row.pack(fill=tk.X, pady=(5, 0))
+    def _sync_shodan_options_state(self, *_args) -> None:
+        from gui.components.scan_provider_options import sync_option_entries
 
-        edit_queries_btn = tk.Button(
-            btn_row,
-            text="Edit Queries",
-            command=self._open_query_editor,
-            font=self.theme.fonts["small"],
+        sync_option_entries(
+            getattr(self, "_shodan_opts_frame", None),
+            self.provider_shodan_var.get(),
         )
-        self.theme.apply_to_widget(edit_queries_btn, "button_secondary")
-        edit_queries_btn.pack(side=tk.RIGHT, padx=(0, 10))
+        self._refresh_provider_queue_label()
 
-        for proto_text, cb_var, results_var in (
-            ("SMB", self.protocol_smb_var, self.smb_max_results_var),
-            ("FTP", self.protocol_ftp_var, self.ftp_max_results_var),
-            ("HTTP", self.protocol_http_var, self.http_max_results_var),
-        ):
-            proto_row = tk.Frame(container)
-            self.theme.apply_to_widget(proto_row, "card")
-            proto_row.pack(fill=tk.X, pady=(2, 0))
+    def _sync_searxng_options_state(self, *_args) -> None:
+        from gui.components.scan_provider_options import sync_searxng_option_state
 
-            cb = tk.Checkbutton(
-                proto_row,
-                text=proto_text,
-                variable=cb_var,
-                command=self._refresh_protocol_estimate_lines,
-                font=self.theme.fonts["small"],
-            )
-            self.theme.apply_to_widget(cb, "checkbox")
-            cb.pack(side=tk.LEFT, padx=(10, 8), pady=2)
-
-            cap_label = self.theme.create_styled_label(proto_row, "Max Shodan Results", "small")
-            cap_label.pack(side=tk.LEFT, padx=(0, 4))
-
-            cap_entry = tk.Entry(
-                proto_row,
-                textvariable=results_var,
-                width=8,
-                font=self.theme.fonts["small"],
-            )
-            self.theme.apply_to_widget(cap_entry, "entry")
-            cap_entry.pack(side=tk.LEFT, pady=2)
-
-        self.protocol_cost_label = self.theme.create_styled_label(
-            container,
-            "",
-            "small",
-            fg=self.theme.colors["text_secondary"],
+        sync_searxng_option_state(
+            getattr(self, "_searxng_opts_frame", None),
+            self.provider_searxng_var.get(),
         )
-        self.protocol_cost_label.pack(anchor="w", padx=15, pady=(0, 2))
+        self._refresh_provider_queue_label()
 
-        self.protocol_results_label = self.theme.create_styled_label(
-            container,
-            "",
-            "small",
-            fg=self.theme.colors["text_secondary"],
+    def _sync_reddit_options_state(self, *_args) -> None:
+        from gui.components.scan_provider_options import sync_reddit_option_state
+
+        sync_reddit_option_state(
+            getattr(self, "_reddit_opts_frame", None),
+            self.provider_reddit_var.get(),
         )
-        self.protocol_results_label.pack(anchor="w", padx=15, pady=(0, 2))
-
-        estimate_help_link = tk.Label(
-            container,
-            text="How cost & result estimates work",
-            fg=self.theme.colors["accent"],
-            cursor="hand2",
-            font=self.theme.fonts["small"],
-        )
-        estimate_help_link.pack(anchor="w", padx=15, pady=(0, 3))
-        estimate_help_link.bind("<Button-1>", self._on_cost_estimate_help_clicked)
-
-        info = self.theme.create_styled_label(
-            container,
-            "Selected protocols run sequentially in one queue and stop on first failure.",
-            "small",
-            fg=self.theme.colors["text_secondary"],
-        )
-        info.pack(anchor="w", padx=15, pady=(0, 5))
-        self._refresh_protocol_estimate_lines()
-
-    def _create_country_option(self, parent: tk.Frame) -> None:
-        container = tk.Frame(parent)
-        self.theme.apply_to_widget(container, "card")
-        container.pack(fill=tk.X, padx=15, pady=(0, 10))
-
-        heading = self._create_accent_heading(container, "Country Code (optional)")
-        heading.pack(fill=tk.X)
-
-        row = tk.Frame(container)
-        self.theme.apply_to_widget(row, "card")
-        row.pack(fill=tk.X, pady=(5, 0))
-
-        self.country_entry = tk.Entry(
-            row,
-            textvariable=self.country_var,
-            width=10,
-            font=self.theme.fonts["body"],
-        )
-        self.theme.apply_to_widget(self.country_entry, "entry")
-        self.country_entry.pack(side=tk.LEFT)
-
-        hint = self.theme.create_styled_label(
-            row,
-            "  (e.g., US, GB, CA — combines with region selections below)",
-            "small",
-            fg=self.theme.colors["text_secondary"],
-        )
-        hint.configure(font=(self.theme.fonts["small"][0], self.theme.fonts["small"][1], "italic"))
-        hint.pack(side=tk.LEFT)
-
-    def _create_region_selection(self, parent: tk.Frame) -> None:
-        container = tk.Frame(parent)
-        self.theme.apply_to_widget(container, "card")
-        container.pack(fill=tk.X, padx=15, pady=(0, 10))
-
-        self._create_accent_heading(container, "Region Selection").pack(fill=tk.X, pady=(0, 10))
-
-        checkboxes = tk.Frame(container)
-        self.theme.apply_to_widget(checkboxes, "card")
-        checkboxes.pack(fill=tk.X, pady=(5, 5))
-
-        region_vars = [
-            ("Africa", self.africa_var),
-            ("Asia", self.asia_var),
-            ("Europe", self.europe_var),
-            ("North America", self.north_america_var),
-            ("Oceania", self.oceania_var),
-            ("South America", self.south_america_var),
-        ]
-
-        for i, (name, var) in enumerate(region_vars):
-            cb = tk.Checkbutton(
-                checkboxes,
-                text=f"{name} ({len(REGIONS[name])})",
-                variable=var,
-                font=self.theme.fonts["small"],
-                command=self._update_region_status,
-            )
-            self.theme.apply_to_widget(cb, "checkbox")
-            cb.grid(row=i // 3, column=i % 3, sticky="w", padx=5, pady=2)
-
-        bottom = tk.Frame(container)
-        self.theme.apply_to_widget(bottom, "card")
-        bottom.pack(fill=tk.X, pady=(5, 10))
-
-        actions = tk.Frame(bottom)
-        self.theme.apply_to_widget(actions, "card")
-        actions.pack(side=tk.LEFT)
-
-        for label, cmd in (("Select All", self._select_all_regions), ("Clear All", self._clear_all_regions)):
-            btn = tk.Button(actions, text=label, command=cmd, font=self.theme.fonts["small"])
-            self.theme.apply_to_widget(btn, "button_secondary")
-            btn.pack(side=tk.LEFT, padx=(0, 5))
-
-        self.region_status_label = self.theme.create_styled_label(
-            bottom,
-            "",
-            "small",
-            fg=self.theme.colors["text_secondary"],
-        )
-        self.region_status_label.pack(side=tk.RIGHT, padx=(10, 5))
-
-    def _create_shared_runtime_options(self, parent: tk.Frame) -> None:
-        container = tk.Frame(parent)
-        self.theme.apply_to_widget(container, "card")
-        container.pack(fill=tk.X, padx=15, pady=(0, 10))
-
-        self._create_accent_heading(container, "Shared Runtime").pack(fill=tk.X)
-
-        validate_cmd = self.dialog.register(self._validate_integer_input)
-
-        conc_row = tk.Frame(container)
-        self.theme.apply_to_widget(conc_row, "card")
-        conc_row.pack(fill=tk.X, pady=(6, 0))
-
-        self.theme.create_styled_label(conc_row, "Backend concurrency:", "small").pack(side=tk.LEFT)
-        conc_entry = tk.Entry(
-            conc_row,
-            textvariable=self.shared_concurrency_var,
-            width=6,
-            validate="key",
-            validatecommand=(validate_cmd, "%P"),
-        )
-        self.theme.apply_to_widget(conc_entry, "entry")
-        conc_entry.pack(side=tk.LEFT, padx=(8, 0))
-
-        timeout_row = tk.Frame(container)
-        self.theme.apply_to_widget(timeout_row, "card")
-        timeout_row.pack(fill=tk.X, pady=(6, 0))
-
-        self.theme.create_styled_label(timeout_row, "Shared timeout:", "small").pack(side=tk.LEFT)
-        timeout_entry = tk.Entry(
-            timeout_row,
-            textvariable=self.shared_timeout_var,
-            width=6,
-            validate="key",
-            validatecommand=(validate_cmd, "%P"),
-        )
-        self.theme.apply_to_widget(timeout_entry, "entry")
-        timeout_entry.pack(side=tk.LEFT, padx=(8, 0))
-
-        self.theme.create_styled_label(
-            container,
-            f"Allowed ranges: concurrency 1–{_CONCURRENCY_UPPER}, timeout 1–{_TIMEOUT_UPPER} seconds",
-            "small",
-            fg=self.theme.colors["text_secondary"],
-        ).pack(anchor="w", pady=(6, 2))
-
-        self.theme.create_styled_label(
-            container,
-            "SMB rate/share delays continue to use configuration defaults to avoid unintended scan throttling.",
-            "small",
-            fg=self.theme.colors["text_secondary"],
-        ).pack(anchor="w", pady=(0, 4))
-
-        verbose_cb = tk.Checkbutton(
-            container,
-            text="Verbose backend output",
-            variable=self.verbose_var,
-            font=self.theme.fonts["small"],
-        )
-        self.theme.apply_to_widget(verbose_cb, "checkbox")
-        verbose_cb.pack(anchor="w", padx=10, pady=(2, 2))
-
-        probe_cb = tk.Checkbutton(
-            container,
-            text="Run bulk probe after each scan",
-            variable=self.bulk_probe_enabled_var,
-            font=self.theme.fonts["small"],
-        )
-        self.theme.apply_to_widget(probe_cb, "checkbox")
-        probe_cb.pack(anchor="w", padx=10, pady=(2, 2))
-
-        extract_cb = tk.Checkbutton(
-            container,
-            text="Run bulk extract after each scan",
-            variable=self.bulk_extract_enabled_var,
-            command=self._sync_skip_indicator_extract_state,
-            font=self.theme.fonts["small"],
-        )
-        self.theme.apply_to_widget(extract_cb, "checkbox")
-        extract_cb.pack(anchor="w", padx=10, pady=(2, 2))
-
-        skip_cb = tk.Checkbutton(
-            container,
-            text="Skip extract on hosts with malware indicators (recommended)",
-            variable=self.skip_indicator_extract_var,
-            font=self.theme.fonts["small"],
-        )
-        self.theme.apply_to_widget(skip_cb, "checkbox")
-        skip_cb.pack(anchor="w", padx=10, pady=(2, 2))
-        self.skip_indicator_extract_checkbox = skip_cb
-        self._sync_skip_indicator_extract_state()
-
-        if self.show_rce_controls:
-            rce_cb = tk.Checkbutton(
-                container,
-                text="Enable RCE analysis",
-                variable=self.rce_enabled_var,
-                font=self.theme.fonts["small"],
-            )
-            self.theme.apply_to_widget(rce_cb, "checkbox")
-            rce_cb.pack(anchor="w", padx=10, pady=(2, 2))
-
-            rce_hint = self.theme.create_styled_label(
-                container,
-                "RCE analysis currently applies to SMB probe flow only.",
-                "small",
-                fg=self.theme.colors["text_secondary"],
-            )
-            rce_hint.pack(anchor="w", padx=15, pady=(0, 5))
-        else:
-            rce_spacer = tk.Frame(container, height=46)
-            self.theme.apply_to_widget(rce_spacer, "card")
-            rce_spacer.pack(fill=tk.X, padx=10, pady=(2, 7))
-            rce_spacer.pack_propagate(False)
-
-        extract_hint = self.theme.create_styled_label(
-            container,
-            "Bulk extract supports SMB, FTP, and HTTP/HTTPS hosts.",
-            "small",
-            fg=self.theme.colors["text_secondary"],
-        )
-        extract_hint.pack(anchor="w", padx=15, pady=(0, 5))
-
-    def _create_protocol_specific_options(self, parent: tk.Frame) -> None:
-        container = tk.Frame(parent)
-        self.theme.apply_to_widget(container, "card")
-        container.pack(fill=tk.X, padx=15, pady=(0, 10))
-
-        self._create_accent_heading(container, "Protocol-specific").pack(fill=tk.X)
-
-        smb_frame = tk.Frame(container)
-        self.theme.apply_to_widget(smb_frame, "card")
-        smb_frame.pack(fill=tk.X, pady=(6, 2))
-
-        self.theme.create_styled_label(smb_frame, "SMB Security Mode", "small").pack(anchor="w", padx=10, pady=(0, 2))
-        cautious_radio = tk.Radiobutton(
-            smb_frame,
-            text="Cautious – signed SMB2+/SMB3 only",
-            variable=self.security_mode_var,
-            value="cautious",
-            font=self.theme.fonts["small"],
-        )
-        self.theme.apply_to_widget(cautious_radio, "checkbox")
-        cautious_radio.pack(anchor="w", padx=10)
-
-        legacy_radio = tk.Radiobutton(
-            smb_frame,
-            text="Legacy – allow SMB1/unsigned connections",
-            variable=self.security_mode_var,
-            value="legacy",
-            font=self.theme.fonts["small"],
-        )
-        self.theme.apply_to_widget(legacy_radio, "checkbox")
-        legacy_radio.pack(anchor="w", padx=10, pady=(0, 2))
-
-        http_frame = tk.Frame(container)
-        self.theme.apply_to_widget(http_frame, "card")
-        http_frame.pack(fill=tk.X, pady=(2, 5))
-
-        tls_cb = tk.Checkbutton(
-            http_frame,
-            text="HTTP: Allow insecure HTTPS certificates",
-            variable=self.allow_insecure_tls_var,
-            font=self.theme.fonts["small"],
-        )
-        self.theme.apply_to_widget(tls_cb, "checkbox")
-        tls_cb.pack(anchor="w", padx=10, pady=(2, 2))
-
-    def _create_config_section(self) -> None:
-        config_frame = tk.Frame(self._content)
-        self.theme.apply_to_widget(config_frame, "card")
-        config_frame.pack(fill=tk.X, padx=20, pady=(0, 5))
-
-        title = self.theme.create_styled_label(config_frame, "Configuration", "heading")
-        title.pack(anchor="w", padx=15, pady=(10, 5))
-
-        info_frame = tk.Frame(config_frame)
-        self.theme.apply_to_widget(info_frame, "card")
-        info_frame.pack(fill=tk.X, padx=15, pady=(0, 5))
-
-        info_text = f"Using configuration from:\n{self.config_path}"
-        self.theme.create_styled_label(
-            info_frame,
-            info_text,
-            "small",
-            fg=self.theme.colors["text_secondary"],
-            justify="left",
-        ).pack(anchor="w")
-
-        btn_frame = tk.Frame(config_frame)
-        self.theme.apply_to_widget(btn_frame, "card")
-        btn_frame.pack(fill=tk.X, padx=15, pady=(0, 10))
-
-        edit_btn = tk.Button(btn_frame, text="Edit Configuration", command=self._open_config_editor)
-        self.theme.apply_to_widget(edit_btn, "button_secondary")
-        edit_btn.pack(side=tk.LEFT)
+        self._refresh_provider_queue_label()
 
     def _open_config_editor(self) -> None:
         if not self.config_editor_callback:
@@ -1164,29 +737,6 @@ class UnifiedScanDialog:
             # Some Tk/WM combos reject grab while viewability is racing; keep dialog usable.
             pass
 
-    def _create_button_panel(self) -> None:
-        frame = tk.Frame(self.dialog)
-        self.theme.apply_to_widget(frame, "main_window")
-        frame.pack(fill=tk.X, padx=20, pady=(5, 15))
-
-        add_shortcut_hint(
-            frame,
-            self.theme,
-            "Enter start scan  •  Esc cancel  •  Ctrl/Cmd+W close",
-        )
-
-        btns = tk.Frame(frame)
-        self.theme.apply_to_widget(btns, "main_window")
-        btns.pack(side=tk.RIGHT)
-
-        cancel_btn = tk.Button(btns, text="Cancel", command=self._cancel)
-        self.theme.apply_to_widget(cancel_btn, "button_secondary")
-        cancel_btn.pack(side=tk.LEFT, padx=(0, 10))
-
-        start_btn = tk.Button(btns, text="Start Scan", command=self._start)
-        self.theme.apply_to_widget(start_btn, "button_primary")
-        start_btn.pack(side=tk.LEFT)
-
     def _open_reddit_grab(self) -> None:
         """Close this dialog and open the Reddit Grab flow via callback."""
         if not self.reddit_grab_callback:
@@ -1208,6 +758,7 @@ class UnifiedScanDialog:
         upper = raw.upper()
         if upper != raw:
             self.country_var.set(upper)
+        self._sync_targeting_mode_state()
 
     def _parse_positive_int(self, value_str: str, field_name: str, *, minimum: int = 1, maximum: int) -> int:
         if not value_str.strip():
@@ -1221,6 +772,19 @@ class UnifiedScanDialog:
         if v > maximum:
             raise ValueError(f"{field_name} must be {maximum} or less.")
         return v
+
+    def _resolve_selected_providers(self) -> list[str]:
+        providers: list[str] = []
+        shodan_var = getattr(self, "provider_shodan_var", None)
+        if shodan_var is None or shodan_var.get():
+            providers.append("shodan")
+        searxng_var = getattr(self, "provider_searxng_var", None)
+        if searxng_var is not None and searxng_var.get():
+            providers.append("searxng")
+        reddit_var = getattr(self, "provider_reddit_var", None)
+        if reddit_var is not None and reddit_var.get():
+            providers.append("reddit")
+        return providers
 
     def _resolve_selected_protocols(self) -> list[str]:
         protocols: list[str] = []
@@ -1295,6 +859,11 @@ class UnifiedScanDialog:
         return out
 
     def _get_all_selected_countries(self, manual_input: str) -> tuple[list[str], str]:
+        if manual_input.strip() and self._get_selected_region_countries():
+            return [], (
+                "Use either individual country codes or region selections, not both."
+            )
+
         manual, err = self._parse_and_validate_countries(manual_input)
         if err:
             return [], err
@@ -1333,6 +902,42 @@ class UnifiedScanDialog:
             text = ""
         self.region_status_label.configure(text=text)
 
+    def _sync_targeting_mode_state(self) -> None:
+        """Keep manual country entry and region targeting mutually exclusive."""
+        manual_active = bool(self.country_var.get().strip())
+        region_vars = (
+            self.africa_var,
+            self.asia_var,
+            self.europe_var,
+            self.north_america_var,
+            self.oceania_var,
+            self.south_america_var,
+        )
+        region_active = any(bool(var.get()) for var in region_vars)
+
+        # Explicit country codes win when restoring an older conflicting state.
+        if manual_active and region_active:
+            for var in region_vars:
+                var.set(False)
+            region_active = False
+            self._update_region_status()
+
+        country_entry = getattr(self, "country_entry", None)
+        if country_entry is not None:
+            country_entry.configure(
+                state=tk.DISABLED if region_active else tk.NORMAL
+            )
+
+        region_state = tk.DISABLED if manual_active else tk.NORMAL
+        for widget in getattr(self, "_region_checkbuttons", ()):
+            widget.configure(state=region_state)
+        for widget in getattr(self, "_region_action_buttons", ()):
+            widget.configure(state=region_state)
+
+    def _on_region_selection_changed(self) -> None:
+        self._update_region_status()
+        self._sync_targeting_mode_state()
+
     def _select_all_regions(self) -> None:
         for var in (
             self.africa_var,
@@ -1343,7 +948,7 @@ class UnifiedScanDialog:
             self.south_america_var,
         ):
             var.set(True)
-        self._update_region_status()
+        self._on_region_selection_changed()
 
     def _clear_all_regions(self) -> None:
         for var in (
@@ -1355,13 +960,17 @@ class UnifiedScanDialog:
             self.south_america_var,
         ):
             var.set(False)
-        self._update_region_status()
+        self._on_region_selection_changed()
 
     # ------------------------------------------------------------------
     # Build/start/cancel
     # ------------------------------------------------------------------
 
     def _build_scan_request(self) -> Dict[str, Any]:
+        providers = self._resolve_selected_providers()
+        if not providers:
+            raise ValueError("Select at least one discovery provider (Shodan, SearXNG, or Reddit).")
+
         shared_concurrency = self._parse_positive_int(
             self.shared_concurrency_var.get().strip(),
             "Backend concurrency",
@@ -1375,10 +984,35 @@ class UnifiedScanDialog:
             maximum=_TIMEOUT_UPPER,
         )
 
-        protocols = self._resolve_selected_protocols()
+        # Protocols only required when Shodan is selected
+        if "shodan" in providers:
+            protocols = self._resolve_selected_protocols()
+            if not protocols:
+                raise ValueError("Select at least one protocol (SMB, FTP, or HTTP).")
+        else:
+            protocols = []
 
-        if not protocols:
-            raise ValueError("Select at least one protocol (SMB, FTP, or HTTP).")
+        # SearXNG options required when SearXNG is selected
+        instance_url = ""
+        searxng_query = ""
+        searxng_max_results = 500
+        if "searxng" in providers:
+            _url_var = getattr(self, "searxng_instance_url_var", None)
+            instance_url = str(_url_var.get() if _url_var else "").strip()
+            if not instance_url:
+                raise ValueError("SearXNG instance URL is required when SearXNG is selected.")
+            _q_var = getattr(self, "searxng_query_var", None)
+            searxng_query = str(_q_var.get() if _q_var else "").strip()
+            if not searxng_query:
+                raise ValueError("SearXNG search query is required when SearXNG is selected.")
+            from gui.components.scan_provider_options import validate_searxng_max_results
+            _mr_var = getattr(self, "searxng_max_results_var", None)
+            searxng_max_results = validate_searxng_max_results(_mr_var.get() if _mr_var else "500")
+
+        reddit_opts: Dict[str, Any] = {}
+        if "reddit" in providers:
+            from gui.components.scan_provider_options import validate_reddit_scan_options
+            reddit_opts = validate_reddit_scan_options({k: getattr(self, f"reddit_{k}_var").get() for k in ("mode", "sort", "top_window", "max_posts", "query", "username", "parse_body", "include_nsfw")})
 
         manual_input = self.country_var.get().strip()
         countries, err = self._get_all_selected_countries(manual_input)
@@ -1405,7 +1039,8 @@ class UnifiedScanDialog:
 
         self._persist_dialog_state()
 
-        return {
+        request: Dict[str, Any] = {
+            "providers": providers,
             "protocols": protocols,
             "country": country_param,
             "shared_concurrency": shared_concurrency,
@@ -1414,7 +1049,6 @@ class UnifiedScanDialog:
             "bulk_probe_enabled": bool(self.bulk_probe_enabled_var.get()),
             "bulk_extract_enabled": bool(self.bulk_extract_enabled_var.get()),
             "bulk_extract_skip_indicators": bool(self.skip_indicator_extract_var.get()),
-            "rce_enabled": bool(self.rce_enabled_var.get()) if self.show_rce_controls else False,
             "security_mode": mode,
             "allow_insecure_tls": bool(self.allow_insecure_tls_var.get()),
             "smb_max_shodan_results_per_scan": smb_cap,
@@ -1424,6 +1058,34 @@ class UnifiedScanDialog:
             "ftp_max_query_credits_per_scan": _credits_for_cap(ftp_cap),
             "http_max_query_credits_per_scan": _credits_for_cap(http_cap),
         }
+        if "searxng" in providers:
+            request["searxng_instance_url"] = instance_url
+            request["searxng_query"] = searxng_query
+            request["searxng_max_results"] = searxng_max_results
+            from gui.components.scan_provider_options import (
+                coerce_searxng_tuning,
+                SEARXNG_TIMEOUT_DEFAULT, SEARXNG_TIMEOUT_MIN, SEARXNG_TIMEOUT_MAX,
+                SEARXNG_SHORT_RETRY_DEFAULT, SEARXNG_SHORT_RETRY_MIN, SEARXNG_SHORT_RETRY_MAX,
+                SEARXNG_LONG_RETRY_DEFAULT, SEARXNG_LONG_RETRY_MIN, SEARXNG_LONG_RETRY_MAX,
+            )
+            request["searxng_request_timeout"] = coerce_searxng_tuning(
+                self.searxng_request_timeout_var.get(),
+                default=SEARXNG_TIMEOUT_DEFAULT, lo=SEARXNG_TIMEOUT_MIN,
+                hi=SEARXNG_TIMEOUT_MAX, step=1,
+            )
+            request["searxng_short_retry_delay"] = coerce_searxng_tuning(
+                self.searxng_short_retry_delay_var.get(),
+                default=SEARXNG_SHORT_RETRY_DEFAULT, lo=SEARXNG_SHORT_RETRY_MIN,
+                hi=SEARXNG_SHORT_RETRY_MAX, step=5,
+            )
+            request["searxng_long_retry_delay"] = coerce_searxng_tuning(
+                self.searxng_long_retry_delay_var.get(),
+                default=SEARXNG_LONG_RETRY_DEFAULT, lo=SEARXNG_LONG_RETRY_MIN,
+                hi=SEARXNG_LONG_RETRY_MAX, step=30,
+            )
+        if "reddit" in providers:
+            request.update(reddit_opts)
+        return request
 
     def _start(self) -> None:
         self._persist_dialog_state()
@@ -1433,22 +1095,34 @@ class UnifiedScanDialog:
             messagebox.showerror("Invalid Input", str(exc), parent=self.dialog)
             return
 
+        # Build scan description including provider and protocol context (M1)
+        provider_label = ", ".join(p.upper() for p in scan_request["providers"])
         protocol_label = ", ".join(p.upper() for p in scan_request["protocols"])
         country_desc = scan_request.get("country") or "global"
-        scan_desc = f"protocols: {protocol_label}; target: {country_desc}"
+        if protocol_label:
+            scan_desc = f"providers: {provider_label}; protocols: {protocol_label}; target: {country_desc}"
+        else:
+            scan_desc = f"providers: {provider_label}; target: {country_desc}"
 
-        preflight_result = run_preflight(
-            self.dialog,
-            self.theme,
-            self._settings_manager,
-            scan_request,
-            scan_desc,
-        )
-        if preflight_result is None:
-            return
+        # Extract is Shodan protocol-completion only — silence it for SearXNG-only (M4)
+        if "shodan" not in scan_request.get("providers", []):
+            scan_request["bulk_extract_enabled"] = False
+
+        # Skip Shodan preflight (credit estimate, API key gate) for SearXNG-only (M1/M5)
+        if "shodan" in scan_request.get("providers", []):
+            preflight_result = run_preflight(
+                self.dialog,
+                self.theme,
+                self._settings_manager,
+                scan_request,
+                scan_desc,
+            )
+            if preflight_result is None:
+                return
+            scan_request = preflight_result
 
         self.result = "start"
-        self.scan_start_callback(preflight_result)
+        self.scan_start_callback(scan_request)
         self.dialog.destroy()
 
     def _cancel(self) -> None:
@@ -1489,7 +1163,6 @@ def show_unified_scan_dialog(
     config_editor_callback: Optional[Callable[[str], None]] = None,
     query_editor_callback: Optional[Callable[[], None]] = None,
     reddit_grab_callback: Optional[Callable[[], None]] = None,
-    show_rce_controls: bool = False,
 ) -> Optional[str]:
     """Show the unified scan launch dialog as a single-instance window."""
     global _ACTIVE_UNIFIED_SCAN_DIALOG
@@ -1505,7 +1178,6 @@ def show_unified_scan_dialog(
         config_editor_callback=config_editor_callback,
         query_editor_callback=query_editor_callback,
         reddit_grab_callback=reddit_grab_callback,
-        show_rce_controls=show_rce_controls,
     )
     _ACTIVE_UNIFIED_SCAN_DIALOG = dialog
     try:

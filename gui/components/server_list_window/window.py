@@ -26,7 +26,6 @@ from gui.utils.scan_manager import get_scan_manager
 from gui.utils.template_store import TemplateStore
 from gui.utils.logging_config import get_logger
 from gui.utils.keybindings import bind_close_shortcuts, bind_tree_enter_shortcut
-from gui.components.pry_dialog import PryDialog
 from gui.components.pry_status_dialog import BatchStatusDialog
 from shared.db_migrations import run_migrations
 from shared.path_service import get_paths
@@ -67,7 +66,7 @@ try:
     from batch_extract_dialog import BatchExtractSettingsDialog  # standalone/absolute import
 except ImportError:
     from ..batch_extract_dialog import BatchExtractSettingsDialog  # package relative fallback
-from gui.utils import probe_cache, probe_patterns, probe_runner, extract_runner, pry_runner
+from gui.utils import probe_cache, probe_patterns, probe_runner, extract_runner
 from shared.quarantine import create_quarantine_dir
 
 from gui.components.server_list_window.actions import ServerListWindowActionsMixin
@@ -102,8 +101,6 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self.db_reader = db_reader
         self.theme = get_theme()
         self.window_data = window_data or {}
-        self._pry_unlocked = bool(self.window_data.get("_pry_unlocked", False))
-        self._rce_unlocked = bool(self.window_data.get("_rce_unlocked", self._pry_unlocked))
         self.settings_manager = settings_manager
         self.on_database_changed = on_database_changed
         self.probe_status_map = {}
@@ -153,7 +150,6 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self.context_menu = None
         self.probe_button = None
         self.extract_button = None
-        self.pry_button = None
         self.browser_button = None
         self.stop_button = None
         self.running_tasks_button = None
@@ -164,7 +160,6 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self._delete_in_progress = False  # Flag to prevent concurrent deletes
         self.table_overlay = None
         self.table_overlay_label = None
-        self.pry_status_button = None
         self.batch_status_dialog = None
         self._stop_button_original_style = None
         self._running_tasks_subscribed = False
@@ -208,8 +203,6 @@ class ServerListWindow(ServerListWindowActionsMixin):
 
         # Window state
         self.is_advanced_mode = False
-        self.pry_status_dialog = None
-
         # Sort state tracking for bidirectional column sorting
         self.current_sort_column = None
         self.current_sort_direction = None
@@ -547,7 +540,6 @@ class ServerListWindow(ServerListWindowActionsMixin):
             self.window,
             self.theme,
             table_callbacks,
-            show_rce_column=self._rce_unlocked,
         )
 
         self._create_context_menu(self.tree)
@@ -574,8 +566,6 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self.context_menu.add_separator()
         _add_selection_command("🔍 Probe Selected", self._on_probe_selected)
         _add_selection_command("📦 Extract Selected", self._on_extract_selected)
-        if self._pry_unlocked:
-            _add_selection_command("🔓 Pry Selected", self._on_pry_selected)
         _add_selection_command("🗂️ Browse Selected", self._on_file_browser_selected)
         self.context_menu.add_separator()
         _add_selection_command("⭐ Toggle Favorite", self._on_mark_favorite_selected)
@@ -842,21 +832,6 @@ class ServerListWindow(ServerListWindowActionsMixin):
         )
         self.theme.apply_to_widget(self.browser_button, "button_secondary")
         self.browser_button.pack(side=tk.LEFT, padx=(0, 8))
-
-        if self._pry_unlocked:
-            self.pry_button = tk.Button(
-                button_container,
-                text="🔓 Pry Selected",
-                command=self._on_pry_selected,
-                state=tk.DISABLED
-            )
-            self.theme.apply_to_widget(self.pry_button, "button_secondary")
-            self.pry_button.pack(side=tk.LEFT, padx=(0, 8))
-        else:
-            pry_spacer = tk.Frame(button_container, width=120)
-            self.theme.apply_to_widget(pry_spacer, "main_window")
-            pry_spacer.pack(side=tk.LEFT, padx=(0, 8))
-            pry_spacer.pack_propagate(False)
 
         self.delete_button = tk.Button(
             button_container,
@@ -1180,8 +1155,6 @@ class ServerListWindow(ServerListWindowActionsMixin):
             probe_callback=self._launch_probe_from_detail,
             extract_callback=self._launch_extract_from_detail,
             browse_callback=self._launch_browse_from_detail,
-            rce_status_callback=self._handle_rce_status_update,
-            show_rce_controls=self._rce_unlocked,
         )
 
     def _notify_database_changed(self) -> None:

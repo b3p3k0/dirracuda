@@ -752,47 +752,6 @@ class SMBSeekWorkflowDatabase:
             print(f"⚠ Error in fallback complete share summary query: {e}")
             return []
 
-    def upsert_rce_status(self, ip_address: str, rce_status: str,
-                          verdict_summary: Optional[str] = None) -> None:
-        """
-        Update RCE analysis status for a host.
-
-        Args:
-            ip_address: IP address of the host
-            rce_status: Status string ('not_run', 'clean', 'flagged', 'unknown', 'error')
-            verdict_summary: Optional JSON summary of verdicts
-        """
-        if not ip_address:
-            return
-
-        valid_statuses = {'not_run', 'clean', 'flagged', 'unknown', 'error'}
-        if rce_status not in valid_statuses:
-            rce_status = 'unknown'
-
-        try:
-            rows = self.db_manager.execute_query(
-                "SELECT id FROM smb_servers WHERE ip_address = ?",
-                (ip_address,)
-            )
-            if not rows:
-                return
-
-            server_id = rows[0]['id']
-            self.db_manager.execute_query(
-                """
-                INSERT INTO host_probe_cache (server_id, rce_status, rce_verdict_summary, updated_at)
-                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(server_id) DO UPDATE SET
-                    rce_status=excluded.rce_status,
-                    rce_verdict_summary=excluded.rce_verdict_summary,
-                    updated_at=CURRENT_TIMESTAMP
-                """,
-                (server_id, rce_status, verdict_summary)
-            )
-        except Exception as e:
-            if self._verbose:
-                print(f"Warning: Failed to persist RCE status for {ip_address}: {e}")
-
     def close(self):
         """Close database connections."""
         if hasattr(self, 'db_manager'):

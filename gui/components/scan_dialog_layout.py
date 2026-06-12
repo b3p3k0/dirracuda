@@ -201,7 +201,6 @@ def _capture_form_state(self) -> Dict[str, Any]:
         "share_access_delay": self.share_access_delay_var.get(),
         "api_key_override": self.api_key_var.get(),
         "verbose": self.verbose_var.get(),
-        "rce_enabled": self.rce_enabled_var.get(),
         "bulk_probe_enabled": self.bulk_probe_enabled_var.get(),
         "bulk_extract_enabled": self.bulk_extract_enabled_var.get(),
         "bulk_extract_skip_indicators": self.skip_indicator_extract_var.get()
@@ -241,9 +240,6 @@ def _apply_form_state(self, state: Dict[str, Any]) -> None:
 
     self.api_key_var.set(state.get("api_key_override", ""))
     self.verbose_var.set(bool(state.get("verbose", False)))
-
-    # RCE analysis setting (with backward compatibility)
-    self.rce_enabled_var.set(bool(state.get("rce_enabled", False)))
 
     # Bulk operation settings (with backward compatibility)
     self.bulk_probe_enabled_var.set(bool(state.get("bulk_probe_enabled", False)))
@@ -539,51 +535,6 @@ def _create_security_mode_option(self, parent_frame: tk.Frame) -> None:
         fg=self.theme.colors.get("text_warning", self.theme.colors.get("warning", "#d97706"))
     )
     warning_label.pack(anchor="w", padx=15, pady=(0, 5))
-
-def _create_rce_analysis_option(self, parent_frame: tk.Frame) -> None:
-    """Create RCE vulnerability analysis toggle."""
-    container = tk.Frame(parent_frame)
-    self.theme.apply_to_widget(container, "card")
-    container.pack(fill=tk.X, padx=15, pady=(0, 10))
-
-    heading = self._create_accent_heading(container, "🔍 RCE Vulnerability Analysis")
-    heading.pack(fill=tk.X)
-
-    options_frame = tk.Frame(container)
-    self.theme.apply_to_widget(options_frame, "card")
-    options_frame.pack(fill=tk.X, pady=(5, 5))
-
-    rce_checkbox = tk.Checkbutton(
-        options_frame,
-        text="Check for RCE vulnerabilities during share access testing",
-        variable=self.rce_enabled_var,
-        font=self.theme.fonts["small"]
-    )
-    self.theme.apply_to_widget(rce_checkbox, "checkbox")
-    rce_checkbox.pack(anchor="w", padx=10, pady=2)
-
-    info_label = self.theme.create_styled_label(
-        container,
-        "Experimental feature: analyzes SMB configurations for known RCE vulnerabilities.",
-        "small",
-        fg=self.theme.colors["text_secondary"]
-    )
-    info_label.pack(anchor="w", padx=15, pady=(0, 5))
-
-    confidence_label = self.theme.create_styled_label(
-        container,
-        "Note: All results marked as \"low confidence\" during this initial phase.",
-        "small",
-        fg=self.theme.colors.get("text_warning", self.theme.colors.get("warning", "#d97706"))
-    )
-    confidence_label.pack(anchor="w", padx=15, pady=(0, 5))
-
-def _create_hidden_rce_spacer_option(self, parent_frame: tk.Frame) -> None:
-    """Reserve visual spacing when RCE controls are hidden."""
-    container = tk.Frame(parent_frame, height=120)
-    self.theme.apply_to_widget(container, "card")
-    container.pack(fill=tk.X, padx=15, pady=(0, 10))
-    container.pack_propagate(False)
 
 def _create_bulk_probe_option(self, parent_frame: tk.Frame) -> None:
     """Create bulk probe automation checkbox."""
@@ -1018,8 +969,6 @@ def bind_scan_dialog_layout_methods(dialog_cls) -> None:
         "_create_rescan_options",
         "_create_verbose_option",
         "_create_security_mode_option",
-        "_create_rce_analysis_option",
-        "_create_hidden_rce_spacer_option",
         "_create_bulk_probe_option",
         "_create_bulk_extract_option",
         "_create_concurrency_options",

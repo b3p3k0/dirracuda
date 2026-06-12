@@ -23,6 +23,7 @@ from gui.utils.coercion import _coerce_bool
 from gui.utils.filesize import _format_file_size
 from gui.browsers.core import UnifiedBrowserCore
 from shared.path_service import get_paths, get_legacy_paths, select_existing_path
+from shared.config import resolve_http_allow_insecure_tls
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tif", ".tiff"}
 _PATHS = get_paths()
@@ -80,6 +81,7 @@ class HttpBrowserWindow(UnifiedBrowserCore):
         db_reader=None,
         theme=None,
         settings_manager=None,
+        request_host: Optional[str] = None,
     ) -> None:
         from shared.http_browser import HttpNavigator
         from gui.utils.probe_cache_dispatch import load_probe_result_for_host
@@ -87,11 +89,13 @@ class HttpBrowserWindow(UnifiedBrowserCore):
         self.ip_address = ip_address
         self.port = port
         self.scheme = scheme
+        self.request_host = str(request_host or "").strip() or None
         self._initial_path = self._normalize_initial_path(initial_path)
         self.db_reader = db_reader
         self.theme = theme
         self.settings_manager = settings_manager
         self.config = _load_http_browser_config(config_path)
+        self.allow_insecure_tls = resolve_http_allow_insecure_tls(config_path)
         self._server_banner = str(banner or "")
 
         self._current_path: str = "/"
@@ -100,7 +104,8 @@ class HttpBrowserWindow(UnifiedBrowserCore):
             ip=ip_address,
             port=port,
             scheme=scheme,
-            allow_insecure_tls=True,
+            request_host=self.request_host,
+            allow_insecure_tls=self.allow_insecure_tls,
             connect_timeout=float(self.config["connect_timeout"]),
             request_timeout=float(self.config["request_timeout"]),
             max_entries=int(self.config["max_entries"]),
@@ -155,7 +160,7 @@ class HttpBrowserWindow(UnifiedBrowserCore):
     # ------------------------------------------------------------------
 
     def _adapt_window_title(self) -> str:
-        return f"HTTP Browser \u2014 {self.scheme}://{self.ip_address}:{self.port}"
+        return f"HTTP Browser \u2014 {self.scheme}://{self._display_host()}:{self.port}"
 
     def _adapt_banner_label(self) -> str:
         return "Banner/Title:"
@@ -201,6 +206,9 @@ class HttpBrowserWindow(UnifiedBrowserCore):
         if not cleaned:
             return "/"
         return f"/{cleaned.lstrip('/')}"
+
+    def _display_host(self) -> str:
+        return getattr(self, "request_host", None) or self.ip_address
 
     # ------------------------------------------------------------------
     # Navigation
@@ -312,7 +320,7 @@ class HttpBrowserWindow(UnifiedBrowserCore):
         # Lazy import preserves gui.components.unified_browser_window.open_file_viewer
         # as a valid monkeypatch target (BASELINE_CONTRACTS §2c).
         from gui.components.unified_browser_window import open_file_viewer
-        display_path = f"{self.scheme}://{self.ip_address}:{self.port}{remote_path}"
+        display_path = f"{self.scheme}://{self._display_host()}:{self.port}{remote_path}"
 
         def save_callback() -> None:
             self._start_download_thread([(remote_path, 0)])
@@ -339,7 +347,7 @@ class HttpBrowserWindow(UnifiedBrowserCore):
         # Lazy import preserves gui.components.unified_browser_window.open_image_viewer
         # as a valid monkeypatch target (BASELINE_CONTRACTS §2c).
         from gui.components.unified_browser_window import open_image_viewer
-        display_path = f"{self.scheme}://{self.ip_address}:{self.port}{remote_path}"
+        display_path = f"{self.scheme}://{self._display_host()}:{self.port}{remote_path}"
 
         def save_callback() -> None:
             self._start_download_thread([(remote_path, file_size)])
@@ -577,7 +585,9 @@ class HttpBrowserWindow(UnifiedBrowserCore):
                 ip=self.ip_address,
                 port=self.port,
                 scheme=self.scheme,
-                allow_insecure_tls=True,
+                request_host=self.request_host,
+                start_path=self._initial_path,
+                allow_insecure_tls=self.allow_insecure_tls,
                 max_entries=int(self.config["max_entries"]),
                 connect_timeout=int(self.config["connect_timeout"]),
                 request_timeout=int(self.config["request_timeout"]),

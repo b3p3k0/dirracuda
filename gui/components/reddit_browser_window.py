@@ -159,6 +159,7 @@ class RedditBrowserWindow:
         add_record_callback=None,
         promote_record_callback=None,
         promote_records_callback=None,
+        allow_promotion: bool = True,
         settings_manager=None,
     ) -> None:
         self.parent = parent
@@ -167,6 +168,7 @@ class RedditBrowserWindow:
         self._add_record_callback = add_record_callback
         self._promote_record_callback = promote_record_callback
         self._promote_records_callback = promote_records_callback
+        self._allow_promotion = bool(allow_promotion)
         self._settings_manager = settings_manager
 
         # Row data store — keyed by iid (str(target.id))
@@ -250,11 +252,12 @@ class RedditBrowserWindow:
             label="Probe Target",
             command=self._on_context_probe_target,
         )
-        self._context_menu.add_separator()
-        self._context_menu.add_command(
-            label="Add to dirracuda DB",
-            command=self._on_add_to_db,
-        )
+        if self._allow_promotion:
+            self._context_menu.add_separator()
+            self._context_menu.add_command(
+                label="Add to dirracuda DB",
+                command=self._on_add_to_db,
+            )
         self.tree.bind("<Button-3>", self._on_right_click)
         self.tree.bind("<Double-1>", self._on_double_click)
 
@@ -269,13 +272,15 @@ class RedditBrowserWindow:
         self.theme.apply_to_widget(btn_frame, "main_window")
         btn_frame.pack(fill=tk.X, padx=8, pady=(0, 8))
 
-        for text, cmd in (
+        _action_buttons = [
             ("Open in Explorer", self._on_open_explorer),
             ("Open Reddit Post", self._on_open_reddit_post),
             ("Probe Selected", self._on_probe_selected),
             ("Refresh", self._on_refresh),
-            ("Clear DB", self._on_clear_db),
-        ):
+        ]
+        if self._allow_promotion:
+            _action_buttons.append(("Clear DB", self._on_clear_db))
+        for text, cmd in _action_buttons:
             btn = tk.Button(btn_frame, text=text, command=cmd)
             self.theme.apply_to_widget(btn, "button_secondary")
             btn.pack(side=tk.LEFT, padx=(0, 6))
@@ -486,6 +491,13 @@ class RedditBrowserWindow:
         self._load_rows()
 
     def _on_clear_db(self) -> None:
+        if not self._allow_promotion:
+            messagebox.showinfo(
+                "Clear disabled",
+                "Cannot clear Reddit data from the primary database in this view.",
+                parent=self.window,
+            )
+            return
         confirmed = messagebox.askyesno(
             "Clear DB",
             "This will delete all Reddit targets and posts from the sidecar DB. Continue?",
@@ -811,7 +823,7 @@ class RedditBrowserWindow:
                             probe_preview=outcome.probe_preview,
                             probe_checked_at=outcome.probe_checked_at,
                             probe_error=outcome.probe_error,
-                            probe_snapshot_payload=outcome.probe_snapshot_payload,
+                            probe_snapshot_payload=getattr(outcome, "probe_snapshot_payload", None),
                         )
                         if outcome.probe_status == "unprobed" and outcome.probe_error:
                             unprobed_errors.append(
@@ -932,69 +944,15 @@ class RedditBrowserWindow:
         """
         Build Add Record prefill payload from a Reddit target row.
 
-        Maps protocol to host_type/scheme; extracts port from URL (D1: host:port only).
-        Returns None for unsupported protocols.
+        Delegates to experimental.redseek.mapper.row_to_prefill with the
+        browser-specific source labels.  Returns None for unsupported protocols.
         """
-        from urllib.parse import urlparse
-        protocol = (row.get("protocol") or "").lower().strip()
-        if protocol in ("http", "https"):
-            host_type, scheme = "H", protocol
-        elif protocol == "ftp":
-            host_type, scheme = "F", None
-        elif protocol == "smb":
-            host_type, scheme = "S", None
-        else:
-            return None
-
-        port = None
-        url = row.get("target_normalized") or ""
-        if url:
-            try:
-                port = urlparse(url).port  # None when not explicit in URL
-            except Exception:
-                port = None
-        # Fallback: handle bare host:port form with no scheme (e.g. "192.168.1.1:8080")
-        if port is None and url and "://" not in url:
-            segment = url.split("/")[0]
-            if ":" in segment:
-                try:
-                    port = int(segment.rsplit(":", 1)[1])
-                except (ValueError, IndexError):
-                    port = None
-
-        prefill = {
-            "host_type": host_type,
-            "host": row.get("host") or "",
-            "port": port,
-            "scheme": scheme,
-            "_promotion_source": "reddit_browser",
-            "_probe_cache": {
-                "status": row.get("probe_status"),
-                "indicator_matches": row.get("probe_indicator_matches"),
-                "preview": row.get("probe_preview"),
-                "checked_at": row.get("probe_checked_at"),
-                "error": row.get("probe_error"),
-            },
-            "_probe_snapshot_source": "sidecar:reddit",
-        }
-        if host_type == "H":
-            parsed = None
-            try:
-                parse_target = url if "://" in url else f"{scheme or 'http'}://{url}"
-                parsed = urlparse(parse_target) if parse_target else None
-            except Exception:
-                parsed = None
-            probe_host_hint = (parsed.hostname if parsed is not None else None) or str(row.get("host") or "").strip()
-            probe_path_hint = (parsed.path if parsed is not None else "") or "/"
-            probe_path_hint = probe_path_hint.split("?", 1)[0].split("#", 1)[0].strip() or "/"
-            if not probe_path_hint.startswith("/"):
-                probe_path_hint = "/" + probe_path_hint.lstrip("/")
-            prefill["_probe_host_hint"] = probe_host_hint
-            prefill["_probe_path_hint"] = probe_path_hint
-        snapshot = self._parse_probe_snapshot(row.get("probe_snapshot_json"))
-        if snapshot is not None:
-            prefill["_probe_snapshot"] = snapshot
-        return prefill
+        from experimental.redseek.mapper import row_to_prefill
+        return row_to_prefill(
+            row,
+            promotion_source="reddit_browser",
+            snapshot_source="sidecar:reddit",
+        )
 
     def _resolve_prefill_host_ipv4(self, prefill: dict) -> tuple[str, bool]:
         """
@@ -1030,6 +988,13 @@ class RedditBrowserWindow:
 
     def _on_add_to_db(self) -> None:
         self._hide_context_menu()
+        if not self._allow_promotion:
+            messagebox.showinfo(
+                "Promotion disabled",
+                "Rows from this view are already synced to the main database.",
+                parent=self.window,
+            )
+            return
         rows = self._selected_rows()
         if not rows:
             messagebox.showinfo("No selection", "Select a row first.", parent=self.window)
@@ -1295,6 +1260,7 @@ def show_reddit_browser_window(
     add_record_callback=None,
     promote_record_callback=None,
     promote_records_callback=None,
+    allow_promotion: bool = True,
     settings_manager=None,
 ) -> None:
     """Open the Reddit Post DB browser window."""
@@ -1304,5 +1270,6 @@ def show_reddit_browser_window(
         add_record_callback=add_record_callback,
         promote_record_callback=promote_record_callback,
         promote_records_callback=promote_records_callback,
+        allow_promotion=allow_promotion,
         settings_manager=settings_manager,
     )

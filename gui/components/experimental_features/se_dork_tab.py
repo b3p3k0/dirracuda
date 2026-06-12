@@ -9,22 +9,33 @@ persisted. Run summary shown in status area.
 
 from __future__ import annotations
 
+from pathlib import Path
 import threading
 import tkinter as tk
 from types import SimpleNamespace
 from typing import Any, Optional
 
+from experimental.se_dork.models import DEFAULT_MAX_RESULTS, MAX_RESULTS
 from gui.utils.style import get_theme
 
 _DEFAULT_INSTANCE_URL = "http://your.searxng.server:port"
 _DEFAULT_QUERY = 'site:* intitle:"index of /"'
-_DEFAULT_MAX_RESULTS = "50"
+_DEFAULT_MAX_RESULTS = str(DEFAULT_MAX_RESULTS)
 _DEFAULT_BULK_PROBE_ENABLED = False
 _DEFAULT_PROBE_WORKERS = 3
 _SETTINGS_KEY_URL = "se_dork.instance_url"
 _SETTINGS_KEY_QUERY = "se_dork.query"
 _SETTINGS_KEY_MAX_RESULTS = "se_dork.max_results"
 _SETTINGS_KEY_BULK_PROBE_ENABLED = "se_dork.bulk_probe_enabled"
+
+
+def _coerce_max_results(value: object) -> int:
+    """Normalize saved/user SearXNG limits to the current supported range."""
+    candidate = _DEFAULT_MAX_RESULTS if value is None or str(value).strip() == "" else value
+    try:
+        return max(1, min(MAX_RESULTS, int(str(candidate))))
+    except (TypeError, ValueError):
+        return int(_DEFAULT_MAX_RESULTS)
 
 
 def _resolve_initial_url(settings_manager: Any, default: str) -> str:
@@ -68,6 +79,28 @@ def _resolve_probe_worker_count(settings_manager: Any, default: int = _DEFAULT_P
         return max(1, min(8, int(raw)))
     except Exception:
         return default
+
+
+def _resolve_main_db_path(context: dict) -> Path:
+    """Resolve the active primary DB path for tab-triggered SearXNG runs."""
+    explicit = context.get("main_db_path")
+    if explicit:
+        try:
+            return Path(explicit).expanduser().resolve(strict=False)
+        except Exception:
+            pass
+    try:
+        from shared.path_service import (
+            get_legacy_paths,
+            get_paths,
+            resolve_runtime_main_db_path,
+        )
+
+        paths = get_paths()
+        legacy = get_legacy_paths(paths=paths)
+        return resolve_runtime_main_db_path(paths=paths, legacy=legacy)
+    except Exception:
+        return Path("dirracuda.db").resolve(strict=False)
 
 
 class SeDorkTab:
@@ -142,10 +175,12 @@ class SeDorkTab:
         initial_max = _DEFAULT_MAX_RESULTS
         if sm is not None:
             try:
-                initial_max = sm.get_setting(_SETTINGS_KEY_MAX_RESULTS, _DEFAULT_MAX_RESULTS) or _DEFAULT_MAX_RESULTS
+                initial_max = _coerce_max_results(
+                    sm.get_setting(_SETTINGS_KEY_MAX_RESULTS, _DEFAULT_MAX_RESULTS)
+                )
             except Exception:
                 pass
-        self._max_results_var = tk.StringVar(value=initial_max)
+        self._max_results_var = tk.StringVar(value=str(initial_max))
         max_entry = tk.Entry(max_row, textvariable=self._max_results_var, width=8)
         self._theme.apply_to_widget(max_entry, "entry")
         max_entry.pack(side=tk.LEFT, padx=(6, 0))
@@ -181,7 +216,14 @@ class SeDorkTab:
         self._theme.apply_to_widget(max_hint_spacer, "label")
         max_hint_spacer.pack(side=tk.LEFT)
 
-        max_hint_label = tk.Label(max_hint_row, text="Maximum 500", anchor="w")
+        max_hint_label = tk.Label(
+            max_hint_row,
+            text=(
+                f"Maximum {MAX_RESULTS:,}. "
+                "Large runs are automatically paced to protect upstream engines."
+            ),
+            anchor="w",
+        )
         self._theme.apply_to_widget(max_hint_label, "label")
         max_hint_label.pack(side=tk.LEFT, padx=(6, 0))
 
@@ -233,7 +275,10 @@ class SeDorkTab:
         try:
             sm.set_setting(_SETTINGS_KEY_URL, self._url_var.get().strip())
             sm.set_setting(_SETTINGS_KEY_QUERY, self._query_var.get().strip())
-            sm.set_setting(_SETTINGS_KEY_MAX_RESULTS, self._max_results_var.get().strip())
+            sm.set_setting(
+                _SETTINGS_KEY_MAX_RESULTS,
+                str(_coerce_max_results(self._max_results_var.get())),
+            )
             sm.set_setting(_SETTINGS_KEY_BULK_PROBE_ENABLED, bool(self._bulk_probe_var.get()))
         except Exception:
             pass
@@ -281,16 +326,19 @@ class SeDorkTab:
 
     def _invoke_run(self) -> None:
         """Kick off a threaded dork search run."""
+        queue_active_getter = self._context.get("provider_queue_active_getter")
+        if callable(queue_active_getter) and queue_active_getter():
+            self._status_label.configure(
+                text="A unified provider queue is running. Wait for it to complete."
+            )
+            return
         url = self._url_var.get().strip()
         query = self._query_var.get().strip()
         if not url or not query:
             self._status_label.configure(text="Enter instance URL and query first.")
             return
 
-        try:
-            max_results = max(1, min(500, int(self._max_results_var.get().strip() or _DEFAULT_MAX_RESULTS)))
-        except (ValueError, TypeError):
-            max_results = int(_DEFAULT_MAX_RESULTS)
+        max_results = _coerce_max_results(self._max_results_var.get())
 
         self._save_settings()
         self._test_btn.configure(state="disabled")
@@ -307,6 +355,7 @@ class SeDorkTab:
                 probe_config_path = None
 
         from experimental.se_dork.models import RunOptions
+        main_db_path = _resolve_main_db_path(self._context)
         options = RunOptions(
             instance_url=url,
             query=query,
@@ -317,9 +366,13 @@ class SeDorkTab:
         )
 
         def _run() -> None:
+            sync_summary = None
             try:
+                from experimental.se_dork.main_db_sync import sync_run_to_main_db
                 from experimental.se_dork.service import run_dork_search
-                result = run_dork_search(options)
+                result = run_dork_search(options, db_path=main_db_path)
+                if result.status == "done" and not result.error:
+                    sync_summary = sync_run_to_main_db(result.run_id, db_path=main_db_path)
             except Exception as exc:
                 from experimental.se_dork.models import RunResult, RUN_STATUS_ERROR
                 result = RunResult(
@@ -329,7 +382,7 @@ class SeDorkTab:
                     status=RUN_STATUS_ERROR,
                     error=str(exc),
                 )
-            self.frame.after(0, lambda: self._on_run_done(result))
+            self.frame.after(0, lambda: self._on_run_done(result, sync_summary=sync_summary))
 
         threading.Thread(target=_run, daemon=True).start()
 
@@ -348,17 +401,34 @@ class SeDorkTab:
             from gui.components.se_dork_browser_window import show_se_dork_browser_window
             show_se_dork_browser_window(
                 self.frame,
+                db_path=_resolve_main_db_path(self._context),
                 add_record_callback=None,
                 promote_record_callback=None,
+                allow_promotion=False,
                 settings_manager=self._context.get("settings_manager"),
             )
 
-    def _on_run_done(self, result: Any) -> None:
+    def _on_run_done(self, result: Any, sync_summary: Optional[dict] = None) -> None:
         """Called on the main thread once the run thread completes."""
         self._test_btn.configure(state="normal")
         self._run_btn.configure(state="normal")
         if result.status == "done":
             message = f"Done \u2014 fetched {result.fetched_count}, stored {result.deduped_count} unique."
+            if getattr(result, "pages_fetched", 0):
+                message += (
+                    f"\nFetch pacing: {int(result.pages_fetched)} pages, "
+                    f"{int(round(getattr(result, 'pacing_delay_seconds', 0.0)))}s delayed."
+                )
+            if getattr(result, "fetch_warning", None):
+                message += f"\nWarning: {result.fetch_warning}"
+            if isinstance(sync_summary, dict):
+                message += (
+                    f"\nPrimary DB sync: {int(sync_summary.get('processed', 0) or 0)} processed"
+                    f" ({int(sync_summary.get('inserted', 0) or 0)} inserted"
+                    f", {int(sync_summary.get('updated', 0) or 0)} updated"
+                    f", {int(sync_summary.get('skipped', 0) or 0)} skipped"
+                    f", {int(sync_summary.get('failed', 0) or 0)} failed)."
+                )
             if getattr(result, "probe_enabled", False):
                 message += (
                     f"\nProbe: {getattr(result, 'probe_total', 0)} rows \u2022 "

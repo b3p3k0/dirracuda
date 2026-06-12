@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<h1>Dashboard</h1>
+
+<div class="dash-card">
+  <h2>Service</h2>
+  <p>
+    {% if cfg.remote_enabled %}
+      Remote access enabled
+    {% else %}
+      Localhost only
+    {% endif %}
+  </p>
+  <p>Listening: {{ listen_url }}</p>
+  <p>Local URL: {{ local_url }}</p>
+  <p>
+    Shodan Balance:
+    <span id="shodan-balance-status" class="status-text" role="status" aria-live="polite">
+      Checking...
+    </span>
+    <button id="shodan-balance-refresh" type="button">Refresh</button>
+  </p>
+</div>
+
+<div class="dash-card">
+  <h2>Active Scan</h2>
+  {% if qs.active %}
+    <p id="active-info" data-task-id="{{ qs.active.task_id }}">
+      <strong>{{ qs.active.task_id }}</strong>
+      &mdash; {{ qs.active.protocol }}
+      &mdash; <span id="active-status">{{ qs.active.status }}</span>
+      {% if qs.active.progress_message %}
+        &mdash; <span id="active-progress">{{ qs.active.progress_message }}</span>
+      {% endif %}
+    </p>
+  {% else %}
+    <p id="active-info" data-task-id="" class="status-text">none</p>
+  {% endif %}
+</div>
+
+<div class="dash-card">
+  <h2>Queue</h2>
+  {% if qs.queued %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Protocol</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for t in qs.queued %}
+          <tr>
+            <td>{{ t.task_id }}</td>
+            <td>{{ t.protocol }}</td>
+            <td>{{ t.status }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="status-text">Queue is empty.</p>
+  {% endif %}
+</div>
+{% if migration.state in ["deferred", "failed", "in_progress"] %}
+<div class="dash-card">
+  <h2>Migration Status</h2>
+  <p>
+    Sidecar data migration: <strong>{{ migration.state }}</strong>.
+    {% if migration.state == "deferred" %}
+      Migration was deferred on the desktop. Use the desktop app: Database &rarr; [Legacy] Sidecar Data &rarr; Migrate All to Main DB.
+    {% elif migration.state == "failed" %}
+      Migration failed: {{ migration.error | default("unknown error") }}. Use the desktop app: Database &rarr; [Legacy] Sidecar Data &rarr; Migrate All to Main DB.
+    {% elif migration.state == "in_progress" %}
+      Migration is in progress on the desktop app.
+    {% endif %}
+  </p>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/dashboard.js"></script>
+{% endblock %}

@@ -29,7 +29,10 @@ bash install.sh
 
 **Manual setup** (other distros, or if you prefer to do it yourself):
 
-You'll need Python 3.8+ (3.10+ recommended) and Tkinter:
+You'll need Python 3.8+ and Tkinter. Python 3.8 remains compatible with this
+release but [reached upstream end of life on October 7,
+2024](https://peps.python.org/pep-0569/); use Python 3.10 or newer for an
+actively supported runtime.
 
 ```bash
 # Ubuntu/Debian
@@ -47,19 +50,21 @@ Then:
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-mkdir -p ~/.dirracuda/conf
+mkdir -p ~/.dirracuda/conf ~/.dirracuda/conf.d/core ~/.dirracuda/conf.d/prefs ~/.dirracuda/conf.d/experimental
 cp conf/config.json.example ~/.dirracuda/conf/config.json
 ```
 
-Edit `~/.dirracuda/conf/config.json` (or launch a new scan from the dashboard) and add your Shodan API key (requires paid membership):
+Edit `~/.dirracuda/conf.d/core/scan.json` (or launch a new scan from the dashboard) and add your Shodan API key (requires paid membership):
 
 ```json
 {
   "shodan": {
-    "api_key": "your_key_here"
+    "api_key": ""
   }
 }
 ```
+Paste the key between the quotes. Do not commit the populated file.
+`~/.dirracuda/conf/config.json` is still generated for compatibility, but runtime reads/writes are shard-authoritative under `~/.dirracuda/conf.d/`.
 
 Launch the GUI from your venv:
 
@@ -79,7 +84,6 @@ Launch the GUI from your venv:
 | smbprotocol | ≥1.10.0 | Pure-Python SMB2/3 transport for cautious-mode sessions |
 | pyspnego | ≥0.8.0 | SPNEGO authentication support; required by smbprotocol |
 | impacket | ≥0.11.0 | SMB1/2/3 transport for legacy compatibility, share enumeration, and browser operations |
-| PyYAML | ≥6.0 | Loads RCE vulnerability signatures from `conf/signatures/rce_smb/*.yaml` |
 | Pillow | ≥8.0.0 | Image rendering in the file viewer (PNG, JPEG, GIF, WebP, BMP, TIFF) |
 
 ### System tools
@@ -111,8 +115,8 @@ You're connecting to machines you don't control. A few baseline precautions befo
 
 The main window. From here you can:
 
-- Launch discovery from one **▶ Start Scan** button - pick one protocol or queue multiple protocols in sequence from the same dialog
-- Access [Experimental Features](#experimental-features) 
+- Launch discovery from one **▶ Start Scan** button - selected providers run one at a time (`Reddit` → `SearXNG` → `Shodan`), and Shodan queues selected SMB/FTP/HTTP protocols in sequence
+- Access [Accessories](#accessories)
 - Open the Server List Browser to work with hosts you've found
 - Manage your database (import, export, merge, maintenance)
 - Edit configuration
@@ -133,7 +137,19 @@ Triggered from **▶ Start Scan** with the protocol(s) selected. All three follo
 
 **FTP** - default dork: `port:21 "230 Login successful"`. Verification includes anonymous login and root directory listing. Failure codes: `connect_fail`, `auth_fail`, `list_fail`, `timeout`.
 
-**HTTP** - default dork: `http.title:"Index of /"`. Verification stays locked to the exact Shodan hit endpoint (same IP + same port), and tests HTTP and/or HTTPS on that port based on your config toggles.
+**HTTP** - default dork: `http.title:"Index of /"`. Verification, probing,
+browsing, and extraction connect to the recorded IP and port. A saved hostname
+is used only for the HTTP `Host` header, TLS SNI, and certificate identity.
+Redirects may follow at most three same-origin hops; a scheme, host, or
+effective-port change is rejected. Target traffic ignores ambient HTTP proxy
+environment variables.
+
+HTTPS target verification is permissive by default so self-signed directory
+indexes remain reachable. With **App Config → Security → HTTP Target TLS →
+Allow insecure TLS** enabled, certificate-chain and hostname checks are skipped;
+a machine in the middle can intercept or impersonate the target. Disable it for
+strict verification. The Start Scan checkbox overrides this default for that
+run only.
 
 `Edit Queries` in Start Scan opens the modeless `Discovery Dorks` editor (single-instance) for SMB/FTP/HTTP base queries.
 Changes there are manual-save only.
@@ -168,7 +184,7 @@ The **preflight screen** shows your live balance and an estimated post-scan bala
 | 📋 Copy IP | Copy selected server IP address to clipboard |
 | 🔍 Probe Selected | Enumerate shares, detect ransomware indicators |
 | 📦 Extract Selected | Collect files with hard limits on count, size, and time |
-| 🗂️ Browse Selected | Read-only exploration of accessible shares |
+| 🗂️ Browse Selected | Read-only exploration of accessible shares; HTTP rows open at their saved hostname/path when available |
 | ⭐ Toggle Favorite | Mark/unmark selected servers as favorites |
 | 🚫 Toggle Avoid | Mark/unmark selected servers to avoid |
 | ⚠ Toggle Compromised | Mark/unmark selected servers as likely compromised |
@@ -190,13 +206,17 @@ Live scan/probe/extract output is shown in monitor dialogs. Hiding a monitor doe
 
 ![file browser](img/browse.png)
 
-Read-only, protocol transparent navigation available shares. Typical file explorer behavior (double click to descend/open etc...) are supported
+The SMB, FTP, and HTTP browsers provide read-only navigation with familiar file
+explorer controls. Double-click opens a file or descends into a directory.
 
 The viewer auto-detects file types: text files display with an encoding selector (UTF-8, Latin-1, etc.), binary files switch to hex mode, and images (PNG, JPEG, GIF, WebP, BMP, TIFF) render with fit-to-window scaling.
 
 ![image viewer](img/pic_view.png)
 
-Files over the specified maximum (default: 5 MB) trigger a warning-you can bump that limit in `~/.dirracuda/conf/config.json` under `file_browser.viewer.max_view_size_mb`, or click "Ignore Once" to load anyway (hard cap: 1 GB).
+Files over the configured maximum (default: 5 MB) trigger a warning. Change
+`file_browser.viewer.max_view_size_mb` in
+`~/.dirracuda/conf.d/core/storage.json`, or click **Ignore Once** to load the
+file up to the 1 GB hard cap.
 
 Downloads are staged in quarantine (`~/.dirracuda/data/quarantine/`). When ClamAV is enabled, downloaded files are post-processed by verdict (clean files optionally promoted to extracted, infected files moved to known-bad). The browser never writes to remote systems.
 
@@ -213,19 +233,25 @@ Dirracuda can stage quarantine files in RAM-backed `tmpfs` instead of disk.
 For setup, either:
 
 1. Run `bash install.sh` and in Step 8 choose tmpfs + optional `/etc/fstab` update.
-2. Manually add an `/etc/fstab` entry like the one below (replace `<USER>`), then run `sudo mkdir -p /home/<USER>/.dirracuda/data/tmpfs_quarantine && sudo mount -a`.
+2. Build the mount path from your actual home directory, print the matching
+   `/etc/fstab` line, and paste that line into `/etc/fstab`:
+
+```bash
+home_dir="$(getent passwd "$(id -un)" | cut -d: -f6)"
+mountpoint="$home_dir/.dirracuda/data/tmpfs_quarantine"
+sudo mkdir -p "$mountpoint"
+printf 'tmpfs  %s  tmpfs  noexec,nosuid,nodev,size=512M,noswap  0  0\n' "$mountpoint"
+# Paste the printed line into /etc/fstab, then:
+sudo mount -a
+```
 
 Dirracuda will reuse this mount when tmpfs mode is enabled.
-
-```fstab
-tmpfs  /home/<USER>/.dirracuda/data/tmpfs_quarantine  tmpfs  noexec,nosuid,nodev,size=512M,noswap  0  0
-```
 
 Enable in **App Config**:
 
 - Check `Use memory (tmpfs) for quarantine`
 
-Or set in `~/.dirracuda/conf/config.json`:
+Or set in `~/.dirracuda/conf.d/core/storage.json`:
 
 ```json
 {
@@ -256,7 +282,7 @@ Automated file collection with configurable limits:
 - Max directory depth
 - File extension filtering
 
-All extracted files land in quarantine. The defaults are conservative - check `~/.dirracuda/conf/config.json` if you need to adjust them.
+All extracted files land in quarantine. The defaults are conservative - check `~/.dirracuda/conf.d/core/storage.json` if you need to adjust them.
 
 #### Optional ClamAV scanning (bulk extract + browser downloads)
 
@@ -327,7 +353,16 @@ Behavior notes:
 
 ![config](img/config.png)
 
-App settings are stored in `~/.dirracuda/conf/config.json`. The bundled example file (`conf/config.json.example`) documents every option.
+Runtime settings are modular and stored under `~/.dirracuda/conf.d/`:
+
+- `core/scan.json` - discovery + scan controls (`shodan`, `workflow`, `connection`, `discovery`, `access`, `ftp`, `http`)
+- `core/storage.json` - storage/runtime paths (`database`, `file_collection`, `file_browser`, `ftp_browser`, `http_browser`, `quarantine`, `clamav`, `gui_app`)
+- `core/security.json` - security integrations (`security`, `censys`)
+- `core/output.json` - output formatting settings (`output`)
+- `prefs/user-prefs.json` - GUI/user preferences (replaces legacy `state/gui_settings.json`)
+- `experimental/{se_dork,reddit_grab,dorkbook,keymaster,webui}.json` - experimental module settings
+
+`~/.dirracuda/conf/config.json` is retained as a generated compatibility view for legacy readers.
 
 Two additional files hold editable lists:
 
@@ -338,13 +373,14 @@ These are separate so you can customize or share them without touching app setti
 
 The GUI includes a built-in config editor for common settings and an integrated simple text editor for full configuration.
 
-## Experimental Features
+## Accessories
 
-Experimental work is grouped under the permanent `⚗ Experimental` button in the dashboard header.
+Accessories are grouped under the `⚗ Accessories` button in the dashboard header.
 
 The dialog is modeless and tab-based. Current tabs:
 - `SearXNG`
 - `Reddit`
+- `Web UI`
 - `Dorkbook`
 - `Keymaster`
 
@@ -352,32 +388,33 @@ The dialog is modeless and tab-based. Current tabs:
 
 ![SearXNG](img/searxng.png)
 
-Use this tab to run open-directory dork queries against a SearXNG server, keep confirmed open indexes, and review/promote the results.
+Use this tab to run open-directory dork queries against a SearXNG server, keep confirmed open indexes, and review/probe the results.
 
 Quick start:
-1. Dashboard → `⚗ Experimental` → `SearXNG` tab.
+1. Dashboard → `⚗ Accessories` → `SearXNG` tab.
 2. Fill in your server and query.
 3. Click `Test` to confirm the server is reachable and JSON search is enabled.
 4. Click `Run` to collect results.
-5. Click `Open Results DB` to review, probe, and promote hosts.
+5. Click `Open Results DB` to review and probe retained URLs.
 
 Inputs (persisted across opens/restarts):
-- **SearXNG Server** — server URL (default placeholder: `http://your.searxng.server:port`)
+- **SearXNG Server** — base URL of the SearXNG instance you control
 - **Query** — dork query (default: `site:* intitle:"index of /"`)
-- **Max results** — fetch cap per run (default 50, max 500)
+- **Max results** — unique-result fetch cap per run (default 500, max 1,000)
 - **Run Probe on Results** — optional bulk probe pass for retained results
 
 What each action does:
 - **Test** checks server reachability and JSON search support.
-- **Run** executes the query, keeps only confirmed open-index results, and updates status with fetched/stored counts. If probe is enabled, the status line also shows probe totals (`✔/✖/○`).
-- **Open Results DB** opens the results browser backed by `~/.dirracuda/data/experimental/se_dork.db`.
+- **Run** executes the query, keeps only confirmed open-index results, and updates status with fetched/stored counts. Each fetched page is stored, classified, filtered, and optionally probed before the next page request. That work consumes the active pacing window; Dirracuda sleeps only for any time left over. Fetching deduplicates normalized URLs and stops at the requested unique-result count, 40 pages, or the first clean empty page. Temporary per-engine failures are advisory when a page still returns results, with 10/20/30-second soft backoff until a clean page resets normal pacing. An empty throttled page triggers a hard retry: early runs (fewer than 5 productive pages and fewer than 50 unique URLs) allow two retries (30 seconds, then 180 seconds); mature runs allow one (30 seconds only). Direct SearXNG HTTP 429 responses use the same run-wide retry budget and honor a valid bounded `Retry-After`. Completed pages remain available if a later request fails, and partial runs still reach primary-DB sync. The 1,000-result setting is a ceiling, not a guarantee. If probe is enabled, the status line also shows probe totals (`✔/✖/○`). On completion, retained SearXNG rows are auto-synced into main HTTP server surfaces. A standalone run shows a result popup, while Live Scan Output keeps the full rollup. In a multi-provider Start Scan run, the popup is suppressed while the serial provider queue continues.
+- **Open Results DB** opens the SearXNG browser against the active primary DB context for new runs. Historical sidecar data is still available from the legacy sidecar browser path.
+- **Cancel a running search** — use the **Running Tasks** control in the dashboard footer, select the SearXNG task, and click **Cancel Task**. In a multi-provider Start Scan run, cancelling the provider queue task also cancels the active SearXNG search. Cancelled runs still sync any retained open-index rows to the primary HTTP table, and completed results are preserved.
 
 ![searxng db](img/searxng_db.png)
 
 Results browser:
 - Columns: `URL`, `Probed`, `Probe Preview`, `Checked`
-- Actions: `Copy URL`, `Open in Explorer`, `Open in system browser`, `Probe Selected` / `Probe URL`, `Add to dirracuda DB`; double-click opens a read-only result details view.
-- Promotion note: `Add to dirracuda DB` promotes resolvable IPv4 targets directly into the main Dirracuda DB, and multi-select imports run in the background with progress/cancel plus a best-effort summary. Probe snapshots from newer SearXNG results are carried into the main DB so SLB can render probe trees without re-probing (older summary-only rows keep summary data until re-probed). The Server List Browser does not need to be open, and new rows may be hidden by active filters.
+- Actions: `Copy URL`, `Open in Explorer`, `Open in system browser`, `Probe Selected` / `Probe URL`; double-click opens a read-only result details view.
+- Primary-backed mode hides manual promotion controls because retained SearXNG rows are synced during run completion. Legacy sidecar browsing keeps promotion controls for historical rows.
 
 #### SearXNG `format=json` and 403 troubleshooting
 
@@ -396,42 +433,52 @@ Then restart SearXNG and run `Test` again.
 
 ![reddit](img/reddit.png)
 
-redseek ingests submissions from `r/opendirectories` into a sidecar DB (`~/.dirracuda/data/experimental/reddit_od.db`) for review. 
+redseek ingests submissions from `r/opendirectories`. New runs write `reddit_posts`, `reddit_targets`, and `reddit_ingest_state` directly to the active primary DB, and parsed SMB/FTP/HTTP targets are automatically promoted into the main protocol tables at run completion. No manual "Add to dirracuda DB" step is needed for new runs.
 
-Ingest modes in `Reddit Grab`:
+Legacy data already in `~/.dirracuda/data/experimental/reddit_od.db` remains accessible under Accessories → Legacy Sidecar Data → Reddit, with manual promotion still available from that view.
+
+Ingest modes in `Reddit Grab` (Accessories):
 
 | Mode | Endpoint | Required input | Notes |
 |------|----------|----------------|-------|
-| `feed` | `/r/opendirectories/{sort}.json` | none | Default mode |
-| `search` | `/r/opendirectories/search.json` with `restrict_sr=1` | query | Subreddit-scoped keyword search |
-| `user` | `/r/opendirectories/search.json` with `q=author:<user> subreddit:opendirectories`, `restrict_sr=1`, `type=link` | username | Service still runtime-checks subreddit and author before writes |
+| `feed` | `/r/opendirectories/{sort}.rss` | none | Default anonymous RSS mode |
+| `search` | `/r/opendirectories/search.rss` with `restrict_sr=1` | query | Subreddit-scoped keyword search |
 
 Sort options:
 - `new`
 - `top` with window `hour`, `day`, `week`, `month`, `year`, or `all`
 
-Only submissions are processed. Comments/replies are not.
+Only submissions exposed by Reddit's public Atom/RSS feeds are processed. Comments/replies are not.
+RSS does not expose the old JSON cursor, so each run makes one anonymous feed request. Dirracuda sends `limit=<Max posts>` and supports 1–100 posts per snapshot (default and maximum: 100); Reddit may still return fewer. `Max pages` is kept only for compatibility.
+User/author mode is unavailable in anonymous RSS mode. Historical rows from older user-mode runs remain viewable in existing databases.
 
 Reddit Grab options:
-- **Run probe on results** — optional explicit probe pass for concrete HTTP/HTTPS/FTP targets found during that ingest run. Unknown-protocol rows are skipped with a clear notice instead of guessing a protocol.
+- **Run probe on results** — optional explicit probe pass for concrete HTTP/HTTPS/FTP targets found during that ingest run. Unknown-protocol rows are skipped with a clear notice instead of guessing a protocol. Probe summaries and snapshots are carried into the primary DB automatically.
+
+Successful standalone Reddit runs keep the existing result popup and also append a
+Shodan-style completion rollup to Live Scan Output. Multi-provider Start Scan runs
+suppress the popup while the serial queue continues. The console copy records posts,
+discovered/new targets, optional probe and sync totals, and the active primary database
+path.
 
 ![reddit db](img/reddit_db.png)
 
-Reddit Post DB:
+Reddit Post DB (current runs — primary DB):
 - Columns include target metadata plus probe status, preview, and checked time.
-- `Probe Selected` runs the same full-featured probe stack used elsewhere and stores the full probe snapshot in the Reddit sidecar for HTTP/HTTPS/FTP targets.
+- `Probe Selected` runs the full probe stack for HTTP/HTTPS/FTP targets and stores the probe snapshot.
 - Double-click opens a read-only details view with Reddit metadata and the probe tree when a snapshot is available.
-- `Add to dirracuda DB` promotes resolvable IPv4 targets directly into the main Dirracuda DB, and multi-select imports run in the background with progress/cancel plus a best-effort summary. Reddit probe summaries and snapshots are carried into the main DB so SLB can render probe trees without re-probing, while unknown-protocol rows are skipped with a clear message. The Server List Browser does not need to be open, and new rows may be hidden by active filters.
+- Rows from new runs are already synced to the main database; manual promotion is not available from this view.
 
 Disclaimer:
 
-> Dirracuda's Reddit ingestion feature uses publicly accessible JSON endpoints to retrieve posts from `r/opendirectories`.
+> Dirracuda's Reddit ingestion feature uses publicly accessible Atom/RSS feeds to retrieve posts from `r/opendirectories`.
 > No authentication is required, and only publicly available data is accessed.
 > This method is not part of Reddit's official API and may change or break at any time.
 
 Known limitations:
-- Reddit JSON endpoints are unofficial and may change without notice
+- Reddit RSS feeds are unofficial and may change without notice
 - Data availability is limited and not a complete historical archive
+- RSS has reduced metadata compared with the discontinued JSON listing endpoint; NSFW filtering is best-effort
 - Rate limiting may interrupt runs (HTTP 429 aborts the current run)
 - Some posts contain no usable targets
 - Data quality depends entirely on user-submitted content
@@ -443,7 +490,7 @@ Known limitations:
 Dorkbook is a notebook for reusable search queries.
 
 Quick start:
-1. Dashboard → `⚗ Experimental` → `Dorkbook` tab.
+1. Dashboard → `⚗ Accessories` → `Dorkbook` tab.
 2. Click `Open Dorkbook`.
 3. Use `SMB` / `FTP` / `HTTP` tabs to manage recipes.
 
@@ -457,13 +504,15 @@ Behavior:
 
 ![keymaster](img/keymaster.png)
 
-Keymaster stores reusable Shodan API keys for rapid key rotation during testing or billing management etc.
+Keymaster stores reusable Shodan API keys for rapid key rotation during testing.
 
 Quick start:
-1. Dashboard → `⚗ Experimental` → `Keymaster` tab.
+1. Dashboard → `⚗ Accessories` → `Keymaster` tab.
 2. Click `Open Keymaster`.
-3. Add one or more keys with a label, API key, and optional notes.
-4. Select a key and click `Apply` (or double-click the row, or use the right-click menu).
+3. On first secure-mode use, set a dedicated Keymaster passphrase.
+4. Unlock once per app session.
+5. Add one or more keys with a label, API key, and optional notes.
+6. Select a key and click `Apply` (or double-click the row, or use the right-click menu).
 
 What Apply does:
 - Writes the selected key to `shodan.api_key` in the active config file.
@@ -471,11 +520,87 @@ What Apply does:
 
 Sidecar DB path: `~/.dirracuda/data/experimental/keymaster.db`
 
-Key table columns: `Label`, `Key Preview`, `Notes`, `Last Used`.
+Storage behavior:
+- Secure storage is enabled by default.
+- Key material is encrypted at rest in Keymaster sidecar storage.
+- Existing legacy plaintext rows are auto-migrated on successful unlock/setup.
+- If you disable secure storage in the Keymaster window, existing encrypted rows are converted back to plaintext in the sidecar DB.
+- `Forgot Passphrase / Reset` is destructive by design: it clears Keymaster rows and passphrase metadata so secure mode can be reinitialized.
 
-Key Preview format: keys longer than 8 characters show as `first4 + asterisks + last4`; shorter keys are fully masked.
+Key table columns: `Label`, `Key Preview`, `Query Credits`, `Notes`, `Last Used`.
 
-API key input is masked in Add/Edit dialogs to avoid shoulder surfing, **BUT IS STORED IN CLEAR TEXT LOCALLY.** This should be a non-risk (if an attacker can read the unencrypted string in your local home dir, you probably have bigger issues...) but I would be remiss not to point it out.
+Key Preview format: keys longer than 8 characters show as `first4 + asterisks`; shorter keys are fully masked.
+
+### Censys Discovery
+
+Development status: **suspended**.
+
+Reason:
+- Free-tier Censys API access does not provide candidate-list query endpoints required for in-app discovery runs.
+
+What is retained:
+- Backend module and config contract remain in-repo for future reactivation.
+- Sidecar DB path remains `~/.dirracuda/data/experimental/censys_discovery.db`.
+
+Current UI state:
+- No Censys tab in Accessories.
+- No Censys settings tab in Application Configuration.
+
+## Web UI (Optional)
+
+An optional browser-based interface for scan management, results browsing, and database export. Runs as a separate service alongside the desktop GUI; disabled by default.
+
+```bash
+pip install -r experimental/webui/requirements-web.txt
+./dirracuda-d credentials set admin
+./dirracuda-d start
+# → http://127.0.0.1:2600
+```
+
+For setup, configuration, remote mode, and security guidance, see [experimental/webui/README.md](experimental/webui/README.md).
+
+`./dirracuda-d` is the runtime-headless service manager. It automatically uses
+the repository virtualenv and provides `start`, `stop`, `restart`, `status`,
+`run`, `logs`, `doctor`, config checks, credential setup, JSON output, and
+optional per-user systemd installation. Run `./dirracuda-d --help` for the full
+command list.
+
+From the desktop app, use `Accessories → Web UI` to control the same service.
+The tab reports whether direct-process or systemd control is active.
+`Manage Credentials` is also the trusted local recovery path: it can replace
+the single configured Web UI password without the old password, requires the
+new password twice, clears that account's lockouts, and restarts a running
+managed service to sign out existing browser sessions. The browser account page
+continues to require the current password.
+
+Current Web UI layout:
+- `Scans` (dropdown): `shodan`, `searxng`, `reddit`
+- `Results`
+- `Export`
+- `Extras` (dropdown): `dorkbook`, `keymaster`
+- `Config`, `Account`
+
+Notes:
+- Root `/scans` and `/extras` are intentionally not registered and return 404.
+- Queue state is shared and survives page navigation/refresh.
+- Dorkbook prefill is immediate-persist to discovery config.
+- Keymaster `apply` writes `shodan.api_key`; secure-mode toggle/reset stays desktop-only for now.
+
+Remote access requires `remote_enabled=true`, a matching CIDR allowlist, and TLS
+or the explicit insecure override. If remote access is enabled while the bind is
+still loopback, Dirracuda promotes `127.0.0.1` to `0.0.0.0` (or `::1` to `::`)
+on save/load so Uvicorn can accept non-loopback traffic. The desktop tab shows
+the wildcard listening endpoint separately from the usable local browser URL.
+LAN clients connect to the host's actual interface address, not the wildcard
+listener address.
+Remote plaintext HTTP is reported prominently by the CLI and both UIs.
+IP-literal Host values and `localhost` are accepted automatically; custom DNS
+names must be added to `trusted_hosts`.
+
+For route-level behavior, API contracts, and security/runtime details, see
+[docs/TECHNICAL_REFERENCE.md](docs/TECHNICAL_REFERENCE.md).
+
+---
 
 ## Advanced
 
@@ -527,7 +652,8 @@ You should only scan networks you own or have explicit permission to test. Unaut
 
 That said: security research matters. Curiosity about how systems work isn't malicious, and understanding vulnerabilities is how we fix them. This tool exists because improperly secured data is a real problem worth studying. Use it to learn, to audit, to improve defenses and responsibly disclose. Don't be a dick.
 
-If you're unsure whether something is authorized, it probably isn't. When in doubt, get it in writing (or learn how to cover your trail).
+If you're unsure whether something is authorized, do not proceed until you
+have written permission that clearly covers the planned testing.
 
 ---
 

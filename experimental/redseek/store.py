@@ -444,3 +444,21 @@ def wipe_all(path: Optional[Path] = None) -> None:
         conn.execute("DELETE FROM reddit_posts")
         conn.execute("DELETE FROM reddit_ingest_state")
         conn.commit()
+
+
+def wipe_ingest_state(path: Optional[Path] = None) -> None:
+    """
+    Delete all rows from reddit_ingest_state only; posts and targets are preserved.
+
+    Resets pagination cursors without losing ingested data. Use this when
+    replace_cache=True is requested against the primary DB so historical
+    posts/targets are not destroyed.
+
+    Safe to call on a DB that has never been initialized (init_db is called first).
+    """
+    resolved = get_db_path(path)
+    init_db(resolved)
+    with sqlite3.connect(str(resolved)) as conn:
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("DELETE FROM reddit_ingest_state")
+        conn.commit()

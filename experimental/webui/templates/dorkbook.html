@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Dorkbook{% endblock %}
+
+{% block content %}
+<h1>Dorkbook</h1>
+<p>Reusable dork recipes by protocol. Apply a recipe to immediately update the active discovery query.</p>
+
+<div role="status" id="dorkbook-status" aria-live="polite"></div>
+
+<div class="form-section">
+  <div id="dorkbook-tabs" role="tablist">
+    <button type="button" class="tab-btn active" role="tab" data-protocol="SMB" aria-selected="true">SMB</button>
+    <button type="button" class="tab-btn" role="tab" data-protocol="FTP" aria-selected="false">FTP</button>
+    <button type="button" class="tab-btn" role="tab" data-protocol="HTTP" aria-selected="false">HTTP</button>
+  </div>
+
+  <div class="form-row dorkbook-search-row">
+    <label for="dorkbook-search">Search</label>
+    <input id="dorkbook-search" type="text" placeholder="filter by nickname, query, or notes" maxlength="200">
+  </div>
+
+  <table id="dorkbook-table" class="results-table">
+    <thead>
+      <tr>
+        <th>Nickname</th>
+        <th>Query</th>
+        <th>Notes</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody id="dorkbook-tbody">
+    </tbody>
+  </table>
+
+  <p class="info-text">For editing, renaming, or copying entries, open Dorkbook in the desktop app.</p>
+</div>
+
+<div class="form-section">
+  <h2>Add Custom Entry</h2>
+  <form id="dorkbook-add-form" novalidate>
+    <input type="hidden" id="add-protocol" name="protocol" value="SMB">
+    <div class="form-row">
+      <label for="add-nickname">Nickname</label>
+      <input id="add-nickname" name="nickname" type="text" maxlength="200" placeholder="optional display name">
+    </div>
+    <div class="form-row">
+      <label for="add-query">Query <span aria-hidden="true">*</span></label>
+      <input id="add-query" name="query" type="text" maxlength="2000" required placeholder="e.g. smb authentication: disabled">
+    </div>
+    <div class="form-row">
+      <label for="add-notes">Notes</label>
+      <textarea id="add-notes" name="notes" maxlength="2000" rows="3" placeholder="optional notes"></textarea>
+    </div>
+    <div class="form-row">
+      <button type="submit" class="btn btn-primary">Save</button>
+    </div>
+  </form>
+</div>
+
+<script src="/static/dorkbook.js"></script>
+{% endblock %}

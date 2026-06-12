@@ -30,3 +30,15 @@ class KeymasterError(Exception):
 
 class DuplicateKeyError(KeymasterError):
     """Raised when an entry duplicates an api_key value within a provider."""
+
+
+class KeymasterLockedError(KeymasterError):
+    """Raised when secure mode is enabled but no unlocked session key is available."""
+
+
+class PassphraseRequiredError(KeymasterError):
+    """Raised when secure mode is enabled but no passphrase is configured yet."""
+
+
+class InvalidPassphraseError(KeymasterError):
+    """Raised when an unlock attempt fails passphrase verification."""

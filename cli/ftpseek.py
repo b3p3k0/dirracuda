@@ -2,6 +2,7 @@
 """FTP server discovery and assessment — CLI entry point."""
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -75,7 +76,7 @@ def create_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--config", metavar="FILE", default=None,
-        help=f"Path to config file (default: {_PATHS.config_file})",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--filter",
@@ -92,6 +93,13 @@ def create_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = create_parser()
     args = parser.parse_args()
+
+    if getattr(args, "config", None) and os.environ.get("DIRRACUDA_INTERNAL_CONFIG_OVERRIDE") != "1":
+        print(
+            f"Warning: --config override is deprecated and ignored; using canonical runtime config at {_PATHS.config_file}",
+            file=sys.stderr,
+        )
+        args.config = None
 
     if args.verbose and args.quiet:
         print("Error: Cannot use both --quiet and --verbose options")

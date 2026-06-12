@@ -17,11 +17,11 @@ import stat
 import threading
 import time
 import urllib.error
-import urllib.request
 from email.utils import parsedate_to_datetime
 from pathlib import Path, PurePosixPath
 from typing import Callable, List, Optional, Tuple
 
+from shared.http_transport import http_open
 from shared.smb_browser import DownloadResult, Entry, ListResult, ReadResult
 
 
@@ -124,6 +124,7 @@ class HttpNavigator:
         ip: str,
         port: int,
         scheme: str,
+        request_host: Optional[str] = None,
         allow_insecure_tls: bool = True,
         connect_timeout: float = 10.0,
         request_timeout: float = 15.0,
@@ -133,6 +134,7 @@ class HttpNavigator:
         self.ip = ip
         self.port = port
         self.scheme = scheme
+        self.request_host = str(request_host or "").strip() or None
         self.allow_insecure_tls = allow_insecure_tls
         self.connect_timeout = connect_timeout
         self.request_timeout = request_timeout
@@ -155,7 +157,8 @@ class HttpNavigator:
 
     def _make_url(self, path: str) -> str:
         clean_path = "/" + path.lstrip("/")
-        return f"{self.scheme}://{self.ip}:{self.port}{clean_path}"
+        authority = self.request_host or self.ip
+        return f"{self.scheme}://{authority}:{self.port}{clean_path}"
 
     # ------------------------------------------------------------------
     # list_dir
@@ -180,6 +183,7 @@ class HttpNavigator:
             self.allow_insecure_tls,
             self.request_timeout,
             path=path,
+            request_host=self.request_host,
         )
 
         if reason:
@@ -234,10 +238,6 @@ class HttpNavigator:
         if self._cancel_event.is_set():
             raise HttpCancelledError("Cancelled before download started")
 
-        url = self._make_url(remote_path)
-        ctx = self._ssl_context()
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-
         basename = PurePosixPath(remote_path).name or "download"
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest_path = dest_dir / basename
@@ -250,7 +250,13 @@ class HttpNavigator:
         mtime: Optional[float] = None
 
         try:
-            with urllib.request.urlopen(req, timeout=self.request_timeout, context=ctx) as resp:
+            with http_open(
+                connect_host=self.ip,
+                request_host=self.request_host,
+                scheme=self.scheme, port=self.port, path=remote_path,
+                headers={"User-Agent": "Mozilla/5.0"},
+                context=self._ssl_context(), timeout=self.request_timeout,
+            ) as resp:
                 # Extract mtime from Last-Modified header
                 last_modified = resp.headers.get("Last-Modified")
                 if last_modified:
@@ -324,12 +330,14 @@ class HttpNavigator:
 
     def read_file(self, remote_path: str, max_bytes: int = 5 * 1024 * 1024) -> ReadResult:
         """Fetch and return up to max_bytes as bytes."""
-        url = self._make_url(remote_path)
-        ctx = self._ssl_context()
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-
         try:
-            with urllib.request.urlopen(req, timeout=self.request_timeout, context=ctx) as resp:
+            with http_open(
+                connect_host=self.ip,
+                request_host=self.request_host,
+                scheme=self.scheme, port=self.port, path=remote_path,
+                headers={"User-Agent": "Mozilla/5.0"},
+                context=self._ssl_context(), timeout=self.request_timeout,
+            ) as resp:
                 data = resp.read(max_bytes + 1)
         except urllib.error.HTTPError as exc:
             try:

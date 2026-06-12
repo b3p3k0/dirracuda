@@ -346,8 +346,7 @@ def _build_union_sql(self, smb_where: str, ftp_where: str) -> str:
         COALESCE(uf.notes, '')                      AS notes,
         COALESCE(pc.status, 'unprobed')             AS probe_status,
         COALESCE(pc.indicator_matches, 0)           AS indicator_matches,
-        COALESCE(pc.extracted, 0)                   AS extracted,
-        COALESCE(pc.rce_status, 'not_run')          AS rce_status
+        COALESCE(pc.extracted, 0)                   AS extracted
     FROM smb_servers s
     LEFT JOIN (
         SELECT
@@ -404,8 +403,7 @@ def _build_union_sql(self, smb_where: str, ftp_where: str) -> str:
         COALESCE(fuf.notes, '')             AS notes,
         COALESCE(fpc.status, 'unprobed')    AS probe_status,
         COALESCE(fpc.indicator_matches, 0)  AS indicator_matches,
-        COALESCE(fpc.extracted, 0)          AS extracted,
-        COALESCE(fpc.rce_status, 'not_run') AS rce_status
+        COALESCE(fpc.extracted, 0)          AS extracted
     FROM ftp_servers f
     LEFT JOIN ftp_user_flags  fuf ON fuf.server_id = f.id
     LEFT JOIN ftp_probe_cache fpc ON fpc.server_id = f.id
@@ -457,8 +455,7 @@ def _build_http_arm(self, http_where: str) -> str:
         COALESCE(huf.notes, '')     AS notes,
         COALESCE(hpc.status, 'unprobed')          AS probe_status,
         COALESCE(hpc.indicator_matches, 0)        AS indicator_matches,
-        COALESCE(hpc.extracted, 0)                AS extracted,
-        COALESCE(hpc.rce_status, 'not_run')       AS rce_status
+        COALESCE(hpc.extracted, 0)                AS extracted
     FROM http_servers hs
     LEFT JOIN http_user_flags  huf ON huf.server_id = hs.id
     LEFT JOIN http_probe_cache hpc ON hpc.server_id = hs.id
@@ -620,8 +617,7 @@ def _query_protocol_server_list_smb_only(
             COALESCE(uf.notes, '')                      AS notes,
             COALESCE(pc.status, 'unprobed')             AS probe_status,
             COALESCE(pc.indicator_matches, 0)           AS indicator_matches,
-            COALESCE(pc.extracted, 0)                   AS extracted,
-            COALESCE(pc.rce_status, 'not_run')          AS rce_status
+            COALESCE(pc.extracted, 0)                   AS extracted
         FROM smb_servers s
         LEFT JOIN (
             SELECT
@@ -732,7 +728,6 @@ def _get_mock_protocol_list(
             "probe_status": "unprobed",
             "indicator_matches": 0,
             "extracted": 0,
-            "rce_status": "not_run",
         },
         {
             "host_type": "F",
@@ -757,7 +752,6 @@ def _get_mock_protocol_list(
             "probe_status": "unprobed",
             "indicator_matches": 0,
             "extracted": 0,
-            "rce_status": "not_run",
         },
     ]
 

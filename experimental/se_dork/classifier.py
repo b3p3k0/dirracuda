@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from commands.http.verifier import try_http_request, validate_index_page
+from shared.config import resolve_http_allow_insecure_tls
 
 # ---------------------------------------------------------------------------
 # Verdict constants
@@ -45,7 +46,11 @@ class ClassifyResult:
 # Public classifier
 # ---------------------------------------------------------------------------
 
-def classify_url(url: str, timeout: float = 10.0) -> ClassifyResult:
+def classify_url(
+    url: str,
+    timeout: float = 10.0,
+    allow_insecure_tls: Optional[bool] = None,
+) -> ClassifyResult:
     """
     Classify a URL using the existing HTTP verifier path.
 
@@ -81,12 +86,17 @@ def classify_url(url: str, timeout: float = 10.0) -> ClassifyResult:
     if not hostname:
         return ClassifyResult(verdict=VERDICT_ERROR, reason_code="no_host", http_status=None)
 
+    # Resolve TLS policy: honor transient override, else canonical default.
+    tls = allow_insecure_tls
+    if tls is None:
+        tls = resolve_http_allow_insecure_tls()
+
     # Run HTTP request via existing verifier
     status_code, body, _tls_verified, reason = try_http_request(
         ip=hostname,
         port=port,
         scheme=scheme,
-        allow_insecure_tls=True,
+        allow_insecure_tls=tls,
         timeout=timeout,
         path=path,
         request_host=hostname,

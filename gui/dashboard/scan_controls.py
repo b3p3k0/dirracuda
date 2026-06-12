@@ -87,7 +87,15 @@ def _handle_http_scan_button_click(self) -> None:
 
 def _handle_reddit_grab_button_click(self) -> None:
     """Handle Reddit Grab button click — opens Reddit Grab dialog."""
-    if self._reddit_grab_running:
+    if getattr(self, "_provider_queue_active", False):
+        _mb().showwarning(
+            "Provider Queue Busy",
+            "A unified provider queue is running. Please wait for it to complete.",
+        )
+        return
+    if self._reddit_grab_running or getattr(self, "_reddit_scan_running", False):
+        _mb().showwarning("Reddit Busy",
+            "A Reddit ingest is already running. Please wait for it to complete.")
         return
     self._check_external_scans()
     if self.scan_button_state != "idle":
@@ -102,7 +110,12 @@ def _handle_reddit_grab_start(self, options: IngestOptions) -> None:
     """Callback from Reddit Grab dialog — launches background ingest worker."""
     # Second state check: dialog may have been open while scan state changed.
     self._check_external_scans()
-    if self.scan_button_state != "idle" or self._reddit_grab_running:
+    if (
+        getattr(self, "_provider_queue_active", False)
+        or self.scan_button_state != "idle"
+        or self._reddit_grab_running
+        or getattr(self, "_reddit_scan_running", False)
+    ):
         return
 
     if getattr(options, "bulk_probe_enabled", False):
@@ -135,8 +148,15 @@ def _handle_reddit_grab_start(self, options: IngestOptions) -> None:
 
 def _reddit_grab_worker(self, options: IngestOptions) -> None:
     """Background worker: runs run_ingest and marshals result to main thread."""
+    import dataclasses
+    from experimental.redseek.main_db_sync import sync_targets_to_main_db
+
+    main_db_path = dashboard_scan._resolve_main_db_path(self)
+    options = dataclasses.replace(options, replace_cache_scope="state_only")
+
+    sync_summary: dict = {}
     try:
-        result = _d('run_ingest')(options)
+        result = _d('run_ingest')(options, db_path=main_db_path)
     except Exception as exc:
         result = IngestResult(
             sort=options.sort,
@@ -153,9 +173,28 @@ def _reddit_grab_worker(self, options: IngestOptions) -> None:
             rate_limited=False,
             error=f"unexpected error: {exc}",
         )
-    self.parent.after(0, self._on_reddit_grab_done, result)
+    else:
+        if not result.error:
+            keys = list(getattr(result, "_probe_candidate_keys", ()))
+            sync_summary = sync_targets_to_main_db(keys, db_path=main_db_path)
+    self.parent.after(
+        0,
+        self._on_reddit_grab_done,
+        result,
+        sync_summary,
+        main_db_path,
+        options.mode,
+        options.query,
+    )
 
-def _on_reddit_grab_done(self, result: IngestResult) -> None:
+def _on_reddit_grab_done(
+    self,
+    result: IngestResult,
+    sync_summary: dict = None,
+    db_path=None,
+    mode: str = "feed",
+    query: str = "",
+) -> None:
     """Main-thread completion handler for a Reddit Grab run."""
     self._reddit_grab_running = False
     if self.reddit_grab_button is not None and self.scan_button_state == "idle":
@@ -166,7 +205,7 @@ def _on_reddit_grab_done(self, result: IngestResult) -> None:
         if result.rate_limited:
             detail = f"Rate limited (HTTP 429). {detail}"
         if result.replace_cache_done:
-            detail += "\nNote: cache was wiped before the failure."
+            detail += "\nNote: cache state was reset before the failure."
         self._log_status_event(f"Reddit Grab failed: {result.error}")
         _mb().showerror("Reddit Grab Failed", detail, parent=self.parent)
     else:
@@ -192,11 +231,26 @@ def _on_reddit_grab_done(self, result: IngestResult) -> None:
                 f" {result.probe_unprobed} unprobed,"
                 f" {result.probe_skipped} skipped)"
             )
+        ss = sync_summary or {}
+        if ss:
+            summary += (
+                f"\nSynced to main DB:"
+                f" {int(ss.get('inserted', 0))} new,"
+                f" {int(ss.get('updated', 0))} updated,"
+                f" {int(ss.get('skipped', 0))} skipped"
+            )
         if result.replace_cache_done:
-            summary += "\nCache replaced before run."
-        self._log_status_event(
-            f"Reddit Grab done — {result.posts_stored} posts, "
-            f"{result.targets_stored} targets"
+            summary += "\nCursor state was reset before run."
+        resolved_db_path = db_path or dashboard_scan._resolve_main_db_path(self)
+        dashboard_scan._emit_live_rollup(
+            self,
+            dashboard_scan.format_reddit_rollup(
+                result,
+                mode=mode,
+                query=query,
+                db_path=resolved_db_path,
+                sync_summary=sync_summary,
+            ),
         )
         _mb().showinfo("Reddit Grab Complete", summary, parent=self.parent)
 

@@ -41,7 +41,6 @@ def run_probe(
     max_depth: int = 1,
     username: str = DEFAULT_USERNAME,
     password: str = DEFAULT_PASSWORD,
-    enable_rce_analysis: bool = False,
     cancel_event: Optional[Event] = None,
     allow_empty: bool = False,
     config: Optional["SMBSeekConfig"] = None,
@@ -59,14 +58,12 @@ def run_probe(
         timeout_seconds: SMB socket timeout per request.
         max_depth: Directory recursion depth (1 = current behavior).
         username/password: Credentials to reuse (guest/anonymous by default).
-        enable_rce_analysis: Enable RCE vulnerability analysis if True.
-        config: Optional SMBSeekConfig to reuse budget/timeouts for RCE probes.
-        db_accessor: Optional database accessor for persisting RCE status.
+        config: Optional SMBSeekConfig to reuse budget/timeouts.
+        db_accessor: Optional database accessor.
         legacy_mode: Enable SMB1 / MS17-010 safe probes when True.
 
     Returns:
         Dictionary describing probe snapshot suitable for caching/printing.
-        Includes rce_analysis key if RCE analysis is enabled.
     """
     if SMBConnection is None:
         raise ProbeError(
@@ -119,59 +116,6 @@ def run_probe(
                 "share": share_name,
                 "message": str(exc)
             })
-
-    # RCE vulnerability analysis (if enabled)
-    if enable_rce_analysis:
-        _check_cancel(cancel_event)
-        try:
-            from shared.rce_scanner import scan_rce_indicators
-
-            # Build host context from probe data
-            host_context = {
-                'ip_address': ip_address,
-                'auth_method': f"{username}:{password}",
-                'accessible_shares': [share['share'] for share in snapshot['shares']],
-                'shares_found': [share['share'] for share in snapshot['shares']],
-                'timestamp': snapshot['run_at']
-            }
-
-            # Perform RCE analysis
-            rce_result = scan_rce_indicators(host_context)
-            snapshot['rce_analysis'] = rce_result
-
-            if db_accessor and rce_result:
-                import json
-                rce_status = rce_result.get('rce_status', 'not_run')
-                verdict_summary = json.dumps({
-                    'verdict': rce_result.get('verdict'),
-                    'findings': rce_result.get('findings', [])[:5],
-                    'not_assessable_reasons': rce_result.get('not_assessable_reasons', [])
-                })
-                try:
-                    db_accessor.upsert_rce_status(ip_address, rce_status, verdict_summary)
-                except Exception as e:
-                    # Fail-soft: do not interrupt probe
-                    pass
-
-        except ImportError:
-            # RCE scanner not available
-            snapshot['rce_analysis'] = {
-                'score': 0,
-                'level': 'error',
-                'status': 'scanner-unavailable',
-                'error': 'RCE scanner dependencies not found'
-            }
-        except Exception as e:
-            # RCE analysis failed
-            snapshot['rce_analysis'] = {
-                'score': 0,
-                'level': 'error',
-                'status': 'analysis-failed',
-                'error': str(e)
-            }
-    else:
-        # RCE analysis not enabled
-        snapshot['rce_analysis'] = None
 
     return snapshot
 

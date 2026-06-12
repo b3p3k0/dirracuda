@@ -10,6 +10,8 @@ from tkinter import ttk
 import queue
 from typing import List, Optional
 
+from gui.components import log_semantic_color
+
 
 def configure_log_tags(dashboard) -> None:
     """Configure text tags used for ANSI-colored output."""
@@ -83,12 +85,17 @@ def append_log_line(dashboard, line: str) -> None:
     previous_len = len(dashboard.log_history)
     dashboard.log_history.append(line)
 
+    try:
+        display_line = log_semantic_color.colorize_for_display(line)
+    except Exception:
+        display_line = line
+
     dashboard.log_text_widget.configure(state=tk.NORMAL)
     if dashboard._log_placeholder_visible:
         dashboard.log_text_widget.delete("1.0", tk.END)
         dashboard._log_placeholder_visible = False
 
-    segments = dashboard._parse_ansi_segments(line)
+    segments = dashboard._parse_ansi_segments(display_line)
     if not segments:
         segments = [(line, ())]
 

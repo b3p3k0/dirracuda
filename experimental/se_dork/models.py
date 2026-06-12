@@ -16,6 +16,8 @@ INSTANCE_FORMAT_FORBIDDEN = "instance_format_forbidden"
 INSTANCE_NON_JSON = "instance_non_json"
 SEARCH_HTTP_ERROR = "search_http_error"
 SEARCH_PARSE_ERROR = "search_parse_error"
+DEFAULT_MAX_RESULTS = 500
+MAX_RESULTS = 1000
 
 
 @dataclass
@@ -34,6 +36,7 @@ class PreflightResult:
 RUN_STATUS_RUNNING = "running"
 RUN_STATUS_DONE = "done"
 RUN_STATUS_ERROR = "error"
+RUN_STATUS_CANCELLED = "cancelled"
 
 
 @dataclass
@@ -42,10 +45,14 @@ class RunOptions:
 
     instance_url: str
     query: str
-    max_results: int = 50
+    max_results: int = DEFAULT_MAX_RESULTS
     bulk_probe_enabled: bool = False
     probe_config_path: Optional[str] = None
     probe_worker_count: Optional[int] = None
+    request_timeout: int = 15
+    short_retry_delay: int = 30
+    long_retry_delay: int = 180
+    allow_insecure_tls: Optional[bool] = None  # transient scan override; None -> resolver
 
 
 @dataclass
@@ -63,3 +70,11 @@ class RunResult:
     probe_clean: int = 0
     probe_issue: int = 0
     probe_unprobed: int = 0
+    pages_fetched: int = 0
+    pacing_delay_seconds: float = 0.0
+    throttled_page_count: int = 0
+    hard_retry_count: int = 0
+    hard_retry_delay_seconds: float = 0.0
+    throttle_engines: tuple[str, ...] = ()
+    stopped_early: bool = False
+    fetch_warning: Optional[str] = None

@@ -1,7 +1,7 @@
 """
 Server List Batch Operations Mixin
 
-Handles probe, extract, browse, pry, delete, and batch job lifecycle logic.
+Handles probe, extract, browse, delete, and batch job lifecycle logic.
 Extracted from batch.py to shrink file size while preserving behavior.
 """
 
@@ -20,12 +20,12 @@ from typing import Dict, List, Any, Optional
 
 from gui.components.server_list_window import export, details, filters, table
 from gui.components.batch_extract_dialog import BatchExtractSettingsDialog
-from gui.components.pry_dialog import PryDialog
-from gui.utils import probe_patterns, probe_runner, extract_runner, pry_runner, session_flags
+from gui.utils import probe_patterns, probe_runner, extract_runner, session_flags
 from gui.utils.probe_cache_dispatch import dispatch_probe_run
 from gui.utils.probe_snapshot_summary import summarize_probe_snapshot
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.logging_config import get_logger
+from shared.config import resolve_http_allow_insecure_tls
 from shared.quarantine import create_quarantine_dir
 
 _logger = get_logger("server_list_window")
@@ -632,15 +632,12 @@ class ServerListWindowBatchOperationsMixin:
         self._hide_context_menu()
         if not self.tree:
             return
-        selected = self.tree.selection()
-        if not selected:
-            return
-
-        ips = []
-        for item in selected:
-            values = self.tree.item(item)["values"]
-            if len(values) >= 7:
-                ips.append(str(values[6]))  # IP at index 6 (after fav/avoid/probe/rce/extracted/Type)
+        targets = self._build_selected_targets()
+        ips = [
+            str(target.get("ip_address") or "").strip()
+            for target in targets
+            if str(target.get("ip_address") or "").strip()
+        ]
 
         if ips:
             try:
@@ -651,11 +648,9 @@ class ServerListWindowBatchOperationsMixin:
 
     @staticmethod
     def _normalize_url_path(path: Any) -> str:
-        raw = str(path or "").strip()
-        normalized = raw.split("?", 1)[0].split("#", 1)[0].strip() or "/"
-        if not normalized.startswith("/"):
-            normalized = "/" + normalized.lstrip("/")
-        return normalized
+        from gui.components.server_list_window.http_endpoint import normalize_http_path
+
+        return normalize_http_path(path)
 
     def _build_copy_url_for_target(self, target: Dict[str, Any]) -> Optional[str]:
         host_type = str(target.get("host_type") or "S").strip().upper()
@@ -677,35 +672,9 @@ class ServerListWindowBatchOperationsMixin:
             return f"ftp://{ip_address}:{port}/"
 
         if host_type == "H":
-            row_data = target.get("data") or {}
-            row_port = target.get("port", row_data.get("port"))
-            detail = None
-            if self.db_reader:
-                try:
-                    detail = self.db_reader.get_http_server_detail(
-                        ip_address,
-                        protocol_server_id=target.get("protocol_server_id"),
-                        port=row_port,
-                    )
-                except Exception:
-                    detail = None
+            from gui.components.server_list_window.http_endpoint import resolve_http_target
 
-            try:
-                port = int((detail or {}).get("port") or row_port or 80)
-            except (TypeError, ValueError):
-                port = 80
-
-            scheme = str(
-                (detail or {}).get("scheme")
-                or row_data.get("scheme")
-                or ("https" if port == 443 else "http")
-            ).strip().lower()
-            if scheme not in {"http", "https"}:
-                scheme = "https" if port == 443 else "http"
-
-            host = str((detail or {}).get("probe_host") or row_data.get("probe_host") or ip_address).strip() or ip_address
-            path = self._normalize_url_path((detail or {}).get("probe_path") or row_data.get("probe_path") or "/")
-            return f"{scheme}://{host}:{port}{path}"
+            return resolve_http_target(target, db_reader=self.db_reader).url
 
         return None
 
@@ -738,70 +707,6 @@ class ServerListWindowBatchOperationsMixin:
         self._hide_context_menu()
         targets = self._build_selected_targets()
         self._launch_extract_workflow(targets)
-
-    def _on_pry_selected(self) -> None:
-        self._hide_context_menu()
-        if not getattr(self, "_pry_unlocked", False):
-            messagebox.showwarning(
-                "Pry Disabled",
-                "Pry is disabled for this session.",
-                parent=self.window,
-            )
-            return
-        targets = self._build_selected_targets()
-        ftp_targets = [t for t in targets if t.get("host_type") == "F"]
-        if ftp_targets:
-            messagebox.showwarning(
-                "Pry Not Supported",
-                "Pry is an SMB-only action and cannot run on FTP server rows.",
-                parent=self.window,
-            )
-            return
-        if len(targets) != 1:
-            messagebox.showwarning("Select one server", "Choose exactly one server to run Pry.", parent=self.window)
-            return
-
-        target = targets[0]
-        ip_addr = target.get("ip_address") or ""
-
-        config_path = None
-        if self.settings_manager:
-            config_path = self.settings_manager.get_setting('backend.config_path', None)
-            if not config_path and hasattr(self.settings_manager, "get_smbseek_config_path"):
-                config_path = self.settings_manager.get_smbseek_config_path()
-
-        # Build share choices from share_access data
-        shares = []
-        try:
-            shares = self.db_reader.get_denied_shares(ip_addr, limit=100)
-            # Also include accessible shares for completeness
-            shares += self.db_reader.get_accessible_shares(ip_addr)
-            # Mark accessible flag for combobox badge
-            for s in shares:
-                s.setdefault("accessible", bool(s.get("permissions") or False))
-        except Exception:
-            shares = []
-
-        dialog = PryDialog(
-            parent=self.window,
-            theme=self.theme,
-            settings_manager=self.settings_manager,
-            config_path=config_path,
-            target_label=ip_addr,
-            shares=shares
-        )
-        dialog_result = dialog.show()
-        if not dialog_result:
-            return
-
-        options = dialog_result.get("options", {})
-        options.update({
-            "username": dialog_result.get("username", ""),
-            "share_name": dialog_result.get("share_name", ""),
-            "wordlist_path": dialog_result.get("wordlist_path", ""),
-            "worker_count": 1
-        })
-        self._start_batch_job("pry", [target], options)
 
     def _on_file_browser_selected(self) -> None:
         self._hide_context_menu()
@@ -1122,13 +1027,8 @@ class ServerListWindowBatchOperationsMixin:
     def _prompt_probe_batch_settings(self, target_count: int) -> Optional[Dict[str, Any]]:
         config = details._load_probe_config(self.settings_manager)
         default_workers = 3
-        rce_unlocked = bool(getattr(self, "_rce_unlocked", getattr(self, "_pry_unlocked", False)))
-        enable_rce_default = False
         if self.settings_manager:
             default_workers = int(self.settings_manager.get_setting('probe.batch_max_workers', default_workers))
-            if rce_unlocked:
-                rce_pref = self.settings_manager.get_setting('probe_dialog.rce_enabled', None)
-                enable_rce_default = bool(rce_pref) if rce_pref is not None else bool(self.settings_manager.get_setting('scan_dialog.rce_enabled', False))
 
         default_workers = max(1, min(8, default_workers))
 
@@ -1141,7 +1041,6 @@ class ServerListWindowBatchOperationsMixin:
         tk.Label(dialog, text=f"Targets selected: {target_count}").grid(row=0, column=0, columnspan=2, padx=10, pady=(10, 5), sticky="w")
 
         worker_var = tk.IntVar(value=default_workers)
-        rce_var = tk.BooleanVar(value=enable_rce_default)
         max_dirs_var = tk.IntVar(value=config["max_directories"])
         max_files_var = tk.IntVar(value=config["max_files"])
         timeout_var = tk.IntVar(value=config["timeout_seconds"])
@@ -1158,20 +1057,6 @@ class ServerListWindowBatchOperationsMixin:
         add_labeled_entry(3, "Max files/directory:", max_files_var)
         add_labeled_entry(4, "Timeout per share (s):", timeout_var)
         add_labeled_entry(5, "Max probe depth (1-3):", max_depth_var)
-
-        if rce_unlocked:
-            tk.Checkbutton(dialog, text="Enable RCE analysis", variable=rce_var).grid(
-                row=6,
-                column=0,
-                columnspan=2,
-                padx=10,
-                pady=(5, 10),
-                sticky="w",
-            )
-        else:
-            spacer = tk.Frame(dialog, height=24)
-            spacer.grid(row=6, column=0, columnspan=2, padx=10, pady=(5, 10), sticky="we")
-            spacer.grid_propagate(False)
 
         result: Dict[str, Any] = {}
 
@@ -1192,12 +1077,9 @@ class ServerListWindowBatchOperationsMixin:
                 self.settings_manager.set_setting('probe.max_files_per_directory', max_files)
                 self.settings_manager.set_setting('probe.share_timeout_seconds', timeout_val)
                 self.settings_manager.set_setting('probe.max_depth_levels', max_depth)
-                if rce_unlocked:
-                    self.settings_manager.set_setting('probe_dialog.rce_enabled', bool(rce_var.get()))
 
             result.update({
                 "worker_count": workers,
-                "enable_rce": bool(rce_var.get()) if rce_unlocked else False,
                 "limits": {
                     "max_directories": max_dirs,
                     "max_files": max_files,
@@ -1230,6 +1112,11 @@ class ServerListWindowBatchOperationsMixin:
         if not dialog_config:
             return
 
+        # Resolve HTTP TLS policy once per launch; every worker shares it.
+        dialog_config["http_allow_insecure_tls"] = resolve_http_allow_insecure_tls(
+            self._get_config_path()
+        )
+
         self._start_batch_job("probe", targets, dialog_config)
 
     def _launch_extract_workflow(self, targets: List[Dict[str, Any]]) -> None:
@@ -1254,20 +1141,15 @@ class ServerListWindowBatchOperationsMixin:
 
         # Load clamav config once before futures start (not per-target).
         clamav_cfg: Dict[str, Any] = {}
-        http_allow_insecure_tls = True
         if config_path and Path(config_path).exists():
             try:
                 _cfg_data = json.loads(Path(config_path).read_text(encoding="utf-8"))
                 clamav_cfg = _cfg_data.get("clamav", {})
-                http_allow_insecure_tls = bool(
-                    _cfg_data.get("http", {})
-                    .get("verification", {})
-                    .get("allow_insecure_tls", True)
-                )
             except Exception:
                 pass
         dialog_config["clamav_config"] = clamav_cfg
-        dialog_config["http_allow_insecure_tls"] = http_allow_insecure_tls
+        # Resolve HTTP TLS policy once per launch via the shared resolver.
+        dialog_config["http_allow_insecure_tls"] = resolve_http_allow_insecure_tls(config_path)
 
         self._start_batch_job("extract", targets, dialog_config)
 
@@ -1302,30 +1184,16 @@ class ServerListWindowBatchOperationsMixin:
             return
 
         elif host_type == "H":
-            row_data = target.get("data", {}) or {}
-            row_psid = row_data.get("protocol_server_id")
-            row_port = row_data.get("port")
-            detail = (
-                self.db_reader.get_http_server_detail(
-                    ip_addr,
-                    protocol_server_id=row_psid,
-                    port=row_port,
-                )
-                if self.db_reader else None
+            from gui.components.server_list_window.http_endpoint import (
+                open_http_server_browser,
+                resolve_http_target,
             )
-            try:
-                port = int((detail or {}).get("port") or row_port or 80)
-            except (TypeError, ValueError):
-                port = 80
-            scheme = (detail or {}).get("scheme") or ("https" if port == 443 else "http")
+
+            endpoint = resolve_http_target(target, db_reader=self.db_reader)
             banner = target.get("data", {}).get("banner")
-            from gui.components.unified_browser_window import open_ftp_http_browser
-            open_ftp_http_browser(
-                "H",
+            open_http_server_browser(
+                endpoint,
                 parent=self.window,
-                ip_address=ip_addr,
-                port=port,
-                scheme=scheme,
                 banner=banner,
                 config_path=config_path,
                 db_reader=self.db_reader,

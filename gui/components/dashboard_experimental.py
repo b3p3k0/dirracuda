@@ -10,6 +10,15 @@ Patch path for show_reddit_browser_window in tests:
   gui.components.dashboard_experimental.show_reddit_browser_window
 """
 
+import sys
+import threading
+import tkinter as tk
+from pathlib import Path
+
+from gui.utils import safe_messagebox as _fallback_msgbox
+from gui.utils.dialog_helpers import ensure_dialog_focus
+from gui.utils.db_unification import execute_sidecar_migration_now
+from gui.utils.style import apply_theme_to_window
 from gui.components.reddit_browser_window import show_reddit_browser_window
 from gui.components.se_dork_browser_window import show_se_dork_browser_window
 from gui.components.dorkbook_window import show_dorkbook_window
@@ -23,49 +32,191 @@ from gui.utils.logging_config import get_logger
 _logger = get_logger("dashboard")
 
 
+def _mb():
+    mod = sys.modules.get("gui.components.dashboard")
+    if mod is not None and hasattr(mod, "messagebox"):
+        return mod.messagebox
+    return _fallback_msgbox
+
+
 def set_server_list_getter(widget, getter) -> None:
     """Store a callable that returns the current ServerListWindow or None."""
     widget._server_list_getter = getter
+
+
+def _resolve_main_db_path(widget) -> Path:
+    """Resolve current primary DB path from dashboard state with runtime fallback."""
+    db_reader = getattr(widget, "db_reader", None)
+    reader_path = getattr(db_reader, "db_path", None)
+    if reader_path:
+        try:
+            return Path(reader_path).expanduser().resolve(strict=False)
+        except Exception:
+            pass
+
+    try:
+        from shared.path_service import (
+            get_legacy_paths,
+            get_paths,
+            resolve_runtime_main_db_path,
+        )
+
+        paths = get_paths()
+        legacy = get_legacy_paths(paths=paths)
+        return resolve_runtime_main_db_path(paths=paths, legacy=legacy)
+    except Exception:
+        return Path("dirracuda.db").resolve(strict=False)
+
+
+def _resolve_reddit_sidecar_path() -> Path:
+    """Resolve canonical/legacy Reddit sidecar DB path for legacy browsing."""
+    try:
+        from shared.path_service import get_legacy_paths, get_paths, select_existing_path
+
+        paths = get_paths()
+        legacy = get_legacy_paths(paths=paths)
+        return select_existing_path(
+            paths.reddit_od_db_file,
+            [legacy.flat_sidecar_reddit_od_file, legacy.legacy_home_root / "reddit_od.db"],
+        )
+    except Exception:
+        return Path("reddit_od.db").resolve(strict=False)
+
+
+def _resolve_se_dork_sidecar_path() -> Path:
+    """Resolve canonical/legacy SearXNG sidecar DB path for legacy browsing."""
+    try:
+        from shared.path_service import get_legacy_paths, get_paths, select_existing_path
+
+        paths = get_paths()
+        legacy = get_legacy_paths(paths=paths)
+        return select_existing_path(
+            paths.se_dork_db_file,
+            [legacy.flat_sidecar_se_dork_file, legacy.legacy_home_root / "se_dork.db"],
+        )
+    except Exception:
+        return Path("se_dork.db").resolve(strict=False)
 
 
 def handle_experimental_button_click(widget) -> None:
     """Open the Experimental Features dialog from the dashboard."""
     from gui.components.experimental_features_dialog import show_experimental_features_dialog
 
+    config_path = None
+    if hasattr(widget, "_resolve_active_config_path"):
+        try:
+            resolved = widget._resolve_active_config_path()
+            config_path = str(resolved) if resolved is not None else None
+        except Exception:
+            config_path = None
+    if config_path is None:
+        config_path = getattr(widget, "config_path", None)
+
     context = {
         "reddit_grab_callback": widget._handle_reddit_grab_button_click,
         "reddit_grab_status_getter": lambda: bool(
             getattr(widget, "_reddit_grab_running", False)
         ),
+        "provider_queue_active_getter": lambda: bool(
+            getattr(widget, "_provider_queue_active", False)
+        ),
         "open_reddit_post_db": widget._open_reddit_post_db,
         "open_se_dork_results_db": lambda: open_se_dork_results_db(widget),
+        "open_app_config": widget._open_config_editor,
         "open_dorkbook": lambda: open_dorkbook(widget),
         "open_keymaster": lambda: open_keymaster(widget),
         "parent": widget.parent,
+        "main_db_path": str(_resolve_main_db_path(widget)),
     }
+    if config_path is not None:
+        context["webui_config_path"] = config_path
     show_experimental_features_dialog(widget.parent, context, widget.settings_manager)
 
 
 def open_reddit_post_db(widget) -> None:
-    """Open the Reddit Post DB browser with direct main-DB promotion."""
+    """Open the Reddit Post DB browser in primary-DB mode (promotion disabled)."""
     show_reddit_browser_window(
         parent=widget.parent,
+        db_path=_resolve_main_db_path(widget),
         add_record_callback=None,
-        promote_record_callback=_make_sidecar_promote_callback(widget),
-        promote_records_callback=_make_sidecar_bulk_promote_callback(widget),
+        promote_record_callback=None,
+        promote_records_callback=None,
+        allow_promotion=False,
         settings_manager=getattr(widget, "settings_manager", None),
     )
 
 
 def open_se_dork_results_db(widget) -> None:
-    """Open the SE Dork results browser with direct main-DB promotion."""
+    """Open the SE Dork results browser in primary-DB mode (promotion disabled)."""
     show_se_dork_browser_window(
         parent=widget.parent,
+        db_path=_resolve_main_db_path(widget),
         add_record_callback=None,
-        promote_record_callback=_make_sidecar_promote_callback(widget),
-        promote_records_callback=_make_sidecar_bulk_promote_callback(widget),
+        promote_record_callback=None,
+        promote_records_callback=None,
+        allow_promotion=False,
         settings_manager=getattr(widget, "settings_manager", None),
     )
+
+
+def open_sidecar_legacy_db(widget) -> None:
+    dialog = tk.Toplevel(widget.parent)
+    dialog.title("[Legacy] Sidecar Data")
+    dialog.transient(widget.parent)
+    dialog.resizable(False, False)
+    theme = getattr(widget, "theme", None)
+    if theme:
+        apply_theme_to_window(dialog)
+
+    def _pick(choice: str) -> None:
+        dialog.destroy()
+        if choice == "se_dork":
+            show_se_dork_browser_window(
+                parent=widget.parent,
+                db_path=_resolve_se_dork_sidecar_path(),
+                add_record_callback=None,
+                promote_record_callback=_make_sidecar_promote_callback(widget),
+                promote_records_callback=_make_sidecar_bulk_promote_callback(widget),
+                allow_promotion=True,
+                settings_manager=getattr(widget, "settings_manager", None),
+            )
+        elif choice == "reddit":
+            show_reddit_browser_window(
+                parent=widget.parent,
+                db_path=_resolve_reddit_sidecar_path(),
+                add_record_callback=None,
+                promote_record_callback=_make_sidecar_promote_callback(widget),
+                promote_records_callback=_make_sidecar_bulk_promote_callback(widget),
+                allow_promotion=True,
+                settings_manager=getattr(widget, "settings_manager", None),
+            )
+        elif choice == "migrate":
+            db_reader = getattr(widget, "db_reader", None)
+            if db_reader is None:
+                _mb().showerror("No Database", "No database is currently loaded.",
+                                parent=widget.parent)
+                return
+            def _worker():
+                try:
+                    execute_sidecar_migration_now(db_reader)
+                except Exception:
+                    pass
+                try:
+                    widget.parent.after(0, widget.refresh_after_database_change)
+                except Exception:
+                    pass
+            threading.Thread(target=_worker, daemon=True).start()
+
+    for label, key in [
+        ("SearXNG Dork Results", "se_dork"),
+        ("Reddit Open Directory Posts", "reddit"),
+        ("Migrate All to Main DB", "migrate"),
+    ]:
+        btn = tk.Button(dialog, text=label, command=lambda k=key: _pick(k))
+        if theme:
+            theme.apply_to_widget(btn, "button_secondary")
+        btn.pack(fill="x", padx=12, pady=4)
+    ensure_dialog_focus(dialog, widget.parent)
 
 
 def open_dorkbook(widget) -> None:

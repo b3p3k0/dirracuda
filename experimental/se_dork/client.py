@@ -4,9 +4,12 @@ SearXNG preflight client for the se_dork module.
 Checks whether a SearXNG instance is reachable and has JSON search enabled.
 Uses urllib.request only (stdlib, no external deps).
 
-Preflight sequence:
+Explicit preflight sequence:
   1. GET /config       — reachability probe
   2. GET /search?q=hello&format=json — JSON format capability check
+
+Normal runs call run_reachability_check() and let their real page-1 search
+validate JSON support, avoiding a redundant upstream query.
 
 Failure reason codes:
   instance_unreachable      — cannot reach the instance at all
@@ -49,14 +52,25 @@ def run_preflight(instance_url: str, timeout: int = 10) -> PreflightResult:
     reason_code and human-readable message describing the failure.
     """
     base = instance_url.rstrip("/")
-
-    # Step 1: reachability via /config
-    config_result = _check_reachable(base, timeout)
-    if config_result is not None:
-        return config_result
+    reachability = run_reachability_check(base, timeout)
+    if not reachability.ok:
+        return reachability
 
     # Step 2: JSON format capability via /search?q=hello&format=json
     return _check_search(base, timeout)
+
+
+def run_reachability_check(instance_url: str, timeout: int = 10) -> PreflightResult:
+    """Check instance reachability without issuing an upstream search."""
+    base = instance_url.rstrip("/")
+    failure = _check_reachable(base, timeout)
+    if failure is not None:
+        return failure
+    return PreflightResult(
+        ok=True,
+        reason_code=None,
+        message="Instance reachable.",
+    )
 
 
 def _check_reachable(base: str, timeout: int) -> Optional[PreflightResult]:

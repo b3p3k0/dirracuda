@@ -179,8 +179,8 @@ def bind_dashboard_alt_shortcuts(
     """
     Bind Alt-based dashboard launch shortcuts.
 
-    - Alt+1..Alt+6 map to action handlers.
-    - Alt+7..Alt+0 are reserved no-op (consumed).
+    - Alt+1..Alt+5 map to action handlers.
+    - Alt+6..Alt+0 are reserved no-op (consumed).
     """
 
     def _bind_alt_digit(digit: str, handler: ShortcutHandler) -> None:

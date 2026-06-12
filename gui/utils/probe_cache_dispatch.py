@@ -18,9 +18,17 @@ from gui.utils import probe_cache, ftp_probe_cache, http_probe_cache
 from gui.utils import probe_runner, ftp_probe_runner, http_probe_runner
 from gui.utils.database_access import DatabaseReader
 from gui.utils.settings_manager import get_settings_manager
+from shared.config import resolve_http_allow_insecure_tls
 
 _UNSET = object()
 _DB_READER_CACHE: Dict[str, Any] = {"path": None, "reader": None}
+
+
+def _normalize_start_path(value: Any) -> str:
+    text = str(value or "/").split("?", 1)[0].split("#", 1)[0].strip() or "/"
+    if not text.startswith("/"):
+        text = "/" + text.lstrip("/")
+    return text
 
 
 def _get_cached_db_reader() -> Optional[DatabaseReader]:
@@ -122,8 +130,8 @@ def dispatch_probe_run(
     shares: Optional[List[str]] = None,
     username=_UNSET,
     password=_UNSET,
-    enable_rce: bool = False,
     allow_empty: bool = False,
+    allow_insecure_tls: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Dispatch a probe run to the correct protocol runner.
 
@@ -136,8 +144,10 @@ def dispatch_probe_run(
     max_depth: Probe recursion depth, clamped to 1..3.
     port: caller-selected endpoint port (FTP or HTTP). When omitted for HTTP,
         db_reader.get_http_server_detail() is used as fallback.
-    request_host/start_path: optional HTTP probe hints. When omitted for HTTP,
-        db_reader.get_http_server_detail() may provide probe_host/probe_path.
+    request_host/start_path: optional FTP/HTTP probe hints.
+        For FTP, start_path defaults to "/".
+        For HTTP, omitted values may be resolved from
+        db_reader.get_http_server_detail() as probe_host/probe_path.
     """
     _ht = str(host_type or "S").strip().upper()
     depth_limit = min(3, max(1, int(max_depth)))
@@ -147,10 +157,12 @@ def dispatch_probe_run(
             ftp_port = int(port) if port is not None else 21
         except (TypeError, ValueError):
             ftp_port = 21
+        ftp_start_path = _normalize_start_path(start_path)
         max_entries = max(1, max_directories * max_files)
         return ftp_probe_runner.run_ftp_probe(
             ip_address,
             port=ftp_port,
+            start_path=ftp_start_path,
             max_entries=max_entries,
             max_directories=max_directories,
             max_files=max_files,
@@ -185,10 +197,12 @@ def dispatch_probe_run(
             request_host = (detail or {}).get("probe_host") or None
         if start_path is None:
             start_path = (detail or {}).get("probe_path") or "/"
-        start_path = str(start_path or "/").split("?", 1)[0].split("#", 1)[0].strip() or "/"
-        if not start_path.startswith("/"):
-            start_path = "/" + start_path.lstrip("/")
+        start_path = _normalize_start_path(start_path)
 
+        if allow_insecure_tls is None:
+            tls = resolve_http_allow_insecure_tls()
+        else:
+            tls = bool(allow_insecure_tls)
         max_entries = max(1, max_directories * max_files)
         return http_probe_runner.run_http_probe(
             ip_address,
@@ -196,7 +210,7 @@ def dispatch_probe_run(
             scheme=scheme,
             request_host=request_host,
             start_path=start_path,
-            allow_insecure_tls=True,
+            allow_insecure_tls=tls,
             max_entries=max_entries,
             max_directories=max_directories,
             max_files=max_files,
@@ -211,7 +225,6 @@ def dispatch_probe_run(
         "max_directories": max_directories,
         "max_files": max_files,
         "timeout_seconds": timeout_seconds,
-        "enable_rce_analysis": enable_rce,
         "cancel_event": cancel_event,
         "allow_empty": allow_empty,
         "db_accessor": db_reader,
