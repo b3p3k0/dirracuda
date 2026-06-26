@@ -20,7 +20,11 @@ Seeded before implementation. Append after each major card.
    table/column checks.
 7. DA prompts say "do not commit." The RA commits accepted cards locally as
    rollback checkpoints after QAQC and HI acceptance.
-7. Accepted-card decisions must be written into the planning packet or next
+8. Accepted-card decisions must be written into the planning packet or next
    prompt before handoff. Do not rely on chat memory for C0 carry-forward.
-8. Keep prompts sequential. Do not present the next card until the current card
+9. Keep prompts sequential. Do not present the next card until the current card
    is accepted and committed.
+10. SQLite schema work needs two layers of safety: migrations can be skipped or
+   swallowed, so runtime helpers must guard every table/column they touch.
+11. SQLite foreign keys are connection-local and often off here. Delete child
+   rows explicitly and verify unique-index shape, not just index names.
