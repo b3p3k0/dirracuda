@@ -183,6 +183,7 @@ The **preflight screen** shows your live balance and an estimated post-scan bala
 |--------|-------------|
 | 📋 Copy IP | Copy selected server IP address to clipboard |
 | 🔍 Probe Selected | Enumerate shares, detect ransomware indicators |
+| 🔎 Scan Sherlock | Re-check selected hosts against their latest probe snapshots and refresh the alert-only Risk column |
 | 📦 Extract Selected | Collect files with hard limits on count, size, and time |
 | 🗂️ Browse Selected | Read-only exploration of accessible shares; HTTP rows open at their saved hostname/path when available |
 | ⭐ Toggle Favorite | Mark/unmark selected servers as favorites |
@@ -542,9 +543,9 @@ Key Preview format: keys longer than 8 characters show as `first4 + asterisks`; 
 
 ### Sherlock
 
-Sherlock is a display-only exposure triage settings surface. It configures how
-Dirracuda will highlight risky names found in existing probe snapshots; it never
-downloads files, reads file contents, authenticates, or probes on its own.
+Sherlock is a display-only exposure triage layer for risky names found in
+existing probe snapshots. It never downloads files, reads file contents,
+authenticates, or probes on its own.
 
 Current controls:
 - **Ignore case** and **Run after probe** preferences
@@ -553,7 +554,11 @@ Current controls:
 - Add, edit, enable/disable, delete custom patterns, and restore built-ins
 
 Settings are persisted under `~/.dirracuda/conf.d/experimental/sherlock.json`.
-Server List risk scanning and post-probe execution are planned follow-up wiring.
+The Server List includes an alert-only `Risk` column plus `Scan Sherlock`
+toolbar/context-menu actions for selected hosts. Fresh findings show `HIGH n`,
+`MED n`, or `LOW n` using the configured severity colors; no-hit, stale,
+unscanned, and no-snapshot rows stay blank. Post-probe execution and read-only
+details/Web display are planned follow-up wiring.
 
 ### Censys Discovery
 

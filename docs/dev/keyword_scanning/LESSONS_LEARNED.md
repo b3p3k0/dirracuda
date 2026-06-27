@@ -31,3 +31,6 @@ Seeded before implementation. Append after each major card.
 12. Dialog visual QA must exercise the real host shell, including banners,
    notebook tabs, footer rows, and default geometry. A standalone tab frame can
    pass screenshots while the actual Accessories dialog still clips controls.
+13. Server List Sherlock display is intentionally lossy and quiet: stale,
+   malformed, zero-hit, no-snapshot, and unscanned states render as blank, while
+   details/summaries carry the explanatory state.

@@ -377,8 +377,103 @@ def get_sherlock_result_for_host(
         return None
 
 
+def get_sherlock_risk_summary_map(self) -> Dict[str, Dict[str, Any]]:
+    """Return a row_key -> {severity, count, stale} map for every stored result.
+
+    row_key is "<host_type>:<protocol_server_id>" to match the Server List. Each
+    protocol is processed independently so a missing/partial cache table (legacy
+    DBs may lack ftp_probe_cache/http_probe_cache or latest_snapshot_id) degrades
+    only that protocol's staleness — those rows fall back to stale=True (blank) —
+    and never blanks the others. The renderer owns the blank decision; this reader
+    just reports raw severity/count/stale. Returns {} when sherlock_results is
+    absent/partial. Display-only: no network, no content reads.
+    """
+    summary: Dict[str, Dict[str, Any]] = {}
+    try:
+        with self._get_connection() as conn:
+            cur = conn.cursor()
+            if not _table_exists(cur, "sherlock_results"):
+                return {}
+            if not _RESULT_READ_COLS.issubset(_table_columns(cur, "sherlock_results")):
+                return {}
+
+            for host_type, cache_table in _CACHE_TABLES.items():
+                try:
+                    cache_cols = _table_columns(cur, cache_table) if _table_exists(cur, cache_table) else set()
+                    cache_ok = (
+                        "server_id" in cache_cols
+                        and "latest_snapshot_id" in cache_cols
+                    )
+                    if cache_ok:
+                        rows = cur.execute(
+                            f"""
+                            SELECT r.protocol_server_id AS protocol_server_id,
+                                   r.highest_severity AS highest_severity,
+                                   r.total_hit_count AS total_hit_count,
+                                   r.snapshot_id AS snapshot_id,
+                                   c.latest_snapshot_id AS latest_snapshot_id
+                            FROM sherlock_results r
+                            LEFT JOIN {cache_table} c
+                                ON c.server_id = r.protocol_server_id
+                            WHERE r.host_type = ?
+                            """,
+                            (host_type,),
+                        ).fetchall()
+                    else:
+                        rows = cur.execute(
+                            """
+                            SELECT protocol_server_id AS protocol_server_id,
+                                   highest_severity AS highest_severity,
+                                   total_hit_count AS total_hit_count,
+                                   snapshot_id AS snapshot_id,
+                                   NULL AS latest_snapshot_id
+                            FROM sherlock_results
+                            WHERE host_type = ?
+                            """,
+                            (host_type,),
+                        ).fetchall()
+                except sqlite3.OperationalError:
+                    continue
+
+                for row in rows:
+                    try:
+                        protocol_server_id = int(row["protocol_server_id"])
+                    except (TypeError, ValueError):
+                        continue
+
+                    stored_snapshot_id = row["snapshot_id"]
+                    latest = row["latest_snapshot_id"]
+                    try:
+                        stored_id = int(stored_snapshot_id) if stored_snapshot_id is not None else None
+                    except (TypeError, ValueError):
+                        stored_id = None
+                    try:
+                        latest_id = int(latest) if latest is not None else None
+                    except (TypeError, ValueError):
+                        latest_id = None
+                    try:
+                        count = int(row["total_hit_count"] or 0)
+                    except (TypeError, ValueError):
+                        count = 0
+
+                    stale = stored_id is None or latest_id is None or stored_id != latest_id
+                    row_key = f"{host_type}:{protocol_server_id}"
+                    summary[row_key] = {
+                        "severity": row["highest_severity"],
+                        "count": count,
+                        "stale": stale,
+                    }
+    except sqlite3.OperationalError:
+        return {}
+    return summary
+
+
 def bind_database_access_sherlock_methods(reader_cls, shared_symbols: Dict[str, Any]) -> None:
     """Attach Sherlock store/read methods onto DatabaseReader."""
     globals().update(shared_symbols)
-    for name in ("store_sherlock_result", "get_sherlock_result_for_host"):
+    for name in (
+        "store_sherlock_result",
+        "get_sherlock_result_for_host",
+        "get_sherlock_risk_summary_map",
+    ):
         setattr(reader_cls, name, globals()[name])

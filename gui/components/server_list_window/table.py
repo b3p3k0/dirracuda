@@ -12,6 +12,55 @@ from datetime import datetime
 from typing import Dict, List, Any, Callable, Optional, Tuple
 import re
 
+from shared.sherlock import Severity, default_settings, settings_from_dict
+
+# Persisted severity tokens -> Severity. Explicit (not severity_from_str, which
+# defaults unknowns to MED) so malformed tokens render blank instead of mislabeled.
+_SHERLOCK_SEVERITY_BY_TOKEN = {
+    "high": Severity.HIGH,
+    "med": Severity.MED,
+    "low": Severity.LOW,
+}
+_SHERLOCK_TAG_BY_SEVERITY = {
+    Severity.HIGH: "sherlock_high",
+    Severity.MED: "sherlock_med",
+    Severity.LOW: "sherlock_low",
+}
+
+
+def _load_sherlock_settings(settings_manager):
+    """Load Sherlock settings (validated colors) or defaults when unavailable."""
+    if settings_manager is None:
+        return default_settings()
+    try:
+        return settings_from_dict(settings_manager.get_setting("sherlock", {}))
+    except Exception:
+        return default_settings()
+
+
+def _resolve_sherlock_risk(risk):
+    """Return (Severity, count) for a displayable finding, else None.
+
+    Applies the alert-only blank contract: absent / stale / zero-hit / malformed
+    severity all yield None (blank cell). Only a fresh, non-zero, recognized
+    severity is displayed.
+    """
+    if not isinstance(risk, dict):
+        return None
+    if risk.get("stale"):
+        return None
+    count = risk.get("count") or 0
+    try:
+        count = int(count)
+    except (TypeError, ValueError):
+        return None
+    if count <= 0:
+        return None
+    severity = _SHERLOCK_SEVERITY_BY_TOKEN.get(risk.get("severity"))
+    if severity is None:
+        return None
+    return severity, count
+
 def create_server_table(parent, theme, callbacks):
     """
     Create server data table with scrollbars.
@@ -34,6 +83,7 @@ def create_server_table(parent, theme, callbacks):
         "avoid",
         "probe",
         "extracted",
+        "Risk",
         "Type",
         "IP Address",
         "Shares",
@@ -58,6 +108,7 @@ def create_server_table(parent, theme, callbacks):
     tree.column("avoid", width=55, anchor="center")  # Avoid skull column
     tree.column("probe", width=65, anchor="center")
     tree.column("extracted", width=85, anchor="center")
+    tree.column("Risk", width=80, anchor="center")  # Alert-only Sherlock risk; fixed width
     tree.column("Type", width=40, anchor="center")  # Protocol type: S or F
     tree.column("IP Address", width=135, anchor="w")
     tree.column("Shares", width=100, anchor="center")
@@ -72,6 +123,7 @@ def create_server_table(parent, theme, callbacks):
         "avoid": "Avoid",
         "probe": "Probed",
         "extracted": "Extracted",
+        "Risk": "Risk",
         "Type": "Type",
     }
     for col in columns:
@@ -124,6 +176,13 @@ def update_table_display(tree, filtered_servers: List[Dict[str, Any]], settings_
     import logging
     _log = logging.getLogger("server_list_window")
 
+    # Configure Sherlock row-tint tags from saved severity colors (idempotent;
+    # reflects edited colors on each reload). Colors are pre-validated by
+    # settings_from_dict, so no re-validation here.
+    sherlock_settings = _load_sherlock_settings(settings_manager)
+    for severity, tag in _SHERLOCK_TAG_BY_SEVERITY.items():
+        tree.tag_configure(tag, background=sherlock_settings.color_for(severity))
+
     # Clear existing items
     for item in tree.get_children():
         tree.delete(item)
@@ -167,13 +226,24 @@ def update_table_display(tree, filtered_servers: List[Dict[str, Any]], settings_
         probe_emoji = server.get("probe_status_emoji", "⚪")
         extracted_emoji = server.get("extract_status_emoji", "○")
 
+        # Alert-only Risk cell + row tint; blank unless there is a fresh finding.
+        resolved_risk = _resolve_sherlock_risk(server.get("sherlock_risk"))
+        if resolved_risk is None:
+            risk_text = ""
+            row_tags: Tuple[str, ...] = ()
+        else:
+            severity, count = resolved_risk
+            risk_text = severity.display_text(count)
+            row_tags = (_SHERLOCK_TAG_BY_SEVERITY[severity],)
+
         # Insert row — iid is the row_key so selection/lookups are protocol-aware
         item_id = tree.insert(
             "",
             "end",
             iid=row_key,
-            values=(favorite_icon, avoid_icon, probe_emoji, extracted_emoji,
-                    host_type, ip_addr, shares_count, accessible_shares, denied_count, last_seen, country)
+            values=(favorite_icon, avoid_icon, probe_emoji, extracted_emoji, risk_text,
+                    host_type, ip_addr, shares_count, accessible_shares, denied_count, last_seen, country),
+            tags=row_tags
         )
 
         # Add visual indicators for shares count
@@ -220,7 +290,7 @@ def sort_table_by_column(tree, column: str, current_sort_column: Optional[str],
         tuple: (new_sort_column, new_sort_direction)
     """
     # Short-circuit for flag/status/type columns - no meaningful sort order
-    if column in ("favorite", "avoid", "rce", "extracted", "Type"):
+    if column in ("favorite", "avoid", "rce", "extracted", "Risk", "Type"):
         return current_sort_column, current_sort_direction
 
     # Cache original header text on first access to this column

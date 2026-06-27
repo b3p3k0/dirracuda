@@ -415,6 +415,13 @@ class ServerListWindowBatchStatusMixin:
             if self.browser_button:
                 self.browser_button.configure(state=tk.NORMAL if has_selection else tk.DISABLED)
 
+            # Sherlock is local DB work (not a CLI batch); allow with a selection,
+            # blocked only while its own scan is in flight.
+            sherlock_button = getattr(self, "sherlock_button", None)
+            if sherlock_button:
+                sherlock_allowed = has_selection and not getattr(self, "_sherlock_scan_active", False)
+                sherlock_button.configure(state=tk.NORMAL if sherlock_allowed else tk.DISABLED)
+
             # Delete - disabled if no selection, batch active, or delete in progress
             if self.delete_button:
                 delete_allowed = has_selection and not batch_active and not getattr(self, '_delete_in_progress', False)

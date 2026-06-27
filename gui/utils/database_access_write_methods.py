@@ -403,6 +403,88 @@ def upsert_probe_snapshot_for_host(
         raise
 
 
+def _resolve_latest_snapshot(
+    self,
+    cur: sqlite3.Cursor,
+    *,
+    ip_address: str,
+    host_type: str,
+    server_table: str,
+    cache_table: str,
+    protocol_server_id: Optional[int] = None,
+    port: Optional[int] = None,
+) -> Optional[Tuple[int, Dict[str, Any]]]:
+    """Resolve the latest probe snapshot (id, payload) for a host, or None.
+
+    Tries the cache's latest_snapshot_id anchor first, then falls back to the
+    most recent probe_snapshots row. Returns the snapshot id alongside the parsed
+    payload so callers that must persist (e.g. Sherlock) have a non-None id.
+    """
+    server_id = self._resolve_protocol_server_id(
+        cur,
+        ip_address=ip_address,
+        host_type=host_type,
+        server_table=server_table,
+        protocol_server_id=protocol_server_id,
+        port=port,
+    )
+    snapshot_row = None
+    if server_id is not None:
+        snapshot_row = cur.execute(
+            f"SELECT latest_snapshot_id FROM {cache_table} WHERE server_id = ?",
+            (server_id,),
+        ).fetchone()
+    latest_snapshot_id = (
+        int(snapshot_row["latest_snapshot_id"])
+        if snapshot_row and snapshot_row["latest_snapshot_id"] is not None
+        else None
+    )
+    if latest_snapshot_id is not None:
+        payload_row = cur.execute(
+            "SELECT raw_snapshot_json FROM probe_snapshots WHERE id = ?",
+            (latest_snapshot_id,),
+        ).fetchone()
+        if payload_row and payload_row["raw_snapshot_json"]:
+            try:
+                return latest_snapshot_id, json.loads(payload_row["raw_snapshot_json"])
+            except Exception:
+                return None
+
+    # Fallback when latest_snapshot_id is not yet attached.
+    params: List[Any] = [host_type, ip_address]
+    where_sql = "host_type = ? AND ip_address = ?"
+    if host_type == "H" and port is not None:
+        where_sql += " AND port = ?"
+        params.append(int(port))
+    payload_row = cur.execute(
+        f"""
+        SELECT id, raw_snapshot_json
+        FROM probe_snapshots
+        WHERE {where_sql}
+        ORDER BY datetime(created_at) DESC, id DESC
+        LIMIT 1
+        """,
+        tuple(params),
+    ).fetchone()
+    if payload_row and payload_row["raw_snapshot_json"]:
+        try:
+            return int(payload_row["id"]), json.loads(payload_row["raw_snapshot_json"])
+        except Exception:
+            return None
+    return None
+
+
+def _snapshot_tables_for_host(host_type: str) -> Optional[Tuple[str, str]]:
+    """Return (server_table, cache_table) for a host_type, or None when invalid."""
+    if host_type == "S":
+        return "smb_servers", "host_probe_cache"
+    if host_type == "F":
+        return "ftp_servers", "ftp_probe_cache"
+    if host_type == "H":
+        return "http_servers", "http_probe_cache"
+    return None
+
+
 def get_probe_snapshot_for_host(
     self,
     ip_address: str,
@@ -412,75 +494,49 @@ def get_probe_snapshot_for_host(
     port: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
     """Return latest probe snapshot payload for a host/endpoint from DB, or None."""
+    result = self.get_latest_probe_snapshot_with_id_for_host(
+        ip_address,
+        host_type,
+        protocol_server_id=protocol_server_id,
+        port=port,
+    )
+    return result[1] if result is not None else None
+
+
+def get_latest_probe_snapshot_with_id_for_host(
+    self,
+    ip_address: str,
+    host_type: str,
+    *,
+    protocol_server_id: Optional[int] = None,
+    port: Optional[int] = None,
+) -> Optional[Tuple[int, Dict[str, Any]]]:
+    """Return (snapshot_id, payload) for the latest probe snapshot, or None.
+
+    Display-only callers (Sherlock) need the id to persist a result; this never
+    downloads, reads content, authenticates, or probes — DB read only.
+    """
     host_type = (host_type or "S").upper()
     if not ip_address or host_type not in ("S", "F", "H"):
         return None
 
-    if host_type == "S":
-        server_table = "smb_servers"
-        cache_table = "host_probe_cache"
-    elif host_type == "F":
-        server_table = "ftp_servers"
-        cache_table = "ftp_probe_cache"
-    else:
-        server_table = "http_servers"
-        cache_table = "http_probe_cache"
+    tables = _snapshot_tables_for_host(host_type)
+    if tables is None:
+        return None
+    server_table, cache_table = tables
 
     try:
         with self._get_connection() as conn:
             cur = conn.cursor()
-            server_id = self._resolve_protocol_server_id(
+            return self._resolve_latest_snapshot(
                 cur,
                 ip_address=ip_address,
                 host_type=host_type,
                 server_table=server_table,
+                cache_table=cache_table,
                 protocol_server_id=protocol_server_id,
                 port=port,
             )
-            snapshot_row = None
-            if server_id is not None:
-                snapshot_row = cur.execute(
-                    f"SELECT latest_snapshot_id FROM {cache_table} WHERE server_id = ?",
-                    (server_id,),
-                ).fetchone()
-            latest_snapshot_id = (
-                int(snapshot_row["latest_snapshot_id"])
-                if snapshot_row and snapshot_row["latest_snapshot_id"] is not None
-                else None
-            )
-            if latest_snapshot_id is not None:
-                payload_row = cur.execute(
-                    "SELECT raw_snapshot_json FROM probe_snapshots WHERE id = ?",
-                    (latest_snapshot_id,),
-                ).fetchone()
-                if payload_row and payload_row["raw_snapshot_json"]:
-                    try:
-                        return json.loads(payload_row["raw_snapshot_json"])
-                    except Exception:
-                        return None
-
-            # Fallback when latest_snapshot_id is not yet attached.
-            params: List[Any] = [host_type, ip_address]
-            where_sql = "host_type = ? AND ip_address = ?"
-            if host_type == "H" and port is not None:
-                where_sql += " AND port = ?"
-                params.append(int(port))
-            payload_row = cur.execute(
-                f"""
-                SELECT raw_snapshot_json
-                FROM probe_snapshots
-                WHERE {where_sql}
-                ORDER BY datetime(created_at) DESC, id DESC
-                LIMIT 1
-                """,
-                tuple(params),
-            ).fetchone()
-            if payload_row and payload_row["raw_snapshot_json"]:
-                try:
-                    return json.loads(payload_row["raw_snapshot_json"])
-                except Exception:
-                    return None
-            return None
     except sqlite3.OperationalError:
         return None
 
@@ -1441,7 +1497,9 @@ def bind_database_access_write_methods(reader_cls, shared_symbols: Dict[str, Any
         "upsert_user_flags_for_host",
         "upsert_probe_cache_for_host",
         "upsert_probe_snapshot_for_host",
+        "_resolve_latest_snapshot",
         "get_probe_snapshot_for_host",
+        "get_latest_probe_snapshot_with_id_for_host",
         "set_latest_probe_snapshot_for_host",
         "upsert_extracted_flag_for_host",
         "upsert_manual_server_record",

@@ -151,6 +151,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self.probe_button = None
         self.extract_button = None
         self.browser_button = None
+        self.sherlock_button = None
         self.stop_button = None
         self.running_tasks_button = None
         self.running_tasks_window = None
@@ -158,6 +159,8 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self._selection_menu_indices: List[int] = []  # Selection-dependent context menu entries
         self._delete_menu_index = None  # Store context menu index
         self._delete_in_progress = False  # Flag to prevent concurrent deletes
+        self._sherlock_scan_active = False  # In-flight guard for standalone Sherlock scan
+        self._sherlock_scan_thread = None
         self.table_overlay = None
         self.table_overlay_label = None
         self.batch_status_dialog = None
@@ -567,6 +570,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
         _add_selection_command("🔍 Probe Selected", self._on_probe_selected)
         _add_selection_command("📦 Extract Selected", self._on_extract_selected)
         _add_selection_command("🗂️ Browse Selected", self._on_file_browser_selected)
+        _add_selection_command("🔎 Scan Sherlock Selected", self._on_sherlock_scan_selected)
         self.context_menu.add_separator()
         _add_selection_command("⭐ Toggle Favorite", self._on_mark_favorite_selected)
         _add_selection_command("🚫 Toggle Avoid", self._on_mark_avoid_selected)
@@ -833,6 +837,15 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self.theme.apply_to_widget(self.browser_button, "button_secondary")
         self.browser_button.pack(side=tk.LEFT, padx=(0, 8))
 
+        self.sherlock_button = tk.Button(
+            button_container,
+            text="🔎 Scan Sherlock",
+            command=self._on_sherlock_scan_selected,
+            state=tk.DISABLED
+        )
+        self.theme.apply_to_widget(self.sherlock_button, "button_secondary")
+        self.sherlock_button.pack(side=tk.LEFT, padx=(0, 8))
+
         self.delete_button = tk.Button(
             button_container,
             text="🗑️ Delete Selected",
@@ -975,6 +988,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
 
             self.all_servers = servers
             self._attach_probe_status(self.all_servers)
+            self._attach_sherlock_risk(self.all_servers)
 
             # Do NOT preload denied share lists for every server here.
             # For large datasets this results in thousands of per-server DB queries

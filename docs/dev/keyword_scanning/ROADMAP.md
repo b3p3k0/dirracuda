@@ -72,14 +72,6 @@ Exit criteria:
 Run targeted validation, Xvfb dialog checks, README/technical docs sync, and
 lessons learned update.
 
-Docs criteria, per HI exercising the "51% rule": 1) "Sherlock" can also
-refer to an existing, deprecated product from Apple. 2) We do NOT recognize
-that Apple has ANY exclusive right to the name. 3) BOTH OF US yoinked it from
-Sir Conan Doyle. 4) Even if Apple thought of it exclusively, we wouldn't care
-anyway.
-
-use haiku or another lower tier model to kick that out as a "snarky but not over the top" note in README.
-
 Exit criteria:
 - Validation output is captured.
 - README and technical reference match runtime behavior.
