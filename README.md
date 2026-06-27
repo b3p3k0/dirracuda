@@ -121,6 +121,7 @@ The main window. From here you can:
 - Manage your database (import, export, merge, maintenance)
 - Edit configuration
 - Open **Running Tasks** to monitor active/queued work and reopen hidden monitor dialogs (scan/probe/extract)
+- Toggle Sherlock auto-triage from the Start Scan dialog's runtime controls when you want probes to refresh Risk findings immediately
 
 ### Keyboard Shortcuts
 For the full list of keyboard shortcuts, see [`docs/KBD_QUICKREF.md`](docs/KBD_QUICKREF.md).
@@ -554,11 +555,16 @@ Current controls:
 - Add, edit, enable/disable, delete custom patterns, and restore built-ins
 
 Settings are persisted under `~/.dirracuda/conf.d/experimental/sherlock.json`.
+The Start Scan dialog also mirrors the global **Sherlock: run after probe**
+setting and opens the same Sherlock settings surface from its runtime controls.
+When enabled, successful probe runs automatically re-check the fresh snapshot
+after `latest_snapshot_id` is saved; probe status, ransomware indicators, and
+extraction state are unchanged if Sherlock is disabled or fails.
 The Server List includes an alert-only `Risk` column plus `Scan Sherlock`
 toolbar/context-menu actions for selected hosts. Fresh findings show `HIGH n`,
 `MED n`, or `LOW n` using the configured severity colors; no-hit, stale,
-unscanned, and no-snapshot rows stay blank. Post-probe execution and read-only
-details/Web display are planned follow-up wiring.
+unscanned, and no-snapshot rows stay blank. Read-only details/Web display are
+planned follow-up wiring.
 
 ### Censys Discovery
 

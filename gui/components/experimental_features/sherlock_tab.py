@@ -522,3 +522,28 @@ def build_sherlock_tab(parent: tk.Widget, context: dict) -> tk.Widget:
     """Build and return the Sherlock tab frame."""
     tab = SherlockTab(parent, context)
     return tab.frame
+
+
+def open_sherlock_settings_window(parent: tk.Widget, settings_manager: Any) -> None:
+    """Open the existing Sherlock settings UI in a focused modal window.
+
+    Hosts the real Sherlock tab (no UI duplication); it only needs settings_manager.
+    Blocks until closed so callers can refresh from the shard afterward.
+    """
+    theme = get_theme()
+    win = tk.Toplevel(parent)
+    win.title("Sherlock Settings")
+    win.transient(parent)
+    theme.apply_to_widget(win, "main_window")
+
+    frame = build_sherlock_tab(win, {"settings_manager": settings_manager})
+    frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+
+    close_btn = tk.Button(win, text="Close", command=win.destroy)
+    theme.apply_to_widget(close_btn, "button_secondary")
+    close_btn.pack(side=tk.RIGHT, padx=8, pady=(0, 8))
+
+    win.protocol("WM_DELETE_WINDOW", win.destroy)
+    win.grab_set()
+    ensure_dialog_focus(win, parent)
+    win.wait_window()

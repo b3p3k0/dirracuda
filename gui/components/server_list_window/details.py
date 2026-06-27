@@ -32,6 +32,7 @@ from gui.utils.probe_snapshot_summary import (
 from gui.utils.probe_snapshot_details import (
     format_probe_section as format_probe_snapshot_section,
 )
+from gui.utils.sherlock_post_probe import run_sherlock_after_probe
 from gui.utils.database_access import DatabaseReader
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.keybindings import add_shortcut_hint, bind_close_shortcuts, bind_submit_shortcuts
@@ -627,6 +628,14 @@ def _start_probe(
                             accessible_dirs_count=len(display_entries),
                             accessible_dirs_list=",".join(display_entries),
                         )
+                        if snapshot_id is not None:
+                            run_sherlock_after_probe(
+                                settings_manager,
+                                db_accessor,
+                                ip_address,
+                                "F",
+                                port=_ftp_port,
+                            )
                     except Exception:
                         pass
             elif host_type == "H":
@@ -660,6 +669,15 @@ def _start_probe(
                             protocol_server_id=_protocol_server_id,
                             port=_http_port,
                         )
+                        if snapshot_id is not None:
+                            run_sherlock_after_probe(
+                                settings_manager,
+                                db_accessor,
+                                ip_address,
+                                "H",
+                                protocol_server_id=_protocol_server_id,
+                                port=_http_port,
+                            )
                     except Exception:
                         pass
             else:
@@ -678,6 +696,13 @@ def _start_probe(
                             snapshot_path=None,
                             latest_snapshot_id=snapshot_id,
                         )
+                        if snapshot_id is not None:
+                            run_sherlock_after_probe(
+                                settings_manager,
+                                db_accessor,
+                                ip_address,
+                                "S",
+                            )
                     except Exception:
                         pass
             issue_detected = bool(analysis.get("is_suspicious"))

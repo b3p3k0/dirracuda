@@ -36,6 +36,7 @@ import tkinter as tk  # annotations + tk.TclError only — use _d("tk")/_d("ttk"
 from gui.utils import safe_messagebox as _fallback_msgbox
 from gui.utils.logging_config import get_logger
 from gui.utils.probe_snapshot_summary import summarize_probe_snapshot
+from gui.utils.sherlock_post_probe import run_sherlock_after_probe
 from gui.components.scan_results_dialog import show_scan_results_dialog
 from gui.components.batch_summary_dialog import show_batch_summary_dialog
 from shared.config import resolve_http_allow_insecure_tls
@@ -757,6 +758,14 @@ def probe_single_server(
                         accessible_dirs_count=accessible_dirs_count,
                         accessible_dirs_list=accessible_dirs_list,
                     )
+                    if snapshot_id is not None:
+                        run_sherlock_after_probe(
+                            getattr(dash, "settings_manager", None),
+                            dash.db_reader,
+                            ip_address,
+                            "F",
+                            port=port,
+                        )
             except Exception:
                 pass
 
@@ -853,6 +862,15 @@ def probe_single_server(
                         protocol_server_id=protocol_server_id,
                         port=http_port,
                     )
+                    if snapshot_id is not None:
+                        run_sherlock_after_probe(
+                            getattr(dash, "settings_manager", None),
+                            dash.db_reader,
+                            ip_address,
+                            "H",
+                            protocol_server_id=protocol_server_id,
+                            port=http_port,
+                        )
             except Exception:
                 pass
 
@@ -919,6 +937,13 @@ def probe_single_server(
                     snapshot_path=None,
                     latest_snapshot_id=snapshot_id,
                 )
+                if snapshot_id is not None:
+                    run_sherlock_after_probe(
+                        getattr(dash, "settings_manager", None),
+                        dash.db_reader,
+                        ip_address,
+                        "S",
+                    )
         except Exception:
             pass
 

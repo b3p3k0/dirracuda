@@ -102,6 +102,8 @@ honestly. The Server List Risk cell stays blank.
 - The Risk column is blank for clear, unscanned, stale, or no-snapshot rows.
 - Findings show text, for example `HIGH 3`, plus row tint.
 - Color is never the only signal.
+- Start Scan runtime controls may mirror `Run after probe`; it edits the same
+  Sherlock settings shard as Accessories and is not a one-scan-only option.
 - Detail surfaces may explain no snapshot, skipped, or 0 hits, but the table
   stays quiet.
 

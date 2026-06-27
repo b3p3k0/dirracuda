@@ -414,3 +414,62 @@ def test_searxng_scale_enabled_when_searxng_checked(monkeypatch, tmp_path):
             assert str(sc.cget("state")) == "normal"
     finally:
         _destroy(root, dialog)
+
+
+# ---------------------------------------------------------------------------
+# C5.1 — Sherlock run-after-probe control in Runtime & safety
+# ---------------------------------------------------------------------------
+
+def _find_by_text(widget, text):
+    """Depth-first collect descendant widgets whose -text option equals text."""
+    found = []
+    try:
+        if widget.cget("text") == text:
+            found.append(widget)
+    except (tk.TclError, AttributeError):
+        pass
+    for child in widget.winfo_children():
+        found.extend(_find_by_text(child, text))
+    return found
+
+
+def _find_by_text_prefix(widget, prefix):
+    found = []
+    try:
+        if str(widget.cget("text")).startswith(prefix):
+            found.append(widget)
+    except (tk.TclError, AttributeError):
+        pass
+    for child in widget.winfo_children():
+        found.extend(_find_by_text_prefix(child, prefix))
+    return found
+
+
+def test_sherlock_toggle_seeds_from_shard(monkeypatch, tmp_path):
+    """The checkbox initializes from sherlock.run_after_probe in the config shard."""
+    overrides = {"sherlock": {"run_after_probe": True}}
+    root, dialog = _build_dialog(monkeypatch, tmp_path, overrides)
+    try:
+        assert dialog.sherlock_run_after_probe_var.get() is True
+    finally:
+        _destroy(root, dialog)
+
+
+def test_sherlock_row_between_bulk_probe_and_extract(monkeypatch, tmp_path):
+    """Sherlock checkbox + settings button render between bulk probe and bulk extract."""
+    root, dialog = _build_dialog(monkeypatch, tmp_path)
+    try:
+        root.update()
+        probe = _find_by_text(dialog.dialog, "Run bulk probe after each scan")
+        sherlock_cb = _find_by_text(dialog.dialog, "Sherlock: run after probe")
+        settings_btn = _find_by_text_prefix(dialog.dialog, "Sherlock settings")
+        extract = _find_by_text(dialog.dialog, "Run bulk extract after each scan")
+
+        assert probe and sherlock_cb and settings_btn and extract
+        assert (
+            probe[0].winfo_rooty()
+            < sherlock_cb[0].winfo_rooty()
+            < extract[0].winfo_rooty()
+        )
+    finally:
+        _destroy(root, dialog)

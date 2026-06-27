@@ -122,6 +122,8 @@ Expected implementation shape:
 - Hook after successful snapshot ID is available.
 - Reuse the same matcher/store path as standalone scan.
 - Do not alter probe status, indicator matches, or extraction state.
+- Mirror the global `Run after probe` flag in Start Scan runtime controls when
+  accepted by HI; it must preserve the rest of the Sherlock settings shard.
 
 Acceptance:
 - Sherlock runs only when setting is enabled.
@@ -132,6 +134,7 @@ Validation:
 - Dashboard post-scan tests.
 - Detail-probe tests.
 - Server List probe tests.
+- Runtime-toggle persistence/layout tests if the Start Scan control is present.
 
 ## C6 - Details And Web UI Read-Only Display
 

@@ -34,3 +34,6 @@ Seeded before implementation. Append after each major card.
 13. Server List Sherlock display is intentionally lossy and quiet: stale,
    malformed, zero-hit, no-snapshot, and unscanned states render as blank, while
    details/summaries carry the explanatory state.
+14. Runtime-facing controls should not live only under Accessories. If a setting
+   affects immediate scan/probe behavior, mirror it near that workflow while
+   preserving the same underlying config shard.
