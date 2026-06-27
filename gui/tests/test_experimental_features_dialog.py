@@ -951,7 +951,7 @@ def test_registry_no_censys_after_keymaster():
     from gui.components.experimental_features.registry import _get_features
     ids = [f.feature_id for f in _get_features()]
     assert "keymaster" in ids
-    assert ids[-1] == "keymaster"
+    assert "censys_discovery" not in ids
 
 
 # Sub-group B: Build (dummy widget pattern — no display required)
@@ -1581,7 +1581,7 @@ def test_registry_webui_label():
 def test_registry_tab_order_exact():
     from gui.components.experimental_features.registry import _get_features
     ids = [f.feature_id for f in _get_features()]
-    assert ids == ["se_dork", "reddit", "webui", "dorkbook", "keymaster"]
+    assert ids == ["se_dork", "reddit", "webui", "dorkbook", "keymaster", "sherlock"]
 
 
 def test_webui_tab_get_cfg_fallback(monkeypatch):

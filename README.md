@@ -360,7 +360,7 @@ Runtime settings are modular and stored under `~/.dirracuda/conf.d/`:
 - `core/security.json` - security integrations (`security`, `censys`)
 - `core/output.json` - output formatting settings (`output`)
 - `prefs/user-prefs.json` - GUI/user preferences (replaces legacy `state/gui_settings.json`)
-- `experimental/{se_dork,reddit_grab,dorkbook,keymaster,webui}.json` - experimental module settings
+- `experimental/{se_dork,reddit_grab,dorkbook,keymaster,webui,sherlock}.json` - experimental module settings
 
 `~/.dirracuda/conf/config.json` is retained as a generated compatibility view for legacy readers.
 
@@ -383,6 +383,7 @@ The dialog is modeless and tab-based. Current tabs:
 - `Web UI`
 - `Dorkbook`
 - `Keymaster`
+- `Sherlock`
 
 ### SearXNG
 
@@ -538,6 +539,21 @@ Storage behavior:
 Key table columns: `Label`, `Key Preview`, `Query Credits`, `Notes`, `Last Used`.
 
 Key Preview format: keys longer than 8 characters show as `first4 + asterisks`; shorter keys are fully masked.
+
+### Sherlock
+
+Sherlock is a display-only exposure triage settings surface. It configures how
+Dirracuda will highlight risky names found in existing probe snapshots; it never
+downloads files, reads file contents, authenticates, or probes on its own.
+
+Current controls:
+- **Ignore case** and **Run after probe** preferences
+- High/Med/Low severity colors as `#RRGGBB` values, with optional color chooser buttons
+- A scrollable pattern table with built-in and custom keyword/wildcard patterns
+- Add, edit, enable/disable, delete custom patterns, and restore built-ins
+
+Settings are persisted under `~/.dirracuda/conf.d/experimental/sherlock.json`.
+Server List risk scanning and post-probe execution are planned follow-up wiring.
 
 ### Censys Discovery
 

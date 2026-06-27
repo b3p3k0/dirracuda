@@ -28,3 +28,6 @@ Seeded before implementation. Append after each major card.
    swallowed, so runtime helpers must guard every table/column they touch.
 11. SQLite foreign keys are connection-local and often off here. Delete child
    rows explicitly and verify unique-index shape, not just index names.
+12. Dialog visual QA must exercise the real host shell, including banners,
+   notebook tabs, footer rows, and default geometry. A standalone tab frame can
+   pass screenshots while the actual Accessories dialog still clips controls.

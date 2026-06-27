@@ -24,10 +24,18 @@ from .path_entry import (
     path_entries_from_rows,
     path_entries_from_snapshot,
 )
+from .serialize import (
+    SHERLOCK_SETTINGS_KEY,
+    settings_from_dict,
+    settings_to_dict,
+    severity_from_str,
+    severity_to_str,
+)
 
 __all__ = [
     "DEFAULT_COLORS",
     "MatchResult",
+    "SHERLOCK_SETTINGS_KEY",
     "Severity",
     "SherlockHit",
     "SherlockPathEntry",
@@ -39,5 +47,9 @@ __all__ = [
     "match_entries",
     "path_entries_from_rows",
     "path_entries_from_snapshot",
+    "settings_from_dict",
+    "settings_to_dict",
+    "severity_from_str",
+    "severity_to_str",
     "validate_color",
 ]
