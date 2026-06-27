@@ -5,6 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 RESULTS_TEMPLATE = ROOT / "experimental" / "webui" / "templates" / "results.html"
 RESULTS_SCRIPT = ROOT / "experimental" / "webui" / "static" / "results.js"
+RESULTS_STYLE = ROOT / "experimental" / "webui" / "static" / "style.css"
 
 
 def _source(path: Path) -> str:
@@ -19,10 +20,33 @@ def test_results_table_keeps_probe_status_without_probe_action_column():
 
     assert "<th>Probed</th>" in template
     assert "<th>Probe</th>" not in template
-    assert 'colspan="12"' in template
-    assert len(data_cells) + 1 == 12
+    assert 'colspan="13"' in template
+    assert len(data_cells) + 1 == 13
     assert "['Probe', 'Run']" not in script
     assert "probe-action-cell" not in script
+
+
+def test_results_table_has_readonly_sherlock_risk_column():
+    template = _source(RESULTS_TEMPLATE)
+    script = _source(RESULTS_SCRIPT)
+    style = _source(RESULTS_STYLE)
+
+    # Risk column placed between Extracted and Type (desktop order).
+    assert "<th>Extracted</th>\n        <th>Risk</th>\n        <th>Type</th>" in template
+
+    # Row badge cell + read-only detail block rendered from persisted data.
+    assert "['Risk', r.sherlock_risk]" in script
+    assert "_renderRiskCell(td, pair[1]);" in script
+    assert "_renderSherlockDetail(container, payload.sherlock);" in script
+    # Quiet contract: blank when no fresh finding; uses textContent (no innerHTML).
+    assert "if (!risk || !risk.text) return;" in script
+    assert "badge.textContent = risk.text;" in script
+
+    # No editing / scan controls in the Web UI Sherlock surface.
+    assert "sherlock-scan" not in script
+    assert "sherlock-edit" not in script
+
+    assert ".sherlock-badge" in style
 
 
 def test_detail_actions_have_expected_labels_and_order():

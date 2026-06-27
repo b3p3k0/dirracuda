@@ -563,8 +563,10 @@ extraction state are unchanged if Sherlock is disabled or fails.
 The Server List includes an alert-only `Risk` column plus `Scan Sherlock`
 toolbar/context-menu actions for selected hosts. Fresh findings show `HIGH n`,
 `MED n`, or `LOW n` using the configured severity colors; no-hit, stale,
-unscanned, and no-snapshot rows stay blank. Read-only details/Web display are
-planned follow-up wiring.
+unscanned, and no-snapshot rows stay blank. Desktop detail popups show the
+latest Sherlock summary and capped hit details with explanatory stale/zero-hit
+states. Web UI Results mirrors persisted findings with read-only Risk badges
+and detail blocks; Web UI does not edit patterns or trigger Sherlock scans.
 
 ### Censys Discovery
 
@@ -610,7 +612,7 @@ continues to require the current password.
 
 Current Web UI layout:
 - `Scans` (dropdown): `shodan`, `searxng`, `reddit`
-- `Results`
+- `Results` (includes read-only Sherlock Risk badges/details when persisted)
 - `Export`
 - `Extras` (dropdown): `dorkbook`, `keymaster`
 - `Config`, `Account`

@@ -393,9 +393,12 @@ def test_all_protocol_results_mixed_rows_and_metadata(creds, cfg_no_tls, db_all_
             "denied_shares_count",
             "last_seen",
             "country",
+            "sherlock_risk",
         }
         assert row["row_key"]
         assert row["protocol_server_id"] > 0
+        # No Sherlock results in this DB -> alert-only column stays blank.
+        assert row["sherlock_risk"] is None
 
     smb = rows[0]
     assert smb["row_key"] == "S:1"

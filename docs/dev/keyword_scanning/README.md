@@ -13,7 +13,8 @@ the planning agent.
 1. The PA/RA writes or updates one small task card at a time.
 2. Claude first receives a planning prompt for that card and returns a plan.
 3. The RA reviews Claude's plan for scope, risks, guardrails, and tests.
-4. After HI approval, Claude receives the implementation prompt for that card.
+4. After HI approval, Claude executes the approved implementation in this
+   worktree before sending a completion report.
 5. The RA reviews Claude's diff, test output, file sizes, and docs impact.
 6. After HI accepts a completed card, the RA commits that accepted card locally.
 7. The next card does not start until the accepted card is committed.

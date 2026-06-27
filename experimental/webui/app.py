@@ -33,6 +33,7 @@ from experimental.webui.experimental_models import (
 )
 from gui.components.discovery_dork_config import apply_discovery_dorks, read_discovery_dorks
 import experimental.webui.results_probe_actions as _results_probe_actions
+import experimental.webui.sherlock_view as _sherlock_view
 from experimental.webui.auth import (
     MAX_PASSWORD_BYTES,
     MAX_USERNAME_BYTES,
@@ -1006,6 +1007,10 @@ def create_app(
             return JSONResponse({"error": "database error"}, status_code=500)
         if payload is None:
             return JSONResponse({"error": "not found"}, status_code=404)
+        try:
+            payload["sherlock"] = _sherlock_view.get_sherlock_detail(db_path, host, server_id)
+        except Exception:
+            payload["sherlock"] = None
         return JSONResponse(payload)
 
     @app.post("/api/results/actions/toggle")
@@ -1144,6 +1149,12 @@ def create_app(
         except Exception:
             logger.exception("results query failed: protocol=%s", protocol)
             return JSONResponse({"error": "database error"}, status_code=500)
+        try:
+            badge_map = _sherlock_view.get_sherlock_badge_map(db_path)
+        except Exception:
+            badge_map = {}
+        for row in rows:
+            row["sherlock_risk"] = badge_map.get(row.get("row_key"))
         total_pages = max(1, math.ceil(total_count / ps)) if ps > 0 else 1
         return JSONResponse(
             {

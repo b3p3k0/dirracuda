@@ -37,3 +37,9 @@ Seeded before implementation. Append after each major card.
 14. Runtime-facing controls should not live only under Accessories. If a setting
    affects immediate scan/probe behavior, mirror it near that workflow while
    preserving the same underlying config shard.
+15. Read-only display helpers still need full runtime schema guards, including
+   columns used only for ordering or joins. Partial-table tests should cover
+   those hidden SQL dependencies.
+16. Web UI Sherlock values are untrusted display data. Render persisted labels,
+   paths, and patterns through DOM text nodes / `textContent`, never dynamic
+   HTML.
