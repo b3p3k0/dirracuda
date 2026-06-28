@@ -56,6 +56,42 @@ def validate_color(value: object) -> str:
     return value.lower()  # type: ignore[union-attr]
 
 
+# V2 user color tags (SPEC "User Color Tags"). These are visual tags only and
+# never participate in severity precedence or hit counts.
+COLOR_TAG_NONE = "none"
+USER_COLOR_KEYS = ("user1", "user2", "user3")
+VALID_COLOR_TAGS = (COLOR_TAG_NONE,) + USER_COLOR_KEYS
+DEFAULT_USER_COLORS: Dict[str, str] = {"user1": "", "user2": "", "user3": ""}
+
+
+def normalize_color_tag(value: object) -> str:
+    """Map a stored token to a canonical color tag; unknown values -> 'none'."""
+    if isinstance(value, str):
+        token = value.strip().lower()
+        if token in VALID_COLOR_TAGS:
+            return token
+    return COLOR_TAG_NONE
+
+
+def is_valid_user_color(value: object) -> bool:
+    """Return True when value is an empty string or a well-formed #RRGGBB color."""
+    return value == "" or is_valid_color(value)
+
+
+def validate_user_color(value: object) -> str:
+    """
+    Validate a user color and return it normalized.
+
+    Empty string is allowed (visually inactive) and passes through; any non-empty
+    value must be a valid #RRGGBB color (normalized lowercase via validate_color).
+    Raises ValueError on a malformed non-empty value so the C10 save path can
+    reject before persisting.
+    """
+    if value == "":
+        return ""
+    return validate_color(value)
+
+
 @dataclasses.dataclass(frozen=True)
 class SherlockPattern:
     """A single match pattern. Frozen so the built-in catalog is never mutated."""
@@ -67,6 +103,7 @@ class SherlockPattern:
     severity: Severity
     enabled: bool = True
     builtin: bool = False
+    color_tag: str = COLOR_TAG_NONE
 
 
 # Built-in pattern specs as immutable tuples. builtin_patterns() turns these into
@@ -125,11 +162,24 @@ class SherlockSettings:
     ignore_case: bool = True
     run_after_probe: bool = False
     colors: Dict[Severity, str] = dataclasses.field(default_factory=lambda: dict(DEFAULT_COLORS))
+    user_colors: Dict[str, str] = dataclasses.field(
+        default_factory=lambda: dict(DEFAULT_USER_COLORS)
+    )
     patterns: List[SherlockPattern] = dataclasses.field(default_factory=builtin_patterns)
 
     def color_for(self, severity: Severity) -> str:
         """Return the configured color for severity, falling back to default."""
         return self.colors.get(severity, DEFAULT_COLORS[severity])
+
+    def user_color_for(self, tag: object) -> str:
+        """Return the configured color for a user tag token, or '' if unset.
+
+        Normalizes the tag; 'none', unknown, or unconfigured tags return ''.
+        """
+        token = normalize_color_tag(tag)
+        if token in USER_COLOR_KEYS:
+            return self.user_colors.get(token, "")
+        return ""
 
 
 def default_settings() -> SherlockSettings:
@@ -138,5 +188,6 @@ def default_settings() -> SherlockSettings:
         ignore_case=True,
         run_after_probe=False,
         colors=dict(DEFAULT_COLORS),
+        user_colors=dict(DEFAULT_USER_COLORS),
         patterns=builtin_patterns(),
     )

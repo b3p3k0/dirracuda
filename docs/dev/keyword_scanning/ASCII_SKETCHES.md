@@ -115,3 +115,143 @@ RA reviews diff + tests + docs + file sizes
       v
 Report PASS/FAIL; after HI acceptance, RA commits before next card
 ```
+
+## V2 Accessories Tab
+
+```text
+Accessories -> Sherlock
+
++----------------------------------------------------------+
+| Sherlock                                                 |
++----------------------------------------------------------+
+| [x] Ignore case        [x] Run after probe               |
+|                                                          |
+| Severity colors                                          |
+| High  [#ff4d4d] [Choose]  Med [#ffa31a] [Choose]        |
+| Low   [#ffff80] [Choose]                                |
+|                                                          |
+| User colors                                              |
+| User1 [        ] [Choose]  User2 [        ] [Choose]    |
+| User3 [        ] [Choose]                                |
+|                                                          |
+| Patterns                                                 |
+| [Manage Patterns...]                                    |
+|                                                          |
+| [Save]  Saved.                                           |
++----------------------------------------------------------+
+```
+
+## V2 Pattern Manager
+
+```text
+Sherlock Patterns
+
++--------------------------------------------------------------------+
+| Sherlock Patterns                                                  |
++--------------------------------------------------------------------+
+| +--------------------------------------------------------------+ |^||
+| | On | Severity | User Tag | Category | Label | Pattern | Type | | ||
+| | Yes| HIGH     | User1    | PII      | SSN   | *ssn*   |Custom|#||
+| | Yes| HIGH     |          | Secrets  | PEM   | *.pem   |Built-in|
+| | No | MED      | User2    | Finance  | Tax   | *tax*   |Custom| ||
+| | ... many analyst rows ...                                      |v||
+| +--------------------------------------------------------------+---+
+|                                                                    |
+| [Add] [Edit] [Enable/Disable] [Delete] [Restore Built-ins] [Close] |
++--------------------------------------------------------------------+
+```
+
+```text
+Pattern Add/Edit
+
++--------------------------------------+
+| Add Pattern                          |
++--------------------------------------+
+| Label:      [ Payroll archive      ] |
+| Category:   [ Finance              ] |
+| Pattern:    [ *payroll*            ] |
+| Severity:   [ MED v ]                |
+| Color tag:  [ User2 v ]              |
+| [x] Enabled                          |
+|                         [Cancel] [OK]|
++--------------------------------------+
+```
+
+## V2 Probe Batch Summary
+
+```text
++--------------------------------------------------------------------------+
+| Probe Batch Summary                                                      |
++--------------------------------------------------------------------------+
+| IP Address   | Protocol | Action | Result  | Risk   | Notes             |
+| 10.0.0.12    | SMB      | Probe  | Success | HIGH 4 | 3 share(s)        |
+| ftp.example  | FTP      | Probe  | Success | LOW 1  | 12 directorie(s)  |
+| 10.0.0.44    | SMB      | Probe  | Success |        | No accessible ... |
++--------------------------------------------------------------------------+
+```
+
+## V2 Settings Save Flow
+
+```text
+Edit colors/patterns
+      |
+      v
+Validate severity colors (#RRGGBB required)
+      |
+      v
+Validate user colors (empty OR #RRGGBB)
+      |
+      v
+Pattern dialog staged edits remain in memory
+      |
+      v
+Save all Sherlock settings to sherlock.json
+```
+
+## V2 Tint Decision Flow
+
+```text
+Fresh Sherlock finding?
+      |
+      +-- No --> blank Risk cell, no tint
+      |
+      v
+Any hit has User tag with configured color?
+      |
+      +-- Yes --> use highest-severity tagged hit's User color
+      |
+      v
+No usable User color
+      |
+      v
+Use HIGH/MED/LOW severity color
+      |
+      v
+Risk text remains severity-based: HIGH n / MED n / LOW n
+```
+
+## V2 Post-Probe Summary Flow
+
+```text
+Probe saves snapshot
+      |
+      v
+Run after probe enabled?
+      |
+      +-- No --> existing summary unchanged
+      |
+      v
+Sherlock hook runs and persists latest result
+      |
+      v
+Probe result row receives Sherlock display data
+      |
+      v
+Batch Summary opens
+      |
+      v
+If any row has Risk:
+  add Risk column and tint finding rows
+Else:
+  keep current summary layout
+```

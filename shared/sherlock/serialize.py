@@ -15,12 +15,14 @@ from typing import Any, Dict, List
 
 from .model import (
     DEFAULT_COLORS,
+    USER_COLOR_KEYS,
     Severity,
     SherlockPattern,
     SherlockSettings,
     builtin_patterns,
     default_settings,
     is_valid_color,
+    normalize_color_tag,
 )
 
 # Top-level config-store module key. Must match an entry in
@@ -82,6 +84,7 @@ def settings_to_dict(settings: SherlockSettings) -> Dict[str, Any]:
             "pattern": p.pattern,
             "severity": severity_to_str(p.severity),
             "enabled": bool(p.enabled),
+            "color_tag": normalize_color_tag(p.color_tag),
         }
         for p in settings.patterns
         if not p.builtin
@@ -90,10 +93,12 @@ def settings_to_dict(settings: SherlockSettings) -> Dict[str, Any]:
         severity_to_str(sev): settings.color_for(sev)
         for sev in (Severity.HIGH, Severity.MED, Severity.LOW)
     }
+    user_colors = {key: settings.user_colors.get(key, "") for key in USER_COLOR_KEYS}
     return {
         "ignore_case": bool(settings.ignore_case),
         "run_after_probe": bool(settings.run_after_probe),
         "colors": colors,
+        "user_colors": user_colors,
         "builtin_disabled": builtin_disabled,
         "custom_patterns": custom_patterns,
     }
@@ -106,6 +111,22 @@ def _colors_from_dict(raw: object) -> Dict[Severity, str]:
     for sev in (Severity.HIGH, Severity.MED, Severity.LOW):
         candidate = source.get(severity_to_str(sev))
         colors[sev] = candidate if is_valid_color(candidate) else DEFAULT_COLORS[sev]
+    return colors
+
+
+def _user_colors_from_dict(raw: object) -> Dict[str, str]:
+    """Build a user_colors map, degrading safely on load.
+
+    Each user key accepts a valid #RRGGBB (normalized lowercase); empty or
+    invalid values fall back to '' (visually inactive) rather than raising, so a
+    corrupt shard never blocks loading. The raising validate_user_color is for
+    the GUI save path (C10).
+    """
+    source = raw if isinstance(raw, dict) else {}
+    colors: Dict[str, str] = {}
+    for key in USER_COLOR_KEYS:
+        candidate = source.get(key)
+        colors[key] = candidate.lower() if is_valid_color(candidate) else ""
     return colors
 
 
@@ -132,6 +153,7 @@ def _custom_patterns_from_list(raw: object) -> List[SherlockPattern]:
                 severity=severity_from_str(item.get("severity")),
                 enabled=_coerce_bool(item.get("enabled", True), True),
                 builtin=False,
+                color_tag=normalize_color_tag(item.get("color_tag")),
             )
         )
     return patterns
@@ -164,6 +186,7 @@ def settings_from_dict(data: object) -> SherlockSettings:
         ignore_case=_coerce_bool(data.get("ignore_case", True), True),
         run_after_probe=_coerce_bool(data.get("run_after_probe", False), False),
         colors=_colors_from_dict(data.get("colors")),
+        user_colors=_user_colors_from_dict(data.get("user_colors")),
         patterns=patterns,
     )
 

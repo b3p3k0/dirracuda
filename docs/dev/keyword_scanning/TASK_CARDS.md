@@ -172,3 +172,151 @@ Validation:
 - Targeted pytest commands from cards.
 - `git diff --check`.
 - File-size check for touched files.
+
+## C8 - User Color Tags Model
+
+Goal: Add pure Sherlock settings/model/matcher support for User1/User2/User3
+visual tags without DB, GUI, or display-surface changes.
+
+Expected implementation shape:
+- Extend pure Sherlock model/settings with optional user colors and pattern
+  color-tag tokens.
+- User colors default to empty string and validate as empty or `#RRGGBB`.
+- Custom pattern serialization preserves optional `color_tag`; built-ins remain
+  untagged/read-only by default.
+- Matcher hits carry the matched pattern's color tag.
+- Severity precedence and hit count remain exactly as V1.
+
+Acceptance:
+- Existing V1 settings load safely with empty user colors and untagged patterns.
+- Bad user-color values fall back or reject according to caller context without
+  corrupting settings.
+- Unknown color-tag tokens degrade to no tag.
+- Matcher purity stays intact.
+
+Validation:
+- Settings/model/serialize tests.
+- Matcher tests for tagged and untagged patterns.
+- Purity tests.
+- `git diff --check`.
+
+## C9 - Tag Persistence And Display Contract
+
+Goal: Persist per-hit color tags and a selected result display tag through
+guarded, additive DB changes.
+
+Expected implementation shape:
+- Add nullable `display_color_tag` to `sherlock_results`.
+- Add nullable `color_tag` to `sherlock_hits`.
+- Store the selected display tag from matched hits using highest-severity tagged
+  hit; ties preserve matcher order.
+- Risk summary/detail readers include display tag and hit color tags when
+  columns exist, while legacy/partial schemas degrade to severity-only output.
+- Keep Web UI DB helper growth out of `experimental/webui/db.py`.
+
+Acceptance:
+- Existing rows without tag columns still display severity-only Risk.
+- New rows preserve tag data across store/read.
+- Runtime guards cover every table/column touched.
+- No scan/probe/content behavior changes.
+
+Validation:
+- Migration/persistence tests on minimal/current/partial schemas.
+- Risk summary tests for display tag selection.
+- Web UI read-helper tests if touched.
+- `git diff --check`.
+
+## C10 - Sherlock Settings UI Pattern Manager
+
+Goal: Add User color inputs and move pattern management into a tall popup dialog
+with staged edits.
+
+Expected implementation shape:
+- Main Sherlock tab shows High/Med/Low row, User1/User2/User3 row, and
+  `Manage Patterns...`.
+- Embedded pattern table and pattern action buttons move into `Sherlock
+  Patterns`.
+- Pattern manager table includes a `User Tag` column and remains scrollable with
+  visible scrollbar, mouse wheel, and arrow navigation.
+- Add/Edit dialog includes `Color tag` dropdown for custom patterns only.
+- Pattern manager edits stay staged until main Sherlock Save persists settings.
+
+Acceptance:
+- Empty user colors save.
+- Invalid non-empty user colors are rejected before save.
+- Built-ins cannot be edited or assigned user tags.
+- Default-size Accessories and pattern manager dialogs show all controls.
+
+Validation:
+- Sherlock tab/pattern manager GUI tests.
+- Settings persistence tests.
+- Xvfb screenshots for Accessories and pattern manager.
+- Messagebox/focus/theme guardrails.
+- `git diff --check`.
+
+## C11 - Existing Display Surfaces Use User Tint
+
+Goal: Apply persisted user-tag tinting to existing Sherlock display surfaces.
+
+Expected implementation shape:
+- Server List Risk row tint uses configured user color when `display_color_tag`
+  is present and configured; otherwise severity tint.
+- Desktop details and Web UI read-only details expose user tag labels for hits
+  when available.
+- Web UI badges use the same color-selection contract as desktop.
+- Shared display helper preferred over duplicating tint precedence logic.
+
+Acceptance:
+- Risk text remains `HIGH n`, `MED n`, or `LOW n`.
+- Empty/missing user color falls back to severity color.
+- Blank/stale/no-hit rows remain blank and untinted.
+- Web UI remains read-only with no Sherlock mutation route.
+
+Validation:
+- Server List Risk tests.
+- Desktop details tests.
+- Web UI API/static tests.
+- `git diff --check`.
+
+## C12 - Probe Summary Risk Highlighting
+
+Goal: Add Sherlock Risk column and row tint to existing probe batch summaries
+when post-probe Sherlock finds fresh Risk rows.
+
+Expected implementation shape:
+- Reuse persisted/returned Sherlock display data after the post-probe hook.
+- Add optional Risk column support to the shared batch summary dialog.
+- Add row tint tags driven by the same user-tag-wins fallback contract.
+- Preserve current summary columns when no row has fresh Risk.
+- CSV export includes Risk only when the Risk column is visible.
+
+Acceptance:
+- Dashboard/provider probe summaries and Server List probe summaries show Risk
+  only when post-probe Sherlock produces findings.
+- Probe status, ransomware indicator behavior, and extraction state do not
+  change.
+- No extra network/probe/content work is triggered by summary display.
+
+Validation:
+- Batch summary dialog tests.
+- Dashboard/provider queue summary tests.
+- Server List batch probe summary tests.
+- Xvfb screenshot of probe summary with Risk.
+- `git diff --check`.
+
+## C13 - V2 Closeout, Visual QA, Docs
+
+Goal: Close out V2 color highlighting with validation evidence and docs sync.
+
+Deliverables:
+- Targeted validation matrix across C8-C12.
+- Xvfb screenshots for Sherlock tab, pattern manager, and probe summary.
+- README/technical reference updates if runtime behavior changed.
+- Lessons learned update.
+- Final file-size audit and PASS/FAIL report.
+
+Validation:
+- Targeted pytest commands from C8-C12.
+- GUI guardrails.
+- `git diff --check`.
+- File-size check for touched files.

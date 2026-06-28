@@ -3,12 +3,17 @@
 import pytest
 
 from shared.sherlock import (
+    COLOR_TAG_NONE,
     DEFAULT_COLORS,
     Severity,
+    SherlockSettings,
     builtin_patterns,
     default_settings,
     is_valid_color,
+    is_valid_user_color,
+    normalize_color_tag,
     validate_color,
+    validate_user_color,
 )
 
 
@@ -87,3 +92,63 @@ def test_severity_precedence_and_display_text():
     assert Severity.HIGH > Severity.MED > Severity.LOW
     assert Severity.HIGH.display_text(3) == "HIGH 3"
     assert Severity.MED.display_name == "MED"
+
+
+# --- V2 user color tags (C8) ---
+
+
+@pytest.mark.parametrize("value", ["", "#ff4d4d", "#FFA31A", "#000000"])
+def test_is_valid_user_color_accepts(value):
+    assert is_valid_user_color(value) is True
+
+
+@pytest.mark.parametrize("value", ["#fff", "red", "ff4d4d", None, 123, "#ff4d4dd"])
+def test_is_valid_user_color_rejects(value):
+    assert is_valid_user_color(value) is False
+
+
+def test_validate_user_color_empty_passes_through():
+    assert validate_user_color("") == ""
+
+
+def test_validate_user_color_normalizes_lowercase():
+    assert validate_user_color("#FFA31A") == "#ffa31a"
+
+
+def test_validate_user_color_raises_on_invalid():
+    with pytest.raises(ValueError):
+        validate_user_color("not-a-color")
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("user1", "user1"),
+        ("USER2 ", "user2"),
+        (" User3", "user3"),
+        ("none", "none"),
+        ("", "none"),
+        (None, "none"),
+        ("user9", "none"),
+        (7, "none"),
+    ],
+)
+def test_normalize_color_tag(value, expected):
+    assert normalize_color_tag(value) == expected
+
+
+def test_default_settings_user_colors_empty():
+    assert default_settings().user_colors == {"user1": "", "user2": "", "user3": ""}
+
+
+def test_user_color_for_returns_configured_or_empty():
+    settings = SherlockSettings(user_colors={"user1": "#abcdef", "user2": "", "user3": ""})
+    assert settings.user_color_for("user1") == "#abcdef"
+    assert settings.user_color_for("USER1") == "#abcdef"
+    assert settings.user_color_for("user2") == ""
+    assert settings.user_color_for("none") == ""
+    assert settings.user_color_for("user9") == ""
+
+
+def test_builtins_are_always_untagged():
+    assert all(p.color_tag == COLOR_TAG_NONE for p in builtin_patterns())

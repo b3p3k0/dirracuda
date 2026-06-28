@@ -12,7 +12,13 @@ import dataclasses
 import fnmatch
 from typing import Iterable, List, Optional
 
-from .model import Severity, SherlockPattern, SherlockSettings
+from .model import (
+    COLOR_TAG_NONE,
+    Severity,
+    SherlockPattern,
+    SherlockSettings,
+    normalize_color_tag,
+)
 from .path_entry import SherlockPathEntry
 
 
@@ -25,6 +31,7 @@ class SherlockHit:
     label: str
     pattern: str
     display_path: str
+    color_tag: str = COLOR_TAG_NONE
 
 
 @dataclasses.dataclass(frozen=True)
@@ -100,6 +107,7 @@ def match_entries(
                         label=pattern.label,
                         pattern=pattern.pattern,
                         display_path=entry.display_path,
+                        color_tag=normalize_color_tag(pattern.color_tag),
                     )
                 )
 

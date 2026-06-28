@@ -234,3 +234,196 @@ Run the final targeted validation set, update docs, update lessons learned, and
 report PASS/FAIL with exact commands.
 Do not commit.
 ```
+
+## C8 Planning Prompt
+
+```text
+Plan C8 only: pure Sherlock User color tags model.
+
+For this reply, produce a plan and stop. After RA/HI acceptance, execute the
+approved plan in this worktree before sending the completion report.
+
+The plan must cover:
+- user color settings: User1/User2/User3 default empty; valid values empty or
+  #RRGGBB; existing severity colors still require #RRGGBB
+- stable color-tag tokens: none/user1/user2/user3, with unknown tokens
+  degrading to no tag
+- optional color_tag on custom patterns and matcher hits
+- serialization/backward compatibility for existing Sherlock settings
+- matcher behavior: severity precedence and hit count unchanged
+- purity guardrails: no DB, GUI, filesystem, network, or protocol coupling
+- tests and file-size risks
+
+Do not include DB migrations, GUI changes, Server List/Web display changes, or
+probe summary work in this card.
+```
+
+## C8 Implementation Prompt
+
+```text
+Implement approved C8 only.
+
+Keep this card pure model/settings/matcher work. Do not touch DB migrations,
+GUI, Server List/Web display, or batch summaries.
+Run targeted Sherlock model/serialize/matcher/purity tests and `git diff --check`.
+Report exact commands and results. Do not commit.
+```
+
+## C9 Planning Prompt
+
+```text
+Plan C9 only: Sherlock tag persistence and display contract.
+
+For this reply, produce a plan and stop. After RA/HI acceptance, execute the
+approved plan in this worktree before sending the completion report.
+
+The plan must cover:
+- additive nullable columns: sherlock_results.display_color_tag and
+  sherlock_hits.color_tag
+- guarded runtime reads/writes for every touched column
+- selected display tag rule: highest-severity tagged hit; ties preserve matcher
+  order; store token independent of whether color is currently configured
+- legacy/partial schema fallback to severity-only display
+- shape changes for result/detail/risk summary readers
+- tests on minimal/current/partial schemas
+- file-size risks, especially existing near-limit DB/Web files
+
+Do not change Accessories UI or batch summary UI in this card.
+```
+
+## C9 Implementation Prompt
+
+```text
+Implement approved C9 only.
+
+Keep schema changes additive and guarded. Do not change Accessories UI or batch
+summary UI.
+Run persistence/risk-summary/Web-read helper tests and `git diff --check`.
+Report exact commands and results. Do not commit.
+```
+
+## C10 Planning Prompt
+
+```text
+Plan C10 only: Sherlock Accessories user colors and pattern manager dialog.
+
+For this reply, produce a plan and stop. After RA/HI acceptance, execute the
+approved plan in this worktree before sending the completion report.
+
+The plan must cover:
+- main Sherlock tab layout: severity colors row, User1/User2/User3 row, Manage
+  Patterns button, Save/status
+- user color validation and colorchooser behavior
+- tall modal Sherlock Patterns dialog with scrollable Treeview and moved
+  Add/Edit/Enable-Disable/Delete/Restore controls
+- Add/Edit dialog Color tag dropdown for custom patterns
+- staged edit behavior: dialog changes remain in memory until main Save
+- Xvfb/default-size visual checks
+- tests and file-size risks
+
+Do not change DB migrations or probe summary behavior in this card.
+```
+
+## C10 Implementation Prompt
+
+```text
+Implement approved C10 only.
+
+Keep this to Sherlock settings UI/pattern manager behavior. Do not change DB
+migrations or probe summaries.
+Run Sherlock tab/dialog tests, Xvfb checks, GUI guardrails, and `git diff --check`.
+Report exact commands and results. Do not commit.
+```
+
+## C11 Planning Prompt
+
+```text
+Plan C11 only: existing Sherlock display surfaces use User tint.
+
+For this reply, produce a plan and stop. After RA/HI acceptance, execute the
+approved plan in this worktree before sending the completion report.
+
+The plan must cover:
+- shared tint/risk display helper to avoid duplicated precedence logic
+- Server List Risk tint: User color wins when configured, otherwise severity
+  color; Risk text remains HIGH/MED/LOW
+- desktop details display of per-hit user tag labels when available
+- Web UI read-only badges/details using the same tint contract and no mutation
+  routes
+- blank/stale/no-hit quiet contract
+- tests and file-size risks
+
+Do not add probe batch summary Risk column in this card.
+```
+
+## C11 Implementation Prompt
+
+```text
+Implement approved C11 only.
+
+Do not add probe batch summary Risk column in this card.
+Run Server List, desktop details, Web UI read-only tests, and `git diff --check`.
+Report exact commands and results. Do not commit.
+```
+
+## C12 Planning Prompt
+
+```text
+Plan C12 only: probe batch summary Sherlock Risk highlighting.
+
+For this reply, produce a plan and stop. After RA/HI acceptance, execute the
+approved plan in this worktree before sending the completion report.
+
+The plan must cover:
+- how post-probe Sherlock display data reaches summary rows without extra
+  network/probe/content work
+- optional Risk column in shared batch summary dialog
+- row tint tags using the same User-color-wins fallback contract
+- preserving existing summary layout when no row has fresh Risk
+- CSV export including Risk only when visible
+- dashboard/provider and Server List batch summary coverage
+- Xvfb/default-size visual check for a Risk-highlighted summary
+- tests and file-size risks
+
+Do not change Sherlock settings UI or DB schema in this card.
+```
+
+## C12 Implementation Prompt
+
+```text
+Implement approved C12 only.
+
+Do not change Sherlock settings UI or DB schema in this card.
+Run batch summary, dashboard/provider, Server List summary tests, Xvfb visual
+check, and `git diff --check`.
+Report exact commands and results. Do not commit.
+```
+
+## C13 Planning Prompt
+
+```text
+Plan C13 only: V2 color-highlighting closeout.
+
+For this reply, produce a plan and stop. After RA/HI acceptance, execute the
+approved plan in this worktree before sending the completion report.
+
+The plan must cover:
+- targeted validation matrix across C8-C12
+- Xvfb screenshots for Sherlock tab, pattern manager, and probe summary
+- README/technical reference sync
+- lessons learned update
+- final file-size audit
+- handling any known unrelated full-suite flakes distinctly from V2 failures
+
+Do not add product behavior in this card.
+```
+
+## C13 Implementation Prompt
+
+```text
+Implement approved C13 only.
+
+Run the final targeted validation set, update docs/lessons learned, capture
+visual QA evidence, and report PASS/FAIL with exact commands.
+Do not commit.
+```

@@ -1,5 +1,7 @@
 """Unit tests for the pure Sherlock matcher."""
 
+import pytest
+
 from shared.sherlock import (
     Severity,
     SherlockPathEntry,
@@ -21,7 +23,7 @@ def _entry(display_path, segments=None, container=None):
     )
 
 
-def _pat(pattern, severity=Severity.HIGH, enabled=True, key="k"):
+def _pat(pattern, severity=Severity.HIGH, enabled=True, key="k", color_tag="none"):
     return SherlockPattern(
         key=key,
         category="cat",
@@ -29,6 +31,7 @@ def _pat(pattern, severity=Severity.HIGH, enabled=True, key="k"):
         pattern=pattern,
         severity=severity,
         enabled=enabled,
+        color_tag=color_tag,
     )
 
 
@@ -130,3 +133,51 @@ def test_bracket_neutralization_with_wildcards():
     settings = _settings([_pat("*[ab]*")])
     assert match_entries([_entry("share/x[ab]y.txt")], settings).hit_count == 1
     assert match_entries([_entry("share/xay.txt")], settings).hit_count == 0
+
+
+# --- V2 color tags (C8) ---
+
+
+def test_hit_carries_pattern_color_tag():
+    result = match_entries(
+        [_entry("share/secret.txt")], _settings([_pat("secret", color_tag="user2")])
+    )
+    assert result.hits[0].color_tag == "user2"
+
+
+def test_untagged_pattern_hit_is_none_tag():
+    result = match_entries([_entry("share/secret.txt")], _settings([_pat("secret")]))
+    assert result.hits[0].color_tag == "none"
+
+
+@pytest.mark.parametrize(
+    "raw_tag,expected",
+    [("USER1", "user1"), ("user9", "none"), (None, "none")],
+)
+def test_hit_color_tag_normalized_at_emission(raw_tag, expected):
+    # Patterns built manually / by a future UI may carry unnormalized tags; the
+    # matcher must still emit stable tokens (uppercase folds, unknown->none).
+    result = match_entries(
+        [_entry("share/secret.txt")], _settings([_pat("secret", color_tag=raw_tag)])
+    )
+    assert result.hits[0].color_tag == expected
+
+
+def test_color_tags_do_not_change_severity_or_count():
+    patterns = [
+        _pat("*internal*", severity=Severity.LOW, key="low", color_tag="user1"),
+        _pat("*payroll*", severity=Severity.MED, key="med", color_tag="user2"),
+        _pat("*password*", severity=Severity.HIGH, key="high", color_tag="user3"),
+    ]
+    entry = _entry("share/internal_payroll_password.txt")
+    tagged = match_entries([entry], _settings(patterns))
+
+    baseline_patterns = [
+        _pat("*internal*", severity=Severity.LOW, key="low"),
+        _pat("*payroll*", severity=Severity.MED, key="med"),
+        _pat("*password*", severity=Severity.HIGH, key="high"),
+    ]
+    baseline = match_entries([entry], _settings(baseline_patterns))
+
+    assert tagged.hit_count == baseline.hit_count == 3
+    assert tagged.highest_severity is baseline.highest_severity is Severity.HIGH

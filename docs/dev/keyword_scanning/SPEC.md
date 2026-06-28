@@ -121,3 +121,57 @@ Each implementation card must report:
 
 Each touched file's line count must be checked before and after. Any file over
 1700 lines requires a pause and modularization proposal before continuing.
+
+## V2 Color Highlighting Addendum
+
+Sherlock V2 adds analyst-defined visual tags without changing the risk severity
+model. `HIGH`, `MED`, and `LOW` remain the only severities and continue to
+control risk text and hit count semantics.
+
+### User Color Tags
+
+- Add fixed labels `User1`, `User2`, and `User3`.
+- Each user color defaults to empty string.
+- Valid user color values are empty string or `#RRGGBB`; saved hex values are
+  normalized lowercase.
+- Severity colors still require valid `#RRGGBB`.
+- Empty user colors are persisted but visually inactive.
+
+### Pattern Tags
+
+- Custom patterns may carry one optional color tag: none, `user1`, `user2`, or
+  `user3`.
+- Built-ins remain read-only and cannot be assigned/edit tags in V2. They may
+  still be enabled, disabled, and restored.
+- Matcher hits carry the pattern's color tag for display/persistence.
+- Severity precedence and hit count are unchanged.
+
+### Display Tint Precedence
+
+- Risk text remains severity-based: `HIGH n`, `MED n`, or `LOW n`.
+- If a fresh finding has any hit with a user tag whose configured color is not
+  empty, row-level tint uses the selected user color.
+- If more than one usable user-tagged hit exists, choose the tagged hit with the
+  highest severity; ties preserve matcher hit order.
+- If no usable user color exists, surfaces fall back to severity color.
+- Blank/no-hit/stale/no-snapshot rows remain blank and untinted.
+
+### Persistence Addendum
+
+- Add nullable `display_color_tag` to `sherlock_results`.
+- Add nullable `color_tag` to `sherlock_hits`.
+- `display_color_tag` stores the selected user tag token from matched hits,
+  independent of whether that tag currently has a configured color. Display
+  surfaces resolve the actual color from current settings.
+- Legacy rows without these columns or values degrade to severity-only display.
+
+### UI Addendum
+
+- The Sherlock tab keeps options, severity colors, user colors, Save/status, and
+  a `Manage Patterns...` button.
+- The pattern table and pattern actions move into a tall modal `Sherlock
+  Patterns` dialog.
+- Pattern dialog edits remain staged in memory until the main Sherlock tab Save
+  button persists the full settings shard.
+- Existing probe batch summaries gain a Risk column and row tint only when at
+  least one row has a fresh Sherlock finding.

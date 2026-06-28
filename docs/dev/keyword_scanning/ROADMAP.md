@@ -83,3 +83,64 @@ sanity found one pre-existing tkinter import-ordering artifact in
 captured for the Accessories tab, Quick Scan row, Server List Risk column, and
 detail popup. README, `AGENTS.md`, and `docs/TECHNICAL_REFERENCE.md` were synced;
 `CLAUDE.md` was updated locally but remains gitignored. Sherlock V1 closed.
+
+## C8 - User Color Tags Model
+
+Add pure settings/model/matcher support for optional User1/User2/User3 visual
+tags. No DB, GUI, or batch-summary work.
+
+Exit criteria:
+- User colors validate as empty or `#RRGGBB`.
+- Custom patterns and hits can carry optional color-tag tokens.
+- Severity precedence and hit counts remain unchanged.
+
+## C9 - Tag Persistence And Display Contract
+
+Persist per-hit color tags and the selected result display tag additively.
+Expose guarded read shapes for existing display surfaces.
+
+Exit criteria:
+- Nullable tag columns migrate idempotently.
+- Legacy/partial schemas degrade to severity-only display.
+- Store/read helpers preserve total hit count and capped details.
+
+## C10 - Sherlock Settings UI Pattern Manager
+
+Add User color inputs to the Sherlock tab and move pattern management into a
+tall modal dialog with staged edits.
+
+Exit criteria:
+- Main tab no longer embeds the pattern table.
+- Pattern manager has scrollable table, actions, and color-tag dropdown for
+  custom patterns.
+- Xvfb/default-size screenshots show no clipping.
+
+## C11 - Existing Display Surfaces Use User Tint
+
+Apply the user-tag tint contract to Server List, desktop details, and Web UI
+read-only Sherlock displays.
+
+Exit criteria:
+- Risk text remains severity-based.
+- User tint wins when configured; otherwise severity tint remains.
+- Blank/stale/no-hit rows remain quiet.
+
+## C12 - Probe Summary Risk Highlighting
+
+Show Sherlock Risk column and row tint in probe batch summaries when post-probe
+Sherlock produced fresh findings.
+
+Exit criteria:
+- Summary layout is unchanged when no row has Risk.
+- Risk column and CSV column appear only when visible.
+- Dashboard/provider and Server List probe summaries are covered.
+
+## C13 - V2 Closeout
+
+Run targeted validation, visual QA, docs sync, and lessons learned for the V2
+color-highlighting pass.
+
+Exit criteria:
+- All V2 surfaces have targeted tests.
+- Xvfb screenshots cover Sherlock tab, pattern manager, and probe summary.
+- README/technical docs and lessons learned match runtime behavior.

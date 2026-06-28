@@ -132,3 +132,72 @@ def test_to_dict_only_records_disabled_builtins():
     data = settings_to_dict(SherlockSettings(patterns=patterns))
     assert data["builtin_disabled"] == [disabled_key]
     assert data["custom_patterns"] == []
+
+
+# --- V2 user color tags (C8) ---
+
+
+def test_user_colors_and_color_tag_round_trip():
+    settings = SherlockSettings(
+        user_colors={"user1": "#abcdef", "user2": "", "user3": "#001122"},
+        patterns=builtin_patterns()
+        + [
+            SherlockPattern(
+                key="custom_tagged",
+                category="Custom",
+                label="Tagged",
+                pattern="*acme*",
+                severity=Severity.MED,
+                enabled=True,
+                builtin=False,
+                color_tag="user1",
+            )
+        ],
+    )
+    restored = settings_from_dict(settings_to_dict(settings))
+    assert restored.user_colors == {"user1": "#abcdef", "user2": "", "user3": "#001122"}
+    custom = [p for p in restored.patterns if not p.builtin][0]
+    assert custom.color_tag == "user1"
+
+
+def test_v1_dict_loads_with_empty_user_colors_and_untagged_customs():
+    restored = settings_from_dict(
+        {"custom_patterns": [{"key": "c", "pattern": "*x*", "severity": "low"}]}
+    )
+    assert restored.user_colors == {"user1": "", "user2": "", "user3": ""}
+    custom = [p for p in restored.patterns if not p.builtin][0]
+    assert custom.color_tag == "none"
+
+
+def test_invalid_user_color_degrades_to_empty():
+    restored = settings_from_dict(
+        {"user_colors": {"user1": "red", "user2": "#ABCDEF", "user3": 7}}
+    )
+    assert restored.user_colors == {"user1": "", "user2": "#abcdef", "user3": ""}
+
+
+def test_unknown_color_tag_token_degrades_to_none():
+    restored = settings_from_dict(
+        {"custom_patterns": [{"key": "c", "pattern": "*x*", "color_tag": "user9"}]}
+    )
+    custom = [p for p in restored.patterns if not p.builtin][0]
+    assert custom.color_tag == "none"
+
+
+def test_builtins_never_serialize_a_color_tag():
+    patterns = builtin_patterns()
+    disabled_key = patterns[1].key
+    patterns[1] = SherlockPattern(
+        key=patterns[1].key,
+        category=patterns[1].category,
+        label=patterns[1].label,
+        pattern=patterns[1].pattern,
+        severity=patterns[1].severity,
+        enabled=False,
+        builtin=True,
+    )
+    data = settings_to_dict(SherlockSettings(patterns=patterns))
+    # Built-ins persist only by disabled key — never as custom rows, so no
+    # built-in color_tag is ever written to state.
+    assert data["builtin_disabled"] == [disabled_key]
+    assert data["custom_patterns"] == []

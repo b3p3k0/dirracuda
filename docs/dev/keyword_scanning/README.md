@@ -8,6 +8,10 @@ This folder is for planning, RA review, Claude prompts, and documentation only.
 It does not authorize coding, schema changes, migrations, or runtime edits by
 the planning agent.
 
+For the V2 color-highlighting pass, approval of a plan authorizes the PA/RA to
+update this planning packet and present the next Claude prompt only. It does not
+authorize the PA/RA to implement runtime code directly.
+
 ## Operating Model
 
 1. The PA/RA writes or updates one small task card at a time.
@@ -39,6 +43,13 @@ the planning agent.
   individual path segments, includes share/container names when available, uses
   a pure canonical path-entry input shape, and defers config-store persistence
   until the UI/settings card.
+- V2 color-highlighting decisions: User1/User2/User3 are optional visual tags,
+  not new severities. Custom patterns may carry one tag. If a fresh finding has
+  a usable user-tag color, that color wins row tint; risk text remains
+  HIGH/MED/LOW severity text. Empty user colors are saved but visually inactive.
+- V2 pattern management decision: the embedded pattern table moves to a tall
+  modal dialog. Dialog edits are staged in the Sherlock tab and persist only
+  when the existing Sherlock Save button is clicked.
 
 ## Source Anchors
 
@@ -52,6 +63,8 @@ the planning agent.
   https://docs.python.org/3/library/tkinter.colorchooser.html
 - SQLite additive table creation is via `CREATE TABLE IF NOT EXISTS`:
   https://www.sqlite.org/lang_createtable.html
+- SQLite additive column work is via `ALTER TABLE ... ADD COLUMN`:
+  https://www.sqlite.org/lang_altertable.html
 - Xvfb provides a virtual framebuffer for GUI checks without display hardware:
   https://xorg.freedesktop.org/archive/X11R7.7/doc/man/man1/Xvfb.1.xhtml
 

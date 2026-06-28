@@ -10,14 +10,21 @@ from __future__ import annotations
 
 from .matcher import MatchResult, SherlockHit, match_entries
 from .model import (
+    COLOR_TAG_NONE,
     DEFAULT_COLORS,
+    DEFAULT_USER_COLORS,
+    USER_COLOR_KEYS,
+    VALID_COLOR_TAGS,
     Severity,
     SherlockPattern,
     SherlockSettings,
     builtin_patterns,
     default_settings,
     is_valid_color,
+    is_valid_user_color,
+    normalize_color_tag,
     validate_color,
+    validate_user_color,
 )
 from .path_entry import (
     SherlockPathEntry,
@@ -33,7 +40,9 @@ from .serialize import (
 )
 
 __all__ = [
+    "COLOR_TAG_NONE",
     "DEFAULT_COLORS",
+    "DEFAULT_USER_COLORS",
     "MatchResult",
     "SHERLOCK_SETTINGS_KEY",
     "Severity",
@@ -41,10 +50,14 @@ __all__ = [
     "SherlockPathEntry",
     "SherlockPattern",
     "SherlockSettings",
+    "USER_COLOR_KEYS",
+    "VALID_COLOR_TAGS",
     "builtin_patterns",
     "default_settings",
     "is_valid_color",
+    "is_valid_user_color",
     "match_entries",
+    "normalize_color_tag",
     "path_entries_from_rows",
     "path_entries_from_snapshot",
     "settings_from_dict",
@@ -52,4 +65,5 @@ __all__ = [
     "severity_from_str",
     "severity_to_str",
     "validate_color",
+    "validate_user_color",
 ]
