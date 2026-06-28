@@ -231,6 +231,7 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                 notes.append("Indicators detected")
             return {
                 "ip_address": ip_address,
+                "row_key": row_key,
                 "action": "probe",
                 "status": "success",
                 "notes": ", ".join(notes),
@@ -357,6 +358,7 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                 notes_h.append("Indicators detected")
             return {
                 "ip_address": ip_address,
+                "row_key": row_key,
                 "action": "probe",
                 "status": "success",
                 "notes": ", ".join(notes_h),
@@ -390,6 +392,7 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
             status = "cancelled" if "cancel" in str(exc).lower() else "failed"
             return {
                 "ip_address": ip_address,
+                "row_key": row_key,
                 "action": "probe",
                 "status": status,
                 "notes": str(exc),
@@ -438,6 +441,7 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
 
         return {
             "ip_address": ip_address,
+            "row_key": row_key,
             "action": "probe",
             "status": "success",
             "notes": ", ".join(notes),

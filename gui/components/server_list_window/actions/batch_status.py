@@ -13,6 +13,10 @@ from typing import Dict, Any, Optional, List
 
 from gui.components.server_list_window import table, filters
 from gui.components.batch_summary_dialog import show_batch_summary_dialog
+from gui.utils.sherlock_risk_display import (
+    attach_sherlock_risk_to_results,
+    resolve_sherlock_risk,
+)
 from gui.utils import safe_messagebox as messagebox
 from gui.components.running_tasks_window import RunningTasksWindow
 from gui.utils.running_tasks import RunningTaskSnapshot, get_running_task_registry
@@ -316,6 +320,7 @@ class ServerListWindowBatchStatusMixin:
             for target in pending:
                 job["results"].append({
                     "ip_address": target.get("ip_address"),
+                    "row_key": target.get("row_key"),
                     "action": job.get("type", "batch"),
                     "status": "cancelled",
                     "notes": "Stopped by user"
@@ -543,6 +548,19 @@ class ServerListWindowBatchStatusMixin:
             self._remove_context_dismiss_handlers()
 
         def _show_batch_summary(self, job_type: str, results: List[Dict[str, Any]]) -> None:
+            # Post-probe Sherlock Risk (C12): enrich rows from already-persisted
+            # results (one DB read, no probe/network/content) and show the Risk
+            # column only when a fresh finding exists. Non-probe jobs unchanged.
+            sherlock_settings = None
+            show_risk = False
+            if job_type == "probe":
+                attach_sherlock_risk_to_results(getattr(self, "db_reader", None), results)
+                show_risk = any(
+                    resolve_sherlock_risk(r.get("sherlock_risk")) for r in results
+                )
+                if show_risk:
+                    sherlock_settings = self._load_sherlock_settings()
+
             show_batch_summary_dialog(
                 parent=self.window,
                 theme=self.theme,
@@ -554,6 +572,8 @@ class ServerListWindowBatchStatusMixin:
                 show_stats=False,
                 wait=False,
                 modal=False,
+                show_risk=show_risk,
+                sherlock_settings=sherlock_settings,
             )
 
         def _maybe_show_clamav_dialog(

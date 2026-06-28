@@ -12,24 +12,11 @@ from datetime import datetime
 from typing import Dict, List, Any, Callable, Optional, Tuple
 import re
 
-from shared.sherlock import Severity, default_settings, normalize_color_tag, settings_from_dict
-
-# Persisted severity tokens -> Severity. Explicit (not severity_from_str, which
-# defaults unknowns to MED) so malformed tokens render blank instead of mislabeled.
-_SHERLOCK_SEVERITY_BY_TOKEN = {
-    "high": Severity.HIGH,
-    "med": Severity.MED,
-    "low": Severity.LOW,
-}
-
-
-def _sherlock_row_tag(severity: Severity, color_tag: str) -> str:
-    """Composite Treeview tag name keyed by (severity, normalized color tag).
-
-    User-tagged rows get a distinct tag so the row background can carry the
-    user color; untagged rows keep a severity-only tag.
-    """
-    return "sherlock_{0}_{1}".format(severity.name.lower(), color_tag)
+from shared.sherlock import default_settings, settings_from_dict
+from gui.utils.sherlock_risk_display import (
+    resolve_sherlock_risk as _resolve_sherlock_risk,
+    sherlock_row_tag as _sherlock_row_tag,
+)
 
 
 def _load_sherlock_settings(settings_manager):
@@ -41,31 +28,6 @@ def _load_sherlock_settings(settings_manager):
     except Exception:
         return default_settings()
 
-
-def _resolve_sherlock_risk(risk):
-    """Return (Severity, count, color_tag) for a displayable finding, else None.
-
-    Applies the alert-only blank contract: absent / stale / zero-hit / malformed
-    severity all yield None (blank cell). Only a fresh, non-zero, recognized
-    severity is displayed. `color_tag` is the normalized user tag token
-    (none/user1/user2/user3) used to pick the row tint.
-    """
-    if not isinstance(risk, dict):
-        return None
-    if risk.get("stale"):
-        return None
-    count = risk.get("count") or 0
-    try:
-        count = int(count)
-    except (TypeError, ValueError):
-        return None
-    if count <= 0:
-        return None
-    severity = _SHERLOCK_SEVERITY_BY_TOKEN.get(risk.get("severity"))
-    if severity is None:
-        return None
-    color_tag = normalize_color_tag(risk.get("display_color_tag"))
-    return severity, count, color_tag
 
 def create_server_table(parent, theme, callbacks):
     """
