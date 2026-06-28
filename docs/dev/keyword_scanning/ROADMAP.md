@@ -76,3 +76,10 @@ Exit criteria:
 - Validation output is captured.
 - README and technical reference match runtime behavior.
 - Lessons learned record new guardrails and pitfalls.
+
+Status: complete. Targeted matrix (220 Sherlock tests) passed. Full-suite
+sanity found one pre-existing tkinter import-ordering artifact in
+`test_daemon_cli.py`, not a Sherlock failure. Default-size Xvfb screenshots were
+captured for the Accessories tab, Quick Scan row, Server List Risk column, and
+detail popup. README, `AGENTS.md`, and `docs/TECHNICAL_REFERENCE.md` were synced;
+`CLAUDE.md` was updated locally but remains gitignored. Sherlock V1 closed.

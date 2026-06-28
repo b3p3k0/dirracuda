@@ -90,7 +90,7 @@ Always access config through `SMBSeekConfig` in `shared/config.py`. Never read
 SQLite at `dirracuda.db` (path configurable). Schema migrations are additive and run on
 startup via `shared/db_migrations.py`. Core tables: `smb_servers`, `ftp_servers`,
 `http_servers`, `share_access`, `file_manifests`, `scan_sessions`, `failure_logs`,
-`host_probe_cache`, `host_user_flags`.
+`host_probe_cache`, `host_user_flags`, `sherlock_results`, `sherlock_hits`.
 
 ### User-Data Paths
 
@@ -125,6 +125,7 @@ GUI tabs for these surfaces live in `gui/components/experimental_features/`.
 | Redseek | `experimental/redseek/service.py` | **primary** | Reddit ingestion via anonymous RSS feed/search only; new runs write to primary DB, auto-sync SMB/FTP/HTTP targets; legacy data in `reddit_od.db` |
 | SearXNG Dork | `experimental/se_dork/service.py` | **primary** | SearXNG-based dork search; two-commit transaction model; auto-sync to primary protocol tables |
 | Censys Discovery | `experimental/censys_discovery/service.py` | sidecar | Censys Platform v3 alternative discovery; requires org-scoped PAT. **Suspended** — free-tier API does not provide candidate-list endpoints required for in-app runs. |
+| Sherlock | `shared/sherlock/` + `gui/components/experimental_features/sherlock_tab.py` | **primary** (`sherlock_results`/`sherlock_hits`) | Display-only exposure triage over existing probe snapshot paths. Never downloads, reads content, authenticates, or probes. Pure matcher (purity-guarded); Server List `Risk` column + `Scan Sherlock` action; optional post-probe hook; read-only desktop/Web UI display (quiet — blank unless fresh positive finding). |
 
 ## Test Conventions
 

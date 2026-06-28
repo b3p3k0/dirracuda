@@ -43,3 +43,26 @@ Seeded before implementation. Append after each major card.
 16. Web UI Sherlock values are untrusted display data. Render persisted labels,
    paths, and patterns through DOM text nodes / `textContent`, never dynamic
    HTML.
+
+## C7 Closeout
+
+17. Closeout needs its own validation matrix, not just a re-run of the latest
+   card. Map every shipped surface (matcher, settings, persistence, Accessories
+   tab, Server List Risk/scan, post-probe hook, Quick Scan toggle, desktop
+   details, Web UI) to its test file and run them together plus a full-suite
+   sanity pass.
+18. Agent-facing technical references trail runtime silently. `CLAUDE.md`,
+   `AGENTS.md`, and `docs/TECHNICAL_REFERENCE.md` had zero Sherlock mention after
+   C1-C6 even though the user-facing README was current. Closeout must sweep the
+   DB table lists, Accessories lists, and Server List sections in those files.
+19. Visual QA must run isolated. Point `HOME` at a temp dir and seed a temp
+   migrated DB (the `test_sherlock_persistence.py` pattern) so default-size
+   screenshots never touch the real `~/.dirracuda` tree.
+20. Headless screenshots need explicit window placement and filter state. Under
+   xvfb there is no window manager, so large windows open off-origin; pin
+   geometry to `+0+0`. The Server List `Show Only Shares >0` default also hides
+   zero-share seeded hosts — disable it to render the Risk column row.
+21. Full-suite ordering can mask or fake regressions. `test_daemon_modules_import_without_tkinter`
+   fails only when a GUI test earlier in the run leaves `tkinter` in
+   `sys.modules`; the daemon import chain itself stays clean. Verify suspected
+   regressions in isolation before attributing them to the current card.
