@@ -1117,7 +1117,9 @@ Displays hosts from `smb_servers`, `ftp_servers`, `http_servers` in separate tab
 | Scan Sherlock | `gui/components/server_list_window/actions/sherlock_action.py` — matches the selected hosts' **latest probe snapshot paths** against enabled Sherlock patterns and persists the result; no network/probe work, no downloads, no content reads. Hosts without a current snapshot are skipped and counted. |
 | Delete | Cascades via FK `ON DELETE CASCADE` |
 
-The list also carries an alert-only **`Risk`** column populated from `sherlock_results`: fresh findings render `HIGH n` / `MED n` / `LOW n` with a row tint in the configured severity color, while no-hit, stale, no-snapshot, and unscanned rows stay blank. Detail popups carry the explanatory state and capped hit list.
+The list also carries an alert-only **`Risk`** column populated from `sherlock_results`: fresh findings render `HIGH n` / `MED n` / `LOW n`, while no-hit, stale, no-snapshot, and unscanned rows stay blank. The row tint uses the result's `display_color_tag` User color when that tag is configured non-empty, otherwise the severity color — the risk text stays severity-based either way. The shared precedence helper lives in `gui/utils/sherlock_risk_display.py` so Server List, desktop details, probe summaries, and the Web UI share one tint contract. Detail popups carry the explanatory state and capped hit list.
+
+When `Run after probe` runs Sherlock on a fresh snapshot, the shared probe batch summary dialog (`gui/components/batch_summary_dialog.py`) gains an optional `Risk` column and row tint driven by the returned per-host risk data using the same user-tag-then-severity contract. The column (and its CSV export field) appear only when at least one summarized host has a fresh finding; otherwise the summary layout is unchanged. No extra network/probe/content work is triggered by the summary display.
 
 Long-running monitor dialogs (scan/probe/extract and related batch jobs) are non-modal and integrated with the shared Running Tasks registry. Hiding a monitor does not cancel work; active/queued tasks remain reopenable through Running Tasks.
 
@@ -1162,7 +1164,7 @@ Current tabs (registry order):
 - `Web UI`
 - `Dorkbook`
 - `Keymaster`
-- `Sherlock` — display-only exposure-triage settings (`gui/components/experimental_features/sherlock_tab.py`): ignore-case + run-after-probe toggles, High/Med/Low `#RRGGBB` severity colors with optional color chooser, and a fixed-height scrollable table for built-in/custom keyword/wildcard patterns. Settings persist to the top-level `sherlock` config-store module. The Start Scan dialog mirrors the same `run after probe` flag and opens this surface from its runtime controls.
+- `Sherlock` — display-only exposure-triage settings (`gui/components/experimental_features/sherlock_tab.py`): ignore-case + run-after-probe toggles, High/Med/Low `#RRGGBB` severity colors, optional User1/User2/User3 `#RRGGBB` tag colors (each empty or valid hex), all with optional color chooser. Pattern management lives in a tall **`Manage Patterns...`** modal (`Sherlock Patterns`) holding the scrollable built-in/custom keyword/wildcard table with a `User Tag` column; the Add/Edit dialog offers a color-tag dropdown for custom patterns only (built-ins cannot be edited or tagged). Pattern-manager edits stay staged in the tab and persist only when the tab's Save is clicked. Settings persist to the top-level `sherlock` config-store module. The Start Scan dialog mirrors the same `run after probe` flag and opens this surface from its runtime controls.
 
 Suspended module:
 - `Censys Discovery` backend is retained in `experimental/censys_discovery/`, but its GUI surfaces are currently hidden.

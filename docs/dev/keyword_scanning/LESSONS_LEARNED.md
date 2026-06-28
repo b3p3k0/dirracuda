@@ -63,6 +63,29 @@ Seeded before implementation. Append after each major card.
    geometry to `+0+0`. The Server List `Show Only Shares >0` default also hides
    zero-share seeded hosts — disable it to render the Risk column row.
 21. Full-suite ordering can mask or fake regressions. `test_daemon_modules_import_without_tkinter`
-   fails only when a GUI test earlier in the run leaves `tkinter` in
-   `sys.modules`; the daemon import chain itself stays clean. Verify suspected
-   regressions in isolation before attributing them to the current card.
+   (`experimental/webui/tests/test_daemon_cli.py`) fails only when a GUI test
+   earlier in the run leaves `tkinter` in `sys.modules`; the daemon import chain
+   itself stays clean. Verify suspected regressions in isolation before
+   attributing them to the current card.
+
+## C13 Closeout
+
+22. Closeout triage needs two explicit buckets, not one pass/fail count. Run the
+   full suite, then separate the known `test_daemon_cli` tkinter ordering
+   artifact (re-confirm it passes in isolation) from any real V2 failure touching
+   `shared/sherlock`, `database_access_sherlock_methods`, `sherlock_risk_display`,
+   or the batch-summary path. Reporting "1 failed" without that split hides
+   whether the feature is actually green.
+23. Tint precedence must be QA'd with both states. The user-tag-then-severity
+   contract only proves out when a screenshot shows a user-tagged row tinted with
+   its User color *and* an untagged row falling back to the severity color. The
+   C13 probe-summary shot (HIGH row in User1 blue, LOW row in severity yellow,
+   no-finding row blank) is the canonical evidence shape.
+24. Staged-edit modals split the QA surface. The pattern manager persists nothing
+   until the main tab Save, so visual checks must confirm the modal renders the
+   `User Tag` column and color-tag dropdown, while persistence tests separately
+   confirm staged edits only land on Save. Screenshot ≠ persistence proof here.
+25. Reuse prior cards' Xvfb harnesses verbatim where they exist. The C10 and C12
+   QA scripts re-ran unchanged against committed V2 code; the only gotcha was a
+   missing `sys.path`/`PYTHONPATH` to the repo root for the standalone probe
+   harness. Don't rebuild screenshot scaffolding from scratch at closeout.

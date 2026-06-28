@@ -550,9 +550,9 @@ authenticates, or probes on its own.
 
 Current controls:
 - **Ignore case** and **Run after probe** preferences
-- High/Med/Low severity colors as `#RRGGBB` values, with optional color chooser buttons
-- A scrollable pattern table with built-in and custom keyword/wildcard patterns
-- Add, edit, enable/disable, delete custom patterns, and restore built-ins
+- High/Med/Low severity colors plus optional User1/User2/User3 tag colors as `#RRGGBB` values, with optional color chooser buttons
+- A **Manage Patterns...** modal holding the scrollable built-in/custom keyword/wildcard pattern table; custom patterns can carry one User color tag
+- Add, edit, enable/disable, delete custom patterns, and restore built-ins; pattern-manager edits stay staged until the tab's Save persists settings
 
 Settings are persisted under `~/.dirracuda/conf.d/experimental/sherlock.json`.
 The Start Scan dialog also mirrors the global **Sherlock: run after probe**
@@ -562,8 +562,12 @@ after `latest_snapshot_id` is saved; probe status, ransomware indicators, and
 extraction state are unchanged if Sherlock is disabled or fails.
 The Server List includes an alert-only `Risk` column plus `Scan Sherlock`
 toolbar/context-menu actions for selected hosts. Fresh findings show `HIGH n`,
-`MED n`, or `LOW n` using the configured severity colors; no-hit, stale,
-unscanned, and no-snapshot rows stay blank. Desktop detail popups show the
+`MED n`, or `LOW n`; the row tint uses the matched pattern's User tag color when
+one is configured, otherwise the severity color (the risk text stays
+HIGH/MED/LOW). No-hit, stale, unscanned, and no-snapshot rows stay blank. When
+`Run after probe` is on, probe batch summaries also gain a Risk column and row
+tint for any host whose fresh post-probe scan produced findings, using the same
+user-tag-then-severity tint and CSV export. Desktop detail popups show the
 latest Sherlock summary and capped hit details with explanatory stale/zero-hit
 states. Web UI Results mirrors persisted findings with read-only Risk badges
 and detail blocks; Web UI does not edit patterns or trigger Sherlock scans.

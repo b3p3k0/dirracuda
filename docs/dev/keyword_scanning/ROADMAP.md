@@ -144,3 +144,15 @@ Exit criteria:
 - All V2 surfaces have targeted tests.
 - Xvfb screenshots cover Sherlock tab, pattern manager, and probe summary.
 - README/technical docs and lessons learned match runtime behavior.
+
+Status: complete. Targeted C8-C12 matrix plus `-k sherlock` (269 tests) and the
+messagebox/theme GUI guardrails all passed. Full-suite sanity ran 3662 passed
+with the single known `test_daemon_cli` tkinter import-ordering artifact, which
+passes in isolation — no V2 regression. Default-size Xvfb screenshots were
+captured for the Sherlock Accessories tab (severity + User color rows + Manage
+Patterns), the pattern manager modal (User Tag column), and a probe batch summary
+with the Risk column (User-tag tint vs severity fallback vs blank). README,
+`docs/TECHNICAL_REFERENCE.md`, `AGENTS.md`, lessons learned, and the gitignored
+`CLAUDE.md` (local only) were synced. File-size audit: all touched runtime files
+under the 1700-line guardrail (`dashboard_batch_ops.py` highest at 1581 — near
+limit, noted). Sherlock V2 closed.
