@@ -28,6 +28,7 @@ from gui.utils.keybindings import add_shortcut_hint, bind_close_shortcuts, bind_
 
 _DISMISSED_KEY = "experimental.warning_dismissed"
 _DIALOG_TITLE = "Accessories"
+_DIALOG_GEOMETRY = "655x420"
 _WARNING_TEXT = (
     "Some items here may require additional setup before first use.\n"
     "Check per-tool documentation for dependencies and configuration."
@@ -57,7 +58,7 @@ class ExperimentalFeaturesDialog:
     def _build(self, parent: tk.Widget, context: dict, settings_manager: Any) -> None:
         dialog = tk.Toplevel(parent)
         dialog.title(_DIALOG_TITLE)
-        dialog.geometry("580x420")
+        dialog.geometry(_DIALOG_GEOMETRY)
         dialog.resizable(True, True)
         self._theme.apply_to_widget(dialog, "main_window")
         dialog.transient(parent)

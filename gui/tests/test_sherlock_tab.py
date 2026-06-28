@@ -40,6 +40,7 @@ from gui.components.experimental_features.sherlock_tab import (
 from shared.sherlock import (
     DEFAULT_COLORS,
     SHERLOCK_SETTINGS_KEY,
+    USER_COLOR_KEYS,
     Severity,
     SherlockPattern,
     builtin_patterns,
@@ -66,6 +67,8 @@ def _bare_tab(context=None) -> SherlockTab:
     tab._tree.selection.return_value = ()
     tab._status_label = MagicMock()
     tab._refresh_table = MagicMock()
+    tab._pattern_manager = None
+    tab._user_color_vars = {key: _DummyVar("") for key in USER_COLOR_KEYS}
     return tab
 
 
@@ -75,6 +78,10 @@ def _color_vars(high="#ff4d4d", med="#ffa31a", low="#ffff80"):
         Severity.MED: _DummyVar(med),
         Severity.LOW: _DummyVar(low),
     }
+
+
+def _user_color_vars(**values):
+    return {key: _DummyVar(values.get(key, "")) for key in USER_COLOR_KEYS}
 
 
 # ---------------------------------------------------------------------------
@@ -126,11 +133,12 @@ def test_load_settings_survives_manager_exception():
 # _on_save
 # ---------------------------------------------------------------------------
 
-def _wire_save(tab, sm, *, colors=None):
+def _wire_save(tab, sm, *, colors=None, user_colors=None):
     tab._context = {"settings_manager": sm} if sm is not None else {}
     tab._ignore_case_var = _DummyVar(True)
     tab._run_after_probe_var = _DummyVar(False)
     tab._color_vars = colors or _color_vars()
+    tab._user_color_vars = user_colors if user_colors is not None else _user_color_vars()
     tab._patterns = list(default_settings().patterns)
 
 
@@ -185,6 +193,155 @@ def test_save_noop_without_manager(monkeypatch):
     tab._on_save()  # must not raise
     final = tab._status_label.configure.call_args[1].get("text", "")
     assert "not saved" in final.lower()
+
+
+# ---------------------------------------------------------------------------
+# User colors
+# ---------------------------------------------------------------------------
+
+def test_save_empty_user_colors_persists_blank(monkeypatch):
+    monkeypatch.setattr(mod, "safe_messagebox", MagicMock())
+    sm = MagicMock()
+    sm.set_setting.return_value = True
+    tab = _bare_tab()
+    _wire_save(tab, sm)
+
+    tab._on_save()
+
+    _key, payload = sm.set_setting.call_args[0]
+    assert payload["user_colors"] == {k: "" for k in USER_COLOR_KEYS}
+
+
+def test_save_valid_user_color_round_trips(monkeypatch):
+    monkeypatch.setattr(mod, "safe_messagebox", MagicMock())
+    sm = MagicMock()
+    sm.set_setting.return_value = True
+    tab = _bare_tab()
+    _wire_save(tab, sm, user_colors=_user_color_vars(user1="#ABCDEF"))
+
+    tab._on_save()
+
+    _key, payload = sm.set_setting.call_args[0]
+    assert payload["user_colors"]["user1"] == "#abcdef"
+    assert payload["user_colors"]["user2"] == ""
+
+
+def test_save_rejects_invalid_user_color_without_writing(monkeypatch):
+    fake_mb = MagicMock()
+    monkeypatch.setattr(mod, "safe_messagebox", fake_mb)
+    sm = MagicMock()
+    tab = _bare_tab()
+    _wire_save(tab, sm, user_colors=_user_color_vars(user2="nope"))
+
+    tab._on_save()
+
+    fake_mb.showerror.assert_called_once()
+    sm.set_setting.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Color tag staging (C10)
+# ---------------------------------------------------------------------------
+
+def test_add_carries_color_tag(monkeypatch):
+    tab = _bare_tab()
+    tab._patterns = list(default_settings().patterns)
+    monkeypatch.setattr(
+        tab,
+        "_open_pattern_dialog",
+        lambda existing=None: {
+            "label": "Acme", "category": "Custom", "pattern": "*acme*",
+            "severity": Severity.HIGH, "enabled": True, "color_tag": "user2",
+        },
+    )
+
+    tab._on_add()
+
+    assert tab._patterns[-1].color_tag == "user2"
+
+
+def test_edit_updates_color_tag(monkeypatch):
+    tab = _bare_tab()
+    custom = SherlockPattern(
+        key="custom_1", category="Custom", label="Old", pattern="*old*",
+        severity=Severity.LOW, enabled=True, builtin=False, color_tag="user1",
+    )
+    tab._patterns = list(default_settings().patterns) + [custom]
+    tab._tree.selection.return_value = ("custom_1",)
+    monkeypatch.setattr(
+        tab,
+        "_open_pattern_dialog",
+        lambda existing=None: {
+            "label": "New", "category": "Custom", "pattern": "*new*",
+            "severity": Severity.HIGH, "enabled": True, "color_tag": "user3",
+        },
+    )
+
+    tab._on_edit()
+
+    updated = next(p for p in tab._patterns if p.key == "custom_1")
+    assert updated.color_tag == "user3"
+
+
+def test_toggle_preserves_color_tag():
+    tab = _bare_tab()
+    custom = SherlockPattern(
+        key="custom_1", category="Custom", label="x", pattern="*x*",
+        severity=Severity.LOW, enabled=True, builtin=False, color_tag="user2",
+    )
+    tab._patterns = [custom]
+    tab._tree.selection.return_value = ("custom_1",)
+
+    tab._on_toggle()
+
+    flipped = next(p for p in tab._patterns if p.key == "custom_1")
+    assert flipped.enabled is False
+    assert flipped.color_tag == "user2"
+
+
+def test_refresh_table_renders_user_tag_cell():
+    tab = SherlockTab.__new__(SherlockTab)
+    tab._tree = MagicMock()
+    tab._tree.get_children.return_value = ()
+    custom = SherlockPattern(
+        key="custom_1", category="Custom", label="x", pattern="*x*",
+        severity=Severity.HIGH, enabled=True, builtin=False, color_tag="user2",
+    )
+    builtin = builtin_patterns()[0]
+    tab._patterns = [custom, builtin]
+
+    tab._refresh_table()
+
+    rows = {c.kwargs["iid"]: c.kwargs["values"] for c in tab._tree.insert.call_args_list}
+    # values: enabled, severity, user_tag, category, label, pattern, type
+    assert rows["custom_1"][2] == "User2"
+    assert rows[builtin.key][2] == ""
+
+
+# ---------------------------------------------------------------------------
+# Nested dialog parent resolver (C10)
+# ---------------------------------------------------------------------------
+
+def test_active_dialog_parent_prefers_open_manager():
+    tab = _bare_tab()
+    mgr = MagicMock()
+    mgr.winfo_exists.return_value = True
+    tab._pattern_manager = mgr
+    assert tab._active_dialog_parent() is mgr
+
+
+def test_active_dialog_parent_falls_back_when_manager_closed():
+    tab = _bare_tab()
+    toplevel = MagicMock()
+    tab.frame.winfo_toplevel.return_value = toplevel
+    # No manager.
+    tab._pattern_manager = None
+    assert tab._active_dialog_parent() is toplevel
+    # Destroyed manager.
+    mgr = MagicMock()
+    mgr.winfo_exists.return_value = False
+    tab._pattern_manager = mgr
+    assert tab._active_dialog_parent() is toplevel
 
 
 # ---------------------------------------------------------------------------
@@ -332,3 +489,70 @@ def test_restore_builtins_reenables_all_and_keeps_customs():
 
     assert all(p.enabled for p in tab._patterns if p.builtin)
     assert any(p.key == "custom_1" for p in tab._patterns)
+
+
+# ---------------------------------------------------------------------------
+# Real-Tk: pattern manager structure + nested Add/Edit grab restoration
+# ---------------------------------------------------------------------------
+
+import tkinter as tk  # noqa: E402
+
+
+@pytest.fixture(scope="module")
+def tk_root():
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("no display available for Tk")
+    root.withdraw()
+    yield root
+    root.destroy()
+
+
+def _button_texts(widget):
+    out = []
+    for child in widget.winfo_children():
+        if isinstance(child, tk.Button):
+            out.append(child.cget("text"))
+        out.extend(_button_texts(child))
+    return out
+
+
+def test_pattern_manager_structure_and_nested_grab(tk_root):
+    tab = SherlockTab(tk_root, {})
+    captured = {}
+
+    def when_manager_open():
+        mgr = tab._pattern_manager
+        tree = tab._tree
+        captured["mgr_path"] = str(mgr)
+        captured["columns"] = tuple(tree["columns"])
+        captured["headings"] = tuple(
+            tree.heading(c, "text") for c in tree["columns"]
+        )
+        captured["buttons"] = _button_texts(mgr)
+
+        def when_add_open():
+            add = tk_root.grab_current()
+            captured["add_grabbed"] = add is not None
+            captured["add_transient"] = str(add.transient()) if add else None
+            if add is not None:
+                add.destroy()  # ends the nested wait_window
+
+        tk_root.after(50, when_add_open)
+        tab._on_add()  # blocks until the Add dialog closes
+        # After the child closes, the manager must have re-grabbed.
+        captured["grab_after"] = mgr.grab_current()
+        mgr.destroy()  # ends the manager wait_window
+
+    tk_root.after(50, when_manager_open)
+    tab._open_pattern_manager()  # blocks until the manager closes
+
+    assert "user_tag" in captured["columns"]
+    assert "User Tag" in captured["headings"]
+    for label in ("Add", "Edit", "Enable/Disable", "Delete", "Restore Built-ins", "Close"):
+        assert label in captured["buttons"]
+    assert captured["add_grabbed"] is True
+    # Add dialog was transient to the manager, not the main window.
+    assert captured["add_transient"] == captured["mgr_path"]
+    assert captured["grab_after"] is not None
