@@ -11,7 +11,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from shared.sherlock import Severity
+from shared.sherlock import Severity, normalize_color_tag
+from shared.sherlock.model import COLOR_TAG_NONE
 
 _HEADER = "🔎 Sherlock:"
 
@@ -29,6 +30,18 @@ def _severity_label(token: object) -> Optional[Severity]:
     return _SEVERITY_BY_TOKEN.get(token.strip().lower())
 
 
+def _user_tag_label(color_tag: object) -> str:
+    """Return a ` [User1]` style suffix for a user-tagged hit, else ''.
+
+    The popup is a plain Text widget (no color), so the user tag is surfaced as a
+    text label. 'none'/unknown/missing tags add nothing.
+    """
+    token = normalize_color_tag(color_tag)
+    if token == COLOR_TAG_NONE:
+        return ""
+    return " [{0}]".format(token.capitalize())
+
+
 def _hit_line(hit: Dict[str, Any]) -> str:
     sev = _severity_label(hit.get("severity"))
     sev_text = sev.display_name if sev is not None else "?"
@@ -37,7 +50,8 @@ def _hit_line(hit: Dict[str, Any]) -> str:
     pattern = str(hit.get("pattern") or "").strip()
     path = str(hit.get("display_path") or "").strip() or "(no path)"
     label_part = "{0} ({1})".format(label, pattern) if pattern else label
-    return "   • {0} · {1} · {2} — {3}".format(sev_text, category, label_part, path)
+    tag_part = _user_tag_label(hit.get("color_tag"))
+    return "   • {0} · {1} · {2}{3} — {4}".format(sev_text, category, label_part, tag_part, path)
 
 
 def format_sherlock_section(

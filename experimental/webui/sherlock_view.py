@@ -25,6 +25,7 @@ from experimental.webui.db import (
 )
 from shared.config_store import get_config_store
 from shared.sherlock import Severity, default_settings, settings_from_dict
+from shared.sherlock.model import SherlockSettings
 
 _CACHE_TABLES = {
     "S": "host_probe_cache",
@@ -39,24 +40,20 @@ _SEVERITY_BY_TOKEN = {
 }
 
 
-def _load_sherlock_colors(config_store: Any = None) -> Dict[str, str]:
-    """Return a {token: #RRGGBB} color map from the sherlock.json shard.
+def _load_sherlock_settings(config_store: Any = None) -> SherlockSettings:
+    """Return the SherlockSettings from the sherlock.json shard.
 
     `config_store` is injectable for tests so they never touch the developer's
     real ~/.dirracuda shard. Any failure / missing shard falls back to the
-    validated default palette.
+    validated defaults. Callers use `settings.tint_for(...)` so the user-color
+    precedence matches the desktop surfaces.
     """
     try:
         store = config_store if config_store is not None else get_config_store()
         raw = store.load_module_prefs("sherlock")
-        settings = settings_from_dict(raw) if isinstance(raw, dict) else default_settings()
+        return settings_from_dict(raw) if isinstance(raw, dict) else default_settings()
     except Exception:
-        settings = default_settings()
-    return {
-        "high": settings.color_for(Severity.HIGH),
-        "med": settings.color_for(Severity.MED),
-        "low": settings.color_for(Severity.LOW),
-    }
+        return default_settings()
 
 
 def _to_int(value: object) -> Optional[int]:
@@ -77,7 +74,7 @@ def get_sherlock_badge_map(db_path: Path, *, config_store: Any = None) -> Dict[s
     if not Path(db_path).exists():
         return {}
 
-    colors = _load_sherlock_colors(config_store)
+    settings = _load_sherlock_settings(config_store)
     out: Dict[str, Dict[str, str]] = {}
     try:
         conn = _connect(db_path)
@@ -160,7 +157,7 @@ def get_sherlock_badge_map(db_path: Path, *, config_store: Any = None) -> Dict[s
                     continue  # malformed severity -> blank
                 out[f"{host_type}:{server_id}"] = {
                     "text": severity.display_text(count),
-                    "color": colors[token],
+                    "color": settings.tint_for(severity, row["display_color_tag"]),
                     "display_color_tag": row["display_color_tag"],
                 }
     finally:
@@ -190,7 +187,7 @@ def get_sherlock_detail(
     if not Path(db_path).exists():
         return None
 
-    colors = _load_sherlock_colors(config_store)
+    settings = _load_sherlock_settings(config_store)
     try:
         conn = _connect(db_path)
     except sqlite3.OperationalError:
@@ -286,7 +283,7 @@ def get_sherlock_detail(
             "scanned_at": row["scanned_at"],
             "stale": stale,
             "truncated": bool(row["truncated"]),
-            "color": colors[token] if severity is not None else None,
+            "color": settings.tint_for(severity, row["display_color_tag"]) if severity is not None else None,
             "display_color_tag": row["display_color_tag"],
             "hits": hits,
         }

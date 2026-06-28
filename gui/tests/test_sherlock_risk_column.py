@@ -71,7 +71,7 @@ def test_finding_shows_text_and_tag(tk_root):
     servers = [_server("S:1", "1.1.1.1", {"severity": "high", "count": 3, "stale": False})]
     table.update_table_display(tree, servers, None)
     assert tree.set("S:1", "Risk") == "HIGH 3"
-    assert "sherlock_high" in tree.item("S:1", "tags")
+    assert "sherlock_high_none" in tree.item("S:1", "tags")
 
 
 @pytest.mark.parametrize("risk", [
@@ -107,14 +107,46 @@ def test_custom_colors_applied_to_tags(tk_root):
     )
     sm = MagicMock()
     sm.get_setting.return_value = settings_to_dict(settings)
-    table.update_table_display(tree, [_server("S:1", "1.1.1.1", {"severity": "med", "count": 2, "stale": False})], sm)
-    assert _tag_bg(tree, "sherlock_high") == "#010203"
-    assert _tag_bg(tree, "sherlock_med") == "#040506"
-    assert tree.set("S:1", "Risk") == "MED 2"
-    assert "sherlock_med" in tree.item("S:1", "tags")
+    table.update_table_display(
+        tree,
+        [
+            _server("S:1", "1.1.1.1", {"severity": "high", "count": 3, "stale": False}),
+            _server("S:2", "1.1.1.2", {"severity": "med", "count": 2, "stale": False}),
+        ],
+        sm,
+    )
+    assert _tag_bg(tree, "sherlock_high_none") == "#010203"
+    assert _tag_bg(tree, "sherlock_med_none") == "#040506"
+    assert tree.set("S:2", "Risk") == "MED 2"
+    assert "sherlock_med_none" in tree.item("S:2", "tags")
 
 
 def test_default_colors_when_no_settings_manager(tk_root):
     tree = _make_tree(tk_root)
-    table.update_table_display(tree, [_server("S:1", "1.1.1.1")], None)
-    assert _tag_bg(tree, "sherlock_high") == "#ff4d4d"
+    table.update_table_display(
+        tree, [_server("S:1", "1.1.1.1", {"severity": "high", "count": 1, "stale": False})], None
+    )
+    assert _tag_bg(tree, "sherlock_high_none") == "#ff4d4d"
+
+
+def test_user_color_tint_wins_over_severity(tk_root):
+    tree = _make_tree(tk_root)
+    settings = SherlockSettings(user_colors={"user1": "#abcdef", "user2": "", "user3": ""})
+    sm = MagicMock()
+    sm.get_setting.return_value = settings_to_dict(settings)
+    risk = {"severity": "high", "count": 3, "stale": False, "display_color_tag": "user1"}
+    table.update_table_display(tree, [_server("S:1", "1.1.1.1", risk)], sm)
+    # Risk text unchanged; row tinted with the configured user color, not severity.
+    assert tree.set("S:1", "Risk") == "HIGH 3"
+    assert "sherlock_high_user1" in tree.item("S:1", "tags")
+    assert _tag_bg(tree, "sherlock_high_user1") == "#abcdef"
+
+
+def test_empty_user_color_falls_back_to_severity(tk_root):
+    tree = _make_tree(tk_root)
+    # user1 unconfigured (empty) -> severity color is used for the tint.
+    risk = {"severity": "high", "count": 2, "stale": False, "display_color_tag": "user1"}
+    table.update_table_display(tree, [_server("S:1", "1.1.1.1", risk)], None)
+    assert tree.set("S:1", "Risk") == "HIGH 2"
+    assert "sherlock_high_user1" in tree.item("S:1", "tags")
+    assert _tag_bg(tree, "sherlock_high_user1") == "#ff4d4d"

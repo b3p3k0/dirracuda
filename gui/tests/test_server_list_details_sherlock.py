@@ -67,6 +67,17 @@ def test_format_hits_render_severity_category_label_pattern_path():
     assert "MED · Finance · Payroll (*payroll*) — share/payroll.xlsx" in text
 
 
+def test_format_hits_show_user_tag_label_when_present():
+    result = _result()
+    result["hits"][0]["color_tag"] = "user1"
+    result["hits"][1]["color_tag"] = "none"
+    text = format_sherlock_section(result)
+    # Tagged hit gets a [User1] label; 'none'/untagged hits get nothing extra.
+    assert "Password files (*password*) [User1] — share/passwords.txt" in text
+    assert "Payroll (*payroll*) — share/payroll.xlsx" in text
+    assert "[User2]" not in text
+
+
 def test_format_truncated_adds_more_notice():
     text = format_sherlock_section(
         _result(total_hit_count=5, detail_count=2, truncated=True)

@@ -49,6 +49,21 @@ def test_results_table_has_readonly_sherlock_risk_column():
     assert ".sherlock-badge" in style
 
 
+def test_sherlock_hit_user_tag_label_rendered_via_textcontent():
+    script = _source(RESULTS_SCRIPT)
+
+    # C11: per-hit user tag label appended to the hit line via textContent only
+    # (string concatenation, never innerHTML) so no value is interpreted as HTML.
+    assert "_userTagLabel(hit.color_tag)" in script
+    assert "var tag = _userTagLabel(hit.color_tag);" in script
+    assert "li.textContent = sev + ' · ' + cat + ' · ' + lbl + pat + tag + ' — ' + path;" in script
+    assert "' [User' + token.charAt(4) + ']'" in script
+
+    # The Web UI remains read-only: no scan/edit surface introduced by the label.
+    assert "sherlock-scan" not in script
+    assert "sherlock-edit" not in script
+
+
 def test_detail_actions_have_expected_labels_and_order():
     script = _source(RESULTS_SCRIPT)
 

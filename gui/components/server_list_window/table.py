@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Dict, List, Any, Callable, Optional, Tuple
 import re
 
-from shared.sherlock import Severity, default_settings, settings_from_dict
+from shared.sherlock import Severity, default_settings, normalize_color_tag, settings_from_dict
 
 # Persisted severity tokens -> Severity. Explicit (not severity_from_str, which
 # defaults unknowns to MED) so malformed tokens render blank instead of mislabeled.
@@ -21,11 +21,15 @@ _SHERLOCK_SEVERITY_BY_TOKEN = {
     "med": Severity.MED,
     "low": Severity.LOW,
 }
-_SHERLOCK_TAG_BY_SEVERITY = {
-    Severity.HIGH: "sherlock_high",
-    Severity.MED: "sherlock_med",
-    Severity.LOW: "sherlock_low",
-}
+
+
+def _sherlock_row_tag(severity: Severity, color_tag: str) -> str:
+    """Composite Treeview tag name keyed by (severity, normalized color tag).
+
+    User-tagged rows get a distinct tag so the row background can carry the
+    user color; untagged rows keep a severity-only tag.
+    """
+    return "sherlock_{0}_{1}".format(severity.name.lower(), color_tag)
 
 
 def _load_sherlock_settings(settings_manager):
@@ -39,11 +43,12 @@ def _load_sherlock_settings(settings_manager):
 
 
 def _resolve_sherlock_risk(risk):
-    """Return (Severity, count) for a displayable finding, else None.
+    """Return (Severity, count, color_tag) for a displayable finding, else None.
 
     Applies the alert-only blank contract: absent / stale / zero-hit / malformed
     severity all yield None (blank cell). Only a fresh, non-zero, recognized
-    severity is displayed.
+    severity is displayed. `color_tag` is the normalized user tag token
+    (none/user1/user2/user3) used to pick the row tint.
     """
     if not isinstance(risk, dict):
         return None
@@ -59,7 +64,8 @@ def _resolve_sherlock_risk(risk):
     severity = _SHERLOCK_SEVERITY_BY_TOKEN.get(risk.get("severity"))
     if severity is None:
         return None
-    return severity, count
+    color_tag = normalize_color_tag(risk.get("display_color_tag"))
+    return severity, count, color_tag
 
 def create_server_table(parent, theme, callbacks):
     """
@@ -176,12 +182,12 @@ def update_table_display(tree, filtered_servers: List[Dict[str, Any]], settings_
     import logging
     _log = logging.getLogger("server_list_window")
 
-    # Configure Sherlock row-tint tags from saved severity colors (idempotent;
-    # reflects edited colors on each reload). Colors are pre-validated by
+    # Load Sherlock settings for row tints. Composite (severity, color_tag) tags
+    # are configured lazily in the row loop via settings.tint_for so a configured
+    # user color wins over the severity color. Colors are pre-validated by
     # settings_from_dict, so no re-validation here.
     sherlock_settings = _load_sherlock_settings(settings_manager)
-    for severity, tag in _SHERLOCK_TAG_BY_SEVERITY.items():
-        tree.tag_configure(tag, background=sherlock_settings.color_for(severity))
+    configured_sherlock_tags: set = set()
 
     # Clear existing items
     for item in tree.get_children():
@@ -227,14 +233,23 @@ def update_table_display(tree, filtered_servers: List[Dict[str, Any]], settings_
         extracted_emoji = server.get("extract_status_emoji", "○")
 
         # Alert-only Risk cell + row tint; blank unless there is a fresh finding.
+        # Tint = user color when the finding carries a configured user tag, else
+        # the severity color (settings.tint_for). Risk text stays HIGH/MED/LOW n.
         resolved_risk = _resolve_sherlock_risk(server.get("sherlock_risk"))
         if resolved_risk is None:
             risk_text = ""
             row_tags: Tuple[str, ...] = ()
         else:
-            severity, count = resolved_risk
+            severity, count, color_tag = resolved_risk
             risk_text = severity.display_text(count)
-            row_tags = (_SHERLOCK_TAG_BY_SEVERITY[severity],)
+            tag_name = _sherlock_row_tag(severity, color_tag)
+            if tag_name not in configured_sherlock_tags:
+                tree.tag_configure(
+                    tag_name,
+                    background=sherlock_settings.tint_for(severity, color_tag),
+                )
+                configured_sherlock_tags.add(tag_name)
+            row_tags = (tag_name,)
 
         # Insert row — iid is the row_key so selection/lookups are protocol-aware
         item_id = tree.insert(

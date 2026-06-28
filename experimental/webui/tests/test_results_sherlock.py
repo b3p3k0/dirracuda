@@ -327,3 +327,57 @@ def test_detail_tags_degrade_to_none_on_base_schema(creds, cfg_no_tls, db_with_s
     detail = sherlock_view.get_sherlock_detail(db_with_sherlock, "S", 1)
     assert detail["display_color_tag"] is None
     assert all(h["color_tag"] is None for h in detail["hits"])
+
+
+# --- C11: tint resolution (user color wins over severity, same as desktop) ---
+
+class _TagStore:
+    """Shard with a configured user2 color and custom severity palette."""
+
+    def load_module_prefs(self, name):
+        assert name == "sherlock"
+        return {
+            "colors": {"high": "#010203", "med": "#0a0b0c", "low": "#111213"},
+            "user_colors": {"user1": "", "user2": "#abcdef", "user3": ""},
+        }
+
+
+class _NoUserColorStore:
+    """Shard with the same severity palette but no configured user colors."""
+
+    def load_module_prefs(self, name):
+        assert name == "sherlock"
+        return {"colors": {"high": "#010203", "med": "#0a0b0c", "low": "#111213"}}
+
+
+def test_badge_color_uses_user_color_when_tag_configured(db_with_sherlock_tags):
+    badge_map = sherlock_view.get_sherlock_badge_map(
+        db_with_sherlock_tags, config_store=_TagStore()
+    )
+    # display_color_tag is 'user2' and user2 is configured -> user color wins.
+    assert badge_map["S:1"]["color"] == "#abcdef"
+    assert badge_map["S:1"]["text"] == "HIGH 2"
+
+
+def test_badge_color_falls_back_to_severity_when_user_color_empty(db_with_sherlock_tags):
+    badge_map = sherlock_view.get_sherlock_badge_map(
+        db_with_sherlock_tags, config_store=_NoUserColorStore()
+    )
+    # 'user2' tag present but unconfigured -> severity (HIGH) color.
+    assert badge_map["S:1"]["color"] == "#010203"
+
+
+def test_detail_color_uses_user_color_when_tag_configured(db_with_sherlock_tags):
+    detail = sherlock_view.get_sherlock_detail(
+        db_with_sherlock_tags, "S", 1, config_store=_TagStore()
+    )
+    assert detail["color"] == "#abcdef"
+    # Per-hit tokens still surfaced for the read-only label.
+    assert [h["color_tag"] for h in detail["hits"]] == ["user2", "none"]
+
+
+def test_detail_color_falls_back_to_severity_when_user_color_empty(db_with_sherlock_tags):
+    detail = sherlock_view.get_sherlock_detail(
+        db_with_sherlock_tags, "S", 1, config_store=_NoUserColorStore()
+    )
+    assert detail["color"] == "#010203"

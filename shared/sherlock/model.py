@@ -181,6 +181,22 @@ class SherlockSettings:
             return self.user_colors.get(token, "")
         return ""
 
+    def tint_for(self, severity: Optional[Severity], color_tag: object = None) -> str:
+        """Resolve the display tint: configured user color wins, else severity.
+
+        Single source of the C11 precedence rule. Returns the configured user
+        color when the tag resolves to a non-empty user color; otherwise the
+        severity color; '' only when neither applies (severity is None and no
+        user color), which never happens for a row that passed the quiet
+        contract.
+        """
+        user = self.user_color_for(color_tag)
+        if user:
+            return user
+        if severity is None:
+            return ""
+        return self.color_for(severity)
+
 
 def default_settings() -> SherlockSettings:
     """Build a fresh settings object with default colors and built-in patterns."""

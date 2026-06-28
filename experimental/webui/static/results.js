@@ -459,6 +459,15 @@ function _renderRiskCell(td, risk) {
   td.appendChild(badge);
 }
 
+function _userTagLabel(colorTag) {
+  // Map a user color tag token to a ' [User1]' style suffix; '' otherwise.
+  var token = String(colorTag || '').trim().toLowerCase();
+  if (token === 'user1' || token === 'user2' || token === 'user3') {
+    return ' [User' + token.charAt(4) + ']';
+  }
+  return '';
+}
+
 function _renderSherlockDetail(container, sherlock) {
   // Read-only; explanatory (stale / 0-hit are described, not hidden).
   if (!sherlock) return;
@@ -499,7 +508,9 @@ function _renderSherlockDetail(container, sherlock) {
       var lbl = hit.label || '?';
       var pat = hit.pattern ? (' (' + hit.pattern + ')') : '';
       var path = hit.display_path || '(no path)';
-      li.textContent = sev + ' · ' + cat + ' · ' + lbl + pat + ' — ' + path;
+      // User tag label, mirroring the desktop detail popup. textContent only.
+      var tag = _userTagLabel(hit.color_tag);
+      li.textContent = sev + ' · ' + cat + ' · ' + lbl + pat + tag + ' — ' + path;
       list.appendChild(li);
     });
     wrap.appendChild(list);

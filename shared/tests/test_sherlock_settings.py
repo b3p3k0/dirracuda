@@ -152,3 +152,30 @@ def test_user_color_for_returns_configured_or_empty():
 
 def test_builtins_are_always_untagged():
     assert all(p.color_tag == COLOR_TAG_NONE for p in builtin_patterns())
+
+
+def test_tint_for_user_color_wins_when_configured():
+    settings = SherlockSettings(
+        colors={Severity.HIGH: "#010203", Severity.MED: "#040506", Severity.LOW: "#070809"},
+        user_colors={"user1": "#abcdef", "user2": "", "user3": ""},
+    )
+    # Configured user color wins over the severity color.
+    assert settings.tint_for(Severity.HIGH, "user1") == "#abcdef"
+
+
+def test_tint_for_falls_back_to_severity():
+    settings = SherlockSettings(
+        colors={Severity.HIGH: "#010203", Severity.MED: "#040506", Severity.LOW: "#070809"},
+        user_colors={"user1": "", "user2": "", "user3": ""},
+    )
+    # Empty user color, 'none', and unknown tokens all fall back to severity.
+    assert settings.tint_for(Severity.HIGH, "user1") == "#010203"
+    assert settings.tint_for(Severity.MED, "none") == "#040506"
+    assert settings.tint_for(Severity.LOW, "user9") == "#070809"
+    assert settings.tint_for(Severity.LOW, None) == "#070809"
+
+
+def test_tint_for_returns_empty_when_no_severity_and_no_user_color():
+    settings = default_settings()
+    assert settings.tint_for(None, None) == ""
+    assert settings.tint_for(None, "none") == ""
