@@ -96,6 +96,9 @@ def get_sherlock_badge_map(db_path: Path, *, config_store: Any = None) -> Dict[s
             "total_hit_count",
         }.issubset(result_cols):
             return {}
+        has_result_tag = "display_color_tag" in result_cols
+        tag_select = "display_color_tag" if has_result_tag else "NULL"
+        tag_select_joined = "r.display_color_tag" if has_result_tag else "NULL"
 
         table_columns: Dict[str, set] = {}
         for cache_table in _CACHE_TABLES.values():
@@ -114,6 +117,7 @@ def get_sherlock_badge_map(db_path: Path, *, config_store: Any = None) -> Dict[s
                                r.highest_severity AS highest_severity,
                                r.total_hit_count AS total_hit_count,
                                r.snapshot_id AS snapshot_id,
+                               {tag_select_joined} AS display_color_tag,
                                c.latest_snapshot_id AS latest_snapshot_id
                         FROM sherlock_results r
                         LEFT JOIN {cache_table} c
@@ -124,11 +128,12 @@ def get_sherlock_badge_map(db_path: Path, *, config_store: Any = None) -> Dict[s
                     ).fetchall()
                 else:
                     rows = conn.execute(
-                        """
+                        f"""
                         SELECT protocol_server_id AS protocol_server_id,
                                highest_severity AS highest_severity,
                                total_hit_count AS total_hit_count,
                                snapshot_id AS snapshot_id,
+                               {tag_select} AS display_color_tag,
                                NULL AS latest_snapshot_id
                         FROM sherlock_results
                         WHERE host_type = ?
@@ -156,6 +161,7 @@ def get_sherlock_badge_map(db_path: Path, *, config_store: Any = None) -> Dict[s
                 out[f"{host_type}:{server_id}"] = {
                     "text": severity.display_text(count),
                     "color": colors[token],
+                    "display_color_tag": row["display_color_tag"],
                 }
     finally:
         conn.close()
@@ -209,9 +215,12 @@ def get_sherlock_detail(
 
         has_scanned = "scanned_at" in result_cols
         has_truncated = "truncated" in result_cols
+        has_result_tag = "display_color_tag" in result_cols
+        has_hit_tag = "color_tag" in hit_cols
         select_extra = (
             f"{'scanned_at' if has_scanned else 'NULL'} AS scanned_at, "
-            f"{'truncated' if has_truncated else '0'} AS truncated"
+            f"{'truncated' if has_truncated else '0'} AS truncated, "
+            f"{'display_color_tag' if has_result_tag else 'NULL'} AS display_color_tag"
         )
         try:
             row = conn.execute(
@@ -249,9 +258,11 @@ def get_sherlock_detail(
 
         hits = []
         if result_id is not None:
+            hit_tag_select = "color_tag" if has_hit_tag else "NULL"
             hit_rows = conn.execute(
-                """
-                SELECT severity, category, label, pattern, display_path
+                f"""
+                SELECT severity, category, label, pattern, display_path,
+                       {hit_tag_select} AS color_tag
                 FROM sherlock_hits WHERE result_id = ? ORDER BY id
                 """,
                 (result_id,),
@@ -264,6 +275,7 @@ def get_sherlock_detail(
                         "label": hr["label"],
                         "pattern": hr["pattern"],
                         "display_path": hr["display_path"],
+                        "color_tag": hr["color_tag"],
                     }
                 )
 
@@ -275,6 +287,7 @@ def get_sherlock_detail(
             "stale": stale,
             "truncated": bool(row["truncated"]),
             "color": colors[token] if severity is not None else None,
+            "display_color_tag": row["display_color_tag"],
             "hits": hits,
         }
     finally:

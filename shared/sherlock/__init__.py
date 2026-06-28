@@ -8,7 +8,12 @@ matches in-memory path strings (R1/R11). Persistence and GUI live in later cards
 
 from __future__ import annotations
 
-from .matcher import MatchResult, SherlockHit, match_entries
+from .matcher import (
+    MatchResult,
+    SherlockHit,
+    match_entries,
+    select_display_color_tag,
+)
 from .model import (
     COLOR_TAG_NONE,
     DEFAULT_COLORS,
@@ -60,6 +65,7 @@ __all__ = [
     "normalize_color_tag",
     "path_entries_from_rows",
     "path_entries_from_snapshot",
+    "select_display_color_tag",
     "settings_from_dict",
     "settings_to_dict",
     "severity_from_str",

@@ -15,7 +15,12 @@ from __future__ import annotations
 import sqlite3
 from typing import Any, Dict, Optional
 
-from shared.sherlock import MatchResult, Severity
+from shared.sherlock import (
+    MatchResult,
+    Severity,
+    normalize_color_tag,
+    select_display_color_tag,
+)
 
 # Detail-row cap per host. total_hit_count is always the full count; this only
 # bounds the rows persisted into sherlock_hits.
@@ -151,10 +156,17 @@ def store_sherlock_result(
             cur = conn.cursor()
             if not (_table_exists(cur, "sherlock_results") and _table_exists(cur, "sherlock_hits")):
                 return None
-            if not _RESULT_WRITE_COLS.issubset(_table_columns(cur, "sherlock_results")):
+            result_cols = _table_columns(cur, "sherlock_results")
+            hits_cols = _table_columns(cur, "sherlock_hits")
+            if not _RESULT_WRITE_COLS.issubset(result_cols):
                 return None
-            if not _HITS_WRITE_COLS.issubset(_table_columns(cur, "sherlock_hits")):
+            if not _HITS_WRITE_COLS.issubset(hits_cols):
                 return None
+            # Optional C9 tag columns: detected, never required, so a pre-C9 table
+            # persists severity-only instead of rejecting the whole store.
+            has_result_tag = "display_color_tag" in result_cols
+            has_hit_tag = "color_tag" in hits_cols
+            display_tag = select_display_color_tag(match_result.hits)
 
             server_id = self._resolve_protocol_server_id(
                 cur,
@@ -167,9 +179,19 @@ def store_sherlock_result(
             if server_id is None:
                 return None
 
-            insert_values = (
-                host_type,
-                server_id,
+            # Columns shared by INSERT, UPDATE SET, and ON CONFLICT (timestamps are
+            # always literal CURRENT_TIMESTAMP). display_color_tag is appended only
+            # when the column exists, so legacy schemas stay severity-only.
+            set_cols = [
+                "ip_address",
+                "port",
+                "snapshot_id",
+                "highest_severity",
+                "total_hit_count",
+                "detail_count",
+                "truncated",
+            ]
+            set_values = [
                 ip_address,
                 port,
                 int(snapshot_id),
@@ -177,49 +199,38 @@ def store_sherlock_result(
                 total,
                 detail_count,
                 truncated,
+            ]
+            if has_result_tag:
+                set_cols.append("display_color_tag")
+                set_values.append(display_tag)
+
+            insert_cols = ["host_type", "protocol_server_id"] + set_cols
+            insert_values = (host_type, server_id) + tuple(set_values)
+            update_values = tuple(set_values) + (host_type, server_id)
+
+            placeholders = ", ".join(["?"] * len(insert_cols))
+            insert_sql = (
+                "INSERT INTO sherlock_results ({cols}, scanned_at, updated_at) "
+                "VALUES ({ph}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)".format(
+                    cols=", ".join(insert_cols), ph=placeholders
+                )
             )
-            update_values = (
-                ip_address,
-                port,
-                int(snapshot_id),
-                severity_token,
-                total,
-                detail_count,
-                truncated,
-                host_type,
-                server_id,
+            update_sql = (
+                "UPDATE sherlock_results SET {sets}, "
+                "scanned_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP "
+                "WHERE host_type=? AND protocol_server_id=?".format(
+                    sets=", ".join("{0}=?".format(c) for c in set_cols)
+                )
             )
-            insert_sql = """
-                INSERT INTO sherlock_results
-                    (host_type, protocol_server_id, ip_address, port, snapshot_id,
-                     highest_severity, total_hit_count, detail_count, truncated,
-                     scanned_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            """
-            update_sql = """
-                UPDATE sherlock_results SET
-                    ip_address=?, port=?, snapshot_id=?, highest_severity=?,
-                    total_hit_count=?, detail_count=?, truncated=?,
-                    scanned_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
-                WHERE host_type=? AND protocol_server_id=?
-            """
 
             if _unique_index_covers(cur, "sherlock_results", ("host_type", "protocol_server_id")):
                 # Atomic, race-safe upsert on the verified unique index.
+                conflict_sets = ", ".join("{0}=excluded.{0}".format(c) for c in set_cols)
                 cur.execute(
-                    insert_sql.rstrip()
-                    + """
-                    ON CONFLICT(host_type, protocol_server_id) DO UPDATE SET
-                        ip_address=excluded.ip_address,
-                        port=excluded.port,
-                        snapshot_id=excluded.snapshot_id,
-                        highest_severity=excluded.highest_severity,
-                        total_hit_count=excluded.total_hit_count,
-                        detail_count=excluded.detail_count,
-                        truncated=excluded.truncated,
-                        scanned_at=CURRENT_TIMESTAMP,
-                        updated_at=CURRENT_TIMESTAMP
-                    """,
+                    insert_sql
+                    + " ON CONFLICT(host_type, protocol_server_id) DO UPDATE SET "
+                    + conflict_sets
+                    + ", scanned_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP",
                     insert_values,
                 )
             else:
@@ -242,24 +253,46 @@ def store_sherlock_result(
             # Explicit child cleanup (FK cascade is off on these connections).
             cur.execute("DELETE FROM sherlock_hits WHERE result_id = ?", (result_id,))
             if hits:
-                cur.executemany(
-                    """
-                    INSERT INTO sherlock_hits
-                        (result_id, severity, category, label, pattern, display_path, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                    """,
-                    [
-                        (
-                            result_id,
-                            _severity_token(hit.severity),
-                            hit.category,
-                            hit.label,
-                            hit.pattern,
-                            hit.display_path,
-                        )
-                        for hit in hits
-                    ],
-                )
+                if has_hit_tag:
+                    cur.executemany(
+                        """
+                        INSERT INTO sherlock_hits
+                            (result_id, severity, category, label, pattern, display_path,
+                             color_tag, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                        """,
+                        [
+                            (
+                                result_id,
+                                _severity_token(hit.severity),
+                                hit.category,
+                                hit.label,
+                                hit.pattern,
+                                hit.display_path,
+                                normalize_color_tag(hit.color_tag),
+                            )
+                            for hit in hits
+                        ],
+                    )
+                else:
+                    cur.executemany(
+                        """
+                        INSERT INTO sherlock_hits
+                            (result_id, severity, category, label, pattern, display_path, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                        """,
+                        [
+                            (
+                                result_id,
+                                _severity_token(hit.severity),
+                                hit.category,
+                                hit.label,
+                                hit.pattern,
+                                hit.display_path,
+                            )
+                            for hit in hits
+                        ],
+                    )
             conn.commit()
     except sqlite3.OperationalError:
         return None
@@ -295,10 +328,14 @@ def get_sherlock_result_for_host(
             cur = conn.cursor()
             if not (_table_exists(cur, "sherlock_results") and _table_exists(cur, "sherlock_hits")):
                 return None
-            if not _RESULT_READ_COLS.issubset(_table_columns(cur, "sherlock_results")):
+            result_cols = _table_columns(cur, "sherlock_results")
+            hits_cols = _table_columns(cur, "sherlock_hits")
+            if not _RESULT_READ_COLS.issubset(result_cols):
                 return None
-            if not _HITS_READ_COLS.issubset(_table_columns(cur, "sherlock_hits")):
+            if not _HITS_READ_COLS.issubset(hits_cols):
                 return None
+            has_result_tag = "display_color_tag" in result_cols
+            has_hit_tag = "color_tag" in hits_cols
 
             server_id = self._resolve_protocol_server_id(
                 cur,
@@ -311,13 +348,15 @@ def get_sherlock_result_for_host(
             if server_id is None:
                 return None
 
+            result_tag_select = "display_color_tag" if has_result_tag else "NULL"
             row = cur.execute(
                 """
                 SELECT id, host_type, protocol_server_id, ip_address, port, snapshot_id,
-                       highest_severity, total_hit_count, detail_count, truncated, scanned_at
+                       highest_severity, total_hit_count, detail_count, truncated, scanned_at,
+                       {0} AS display_color_tag
                 FROM sherlock_results
                 WHERE host_type=? AND protocol_server_id=?
-                """,
+                """.format(result_tag_select),
                 (host_type, server_id),
             ).fetchone()
             if row is None:
@@ -341,11 +380,13 @@ def get_sherlock_result_for_host(
                 or int(stored_snapshot_id) != current_latest
             )
 
+            hit_tag_select = "color_tag" if has_hit_tag else "NULL"
             hit_rows = cur.execute(
                 """
-                SELECT severity, category, label, pattern, display_path
+                SELECT severity, category, label, pattern, display_path,
+                       {0} AS color_tag
                 FROM sherlock_hits WHERE result_id = ? ORDER BY id
-                """,
+                """.format(hit_tag_select),
                 (result_id,),
             ).fetchall()
             hits = [
@@ -355,6 +396,7 @@ def get_sherlock_result_for_host(
                     "label": hr["label"],
                     "pattern": hr["pattern"],
                     "display_path": hr["display_path"],
+                    "color_tag": hr["color_tag"],
                 }
                 for hr in hit_rows
             ]
@@ -370,6 +412,7 @@ def get_sherlock_result_for_host(
                 "detail_count": row["detail_count"],
                 "truncated": bool(row["truncated"]),
                 "scanned_at": row["scanned_at"],
+                "display_color_tag": row["display_color_tag"],
                 "stale": stale,
                 "hits": hits,
             }
@@ -394,8 +437,12 @@ def get_sherlock_risk_summary_map(self) -> Dict[str, Dict[str, Any]]:
             cur = conn.cursor()
             if not _table_exists(cur, "sherlock_results"):
                 return {}
-            if not _RESULT_READ_COLS.issubset(_table_columns(cur, "sherlock_results")):
+            result_cols = _table_columns(cur, "sherlock_results")
+            if not _RESULT_READ_COLS.issubset(result_cols):
                 return {}
+            has_result_tag = "display_color_tag" in result_cols
+            tag_select = "display_color_tag" if has_result_tag else "NULL"
+            tag_select_joined = "r.display_color_tag" if has_result_tag else "NULL"
 
             for host_type, cache_table in _CACHE_TABLES.items():
                 try:
@@ -411,6 +458,7 @@ def get_sherlock_risk_summary_map(self) -> Dict[str, Dict[str, Any]]:
                                    r.highest_severity AS highest_severity,
                                    r.total_hit_count AS total_hit_count,
                                    r.snapshot_id AS snapshot_id,
+                                   {tag_select_joined} AS display_color_tag,
                                    c.latest_snapshot_id AS latest_snapshot_id
                             FROM sherlock_results r
                             LEFT JOIN {cache_table} c
@@ -421,11 +469,12 @@ def get_sherlock_risk_summary_map(self) -> Dict[str, Dict[str, Any]]:
                         ).fetchall()
                     else:
                         rows = cur.execute(
-                            """
+                            f"""
                             SELECT protocol_server_id AS protocol_server_id,
                                    highest_severity AS highest_severity,
                                    total_hit_count AS total_hit_count,
                                    snapshot_id AS snapshot_id,
+                                   {tag_select} AS display_color_tag,
                                    NULL AS latest_snapshot_id
                             FROM sherlock_results
                             WHERE host_type = ?
@@ -462,6 +511,7 @@ def get_sherlock_risk_summary_map(self) -> Dict[str, Dict[str, Any]]:
                         "severity": row["highest_severity"],
                         "count": count,
                         "stale": stale,
+                        "display_color_tag": row["display_color_tag"],
                     }
     except sqlite3.OperationalError:
         return {}

@@ -145,7 +145,10 @@ def test_results_list_badge_only_for_fresh_nonzero_recognized(creds, cfg_no_tls,
     _, c = _client(creds, cfg_no_tls, db_with_sherlock)
     rows = _rows_by_key(c.get("/api/results/all").json())
 
-    assert rows["S:1"]["sherlock_risk"] == {"text": "HIGH 3", "color": "#ff4d4d"}
+    # Base schema has no tag column -> display_color_tag degrades to None.
+    assert rows["S:1"]["sherlock_risk"] == {
+        "text": "HIGH 3", "color": "#ff4d4d", "display_color_tag": None
+    }
     # stale / zero-hit / malformed / unscanned all stay blank
     for key in ("S:2", "S:3", "S:4", "S:5"):
         assert rows[key]["sherlock_risk"] is None
@@ -255,7 +258,7 @@ def test_badge_colors_from_injected_shard(db_with_sherlock):
             return {"colors": {"high": "#010203", "med": "#0a0b0c", "low": "#111213"}}
 
     badge_map = sherlock_view.get_sherlock_badge_map(db_with_sherlock, config_store=_FakeStore())
-    assert badge_map["S:1"] == {"text": "HIGH 3", "color": "#010203"}
+    assert badge_map["S:1"] == {"text": "HIGH 3", "color": "#010203", "display_color_tag": None}
 
 
 def test_badge_colors_default_on_shard_failure(db_with_sherlock):
@@ -265,3 +268,62 @@ def test_badge_colors_default_on_shard_failure(db_with_sherlock):
 
     badge_map = sherlock_view.get_sherlock_badge_map(db_with_sherlock, config_store=_BadStore())
     assert badge_map["S:1"]["color"] == "#ff4d4d"
+
+
+# --- C9: color-tag columns surfaced read-only when present ---
+
+@pytest.fixture
+def db_with_sherlock_tags(tmp_path):
+    """SMB host with a fresh finding and C9 tag columns populated."""
+    db_path = tmp_path / "sherlock_tags.db"
+    conn = sqlite3.connect(str(db_path))
+    _base_schema(conn)
+    conn.executescript(
+        """
+        CREATE TABLE sherlock_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            host_type TEXT NOT NULL, protocol_server_id INTEGER NOT NULL,
+            ip_address TEXT, port INTEGER, snapshot_id INTEGER,
+            highest_severity TEXT, total_hit_count INTEGER DEFAULT 0,
+            detail_count INTEGER DEFAULT 0, truncated INTEGER DEFAULT 0,
+            scanned_at TEXT, updated_at TEXT, display_color_tag TEXT
+        );
+        CREATE TABLE sherlock_hits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, result_id INTEGER NOT NULL,
+            severity TEXT, category TEXT, label TEXT, pattern TEXT,
+            display_path TEXT, created_at TEXT, color_tag TEXT
+        );
+        INSERT INTO smb_servers (ip_address, status, last_seen)
+            VALUES ('10.0.0.11', 'active', '2026-05-10T14:00:00');
+        INSERT INTO host_probe_cache (server_id, status, latest_snapshot_id)
+            VALUES (1, 'clean', 5);
+        INSERT INTO sherlock_results
+            (host_type, protocol_server_id, snapshot_id, highest_severity,
+             total_hit_count, detail_count, truncated, display_color_tag)
+            VALUES ('S', 1, 5, 'high', 2, 2, 0, 'user2');
+        INSERT INTO sherlock_hits (result_id, severity, category, label, pattern, display_path, color_tag) VALUES
+            (1, 'high', 'Credentials', 'Password files', '*password*', 'Public/passwords.txt', 'user2'),
+            (1, 'med', 'Finance', 'Payroll', '*payroll*', 'Public/payroll.xlsx', 'none');
+        """
+    )
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def test_badge_map_includes_display_color_tag_when_present(db_with_sherlock_tags):
+    badge_map = sherlock_view.get_sherlock_badge_map(db_with_sherlock_tags)
+    assert badge_map["S:1"]["display_color_tag"] == "user2"
+
+
+def test_detail_includes_tag_tokens_when_present(db_with_sherlock_tags):
+    detail = sherlock_view.get_sherlock_detail(db_with_sherlock_tags, "S", 1)
+    assert detail["display_color_tag"] == "user2"
+    assert [h["color_tag"] for h in detail["hits"]] == ["user2", "none"]
+
+
+def test_detail_tags_degrade_to_none_on_base_schema(creds, cfg_no_tls, db_with_sherlock):
+    # db_with_sherlock has no tag columns -> tokens read back as None.
+    detail = sherlock_view.get_sherlock_detail(db_with_sherlock, "S", 1)
+    assert detail["display_color_tag"] is None
+    assert all(h["color_tag"] is None for h in detail["hits"])

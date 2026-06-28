@@ -14,6 +14,7 @@ from typing import Iterable, List, Optional
 
 from .model import (
     COLOR_TAG_NONE,
+    USER_COLOR_KEYS,
     Severity,
     SherlockPattern,
     SherlockSettings,
@@ -113,3 +114,19 @@ def match_entries(
 
     highest = max((hit.severity for hit in hits), default=None)
     return MatchResult(hits=hits, highest_severity=highest, hit_count=len(hits))
+
+
+def select_display_color_tag(hits: Iterable[SherlockHit]) -> Optional[str]:
+    """Pick the result-level display tag from matched hits (SPEC C9 / V2).
+
+    The token of the highest-severity user-tagged hit (color_tag in
+    USER_COLOR_KEYS); ties preserve matcher hit order (first hit wins). Returns
+    None when no hit carries a user tag. The token is independent of whether that
+    user color is currently configured — display surfaces resolve the color later.
+    """
+    best: Optional[tuple] = None  # (severity, tag)
+    for hit in hits:
+        tag = normalize_color_tag(hit.color_tag)
+        if tag in USER_COLOR_KEYS and (best is None or hit.severity > best[0]):
+            best = (hit.severity, tag)
+    return best[1] if best else None

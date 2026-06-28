@@ -876,6 +876,7 @@ WHERE ip_address = '1.2.3.4';
 - Additive, created by guarded migration; every read/write in `gui/utils/database_access_sherlock_methods.py` re-checks table/column presence so older or partial schemas degrade to blank rather than erroring.
 - `sherlock_results` holds the **latest** display-only triage summary per `(host_type, protocol_server_id)`: `highest_severity`, `total_hit_count`, the matched probe `snapshot_id` (used for stale detection against `*_probe_cache.latest_snapshot_id`), and a scanned timestamp. Re-storing replaces the prior row for that host/protocol (no scan history).
 - `sherlock_hits` holds capped per-hit detail rows (severity, category, label, pattern, display path) linked by `result_id`; `total_hit_count` preserves the true count even when details are capped.
+- V2 adds nullable color-tag columns: `sherlock_results.display_color_tag` (the selected user-tag token — highest-severity tagged hit, ties by matcher order — stored independent of whether that color is currently configured) and `sherlock_hits.color_tag` (the matched pattern's tag). Both are detected, never required: legacy/partial schemas without them persist and read severity-only.
 - Source of matches is **probe snapshot paths only** — Sherlock never reads file contents, downloads, authenticates, or probes. See §6.5 (Server List Risk column / Scan Sherlock), §6.9 (Sherlock Accessories tab), and `docs/dev/keyword_scanning/`.
 
 ### 5.3 Views

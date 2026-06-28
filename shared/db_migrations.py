@@ -1168,6 +1168,7 @@ _SHERLOCK_RESULTS_BACKFILL = (
     ("truncated", "INTEGER DEFAULT 0"),
     ("scanned_at", "DATETIME"),
     ("updated_at", "DATETIME"),
+    ("display_color_tag", "TEXT"),
 )
 _SHERLOCK_HITS_BACKFILL = (
     ("result_id", "INTEGER"),
@@ -1177,6 +1178,7 @@ _SHERLOCK_HITS_BACKFILL = (
     ("pattern", "TEXT"),
     ("display_path", "TEXT"),
     ("created_at", "DATETIME"),
+    ("color_tag", "TEXT"),
 )
 
 
@@ -1235,7 +1237,8 @@ def _ensure_sherlock_tables(cur: sqlite3.Cursor) -> None:
             detail_count       INTEGER DEFAULT 0,
             truncated          INTEGER DEFAULT 0,
             scanned_at         DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at         DATETIME DEFAULT CURRENT_TIMESTAMP
+            updated_at         DATETIME DEFAULT CURRENT_TIMESTAMP,
+            display_color_tag  TEXT
         )
         """
     )
@@ -1250,6 +1253,7 @@ def _ensure_sherlock_tables(cur: sqlite3.Cursor) -> None:
             pattern      TEXT,
             display_path TEXT,
             created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+            color_tag    TEXT,
             FOREIGN KEY (result_id) REFERENCES sherlock_results(id) ON DELETE CASCADE
         )
         """

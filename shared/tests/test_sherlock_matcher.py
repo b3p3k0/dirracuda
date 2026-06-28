@@ -4,10 +4,12 @@ import pytest
 
 from shared.sherlock import (
     Severity,
+    SherlockHit,
     SherlockPathEntry,
     SherlockPattern,
     SherlockSettings,
     match_entries,
+    select_display_color_tag,
 )
 
 
@@ -181,3 +183,51 @@ def test_color_tags_do_not_change_severity_or_count():
 
     assert tagged.hit_count == baseline.hit_count == 3
     assert tagged.highest_severity is baseline.highest_severity is Severity.HIGH
+
+
+# ---------------------------------------------------------------------------
+# select_display_color_tag (C9 display-tag selection rule)
+# ---------------------------------------------------------------------------
+
+def _hit(severity, color_tag):
+    return SherlockHit(
+        severity=severity,
+        category="cat",
+        label="label",
+        pattern="p",
+        display_path="path",
+        color_tag=color_tag,
+    )
+
+
+def test_select_display_tag_no_hits():
+    assert select_display_color_tag([]) is None
+
+
+def test_select_display_tag_no_tagged_hits():
+    assert select_display_color_tag([_hit(Severity.HIGH, "none")]) is None
+
+
+def test_select_display_tag_single_tag():
+    assert select_display_color_tag([_hit(Severity.MED, "user2")]) == "user2"
+
+
+def test_select_display_tag_highest_severity_wins():
+    # MED tag appears first, but the HIGH-severity tag must win.
+    hits = [_hit(Severity.MED, "user1"), _hit(Severity.HIGH, "user3")]
+    assert select_display_color_tag(hits) == "user3"
+
+
+def test_select_display_tag_tie_keeps_first_in_order():
+    hits = [_hit(Severity.HIGH, "user2"), _hit(Severity.HIGH, "user1")]
+    assert select_display_color_tag(hits) == "user2"
+
+
+def test_select_display_tag_ignores_untagged_higher_severity():
+    # Highest-severity hit is untagged; the lower-severity tagged hit is selected.
+    hits = [_hit(Severity.HIGH, "none"), _hit(Severity.LOW, "user1")]
+    assert select_display_color_tag(hits) == "user1"
+
+
+def test_select_display_tag_unknown_token_degrades_to_none():
+    assert select_display_color_tag([_hit(Severity.HIGH, "bogus")]) is None

@@ -532,3 +532,185 @@ def test_store_noop_on_missing_snapshot(tmp_path):
         assert conn.execute("SELECT COUNT(*) FROM sherlock_results").fetchone()[0] == 0
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# C9. Color-tag persistence (display_color_tag / sherlock_hits.color_tag)
+# ---------------------------------------------------------------------------
+
+def _tagged_match_result(specs) -> MatchResult:
+    """Build a MatchResult from (severity, color_tag) pairs, in matcher order."""
+    hits = [
+        SherlockHit(
+            severity=sev,
+            category="Credentials",
+            label="Label",
+            pattern="*x*",
+            display_path=f"share/dir/{i}.txt",
+            color_tag=tag,
+        )
+        for i, (sev, tag) in enumerate(specs)
+    ]
+    highest = max((h.severity for h in hits), default=None)
+    return MatchResult(hits=hits, highest_severity=highest, hit_count=len(hits))
+
+
+def test_c9_migration_adds_tag_columns_on_minimal_schema(tmp_path):
+    db = str(tmp_path / "minimal_c9.db")
+    conn = sqlite3.connect(db)
+    conn.executescript(_MINIMAL_DDL)
+    conn.commit()
+    conn.close()
+
+    run_migrations(db)
+
+    assert "display_color_tag" in _sherlock_columns(db, "sherlock_results")
+    assert "color_tag" in _sherlock_columns(db, "sherlock_hits")
+
+
+def test_c9_migration_backfills_tag_columns_on_pre_c9_schema(tmp_path):
+    # Pre-C9 tables: all base columns present, tag columns absent.
+    db = str(tmp_path / "pre_c9.db")
+    conn = sqlite3.connect(db)
+    conn.executescript(
+        """
+        CREATE TABLE smb_servers (id INTEGER PRIMARY KEY AUTOINCREMENT, ip_address TEXT UNIQUE, country TEXT, first_seen DATETIME, last_seen DATETIME, created_at DATETIME);
+        CREATE TABLE sherlock_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, host_type TEXT, protocol_server_id INTEGER,
+            ip_address TEXT, port INTEGER, snapshot_id INTEGER, highest_severity TEXT,
+            total_hit_count INTEGER DEFAULT 0, detail_count INTEGER DEFAULT 0,
+            truncated INTEGER DEFAULT 0, scanned_at DATETIME, updated_at DATETIME);
+        CREATE TABLE sherlock_hits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, result_id INTEGER, severity TEXT,
+            category TEXT, label TEXT, pattern TEXT, display_path TEXT, created_at DATETIME);
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    run_migrations(db)
+    assert "display_color_tag" in _sherlock_columns(db, "sherlock_results")
+    assert "color_tag" in _sherlock_columns(db, "sherlock_hits")
+
+    # Idempotent re-run.
+    run_migrations(db)
+    assert "display_color_tag" in _sherlock_columns(db, "sherlock_results")
+    assert "color_tag" in _sherlock_columns(db, "sherlock_hits")
+
+
+def test_c9_store_and_read_round_trips_tags(tmp_path):
+    db = _migrated_db(tmp_path)
+    ip = "10.0.0.20"
+    sid = _insert_server(db, "S", ip)
+    reader = DatabaseReader(db_path=db)
+
+    # MED/user1 first, HIGH/user3 second -> highest severity wins (not order).
+    mr = _tagged_match_result([(Severity.MED, "user1"), (Severity.HIGH, "user3")])
+    rid = reader.store_sherlock_result(ip, "S", 5, mr, protocol_server_id=sid)
+    assert rid is not None
+
+    conn = _conn(db)
+    try:
+        assert conn.execute(
+            "SELECT display_color_tag FROM sherlock_results"
+        ).fetchone()["display_color_tag"] == "user3"
+        hit_tags = [r["color_tag"] for r in conn.execute(
+            "SELECT color_tag FROM sherlock_hits ORDER BY id"
+        ).fetchall()]
+        assert hit_tags == ["user1", "user3"]
+    finally:
+        conn.close()
+
+    result = reader.get_sherlock_result_for_host(ip, "S", protocol_server_id=sid)
+    assert result["display_color_tag"] == "user3"
+    assert [h["color_tag"] for h in result["hits"]] == ["user1", "user3"]
+
+
+def test_c9_display_tag_tie_keeps_matcher_order(tmp_path):
+    db = _migrated_db(tmp_path)
+    ip = "10.0.0.21"
+    sid = _insert_server(db, "S", ip)
+    reader = DatabaseReader(db_path=db)
+
+    # Two HIGH tagged hits -> first in matcher order wins the display tag.
+    mr = _tagged_match_result([(Severity.HIGH, "user2"), (Severity.HIGH, "user1")])
+    reader.store_sherlock_result(ip, "S", 5, mr, protocol_server_id=sid)
+
+    result = reader.get_sherlock_result_for_host(ip, "S", protocol_server_id=sid)
+    assert result["display_color_tag"] == "user2"
+
+
+def test_c9_untagged_result_has_null_display_tag(tmp_path):
+    db = _migrated_db(tmp_path)
+    ip = "10.0.0.22"
+    sid = _insert_server(db, "S", ip)
+    reader = DatabaseReader(db_path=db)
+
+    # _make_match_result builds untagged (color_tag defaults to 'none') hits.
+    reader.store_sherlock_result(ip, "S", 5, _make_match_result(2), protocol_server_id=sid)
+    result = reader.get_sherlock_result_for_host(ip, "S", protocol_server_id=sid)
+    # No user-tagged hit -> result display tag is NULL, but each hit's normalized
+    # token ("none") is still persisted when the column exists.
+    assert result["display_color_tag"] is None
+    assert all(h["color_tag"] == "none" for h in result["hits"])
+
+
+def test_c9_risk_summary_map_includes_display_tag(tmp_path):
+    db = _migrated_db(tmp_path)
+    ip = "10.0.0.23"
+    sid = _insert_server(db, "S", ip)
+    reader = DatabaseReader(db_path=db)
+    reader.store_sherlock_result(
+        ip, "S", 5, _tagged_match_result([(Severity.HIGH, "user2")]),
+        protocol_server_id=sid,
+    )
+    summary = reader.get_sherlock_risk_summary_map()
+    assert summary[f"S:{sid}"]["display_color_tag"] == "user2"
+
+
+def test_c9_partial_schema_without_tag_columns_degrades(tmp_path):
+    # Sherlock tables present with all base columns but NO tag columns. Bypass
+    # run_migrations so the columns stay absent: store must persist severity-only
+    # without error, and read must report display/hit tags as None.
+    db = str(tmp_path / "no_tag_cols.db")
+    conn = sqlite3.connect(db)
+    conn.executescript(
+        """
+        CREATE TABLE smb_servers (id INTEGER PRIMARY KEY AUTOINCREMENT, ip_address TEXT UNIQUE, country TEXT, first_seen DATETIME, last_seen DATETIME, created_at DATETIME);
+        CREATE TABLE host_probe_cache (server_id INTEGER PRIMARY KEY, latest_snapshot_id INTEGER);
+        CREATE TABLE sherlock_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, host_type TEXT, protocol_server_id INTEGER,
+            ip_address TEXT, port INTEGER, snapshot_id INTEGER, highest_severity TEXT,
+            total_hit_count INTEGER DEFAULT 0, detail_count INTEGER DEFAULT 0,
+            truncated INTEGER DEFAULT 0, scanned_at DATETIME, updated_at DATETIME);
+        CREATE TABLE sherlock_hits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, result_id INTEGER, severity TEXT,
+            category TEXT, label TEXT, pattern TEXT, display_path TEXT, created_at DATETIME);
+        CREATE UNIQUE INDEX idx_sherlock_results_key ON sherlock_results(host_type, protocol_server_id);
+        INSERT INTO smb_servers (ip_address) VALUES ('10.0.0.24');
+        INSERT INTO host_probe_cache (server_id, latest_snapshot_id) VALUES (1, 5);
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    reader = object.__new__(DatabaseReader)
+    reader.db_path = db
+    reader.cache = {}
+    reader.cache_timestamps = {}
+    import threading
+    reader.connection_lock = threading.Lock()
+
+    rid = reader.store_sherlock_result(
+        "10.0.0.24", "S", 5, _tagged_match_result([(Severity.HIGH, "user2")]),
+        protocol_server_id=1,
+    )
+    assert rid is not None  # severity-only persist still succeeds
+
+    result = reader.get_sherlock_result_for_host("10.0.0.24", "S", protocol_server_id=1)
+    assert result is not None
+    assert result["display_color_tag"] is None
+    assert all(h["color_tag"] is None for h in result["hits"])
+
+    summary = reader.get_sherlock_risk_summary_map()
+    assert summary["S:1"]["display_color_tag"] is None
