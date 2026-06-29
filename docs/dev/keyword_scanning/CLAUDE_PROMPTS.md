@@ -810,3 +810,65 @@ audit for touched production files. Review README and technical reference and
 update only if export behavior makes them incomplete or misleading. Report exact
 commands and results. Do not commit.
 ```
+
+## C20 Planning Prompt
+
+```text
+Plan C20 only: Sherlock Pattern Manager improvement closeout.
+
+For this reply, produce a plan and stop. After RA/HI acceptance, execute the
+approved closeout plan in this worktree before sending the completion report.
+
+Workflow reminder: Codex is PA/RA, Claude is DA. Do not commit. The RA commits
+only after HI accepts completed work.
+
+Source anchors: pytest command usage and Xvfb headless display behavior:
+https://docs.pytest.org/en/stable/how-to/usage.html
+https://www.x.org/archive/X11R7.7/doc/man/man1/Xvfb.1.xhtml
+
+This is a closeout card only. Do not add product behavior, new UI controls,
+new settings fields, DB/schema changes, matcher changes, Web UI changes,
+scan-flow changes, import support, or feature rewrites.
+
+The plan must cover:
+- final validation evidence for the completed C15-C19 Pattern Manager pass:
+  - C15 built-in lifecycle + Copy
+  - C16 category combobox
+  - C16.5 Save & Close / unsaved-close warning
+  - C17 multi-select + double-click edit routing
+  - C18 search/faceted filters
+  - C19 JSON export
+- README.md review and update only where current runtime behavior is missing or
+  misleading
+- docs/TECHNICAL_REFERENCE.md review and update only where current runtime
+  behavior is missing or misleading
+- docs/dev/keyword_scanning/ROADMAP.md closeout status update
+- docs/dev/keyword_scanning/LESSONS_LEARNED.md update only for reusable lessons
+  discovered during C15-C19 or closeout validation
+- AGENTS.md review; update only if generic agent-facing guidance is now stale
+- Xvfb/default-size visual QA screenshots covering:
+  - Add/Edit dialog category combobox
+  - Pattern Manager multi-select/action row
+  - Pattern Manager filter row
+  - Pattern Manager Export button/action row
+- file-size audit for touched runtime files, especially
+  `gui/components/experimental_features/sherlock_tab.py`
+- explicit handling of the near-limit file-size risk:
+  - if no runtime edit is needed and `sherlock_tab.py` remains under 1200 lines,
+    document the risk for future cards
+  - if any runtime edit would push `sherlock_tab.py` over 1200 lines, stop and
+    propose/extract a helper module before landing more pattern-manager logic
+- dead-code/unused-import scan for C15-C19 additions
+- report any known unrelated full-suite flakes separately from Sherlock failures
+
+Validation plan must include:
+- targeted C15-C19 matrix, including Sherlock tab tests and pure export tests
+- `pytest -k sherlock`
+- GUI guardrails for messagebox/theme usage
+- `git diff --check`
+- runtime file-size audit
+- full suite only if risk/time warrants; if run, separate known unrelated flakes
+  from Sherlock-attributable failures
+
+Report exact commands and results. Do not commit.
+```

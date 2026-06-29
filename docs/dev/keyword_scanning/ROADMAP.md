@@ -171,6 +171,10 @@ Exit criteria:
 - Default-size visual QA confirms no clipping and no visible hex strings in the
   color rows.
 
+Status: complete. Swatch buttons replaced the hex Entry + `...` controls for
+High/Med/Low and User1/User2/User3; User rows gained None/Clear; the saved
+`#rrggbb` wire format is unchanged.
+
 ## C15 - Built-In Lifecycle And Copy
 
 Let analysts delete built-ins, copy any row, and edit built-ins through a
@@ -182,6 +186,10 @@ Exit criteria:
 - Built-in Edit and Copy create new custom rows.
 - Restore Built-ins clears deleted/disabled built-in state and keeps customs.
 
+Status: complete. `builtin_deleted` persists hidden built-ins separately from
+disabled ones; `Copy` and a built-in edit-as-copy flow create new custom rows;
+Restore Built-ins re-adds deleted/disabled defaults while keeping customs.
+
 ## C16 - Category Combobox
 
 Replace the Add/Edit free-text category entry with an editable category
@@ -191,6 +199,10 @@ Exit criteria:
 - Existing categories are selectable.
 - New typed categories are accepted.
 - Blank category saves as `Custom`.
+
+Status: complete. The Add/Edit category control is an editable
+`ttk.Combobox(state=normal)` populated from staged categories via a pure
+`category_choices` helper; typed values are accepted and blank saves as `Custom`.
 
 ## C16.5 - Pattern Manager Save And Close
 
@@ -202,6 +214,11 @@ Exit criteria:
   closes only after a successful save.
 - `Close` warns when pattern-manager changes are unsaved and can be cancelled.
 - No settings schema or non-pattern-manager behavior changes.
+
+Status: complete. `Save & Close` persists through the existing Sherlock settings
+save path and closes only on success; `Close` warns on unsaved pattern-manager
+changes (dirty flag) and is cancellable; no schema or non-manager behavior
+changed.
 
 ## C17 - Multi-Select And Double-Click
 
@@ -254,3 +271,21 @@ Exit criteria:
 - Xvfb screenshots cover category combobox, multi-select/action row, filters,
   and export.
 - Runtime docs match behavior and file-size risk is explicitly handled.
+
+Status: complete. Targeted C15-C19 matrix (`test_sherlock_tab.py` +
+`test_sherlock_export.py`, 105 tests) and `-k sherlock` (355 tests) all passed
+under Xvfb with the real-Tk `tk_root` tests executing (not skipped); the
+messagebox/theme GUI guardrails passed; `git diff --check` was clean. Four
+default-size Xvfb screenshots were captured against the real Accessories Sherlock
+pattern-manager modal (Add/Edit category combobox, multi-select + action row,
+active filter row, and the Export action row) with no clipping. README,
+`docs/TECHNICAL_REFERENCE.md`, and `AGENTS.md` already matched runtime behavior
+(updated during C15-C19) and needed no change; this closeout updated the ROADMAP
+status lines, `LESSONS_LEARNED.md`, and `RISK_REGISTER.md` R23. File-size audit:
+`sherlock_tab.py` is 1188 lines — under the 1200 guardrail by only 12 lines and
+unchanged this card (no runtime edit). The dead-code scan found the touched
+C15-C19 code clean; the only unused-import finding (`severity_from_str` /
+`severity_to_str` in `sherlock_tab.py`) predates this pass (added in the C3
+commit 6baed90) and was left in place as out-of-scope for a docs-only closeout.
+Carry-forward: the next card touching the pattern manager must extract a helper
+module before adding logic that would push `sherlock_tab.py` over 1200 lines.

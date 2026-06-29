@@ -89,3 +89,35 @@ Seeded before implementation. Append after each major card.
    QA scripts re-ran unchanged against committed V2 code; the only gotcha was a
    missing `sys.path`/`PYTHONPATH` to the repo root for the standalone probe
    harness. Don't rebuild screenshot scaffolding from scratch at closeout.
+
+## C20 Closeout
+
+26. Run GUI test suites under `xvfb-run -a`, not a bare interpreter. The
+   `tk_root` fixture in `test_sherlock_tab.py` skips with "no display available"
+   when there is no X server, so a headless `pytest` silently turns the real-Tk
+   coverage (category combobox, filter-row widgets, facet refresh, under-active-
+   filter dialogs, button-order layout) into skips. Closeout evidence must show
+   those tests as passed, not skipped — confirm the count, don't trust a green
+   summary that quietly skipped the display-dependent cases.
+
+27. A doc no-op is a valid, reportable closeout outcome. README,
+   `docs/TECHNICAL_REFERENCE.md`, and `AGENTS.md` were updated incrementally
+   during C15-C19, so the C20 sweep found them already accurate and left them
+   unchanged. State "reviewed, no change needed" explicitly rather than inventing
+   edits to look productive — but still re-read them, because the C7 lesson (docs
+   trail runtime silently) cuts both ways.
+
+28. Scope the dead-code scan to the card's own changes and attribute findings by
+   age. The C20 unused-import scan flagged `severity_from_str` / `severity_to_str`
+   in `sherlock_tab.py`; `git log -S` showed they were added in the C3 commit
+   (6baed90), never used since, and are not C15-C19 work. Reporting them as a
+   pre-existing finding and leaving them out of a docs-only closeout is correct;
+   removing them would be an out-of-scope runtime edit. (No linter is installed
+   here, so a small `ast`-based scan plus `py_compile` is the closeout tool.)
+
+29. Near-limit files need a measured number and an explicit trigger, not just a
+   "watch this" note. `sherlock_tab.py` sits at 1188 lines, 12 under the 1200
+   guardrail (R23). The actionable carry-forward is concrete: the next card
+   touching the pattern manager must extract a helper module before adding logic
+   that would cross 1200 — recorded in ROADMAP C20 status and RISK_REGISTER R23
+   so it cannot be lost to chat memory.
