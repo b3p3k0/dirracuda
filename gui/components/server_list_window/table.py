@@ -12,6 +12,23 @@ from datetime import datetime
 from typing import Dict, List, Any, Callable, Optional, Tuple
 import re
 
+from shared.sherlock import default_settings, settings_from_dict
+from gui.utils.sherlock_risk_display import (
+    resolve_sherlock_risk as _resolve_sherlock_risk,
+    sherlock_row_tag as _sherlock_row_tag,
+)
+
+
+def _load_sherlock_settings(settings_manager):
+    """Load Sherlock settings (validated colors) or defaults when unavailable."""
+    if settings_manager is None:
+        return default_settings()
+    try:
+        return settings_from_dict(settings_manager.get_setting("sherlock", {}))
+    except Exception:
+        return default_settings()
+
+
 def create_server_table(parent, theme, callbacks):
     """
     Create server data table with scrollbars.
@@ -34,6 +51,7 @@ def create_server_table(parent, theme, callbacks):
         "avoid",
         "probe",
         "extracted",
+        "Risk",
         "Type",
         "IP Address",
         "Shares",
@@ -58,6 +76,7 @@ def create_server_table(parent, theme, callbacks):
     tree.column("avoid", width=55, anchor="center")  # Avoid skull column
     tree.column("probe", width=65, anchor="center")
     tree.column("extracted", width=85, anchor="center")
+    tree.column("Risk", width=80, anchor="center")  # Alert-only Sherlock risk; fixed width
     tree.column("Type", width=40, anchor="center")  # Protocol type: S or F
     tree.column("IP Address", width=135, anchor="w")
     tree.column("Shares", width=100, anchor="center")
@@ -72,6 +91,7 @@ def create_server_table(parent, theme, callbacks):
         "avoid": "Avoid",
         "probe": "Probed",
         "extracted": "Extracted",
+        "Risk": "Risk",
         "Type": "Type",
     }
     for col in columns:
@@ -124,6 +144,13 @@ def update_table_display(tree, filtered_servers: List[Dict[str, Any]], settings_
     import logging
     _log = logging.getLogger("server_list_window")
 
+    # Load Sherlock settings for row tints. Composite (severity, color_tag) tags
+    # are configured lazily in the row loop via settings.tint_for so a configured
+    # user color wins over the severity color. Colors are pre-validated by
+    # settings_from_dict, so no re-validation here.
+    sherlock_settings = _load_sherlock_settings(settings_manager)
+    configured_sherlock_tags: set = set()
+
     # Clear existing items
     for item in tree.get_children():
         tree.delete(item)
@@ -167,13 +194,33 @@ def update_table_display(tree, filtered_servers: List[Dict[str, Any]], settings_
         probe_emoji = server.get("probe_status_emoji", "⚪")
         extracted_emoji = server.get("extract_status_emoji", "○")
 
+        # Alert-only Risk cell + row tint; blank unless there is a fresh finding.
+        # Tint = user color when the finding carries a configured user tag, else
+        # the severity color (settings.tint_for). Risk text stays HIGH/MED/LOW n.
+        resolved_risk = _resolve_sherlock_risk(server.get("sherlock_risk"))
+        if resolved_risk is None:
+            risk_text = ""
+            row_tags: Tuple[str, ...] = ()
+        else:
+            severity, count, color_tag = resolved_risk
+            risk_text = severity.display_text(count)
+            tag_name = _sherlock_row_tag(severity, color_tag)
+            if tag_name not in configured_sherlock_tags:
+                tree.tag_configure(
+                    tag_name,
+                    background=sherlock_settings.tint_for(severity, color_tag),
+                )
+                configured_sherlock_tags.add(tag_name)
+            row_tags = (tag_name,)
+
         # Insert row — iid is the row_key so selection/lookups are protocol-aware
         item_id = tree.insert(
             "",
             "end",
             iid=row_key,
-            values=(favorite_icon, avoid_icon, probe_emoji, extracted_emoji,
-                    host_type, ip_addr, shares_count, accessible_shares, denied_count, last_seen, country)
+            values=(favorite_icon, avoid_icon, probe_emoji, extracted_emoji, risk_text,
+                    host_type, ip_addr, shares_count, accessible_shares, denied_count, last_seen, country),
+            tags=row_tags
         )
 
         # Add visual indicators for shares count
@@ -220,7 +267,7 @@ def sort_table_by_column(tree, column: str, current_sort_column: Optional[str],
         tuple: (new_sort_column, new_sort_direction)
     """
     # Short-circuit for flag/status/type columns - no meaningful sort order
-    if column in ("favorite", "avoid", "rce", "extracted", "Type"):
+    if column in ("favorite", "avoid", "rce", "extracted", "Risk", "Type"):
         return current_sort_column, current_sort_direction
 
     # Cache original header text on first access to this column

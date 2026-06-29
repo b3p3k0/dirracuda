@@ -16,7 +16,7 @@ from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.keybindings import bind_close_shortcuts, bind_submit_shortcuts
 
 
-DEFAULT_GEOMETRY = "960x700"
+DEFAULT_GEOMETRY = "960x720"
 MIN_WIDTH = 840
 MIN_HEIGHT = 680
 
@@ -513,22 +513,39 @@ def _build_runtime(owner: Any, parent: tk.Widget) -> None:
     timeout.pack(side=tk.LEFT, padx=(6, 4))
     _muted_label(owner, inputs, "sec").pack(side=tk.LEFT)
 
-    for text, variable, command in (
-        ("Verbose backend output", owner.verbose_var, None),
-        ("Run bulk probe after each scan", owner.bulk_probe_enabled_var, None),
-        (
-            "Run bulk extract after each scan",
-            owner.bulk_extract_enabled_var,
-            owner._sync_skip_indicator_extract_state,
-        ),
+    for text, variable in (
+        ("Verbose backend output", owner.verbose_var),
+        ("Run bulk probe after each scan", owner.bulk_probe_enabled_var),
     ):
-        checkbox = ttk.Checkbutton(
-            parent,
-            text=text,
-            variable=variable,
-            command=command,
-        )
+        checkbox = ttk.Checkbutton(parent, text=text, variable=variable)
         checkbox.pack(anchor="w", pady=1)
+
+    # Sherlock run-after-probe: live control + shortcut to full Sherlock settings.
+    sherlock_row = tk.Frame(parent)
+    owner.theme.apply_to_widget(sherlock_row, "main_window")
+    sherlock_row.pack(fill=tk.X, anchor="w", pady=1)
+    ttk.Checkbutton(
+        sherlock_row,
+        text="Sherlock: run after probe",
+        variable=owner.sherlock_run_after_probe_var,
+        command=owner._on_sherlock_run_after_probe_toggled,
+    ).pack(side=tk.LEFT)
+    sherlock_settings_btn = tk.Button(
+        sherlock_row,
+        text="Sherlock settings…",
+        command=owner._open_sherlock_settings,
+        font=owner.theme.fonts["small"],
+    )
+    owner.theme.apply_to_widget(sherlock_settings_btn, "button_secondary")
+    sherlock_settings_btn.pack(side=tk.LEFT, padx=(8, 0))
+
+    bulk_extract_checkbox = ttk.Checkbutton(
+        parent,
+        text="Run bulk extract after each scan",
+        variable=owner.bulk_extract_enabled_var,
+        command=owner._sync_skip_indicator_extract_state,
+    )
+    bulk_extract_checkbox.pack(anchor="w", pady=1)
 
     owner.skip_indicator_extract_checkbox = ttk.Checkbutton(
         parent,

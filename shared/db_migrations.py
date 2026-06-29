@@ -534,6 +534,8 @@ def run_migrations(db_path: str) -> None:
             "ON probe_snapshot_errors(snapshot_id)"
         )
 
+        _ensure_sherlock_tables(cur)
+
         # --- App migration state/report tables ---
         cur.execute(
             """
@@ -1148,6 +1150,150 @@ def _migrate_http_servers_to_endpoint_identity(cur: sqlite3.Cursor) -> None:
 
     if fk_enabled:
         cur.execute("PRAGMA foreign_keys = ON")
+
+
+# Canonical additive columns for partial-table self-heal. Declarations avoid
+# non-constant defaults (CURRENT_TIMESTAMP) and NOT NULL, since SQLite forbids
+# ALTER TABLE ADD COLUMN with either on a non-empty table. Non-null on the key
+# columns is enforced by the Sherlock store layer, not the schema.
+_SHERLOCK_RESULTS_BACKFILL = (
+    ("host_type", "TEXT"),
+    ("protocol_server_id", "INTEGER"),
+    ("ip_address", "TEXT"),
+    ("port", "INTEGER"),
+    ("snapshot_id", "INTEGER"),
+    ("highest_severity", "TEXT"),
+    ("total_hit_count", "INTEGER DEFAULT 0"),
+    ("detail_count", "INTEGER DEFAULT 0"),
+    ("truncated", "INTEGER DEFAULT 0"),
+    ("scanned_at", "DATETIME"),
+    ("updated_at", "DATETIME"),
+    ("display_color_tag", "TEXT"),
+)
+_SHERLOCK_HITS_BACKFILL = (
+    ("result_id", "INTEGER"),
+    ("severity", "TEXT"),
+    ("category", "TEXT"),
+    ("label", "TEXT"),
+    ("pattern", "TEXT"),
+    ("display_path", "TEXT"),
+    ("created_at", "DATETIME"),
+    ("color_tag", "TEXT"),
+)
+
+
+def _backfill_columns(cur: sqlite3.Cursor, table: str, columns) -> None:
+    """Add any missing columns to an existing table (additive, nullable)."""
+    cur.execute(f"PRAGMA table_info({table})")
+    existing = {row[1] for row in cur.fetchall()}
+    for name, decl in columns:
+        if name not in existing:
+            cur.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+
+
+def _ensure_unique_index(cur: sqlite3.Cursor, table: str, index_name: str, cols) -> None:
+    """Ensure a unique index of the right shape exists, dropping a wrong-shaped
+    same-name index first (CREATE ... IF NOT EXISTS would keep it otherwise)."""
+    cols = tuple(cols)
+    cur.execute(f"PRAGMA index_list({table})")
+    for idx in cur.fetchall():
+        # PRAGMA index_list columns: seq, name, unique, origin, partial
+        if str(idx[1]) != index_name:
+            continue
+        is_unique = int(idx[2]) == 1
+        cur.execute(f'PRAGMA index_info("{index_name}")')
+        idx_cols = tuple(row[2] for row in cur.fetchall())
+        if is_unique and idx_cols == cols:
+            return
+        cur.execute(f'DROP INDEX IF EXISTS "{index_name}"')
+        break
+    cur.execute(
+        f"CREATE UNIQUE INDEX IF NOT EXISTS {index_name} "
+        f"ON {table} ({', '.join(cols)})"
+    )
+
+
+def _ensure_sherlock_tables(cur: sqlite3.Cursor) -> None:
+    """Additive Sherlock persistence tables (latest summary + capped hit details).
+
+    Display-only exposure-triage state. Schema lives here (migrations), not in
+    db_schema.sql, matching probe_snapshots/extract_run_summaries precedent. Key
+    columns are nullable so a partial/legacy table converges via column backfill
+    instead of an illegal ALTER ... NOT NULL; uniqueness is a deduped, named
+    unique index. Foreign keys are off on these connections, so child-row cleanup
+    is always explicit.
+    """
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sherlock_results (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            host_type          TEXT,
+            protocol_server_id INTEGER,
+            ip_address         TEXT,
+            port               INTEGER,
+            snapshot_id        INTEGER,
+            highest_severity   TEXT,
+            total_hit_count    INTEGER DEFAULT 0,
+            detail_count       INTEGER DEFAULT 0,
+            truncated          INTEGER DEFAULT 0,
+            scanned_at         DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at         DATETIME DEFAULT CURRENT_TIMESTAMP,
+            display_color_tag  TEXT
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sherlock_hits (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            result_id    INTEGER NOT NULL,
+            severity     TEXT,
+            category     TEXT,
+            label        TEXT,
+            pattern      TEXT,
+            display_path TEXT,
+            created_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+            color_tag    TEXT,
+            FOREIGN KEY (result_id) REFERENCES sherlock_results(id) ON DELETE CASCADE
+        )
+        """
+    )
+    # Self-heal partial tables BEFORE the result_id index and dedupe, so a legacy
+    # sherlock_hits missing result_id gains it first.
+    _backfill_columns(cur, "sherlock_results", _SHERLOCK_RESULTS_BACKFILL)
+    _backfill_columns(cur, "sherlock_hits", _SHERLOCK_HITS_BACKFILL)
+
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sherlock_hits_result "
+        "ON sherlock_hits(result_id)"
+    )
+
+    # Dedupe duplicate (host_type, protocol_server_id) results, keeping the
+    # highest id. Delete the losing rows' child hits first (FK cascade is off).
+    cur.execute(
+        """
+        DELETE FROM sherlock_hits WHERE result_id IN (
+            SELECT id FROM sherlock_results
+            WHERE id NOT IN (
+                SELECT MAX(id) FROM sherlock_results
+                GROUP BY host_type, protocol_server_id
+            )
+        )
+        """
+    )
+    cur.execute(
+        """
+        DELETE FROM sherlock_results WHERE id NOT IN (
+            SELECT MAX(id) FROM sherlock_results
+            GROUP BY host_type, protocol_server_id
+        )
+        """
+    )
+
+    _ensure_unique_index(
+        cur, "sherlock_results", "idx_sherlock_results_key",
+        ("host_type", "protocol_server_id"),
+    )
 
 
 __all__ = ["run_migrations"]

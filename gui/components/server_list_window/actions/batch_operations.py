@@ -23,6 +23,7 @@ from gui.components.batch_extract_dialog import BatchExtractSettingsDialog
 from gui.utils import probe_patterns, probe_runner, extract_runner, session_flags
 from gui.utils.probe_cache_dispatch import dispatch_probe_run
 from gui.utils.probe_snapshot_summary import summarize_probe_snapshot
+from gui.utils.sherlock_post_probe import run_sherlock_after_probe
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.logging_config import get_logger
 from shared.config import resolve_http_allow_insecure_tls
@@ -293,6 +294,16 @@ class ServerListWindowBatchOperationsMixin:
             kwargs["port"] = probe_result.get("port")
 
         self.db_reader.upsert_probe_cache_for_host(ip_address, host_type, **kwargs)
+
+        if snapshot_id is not None:
+            run_sherlock_after_probe(
+                self.settings_manager,
+                self.db_reader,
+                ip_address,
+                host_type,
+                protocol_server_id=upsert_result.get("protocol_server_id"),
+                port=probe_result.get("port"),
+            )
 
     def _maybe_show_reddit_promotion_notice(self) -> None:
         """

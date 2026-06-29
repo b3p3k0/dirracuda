@@ -36,9 +36,16 @@ import tkinter as tk  # annotations + tk.TclError only — use _d("tk")/_d("ttk"
 from gui.utils import safe_messagebox as _fallback_msgbox
 from gui.utils.logging_config import get_logger
 from gui.utils.probe_snapshot_summary import summarize_probe_snapshot
+from gui.utils.sherlock_post_probe import run_sherlock_after_probe
+from gui.utils.sherlock_risk_display import (
+    attach_sherlock_risk_to_results,
+    resolve_sherlock_risk,
+    row_key_for_server,
+)
 from gui.components.scan_results_dialog import show_scan_results_dialog
 from gui.components.batch_summary_dialog import show_batch_summary_dialog
 from shared.config import resolve_http_allow_insecure_tls
+from shared.sherlock import default_settings, settings_from_dict
 
 _logger = get_logger("dashboard")
 
@@ -602,6 +609,7 @@ def execute_batch_probe(
                     except Exception as e:
                         result = {
                             "ip_address": server.get("ip_address"),
+                            "row_key": row_key_for_server(server),
                             "protocol": dash._protocol_label_from_host_type(server.get("host_type")),
                             "action": "probe",
                             "status": "failed",
@@ -700,10 +708,12 @@ def probe_single_server(
 ) -> Dict[str, Any]:
     """Probe a single server (SMB, FTP, or HTTP)."""
     protocol_label = dash._protocol_label_from_host_type(server.get("host_type"))
+    row_key = row_key_for_server(server)
     if cancel_event.is_set():
         return {
             "ip_address": server.get("ip_address"),
             "protocol": protocol_label,
+            "row_key": row_key,
             "action": "probe",
             "status": "cancelled",
             "notes": "Cancelled"
@@ -757,6 +767,14 @@ def probe_single_server(
                         accessible_dirs_count=accessible_dirs_count,
                         accessible_dirs_list=accessible_dirs_list,
                     )
+                    if snapshot_id is not None:
+                        run_sherlock_after_probe(
+                            getattr(dash, "settings_manager", None),
+                            dash.db_reader,
+                            ip_address,
+                            "F",
+                            port=port,
+                        )
             except Exception:
                 pass
 
@@ -767,6 +785,7 @@ def probe_single_server(
             return {
                 "ip_address": ip_address,
                 "protocol": protocol_label,
+                "row_key": row_key,
                 "action": "probe",
                 "status": "success",
                 "notes": ", ".join(notes),
@@ -776,6 +795,7 @@ def probe_single_server(
             return {
                 "ip_address": ip_address,
                 "protocol": protocol_label,
+                "row_key": row_key,
                 "action": "probe",
                 "status": status,
                 "notes": str(e)
@@ -853,6 +873,15 @@ def probe_single_server(
                         protocol_server_id=protocol_server_id,
                         port=http_port,
                     )
+                    if snapshot_id is not None:
+                        run_sherlock_after_probe(
+                            getattr(dash, "settings_manager", None),
+                            dash.db_reader,
+                            ip_address,
+                            "H",
+                            protocol_server_id=protocol_server_id,
+                            port=http_port,
+                        )
             except Exception:
                 pass
 
@@ -863,6 +892,7 @@ def probe_single_server(
             return {
                 "ip_address": ip_address,
                 "protocol": protocol_label,
+                "row_key": row_key,
                 "action": "probe",
                 "status": "success",
                 "notes": ", ".join(notes_h),
@@ -872,6 +902,7 @@ def probe_single_server(
             return {
                 "ip_address": ip_address,
                 "protocol": protocol_label,
+                "row_key": row_key,
                 "action": "probe",
                 "status": status,
                 "notes": str(e)
@@ -919,12 +950,20 @@ def probe_single_server(
                     snapshot_path=None,
                     latest_snapshot_id=snapshot_id,
                 )
+                if snapshot_id is not None:
+                    run_sherlock_after_probe(
+                        getattr(dash, "settings_manager", None),
+                        dash.db_reader,
+                        ip_address,
+                        "S",
+                    )
         except Exception:
             pass
 
         return {
             "ip_address": ip_address,
             "protocol": protocol_label,
+            "row_key": row_key,
             "action": "probe",
             "status": "success",
             "notes": dash._build_probe_notes(len(shares), issue_detected, analysis, result)
@@ -934,6 +973,7 @@ def probe_single_server(
         return {
             "ip_address": ip_address,
             "protocol": protocol_label,
+            "row_key": row_key,
             "action": "probe",
             "status": status,
             "notes": str(e)
@@ -1418,6 +1458,19 @@ def show_batch_summary(
         normalized["protocol"] = dash._protocol_label_for_result(normalized)
         normalized_results.append(normalized)
 
+    # Post-probe Sherlock Risk (C12): enrich rows from already-persisted results
+    # (one DB read, no probe/network/content) and show the Risk column only when
+    # a fresh finding exists. Non-probe jobs keep the current layout untouched.
+    sherlock_settings = None
+    show_risk = False
+    if (job_type or "batch") == "probe":
+        attach_sherlock_risk_to_results(getattr(dash, "db_reader", None), normalized_results)
+        show_risk = any(
+            resolve_sherlock_risk(r.get("sherlock_risk")) for r in normalized_results
+        )
+        if show_risk:
+            sherlock_settings = _load_sherlock_settings(dash)
+
     show_batch_summary_dialog(
         parent=dash.parent,
         theme=dash.theme,
@@ -1430,7 +1483,20 @@ def show_batch_summary(
         show_stats=False,
         wait=True,
         modal=True,
+        show_risk=show_risk,
+        sherlock_settings=sherlock_settings,
     )
+
+
+def _load_sherlock_settings(dash):
+    """Load validated Sherlock settings for tint, or safe defaults."""
+    manager = getattr(dash, "settings_manager", None)
+    if manager is None:
+        return default_settings()
+    try:
+        return settings_from_dict(manager.get_setting("sherlock", {}))
+    except Exception:
+        return default_settings()
 
 
 def load_clamav_config(dash) -> Dict[str, Any]:

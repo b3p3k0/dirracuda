@@ -31,6 +31,8 @@ from shared.config import resolve_http_allow_insecure_tls
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.style import get_theme
 from gui.utils.template_store import TemplateStore
+from gui.utils.sherlock_post_probe import load_sherlock_settings, set_run_after_probe
+from gui.components.experimental_features.sherlock_tab import open_sherlock_settings_window
 
 REGIONS = ScanDialog.REGIONS
 
@@ -116,6 +118,10 @@ class UnifiedScanDialog:
         self.shared_timeout_var = tk.StringVar(value="10")
         self.verbose_var = tk.BooleanVar(value=False)
         self.bulk_probe_enabled_var = tk.BooleanVar(value=False)
+        # Live view of the global sherlock.run_after_probe flag (not a per-scan option).
+        self.sherlock_run_after_probe_var = tk.BooleanVar(
+            value=load_sherlock_settings(self._settings_manager).run_after_probe
+        )
         self.bulk_extract_enabled_var = tk.BooleanVar(value=False)
         self.skip_indicator_extract_var = tk.BooleanVar(value=True)
 
@@ -610,6 +616,23 @@ class UnifiedScanDialog:
             self.provider_reddit_var.get(),
         )
         self._refresh_provider_queue_label()
+
+    def _on_sherlock_run_after_probe_toggled(self) -> None:
+        """Persist the global sherlock.run_after_probe flag immediately on toggle."""
+        set_run_after_probe(
+            self._settings_manager, bool(self.sherlock_run_after_probe_var.get())
+        )
+
+    def _open_sherlock_settings(self) -> None:
+        """Open the Sherlock settings window, then refresh the toggle from the shard.
+
+        The settings window blocks until closed; .set() updates the checkbox display
+        without firing its command, so no redundant re-write occurs.
+        """
+        open_sherlock_settings_window(self.dialog, self._settings_manager)
+        self.sherlock_run_after_probe_var.set(
+            load_sherlock_settings(self._settings_manager).run_after_probe
+        )
 
     def _open_config_editor(self) -> None:
         if not self.config_editor_callback:

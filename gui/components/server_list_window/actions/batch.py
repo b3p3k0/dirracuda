@@ -39,6 +39,7 @@ from gui.utils import (
 )
 from gui.utils.probe_cache_dispatch import dispatch_probe_run
 from gui.utils.probe_snapshot_summary import summarize_probe_snapshot
+from gui.utils.sherlock_post_probe import run_sherlock_after_probe
 from shared.quarantine import create_quarantine_dir
 from shared.path_service import get_paths, get_legacy_paths, select_existing_path
 
@@ -214,6 +215,14 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                     accessible_dirs_count=accessible_dirs_count,
                     accessible_dirs_list=accessible_dirs_list,
                 )
+                if snapshot_id is not None:
+                    run_sherlock_after_probe(
+                        self.settings_manager,
+                        self.db_reader,
+                        ip_address,
+                        host_type,
+                        port=port,
+                    )
             except Exception:
                 pass
 
@@ -222,6 +231,7 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                 notes.append("Indicators detected")
             return {
                 "ip_address": ip_address,
+                "row_key": row_key,
                 "action": "probe",
                 "status": "success",
                 "notes": ", ".join(notes),
@@ -331,6 +341,15 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                     protocol_server_id=protocol_server_id,
                     port=http_port,
                 )
+                if snapshot_id is not None:
+                    run_sherlock_after_probe(
+                        self.settings_manager,
+                        self.db_reader,
+                        ip_address,
+                        host_type,
+                        protocol_server_id=protocol_server_id,
+                        port=http_port,
+                    )
             except Exception:
                 pass
 
@@ -339,6 +358,7 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                 notes_h.append("Indicators detected")
             return {
                 "ip_address": ip_address,
+                "row_key": row_key,
                 "action": "probe",
                 "status": "success",
                 "notes": ", ".join(notes_h),
@@ -372,6 +392,7 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
             status = "cancelled" if "cancel" in str(exc).lower() else "failed"
             return {
                 "ip_address": ip_address,
+                "row_key": row_key,
                 "action": "probe",
                 "status": status,
                 "notes": str(exc),
@@ -398,6 +419,13 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                 snapshot_path=None,
                 latest_snapshot_id=snapshot_id,
             )
+            if snapshot_id is not None:
+                run_sherlock_after_probe(
+                    self.settings_manager,
+                    self.db_reader,
+                    ip_address,
+                    host_type,
+                )
         except Exception:
             pass
 
@@ -413,6 +441,7 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
 
         return {
             "ip_address": ip_address,
+            "row_key": row_key,
             "action": "probe",
             "status": "success",
             "notes": ", ".join(notes),

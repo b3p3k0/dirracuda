@@ -32,6 +32,8 @@ from gui.utils.probe_snapshot_summary import (
 from gui.utils.probe_snapshot_details import (
     format_probe_section as format_probe_snapshot_section,
 )
+from gui.utils.sherlock_post_probe import run_sherlock_after_probe
+from gui.utils.sherlock_details import format_sherlock_section
 from gui.utils.database_access import DatabaseReader
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.keybindings import add_shortcut_hint, bind_close_shortcuts, bind_submit_shortcuts
@@ -128,6 +130,7 @@ def show_server_detail_popup(parent_window, server_data, theme, settings_manager
         text_widget,
         server_data,
         cached_probe,
+        settings_manager=settings_manager,
     )
 
     # Status label for probe feedback
@@ -300,7 +303,11 @@ def _invoke_callback_or_warn(cb, server_data: Dict[str, Any], parent_window: tk.
         )
 
 
-def _format_server_details(server: Dict[str, Any], probe_section: Optional[str] = None) -> str:
+def _format_server_details(
+    server: Dict[str, Any],
+    probe_section: Optional[str] = None,
+    sherlock_section: Optional[str] = None,
+) -> str:
     """Format server details for display. Renders protocol-specific sections for S vs F rows."""
     host_type = server.get('host_type', 'S')
     protocol_label = {"S": "SMB", "F": "FTP", "H": "HTTP"}.get(host_type, "Unknown")
@@ -397,6 +404,8 @@ def _format_server_details(server: Dict[str, Any], probe_section: Optional[str] 
 
 {probe_section or '🔍 Probe:\n   No probe has been run for this host yet.\n'}
 
+{sherlock_section or '🔎 Sherlock:\n   No Sherlock scan recorded for this host.'}
+
 📝 Additional Notes:
    This server was discovered during scanning. Protocol-specific access
    and authentication details are shown above.
@@ -415,15 +424,63 @@ def _render_server_details(
     text_widget: tk.Text,
     server: Dict[str, Any],
     probe_result: Optional[Dict[str, Any]],
+    settings_manager=None,
 ) -> None:
-    """Render server details with probe section embedded."""
+    """Render server details with probe and Sherlock sections embedded.
+
+    The Sherlock result is reloaded on every render so an in-popup re-probe
+    (which may rewrite the result via the post-probe hook) refreshes the section
+    without reopening the dialog.
+    """
     probe_text = _format_probe_section(probe_result)
-    full_text = _format_server_details(server, probe_text)
+    sherlock_result = _load_sherlock_result_for_detail(server, settings_manager=settings_manager)
+    sherlock_text = format_sherlock_section(sherlock_result)
+    full_text = _format_server_details(server, probe_text, sherlock_text)
 
     text_widget.configure(state=tk.NORMAL)
     text_widget.delete("1.0", tk.END)
     text_widget.insert(tk.END, full_text)
     text_widget.configure(state=tk.DISABLED)
+
+
+def _load_sherlock_result_for_detail(
+    server_data: Dict[str, Any],
+    *,
+    settings_manager=None,
+) -> Optional[Dict[str, Any]]:
+    """Load the persisted Sherlock result for the active detail row.
+
+    Degrades to None when there is no settings_manager, the reader lacks the
+    Sherlock method, or any read error occurs — the section then reports
+    "no scan recorded".
+    """
+    if settings_manager is None or not hasattr(settings_manager, "get_database_path"):
+        return None
+    try:
+        db_path = settings_manager.get_database_path()
+    except Exception:
+        return None
+    if not db_path:
+        return None
+
+    ip_address = server_data.get("ip_address", "")
+    host_type = str(server_data.get("host_type", "S") or "S").upper()
+    port = server_data.get("port") if host_type in {"F", "H"} else None
+    protocol_server_id = server_data.get("protocol_server_id")
+    try:
+        db_reader = DatabaseReader(db_path)
+        getter = getattr(db_reader, "get_sherlock_result_for_host", None)
+        if getter is None:
+            return None
+        result = getter(
+            ip_address,
+            host_type,
+            protocol_server_id=protocol_server_id,
+            port=port,
+        )
+        return result if isinstance(result, dict) else None
+    except Exception:
+        return None
 
 
 def _load_probe_result_for_detail(
@@ -627,6 +684,14 @@ def _start_probe(
                             accessible_dirs_count=len(display_entries),
                             accessible_dirs_list=",".join(display_entries),
                         )
+                        if snapshot_id is not None:
+                            run_sherlock_after_probe(
+                                settings_manager,
+                                db_accessor,
+                                ip_address,
+                                "F",
+                                port=_ftp_port,
+                            )
                     except Exception:
                         pass
             elif host_type == "H":
@@ -660,6 +725,15 @@ def _start_probe(
                             protocol_server_id=_protocol_server_id,
                             port=_http_port,
                         )
+                        if snapshot_id is not None:
+                            run_sherlock_after_probe(
+                                settings_manager,
+                                db_accessor,
+                                ip_address,
+                                "H",
+                                protocol_server_id=_protocol_server_id,
+                                port=_http_port,
+                            )
                     except Exception:
                         pass
             else:
@@ -678,6 +752,13 @@ def _start_probe(
                             snapshot_path=None,
                             latest_snapshot_id=snapshot_id,
                         )
+                        if snapshot_id is not None:
+                            run_sherlock_after_probe(
+                                settings_manager,
+                                db_accessor,
+                                ip_address,
+                                "S",
+                            )
                     except Exception:
                         pass
             issue_detected = bool(analysis.get("is_suspicious"))
@@ -698,6 +779,7 @@ def _start_probe(
                     text_widget,
                     server_data,
                     result,
+                    settings_manager=settings_manager,
                 )
                 if probe_status_callback:
                     try:

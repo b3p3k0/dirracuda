@@ -872,6 +872,13 @@ WHERE ip_address = '1.2.3.4';
 - Includes idempotent legacy probe-cache backfill, targeted sidecar host-entity import, one-time keep/discard prompt for old cache files, and non-blocking warning+retry on migration failure.
 - `gui/main.py` is a compatibility shim only: it preserves import compatibility but exits non-zero when invoked as a runtime entrypoint.
 
+**Sherlock result tables (`sherlock_results`, `sherlock_hits`):**
+- Additive, created by guarded migration; every read/write in `gui/utils/database_access_sherlock_methods.py` re-checks table/column presence so older or partial schemas degrade to blank rather than erroring.
+- `sherlock_results` holds the **latest** display-only triage summary per `(host_type, protocol_server_id)`: `highest_severity`, `total_hit_count`, the matched probe `snapshot_id` (used for stale detection against `*_probe_cache.latest_snapshot_id`), and a scanned timestamp. Re-storing replaces the prior row for that host/protocol (no scan history).
+- `sherlock_hits` holds capped per-hit detail rows (severity, category, label, pattern, display path) linked by `result_id`; `total_hit_count` preserves the true count even when details are capped.
+- V2 adds nullable color-tag columns: `sherlock_results.display_color_tag` (the selected user-tag token — highest-severity tagged hit, ties by matcher order — stored independent of whether that color is currently configured) and `sherlock_hits.color_tag` (the matched pattern's tag). Both are detected, never required: legacy/partial schemas without them persist and read severity-only.
+- Source of matches is **probe snapshot paths only** — Sherlock never reads file contents, downloads, authenticates, or probes. See §6.5 (Server List Risk column / Scan Sherlock), §6.9 (Sherlock Accessories tab), and `docs/dev/keyword_scanning/`.
+
 ### 5.3 Views
 
 | View | Purpose |
@@ -1055,7 +1062,7 @@ WebUI jobs are outside this desktop scheduler.
 |---------|---------|
 | Start Scan | Opens `UnifiedScanDialog` (provider/protocol selector + scan options), then always shows preflight confirmation with live-balance + cost visibility before launch. Selected providers run serially by registered priority (`Reddit=100`, `SearXNG=200`, `Shodan=300`); Shodan retains its nested SMB/FTP/HTTP protocol queue. Numeric estimates are shown only when live balance lookup succeeds. |
 | Database | Opens consolidated DB surface (`View Servers`, `DB Tools`, `[Legacy] Sidecar Data`) |
-| Accessories | Opens `ExperimentalFeaturesDialog` (`SearXNG`, `Reddit`, `Web UI`, `Dorkbook`, `Keymaster` tabs) |
+| Accessories | Opens `ExperimentalFeaturesDialog` (`SearXNG`, `Reddit`, `Web UI`, `Dorkbook`, `Keymaster`, `Sherlock` tabs) |
 | Configuration | Opens config editor |
 | About | Opens about dialog |
 | Dark/Light toggle | Switches ttkthemes theme; persisted in `~/.dirracuda/conf.d/prefs/user-prefs.json` |
@@ -1105,7 +1112,12 @@ Displays hosts from `smb_servers`, `ftp_servers`, `http_servers` in separate tab
 | Extract | `extract_runner.py` — downloads files per `file_collection` limits; optional ClamAV scan post-extract |
 | ~~Pry~~ | Removed in C2. `share_credentials` table retained for DB compatibility; existing credential rows remain readable. |
 | Favorite / Avoid / Compromised | Sets flags in `host_user_flags` / `ftp_user_flags` / `http_user_flags` |
+| Scan Sherlock | `gui/components/server_list_window/actions/sherlock_action.py` — matches the selected hosts' **latest probe snapshot paths** against enabled Sherlock patterns and persists the result; no network/probe work, no downloads, no content reads. Hosts without a current snapshot are skipped and counted. |
 | Delete | Cascades via FK `ON DELETE CASCADE` |
+
+The list also carries an alert-only **`Risk`** column populated from `sherlock_results`: fresh findings render `HIGH n` / `MED n` / `LOW n`, while no-hit, stale, no-snapshot, and unscanned rows stay blank. The row tint uses the result's `display_color_tag` User color when that tag is configured non-empty, otherwise the severity color — the risk text stays severity-based either way. The shared precedence helper lives in `gui/utils/sherlock_risk_display.py` so Server List, desktop details, probe summaries, and the Web UI share one tint contract. Detail popups carry the explanatory state and capped hit list.
+
+When `Run after probe` runs Sherlock on a fresh snapshot, the shared probe batch summary dialog (`gui/components/batch_summary_dialog.py`) gains an optional `Risk` column and row tint driven by the returned per-host risk data using the same user-tag-then-severity contract. The column (and its CSV export field) appear only when at least one summarized host has a fresh finding; otherwise the summary layout is unchanged. No extra network/probe/content work is triggered by the summary display.
 
 Long-running monitor dialogs (scan/probe/extract and related batch jobs) are non-modal and integrated with the shared Running Tasks registry. Hiding a monitor does not cancel work; active/queued tasks remain reopenable through Running Tasks.
 
@@ -1140,7 +1152,7 @@ Backed by `gui/utils/db_tools_engine.py`. Capabilities:
 - **Statistics** — server count by country, protocol breakdown
 - **Maintenance** — SQLite VACUUM, integrity check (`PRAGMA integrity_check`), cascade-deletion preview before purging old sessions
 
-### 6.9 Accessories (SearXNG, Reddit, Web UI, Dorkbook, Keymaster)
+### 6.9 Accessories (SearXNG, Reddit, Web UI, Dorkbook, Keymaster, Sherlock)
 
 `ExperimentalFeaturesDialog` is a modeless tab host opened from the dashboard `Accessories` button. Tabs are registry-driven (`gui/components/experimental_features/registry.py`), so adding/removing experimental modules is a registry edit, not dialog shell surgery.
 
@@ -1150,6 +1162,7 @@ Current tabs (registry order):
 - `Web UI`
 - `Dorkbook`
 - `Keymaster`
+- `Sherlock` — display-only exposure-triage settings (`gui/components/experimental_features/sherlock_tab.py`): ignore-case + run-after-probe toggles, High/Med/Low severity colors plus optional User1/User2/User3 tag colors, each edited via a clickable color swatch that opens Tk's native color chooser (severity colors are required; empty User colors read `None` and have a `Clear` control). Values persist as `#rrggbb`. Pattern management lives in a tall **`Manage Patterns...`** modal (`Sherlock Patterns`) holding the scrollable built-in/custom keyword/wildcard table with a `User Tag` column; the Add/Edit dialog offers a color-tag dropdown. Built-ins stay code-defined and are never stored as full rows: deleting a built-in records its key under `builtin_deleted` (distinct from `builtin_disabled`), and `Edit`, `Copy`, or double-click on a built-in opens the Add flow prefilled from it and saves a new custom pattern with a new key (the built-in itself is unchanged). `Edit` and `Copy` require exactly one selected row; Ctrl/Shift multi-select is supported for batch Enable/Disable and Delete. A filter row above the table (text `Search` plus `Category`, `Severity`, `User Tag`, and `Enabled` facets and a `Clear` button) re-renders only the matching staged rows without mutating the staged catalog: search matches label/category/pattern/severity/user-tag/type case-insensitively, facets use exact staged values with `All` meaning no filter, the `Category` and `User Tag` facet value lists are rebuilt from the staged rows, and every filter change clears the selection so hidden rows are never acted on. `Restore Built-ins` clears deleted/disabled built-in state and re-adds the code defaults while preserving customs. An `Export` button serializes the full staged catalog (metadata header plus one row per pattern: key, type, enabled, severity, category, label, pattern, color_tag) to a chosen UTF-8 JSON file via `tkinter.filedialog.asksaveasfilename`; the payload builder lives in pure `shared/sherlock/export.py` and the export is read-only (never mutates staged edits, selection, the dirty flag, or persistence). Pattern-manager edits stay staged until either `Save & Close` in the manager or the tab-level Save persists settings. Settings persist to the top-level `sherlock` config-store module. The Start Scan dialog mirrors the same `run after probe` flag and opens this surface from its runtime controls.
 
 Suspended module:
 - `Censys Discovery` backend is retained in `experimental/censys_discovery/`, but its GUI surfaces are currently hidden.

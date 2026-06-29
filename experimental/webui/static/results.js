@@ -373,6 +373,7 @@ function buildRow(r) {
     ['Avoid', r.avoid],
     ['Probed', r.probe_status_emoji],
     ['Extracted', r.extract_status_emoji],
+    ['Risk', r.sherlock_risk],
     ['Type', r.host_type],
     ['IP Address', r.ip_address],
     ['Shares', r.shares],
@@ -385,7 +386,11 @@ function buildRow(r) {
   cells.forEach(function(pair, idx) {
     var td = document.createElement('td');
     td.setAttribute('data-label', pair[0]);
-    td.textContent = pair[1] != null ? String(pair[1]) : '';
+    if (pair[0] === 'Risk') {
+      _renderRiskCell(td, pair[1]);
+    } else {
+      td.textContent = pair[1] != null ? String(pair[1]) : '';
+    }
 
     if (idx === 0 || idx === 1 || idx === 2) {
       var action = idx === 0 ? 'favorite' : (idx === 1 ? 'avoid' : 'compromised');
@@ -444,6 +449,82 @@ function _overviewValue(value) {
   return String(value);
 }
 
+function _renderRiskCell(td, risk) {
+  // Alert-only: blank unless the API returned a fresh, non-zero finding.
+  if (!risk || !risk.text) return;
+  var badge = document.createElement('span');
+  badge.className = 'sherlock-badge';
+  badge.textContent = risk.text;
+  if (risk.color) badge.style.backgroundColor = risk.color;
+  td.appendChild(badge);
+}
+
+function _userTagLabel(colorTag) {
+  // Map a user color tag token to a ' [User1]' style suffix; '' otherwise.
+  var token = String(colorTag || '').trim().toLowerCase();
+  if (token === 'user1' || token === 'user2' || token === 'user3') {
+    return ' [User' + token.charAt(4) + ']';
+  }
+  return '';
+}
+
+function _renderSherlockDetail(container, sherlock) {
+  // Read-only; explanatory (stale / 0-hit are described, not hidden).
+  if (!sherlock) return;
+
+  var wrap = document.createElement('div');
+  wrap.className = 'result-detail-sherlock';
+
+  var label = document.createElement('div');
+  label.className = 'result-detail-sherlock-label';
+  label.textContent = 'Sherlock (read-only):';
+  wrap.appendChild(label);
+
+  var head = document.createElement('div');
+  head.className = 'result-detail-sherlock-head';
+  if (sherlock.stale) {
+    head.textContent = 'Result is stale (host snapshot changed); re-scan to refresh.';
+  } else if (!sherlock.count || sherlock.count <= 0) {
+    head.textContent = 'No risky names matched.';
+  } else if (sherlock.text) {
+    head.textContent = 'Risk: ';
+    var chip = document.createElement('span');
+    chip.className = 'sherlock-badge';
+    chip.textContent = sherlock.text;
+    if (sherlock.color) chip.style.backgroundColor = sherlock.color;
+    head.appendChild(chip);
+  } else {
+    head.textContent = 'Risk recorded.';
+  }
+  wrap.appendChild(head);
+
+  if (!sherlock.stale && sherlock.hits && sherlock.hits.length) {
+    var list = document.createElement('ul');
+    list.className = 'result-detail-sherlock-hits';
+    sherlock.hits.forEach(function(hit) {
+      var li = document.createElement('li');
+      var sev = String(hit.severity || '?').toUpperCase();
+      var cat = hit.category || '?';
+      var lbl = hit.label || '?';
+      var pat = hit.pattern ? (' (' + hit.pattern + ')') : '';
+      var path = hit.display_path || '(no path)';
+      // User tag label, mirroring the desktop detail popup. textContent only.
+      var tag = _userTagLabel(hit.color_tag);
+      li.textContent = sev + ' · ' + cat + ' · ' + lbl + pat + tag + ' — ' + path;
+      list.appendChild(li);
+    });
+    wrap.appendChild(list);
+    if (sherlock.truncated) {
+      var more = document.createElement('div');
+      more.className = 'result-detail-sherlock-more';
+      more.textContent = '… additional hits not shown';
+      wrap.appendChild(more);
+    }
+  }
+
+  container.appendChild(wrap);
+}
+
 function _detailSummaryText(payload) {
   return 'Host Details: ' +
     (payload.ip_address || 'Unknown') +
@@ -496,6 +577,8 @@ function renderDetailContent(container, payload, baseRow) {
     kv.appendChild(item);
   });
   container.appendChild(kv);
+
+  _renderSherlockDetail(container, payload.sherlock);
 
   var notesWrap = document.createElement('div');
   notesWrap.className = 'result-detail-notes-wrap';

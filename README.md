@@ -121,6 +121,7 @@ The main window. From here you can:
 - Manage your database (import, export, merge, maintenance)
 - Edit configuration
 - Open **Running Tasks** to monitor active/queued work and reopen hidden monitor dialogs (scan/probe/extract)
+- Toggle Sherlock auto-triage from the Start Scan dialog's runtime controls when you want probes to refresh Risk findings immediately
 
 ### Keyboard Shortcuts
 For the full list of keyboard shortcuts, see [`docs/KBD_QUICKREF.md`](docs/KBD_QUICKREF.md).
@@ -183,6 +184,7 @@ The **preflight screen** shows your live balance and an estimated post-scan bala
 |--------|-------------|
 | 📋 Copy IP | Copy selected server IP address to clipboard |
 | 🔍 Probe Selected | Enumerate shares, detect ransomware indicators |
+| 🔎 Scan Sherlock | Re-check selected hosts against their latest probe snapshots and refresh the alert-only Risk column |
 | 📦 Extract Selected | Collect files with hard limits on count, size, and time |
 | 🗂️ Browse Selected | Read-only exploration of accessible shares; HTTP rows open at their saved hostname/path when available |
 | ⭐ Toggle Favorite | Mark/unmark selected servers as favorites |
@@ -360,7 +362,7 @@ Runtime settings are modular and stored under `~/.dirracuda/conf.d/`:
 - `core/security.json` - security integrations (`security`, `censys`)
 - `core/output.json` - output formatting settings (`output`)
 - `prefs/user-prefs.json` - GUI/user preferences (replaces legacy `state/gui_settings.json`)
-- `experimental/{se_dork,reddit_grab,dorkbook,keymaster,webui}.json` - experimental module settings
+- `experimental/{se_dork,reddit_grab,dorkbook,keymaster,webui,sherlock}.json` - experimental module settings
 
 `~/.dirracuda/conf/config.json` is retained as a generated compatibility view for legacy readers.
 
@@ -383,6 +385,7 @@ The dialog is modeless and tab-based. Current tabs:
 - `Web UI`
 - `Dorkbook`
 - `Keymaster`
+- `Sherlock`
 
 ### SearXNG
 
@@ -531,6 +534,37 @@ Key table columns: `Label`, `Key Preview`, `Query Credits`, `Notes`, `Last Used`
 
 Key Preview format: keys longer than 8 characters show as `first4 + asterisks`; shorter keys are fully masked.
 
+### Sherlock
+
+Sherlock is a display-only exposure triage layer for risky names found in
+existing probe snapshots. It never downloads files, reads file contents,
+authenticates, or probes on its own.
+
+Current controls:
+- **Ignore case** and **Run after probe** preferences
+- High/Med/Low severity colors plus optional User1/User2/User3 tag colors, each edited by clicking a color swatch that opens the native color chooser; severity colors are required, while empty User colors read **None** and have a **Clear** control. Values are stored as `#rrggbb`.
+- A **Manage Patterns...** modal holding the scrollable built-in/custom keyword/wildcard pattern table; custom patterns can carry one User color tag
+- Add, edit, copy, enable/disable, and delete patterns (built-in or custom), and restore built-ins; built-ins stay code-defined, so editing or copying a built-in saves a new custom pattern and `Restore Built-ins` re-adds any deleted built-ins. The pattern table supports Ctrl/Shift multi-select for batch enable/disable and delete, and double-click opens edit for the clicked row. Pattern-manager edits stay staged until either **Save & Close** in the manager or **Save** on the tab persists settings. An **Export** button writes the full staged pattern catalog to a chosen UTF-8 JSON file (`sherlock_patterns_YYYYMMDD_HHMMSS.json`) without altering staged edits.
+- A filter row above the table with a text **Search** box and **Category**, **Severity**, **User Tag**, and **Enabled** facets (plus **Clear**) narrows which rows are shown; `All` disables a facet. Filtering only changes the displayed rows — it never edits staged patterns — and batch/edit actions act only on the visible selection.
+
+Settings are persisted under `~/.dirracuda/conf.d/experimental/sherlock.json`.
+The Start Scan dialog also mirrors the global **Sherlock: run after probe**
+setting and opens the same Sherlock settings surface from its runtime controls.
+When enabled, successful probe runs automatically re-check the fresh snapshot
+after `latest_snapshot_id` is saved; probe status, ransomware indicators, and
+extraction state are unchanged if Sherlock is disabled or fails.
+The Server List includes an alert-only `Risk` column plus `Scan Sherlock`
+toolbar/context-menu actions for selected hosts. Fresh findings show `HIGH n`,
+`MED n`, or `LOW n`; the row tint uses the matched pattern's User tag color when
+one is configured, otherwise the severity color (the risk text stays
+HIGH/MED/LOW). No-hit, stale, unscanned, and no-snapshot rows stay blank. When
+`Run after probe` is on, probe batch summaries also gain a Risk column and row
+tint for any host whose fresh post-probe scan produced findings, using the same
+user-tag-then-severity tint and CSV export. Desktop detail popups show the
+latest Sherlock summary and capped hit details with explanatory stale/zero-hit
+states. Web UI Results mirrors persisted findings with read-only Risk badges
+and detail blocks; Web UI does not edit patterns or trigger Sherlock scans.
+
 ### Censys Discovery
 
 Development status: **suspended**.
@@ -575,7 +609,7 @@ continues to require the current password.
 
 Current Web UI layout:
 - `Scans` (dropdown): `shodan`, `searxng`, `reddit`
-- `Results`
+- `Results` (includes read-only Sherlock Risk badges/details when persisted)
 - `Export`
 - `Extras` (dropdown): `dorkbook`, `keymaster`
 - `Config`, `Account`

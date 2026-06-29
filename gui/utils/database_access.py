@@ -83,6 +83,7 @@ class DatabaseReader:
 from gui.utils.database_access_core_methods import bind_database_access_core_methods
 from gui.utils.database_access_write_methods import bind_database_access_write_methods
 from gui.utils.database_access_protocol_methods import bind_database_access_protocol_methods
+from gui.utils.database_access_sherlock_methods import bind_database_access_sherlock_methods
 
 _SHARED_BIND_SYMBOLS: Dict[str, Any] = {
     "get_error": get_error,
@@ -92,3 +93,4 @@ _SHARED_BIND_SYMBOLS: Dict[str, Any] = {
 bind_database_access_core_methods(DatabaseReader, _SHARED_BIND_SYMBOLS)
 bind_database_access_write_methods(DatabaseReader, _SHARED_BIND_SYMBOLS)
 bind_database_access_protocol_methods(DatabaseReader, _SHARED_BIND_SYMBOLS)
+bind_database_access_sherlock_methods(DatabaseReader, _SHARED_BIND_SYMBOLS)

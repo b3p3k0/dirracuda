@@ -476,6 +476,43 @@ tbody tr.selected td { background: var(--bg3); color: var(--accent); }
   word-break: break-all;
 }
 
+/* Sherlock read-only risk badge + detail block (color never the only signal:
+   the severity text label is always present). */
+.sherlock-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: var(--radius);
+  font-size: 0.85em;
+  font-weight: 600;
+  color: #1a1a1a;
+  white-space: nowrap;
+}
+
+.result-detail-sherlock {
+  margin-bottom: 10px;
+}
+
+.result-detail-sherlock-label {
+  color: var(--text-dim);
+  margin-bottom: 4px;
+}
+
+.result-detail-sherlock-head {
+  color: var(--text);
+  margin-bottom: 4px;
+}
+
+.result-detail-sherlock-hits {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text);
+}
+
+.result-detail-sherlock-more {
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+
 .result-detail-notes-wrap {
   margin-bottom: 8px;
 }
