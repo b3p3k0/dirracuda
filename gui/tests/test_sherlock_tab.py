@@ -69,6 +69,9 @@ def _bare_tab(context=None) -> SherlockTab:
     tab._refresh_table = MagicMock()
     tab._pattern_manager = None
     tab._user_color_vars = {key: _DummyVar("") for key in USER_COLOR_KEYS}
+    tab._neutral_bg = "#f5f5f5"
+    tab._severity_swatches = {sev: MagicMock() for sev in Severity}
+    tab._user_swatches = {key: MagicMock() for key in USER_COLOR_KEYS}
     return tab
 
 
@@ -94,6 +97,32 @@ def test_validate_pattern_fields():
     assert ok is False and msg
     assert validate_pattern_fields("")[0] is False
     assert validate_pattern_fields(None)[0] is False
+
+
+# ---------------------------------------------------------------------------
+# Swatch face (C14) - pure, no Tk
+# ---------------------------------------------------------------------------
+
+def test_swatch_face_valid_color_shows_color_no_caption():
+    tab = _bare_tab()
+    assert tab._swatch_face("#ABCDEF", is_user=False) == ("#abcdef", "")
+    assert tab._swatch_face("#abcdef", is_user=True) == ("#abcdef", "")
+
+
+def test_swatch_face_empty_user_shows_none():
+    tab = _bare_tab()
+    assert tab._swatch_face("", is_user=True) == (tab._neutral_bg, "None")
+
+
+def test_swatch_face_invalid_renders_defensively_without_raw_text():
+    tab = _bare_tab()
+    # Invalid internal value never leaks into the caption.
+    bg, caption = tab._swatch_face("not-a-color", is_user=False)
+    assert bg == tab._neutral_bg
+    assert caption == "?"
+    assert "not-a-color" not in caption
+    # Empty severity (not allowed to clear) is also defensive, not blank-as-None.
+    assert tab._swatch_face("", is_user=False) == (tab._neutral_bg, "?")
 
 
 # ---------------------------------------------------------------------------
@@ -556,3 +585,74 @@ def test_pattern_manager_structure_and_nested_grab(tk_root):
     # Add dialog was transient to the manager, not the main window.
     assert captured["add_transient"] == captured["mgr_path"]
     assert captured["grab_after"] is not None
+
+
+# ---------------------------------------------------------------------------
+# Real-Tk: color swatches (C14)
+# ---------------------------------------------------------------------------
+
+def _all_widgets(widget):
+    out = [widget]
+    for child in widget.winfo_children():
+        out.extend(_all_widgets(child))
+    return out
+
+
+def test_color_rows_have_no_dotdotdot_buttons_or_entries(tk_root):
+    tab = SherlockTab(tk_root, {})
+    assert "..." not in _button_texts(tab.frame)
+    # No visible hex entries in the color rows.
+    assert not any(isinstance(w, tk.Entry) for w in _all_widgets(tab.frame))
+
+
+def test_severity_swatch_paints_initial_color(tk_root):
+    tab = SherlockTab(tk_root, {})
+    swatch = tab._severity_swatches[Severity.HIGH]
+    assert str(swatch.cget("bg")).lower() == tab._color_vars[Severity.HIGH].get().lower()
+    assert swatch.cget("text") == ""
+
+
+def test_swatch_click_sets_var_and_repaints(tk_root, monkeypatch):
+    tab = SherlockTab(tk_root, {})
+    from tkinter import colorchooser
+
+    monkeypatch.setattr(
+        colorchooser, "askcolor", lambda *a, **kw: ((18, 52, 86), "#123456")
+    )
+    tab._pick_color(Severity.MED)
+
+    assert tab._color_vars[Severity.MED].get() == "#123456"
+    swatch = tab._severity_swatches[Severity.MED]
+    assert str(swatch.cget("bg")).lower() == "#123456"
+    assert swatch.cget("text") == ""
+
+
+def test_swatch_click_cancel_leaves_var_unchanged(tk_root, monkeypatch):
+    tab = SherlockTab(tk_root, {})
+    from tkinter import colorchooser
+
+    before = tab._color_vars[Severity.LOW].get()
+    monkeypatch.setattr(colorchooser, "askcolor", lambda *a, **kw: (None, None))
+    tab._pick_color(Severity.LOW)
+
+    assert tab._color_vars[Severity.LOW].get() == before
+
+
+def test_user_clear_resets_to_empty_and_shows_none(tk_root, monkeypatch):
+    tab = SherlockTab(tk_root, {})
+    from tkinter import colorchooser
+
+    monkeypatch.setattr(
+        colorchooser, "askcolor", lambda *a, **kw: ((171, 205, 239), "#abcdef")
+    )
+    tab._pick_user_color("user1")
+    assert tab._user_color_vars["user1"].get() == "#abcdef"
+
+    tab._clear_user_color("user1")
+    assert tab._user_color_vars["user1"].get() == ""
+    assert tab._user_swatches["user1"].cget("text") == "None"
+
+
+def test_user_rows_have_clear_buttons(tk_root):
+    tab = SherlockTab(tk_root, {})
+    assert _button_texts(tab.frame).count("Clear") == len(USER_COLOR_KEYS)

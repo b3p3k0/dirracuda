@@ -427,3 +427,52 @@ Run the final targeted validation set, update docs/lessons learned, capture
 visual QA evidence, and report PASS/FAIL with exact commands.
 Do not commit.
 ```
+
+## C14 Planning Prompt
+
+```text
+Plan C14 only: Sherlock color swatch picker polish.
+
+For this reply, produce a plan and stop. After RA/HI acceptance, execute the
+approved plan in this worktree before sending the completion report.
+
+Source anchor: Tk's built-in color chooser is `tkinter.colorchooser.askcolor`;
+official docs: https://docs.python.org/3/library/tkinter.colorchooser.html
+
+The plan must cover:
+- replacing visible hex Entry controls and `...` buttons in the Sherlock tab
+  color rows with fixed-size swatch buttons
+- using Tk's built-in colorchooser.askcolor from the swatch buttons
+- preserving the existing underlying hex-string StringVars and sherlock.json
+  wire format
+- severity colors remaining required and non-clearable
+- User1/User2/User3 showing `None` when empty and providing Clear controls
+- defensive rendering for invalid internal values while Save still rejects them
+- README/technical-reference wording updates only where visible hex-field text
+  would become misleading
+- Xvfb/default-size visual QA of Accessories -> Sherlock at the current
+  655px-safe dialog width
+
+Do not change matcher, DB schema/migrations, persistence readers/writers, scan
+flow, risk-display behavior, Web UI behavior, or pattern-manager behavior in
+this card.
+
+Run Sherlock tab tests, Accessories geometry tests, `pytest -k sherlock`, GUI
+guardrails, `git diff --check`, and a runtime file-size audit for
+`sherlock_tab.py`.
+Report exact commands and results. Do not commit.
+```
+
+## C14 Implementation Prompt
+
+```text
+Implement approved C14 only.
+
+Replace the Sherlock tab color controls with swatch-based picker controls per
+the accepted C14 plan. Keep the saved settings contract unchanged and avoid any
+non-UI Sherlock behavior changes.
+
+Run the approved targeted tests, Xvfb/default-size visual check, guardrails,
+`git diff --check`, and file-size audit. Report PASS/FAIL with exact commands.
+Do not commit.
+```

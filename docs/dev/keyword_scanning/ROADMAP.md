@@ -156,3 +156,17 @@ with the Risk column (User-tag tint vs severity fallback vs blank). README,
 `CLAUDE.md` (local only) were synced. File-size audit: all touched runtime files
 under the 1700-line guardrail (`dashboard_batch_ops.py` highest at 1581 — near
 limit, noted). Sherlock V2 closed.
+
+## C14 - Color Swatch Picker Polish
+
+Replace the Sherlock tab's visible hex-entry plus `...` picker controls with
+clickable color swatches. User1/User2/User3 also get Clear controls so optional
+user colors can return to the saved empty-string state.
+
+Exit criteria:
+- High/Med/Low and User1/User2/User3 render as fixed-size swatch controls.
+- Swatches open Tk's native color chooser and preserve the existing saved hex
+  string settings contract.
+- User color Clear controls restore empty values.
+- Default-size visual QA confirms no clipping and no visible hex strings in the
+  color rows.

@@ -320,3 +320,28 @@ Validation:
 - GUI guardrails.
 - `git diff --check`.
 - File-size check for touched files.
+
+## C14 - Color Swatch Picker Polish
+
+Goal: Replace the Sherlock tab's visible hex-entry plus `...` color-picker
+controls with compact clickable swatches.
+
+Deliverables:
+- Main Sherlock tab shows fixed-size swatch buttons for High/Med/Low and
+  User1/User2/User3 colors.
+- Clicking a swatch opens Tk's native color chooser and keeps storing the
+  selected lowercase `#rrggbb` in the existing settings vars.
+- User colors show `None` when empty and include a Clear control that restores
+  the saved empty-string value.
+- Severity colors remain required and cannot be cleared.
+- Saved `sherlock.json` wire format remains unchanged.
+- README/technical docs are updated only where visible hex-field wording would
+  become misleading.
+
+Validation:
+- Sherlock tab tests for swatch click, chooser cancel, user Clear, no `...`
+  buttons, existing save validation, and invalid value rejection.
+- Accessories geometry/default-size Xvfb screenshot showing all six controls
+  without clipping and no visible hex strings in the color rows.
+- `pytest -k sherlock`, GUI guardrails, `git diff --check`, and runtime
+  file-size check for `sherlock_tab.py`.

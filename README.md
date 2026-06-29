@@ -550,7 +550,7 @@ authenticates, or probes on its own.
 
 Current controls:
 - **Ignore case** and **Run after probe** preferences
-- High/Med/Low severity colors plus optional User1/User2/User3 tag colors as `#RRGGBB` values, with optional color chooser buttons
+- High/Med/Low severity colors plus optional User1/User2/User3 tag colors, each edited by clicking a color swatch that opens the native color chooser; severity colors are required, while empty User colors read **None** and have a **Clear** control. Values are stored as `#rrggbb`.
 - A **Manage Patterns...** modal holding the scrollable built-in/custom keyword/wildcard pattern table; custom patterns can carry one User color tag
 - Add, edit, enable/disable, delete custom patterns, and restore built-ins; pattern-manager edits stay staged until the tab's Save persists settings
 

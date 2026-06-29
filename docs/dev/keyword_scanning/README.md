@@ -36,8 +36,8 @@ authorize the PA/RA to implement runtime code directly.
 - Fuzzy matching is deferred.
 - The Risk column is alert-only: high/med/low findings show text, clear/no-hit
   rows remain blank.
-- Default colors are high `#ff4d4d`, med `#ffa31a`, low `#ffff80`, with user
-  editable hex text fields.
+- Default colors are high `#ff4d4d`, med `#ffa31a`, low `#ffff80`, stored as
+  hex strings and edited through color swatches/native chooser controls.
 - The pattern list must be fixed-height and scrollable.
 - C0 accepted matcher decisions: C1 matches full normalized snapshot paths and
   individual path segments, includes share/container names when available, uses
@@ -50,6 +50,9 @@ authorize the PA/RA to implement runtime code directly.
 - V2 pattern management decision: the embedded pattern table moves to a tall
   modal dialog. Dialog edits are staged in the Sherlock tab and persist only
   when the existing Sherlock Save button is clicked.
+- C14 swatch decision: visible hex fields and `...` buttons are replaced by
+  clickable swatches. User1/User2/User3 also get Clear controls so empty user
+  colors remain reachable from the UI.
 
 ## Source Anchors
 

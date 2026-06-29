@@ -11,6 +11,11 @@ triggers probing - those belong to later cards.
 C10: adds User1/User2/User3 color inputs to the main tab and moves pattern
 management into a tall modal "Sherlock Patterns" dialog. Pattern edits stay
 staged in memory until the main tab's Save persists settings.
+
+C14: the severity/User color rows use clickable color swatches (opening Tk's
+native colorchooser) instead of visible hex entries; User rows show "None" when
+empty and gain a Clear control. The underlying hex StringVars and sherlock.json
+wire format are unchanged.
 """
 
 from __future__ import annotations
@@ -33,6 +38,7 @@ from shared.sherlock import (
     SherlockSettings,
     builtin_patterns,
     default_settings,
+    is_valid_color,
     normalize_color_tag,
     settings_from_dict,
     settings_to_dict,
@@ -85,6 +91,8 @@ class SherlockTab:
     def __init__(self, parent: tk.Widget, context: dict) -> None:
         self._context = context
         self._theme = get_theme()
+        # Background for empty/invalid swatch faces (a real color string).
+        self._neutral_bg = self._theme.colors["secondary_bg"]
         self.frame = tk.Frame(parent)
         self._theme.apply_to_widget(self.frame, "main_window")
 
@@ -100,6 +108,9 @@ class SherlockTab:
             key: tk.StringVar(value=settings.user_colors.get(key, ""))
             for key in USER_COLOR_KEYS
         }
+        # Swatch buttons, kept so pick/clear handlers can repaint them.
+        self._severity_swatches: Dict[Severity, tk.Button] = {}
+        self._user_swatches: Dict[str, tk.Button] = {}
         # Pattern table + manager dialog are built lazily on demand.
         self._tree: Optional[ttk.Treeview] = None
         self._pattern_manager: Optional[tk.Toplevel] = None
@@ -230,11 +241,12 @@ class SherlockTab:
         self._theme.apply_to_widget(color_row, "main_window")
         color_row.pack(anchor="w", padx=12, pady=(0, 6), fill=tk.X)
         for sev in _SEVERITY_ORDER:
-            self._build_color_input(
+            self._severity_swatches[sev] = self._build_color_input(
                 color_row,
                 "{0}:".format(_SEVERITY_LABELS[sev]),
                 self._color_vars[sev],
-                lambda s=sev: self._pick_color(s),
+                is_user=False,
+                on_pick=lambda s=sev: self._pick_color(s),
             )
 
         # User colors
@@ -244,13 +256,13 @@ class SherlockTab:
         user_row.pack(anchor="w", padx=12, pady=(0, 6), fill=tk.X)
         for key in USER_COLOR_KEYS:
             var = self._user_color_vars[key]
-            self._build_color_input(
+            self._user_swatches[key] = self._build_color_input(
                 user_row,
                 "{0}:".format(_USER_COLOR_LABELS[key]),
                 var,
-                lambda v=var, k=key: self._pick_color_into(
-                    v, "{0} color".format(_USER_COLOR_LABELS[k])
-                ),
+                is_user=True,
+                on_pick=lambda k=key: self._pick_user_color(k),
+                on_clear=lambda k=key: self._clear_user_color(k),
             )
 
         # Patterns
@@ -283,8 +295,19 @@ class SherlockTab:
         caption.pack(anchor="w", padx=12, pady=(2, 1))
 
     def _build_color_input(
-        self, parent: tk.Widget, label_text: str, var: tk.StringVar, on_pick
-    ) -> None:
+        self,
+        parent: tk.Widget,
+        label_text: str,
+        var: tk.StringVar,
+        *,
+        is_user: bool,
+        on_pick,
+        on_clear=None,
+    ) -> tk.Button:
+        """Build a label + clickable color swatch (+ Clear for user rows).
+
+        Returns the swatch button so callers can repaint it after a pick/clear.
+        """
         group = tk.Frame(parent)
         self._theme.apply_to_widget(group, "main_window")
         group.pack(side=tk.LEFT, padx=(0, 14))
@@ -293,13 +316,38 @@ class SherlockTab:
         self._theme.apply_to_widget(label, "label")
         label.pack(side=tk.LEFT)
 
-        entry = tk.Entry(group, textvariable=var, width=9)
-        self._theme.apply_to_widget(entry, "entry")
-        entry.pack(side=tk.LEFT, padx=(4, 2))
+        swatch = tk.Button(group, width=4, height=1, relief="solid", bd=1, command=on_pick)
+        self._theme.apply_to_widget(swatch, "button_secondary")
+        swatch.pack(side=tk.LEFT, padx=(4, 2))
+        self._render_swatch(swatch, var.get(), is_user)
 
-        pick = tk.Button(group, text="...", width=3, command=on_pick)
-        self._theme.apply_to_widget(pick, "button_secondary")
-        pick.pack(side=tk.LEFT)
+        if on_clear is not None:
+            clear = tk.Button(group, text="Clear", width=5, command=on_clear)
+            self._theme.apply_to_widget(clear, "button_secondary")
+            clear.pack(side=tk.LEFT)
+
+        return swatch
+
+    def _swatch_face(self, value: object, *, is_user: bool) -> Tuple[str, str]:
+        """Map a stored color string to a (background, caption) swatch face.
+
+        Valid colors show the color with no caption. Empty user colors show
+        'None'. Any other (invalid internal) value renders defensively as the
+        neutral background with a '?' caption - never the raw string - so no
+        stray hex text leaks into the color rows. Save still rejects invalid
+        values via the unchanged validators.
+        """
+        text = (value or "").strip() if isinstance(value, str) else ""
+        if is_valid_color(text):
+            return text.lower(), ""
+        if is_user and text == "":
+            return self._neutral_bg, "None"
+        return self._neutral_bg, "?"
+
+    def _render_swatch(self, swatch: tk.Button, value: object, is_user: bool) -> None:
+        """Repaint a swatch button to reflect *value*."""
+        bg, caption = self._swatch_face(value, is_user=is_user)
+        swatch.configure(bg=bg, activebackground=bg, text=caption)
 
     def _build_table(self, parent: tk.Widget) -> None:
         table_frame = tk.Frame(parent)
@@ -562,14 +610,28 @@ class SherlockTab:
         return self.frame.winfo_toplevel()
 
     def _pick_color(self, severity: Severity) -> None:
-        """Open the Tk color chooser for a severity color."""
-        self._pick_color_into(
-            self._color_vars[severity],
-            "{0} color".format(_SEVERITY_LABELS[severity]),
-        )
+        """Open the Tk color chooser for a severity color, then repaint."""
+        var = self._color_vars[severity]
+        if self._pick_color_into(var, "{0} color".format(_SEVERITY_LABELS[severity])):
+            self._render_swatch(self._severity_swatches[severity], var.get(), False)
 
-    def _pick_color_into(self, var: tk.StringVar, title: str) -> None:
-        """Open the Tk color chooser and write the chosen hex into *var*."""
+    def _pick_user_color(self, key: str) -> None:
+        """Open the Tk color chooser for a user color, then repaint."""
+        var = self._user_color_vars[key]
+        if self._pick_color_into(var, "{0} color".format(_USER_COLOR_LABELS[key])):
+            self._render_swatch(self._user_swatches[key], var.get(), True)
+
+    def _clear_user_color(self, key: str) -> None:
+        """Reset a user color to the saved empty-string value and repaint."""
+        var = self._user_color_vars[key]
+        var.set("")
+        self._render_swatch(self._user_swatches[key], "", True)
+
+    def _pick_color_into(self, var: tk.StringVar, title: str) -> bool:
+        """Open the Tk color chooser and write the chosen hex into *var*.
+
+        Returns True when a color was chosen (var updated), False on cancel/error.
+        """
         from tkinter import colorchooser
 
         current = var.get().strip()
@@ -580,9 +642,11 @@ class SherlockTab:
                 parent=self._active_dialog_parent(),
             )
         except Exception:
-            return
+            return False
         if chosen:
             var.set(str(chosen).lower())
+            return True
+        return False
 
     def _open_pattern_dialog(
         self, existing: Optional[SherlockPattern] = None
