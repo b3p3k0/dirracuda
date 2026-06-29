@@ -1125,3 +1125,187 @@ def test_category_combobox_blank_saves_as_custom(tk_root):
     assert "error" not in captured
     assert result is not None
     assert result["category"] == "Custom"
+
+
+# ---------------------------------------------------------------------------
+# C17: multi-select + row double-click
+# ---------------------------------------------------------------------------
+
+
+def _custom(key, *, enabled=True, label="x", pattern="*x*"):
+    return SherlockPattern(
+        key=key, category="Custom", label=label, pattern=pattern,
+        severity=Severity.LOW, enabled=enabled, builtin=False,
+    )
+
+
+@pytest.mark.gui_smoke
+def test_pattern_table_uses_extended_selectmode():
+    import tkinter as tk
+    from gui.utils.style import get_theme
+
+    try:
+        root = tk.Tk()
+    except tk.TclError as exc:
+        pytest.skip(f"Tk display unavailable: {exc}")
+    try:
+        root.withdraw()
+        tab = SherlockTab.__new__(SherlockTab)
+        tab._theme = get_theme()
+        tab._tree = None
+        tab._build_table(root)
+        assert str(tab._tree.cget("selectmode")) == "extended"
+    finally:
+        root.destroy()
+
+
+def test_selected_patterns_returns_table_order():
+    tab = _bare_tab()
+    a, b, c = _custom("custom_a"), _custom("custom_b"), _custom("custom_c")
+    tab._patterns = [a, b, c]
+    # Selection reported out of table order; helper restores table order.
+    tab._tree.selection.return_value = ("custom_c", "custom_a")
+    selected = tab._selected_patterns()
+    assert [p.key for p in selected] == ["custom_a", "custom_c"]
+
+
+def test_selected_patterns_empty_selection():
+    tab = _bare_tab()
+    tab._patterns = [_custom("custom_a")]
+    tab._tree.selection.return_value = ()
+    assert tab._selected_patterns() == []
+
+
+def test_toggle_batch_flips_mixed_states_individually():
+    tab = _bare_tab()
+    on = _custom("custom_on", enabled=True)
+    off = _custom("custom_off", enabled=False)
+    untouched = _custom("custom_keep", enabled=True)
+    tab._patterns = [on, off, untouched]
+    tab._tree.selection.return_value = ("custom_on", "custom_off")
+
+    tab._on_toggle()
+
+    by_key = {p.key: p for p in tab._patterns}
+    assert by_key["custom_on"].enabled is False
+    assert by_key["custom_off"].enabled is True
+    assert by_key["custom_keep"].enabled is True  # not selected, unchanged
+    assert tab._pattern_manager_dirty is True
+    tab._refresh_table.assert_called()
+    tab._tree.selection_set.assert_called_once_with(["custom_on", "custom_off"])
+
+
+def test_delete_batch_removes_builtin_and_custom():
+    tab = _bare_tab()
+    builtins = list(builtin_patterns())
+    builtin_key = builtins[0].key
+    custom = _custom("custom_1")
+    tab._patterns = builtins + [custom]
+    before = len(tab._patterns)
+    tab._tree.selection.return_value = (builtin_key, "custom_1")
+
+    tab._on_delete()
+
+    keys = {p.key for p in tab._patterns}
+    assert builtin_key not in keys
+    assert "custom_1" not in keys
+    assert len(tab._patterns) == before - 2
+    assert tab._pattern_manager_dirty is True
+
+
+def test_edit_multiple_selected_sets_status_no_change(monkeypatch):
+    tab = _bare_tab()
+    tab._patterns = [_custom("custom_1"), _custom("custom_2")]
+    snapshot = list(tab._patterns)
+    tab._tree.selection.return_value = ("custom_1", "custom_2")
+    monkeypatch.setattr(
+        tab, "_open_pattern_dialog",
+        lambda *a, **k: pytest.fail("dialog must not open for multi-select Edit"),
+    )
+
+    tab._on_edit()
+
+    assert tab._patterns == snapshot
+    assert tab._pattern_manager_dirty is False
+    tab._status_label.configure.assert_called()
+
+
+def test_copy_multiple_selected_sets_status_no_change(monkeypatch):
+    tab = _bare_tab()
+    tab._patterns = [_custom("custom_1"), _custom("custom_2")]
+    before = len(tab._patterns)
+    tab._tree.selection.return_value = ("custom_1", "custom_2")
+    monkeypatch.setattr(
+        tab, "_open_pattern_dialog",
+        lambda *a, **k: pytest.fail("dialog must not open for multi-select Copy"),
+    )
+
+    tab._on_copy()
+
+    assert len(tab._patterns) == before
+    assert tab._pattern_manager_dirty is False
+    tab._status_label.configure.assert_called()
+
+
+def test_double_click_custom_edits_in_place(monkeypatch):
+    tab = _bare_tab()
+    custom = SherlockPattern(
+        key="custom_1", category="Custom", label="Old", pattern="*old*",
+        severity=Severity.LOW, enabled=True, builtin=False,
+    )
+    tab._patterns = [custom]
+    tab._tree.identify_row.return_value = "custom_1"
+    tab._tree.selection.return_value = ("custom_1",)
+    monkeypatch.setattr(
+        tab, "_open_pattern_dialog",
+        lambda existing=None: _dialog_result(label="New", pattern="*new*"),
+    )
+
+    tab._on_row_double_click(types.SimpleNamespace(y=10))
+
+    # Double-click selects the clicked row before routing to Edit.
+    tab._tree.selection_set.assert_any_call("custom_1")
+    updated = next(p for p in tab._patterns if p.key == "custom_1")
+    assert updated.label == "New"
+    assert updated.builtin is False
+    assert tab._pattern_manager_dirty is True
+
+
+def test_double_click_builtin_creates_copy(monkeypatch):
+    tab = _bare_tab()
+    tab._patterns = list(builtin_patterns())
+    builtin = tab._patterns[0]
+    before = len(tab._patterns)
+    tab._tree.identify_row.return_value = builtin.key
+    tab._tree.selection.return_value = (builtin.key,)
+    monkeypatch.setattr(
+        tab, "_open_pattern_dialog",
+        lambda existing=None, prefill=None: _dialog_result(
+            label=prefill.label, category=prefill.category,
+            pattern=prefill.pattern, severity=prefill.severity,
+        ),
+    )
+
+    tab._on_row_double_click(types.SimpleNamespace(y=10))
+
+    assert any(p.key == builtin.key and p.builtin for p in tab._patterns)
+    assert len(tab._patterns) == before + 1
+    assert tab._patterns[-1].builtin is False
+    assert tab._pattern_manager_dirty is True
+
+
+def test_double_click_empty_area_no_change(monkeypatch):
+    tab = _bare_tab()
+    tab._patterns = [_custom("custom_1")]
+    snapshot = list(tab._patterns)
+    tab._tree.identify_row.return_value = ""
+    monkeypatch.setattr(
+        tab, "_open_pattern_dialog",
+        lambda *a, **k: pytest.fail("dialog must not open on empty double-click"),
+    )
+
+    tab._on_row_double_click(types.SimpleNamespace(y=999))
+
+    assert tab._patterns == snapshot
+    assert tab._pattern_manager_dirty is False
+    tab._tree.selection_set.assert_not_called()

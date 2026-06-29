@@ -208,6 +208,10 @@ Exit criteria:
 Add standard Ctrl/Shift multi-select and row double-click editing to the pattern
 manager.
 
+Status: complete. C17 changed the Pattern Manager Treeview to extended
+selection, added batch Enable/Disable and Delete, and routes double-click on a
+row through the existing Edit flow while preserving built-in edit-as-copy.
+
 Exit criteria:
 - Treeview uses extended selection.
 - Batch Enable/Disable and Delete operate on selected visible rows.

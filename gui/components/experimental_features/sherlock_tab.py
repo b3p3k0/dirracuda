@@ -378,7 +378,7 @@ class SherlockTab:
             table_frame,
             columns=columns,
             show="headings",
-            selectmode="browse",
+            selectmode="extended",
             height=16,
         )
         headings = {
@@ -405,6 +405,7 @@ class SherlockTab:
 
         for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
             tree.bind(sequence, self._on_mousewheel)
+        tree.bind("<Double-1>", self._on_row_double_click)
 
         self._tree = tree
 
@@ -534,12 +535,17 @@ class SherlockTab:
                 ),
             )
 
-    def _selected_pattern(self) -> Optional[SherlockPattern]:
-        selection = self._tree.selection()
+    def _selected_patterns(self) -> List[SherlockPattern]:
+        """Staged patterns for the current selection, in visible/table order.
+
+        Iterating self._patterns reproduces the table render order (_refresh_table
+        inserts in that order), so the result follows the visible row order
+        regardless of Ctrl/Shift click sequence.
+        """
+        selection = set(self._tree.selection())
         if not selection:
-            return None
-        key = selection[0]
-        return next((p for p in self._patterns if p.key == key), None)
+            return []
+        return [p for p in self._patterns if p.key in selection]
 
     def _replace_pattern(self, key: str, new_pattern: SherlockPattern) -> None:
         self._patterns = [
@@ -558,6 +564,23 @@ class SherlockTab:
             self._tree.yview_scroll(delta, "units")
         return "break"
 
+    def _on_row_double_click(self, event: Any) -> str:
+        """Double-click a row to edit exactly that row.
+
+        Selects the clicked row first, then routes through _on_edit so the C15
+        built-in lifecycle holds (built-ins edit-as-copy, customs edit in place).
+        A double-click on empty space changes nothing.
+        """
+        tree = self._tree
+        if tree is None:
+            return "break"
+        row = tree.identify_row(event.y)
+        if not row:
+            return "break"
+        tree.selection_set(row)
+        self._on_edit()
+        return "break"
+
     def _set_status(self, text: str) -> None:
         self._status_label.configure(text=text)
 
@@ -566,21 +589,26 @@ class SherlockTab:
     # ------------------------------------------------------------------
 
     def _on_toggle(self) -> None:
-        pattern = self._selected_pattern()
-        if pattern is None:
-            self._set_status("Select a pattern to enable or disable.")
+        patterns = self._selected_patterns()
+        if not patterns:
+            self._set_status("Select one or more patterns to enable or disable.")
             return
-        self._replace_pattern(pattern.key, _with_enabled(pattern, not pattern.enabled))
+        keys = {p.key for p in patterns}
+        self._patterns = [
+            _with_enabled(p, not p.enabled) if p.key in keys else p
+            for p in self._patterns
+        ]
         self._pattern_manager_dirty = True
         self._refresh_table()
-        self._tree.selection_set(pattern.key)
+        self._tree.selection_set([p.key for p in patterns])
 
     def _on_delete(self) -> None:
-        pattern = self._selected_pattern()
-        if pattern is None:
-            self._set_status("Select a pattern to delete.")
+        patterns = self._selected_patterns()
+        if not patterns:
+            self._set_status("Select one or more patterns to delete.")
             return
-        self._patterns = [p for p in self._patterns if p.key != pattern.key]
+        keys = {p.key for p in patterns}
+        self._patterns = [p for p in self._patterns if p.key not in keys]
         self._pattern_manager_dirty = True
         self._refresh_table()
 
@@ -599,11 +627,11 @@ class SherlockTab:
         self._append_custom_from_result(result)
 
     def _on_copy(self) -> None:
-        pattern = self._selected_pattern()
-        if pattern is None:
-            self._set_status("Select a pattern to copy.")
+        patterns = self._selected_patterns()
+        if len(patterns) != 1:
+            self._set_status("Select exactly one pattern to copy.")
             return
-        self._add_from_source(pattern)
+        self._add_from_source(patterns[0])
 
     def _add_from_source(self, source: SherlockPattern) -> None:
         """Open the Add dialog prefilled from *source*; save as a new custom."""
@@ -629,10 +657,11 @@ class SherlockTab:
         self._tree.selection_set(pattern.key)
 
     def _on_edit(self) -> None:
-        pattern = self._selected_pattern()
-        if pattern is None:
-            self._set_status("Select a pattern to edit.")
+        patterns = self._selected_patterns()
+        if len(patterns) != 1:
+            self._set_status("Select exactly one pattern to edit.")
             return
+        pattern = patterns[0]
         if pattern.builtin:
             self._add_from_source(pattern)
             return

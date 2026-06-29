@@ -552,7 +552,7 @@ Current controls:
 - **Ignore case** and **Run after probe** preferences
 - High/Med/Low severity colors plus optional User1/User2/User3 tag colors, each edited by clicking a color swatch that opens the native color chooser; severity colors are required, while empty User colors read **None** and have a **Clear** control. Values are stored as `#rrggbb`.
 - A **Manage Patterns...** modal holding the scrollable built-in/custom keyword/wildcard pattern table; custom patterns can carry one User color tag
-- Add, edit, copy, enable/disable, and delete patterns (built-in or custom), and restore built-ins; built-ins stay code-defined, so editing or copying a built-in saves a new custom pattern and `Restore Built-ins` re-adds any deleted built-ins. Pattern-manager edits stay staged until the tab's Save persists settings
+- Add, edit, copy, enable/disable, and delete patterns (built-in or custom), and restore built-ins; built-ins stay code-defined, so editing or copying a built-in saves a new custom pattern and `Restore Built-ins` re-adds any deleted built-ins. The pattern table supports Ctrl/Shift multi-select for batch enable/disable and delete, and double-click opens edit for the clicked row. Pattern-manager edits stay staged until either **Save & Close** in the manager or **Save** on the tab persists settings.
 
 Settings are persisted under `~/.dirracuda/conf.d/experimental/sherlock.json`.
 The Start Scan dialog also mirrors the global **Sherlock: run after probe**

@@ -635,3 +635,65 @@ Run the approved targeted tests, Xvfb/default-size visual check, guardrails,
 `git diff --check`, and file-size audit. Report PASS/FAIL with exact commands.
 Do not commit.
 ```
+
+## C17 Planning Prompt
+
+```text
+Plan C17 only: Sherlock Pattern Manager multi-select and double-click.
+
+For this reply, produce a plan and stop. After RA/HI acceptance, execute the
+approved plan in this worktree before sending the completion report.
+
+Workflow reminder: Codex is PA/RA, Claude is DA. Do not commit. The RA commits
+only after HI accepts completed work.
+
+Source anchor: Tk `ttk.Treeview` supports a `selectmode` option, and Tk widgets
+support event binding for double-click handlers; official docs:
+https://docs.python.org/3/library/tkinter.ttk.html
+
+The plan must cover:
+- changing the Pattern Manager Treeview from `selectmode="browse"` to
+  `selectmode="extended"` for standard Ctrl/Shift multi-select
+- adding a helper that returns the currently selected staged patterns, preserving
+  visible/table selection order where practical
+- preserving exact-one behavior for `Edit` and `Copy`: no selection or multiple
+  selected rows should show a status message and make no changes
+- `Enable/Disable` operating on one or many selected rows, flipping each row's
+  current enabled state individually, including mixed selected states
+- `Delete` operating on one or many selected rows; built-ins are staged as
+  deleted by removal from the list, customs are removed from the list
+- preserving C15 built-in lifecycle: built-in Edit and double-click still route
+  to add-prefilled custom copy; custom Edit still edits in place
+- binding double-click on a row to Edit for exactly that row, including selecting
+  the clicked row before routing when needed
+- preserving C16 category combobox behavior
+- preserving C16.5 dirty tracking: successful batch toggle/delete and
+  double-click edit mutations mark `_pattern_manager_dirty`; empty/invalid
+  selections do not
+- Xvfb/default-size visual QA of the manager at the current widened geometry
+  with multi-selection/action row visible
+
+Do not implement filters, JSON export, matcher changes, DB schema/migrations,
+risk-display changes, Web UI changes, scan-flow changes, or settings wire-format
+changes in this card.
+
+Run Sherlock tab tests, relevant settings/serialization tests if touched,
+Accessories geometry tests, `pytest -k sherlock`, GUI guardrails,
+`git diff --check`, and a runtime file-size audit for touched production files.
+Report exact commands and results. Do not commit.
+```
+
+## C17 Implementation Prompt
+
+```text
+Implement approved C17 only.
+
+Add Pattern Manager extended multi-select, batch Enable/Disable/Delete, and
+double-click edit routing per the accepted C17 plan. Preserve C15 built-in
+lifecycle, C16 category combobox, and C16.5 dirty/save behavior. Do not add
+filters or export.
+
+Run the approved targeted tests, Xvfb/default-size visual check, guardrails,
+`git diff --check`, and file-size audit. Report PASS/FAIL with exact commands.
+Do not commit.
+```
