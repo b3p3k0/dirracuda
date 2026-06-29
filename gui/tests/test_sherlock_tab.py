@@ -1344,3 +1344,263 @@ def test_double_click_empty_area_no_change(monkeypatch):
     assert tab._patterns == snapshot
     assert tab._pattern_manager_dirty is False
     tab._tree.selection_set.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# C18 - Search and faceted filters
+# ---------------------------------------------------------------------------
+
+def _tagged(key, *, color_tag="none", category="Custom", severity=Severity.LOW,
+            enabled=True, builtin=False, label="x", pattern="*x*"):
+    return SherlockPattern(
+        key=key, category=category, label=label, pattern=pattern,
+        severity=severity, enabled=enabled, builtin=builtin, color_tag=color_tag,
+    )
+
+
+def test_user_tag_facet_choices_none_only():
+    assert mod._user_tag_facet_choices([_tagged("a")]) == ["None"]
+
+
+def test_user_tag_facet_choices_present_in_canonical_order():
+    pats = [_tagged("a", color_tag="user2"), _tagged("b"), _tagged("c", color_tag="user1")]
+    assert mod._user_tag_facet_choices(pats) == ["None", "User1", "User2"]
+
+
+def test_user_tag_facet_choices_all_tagged_omits_none():
+    assert mod._user_tag_facet_choices([_tagged("a", color_tag="user1")]) == ["User1"]
+
+
+def _sample(**over):
+    base = dict(
+        key="k", category="Credentials", label="Password files",
+        pattern="*password*", severity=Severity.HIGH, enabled=True,
+        builtin=True, color_tag="none",
+    )
+    base.update(over)
+    return SherlockPattern(**base)
+
+
+_ALL = mod._FACET_ALL
+
+
+def _matches(pat, *, search="", category=_ALL, severity=_ALL, user_tag=_ALL, enabled=_ALL):
+    return mod._pattern_matches_filters(
+        pat, search=search, category=category, severity=severity,
+        user_tag=user_tag, enabled=enabled,
+    )
+
+
+def test_filter_search_matches_each_field_case_insensitively():
+    p = _sample(color_tag="user1", builtin=True)
+    assert _matches(p, search="PASSWORD")          # label/pattern
+    assert _matches(p, search="cred")              # category
+    assert _matches(p, search="high")              # severity display name
+    assert _matches(p, search="user1")             # user-tag label/token
+    assert _matches(p, search="built")             # type Built-in
+    assert _matches(_sample(builtin=False), search="custom")  # type Custom
+    assert not _matches(p, search="nonexistent-token")
+
+
+def test_filter_empty_search_and_all_facets_match_everything():
+    assert _matches(_sample())
+    assert _matches(_sample(enabled=False, color_tag="user3", builtin=False))
+
+
+def test_filter_category_facet_exact_case_insensitive():
+    p = _sample(category="Credentials")
+    assert _matches(p, category="credentials")
+    assert not _matches(p, category="Private keys")
+
+
+def test_filter_severity_facet_exact():
+    assert _matches(_sample(severity=Severity.HIGH), severity="HIGH")
+    assert not _matches(_sample(severity=Severity.HIGH), severity="LOW")
+
+
+def test_filter_user_tag_facet_exact():
+    assert _matches(_sample(color_tag="none"), user_tag="None")
+    assert _matches(_sample(color_tag="user2"), user_tag="User2")
+    assert not _matches(_sample(color_tag="user2"), user_tag="User1")
+
+
+def test_filter_enabled_facet_exact():
+    assert _matches(_sample(enabled=True), enabled="Enabled")
+    assert _matches(_sample(enabled=False), enabled="Disabled")
+    assert not _matches(_sample(enabled=True), enabled="Disabled")
+
+
+def test_filter_facets_are_anded():
+    p = _sample(category="Credentials", severity=Severity.HIGH)
+    assert _matches(p, category="Credentials", severity="HIGH")
+    assert not _matches(p, category="Credentials", severity="LOW")
+
+
+def test_visible_patterns_no_filter_state_returns_all():
+    tab = _bare_tab()
+    pats = [_custom("a"), _custom("b")]
+    tab._patterns = pats
+    assert tab._visible_patterns() == pats
+
+
+# --- filter-change / clear behavior (mocked tree) ---
+
+def _filter_tab():
+    tab = _bare_tab()
+    tab._filter_search_var = _DummyVar("")
+    tab._filter_category_var = _DummyVar(_ALL)
+    tab._filter_severity_var = _DummyVar(_ALL)
+    tab._filter_user_tag_var = _DummyVar(_ALL)
+    tab._filter_enabled_var = _DummyVar(_ALL)
+    return tab
+
+
+def test_on_filter_change_clears_selection_and_refreshes():
+    tab = _filter_tab()
+    tab._tree.selection.return_value = ("custom_a",)
+    tab._on_filter_change()
+    tab._tree.selection_remove.assert_called_once_with("custom_a")
+    tab._refresh_table.assert_called_once()
+
+
+def test_on_filter_change_does_not_mark_dirty():
+    tab = _filter_tab()
+    tab._filter_severity_var.set("HIGH")
+    tab._tree.selection.return_value = ()
+    tab._on_filter_change()
+    assert tab._pattern_manager_dirty is False
+
+
+def test_clear_filters_resets_vars_and_single_refresh():
+    tab = _filter_tab()
+    tab._filter_search_var.set("x")
+    tab._filter_category_var.set("Credentials")
+    tab._filter_severity_var.set("HIGH")
+    tab._filter_user_tag_var.set("User1")
+    tab._filter_enabled_var.set("Disabled")
+    tab._tree.selection.return_value = ()
+    tab._on_clear_filters()
+    assert tab._filter_search_var.get() == ""
+    assert tab._filter_category_var.get() == _ALL
+    assert tab._filter_severity_var.get() == _ALL
+    assert tab._filter_user_tag_var.get() == _ALL
+    assert tab._filter_enabled_var.get() == _ALL
+    tab._refresh_table.assert_called_once()
+
+
+def test_toggle_restore_keeps_only_visible_keys_selected():
+    # Enabled facet "Enabled": toggling a visible enabled row off makes it leave
+    # the filtered view, so it must not be re-selected.
+    tab = _filter_tab()
+    tab._filter_enabled_var.set("Enabled")
+    a = _custom("custom_a", enabled=True)
+    b = _custom("custom_b", enabled=True)
+    tab._patterns = [a, b]
+    tab._tree.selection.return_value = ("custom_a",)
+    tab._on_toggle()
+    # custom_a is now disabled -> filtered out -> not selectable.
+    tab._tree.selection_set.assert_called_once_with([])
+
+
+# --- real-Tk: filter row presence and action scoping ---
+
+def test_filter_row_widgets_present(tk_root):
+    tab = SherlockTab(tk_root, {})
+    captured = {}
+
+    def when_open():
+        mgr = tab._pattern_manager
+        captured["buttons"] = _button_texts(mgr)
+        captured["combos"] = [
+            w for w in _all_widgets(mgr) if isinstance(w, ttk.Combobox)
+        ]
+        captured["entries"] = [
+            w for w in _all_widgets(mgr) if isinstance(w, tk.Entry)
+        ]
+        captured["has_combos"] = (
+            tab._filter_category_combo is not None
+            and tab._filter_user_tag_combo is not None
+        )
+        mgr.destroy()
+
+    tk_root.after(50, when_open)
+    tab._open_pattern_manager()
+
+    assert "Clear" in captured["buttons"]
+    # Category, Severity, User Tag, Enabled facet comboboxes.
+    assert len(captured["combos"]) >= 4
+    assert captured["entries"]  # search entry
+    assert captured["has_combos"]
+
+
+def test_facet_value_lists_refresh_after_mutation(tk_root):
+    tab = SherlockTab(tk_root, {})
+    tab._patterns = [_tagged("custom_a", category="Alpha")]
+    captured = {}
+
+    def when_open():
+        captured["tags_before"] = list(tab._filter_user_tag_combo["values"])
+        captured["cats_before"] = list(tab._filter_category_combo["values"])
+        tab._patterns.append(_tagged("custom_b", category="Beta", color_tag="user1"))
+        tab._refresh_table()
+        captured["tags_after"] = list(tab._filter_user_tag_combo["values"])
+        captured["cats_after"] = list(tab._filter_category_combo["values"])
+        tab._pattern_manager.destroy()
+
+    tk_root.after(50, when_open)
+    tab._open_pattern_manager()
+
+    assert "User1" not in captured["tags_before"]
+    assert "User1" in captured["tags_after"]
+    assert "Beta" not in captured["cats_before"]
+    assert "Beta" in captured["cats_after"]
+
+
+def test_delete_under_active_filter_only_touches_visible_selection(tk_root):
+    tab = SherlockTab(tk_root, {})
+    a = _tagged("custom_a", category="Custom")
+    b = _tagged("custom_b", category="Other")
+    tab._patterns = [a, b]
+    captured = {}
+
+    def when_open():
+        tab._filter_category_var.set("Custom")
+        tab._on_filter_change()
+        captured["visible_iids"] = tab._tree.get_children()
+        tab._tree.selection_set("custom_a")
+        tab._on_delete()
+        captured["after"] = list(tab._patterns)
+        tab._pattern_manager.destroy()
+
+    tk_root.after(50, when_open)
+    tab._open_pattern_manager()
+
+    # Only custom_a (visible + selected) was rendered, then deleted.
+    assert captured["visible_iids"] == ("custom_a",)
+    keys = [p.key for p in captured["after"]]
+    assert "custom_a" not in keys
+    # The filtered-out row is byte-for-byte unchanged.
+    assert any(p == b for p in captured["after"])
+
+
+def test_enable_disable_under_active_filter_only_touches_visible_selection(tk_root):
+    tab = SherlockTab(tk_root, {})
+    a = _tagged("custom_a", category="Custom", enabled=True)
+    b = _tagged("custom_b", category="Other", enabled=True)
+    tab._patterns = [a, b]
+    captured = {}
+
+    def when_open():
+        tab._filter_category_var.set("Custom")
+        tab._on_filter_change()
+        tab._tree.selection_set("custom_a")
+        tab._on_toggle()
+        captured["after"] = list(tab._patterns)
+        tab._pattern_manager.destroy()
+
+    tk_root.after(50, when_open)
+    tab._open_pattern_manager()
+
+    by_key = {p.key: p for p in captured["after"]}
+    assert by_key["custom_a"].enabled is False   # visible selection flipped
+    assert by_key["custom_b"] == b               # filtered-out row unchanged

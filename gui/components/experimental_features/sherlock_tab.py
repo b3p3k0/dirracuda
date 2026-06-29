@@ -70,6 +70,73 @@ _TAG_TO_DIALOG_LABEL: Dict[str, str] = {v: k for k, v in _DIALOG_LABEL_TO_TAG.it
 _COLOR_TAG_CELL_LABELS: Dict[str, str] = {COLOR_TAG_NONE: ""}
 _COLOR_TAG_CELL_LABELS.update({key: _USER_COLOR_LABELS[key] for key in USER_COLOR_KEYS})
 
+# C18 pattern-manager filter facets. "All" disables a facet. Severity and Enabled
+# are fixed lists; Category and User Tag are rebuilt from the staged rows.
+_FACET_ALL = "All"
+_SEVERITY_FACET_CHOICES: Tuple[str, ...] = (
+    _FACET_ALL,
+) + tuple(s.display_name for s in _SEVERITY_ORDER)
+_ENABLED_FACET_CHOICES: Tuple[str, ...] = (_FACET_ALL, "Enabled", "Disabled")
+
+
+def _user_tag_facet_choices(patterns) -> List[str]:
+    """User Tag facet values present among *patterns* (without leading 'All').
+
+    Emits 'None' when any row is untagged, then User1/User2/User3 in canonical
+    order for whichever tags actually occur. Callers prepend _FACET_ALL.
+    """
+    present = {normalize_color_tag(p.color_tag) for p in patterns}
+    choices: List[str] = []
+    if COLOR_TAG_NONE in present:
+        choices.append(_COLOR_TAG_CELL_LABELS.get(COLOR_TAG_NONE) or "None")
+    for key in USER_COLOR_KEYS:
+        if key in present:
+            choices.append(_USER_COLOR_LABELS[key])
+    return choices
+
+
+def _pattern_matches_filters(
+    pattern: SherlockPattern,
+    *,
+    search: str,
+    category: str,
+    severity: str,
+    user_tag: str,
+    enabled: str,
+) -> bool:
+    """Pure predicate: does *pattern* survive the current filter row?
+
+    `search` is a free-text substring (empty = no filter); the facet values use
+    exact staged values with `_FACET_ALL` meaning no filter. All conditions are
+    ANDed.
+    """
+    needle = (search or "").strip().casefold()
+    if needle:
+        tag = normalize_color_tag(pattern.color_tag)
+        haystack = " ".join(
+            (
+                pattern.label,
+                pattern.category,
+                pattern.pattern,
+                pattern.severity.display_name,
+                _COLOR_TAG_CELL_LABELS.get(tag, ""),
+                tag,
+                "Built-in" if pattern.builtin else "Custom",
+            )
+        ).casefold()
+        if needle not in haystack:
+            return False
+    if category != _FACET_ALL and category.casefold() != (pattern.category or "").casefold():
+        return False
+    if severity != _FACET_ALL and severity != pattern.severity.display_name:
+        return False
+    if user_tag != _FACET_ALL:
+        if _DIALOG_LABEL_TO_TAG.get(user_tag) != normalize_color_tag(pattern.color_tag):
+            return False
+    if enabled != _FACET_ALL and (enabled == "Enabled") != bool(pattern.enabled):
+        return False
+    return True
+
 
 def validate_pattern_fields(pattern: str) -> Tuple[bool, str]:
     """Pure add/edit validation: pattern text must be non-empty."""
@@ -370,6 +437,79 @@ class SherlockTab:
         bg, caption = self._swatch_face(value, is_user=is_user)
         swatch.configure(bg=bg, activebackground=bg, text=caption)
 
+    def _build_filter_row(self, parent: tk.Widget) -> None:
+        """Build the C18 filter row above the pattern table.
+
+        Display-only: edits here re-render the visible rows but never touch
+        self._patterns or the dirty flag. Created fresh on every manager open.
+        """
+        self._filter_search_var = tk.StringVar(value="")
+        self._filter_category_var = tk.StringVar(value=_FACET_ALL)
+        self._filter_severity_var = tk.StringVar(value=_FACET_ALL)
+        self._filter_user_tag_var = tk.StringVar(value=_FACET_ALL)
+        self._filter_enabled_var = tk.StringVar(value=_FACET_ALL)
+
+        row = tk.Frame(parent)
+        self._theme.apply_to_widget(row, "main_window")
+        row.pack(anchor="w", pady=(0, 8), fill=tk.X)
+
+        def _label(text: str) -> None:
+            lbl = tk.Label(row, text=text, anchor="w")
+            self._theme.apply_to_widget(lbl, "label")
+            lbl.pack(side=tk.LEFT, padx=(0, 3))
+
+        def _facet(var: tk.StringVar, values, width: int) -> ttk.Combobox:
+            combo = ttk.Combobox(
+                row, textvariable=var, values=list(values), state="readonly", width=width
+            )
+            combo.pack(side=tk.LEFT, padx=(0, 10))
+            combo.bind("<<ComboboxSelected>>", self._on_filter_change)
+            return combo
+
+        _label("Search:")
+        search_entry = tk.Entry(row, textvariable=self._filter_search_var, width=18)
+        self._theme.apply_to_widget(search_entry, "entry")
+        search_entry.pack(side=tk.LEFT, padx=(0, 10))
+        self._filter_search_var.trace_add("write", self._on_filter_change)
+
+        _label("Category:")
+        self._filter_category_combo = _facet(self._filter_category_var, [_FACET_ALL], 14)
+        _label("Severity:")
+        _facet(self._filter_severity_var, _SEVERITY_FACET_CHOICES, 7)
+        _label("User Tag:")
+        self._filter_user_tag_combo = _facet(self._filter_user_tag_var, [_FACET_ALL], 8)
+        _label("Enabled:")
+        _facet(self._filter_enabled_var, _ENABLED_FACET_CHOICES, 9)
+
+        clear_btn = tk.Button(row, text="Clear", command=self._on_clear_filters)
+        self._theme.apply_to_widget(clear_btn, "button_secondary")
+        clear_btn.pack(side=tk.LEFT)
+
+    def _on_filter_change(self, *_args: Any) -> None:
+        """Re-render the visible rows; clear selection so hidden rows can't be acted on."""
+        if getattr(self, "_applying_filter_reset", False):
+            return
+        tree = self._tree
+        if tree is None:
+            return
+        selection = tree.selection()
+        if selection:
+            tree.selection_remove(*selection)
+        self._refresh_table()
+
+    def _on_clear_filters(self) -> None:
+        """Reset every facet/search field to its default and re-render once."""
+        self._applying_filter_reset = True
+        try:
+            self._filter_search_var.set("")
+            self._filter_category_var.set(_FACET_ALL)
+            self._filter_severity_var.set(_FACET_ALL)
+            self._filter_user_tag_var.set(_FACET_ALL)
+            self._filter_enabled_var.set(_FACET_ALL)
+        finally:
+            self._applying_filter_reset = False
+        self._on_filter_change()
+
     def _build_table(self, parent: tk.Widget) -> None:
         table_frame = tk.Frame(parent)
         self._theme.apply_to_widget(table_frame, "main_window")
@@ -430,13 +570,14 @@ class SherlockTab:
         dialog.title("Sherlock Patterns")
         dialog.transient(parent)
         self._theme.apply_to_widget(dialog, "main_window")
-        dialog.geometry("780x560")
-        dialog.minsize(760, 540)
+        dialog.geometry("1000x600")
+        dialog.minsize(990, 560)
 
         outer = tk.Frame(dialog, padx=12, pady=10)
         self._theme.apply_to_widget(outer, "main_window")
         outer.pack(fill=tk.BOTH, expand=True)
 
+        self._build_filter_row(outer)
         self._build_table(outer)
 
         action_row = tk.Frame(outer)
@@ -498,6 +639,8 @@ class SherlockTab:
         dialog = self._pattern_manager
         self._pattern_manager = None
         self._tree = None
+        self._filter_category_combo = None
+        self._filter_user_tag_combo = None
         if dialog is not None:
             dialog.destroy()
 
@@ -522,13 +665,87 @@ class SherlockTab:
     # Table rendering / selection
     # ------------------------------------------------------------------
 
+    def _current_filter_state(self) -> Tuple[str, str, str, str, str]:
+        """Read the filter row vars, defaulting to no-filter when absent.
+
+        Returns (search, category, severity, user_tag, enabled). When the filter
+        widgets have not been built (e.g. unit tests that mock the tree), every
+        facet reads as `_FACET_ALL` so the whole catalog stays visible.
+        """
+        def _get(name: str, default: str) -> str:
+            var = getattr(self, name, None)
+            if var is None:
+                return default
+            return var.get()
+
+        return (
+            _get("_filter_search_var", "").strip(),
+            _get("_filter_category_var", _FACET_ALL) or _FACET_ALL,
+            _get("_filter_severity_var", _FACET_ALL) or _FACET_ALL,
+            _get("_filter_user_tag_var", _FACET_ALL) or _FACET_ALL,
+            _get("_filter_enabled_var", _FACET_ALL) or _FACET_ALL,
+        )
+
+    def _visible_patterns(self) -> List[SherlockPattern]:
+        """Staged patterns surviving the current filter row (never mutates state)."""
+        search, category, severity, user_tag, enabled = self._current_filter_state()
+        return [
+            p
+            for p in self._patterns
+            if _pattern_matches_filters(
+                p,
+                search=search,
+                category=category,
+                severity=severity,
+                user_tag=user_tag,
+                enabled=enabled,
+            )
+        ]
+
+    def _visible_keys(self) -> set:
+        """Keys of currently-visible rows; used to keep selection on visible rows."""
+        return {p.key for p in self._visible_patterns()}
+
+    def _refresh_facet_choices(self) -> None:
+        """Rebuild the dynamic Category / User Tag facet value lists.
+
+        Reset a facet to `_FACET_ALL` when its selected value is no longer
+        present among staged rows. No-op when the combos have not been built.
+        """
+        cat_combo = getattr(self, "_filter_category_combo", None)
+        if cat_combo is not None:
+            try:
+                exists = cat_combo.winfo_exists()
+            except Exception:
+                exists = False
+            if exists:
+                choices = [_FACET_ALL] + category_choices(
+                    self._patterns, always_include=()
+                )
+                cat_combo["values"] = choices
+                if self._filter_category_var.get() not in choices:
+                    self._filter_category_var.set(_FACET_ALL)
+
+        tag_combo = getattr(self, "_filter_user_tag_combo", None)
+        if tag_combo is not None:
+            try:
+                exists = tag_combo.winfo_exists()
+            except Exception:
+                exists = False
+            if exists:
+                choices = [_FACET_ALL] + _user_tag_facet_choices(self._patterns)
+                tag_combo["values"] = choices
+                if self._filter_user_tag_var.get() not in choices:
+                    self._filter_user_tag_var.set(_FACET_ALL)
+
     def _refresh_table(self) -> None:
         tree = self._tree
         if tree is None:
             return
+        self._refresh_facet_choices()
         for iid in tree.get_children():
             tree.delete(iid)
-        for pattern in self._patterns:
+        for pattern in self._visible_patterns():
             tag = normalize_color_tag(pattern.color_tag)
             tree.insert(
                 "",
@@ -614,7 +831,8 @@ class SherlockTab:
         ]
         self._pattern_manager_dirty = True
         self._refresh_table()
-        self._tree.selection_set([p.key for p in patterns])
+        visible = self._visible_keys()
+        self._tree.selection_set([p.key for p in patterns if p.key in visible])
 
     def _on_delete(self) -> None:
         patterns = self._selected_patterns()
@@ -668,7 +886,8 @@ class SherlockTab:
         self._patterns.append(pattern)
         self._pattern_manager_dirty = True
         self._refresh_table()
-        self._tree.selection_set(pattern.key)
+        if pattern.key in self._visible_keys():
+            self._tree.selection_set(pattern.key)
 
     def _on_edit(self) -> None:
         patterns = self._selected_patterns()
@@ -695,7 +914,8 @@ class SherlockTab:
         self._replace_pattern(pattern.key, updated)
         self._pattern_manager_dirty = True
         self._refresh_table()
-        self._tree.selection_set(pattern.key)
+        if pattern.key in self._visible_keys():
+            self._tree.selection_set(pattern.key)
 
     # ------------------------------------------------------------------
     # Color picker / add-edit dialog

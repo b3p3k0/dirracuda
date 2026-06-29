@@ -222,6 +222,10 @@ Exit criteria:
 Add a search row plus Category/Severity/User Tag/Enabled facets above the
 pattern table.
 
+Status: complete. C18 added a display-only filter row to the Pattern Manager;
+filter changes re-render visible rows and clear selection without mutating the
+staged catalog or dirty flag.
+
 Exit criteria:
 - Search and facets combine predictably.
 - Clear filters restores all staged rows.

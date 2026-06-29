@@ -697,3 +697,60 @@ Run the approved targeted tests, Xvfb/default-size visual check, guardrails,
 `git diff --check`, and file-size audit. Report PASS/FAIL with exact commands.
 Do not commit.
 ```
+
+## C18 Planning Prompt
+
+```text
+Plan C18 only: Sherlock Pattern Manager search and faceted filters.
+
+For this reply, produce a plan and stop. After RA/HI acceptance, execute the
+approved plan in this worktree before sending the completion report.
+
+Workflow reminder: Codex is PA/RA, Claude is DA. Do not commit. The RA commits
+only after HI accepts completed work.
+
+Source anchor: Tk `ttk.Combobox` supports readonly dropdown facets, `Entry`
+widgets can be bound to variable changes for search text, and `ttk.Treeview`
+selection must be cleared when visible row sets change; official docs:
+https://docs.python.org/3/library/tkinter.ttk.html
+
+The plan must cover:
+- adding a filter row above the Pattern Manager table with:
+  - text Search
+  - Category facet
+  - Severity facet
+  - User Tag facet
+  - Enabled facet
+  - Clear button
+- search matching label, category, pattern, severity, user-tag label/token, and
+  type (`Built-in` / `Custom`) case-insensitively
+- facets using exact staged values, with `All` meaning no filter
+- Category facet values coming from the full staged pattern list, de-duplicated
+  case-insensitively and refreshed after add/edit/delete/restore
+- User Tag facet values covering `All`, `None`, `User1`, `User2`, and `User3`
+  as applicable for staged rows
+- Severity facet values covering `All`, `HIGH`, `MED`, and `LOW`
+- Enabled facet values covering `All`, `Enabled`, and `Disabled`
+- filtering re-rendering the table from staged patterns without mutating
+  `self._patterns`
+- clearing selection on every filter change so hidden rows cannot be mutated
+- keeping C17 actions scoped to the current visible selection after filtering:
+  batch Enable/Disable and Delete operate only on selected visible rows; Edit,
+  Copy, and double-click still require exactly one visible row
+- filter changes not marking `_pattern_manager_dirty`; only actual pattern
+  mutations remain dirty
+- Clear filters restoring all staged rows and clearing selection
+- preserving C15 built-in lifecycle, C16 category combobox, C16.5 Save & Close,
+  and C17 multi-select/double-click behavior
+- Xvfb/default-size visual QA of the manager at current geometry with the
+  filter row, table, and full action button row visible
+
+Do not implement JSON export, matcher changes, DB schema/migrations,
+risk-display changes, Web UI changes, scan-flow changes, settings wire-format
+changes, or new pattern fields in this card.
+
+Run Sherlock tab tests, relevant settings/model tests if touched, Accessories
+geometry tests, `pytest -k sherlock`, GUI guardrails, `git diff --check`, and a
+runtime file-size audit for touched production files. Report exact commands and
+results. Do not commit.
+```
