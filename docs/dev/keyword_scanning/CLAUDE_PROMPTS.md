@@ -476,3 +476,57 @@ Run the approved targeted tests, Xvfb/default-size visual check, guardrails,
 `git diff --check`, and file-size audit. Report PASS/FAIL with exact commands.
 Do not commit.
 ```
+
+## C15 Planning Prompt
+
+```text
+Plan C15 only: Sherlock Pattern Manager built-in lifecycle + Copy.
+
+For this reply, produce a plan and stop. After RA/HI acceptance, execute the
+approved plan in this worktree before sending the completion report.
+
+Workflow reminder: Codex is PA/RA, Claude is DA. Do not commit. The RA commits
+only after HI accepts completed work.
+
+The plan must cover:
+- built-ins becoming deletable from the staged pattern list
+- built-ins remaining code-defined and not directly overwritten
+- Edit on a built-in opening the Add flow prefilled from that built-in, saving
+  as a new custom pattern with a new key
+- a `Copy` button that is enabled/valid only for exactly one selected row and
+  opens Add prefilled from the selected built-in or custom
+- additive settings serialization for deleted built-ins as `builtin_deleted`,
+  distinct from existing `builtin_disabled`
+- legacy Sherlock settings loading unchanged when `builtin_deleted` is absent
+- `Restore Built-ins` clearing deleted/disabled built-in state and restoring
+  code defaults while preserving custom patterns
+- staged-only behavior: manager changes do not persist until the main Sherlock
+  Save writes the settings shard
+- README/technical-reference wording updates only if behavior would otherwise
+  be misleading
+- Xvfb/default-size visual QA showing the action row with Copy
+
+Do not implement category combobox, multi-select, filters, export, matcher
+changes, DB schema/migrations, risk-display changes, Web UI changes, or scan
+flow changes in this card.
+
+Run Sherlock serialization/settings tests, Sherlock tab tests, Accessories
+geometry tests, `pytest -k sherlock`, GUI guardrails, `git diff --check`, and a
+runtime file-size audit for touched production files.
+Report exact commands and results. Do not commit.
+```
+
+## C15 Implementation Prompt
+
+```text
+Implement approved C15 only.
+
+Add built-in deletion, edit-as-copy, single-row Copy, and additive
+`builtin_deleted` settings support per the accepted C15 plan. Keep this to
+Sherlock settings/model/serialization and the pattern manager UI; do not add
+category combobox, multi-select, filters, export, or non-UI Sherlock behavior.
+
+Run the approved targeted tests, Xvfb/default-size visual check, guardrails,
+`git diff --check`, and file-size audit. Report PASS/FAIL with exact commands.
+Do not commit.
+```

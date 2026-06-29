@@ -444,6 +444,10 @@ class SherlockTab:
         self._theme.apply_to_widget(delete_btn, "button_danger")
         delete_btn.pack(side=tk.LEFT, padx=(0, 6))
 
+        copy_btn = tk.Button(action_row, text="Copy", command=self._on_copy)
+        self._theme.apply_to_widget(copy_btn, "button_secondary")
+        copy_btn.pack(side=tk.LEFT, padx=(0, 6))
+
         restore_btn = tk.Button(
             action_row, text="Restore Built-ins", command=self._on_restore_builtins
         )
@@ -536,10 +540,7 @@ class SherlockTab:
     def _on_delete(self) -> None:
         pattern = self._selected_pattern()
         if pattern is None:
-            self._set_status("Select a custom pattern to delete.")
-            return
-        if pattern.builtin:
-            self._set_status("Built-ins cannot be deleted; disable them instead.")
+            self._set_status("Select a pattern to delete.")
             return
         self._patterns = [p for p in self._patterns if p.key != pattern.key]
         self._refresh_table()
@@ -555,6 +556,23 @@ class SherlockTab:
         result = self._open_pattern_dialog()
         if result is None:
             return
+        self._append_custom_from_result(result)
+
+    def _on_copy(self) -> None:
+        pattern = self._selected_pattern()
+        if pattern is None:
+            self._set_status("Select a pattern to copy.")
+            return
+        self._add_from_source(pattern)
+
+    def _add_from_source(self, source: SherlockPattern) -> None:
+        """Open the Add dialog prefilled from *source*; save as a new custom."""
+        result = self._open_pattern_dialog(prefill=source)
+        if result is None:
+            return
+        self._append_custom_from_result(result)
+
+    def _append_custom_from_result(self, result: Dict[str, Any]) -> None:
         pattern = SherlockPattern(
             key="custom_{0}".format(uuid.uuid4().hex),
             category=result["category"],
@@ -572,10 +590,10 @@ class SherlockTab:
     def _on_edit(self) -> None:
         pattern = self._selected_pattern()
         if pattern is None:
-            self._set_status("Select a custom pattern to edit.")
+            self._set_status("Select a pattern to edit.")
             return
         if pattern.builtin:
-            self._set_status("Built-ins are read-only; disable or restore instead.")
+            self._add_from_source(pattern)
             return
         result = self._open_pattern_dialog(existing=pattern)
         if result is None:
@@ -649,16 +667,24 @@ class SherlockTab:
         return False
 
     def _open_pattern_dialog(
-        self, existing: Optional[SherlockPattern] = None
+        self,
+        existing: Optional[SherlockPattern] = None,
+        *,
+        prefill: Optional[SherlockPattern] = None,
     ) -> Optional[Dict[str, Any]]:
         """Modal add/edit dialog. Returns the collected fields or None on cancel.
 
-        Parents to the open Pattern Manager (if any) so it stays modal to the
-        manager; the manager's grab is re-asserted once this dialog closes.
+        *existing* drives the in-place edit of a custom pattern (Edit title, same
+        key replaced by the caller). *prefill* seeds the field values for an Add
+        (Copy, or editing a built-in) while keeping the Add title, so the caller
+        saves a brand-new custom pattern. Parents to the open Pattern Manager (if
+        any) so it stays modal to the manager; the manager's grab is re-asserted
+        once this dialog closes.
         """
+        source = existing if existing is not None else prefill
         parent = self._active_dialog_parent()
         dialog = tk.Toplevel(parent)
-        dialog.title("Edit Pattern" if existing else "Add Pattern")
+        dialog.title("Edit Pattern" if existing is not None else "Add Pattern")
         dialog.resizable(False, False)
         dialog.transient(parent)
         dialog.grab_set()
@@ -668,17 +694,17 @@ class SherlockTab:
         self._theme.apply_to_widget(outer, "main_window")
         outer.pack(fill=tk.BOTH, expand=True)
 
-        label_var = tk.StringVar(value=existing.label if existing else "")
-        category_var = tk.StringVar(value=existing.category if existing else "Custom")
-        pattern_var = tk.StringVar(value=existing.pattern if existing else "")
+        label_var = tk.StringVar(value=source.label if source else "")
+        category_var = tk.StringVar(value=source.category if source else "Custom")
+        pattern_var = tk.StringVar(value=source.pattern if source else "")
         severity_var = tk.StringVar(
-            value=_SEVERITY_LABELS[existing.severity] if existing else _SEVERITY_LABELS[Severity.MED]
+            value=_SEVERITY_LABELS[source.severity] if source else _SEVERITY_LABELS[Severity.MED]
         )
-        existing_tag = normalize_color_tag(existing.color_tag) if existing else COLOR_TAG_NONE
+        source_tag = normalize_color_tag(source.color_tag) if source else COLOR_TAG_NONE
         color_tag_var = tk.StringVar(
-            value=_TAG_TO_DIALOG_LABEL.get(existing_tag, "None")
+            value=_TAG_TO_DIALOG_LABEL.get(source_tag, "None")
         )
-        enabled_var = tk.BooleanVar(value=existing.enabled if existing else True)
+        enabled_var = tk.BooleanVar(value=source.enabled if source else True)
 
         def _add_field(row: int, text: str, var: tk.StringVar) -> None:
             field_label = tk.Label(outer, text=text, anchor="w")

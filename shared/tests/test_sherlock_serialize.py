@@ -71,6 +71,64 @@ def test_new_builtin_appears_enabled_after_load():
     assert {p.key for p in restored.patterns if p.builtin} == catalog_keys
 
 
+def test_deleted_builtin_round_trip_is_absent_after_reload():
+    full = builtin_patterns()
+    target = full[0].key
+    # Staged catalog with one built-in deleted (absent from the list).
+    settings = SherlockSettings(patterns=[p for p in full if p.key != target])
+    data = settings_to_dict(settings)
+    assert data["builtin_deleted"] == [target]
+
+    restored = settings_from_dict(data)
+    keys = {p.key for p in restored.patterns if p.builtin}
+    assert target not in keys
+    assert keys == {p.key for p in full if p.key != target}
+
+
+def test_builtin_deleted_absent_is_legacy_parity():
+    # A legacy dict without builtin_deleted regenerates the full catalog.
+    catalog_keys = {p.key for p in builtin_patterns()}
+    restored = settings_from_dict({"builtin_disabled": []})
+    assert {p.key for p in restored.patterns if p.builtin} == catalog_keys
+
+
+def test_unknown_builtin_deleted_keys_ignored():
+    catalog_keys = {p.key for p in builtin_patterns()}
+    restored = settings_from_dict({"builtin_deleted": ["does_not_exist"]})
+    assert {p.key for p in restored.patterns if p.builtin} == catalog_keys
+
+
+def test_deleted_builtin_preserves_other_state_and_customs():
+    full = builtin_patterns()
+    deleted = full[0].key
+    disabled = full[1].key
+    custom = SherlockPattern(
+        key="custom_x", category="Custom", label="Acme", pattern="*acme*",
+        severity=Severity.HIGH, enabled=True, builtin=False,
+    )
+    kept = []
+    for p in full:
+        if p.key == deleted:
+            continue
+        if p.key == disabled:
+            kept.append(
+                SherlockPattern(
+                    key=p.key, category=p.category, label=p.label,
+                    pattern=p.pattern, severity=p.severity, enabled=False,
+                    builtin=True,
+                )
+            )
+        else:
+            kept.append(p)
+    settings = SherlockSettings(patterns=kept + [custom])
+
+    restored = settings_from_dict(settings_to_dict(settings))
+    by_key = {p.key: p for p in restored.patterns}
+    assert deleted not in by_key
+    assert by_key[disabled].enabled is False
+    assert by_key["custom_x"].pattern == "*acme*"
+
+
 def test_custom_patterns_round_trip():
     settings = SherlockSettings(
         patterns=builtin_patterns()

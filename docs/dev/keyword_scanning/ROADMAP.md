@@ -170,3 +170,64 @@ Exit criteria:
 - User color Clear controls restore empty values.
 - Default-size visual QA confirms no clipping and no visible hex strings in the
   color rows.
+
+## C15 - Built-In Lifecycle And Copy
+
+Let analysts delete built-ins, copy any row, and edit built-ins through a
+prefilled custom-copy flow while keeping code-defined built-ins as the stable
+restore target.
+
+Exit criteria:
+- `builtin_deleted` persists hidden built-ins separately from disabled built-ins.
+- Built-in Edit and Copy create new custom rows.
+- Restore Built-ins clears deleted/disabled built-in state and keeps customs.
+
+## C16 - Category Combobox
+
+Replace the Add/Edit free-text category entry with an editable category
+combobox populated from staged pattern categories.
+
+Exit criteria:
+- Existing categories are selectable.
+- New typed categories are accepted.
+- Blank category saves as `Custom`.
+
+## C17 - Multi-Select And Double-Click
+
+Add standard Ctrl/Shift multi-select and row double-click editing to the pattern
+manager.
+
+Exit criteria:
+- Treeview uses extended selection.
+- Batch Enable/Disable and Delete operate on selected visible rows.
+- Double-click opens Edit; built-ins route to edit-as-copy.
+
+## C18 - Search And Faceted Filters
+
+Add a search row plus Category/Severity/User Tag/Enabled facets above the
+pattern table.
+
+Exit criteria:
+- Search and facets combine predictably.
+- Clear filters restores all staged rows.
+- Filter changes clear selection so hidden rows cannot be mutated.
+
+## C19 - JSON Pattern Export
+
+Add JSON export for the full staged pattern list from the pattern manager.
+
+Exit criteria:
+- Export writes metadata plus complete pattern rows.
+- Export uses native Save As and handles cancel/error safely.
+- No import path is added.
+
+## C20 - Pattern Manager Closeout
+
+Run final validation, visual QA, docs sync, lessons learned, and file-size
+review for the pattern-manager improvement pass.
+
+Exit criteria:
+- C15-C19 targeted matrix is green.
+- Xvfb screenshots cover category combobox, multi-select/action row, filters,
+  and export.
+- Runtime docs match behavior and file-size risk is explicitly handled.

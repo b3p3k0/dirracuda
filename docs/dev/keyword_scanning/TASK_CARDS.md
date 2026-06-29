@@ -345,3 +345,124 @@ Validation:
   without clipping and no visible hex strings in the color rows.
 - `pytest -k sherlock`, GUI guardrails, `git diff --check`, and runtime
   file-size check for `sherlock_tab.py`.
+
+## C15 - Built-In Lifecycle And Copy
+
+Goal: Let analysts trim or clone built-in patterns without losing a stable
+restore target.
+
+Deliverables:
+- Built-ins can be deleted from the staged list and stay hidden after Save.
+- Built-ins are not directly overwritten; Edit on a built-in opens the Add flow
+  prefilled from that built-in and saves a new custom pattern.
+- Add a `Copy` button for exactly one selected row; it opens Add prefilled from
+  the selected built-in or custom pattern.
+- Persist deleted built-ins additively as `builtin_deleted`, keeping existing
+  `builtin_disabled` behavior distinct.
+- `Restore Built-ins` clears disabled/deleted built-in state and restores code
+  defaults while preserving custom patterns.
+
+Validation:
+- Serialization tests for legacy settings, disabled built-ins, deleted
+  built-ins, and restore semantics.
+- GUI tests for built-in edit-as-copy, Copy, built-in delete, custom delete, and
+  staged-only behavior until the main Save.
+- Xvfb/default-size check of the action row with the new Copy button.
+- `pytest -k sherlock`, GUI guardrails, `git diff --check`, and file-size audit.
+
+## C16 - Category Combobox
+
+Goal: Reduce category misspellings while still allowing analysts to create new
+categories.
+
+Deliverables:
+- Add/Edit Pattern uses an editable `ttk.Combobox(state="normal")` for Category.
+- Dropdown values come from current staged pattern categories, de-duplicated
+  case-insensitively and sorted.
+- Typed new values are allowed; blank category saves as `Custom`.
+- New staged categories appear in later Add/Edit dialogs.
+
+Validation:
+- Category list helper tests for sort/dedupe behavior.
+- GUI tests for existing-category selection, typed-new category save, and blank
+  fallback to `Custom`.
+- Xvfb/default-size Add/Edit screenshot.
+- `git diff --check` and file-size audit.
+
+## C17 - Multi-Select And Double-Click
+
+Goal: Make large pattern-list maintenance faster with standard selection
+behavior and row double-click editing.
+
+Deliverables:
+- Pattern table uses `selectmode="extended"` for Ctrl/Shift multi-select.
+- Add `_selected_patterns()` and route batch-capable actions through it.
+- `Enable/Disable` flips each selected row individually, including mixed states.
+- `Delete` acts on all selected rows; built-ins stage deletion, customs are
+  removed.
+- Double-click opens Edit for one selected row; built-in double-click follows
+  edit-as-copy.
+
+Validation:
+- GUI tests for selectmode, batch mixed-state toggle, batch delete, exact-one
+  Edit/Copy requirements, and double-click routing.
+- Xvfb/default-size manager screenshot with multi-selection.
+- `pytest -k sherlock`, GUI guardrails, `git diff --check`, and file-size audit.
+
+## C18 - Search And Faceted Filters
+
+Goal: Let analysts narrow long pattern lists without changing staged data.
+
+Deliverables:
+- Add filter row above the table: text search plus Category, Severity, User Tag,
+  and Enabled facets.
+- Search matches label, category, pattern, severity, tag, and type.
+- Facets use exact staged values; `All` disables a facet.
+- Filter changes re-render visible rows and clear selection so hidden rows are
+  never mutated by actions.
+
+Validation:
+- Filter helper tests for search/facet combinations.
+- GUI tests for Clear filters, selection clearing, and action behavior after
+  filtering.
+- Xvfb/default-size manager screenshot with filter row.
+- `git diff --check`, GUI guardrails, and file-size audit.
+
+## C19 - JSON Pattern Export
+
+Goal: Export the current staged Sherlock pattern list in a standard, exact
+format for review/sharing.
+
+Deliverables:
+- Add an `Export` button to the pattern manager.
+- Export all staged patterns, not only filtered rows, to JSON through
+  `filedialog.asksaveasfilename`.
+- Payload includes metadata plus pattern rows with key, type, enabled, severity,
+  category, label, pattern, and color_tag.
+- Cancel and write errors leave staged data unchanged; errors use
+  `safe_messagebox`.
+- No import in this pass.
+
+Validation:
+- JSON schema/content tests, cancel/no-write test, write-error test.
+- Xvfb/default-size manager screenshot showing Export.
+- `pytest -k sherlock`, GUI guardrails, `git diff --check`, and file-size audit.
+
+## C20 - Pattern Manager Closeout
+
+Goal: Close out the pattern-manager improvements with validation evidence, docs
+sync, and maintainability review.
+
+Deliverables:
+- README, technical reference, planning docs, and lessons learned updated where
+  runtime behavior changed.
+- Xvfb screenshots cover category combobox, multi-select/action row, filters,
+  and export button.
+- File-size audit for touched runtime files; if `sherlock_tab.py` crosses 1200
+  lines, propose/extract a helper module before more pattern-manager work.
+
+Validation:
+- Targeted matrix across C15-C19.
+- `pytest -k sherlock`, GUI guardrails, `git diff --check`.
+- Known unrelated full-suite flakes, if any, reported separately from Sherlock
+  failures.

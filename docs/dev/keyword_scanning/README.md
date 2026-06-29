@@ -8,8 +8,8 @@ This folder is for planning, RA review, Claude prompts, and documentation only.
 It does not authorize coding, schema changes, migrations, or runtime edits by
 the planning agent.
 
-For the V2 color-highlighting pass, approval of a plan authorizes the PA/RA to
-update this planning packet and present the next Claude prompt only. It does not
+For follow-on Sherlock passes, approval of a plan authorizes the PA/RA to update
+this planning packet and present the next Claude prompt only. It does not
 authorize the PA/RA to implement runtime code directly.
 
 ## Operating Model
@@ -53,6 +53,13 @@ authorize the PA/RA to implement runtime code directly.
 - C14 swatch decision: visible hex fields and `...` buttons are replaced by
   clickable swatches. User1/User2/User3 also get Clear controls so empty user
   colors remain reachable from the UI.
+- Pattern-manager improvement decisions: built-ins may be disabled or deleted,
+  but editing a built-in creates a prefilled custom copy rather than modifying
+  the code-defined built-in. `Restore Built-ins` restores code defaults and
+  clears built-in disabled/deleted state while leaving customs alone.
+- Pattern filtering uses a search box plus Category/Severity/User Tag/Enabled
+  facets. JSON is the first export format and exports the full staged list, not
+  only the currently filtered rows.
 
 ## Source Anchors
 
@@ -62,8 +69,16 @@ authorize the PA/RA to implement runtime code directly.
   https://docs.python.org/3/library/fnmatch.html
 - Tk `ttk.Treeview` supports row/item tags suitable for highlighting:
   https://docs.python.org/3/library/tkinter.ttk.html
+- Tk `ttk.Combobox` supports editable dropdowns for category selection/new
+  category entry: https://docs.python.org/3/library/tkinter.ttk.html
+- Tk `ttk.Treeview` supports extended selection for Ctrl/Shift multi-select:
+  https://docs.python.org/3/library/tkinter.ttk.html
 - Tk ships a built-in `colorchooser` dialog:
   https://docs.python.org/3/library/tkinter.colorchooser.html
+- Tk `filedialog.asksaveasfilename` provides native Save As dialogs:
+  https://docs.python.org/3/library/dialog.html
+- Python `json` is the pattern export format for exact settings-shaped data:
+  https://docs.python.org/3/library/json.html
 - SQLite additive table creation is via `CREATE TABLE IF NOT EXISTS`:
   https://www.sqlite.org/lang_createtable.html
 - SQLite additive column work is via `ALTER TABLE ... ADD COLUMN`:

@@ -20,3 +20,8 @@
 | R16 | Additive tag columns break older DBs | High | Nullable columns plus runtime table/column guards | Migration/minimal-schema tests |
 | R17 | Probe summary silently changes non-Sherlock rows | Medium | Add Risk column only when at least one fresh finding exists; blank rows remain quiet | Batch summary tests and CSV tests |
 | R18 | Near-limit files grow during display updates | Medium | Put shared tint/risk resolution in small helpers and check line counts before/after | File-size checks; modularization pause over 1700 lines |
+| R19 | Built-in restore semantics become ambiguous | Medium | Built-ins are code-defined; edits create custom copies; deleted/disabled built-in state is separate and clearable by Restore Built-ins | Serialization tests and staged UI tests |
+| R20 | Filtered/hidden rows are mutated by bulk actions | Medium | Filtering clears selection; bulk actions operate only on visible selected rows | Filter + bulk-action tests |
+| R21 | Multi-select breaks single-row edit/copy expectations | Medium | Edit/Copy require exactly one selected row; batch actions support one or many rows | Selection/action tests |
+| R22 | Export output is incomplete or not round-trip-friendly | Low | JSON exports the full staged list with metadata and all pattern fields; no import in this pass | Export schema and cancel/error tests |
+| R23 | Pattern manager grows beyond maintainable size | Medium | C20 file-size audit; propose helper extraction if `sherlock_tab.py` crosses 1200 lines before further manager work | Line-count checks and closeout review |

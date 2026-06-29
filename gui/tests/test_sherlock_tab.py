@@ -459,18 +459,32 @@ def test_edit_mutates_custom_pattern(monkeypatch):
     assert updated.enabled is False
 
 
-def test_edit_builtin_is_readonly(monkeypatch):
+def test_edit_builtin_creates_new_custom(monkeypatch):
     tab = _bare_tab()
     tab._patterns = list(default_settings().patterns)
-    builtin_key = tab._patterns[0].key
-    tab._tree.selection.return_value = (builtin_key,)
-    called = []
-    monkeypatch.setattr(tab, "_open_pattern_dialog", lambda existing=None: called.append(1))
+    builtin = tab._patterns[0]
+    before = len(tab._patterns)
+    tab._tree.selection.return_value = (builtin.key,)
+    monkeypatch.setattr(
+        tab,
+        "_open_pattern_dialog",
+        lambda existing=None, prefill=None: {
+            "label": builtin.label, "category": builtin.category,
+            "pattern": builtin.pattern, "severity": builtin.severity,
+            "enabled": True, "color_tag": "none",
+        },
+    )
 
     tab._on_edit()
 
-    assert called == []
-    tab._status_label.configure.assert_called()
+    # The built-in row is untouched and a new custom was appended.
+    assert any(p.key == builtin.key and p.builtin for p in tab._patterns)
+    assert len(tab._patterns) == before + 1
+    added = tab._patterns[-1]
+    assert added.builtin is False
+    assert added.key.startswith("custom_")
+    assert added.key != builtin.key
+    assert added.pattern == builtin.pattern
 
 
 def test_delete_removes_custom_only():
@@ -487,7 +501,7 @@ def test_delete_removes_custom_only():
     assert all(p.key != "custom_1" for p in tab._patterns)
 
 
-def test_delete_builtin_blocked():
+def test_delete_removes_builtin():
     tab = _bare_tab()
     tab._patterns = list(default_settings().patterns)
     builtin_key = tab._patterns[0].key
@@ -495,7 +509,72 @@ def test_delete_builtin_blocked():
 
     tab._on_delete()
 
-    assert any(p.key == builtin_key for p in tab._patterns)
+    assert all(p.key != builtin_key for p in tab._patterns)
+
+
+def test_copy_builtin_creates_new_custom(monkeypatch):
+    tab = _bare_tab()
+    tab._patterns = list(default_settings().patterns)
+    builtin = tab._patterns[0]
+    before = len(tab._patterns)
+    tab._tree.selection.return_value = (builtin.key,)
+    monkeypatch.setattr(
+        tab,
+        "_open_pattern_dialog",
+        lambda existing=None, prefill=None: {
+            "label": prefill.label, "category": prefill.category,
+            "pattern": prefill.pattern, "severity": prefill.severity,
+            "enabled": prefill.enabled, "color_tag": "none",
+        },
+    )
+
+    tab._on_copy()
+
+    assert any(p.key == builtin.key and p.builtin for p in tab._patterns)
+    assert len(tab._patterns) == before + 1
+    added = tab._patterns[-1]
+    assert added.builtin is False
+    assert added.key.startswith("custom_")
+    assert added.pattern == builtin.pattern
+
+
+def test_copy_custom_creates_new_custom(monkeypatch):
+    tab = _bare_tab()
+    custom = SherlockPattern(
+        key="custom_1", category="Custom", label="x", pattern="*x*",
+        severity=Severity.MED, enabled=True, builtin=False, color_tag="user1",
+    )
+    tab._patterns = [custom]
+    tab._tree.selection.return_value = ("custom_1",)
+    monkeypatch.setattr(
+        tab,
+        "_open_pattern_dialog",
+        lambda existing=None, prefill=None: {
+            "label": prefill.label, "category": prefill.category,
+            "pattern": prefill.pattern, "severity": prefill.severity,
+            "enabled": prefill.enabled, "color_tag": prefill.color_tag,
+        },
+    )
+
+    tab._on_copy()
+
+    assert len(tab._patterns) == 2
+    added = tab._patterns[-1]
+    assert added.builtin is False
+    assert added.key != "custom_1"
+    assert added.key.startswith("custom_")
+    assert added.color_tag == "user1"
+
+
+def test_copy_without_selection_sets_status():
+    tab = _bare_tab()
+    tab._patterns = list(default_settings().patterns)
+    before = len(tab._patterns)
+    tab._tree.selection.return_value = ()
+
+    tab._on_copy()
+
+    assert len(tab._patterns) == before
     tab._status_label.configure.assert_called()
 
 
@@ -517,6 +596,24 @@ def test_restore_builtins_reenables_all_and_keeps_customs():
     tab._on_restore_builtins()
 
     assert all(p.enabled for p in tab._patterns if p.builtin)
+    assert any(p.key == "custom_1" for p in tab._patterns)
+
+
+def test_restore_builtins_readds_deleted_and_keeps_customs():
+    tab = _bare_tab()
+    full = builtin_patterns()
+    deleted_key = full[0].key
+    custom = SherlockPattern(
+        key="custom_1", category="Custom", label="x", pattern="*x*",
+        severity=Severity.LOW, enabled=True, builtin=False,
+    )
+    # Simulate a previously deleted built-in: drop it from the staged list.
+    tab._patterns = [p for p in full if p.key != deleted_key] + [custom]
+
+    tab._on_restore_builtins()
+
+    assert any(p.key == deleted_key and p.builtin for p in tab._patterns)
+    assert len([p for p in tab._patterns if p.builtin]) == len(full)
     assert any(p.key == "custom_1" for p in tab._patterns)
 
 
@@ -579,7 +676,7 @@ def test_pattern_manager_structure_and_nested_grab(tk_root):
 
     assert "user_tag" in captured["columns"]
     assert "User Tag" in captured["headings"]
-    for label in ("Add", "Edit", "Enable/Disable", "Delete", "Restore Built-ins", "Close"):
+    for label in ("Add", "Edit", "Enable/Disable", "Delete", "Copy", "Restore Built-ins", "Close"):
         assert label in captured["buttons"]
     assert captured["add_grabbed"] is True
     # Add dialog was transient to the manager, not the main window.

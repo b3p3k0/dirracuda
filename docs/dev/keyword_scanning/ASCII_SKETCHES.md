@@ -255,3 +255,87 @@ If any row has Risk:
 Else:
   keep current summary layout
 ```
+
+## Pattern Manager Improvements
+
+```text
+Sherlock Patterns
+
++--------------------------------------------------------------------------------+
+| Search [ password______________ ] Category [All v] Severity [All v] [Clear]    |
+| User Tag [All v] Enabled [All v]                                                |
++--------------------------------------------------------------------------------+
+| On | Sev | User Tag | Category      | Label          | Pattern        | Type    |
+| Yes| HIGH| User1    | Credentials   | Password files | *password*     | Built-in|
+| No | MED |          | Finance       | Payroll        | *payroll*      | Custom  |
+| ...                                                                            |
++--------------------------------------------------------------------------------+
+| [Add] [Edit] [Copy] [Enable/Disable] [Delete] [Restore Built-ins] [Export]     |
+| [Close]                                                                        |
++--------------------------------------------------------------------------------+
+```
+
+```text
+Pattern Add/Edit
+
++------------------------------------------+
+| Label:      [ Payroll archive          ] |
+| Category:   [ Finance                v ] |
+| Pattern:    [ *payroll*                ] |
+| Severity:   [ MED v ]                    |
+| Color tag:  [ User2 v ]                  |
+| [x] Enabled                              |
+|                              [Cancel] [OK]|
++------------------------------------------+
+```
+
+## Pattern Manager Flows
+
+```text
+Edit built-in
+      |
+      v
+Open Add dialog prefilled from built-in
+      |
+      v
+Save as new custom pattern
+      |
+      v
+Original built-in remains code-defined
+```
+
+```text
+Delete selected rows
+      |
+      +-- Built-in --> stage key in builtin_deleted
+      |
+      +-- Custom ---> remove staged custom row
+      |
+      v
+Main Sherlock Save persists staged settings
+```
+
+```text
+Filter changed
+      |
+      v
+Recompute visible rows from staged pattern list
+      |
+      v
+Refresh table and clear selection
+      |
+      v
+Bulk actions can affect visible selected rows only
+```
+
+```text
+Export
+      |
+      v
+Native Save As dialog
+      |
+      +-- Cancel --> no write, staged data unchanged
+      |
+      v
+Write JSON metadata + all staged pattern rows
+```
