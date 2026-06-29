@@ -622,6 +622,7 @@ def test_restore_builtins_readds_deleted_and_keeps_customs():
 # ---------------------------------------------------------------------------
 
 import tkinter as tk  # noqa: E402
+from tkinter import ttk  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -753,3 +754,137 @@ def test_user_clear_resets_to_empty_and_shows_none(tk_root, monkeypatch):
 def test_user_rows_have_clear_buttons(tk_root):
     tab = SherlockTab(tk_root, {})
     assert _button_texts(tab.frame).count("Clear") == len(USER_COLOR_KEYS)
+
+
+# ---------------------------------------------------------------------------
+# Real-Tk: Add/Edit Category combobox (C16)
+# ---------------------------------------------------------------------------
+
+
+def _category_combobox(widget):
+    """Return the editable (state=normal) combobox; sev/tag are readonly."""
+    for w in _all_widgets(widget):
+        if isinstance(w, ttk.Combobox) and str(w.cget("state")) == "normal":
+            return w
+    return None
+
+
+def _find_button(widget, text):
+    for w in _all_widgets(widget):
+        if isinstance(w, tk.Button) and w.cget("text") == text:
+            return w
+    return None
+
+
+def _seed_pattern(category="Seed"):
+    return SherlockPattern(
+        key="src", category=category, label="L", pattern="*ok*",
+        severity=Severity.MED, enabled=True, builtin=False,
+    )
+
+
+def test_category_combobox_lists_staged_categories(tk_root):
+    tab = SherlockTab(tk_root, {})
+    custom = SherlockPattern(
+        key="custom_acme", category="Acme", label="A", pattern="*a*",
+        severity=Severity.MED, enabled=True, builtin=False,
+    )
+    tab._patterns = list(default_settings().patterns) + [custom]
+    captured = {}
+
+    def when_open():
+        dlg = None
+        try:
+            dlg = tk_root.grab_current()
+            combo = _category_combobox(dlg)
+            captured["state"] = str(combo.cget("state"))
+            captured["values"] = tuple(combo.cget("values"))
+        except Exception as exc:  # noqa: BLE001
+            captured["error"] = exc
+        finally:
+            if dlg is not None and dlg.winfo_exists():
+                dlg.destroy()
+
+    tk_root.after(50, when_open)
+    tab._open_pattern_dialog()
+
+    assert "error" not in captured
+    # Editable so analysts can type a brand-new category.
+    assert captured["state"] == "normal"
+    # Newly staged custom category appears without a main Save/reopen, alongside
+    # built-in categories and the always-present "Custom".
+    assert "Acme" in captured["values"]
+    assert "Custom" in captured["values"]
+    assert "Credentials" in captured["values"]
+
+
+def test_category_combobox_existing_selection_saved(tk_root):
+    tab = SherlockTab(tk_root, {})
+    tab._patterns = list(default_settings().patterns)
+    captured = {}
+
+    def when_open():
+        dlg = None
+        try:
+            dlg = tk_root.grab_current()
+            _category_combobox(dlg).set("Credentials")
+            _find_button(dlg, "OK").invoke()  # destroys the dialog
+        except Exception as exc:  # noqa: BLE001
+            captured["error"] = exc
+            if dlg is not None and dlg.winfo_exists():
+                dlg.destroy()
+
+    tk_root.after(50, when_open)
+    result = tab._open_pattern_dialog(prefill=_seed_pattern())
+
+    assert "error" not in captured
+    assert result is not None
+    assert result["category"] == "Credentials"
+
+
+def test_category_combobox_typed_new_value_saved(tk_root):
+    tab = SherlockTab(tk_root, {})
+    tab._patterns = list(default_settings().patterns)
+    captured = {}
+
+    def when_open():
+        dlg = None
+        try:
+            dlg = tk_root.grab_current()
+            _category_combobox(dlg).set("Brand New Cat")
+            _find_button(dlg, "OK").invoke()
+        except Exception as exc:  # noqa: BLE001
+            captured["error"] = exc
+            if dlg is not None and dlg.winfo_exists():
+                dlg.destroy()
+
+    tk_root.after(50, when_open)
+    result = tab._open_pattern_dialog(prefill=_seed_pattern())
+
+    assert "error" not in captured
+    assert result is not None
+    assert result["category"] == "Brand New Cat"
+
+
+def test_category_combobox_blank_saves_as_custom(tk_root):
+    tab = SherlockTab(tk_root, {})
+    tab._patterns = list(default_settings().patterns)
+    captured = {}
+
+    def when_open():
+        dlg = None
+        try:
+            dlg = tk_root.grab_current()
+            _category_combobox(dlg).set("   ")
+            _find_button(dlg, "OK").invoke()
+        except Exception as exc:  # noqa: BLE001
+            captured["error"] = exc
+            if dlg is not None and dlg.winfo_exists():
+                dlg.destroy()
+
+    tk_root.after(50, when_open)
+    result = tab._open_pattern_dialog(prefill=_seed_pattern())
+
+    assert "error" not in captured
+    assert result is not None
+    assert result["category"] == "Custom"

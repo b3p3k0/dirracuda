@@ -6,8 +6,10 @@ from shared.sherlock import (
     COLOR_TAG_NONE,
     DEFAULT_COLORS,
     Severity,
+    SherlockPattern,
     SherlockSettings,
     builtin_patterns,
+    category_choices,
     default_settings,
     is_valid_color,
     is_valid_user_color,
@@ -179,3 +181,38 @@ def test_tint_for_returns_empty_when_no_severity_and_no_user_color():
     settings = default_settings()
     assert settings.tint_for(None, None) == ""
     assert settings.tint_for(None, "none") == ""
+
+
+# ---------------------------------------------------------------------------
+# category_choices (C16)
+# ---------------------------------------------------------------------------
+
+
+def _pat(category: str) -> SherlockPattern:
+    return SherlockPattern(
+        key="k", category=category, label="L", pattern="*x*", severity=Severity.MED
+    )
+
+
+def test_category_choices_sorts_and_dedupes_case_insensitively():
+    patterns = [_pat("Credentials"), _pat("credentials"), _pat("Backups")]
+    # One casing per category, case-insensitively sorted, "Custom" always present.
+    assert category_choices(patterns) == ["Backups", "Credentials", "Custom"]
+
+
+def test_category_choices_first_casing_wins():
+    # The first casing seen is the stable display value for a case collision.
+    assert category_choices([_pat("creds"), _pat("Creds")]) == ["creds", "Custom"]
+    assert category_choices([_pat("Creds"), _pat("creds")]) == ["Creds", "Custom"]
+
+
+def test_category_choices_skips_blank_categories():
+    patterns = [_pat(""), _pat("   "), _pat("Finance")]
+    assert category_choices(patterns) == ["Custom", "Finance"]
+
+
+def test_category_choices_always_includes_custom_without_duplication():
+    assert category_choices([]) == ["Custom"]
+    # A pattern using Custom/custom does not duplicate the always-included value.
+    assert category_choices([_pat("Custom")]) == ["Custom"]
+    assert category_choices([_pat("custom")]) == ["Custom"]

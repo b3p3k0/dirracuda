@@ -11,7 +11,7 @@ from __future__ import annotations
 import dataclasses
 import enum
 import re
-from typing import Dict, List, Optional
+from typing import Dict, Iterable, List, Optional, Sequence
 
 
 class Severity(enum.IntEnum):
@@ -207,3 +207,25 @@ def default_settings() -> SherlockSettings:
         user_colors=dict(DEFAULT_USER_COLORS),
         patterns=builtin_patterns(),
     )
+
+
+def category_choices(
+    patterns: Iterable[SherlockPattern],
+    *,
+    always_include: Sequence[str] = ("Custom",),
+) -> List[str]:
+    """Sorted, case-insensitively de-duplicated category list for the dialog.
+
+    Stable display value: first casing seen wins (always_include first, then
+    staged-pattern order). Blank/whitespace-only categories are skipped.
+    """
+    seen: Dict[str, str] = {}  # casefold key -> display value
+    for value in always_include:
+        text = (value or "").strip()
+        if text and text.casefold() not in seen:
+            seen[text.casefold()] = text
+    for pattern in patterns:
+        text = (pattern.category or "").strip()
+        if text and text.casefold() not in seen:
+            seen[text.casefold()] = text
+    return sorted(seen.values(), key=str.casefold)

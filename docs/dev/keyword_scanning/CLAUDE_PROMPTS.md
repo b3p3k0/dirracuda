@@ -530,3 +530,56 @@ Run the approved targeted tests, Xvfb/default-size visual check, guardrails,
 `git diff --check`, and file-size audit. Report PASS/FAIL with exact commands.
 Do not commit.
 ```
+
+## C16 Planning Prompt
+
+```text
+Plan C16 only: Sherlock Pattern Add/Edit category combobox.
+
+For this reply, produce a plan and stop. After RA/HI acceptance, execute the
+approved plan in this worktree before sending the completion report.
+
+Workflow reminder: Codex is PA/RA, Claude is DA. Do not commit. The RA commits
+only after HI accepts completed work.
+
+Source anchor: Tk `ttk.Combobox` supports editable dropdowns using
+`state="normal"`; official docs: https://docs.python.org/3/library/tkinter.ttk.html
+
+The plan must cover:
+- replacing the free-text Category `Entry` in Add/Edit Pattern with an editable
+  `ttk.Combobox(state="normal")`
+- populating dropdown values from the current staged pattern categories
+- de-duplicating categories case-insensitively, preserving a stable display
+  value, and sorting for predictable UI
+- allowing typed new category values
+- trimming whitespace and falling back to `Custom` only when the category is
+  blank on OK
+- ensuring newly staged categories appear in later Add/Edit dialogs without
+  requiring main Sherlock Save/reopen
+- preserving C15 behavior: built-in Edit/Copy opens Add-prefilled and saves a
+  new custom row; custom Edit still edits in place
+- Xvfb/default-size visual QA of Add/Edit showing the Category combobox
+
+Do not implement multi-select, double-click, filters, export, matcher changes,
+DB schema/migrations, risk-display changes, Web UI changes, or scan-flow
+changes in this card.
+
+Run Sherlock tab tests, relevant serialization/settings tests if touched,
+Accessories geometry tests, `pytest -k sherlock`, GUI guardrails,
+`git diff --check`, and a runtime file-size audit for touched production files.
+Report exact commands and results. Do not commit.
+```
+
+## C16 Implementation Prompt
+
+```text
+Implement approved C16 only.
+
+Replace the Pattern Add/Edit Category text entry with an editable combobox fed
+by staged pattern categories per the accepted C16 plan. Keep this limited to the
+pattern dialog/category behavior and preserve C15 built-in lifecycle semantics.
+
+Run the approved targeted tests, Xvfb/default-size visual check, guardrails,
+`git diff --check`, and file-size audit. Report PASS/FAIL with exact commands.
+Do not commit.
+```

@@ -37,6 +37,7 @@ from shared.sherlock import (
     SherlockPattern,
     SherlockSettings,
     builtin_patterns,
+    category_choices,
     default_settings,
     is_valid_color,
     normalize_color_tag,
@@ -715,7 +716,19 @@ class SherlockTab:
             entry.grid(row=row, column=1, sticky="ew", pady=3, padx=(8, 0))
 
         _add_field(0, "Label:", label_var)
-        _add_field(1, "Category:", category_var)
+
+        cat_label = tk.Label(outer, text="Category:", anchor="w")
+        self._theme.apply_to_widget(cat_label, "label")
+        cat_label.grid(row=1, column=0, sticky="w", pady=3)
+        cat_combo = ttk.Combobox(
+            outer,
+            textvariable=category_var,
+            values=category_choices(self._patterns),
+            state="normal",
+            width=28,
+        )
+        cat_combo.grid(row=1, column=1, sticky="ew", pady=3, padx=(8, 0))
+
         _add_field(2, "Pattern:", pattern_var)
 
         sev_label = tk.Label(outer, text="Severity:", anchor="w")
