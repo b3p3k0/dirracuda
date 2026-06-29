@@ -419,14 +419,6 @@ Results browser:
 - Actions: `Copy URL`, `Open in Explorer`, `Open in system browser`, `Probe Selected` / `Probe URL`; double-click opens a read-only result details view.
 - Primary-backed mode hides manual promotion controls because retained SearXNG rows are synced during run completion. Legacy sidecar browsing keeps promotion controls for historical rows.
 
-#### SearXNG live validation (opt-in)
-
-`scripts/live_test_searxng.py` runs an end-to-end pipeline check against a real instance using a temporary database. Requires `--confirm-live`; never runs automatically.
-
-```bash
-./venv/bin/python scripts/live_test_searxng.py --confirm-live --max-results 100
-```
-
 #### SearXNG `format=json` and 403 troubleshooting
 
 If `Test` fails with a 403 on `format=json`, enable JSON output in your SearXNG `settings.yml`:
