@@ -116,7 +116,7 @@ You're connecting to machines you don't control. A few baseline precautions befo
 The main window. From here you can:
 
 - Launch discovery from one **▶ Start Scan** button - selected providers run one at a time (`Reddit` → `SearXNG` → `Shodan`), and Shodan queues selected SMB/FTP/HTTP protocols in sequence
-- Access [Accessories](#accessories) 
+- Access [Accessories](#accessories)
 - Open the Server List Browser to work with hosts you've found
 - Manage your database (import, export, merge, maintenance)
 - Edit configuration
