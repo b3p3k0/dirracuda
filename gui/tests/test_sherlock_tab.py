@@ -1055,6 +1055,39 @@ def test_category_combobox_lists_staged_categories(tk_root):
     assert "Credentials" in captured["values"]
 
 
+def test_pattern_dialog_grabs_after_fields_are_built(tk_root, monkeypatch):
+    tk_root.deiconify()
+    tk_root.update()
+    tab = SherlockTab(tk_root, {})
+    observed = {}
+    original_grab_set = tk.Misc.grab_set
+
+    def guarded_grab_set(widget):
+        widgets = _all_widgets(widget)
+        observed["entries"] = sum(isinstance(w, tk.Entry) for w in widgets)
+        observed["comboboxes"] = sum(isinstance(w, ttk.Combobox) for w in widgets)
+        if observed["entries"] < 2 or observed["comboboxes"] < 3:
+            raise tk.TclError("grab failed before dialog fields were built")
+        return original_grab_set(widget)
+
+    def when_open():
+        for child in tk_root.winfo_children():
+            if isinstance(child, tk.Toplevel) and child.winfo_exists():
+                child.destroy()
+                break
+
+    monkeypatch.setattr(tk.Misc, "grab_set", guarded_grab_set)
+    try:
+        tk_root.after(50, when_open)
+        result = tab._open_pattern_dialog(prefill=_seed_pattern())
+    finally:
+        tk_root.withdraw()
+
+    assert result is None
+    assert observed["entries"] >= 2
+    assert observed["comboboxes"] >= 3
+
+
 def test_category_combobox_existing_selection_saved(tk_root):
     tab = SherlockTab(tk_root, {})
     tab._patterns = list(default_settings().patterns)
@@ -1256,6 +1289,7 @@ def test_double_click_custom_edits_in_place(monkeypatch):
     tab._patterns = [custom]
     tab._tree.identify_row.return_value = "custom_1"
     tab._tree.selection.return_value = ("custom_1",)
+    tab._tree.after_idle.side_effect = lambda cb: cb()
     monkeypatch.setattr(
         tab, "_open_pattern_dialog",
         lambda existing=None: _dialog_result(label="New", pattern="*new*"),
@@ -1278,6 +1312,7 @@ def test_double_click_builtin_creates_copy(monkeypatch):
     before = len(tab._patterns)
     tab._tree.identify_row.return_value = builtin.key
     tab._tree.selection.return_value = (builtin.key,)
+    tab._tree.after_idle.side_effect = lambda cb: cb()
     monkeypatch.setattr(
         tab, "_open_pattern_dialog",
         lambda existing=None, prefill=None: _dialog_result(

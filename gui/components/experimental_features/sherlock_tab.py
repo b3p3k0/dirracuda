@@ -86,6 +86,16 @@ def _with_enabled(pattern: SherlockPattern, enabled: bool) -> SherlockPattern:
     return dataclasses.replace(pattern, enabled=enabled)
 
 
+def _grab_when_viewable(dialog: tk.Toplevel, parent: tk.Misc) -> None:
+    """Apply a modal grab only after Tk has mapped the dialog window."""
+    dialog.update_idletasks()
+    dialog.update()
+    if not dialog.winfo_exists():
+        return
+    dialog.grab_set()
+    ensure_dialog_focus(dialog, parent)
+
+
 class SherlockTab:
     """Content widget for the Sherlock experimental feature tab."""
 
@@ -570,6 +580,10 @@ class SherlockTab:
         Selects the clicked row first, then routes through _on_edit so the C15
         built-in lifecycle holds (built-ins edit-as-copy, customs edit in place).
         A double-click on empty space changes nothing.
+
+        The edit is deferred with after_idle so dialog creation runs after this
+        click event finishes; the Add/Edit dialog also waits until it is
+        viewable before taking a modal grab.
         """
         tree = self._tree
         if tree is None:
@@ -578,7 +592,7 @@ class SherlockTab:
         if not row:
             return "break"
         tree.selection_set(row)
-        self._on_edit()
+        tree.after_idle(self._on_edit)
         return "break"
 
     def _set_status(self, text: str) -> None:
@@ -758,7 +772,6 @@ class SherlockTab:
         dialog.title("Edit Pattern" if existing is not None else "Add Pattern")
         dialog.resizable(False, False)
         dialog.transient(parent)
-        dialog.grab_set()
         self._theme.apply_to_widget(dialog, "main_window")
 
         outer = tk.Frame(dialog, padx=14, pady=12)
@@ -864,7 +877,7 @@ class SherlockTab:
 
         outer.grid_columnconfigure(1, weight=1)
         dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
-        ensure_dialog_focus(dialog, parent)
+        _grab_when_viewable(dialog, parent)
         dialog.wait_window()
 
         # Restore the Pattern Manager's modality: the child grab_set() stole the
