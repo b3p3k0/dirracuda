@@ -21,14 +21,17 @@ wire format are unchanged.
 from __future__ import annotations
 
 import dataclasses
+import json
 import uuid
 import tkinter as tk
-from tkinter import ttk
+from datetime import datetime
+from tkinter import ttk, filedialog
 from typing import Any, Dict, List, Optional, Tuple
 
 from gui.utils import safe_messagebox
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.style import get_theme
+from shared.sherlock.export import build_export_payload
 from shared.sherlock import (
     COLOR_TAG_NONE,
     SHERLOCK_SETTINGS_KEY,
@@ -570,8 +573,8 @@ class SherlockTab:
         dialog.title("Sherlock Patterns")
         dialog.transient(parent)
         self._theme.apply_to_widget(dialog, "main_window")
-        dialog.geometry("1000x600")
-        dialog.minsize(990, 560)
+        dialog.geometry("1100x600")
+        dialog.minsize(1080, 560)
 
         outer = tk.Frame(dialog, padx=12, pady=10)
         self._theme.apply_to_widget(outer, "main_window")
@@ -611,6 +614,10 @@ class SherlockTab:
         )
         self._theme.apply_to_widget(restore_btn, "button_secondary")
         restore_btn.pack(side=tk.LEFT, padx=(0, 6))
+
+        export_btn = tk.Button(action_row, text="Export", command=self._on_export)
+        self._theme.apply_to_widget(export_btn, "button_secondary")
+        export_btn.pack(side=tk.LEFT, padx=(0, 6))
 
         savec_btn = tk.Button(
             action_row, text="Save & Close", command=self._save_and_close_manager
@@ -851,6 +858,42 @@ class SherlockTab:
         self._pattern_manager_dirty = True
         self._refresh_table()
         self._set_status("Built-ins restored.")
+
+    def _on_export(self) -> None:
+        """Write the full staged pattern list to a user-chosen JSON file.
+
+        Read-only: never mutates _patterns, filter vars, selection, the dirty
+        flag, settings, or persistence. Cancel is silent; write errors report via
+        safe_messagebox; success only updates the status line (manager stays open).
+        """
+        now = datetime.now()
+        default_name = f"sherlock_patterns_{now.strftime('%Y%m%d_%H%M%S')}.json"
+        path = filedialog.asksaveasfilename(
+            parent=self._pattern_manager,
+            title="Export Sherlock Patterns",
+            defaultextension=".json",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+            initialfile=default_name,
+        )
+        if not path:
+            return
+        payload = build_export_payload(
+            self._patterns, exported_at=now.isoformat(timespec="seconds")
+        )
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(payload, fh, indent=2, ensure_ascii=False)
+                fh.write("\n")
+        except OSError as exc:
+            safe_messagebox.showerror(
+                "Export Failed",
+                "Could not write pattern export:\n{0}".format(exc),
+                parent=self._active_dialog_parent(),
+            )
+            return
+        self._set_status(
+            "Exported {0} patterns to {1}.".format(payload["count"], path)
+        )
 
     def _on_add(self) -> None:
         result = self._open_pattern_dialog()

@@ -1604,3 +1604,91 @@ def test_enable_disable_under_active_filter_only_touches_visible_selection(tk_ro
     by_key = {p.key: p for p in captured["after"]}
     assert by_key["custom_a"].enabled is False   # visible selection flipped
     assert by_key["custom_b"] == b               # filtered-out row unchanged
+
+
+# ---------------------------------------------------------------------------
+# Export (C19)
+# ---------------------------------------------------------------------------
+
+def _seed_export_tab():
+    tab = _bare_tab()
+    tab._patterns = list(default_settings().patterns)
+    tab._pattern_manager = MagicMock()
+    return tab
+
+
+def test_export_writes_full_catalog_json(monkeypatch, tmp_path):
+    tab = _seed_export_tab()
+    out = tmp_path / "patterns.json"
+    monkeypatch.setattr(
+        mod.filedialog, "asksaveasfilename", lambda **kw: str(out)
+    )
+    before = list(tab._patterns)
+
+    tab._on_export()
+
+    import json as _json
+
+    text = out.read_text(encoding="utf-8")
+    assert text.endswith("\n")
+    data = _json.loads(text)
+    assert data["schema"] == "dirracuda.sherlock.patterns"
+    assert data["schema_version"] == 1
+    assert data["count"] == len(before)
+    assert len(data["patterns"]) == len(before)
+    # Read-only: staged list and manager untouched.
+    assert tab._patterns == before
+    assert tab._pattern_manager_dirty is False
+    assert tab._pattern_manager is not None
+    assert tab._status_label.configure.called
+
+
+def test_export_ignores_filters_and_writes_all_rows(monkeypatch, tmp_path):
+    tab = _seed_export_tab()
+    # Filter vars that would hide everything are irrelevant to export.
+    tab._filter_search_var = _DummyVar("zzz-no-match")
+    tab._filter_category_var = _DummyVar("Nonexistent")
+    out = tmp_path / "all.json"
+    monkeypatch.setattr(
+        mod.filedialog, "asksaveasfilename", lambda **kw: str(out)
+    )
+
+    tab._on_export()
+
+    import json as _json
+
+    data = _json.loads(out.read_text(encoding="utf-8"))
+    assert data["count"] == len(tab._patterns)
+
+
+def test_export_cancel_writes_nothing(monkeypatch, tmp_path):
+    tab = _seed_export_tab()
+    fake_mb = MagicMock()
+    monkeypatch.setattr(mod, "safe_messagebox", fake_mb)
+    monkeypatch.setattr(mod.filedialog, "asksaveasfilename", lambda **kw: "")
+    before = list(tab._patterns)
+
+    tab._on_export()
+
+    assert tab._patterns == before
+    assert tab._pattern_manager_dirty is False
+    fake_mb.showerror.assert_not_called()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_export_write_error_reports_and_does_not_mutate(monkeypatch, tmp_path):
+    tab = _seed_export_tab()
+    fake_mb = MagicMock()
+    monkeypatch.setattr(mod, "safe_messagebox", fake_mb)
+    # Path under a directory that does not exist -> open() raises OSError.
+    bad = tmp_path / "missing_dir" / "out.json"
+    monkeypatch.setattr(
+        mod.filedialog, "asksaveasfilename", lambda **kw: str(bad)
+    )
+    before = list(tab._patterns)
+
+    tab._on_export()
+
+    fake_mb.showerror.assert_called_once()
+    assert tab._patterns == before
+    assert not bad.exists()

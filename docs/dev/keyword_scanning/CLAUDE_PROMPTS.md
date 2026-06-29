@@ -754,3 +754,59 @@ geometry tests, `pytest -k sherlock`, GUI guardrails, `git diff --check`, and a
 runtime file-size audit for touched production files. Report exact commands and
 results. Do not commit.
 ```
+
+## C19 Planning Prompt
+
+```text
+Plan C19 only: Sherlock Pattern Manager JSON export.
+
+For this reply, produce a plan and stop. After RA/HI acceptance, execute the
+approved plan in this worktree before sending the completion report.
+
+Workflow reminder: Codex is PA/RA, Claude is DA. Do not commit. The RA commits
+only after HI accepts completed work.
+
+Source anchors: Tk `filedialog.asksaveasfilename` provides the native Save As
+dialog, and Python `json` writes standard JSON. Official docs:
+https://docs.python.org/3/library/dialog.html
+https://docs.python.org/3/library/json.html
+
+Important file-size constraint: `gui/components/experimental_features/sherlock_tab.py`
+is currently near the C15-C20 extraction warning line (about 1145 lines after
+C18). If the planned implementation would push this runtime file over 1200
+lines, plan a small helper module instead of adding everything inline. Keep the
+tab as thin UI wiring where practical.
+
+The plan must cover:
+- adding an `Export` button to the Pattern Manager action row
+- exporting the full current staged pattern list (`self._patterns`), not only
+  filtered/visible rows
+- using `tkinter.filedialog.asksaveasfilename` with the Pattern Manager as
+  parent, JSON filetypes, `.json` default extension, and a timestamped default
+  filename such as `sherlock_patterns_YYYYMMDD_HHMMSS.json`
+- writing UTF-8 JSON with deterministic, readable formatting
+- payload shape with metadata plus complete pattern rows:
+  - metadata: format/schema name, schema version, exported timestamp, and count
+  - rows: key, type (`builtin`/`custom`), enabled, severity, category, label,
+    pattern, and color_tag
+- preserving staged data exactly: export must not mutate `self._patterns`, filter
+  vars, selection, dirty flag, settings, or persistence
+- cancel/no-path behavior: no file written, no mutation, no error dialog
+- write-error behavior: no mutation; report through `gui.utils.safe_messagebox`
+  with the manager as parent when available
+- success behavior: concise status message is okay; do not auto-close the manager
+- preserving C15 built-in lifecycle, C16 category combobox, C16.5 Save & Close,
+  C17 multi-select/double-click, and C18 filtering
+- Xvfb/default-size visual QA showing the filter row, table, Export button, and
+  full action row without clipping; adjust layout/geometry if needed
+
+Do not implement import, matcher changes, DB schema/migrations, risk-display
+changes, Web UI changes, scan-flow changes, settings wire-format changes, or
+new pattern fields in this card.
+
+Run Sherlock tab tests, targeted export/helper tests, Accessories geometry tests,
+`pytest -k sherlock`, GUI guardrails, `git diff --check`, and a runtime file-size
+audit for touched production files. Review README and technical reference and
+update only if export behavior makes them incomplete or misleading. Report exact
+commands and results. Do not commit.
+```

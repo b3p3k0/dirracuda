@@ -235,6 +235,10 @@ Exit criteria:
 
 Add JSON export for the full staged pattern list from the pattern manager.
 
+Status: complete. C19 added a read-only Export button that writes the full
+staged pattern catalog to UTF-8 JSON with a small metadata header and one row
+per pattern; no import path was added.
+
 Exit criteria:
 - Export writes metadata plus complete pattern rows.
 - Export uses native Save As and handles cancel/error safely.
