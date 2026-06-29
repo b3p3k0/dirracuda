@@ -389,6 +389,31 @@ Validation:
 - Xvfb/default-size Add/Edit screenshot.
 - `git diff --check` and file-size audit.
 
+## C16.5 - Pattern Manager Save And Close
+
+Goal: Let users persist pattern-manager staged edits from inside the manager
+dialog without hunting for the parent Sherlock tab's Save button.
+
+Deliverables:
+- Add `Save & Close` between `Restore Built-ins` and `Close`.
+- `Save & Close` validates and persists the full Sherlock settings shard through
+  the existing Sherlock tab save path, then closes the pattern manager only when
+  save succeeds.
+- Existing `Close` closes without saving, but warns when there are unsaved
+  pattern-manager changes and lets the user cancel close.
+- Unsaved-change tracking covers Add/Edit/Copy/Delete/Enable-Disable/Restore
+  Built-ins in the pattern manager; parent-tab color/option changes can still
+  use the parent Save button.
+- No new persistence format or settings schema changes.
+
+Validation:
+- GUI tests for successful Save & Close, save failure staying open, Close with
+  unsaved changes warning/cancel, Close with no changes, and dirty-state marking
+  for pattern actions.
+- Xvfb/default-size manager screenshot showing `Save & Close` between Restore
+  and Close.
+- `pytest -k sherlock`, GUI guardrails, `git diff --check`, and file-size audit.
+
 ## C17 - Multi-Select And Double-Click
 
 Goal: Make large pattern-list maintenance faster with standard selection

@@ -115,6 +115,9 @@ class SherlockTab:
         # Pattern table + manager dialog are built lazily on demand.
         self._tree: Optional[ttk.Treeview] = None
         self._pattern_manager: Optional[tk.Toplevel] = None
+        # True when pattern-manager edits have not been persisted to disk;
+        # cleared only by a successful save (never auto-reset on manager open).
+        self._pattern_manager_dirty: bool = False
         self._build(self.frame)
 
     # ------------------------------------------------------------------
@@ -172,14 +175,19 @@ class SherlockTab:
                 return None
         return user_colors
 
-    def _on_save(self) -> None:
-        """Validate and persist the current settings."""
+    def _on_save(self) -> bool:
+        """Validate and persist the current settings. Return True on success.
+
+        A successful write clears _pattern_manager_dirty (the same shard carries
+        self._patterns), so both the main-tab Save and the manager's Save & Close
+        mark pattern edits as persisted.
+        """
         colors = self._collect_colors()
         if colors is None:
-            return
+            return False
         user_colors = self._collect_user_colors()
         if user_colors is None:
-            return
+            return False
 
         settings = SherlockSettings(
             ignore_case=bool(self._ignore_case_var.get()),
@@ -193,16 +201,18 @@ class SherlockTab:
         sm = self._context.get("settings_manager")
         if sm is None:
             self._set_status("Settings unavailable; not saved.")
-            return
+            return False
         try:
             ok = sm.set_setting(SHERLOCK_SETTINGS_KEY, data)
         except Exception as exc:  # pragma: no cover - defensive
             self._set_status("Save failed: {0}".format(exc))
-            return
+            return False
         if ok:
+            self._pattern_manager_dirty = False
             self._set_status("Saved.")
-        else:
-            self._set_status("Save failed; settings were not written.")
+            return True
+        self._set_status("Save failed; settings were not written.")
+        return False
 
     # ------------------------------------------------------------------
     # UI construction
@@ -409,19 +419,14 @@ class SherlockTab:
         dialog.title("Sherlock Patterns")
         dialog.transient(parent)
         self._theme.apply_to_widget(dialog, "main_window")
-        dialog.geometry("700x560")
-        dialog.minsize(680, 540)
+        dialog.geometry("780x560")
+        dialog.minsize(760, 540)
 
         outer = tk.Frame(dialog, padx=12, pady=10)
         self._theme.apply_to_widget(outer, "main_window")
         outer.pack(fill=tk.BOTH, expand=True)
 
         self._build_table(outer)
-
-        def _close() -> None:
-            self._pattern_manager = None
-            self._tree = None
-            dialog.destroy()
 
         action_row = tk.Frame(outer)
         self._theme.apply_to_widget(action_row, "main_window")
@@ -455,7 +460,13 @@ class SherlockTab:
         self._theme.apply_to_widget(restore_btn, "button_secondary")
         restore_btn.pack(side=tk.LEFT, padx=(0, 6))
 
-        close_btn = tk.Button(action_row, text="Close", command=_close)
+        savec_btn = tk.Button(
+            action_row, text="Save & Close", command=self._save_and_close_manager
+        )
+        self._theme.apply_to_widget(savec_btn, "button_primary")
+        savec_btn.pack(side=tk.LEFT, padx=(0, 6))
+
+        close_btn = tk.Button(action_row, text="Close", command=self._close_manager)
         self._theme.apply_to_widget(close_btn, "button_secondary")
         close_btn.pack(side=tk.LEFT, padx=(0, 6))
 
@@ -466,10 +477,35 @@ class SherlockTab:
         except Exception:
             pass
 
-        dialog.protocol("WM_DELETE_WINDOW", _close)
+        dialog.protocol("WM_DELETE_WINDOW", self._close_manager)
         dialog.grab_set()
         ensure_dialog_focus(dialog, parent)
         dialog.wait_window()
+
+    def _teardown_manager(self) -> None:
+        """Clear manager references and destroy the dialog."""
+        dialog = self._pattern_manager
+        self._pattern_manager = None
+        self._tree = None
+        if dialog is not None:
+            dialog.destroy()
+
+    def _close_manager(self) -> None:
+        """Close button / window close: warn first if there are staged edits."""
+        if self._pattern_manager_dirty:
+            confirm = safe_messagebox.askyesno(
+                "Unsaved Pattern Changes",
+                "You have unsaved pattern changes. Close without saving?",
+                parent=self._pattern_manager,
+            )
+            if not confirm:
+                return
+        self._teardown_manager()
+
+    def _save_and_close_manager(self) -> None:
+        """Run the standard save/validation path; close only when it succeeds."""
+        if self._on_save():  # success clears _pattern_manager_dirty
+            self._teardown_manager()
 
     # ------------------------------------------------------------------
     # Table rendering / selection
@@ -535,6 +571,7 @@ class SherlockTab:
             self._set_status("Select a pattern to enable or disable.")
             return
         self._replace_pattern(pattern.key, _with_enabled(pattern, not pattern.enabled))
+        self._pattern_manager_dirty = True
         self._refresh_table()
         self._tree.selection_set(pattern.key)
 
@@ -544,12 +581,14 @@ class SherlockTab:
             self._set_status("Select a pattern to delete.")
             return
         self._patterns = [p for p in self._patterns if p.key != pattern.key]
+        self._pattern_manager_dirty = True
         self._refresh_table()
 
     def _on_restore_builtins(self) -> None:
         """Re-enable all built-ins (clears any disabled state); customs untouched."""
         customs = [p for p in self._patterns if not p.builtin]
         self._patterns = builtin_patterns() + customs
+        self._pattern_manager_dirty = True
         self._refresh_table()
         self._set_status("Built-ins restored.")
 
@@ -585,6 +624,7 @@ class SherlockTab:
             color_tag=result.get("color_tag", COLOR_TAG_NONE),
         )
         self._patterns.append(pattern)
+        self._pattern_manager_dirty = True
         self._refresh_table()
         self._tree.selection_set(pattern.key)
 
@@ -610,6 +650,7 @@ class SherlockTab:
             color_tag=result.get("color_tag", COLOR_TAG_NONE),
         )
         self._replace_pattern(pattern.key, updated)
+        self._pattern_manager_dirty = True
         self._refresh_table()
         self._tree.selection_set(pattern.key)
 

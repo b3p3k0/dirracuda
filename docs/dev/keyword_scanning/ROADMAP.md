@@ -192,6 +192,17 @@ Exit criteria:
 - New typed categories are accepted.
 - Blank category saves as `Custom`.
 
+## C16.5 - Pattern Manager Save And Close
+
+Add an in-dialog `Save & Close` action and unsaved-change warning for closing
+the pattern manager without saving.
+
+Exit criteria:
+- `Save & Close` persists through the existing Sherlock settings save path and
+  closes only after a successful save.
+- `Close` warns when pattern-manager changes are unsaved and can be cancelled.
+- No settings schema or non-pattern-manager behavior changes.
+
 ## C17 - Multi-Select And Double-Click
 
 Add standard Ctrl/Shift multi-select and row double-click editing to the pattern

@@ -68,6 +68,7 @@ def _bare_tab(context=None) -> SherlockTab:
     tab._status_label = MagicMock()
     tab._refresh_table = MagicMock()
     tab._pattern_manager = None
+    tab._pattern_manager_dirty = False
     tab._user_color_vars = {key: _DummyVar("") for key in USER_COLOR_KEYS}
     tab._neutral_bg = "#f5f5f5"
     tab._severity_swatches = {sev: MagicMock() for sev in Severity}
@@ -618,6 +619,224 @@ def test_restore_builtins_readds_deleted_and_keeps_customs():
 
 
 # ---------------------------------------------------------------------------
+# C16.5: Pattern Manager dirty tracking + Save & Close / Close warning
+# ---------------------------------------------------------------------------
+
+
+def _dialog_result(**over):
+    base = {
+        "label": "Acme", "category": "Custom", "pattern": "*acme*",
+        "severity": Severity.HIGH, "enabled": True, "color_tag": "none",
+    }
+    base.update(over)
+    return base
+
+
+def test_add_marks_dirty(monkeypatch):
+    tab = _bare_tab()
+    tab._patterns = list(default_settings().patterns)
+    monkeypatch.setattr(tab, "_open_pattern_dialog", lambda existing=None: _dialog_result())
+    tab._on_add()
+    assert tab._pattern_manager_dirty is True
+
+
+def test_add_cancelled_leaves_clean(monkeypatch):
+    tab = _bare_tab()
+    tab._patterns = list(default_settings().patterns)
+    monkeypatch.setattr(tab, "_open_pattern_dialog", lambda existing=None: None)
+    tab._on_add()
+    assert tab._pattern_manager_dirty is False
+
+
+def test_edit_custom_marks_dirty(monkeypatch):
+    tab = _bare_tab()
+    custom = SherlockPattern(
+        key="custom_1", category="Custom", label="Old", pattern="*old*",
+        severity=Severity.LOW, enabled=True, builtin=False,
+    )
+    tab._patterns = [custom]
+    tab._tree.selection.return_value = ("custom_1",)
+    monkeypatch.setattr(
+        tab, "_open_pattern_dialog",
+        lambda existing=None: _dialog_result(label="New", pattern="*new*"),
+    )
+    tab._on_edit()
+    assert tab._pattern_manager_dirty is True
+
+
+def test_copy_marks_dirty(monkeypatch):
+    tab = _bare_tab()
+    tab._patterns = list(default_settings().patterns)
+    tab._tree.selection.return_value = (tab._patterns[0].key,)
+    monkeypatch.setattr(
+        tab, "_open_pattern_dialog",
+        lambda existing=None, prefill=None: _dialog_result(),
+    )
+    tab._on_copy()
+    assert tab._pattern_manager_dirty is True
+
+
+def test_delete_marks_dirty():
+    tab = _bare_tab()
+    custom = SherlockPattern(
+        key="custom_1", category="Custom", label="x", pattern="*x*",
+        severity=Severity.LOW, enabled=True, builtin=False,
+    )
+    tab._patterns = [custom]
+    tab._tree.selection.return_value = ("custom_1",)
+    tab._on_delete()
+    assert tab._pattern_manager_dirty is True
+
+
+def test_delete_without_selection_leaves_clean():
+    tab = _bare_tab()
+    tab._patterns = list(default_settings().patterns)
+    tab._tree.selection.return_value = ()
+    tab._on_delete()
+    assert tab._pattern_manager_dirty is False
+
+
+def test_toggle_marks_dirty():
+    tab = _bare_tab()
+    tab._patterns = list(default_settings().patterns)
+    tab._tree.selection.return_value = (tab._patterns[0].key,)
+    tab._on_toggle()
+    assert tab._pattern_manager_dirty is True
+
+
+def test_restore_builtins_marks_dirty():
+    tab = _bare_tab()
+    tab._patterns = list(default_settings().patterns)
+    tab._on_restore_builtins()
+    assert tab._pattern_manager_dirty is True
+
+
+def test_on_save_returns_true_and_clears_dirty(monkeypatch):
+    monkeypatch.setattr(mod, "safe_messagebox", MagicMock())
+    sm = MagicMock()
+    sm.set_setting.return_value = True
+    tab = _bare_tab()
+    _wire_save(tab, sm)
+    tab._pattern_manager_dirty = True
+
+    assert tab._on_save() is True
+    assert tab._pattern_manager_dirty is False
+
+
+def test_on_save_invalid_color_returns_false_keeps_dirty(monkeypatch):
+    monkeypatch.setattr(mod, "safe_messagebox", MagicMock())
+    sm = MagicMock()
+    tab = _bare_tab()
+    _wire_save(tab, sm, colors=_color_vars(high="not-a-color"))
+    tab._pattern_manager_dirty = True
+
+    assert tab._on_save() is False
+    assert tab._pattern_manager_dirty is True
+    sm.set_setting.assert_not_called()
+
+
+def test_on_save_set_setting_false_returns_false_keeps_dirty(monkeypatch):
+    monkeypatch.setattr(mod, "safe_messagebox", MagicMock())
+    sm = MagicMock()
+    sm.set_setting.return_value = False
+    tab = _bare_tab()
+    _wire_save(tab, sm)
+    tab._pattern_manager_dirty = True
+
+    assert tab._on_save() is False
+    assert tab._pattern_manager_dirty is True
+
+
+def test_on_save_without_manager_returns_false(monkeypatch):
+    monkeypatch.setattr(mod, "safe_messagebox", MagicMock())
+    tab = _bare_tab()
+    _wire_save(tab, None)
+    assert tab._on_save() is False
+
+
+def test_close_manager_clean_closes_without_prompt(monkeypatch):
+    fake_mb = MagicMock()
+    monkeypatch.setattr(mod, "safe_messagebox", fake_mb)
+    tab = _bare_tab()
+    dialog = MagicMock()
+    tab._pattern_manager = dialog
+    tab._pattern_manager_dirty = False
+
+    tab._close_manager()
+
+    fake_mb.askyesno.assert_not_called()
+    dialog.destroy.assert_called_once()
+    assert tab._pattern_manager is None
+
+
+def test_close_manager_dirty_cancel_stays_open(monkeypatch):
+    fake_mb = MagicMock()
+    fake_mb.askyesno.return_value = False
+    monkeypatch.setattr(mod, "safe_messagebox", fake_mb)
+    tab = _bare_tab()
+    dialog = MagicMock()
+    tab._pattern_manager = dialog
+    tab._pattern_manager_dirty = True
+
+    tab._close_manager()
+
+    fake_mb.askyesno.assert_called_once()
+    dialog.destroy.assert_not_called()
+    assert tab._pattern_manager is dialog
+
+
+def test_close_manager_dirty_confirm_closes_but_flag_persists(monkeypatch):
+    # Reviewer's hole: a confirmed unsaved close must NOT clear the dirty flag,
+    # so reopening the manager and closing again warns until a successful save.
+    fake_mb = MagicMock()
+    fake_mb.askyesno.return_value = True
+    monkeypatch.setattr(mod, "safe_messagebox", fake_mb)
+    tab = _bare_tab()
+    dialog = MagicMock()
+    tab._pattern_manager = dialog
+    tab._pattern_manager_dirty = True
+
+    tab._close_manager()
+
+    dialog.destroy.assert_called_once()
+    assert tab._pattern_manager is None
+    assert tab._pattern_manager_dirty is True
+
+    # Simulate reopening the manager: the next close still prompts.
+    dialog2 = MagicMock()
+    tab._pattern_manager = dialog2
+    fake_mb.askyesno.reset_mock()
+    fake_mb.askyesno.return_value = False
+    tab._close_manager()
+    fake_mb.askyesno.assert_called_once()
+    dialog2.destroy.assert_not_called()
+
+
+def test_save_and_close_success_tears_down(monkeypatch):
+    tab = _bare_tab()
+    dialog = MagicMock()
+    tab._pattern_manager = dialog
+    monkeypatch.setattr(tab, "_on_save", lambda: True)
+
+    tab._save_and_close_manager()
+
+    dialog.destroy.assert_called_once()
+    assert tab._pattern_manager is None
+
+
+def test_save_and_close_failure_stays_open(monkeypatch):
+    tab = _bare_tab()
+    dialog = MagicMock()
+    tab._pattern_manager = dialog
+    monkeypatch.setattr(tab, "_on_save", lambda: False)
+
+    tab._save_and_close_manager()
+
+    dialog.destroy.assert_not_called()
+    assert tab._pattern_manager is dialog
+
+
+# ---------------------------------------------------------------------------
 # Real-Tk: pattern manager structure + nested Add/Edit grab restoration
 # ---------------------------------------------------------------------------
 
@@ -683,6 +902,24 @@ def test_pattern_manager_structure_and_nested_grab(tk_root):
     # Add dialog was transient to the manager, not the main window.
     assert captured["add_transient"] == captured["mgr_path"]
     assert captured["grab_after"] is not None
+
+
+def test_pattern_manager_save_and_close_button_order(tk_root):
+    tab = SherlockTab(tk_root, {})
+    captured = {}
+
+    def when_open():
+        mgr = tab._pattern_manager
+        captured["buttons"] = _button_texts(mgr)
+        mgr.destroy()  # ends the manager wait_window
+
+    tk_root.after(50, when_open)
+    tab._open_pattern_manager()  # blocks until the manager closes
+
+    texts = captured["buttons"]
+    assert "Save & Close" in texts
+    # Save & Close sits between Restore Built-ins and Close.
+    assert texts.index("Restore Built-ins") < texts.index("Save & Close") < texts.index("Close")
 
 
 # ---------------------------------------------------------------------------

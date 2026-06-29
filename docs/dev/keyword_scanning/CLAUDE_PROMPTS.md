@@ -583,3 +583,55 @@ Run the approved targeted tests, Xvfb/default-size visual check, guardrails,
 `git diff --check`, and file-size audit. Report PASS/FAIL with exact commands.
 Do not commit.
 ```
+
+## C16.5 Planning Prompt
+
+```text
+Plan C16.5 only: Sherlock Pattern Manager Save & Close.
+
+For this reply, produce a plan and stop. After RA/HI acceptance, execute the
+approved plan in this worktree before sending the completion report.
+
+Workflow reminder: Codex is PA/RA, Claude is DA. Do not commit. The RA commits
+only after HI accepts completed work.
+
+The plan must cover:
+- adding a `Save & Close` button in the Pattern Manager action row between
+  `Restore Built-ins` and `Close`
+- `Save & Close` using the existing Sherlock tab save/validation path so the
+  same settings shard is written and existing color/option/pattern validation is
+  preserved
+- closing the Pattern Manager only when save succeeds
+- existing `Close` still closing without saving when there are no unsaved
+  pattern-manager changes
+- existing `Close` warning when there are unsaved pattern-manager changes, with
+  a cancel path that leaves the manager open
+- unsaved-change tracking for Pattern Manager actions: Add, Edit, Copy, Delete,
+  Enable/Disable, and Restore Built-ins
+- dirty state clearing after successful `Save & Close`
+- preserving existing parent-tab Save behavior for the main Sherlock tab
+- Xvfb/default-size visual QA showing `Save & Close` between Restore and Close
+
+Do not implement multi-select, double-click, filters, export, matcher changes,
+DB schema/migrations, risk-display changes, Web UI changes, or scan-flow
+changes in this card.
+
+Run Sherlock tab tests, relevant settings/serialization tests if touched,
+Accessories geometry tests, `pytest -k sherlock`, GUI guardrails,
+`git diff --check`, and a runtime file-size audit for touched production files.
+Report exact commands and results. Do not commit.
+```
+
+## C16.5 Implementation Prompt
+
+```text
+Implement approved C16.5 only.
+
+Add Pattern Manager `Save & Close` plus unsaved-close warning per the accepted
+C16.5 plan. Keep this limited to pattern-manager save/close behavior and
+preserve C15/C16 pattern lifecycle/category behavior.
+
+Run the approved targeted tests, Xvfb/default-size visual check, guardrails,
+`git diff --check`, and file-size audit. Report PASS/FAIL with exact commands.
+Do not commit.
+```
