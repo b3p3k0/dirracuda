@@ -544,34 +544,29 @@ Key Preview format: keys longer than 8 characters show as `first4 + asterisks`; 
 
 ### Sherlock
 
-Sherlock is a display-only exposure triage layer for risky names found in
-existing probe snapshots. It never downloads files, reads file contents,
-authenticates, or probes on its own.
+Sherlock highlights risky-looking names already captured in probe snapshots. It
+matches share, folder, and file names against keyword/wildcard patterns, then
+colors the hit by severity or by one of your custom User colors. It never
+downloads files, reads file contents, authenticates, or probes on its own.
 
-Current controls:
-- **Ignore case** and **Run after probe** preferences
-- High/Med/Low severity colors plus optional User1/User2/User3 tag colors, each edited by clicking a color swatch that opens the native color chooser; severity colors are required, while empty User colors read **None** and have a **Clear** control. Values are stored as `#rrggbb`.
-- A **Manage Patterns...** modal holding the scrollable built-in/custom keyword/wildcard pattern table; custom patterns can carry one User color tag
-- Add, edit, copy, enable/disable, and delete patterns (built-in or custom), and restore built-ins; built-ins stay code-defined, so editing or copying a built-in saves a new custom pattern and `Restore Built-ins` re-adds any deleted built-ins. The pattern table supports Ctrl/Shift multi-select for batch enable/disable and delete, and double-click opens edit for the clicked row. Pattern-manager edits stay staged until either **Save & Close** in the manager or **Save** on the tab persists settings. An **Export** button writes the full staged pattern catalog to a chosen UTF-8 JSON file (`sherlock_patterns_YYYYMMDD_HHMMSS.json`) without altering staged edits.
-- A filter row above the table with a text **Search** box and **Category**, **Severity**, **User Tag**, and **Enabled** facets (plus **Clear**) narrows which rows are shown; `All` disables a facet. Filtering only changes the displayed rows — it never edits staged patterns — and batch/edit actions act only on the visible selection.
+Use Accessories -> Sherlock to:
+- turn matching on after successful probes
+- choose whether matching ignores case
+- set High/Med/Low colors and optional User1/User2/User3 colors
+- manage built-in and custom patterns, including search/filter, copy,
+  multi-select, restore built-ins, and JSON export
 
-Settings are persisted under `~/.dirracuda/conf.d/experimental/sherlock.json`.
-The Start Scan dialog also mirrors the global **Sherlock: run after probe**
-setting and opens the same Sherlock settings surface from its runtime controls.
-When enabled, successful probe runs automatically re-check the fresh snapshot
-after `latest_snapshot_id` is saved; probe status, ransomware indicators, and
-extraction state are unchanged if Sherlock is disabled or fails.
-The Server List includes an alert-only `Risk` column plus `Scan Sherlock`
-toolbar/context-menu actions for selected hosts. Fresh findings show `HIGH n`,
-`MED n`, or `LOW n`; the row tint uses the matched pattern's User tag color when
-one is configured, otherwise the severity color (the risk text stays
-HIGH/MED/LOW). No-hit, stale, unscanned, and no-snapshot rows stay blank. When
-`Run after probe` is on, probe batch summaries also gain a Risk column and row
-tint for any host whose fresh post-probe scan produced findings, using the same
-user-tag-then-severity tint and CSV export. Desktop detail popups show the
-latest Sherlock summary and capped hit details with explanatory stale/zero-hit
-states. Web UI Results mirrors persisted findings with read-only Risk badges
-and detail blocks; Web UI does not edit patterns or trigger Sherlock scans.
+When Sherlock finds matches, the Server List `Risk` column shows `HIGH n`,
+`MED n`, or `LOW n`; blank means there is no current finding to show. Row color
+uses the pattern's User color when one is set, otherwise the severity color.
+You can also run Sherlock manually from the Server List against selected hosts'
+latest probe snapshots.
+
+If **Run after probe** is enabled, probe summaries show the same Risk column and
+colors. Detail popups and Web UI Results show the latest saved Sherlock summary;
+the Web UI is currently read-only for Sherlock.
+
+Settings are stored at `~/.dirracuda/conf.d/experimental/sherlock.json`.
 
 ### Censys Discovery
 
@@ -579,6 +574,7 @@ Development status: **suspended**.
 
 Reason:
 - Free-tier Censys API access does not provide candidate-list query endpoints required for in-app discovery runs.
+- I'm not invested enough to upgrade my account; if someone wants to help test it dm me ;)
 
 What is retained:
 - Backend module and config contract remain in-repo for future reactivation.
