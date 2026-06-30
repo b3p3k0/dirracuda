@@ -17,7 +17,11 @@ from shared.sherlock import (
     settings_from_dict,
     settings_to_dict,
 )
-from shared.sherlock.serialize import severity_from_str, severity_to_str
+from shared.sherlock.serialize import (
+    dataclass_disabled,
+    severity_from_str,
+    severity_to_str,
+)
 
 
 def test_round_trip_defaults_is_faithful():
@@ -240,6 +244,31 @@ def test_unknown_color_tag_token_degrades_to_none():
     )
     custom = [p for p in restored.patterns if not p.builtin][0]
     assert custom.color_tag == "none"
+
+
+def test_dataclass_disabled_preserves_all_fields_including_color_tag():
+    # Regression (C25.5): disabling a pattern must flip only `enabled` and carry
+    # every other field through unchanged, including color_tag.
+    pattern = SherlockPattern(
+        key="bk",
+        category="Credentials",
+        label="Tagged builtin",
+        pattern="*secret*",
+        severity=Severity.HIGH,
+        enabled=True,
+        builtin=True,
+        color_tag="user2",
+    )
+    disabled = dataclass_disabled(pattern)
+
+    assert disabled.enabled is False
+    assert disabled.color_tag == "user2"
+    assert disabled.key == pattern.key
+    assert disabled.category == pattern.category
+    assert disabled.label == pattern.label
+    assert disabled.pattern == pattern.pattern
+    assert disabled.severity is pattern.severity
+    assert disabled.builtin is pattern.builtin
 
 
 def test_builtins_never_serialize_a_color_tag():

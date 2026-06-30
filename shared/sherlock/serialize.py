@@ -12,6 +12,7 @@ catalog.
 
 from __future__ import annotations
 
+import dataclasses
 from typing import Any, Dict, List
 
 from .model import (
@@ -205,13 +206,9 @@ def settings_from_dict(data: object) -> SherlockSettings:
 
 
 def dataclass_disabled(pattern: SherlockPattern) -> SherlockPattern:
-    """Return a copy of *pattern* with enabled=False (built-ins are frozen)."""
-    return SherlockPattern(
-        key=pattern.key,
-        category=pattern.category,
-        label=pattern.label,
-        pattern=pattern.pattern,
-        severity=pattern.severity,
-        enabled=False,
-        builtin=pattern.builtin,
-    )
+    """Return a copy of *pattern* with enabled=False (every other field preserved).
+
+    Uses dataclasses.replace so every field (including color_tag and any future
+    field) is carried through unchanged; only enabled flips to False.
+    """
+    return dataclasses.replace(pattern, enabled=False)
