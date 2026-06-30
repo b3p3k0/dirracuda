@@ -65,6 +65,11 @@ def _bare_tab(context=None) -> SherlockTab:
     tab.frame = MagicMock()
     tab._tree = MagicMock()
     tab._tree.selection.return_value = ()
+    # Left category pane is unbuilt in headless tests; refresh_category_list
+    # no-ops when _category_tree is None, so _refresh_after_mutation just drives
+    # the mocked _refresh_table.
+    tab._category_tree = None
+    tab._active_category = mod._FACET_ALL
     tab._status_label = MagicMock()
     tab._refresh_table = MagicMock()
     tab._pattern_manager = None
@@ -1194,7 +1199,10 @@ def test_pattern_table_uses_extended_selectmode():
 
 def test_selected_patterns_returns_table_order():
     tab = _bare_tab()
-    a, b, c = _custom("custom_a"), _custom("custom_b"), _custom("custom_c")
+    # Distinct labels -> three single-member value groups (iid == pattern key).
+    a = _custom("custom_a", label="A")
+    b = _custom("custom_b", label="B")
+    c = _custom("custom_c", label="C")
     tab._patterns = [a, b, c]
     # Selection reported out of table order; helper restores table order.
     tab._tree.selection.return_value = ("custom_c", "custom_a")
@@ -1211,9 +1219,10 @@ def test_selected_patterns_empty_selection():
 
 def test_toggle_batch_flips_mixed_states_individually():
     tab = _bare_tab()
-    on = _custom("custom_on", enabled=True)
-    off = _custom("custom_off", enabled=False)
-    untouched = _custom("custom_keep", enabled=True)
+    # Distinct labels keep these as three separate single-member value groups.
+    on = _custom("custom_on", enabled=True, label="On")
+    off = _custom("custom_off", enabled=False, label="Off")
+    untouched = _custom("custom_keep", enabled=True, label="Keep")
     tab._patterns = [on, off, untouched]
     tab._tree.selection.return_value = ("custom_on", "custom_off")
 
@@ -1248,7 +1257,8 @@ def test_delete_batch_removes_builtin_and_custom():
 
 def test_edit_multiple_selected_sets_status_no_change(monkeypatch):
     tab = _bare_tab()
-    tab._patterns = [_custom("custom_1"), _custom("custom_2")]
+    # Distinct labels -> two value groups, a genuine multi-group selection.
+    tab._patterns = [_custom("custom_1", label="One"), _custom("custom_2", label="Two")]
     snapshot = list(tab._patterns)
     tab._tree.selection.return_value = ("custom_1", "custom_2")
     monkeypatch.setattr(
@@ -1265,7 +1275,8 @@ def test_edit_multiple_selected_sets_status_no_change(monkeypatch):
 
 def test_copy_multiple_selected_sets_status_no_change(monkeypatch):
     tab = _bare_tab()
-    tab._patterns = [_custom("custom_1"), _custom("custom_2")]
+    # Distinct labels -> two value groups, so this is a genuine multi-group select.
+    tab._patterns = [_custom("custom_1", label="One"), _custom("custom_2", label="Two")]
     before = len(tab._patterns)
     tab._tree.selection.return_value = ("custom_1", "custom_2")
     monkeypatch.setattr(
@@ -1436,11 +1447,12 @@ def test_filter_facets_are_anded():
     assert not _matches(p, category="Credentials", severity="LOW")
 
 
-def test_visible_patterns_no_filter_state_returns_all():
+def test_visible_groups_no_filter_state_returns_all():
     tab = _bare_tab()
-    pats = [_custom("a"), _custom("b")]
+    pats = [_custom("a", label="A"), _custom("b", label="B")]
     tab._patterns = pats
-    assert tab._visible_patterns() == pats
+    groups = tab._visible_groups()
+    assert [m.key for g in groups for m in g.members] == ["a", "b"]
 
 
 # --- filter-change / clear behavior (mocked tree) ---
@@ -1448,7 +1460,7 @@ def test_visible_patterns_no_filter_state_returns_all():
 def _filter_tab():
     tab = _bare_tab()
     tab._filter_search_var = _DummyVar("")
-    tab._filter_category_var = _DummyVar(_ALL)
+    # Category lives in tab._active_category (left pane), set by _bare_tab.
     tab._filter_severity_var = _DummyVar(_ALL)
     tab._filter_user_tag_var = _DummyVar(_ALL)
     tab._filter_enabled_var = _DummyVar(_ALL)
@@ -1474,14 +1486,15 @@ def test_on_filter_change_does_not_mark_dirty():
 def test_clear_filters_resets_vars_and_single_refresh():
     tab = _filter_tab()
     tab._filter_search_var.set("x")
-    tab._filter_category_var.set("Credentials")
+    tab._active_category = "Credentials"
     tab._filter_severity_var.set("HIGH")
     tab._filter_user_tag_var.set("User1")
     tab._filter_enabled_var.set("Disabled")
     tab._tree.selection.return_value = ()
     tab._on_clear_filters()
     assert tab._filter_search_var.get() == ""
-    assert tab._filter_category_var.get() == _ALL
+    # Category (left pane) resets to "All Categories".
+    assert tab._active_category == _ALL
     assert tab._filter_severity_var.get() == _ALL
     assert tab._filter_user_tag_var.get() == _ALL
     assert tab._filter_enabled_var.get() == _ALL
@@ -1510,27 +1523,32 @@ def test_filter_row_widgets_present(tk_root):
 
     def when_open():
         mgr = tab._pattern_manager
-        captured["buttons"] = _button_texts(mgr)
-        captured["combos"] = [
-            w for w in _all_widgets(mgr) if isinstance(w, ttk.Combobox)
-        ]
-        captured["entries"] = [
-            w for w in _all_widgets(mgr) if isinstance(w, tk.Entry)
-        ]
-        captured["has_combos"] = (
-            tab._filter_category_combo is not None
-            and tab._filter_user_tag_combo is not None
-        )
-        mgr.destroy()
+        try:
+            captured["buttons"] = _button_texts(mgr)
+            captured["combos"] = [
+                w for w in _all_widgets(mgr) if isinstance(w, ttk.Combobox)
+            ]
+            captured["entries"] = [
+                w for w in _all_widgets(mgr) if isinstance(w, tk.Entry)
+            ]
+            # C23: Category is the left pane (a Treeview), not a facet combo.
+            captured["has_widgets"] = (
+                tab._filter_category_combo is None
+                and tab._filter_user_tag_combo is not None
+                and tab._category_tree is not None
+            )
+        finally:
+            mgr.destroy()
 
     tk_root.after(50, when_open)
     tab._open_pattern_manager()
 
     assert "Clear" in captured["buttons"]
-    # Category, Severity, User Tag, Enabled facet comboboxes.
-    assert len(captured["combos"]) >= 4
-    assert captured["entries"]  # search entry
-    assert captured["has_combos"]
+    # Severity, User Tag, Enabled facet comboboxes (Category moved to left pane).
+    assert len(captured["combos"]) >= 3
+    # Value search entry + category search entry.
+    assert len(captured["entries"]) >= 2
+    assert captured["has_widgets"]
 
 
 def test_facet_value_lists_refresh_after_mutation(tk_root):
@@ -1538,14 +1556,24 @@ def test_facet_value_lists_refresh_after_mutation(tk_root):
     tab._patterns = [_tagged("custom_a", category="Alpha")]
     captured = {}
 
+    def _category_rows():
+        tree = tab._category_tree
+        return [tree.set(iid, "category") for iid in tree.get_children()]
+
     def when_open():
-        captured["tags_before"] = list(tab._filter_user_tag_combo["values"])
-        captured["cats_before"] = list(tab._filter_category_combo["values"])
-        tab._patterns.append(_tagged("custom_b", category="Beta", color_tag="user1"))
-        tab._refresh_table()
-        captured["tags_after"] = list(tab._filter_user_tag_combo["values"])
-        captured["cats_after"] = list(tab._filter_category_combo["values"])
-        tab._pattern_manager.destroy()
+        try:
+            captured["tags_before"] = list(tab._filter_user_tag_combo["values"])
+            captured["cats_before"] = _category_rows()
+            tab._patterns.append(
+                _tagged("custom_b", category="Beta", color_tag="user1")
+            )
+            # A staged add refreshes both panes (left counts + right groups) and
+            # the User Tag facet list.
+            tab._refresh_after_mutation()
+            captured["tags_after"] = list(tab._filter_user_tag_combo["values"])
+            captured["cats_after"] = _category_rows()
+        finally:
+            tab._pattern_manager.destroy()
 
     tk_root.after(50, when_open)
     tab._open_pattern_manager()
@@ -1564,13 +1592,16 @@ def test_delete_under_active_filter_only_touches_visible_selection(tk_root):
     captured = {}
 
     def when_open():
-        tab._filter_category_var.set("Custom")
-        tab._on_filter_change()
-        captured["visible_iids"] = tab._tree.get_children()
-        tab._tree.selection_set("custom_a")
-        tab._on_delete()
-        captured["after"] = list(tab._patterns)
-        tab._pattern_manager.destroy()
+        try:
+            # Select the "Custom" category in the left pane (display-only).
+            tab._active_category = "Custom"
+            tab._on_filter_change()
+            captured["visible_iids"] = tab._tree.get_children()
+            tab._tree.selection_set("custom_a")
+            tab._on_delete()
+            captured["after"] = list(tab._patterns)
+        finally:
+            tab._pattern_manager.destroy()
 
     tk_root.after(50, when_open)
     tab._open_pattern_manager()
@@ -1591,12 +1622,14 @@ def test_enable_disable_under_active_filter_only_touches_visible_selection(tk_ro
     captured = {}
 
     def when_open():
-        tab._filter_category_var.set("Custom")
-        tab._on_filter_change()
-        tab._tree.selection_set("custom_a")
-        tab._on_toggle()
-        captured["after"] = list(tab._patterns)
-        tab._pattern_manager.destroy()
+        try:
+            tab._active_category = "Custom"
+            tab._on_filter_change()
+            tab._tree.selection_set("custom_a")
+            tab._on_toggle()
+            captured["after"] = list(tab._patterns)
+        finally:
+            tab._pattern_manager.destroy()
 
     tk_root.after(50, when_open)
     tab._open_pattern_manager()
@@ -1645,9 +1678,9 @@ def test_export_writes_full_catalog_json(monkeypatch, tmp_path):
 
 def test_export_ignores_filters_and_writes_all_rows(monkeypatch, tmp_path):
     tab = _seed_export_tab()
-    # Filter vars that would hide everything are irrelevant to export.
+    # Filter state that would hide everything is irrelevant to export.
     tab._filter_search_var = _DummyVar("zzz-no-match")
-    tab._filter_category_var = _DummyVar("Nonexistent")
+    tab._active_category = "Nonexistent"
     out = tmp_path / "all.json"
     monkeypatch.setattr(
         mod.filedialog, "asksaveasfilename", lambda **kw: str(out)
@@ -1692,3 +1725,257 @@ def test_export_write_error_reports_and_does_not_mutate(monkeypatch, tmp_path):
     fake_mb.showerror.assert_called_once()
     assert tab._patterns == before
     assert not bad.exists()
+
+
+# ---------------------------------------------------------------------------
+# C23 - Two-pane (grouped value rows + category index)
+# ---------------------------------------------------------------------------
+
+from gui.components.experimental_features import sherlock_pattern_manager as pm  # noqa: E402
+
+
+def test_grouped_row_selection_maps_to_all_members():
+    tab = _bare_tab()
+    # Same label/category/severity/tag -> one value group with two members.
+    m1 = _tagged("custom_1", label="Tax", pattern="*w2*")
+    m2 = _tagged("custom_2", label="Tax", pattern="*w4*")
+    other = _tagged("custom_3", label="Other", pattern="*x*")
+    tab._patterns = [m1, m2, other]
+    # The group's iid is its first member's key.
+    tab._tree.selection.return_value = ("custom_1",)
+
+    groups = tab._selected_groups()
+    assert len(groups) == 1
+    assert {member.key for member in groups[0].members} == {"custom_1", "custom_2"}
+    assert {p.key for p in tab._selected_patterns()} == {"custom_1", "custom_2"}
+
+
+def test_toggle_grouped_row_flips_all_members():
+    tab = _bare_tab()
+    tab._patterns = [
+        _tagged("custom_1", label="Tax", pattern="*w2*", enabled=True),
+        _tagged("custom_2", label="Tax", pattern="*w4*", enabled=True),
+    ]
+    tab._tree.selection.return_value = ("custom_1",)
+
+    tab._on_toggle()
+
+    assert all(not p.enabled for p in tab._patterns)
+    assert tab._pattern_manager_dirty is True
+
+
+def test_delete_grouped_row_removes_all_members():
+    tab = _bare_tab()
+    tab._patterns = [
+        _tagged("custom_1", label="Tax", pattern="*w2*"),
+        _tagged("custom_2", label="Tax", pattern="*w4*"),
+        _tagged("custom_3", label="Keep", pattern="*k*"),
+    ]
+    tab._tree.selection.return_value = ("custom_1",)
+
+    tab._on_delete()
+
+    assert [p.key for p in tab._patterns] == ["custom_3"]
+    assert tab._pattern_manager_dirty is True
+
+
+def test_edit_grouped_multimember_is_guarded(monkeypatch):
+    tab = _bare_tab()
+    tab._patterns = [
+        _tagged("custom_1", label="Tax", pattern="*w2*"),
+        _tagged("custom_2", label="Tax", pattern="*w4*"),
+    ]
+    snapshot = list(tab._patterns)
+    tab._tree.selection.return_value = ("custom_1",)
+    monkeypatch.setattr(
+        tab, "_open_pattern_dialog",
+        lambda *a, **k: pytest.fail("dialog must not open for multi-member edit"),
+    )
+
+    tab._on_edit()
+
+    assert tab._patterns == snapshot
+    assert tab._pattern_manager_dirty is False
+    tab._status_label.configure.assert_called()
+
+
+def test_copy_grouped_multimember_duplicates_all_members(monkeypatch):
+    tab = _bare_tab()
+    tab._patterns = [
+        _tagged("custom_1", label="Tax", pattern="*w2*"),
+        _tagged("custom_2", label="Tax", pattern="*w4*"),
+    ]
+    tab._tree.selection.return_value = ("custom_1",)
+    monkeypatch.setattr(
+        tab, "_open_pattern_dialog",
+        lambda *a, **k: pytest.fail("multi-member copy must not open the dialog"),
+    )
+
+    tab._on_copy()
+
+    assert len(tab._patterns) == 4
+    assert sorted(p.pattern for p in tab._patterns) == ["*w2*", "*w2*", "*w4*", "*w4*"]
+    assert all(not p.builtin for p in tab._patterns)
+    assert tab._pattern_manager_dirty is True
+
+
+def test_visible_groups_combines_active_category_and_search():
+    tab = _filter_tab()
+    a = _tagged("custom_a", label="Alpha", category="Custom")
+    b = _tagged("custom_b", label="Beta", category="Custom")
+    other = _tagged("custom_c", label="Alpha", category="Other")
+    tab._patterns = [a, b, other]
+    tab._active_category = "Custom"
+    tab._filter_search_var.set("alpha")
+
+    groups = tab._visible_groups()
+
+    assert [g.label for g in groups] == ["Alpha"]
+    assert {m.key for g in groups for m in g.members} == {"custom_a"}
+
+
+def test_hidden_rows_are_not_actionable():
+    tab = _filter_tab()
+    visible = _tagged("custom_v", label="Vis", category="Custom")
+    hidden = _tagged("custom_h", label="Hid", category="Other")
+    tab._patterns = [visible, hidden]
+    tab._active_category = "Custom"
+    # custom_h is filtered out of the active category; selecting it is inert.
+    tab._tree.selection.return_value = ("custom_h",)
+
+    assert tab._selected_groups() == []
+    tab._on_delete()
+
+    assert any(p.key == "custom_h" for p in tab._patterns)
+    assert tab._pattern_manager_dirty is False
+
+
+def test_delete_last_group_of_active_category_resets_to_all():
+    tab = _bare_tab()
+    only = _tagged("custom_1", label="Solo", category="Lonely")
+    keep = _tagged("custom_2", label="Keep", category="Custom")
+    tab._patterns = [only, keep]
+    tab._active_category = "Lonely"
+    tab._tree.selection.return_value = ("custom_1",)
+
+    tab._on_delete()
+
+    # The "Lonely" category no longer exists -> active category falls back to All.
+    assert tab._active_category == _ALL
+
+
+def test_category_pane_lists_all_categories_with_grouped_counts(tk_root):
+    tab = SherlockTab(tk_root, {})
+    tab._patterns = [
+        _tagged("c1", label="Tax", category="Finance", pattern="*w2*"),
+        _tagged("c2", label="Tax", category="Finance", pattern="*w4*"),  # same group
+        _tagged("c3", label="Keys", category="Secrets", pattern="*key*"),
+    ]
+    captured = {}
+
+    def when_open():
+        try:
+            tab._refresh_category_list()
+            tree = tab._category_tree
+            captured["rows"] = {
+                iid: (tree.set(iid, "category"), tree.set(iid, "count"))
+                for iid in tree.get_children()
+            }
+        finally:
+            tab._pattern_manager.destroy()
+
+    tk_root.after(50, when_open)
+    tab._open_pattern_manager()
+
+    rows = captured["rows"]
+    # Counts are grouped value-row counts: Finance has 2 patterns but 1 group.
+    assert rows[pm._ALL_ROW_IID] == ("All Categories", "2")
+    assert rows["cat::Finance"] == ("Finance", "1")
+    assert rows["cat::Secrets"] == ("Secrets", "1")
+
+
+def test_category_search_filters_left_list(tk_root):
+    tab = SherlockTab(tk_root, {})
+    tab._patterns = [
+        _tagged("c1", label="A", category="Finance", pattern="*a*"),
+        _tagged("c2", label="B", category="Secrets", pattern="*b*"),
+    ]
+    captured = {}
+
+    def when_open():
+        try:
+            tab._category_search_var.set("fin")
+            tree = tab._category_tree
+            captured["cats"] = [
+                tree.set(iid, "category") for iid in tree.get_children()
+            ]
+        finally:
+            tab._pattern_manager.destroy()
+
+    tk_root.after(50, when_open)
+    tab._open_pattern_manager()
+
+    cats = captured["cats"]
+    assert "All Categories" in cats  # always present
+    assert "Finance" in cats
+    assert "Secrets" not in cats
+
+
+def test_selecting_category_filters_right_pane_and_all_restores(tk_root):
+    tab = SherlockTab(tk_root, {})
+    tab._patterns = [
+        _tagged("c1", label="A", category="Finance", pattern="*a*"),
+        _tagged("c2", label="B", category="Secrets", pattern="*b*"),
+    ]
+    captured = {}
+
+    def when_open():
+        try:
+            tab._category_tree.selection_set("cat::Finance")
+            tab._on_category_select()
+            captured["after_select"] = tab._tree.get_children()
+            tab._category_tree.selection_set(pm._ALL_ROW_IID)
+            tab._on_category_select()
+            captured["after_all"] = tab._tree.get_children()
+        finally:
+            tab._pattern_manager.destroy()
+
+    tk_root.after(50, when_open)
+    tab._open_pattern_manager()
+
+    assert captured["after_select"] == ("c1",)
+    assert set(captured["after_all"]) == {"c1", "c2"}
+
+
+def test_export_writes_all_groups_not_only_visible(tk_root, monkeypatch, tmp_path):
+    tab = SherlockTab(tk_root, {})
+    tab._patterns = [
+        _tagged("c1", label="A", category="Finance", pattern="*a*"),
+        _tagged("c2", label="B", category="Secrets", pattern="*b*"),
+    ]
+    out = tmp_path / "all.json"
+    monkeypatch.setattr(
+        mod.filedialog, "asksaveasfilename", lambda **kw: str(out)
+    )
+    captured = {}
+
+    def when_open():
+        try:
+            # Narrow the right pane to one category, then export.
+            tab._active_category = "Finance"
+            tab._refresh_table()
+            captured["visible"] = tab._tree.get_children()
+            tab._on_export()
+        finally:
+            tab._pattern_manager.destroy()
+
+    tk_root.after(50, when_open)
+    tab._open_pattern_manager()
+
+    import json as _json
+
+    data = _json.loads(out.read_text(encoding="utf-8"))
+    assert captured["visible"] == ("c1",)  # right pane filtered to Finance
+    # Export still writes the full staged catalog (both patterns).
+    assert data["count"] == 2
+    assert {row["pattern"] for row in data["patterns"]} == {"*a*", "*b*"}

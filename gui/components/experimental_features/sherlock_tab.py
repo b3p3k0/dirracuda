@@ -84,8 +84,11 @@ class SherlockTab:
         # Swatch buttons, kept so pick/clear handlers can repaint them.
         self._severity_swatches: Dict[Severity, tk.Button] = {}
         self._user_swatches: Dict[str, tk.Button] = {}
-        # Pattern table + manager dialog are built lazily on demand.
+        # Pattern manager panes + dialog are built lazily on demand.
         self._tree: Optional[ttk.Treeview] = None
+        self._category_tree: Optional[ttk.Treeview] = None
+        # C23 left-pane selected category (display-only); _FACET_ALL == "All".
+        self._active_category: str = _FACET_ALL
         self._pattern_manager: Optional[tk.Toplevel] = None
         # True when pattern-manager edits have not been persisted to disk;
         # cleared only by a successful save (never auto-reset on manager open).
@@ -348,6 +351,18 @@ class SherlockTab:
     def _build_table(self, parent: tk.Widget) -> None:
         return sherlock_pattern_manager.build_table(self, parent)
 
+    def _build_category_pane(self, parent: tk.Widget) -> None:
+        return sherlock_pattern_manager.build_category_pane(self, parent)
+
+    def _refresh_category_list(self) -> None:
+        return sherlock_pattern_manager.refresh_category_list(self)
+
+    def _on_category_select(self, *args: Any) -> None:
+        return sherlock_pattern_manager.on_category_select(self, *args)
+
+    def _on_category_search(self, *args: Any) -> None:
+        return sherlock_pattern_manager.on_category_search(self, *args)
+
     # ------------------------------------------------------------------
     # Pattern manager dialog
     # ------------------------------------------------------------------
@@ -371,17 +386,23 @@ class SherlockTab:
     def _current_filter_state(self) -> Tuple[str, str, str, str, str]:
         return sherlock_pattern_manager.current_filter_state(self)
 
-    def _visible_patterns(self) -> List[SherlockPattern]:
-        return sherlock_pattern_manager.visible_patterns(self)
+    def _visible_groups(self):
+        return sherlock_pattern_manager.visible_groups(self)
 
     def _visible_keys(self) -> set:
         return sherlock_pattern_manager.visible_keys(self)
+
+    def _refresh_after_mutation(self) -> None:
+        return sherlock_pattern_manager.refresh_after_mutation(self)
 
     def _refresh_facet_choices(self) -> None:
         return sherlock_pattern_manager.refresh_facet_choices(self)
 
     def _refresh_table(self) -> None:
         return sherlock_pattern_manager.refresh_table(self)
+
+    def _selected_groups(self):
+        return sherlock_pattern_manager.selected_groups(self)
 
     def _selected_patterns(self) -> List[SherlockPattern]:
         return sherlock_pattern_manager.selected_patterns(self)
@@ -419,6 +440,9 @@ class SherlockTab:
 
     def _on_copy(self) -> None:
         return sherlock_pattern_manager.on_copy(self)
+
+    def _duplicate_group_as_customs(self, group: Any) -> None:
+        return sherlock_pattern_manager.duplicate_group_as_customs(self, group)
 
     def _add_from_source(self, source: SherlockPattern) -> None:
         return sherlock_pattern_manager.add_from_source(self, source)

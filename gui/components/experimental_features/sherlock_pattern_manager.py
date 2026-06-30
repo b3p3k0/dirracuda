@@ -1,11 +1,18 @@
 """
 Sherlock Pattern Manager dialog, extracted from sherlock_tab.py in C21.
 
-This module is the home for the "Sherlock Patterns" modal dialog: the flat
-pattern table, the C18 search/facet filter row, the Add/Edit dialog, and the
-Copy / Delete / Enable-Disable / Restore Built-ins / Export / Save & Close
-actions. C21 is a behavior-preserving structural extraction only - the dialog
-behaves exactly as it did when these methods lived on SherlockTab.
+This module is the home for the "Sherlock Patterns" modal dialog: the C23 two-pane
+(Regedit-style) layout - a left category index pane and a right grouped value-row
+pane - plus the C18 search/facet filter row, the Add/Edit dialog, and the Copy /
+Delete / Enable-Disable / Restore Built-ins / Export / Save & Close actions.
+
+C23 replaced the original single flat pattern table with the two-pane view. The
+right pane shows one row per *value group* (built via shared.sherlock.grouping),
+so several stored SherlockPattern rows sharing category/label/severity/tag/type
+collapse into one display row; row actions map back to every underlying member.
+Category selection/search and value filtering are display-only: they never mutate
+tab._patterns or the dirty flag, and hidden rows are never actionable. The stored
+schema and wire format are unchanged - one SherlockPattern per pattern string.
 
 Each public function takes the owning SherlockTab instance as ``tab`` and reads
 and writes its existing instance state (``tab._patterns``,
@@ -23,12 +30,14 @@ import dataclasses
 import json
 import uuid
 import tkinter as tk
+from collections import Counter
 from datetime import datetime
 from tkinter import ttk, filedialog
 from typing import Any, Dict, List, Optional, Tuple
 
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from shared.sherlock.export import build_export_payload
+from shared.sherlock.grouping import PatternValueGroup, group_patterns
 from shared.sherlock import (
     COLOR_TAG_NONE,
     USER_COLOR_KEYS,
@@ -75,8 +84,15 @@ _TAG_TO_DIALOG_LABEL: Dict[str, str] = {v: k for k, v in _DIALOG_LABEL_TO_TAG.it
 _COLOR_TAG_CELL_LABELS: Dict[str, str] = {COLOR_TAG_NONE: ""}
 _COLOR_TAG_CELL_LABELS.update({key: _USER_COLOR_LABELS[key] for key in USER_COLOR_KEYS})
 
+# C23 left-pane category index. The "All Categories" row uses a fixed iid distinct
+# from any "cat::<name>" row, and maps to the _FACET_ALL active-category sentinel.
+_ALL_ROW_IID = "all-categories"
+_ALL_CATEGORIES_LABEL = "All Categories"
+_CATEGORY_IID_PREFIX = "cat::"
+
 # C18 pattern-manager filter facets. "All" disables a facet. Severity and Enabled
-# are fixed lists; Category and User Tag are rebuilt from the staged rows.
+# are fixed lists; User Tag is rebuilt from the staged rows. Category is chosen in
+# the C23 left pane (tab._active_category), no longer a right-pane facet combo.
 _FACET_ALL = "All"
 _SEVERITY_FACET_CHOICES: Tuple[str, ...] = (
     _FACET_ALL,
@@ -143,6 +159,61 @@ def _pattern_matches_filters(
     return True
 
 
+def _group_iid(group: PatternValueGroup) -> str:
+    """Right-pane row iid for a value group: its first member's key.
+
+    First-member keys are globally unique, so group iids are unique. For the
+    common single-member group iid == the pattern key, keeping single-row
+    selection behavior and selection restore identical to the pre-C23 table.
+    """
+    return group.members[0].key
+
+
+def _group_search_matches(group: PatternValueGroup, needle: str) -> bool:
+    """Group-level search: match against shared fields or *any* member pattern.
+
+    Matching at the group level (not per-member) keeps a multi-member value row
+    intact - a search that hits one member never partially hides the group.
+    *needle* is already stripped+casefolded by the caller.
+    """
+    if not needle:
+        return True
+    tag = normalize_color_tag(group.color_tag)
+    parts = [
+        group.label,
+        group.category,
+        group.severity.display_name,
+        _COLOR_TAG_CELL_LABELS.get(tag, ""),
+        tag,
+        "Built-in" if group.builtin else "Custom",
+    ]
+    parts.extend(group.patterns)
+    return needle in " ".join(parts).casefold()
+
+
+def _pattern_passes_facets(
+    pattern: SherlockPattern,
+    *,
+    category: str,
+    severity: str,
+    user_tag: str,
+    enabled: str,
+) -> bool:
+    """The group-invariant facets only (no search): category/severity/tag/enabled.
+
+    These fields are all part of the group key, so filtering patterns by them
+    never splits a value group. Search is applied at the group level instead.
+    """
+    return _pattern_matches_filters(
+        pattern,
+        search="",
+        category=category,
+        severity=severity,
+        user_tag=user_tag,
+        enabled=enabled,
+    )
+
+
 def validate_pattern_fields(pattern: str) -> Tuple[bool, str]:
     """Pure add/edit validation: pattern text must be non-empty."""
     if not isinstance(pattern, str) or not pattern.strip():
@@ -174,16 +245,19 @@ def _grab_when_viewable(dialog: tk.Toplevel, parent: tk.Misc) -> None:
 
 
 def build_filter_row(tab, parent: tk.Widget) -> None:
-    """Build the C18 filter row above the pattern table.
+    """Build the C18 value-search/facet row above the grouped value table.
 
     Display-only: edits here re-render the visible rows but never touch
-    tab._patterns or the dirty flag. Created fresh on every manager open.
+    tab._patterns or the dirty flag. Created fresh on every manager open. The
+    Category facet moved to the C23 left pane (tab._active_category), so only the
+    value search + Severity/User Tag/Enabled facets live here.
     """
     tab._filter_search_var = tk.StringVar(value="")
-    tab._filter_category_var = tk.StringVar(value=_FACET_ALL)
     tab._filter_severity_var = tk.StringVar(value=_FACET_ALL)
     tab._filter_user_tag_var = tk.StringVar(value=_FACET_ALL)
     tab._filter_enabled_var = tk.StringVar(value=_FACET_ALL)
+    # Left pane owns category now; keep the attr cleared for teardown safety.
+    tab._filter_category_combo = None
 
     row = tk.Frame(parent)
     tab._theme.apply_to_widget(row, "main_window")
@@ -203,13 +277,11 @@ def build_filter_row(tab, parent: tk.Widget) -> None:
         return combo
 
     _label("Search:")
-    search_entry = tk.Entry(row, textvariable=tab._filter_search_var, width=18)
+    search_entry = tk.Entry(row, textvariable=tab._filter_search_var, width=16)
     tab._theme.apply_to_widget(search_entry, "entry")
     search_entry.pack(side=tk.LEFT, padx=(0, 10))
     tab._filter_search_var.trace_add("write", tab._on_filter_change)
 
-    _label("Category:")
-    tab._filter_category_combo = _facet(tab._filter_category_var, [_FACET_ALL], 14)
     _label("Severity:")
     _facet(tab._filter_severity_var, _SEVERITY_FACET_CHOICES, 7)
     _label("User Tag:")
@@ -220,6 +292,60 @@ def build_filter_row(tab, parent: tk.Widget) -> None:
     clear_btn = tk.Button(row, text="Clear", command=tab._on_clear_filters)
     tab._theme.apply_to_widget(clear_btn, "button_secondary")
     clear_btn.pack(side=tk.LEFT)
+
+
+def build_category_pane(tab, parent: tk.Widget) -> None:
+    """Build the C23 left category index: search box + category Treeview.
+
+    Display-only. Selecting a category sets tab._active_category and re-renders
+    the right pane; the search box filters which category rows show without
+    touching the right pane, the active category, _patterns, or the dirty flag.
+    """
+    tab._category_search_var = tk.StringVar(value="")
+
+    header = tk.Label(parent, text="Categories", anchor="w")
+    tab._theme.apply_to_widget(header, "label")
+    header.pack(anchor="w", pady=(0, 4))
+
+    search_row = tk.Frame(parent)
+    tab._theme.apply_to_widget(search_row, "main_window")
+    search_row.pack(anchor="w", pady=(0, 8), fill=tk.X)
+    search_label = tk.Label(search_row, text="Search:", anchor="w")
+    tab._theme.apply_to_widget(search_label, "label")
+    search_label.pack(side=tk.LEFT, padx=(0, 3))
+    search_entry = tk.Entry(search_row, textvariable=tab._category_search_var, width=16)
+    tab._theme.apply_to_widget(search_entry, "entry")
+    search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+    tab._category_search_var.trace_add("write", tab._on_category_search)
+
+    tree_frame = tk.Frame(parent)
+    tab._theme.apply_to_widget(tree_frame, "main_window")
+    tree_frame.pack(fill=tk.BOTH, expand=True)
+
+    tree = ttk.Treeview(
+        tree_frame,
+        columns=("category", "count"),
+        show="headings",
+        selectmode="browse",
+        height=16,
+    )
+    tree.heading("category", text="Category")
+    tree.heading("count", text="#")
+    tree.column("category", width=150, anchor="w", stretch=True)
+    tree.column("count", width=44, anchor="center", stretch=False)
+
+    scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
+    tree.configure(yscrollcommand=scrollbar.set)
+    tree.grid(row=0, column=0, sticky="nsew")
+    scrollbar.grid(row=0, column=1, sticky="ns")
+    tree_frame.grid_rowconfigure(0, weight=1)
+    tree_frame.grid_columnconfigure(0, weight=1)
+
+    for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+        tree.bind(sequence, tab._on_mousewheel)
+    tree.bind("<<TreeviewSelect>>", tab._on_category_select)
+
+    tab._category_tree = tree
 
 
 def on_filter_change(tab, *_args: Any) -> None:
@@ -236,17 +362,120 @@ def on_filter_change(tab, *_args: Any) -> None:
 
 
 def on_clear_filters(tab) -> None:
-    """Reset every facet/search field to its default and re-render once."""
+    """Reset value search/facets, the category search, and the active category.
+
+    Display-only: resets both panes to the unfiltered "All Categories" view and
+    re-renders once each, never touching tab._patterns or the dirty flag.
+    """
     tab._applying_filter_reset = True
     try:
         tab._filter_search_var.set("")
-        tab._filter_category_var.set(_FACET_ALL)
         tab._filter_severity_var.set(_FACET_ALL)
         tab._filter_user_tag_var.set(_FACET_ALL)
         tab._filter_enabled_var.set(_FACET_ALL)
+        cat_search = getattr(tab, "_category_search_var", None)
+        if cat_search is not None:
+            cat_search.set("")
+        tab._active_category = _FACET_ALL
     finally:
         tab._applying_filter_reset = False
+    tab._refresh_category_list()
     tab._on_filter_change()
+
+
+# ----------------------------------------------------------------------
+# Left category pane: render / select / search (display-only)
+# ----------------------------------------------------------------------
+
+
+def refresh_category_list(tab) -> None:
+    """Render the left category index: All Categories + per-category rows.
+
+    Counts are *grouped value-row* counts (one per value group), not raw pattern
+    counts. The category search filters which rows show (display-only). Reselects
+    the active-category row under a guard so the reselection never re-fires the
+    selection handler. No-op until the category tree has been built.
+    """
+    tree = getattr(tab, "_category_tree", None)
+    if tree is None:
+        return
+    groups = group_patterns(tab._patterns)
+    counts = Counter(group.category for group in groups)
+    total = len(groups)
+    names = category_choices(tab._patterns, always_include=())
+
+    needle = ""
+    var = getattr(tab, "_category_search_var", None)
+    if var is not None:
+        needle = (var.get() or "").strip().casefold()
+
+    active = getattr(tab, "_active_category", _FACET_ALL)
+    target = _ALL_ROW_IID if active == _FACET_ALL else _CATEGORY_IID_PREFIX + active
+
+    tab._applying_category_refresh = True
+    try:
+        for iid in tree.get_children():
+            tree.delete(iid)
+        tree.insert(
+            "", "end", iid=_ALL_ROW_IID, values=(_ALL_CATEGORIES_LABEL, total)
+        )
+        for name in names:
+            if needle and needle not in name.casefold():
+                continue
+            tree.insert(
+                "",
+                "end",
+                iid=_CATEGORY_IID_PREFIX + name,
+                values=(name, counts.get(name, 0)),
+            )
+        if tree.exists(target):
+            tree.selection_set(target)
+        else:
+            # Active category currently filtered out of the left list: leave the
+            # left selection empty but keep _active_category so the right pane
+            # still shows it (category search is display-only).
+            selection = tree.selection()
+            if selection:
+                tree.selection_remove(*selection)
+    finally:
+        tab._applying_category_refresh = False
+
+
+def on_category_select(tab, *_args: Any) -> None:
+    """Left-pane selection: set the active category and re-render the right pane.
+
+    Display-only: never mutates _patterns or the dirty flag. The right-pane
+    selection is cleared so no previously-selected (now hidden) row stays
+    actionable. Guarded against the reselection done inside refresh_category_list.
+    """
+    if getattr(tab, "_applying_category_refresh", False):
+        return
+    tree = getattr(tab, "_category_tree", None)
+    if tree is None:
+        return
+    selection = tree.selection()
+    if not selection:
+        return
+    iid = selection[0]
+    if iid == _ALL_ROW_IID:
+        tab._active_category = _FACET_ALL
+    elif iid.startswith(_CATEGORY_IID_PREFIX):
+        tab._active_category = iid[len(_CATEGORY_IID_PREFIX):]
+    else:
+        return
+    rtree = getattr(tab, "_tree", None)
+    if rtree is not None:
+        rsel = rtree.selection()
+        if rsel:
+            rtree.selection_remove(*rsel)
+    tab._refresh_table()
+
+
+def on_category_search(tab, *_args: Any) -> None:
+    """Category search edit: re-render only the left list (display-only)."""
+    if getattr(tab, "_applying_filter_reset", False):
+        return
+    tab._refresh_category_list()
 
 
 def build_table(tab, parent: tk.Widget) -> None:
@@ -258,7 +487,6 @@ def build_table(tab, parent: tk.Widget) -> None:
         "enabled",
         "severity",
         "user_tag",
-        "category",
         "label",
         "pattern",
         "type",
@@ -270,13 +498,13 @@ def build_table(tab, parent: tk.Widget) -> None:
         selectmode="extended",
         height=16,
     )
+    # Category lives in the left pane now; "Patterns" holds the grouped tokens.
     headings = {
         "enabled": ("On", 40),
         "severity": ("Severity", 66),
         "user_tag": ("User Tag", 70),
-        "category": ("Category", 110),
-        "label": ("Label", 130),
-        "pattern": ("Pattern", 150),
+        "label": ("Label", 150),
+        "pattern": ("Patterns", 220),
         "type": ("Type", 70),
     }
     for col, (heading, width) in headings.items():
@@ -311,15 +539,26 @@ def open_pattern_manager(tab) -> None:
     dialog.title("Sherlock Patterns")
     dialog.transient(parent)
     tab._theme.apply_to_widget(dialog, "main_window")
-    dialog.geometry("1100x600")
-    dialog.minsize(1080, 560)
+    dialog.geometry("1200x620")
+    dialog.minsize(1120, 560)
 
     outer = tk.Frame(dialog, padx=12, pady=10)
     tab._theme.apply_to_widget(outer, "main_window")
     outer.pack(fill=tk.BOTH, expand=True)
 
-    tab._build_filter_row(outer)
-    tab._build_table(outer)
+    panes = ttk.PanedWindow(outer, orient=tk.HORIZONTAL)
+    panes.pack(fill=tk.BOTH, expand=True)
+
+    left_pane = tk.Frame(panes)
+    tab._theme.apply_to_widget(left_pane, "main_window")
+    right_pane = tk.Frame(panes)
+    tab._theme.apply_to_widget(right_pane, "main_window")
+    panes.add(left_pane, weight=1)
+    panes.add(right_pane, weight=3)
+
+    tab._build_category_pane(left_pane)
+    tab._build_filter_row(right_pane)
+    tab._build_table(right_pane)
 
     action_row = tk.Frame(outer)
     tab._theme.apply_to_widget(action_row, "main_window")
@@ -368,6 +607,8 @@ def open_pattern_manager(tab) -> None:
     close_btn.pack(side=tk.LEFT, padx=(0, 6))
 
     tab._pattern_manager = dialog
+    tab._active_category = _FACET_ALL
+    tab._refresh_category_list()
     tab._refresh_table()
     try:
         tab._tree.focus_set()
@@ -385,6 +626,7 @@ def teardown_manager(tab) -> None:
     dialog = tab._pattern_manager
     tab._pattern_manager = None
     tab._tree = None
+    tab._category_tree = None
     tab._filter_category_combo = None
     tab._filter_user_tag_combo = None
     if dialog is not None:
@@ -430,55 +672,52 @@ def current_filter_state(tab) -> Tuple[str, str, str, str, str]:
 
     return (
         _get("_filter_search_var", "").strip(),
-        _get("_filter_category_var", _FACET_ALL) or _FACET_ALL,
+        getattr(tab, "_active_category", _FACET_ALL) or _FACET_ALL,
         _get("_filter_severity_var", _FACET_ALL) or _FACET_ALL,
         _get("_filter_user_tag_var", _FACET_ALL) or _FACET_ALL,
         _get("_filter_enabled_var", _FACET_ALL) or _FACET_ALL,
     )
 
 
-def visible_patterns(tab) -> List[SherlockPattern]:
-    """Staged patterns surviving the current filter row (never mutates state)."""
+def visible_groups(tab) -> List[PatternValueGroup]:
+    """Value groups surviving the current filter state (never mutates state).
+
+    The group-invariant facets (category from the left pane, severity, user tag,
+    enabled) filter the patterns first - none of these can split a group - then
+    the rows are grouped and the value search is applied at the group level so a
+    multi-member group is never partially hidden.
+    """
     search, category, severity, user_tag, enabled = tab._current_filter_state()
-    return [
+    candidates = [
         p
         for p in tab._patterns
-        if _pattern_matches_filters(
+        if _pattern_passes_facets(
             p,
-            search=search,
             category=category,
             severity=severity,
             user_tag=user_tag,
             enabled=enabled,
         )
     ]
+    groups = group_patterns(candidates)
+    needle = (search or "").strip().casefold()
+    if not needle:
+        return groups
+    return [g for g in groups if _group_search_matches(g, needle)]
 
 
 def visible_keys(tab) -> set:
-    """Keys of currently-visible rows; used to keep selection on visible rows."""
-    return {p.key for p in tab._visible_patterns()}
+    """Iids of currently-visible value groups; used to keep selection visible."""
+    return {_group_iid(g) for g in tab._visible_groups()}
 
 
 def refresh_facet_choices(tab) -> None:
-    """Rebuild the dynamic Category / User Tag facet value lists.
+    """Rebuild the dynamic User Tag facet value list.
 
-    Reset a facet to `_FACET_ALL` when its selected value is no longer
-    present among staged rows. No-op when the combos have not been built.
+    Reset the facet to `_FACET_ALL` when its selected value is no longer present
+    among staged rows. No-op when the combo has not been built. (Category is the
+    left pane now and is refreshed by refresh_category_list.)
     """
-    cat_combo = getattr(tab, "_filter_category_combo", None)
-    if cat_combo is not None:
-        try:
-            exists = cat_combo.winfo_exists()
-        except Exception:
-            exists = False
-        if exists:
-            choices = [_FACET_ALL] + category_choices(
-                tab._patterns, always_include=()
-            )
-            cat_combo["values"] = choices
-            if tab._filter_category_var.get() not in choices:
-                tab._filter_category_var.set(_FACET_ALL)
-
     tag_combo = getattr(tab, "_filter_user_tag_combo", None)
     if tag_combo is not None:
         try:
@@ -493,41 +732,63 @@ def refresh_facet_choices(tab) -> None:
 
 
 def refresh_table(tab) -> None:
+    """Render one right-pane row per visible value group (iid = first member key)."""
     tree = tab._tree
     if tree is None:
         return
     tab._refresh_facet_choices()
     for iid in tree.get_children():
         tree.delete(iid)
-    for pattern in tab._visible_patterns():
-        tag = normalize_color_tag(pattern.color_tag)
+    for group in tab._visible_groups():
+        tag = normalize_color_tag(group.color_tag)
         tree.insert(
             "",
             "end",
-            iid=pattern.key,
+            iid=_group_iid(group),
             values=(
-                "Yes" if pattern.enabled else "No",
-                pattern.severity.display_name,
+                "Yes" if group.enabled else "No",
+                group.severity.display_name,
                 _COLOR_TAG_CELL_LABELS.get(tag, ""),
-                pattern.category,
-                pattern.label,
-                pattern.pattern,
-                "Built-in" if pattern.builtin else "Custom",
+                group.label,
+                ", ".join(group.patterns),
+                "Built-in" if group.builtin else "Custom",
             ),
         )
 
 
-def selected_patterns(tab) -> List[SherlockPattern]:
-    """Staged patterns for the current selection, in visible/table order.
+def refresh_after_mutation(tab) -> None:
+    """Refresh both panes after a staged mutation; reconcile the active category.
 
-    Iterating tab._patterns reproduces the table render order (_refresh_table
-    inserts in that order), so the result follows the visible row order
-    regardless of Ctrl/Shift click sequence.
+    Every handler that changes tab._patterns routes through here. If the active
+    category no longer exists in the catalog (its last group was deleted), reset
+    it to "All Categories" so the right pane is never filtered by an invisible
+    category. Then re-render the left counts and the right grouped rows.
+    """
+    active = getattr(tab, "_active_category", _FACET_ALL)
+    if active != _FACET_ALL and active not in category_choices(
+        tab._patterns, always_include=()
+    ):
+        tab._active_category = _FACET_ALL
+    tab._refresh_category_list()
+    tab._refresh_table()
+
+
+def selected_groups(tab) -> List[PatternValueGroup]:
+    """Visible value groups whose row is currently selected, in visible order.
+
+    Iterating tab._visible_groups() reproduces the render order, so the result
+    follows visible row order regardless of Ctrl/Shift click sequence. Only
+    visible groups are returned, so filtered-out rows are never actionable.
     """
     selection = set(tab._tree.selection())
     if not selection:
         return []
-    return [p for p in tab._patterns if p.key in selection]
+    return [g for g in tab._visible_groups() if _group_iid(g) in selection]
+
+
+def selected_patterns(tab) -> List[SherlockPattern]:
+    """Underlying SherlockPattern members of every selected visible group."""
+    return [member for group in tab._selected_groups() for member in group.members]
 
 
 def replace_pattern(tab, key: str, new_pattern: SherlockPattern) -> None:
@@ -537,6 +798,11 @@ def replace_pattern(tab, key: str, new_pattern: SherlockPattern) -> None:
 
 
 def on_mousewheel(tab, event: Any) -> str:
+    """Scroll whichever tree is under the pointer (left index or right values)."""
+    widget = getattr(event, "widget", None)
+    tree = widget if isinstance(widget, ttk.Treeview) else getattr(tab, "_tree", None)
+    if tree is None:
+        return "break"
     delta = 0
     if getattr(event, "delta", 0):
         delta = -1 if event.delta > 0 else 1
@@ -545,7 +811,7 @@ def on_mousewheel(tab, event: Any) -> str:
     elif getattr(event, "num", None) == 5:
         delta = 1
     if delta:
-        tab._tree.yview_scroll(delta, "units")
+        tree.yview_scroll(delta, "units")
     return "break"
 
 
@@ -577,30 +843,36 @@ def on_row_double_click(tab, event: Any) -> str:
 
 
 def on_toggle(tab) -> None:
-    patterns = tab._selected_patterns()
-    if not patterns:
+    """Enable/Disable every member of each selected visible value group."""
+    groups = tab._selected_groups()
+    if not groups:
         tab._set_status("Select one or more patterns to enable or disable.")
         return
-    keys = {p.key for p in patterns}
+    keys = {member.key for group in groups for member in group.members}
     tab._patterns = [
         _with_enabled(p, not p.enabled) if p.key in keys else p
         for p in tab._patterns
     ]
     tab._pattern_manager_dirty = True
-    tab._refresh_table()
+    tab._refresh_after_mutation()
+    # Members keep their keys, so each group's iid (first member key) is stable;
+    # restore selection only for groups still visible after the toggle.
     visible = tab._visible_keys()
-    tab._tree.selection_set([p.key for p in patterns if p.key in visible])
+    tab._tree.selection_set(
+        [_group_iid(g) for g in groups if _group_iid(g) in visible]
+    )
 
 
 def on_delete(tab) -> None:
-    patterns = tab._selected_patterns()
-    if not patterns:
+    """Remove every member of each selected visible value group."""
+    groups = tab._selected_groups()
+    if not groups:
         tab._set_status("Select one or more patterns to delete.")
         return
-    keys = {p.key for p in patterns}
+    keys = {member.key for group in groups for member in group.members}
     tab._patterns = [p for p in tab._patterns if p.key not in keys]
     tab._pattern_manager_dirty = True
-    tab._refresh_table()
+    tab._refresh_after_mutation()
 
 
 def on_restore_builtins(tab) -> None:
@@ -608,7 +880,7 @@ def on_restore_builtins(tab) -> None:
     customs = [p for p in tab._patterns if not p.builtin]
     tab._patterns = builtin_patterns() + customs
     tab._pattern_manager_dirty = True
-    tab._refresh_table()
+    tab._refresh_after_mutation()
     tab._set_status("Built-ins restored.")
 
 
@@ -657,11 +929,43 @@ def on_add(tab) -> None:
 
 
 def on_copy(tab) -> None:
-    patterns = tab._selected_patterns()
-    if len(patterns) != 1:
+    """Copy exactly one selected visible value group as new custom rows.
+
+    Single-member group -> the prefilled Add dialog (existing UX). Multi-member
+    group -> no-dialog duplicate of every member as a custom (the single-pattern
+    dialog can't represent multiple patterns; comma input is a later card).
+    """
+    groups = tab._selected_groups()
+    if len(groups) != 1:
         tab._set_status("Select exactly one pattern to copy.")
         return
-    tab._add_from_source(patterns[0])
+    group = groups[0]
+    if len(group.members) == 1:
+        tab._add_from_source(group.members[0])
+    else:
+        tab._duplicate_group_as_customs(group)
+
+
+def duplicate_group_as_customs(tab, group: PatternValueGroup) -> None:
+    """Duplicate every member of *group* as a new custom row (no dialog)."""
+    new_keys: List[str] = []
+    for member in group.members:
+        pattern = SherlockPattern(
+            key="custom_{0}".format(uuid.uuid4().hex),
+            category=member.category,
+            label=member.label,
+            pattern=member.pattern,
+            severity=member.severity,
+            enabled=member.enabled,
+            builtin=False,
+            color_tag=normalize_color_tag(member.color_tag),
+        )
+        tab._patterns.append(pattern)
+        new_keys.append(pattern.key)
+    tab._pattern_manager_dirty = True
+    tab._refresh_after_mutation()
+    if new_keys and new_keys[0] in tab._visible_keys():
+        tab._tree.selection_set(new_keys[0])
 
 
 def add_from_source(tab, source: SherlockPattern) -> None:
@@ -685,17 +989,29 @@ def append_custom_from_result(tab, result: Dict[str, Any]) -> None:
     )
     tab._patterns.append(pattern)
     tab._pattern_manager_dirty = True
-    tab._refresh_table()
+    tab._refresh_after_mutation()
     if pattern.key in tab._visible_keys():
         tab._tree.selection_set(pattern.key)
 
 
 def on_edit(tab) -> None:
-    patterns = tab._selected_patterns()
-    if len(patterns) != 1:
+    """Edit exactly one selected single-member value group.
+
+    Multi-member groups are guarded (the single-pattern dialog can't represent
+    them safely yet); built-in single-member groups follow C15 edit-as-copy.
+    """
+    groups = tab._selected_groups()
+    if len(groups) != 1:
         tab._set_status("Select exactly one pattern to edit.")
         return
-    pattern = patterns[0]
+    group = groups[0]
+    if len(group.members) != 1:
+        tab._set_status(
+            "Editing a grouped value with multiple patterns isn't supported "
+            "yet - use Copy, or delete and re-add."
+        )
+        return
+    pattern = group.members[0]
     if pattern.builtin:
         tab._add_from_source(pattern)
         return
@@ -714,7 +1030,7 @@ def on_edit(tab) -> None:
     )
     tab._replace_pattern(pattern.key, updated)
     tab._pattern_manager_dirty = True
-    tab._refresh_table()
+    tab._refresh_after_mutation()
     if pattern.key in tab._visible_keys():
         tab._tree.selection_set(pattern.key)
 
