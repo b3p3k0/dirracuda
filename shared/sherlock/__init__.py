@@ -8,6 +8,14 @@ matches in-memory path strings (R1/R11). Persistence and GUI live in later cards
 
 from __future__ import annotations
 
+from .grouping import (
+    PatternValueGroup,
+    build_group_patterns,
+    expand_groups,
+    group_patterns,
+    reuse_keys,
+    split_pattern_input,
+)
 from .matcher import (
     MatchResult,
     SherlockHit,
@@ -50,6 +58,7 @@ __all__ = [
     "DEFAULT_COLORS",
     "DEFAULT_USER_COLORS",
     "MatchResult",
+    "PatternValueGroup",
     "SHERLOCK_SETTINGS_KEY",
     "Severity",
     "SherlockHit",
@@ -58,20 +67,25 @@ __all__ = [
     "SherlockSettings",
     "USER_COLOR_KEYS",
     "VALID_COLOR_TAGS",
+    "build_group_patterns",
     "builtin_patterns",
     "category_choices",
     "default_settings",
+    "expand_groups",
+    "group_patterns",
     "is_valid_color",
     "is_valid_user_color",
     "match_entries",
     "normalize_color_tag",
     "path_entries_from_rows",
     "path_entries_from_snapshot",
+    "reuse_keys",
     "select_display_color_tag",
     "settings_from_dict",
     "settings_to_dict",
     "severity_from_str",
     "severity_to_str",
+    "split_pattern_input",
     "validate_color",
     "validate_user_color",
 ]
