@@ -27,13 +27,14 @@ from __future__ import annotations
 
 import tkinter as tk
 from tkinter import ttk, filedialog
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from gui.utils import safe_messagebox
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.style import get_theme
 from gui.components.experimental_features import sherlock_category_actions
 from gui.components.experimental_features import sherlock_pattern_manager
+from gui.components.experimental_features import sherlock_value_actions
 from gui.components.experimental_features.sherlock_pattern_manager import (
     _FACET_ALL,
     _SEVERITY_LABELS,
@@ -439,9 +440,6 @@ class SherlockTab:
     def _selected_patterns(self) -> List[SherlockPattern]:
         return sherlock_pattern_manager.selected_patterns(self)
 
-    def _replace_pattern(self, key: str, new_pattern: SherlockPattern) -> None:
-        return sherlock_pattern_manager.replace_pattern(self, key, new_pattern)
-
     def _on_mousewheel(self, event: Any) -> str:
         return sherlock_pattern_manager.on_mousewheel(self, event)
 
@@ -456,34 +454,36 @@ class SherlockTab:
     # ------------------------------------------------------------------
 
     def _on_toggle(self) -> None:
-        return sherlock_pattern_manager.on_toggle(self)
+        return sherlock_value_actions.on_toggle(self)
 
     def _on_delete(self) -> None:
-        return sherlock_pattern_manager.on_delete(self)
+        return sherlock_value_actions.on_delete(self)
 
     def _on_restore_builtins(self) -> None:
-        return sherlock_pattern_manager.on_restore_builtins(self)
+        return sherlock_value_actions.on_restore_builtins(self)
 
     def _on_export(self) -> None:
-        return sherlock_pattern_manager.on_export(self)
+        return sherlock_value_actions.on_export(self)
 
     def _on_add(self) -> None:
-        return sherlock_pattern_manager.on_add(self)
+        return sherlock_value_actions.on_add(self)
 
     def _on_copy(self) -> None:
-        return sherlock_pattern_manager.on_copy(self)
+        return sherlock_value_actions.on_copy(self)
 
-    def _duplicate_group_as_customs(self, group: Any) -> None:
-        return sherlock_pattern_manager.duplicate_group_as_customs(self, group)
-
-    def _add_from_source(self, source: SherlockPattern) -> None:
-        return sherlock_pattern_manager.add_from_source(self, source)
+    def _add_from_source(
+        self, source: SherlockPattern, *, patterns: Optional[Sequence[str]] = None
+    ) -> None:
+        return sherlock_value_actions.add_from_source(self, source, patterns=patterns)
 
     def _append_custom_from_result(self, result: Dict[str, Any]) -> None:
-        return sherlock_pattern_manager.append_custom_from_result(self, result)
+        return sherlock_value_actions.append_custom_from_result(self, result)
 
     def _on_edit(self) -> None:
-        return sherlock_pattern_manager.on_edit(self)
+        return sherlock_value_actions.on_edit(self)
+
+    def _on_apply_tag(self) -> None:
+        return sherlock_value_actions.on_apply_tag(self)
 
     # ------------------------------------------------------------------
     # Color picker / add-edit dialog
@@ -544,9 +544,13 @@ class SherlockTab:
         existing: Optional[SherlockPattern] = None,
         *,
         prefill: Optional[SherlockPattern] = None,
+        prefill_patterns: Optional[Sequence[str]] = None,
     ) -> Optional[Dict[str, Any]]:
         return sherlock_pattern_manager.open_pattern_dialog(
-            self, existing=existing, prefill=prefill
+            self,
+            existing=existing,
+            prefill=prefill,
+            prefill_patterns=prefill_patterns,
         )
 
 

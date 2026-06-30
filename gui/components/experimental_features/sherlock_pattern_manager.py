@@ -27,23 +27,22 @@ so the existing test patches on that namespace keep intercepting.
 from __future__ import annotations
 
 import dataclasses
-import json
-import uuid
 import tkinter as tk
 from collections import Counter
-from datetime import datetime
-from tkinter import ttk, filedialog
-from typing import Any, Dict, List, Optional, Tuple
+from tkinter import ttk
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from gui.utils.dialog_helpers import ensure_dialog_focus
-from shared.sherlock.export import build_export_payload
-from shared.sherlock.grouping import PatternValueGroup, group_patterns
+from shared.sherlock.grouping import (
+    PatternValueGroup,
+    group_patterns,
+    split_pattern_input,
+)
 from shared.sherlock import (
     COLOR_TAG_NONE,
     USER_COLOR_KEYS,
     Severity,
     SherlockPattern,
-    builtin_patterns,
     category_choices,
     normalize_color_tag,
 )
@@ -599,6 +598,24 @@ def open_pattern_manager(tab) -> None:
     tab._theme.apply_to_widget(export_btn, "button_secondary")
     export_btn.pack(side=tk.LEFT, padx=(0, 6))
 
+    # Bulk color-tag control for selected value rows (custom rows only; built-ins
+    # are skipped because their color_tag can't survive persistence).
+    tab._value_tag_var = tk.StringVar(value="None")
+    tag_label = tk.Label(action_row, text="Tag:", anchor="w")
+    tab._theme.apply_to_widget(tag_label, "label")
+    tag_label.pack(side=tk.LEFT, padx=(0, 3))
+    tag_combo = ttk.Combobox(
+        action_row,
+        textvariable=tab._value_tag_var,
+        values=list(_COLOR_TAG_CHOICES),
+        state="readonly",
+        width=8,
+    )
+    tag_combo.pack(side=tk.LEFT, padx=(0, 4))
+    apply_tag_btn = tk.Button(action_row, text="Apply", command=tab._on_apply_tag)
+    tab._theme.apply_to_widget(apply_tag_btn, "button_secondary")
+    apply_tag_btn.pack(side=tk.LEFT, padx=(0, 6))
+
     savec_btn = tk.Button(
         action_row, text="Save & Close", command=tab._save_and_close_manager
     )
@@ -633,6 +650,7 @@ def teardown_manager(tab) -> None:
     tab._category_tree = None
     tab._filter_category_combo = None
     tab._filter_user_tag_combo = None
+    tab._value_tag_var = None
     if dialog is not None:
         dialog.destroy()
 
@@ -795,12 +813,6 @@ def selected_patterns(tab) -> List[SherlockPattern]:
     return [member for group in tab._selected_groups() for member in group.members]
 
 
-def replace_pattern(tab, key: str, new_pattern: SherlockPattern) -> None:
-    tab._patterns = [
-        new_pattern if p.key == key else p for p in tab._patterns
-    ]
-
-
 def on_mousewheel(tab, event: Any) -> str:
     """Scroll whichever tree is under the pointer (left index or right values)."""
     widget = getattr(event, "widget", None)
@@ -842,205 +854,12 @@ def on_row_double_click(tab, event: Any) -> str:
 
 
 # ----------------------------------------------------------------------
-# Action handlers
-# ----------------------------------------------------------------------
-
-
-def on_toggle(tab) -> None:
-    """Enable/Disable every member of each selected visible value group."""
-    groups = tab._selected_groups()
-    if not groups:
-        tab._set_status("Select one or more patterns to enable or disable.")
-        return
-    keys = {member.key for group in groups for member in group.members}
-    tab._patterns = [
-        _with_enabled(p, not p.enabled) if p.key in keys else p
-        for p in tab._patterns
-    ]
-    tab._pattern_manager_dirty = True
-    tab._refresh_after_mutation()
-    # Members keep their keys, so each group's iid (first member key) is stable;
-    # restore selection only for groups still visible after the toggle.
-    visible = tab._visible_keys()
-    tab._tree.selection_set(
-        [_group_iid(g) for g in groups if _group_iid(g) in visible]
-    )
-
-
-def on_delete(tab) -> None:
-    """Remove every member of each selected visible value group."""
-    groups = tab._selected_groups()
-    if not groups:
-        tab._set_status("Select one or more patterns to delete.")
-        return
-    keys = {member.key for group in groups for member in group.members}
-    tab._patterns = [p for p in tab._patterns if p.key not in keys]
-    tab._pattern_manager_dirty = True
-    tab._refresh_after_mutation()
-
-
-def on_restore_builtins(tab) -> None:
-    """Re-enable all built-ins (clears any disabled state); customs untouched."""
-    customs = [p for p in tab._patterns if not p.builtin]
-    tab._patterns = builtin_patterns() + customs
-    tab._pattern_manager_dirty = True
-    tab._refresh_after_mutation()
-    tab._set_status("Built-ins restored.")
-
-
-def on_export(tab) -> None:
-    """Write the full staged pattern list to a user-chosen JSON file.
-
-    Read-only: never mutates _patterns, filter vars, selection, the dirty
-    flag, settings, or persistence. Cancel is silent; write errors report via
-    safe_messagebox; success only updates the status line (manager stays open).
-    """
-    now = datetime.now()
-    default_name = f"sherlock_patterns_{now.strftime('%Y%m%d_%H%M%S')}.json"
-    path = filedialog.asksaveasfilename(
-        parent=tab._pattern_manager,
-        title="Export Sherlock Patterns",
-        defaultextension=".json",
-        filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
-        initialfile=default_name,
-    )
-    if not path:
-        return
-    payload = build_export_payload(
-        tab._patterns, exported_at=now.isoformat(timespec="seconds")
-    )
-    try:
-        with open(path, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh, indent=2, ensure_ascii=False)
-            fh.write("\n")
-    except OSError as exc:
-        _mb().showerror(
-            "Export Failed",
-            "Could not write pattern export:\n{0}".format(exc),
-            parent=tab._active_dialog_parent(),
-        )
-        return
-    tab._set_status(
-        "Exported {0} patterns to {1}.".format(payload["count"], path)
-    )
-
-
-def on_add(tab) -> None:
-    result = tab._open_pattern_dialog()
-    if result is None:
-        return
-    tab._append_custom_from_result(result)
-
-
-def on_copy(tab) -> None:
-    """Copy exactly one selected visible value group as new custom rows.
-
-    Single-member group -> the prefilled Add dialog (existing UX). Multi-member
-    group -> no-dialog duplicate of every member as a custom (the single-pattern
-    dialog can't represent multiple patterns; comma input is a later card).
-    """
-    groups = tab._selected_groups()
-    if len(groups) != 1:
-        tab._set_status("Select exactly one pattern to copy.")
-        return
-    group = groups[0]
-    if len(group.members) == 1:
-        tab._add_from_source(group.members[0])
-    else:
-        tab._duplicate_group_as_customs(group)
-
-
-def duplicate_group_as_customs(tab, group: PatternValueGroup) -> None:
-    """Duplicate every member of *group* as a new custom row (no dialog)."""
-    new_keys: List[str] = []
-    for member in group.members:
-        pattern = SherlockPattern(
-            key="custom_{0}".format(uuid.uuid4().hex),
-            category=member.category,
-            label=member.label,
-            pattern=member.pattern,
-            severity=member.severity,
-            enabled=member.enabled,
-            builtin=False,
-            color_tag=normalize_color_tag(member.color_tag),
-        )
-        tab._patterns.append(pattern)
-        new_keys.append(pattern.key)
-    tab._pattern_manager_dirty = True
-    tab._refresh_after_mutation()
-    if new_keys and new_keys[0] in tab._visible_keys():
-        tab._tree.selection_set(new_keys[0])
-
-
-def add_from_source(tab, source: SherlockPattern) -> None:
-    """Open the Add dialog prefilled from *source*; save as a new custom."""
-    result = tab._open_pattern_dialog(prefill=source)
-    if result is None:
-        return
-    tab._append_custom_from_result(result)
-
-
-def append_custom_from_result(tab, result: Dict[str, Any]) -> None:
-    pattern = SherlockPattern(
-        key="custom_{0}".format(uuid.uuid4().hex),
-        category=result["category"],
-        label=result["label"],
-        pattern=result["pattern"],
-        severity=result["severity"],
-        enabled=result["enabled"],
-        builtin=False,
-        color_tag=result.get("color_tag", COLOR_TAG_NONE),
-    )
-    tab._patterns.append(pattern)
-    tab._pattern_manager_dirty = True
-    tab._refresh_after_mutation()
-    if pattern.key in tab._visible_keys():
-        tab._tree.selection_set(pattern.key)
-
-
-def on_edit(tab) -> None:
-    """Edit exactly one selected single-member value group.
-
-    Multi-member groups are guarded (the single-pattern dialog can't represent
-    them safely yet); built-in single-member groups follow C15 edit-as-copy.
-    """
-    groups = tab._selected_groups()
-    if len(groups) != 1:
-        tab._set_status("Select exactly one pattern to edit.")
-        return
-    group = groups[0]
-    if len(group.members) != 1:
-        tab._set_status(
-            "Editing a grouped value with multiple patterns isn't supported "
-            "yet - use Copy, or delete and re-add."
-        )
-        return
-    pattern = group.members[0]
-    if pattern.builtin:
-        tab._add_from_source(pattern)
-        return
-    result = tab._open_pattern_dialog(existing=pattern)
-    if result is None:
-        return
-    updated = SherlockPattern(
-        key=pattern.key,
-        category=result["category"],
-        label=result["label"],
-        pattern=result["pattern"],
-        severity=result["severity"],
-        enabled=result["enabled"],
-        builtin=False,
-        color_tag=result.get("color_tag", COLOR_TAG_NONE),
-    )
-    tab._replace_pattern(pattern.key, updated)
-    tab._pattern_manager_dirty = True
-    tab._refresh_after_mutation()
-    if pattern.key in tab._visible_keys():
-        tab._tree.selection_set(pattern.key)
-
-
-# ----------------------------------------------------------------------
 # Add/edit dialog
+#
+# The value-row action handlers (Add / Copy / Edit / Enable-Disable / Delete /
+# Restore / Export / bulk tag) moved to sherlock_value_actions.py in C25 to keep
+# this module under the R23 1200-line guardrail. This module keeps the rendering,
+# the filters, this Add/Edit dialog, and the open_pattern_manager wiring.
 # ----------------------------------------------------------------------
 
 
@@ -1049,15 +868,19 @@ def open_pattern_dialog(
     existing: Optional[SherlockPattern] = None,
     *,
     prefill: Optional[SherlockPattern] = None,
+    prefill_patterns: Optional[Sequence[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Modal add/edit dialog. Returns the collected fields or None on cancel.
 
-    *existing* drives the in-place edit of a custom pattern (Edit title, same
-    key replaced by the caller). *prefill* seeds the field values for an Add
-    (Copy, or editing a built-in) while keeping the Add title, so the caller
-    saves a brand-new custom pattern. Parents to the open Pattern Manager (if
-    any) so it stays modal to the manager; the manager's grab is re-asserted
-    once this dialog closes.
+    *existing* drives the in-place edit of a custom group (Edit title; the caller
+    rebuilds its rows). *prefill* seeds the field values for an Add (Copy, or
+    editing a built-in) while keeping the Add title, so the caller saves brand-new
+    custom rows. *prefill_patterns* seeds the comma-separated Patterns field for a
+    multi-member group; when omitted the field falls back to ``source.pattern``.
+    The result carries ``patterns`` - the deduped token list from
+    split_pattern_input - so the caller mints one custom row per token. Parents to
+    the open Pattern Manager (if any) so it stays modal; the manager's grab is
+    re-asserted once this dialog closes.
     """
     source = existing if existing is not None else prefill
     parent = tab._active_dialog_parent()
@@ -1071,9 +894,16 @@ def open_pattern_dialog(
     tab._theme.apply_to_widget(outer, "main_window")
     outer.pack(fill=tk.BOTH, expand=True)
 
+    if prefill_patterns is not None:
+        pattern_seed = ", ".join(prefill_patterns)
+    elif source is not None:
+        pattern_seed = source.pattern
+    else:
+        pattern_seed = ""
+
     label_var = tk.StringVar(value=source.label if source else "")
     category_var = tk.StringVar(value=tab._dialog_category_default(source))
-    pattern_var = tk.StringVar(value=source.pattern if source else "")
+    pattern_var = tk.StringVar(value=pattern_seed)
     severity_var = tk.StringVar(
         value=_SEVERITY_LABELS[source.severity] if source else _SEVERITY_LABELS[Severity.MED]
     )
@@ -1105,7 +935,7 @@ def open_pattern_dialog(
     )
     cat_combo.grid(row=1, column=1, sticky="ew", pady=3, padx=(8, 0))
 
-    _add_field(2, "Pattern:", pattern_var)
+    _add_field(2, "Patterns:", pattern_var)
 
     sev_label = tk.Label(outer, text="Severity:", anchor="w")
     tab._theme.apply_to_widget(sev_label, "label")
@@ -1138,15 +968,17 @@ def open_pattern_dialog(
     result: Dict[str, Any] = {}
 
     def _on_ok() -> None:
-        ok, message = validate_pattern_fields(pattern_var.get())
-        if not ok:
-            _mb().showerror("Invalid Pattern", message, parent=dialog)
+        tokens = split_pattern_input(pattern_var.get())
+        if not tokens:
+            _mb().showerror(
+                "Invalid Pattern", "Enter at least one pattern.", parent=dialog
+            )
             return
         result.update(
             {
                 "label": label_var.get().strip(),
                 "category": category_var.get().strip() or "Custom",
-                "pattern": pattern_var.get().strip(),
+                "patterns": tokens,
                 "severity": _LABEL_TO_SEVERITY.get(severity_var.get(), Severity.MED),
                 "color_tag": normalize_color_tag(
                     _DIALOG_LABEL_TO_TAG.get(color_tag_var.get(), COLOR_TAG_NONE)

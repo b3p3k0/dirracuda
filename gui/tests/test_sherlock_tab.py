@@ -307,16 +307,17 @@ def test_edit_updates_color_tag(monkeypatch):
     monkeypatch.setattr(
         tab,
         "_open_pattern_dialog",
-        lambda existing=None: {
-            "label": "New", "category": "Custom", "pattern": "*new*",
+        lambda existing=None, **_: {
+            "label": "New", "category": "Custom", "patterns": ["*new*"],
             "severity": Severity.HIGH, "enabled": True, "color_tag": "user3",
         },
     )
 
     tab._on_edit()
 
-    updated = next(p for p in tab._patterns if p.key == "custom_1")
+    updated = next(p for p in tab._patterns if p.pattern == "*new*")
     assert updated.color_tag == "user3"
+    assert all(p.pattern != "*old*" for p in tab._patterns)
 
 
 def test_toggle_preserves_color_tag():
@@ -451,19 +452,22 @@ def test_edit_mutates_custom_pattern(monkeypatch):
     monkeypatch.setattr(
         tab,
         "_open_pattern_dialog",
-        lambda existing=None: {
-            "label": "New", "category": "Custom", "pattern": "*new*",
+        lambda existing=None, **_: {
+            "label": "New", "category": "Custom", "patterns": ["*new*"],
             "severity": Severity.HIGH, "enabled": False,
         },
     )
 
     tab._on_edit()
 
-    updated = next(p for p in tab._patterns if p.key == "custom_1")
+    # Changing the pattern string mints a fresh custom key (reuse_keys keys off
+    # the pattern string), so the edited row no longer carries the old key.
+    updated = next(p for p in tab._patterns if p.pattern == "*new*")
     assert updated.label == "New"
-    assert updated.pattern == "*new*"
     assert updated.severity is Severity.HIGH
     assert updated.enabled is False
+    assert updated.key.startswith("custom_")
+    assert all(p.key != "custom_1" for p in tab._patterns)
 
 
 def test_edit_builtin_creates_new_custom(monkeypatch):
@@ -475,9 +479,9 @@ def test_edit_builtin_creates_new_custom(monkeypatch):
     monkeypatch.setattr(
         tab,
         "_open_pattern_dialog",
-        lambda existing=None, prefill=None: {
+        lambda existing=None, prefill=None, **_: {
             "label": builtin.label, "category": builtin.category,
-            "pattern": builtin.pattern, "severity": builtin.severity,
+            "patterns": [builtin.pattern], "severity": builtin.severity,
             "enabled": True, "color_tag": "none",
         },
     )
@@ -528,9 +532,9 @@ def test_copy_builtin_creates_new_custom(monkeypatch):
     monkeypatch.setattr(
         tab,
         "_open_pattern_dialog",
-        lambda existing=None, prefill=None: {
+        lambda existing=None, prefill=None, **_: {
             "label": prefill.label, "category": prefill.category,
-            "pattern": prefill.pattern, "severity": prefill.severity,
+            "patterns": [prefill.pattern], "severity": prefill.severity,
             "enabled": prefill.enabled, "color_tag": "none",
         },
     )
@@ -556,9 +560,9 @@ def test_copy_custom_creates_new_custom(monkeypatch):
     monkeypatch.setattr(
         tab,
         "_open_pattern_dialog",
-        lambda existing=None, prefill=None: {
+        lambda existing=None, prefill=None, **_: {
             "label": prefill.label, "category": prefill.category,
-            "pattern": prefill.pattern, "severity": prefill.severity,
+            "patterns": [prefill.pattern], "severity": prefill.severity,
             "enabled": prefill.enabled, "color_tag": prefill.color_tag,
         },
     )
@@ -664,7 +668,7 @@ def test_edit_custom_marks_dirty(monkeypatch):
     tab._tree.selection.return_value = ("custom_1",)
     monkeypatch.setattr(
         tab, "_open_pattern_dialog",
-        lambda existing=None: _dialog_result(label="New", pattern="*new*"),
+        lambda existing=None, **_: _dialog_result(label="New", patterns=["*new*"]),
     )
     tab._on_edit()
     assert tab._pattern_manager_dirty is True
@@ -676,7 +680,7 @@ def test_copy_marks_dirty(monkeypatch):
     tab._tree.selection.return_value = (tab._patterns[0].key,)
     monkeypatch.setattr(
         tab, "_open_pattern_dialog",
-        lambda existing=None, prefill=None: _dialog_result(),
+        lambda existing=None, prefill=None, **_: _dialog_result(),
     )
     tab._on_copy()
     assert tab._pattern_manager_dirty is True
@@ -1304,7 +1308,9 @@ def test_double_click_custom_edits_in_place(monkeypatch):
     tab._tree.after_idle.side_effect = lambda cb: cb()
     monkeypatch.setattr(
         tab, "_open_pattern_dialog",
-        lambda existing=None: _dialog_result(label="New", pattern="*new*"),
+        # Keep the pattern string so reuse_keys preserves the custom_1 key; the
+        # double-click test is about routing to in-place Edit, not key churn.
+        lambda existing=None, **_: _dialog_result(label="New", patterns=["*old*"]),
     )
 
     tab._on_row_double_click(types.SimpleNamespace(y=10))
@@ -1327,9 +1333,9 @@ def test_double_click_builtin_creates_copy(monkeypatch):
     tab._tree.after_idle.side_effect = lambda cb: cb()
     monkeypatch.setattr(
         tab, "_open_pattern_dialog",
-        lambda existing=None, prefill=None: _dialog_result(
+        lambda existing=None, prefill=None, **_: _dialog_result(
             label=prefill.label, category=prefill.category,
-            pattern=prefill.pattern, severity=prefill.severity,
+            patterns=[prefill.pattern], severity=prefill.severity,
         ),
     )
 
@@ -1780,44 +1786,197 @@ def test_delete_grouped_row_removes_all_members():
     assert tab._pattern_manager_dirty is True
 
 
-def test_edit_grouped_multimember_is_guarded(monkeypatch):
+def test_edit_grouped_multimember_edits_in_place(monkeypatch):
+    # C25: a custom multi-member group now edits in place via the comma Patterns
+    # field. Keep one token, drop one, add one.
     tab = _bare_tab()
     tab._patterns = [
         _tagged("custom_1", label="Tax", pattern="*w2*"),
         _tagged("custom_2", label="Tax", pattern="*w4*"),
     ]
-    snapshot = list(tab._patterns)
     tab._tree.selection.return_value = ("custom_1",)
-    monkeypatch.setattr(
-        tab, "_open_pattern_dialog",
-        lambda *a, **k: pytest.fail("dialog must not open for multi-member edit"),
-    )
+    captured = {}
+
+    def fake(existing=None, prefill_patterns=None, **_):
+        captured["prefill_patterns"] = (
+            list(prefill_patterns) if prefill_patterns is not None else None
+        )
+        return _dialog_result(label="Tax", patterns=["*w2*", "*w9*"])
+
+    monkeypatch.setattr(tab, "_open_pattern_dialog", fake)
 
     tab._on_edit()
 
-    assert tab._patterns == snapshot
+    # Edit seeded the dialog with both grouped tokens, in order.
+    assert captured["prefill_patterns"] == ["*w2*", "*w4*"]
+    by_pattern = {p.pattern: p for p in tab._patterns}
+    assert set(by_pattern) == {"*w2*", "*w9*"}
+    # Unchanged token keeps its key; the new token mints a fresh custom key.
+    assert by_pattern["*w2*"].key == "custom_1"
+    assert by_pattern["*w9*"].key.startswith("custom_")
+    assert by_pattern["*w9*"].key not in {"custom_1", "custom_2"}
+    assert tab._pattern_manager_dirty is True
+
+
+def test_copy_grouped_multimember_opens_prefilled_dialog(monkeypatch):
+    # C25: copy of a multi-member group opens the prefilled Add dialog (no silent
+    # duplicate); saving mints fresh custom keys for every token.
+    tab = _bare_tab()
+    tab._patterns = [
+        _tagged("custom_1", label="Tax", pattern="*w2*"),
+        _tagged("custom_2", label="Tax", pattern="*w4*"),
+    ]
+    tab._tree.selection.return_value = ("custom_1",)
+    captured = {}
+
+    def fake(existing=None, prefill=None, prefill_patterns=None, **_):
+        captured["prefill"] = prefill
+        captured["prefill_patterns"] = (
+            list(prefill_patterns) if prefill_patterns is not None else None
+        )
+        return _dialog_result(label="Tax", patterns=["*w2*", "*w4*"])
+
+    monkeypatch.setattr(tab, "_open_pattern_dialog", fake)
+
+    tab._on_copy()
+
+    assert captured["prefill"] is not None
+    assert captured["prefill_patterns"] == ["*w2*", "*w4*"]
+    assert len(tab._patterns) == 4
+    new = [p for p in tab._patterns if p.key not in {"custom_1", "custom_2"}]
+    assert len(new) == 2
+    assert sorted(p.pattern for p in new) == ["*w2*", "*w4*"]
+    assert all(p.key.startswith("custom_") and not p.builtin for p in new)
+    assert tab._pattern_manager_dirty is True
+
+
+def test_add_comma_creates_one_row_per_token(monkeypatch):
+    tab = _bare_tab()
+    tab._patterns = []
+    monkeypatch.setattr(
+        tab, "_open_pattern_dialog",
+        lambda existing=None, **_: _dialog_result(
+            label="Multi", patterns=["*a*", "*b*", "*c*"]
+        ),
+    )
+
+    tab._on_add()
+
+    assert [p.pattern for p in tab._patterns] == ["*a*", "*b*", "*c*"]
+    assert all(not p.builtin and p.key.startswith("custom_") for p in tab._patterns)
+    assert len({p.key for p in tab._patterns}) == 3
+
+
+def test_placeholder_comma_add_becomes_real_category(monkeypatch):
+    from shared.sherlock import category_choices
+
+    tab = _bare_tab()
+    tab._patterns = []
+    tab._placeholder_categories = ["Finance"]
+    tab._active_category = "Finance"
+    monkeypatch.setattr(
+        tab, "_open_pattern_dialog",
+        lambda existing=None, **_: _dialog_result(
+            category="Finance", patterns=["*w2*", "*w4*"]
+        ),
+    )
+
+    tab._on_add()
+
+    assert [p.category for p in tab._patterns] == ["Finance", "Finance"]
+    # Real category now derives from the stored rows, so it survives the
+    # placeholder reset on the next manager open.
+    assert "Finance" in category_choices(tab._patterns, always_include=())
+
+
+# ---------------------------------------------------------------------------
+# C25: bulk color-tag assignment (Tag ... Apply)
+# ---------------------------------------------------------------------------
+
+
+def test_apply_tag_updates_selected_custom_group():
+    tab = _bare_tab()
+    tab._patterns = [_tagged("custom_1", label="A"), _tagged("custom_2", label="B")]
+    tab._tree.selection.return_value = ("custom_1",)
+    tab._value_tag_var = _DummyVar("User2")
+
+    tab._on_apply_tag()
+
+    assert next(p for p in tab._patterns if p.key == "custom_1").color_tag == "user2"
+    assert next(p for p in tab._patterns if p.key == "custom_2").color_tag == "none"
+    assert tab._pattern_manager_dirty is True
+
+
+def test_apply_tag_no_selection_sets_status_not_dirty():
+    tab = _bare_tab()
+    tab._patterns = [_tagged("custom_1")]
+    tab._tree.selection.return_value = ()
+    tab._value_tag_var = _DummyVar("User1")
+
+    tab._on_apply_tag()
+
     assert tab._pattern_manager_dirty is False
     tab._status_label.configure.assert_called()
 
 
-def test_copy_grouped_multimember_duplicates_all_members(monkeypatch):
+def test_apply_tag_same_tag_is_noop():
+    tab = _bare_tab()
+    tab._patterns = [_tagged("custom_1", color_tag="user1")]
+    tab._tree.selection.return_value = ("custom_1",)
+    tab._value_tag_var = _DummyVar("User1")
+
+    tab._on_apply_tag()
+
+    assert tab._pattern_manager_dirty is False
+    assert next(p for p in tab._patterns if p.key == "custom_1").color_tag == "user1"
+
+
+def test_apply_tag_regroups_rows_when_tag_changes():
+    # Two custom rows sharing every field but color_tag -> two groups; tagging
+    # both the same merges them into one grouped row.
     tab = _bare_tab()
     tab._patterns = [
-        _tagged("custom_1", label="Tax", pattern="*w2*"),
-        _tagged("custom_2", label="Tax", pattern="*w4*"),
+        _tagged("custom_1", label="Tax", pattern="*w2*", color_tag="none"),
+        _tagged("custom_2", label="Tax", pattern="*w4*", color_tag="user1"),
     ]
-    tab._tree.selection.return_value = ("custom_1",)
-    monkeypatch.setattr(
-        tab, "_open_pattern_dialog",
-        lambda *a, **k: pytest.fail("multi-member copy must not open the dialog"),
-    )
+    tab._tree.selection.return_value = ("custom_1", "custom_2")
+    tab._value_tag_var = _DummyVar("User2")
 
-    tab._on_copy()
+    tab._on_apply_tag()
 
-    assert len(tab._patterns) == 4
-    assert sorted(p.pattern for p in tab._patterns) == ["*w2*", "*w2*", "*w4*", "*w4*"]
-    assert all(not p.builtin for p in tab._patterns)
+    groups = [g for g in tab._visible_groups() if g.label == "Tax"]
+    assert len(groups) == 1
+    assert groups[0].color_tag == "user2"
+    assert len(groups[0].members) == 2
+
+
+def test_apply_tag_skips_builtin_members():
+    tab = _bare_tab()
+    tab._patterns = [
+        _tagged("b1", builtin=True, label="B", pattern="*b*"),
+        _tagged("custom_1", builtin=False, label="C", pattern="*c*"),
+    ]
+    tab._tree.selection.return_value = ("b1", "custom_1")
+    tab._value_tag_var = _DummyVar("User1")
+
+    tab._on_apply_tag()
+
+    assert next(p for p in tab._patterns if p.key == "b1").color_tag == "none"
+    assert next(p for p in tab._patterns if p.key == "custom_1").color_tag == "user1"
     assert tab._pattern_manager_dirty is True
+
+
+def test_apply_tag_all_builtin_is_noop():
+    tab = _bare_tab()
+    tab._patterns = [_tagged("b1", builtin=True, label="B", pattern="*b*")]
+    tab._tree.selection.return_value = ("b1",)
+    tab._value_tag_var = _DummyVar("User1")
+
+    tab._on_apply_tag()
+
+    assert tab._pattern_manager_dirty is False
+    assert next(p for p in tab._patterns if p.key == "b1").color_tag == "none"
+    tab._status_label.configure.assert_called()
 
 
 def test_visible_groups_combines_active_category_and_search():
@@ -2518,3 +2677,70 @@ def test_placeholder_becomes_real_category_survives_reopen(tk_root, monkeypatch)
     assert "Temp" in captured["after_add"]        # value persisted under the name
     assert captured["placeholders"] == []         # placeholder list reset on reopen
     assert "Temp" in captured["cats"]             # survives as a real category
+
+
+# ---------------------------------------------------------------------------
+# Real-Tk: Add/Edit dialog Patterns field (comma split / dedupe / blank reject)
+# ---------------------------------------------------------------------------
+
+
+def _find_widgets(widget, cls):
+    out = [widget] if isinstance(widget, cls) else []
+    for child in widget.winfo_children():
+        out.extend(_find_widgets(child, cls))
+    return out
+
+
+def _plain_entries(widget):
+    # ttk.Combobox subclasses tk.Entry, so filter the comboboxes out to get the
+    # plain text Entry widgets: [Label entry, Patterns entry] in creation order.
+    return [
+        w for w in _find_widgets(widget, tk.Entry) if not isinstance(w, ttk.Combobox)
+    ]
+
+
+def test_pattern_dialog_patterns_field_splits_and_dedupes(tk_root):
+    tab = SherlockTab(tk_root, {})
+    captured = {}
+
+    def drive():
+        dlg = tk_root.grab_current()
+        labels = [w.cget("text") for w in _find_widgets(dlg, tk.Label)]
+        captured["has_patterns_label"] = "Patterns:" in labels
+        patterns_entry = _plain_entries(dlg)[1]
+        patterns_entry.delete(0, tk.END)
+        patterns_entry.insert(0, "*a*, *a* , *b*")
+        buttons = {w.cget("text"): w for w in _find_widgets(dlg, tk.Button)}
+        buttons["OK"].invoke()
+
+    tk_root.after(50, drive)
+    out = tab._open_pattern_dialog()
+
+    assert captured["has_patterns_label"] is True
+    assert out is not None
+    # Comma-split, whitespace-stripped, duplicate dropped (first occurrence wins).
+    assert out["patterns"] == ["*a*", "*b*"]
+
+
+def test_pattern_dialog_blank_patterns_rejected(tk_root, monkeypatch):
+    tab = SherlockTab(tk_root, {})
+    calls = {"showerror": 0}
+    fake = types.SimpleNamespace(
+        showerror=lambda *a, **k: calls.__setitem__("showerror", calls["showerror"] + 1),
+    )
+    monkeypatch.setattr(mod, "safe_messagebox", fake)
+
+    def drive():
+        dlg = tk_root.grab_current()
+        buttons = {w.cget("text"): w for w in _find_widgets(dlg, tk.Button)}
+        patterns_entry = _plain_entries(dlg)[1]
+        patterns_entry.delete(0, tk.END)
+        patterns_entry.insert(0, " , , ")
+        buttons["OK"].invoke()      # only-commas -> error, dialog stays open
+        buttons["Cancel"].invoke()  # close without a result
+
+    tk_root.after(50, drive)
+    out = tab._open_pattern_dialog()
+
+    assert calls["showerror"] >= 1
+    assert out is None
