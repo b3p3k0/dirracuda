@@ -32,6 +32,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from gui.utils import safe_messagebox
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.style import get_theme
+from gui.components.experimental_features import sherlock_category_actions
 from gui.components.experimental_features import sherlock_pattern_manager
 from gui.components.experimental_features.sherlock_pattern_manager import (
     _FACET_ALL,
@@ -89,6 +90,8 @@ class SherlockTab:
         self._category_tree: Optional[ttk.Treeview] = None
         # C23 left-pane selected category (display-only); _FACET_ALL == "All".
         self._active_category: str = _FACET_ALL
+        # C24 UI-only placeholder categories (created, no value yet); reset on open.
+        self._placeholder_categories: List[str] = []
         self._pattern_manager: Optional[tk.Toplevel] = None
         # True when pattern-manager edits have not been persisted to disk;
         # cleared only by a successful save (never auto-reset on manager open).
@@ -362,6 +365,35 @@ class SherlockTab:
 
     def _on_category_search(self, *args: Any) -> None:
         return sherlock_pattern_manager.on_category_search(self, *args)
+
+    # ------------------------------------------------------------------
+    # Category-pane actions (see sherlock_category_actions.py)
+    # ------------------------------------------------------------------
+
+    def _build_category_action_row(self, parent: tk.Widget) -> None:
+        return sherlock_category_actions.build_category_action_row(self, parent)
+
+    def _prompt_category_name(
+        self, *, title: str, prompt: str, initial: str = ""
+    ) -> Optional[str]:
+        return sherlock_category_actions.prompt_category_name(
+            self, title=title, prompt=prompt, initial=initial
+        )
+
+    def _on_category_add(self) -> None:
+        return sherlock_category_actions.on_category_add(self)
+
+    def _on_category_copy(self) -> None:
+        return sherlock_category_actions.on_category_copy(self)
+
+    def _on_category_delete(self) -> None:
+        return sherlock_category_actions.on_category_delete(self)
+
+    def _dialog_category_default(self, source: Optional[SherlockPattern]) -> str:
+        return sherlock_category_actions.dialog_category_default(self, source)
+
+    def _dialog_category_choices(self) -> List[str]:
+        return sherlock_category_actions.dialog_category_choices(self)
 
     # ------------------------------------------------------------------
     # Pattern manager dialog

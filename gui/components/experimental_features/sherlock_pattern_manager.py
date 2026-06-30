@@ -318,6 +318,8 @@ def build_category_pane(tab, parent: tk.Widget) -> None:
     search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
     tab._category_search_var.trace_add("write", tab._on_category_search)
 
+    tab._build_category_action_row(parent)
+
     tree_frame = tk.Frame(parent)
     tab._theme.apply_to_widget(tree_frame, "main_window")
     tree_frame.pack(fill=tk.BOTH, expand=True)
@@ -402,7 +404,8 @@ def refresh_category_list(tab) -> None:
     groups = group_patterns(tab._patterns)
     counts = Counter(group.category for group in groups)
     total = len(groups)
-    names = category_choices(tab._patterns, always_include=())
+    placeholders = getattr(tab, "_placeholder_categories", None) or ()
+    names = category_choices(tab._patterns, always_include=tuple(placeholders))
 
     needle = ""
     var = getattr(tab, "_category_search_var", None)
@@ -608,6 +611,7 @@ def open_pattern_manager(tab) -> None:
 
     tab._pattern_manager = dialog
     tab._active_category = _FACET_ALL
+    tab._placeholder_categories = []
     tab._refresh_category_list()
     tab._refresh_table()
     try:
@@ -1068,7 +1072,7 @@ def open_pattern_dialog(
     outer.pack(fill=tk.BOTH, expand=True)
 
     label_var = tk.StringVar(value=source.label if source else "")
-    category_var = tk.StringVar(value=source.category if source else "Custom")
+    category_var = tk.StringVar(value=tab._dialog_category_default(source))
     pattern_var = tk.StringVar(value=source.pattern if source else "")
     severity_var = tk.StringVar(
         value=_SEVERITY_LABELS[source.severity] if source else _SEVERITY_LABELS[Severity.MED]
@@ -1095,7 +1099,7 @@ def open_pattern_dialog(
     cat_combo = ttk.Combobox(
         outer,
         textvariable=category_var,
-        values=category_choices(tab._patterns),
+        values=tab._dialog_category_choices(),
         state="normal",
         width=28,
     )

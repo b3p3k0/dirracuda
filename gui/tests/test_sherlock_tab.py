@@ -70,6 +70,7 @@ def _bare_tab(context=None) -> SherlockTab:
     # the mocked _refresh_table.
     tab._category_tree = None
     tab._active_category = mod._FACET_ALL
+    tab._placeholder_categories = []
     tab._status_label = MagicMock()
     tab._refresh_table = MagicMock()
     tab._pattern_manager = None
@@ -1979,3 +1980,541 @@ def test_export_writes_all_groups_not_only_visible(tk_root, monkeypatch, tmp_pat
     # Export still writes the full staged catalog (both patterns).
     assert data["count"] == 2
     assert {row["pattern"] for row in data["patterns"]} == {"*a*", "*b*"}
+
+
+# ---------------------------------------------------------------------------
+# C24 - Category-pane actions (Add / Copy / Delete)
+# ---------------------------------------------------------------------------
+
+# --- Add (headless) ---
+
+def test_category_add_creates_placeholder_without_mutating_patterns(monkeypatch):
+    tab = _bare_tab()
+    tab._patterns = list(default_settings().patterns)
+    before = list(tab._patterns)
+    monkeypatch.setattr(tab, "_prompt_category_name", lambda **k: "Brand New")
+
+    tab._on_category_add()
+
+    assert tab._patterns == before
+    assert tab._pattern_manager_dirty is False
+    assert tab._placeholder_categories == ["Brand New"]
+    assert tab._active_category == "Brand New"
+
+
+def test_category_add_blank_rejected(monkeypatch):
+    tab = _bare_tab()
+    tab._patterns = list(default_settings().patterns)
+    monkeypatch.setattr(tab, "_prompt_category_name", lambda **k: "   ")
+
+    tab._on_category_add()
+
+    assert tab._placeholder_categories == []
+    assert tab._pattern_manager_dirty is False
+    tab._status_label.configure.assert_called()
+
+
+def test_category_add_cancel_does_nothing(monkeypatch):
+    tab = _bare_tab()
+    tab._patterns = list(default_settings().patterns)
+    monkeypatch.setattr(tab, "_prompt_category_name", lambda **k: None)
+
+    tab._on_category_add()
+
+    assert tab._placeholder_categories == []
+    assert tab._pattern_manager_dirty is False
+
+
+def test_category_add_existing_selects_not_duplicates(monkeypatch):
+    tab = _bare_tab()
+    tab._patterns = [_tagged("c1", label="A", category="Finance", pattern="*a*")]
+    # Different casing must resolve to the existing display value.
+    monkeypatch.setattr(tab, "_prompt_category_name", lambda **k: "finance")
+
+    tab._on_category_add()
+
+    assert tab._active_category == "Finance"
+    assert tab._placeholder_categories == []
+    assert tab._pattern_manager_dirty is False
+
+
+def test_category_add_existing_placeholder_not_duplicated(monkeypatch):
+    tab = _bare_tab()
+    tab._patterns = []
+    tab._placeholder_categories = ["Temp"]
+    monkeypatch.setattr(tab, "_prompt_category_name", lambda **k: "temp")
+
+    tab._on_category_add()
+
+    assert tab._placeholder_categories == ["Temp"]  # no duplicate
+    assert tab._active_category == "Temp"
+
+
+def test_placeholder_excluded_from_export(monkeypatch, tmp_path):
+    tab = _bare_tab()
+    tab._patterns = list(default_settings().patterns)
+    tab._placeholder_categories = ["GhostCat"]
+    tab._pattern_manager = MagicMock()
+    out = tmp_path / "p.json"
+    monkeypatch.setattr(mod.filedialog, "asksaveasfilename", lambda **kw: str(out))
+
+    tab._on_export()
+
+    import json as _json
+
+    data = _json.loads(out.read_text(encoding="utf-8"))
+    assert data["count"] == len(tab._patterns)
+    assert "GhostCat" not in {row["category"] for row in data["patterns"]}
+
+
+# --- Copy (headless) ---
+
+def test_category_copy_duplicates_as_customs(monkeypatch):
+    tab = _bare_tab()
+    src1 = _tagged("custom_1", label="Tax", category="Finance", pattern="*w2*", color_tag="user1")
+    src2 = _tagged("custom_2", label="Tax", category="Finance", pattern="*w4*", color_tag="user1")
+    tab._patterns = [src1, src2]
+    tab._active_category = "Finance"
+    monkeypatch.setattr(tab, "_prompt_category_name", lambda **k: "Finance Copy")
+
+    tab._on_category_copy()
+
+    copies = [p for p in tab._patterns if p.category == "Finance Copy"]
+    assert len(copies) == 2
+    assert {c.pattern for c in copies} == {"*w2*", "*w4*"}
+    assert all(not c.builtin for c in copies)
+    assert all(c.key.startswith("custom_") for c in copies)
+    assert {c.key for c in copies}.isdisjoint({"custom_1", "custom_2"})
+    assert tab._pattern_manager_dirty is True
+    assert tab._active_category == "Finance Copy"
+
+
+def test_category_copy_preserves_fields_and_forces_custom(monkeypatch):
+    tab = _bare_tab()
+    tab._patterns = list(builtin_patterns())
+    src = [p for p in tab._patterns if p.category == "Credentials"]
+    assert src and all(p.builtin for p in src)
+    tab._active_category = "Credentials"
+    monkeypatch.setattr(tab, "_prompt_category_name", lambda **k: "Creds Copy")
+
+    tab._on_category_copy()
+
+    copies = [p for p in tab._patterns if p.category == "Creds Copy"]
+    assert len(copies) == len(src)
+    for orig, copy in zip(src, copies):  # copies appended in source order
+        assert copy.label == orig.label
+        assert copy.pattern == orig.pattern
+        assert copy.severity == orig.severity
+        assert copy.enabled == orig.enabled
+        assert copy.color_tag == orig.color_tag
+        assert copy.builtin is False
+        assert copy.key != orig.key
+        assert copy.key.startswith("custom_")
+    # Originals untouched.
+    assert all(p.builtin for p in tab._patterns if p.category == "Credentials")
+
+
+def test_category_copy_all_categories_rejected(monkeypatch):
+    tab = _bare_tab()
+    tab._patterns = list(default_settings().patterns)
+    before = list(tab._patterns)
+    tab._active_category = mod._FACET_ALL
+    called = {"prompt": False}
+
+    def _p(**k):
+        called["prompt"] = True
+        return "X"
+
+    monkeypatch.setattr(tab, "_prompt_category_name", _p)
+
+    tab._on_category_copy()
+
+    assert called["prompt"] is False
+    assert tab._patterns == before
+    assert tab._pattern_manager_dirty is False
+    tab._status_label.configure.assert_called()
+
+
+def test_category_copy_empty_source_no_op(monkeypatch):
+    tab = _bare_tab()
+    tab._patterns = []
+    tab._placeholder_categories = ["Empty"]
+    tab._active_category = "Empty"
+    called = {"prompt": False}
+
+    def _p(**k):
+        called["prompt"] = True
+        return "X"
+
+    monkeypatch.setattr(tab, "_prompt_category_name", _p)
+
+    tab._on_category_copy()
+
+    assert called["prompt"] is False  # no prompt when nothing to copy
+    assert tab._patterns == []
+    assert tab._pattern_manager_dirty is False
+
+
+def test_category_copy_blank_dest_rejected(monkeypatch):
+    tab = _bare_tab()
+    tab._patterns = [_tagged("c1", label="A", category="Finance", pattern="*a*")]
+    tab._active_category = "Finance"
+    monkeypatch.setattr(tab, "_prompt_category_name", lambda **k: "  ")
+
+    tab._on_category_copy()
+
+    assert len(tab._patterns) == 1
+    assert tab._pattern_manager_dirty is False
+
+
+def test_category_copy_cancel_dest_no_op(monkeypatch):
+    tab = _bare_tab()
+    tab._patterns = [_tagged("c1", label="A", category="Finance", pattern="*a*")]
+    tab._active_category = "Finance"
+    monkeypatch.setattr(tab, "_prompt_category_name", lambda **k: None)
+
+    tab._on_category_copy()
+
+    assert len(tab._patterns) == 1
+    assert tab._pattern_manager_dirty is False
+
+
+def test_category_copy_existing_dest_cancel_unchanged(monkeypatch):
+    tab = _bare_tab()
+    src = _tagged("c1", label="A", category="Finance", pattern="*a*")
+    dst = _tagged("c2", label="B", category="Archive", pattern="*b*")
+    tab._patterns = [src, dst]
+    before = list(tab._patterns)
+    tab._active_category = "Finance"
+    monkeypatch.setattr(tab, "_prompt_category_name", lambda **k: "archive")
+    fake_mb = MagicMock()
+    fake_mb.askyesno.return_value = False
+    monkeypatch.setattr(mod, "safe_messagebox", fake_mb)
+
+    tab._on_category_copy()
+
+    fake_mb.askyesno.assert_called_once()
+    assert tab._patterns == before
+    assert tab._pattern_manager_dirty is False
+
+
+def test_category_copy_existing_dest_confirm_merges(monkeypatch):
+    tab = _bare_tab()
+    src = _tagged("c1", label="A", category="Finance", pattern="*a*")
+    dst = _tagged("c2", label="B", category="Archive", pattern="*b*")
+    tab._patterns = [src, dst]
+    tab._active_category = "Finance"
+    # Typed lower-case must merge into the existing-cased "Archive".
+    monkeypatch.setattr(tab, "_prompt_category_name", lambda **k: "archive")
+    fake_mb = MagicMock()
+    fake_mb.askyesno.return_value = True
+    monkeypatch.setattr(mod, "safe_messagebox", fake_mb)
+
+    tab._on_category_copy()
+
+    archive = [p for p in tab._patterns if p.category == "Archive"]
+    assert len(archive) == 2  # original + one copied row
+    assert tab._pattern_manager_dirty is True
+    assert tab._active_category == "Archive"
+
+
+# --- Delete (headless) ---
+
+def test_category_delete_confirms_with_counts(monkeypatch):
+    tab = _bare_tab()
+    tab._patterns = [
+        _tagged("c1", label="Tax", category="Finance", pattern="*w2*"),
+        _tagged("c2", label="Tax", category="Finance", pattern="*w4*"),
+    ]
+    tab._active_category = "Finance"
+    fake_mb = MagicMock()
+    fake_mb.askyesno.return_value = True
+    monkeypatch.setattr(mod, "safe_messagebox", fake_mb)
+
+    tab._on_category_delete()
+
+    fake_mb.askyesno.assert_called_once()
+    msg = fake_mb.askyesno.call_args[0][1]
+    assert "1 value group" in msg   # two patterns share one value group
+    assert "2 pattern" in msg
+    assert all(p.category != "Finance" for p in tab._patterns)
+    assert tab._pattern_manager_dirty is True
+
+
+def test_category_delete_cancel_unchanged(monkeypatch):
+    tab = _bare_tab()
+    tab._patterns = [
+        _tagged("c1", label="Tax", category="Finance", pattern="*w2*"),
+        _tagged("c2", label="Tax", category="Finance", pattern="*w4*"),
+    ]
+    before = list(tab._patterns)
+    tab._active_category = "Finance"
+    fake_mb = MagicMock()
+    fake_mb.askyesno.return_value = False
+    monkeypatch.setattr(mod, "safe_messagebox", fake_mb)
+
+    tab._on_category_delete()
+
+    assert tab._patterns == before
+    assert tab._pattern_manager_dirty is False
+
+
+def test_category_delete_removes_builtin_and_custom(monkeypatch):
+    tab = _bare_tab()
+    builtins = builtin_patterns()
+    custom = _tagged("custom_x", label="Mine", category="Credentials", pattern="*mine*")
+    tab._patterns = builtins + [custom]
+    tab._active_category = "Credentials"
+    fake_mb = MagicMock()
+    fake_mb.askyesno.return_value = True
+    monkeypatch.setattr(mod, "safe_messagebox", fake_mb)
+
+    tab._on_category_delete()
+
+    assert all(p.category != "Credentials" for p in tab._patterns)
+    assert not any(p.key == "cred_password" for p in tab._patterns)  # built-in gone
+    assert not any(p.key == "custom_x" for p in tab._patterns)       # custom gone
+    assert tab._pattern_manager_dirty is True
+
+
+def test_category_delete_all_categories_rejected(monkeypatch):
+    tab = _bare_tab()
+    tab._patterns = list(default_settings().patterns)
+    before = list(tab._patterns)
+    tab._active_category = mod._FACET_ALL
+    fake_mb = MagicMock()
+    monkeypatch.setattr(mod, "safe_messagebox", fake_mb)
+
+    tab._on_category_delete()
+
+    fake_mb.askyesno.assert_not_called()
+    assert tab._patterns == before
+    assert tab._pattern_manager_dirty is False
+    tab._status_label.configure.assert_called()
+
+
+def test_category_delete_empty_placeholder_removed_no_dirty(monkeypatch):
+    tab = _bare_tab()
+    tab._patterns = []
+    tab._placeholder_categories = ["Empty"]
+    tab._active_category = "Empty"
+    fake_mb = MagicMock()
+    monkeypatch.setattr(mod, "safe_messagebox", fake_mb)
+
+    tab._on_category_delete()
+
+    fake_mb.askyesno.assert_not_called()  # nothing persisted to confirm
+    assert tab._placeholder_categories == []
+    assert tab._active_category == mod._FACET_ALL  # reset via refresh_after_mutation
+    assert tab._pattern_manager_dirty is False
+
+
+def test_restore_builtins_after_category_delete_restores_defaults(monkeypatch):
+    tab = _bare_tab()
+    builtins = builtin_patterns()
+    custom = _tagged("custom_x", label="Mine", category="Custom", pattern="*mine*")
+    tab._patterns = builtins + [custom]
+    tab._active_category = "Credentials"
+    fake_mb = MagicMock()
+    fake_mb.askyesno.return_value = True
+    monkeypatch.setattr(mod, "safe_messagebox", fake_mb)
+
+    tab._on_category_delete()
+    assert not any(p.category == "Credentials" for p in tab._patterns)
+
+    tab._on_restore_builtins()
+
+    assert any(p.key == "cred_password" and p.builtin for p in tab._patterns)
+    assert len([p for p in tab._patterns if p.builtin]) == len(builtins)
+    assert any(p.key == "custom_x" for p in tab._patterns)
+
+
+# --- Category actions (real Tk) ---
+
+def test_prompt_category_name_returns_typed_value(tk_root):
+    tab = SherlockTab(tk_root, {})
+    captured = {}
+
+    def when_open():
+        dlg = tk_root.grab_current()
+        try:
+            entry = [w for w in _all_widgets(dlg) if isinstance(w, tk.Entry)][0]
+            entry.delete(0, "end")
+            entry.insert(0, "New Cat")
+            _find_button(dlg, "OK").invoke()
+        except Exception as exc:  # noqa: BLE001
+            captured["error"] = exc
+            if dlg is not None and dlg.winfo_exists():
+                dlg.destroy()
+
+    tk_root.after(50, when_open)
+    result = tab._prompt_category_name(title="Add Category", prompt="Name:")
+
+    assert "error" not in captured
+    assert result == "New Cat"
+
+
+def test_prompt_category_name_cancel_returns_none(tk_root):
+    tab = SherlockTab(tk_root, {})
+    captured = {}
+
+    def when_open():
+        dlg = tk_root.grab_current()
+        try:
+            _find_button(dlg, "Cancel").invoke()
+        except Exception as exc:  # noqa: BLE001
+            captured["error"] = exc
+            if dlg is not None and dlg.winfo_exists():
+                dlg.destroy()
+
+    tk_root.after(50, when_open)
+    result = tab._prompt_category_name(title="Add Category", prompt="Name:")
+
+    assert "error" not in captured
+    assert result is None
+
+
+def test_category_action_buttons_present_in_left_pane(tk_root):
+    tab = SherlockTab(tk_root, {})
+    captured = {}
+
+    def when_open():
+        mgr = tab._pattern_manager
+        try:
+            captured["buttons"] = _button_texts(mgr)
+        finally:
+            mgr.destroy()
+
+    tk_root.after(50, when_open)
+    tab._open_pattern_manager()
+
+    # Category Add/Copy/Delete (left pane) + value-row Add/Copy/Delete (action row).
+    assert captured["buttons"].count("Add") >= 2
+    assert captured["buttons"].count("Copy") >= 2
+    assert captured["buttons"].count("Delete") >= 2
+
+
+def test_category_add_refreshes_both_panes(tk_root, monkeypatch):
+    tab = SherlockTab(tk_root, {})
+    tab._patterns = [_tagged("c1", label="A", category="Finance", pattern="*a*")]
+    captured = {}
+
+    def when_open():
+        try:
+            monkeypatch.setattr(tab, "_prompt_category_name", lambda **k: "Empty")
+            tab._on_category_add()
+            tree = tab._category_tree
+            captured["cats"] = [tree.set(iid, "category") for iid in tree.get_children()]
+            captured["active"] = tab._active_category
+            captured["right"] = tab._tree.get_children()
+        finally:
+            tab._pattern_manager.destroy()
+
+    tk_root.after(50, when_open)
+    tab._open_pattern_manager()
+
+    assert "Empty" in captured["cats"]            # placeholder shows in left pane
+    assert captured["active"] == "Empty"
+    assert captured["right"] == ()                # placeholder has no value rows
+
+
+def test_category_copy_refreshes_panes(tk_root, monkeypatch):
+    tab = SherlockTab(tk_root, {})
+    tab._patterns = [
+        _tagged("c1", label="Tax", category="Finance", pattern="*w2*"),
+        _tagged("c2", label="Tax", category="Finance", pattern="*w4*"),
+    ]
+    captured = {}
+
+    def when_open():
+        try:
+            tab._active_category = "Finance"
+            tab._refresh_category_list()
+            monkeypatch.setattr(tab, "_prompt_category_name", lambda **k: "Finance Copy")
+            tab._on_category_copy()
+            tree = tab._category_tree
+            captured["counts"] = {
+                tree.set(iid, "category"): tree.set(iid, "count")
+                for iid in tree.get_children()
+            }
+            captured["right"] = tab._tree.get_children()
+        finally:
+            tab._pattern_manager.destroy()
+
+    tk_root.after(50, when_open)
+    tab._open_pattern_manager()
+
+    # Destination exists with one grouped value row (Tax: *w2*, *w4*).
+    assert captured["counts"].get("Finance Copy") == "1"
+    assert len(captured["right"]) == 1            # right pane shows the dest's row
+
+
+def test_add_dialog_defaults_to_active_category_and_lists_placeholder(tk_root):
+    tab = SherlockTab(tk_root, {})
+    tab._patterns = list(default_settings().patterns)
+    tab._placeholder_categories = ["Temp"]
+    tab._active_category = "Temp"
+    captured = {}
+
+    def when_open():
+        dlg = tk_root.grab_current()
+        try:
+            combo = _category_combobox(dlg)
+            captured["default"] = combo.get()
+            captured["values"] = tuple(combo.cget("values"))
+        except Exception as exc:  # noqa: BLE001
+            captured["error"] = exc
+        finally:
+            if dlg is not None and dlg.winfo_exists():
+                dlg.destroy()
+
+    tk_root.after(50, when_open)
+    tab._open_pattern_dialog()  # plain Add, no source
+
+    assert "error" not in captured
+    assert captured["default"] == "Temp"          # defaulted to active placeholder
+    assert "Temp" in captured["values"]           # placeholder listed
+    assert "Custom" in captured["values"]
+    assert "Credentials" in captured["values"]    # real categories still present
+
+
+def test_placeholder_becomes_real_category_survives_reopen(tk_root, monkeypatch):
+    tab = SherlockTab(tk_root, {})
+    tab._patterns = [_tagged("c1", label="A", category="Finance", pattern="*a*")]
+    captured = {}
+
+    def when_open1():
+        try:
+            monkeypatch.setattr(tab, "_prompt_category_name", lambda **k: "Temp")
+            tab._on_category_add()  # placeholder "Temp", active="Temp"
+            # Add a value under the active placeholder via the right-pane Add dialog.
+            monkeypatch.setattr(
+                tab, "_open_pattern_dialog",
+                lambda existing=None, prefill=None: {
+                    "label": "T", "category": tab._active_category,
+                    "pattern": "*t*", "severity": Severity.LOW,
+                    "enabled": True, "color_tag": "none",
+                },
+            )
+            tab._on_add()
+            captured["after_add"] = [p.category for p in tab._patterns]
+        finally:
+            tab._pattern_manager.destroy()
+
+    tk_root.after(50, when_open1)
+    tab._open_pattern_manager()
+
+    def when_open2():
+        try:
+            tree = tab._category_tree
+            captured["cats"] = [tree.set(iid, "category") for iid in tree.get_children()]
+            captured["placeholders"] = list(tab._placeholder_categories)
+        finally:
+            tab._pattern_manager.destroy()
+
+    tk_root.after(50, when_open2)
+    tab._open_pattern_manager()
+
+    assert "Temp" in captured["after_add"]        # value persisted under the name
+    assert captured["placeholders"] == []         # placeholder list reset on reopen
+    assert "Temp" in captured["cats"]             # survives as a real category
