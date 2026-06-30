@@ -339,3 +339,98 @@ Native Save As dialog
       v
 Write JSON metadata + all staged pattern rows
 ```
+
+## Two-Pane Pattern Manager Redesign
+
+```text
+Sherlock Patterns
+
++--------------------------------------------------------------------------------+
+| Categories                              | Values                                |
+| Search [ tax________________ ]          | Search [ w2________________ ]          |
+|-----------------------------------------+---------------------------------------|
+| All Categories                 42       | On | Sev | Tag   | Label    | Patterns|
+| > Credentials                 12        | Yes| HIGH| User1 | Password | *pass*  |
+| > Tax                          3        | Yes| MED | User2 | Tax docs | *w2*,   |
+| > Finance                      5        |    |     |       |          | *w4*,   |
+| > Internal                     3        |    |     |       |          | *tax*   |
+|                                         |                                       |
+| [Add] [Copy] [Delete]                   | Tag [User2 v] [Apply]                 |
+|                                         | [Add] [Edit] [Copy] [Enable/Disable]  |
+|                                         | [Delete] [Restore Built-ins] [Export] |
+|                                         | [Save & Close] [Close]                |
++--------------------------------------------------------------------------------+
+```
+
+```text
+Add/Edit Value
+
++------------------------------------------+
+| Label:      [ Tax docs                 ] |
+| Category:   [ Tax                    v ] |
+| Patterns:   [ *w2*, *w4*, *tax*       ] |
+| Severity:   [ MED v ]                    |
+| Color tag:  [ User2 v ]                  |
+| [x] Enabled                              |
+|                              [Cancel] [OK]|
++------------------------------------------+
+```
+
+```text
+Open Pattern Manager
+      |
+      v
+Build category index from staged patterns
+      |
+      v
+Group values by category + label + severity + enabled + color tag
+      |
+      v
+Right pane shows grouped value rows for selected category
+      |
+      v
+A grouped row may contain one or many comma-separated pattern strings
+```
+
+```text
+Save Add/Edit Value
+      |
+      v
+Split Patterns field on commas
+      |
+      v
+Trim whitespace and drop empty entries
+      |
+      v
+One pattern string -> one underlying SherlockPattern
+      |
+      v
+Grouped row remains one visible value in the UI
+```
+
+```text
+Apply color tag
+      |
+      v
+Select one or more value rows
+      |
+      v
+Choose None/User1/User2/User3
+      |
+      v
+Apply updates every underlying pattern in selected value groups
+```
+
+```text
+Delete category
+      |
+      v
+Confirm with value/pattern count
+      |
+      v
+Remove all staged patterns in that category
+      |
+      +-- Built-ins become deleted built-ins on Save
+      |
+      +-- Customs are removed from staged settings
+```

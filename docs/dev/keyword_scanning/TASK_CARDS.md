@@ -491,3 +491,142 @@ Validation:
 - `pytest -k sherlock`, GUI guardrails, `git diff --check`.
 - Known unrelated full-suite flakes, if any, reported separately from Sherlock
   failures.
+
+## C21 - Pattern Manager Helper Extraction
+
+Goal: Make room for the next Pattern Manager redesign without growing
+`sherlock_tab.py` past the 1200-line guardrail.
+
+Deliverables:
+- Extract existing Pattern Manager dialog UI/action logic into
+  `gui/components/experimental_features/sherlock_pattern_manager.py`.
+- Keep `sherlock_tab.py` as thin settings-tab wiring that opens the manager and
+  owns the parent Sherlock settings save path.
+- Preserve current behavior exactly: flat table, filters, Add/Edit, Copy,
+  Delete, Enable/Disable, Restore Built-ins, Export, Save & Close, dirty
+  warning, double-click, and staged-save semantics.
+- No two-pane layout, category actions, grouped value rows, comma splitting, or
+  tag-apply toolbar in this card.
+- Reduce `sherlock_tab.py` below the 1200-line warning threshold and record the
+  before/after line counts.
+
+Validation:
+- Existing Sherlock tab/export tests pass without expectation changes except
+  import-path updates required by extraction.
+- Xvfb/default-size Pattern Manager screenshot confirms current UI parity.
+- `pytest -k sherlock`, GUI guardrails, `git diff --check`, and file-size audit.
+
+## C22 - Grouped Value Model
+
+Goal: Add pure grouping/splitting helpers for the future two-pane UI while
+preserving the existing one-pattern-per-row settings format.
+
+Deliverables:
+- Add pure helpers that group staged `SherlockPattern` rows into visible value
+  rows by category, label, severity, enabled state, built-in/custom type, and
+  color tag.
+- Add a comma splitter for Add/Edit input: split on literal commas, trim
+  whitespace, drop empty tokens, and remove duplicates while preserving first
+  occurrence.
+- Add expansion helpers that turn grouped value rows back into individual
+  `SherlockPattern` rows without changing settings schema.
+- Built-in groups and custom groups stay separate even when other fields match.
+- Document that literal commas inside patterns are unsupported in this pass.
+
+Validation:
+- Pure tests for grouping, splitting, duplicate removal, order preservation,
+  built-in/custom separation, empty inputs, and no schema/wire-format change.
+- Matcher regression proves persisted rows still match as individual patterns.
+- Export regression proves export remains full-catalog and row-based.
+
+## C23 - Two-Pane Category / Value Layout
+
+Goal: Replace the flat table with a Regedit-style category index and selected
+category value pane.
+
+Deliverables:
+- Use a two-pane manager layout with categories on the left and grouped values
+  on the right.
+- Left pane shows `All Categories`, category names, counts, and a category
+  search box.
+- Right pane shows grouped value rows for the selected category, with value
+  search/filtering and the existing action row.
+- Preserve scrollbars, mouse wheel, keyboard navigation, extended selection,
+  double-click edit, Save & Close, dirty warning, Restore Built-ins, and Export.
+- Category selection changes visible rows only; it must not mutate staged data
+  or dirty state.
+
+Validation:
+- GUI tests for category counts, category search, `All Categories`, selected
+  category filtering, and hidden-row mutation guardrails.
+- Xvfb/default-size screenshot of the two-pane manager with no clipping.
+- Existing C15-C19 action tests remain green or are migrated to grouped rows.
+
+## C24 - Category Actions
+
+Goal: Let analysts manage category labels as groups without introducing a new
+category settings schema.
+
+Deliverables:
+- Add category-pane `Add`, `Copy`, and `Delete`.
+- Add creates an empty staged category placeholder; it disappears on close unless
+  at least one value is added.
+- Copy duplicates every value in the source category as custom rows under a new
+  category name, preserving label, patterns, severity, enabled state, and color
+  tag.
+- Delete confirms with value/pattern counts, then stages removal of every value
+  in the category. Built-ins stage deletion through existing semantics; customs
+  are removed from staged settings.
+- Category actions mark the Pattern Manager dirty only when they mutate staged
+  values/placeholders.
+
+Validation:
+- GUI tests for add placeholder lifecycle, copy-as-custom behavior, delete
+  confirmation/cancel, mixed built-in/custom category delete, and Restore
+  Built-ins after category deletion.
+- Xvfb screenshot of category actions.
+
+## C25 - Grouped Value Actions And Tag Assignment
+
+Goal: Make value editing denser and add in-view color tag assignment without
+adding a color picker.
+
+Deliverables:
+- Change Add/Edit from `Pattern` to comma-separated `Patterns`.
+- Saving Add/Edit expands each comma-separated string into one underlying
+  `SherlockPattern`; the UI displays them as one grouped value row.
+- Existing single-pattern rows continue to work unchanged.
+- Add a right-pane `Tag [None/User1/User2/User3] [Apply]` control that updates
+  `color_tag` for selected value rows only.
+- No color picker in the manager; color definitions remain on the main Sherlock
+  tab.
+- Value Add/Edit/Copy/Enable-Disable/Delete act on selected grouped value rows
+  only; category Delete remains the only category-wide destructive action.
+
+Validation:
+- GUI tests for comma-separated Add/Edit, grouped Copy/Delete, selected-row tag
+  assignment, dirty tracking, and Save & Close.
+- Pure tests verify commas inside a pattern are unsupported/documented.
+- Matcher/export regressions stay green.
+- Xvfb screenshots for grouped Add/Edit and tag assignment.
+
+## C26 - Two-Pane Pattern Manager Closeout
+
+Goal: Close out the two-pane Pattern Manager redesign with docs, visual proof,
+and maintainability checks.
+
+Deliverables:
+- README update in user-accessible style with at least one screenshot of the
+  reorganized Pattern Manager.
+- Technical implementation details go in `docs/TECHNICAL_REFERENCE.md`, not the
+  README.
+- Update roadmap, risk register, lessons learned, and ASCII sketches/flows.
+- Capture Xvfb screenshots for the two-pane view, category actions,
+  comma-separated Add/Edit, tag assignment, and the README screenshot.
+- File-size audit confirms `sherlock_tab.py` remains below the warning threshold
+  and new helper modules stay comfortably sized.
+
+Validation:
+- Targeted matrix across C21-C25.
+- `pytest -k sherlock`, GUI guardrails, `git diff --check`.
+- Full-suite failures, if any, are bucketed as unrelated vs Sherlock-attributable.

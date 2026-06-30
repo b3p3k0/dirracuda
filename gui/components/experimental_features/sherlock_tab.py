@@ -16,154 +16,46 @@ C14: the severity/User color rows use clickable color swatches (opening Tk's
 native colorchooser) instead of visible hex entries; User rows show "None" when
 empty and gain a Clear control. The underlying hex StringVars and sherlock.json
 wire format are unchanged.
+
+C21: the "Sherlock Patterns" modal dialog (its table, filter row, Add/Edit
+dialog, and Copy/Delete/Enable-Disable/Restore/Export/Save & Close actions) now
+lives in sherlock_pattern_manager.py. This tab keeps the settings surface and
+thin delegating stub methods that drive that dialog; behavior is unchanged.
 """
 
 from __future__ import annotations
 
-import dataclasses
-import json
-import uuid
 import tkinter as tk
-from datetime import datetime
 from tkinter import ttk, filedialog
 from typing import Any, Dict, List, Optional, Tuple
 
 from gui.utils import safe_messagebox
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.style import get_theme
-from shared.sherlock.export import build_export_payload
+from gui.components.experimental_features import sherlock_pattern_manager
+from gui.components.experimental_features.sherlock_pattern_manager import (
+    _FACET_ALL,
+    _SEVERITY_LABELS,
+    _SEVERITY_ORDER,
+    _USER_COLOR_LABELS,
+    _pattern_matches_filters,
+    _user_tag_facet_choices,
+    validate_pattern_fields,
+)
 from shared.sherlock import (
-    COLOR_TAG_NONE,
     SHERLOCK_SETTINGS_KEY,
     USER_COLOR_KEYS,
     Severity,
     SherlockPattern,
     SherlockSettings,
-    builtin_patterns,
-    category_choices,
     default_settings,
     is_valid_color,
-    normalize_color_tag,
     settings_from_dict,
     settings_to_dict,
     validate_color,
     validate_user_color,
 )
 from shared.sherlock.serialize import severity_from_str, severity_to_str
-
-_SEVERITY_ORDER: Tuple[Severity, ...] = (Severity.HIGH, Severity.MED, Severity.LOW)
-_SEVERITY_LABELS: Dict[Severity, str] = {
-    Severity.HIGH: "High",
-    Severity.MED: "Med",
-    Severity.LOW: "Low",
-}
-_SEVERITY_CHOICES: Tuple[str, ...] = tuple(_SEVERITY_LABELS[s] for s in _SEVERITY_ORDER)
-_LABEL_TO_SEVERITY: Dict[str, Severity] = {v: k for k, v in _SEVERITY_LABELS.items()}
-
-# User color tag tokens <-> display labels.
-_USER_COLOR_LABELS: Dict[str, str] = {key: key.capitalize() for key in USER_COLOR_KEYS}
-# Add/Edit dialog dropdown choices (custom patterns only).
-_COLOR_TAG_CHOICES: Tuple[str, ...] = ("None",) + tuple(
-    _USER_COLOR_LABELS[key] for key in USER_COLOR_KEYS
-)
-_DIALOG_LABEL_TO_TAG: Dict[str, str] = {"None": COLOR_TAG_NONE}
-_DIALOG_LABEL_TO_TAG.update({_USER_COLOR_LABELS[key]: key for key in USER_COLOR_KEYS})
-_TAG_TO_DIALOG_LABEL: Dict[str, str] = {v: k for k, v in _DIALOG_LABEL_TO_TAG.items()}
-# Pattern table "User Tag" cell: blank for the no-tag token, label otherwise.
-_COLOR_TAG_CELL_LABELS: Dict[str, str] = {COLOR_TAG_NONE: ""}
-_COLOR_TAG_CELL_LABELS.update({key: _USER_COLOR_LABELS[key] for key in USER_COLOR_KEYS})
-
-# C18 pattern-manager filter facets. "All" disables a facet. Severity and Enabled
-# are fixed lists; Category and User Tag are rebuilt from the staged rows.
-_FACET_ALL = "All"
-_SEVERITY_FACET_CHOICES: Tuple[str, ...] = (
-    _FACET_ALL,
-) + tuple(s.display_name for s in _SEVERITY_ORDER)
-_ENABLED_FACET_CHOICES: Tuple[str, ...] = (_FACET_ALL, "Enabled", "Disabled")
-
-
-def _user_tag_facet_choices(patterns) -> List[str]:
-    """User Tag facet values present among *patterns* (without leading 'All').
-
-    Emits 'None' when any row is untagged, then User1/User2/User3 in canonical
-    order for whichever tags actually occur. Callers prepend _FACET_ALL.
-    """
-    present = {normalize_color_tag(p.color_tag) for p in patterns}
-    choices: List[str] = []
-    if COLOR_TAG_NONE in present:
-        choices.append(_COLOR_TAG_CELL_LABELS.get(COLOR_TAG_NONE) or "None")
-    for key in USER_COLOR_KEYS:
-        if key in present:
-            choices.append(_USER_COLOR_LABELS[key])
-    return choices
-
-
-def _pattern_matches_filters(
-    pattern: SherlockPattern,
-    *,
-    search: str,
-    category: str,
-    severity: str,
-    user_tag: str,
-    enabled: str,
-) -> bool:
-    """Pure predicate: does *pattern* survive the current filter row?
-
-    `search` is a free-text substring (empty = no filter); the facet values use
-    exact staged values with `_FACET_ALL` meaning no filter. All conditions are
-    ANDed.
-    """
-    needle = (search or "").strip().casefold()
-    if needle:
-        tag = normalize_color_tag(pattern.color_tag)
-        haystack = " ".join(
-            (
-                pattern.label,
-                pattern.category,
-                pattern.pattern,
-                pattern.severity.display_name,
-                _COLOR_TAG_CELL_LABELS.get(tag, ""),
-                tag,
-                "Built-in" if pattern.builtin else "Custom",
-            )
-        ).casefold()
-        if needle not in haystack:
-            return False
-    if category != _FACET_ALL and category.casefold() != (pattern.category or "").casefold():
-        return False
-    if severity != _FACET_ALL and severity != pattern.severity.display_name:
-        return False
-    if user_tag != _FACET_ALL:
-        if _DIALOG_LABEL_TO_TAG.get(user_tag) != normalize_color_tag(pattern.color_tag):
-            return False
-    if enabled != _FACET_ALL and (enabled == "Enabled") != bool(pattern.enabled):
-        return False
-    return True
-
-
-def validate_pattern_fields(pattern: str) -> Tuple[bool, str]:
-    """Pure add/edit validation: pattern text must be non-empty."""
-    if not isinstance(pattern, str) or not pattern.strip():
-        return False, "Pattern is required."
-    return True, ""
-
-
-def _with_enabled(pattern: SherlockPattern, enabled: bool) -> SherlockPattern:
-    """Return a copy of *pattern* with a new enabled flag (patterns are frozen).
-
-    Uses dataclasses.replace so every field (incl. color_tag) is preserved.
-    """
-    return dataclasses.replace(pattern, enabled=enabled)
-
-
-def _grab_when_viewable(dialog: tk.Toplevel, parent: tk.Misc) -> None:
-    """Apply a modal grab only after Tk has mapped the dialog window."""
-    dialog.update_idletasks()
-    dialog.update()
-    if not dialog.winfo_exists():
-        return
-    dialog.grab_set()
-    ensure_dialog_focus(dialog, parent)
 
 
 class SherlockTab:
@@ -440,384 +332,68 @@ class SherlockTab:
         bg, caption = self._swatch_face(value, is_user=is_user)
         swatch.configure(bg=bg, activebackground=bg, text=caption)
 
+    # ------------------------------------------------------------------
+    # Pattern manager filter row + table (see sherlock_pattern_manager.py)
+    # ------------------------------------------------------------------
+
     def _build_filter_row(self, parent: tk.Widget) -> None:
-        """Build the C18 filter row above the pattern table.
+        return sherlock_pattern_manager.build_filter_row(self, parent)
 
-        Display-only: edits here re-render the visible rows but never touch
-        self._patterns or the dirty flag. Created fresh on every manager open.
-        """
-        self._filter_search_var = tk.StringVar(value="")
-        self._filter_category_var = tk.StringVar(value=_FACET_ALL)
-        self._filter_severity_var = tk.StringVar(value=_FACET_ALL)
-        self._filter_user_tag_var = tk.StringVar(value=_FACET_ALL)
-        self._filter_enabled_var = tk.StringVar(value=_FACET_ALL)
-
-        row = tk.Frame(parent)
-        self._theme.apply_to_widget(row, "main_window")
-        row.pack(anchor="w", pady=(0, 8), fill=tk.X)
-
-        def _label(text: str) -> None:
-            lbl = tk.Label(row, text=text, anchor="w")
-            self._theme.apply_to_widget(lbl, "label")
-            lbl.pack(side=tk.LEFT, padx=(0, 3))
-
-        def _facet(var: tk.StringVar, values, width: int) -> ttk.Combobox:
-            combo = ttk.Combobox(
-                row, textvariable=var, values=list(values), state="readonly", width=width
-            )
-            combo.pack(side=tk.LEFT, padx=(0, 10))
-            combo.bind("<<ComboboxSelected>>", self._on_filter_change)
-            return combo
-
-        _label("Search:")
-        search_entry = tk.Entry(row, textvariable=self._filter_search_var, width=18)
-        self._theme.apply_to_widget(search_entry, "entry")
-        search_entry.pack(side=tk.LEFT, padx=(0, 10))
-        self._filter_search_var.trace_add("write", self._on_filter_change)
-
-        _label("Category:")
-        self._filter_category_combo = _facet(self._filter_category_var, [_FACET_ALL], 14)
-        _label("Severity:")
-        _facet(self._filter_severity_var, _SEVERITY_FACET_CHOICES, 7)
-        _label("User Tag:")
-        self._filter_user_tag_combo = _facet(self._filter_user_tag_var, [_FACET_ALL], 8)
-        _label("Enabled:")
-        _facet(self._filter_enabled_var, _ENABLED_FACET_CHOICES, 9)
-
-        clear_btn = tk.Button(row, text="Clear", command=self._on_clear_filters)
-        self._theme.apply_to_widget(clear_btn, "button_secondary")
-        clear_btn.pack(side=tk.LEFT)
-
-    def _on_filter_change(self, *_args: Any) -> None:
-        """Re-render the visible rows; clear selection so hidden rows can't be acted on."""
-        if getattr(self, "_applying_filter_reset", False):
-            return
-        tree = self._tree
-        if tree is None:
-            return
-        selection = tree.selection()
-        if selection:
-            tree.selection_remove(*selection)
-        self._refresh_table()
+    def _on_filter_change(self, *args: Any) -> None:
+        return sherlock_pattern_manager.on_filter_change(self, *args)
 
     def _on_clear_filters(self) -> None:
-        """Reset every facet/search field to its default and re-render once."""
-        self._applying_filter_reset = True
-        try:
-            self._filter_search_var.set("")
-            self._filter_category_var.set(_FACET_ALL)
-            self._filter_severity_var.set(_FACET_ALL)
-            self._filter_user_tag_var.set(_FACET_ALL)
-            self._filter_enabled_var.set(_FACET_ALL)
-        finally:
-            self._applying_filter_reset = False
-        self._on_filter_change()
+        return sherlock_pattern_manager.on_clear_filters(self)
 
     def _build_table(self, parent: tk.Widget) -> None:
-        table_frame = tk.Frame(parent)
-        self._theme.apply_to_widget(table_frame, "main_window")
-        table_frame.pack(fill=tk.BOTH, expand=True)
-
-        columns = (
-            "enabled",
-            "severity",
-            "user_tag",
-            "category",
-            "label",
-            "pattern",
-            "type",
-        )
-        tree = ttk.Treeview(
-            table_frame,
-            columns=columns,
-            show="headings",
-            selectmode="extended",
-            height=16,
-        )
-        headings = {
-            "enabled": ("On", 40),
-            "severity": ("Severity", 66),
-            "user_tag": ("User Tag", 70),
-            "category": ("Category", 110),
-            "label": ("Label", 130),
-            "pattern": ("Pattern", 150),
-            "type": ("Type", 70),
-        }
-        for col, (heading, width) in headings.items():
-            tree.heading(col, text=heading)
-            anchor = "center" if col in ("enabled", "severity", "user_tag", "type") else "w"
-            tree.column(col, width=width, anchor=anchor, stretch=(col == "pattern"))
-
-        scrollbar = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview)
-        tree.configure(yscrollcommand=scrollbar.set)
-
-        tree.grid(row=0, column=0, sticky="nsew")
-        scrollbar.grid(row=0, column=1, sticky="ns")
-        table_frame.grid_rowconfigure(0, weight=1)
-        table_frame.grid_columnconfigure(0, weight=1)
-
-        for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
-            tree.bind(sequence, self._on_mousewheel)
-        tree.bind("<Double-1>", self._on_row_double_click)
-
-        self._tree = tree
+        return sherlock_pattern_manager.build_table(self, parent)
 
     # ------------------------------------------------------------------
     # Pattern manager dialog
     # ------------------------------------------------------------------
 
     def _open_pattern_manager(self) -> None:
-        """Open the tall modal Sherlock Patterns dialog (staged edits)."""
-        parent = self.frame.winfo_toplevel()
-        dialog = tk.Toplevel(parent)
-        dialog.title("Sherlock Patterns")
-        dialog.transient(parent)
-        self._theme.apply_to_widget(dialog, "main_window")
-        dialog.geometry("1100x600")
-        dialog.minsize(1080, 560)
-
-        outer = tk.Frame(dialog, padx=12, pady=10)
-        self._theme.apply_to_widget(outer, "main_window")
-        outer.pack(fill=tk.BOTH, expand=True)
-
-        self._build_filter_row(outer)
-        self._build_table(outer)
-
-        action_row = tk.Frame(outer)
-        self._theme.apply_to_widget(action_row, "main_window")
-        action_row.pack(anchor="w", pady=(8, 0), fill=tk.X)
-
-        add_btn = tk.Button(action_row, text="Add", command=self._on_add)
-        self._theme.apply_to_widget(add_btn, "button_secondary")
-        add_btn.pack(side=tk.LEFT, padx=(0, 6))
-
-        edit_btn = tk.Button(action_row, text="Edit", command=self._on_edit)
-        self._theme.apply_to_widget(edit_btn, "button_secondary")
-        edit_btn.pack(side=tk.LEFT, padx=(0, 6))
-
-        toggle_btn = tk.Button(
-            action_row, text="Enable/Disable", command=self._on_toggle
-        )
-        self._theme.apply_to_widget(toggle_btn, "button_secondary")
-        toggle_btn.pack(side=tk.LEFT, padx=(0, 6))
-
-        delete_btn = tk.Button(action_row, text="Delete", command=self._on_delete)
-        self._theme.apply_to_widget(delete_btn, "button_danger")
-        delete_btn.pack(side=tk.LEFT, padx=(0, 6))
-
-        copy_btn = tk.Button(action_row, text="Copy", command=self._on_copy)
-        self._theme.apply_to_widget(copy_btn, "button_secondary")
-        copy_btn.pack(side=tk.LEFT, padx=(0, 6))
-
-        restore_btn = tk.Button(
-            action_row, text="Restore Built-ins", command=self._on_restore_builtins
-        )
-        self._theme.apply_to_widget(restore_btn, "button_secondary")
-        restore_btn.pack(side=tk.LEFT, padx=(0, 6))
-
-        export_btn = tk.Button(action_row, text="Export", command=self._on_export)
-        self._theme.apply_to_widget(export_btn, "button_secondary")
-        export_btn.pack(side=tk.LEFT, padx=(0, 6))
-
-        savec_btn = tk.Button(
-            action_row, text="Save & Close", command=self._save_and_close_manager
-        )
-        self._theme.apply_to_widget(savec_btn, "button_primary")
-        savec_btn.pack(side=tk.LEFT, padx=(0, 6))
-
-        close_btn = tk.Button(action_row, text="Close", command=self._close_manager)
-        self._theme.apply_to_widget(close_btn, "button_secondary")
-        close_btn.pack(side=tk.LEFT, padx=(0, 6))
-
-        self._pattern_manager = dialog
-        self._refresh_table()
-        try:
-            self._tree.focus_set()
-        except Exception:
-            pass
-
-        dialog.protocol("WM_DELETE_WINDOW", self._close_manager)
-        dialog.grab_set()
-        ensure_dialog_focus(dialog, parent)
-        dialog.wait_window()
+        return sherlock_pattern_manager.open_pattern_manager(self)
 
     def _teardown_manager(self) -> None:
-        """Clear manager references and destroy the dialog."""
-        dialog = self._pattern_manager
-        self._pattern_manager = None
-        self._tree = None
-        self._filter_category_combo = None
-        self._filter_user_tag_combo = None
-        if dialog is not None:
-            dialog.destroy()
+        return sherlock_pattern_manager.teardown_manager(self)
 
     def _close_manager(self) -> None:
-        """Close button / window close: warn first if there are staged edits."""
-        if self._pattern_manager_dirty:
-            confirm = safe_messagebox.askyesno(
-                "Unsaved Pattern Changes",
-                "You have unsaved pattern changes. Close without saving?",
-                parent=self._pattern_manager,
-            )
-            if not confirm:
-                return
-        self._teardown_manager()
+        return sherlock_pattern_manager.close_manager(self)
 
     def _save_and_close_manager(self) -> None:
-        """Run the standard save/validation path; close only when it succeeds."""
-        if self._on_save():  # success clears _pattern_manager_dirty
-            self._teardown_manager()
+        return sherlock_pattern_manager.save_and_close_manager(self)
 
     # ------------------------------------------------------------------
     # Table rendering / selection
     # ------------------------------------------------------------------
 
     def _current_filter_state(self) -> Tuple[str, str, str, str, str]:
-        """Read the filter row vars, defaulting to no-filter when absent.
-
-        Returns (search, category, severity, user_tag, enabled). When the filter
-        widgets have not been built (e.g. unit tests that mock the tree), every
-        facet reads as `_FACET_ALL` so the whole catalog stays visible.
-        """
-        def _get(name: str, default: str) -> str:
-            var = getattr(self, name, None)
-            if var is None:
-                return default
-            return var.get()
-
-        return (
-            _get("_filter_search_var", "").strip(),
-            _get("_filter_category_var", _FACET_ALL) or _FACET_ALL,
-            _get("_filter_severity_var", _FACET_ALL) or _FACET_ALL,
-            _get("_filter_user_tag_var", _FACET_ALL) or _FACET_ALL,
-            _get("_filter_enabled_var", _FACET_ALL) or _FACET_ALL,
-        )
+        return sherlock_pattern_manager.current_filter_state(self)
 
     def _visible_patterns(self) -> List[SherlockPattern]:
-        """Staged patterns surviving the current filter row (never mutates state)."""
-        search, category, severity, user_tag, enabled = self._current_filter_state()
-        return [
-            p
-            for p in self._patterns
-            if _pattern_matches_filters(
-                p,
-                search=search,
-                category=category,
-                severity=severity,
-                user_tag=user_tag,
-                enabled=enabled,
-            )
-        ]
+        return sherlock_pattern_manager.visible_patterns(self)
 
     def _visible_keys(self) -> set:
-        """Keys of currently-visible rows; used to keep selection on visible rows."""
-        return {p.key for p in self._visible_patterns()}
+        return sherlock_pattern_manager.visible_keys(self)
 
     def _refresh_facet_choices(self) -> None:
-        """Rebuild the dynamic Category / User Tag facet value lists.
-
-        Reset a facet to `_FACET_ALL` when its selected value is no longer
-        present among staged rows. No-op when the combos have not been built.
-        """
-        cat_combo = getattr(self, "_filter_category_combo", None)
-        if cat_combo is not None:
-            try:
-                exists = cat_combo.winfo_exists()
-            except Exception:
-                exists = False
-            if exists:
-                choices = [_FACET_ALL] + category_choices(
-                    self._patterns, always_include=()
-                )
-                cat_combo["values"] = choices
-                if self._filter_category_var.get() not in choices:
-                    self._filter_category_var.set(_FACET_ALL)
-
-        tag_combo = getattr(self, "_filter_user_tag_combo", None)
-        if tag_combo is not None:
-            try:
-                exists = tag_combo.winfo_exists()
-            except Exception:
-                exists = False
-            if exists:
-                choices = [_FACET_ALL] + _user_tag_facet_choices(self._patterns)
-                tag_combo["values"] = choices
-                if self._filter_user_tag_var.get() not in choices:
-                    self._filter_user_tag_var.set(_FACET_ALL)
+        return sherlock_pattern_manager.refresh_facet_choices(self)
 
     def _refresh_table(self) -> None:
-        tree = self._tree
-        if tree is None:
-            return
-        self._refresh_facet_choices()
-        for iid in tree.get_children():
-            tree.delete(iid)
-        for pattern in self._visible_patterns():
-            tag = normalize_color_tag(pattern.color_tag)
-            tree.insert(
-                "",
-                "end",
-                iid=pattern.key,
-                values=(
-                    "Yes" if pattern.enabled else "No",
-                    pattern.severity.display_name,
-                    _COLOR_TAG_CELL_LABELS.get(tag, ""),
-                    pattern.category,
-                    pattern.label,
-                    pattern.pattern,
-                    "Built-in" if pattern.builtin else "Custom",
-                ),
-            )
+        return sherlock_pattern_manager.refresh_table(self)
 
     def _selected_patterns(self) -> List[SherlockPattern]:
-        """Staged patterns for the current selection, in visible/table order.
-
-        Iterating self._patterns reproduces the table render order (_refresh_table
-        inserts in that order), so the result follows the visible row order
-        regardless of Ctrl/Shift click sequence.
-        """
-        selection = set(self._tree.selection())
-        if not selection:
-            return []
-        return [p for p in self._patterns if p.key in selection]
+        return sherlock_pattern_manager.selected_patterns(self)
 
     def _replace_pattern(self, key: str, new_pattern: SherlockPattern) -> None:
-        self._patterns = [
-            new_pattern if p.key == key else p for p in self._patterns
-        ]
+        return sherlock_pattern_manager.replace_pattern(self, key, new_pattern)
 
     def _on_mousewheel(self, event: Any) -> str:
-        delta = 0
-        if getattr(event, "delta", 0):
-            delta = -1 if event.delta > 0 else 1
-        elif getattr(event, "num", None) == 4:
-            delta = -1
-        elif getattr(event, "num", None) == 5:
-            delta = 1
-        if delta:
-            self._tree.yview_scroll(delta, "units")
-        return "break"
+        return sherlock_pattern_manager.on_mousewheel(self, event)
 
     def _on_row_double_click(self, event: Any) -> str:
-        """Double-click a row to edit exactly that row.
-
-        Selects the clicked row first, then routes through _on_edit so the C15
-        built-in lifecycle holds (built-ins edit-as-copy, customs edit in place).
-        A double-click on empty space changes nothing.
-
-        The edit is deferred with after_idle so dialog creation runs after this
-        click event finishes; the Add/Edit dialog also waits until it is
-        viewable before taking a modal grab.
-        """
-        tree = self._tree
-        if tree is None:
-            return "break"
-        row = tree.identify_row(event.y)
-        if not row:
-            return "break"
-        tree.selection_set(row)
-        tree.after_idle(self._on_edit)
-        return "break"
+        return sherlock_pattern_manager.on_row_double_click(self, event)
 
     def _set_status(self, text: str) -> None:
         self._status_label.configure(text=text)
@@ -827,138 +403,31 @@ class SherlockTab:
     # ------------------------------------------------------------------
 
     def _on_toggle(self) -> None:
-        patterns = self._selected_patterns()
-        if not patterns:
-            self._set_status("Select one or more patterns to enable or disable.")
-            return
-        keys = {p.key for p in patterns}
-        self._patterns = [
-            _with_enabled(p, not p.enabled) if p.key in keys else p
-            for p in self._patterns
-        ]
-        self._pattern_manager_dirty = True
-        self._refresh_table()
-        visible = self._visible_keys()
-        self._tree.selection_set([p.key for p in patterns if p.key in visible])
+        return sherlock_pattern_manager.on_toggle(self)
 
     def _on_delete(self) -> None:
-        patterns = self._selected_patterns()
-        if not patterns:
-            self._set_status("Select one or more patterns to delete.")
-            return
-        keys = {p.key for p in patterns}
-        self._patterns = [p for p in self._patterns if p.key not in keys]
-        self._pattern_manager_dirty = True
-        self._refresh_table()
+        return sherlock_pattern_manager.on_delete(self)
 
     def _on_restore_builtins(self) -> None:
-        """Re-enable all built-ins (clears any disabled state); customs untouched."""
-        customs = [p for p in self._patterns if not p.builtin]
-        self._patterns = builtin_patterns() + customs
-        self._pattern_manager_dirty = True
-        self._refresh_table()
-        self._set_status("Built-ins restored.")
+        return sherlock_pattern_manager.on_restore_builtins(self)
 
     def _on_export(self) -> None:
-        """Write the full staged pattern list to a user-chosen JSON file.
-
-        Read-only: never mutates _patterns, filter vars, selection, the dirty
-        flag, settings, or persistence. Cancel is silent; write errors report via
-        safe_messagebox; success only updates the status line (manager stays open).
-        """
-        now = datetime.now()
-        default_name = f"sherlock_patterns_{now.strftime('%Y%m%d_%H%M%S')}.json"
-        path = filedialog.asksaveasfilename(
-            parent=self._pattern_manager,
-            title="Export Sherlock Patterns",
-            defaultextension=".json",
-            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
-            initialfile=default_name,
-        )
-        if not path:
-            return
-        payload = build_export_payload(
-            self._patterns, exported_at=now.isoformat(timespec="seconds")
-        )
-        try:
-            with open(path, "w", encoding="utf-8") as fh:
-                json.dump(payload, fh, indent=2, ensure_ascii=False)
-                fh.write("\n")
-        except OSError as exc:
-            safe_messagebox.showerror(
-                "Export Failed",
-                "Could not write pattern export:\n{0}".format(exc),
-                parent=self._active_dialog_parent(),
-            )
-            return
-        self._set_status(
-            "Exported {0} patterns to {1}.".format(payload["count"], path)
-        )
+        return sherlock_pattern_manager.on_export(self)
 
     def _on_add(self) -> None:
-        result = self._open_pattern_dialog()
-        if result is None:
-            return
-        self._append_custom_from_result(result)
+        return sherlock_pattern_manager.on_add(self)
 
     def _on_copy(self) -> None:
-        patterns = self._selected_patterns()
-        if len(patterns) != 1:
-            self._set_status("Select exactly one pattern to copy.")
-            return
-        self._add_from_source(patterns[0])
+        return sherlock_pattern_manager.on_copy(self)
 
     def _add_from_source(self, source: SherlockPattern) -> None:
-        """Open the Add dialog prefilled from *source*; save as a new custom."""
-        result = self._open_pattern_dialog(prefill=source)
-        if result is None:
-            return
-        self._append_custom_from_result(result)
+        return sherlock_pattern_manager.add_from_source(self, source)
 
     def _append_custom_from_result(self, result: Dict[str, Any]) -> None:
-        pattern = SherlockPattern(
-            key="custom_{0}".format(uuid.uuid4().hex),
-            category=result["category"],
-            label=result["label"],
-            pattern=result["pattern"],
-            severity=result["severity"],
-            enabled=result["enabled"],
-            builtin=False,
-            color_tag=result.get("color_tag", COLOR_TAG_NONE),
-        )
-        self._patterns.append(pattern)
-        self._pattern_manager_dirty = True
-        self._refresh_table()
-        if pattern.key in self._visible_keys():
-            self._tree.selection_set(pattern.key)
+        return sherlock_pattern_manager.append_custom_from_result(self, result)
 
     def _on_edit(self) -> None:
-        patterns = self._selected_patterns()
-        if len(patterns) != 1:
-            self._set_status("Select exactly one pattern to edit.")
-            return
-        pattern = patterns[0]
-        if pattern.builtin:
-            self._add_from_source(pattern)
-            return
-        result = self._open_pattern_dialog(existing=pattern)
-        if result is None:
-            return
-        updated = SherlockPattern(
-            key=pattern.key,
-            category=result["category"],
-            label=result["label"],
-            pattern=result["pattern"],
-            severity=result["severity"],
-            enabled=result["enabled"],
-            builtin=False,
-            color_tag=result.get("color_tag", COLOR_TAG_NONE),
-        )
-        self._replace_pattern(pattern.key, updated)
-        self._pattern_manager_dirty = True
-        self._refresh_table()
-        if pattern.key in self._visible_keys():
-            self._tree.selection_set(pattern.key)
+        return sherlock_pattern_manager.on_edit(self)
 
     # ------------------------------------------------------------------
     # Color picker / add-edit dialog
@@ -1020,141 +489,9 @@ class SherlockTab:
         *,
         prefill: Optional[SherlockPattern] = None,
     ) -> Optional[Dict[str, Any]]:
-        """Modal add/edit dialog. Returns the collected fields or None on cancel.
-
-        *existing* drives the in-place edit of a custom pattern (Edit title, same
-        key replaced by the caller). *prefill* seeds the field values for an Add
-        (Copy, or editing a built-in) while keeping the Add title, so the caller
-        saves a brand-new custom pattern. Parents to the open Pattern Manager (if
-        any) so it stays modal to the manager; the manager's grab is re-asserted
-        once this dialog closes.
-        """
-        source = existing if existing is not None else prefill
-        parent = self._active_dialog_parent()
-        dialog = tk.Toplevel(parent)
-        dialog.title("Edit Pattern" if existing is not None else "Add Pattern")
-        dialog.resizable(False, False)
-        dialog.transient(parent)
-        self._theme.apply_to_widget(dialog, "main_window")
-
-        outer = tk.Frame(dialog, padx=14, pady=12)
-        self._theme.apply_to_widget(outer, "main_window")
-        outer.pack(fill=tk.BOTH, expand=True)
-
-        label_var = tk.StringVar(value=source.label if source else "")
-        category_var = tk.StringVar(value=source.category if source else "Custom")
-        pattern_var = tk.StringVar(value=source.pattern if source else "")
-        severity_var = tk.StringVar(
-            value=_SEVERITY_LABELS[source.severity] if source else _SEVERITY_LABELS[Severity.MED]
+        return sherlock_pattern_manager.open_pattern_dialog(
+            self, existing=existing, prefill=prefill
         )
-        source_tag = normalize_color_tag(source.color_tag) if source else COLOR_TAG_NONE
-        color_tag_var = tk.StringVar(
-            value=_TAG_TO_DIALOG_LABEL.get(source_tag, "None")
-        )
-        enabled_var = tk.BooleanVar(value=source.enabled if source else True)
-
-        def _add_field(row: int, text: str, var: tk.StringVar) -> None:
-            field_label = tk.Label(outer, text=text, anchor="w")
-            self._theme.apply_to_widget(field_label, "label")
-            field_label.grid(row=row, column=0, sticky="w", pady=3)
-            entry = tk.Entry(outer, textvariable=var, width=28)
-            self._theme.apply_to_widget(entry, "entry")
-            entry.grid(row=row, column=1, sticky="ew", pady=3, padx=(8, 0))
-
-        _add_field(0, "Label:", label_var)
-
-        cat_label = tk.Label(outer, text="Category:", anchor="w")
-        self._theme.apply_to_widget(cat_label, "label")
-        cat_label.grid(row=1, column=0, sticky="w", pady=3)
-        cat_combo = ttk.Combobox(
-            outer,
-            textvariable=category_var,
-            values=category_choices(self._patterns),
-            state="normal",
-            width=28,
-        )
-        cat_combo.grid(row=1, column=1, sticky="ew", pady=3, padx=(8, 0))
-
-        _add_field(2, "Pattern:", pattern_var)
-
-        sev_label = tk.Label(outer, text="Severity:", anchor="w")
-        self._theme.apply_to_widget(sev_label, "label")
-        sev_label.grid(row=3, column=0, sticky="w", pady=3)
-        sev_combo = ttk.Combobox(
-            outer,
-            textvariable=severity_var,
-            values=list(_SEVERITY_CHOICES),
-            state="readonly",
-            width=10,
-        )
-        sev_combo.grid(row=3, column=1, sticky="w", pady=3, padx=(8, 0))
-
-        tag_label = tk.Label(outer, text="Color tag:", anchor="w")
-        self._theme.apply_to_widget(tag_label, "label")
-        tag_label.grid(row=4, column=0, sticky="w", pady=3)
-        tag_combo = ttk.Combobox(
-            outer,
-            textvariable=color_tag_var,
-            values=list(_COLOR_TAG_CHOICES),
-            state="readonly",
-            width=10,
-        )
-        tag_combo.grid(row=4, column=1, sticky="w", pady=3, padx=(8, 0))
-
-        enabled_cb = tk.Checkbutton(outer, text="Enabled", variable=enabled_var)
-        self._theme.apply_to_widget(enabled_cb, "checkbox")
-        enabled_cb.grid(row=5, column=1, sticky="w", pady=3, padx=(8, 0))
-
-        result: Dict[str, Any] = {}
-
-        def _on_ok() -> None:
-            ok, message = validate_pattern_fields(pattern_var.get())
-            if not ok:
-                safe_messagebox.showerror("Invalid Pattern", message, parent=dialog)
-                return
-            result.update(
-                {
-                    "label": label_var.get().strip(),
-                    "category": category_var.get().strip() or "Custom",
-                    "pattern": pattern_var.get().strip(),
-                    "severity": _LABEL_TO_SEVERITY.get(severity_var.get(), Severity.MED),
-                    "color_tag": normalize_color_tag(
-                        _DIALOG_LABEL_TO_TAG.get(color_tag_var.get(), COLOR_TAG_NONE)
-                    ),
-                    "enabled": bool(enabled_var.get()),
-                }
-            )
-            dialog.destroy()
-
-        btn_row = tk.Frame(outer)
-        self._theme.apply_to_widget(btn_row, "main_window")
-        btn_row.grid(row=6, column=0, columnspan=2, sticky="e", pady=(10, 0))
-
-        ok_btn = tk.Button(btn_row, text="OK", command=_on_ok)
-        self._theme.apply_to_widget(ok_btn, "button_primary")
-        ok_btn.pack(side=tk.RIGHT, padx=(6, 0))
-
-        cancel_btn = tk.Button(btn_row, text="Cancel", command=dialog.destroy)
-        self._theme.apply_to_widget(cancel_btn, "button_secondary")
-        cancel_btn.pack(side=tk.RIGHT)
-
-        outer.grid_columnconfigure(1, weight=1)
-        dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
-        _grab_when_viewable(dialog, parent)
-        dialog.wait_window()
-
-        # Restore the Pattern Manager's modality: the child grab_set() stole the
-        # grab and destroying it does not give it back automatically.
-        mgr = getattr(self, "_pattern_manager", None)
-        if mgr is not None:
-            try:
-                if mgr.winfo_exists():
-                    mgr.grab_set()
-                    ensure_dialog_focus(mgr, self.frame.winfo_toplevel())
-            except Exception:
-                pass
-
-        return result or None
 
 
 def build_sherlock_tab(parent: tk.Widget, context: dict) -> tk.Widget:

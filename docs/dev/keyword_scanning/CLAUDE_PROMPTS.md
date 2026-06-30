@@ -872,3 +872,51 @@ Validation plan must include:
 
 Report exact commands and results. Do not commit.
 ```
+
+## C21 Planning Prompt
+
+```text
+Plan C21 only: extract the existing Sherlock Pattern Manager into a helper
+module without changing behavior.
+
+For this reply, produce a plan and stop. After RA/HI acceptance, execute the
+approved plan in this worktree before sending the completion report.
+
+Workflow reminder: Codex is PA/RA, Claude is DA. Do not commit. The RA commits
+only after HI accepts completed work.
+
+Local anchors:
+- `docs/dev/keyword_scanning/RISK_REGISTER.md` R23 requires helper extraction
+  before more Pattern Manager logic crosses the 1200-line warning threshold.
+- Current `gui/components/experimental_features/sherlock_tab.py` is about 1188
+  lines.
+
+The plan must cover:
+- creating `gui/components/experimental_features/sherlock_pattern_manager.py`
+  as the extracted home for the existing Pattern Manager dialog UI/action logic
+- keeping `sherlock_tab.py` as thin Sherlock settings-tab wiring that still owns
+  settings load/save, color swatches, run-after-probe, and opening the manager
+- preserving current behavior exactly:
+  - flat Pattern Manager table
+  - search/facet filter row
+  - Add/Edit category combobox and color-tag dropdown
+  - Copy, Delete, Enable/Disable, Restore Built-ins
+  - Export
+  - Save & Close and unsaved-close warning
+  - extended multi-select and double-click edit routing
+  - dirty tracking and staged-save semantics
+- preserving dialog focus/grab behavior, including the prior double-click
+  `grab failed: window not viewable` fix
+- preserving safe messagebox/theme guardrails
+- reducing `sherlock_tab.py` below the 1200-line warning threshold and reporting
+  before/after line counts
+
+Do not implement the two-pane layout, category Add/Copy/Delete, grouped value
+rows, comma-separated pattern input, tag-apply toolbar, matcher changes, DB
+changes, settings schema changes, Web UI changes, or docs closeout in this card.
+
+Run the existing Sherlock tab tests, pure export tests, `pytest -k sherlock`,
+GUI guardrails, `git diff --check`, and file-size audit. Run Xvfb/default-size
+visual QA showing the current manager still renders correctly after extraction.
+Report exact commands and results. Do not commit.
+```

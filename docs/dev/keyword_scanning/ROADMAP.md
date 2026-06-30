@@ -289,3 +289,68 @@ C15-C19 code clean; the only unused-import finding (`severity_from_str` /
 commit 6baed90) and was left in place as out-of-scope for a docs-only closeout.
 Carry-forward: the next card touching the pattern manager must extract a helper
 module before adding logic that would push `sherlock_tab.py` over 1200 lines.
+
+## C21 - Pattern Manager Helper Extraction
+
+Extract existing Pattern Manager dialog logic into
+`gui/components/experimental_features/sherlock_pattern_manager.py` before adding
+new behavior.
+
+Exit criteria:
+- Current flat Pattern Manager behavior is unchanged.
+- `sherlock_tab.py` is reduced below the 1200-line warning threshold.
+- Existing Sherlock tab/export tests and Xvfb visual parity checks pass.
+
+## C22 - Grouped Value Model
+
+Add pure helpers for grouped value rows and comma-separated pattern input while
+preserving the one-pattern-per-row settings format.
+
+Exit criteria:
+- Grouping uses category, label, severity, enabled state, built-in/custom type,
+  and color tag.
+- Add/Edit input splits on literal commas, trims whitespace, drops empty entries,
+  and removes duplicates while preserving order.
+- Commas inside patterns are documented as unsupported in this pass.
+
+## C23 - Two-Pane Category / Value Layout
+
+Replace the flat Pattern Manager table with a two-pane category/value layout.
+
+Exit criteria:
+- Left pane shows categories, counts, `All Categories`, and category search.
+- Right pane shows grouped values for the selected category.
+- Existing manager actions, filters, Save & Close, Export, and dirty tracking
+  remain functional.
+
+## C24 - Category Actions
+
+Add category-pane Add, Copy, and Delete actions without introducing persisted
+category records.
+
+Exit criteria:
+- Add creates an empty temporary category placeholder.
+- Copy duplicates category values as custom rows under a new category.
+- Delete confirms and stages removal of all category values.
+
+## C25 - Grouped Value Actions And Tag Assignment
+
+Update value editing for comma-separated patterns and add selected-row color tag
+assignment.
+
+Exit criteria:
+- Add/Edit uses a `Patterns` field that can contain comma-separated strings.
+- Single-pattern rows remain supported.
+- Tag assignment applies None/User1/User2/User3 to selected value rows only.
+
+## C26 - Two-Pane Pattern Manager Closeout
+
+Close out the two-pane redesign with docs, screenshots, validation, and
+maintainability review.
+
+Exit criteria:
+- README includes at least one screenshot of the reorganized Pattern Manager and
+  stays user-accessible.
+- Technical details are documented in `docs/TECHNICAL_REFERENCE.md`.
+- Xvfb screenshots cover two-pane layout, category actions, comma-separated
+  Add/Edit, and tag assignment.
