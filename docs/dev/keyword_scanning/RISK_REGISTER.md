@@ -24,10 +24,29 @@
 | R20 | Filtered/hidden rows are mutated by bulk actions | Medium | Filtering clears selection; bulk actions operate only on visible selected rows | Filter + bulk-action tests |
 | R21 | Multi-select breaks single-row edit/copy expectations | Medium | Edit/Copy require exactly one selected row; batch actions support one or many rows | Selection/action tests |
 | R22 | Export output is incomplete or not round-trip-friendly | Low | JSON exports the full staged list with metadata and all pattern fields; no import in this pass | Export schema and cancel/error tests |
-| R23 | Pattern manager grows beyond maintainable size | Medium | C20 audit measured `sherlock_tab.py` at 1188 lines — 12 under the 1200 guardrail. No runtime edit this card, so it stays under; the next card touching the pattern manager MUST extract a helper module (e.g. `sherlock_pattern_manager.py`) before adding logic that would cross 1200 lines | Line-count checks and closeout review |
+| R23 | Pattern manager grows beyond maintainable size | Medium (retired) | Resolved by the C21 extraction. Pattern-manager logic now spans four files, all well under 1200: `sherlock_pattern_manager.py` 1019, `sherlock_tab.py` 584, `sherlock_value_actions.py` 352, `sherlock_category_actions.py` 340 (C26 measurement). `pm.py` at 1019 is the new watch item — split it before adding another major sub-feature | Line-count checks and closeout review |
 | R24 | Helper extraction changes existing Pattern Manager behavior | Medium | C21 is behavior-preserving only; run existing C15-C19 tests and Xvfb parity before any new UI work | Existing Sherlock tab/export tests and screenshot diff review |
 | R25 | Grouped comma rows accidentally change matcher or settings semantics | High | Keep comma rows as UI grouping only; persist one `SherlockPattern.pattern` string per token | Pure grouping tests, matcher regression, export regression |
 | R26 | Literal comma in a desired pattern cannot be represented | Low | Document commas-inside-patterns as unsupported in this pass; split only on literal commas and test the limitation | Splitter tests and technical reference note |
 | R27 | Category Delete removes too much data | Medium | Require confirmation with value/pattern counts; category actions mutate staged data only until Save | GUI delete confirmation/cancel tests |
 | R28 | Bulk tag assignment changes severity or match text unexpectedly | Medium | Tag Apply updates only `color_tag` on selected value rows; severity, label, and pattern strings remain unchanged | Selected-row tag assignment tests |
 | R29 | README screenshot or wording becomes stale/too technical | Low | C26 requires at least one current Pattern Manager screenshot and user-manual wording; technical details stay in TECHNICAL_REFERENCE | README review and screenshot path check |
+
+## C26 Closeout Status
+
+- **R23 retired.** The C21 extraction resolved the near-limit risk; file sizes
+  recorded above. `sherlock_pattern_manager.py` (1019) is the new watch item.
+- **R24 (helper extraction changes behavior) retired.** C21–C25 shipped behavior-
+  preserving; the full Sherlock test matrix stays green.
+- **R25, R27, R28 closed.** Grouped comma rows persist one `SherlockPattern` per
+  token (matcher/settings/export unchanged); category Delete confirms with counts
+  and mutates only staged data; Tag Apply changes only `color_tag` on selected
+  value rows and skips built-ins. Covered by grouping/GUI tests.
+- **R26 remains accepted (Low).** Literal commas inside a single pattern are
+  unsupported; the splitter always treats commas as separators. Documented in
+  README and TECHNICAL_REFERENCE §6.9; no fix planned this pass.
+- **R29 closed.** README carries a current two-pane Pattern Manager screenshot
+  (`img/sherlock_patterns.png`) and user-manual wording; technical depth lives in
+  TECHNICAL_REFERENCE §6.9.
+- **R1–R7, R13–R14 unchanged.** Security/display invariants are untouched by the
+  two-pane redesign (still snapshot-path-only, severity text preserved).

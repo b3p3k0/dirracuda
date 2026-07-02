@@ -301,6 +301,11 @@ Exit criteria:
 - `sherlock_tab.py` is reduced below the 1200-line warning threshold.
 - Existing Sherlock tab/export tests and Xvfb visual parity checks pass.
 
+Status: complete. Pattern Manager dialog logic moved to
+`gui/components/experimental_features/sherlock_pattern_manager.py` (satellite
+functions plus delegating stubs and `_mb()` dispatch, one-way import);
+`sherlock_tab.py` dropped from 1188 to well under 1200. Behavior preserved.
+
 ## C22 - Grouped Value Model
 
 Add pure helpers for grouped value rows and comma-separated pattern input while
@@ -313,6 +318,11 @@ Exit criteria:
   and removes duplicates while preserving order.
 - Commas inside patterns are documented as unsupported in this pass.
 
+Status: complete. Pure helpers landed in `shared/sherlock/grouping.py`
+(`PatternValueGroup`, `group_patterns`, `split_pattern_input`,
+`build_group_patterns`, `reuse_keys`, `expand_groups`). Model-only, no GUI or
+schema change; the one-pattern-per-`SherlockPattern` format is preserved.
+
 ## C23 - Two-Pane Category / Value Layout
 
 Replace the flat Pattern Manager table with a two-pane category/value layout.
@@ -322,6 +332,12 @@ Exit criteria:
 - Right pane shows grouped values for the selected category.
 - Existing manager actions, filters, Save & Close, Export, and dirty tracking
   remain functional.
+
+Status: complete. The flat table became a two-pane view: left category index
+(grouped counts, `All Categories`, category search), right grouped value rows
+built from C22 grouping. Filtering is display-only; both panes refresh together;
+group actions map to member rows. Existing filters/Save & Close/Export/dirty
+tracking preserved.
 
 ## C24 - Category Actions
 
@@ -333,6 +349,13 @@ Exit criteria:
 - Copy duplicates category values as custom rows under a new category.
 - Delete confirms and stages removal of all category values.
 
+Status: complete. Category-pane Add/Copy/Delete landed in
+`sherlock_category_actions.py` (R23 extraction). `Add` creates a UI-only
+placeholder category (reset on open, never touches `_patterns`/dirty until a
+value is saved into it); `Copy` duplicates a category's values as new custom
+rows; `Delete` confirms with counts and stages removal. Placeholders are
+excluded from export.
+
 ## C25 - Grouped Value Actions And Tag Assignment
 
 Update value editing for comma-separated patterns and add selected-row color tag
@@ -342,6 +365,26 @@ Exit criteria:
 - Add/Edit uses a `Patterns` field that can contain comma-separated strings.
 - Single-pattern rows remain supported.
 - Tag assignment applies None/User1/User2/User3 to selected value rows only.
+
+Status: complete. Grouped Add/Edit uses a comma-separated `Patterns` field
+(C22 `split_pattern_input`/`build_group_patterns`/`reuse_keys`); multi-member
+custom groups edit in place; `Copy` opens a prefilled dialog. Bulk `Tag...Apply`
+sets `color_tag` on selected value rows and skips built-ins (built-in color_tag
+is not persisted). Landed in `sherlock_value_actions.py` (R23 extraction).
+
+## C25.5 - Disabled Built-In Field Preservation
+
+Fix a bug where disabling a built-in pattern dropped its non-`enabled` fields.
+
+Exit criteria:
+- `dataclass_disabled()` preserves every `SherlockPattern` field while flipping
+  `enabled=False`.
+- Disabled built-ins retain category, label, severity, and color tag.
+
+Status: complete. `shared/sherlock/serialize.py::dataclass_disabled` now returns
+`dataclasses.replace(pattern, enabled=False)`, carrying every field through
+unchanged (including `color_tag` and any future field) instead of rebuilding a
+partial dataclass.
 
 ## C26 - Two-Pane Pattern Manager Closeout
 
@@ -354,3 +397,25 @@ Exit criteria:
 - Technical details are documented in `docs/TECHNICAL_REFERENCE.md`.
 - Xvfb screenshots cover two-pane layout, category actions, comma-separated
   Add/Edit, and tag assignment.
+
+Status: complete. Validation matrix green under xvfb: `test_sherlock_tab.py` 145,
+pure shared (grouping/matcher/export/serialize) 85, `-k sherlock` 433, and the
+messagebox/theme guardrails 2; `git diff --check` clean. Default-size Xvfb
+screenshots captured against the real Accessories Sherlock two-pane manager
+(full two-pane layout with left-pane category Add/Copy/Delete and right-pane
+Tag Apply, the value Add/Edit dialog showing the `Patterns` field, and the
+category Add dialog) with no clipping; `img/sherlock_patterns.png` is referenced
+from README. Docs synced: README (`### Sherlock`), `docs/TECHNICAL_REFERENCE.md`
+(§6.9 rewritten for the two-pane layout, grouped values, comma splitting, the
+literal-comma limitation, category actions, Tag Apply custom-only, and the C25.5
+fix), `AGENTS.md`, ROADMAP, RISK_REGISTER (R23 retired; R24/R25/R27/R28/R29
+closed; R26 accepted), and LESSONS_LEARNED (C21-C26). `ASCII_SKETCHES.md`
+reviewed — its two-pane redesign section already matches shipped UI, no change.
+Behavior-neutral cleanup: removed the dead `severity_from_str/severity_to_str`
+import and the unused `filedialog` import from `sherlock_tab.py`, migrating the 6
+export-test patch sites to `sherlock_value_actions.filedialog` (the real caller).
+File-size audit (guardrail 1200): `sherlock_pattern_manager.py` 1019,
+`sherlock_tab.py` 584, `sherlock_value_actions.py` 352,
+`sherlock_category_actions.py` 340, `shared/sherlock/serialize.py` 214,
+`shared/sherlock/grouping.py` 194 — all clear. `CLAUDE.md` is untracked
+(gitignored/local) and was not modified. Sherlock two-pane redesign closed.

@@ -63,8 +63,8 @@ Edit `~/.dirracuda/conf.d/core/scan.json` (or launch a new scan from the dashboa
   }
 }
 ```
-Paste the key between the quotes. Do not commit the populated file.
-`~/.dirracuda/conf/config.json` is still generated for compatibility, but runtime reads/writes are shard-authoritative under `~/.dirracuda/conf.d/`.
+Paste the key between the quotes.
+`~/.dirracuda/conf/config.json` is still generated for compatibility, but runtime reads/writes are authoritative under `~/.dirracuda/conf.d/`.
 
 Launch the GUI from your venv:
 
@@ -544,17 +544,29 @@ Key Preview format: keys longer than 8 characters show as `first4 + asterisks`; 
 
 ### Sherlock
 
-Sherlock highlights risky-looking names already captured in probe snapshots. It
-matches share, folder, and file names against keyword/wildcard patterns, then
-colors the hit by severity or by one of your custom User colors. It never
-downloads files, reads file contents, authenticates, or probes on its own.
+Sherlock highlights keywords captured in probe snapshots. It
+matches share, folder, and file names against keyword/wildcard patterns, sorts
+them by severity and category, then colors each hit by severity or by one of your
+custom User colors. It never downloads files, reads file contents, authenticates,
+or probes on its own.
 
 Use Accessories -> Sherlock to:
 - turn matching on after successful probes
 - choose whether matching ignores case
 - set High/Med/Low colors and optional User1/User2/User3 colors
-- manage built-in and custom patterns, including search/filter, copy,
-  multi-select, restore built-ins, and JSON export
+- open **Manage Patterns...** to edit the built-in and custom pattern catalog
+
+The Pattern Manager has two panes. Categories sit on the left with a per-category
+count; pick one to filter the right pane, or pick `All Categories` to see
+everything. The right pane lists grouped values — patterns that share a label,
+severity, category, and tag show up as one row, so `*w2*`, `*w4*`, and `*tax*`
+under "Tax docs" read as a single entry. Add or edit a value with a comma-
+separated `Patterns` field; each token becomes its own underlying pattern. Add,
+copy, and delete categories from the left pane; tag one or more selected value
+rows with the `Tag` control; and search, multi-select, restore built-ins, or
+export the whole catalog to JSON from the right.
+
+![Sherlock Pattern Manager](img/sherlock_patterns.png)
 
 When Sherlock finds matches, the Server List `Risk` column shows `HIGH n`,
 `MED n`, or `LOW n`; blank means there is no current finding to show. Row color

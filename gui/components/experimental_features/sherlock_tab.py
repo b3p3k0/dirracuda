@@ -26,7 +26,7 @@ thin delegating stub methods that drive that dialog; behavior is unchanged.
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import ttk, filedialog
+from tkinter import ttk
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from gui.utils import safe_messagebox
@@ -57,7 +57,6 @@ from shared.sherlock import (
     validate_color,
     validate_user_color,
 )
-from shared.sherlock.serialize import severity_from_str, severity_to_str
 
 
 class SherlockTab:

@@ -121,3 +121,50 @@ Seeded before implementation. Append after each major card.
    touching the pattern manager must extract a helper module before adding logic
    that would cross 1200 — recorded in ROADMAP C20 status and RISK_REGISTER R23
    so it cannot be lost to chat memory.
+
+## C21-C26 (Two-Pane Pattern Manager)
+
+30. Extract before you add, and make it its own card. C21 moved the pattern
+   manager into a satellite module with zero behavior change *before* C22-C25
+   added the two-pane layout, category actions, and grouped editing. The
+   extraction card was the reason later cards had room to grow; the C20
+   carry-forward trigger (R23) paid off exactly once it was honored as step one.
+
+31. Keep the UI grouping separate from the persistence shape. Grouped value rows
+   are a display projection (`shared/sherlock/grouping.py`) over one
+   `SherlockPattern` per pattern string. Never let a "group" become a stored
+   entity — every group action maps back to member rows, so matcher, settings,
+   and export formats stayed untouched while the UI reorganized completely.
+
+32. A comma-split input needs its unsupported case written down, not just
+   handled. `split_pattern_input` splits on literal commas, which means a pattern
+   that must contain a comma cannot be entered. That limitation (R26) lives in
+   README and TECHNICAL_REFERENCE, not only in a test — a silent splitter looks
+   like a bug to the next analyst who needs a literal comma.
+
+33. UI-only placeholders must be inert until committed. The "Add category"
+   placeholder shows in the left pane but never enters `_patterns` or flips the
+   dirty flag until a real value is saved into it, and it resets on every manager
+   open. Treat transient UI scaffolding as non-persistent by construction so it
+   can't leak into settings, export, or the dirty state.
+
+34. Skip, don't fake, actions that can't persist. Tag Apply is custom-only
+   because built-in `color_tag` is never stored; applying a tag to a built-in
+   would look like it worked and silently vanish on save. Skipping built-ins in
+   the bulk action is the honest behavior, and it belongs in the docs so it reads
+   as intentional rather than a missed row.
+
+35. Use `dataclasses.replace` for "same record, one field changed." The C25.5 bug
+   was a `dataclass_disabled` that rebuilt a partial `SherlockPattern`, dropping
+   category/label/severity/color_tag when a built-in was disabled.
+   `dataclasses.replace(pattern, enabled=False)` carries every current and future
+   field through unchanged — the correct pattern for any "flip one flag" copy.
+
+36. A docs-only closeout is the right home for cleanup deferred from an earlier
+   docs-only closeout. C20 correctly left the dead `severity_from_str/to_str`
+   import (out of scope for a docs card). C26 — also a closeout, but one where the
+   scope explicitly permitted behavior-neutral cleanup — was the place to remove
+   it, plus the unused `filedialog` import, migrating its 6 test patch sites to
+   the module that actually calls it (`sherlock_value_actions`) rather than
+   removing an import that tests relied on via module-object identity. Verify the
+   patch seam before deleting an "unused" import.

@@ -33,6 +33,9 @@ if "impacket" not in sys.modules:
     sys.modules["impacket.smbconnection"] = _iconn
 
 from gui.components.experimental_features import sherlock_tab as mod
+from gui.components.experimental_features import (
+    sherlock_value_actions as value_actions,
+)
 from gui.components.experimental_features.sherlock_tab import (
     SherlockTab,
     validate_pattern_fields,
@@ -1661,7 +1664,7 @@ def test_export_writes_full_catalog_json(monkeypatch, tmp_path):
     tab = _seed_export_tab()
     out = tmp_path / "patterns.json"
     monkeypatch.setattr(
-        mod.filedialog, "asksaveasfilename", lambda **kw: str(out)
+        value_actions.filedialog, "asksaveasfilename", lambda **kw: str(out)
     )
     before = list(tab._patterns)
 
@@ -1690,7 +1693,7 @@ def test_export_ignores_filters_and_writes_all_rows(monkeypatch, tmp_path):
     tab._active_category = "Nonexistent"
     out = tmp_path / "all.json"
     monkeypatch.setattr(
-        mod.filedialog, "asksaveasfilename", lambda **kw: str(out)
+        value_actions.filedialog, "asksaveasfilename", lambda **kw: str(out)
     )
 
     tab._on_export()
@@ -1705,7 +1708,7 @@ def test_export_cancel_writes_nothing(monkeypatch, tmp_path):
     tab = _seed_export_tab()
     fake_mb = MagicMock()
     monkeypatch.setattr(mod, "safe_messagebox", fake_mb)
-    monkeypatch.setattr(mod.filedialog, "asksaveasfilename", lambda **kw: "")
+    monkeypatch.setattr(value_actions.filedialog, "asksaveasfilename", lambda **kw: "")
     before = list(tab._patterns)
 
     tab._on_export()
@@ -1723,7 +1726,7 @@ def test_export_write_error_reports_and_does_not_mutate(monkeypatch, tmp_path):
     # Path under a directory that does not exist -> open() raises OSError.
     bad = tmp_path / "missing_dir" / "out.json"
     monkeypatch.setattr(
-        mod.filedialog, "asksaveasfilename", lambda **kw: str(bad)
+        value_actions.filedialog, "asksaveasfilename", lambda **kw: str(bad)
     )
     before = list(tab._patterns)
 
@@ -2115,7 +2118,7 @@ def test_export_writes_all_groups_not_only_visible(tk_root, monkeypatch, tmp_pat
     ]
     out = tmp_path / "all.json"
     monkeypatch.setattr(
-        mod.filedialog, "asksaveasfilename", lambda **kw: str(out)
+        value_actions.filedialog, "asksaveasfilename", lambda **kw: str(out)
     )
     captured = {}
 
@@ -2215,7 +2218,7 @@ def test_placeholder_excluded_from_export(monkeypatch, tmp_path):
     tab._placeholder_categories = ["GhostCat"]
     tab._pattern_manager = MagicMock()
     out = tmp_path / "p.json"
-    monkeypatch.setattr(mod.filedialog, "asksaveasfilename", lambda **kw: str(out))
+    monkeypatch.setattr(value_actions.filedialog, "asksaveasfilename", lambda **kw: str(out))
 
     tab._on_export()
 
