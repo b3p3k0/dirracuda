@@ -402,9 +402,9 @@ def _format_server_details(
 
 {access_section}
 
-{probe_section or '🔍 Probe:\n   No probe has been run for this host yet.\n'}
+{sherlock_section or 'Sherlock Findings:\n   No Sherlock scan recorded for this host.'}
 
-{sherlock_section or '🔎 Sherlock:\n   No Sherlock scan recorded for this host.'}
+{probe_section or '🔍 Probe:\n   No probe has been run for this host yet.\n'}
 
 📝 Additional Notes:
    This server was discovered during scanning. Protocol-specific access

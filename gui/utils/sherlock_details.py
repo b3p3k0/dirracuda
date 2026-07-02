@@ -14,7 +14,7 @@ from typing import Any, Dict, Optional
 from shared.sherlock import Severity, normalize_color_tag
 from shared.sherlock.model import COLOR_TAG_NONE
 
-_HEADER = "🔎 Sherlock:"
+_HEADER = "Sherlock Findings:"
 
 _SEVERITY_BY_TOKEN = {
     "high": Severity.HIGH,

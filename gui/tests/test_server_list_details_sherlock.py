@@ -43,7 +43,7 @@ def _result(**overrides):
 
 def test_format_none_reports_no_scan():
     text = format_sherlock_section(None)
-    assert "🔎 Sherlock:" in text
+    assert "Sherlock Findings:" in text
     assert "No Sherlock scan recorded" in text
 
 
@@ -90,6 +90,17 @@ def test_format_malformed_severity_reports_count_without_label():
     # Unrecognized highest severity -> count without a mislabeled severity.
     assert "Risk: 2 hit(s)" in text
     assert "HIGH" not in text.split("\n", 2)[1]  # not on the risk line
+
+
+def test_server_details_places_sherlock_before_probe_section():
+    details = _import_details_module_isolated()
+    body = details._format_server_details(
+        {"ip_address": "1.2.3.4", "host_type": "S"},
+        probe_section="🔍 Probe:\n   lots of snapshot paths",
+        sherlock_section="Sherlock Findings:\n   Risk: HIGH 2",
+    )
+
+    assert body.index("Sherlock Findings:") < body.index("🔍 Probe:")
 
 
 # --- integration: detail render reloads Sherlock (post-reprobe refresh) ---
