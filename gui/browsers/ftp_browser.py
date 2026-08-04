@@ -90,6 +90,7 @@ class FtpBrowserWindow(UnifiedBrowserCore):
         self.db_reader = db_reader
         self.theme = theme
         self.settings_manager = settings_manager
+        self.config_path = config_path
         self.config = _load_ftp_browser_config(config_path)
         self._server_banner = str(banner or "")
 
@@ -379,8 +380,8 @@ class FtpBrowserWindow(UnifiedBrowserCore):
             messagebox.showinfo("Download", "Select one or more files to download.", parent=self.window)
             return
 
-        file_list: List = []
-        limit = int(self.config["max_file_bytes"])
+        files: List = []
+        dirs: List[str] = []
         for item_id in sel:
             vals = self.tree.item(item_id, "values")
             name, type_label = vals[0], vals[1]
@@ -390,13 +391,26 @@ class FtpBrowserWindow(UnifiedBrowserCore):
             except (ValueError, IndexError):
                 size_raw = 0
             if type_label == "dir":
-                messagebox.showinfo(
-                    "Download",
-                    f"'{display_name}' is a directory. Folder download is not supported in this version.\n\n"
-                    "Select individual files to download.",
-                    parent=self.window,
-                )
+                dirs.append(str(PurePosixPath(self._current_path) / name))
+                continue
+            files.append((str(PurePosixPath(self._current_path) / name), size_raw, display_name))
+
+        if not files and not dirs:
+            return
+
+        if dirs:
+            extract_opts = self._prompt_extract_options(len(dirs))
+            if not extract_opts:
                 return
+            file_list = [(remote_path, size_raw) for remote_path, size_raw, _display in files]
+            extract_opts["start_dirs"] = dirs
+            extract_opts["start_files"] = [remote_path for remote_path, _size in file_list]
+            self._start_download_thread(file_list, extract_opts)
+            return
+
+        file_list: List = []
+        limit = int(self.config["max_file_bytes"])
+        for remote_path, size_raw, display_name in files:
             if size_raw and size_raw > limit:
                 size_mb = size_raw / (1024 * 1024)
                 messagebox.showerror(
@@ -407,7 +421,6 @@ class FtpBrowserWindow(UnifiedBrowserCore):
                     parent=self.window,
                 )
                 return
-            remote_path = str(PurePosixPath(self._current_path) / name)
             file_list.append((remote_path, size_raw))
 
         if not file_list:
@@ -415,7 +428,15 @@ class FtpBrowserWindow(UnifiedBrowserCore):
 
         self._start_download_thread(file_list)
 
-    def _download_thread_fn(self, file_list: List) -> None:
+    def _download_thread_fn(
+        self,
+        file_list: List,
+        download_plan: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if download_plan:
+            self._download_recursive_thread_fn(file_list, download_plan)
+            return
+
         from gui.utils.extract_runner import (
             build_browser_download_clamav_setup,
             update_browser_clamav_accum,
@@ -426,7 +447,7 @@ class FtpBrowserWindow(UnifiedBrowserCore):
         quarantine_dir = build_quarantine_path(
             ip_address=self.ip_address,
             share_name="ftp_root",
-            base_path=Path(self.config["quarantine_base"]).expanduser(),
+            base_path=self._resolve_quarantine_base_path(self.config["quarantine_base"]),
             purpose="ftp",
         )
         _pp, clamav_accum, _init_err = build_browser_download_clamav_setup(
@@ -600,6 +621,100 @@ class FtpBrowserWindow(UnifiedBrowserCore):
             )
         except tk.TclError:
             pass
+
+    def _download_recursive_thread_fn(
+        self,
+        file_list: List,
+        download_plan: Dict[str, Any],
+    ) -> None:
+        from gui.utils import protocol_extract_runner
+        from shared.quarantine import create_quarantine_dir
+
+        base_path = (
+            download_plan.get("download_path")
+            or self.config.get("quarantine_base")
+            or _DEFAULT_QUARANTINE_ROOT
+        )
+        quarantine_dir = create_quarantine_dir(
+            self.ip_address,
+            purpose="ftp",
+            base_path=self._resolve_quarantine_base_path(base_path),
+        )
+
+        try:
+            self.window.after(0, self._set_status, "Downloading selected folder(s)...")
+        except tk.TclError:
+            return
+
+        try:
+            summary = protocol_extract_runner.run_ftp_extract(
+                self.ip_address,
+                port=int(self.port),
+                download_dir=quarantine_dir,
+                max_total_bytes=int(download_plan.get("max_total_mb", 0) or 0) * 1024 * 1024,
+                max_file_bytes=int(download_plan.get("max_file_mb", 0) or 0) * 1024 * 1024,
+                max_file_count=int(download_plan.get("max_files", 0) or 0),
+                max_seconds=int(download_plan.get("max_time", 0) or 0),
+                max_depth=int(download_plan.get("max_depth", 0) or 0),
+                allowed_extensions=download_plan.get("included_extensions", []),
+                denied_extensions=download_plan.get("excluded_extensions", []),
+                delay_seconds=float(download_plan.get("download_delay_seconds", 0) or 0),
+                connection_timeout=int(download_plan.get("connection_timeout", 0) or 0),
+                extension_mode=download_plan.get("extension_mode", "download_all"),
+                progress_callback=lambda path, done, total: self.window.after(
+                    0,
+                    self._set_status,
+                    f"Downloading {display_safe_path(path)} ({done}/{total or '?'})",
+                ),
+                cancel_event=self._cancel_event,
+                clamav_config=self.config.get("clamav", {}),
+                start_dirs=download_plan.get("start_dirs", []),
+                start_files=download_plan.get("start_files", []),
+            )
+            totals = summary.get("totals", {})
+            success = int(totals.get("files_downloaded", 0) or 0)
+            skipped = int(totals.get("files_skipped", 0) or 0)
+            errors = summary.get("errors", []) or []
+            total = max(success + skipped + len(errors), success)
+            clamav_accum = summary.get("clamav")
+            try:
+                self.window.after(
+                    0,
+                    self._on_download_done,
+                    success,
+                    total,
+                    str(quarantine_dir),
+                    clamav_accum,
+                )
+                if errors:
+                    err_text = "\n".join(
+                        f"{row.get('path', '')}: {row.get('message', '')}"
+                        for row in errors[:5]
+                    )
+                    self.window.after(
+                        0,
+                        lambda msg=err_text: messagebox.showwarning(
+                            "Download issues",
+                            msg,
+                            parent=self.window,
+                        ),
+                    )
+            except tk.TclError:
+                pass
+        except Exception as exc:
+            try:
+                self.window.after(0, self._set_status, f"Download failed: {exc}")
+                self.window.after(
+                    0,
+                    lambda err=exc: messagebox.showerror(
+                        "Download failed",
+                        str(err),
+                        parent=self.window,
+                    ),
+                )
+                self.window.after(0, self._reset_download_state)
+            except tk.TclError:
+                pass
 
     # ------------------------------------------------------------------
     # Cancel / Close

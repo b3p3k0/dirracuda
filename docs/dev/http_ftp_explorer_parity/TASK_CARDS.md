@@ -183,3 +183,99 @@ HI test needed: Yes.
 AUTOMATED: PASS
 MANUAL:    PENDING
 OVERALL:   PENDING
+
+## Card C4 — Recursive Folder Download in FTP/HTTP Explorers
+
+Issue:
+- `Download to Quarantine` rejected directory rows in the FTP and HTTP browsers
+  ("Folder download is not supported in this version"), even after the bulk
+  extract runners gained recursive support. Explorer and bulk extract had
+  diverged.
+
+Scope:
+1. Accept directory selections in FTP/HTTP `Download to Quarantine`.
+2. Prompt for recursive limits (files, size, time, depth, extensions) before
+   starting, and pass them as a `download_plan` to the shared thread entry.
+3. Route recursive downloads through the existing
+   `gui/utils/protocol_extract_runner.py` runners with explicitly scoped
+   `start_dirs` / `start_files` instead of implicit root traversal.
+4. Resolve the quarantine base path through the shared tmpfs-aware runtime at
+   download time.
+
+Likely files:
+1. `gui/browsers/core.py`
+2. `gui/browsers/ftp_browser.py`
+3. `gui/browsers/http_browser.py`
+4. `gui/utils/protocol_extract_runner.py`
+5. `README.md`
+
+Acceptance:
+1. Selecting a folder and clicking `Download to Quarantine` prompts for limits
+   and downloads that folder's contents.
+2. Supplied start paths stay scoped to the selection; omitted starts preserve
+   legacy root extraction. No fallback to `/` on HTTP listing failure.
+3. Enumeration stops as soon as a file/size/time limit is reached.
+4. Recursive downloads land in tmpfs quarantine when tmpfs mode is active.
+5. SMB browser behavior unchanged.
+
+Validation:
+```bash
+xvfb-run -a ./venv/bin/python -m pytest \
+  gui/tests/test_ftp_browser_window.py \
+  gui/tests/test_http_browser_window.py \
+  gui/tests/test_protocol_extract_runner.py \
+  shared/tests/test_tmpfs_quarantine.py \
+  gui/tests/test_browser_clamav.py -q
+xvfb-run -a ./venv/bin/python -m pytest gui/tests shared/tests -q
+```
+
+HI test needed:
+- Yes.
+- Steps:
+1. Open a live FTP browser, select a folder, click `Download to Quarantine`,
+   accept the limit prompt, and confirm only that folder's contents arrive.
+2. Repeat in the HTTP browser against a directory index.
+3. With tmpfs quarantine enabled, confirm files land under the tmpfs mount.
+
+### C4 Report
+
+Issue: FTP/HTTP explorer `Download to Quarantine` rejected directory rows while
+the protocol extract runners already supported recursion.
+Root cause: Recursive support was added at the protocol-runner level only; the
+browser button handlers still short-circuited on directory rows before reaching
+the runner.
+Fix: `UnifiedBrowserCore` gained `_prompt_extract_options`,
+`_resolve_quarantine_base_path`, `_reset_download_state`, and a
+`download_plan`-aware `_start_download_thread`. FTP/HTTP browsers dispatch to a
+new `_download_recursive_thread_fn` that maps the plan onto the shared runner.
+`protocol_extract_runner.py` added `_normalize_remote_path` and
+`_resolve_start_paths` so selected files/folders scope the traversal, and
+enumeration halts on limit hit rather than draining queued subdirectories.
+Files changed:
+  - `gui/browsers/core.py`
+  - `gui/browsers/ftp_browser.py`
+  - `gui/browsers/http_browser.py`
+  - `gui/utils/protocol_extract_runner.py`
+  - `gui/tests/test_ftp_browser_window.py`
+  - `gui/tests/test_http_browser_window.py`
+  - `gui/tests/test_protocol_extract_runner.py`
+  - `shared/tests/test_tmpfs_quarantine.py`
+  - `README.md` (Browsing Shares)
+  - `docs/dev/http_ftp_explorer_parity/LESSONS_LEARNED.md` (new)
+
+Validation run (re-verified 2026-08-04):
+  targeted: 89 passed in 0.34s
+  gui+shared: 3083 passed in 23.92s
+
+File sizes after change (all "excellent", <=1200):
+  `gui/utils/protocol_extract_runner.py` 943
+  `gui/browsers/ftp_browser.py` 777
+  `gui/browsers/http_browser.py` 732
+  `gui/browsers/core.py` 547
+
+Result: PASS
+HI test needed: Yes — see steps above.
+
+AUTOMATED: PASS
+MANUAL:    PENDING
+OVERALL:   PENDING

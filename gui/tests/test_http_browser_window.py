@@ -5,6 +5,7 @@ Mirrors FTP browser test structure; factory function and mock shapes are
 the same but assertions use HTTP-specific URL format and 5-column treeview layout.
 """
 
+import json
 import sys
 import threading
 from pathlib import Path
@@ -17,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from gui.components.unified_browser_window import HttpBrowserWindow
 from shared.http_browser import HttpNavigator
+import shared.tmpfs_quarantine as tq
 
 
 @pytest.fixture(autouse=True)
@@ -173,6 +175,110 @@ def test_on_view_uses_text_limits_and_dispatches_view_thread():
     assert kw["is_image"] is False
     # max_image_pixels passed through but ignored when is_image=False
     assert kw["max_image_pixels"] == 20_000_000
+
+
+def test_on_download_directory_prompts_and_routes_recursive_download():
+    win = _make_window()
+    win.busy = False
+    win.config = {"max_file_bytes": 1024}
+    extract_opts = {
+        "download_path": "/tmp/quarantine",
+        "max_depth": 2,
+        "max_files": 5,
+        "max_total_mb": 50,
+        "max_file_mb": 10,
+        "max_time": 60,
+        "download_delay_seconds": 0,
+        "connection_timeout": 5,
+        "extension_mode": "download_all",
+        "included_extensions": [],
+        "excluded_extensions": [],
+    }
+    win._prompt_extract_options = MagicMock(return_value=extract_opts)
+    win.tree = MagicMock()
+    win.tree.selection.return_value = ["dir-1"]
+    win.tree.item.return_value = ("pub", "dir", "\u2014", "\u2014", "/root/pub/")
+    win._path_map = {"dir-1": "/root/pub/"}
+
+    with patch("gui.browsers.http_browser.messagebox.showinfo") as mock_showinfo:
+        win._on_download()
+
+    mock_showinfo.assert_not_called()
+    win._prompt_extract_options.assert_called_once_with(1)
+    win._start_download_thread.assert_called_once()
+    files_arg, plan_arg = win._start_download_thread.call_args.args
+    assert files_arg == []
+    assert plan_arg["start_dirs"] == ["/root/pub/"]
+    assert plan_arg["start_files"] == []
+    assert plan_arg["max_depth"] == 2
+
+
+def test_recursive_download_uses_active_tmpfs_quarantine(monkeypatch, tmp_path):
+    disk_root = tmp_path / "disk_quarantine"
+    tmpfs_root = tmp_path / "tmpfs_quarantine"
+    config_path = tmp_path / "config.json"
+    disk_root.mkdir()
+    tmpfs_root.mkdir()
+    config_path.write_text(
+        json.dumps(
+            {
+                "quarantine": {"use_tmpfs": True, "tmpfs_size_mb": 512},
+                "file_browser": {"quarantine_root": str(disk_root)},
+                "http_browser": {"quarantine_base": str(disk_root)},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    tq.bootstrap_tmpfs_quarantine(config_data={"quarantine": {"use_tmpfs": False}})
+    monkeypatch.setattr(tq.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(tq, "_is_tmpfs_mounted", lambda p: p == tmpfs_root)
+    monkeypatch.setattr(tq, "_TMPFS_CANONICAL", tmpfs_root)
+    monkeypatch.setattr(tq, "_TMPFS_CANDIDATES", (("canonical", tmpfs_root),))
+
+    win = _make_window()
+    win.config_path = str(config_path)
+    win.config = {"quarantine_base": str(disk_root), "clamav": {}}
+    win._current_path = "/"
+    win.allow_insecure_tls = True
+    win._cancel_event = threading.Event()
+    win.window.after.side_effect = lambda *_args: None
+
+    captured = {}
+
+    def _fake_run_http_extract(*_args, **kwargs):
+        captured["download_dir"] = kwargs["download_dir"]
+        return {
+            "totals": {"files_downloaded": 1, "files_skipped": 0},
+            "errors": [],
+            "clamav": None,
+        }
+
+    plan = {
+        "download_path": str(disk_root),
+        "max_depth": 2,
+        "max_files": 10,
+        "max_total_mb": 100,
+        "max_file_mb": 25,
+        "max_time": 30,
+        "download_delay_seconds": 0,
+        "connection_timeout": 5,
+        "extension_mode": "download_all",
+        "included_extensions": [],
+        "excluded_extensions": [],
+        "start_dirs": ["/pub/"],
+        "start_files": [],
+    }
+
+    monkeypatch.setattr(
+        "gui.utils.protocol_extract_runner.run_http_extract",
+        _fake_run_http_extract,
+    )
+
+    win._download_recursive_thread_fn([], plan)
+
+    assert tmpfs_root in captured["download_dir"].parents
+    assert disk_root not in captured["download_dir"].parents
 
 
 def test_populate_treeview_sorts_dirs_then_files_alphabetically():

@@ -129,6 +129,61 @@ def test_run_ftp_extract_enforces_file_count_limit(monkeypatch, tmp_path):
     assert summary["stop_reason"] == "file_limit"
 
 
+def test_run_ftp_extract_selected_dir_stays_scoped(monkeypatch, tmp_path):
+    monkeypatch.setattr(per, "FtpNavigator", _FakeFtpNavigator)
+    monkeypatch.setattr(per, "log_quarantine_event", lambda *a, **k: None)
+
+    summary = per.run_ftp_extract(
+        "198.51.100.12",
+        port=21,
+        download_dir=tmp_path / "extract",
+        max_total_bytes=10_000,
+        max_file_bytes=10_000,
+        max_file_count=10,
+        max_seconds=60,
+        max_depth=3,
+        allowed_extensions=[],
+        denied_extensions=[],
+        delay_seconds=0,
+        connection_timeout=5,
+        extension_mode="download_all",
+        clamav_config={"enabled": False},
+        start_dirs=["/pub"],
+    )
+
+    downloaded_paths = {row["path"] for row in summary["files"]}
+    assert downloaded_paths == {"pub/child.txt", "pub/deep/deep.txt"}
+    assert "root.txt" not in downloaded_paths
+    assert "root.bin" not in downloaded_paths
+
+
+def test_run_ftp_extract_selected_file_and_dir_share_file_limit(monkeypatch, tmp_path):
+    monkeypatch.setattr(per, "FtpNavigator", _FakeFtpNavigator)
+    monkeypatch.setattr(per, "log_quarantine_event", lambda *a, **k: None)
+
+    summary = per.run_ftp_extract(
+        "198.51.100.13",
+        port=21,
+        download_dir=tmp_path / "extract",
+        max_total_bytes=10_000,
+        max_file_bytes=10_000,
+        max_file_count=2,
+        max_seconds=60,
+        max_depth=3,
+        allowed_extensions=[],
+        denied_extensions=[],
+        delay_seconds=0,
+        connection_timeout=5,
+        extension_mode="download_all",
+        clamav_config={"enabled": False},
+        start_files=["/root.txt"],
+        start_dirs=["/pub"],
+    )
+
+    assert [row["path"] for row in summary["files"]] == ["root.txt", "pub/child.txt"]
+    assert summary["stop_reason"] == "file_limit"
+
+
 def test_run_http_extract_enforces_extension_mode(monkeypatch, tmp_path):
     def _fake_fetch_listing(**kwargs):
         path = kwargs["path"]
@@ -172,6 +227,52 @@ def test_run_http_extract_enforces_extension_mode(monkeypatch, tmp_path):
     assert ("root/a.bin", "not_included_extension") in skipped_reasons
     # max_depth=1 means /root/pub/deep/c.txt is out of scope.
     assert "root/pub/deep/c.txt" not in downloaded_paths
+
+
+def test_run_http_extract_selected_file_and_dir_stay_scoped(monkeypatch, tmp_path):
+    fetch_calls = []
+
+    def _fake_fetch_listing(**kwargs):
+        path = kwargs["path"]
+        fetch_calls.append(path)
+        if path == "/root/pub":
+            return True, ["/root/pub/deep/"], ["/root/pub/b.txt"], None
+        if path == "/root/pub/deep":
+            return True, [], ["/root/pub/deep/c.txt"], None
+        if path in {"/root", "/root/"}:
+            return True, ["/root/pub/"], ["/root/a.txt"], None
+        return False, [], [], f"{path} missing"
+
+    monkeypatch.setattr(per, "_http_fetch_listing", _fake_fetch_listing)
+    monkeypatch.setattr(per, "_http_download_file", _fake_http_download)
+    monkeypatch.setattr(per, "log_quarantine_event", lambda *a, **k: None)
+
+    summary = per.run_http_extract(
+        "203.0.113.8",
+        port=80,
+        scheme="http",
+        request_host="files.example.org",
+        start_path="/root/",
+        allow_insecure_tls=True,
+        download_dir=tmp_path / "extract",
+        max_total_bytes=10_000,
+        max_file_bytes=10_000,
+        max_file_count=2,
+        max_seconds=60,
+        max_depth=3,
+        allowed_extensions=[],
+        denied_extensions=[],
+        delay_seconds=0,
+        connection_timeout=5,
+        extension_mode="download_all",
+        clamav_config={"enabled": False},
+        start_files=["/root/a.txt"],
+        start_dirs=["/root/pub/"],
+    )
+
+    assert [row["path"] for row in summary["files"]] == ["root/a.txt", "root/pub/b.txt"]
+    assert summary["stop_reason"] == "file_limit"
+    assert fetch_calls == ["/root/pub"]
 
 
 def test_run_http_extract_clamav_passthrough_success(monkeypatch, tmp_path):

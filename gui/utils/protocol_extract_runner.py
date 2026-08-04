@@ -61,6 +61,38 @@ def _safe_rel_parts(path_value: str) -> List[str]:
     return parts
 
 
+def _normalize_remote_path(path_value: str, default: str = "/") -> str:
+    cleaned = str(path_value or "").split("?", 1)[0].split("#", 1)[0].strip()
+    if not cleaned:
+        cleaned = default
+    normalized = "/" + str(PurePosixPath(cleaned)).lstrip("/")
+    if normalized != "/" and normalized.endswith("/"):
+        normalized = normalized.rstrip("/")
+    return normalized
+
+
+def _resolve_start_paths(
+    *,
+    start_dirs: Optional[Sequence[str]],
+    start_files: Optional[Sequence[str]],
+    default_dir: str,
+) -> Tuple[bool, List[str], List[str]]:
+    selected_starts_supplied = start_dirs is not None or start_files is not None
+    dirs = [
+        _normalize_remote_path(path)
+        for path in (start_dirs or [])
+        if str(path or "").strip()
+    ]
+    files = [
+        _normalize_remote_path(path)
+        for path in (start_files or [])
+        if str(path or "").strip()
+    ]
+    if not selected_starts_supplied and not dirs and not files:
+        dirs = [_normalize_remote_path(default_dir)]
+    return selected_starts_supplied, dirs, files
+
+
 def _build_summary(
     ip_address: str,
     share_name: str,
@@ -156,6 +188,8 @@ def run_ftp_extract(
     progress_callback: Optional[Callable[[str, int, Optional[int]], None]] = None,
     cancel_event: Optional[Event] = None,
     clamav_config: Optional[Dict[str, Any]] = None,
+    start_dirs: Optional[Sequence[str]] = None,
+    start_files: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
     """Extract files recursively from anonymous FTP starting at '/'."""
     _check_cancel(cancel_event)
@@ -211,13 +245,162 @@ def run_ftp_extract(
     if cancel_event is not None:
         nav._cancel_event = cancel_event
 
-    stack: List[Tuple[str, int]] = [("/", 0)]
+    _, initial_dirs, initial_files = _resolve_start_paths(
+        start_dirs=start_dirs,
+        start_files=start_files,
+        default_dir="/",
+    )
+    stack: List[Tuple[str, int]] = [(path, 0) for path in initial_dirs]
     visited: Set[str] = set()
+    downloaded_paths: Set[str] = set()
 
     try:
         nav.connect(ip_address, int(port))
 
-        while stack:
+        def _download_ftp_file(
+            entry_abs: str,
+            file_size: int = 0,
+            modified_time: Optional[float] = None,
+        ) -> bool:
+            nonlocal total_files, total_bytes
+
+            entry_abs_norm = _normalize_remote_path(entry_abs)
+            if entry_abs_norm in downloaded_paths:
+                return True
+
+            rel_parts = _safe_rel_parts(entry_abs_norm)
+            if not rel_parts:
+                rel_parts = [PurePosixPath(entry_abs_norm).name or "download"]
+            rel_display = "/".join(rel_parts)
+            rel_display_safe = display_safe_path(rel_display)
+
+            try:
+                validate_remote_path(entry_abs_norm)
+            except ValueError as exc:
+                _append_error(summary, share_name, rel_display_safe, str(exc))
+                return True
+
+            file_size_int = int(file_size or 0)
+            should_download, skip_reason = _should_download_file(
+                rel_display,
+                file_size_int,
+                allowed_set,
+                denied_set,
+                mode,
+                max_file_bytes,
+                max_total_bytes,
+                total_bytes,
+            )
+            if not should_download:
+                _append_skip(summary, share_name, rel_display_safe, str(skip_reason), file_size_int)
+                if skip_reason == "total_size_limit":
+                    summary["stop_reason"] = "total_size_limit"
+                    return False
+                return True
+
+            if max_file_count > 0 and total_files >= max_file_count:
+                summary["stop_reason"] = "file_limit"
+                return False
+
+            destination = ftp_root_dir.joinpath(*rel_parts)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.unlink(missing_ok=True)
+
+            current_index = total_files + 1
+            if progress_callback:
+                progress_callback(rel_display_safe, current_index, max_file_count or None)
+
+            try:
+                result = nav.download_file(entry_abs_norm, destination.parent)
+            except FileExistsError:
+                destination.unlink(missing_ok=True)
+                result = nav.download_file(entry_abs_norm, destination.parent)
+            except FtpCancelledError as exc:
+                raise ExtractError(str(exc)) from exc
+            except FtpFileTooLargeError:
+                _append_skip(summary, share_name, rel_display_safe, "file_too_large", file_size_int)
+                return True
+            except Exception as exc:
+                _append_error(summary, share_name, rel_display_safe, f"Download failed: {exc}")
+                return True
+
+            saved_path = Path(result.saved_path)
+            downloaded_size = int(result.size or 0)
+
+            if max_total_bytes > 0 and (total_bytes + downloaded_size) > max_total_bytes:
+                saved_path.unlink(missing_ok=True)
+                _append_skip(summary, share_name, rel_display_safe, "total_size_limit", downloaded_size)
+                summary["stop_reason"] = "total_size_limit"
+                return False
+
+            if modified_time is not None:
+                try:
+                    mtime = float(modified_time)
+                    os.utime(saved_path, (mtime, mtime))
+                except Exception:
+                    pass
+
+            final_path = saved_path
+            if pp is not None and clamav_accum is not None:
+                try:
+                    pp_result = pp(
+                        PostProcessInput(
+                            file_path=saved_path,
+                            ip_address=ip_address,
+                            share=share_name,
+                            rel_display=rel_display,
+                            file_size=downloaded_size,
+                        )
+                    )
+                    final_path = pp_result.final_path
+                    update_browser_clamav_accum(clamav_accum, pp_result, rel_display_safe)
+                except Exception as exc:
+                    _append_error(
+                        summary,
+                        share_name,
+                        rel_display_safe,
+                        f"post_processor error (file kept in quarantine): {exc}",
+                    )
+                    if clamav_accum is not None:
+                        clamav_accum["errors"] += 1
+                        clamav_accum["error_items"].append(
+                            {"path": rel_display_safe, "error": str(exc)}
+                        )
+
+            total_files += 1
+            total_bytes += downloaded_size
+            downloaded_paths.add(entry_abs_norm)
+            if max_file_count > 0 and total_files >= max_file_count:
+                summary["stop_reason"] = "file_limit"
+
+            summary["files"].append(
+                {
+                    "share": share_name,
+                    "path": rel_display_safe,
+                    "size": downloaded_size,
+                    "saved_to": str(final_path),
+                }
+            )
+            try:
+                log_quarantine_event(download_dir, f"extracted {share_name}/{rel_display_safe} -> {final_path}")
+            except Exception:
+                pass
+
+            if delay_seconds > 0:
+                _check_cancel(cancel_event)
+                time.sleep(delay_seconds)
+            return True
+
+        for selected_file in initial_files:
+            _check_cancel(cancel_event)
+            if max_seconds > 0 and (time.time() - start_time) >= max_seconds:
+                summary["timed_out"] = True
+                summary["stop_reason"] = "time_limit"
+                break
+            if not _download_ftp_file(selected_file):
+                break
+
+        while stack and summary.get("stop_reason") not in {"time_limit", "file_limit", "total_size_limit"}:
             _check_cancel(cancel_event)
             if max_seconds > 0 and (time.time() - start_time) >= max_seconds:
                 summary["timed_out"] = True
@@ -233,13 +416,34 @@ def run_ftp_extract(
             visited.add(current_dir_norm)
 
             try:
+                validate_remote_path(current_dir_norm)
+            except ValueError as exc:
+                _append_error(
+                    summary,
+                    share_name,
+                    display_safe_path(current_dir_norm),
+                    str(exc),
+                )
+                continue
+
+            try:
                 listing = nav.list_dir(current_dir_norm)
             except Exception as exc:
-                _append_error(summary, share_name, current_dir_norm, f"List failed: {exc}")
+                _append_error(
+                    summary,
+                    share_name,
+                    display_safe_path(current_dir_norm),
+                    f"List failed: {exc}",
+                )
                 continue
 
             if listing.warning:
-                _append_error(summary, share_name, current_dir_norm, str(listing.warning))
+                _append_error(
+                    summary,
+                    share_name,
+                    display_safe_path(current_dir_norm),
+                    str(listing.warning),
+                )
 
             for entry in listing.entries:
                 _check_cancel(cancel_event)
@@ -254,124 +458,12 @@ def run_ftp_extract(
                         stack.append((entry_abs, depth + 1))
                     continue
 
-                rel_parts = _safe_rel_parts(entry_abs)
-                if not rel_parts:
-                    rel_parts = [PurePosixPath(entry_abs).name or "download"]
-                rel_display = "/".join(rel_parts)
-                rel_display_safe = display_safe_path(rel_display)
-
-                try:
-                    validate_remote_path(entry_abs)
-                except ValueError as exc:
-                    _append_error(summary, share_name, rel_display_safe, str(exc))
-                    continue
-
-                file_size = int(getattr(entry, "size", 0) or 0)
-                should_download, skip_reason = _should_download_file(
-                    rel_display,
-                    file_size,
-                    allowed_set,
-                    denied_set,
-                    mode,
-                    max_file_bytes,
-                    max_total_bytes,
-                    total_bytes,
-                )
-                if not should_download:
-                    _append_skip(summary, share_name, rel_display_safe, str(skip_reason), file_size)
-                    if skip_reason == "total_size_limit":
-                        summary["stop_reason"] = "total_size_limit"
-                        break
-                    continue
-
-                if max_file_count > 0 and total_files >= max_file_count:
-                    summary["stop_reason"] = "file_limit"
+                if not _download_ftp_file(
+                    entry_abs,
+                    int(getattr(entry, "size", 0) or 0),
+                    getattr(entry, "modified_time", None),
+                ):
                     break
-
-                destination = ftp_root_dir.joinpath(*rel_parts)
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                destination.unlink(missing_ok=True)
-
-                current_index = total_files + 1
-                if progress_callback:
-                    progress_callback(rel_display_safe, current_index, max_file_count or None)
-
-                try:
-                    result = nav.download_file(entry_abs, destination.parent)
-                except FileExistsError:
-                    destination.unlink(missing_ok=True)
-                    result = nav.download_file(entry_abs, destination.parent)
-                except FtpCancelledError as exc:
-                    raise ExtractError(str(exc)) from exc
-                except FtpFileTooLargeError:
-                    _append_skip(summary, share_name, rel_display_safe, "file_too_large", file_size)
-                    continue
-                except Exception as exc:
-                    _append_error(summary, share_name, rel_display_safe, f"Download failed: {exc}")
-                    continue
-
-                saved_path = Path(result.saved_path)
-                downloaded_size = int(result.size or 0)
-
-                if max_total_bytes > 0 and (total_bytes + downloaded_size) > max_total_bytes:
-                    saved_path.unlink(missing_ok=True)
-                    _append_skip(summary, share_name, rel_display_safe, "total_size_limit", downloaded_size)
-                    summary["stop_reason"] = "total_size_limit"
-                    break
-
-                if getattr(entry, "modified_time", None) is not None:
-                    try:
-                        mtime = float(entry.modified_time)
-                        os.utime(saved_path, (mtime, mtime))
-                    except Exception:
-                        pass
-
-                final_path = saved_path
-                if pp is not None and clamav_accum is not None:
-                    try:
-                        pp_result = pp(
-                            PostProcessInput(
-                                file_path=saved_path,
-                                ip_address=ip_address,
-                                share=share_name,
-                                rel_display=rel_display,
-                                file_size=downloaded_size,
-                            )
-                        )
-                        final_path = pp_result.final_path
-                        update_browser_clamav_accum(clamav_accum, pp_result, rel_display_safe)
-                    except Exception as exc:
-                        _append_error(
-                            summary,
-                            share_name,
-                            rel_display_safe,
-                            f"post_processor error (file kept in quarantine): {exc}",
-                        )
-                        if clamav_accum is not None:
-                            clamav_accum["errors"] += 1
-                            clamav_accum["error_items"].append(
-                                {"path": rel_display_safe, "error": str(exc)}
-                            )
-
-                total_files += 1
-                total_bytes += downloaded_size
-
-                summary["files"].append(
-                    {
-                        "share": share_name,
-                        "path": rel_display_safe,
-                        "size": downloaded_size,
-                        "saved_to": str(final_path),
-                    }
-                )
-                try:
-                    log_quarantine_event(download_dir, f"extracted {share_name}/{rel_display_safe} -> {final_path}")
-                except Exception:
-                    pass
-
-                if delay_seconds > 0:
-                    _check_cancel(cancel_event)
-                    time.sleep(delay_seconds)
 
             if summary.get("stop_reason") in {"time_limit", "file_limit", "total_size_limit"}:
                 break
@@ -537,6 +629,8 @@ def run_http_extract(
     progress_callback: Optional[Callable[[str, int, Optional[int]], None]] = None,
     cancel_event: Optional[Event] = None,
     clamav_config: Optional[Dict[str, Any]] = None,
+    start_dirs: Optional[Sequence[str]] = None,
+    start_files: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
     """Extract files recursively from an HTTP/HTTPS directory index endpoint."""
     _check_cancel(cancel_event)
@@ -595,51 +689,203 @@ def run_http_extract(
     active_connect_host = ip_address
     active_request_host = str(request_host or "").strip() or None
 
-    paths_to_try = [start_path_norm]
-    if start_path_norm != "/":
-        paths_to_try.append("/")
-
-    root_listing_ok = False
-    root_dirs: List[str] = []
-    root_files: List[str] = []
-    root_path_in_use = start_path_norm
-    last_root_error: Optional[str] = None
-
-    for candidate in paths_to_try:
-        ok, dirs, files, err = _http_fetch_listing(
-            connect_host=ip_address,
-            request_host=active_request_host,
-            port=int(port),
-            scheme=scheme_norm,
-            allow_insecure_tls=allow_insecure_tls,
-            timeout_seconds=max(1, int(connection_timeout)),
-            path=candidate,
+    selected_starts_supplied = start_dirs is not None or start_files is not None
+    if selected_starts_supplied:
+        _, initial_dirs, initial_files = _resolve_start_paths(
+            start_dirs=start_dirs,
+            start_files=start_files,
+            default_dir=start_path_norm,
         )
-        if ok:
-            root_listing_ok = True
-            root_dirs, root_files = dirs, files
-            root_path_in_use = candidate
-            active_connect_host = ip_address
-            break
-        last_root_error = err
+    else:
+        initial_dirs = [start_path_norm]
+        initial_files = []
 
-    if not root_listing_ok:
-        _append_error(
-            summary,
-            share_name,
-            root_path_in_use,
-            last_root_error or f"{root_path_in_use} is not a directory index",
-        )
-        summary["totals"]["files_downloaded"] = 0
-        summary["totals"]["bytes_downloaded"] = 0
-        return _finalize_summary(summary, clamav_accum)
+    stack: List[Tuple[str, int, Optional[List[str]], Optional[List[str]]]] = []
+    if selected_starts_supplied:
+        stack = [(path, 0, None, None) for path in initial_dirs]
+    else:
+        paths_to_try = list(initial_dirs)
+        if start_path_norm != "/" and "/" not in paths_to_try:
+            paths_to_try.append("/")
 
-    stack: List[Tuple[str, int, Optional[List[str]], Optional[List[str]]]] = [
-        (root_path_in_use, 0, root_dirs, root_files)
-    ]
+        root_listing_ok = False
+        root_dirs: List[str] = []
+        root_files: List[str] = []
+        root_path_in_use = start_path_norm
+        last_root_error: Optional[str] = None
+
+        for candidate in paths_to_try:
+            ok, dirs, files, err = _http_fetch_listing(
+                connect_host=ip_address,
+                request_host=active_request_host,
+                port=int(port),
+                scheme=scheme_norm,
+                allow_insecure_tls=allow_insecure_tls,
+                timeout_seconds=max(1, int(connection_timeout)),
+                path=candidate,
+            )
+            if ok:
+                root_listing_ok = True
+                root_dirs, root_files = dirs, files
+                root_path_in_use = candidate
+                active_connect_host = ip_address
+                break
+            last_root_error = err
+
+        if not root_listing_ok:
+            _append_error(
+                summary,
+                share_name,
+                root_path_in_use,
+                last_root_error or f"{root_path_in_use} is not a directory index",
+            )
+            summary["totals"]["files_downloaded"] = 0
+            summary["totals"]["bytes_downloaded"] = 0
+            return _finalize_summary(summary, clamav_accum)
+
+        stack = [(root_path_in_use, 0, root_dirs, root_files)]
+
     visited: Set[str] = set()
+    downloaded_paths: Set[str] = set()
 
-    while stack:
+    def _download_http_file(file_abs: str) -> bool:
+        nonlocal total_files, total_bytes
+
+        file_abs_norm = _normalize_remote_path(file_abs)
+        if file_abs_norm in downloaded_paths:
+            return True
+
+        rel_parts = _safe_rel_parts(file_abs_norm)
+        if not rel_parts:
+            rel_parts = [PurePosixPath(file_abs_norm).name or "download"]
+        rel_display = "/".join(rel_parts)
+
+        should_download, skip_reason = _should_download_file(
+            rel_display,
+            0,
+            allowed_set,
+            denied_set,
+            mode,
+            max_file_bytes,
+            max_total_bytes,
+            total_bytes,
+        )
+        if not should_download:
+            _append_skip(summary, share_name, rel_display, str(skip_reason), 0)
+            if skip_reason == "total_size_limit":
+                summary["stop_reason"] = "total_size_limit"
+                return False
+            return True
+
+        if max_file_count > 0 and total_files >= max_file_count:
+            summary["stop_reason"] = "file_limit"
+            return False
+
+        destination = http_root_dir.joinpath(*rel_parts)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.unlink(missing_ok=True)
+
+        current_index = total_files + 1
+        if progress_callback:
+            progress_callback(rel_display, current_index, max_file_count or None)
+
+        remaining_budget = None
+        if max_total_bytes > 0:
+            remaining_budget = max(0, max_total_bytes - total_bytes)
+            if remaining_budget <= 0:
+                _append_skip(summary, share_name, rel_display, "total_size_limit", 0)
+                summary["stop_reason"] = "total_size_limit"
+                return False
+
+        try:
+            downloaded_size, _mtime = _http_download_file(
+                connect_host=active_connect_host,
+                request_host=active_request_host,
+                port=int(port),
+                scheme=scheme_norm,
+                allow_insecure_tls=allow_insecure_tls,
+                timeout_seconds=max(1, int(connection_timeout)),
+                remote_path=file_abs_norm,
+                dest_path=destination,
+                max_file_bytes=max_file_bytes,
+                max_total_remaining=remaining_budget,
+                cancel_event=cancel_event,
+                progress_callback=None,
+            )
+        except _TotalSizeLimitExceeded:
+            _append_skip(summary, share_name, rel_display, "total_size_limit", 0)
+            summary["stop_reason"] = "total_size_limit"
+            return False
+        except FtpFileTooLargeError:
+            _append_skip(summary, share_name, rel_display, "file_too_large", 0)
+            return True
+        except ExtractError:
+            raise
+        except Exception as exc:
+            _append_error(summary, share_name, rel_display, f"Download failed: {exc}")
+            return True
+
+        final_path = destination
+        if pp is not None and clamav_accum is not None:
+            try:
+                pp_result = pp(
+                    PostProcessInput(
+                        file_path=destination,
+                        ip_address=ip_address,
+                        share=share_name,
+                        rel_display=rel_display,
+                        file_size=downloaded_size,
+                    )
+                )
+                final_path = pp_result.final_path
+                update_browser_clamav_accum(clamav_accum, pp_result, rel_display)
+            except Exception as exc:
+                _append_error(
+                    summary,
+                    share_name,
+                    rel_display,
+                    f"post_processor error (file kept in quarantine): {exc}",
+                )
+                if clamav_accum is not None:
+                    clamav_accum["errors"] += 1
+                    clamav_accum["error_items"].append(
+                        {"path": rel_display, "error": str(exc)}
+                    )
+
+        total_files += 1
+        total_bytes += downloaded_size
+        downloaded_paths.add(file_abs_norm)
+        if max_file_count > 0 and total_files >= max_file_count:
+            summary["stop_reason"] = "file_limit"
+
+        summary["files"].append(
+            {
+                "share": share_name,
+                "path": rel_display,
+                "size": downloaded_size,
+                "saved_to": str(final_path),
+            }
+        )
+        try:
+            log_quarantine_event(download_dir, f"extracted {share_name}/{rel_display} -> {final_path}")
+        except Exception:
+            pass
+
+        if delay_seconds > 0:
+            _check_cancel(cancel_event)
+            time.sleep(delay_seconds)
+        return True
+
+    for selected_file in initial_files:
+        _check_cancel(cancel_event)
+        if max_seconds > 0 and (time.time() - start_time) >= max_seconds:
+            summary["timed_out"] = True
+            summary["stop_reason"] = "time_limit"
+            break
+        if not _download_http_file(selected_file):
+            break
+
+    while stack and summary.get("stop_reason") not in {"time_limit", "file_limit", "total_size_limit"}:
         _check_cancel(cancel_event)
         if max_seconds > 0 and (time.time() - start_time) >= max_seconds:
             summary["timed_out"] = True
@@ -678,122 +924,8 @@ def run_http_extract(
                 summary["stop_reason"] = "time_limit"
                 break
 
-            rel_parts = _safe_rel_parts(file_abs)
-            if not rel_parts:
-                rel_parts = [PurePosixPath(file_abs).name or "download"]
-            rel_display = "/".join(rel_parts)
-
-            should_download, skip_reason = _should_download_file(
-                rel_display,
-                0,
-                allowed_set,
-                denied_set,
-                mode,
-                max_file_bytes,
-                max_total_bytes,
-                total_bytes,
-            )
-            if not should_download:
-                _append_skip(summary, share_name, rel_display, str(skip_reason), 0)
-                if skip_reason == "total_size_limit":
-                    summary["stop_reason"] = "total_size_limit"
-                    break
-                continue
-
-            if max_file_count > 0 and total_files >= max_file_count:
-                summary["stop_reason"] = "file_limit"
+            if not _download_http_file(file_abs):
                 break
-
-            destination = http_root_dir.joinpath(*rel_parts)
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.unlink(missing_ok=True)
-
-            current_index = total_files + 1
-            if progress_callback:
-                progress_callback(rel_display, current_index, max_file_count or None)
-
-            remaining_budget = None
-            if max_total_bytes > 0:
-                remaining_budget = max(0, max_total_bytes - total_bytes)
-                if remaining_budget <= 0:
-                    _append_skip(summary, share_name, rel_display, "total_size_limit", 0)
-                    summary["stop_reason"] = "total_size_limit"
-                    break
-
-            try:
-                downloaded_size, _mtime = _http_download_file(
-                    connect_host=active_connect_host,
-                    request_host=active_request_host,
-                    port=int(port),
-                    scheme=scheme_norm,
-                    allow_insecure_tls=allow_insecure_tls,
-                    timeout_seconds=max(1, int(connection_timeout)),
-                    remote_path=file_abs,
-                    dest_path=destination,
-                    max_file_bytes=max_file_bytes,
-                    max_total_remaining=remaining_budget,
-                    cancel_event=cancel_event,
-                    progress_callback=None,
-                )
-            except _TotalSizeLimitExceeded:
-                _append_skip(summary, share_name, rel_display, "total_size_limit", 0)
-                summary["stop_reason"] = "total_size_limit"
-                break
-            except FtpFileTooLargeError:
-                _append_skip(summary, share_name, rel_display, "file_too_large", 0)
-                continue
-            except ExtractError:
-                raise
-            except Exception as exc:
-                _append_error(summary, share_name, rel_display, f"Download failed: {exc}")
-                continue
-
-            final_path = destination
-            if pp is not None and clamav_accum is not None:
-                try:
-                    pp_result = pp(
-                        PostProcessInput(
-                            file_path=destination,
-                            ip_address=ip_address,
-                            share=share_name,
-                            rel_display=rel_display,
-                            file_size=downloaded_size,
-                        )
-                    )
-                    final_path = pp_result.final_path
-                    update_browser_clamav_accum(clamav_accum, pp_result, rel_display)
-                except Exception as exc:
-                    _append_error(
-                        summary,
-                        share_name,
-                        rel_display,
-                        f"post_processor error (file kept in quarantine): {exc}",
-                    )
-                    if clamav_accum is not None:
-                        clamav_accum["errors"] += 1
-                        clamav_accum["error_items"].append(
-                            {"path": rel_display, "error": str(exc)}
-                        )
-
-            total_files += 1
-            total_bytes += downloaded_size
-
-            summary["files"].append(
-                {
-                    "share": share_name,
-                    "path": rel_display,
-                    "size": downloaded_size,
-                    "saved_to": str(final_path),
-                }
-            )
-            try:
-                log_quarantine_event(download_dir, f"extracted {share_name}/{rel_display} -> {final_path}")
-            except Exception:
-                pass
-
-            if delay_seconds > 0:
-                _check_cancel(cancel_event)
-                time.sleep(delay_seconds)
 
         if summary.get("stop_reason") in {"time_limit", "file_limit", "total_size_limit"}:
             break
