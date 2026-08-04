@@ -1,7 +1,7 @@
 # HTTP/FTP Explorer Parity Workspace
 
 Date: 2026-04-04  
-Status: C0–C3 complete
+Status: C0–C4 complete (C3/C4 manual validation pending)
 
 ## Objective
 
@@ -34,7 +34,8 @@ This workspace contains the execution contract and Claude-ready task cards.
 1. `SPEC_DRAFT.md` — decision-complete implementation spec.
 2. `TASK_CARDS.md` — execution cards (Claude-ready).
 3. `RISK_REGISTER.md` — runtime, UX, and regression risk controls.
-4. `README.md` (this file) — status and contract summary.
+4. `LESSONS_LEARNED.md` — carry-forward parity and regression notes.
+5. `README.md` (this file) — status and contract summary.
 
 ## Working Model
 
@@ -55,4 +56,5 @@ OVERALL:   PASS | FAIL | PENDING
 1. C0: complete (planning only)
 2. C1: complete
 3. C2: complete
-4. C3: complete
+4. C3: complete (MANUAL pending)
+5. C4: complete — recursive folder download in FTP/HTTP explorers (MANUAL pending)

@@ -210,6 +210,8 @@ Live scan/probe/extract output is shown in monitor dialogs. Hiding a monitor doe
 
 The SMB, FTP, and HTTP browsers provide read-only navigation with familiar file
 explorer controls. Double-click opens a file or descends into a directory.
+Selecting a folder and clicking **Download to Quarantine** prompts for recursive
+download limits, then downloads that folder's contents into quarantine.
 
 The viewer auto-detects file types: text files display with an encoding selector (UTF-8, Latin-1, etc.), binary files switch to hex mode, and images (PNG, JPEG, GIF, WebP, BMP, TIFF) render with fit-to-window scaling.
 

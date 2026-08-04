@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from shared.quarantine import create_quarantine_dir
 import shared.tmpfs_quarantine as tq
 
 
@@ -131,3 +132,24 @@ def test_tmpfs_has_quarantined_files_ignores_readme(monkeypatch, tmp_path):
 
     (root / "host").mkdir(parents=True, exist_ok=True)
     assert tq.tmpfs_has_quarantined_files() is True
+
+
+def test_create_quarantine_dir_uses_active_tmpfs_with_disk_base(monkeypatch, tmp_path):
+    tmpfs_root = tmp_path / "tmpfs_q"
+    disk_root = tmp_path / "disk_q"
+    tmpfs_root.mkdir(parents=True, exist_ok=True)
+    disk_root.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(tq.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(tq, "_is_tmpfs_mounted", lambda p: p == tmpfs_root)
+    monkeypatch.setattr(tq, "_TMPFS_CANONICAL", tmpfs_root)
+    monkeypatch.setattr(tq, "_TMPFS_CANDIDATES", (("canonical", tmpfs_root),))
+
+    tq.bootstrap_tmpfs_quarantine(
+        config_data=_cfg(use_tmpfs=True, disk_root=str(disk_root))
+    )
+
+    created = create_quarantine_dir("203.0.113.10", purpose="ftp", base_path=disk_root)
+
+    assert tmpfs_root in created.parents
+    assert disk_root not in created.parents

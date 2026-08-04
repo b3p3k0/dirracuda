@@ -15,6 +15,7 @@ from __future__ import annotations
 import threading
 import tkinter as tk
 from tkinter import ttk
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from gui.utils import safe_messagebox as messagebox
@@ -319,15 +320,89 @@ class UnifiedBrowserCore:
     # Download
     # ------------------------------------------------------------------
 
-    def _start_download_thread(self, file_list) -> None:
+    def _start_download_thread(self, file_list, download_plan: Optional[Dict[str, Any]] = None) -> None:
         self._cancel_event.clear()
         self.btn_cancel.config(state=tk.NORMAL)
         self.btn_download.config(state=tk.DISABLED)
         self.busy = True
         self._download_thread = threading.Thread(
-            target=self._download_thread_fn, args=(file_list,), daemon=True
+            target=self._download_thread_fn, args=(file_list, download_plan), daemon=True
         )
         self._download_thread.start()
+
+    def _prompt_extract_options(self, target_count: int) -> Optional[Dict[str, Any]]:
+        from gui.components.batch_extract_dialog import BatchExtractSettingsDialog
+
+        settings_manager = getattr(self, "settings_manager", None)
+        config_path = getattr(self, "config_path", None)
+        if settings_manager:
+            try:
+                cfg_override = settings_manager.get_setting("backend.config_path", None)
+                if cfg_override:
+                    config_path = cfg_override
+            except Exception:
+                pass
+
+        dialog_config = BatchExtractSettingsDialog(
+            parent=self.window,
+            theme=self.theme,
+            settings_manager=settings_manager,
+            config_path=config_path,
+            config_editor_callback=None,
+            mode="on-demand",
+            target_count=target_count,
+        ).show()
+        if not dialog_config:
+            return None
+
+        return {
+            "download_path": dialog_config.get("download_path"),
+            "max_depth": int(dialog_config.get("max_directory_depth", 0)),
+            "max_files": int(dialog_config.get("max_files_per_target", 0)),
+            "max_total_mb": int(dialog_config.get("max_total_size_mb", 0)),
+            "max_file_mb": int(dialog_config.get("max_file_size_mb", 0)),
+            "max_time": int(dialog_config.get("max_time_seconds", 0)),
+            "download_delay_seconds": float(dialog_config.get("download_delay_seconds", 0)),
+            "connection_timeout": int(dialog_config.get("connection_timeout", 0)),
+            "extension_mode": dialog_config.get("extension_mode", "download_all"),
+            "included_extensions": [
+                ext.lower() for ext in dialog_config.get("included_extensions", [])
+            ],
+            "excluded_extensions": [
+                ext.lower() for ext in dialog_config.get("excluded_extensions", [])
+            ],
+        }
+
+    def _resolve_quarantine_base_path(self, requested_path: Any) -> Path:
+        """Resolve the download base through current tmpfs quarantine state."""
+        from shared.tmpfs_quarantine import (
+            bootstrap_tmpfs_quarantine,
+            get_tmpfs_runtime_state,
+        )
+
+        state = get_tmpfs_runtime_state()
+        config_path = getattr(self, "config_path", None)
+        settings_manager = getattr(self, "settings_manager", None)
+        if settings_manager:
+            try:
+                config_override = settings_manager.get_setting("backend.config_path", None)
+                if config_override:
+                    config_path = config_override
+            except Exception:
+                pass
+
+        if config_path:
+            try:
+                state = bootstrap_tmpfs_quarantine(config_path=config_path)
+            except Exception:
+                state = get_tmpfs_runtime_state()
+
+        if state.get("use_tmpfs"):
+            effective_root = state.get("effective_root")
+            if effective_root:
+                return Path(str(effective_root)).expanduser()
+
+        return Path(str(requested_path)).expanduser()
 
     def _on_download_done(
         self,
@@ -365,6 +440,14 @@ class UnifiedBrowserCore:
                 f"Downloaded {success}/{total} file(s) to quarantine:\n{quarantine_path}",
                 parent=self.window,
             )
+
+    def _reset_download_state(self) -> None:
+        self.busy = False
+        self._set_buttons_busy(False)
+        try:
+            self.btn_cancel.config(state=tk.DISABLED)
+        except tk.TclError:
+            pass
 
     def _maybe_show_clamav_dialog(self, clamav_accum: Optional[Dict[str, Any]]) -> bool:
         """Show ClamAV results dialog and return True iff shown."""
