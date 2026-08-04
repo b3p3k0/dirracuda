@@ -1,0 +1,110 @@
+# Ollama Integration — Risk Register
+
+Date: 2026-08-04
+Status: **Frozen with the C0A contract.** Controls are authoritative in
+[`CONTRACT.md`](CONTRACT.md); this register is the risk-indexed view.
+
+| ID | Risk | Likelihood | Impact | Mitigation / Control |
+|----|------|------------|--------|----------------------|
+| R1 | Document content egresses to Ollama Cloud | Medium | Critical | Client rejects known `:cloud` and `-cloud` tag forms, permits only the benchmarked local tag+digest, validates a literal-loopback endpoint, disables redirects, and ignores proxies. Tag checks are defense-in-depth. Server-level egress (Ollama cloud off) is an operator prerequisite Analyst cannot prove — stated honestly, not claimed as a guarantee. |
+| R2 | Crafted PDF achieves code execution or hangs/OOMs the parser | **High** | **Critical** | Every parser runs in **bubblewrap** (net off, caps dropped, read-only fd-bound input, private HOME/tmp) — a containment boundary against MuPDF RCE (CVE-2026-3308), not just resource limits. Plus wall-clock + `RLIMIT_*` for liveness and process-group kill. PyMuPDF pinned to bundle MuPDF ≥ 1.28.0. Sandbox unavailable → preflight fails. |
+| R3 | XXE in DOCX/XLSX/PPTX reads local files or triggers SSRF | Medium | Critical | `defusedxml` (no external entities, no network); member-count/size/ratio/path gates before parse. Guardrail test bans raw `xml.etree`/unsafe lxml in the analysis path. Runs inside the sandbox regardless. |
+| R4 | Zip bomb exhausts disk or memory during OOXML unpack | Medium | Medium | Cap uncompressed size and decompression ratio before extraction; reject and record. |
+| R5 | Prompt injection from document content corrupts findings | **High** | Medium | Schema-constrained output only; no tools bound; model output never drives an action. Mandatory evidence citations — uncited findings dropped. All rendered values as text nodes, never dynamic HTML. |
+| R6 | Model hallucinates findings that reach the report as fact | Medium | High | Identifier counts come from deterministic detectors, never the model. Model findings require a quoted span that must be present in the source chunk; aggregator verifies before including. |
+| R7 | Report implies full coverage it did not achieve | Medium | High | Every file carries a terminal state. Report header separates detector-scanned and model-reviewed percentages and gives terminal outcomes by reason. No report renders without the coverage table. |
+| R8 | Schema-invalid model responses silently drop findings | Medium | Medium | Pydantic-validate every response, retry once, then record `model_invalid` as a counted coverage state. |
+| R9 | Long run lost to crash, cancel, or reboot | High | Medium | Per-file checkpointing; resume skips completed files. Cancellation via the existing Running Tasks path. |
+| R10 | GPU contention between analysis and any other stack workload | Medium | Medium | CPU-only text extraction (PyMuPDF). No ML document converter. Serial model calls, one job at a time. |
+| R11 | Ollama unreachable, model missing, or stack reconfigured mid-run | Medium | Medium | Preflight checks endpoint, version, and model presence before starting. Mid-run failure pauses and checkpoints rather than discarding the run. |
+| R12 | Feature bloats a near-limit GUI module | Medium | Medium | New logic in new modules under `experimental/`. GUI gets thin wiring only, per the Sherlock C21 precedent. |
+| R13 | Ollama listening on `0.0.0.0:11434` with no auth | Low | High | HI to confirm ufw blocks 11434 from non-loopback. Out of scope for this repo but in scope for the stack it depends on. |
+| R14 | Model deprecation breaks the pipeline on an Ollama upgrade | Medium | Low | No hardcoded model name. Model is config, preflight verifies presence, benchmark harness is re-runnable against replacements. |
+
+| R15 | One host holds 46,724 documents; per-host reporting stalls or OOMs on it | High | High | Stream and checkpoint at file granularity — never hold a host's findings in memory. Report generation aggregates from the sidecar DB, not from a live object graph. Benchmark against the FMIC host specifically, not an average one. |
+| R16 | Legacy `.doc`/`.xls` (8,077 files) silently skipped | High | Medium | antiword for `.doc`; xlrd or sandboxed LibreOffice for `.xls` (C7). catdoc/xls2csv never used (TALOS-2024-2132). No approved parser → explicit `unsupported_format`, never an unreported gap. |
+| R17 | Mislabeled extension routes a file to the wrong parser | High | Medium | Sniff magic bytes before parser selection. Extension is a hint, never authority. |
+| R18 | 31% of sampled PDFs have no text layer and could be silently reported as empty | Certain in sample | Medium | Distinct `no_text_layer` terminal, distinguished from a successful terminal with zero findings. Every report prints its actual no-text-layer count/rate. |
+| R19 | 502 MB outlier or zero-byte file breaks a parse worker | High | Low | Pre-parse gates on size (upper and lower bound) before a worker is handed the file. |
+| R20 | Two GUI instances / stale worker → duplicate runs or a lost run on the single GPU | Medium | High | Atomic GPU-global lease in SQLite; PID + process-start identity; heartbeat; GUI-startup reconciliation and Running Tasks hydration from the DB. Test: two GUIs, two run-ids, one lease. |
+| R21 | Parser output floods the pipe past `RLIMIT_FSIZE` | Medium | Medium | Explicit caps on extracted text bytes/chars, IPC size, stdout/stderr, page/sheet/member counts, aggregate expanded size. Overflow → process-group kill + `parser_output_limit`. |
+| R22 | Source file modified in place between fingerprint and parse (TOCTOU on the inode) | Low | Medium | `O_NOFOLLOW` open + `--ro-bind-fd`; fingerprint from the same fd; re-check or private-snapshot before parse; mismatch → `source_changed_since_inventory`. |
+| R23 | Cancellation closes the HTTP stream but server keeps generating / holds the GPU | Medium | Medium | `stream:true` + cancel-checked read loop + socket deadlines; total-run deadline as backstop. If server stop is unproven, report "cancel requested; server completion unverified" (never "cancelled"). |
+| R24 | Manifest lookup by `(ip, host_type, created_at)` selects the wrong run | Medium | Medium | Structured persistence return with the exact row id; Analyst looks up by row id only. Dashboard flow wired to persist before offering Analyst. |
+| R25 | Reduced-isolation mode misused on hostile input | Low | High | Per-run non-persistent ack; barred from the auto post-extract hook and from benchmark/acceptance; recorded in metadata; never default. |
+| R26 | Analyst optional deps break core GUI startup | Low | High | Separate `requirements-analyst.txt`; no optional parser imports at package/GUI-module import time; preflight reports missing deps cleanly; parser imports only inside the sandbox child (guardrail test). |
+
+## High-Likelihood Risks — Detailed Controls
+
+### R2: Parser code execution, hang, or memory exhaustion
+
+The shipped parser (PyMuPDF/MuPDF) has RCE-class history, so the design is
+containment-first and crash-only. The orchestrator never parses a file itself.
+
+1. **Sandbox is the boundary.** Every parser runs in bubblewrap: read-only
+   fd-bound input, runtime allowlist (not the repo), `--clearenv`, private
+   HOME/tmp, `--unshare-net`, `--unshare-pid`, `--cap-drop ALL`,
+   `--die-with-parent`. Sandbox unavailable → preflight fails. Residual: not a
+   defense against a host-kernel exploit.
+2. **Pre-parse gates.** Reject before a child is spawned: size above cap
+   (default 100 MB — excludes the 502 MB outlier), size zero, magic bytes not
+   matching a supported family, decompression ratio / member / expanded-size caps
+   for container formats.
+3. **One file per child**, explicit `spawn`/`forkserver`. A child parses exactly
+   one file and returns bounded text or dies.
+4. **Kill paths.** rlimits (`RLIMIT_AS`/`RLIMIT_CPU`/`RLIMIT_NPROC`/
+   `RLIMIT_NOFILE`/`RLIMIT_CORE`) applied via a launcher/`prlimit` (never
+   `preexec_fn`), plus a parent wall-clock `SIGKILL` of the whole **process
+   group**. rlimits catch runaway allocation; the wall clock catches infinite
+   loops that trip no soft limit.
+5. **Worker death is a normal outcome.** Record the specific terminal
+   (`parse_timeout`/`parse_oom`/`parse_signal`/`parse_error`/`parser_output_limit`),
+   respawn, continue. No single file can end a run.
+6. **Version pin with a floor.** Pin an approved PyMuPDF bundling MuPDF ≥ 1.28.0;
+   preflight asserts both the package and embedded MuPDF versions; re-check at
+   implementation time.
+
+Net effect: a crafted document costs one timeout interval and one line in the
+coverage table, contained.
+
+### R5: Prompt injection from document content
+
+The controlling insight is that **an injection can lie to the model but it
+cannot lie to a regex.** All structured identifier counts come from the
+deterministic track, so the highest-value findings are outside the model's reach
+entirely. What remains at risk is classification and prose, and those are
+constrained:
+
+1. **No capabilities.** No tools, no function calling, no filesystem, no network
+   beyond the single Ollama call. The model's entire output surface is one
+   schema-validated JSON object.
+2. **Per-chunk isolation.** Every chunk is a fresh request with no conversation
+   history. An injection in chunk 40 cannot influence chunk 41, and cannot
+   influence any other file or host.
+3. **Delimited untrusted content.** Document text is fenced inside a
+   random per-request nonce delimiter the document author cannot predict, per
+   OWASP's "separate and clearly denote untrusted content."
+4. **Quote verification.** Every model finding must cite a span that the
+   aggregator confirms is an exact substring of the source chunk. Fabricated
+   findings are dropped. A finding that survives by quoting the injected text
+   itself is still correct behavior — it points at real content in a real file,
+   which is exactly what the analyst needs to see.
+5. **Output is untrusted display data.** The static HTML report uses
+   context-appropriate escaping, no JavaScript, no remote assets, and a strict
+   CSP (`default-src 'none'`); extracted URLs render as text. Where a future JS
+   surface builds the DOM (Web UI), values go through text nodes — the rule
+   Sherlock already follows. Canonical unmodified evidence lives only in the 0600
+   JSONL; HTML/CSV are derived sanitized copies.
+6. **Downstream warning.** The generated report contains attacker-controlled
+   strings. If a report is ever fed to another LLM, it is an injection vector.
+   Document this; do not build that path in V1.
+
+Residual risk accepted: a sufficiently clever document can cause a wrong
+classification or a misleading summary sentence. It cannot cause an action, and
+it cannot suppress a deterministic identifier match.
+
+## Deferred (Not V1)
+
+1. OCR for scanned PDFs and images.
+2. Cross-run corpus-level reporting and clustering.
+3. Any automated action taken on a finding (notification, tagging, disclosure).
