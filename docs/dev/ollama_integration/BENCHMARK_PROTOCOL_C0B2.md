@@ -1,12 +1,13 @@
 # Analyst Benchmark — Protocol, C0B-2 (Stages C, D, F and E)
 
-Version: `c0b2-protocol-v3-public-prefreeze`
+Version: `c0b2-protocol-v4-stage-d-clarifications`
 Date: 2026-08-05
-Status: **C0B-2B1R FROZEN after three independent PASS reviews; complete public C/D/F
-prefreeze approved by the HI on 2026-08-05.** No scored C0B-2 call is permitted until
-C0B-2B2–B5 implement, independently review and commit the complete public executor under
-one source pin. Private Stage E remains implementation-held and separately
-authorization-held.
+Status: **C0B-2B1R FROZEN after three independent PASS reviews; C0B-2B2 implemented and
+reviewed; complete public C/D/F prefreeze approved by the HI on 2026-08-05.** Version 4
+freezes the Stage-D nonce, derived-view and context-control details found during the B3
+pre-implementation review. No scored C0B-2 call is permitted until C0B-2B3–B5 implement,
+independently review and commit the complete public executor under one source pin.
+Private Stage E remains implementation-held and separately authorization-held.
 
 Authoritative parent: [`CONTRACT.md`](CONTRACT.md), accepted
 [`CONTRACT_ERRATA.md`](CONTRACT_ERRATA.md), and the accepted C0B-1 outcome in
@@ -353,6 +354,7 @@ allowances cannot be raised in place.
 
 | State | Legal entry | Kind | Final artifact |
 |---|---|---|---|
+| `INITIALIZING` | public checkpoint base creation only | internal, non-runnable | none |
 | `PREPARED` | successful create | resumable | none |
 | `RUNNING` | prepared or any resumable pause | transient | none |
 | `PAUSED_SOFT_WALL` | before a new claim | resumable | none |
@@ -1166,11 +1168,50 @@ activated immediately; later seed work is plan-only until the immutable seed-1 q
 decision activates both groups together. Only one provisional winner can activate the
 separate C44 acceptance plan.
 
+F seed 1 has an exact dynamic predecessor. It may activate from cursor `D3_CONTEXT` only
+when no D4 plan or activation exists and the activated final `stage-d-selection` is owned
+by the D3 plan and D3 aggregate. Otherwise it may activate only from cursor
+`D4_CONFIRMATION`, with the final decision owned by the D4 plan and D4 aggregate. Every
+other cursor, missing/non-activated decision or parent/aggregate mismatch fails before
+mutation or contact.
+
 Before a phase's first HTTP call, one transaction verifies its parent, freezes or loads
 the exact plan, registers activated work and records activation. Plans and activation are
 append-only. Plan-only inactive work is not registered, claimable, pending or part of
 completeness. Resume loads persisted plans and decisions; it never recomputes them under
 changed code.
+
+Public `create` generates one 32-byte run nonce key. The same creation transaction stores
+it in the owner-only checkpoint as manifest `run_nonce_key`, whose exact canonical object
+is `{"version":"c0b2-run-nonce-key-v1","key_hex":K}` and `K` is exactly 64 lowercase
+hexadecimal characters. The key is included in every SQLite backup, but is never rendered,
+logged, returned by status/verify or written to a committable artifact. Before any
+boundary/terminal receipt and before D or F plan construction, the runtime loads the
+stored key and re-derives the frozen C plan; a missing, malformed or non-matching key is
+`BLOCKED_PROVENANCE`. Resume never generates a replacement key. This keeps the D3/D4
+paired nonce reproducible after crash or restore without a secret sidecar outside the
+backup boundary.
+
+Public creation first builds the base checkpoint in a unique 0700 directory named
+`.c0b2-initializing-<run_id>-<32 lowercase hex>` below the owner-checked `runs` directory.
+After the schema, header and `INITIALIZING` row are durable and the file/directories are
+fsynced, the global lock protects an atomic no-replace rename to `runs/<run_id>`. Thus a
+visible final run always has a durable state. One explicit `BEGIN IMMEDIATE` transaction
+then stores the master manifest, `run_nonce_key`, C plan, every C work registration and
+the `PREPARED` transition. Before commit, the run is not claimable or successful.
+
+An ordinary exception before that commit removes only the exact newly created staging or
+final run and initial-snapshot paths after descriptor-relative owner/type checks. A
+process crash before promotion leaves only the reserved staging name; same-ID create
+recovery may remove it under the global lock only when its name/run ID, owner, 0700 mode,
+no-follow path and contents are exact, with no attempt or receipt row when those tables
+exist. Unexpected contents or unverifiable state fail closed with the exact cleanup path;
+no broad scan/delete occurs. A crash after promotion leaves `INITIALIZING`; every
+non-create command—including run, resume, status, verify and abandon—rejects it. Same-ID
+create may remove and recreate that final directory only after the same checks prove no
+attempt or receipt. Once `PREPARED` commits, creation recovery never removes the run; if
+the following initial snapshot fails, retry may only complete or verify that snapshot
+without changing the key, plan, work or state.
 
 ### 18.3 Idempotent boundary and terminal backups
 
@@ -1187,6 +1228,13 @@ leave an unreferenced snapshot; retry creates and receipts another without dupli
 work, claiming an invocation or contacting Ollama. Receipt insertion is the only allowed
 same-state boundary/terminal mutation. `status` and `verify` only report a missing receipt.
 
+Ordinary boundary and terminal receipts require successful nonce-key/C-plan
+re-derivation. There is one fail-closed exception: when the checkpoint is already in
+`BLOCKED_PROVENANCE` with its exact frozen failure evidence and artifact, receipt creation
+may snapshot and attest that terminal state without reasserting nonce-key validity. It
+cannot construct D/F work or change the terminal. This prevents the failed identity check
+from making its own mandatory terminal receipt impossible.
+
 ### 18.4 Exact Stage-D contract
 
 Each D phase plan has exact keys `version`, `stage`, `phase`, `plan_key`, `budget_stage`,
@@ -1196,6 +1244,14 @@ Each D phase plan has exact keys `version`, `stage`, `phase`, `plan_key`, `budge
 `cell_id`, `work_id`, `model`, `model_digest`, `worksheet`, `doc_id`, `view_id`,
 `document_sha256`, `chunk_chars`, `overlap`, `num_ctx`, `num_predict`, `seed`,
 `chunk_index`, `chunk_sha256`, `nonce`, `prompt_sha256`, `request_sha256`.
+
+For derived boundary work, `document_sha256` remains the immutable logical gold-document
+SHA-256 and `view_id` is exactly the lowercase SHA-256 of the generated boundary-view
+bytes recorded by the matching master-manifest boundary-view row (ASCII for generator
+`c0b2-boundary-v1`). Non-derived work has `view_id=null`. The chunk and prompt use the exact
+view bytes, and the nonce identity is therefore `view:<view_id>`. D3 and D4 retain the
+same view identity and the shared `D34` nonce domain. This mapping applies to D2, D3 and
+D4 and may not be inferred differently on resume.
 
 Plan version is `stage-d-phase-plan-v1`, aggregate version is
 `stage-d-phase-aggregate-v1`, and decision version is `stage-d-decision-v1`. Plan
@@ -1268,6 +1324,25 @@ reasons. A persisted passed `context_probe` has exact keys `control_id`, `purpos
 `candidate_id`, `model`, `model_digest`, `config_sha256`, `expected_num_ctx`,
 `observed_context_length`, `trigger_work_id`, `state`, `response_sha256`, with
 `state=PASSED`.
+
+D3 and D4 context probes are separate durable planned controls, frozen atomically with
+their phase activation in `runtime_controls`; they are not added to the exact D plan
+payload and do not reuse the Stage-F group binder. There is exactly one control per phase
+candidate. Their exact key set is the Stage-D control object in the schema catalog §3.
+The trigger work is the candidate's first ordered work item. Its first bounded normal
+HTTP-200 terminal answer triggers the probe before any schema retry or next scored work,
+regardless of schema validity. Resource/transport outcomes do not trigger it. D3 requires
+purpose `d3_context_16384` and allocation at least 16384; D4 requires purpose
+`d4_context_selected` and allocation at least that candidate's selected context. A probe
+identity or allocation mismatch remains `BLOCKED_PROVENANCE`, never quality evidence.
+
+At phase activation and on every load/resume, the runtime re-derives the complete ordered
+D control set from the active plan, candidate rows and exact request configuration.
+Missing, extra or byte-different controls block provenance before precharge or contact.
+Before a candidate has an `ACCEPTED` or `SCHEMA_INVALID` attempt, only its first ordered
+work may dispatch. Once that first bounded answer exists, the executor's precharge gate
+blocks its schema retry and every other scored item until the matching context control is
+`COMPLETE`. Durable attempt history, not an in-memory flag, owns this barrier.
 
 The shared `d4-quality-v1` object has exact keys `expected_chunk_count`,
 `completed_eventual_valid_chunks`, `first_pass_invalid_chunks`, `raw_findings`,

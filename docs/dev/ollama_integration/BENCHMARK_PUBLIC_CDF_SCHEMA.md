@@ -1,9 +1,11 @@
 # Analyst Benchmark — Public C/D/F Schema Catalog
 
-Version: `c0b2-public-cdf-schema-v1`
+Version: `c0b2-public-cdf-schema-v2`
 Date: 2026-08-05
-Status: **C0B-2B1R FROZEN after three independent PASS reviews.** No live use is
-permitted until the B2–B5 implementation gate passes.
+Status: **C0B-2B1R FROZEN after three independent PASS reviews; B2 implemented and
+reviewed.** Version 2 freezes the Stage-D nonce-key, derived-view and context-control
+details found during B3 review. No live use is permitted until the B3–B5 implementation
+gate passes.
 
 This is the strict machine-artifact supplement to
 [`BENCHMARK_PROTOCOL_C0B2.md`](BENCHMARK_PROTOCOL_C0B2.md) §18. It closes the exact
@@ -113,6 +115,28 @@ fresh. `document_view_identity` is exactly `pair:<pair_id>` for injection twins,
 `doc:<doc_id>:<document_sha256>`. Candidate/factor calls share a nonce only when this
 complete registry identity matches. Legacy C keeps its already-frozen nonce derivation.
 
+For D boundary-derived work, `document_sha256` is the logical gold-document hash and
+`view_id` is exactly the matching master-manifest boundary-view `sha256`—the 64-character
+lowercase SHA-256 of its ASCII bytes under generator `c0b2-boundary-v1`. Its
+nonce identity is therefore exactly `view:<view_id>`. Non-derived D work has
+`view_id=null`. The run nonce key is the 32-byte value encoded by the exact owner-only
+checkpoint manifest `{"version":"c0b2-run-nonce-key-v1","key_hex":K}` where `K` is
+64 lowercase hexadecimal characters. It is not a public/status artifact. A loaded key is
+valid only when it re-derives the complete frozen C plan byte-for-byte. This check occurs
+before any boundary/terminal receipt and before D/F plan construction.
+
+Public checkpoint creation uses internal state `INITIALIZING`. The base checkpoint makes
+that state durable in an exact owner-only random staging directory, then atomically
+no-replace renames the directory to the final run ID under the global lock. Only then does
+one explicit immediate transaction freeze the master manifest, nonce-key manifest, C
+plan, every C work row and the transition to `PREPARED`. No final run can appear without
+a durable state. Same-ID recovery may remove a matching abandoned staging directory or
+`INITIALIZING` final run only after exact descriptor-relative path/name/owner/mode/content
+checks and proof of no attempts/receipts where readable; unexpected contents fail closed.
+Every non-create command rejects `INITIALIZING`. Recovery never removes `PREPARED`; after
+that commit, retry may only satisfy a missing initial snapshot without changing evidence
+or state.
+
 ## 3. Stage-D schemas and transitions
 
 The parent protocol's D key lists use these strict rules:
@@ -130,6 +154,12 @@ All D plan, aggregate and decision arrays are nonempty except the final `selecti
 `INCONCLUSIVE` decision, which is exactly empty. Counts and pass flags are re-derived from
 attempts and the selective D50 fixture loader. Stored objects must equal the re-derived
 canonical object byte-for-byte before freezing.
+
+F seed-1 activation accepts exactly one of two D predecessors. Cursor `D3_CONTEXT` is
+legal only when D4 plan/activation rows are absent and the activated final D decision has
+the D3 plan and aggregate as its exact owners. Otherwise cursor `D4_CONFIRMATION`, an
+activated final D decision and exact D4 plan/aggregate ownership are required. Every
+other combination rejects before mutation or contact.
 
 All D count fields are nonnegative integers and pass fields are exact Booleans. Failure
 lists are unique ordered subsets of their parent-protocol enums; each level/quality pass
@@ -179,6 +209,36 @@ A passed context-probe evidence object has exact keys and types:
 `candidate_id:sha256`, `model:str`, `model_digest:sha256`, `config_sha256:sha256`,
 `expected_num_ctx:int`, `observed_context_length:int`, `trigger_work_id:sha256`, `state:PASSED`,
 `response_sha256:sha256`.
+
+A planned Stage-D context control has exact keys:
+
+`control_id:sha256`, `kind:context_probe`,
+`purpose:d3_context_16384|d4_context_selected`, `candidate_id:sha256`, `model:str`,
+`model_digest:sha256`, `config_sha256:sha256`, `minimum_context_length:int`,
+`trigger_rule:first_http_terminal_d3|first_http_terminal_d4`, `payload_sha256:sha256`.
+
+Purpose, trigger and phase match exactly: D3 uses `d3_context_16384`,
+`first_http_terminal_d3` and minimum 16384; D4 uses `d4_context_selected`,
+`first_http_terminal_d4` and the candidate's selected context. `config_sha256` hashes the
+exact candidate generation configuration as canonical JSON:
+
+`{"keep_alive":"15m","options":{"min_p":0.0,"num_ctx":X,"num_predict":P,"repeat_last_n":0,"repeat_penalty":1.0,"seed":1,"temperature":0.0,"top_k":1,"top_p":1.0},"think":T}`.
+
+`X` and `P` are the exact work values; `T` is `"low"` for `gpt-oss:20b` and JSON
+`false` for either Qwen candidate. `payload_sha256` is `request_spec_hash()` of the exact
+`/api/ps` request spec. `control_id` uses the same domain-separated context ID formula as
+§5. The control is frozen in `runtime_controls` with its owning activated plan, one per
+candidate. Model, digest, worksheet, chunk and overlap are not duplicated in the config
+preimage; the candidate, control and plan bind those fields separately. The candidate's
+first ordered work ID is the only legal trigger-work evidence. Its first bounded normal
+HTTP-200 terminal answer triggers the control before a schema retry or another scored
+item; schema validity does not change that trigger.
+
+Activation and every load/resume re-derive the complete ordered D control set from the
+active plan; missing, extra or byte-different rows reject before precharge/contact. Before
+any bounded answer, only the candidate's first ordered work may dispatch. After its first
+`ACCEPTED` or `SCHEMA_INVALID` attempt, no scored precharge—including schema retry—is legal
+until the exact control is `COMPLETE`. The barrier derives from durable attempt history.
 
 The final D decision selection row has exact keys `candidate_id:sha256`,
 `selection:candidate-selection`, `evidence_source:D3_REUSE|D4_RERUN`,
@@ -554,6 +614,9 @@ At C/D boundaries, aggregate and decision hashes are required. At `SELECTED` or
 `INCONCLUSIVE`, aggregate/evidence-owner and result-artifact hashes are required. At
 dedicated blocked/safety/abandoned terminals, aggregate is nullable and the exact failure
 artifact hash is required. Thus every public terminal can produce one unambiguous anchor.
+Nonce-key/C-plan re-derivation is mandatory except when state is already
+`BLOCKED_PROVENANCE` and the exact failure evidence/artifact is frozen; that terminal may
+be snapshotted without a valid nonce key, but cannot construct work or change state.
 
 The `c0b2-backup-receipt-v1` object has exact keys `version`, `anchor_sha256`,
 `snapshot_run_relative_path`, `snapshot_sha256`, `snapshot_size_bytes`,

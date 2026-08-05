@@ -14,6 +14,12 @@ Analyst-regression and independent adversarial gates.** The HI reconfirmed this 
 2026-08-05 and authorized milestone commits on `feature/ollama-analyst`; no push or
 promotion is authorized. Private Stage E remains held.
 
+The B3 pre-implementation review froze three technical clarifications before Stage-D
+coding: the protected run nonce key lives only in the backed-up 0600 checkpoint; derived
+boundary work binds both the logical document hash and generated-view hash; and D3/D4
+context probes are phase-specific planned controls triggered by the first normal HTTP
+answer even when schema-invalid. These do not change benchmark thresholds or budgets.
+
 The authoritative spec is [`CONTRACT.md`](CONTRACT.md), plus accepted errata in
 [`CONTRACT_ERRATA.md`](CONTRACT_ERRATA.md). The C0B-1 experiment is pre-registered in
 [`BENCHMARK_PROTOCOL_C0B1.md`](BENCHMARK_PROTOCOL_C0B1.md); method and instrument
