@@ -35,6 +35,27 @@ FROZEN_C0B2A_PATHS = frozenset({
     "scripts/tests/test_analyst_c0b2_cli.py",
 })
 
+FROZEN_C0B2B1_PATHS = frozenset({
+    "docs/dev/ollama_integration/BENCHMARK_PROTOCOL_C0B2.md",
+    "docs/dev/ollama_integration/README.md",
+    "docs/dev/ollama_integration/RISK_REGISTER.md",
+    "docs/dev/ollama_integration/LESSONS_LEARNED.md",
+    "scripts/analyst_benchmark/c0b2_cli.py",
+    "scripts/analyst_benchmark/c0b2_schema.py",
+    "scripts/analyst_benchmark/c0b2_plan.py",
+    "scripts/analyst_benchmark/c0b2_checkpoint.py",
+    "scripts/analyst_benchmark/c0b2_executor.py",
+    "scripts/analyst_benchmark/c0b2_leakscan.py",
+    "scripts/analyst_benchmark/c0b2_transport.py",
+    "scripts/analyst_benchmark/c0b2_runtime.py",
+    "scripts/analyst_benchmark/c0b2_stage_c.py",
+    "scripts/tests/test_analyst_c0b2_cli.py",
+    "scripts/tests/test_analyst_c0b2_checkpoint.py",
+    "scripts/tests/test_analyst_c0b2_transport.py",
+    "scripts/tests/test_analyst_c0b2_runtime.py",
+    "scripts/tests/test_analyst_c0b2_stage_c.py",
+})
+
 
 class LeakGateError(RuntimeError):
     """The worktree changed outside the frozen task boundary."""
@@ -168,7 +189,7 @@ def assert_frozen_task_delta(
         before: WorktreeSeal,
         after: WorktreeSeal,
         *,
-        allowed_paths: Iterable[str] = FROZEN_C0B2A_PATHS,
+        allowed_paths: Iterable[str] = FROZEN_C0B2B1_PATHS,
 ) -> tuple[str, ...]:
     """Fail closed unless all post-baseline changes are exact allowed files."""
     if before.head != after.head:
@@ -177,7 +198,7 @@ def assert_frozen_task_delta(
     allowed = frozenset(allowed_paths)
     unexpected = tuple(path for path in changed if path not in allowed)
     if unexpected:
-        raise LeakGateError("worktree changed outside the frozen C0B-2A allowlist: "
+        raise LeakGateError("worktree changed outside the frozen C0B-2B1 allowlist: "
                             + ", ".join(unexpected))
     current = after.by_path()
     unsafe = tuple(path for path in changed

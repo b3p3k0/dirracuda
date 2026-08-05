@@ -274,6 +274,53 @@ path-specific outcomes, and rejects retry/safety labels returned as ordinary res
 Retry and safety states can enter only through the branches that atomically update their
 backoff or terminal state.
 
+## C0B-2B1 (bounded public Stage-C path)
+
+### 28. Freeze the whole adaptive executor before collecting its first result
+
+The first Stage-C design pinned Git HEAD and the task tree, then deliberately held D/F
+implementation until the Stage-C boundary. Those rules cannot both hold: implementing D
+changes the very identity a survivor must resume under.
+
+The complete public C/D/F implementation must be reviewed and committed before live run
+creation. Stage decisions and plans may remain conditional, but the code that interprets
+them cannot be written after seeing earlier outcomes. This is both a resume requirement
+and a stronger preregistration boundary.
+
+### 29. Retry entitlement comes from answered history, not the latest call class
+
+A schema retry can itself time out or become an orphan. Its replacement is correctly
+charged to `transport_orphan`, but that class does not erase the first schema-invalid
+answer. When the replacement returns the second HTTP-accepted invalid answer, the work is
+complete-invalid; it must not receive a third schema attempt.
+
+The terminal rule now counts bounded invalid answers for the work item. Transport class
+still controls the ledger charge, while answered history controls schema-retry
+entitlement.
+
+### 30. A derived result needs an independent equality check
+
+Exact hashes prove that stored bytes did not change; they do not prove that counters,
+failure reasons or a selected worksheet agree with the underlying attempts. Adversarial
+tests produced shape-valid but contradictory aggregates and selections.
+
+Stage C now re-derives attempt summaries, cell facts and the model decision before either
+the aggregate or boundary decision can freeze. `done_reason=length` is counted across all
+HTTP-answered attempts, so an invalid length-truncated response cannot disappear behind a
+later valid retry.
+
+### 31. Durable completion can have more than one artifact
+
+The database boundary and its verified backup cannot commit in one SQLite transaction.
+Originally, a snapshot failure after the boundary left a correct final state but no way
+to retry the required backup because boundary resumes were read-only.
+
+Snapshot completion is now idempotent: under the global lock, a later boundary/terminal
+call accepts an existing verified same-state snapshot or creates the missing one without
+mutating checkpoint evidence, claiming an invocation or contacting Ollama. The signal
+guard likewise starts before recovery, and a signal during the transactional invocation
+claim rolls that claim back.
+
 ---
 
 ## Not yet learned

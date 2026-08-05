@@ -1,4 +1,4 @@
-"""Pure immutable-manifest and Stage-C planning helpers for C0B-2A.
+"""Pure immutable-manifest and Stage-C planning helpers for C0B-2.
 
 DISPOSITION: retained benchmark infrastructure through C0B; production cards
 consume only the resulting frozen selection artifact.
@@ -283,9 +283,9 @@ def build_c_stage_plan(run_nonce_key: bytes,
     corpus = corpus or goldset.load(verify=True)
     manifest = build_master_manifest(corpus)
     work: list[WorkItem] = []
-    for worksheet in WORKSHEETS:
-        for model, digest, think in MODELS:
-            cell = _cell_id(model, digest, worksheet, think)
+    for model, digest, think in MODELS:
+        for worksheet in WORKSHEETS:
+            cell = cell_id(model, digest, worksheet, think)
             for doc_id in manifest.split.c:
                 doc = corpus.docs[doc_id]
                 chunks = chunker.chunk(doc.text(), chunk_chars=4000,
@@ -295,14 +295,11 @@ def build_c_stage_plan(run_nonce_key: bytes,
                 item = chunks[0]
                 nonce = derive_nonce(run_nonce_key, worksheet, doc_id, corpus)
                 prompt = build_prompt(worksheet, item.text, nonce)
-                payload = _request(model, think, worksheet, prompt)
+                payload = request_payload(model, think, worksheet, prompt)
                 request_hash = stable_hash(payload)
                 chunk_hash = hashlib.sha256(item.text.encode("utf-8")).hexdigest()
-                work_id = stable_hash({
-                    "cell_id": cell, "document_sha256": doc.sha256,
-                    "chunk_index": item.index, "chunk_sha256": chunk_hash,
-                    "request_sha256": request_hash, "nonce": nonce,
-                })
+                work_id = work_identity(
+                    cell, doc.sha256, item.index, chunk_hash, request_hash, nonce)
                 work.append(WorkItem(
                     cell, work_id, model, digest, worksheet, doc_id, doc.sha256,
                     item.index, chunk_hash, nonce,
@@ -318,7 +315,41 @@ def build_c_stage_plan(run_nonce_key: bytes,
     return StagePlan(STAGE_C, SEED_C, manifest.sha256, tuple(work), stable_hash(body))
 
 
-def _cell_id(model: str, digest: str, worksheet: str, think: str | bool) -> str:
+def master_manifest_payload(manifest: MasterManifest) -> dict[str, Any]:
+    """Return the exact JSON-serializable body covered by ``manifest.sha256``."""
+    payload = {
+        "gold_version": manifest.gold_version,
+        "gold_manifest_sha256": manifest.gold_manifest_sha256,
+        "boundary_generator_version": manifest.boundary_generator_version,
+        "boundary_filler_byte": manifest.boundary_filler_byte,
+        "split": {
+            "c": list(manifest.split.c),
+            "d": list(manifest.split.d),
+            "f": list(manifest.split.f),
+        },
+        "markers": dict(manifest.markers),
+        "boundary_views": [asdict(view) for view in manifest.boundary_views],
+    }
+    if stable_hash(payload) != manifest.sha256:
+        raise PlanError("master manifest payload does not match its frozen hash")
+    return payload
+
+
+def stage_plan_payload(stage_plan: StagePlan) -> dict[str, Any]:
+    """Return the exact JSON-serializable Stage-C plan body."""
+    payload = {
+        "stage": stage_plan.stage,
+        "seed": stage_plan.seed,
+        "manifest_sha256": stage_plan.manifest_sha256,
+        "work": [asdict(item) for item in stage_plan.work],
+    }
+    if stable_hash(payload) != stage_plan.sha256:
+        raise PlanError("stage plan payload does not match its frozen hash")
+    return payload
+
+
+def cell_id(model: str, digest: str, worksheet: str, think: str | bool) -> str:
+    """Hash the exact immutable identity of one Stage-C cell."""
     return stable_hash({
         "stage": STAGE_C, "model": model, "model_digest": digest,
         "worksheet": worksheet, "schema_sha256": schema_hash(worksheet),
@@ -328,8 +359,19 @@ def _cell_id(model: str, digest: str, worksheet: str, think: str | bool) -> str:
     })
 
 
-def _request(model: str, think: str | bool, worksheet: str,
-             prompt: str) -> dict[str, Any]:
+def work_identity(cell: str, document_sha256: str, chunk_index: int,
+                  chunk_sha256: str, request_sha256: str, nonce: str) -> str:
+    """Hash the exact immutable identity of one Stage-C work item."""
+    return stable_hash({
+        "cell_id": cell, "document_sha256": document_sha256,
+        "chunk_index": chunk_index, "chunk_sha256": chunk_sha256,
+        "request_sha256": request_sha256, "nonce": nonce,
+    })
+
+
+def request_payload(model: str, think: str | bool, worksheet: str,
+                    prompt: str) -> dict[str, Any]:
+    """Build the exact deterministic Ollama body hashed by Stage-C work."""
     return {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],

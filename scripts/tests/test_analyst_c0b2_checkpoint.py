@@ -19,6 +19,7 @@ from scripts.analyst_benchmark import c0b2_checkpoint as ck
 from scripts.analyst_benchmark import c0b2_executor as ex
 from scripts.analyst_benchmark import c0b2_fsprobe as fs
 from scripts.analyst_benchmark import c0b2_plan as plan
+from scripts.analyst_benchmark import c0b2_stage_c as stage_c
 
 
 def _limits(*, scored: int = 3, schema: int = 2,
@@ -58,7 +59,8 @@ def _header(root: Path, *, probe: bool = False,
             mount, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         capability, selected = digest, "DELETE"
     header = {
-        "run_type": run_type, "filesystem_selected_mode": selected,
+        "run_type": run_type, "ollama_endpoint": "http://127.0.0.1:11434",
+        "ollama_version": "0.32.5", "filesystem_selected_mode": selected,
         "protocol_sha256": digest, "git_head": "b" * 40,
         "declared_dirty_state_sha256": digest, "task_tree_sha256": digest,
         "fixture_sha256": digest, "master_manifest_sha256": digest,
@@ -163,7 +165,7 @@ def test_create_permissions_pragmas_and_header(tmp_path: Path) -> None:
         assert point.conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert point.conn.execute("PRAGMA mmap_size").fetchone()[0] == 0
         header = point.header()
-        assert header["schema_version"] == 1
+        assert header["schema_version"] == 2
         assert header["journal_mode"] == "DELETE"
     finally:
         point.close()
@@ -329,6 +331,14 @@ def test_invocation_ordinals_are_atomic_persistent_and_capped(tmp_path: Path) ->
         with pytest.raises(ck.CheckpointError):
             point.claim_invocation("C")
         point.transition("RUNNING")
+        calls = []
+        def cancel_second_guard() -> None:
+            calls.append(None)
+            if len(calls) == 2: raise ex.InvocationCancelled
+        with pytest.raises(ex.InvocationCancelled):
+            point.claim_invocation("C", claim_guard=cancel_second_guard)
+        assert calls == [None, None] and not point.conn.execute(
+            "SELECT 1 FROM invocations").fetchone()
         assert [point.claim_invocation("C") for _ in range(3)] == [1, 2, 3]
         with pytest.raises(ck.CapExceeded):
             point.claim_invocation("C")
@@ -1183,6 +1193,8 @@ def test_schema_invalid_response_still_resets_resource_sequence(tmp_path: Path) 
     _work(point, "w1")
     now = [0.0]
     outcomes = [ex.RetryableTransport(),
+                ex.FakeResponse("{}", accepted=False, outcome="SCHEMA_INVALID"),
+                ex.RetryableTransport(),
                 ex.FakeResponse("{}", accepted=False, outcome="SCHEMA_INVALID")]
 
     def transport(_request, _cancel):
@@ -1204,11 +1216,18 @@ def test_schema_invalid_response_still_resets_resource_sequence(tmp_path: Path) 
         assert result.outcome == "SCHEMA_INVALID"
         assert point.backoff("model").failures == 0
         assert point.work("w1")[0] == "PENDING"
+        retry = executor.run(ex.WorkRequest(
+            "C", "w1", "model", "r", 3, "schema_retry"))
+        assert retry.outcome == "RETRY_WAIT"
+        now[0] = retry.retry_not_before
+        assert executor.run(ex.WorkRequest(
+            "C", "w1", "model", "r", 4, "transport_orphan")).outcome == "SCHEMA_INVALID"
+        assert point.work("w1") == ("COMPLETED_INVALID", None)
     point.close()
 
 
 def test_sixth_resource_failure_pauses_atomically(tmp_path: Path) -> None:
-    point = _checkpoint(tmp_path, scored=1, schema=0, control=7, transport=5)
+    point = _checkpoint(tmp_path, scored=1, schema=0, control=7, transport=6)
     _work(point, "w1")
     now = [0.0]
 
@@ -1237,40 +1256,36 @@ def test_sixth_resource_failure_pauses_atomically(tmp_path: Path) -> None:
         with pytest.raises(ck.CheckpointError, match="resource probe required for model"):
             resumed.run(ex.WorkRequest(
                 "C", "w1", "model", "r", 7, "transport_orphan"))
-        probe_id = ex.control_id("C", 2, "resource_probe", "model")
+        probe_id = ex.resource_probe_id("C", 2, "model", "probe")
         result = resumed.run_resource_probe(ex.ControlRequest(
-            "C", probe_id, "model", "probe", 1))
+            "C", probe_id, "model", "probe", 1, "transport_orphan"))
         assert result.outcome == "ACCEPTED"
         assert point.backoff("model").failures == 0
     point.close()
 
 
-def test_resource_probe_honors_cancellation_before_precharge_or_transport(
+def test_invocation_cancellation_before_claim_spends_no_ordinal_or_call(
         tmp_path: Path) -> None:
-    point = _checkpoint(tmp_path, scored=1, schema=0, control=7, transport=5)
-    now = [0.0]
-    _pause_model_for_resource_probe(point, tmp_path / "bench", now)
+    point = _checkpoint(tmp_path)
     calls = []
     cancellation = ex.CancellationController()
     cancellation.first_signal()
     with fs.GlobalExecutionLock(tmp_path / "bench") as lock:
         executor = ex.DurableExecutor(
-            point, lock,
-            lambda request, _event: calls.append(request) or ex.FakeResponse("bad"),
-            cancellation=cancellation, now=lambda: now[0])
-        executor.recover_and_start("C")
-        probe = ex.ControlRequest(
-            "C", ex.control_id("C", 2, "resource_probe", "model"),
-            "model", "probe", 1)
-        assert executor.run_resource_probe(probe).outcome == \
-            "CANCELLED_PENDING_RESUME"
-    assert calls == [] and point.usage()["total"] == 9
+                point, lock,
+                lambda request, _event: calls.append(request) or ex.FakeResponse("bad"),
+                cancellation=cancellation)
+        with pytest.raises(ex.InvocationCancelled, match="before invocation"):
+            executor.recover_and_start("C")
+    assert point.state() == "CANCELLED_PENDING_RESUME"
+    assert calls == [] and point.usage()["total"] == 0
+    assert not point.conn.execute("SELECT 1 FROM invocations").fetchone()
     point.close()
 
 
 def test_duplicate_resource_probe_precharge_never_recontacts_transport(
         tmp_path: Path) -> None:
-    point = _checkpoint(tmp_path, scored=1, schema=0, control=7, transport=5)
+    point = _checkpoint(tmp_path, scored=1, schema=0, control=7, transport=6)
     now = [0.0]
     _pause_model_for_resource_probe(point, tmp_path / "bench", now)
     calls = []
@@ -1282,19 +1297,19 @@ def test_duplicate_resource_probe_precharge_never_recontacts_transport(
         executor.recover_and_start("C")
         _seed_preflight(point, "C", 2)
         probe = ex.ControlRequest(
-            "C", ex.control_id("C", 2, "resource_probe", "model"),
-            "model", "probe", 1)
+            "C", ex.resource_probe_id("C", 2, "model", "probe"),
+            "model", "probe", 1, "transport_orphan")
         assert point.precharge(
-            attempt_id=probe.attempt_id, stage="C", call_class="preflight_probe",
+            attempt_id=probe.attempt_id, stage="C", call_class="transport_orphan",
             request_hash="probe", attempt_no=1, control_id=probe.control_id,
-            invocation_ordinal=2)
+            invocation_ordinal=2, first_control_class="transport_orphan")
         assert executor.run_resource_probe(probe).outcome == "ALREADY_DISPATCHING"
     assert calls == [] and point.usage()["total"] == 13
     point.close()
 
 
 def test_resource_probe_safety_limit_commits_terminal_state(tmp_path: Path) -> None:
-    point = _checkpoint(tmp_path, scored=1, schema=0, control=7, transport=5)
+    point = _checkpoint(tmp_path, scored=1, schema=0, control=7, transport=6)
     now = [0.0]
     _pause_model_for_resource_probe(point, tmp_path / "bench", now)
     with fs.GlobalExecutionLock(tmp_path / "bench") as lock:
@@ -1305,8 +1320,8 @@ def test_resource_probe_safety_limit_commits_terminal_state(tmp_path: Path) -> N
         executor.recover_and_start("C")
         _seed_preflight(point, "C", 2)
         probe = ex.ControlRequest(
-            "C", ex.control_id("C", 2, "resource_probe", "model"),
-            "model", "probe", 1)
+            "C", ex.resource_probe_id("C", 2, "model", "probe"),
+            "model", "probe", 1, "transport_orphan")
         assert executor.run_resource_probe(probe).outcome == "FAILED_SAFETY"
         assert point.state() == "FAILED_SAFETY"
         assert point.conn.execute(
@@ -1317,7 +1332,7 @@ def test_resource_probe_safety_limit_commits_terminal_state(tmp_path: Path) -> N
 
 def test_returned_retry_label_cannot_clear_resource_probe_obligation(
         tmp_path: Path) -> None:
-    point = _checkpoint(tmp_path, scored=1, schema=0, control=7, transport=5)
+    point = _checkpoint(tmp_path, scored=1, schema=0, control=7, transport=6)
     now = [0.0]
     _pause_model_for_resource_probe(point, tmp_path / "bench", now)
     with fs.GlobalExecutionLock(tmp_path / "bench") as lock:
@@ -1328,9 +1343,9 @@ def test_returned_retry_label_cannot_clear_resource_probe_obligation(
             now=lambda: now[0])
         executor.recover_and_start("C")
         _seed_preflight(point, "C", 2)
-        probe_id = ex.control_id("C", 2, "resource_probe", "model")
+        probe_id = ex.resource_probe_id("C", 2, "model", "probe")
         result = executor.run_resource_probe(ex.ControlRequest(
-            "C", probe_id, "model", "probe", 1))
+            "C", probe_id, "model", "probe", 1, "transport_orphan"))
     assert result.outcome == "FAILED_SAFETY"
     assert point.state() == "FAILED_SAFETY"
     assert point.backoff("model").failures == 6
@@ -1631,3 +1646,54 @@ def test_offline_executor_has_no_network_unload_or_process_kill_capability() -> 
              if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)}
     assert not imports.intersection({"httpx", "requests", "socket", "subprocess", "urllib"})
     assert not calls.intersection({"kill", "killpg", "terminate", "send_signal"})
+
+
+def test_stage_c_aggregate_facts_are_bound_to_checkpoint_attempts(tmp_path: Path) -> None:
+    point = _checkpoint(tmp_path); _work(point, "w1"); _start(point)
+    metadata = {"done_reason": "stop", "tools_empty": True, "images_empty": True,
+                "unknown_message_fields_empty": True, "strict_schema_invalid": False, "semantic_invalid": False}
+    point.precharge(attempt_id=_attempt("w1", 1), stage="C", call_class="scored",
+                    request_hash="r", attempt_no=1, work_id="w1")
+    point.finish_attempt(_attempt("w1", 1), outcome="ACCEPTED", response="{}", metadata=metadata, accept_work=True)
+    plan_raw = ck.canonical_json({"work": [{"work_id": "w1", "cell_id": "cell", "doc_id": "doc"}]})
+    document = {"doc_id": "doc", "charged_attempt_count": 1, "first_pass_valid": True,
+                "eventual_valid": True, "strict_schema_invalid_attempts": 0,
+                "semantic_invalid_attempts": 0, "done_reason": "stop", "tools_empty": True,
+                "images_empty": True, "unknown_message_fields_empty": True}
+    aggregate = {"cells": [{"cell_id": "cell", "documents": [document], "length_outcomes": 0}]}
+    point._validate_stage_c_attempt_facts(aggregate, plan_raw)
+    for key, bad in (("charged_attempt_count", 2), ("strict_schema_invalid_attempts", 1),
+                     ("tools_empty", False)):
+        original, document[key] = document[key], bad
+        with pytest.raises(ck.ImmutableViolation, match="checkpoint attempts"): point._validate_stage_c_attempt_facts(aggregate, plan_raw)
+        document[key] = original
+    aggregate["cells"][0]["length_outcomes"] = 1
+    with pytest.raises(ck.ImmutableViolation, match="length outcomes"): point._validate_stage_c_attempt_facts(aggregate, plan_raw)
+    point.close()
+
+def test_stage_c_terminal_paths_recompute_selection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    point = _checkpoint(tmp_path); plan_hash, aggregate_hash = "b" * 64, "c" * 64
+    models = [{"model": m, "model_digest": d, "v1_passed": False, "v2_passed": False,
+               "selected_worksheet": None,
+               "selection_basis": "no_passer", "bootstrap": None}
+              for m, d, _think in plan.MODELS]
+    selection = {"version": "stage-c-selection-v1", "stage": "C", "plan_sha256": plan_hash,
+                 "aggregate_sha256": aggregate_hash,
+                 "models": models, "survivors": []}
+    wrong = json.loads(json.dumps(selection)); wrong["models"][0].update(
+        v1_passed=True, selected_worksheet="v1", selection_basis="only_passer")
+    wrong["survivors"] = [{"model": plan.MODELS[0][0], "model_digest": plan.MODELS[0][1],
+                           "worksheet": "v1", "chunk_chars": 4000, "overlap": 256,
+                           "num_ctx": 8192, "num_predict": 4096}]
+    monkeypatch.setattr(point, "load_plan", lambda _stage: ("root", plan_hash, ck.canonical_json({"work": [{}] * 264})))
+    monkeypatch.setattr(point, "load_aggregate", lambda _stage: (plan_hash, aggregate_hash, ck.canonical_json({})))
+    monkeypatch.setattr(stage_c, "build_stage_c_selection", lambda _aggregate: selection)
+    with pytest.raises(ck.ImmutableViolation, match="frozen survivor"):
+        point.freeze_stage_boundary_decision("stage-c-selection", "C", plan_hash, aggregate_hash, wrong)
+    monkeypatch.setattr(stage_c, "build_stage_c_selection", lambda _aggregate: wrong)
+    artifact = {"version": "c0b2-result-v1", "terminal": "INCONCLUSIVE", "stage": "C",
+                "aggregate_sha256": aggregate_hash, "reason": "no_stage_c_survivor"}
+    with fs.GlobalExecutionLock(tmp_path / "bench") as lock:
+        executor = ex.DurableExecutor(point, lock, lambda _request, _cancel: None)
+        with pytest.raises(ck.CheckpointError, match="frozen evidence"): executor.finalize_stage_c_inconclusive(selection, artifact)
+    point.close()

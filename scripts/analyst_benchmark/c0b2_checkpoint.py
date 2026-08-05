@@ -1,4 +1,4 @@
-"""Durable C0B-2 benchmark checkpoint primitives (offline foundation only).
+"""Durable C0B-2 benchmark checkpoint primitives.
 
 This module contains no Ollama client and never discovers a private corpus.  Callers
 provide an explicit benchmark root after their confirmation gates have passed.
@@ -16,10 +16,11 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
-from .c0b2_plan import attempt_id as stable_attempt_id, planned_work_identities, planned_work_ids
-from .c0b2_schema import validate_run_header_pins
+from .c0b2_plan import (MODELS, attempt_id as stable_attempt_id,
+                        planned_work_identities, planned_work_ids)
+from .c0b2_schema import validate_run_header_pins, validate_stage_c_selection
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 CALL_CLASSES = ("scored", "schema_retry", "preflight_probe", "transport_orphan")
 INVOCATION_CAPS = {"C": 3, "D": 6, "F": 10, "E": 10}
 RUN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
@@ -29,7 +30,7 @@ SELECTION_FIELDS = {
 }
 RESUMABLE_STATES = {
     "PREPARED", "RUNNING", "PAUSED_SOFT_WALL", "PAUSED_RESOURCE",
-    "PAUSED_PREFLIGHT", "CANCELLED_PENDING_RESUME",
+    "PAUSED_PREFLIGHT", "PAUSED_STAGE_BOUNDARY", "CANCELLED_PENDING_RESUME",
 }
 TERMINAL_STATES = {
     "SELECTED", "INCONCLUSIVE", "FAILED_SAFETY", "BLOCKED_PROVENANCE",
@@ -42,7 +43,7 @@ AGGREGATE_TERMINALS = {
 }
 FINISH_OUTCOMES = {
     "ACCEPTED", "SCHEMA_INVALID", "RETRYABLE_TRANSPORT", "FAILED_SAFETY",
-    "BLOCKED_SECURITY",
+    "BLOCKED_SECURITY", "BLOCKED_PROVENANCE",
 }
 class CheckpointError(RuntimeError):
     pass
@@ -57,6 +58,13 @@ class BackoffRecord:
     model: str
     failures: int
     retry_not_before: float
+@dataclass(frozen=True)
+class ContextObligation:
+    stage: str
+    model: str
+    control_id: str
+    request_hash: str
+    source_attempt_id: str
 def canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"),
                       ensure_ascii=False, allow_nan=False)
@@ -87,6 +95,10 @@ CREATE TABLE class_limits(stage TEXT NOT NULL REFERENCES stage_limits(stage), ca
  allowance INTEGER NOT NULL CHECK(allowance>=0), PRIMARY KEY(stage,call_class));
 CREATE TABLE plans(stage TEXT PRIMARY KEY, parent_hash TEXT NOT NULL, plan_hash TEXT NOT NULL,
  plan_json TEXT NOT NULL, created REAL NOT NULL);
+CREATE TABLE manifests(name TEXT PRIMARY KEY, manifest_hash TEXT NOT NULL,
+ manifest_json TEXT NOT NULL, created REAL NOT NULL);
+CREATE TABLE stage_aggregates(stage TEXT PRIMARY KEY, plan_hash TEXT NOT NULL,
+ aggregate_hash TEXT NOT NULL, aggregate_json TEXT NOT NULL, created REAL NOT NULL);
 CREATE TABLE acceptance_plan(id INTEGER PRIMARY KEY CHECK(id=1),
  parent_decision_hash TEXT NOT NULL, plan_hash TEXT NOT NULL,
  plan_json TEXT NOT NULL, created REAL NOT NULL);
@@ -103,6 +115,12 @@ CREATE TABLE attempts(attempt_id TEXT PRIMARY KEY, work_id TEXT REFERENCES work_
  UNIQUE(work_id,attempt_no), UNIQUE(control_id,attempt_no));
 CREATE TABLE model_backoff(model TEXT PRIMARY KEY, failures INTEGER NOT NULL,
  retry_not_before REAL NOT NULL, updated REAL NOT NULL);
+CREATE TABLE context_obligations(stage TEXT NOT NULL, model TEXT NOT NULL,
+ control_id TEXT NOT NULL UNIQUE, request_hash TEXT NOT NULL,
+ source_attempt_id TEXT NOT NULL REFERENCES attempts(attempt_id),
+ state TEXT NOT NULL CHECK(state IN ('PENDING','COMPLETE')),
+ completion_attempt_id TEXT REFERENCES attempts(attempt_id), created REAL NOT NULL,
+ updated REAL NOT NULL, PRIMARY KEY(stage,model));
 CREATE TABLE invocations(stage TEXT NOT NULL, ordinal INTEGER NOT NULL,
  created REAL NOT NULL, PRIMARY KEY(stage,ordinal));
 CREATE TABLE events(seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL,
@@ -244,6 +262,9 @@ class Checkpoint:
         if new_state in AGGREGATE_TERMINALS:
             raise CheckpointError("aggregate terminal states require artifact finalization")
         old = self.state()
+        if new_state == "PAUSED_STAGE_BOUNDARY":
+            raise CheckpointError(
+                "stage-boundary pause requires an atomic activated decision")
         blockers = {"BLOCKED_PROVENANCE", "BLOCKED_BUDGET", "BLOCKED_FILESYSTEM",
                     "BLOCKED_SECURITY", "ABANDONED"}
         if old == new_state:
@@ -252,6 +273,8 @@ class Checkpoint:
             allowed = blockers | {"RUNNING"}
         elif old == "RUNNING":
             allowed = ALL_STATES - {"PREPARED", "RUNNING"}
+        elif old == "PAUSED_STAGE_BOUNDARY":
+            allowed = blockers
         elif old in RESUMABLE_STATES:
             allowed = blockers | {"RUNNING"}
         else:
@@ -260,7 +283,9 @@ class Checkpoint:
             raise CheckpointError(f"illegal state transition {old} -> {new_state}")
         self.conn.execute("UPDATE run_state SET state=?,updated=? WHERE id=1",
                           (new_state, time.time()))
-    def claim_invocation(self, stage: str) -> int:
+    def claim_invocation(
+            self, stage: str, *,
+            claim_guard: Optional[Callable[[], None]] = None) -> int:
         if stage not in INVOCATION_CAPS:
             raise ValueError(f"unknown invocation stage {stage}")
         self.conn.execute("BEGIN IMMEDIATE")
@@ -283,8 +308,12 @@ class Checkpoint:
                     (time.time(),))
                 self.conn.commit()
                 raise CapExceeded(f"invocation allowance exhausted for {stage}")
+            if claim_guard:
+                claim_guard()
             self.conn.execute("INSERT INTO invocations VALUES(?,?,?)",
                               (stage, ordinal, time.time()))
+            if claim_guard:
+                claim_guard()
             self.conn.commit()
             return ordinal
         except CapExceeded:
@@ -332,6 +361,158 @@ class Checkpoint:
             raise ImmutableViolation(
                 f"stage {stage} plan parent is not a {predecessor} decision")
         return str(row[0]), str(row[1]), str(row[2])
+
+    def freeze_manifest(self, name: str, value: Any) -> str:
+        if not isinstance(name, str) or not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", name):
+            raise ValueError("invalid manifest name")
+        raw, digest = canonical_json(value), sha256_json(value)
+        if name == "master" and digest != self.header()["master_manifest_sha256"]:
+            raise ImmutableViolation("master manifest differs from the run header")
+        row = self.conn.execute(
+            "SELECT manifest_hash,manifest_json FROM manifests WHERE name=?", (name,)
+        ).fetchone()
+        if row and row != (digest, raw):
+            raise ImmutableViolation(f"manifest {name} is already frozen")
+        if not row:
+            self.conn.execute("INSERT INTO manifests VALUES(?,?,?,?)",
+                              (name, digest, raw, time.time()))
+        return digest
+
+    def load_manifest(self, name: str) -> tuple[str, str]:
+        row = self.conn.execute(
+            "SELECT manifest_hash,manifest_json FROM manifests WHERE name=?", (name,)
+        ).fetchone()
+        if not row:
+            raise CheckpointError(f"unknown manifest {name}")
+        value = json.loads(row[1])
+        if canonical_json(value) != row[1] or sha256_json(value) != row[0]:
+            raise ImmutableViolation(f"manifest {name} hash mismatch")
+        if name == "master" and row[0] != self.header()["master_manifest_sha256"]:
+            raise ImmutableViolation("master manifest no longer matches the run header")
+        return str(row[0]), str(row[1])
+
+    def freeze_aggregate(self, stage: str, plan_hash: str, value: Any) -> str:
+        _parent, expected_plan, raw_plan = self.load_plan(stage)
+        if plan_hash != expected_plan:
+            raise ImmutableViolation(f"aggregate is not chained to the {stage} plan")
+        if stage == "C":
+            from .c0b2_stage_c import validate_stage_c_aggregate_semantics
+            normalized = validate_stage_c_aggregate_semantics(value)
+        else:
+            normalized = value
+        if stage == "C":
+            if (normalized["plan_sha256"] != plan_hash
+                    or normalized["master_manifest_sha256"] != self.load_manifest("master")[0]):
+                raise ImmutableViolation("Stage-C aggregate provenance differs from frozen inputs")
+            planned_cells: dict[str, list[dict[str, Any]]] = {}
+            for item in json.loads(raw_plan)["work"]:
+                planned_cells.setdefault(item.get("cell_id"), []).append(item)
+            aggregate_cells = normalized["cells"]
+            if (len(planned_cells) != 6 or sum(map(len, planned_cells.values())) != 264
+                    or len(aggregate_cells) != len(planned_cells)):
+                raise ImmutableViolation("Stage-C aggregate does not cover the frozen plan")
+            for cell, (cell_id, items) in zip(aggregate_cells, planned_cells.items()):
+                expected = (cell_id, items[0].get("model"),
+                            items[0].get("model_digest"), items[0].get("worksheet"))
+                actual = (cell["cell_id"], cell["model"],
+                          cell["model_digest"], cell["worksheet"])
+                doc_ids = [item.get("doc_id") for item in items]
+                if (actual != expected or len(items) != 44
+                        or [row["doc_id"] for row in cell["documents"]] != doc_ids
+                        or any((item.get("model"), item.get("model_digest"),
+                                item.get("worksheet")) != expected[1:] for item in items)):
+                    raise ImmutableViolation("Stage-C aggregate rows differ from the frozen plan")
+            self._validate_stage_c_attempt_facts(normalized, raw_plan)
+        raw, digest = canonical_json(normalized), sha256_json(normalized)
+        row = self.conn.execute(
+            "SELECT plan_hash,aggregate_hash,aggregate_json FROM stage_aggregates WHERE stage=?",
+            (stage,)).fetchone()
+        if row and row != (plan_hash, digest, raw):
+            raise ImmutableViolation(f"stage {stage} aggregate is already frozen")
+        if not row:
+            self.conn.execute("INSERT INTO stage_aggregates VALUES(?,?,?,?,?)",
+                              (stage, plan_hash, digest, raw, time.time()))
+        return digest
+
+    def load_aggregate(self, stage: str) -> tuple[str, str, str]:
+        row = self.conn.execute(
+            "SELECT plan_hash,aggregate_hash,aggregate_json FROM stage_aggregates WHERE stage=?",
+            (stage,)).fetchone()
+        if not row:
+            raise CheckpointError(f"unknown stage aggregate {stage}")
+        value = json.loads(row[2])
+        if canonical_json(value) != row[2] or sha256_json(value) != row[1]:
+            raise ImmutableViolation(f"stage {stage} aggregate hash mismatch")
+        if self.load_plan(stage)[1] != row[0]:
+            raise ImmutableViolation(f"stage {stage} aggregate plan changed")
+        if stage == "C":
+            from .c0b2_stage_c import validate_stage_c_aggregate_semantics
+            validate_stage_c_aggregate_semantics(value)
+            self._validate_stage_c_attempt_facts(value, self.load_plan("C")[2])
+        return str(row[0]), str(row[1]), str(row[2])
+
+    def _validate_stage_c_attempt_facts(
+            self, aggregate: Mapping[str, Any], plan_json: str) -> None:
+        planned: dict[str, list[dict[str, Any]]] = {}
+        for item in json.loads(plan_json)["work"]:
+            planned.setdefault(item["cell_id"], []).append(item)
+        for cell in aggregate["cells"]:
+            items = planned.get(cell["cell_id"], [])
+            length_outcomes = 0
+            for document, item in zip(cell["documents"], items):
+                attempts = self.conn.execute(
+                    "SELECT state,metadata_json FROM attempts WHERE work_id=? "
+                    "ORDER BY attempt_no", (item["work_id"],)).fetchall()
+                answered: list[tuple[str, dict[str, Any]]] = []
+                for state, metadata_raw in attempts:
+                    if state not in {"ACCEPTED", "SCHEMA_INVALID"}:
+                        continue
+                    try:
+                        metadata = json.loads(metadata_raw)
+                    except (TypeError, json.JSONDecodeError) as exc:
+                        raise ImmutableViolation(
+                            "Stage-C answered attempt metadata is invalid") from exc
+                    if not isinstance(metadata, dict):
+                        raise ImmutableViolation(
+                            "Stage-C answered attempt metadata is not an object")
+                    flags = tuple(metadata.get(name) for name in (
+                        "tools_empty", "images_empty", "unknown_message_fields_empty"))
+                    invalid = (metadata.get("strict_schema_invalid"),
+                               metadata.get("semantic_invalid"))
+                    done_reason = metadata.get("done_reason")
+                    if (any(type(flag) is not bool for flag in flags)
+                            or any(type(flag) is not bool for flag in invalid)
+                            or type(done_reason) is not str or not done_reason
+                            or (state == "ACCEPTED" and invalid != (False, False))
+                            or (state == "SCHEMA_INVALID" and sum(invalid) != 1)):
+                        raise ImmutableViolation(
+                            "Stage-C answered attempt metadata contradicts its outcome")
+                    answered.append((str(state), metadata))
+                    length_outcomes += done_reason == "length"
+                accepted = next((meta for state, meta in answered
+                                 if state == "ACCEPTED"), None)
+                facts = {
+                    "charged_attempt_count": len(attempts),
+                    "first_pass_valid": bool(answered and answered[0][0] == "ACCEPTED"),
+                    "eventual_valid": accepted is not None,
+                    "strict_schema_invalid_attempts": sum(
+                        meta["strict_schema_invalid"] for _state, meta in answered),
+                    "semantic_invalid_attempts": sum(
+                        meta["semantic_invalid"] for _state, meta in answered),
+                    "done_reason": accepted.get("done_reason") if accepted else None,
+                    "tools_empty": all(meta["tools_empty"] for _state, meta in answered),
+                    "images_empty": all(meta["images_empty"] for _state, meta in answered),
+                    "unknown_message_fields_empty": all(
+                        meta["unknown_message_fields_empty"] for _state, meta in answered),
+                }
+                if document["doc_id"] != item.get("doc_id") or any(
+                        document[name] != expected for name, expected in facts.items()):
+                    raise ImmutableViolation(
+                        "Stage-C aggregate document differs from checkpoint attempts")
+            if len(items) != len(cell["documents"]) or \
+                    cell["length_outcomes"] != length_outcomes:
+                raise ImmutableViolation(
+                    "Stage-C aggregate length outcomes differ from checkpoint attempts")
 
     def freeze_acceptance_plan(self, parent_decision_hash: str, plan: Any) -> str:
         if self.header()["run_type"] != "public":
@@ -403,10 +584,16 @@ class Checkpoint:
             raise ImmutableViolation(
                 f"decision {decision_id} is not chained to the {stage} plan")
         _plan_parent, plan_hash, plan_json = matched
+        aggregate = self.conn.execute(
+            "SELECT plan_hash,aggregate_hash FROM stage_aggregates WHERE stage=?",
+            (stage,)).fetchone()
+        if aggregate and aggregate != (plan_hash, aggregate_hash):
+            raise ImmutableViolation(f"decision {decision_id} aggregate provenance changed")
         planned = planned_work_ids(plan_json)
         states = {row[0]: row[1] for row in self.conn.execute(
             "SELECT work_id,state FROM work_items WHERE stage=?", (stage,))}
-        incomplete = any(states.get(work_id) != "SUCCEEDED" for work_id in planned)
+        complete_states = {"SUCCEEDED", "COMPLETED_INVALID"}
+        incomplete = any(states.get(work_id) not in complete_states for work_id in planned)
         dispatching = self.conn.execute(
             "SELECT count(*) FROM attempts WHERE work_id IN "
             "(SELECT work_id FROM work_items WHERE stage=?) AND state='DISPATCHING'",
@@ -448,6 +635,72 @@ class Checkpoint:
         if canonical_json(value) != row[4]:
             raise ImmutableViolation(f"decision {decision_id} is not canonical")
         return sha256_json((decision_id, *row)), value
+
+    def freeze_stage_boundary_decision(
+            self, decision_id: str, stage: str, parent_hash: str,
+            aggregate_hash: str, value: Any) -> str:
+        """Atomically freeze an activated C/D decision and pause at its boundary."""
+        if stage not in {"C", "D"}:
+            raise ValueError("only Stage C or D can enter a stage-boundary pause")
+        _plan_parent, plan_hash, plan_json = self.load_plan(stage)
+        aggregate = self.load_aggregate(stage)
+        if parent_hash != plan_hash or aggregate[:2] != (plan_hash, aggregate_hash):
+            raise ImmutableViolation("stage-boundary decision provenance changed")
+        normalized = validate_stage_c_selection(value) if stage == "C" else value
+        if stage == "C":
+            from .c0b2_stage_c import build_stage_c_selection
+            expected_selection = validate_stage_c_selection(
+                build_stage_c_selection(json.loads(aggregate[2])))
+            if (decision_id != "stage-c-selection" or not normalized["survivors"]
+                    or normalized != expected_selection
+                    or len(json.loads(plan_json)["work"]) != 264
+                    or normalized["plan_sha256"] != plan_hash
+                    or normalized["aggregate_sha256"] != aggregate_hash
+                    or [(row["model"], row["model_digest"])
+                        for row in normalized["models"]]
+                    != [(model, digest) for model, digest, _think in MODELS]
+                    or self.header()["model_digests"]
+                    != {model: digest for model, digest, _think in MODELS}):
+                raise ImmutableViolation("Stage-C boundary selection is not the frozen survivor decision")
+        raw = canonical_json(normalized)
+        frozen = (stage, parent_hash, aggregate_hash, "ACTIVATED", raw)
+        digest = sha256_json((decision_id, *frozen))
+        existing = self.conn.execute(
+            "SELECT stage,parent_hash,aggregate_hash,activation,value_json "
+            "FROM decisions WHERE decision_id=?", (decision_id,)).fetchone()
+        if existing:
+            if existing != frozen or self.state() != "PAUSED_STAGE_BOUNDARY":
+                raise ImmutableViolation(f"decision {decision_id} already frozen")
+            return digest
+        planned = planned_work_ids(plan_json)
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            if self.state() != "RUNNING":
+                raise CheckpointError("stage-boundary decision requires RUNNING")
+            states = {row[0]: row[1] for row in self.conn.execute(
+                "SELECT work_id,state FROM work_items WHERE stage=?", (stage,))}
+            contexts = ({row[0]: row[1] for row in self.conn.execute(
+                "SELECT model,state FROM context_obligations WHERE stage='C'")}
+                if stage == "C" else {})
+            if (not planned or planned != set(states)
+                    or any(states[work_id] not in {"SUCCEEDED", "COMPLETED_INVALID"}
+                           for work_id in planned)
+                    or (stage == "C" and contexts != {
+                        model: "COMPLETE" for model, _digest, _think in MODELS})
+                    or self.conn.execute(
+                        "SELECT 1 FROM attempts WHERE stage=? AND state='DISPATCHING' LIMIT 1",
+                        (stage,)).fetchone()):
+                raise CheckpointError("stage-boundary decision requires complete frozen work")
+            self.conn.execute("INSERT INTO decisions VALUES(?,?,?,?,?,?,?)",
+                              (decision_id, *frozen, time.time()))
+            self.conn.execute(
+                "UPDATE run_state SET state='PAUSED_STAGE_BOUNDARY',updated=? WHERE id=1",
+                (time.time(),))
+            self.conn.commit()
+            return digest
+        except Exception:
+            self.conn.rollback()
+            raise
     def register_work(self, work_id: str, stage: str, cell_id: str, request_hash: str) -> None:
         identities = planned_work_identities(self.load_plan(stage)[2])
         acceptance = self.load_acceptance_plan() if stage == "F" else None
@@ -470,6 +723,7 @@ class Checkpoint:
                   request_hash: str, attempt_no: int, work_id: Optional[str] = None,
                   control_id: Optional[str] = None,
                   invocation_ordinal: Optional[int] = None,
+                  first_control_class: Optional[str] = None,
                   claim_guard: Optional[Callable[[], None]] = None) -> bool:
         if (work_id is None) == (control_id is None) or attempt_no < 1:
             raise ValueError("exactly one of work_id or control_id is required")
@@ -519,7 +773,12 @@ class Checkpoint:
                 raise CheckpointError(
                     f"attempt number {attempt_no} is not next after {prior}")
             if attempt_no == 1:
-                expected_class = "scored" if work_id else "preflight_probe"
+                if work_id:
+                    expected_class = "scored"
+                else:
+                    expected_class = first_control_class or "preflight_probe"
+                    if expected_class not in {"preflight_probe", "transport_orphan"}:
+                        raise ImmutableViolation("invalid first control call class")
             else:
                 previous = self.conn.execute(
                     "SELECT state FROM attempts WHERE "
@@ -584,12 +843,15 @@ class Checkpoint:
                        terminal_state: Optional[str] = None) -> None:
         if outcome not in FINISH_OUTCOMES:
             raise ValueError("invalid finished-attempt outcome")
-        if terminal_state not in {None, "FAILED_SAFETY", "BLOCKED_SECURITY"}: raise ValueError("invalid terminal state")
+        if terminal_state not in {
+                None, "FAILED_SAFETY", "BLOCKED_SECURITY", "BLOCKED_PROVENANCE"}:
+            raise ValueError("invalid terminal state")
         if terminal_state is not None and terminal_state != outcome:
             raise ValueError("terminal state must match the attempt outcome")
         self.conn.execute("BEGIN IMMEDIATE")
         try:
-            row = self.conn.execute("SELECT work_id,state FROM attempts WHERE attempt_id=?",
+            row = self.conn.execute(
+                "SELECT work_id,state FROM attempts WHERE attempt_id=?",
                                     (attempt_id,)).fetchone()
             if not row:
                 raise CheckpointError(f"unknown attempt {attempt_id}")
@@ -608,6 +870,12 @@ class Checkpoint:
                     self.conn.execute(
                         "UPDATE work_items SET state='SUCCEEDED',accepted_attempt_id=? WHERE work_id=?",
                         (attempt_id, work_id))
+                elif outcome == "SCHEMA_INVALID" and self.conn.execute(
+                        "SELECT count(*) FROM attempts WHERE work_id=? "
+                        "AND state='SCHEMA_INVALID'", (work_id,)).fetchone()[0] >= 2:
+                    self.conn.execute(
+                        "UPDATE work_items SET state='COMPLETED_INVALID',"
+                        "accepted_attempt_id=NULL WHERE work_id=?", (work_id,))
                 else:
                     self.conn.execute("UPDATE work_items SET state='PENDING' WHERE work_id=?",
                                       (work_id,))
@@ -667,6 +935,55 @@ class Checkpoint:
         row = self.conn.execute(
             "SELECT failures,retry_not_before FROM model_backoff WHERE model=?", (model,)).fetchone()
         return BackoffRecord(model, int(row[0]), float(row[1])) if row else BackoffRecord(model, 0, 0.0)
+
+    def ensure_context_obligation(
+            self, *, stage: str, model: str, control_id: str,
+            request_hash: str, source_attempt_id: str) -> ContextObligation:
+        if not all(isinstance(value, str) and value for value in
+                   (stage, model, control_id, request_hash, source_attempt_id)):
+            raise ValueError("context obligation identity fields must be nonempty")
+        source = self.conn.execute(
+            "SELECT stage,state FROM attempts WHERE attempt_id=?", (source_attempt_id,)
+        ).fetchone()
+        if not source or source[0] != stage or source[1] not in {
+                "ACCEPTED", "SCHEMA_INVALID"}:
+            raise CheckpointError("context obligation requires an HTTP-accepted attempt")
+        existing = self.conn.execute(
+            "SELECT control_id,request_hash,source_attempt_id FROM context_obligations "
+            "WHERE stage=? AND model=?", (stage, model)).fetchone()
+        frozen = (control_id, request_hash, source_attempt_id)
+        if existing and existing != frozen:
+            raise ImmutableViolation("context obligation identity is already frozen")
+        now = time.time()
+        if not existing:
+            self.conn.execute(
+                "INSERT INTO context_obligations VALUES(?,?,?,?,?,'PENDING',NULL,?,?)",
+                (stage, model, control_id, request_hash, source_attempt_id, now, now))
+        row = self.conn.execute(
+            "SELECT stage,model,control_id,request_hash,source_attempt_id "
+            "FROM context_obligations WHERE stage=? AND model=?", (stage, model)).fetchone()
+        return ContextObligation(*map(str, row))
+
+    def pending_context_obligation(self, stage: str) -> Optional[ContextObligation]:
+        row = self.conn.execute(
+            "SELECT stage,model,control_id,request_hash,source_attempt_id "
+            "FROM context_obligations WHERE stage=? AND state='PENDING' ORDER BY model LIMIT 1",
+            (stage,)).fetchone()
+        return ContextObligation(*map(str, row)) if row else None
+
+    def complete_context_obligation(self, *, control_id: str,
+                                    attempt_id: str) -> None:
+        attempt = self.conn.execute(
+            "SELECT control_id,state FROM attempts WHERE attempt_id=?", (attempt_id,)
+        ).fetchone()
+        if attempt != (control_id, "ACCEPTED"):
+            raise CheckpointError("context completion requires its accepted control attempt")
+        changed = self.conn.execute(
+            "UPDATE context_obligations SET state='COMPLETE',completion_attempt_id=?,"
+            "updated=? WHERE control_id=? AND state='PENDING'",
+            (attempt_id, time.time(), control_id)).rowcount
+        if changed != 1:
+            raise CheckpointError("context obligation is missing or already complete")
     def usage(self) -> dict[str, Any]:
         by_class = {(r[0], r[1]): r[2] for r in self.conn.execute(
             "SELECT stage,call_class,count(*) FROM attempts GROUP BY stage,call_class")}

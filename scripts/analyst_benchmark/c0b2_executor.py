@@ -1,7 +1,7 @@
-"""Fake-transport durable executor primitives for the C0B-2A offline gate.
+"""Transport-independent durable executor primitives for C0B-2.
 
-No network client is imported here.  A later live card must adapt its bounded Ollama
-transport to the small callable interface exercised by these tests.
+No network client is imported here. The bounded Ollama adapter and offline fakes both
+implement the small callable interface owned by this module.
 
 DISPOSITION: benchmark-only diagnostic; remove after C0B artifacts are accepted.
 """
@@ -19,7 +19,11 @@ from .c0b2_checkpoint import (BackoffRecord, Checkpoint, CheckpointError,
 from .c0b2_fsprobe import (GlobalExecutionLock, MountFingerprint,
                            quarantine_corrupt, revalidate_filesystem,
                            verify_connection)
-from .c0b2_plan import attempt_id as stable_attempt_id, planned_work_ids, stable_hash
+from .c0b2_plan import (KEEP_ALIVE, MODELS, OPTIONS_C,
+                        attempt_id as stable_attempt_id, planned_work_ids,
+                        stable_hash)
+from .c0b2_schema import (validate_stage_c_inconclusive,
+                          validate_stage_c_selection)
 
 
 class RetryableTransport(RuntimeError):
@@ -30,8 +34,16 @@ class SafetyLimit(RuntimeError):
     """A non-retryable byte/object/depth/channel safety outcome."""
 
 
+class ProvenanceFailure(RuntimeError):
+    """An immutable endpoint, version, model, digest, or configuration mismatch."""
+
+
 class SoftWallReached(RuntimeError):
     """The invocation deadline crossed inside the atomic claim."""
+
+
+class InvocationCancelled(RuntimeError):
+    """Cancellation won the guarded invocation claim without spending an ordinal."""
 
 
 PUBLIC_ACCEPTANCE_GATES = frozenset({
@@ -98,6 +110,28 @@ def control_id(stage: str, invocation_ordinal: int, kind: str, model: str) -> st
                         "kind": kind, "model": model})
 
 
+def stage_c_context_control_id(model: str, model_digest: str) -> str:
+    candidates = {tag: (digest, think) for tag, digest, think in MODELS}
+    if candidates.get(model, (None,))[0] != model_digest:
+        raise ValueError("model/digest is not a frozen Stage-C candidate")
+    config_hash = stable_hash({"OPTIONS_C": dict(OPTIONS_C),
+                               "think": candidates[model][1],
+                               "keep_alive": KEEP_ALIVE})
+    identity = stable_hash({"stage": "C", "purpose": "stage_c_context",
+                            "model": model, "model_digest": model_digest,
+                            "generation_options_sha256": config_hash})
+    return identity
+
+
+def resource_probe_id(stage: str, invocation_ordinal: int, model: str,
+                      payload_hash: str) -> str:
+    if invocation_ordinal < 1 or not all((stage, model, payload_hash)):
+        raise ValueError("resource probe identity fields must be nonempty")
+    return stable_hash({"stage": stage, "invocation_ordinal": invocation_ordinal,
+                        "kind": "resource_probe", "model": model,
+                        "probe_payload_sha256": payload_hash})
+
+
 class InvocationClock:
     def __init__(self, soft_wall_seconds: float = 240 * 60, *,
                  monotonic: Callable[[], float] = time.monotonic):
@@ -137,6 +171,7 @@ class DurableExecutor:
                  transport: Callable[[Union[WorkRequest, ControlRequest], threading.Event], FakeResponse], *,
                  clock: Optional[InvocationClock] = None,
                  cancellation: Optional[CancellationController] = None,
+                 context_request_hashes: Optional[Mapping[str, str]] = None,
                  now: Callable[[], float] = time.time):
         if not lock.held or lock.root != checkpoint.root:
             raise CheckpointError("executor requires the matching global lock")
@@ -145,6 +180,7 @@ class DurableExecutor:
         self.transport = transport
         self.clock = clock or InvocationClock()
         self.cancellation = cancellation or CancellationController()
+        self.context_request_hashes = dict(context_request_hashes or {})
         self._now = now
         self.current_attempt: Optional[str] = None
         self.invocation_stage: Optional[str] = None
@@ -154,6 +190,11 @@ class DurableExecutor:
         self._require_lock()
         if self.invocation_stage is not None:
             raise CheckpointError("executor already owns an invocation")
+        if self.checkpoint.state() == "PAUSED_STAGE_BOUNDARY":
+            raise CheckpointError("stage boundary is frozen; successor implementation required")
+        if self.cancellation.event.is_set():
+            self.checkpoint.cancel()
+            raise InvocationCancelled("cancelled before invocation claim")
         self.checkpoint.load_plan(stage)
         header = self.checkpoint.header()
         try:
@@ -172,7 +213,12 @@ class DurableExecutor:
             raise CheckpointError(f"checkpoint verification failed: {verification.errors}")
         count = self.checkpoint.recover()
         self.checkpoint.transition("RUNNING")
-        ordinal = self.checkpoint.claim_invocation(stage)
+        try:
+            ordinal = self.checkpoint.claim_invocation(
+                stage, claim_guard=self._guard_invocation_claim)
+        except InvocationCancelled:
+            self.checkpoint.cancel()
+            raise
         self.invocation_stage, self.invocation_ordinal = stage, ordinal
         return count, ordinal
 
@@ -183,7 +229,11 @@ class DurableExecutor:
             self.checkpoint.cancel()
             return ExecutionResult("CANCELLED_PENDING_RESUME")
         self._require_work_request_identity(request)
+        self._require_context_probe_configuration(request.stage, request.model)
         self._require_preflight_complete(request.stage)
+        context = self.checkpoint.pending_context_obligation(request.stage)
+        if context is not None:
+            raise CheckpointError(f"context probe required for {context.model}")
         obligation = self._resource_obligation()
         if obligation is not None:
             raise CheckpointError(f"resource probe required for {obligation.model}")
@@ -218,7 +268,8 @@ class DurableExecutor:
                 attempt_id, outcome=response.outcome, response=response.content,
                 metadata=response.metadata,
                 accept_work=response.outcome == "ACCEPTED",
-                before_commit=lambda: self._reset_resource(request.model))
+                before_commit=lambda: self._accepted_chat_side_effects(
+                    request.stage, request.model, attempt_id))
             # Any bounded HTTP-accepted chat response proves resource recovery;
             # schema acceptance controls work state, not the resource sequence.
             return ExecutionResult(response.outcome, attempt_id)
@@ -244,6 +295,8 @@ class DurableExecutor:
                 attempt_id, outcome=terminal, response=None,
                 metadata={}, accept_work=False, terminal_state=terminal)
             return ExecutionResult(terminal, attempt_id)
+        except ProvenanceFailure:
+            return self._finish_provenance(attempt_id)
         finally:
             self.current_attempt = None
 
@@ -257,10 +310,12 @@ class DurableExecutor:
         obligation = self._resource_obligation()
         if obligation is None or obligation.model != request.model:
             raise CheckpointError("probe does not match the persisted resource obligation")
-        expected_control = control_id(
-            request.stage, int(self.invocation_ordinal or 0), "resource_probe", request.model)
+        expected_control = resource_probe_id(
+            request.stage, int(self.invocation_ordinal or 0), request.model,
+            request.request_hash)
         if request.control_id != expected_control:
             raise CheckpointError("resource probe identity does not match this invocation")
+        self._require_context_probe_configuration(request.stage, request.model)
         if obligation.retry_not_before > self._now():
             return ExecutionResult("RETRY_WAIT", retry_not_before=obligation.retry_not_before)
         attempt_id = request.attempt_id
@@ -269,6 +324,7 @@ class DurableExecutor:
                 attempt_id=attempt_id, stage=request.stage, call_class=request.call_class,
                 request_hash=request.request_hash, attempt_no=request.attempt_no,
                 control_id=request.control_id, invocation_ordinal=self.invocation_ordinal,
+                first_control_class="transport_orphan",
                 claim_guard=self._guard_soft_wall)
         except SoftWallReached:
             self.checkpoint.transition("PAUSED_SOFT_WALL")
@@ -287,7 +343,8 @@ class DurableExecutor:
             self.checkpoint.finish_attempt(
                 attempt_id, outcome=response.outcome, response=response.content,
                 metadata=response.metadata, accept_work=False,
-                before_commit=lambda: self._reset_resource(request.model))
+                before_commit=lambda: self._accepted_chat_side_effects(
+                    request.stage, request.model, attempt_id))
             return ExecutionResult(response.outcome, attempt_id)
         except RetryableTransport:
             if self.cancellation.event.is_set():
@@ -309,6 +366,72 @@ class DurableExecutor:
                 attempt_id, outcome=terminal, response=None, metadata={}, accept_work=False,
                 terminal_state=terminal)
             return ExecutionResult(terminal, attempt_id)
+        except ProvenanceFailure:
+            return self._finish_provenance(attempt_id)
+        finally:
+            self.current_attempt = None
+
+    def run_context_probe(self, request: ControlRequest) -> ExecutionResult:
+        """Satisfy the durable once-per-model Stage-C `/api/ps` obligation."""
+        self._require_lock()
+        self._require_invocation_stage(request.stage)
+        if request.stage != "C":
+            raise CheckpointError("Stage-C context probes require stage C")
+        if self.cancellation.event.is_set():
+            self.checkpoint.cancel()
+            return ExecutionResult("CANCELLED_PENDING_RESUME")
+        self._require_preflight_complete("C")
+        obligation = self.checkpoint.pending_context_obligation("C")
+        if (obligation is None or request.model != obligation.model
+                or request.control_id != obligation.control_id
+                or request.request_hash != obligation.request_hash):
+            raise CheckpointError("context probe differs from the durable obligation")
+        resource_gate = self._resource_gate(request.model)
+        if resource_gate is not None:
+            return resource_gate
+        try:
+            inserted = self.checkpoint.precharge(
+                attempt_id=request.attempt_id, stage="C", call_class=request.call_class,
+                request_hash=request.request_hash, attempt_no=request.attempt_no,
+                control_id=request.control_id, invocation_ordinal=self.invocation_ordinal,
+                claim_guard=self._guard_soft_wall)
+        except SoftWallReached:
+            self.checkpoint.transition("PAUSED_SOFT_WALL")
+            return ExecutionResult("PAUSED_SOFT_WALL")
+        if not inserted:
+            state = self.checkpoint.conn.execute(
+                "SELECT state FROM attempts WHERE attempt_id=?",
+                (request.attempt_id,)).fetchone()[0]
+            return ExecutionResult(f"ALREADY_{state}", request.attempt_id)
+        self.current_attempt = request.attempt_id
+        try:
+            response = self.transport(request, self.cancellation.event)
+            if self.cancellation.event.is_set():
+                self.checkpoint.cancel(request.attempt_id)
+                return ExecutionResult("CANCELLED_PENDING_RESUME", request.attempt_id)
+            self._require_returned_response(response, {"ACCEPTED"})
+            self.checkpoint.finish_attempt(
+                request.attempt_id, outcome="ACCEPTED", response=response.content,
+                metadata=response.metadata, accept_work=False,
+                before_commit=lambda: self.checkpoint.complete_context_obligation(
+                    control_id=request.control_id, attempt_id=request.attempt_id))
+            return ExecutionResult("ACCEPTED", request.attempt_id)
+        except RetryableTransport:
+            if self.cancellation.event.is_set():
+                self.checkpoint.cancel(request.attempt_id)
+                return ExecutionResult("CANCELLED_PENDING_RESUME", request.attempt_id)
+            return self._finish_retryable_control(request)
+        except SafetyLimit:
+            if self.cancellation.event.is_set():
+                self.checkpoint.cancel(request.attempt_id)
+                return ExecutionResult("CANCELLED_PENDING_RESUME", request.attempt_id)
+            terminal = self._safety_terminal()
+            self.checkpoint.finish_attempt(
+                request.attempt_id, outcome=terminal, response=None, metadata={},
+                accept_work=False, terminal_state=terminal)
+            return ExecutionResult(terminal, request.attempt_id)
+        except ProvenanceFailure:
+            return self._finish_provenance(request.attempt_id)
         finally:
             self.current_attempt = None
 
@@ -375,6 +498,8 @@ class DurableExecutor:
                 request.attempt_id, outcome=terminal, response=None, metadata={},
                 accept_work=False, terminal_state=terminal)
             return ExecutionResult(terminal, request.attempt_id)
+        except ProvenanceFailure:
+            return self._finish_provenance(request.attempt_id)
         finally:
             self.current_attempt = None
 
@@ -433,6 +558,8 @@ class DurableExecutor:
                 request.attempt_id, outcome="FAILED_SAFETY", response=None,
                 metadata={}, accept_work=False, terminal_state="FAILED_SAFETY")
             return ExecutionResult("FAILED_SAFETY", request.attempt_id)
+        except ProvenanceFailure:
+            return self._finish_provenance(request.attempt_id)
         finally:
             self.current_attempt = None
 
@@ -513,6 +640,8 @@ class DurableExecutor:
                 request.attempt_id, outcome="FAILED_SAFETY", response=None,
                 metadata={}, accept_work=False, terminal_state="FAILED_SAFETY")
             return ExecutionResult("FAILED_SAFETY", request.attempt_id)
+        except ProvenanceFailure:
+            return self._finish_provenance(request.attempt_id)
         finally:
             self.current_attempt = None
 
@@ -594,7 +723,8 @@ class DurableExecutor:
                 item[2]) for item in proof_plans.values()))
             registered = {row[0] for row in conn.execute("SELECT work_id FROM work_items")}
             pending = conn.execute(
-                "SELECT count(*) FROM work_items WHERE state!='SUCCEEDED'").fetchone()[0]
+                "SELECT count(*) FROM work_items WHERE state NOT IN "
+                "('SUCCEEDED','COMPLETED_INVALID')").fetchone()[0]
             dispatching = conn.execute(
                 "SELECT count(*) FROM attempts WHERE state='DISPATCHING'").fetchone()[0]
             unbound = conn.execute(
@@ -618,9 +748,124 @@ class DurableExecutor:
             conn.rollback()
             raise
 
+    def finalize_stage_c_inconclusive(
+            self, selection: Mapping[str, Any], artifact: Mapping[str, Any]) -> str:
+        """Atomically persist the no-survivor decisions, artifact, and terminal."""
+        self._require_lock()
+        selected = validate_stage_c_selection(selection)
+        result = validate_stage_c_inconclusive(artifact)
+        plan = self.checkpoint.load_plan("C")
+        aggregate = self.checkpoint.load_aggregate("C")
+        from .c0b2_stage_c import build_stage_c_selection
+        expected_selection = validate_stage_c_selection(
+            build_stage_c_selection(json.loads(aggregate[2])))
+        if (selected["survivors"] or len(json.loads(plan[2])["work"]) != 264
+                or selected != expected_selection
+                or selected["plan_sha256"] != plan[1]
+                or selected["aggregate_sha256"] != aggregate[1]
+                or result["aggregate_sha256"] != aggregate[1]
+                or [(row["model"], row["model_digest"])
+                    for row in selected["models"]]
+                != [(model, digest) for model, digest, _think in MODELS]
+                or self.checkpoint.header()["model_digests"]
+                != {model: digest for model, digest, _think in MODELS}):
+            raise CheckpointError("Stage-C inconclusive artifacts differ from frozen evidence")
+        result_raw = canonical_json(result)
+        result_hash = hashlib.sha256(result_raw.encode("utf-8")).hexdigest()
+        selection_raw = canonical_json(selected)
+        selection_row = ("C", plan[1], aggregate[1], "NOT_ACTIVATED", selection_raw)
+        completion = {
+            "outcome": "INCONCLUSIVE", "artifact_sha256": result_hash,
+            "facts": {"deterministic_stop": True,
+                      "reason": "no_stage_c_survivor"},
+        }
+        completion_row = (
+            "C", plan[1], aggregate[1], "NOT_ACTIVATED", canonical_json(completion))
+        conn = self.checkpoint.conn
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            if self.checkpoint.state() != "RUNNING":
+                raise CheckpointError("Stage-C inconclusive finalization requires RUNNING")
+            planned = planned_work_ids(plan[2])
+            states = {row[0]: row[1] for row in conn.execute(
+                "SELECT work_id,state FROM work_items WHERE stage='C'")}
+            contexts = {row[0]: row[1] for row in conn.execute(
+                "SELECT model,state FROM context_obligations WHERE stage='C'")}
+            if (not planned or planned != set(states)
+                    or any(state not in {"SUCCEEDED", "COMPLETED_INVALID"}
+                           for state in states.values())
+                    or conn.execute(
+                        "SELECT 1 FROM attempts WHERE state='DISPATCHING' LIMIT 1").fetchone()
+                    or contexts != {model: "COMPLETE" for model, _digest, _think in MODELS}):
+                raise CheckpointError("Stage-C inconclusive work is incomplete")
+            unbound = conn.execute(
+                "SELECT count(*) FROM work_items w JOIN attempts a "
+                "ON a.attempt_id=w.accepted_attempt_id "
+                "WHERE a.invocation_ordinal IS NULL").fetchone()[0]
+            if unbound:
+                raise CheckpointError("Stage-C inconclusive work has unbound acceptance")
+            self._validate_control_obligations({"C": plan})
+            for decision_id, row in (("stage-c-selection", selection_row),
+                                     ("c0b2-completion", completion_row)):
+                if conn.execute("SELECT 1 FROM decisions WHERE decision_id=?",
+                                (decision_id,)).fetchone():
+                    raise CheckpointError(f"decision {decision_id} already exists")
+                conn.execute("INSERT INTO decisions VALUES(?,?,?,?,?,?,?)",
+                             (decision_id, *row, time.time()))
+            detail = canonical_json({"state": "INCONCLUSIVE", "sha256": result_hash,
+                                     "artifact": result})
+            conn.execute("INSERT INTO events(kind,detail_json,created) "
+                         "VALUES('FINAL_ARTIFACT',?,?)", (detail, time.time()))
+            conn.execute("UPDATE run_state SET state='INCONCLUSIVE',updated=? WHERE id=1",
+                         (time.time(),))
+            conn.commit()
+            return result_hash
+        except Exception:
+            conn.rollback()
+            raise
+
     def _require_lock(self) -> None:
         if not self.lock.held or self.lock.root != self.checkpoint.root:
             raise CheckpointError("executor lost its matching global lock")
+
+    def _finish_provenance(self, attempt_id: str) -> ExecutionResult:
+        if self.cancellation.event.is_set():
+            self.checkpoint.cancel(attempt_id)
+            return ExecutionResult("CANCELLED_PENDING_RESUME", attempt_id)
+        self.checkpoint.finish_attempt(
+            attempt_id, outcome="BLOCKED_PROVENANCE", response=None,
+            metadata={}, accept_work=False, terminal_state="BLOCKED_PROVENANCE")
+        return ExecutionResult("BLOCKED_PROVENANCE", attempt_id)
+
+    def _accepted_chat_side_effects(self, stage: str, model: str,
+                                    attempt_id: str) -> None:
+        self._reset_resource(model)
+        if stage != "C":
+            return
+        frozen = self.checkpoint.header()["model_digests"].get(model)
+        candidates = {tag: digest for tag, digest, _think in MODELS}
+        if frozen is None or candidates.get(model) != frozen:
+            return
+        if self.checkpoint.conn.execute(
+                "SELECT 1 FROM context_obligations WHERE stage='C' AND model=?",
+                (model,)).fetchone():
+            return
+        identity = stage_c_context_control_id(model, frozen)
+        self.checkpoint.ensure_context_obligation(
+            stage="C", model=model, control_id=identity,
+            request_hash=self.context_request_hashes[model],
+            source_attempt_id=attempt_id)
+
+    def _require_context_probe_configuration(self, stage: str, model: str) -> None:
+        if stage != "C":
+            return
+        frozen = self.checkpoint.header()["model_digests"].get(model)
+        candidates = {tag: digest for tag, digest, _think in MODELS}
+        if candidates.get(model) == frozen:
+            request_hash = self.context_request_hashes.get(model)
+            if not isinstance(request_hash, str) or not request_hash:
+                raise CheckpointError(
+                    f"Stage-C context request hash is not configured for {model}")
 
     def _completion_proof(self, outcome: str, artifact_hash: str,
                           stage: str, plan_hash: str) -> dict[str, Any]:
@@ -918,6 +1163,10 @@ class DurableExecutor:
     def _guard_soft_wall(self) -> None:
         if self.clock.crossed():
             raise SoftWallReached
+
+    def _guard_invocation_claim(self) -> None:
+        if self.cancellation.event.is_set():
+            raise InvocationCancelled("cancelled during invocation claim")
 
     def _reset_resource(self, model: str) -> None:
         self.checkpoint.conn.execute("DELETE FROM model_backoff WHERE model=?", (model,))

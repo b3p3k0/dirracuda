@@ -124,23 +124,51 @@ def test_complete_private_gate_is_still_held_before_root_or_prompt_access(
 
 
 @pytest.mark.parametrize("command", ("run", "resume"))
-def test_public_live_commands_require_confirmation_then_remain_held(
+def test_public_live_commands_require_confirmation_then_delegate_stage_c(
         command: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    args = [command, "--run-id", "c0b2-public"]
+    args = [command, "--run-id", "c0b2-public", "--stage", "C"]
     with _deny_side_effects(monkeypatch):
         assert c0b2_cli.main(args) == c0b2_cli.EXIT_USAGE
-        assert c0b2_cli.main([*args, "--confirm-live"]) == c0b2_cli.EXIT_HELD
+
+    from scripts.analyst_benchmark import c0b2_runtime
+    calls = []
+    monkeypatch.setattr(
+        c0b2_runtime, "run_public_stage_c",
+        lambda run_id, *, resume: calls.append((run_id, resume)) or {"state": "RUNNING"},
+        raising=False,
+    )
+    assert c0b2_cli.main([*args, "--confirm-live"]) == 0
+    assert calls == [("c0b2-public", command == "resume")]
 
 
-@pytest.mark.parametrize("args", (
-    ["create"],
-    ["status", "--run-id", "c0b2-public"],
-    ["verify", "--run-id", "c0b2-public"],
-))
-def test_public_offline_skeleton_is_held_without_side_effects(
-        args: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
+def test_public_offline_commands_delegate_without_live_transport(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    from scripts.analyst_benchmark import c0b2_runtime
+
+    monkeypatch.setattr(c0b2_runtime, "create_public_run", lambda: "c0b2-created")
+    monkeypatch.setattr(c0b2_runtime, "public_status", lambda run_id: {
+        "state": "PREPARED", "run_id": run_id})
+    monkeypatch.setattr(c0b2_runtime, "public_verify", lambda run_id: {
+        "ok": True, "errors": [], "run_id": run_id})
+
+    assert c0b2_cli.main(["create"]) == 0
+    assert c0b2_cli.main(["status", "--run-id", "c0b2-public"]) == 0
+    assert c0b2_cli.main(["verify", "--run-id", "c0b2-public"]) == 0
+    output = capsys.readouterr().out
+    assert "c0b2-created" in output
+    assert "PREPARED" in output
+
+
+@pytest.mark.parametrize("stage", ("D", "F"))
+def test_unimplemented_public_stage_is_rejected_before_side_effects(
+        stage: str, monkeypatch: pytest.MonkeyPatch) -> None:
     with _deny_side_effects(monkeypatch):
-        assert c0b2_cli.main(args) == c0b2_cli.EXIT_HELD
+        with pytest.raises(SystemExit) as exc:
+            c0b2_cli.main([
+                "run", "--run-id", "c0b2-public", "--stage", stage,
+                "--confirm-live",
+            ])
+    assert exc.value.code == c0b2_cli.EXIT_USAGE
 
 
 def test_abandon_requires_confirmation_and_remains_offline_held(

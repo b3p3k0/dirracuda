@@ -4,8 +4,10 @@ Date: 2026-08-04
 Status: **C0A contract frozen** (committed `91bb2aa`). **C0B-1 accepted and committed
 (`47e946b`).** **C0B-2A offline foundation passed implementation and independent
 adversarial review.** The HI authorized the public C/D/F envelope on 2026-08-05.
-`C0B-2B1` is the Stage-C-only live-enablement card; no C0B-2 scored call or private-
-corpus access has started.
+`C0B-2B1` now has a bounded Stage-C transport, durable runtime and deterministic scorer
+that pass the offline integration gate. No C0B-2 scored call or private-corpus access has
+started. Live creation remains held until the public D/F implementation is frozen in the
+same Git revision; otherwise the global source pin would strand a Stage-C survivor.
 
 The authoritative spec is [`CONTRACT.md`](CONTRACT.md), plus accepted errata in
 [`CONTRACT_ERRATA.md`](CONTRACT_ERRATA.md). The C0B-1 experiment is pre-registered in
@@ -125,8 +127,8 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
 
 ## Next Step
 
-Implement and independently review `C0B-2B1`: the bounded live transport, offline public
-run creation/resume, and deterministic Stage-C scorer. After that gate passes, run the
-264-item public Stage C within its 400-call cap. The run is serial and resumable; shared-
-GPU offload or slow execution is not a quality failure. Stage D/F implementation and
-private E remain held at this boundary.
+Freeze the missing D/F adaptive-plan and result schemas, then implement and independently
+review the complete public C/D/F runtime before creating the live checkpoint. One clean,
+immutable Git/tree pin must cover the whole adaptive public run. Execution remains serial
+and resumable; shared-GPU offload or slow execution is not a quality failure. Private
+Stage E remains separately held.

@@ -1,8 +1,7 @@
-"""Fail-closed C0B-2 command surface for the offline foundation card.
+"""Fail-closed C0B-2 command surface for public Stage C.
 
-C0B-2A deliberately has no live executor yet.  This module owns only syntax and
-confirmation ordering: every accepted command stops at ``HELD`` before path
-resolution, prompting, checkpoint writes, optional imports, or network access.
+The parser owns confirmation ordering.  Live/path modules are imported only after a
+command has passed every applicable gate; D/F and every private operation remain held.
 
 DISPOSITION: retained C0B-2 benchmark infrastructure; port or remove on C15.
 """
@@ -15,6 +14,7 @@ from collections.abc import Sequence
 
 EXIT_USAGE = 2
 EXIT_HELD = 3
+EXIT_BLOCKED = 4
 
 _OPAQUE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _PRIVATE_ACKS = (
@@ -60,11 +60,11 @@ def _add_private_gate(parser: argparse.ArgumentParser) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m scripts.analyst_benchmark c0b2",
-        description="C0B-2 offline benchmark foundation (live work is held).",
+        description="C0B-2 public Stage-C benchmark (D/F/private remain held).",
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
-    commands.add_parser("create", help="create a public run (C0B-2A held)")
+    commands.add_parser("create", help="create an offline public Stage-C run")
     for name in ("status", "verify"):
         command = commands.add_parser(name, help=f"{name} a public run")
         _add_run_id(command)
@@ -72,6 +72,7 @@ def build_parser() -> argparse.ArgumentParser:
     for name in ("run", "resume"):
         command = commands.add_parser(name, help=f"{name} a public run")
         _add_run_id(command)
+        command.add_argument("--stage", required=True, choices=("C",))
         command.add_argument("--confirm-live", action="store_true")
 
     abandon = commands.add_parser("abandon", help="abandon a run (C0B-2A held)")
@@ -101,7 +102,7 @@ def _held(command: str) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Validate a C0B-2 command without crossing any side-effect boundary."""
+    """Run one gated C0B-2 command."""
     args_in = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
     args = parser.parse_args(args_in)
@@ -125,7 +126,32 @@ def main(argv: Sequence[str] | None = None) -> int:
         # inspect the root fd after merely validating the selected input mode.
         return _held(args.command)
 
-    return _held(args.command)
+    if args.command == "abandon":
+        return _held(args.command)
+
+    # Deliberately local: incomplete/held commands above cannot resolve paths, create
+    # checkpoints, or import the HTTP adapter.
+    from . import c0b2_runtime as runtime
+
+    try:
+        if args.command == "create":
+            print(runtime.render_public({"run_id": runtime.create_public_run()}))
+            return 0
+        if args.command == "status":
+            print(runtime.render_public(runtime.public_status(args.run_id)))
+            return 0
+        if args.command == "verify":
+            result = runtime.public_verify(args.run_id)
+            print(runtime.render_public(result))
+            return 0 if result["ok"] else EXIT_BLOCKED
+        if args.command in {"run", "resume"}:
+            result = runtime.run_public_stage_c(args.run_id, resume=args.command == "resume")
+            print(runtime.render_public(result))
+            return 0
+    except Exception as exc:  # bounded enums/types only; transport never exposes raw data
+        print(f"C0B-2 BLOCKED: {type(exc).__name__}: {str(exc)[:240]}", file=sys.stderr)
+        return EXIT_BLOCKED
+    raise AssertionError("unreachable C0B-2 command")
 
 
 if __name__ == "__main__":

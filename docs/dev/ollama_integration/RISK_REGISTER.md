@@ -2,8 +2,9 @@
 
 Date: 2026-08-04
 Status: **C0A controls frozen; C0B-2A offline controls implemented and reviewed; public
-C/D/F envelope authorized.** Stage-C live execution remains gated on C0B-2B1's bounded
-transport/orchestration review. Controls are
+C/D/F envelope authorized.** The bounded Stage-C path passed its offline gate. Live
+creation remains held until D/F code and the missing adaptive schemas are frozen under
+the same source pin. Controls are
 authoritative in [`CONTRACT.md`](CONTRACT.md), accepted errata, and the reviewed
 [`BENCHMARK_PROTOCOL_C0B2.md`](BENCHMARK_PROTOCOL_C0B2.md); this register is the
 risk-indexed view.
@@ -45,6 +46,9 @@ risk-indexed view.
 | R32 | Private source/model content reaches Git or survives a crash on disk | Low | Critical | No plaintext staging; raw private answers/reasoning/prompts never persist; sealed worktree plus per-document in-memory leak scan; only schema-generated aggregate committable; private envelope breach blocks security. |
 | R33 | Unlabelled private data silently changes the selected model/config | Medium | High | Stage F selects first; Stage E is a separately authorized operational child run that may pass/block only. Any change requires a new public F run and fresh authorization. |
 | R34 | Shared GPU contention is misreported as model-quality failure | High | Medium | Serial requests, no unload/kill, persistent bounded backoff and pause, quality-neutral offload/timing, exact call ledgers and honest `BLOCKED_BUDGET` if evidence cannot complete. |
+| R35 | A Stage-C survivor is stranded because later D/F implementation changes the run's immutable Git/tree pins | High | High | Freeze, review and commit the complete public C/D/F implementation before creating the live checkpoint. Preserve one source identity through the public terminal; any later code change requires a new run. |
+| R36 | A stored aggregate or selection is shape-valid but contradicts its attempt/document evidence | Low | High | Recompute document/cell counters, failure reasons and selection from checkpoint attempts plus the selective public corpus; require exact equality before freezing or loading a decision. |
+| R37 | Final state commits but its required recovery snapshot fails | Low | High | Treat the snapshot as an idempotent completion obligation. A later boundary/terminal invocation may create a missing verified same-state snapshot under the global lock, without claiming an invocation or contacting Ollama. |
 
 ## High-Likelihood Risks — Detailed Controls
 
