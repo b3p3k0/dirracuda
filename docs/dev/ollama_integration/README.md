@@ -1,13 +1,15 @@
 # Ollama Integration Workspace
 
-Date: 2026-08-04
+Date: 2026-08-05
 Status: **C0A contract frozen** (committed `91bb2aa`). **C0B-1 accepted and committed
 (`47e946b`).** **C0B-2A offline foundation passed implementation and independent
 adversarial review.** The HI authorized the public C/D/F envelope on 2026-08-05.
 `C0B-2B1` now has a bounded Stage-C transport, durable runtime and deterministic scorer
 that pass the offline integration gate. No C0B-2 scored call or private-corpus access has
-started. Live creation remains held until the public D/F implementation is frozen in the
-same Git revision; otherwise the global source pin would strand a Stage-C survivor.
+started. On 2026-08-05 the HI approved C0B-2B1R: freeze, review and commit the complete
+public D/F implementation in the same Git revision before live creation; otherwise the
+global source pin would strand a Stage-C survivor. B1R and its normative schema catalog
+passed three independent reviews; B2 is next.
 
 The authoritative spec is [`CONTRACT.md`](CONTRACT.md), plus accepted errata in
 [`CONTRACT_ERRATA.md`](CONTRACT_ERRATA.md). The C0B-1 experiment is pre-registered in
@@ -115,20 +117,23 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
 3. `README.md` (this file) — status, decisions, orientation.
 4. `BENCHMARK_PROTOCOL_C0B1.md` — **pre-registered** C0B-1 decision rule, gates, factors, budgets. Hash-pinned.
 5. `BENCHMARK_PROTOCOL_C0B2.md` — reviewed C0B-2 public/private protocol; offline 2A is
-   implemented and the public envelope is authorized. The frozen B1 amendment permits
-   Stage C only after its offline live-transport/orchestration gate passes.
-6. `BENCHMARK.md` — instrument method, module dispositions, what is/is not committed.
-7. `LESSONS_LEARNED.md` — only what a card actually exercised.
-8. `RESEARCH_NOTES.md` — verified external findings with sources + corpus profile.
-9. `RISK_REGISTER.md` — risk controls.
-10. `UI_MOCKUPS.md` — surface layouts (draft).
+   implemented and the public envelope is authorized. The B1R amendment requires the
+   complete public C/D/F executor to pass offline review under one source pin before the
+   first scored call.
+6. `BENCHMARK_PUBLIC_CDF_SCHEMA.md` — normative strict artifact, identity, derivation and
+   terminal schemas for the public C/D/F executor.
+7. `BENCHMARK.md` — instrument method, module dispositions, what is/is not committed.
+8. `LESSONS_LEARNED.md` — only what a card actually exercised.
+9. `RESEARCH_NOTES.md` — verified external findings with sources + corpus profile.
+10. `RISK_REGISTER.md` — risk controls.
+11. `UI_MOCKUPS.md` — surface layouts (draft).
 
 `BENCHMARK_RESULTS.md` is written at the end of **C0B-2**, not before.
 
 ## Next Step
 
-Freeze the missing D/F adaptive-plan and result schemas, then implement and independently
-review the complete public C/D/F runtime before creating the live checkpoint. One clean,
-immutable Git/tree pin must cover the whole adaptive public run. Execution remains serial
-and resumable; shared-GPU offload or slow execution is not a quality failure. Private
-Stage E remains separately held.
+Implement B2 shared phase/checkpoint controls, then B3 Stage D, B4 Stage F/acceptance and
+B5 full fake-session integration before creating the live
+checkpoint. One clean Git/tree pin covers the whole adaptive public run. Execution stays
+serial and resumable; shared-GPU offload or slow execution is not a quality failure.
+Private Stage E remains separately held.

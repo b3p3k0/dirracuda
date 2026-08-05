@@ -321,6 +321,26 @@ mutating checkpoint evidence, claiming an invocation or contacting Ollama. The s
 guard likewise starts before recovery, and a signal during the transactional invocation
 claim rolls that claim back.
 
+### 32. Freeze code early; activate evidence branches late
+
+Reproducibility requires the complete C/D/F interpreter to share the run's original
+source identity, but it does not require later-stage work to exist before the evidence
+authorizes it. The durable model therefore separates immutable plan bytes, one-way plan
+activation and active-stage state. Code is frozen before `create`; D, later F seeds and
+acceptance become claimable only from their persisted parent decisions.
+
+The same distinction applies operationally: a shared GPU may extend calendar time or
+cause a resumable resource pause, but neither changes plan identity nor becomes model
+quality evidence.
+
+### 33. Exact keys are not an exact contract
+
+A list of field names still leaves incompatible choices for types, nullability, ordering,
+identity domains and derived arithmetic. The public C/D/F protocol now has a separate
+normative schema catalog so the implementation cannot invent those choices after seeing
+results. Every aggregate must be independently re-derived from attempts and immutable
+fixtures; strict shape validation alone is insufficient.
+
 ---
 
 ## Not yet learned

@@ -1,9 +1,10 @@
 # Ollama Integration — Risk Register
 
-Date: 2026-08-04
+Date: 2026-08-05
 Status: **C0A controls frozen; C0B-2A offline controls implemented and reviewed; public
-C/D/F envelope authorized.** The bounded Stage-C path passed its offline gate. Live
-creation remains held until D/F code and the missing adaptive schemas are frozen under
+C/D/F envelope authorized.** The bounded Stage-C path passed its offline gate and the HI
+approved the complete-public prefreeze course of action on 2026-08-05. B1R passed three
+independent reviews. Live creation remains held until B2–B5 freeze and review D/F under
 the same source pin. Controls are
 authoritative in [`CONTRACT.md`](CONTRACT.md), accepted errata, and the reviewed
 [`BENCHMARK_PROTOCOL_C0B2.md`](BENCHMARK_PROTOCOL_C0B2.md); this register is the
@@ -49,6 +50,9 @@ risk-indexed view.
 | R35 | A Stage-C survivor is stranded because later D/F implementation changes the run's immutable Git/tree pins | High | High | Freeze, review and commit the complete public C/D/F implementation before creating the live checkpoint. Preserve one source identity through the public terminal; any later code change requires a new run. |
 | R36 | A stored aggregate or selection is shape-valid but contradicts its attempt/document evidence | Low | High | Recompute document/cell counters, failure reasons and selection from checkpoint attempts plus the selective public corpus; require exact equality before freezing or loading a decision. |
 | R37 | Final state commits but its required recovery snapshot fails | Low | High | Treat the snapshot as an idempotent completion obligation. A later boundary/terminal invocation may create a missing verified same-state snapshot under the global lock, without claiming an invocation or contacting Ollama. |
+| R38 | Conditional D/F work is counted as missing before its predecessor authorizes it | Low | High | Freeze immutable phase plans and one-way activation separately. Plan-only inactive work is neither registered nor counted toward completeness; only a persisted parent decision can activate it. |
+| R39 | Long shared-GPU run becomes non-resumable because results docs change the pinned worktree | Medium | High | Freeze the benchmark worktree from create through terminal backup. Write results/docs only after the public terminal; use another worktree for unrelated changes. |
+| R40 | Shape-valid nested D/F artifacts encode incompatible meanings or derived counters | Low | High | The normative public schema catalog freezes strict types, nullability, identity domains, ordering and derivations. Recompute every aggregate from attempts plus immutable fixtures and require canonical equality before freeze/load. |
 
 ## High-Likelihood Risks — Detailed Controls
 

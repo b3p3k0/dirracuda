@@ -1,11 +1,12 @@
 # Analyst Benchmark — Protocol, C0B-2 (Stages C, D, F and E)
 
-Version: `c0b2-protocol-v2-stage-c-authorized`
+Version: `c0b2-protocol-v3-public-prefreeze`
 Date: 2026-08-05
-Status: **C0B-2A OFFLINE PASS; public C/D/F envelope authorized by the HI.**
-`C0B-2B1` may implement and run Stage C only after its offline acceptance gate passes.
-No scored C0B-2 call is permitted from the C0B-2A tree. Stage D, Stage F and private
-Stage E remain implementation-held; private E also remains separately authorization-held.
+Status: **C0B-2B1R FROZEN after three independent PASS reviews; complete public C/D/F
+prefreeze approved by the HI on 2026-08-05.** No scored C0B-2 call is permitted until
+C0B-2B2–B5 implement, independently review and commit the complete public executor under
+one source pin. Private Stage E remains implementation-held and separately
+authorization-held.
 
 Authoritative parent: [`CONTRACT.md`](CONTRACT.md), accepted
 [`CONTRACT_ERRATA.md`](CONTRACT_ERRATA.md), and the accepted C0B-1 outcome in
@@ -35,9 +36,9 @@ The order is binding:
 5. **Stage E — private operational sample:** selected configuration only, separately
    authorized. It may block launch but never choose a model or tune a setting.
 
-No Stage C/D/F execution begins until 2A passes senior review. Stage E remains held
-until Stage F produces a frozen selection artifact and the HI approves its private-data
-prerequisites.
+No Stage C/D/F execution begins until the complete public C/D/F implementation passes the
+§18.7 B5 gate under one committed source identity. Stage E remains held until Stage F
+produces a frozen selection artifact and the HI approves its private-data prerequisites.
 
 ## 2. Current local candidates
 
@@ -357,7 +358,7 @@ allowances cannot be raised in place.
 | `PAUSED_SOFT_WALL` | before a new claim | resumable | none |
 | `PAUSED_RESOURCE` | frozen retry rule | resumable | none |
 | `PAUSED_PREFLIGHT` | transient endpoint failure | resumable | none |
-| `PAUSED_STAGE_BOUNDARY` | complete activated C or D decision; successor implementation held | resumable | none; stage evidence persisted |
+| `PAUSED_STAGE_BOUNDARY` | complete activated C or D decision; successor execution decision-gated | resumable | none; stage evidence persisted |
 | `CANCELLED_PENDING_RESUME` | first signal or crash reconciliation | resumable | none |
 | `SELECTED` | all public gates plus 166 acceptance | terminal | selection/result |
 | `INCONCLUSIVE` | deterministic public rule finds no winner | terminal | result only |
@@ -378,12 +379,11 @@ Checkpoint corruption is recorded in a 0600 out-of-band quarantine record becaus
 damaged database cannot authoritatively update itself.
 
 Entry to `PAUSED_STAGE_BOUNDARY` is legal only from `RUNNING` in the same transaction
-that freezes a complete activated C or D decision. A C0B-2B1 `run/resume --stage C` at
-that boundary returns the frozen C status with zero checkpoint mutation, invocation
-claim or Ollama contact. Only a successor card may transition back to `RUNNING`, and only
-after it verifies the activated predecessor decision and atomically freezes the exact
-successor plan chained to that decision. Generic resume cannot consume another C
-invocation at the boundary.
+that freezes a complete activated C or D decision. A same-stage command at that boundary
+returns the frozen status with zero work mutation, invocation claim or Ollama contact,
+except for the idempotent backup receipt in §18.3. Only an explicit successor-stage
+`run` may transition back to `RUNNING`, after it verifies the activated predecessor and
+atomically freezes the exact successor plan. Generic `resume` never crosses a boundary.
 
 The global lock lives at one canonical C0B-2 path and covers all run IDs and run types.
 It is acquired before any live checkpoint mutation, preflight or Ollama contact and is
@@ -608,7 +608,8 @@ record `NOT_ACTIVATED`, then create a canonical artifact with exact keys `versio
 INCONCLUSIVE`, the result artifact SHA-256, and `facts: {deterministic_stop: true,
 reason: no_stage_c_survivor}`. It is
 `NOT_ACTIVATED`, chained to the C plan and aggregate, and finalizes atomically with the
-terminal state. D is neither planned nor dispatched by C0B-2B1.
+terminal state. D is not planned or dispatched until the activated C boundary, although
+its implementation is source-pinned before the run is created.
 
 Stage C base plan: at most 264 scored calls; class allowances and hard cap are in §13.
 
@@ -1022,8 +1023,8 @@ unrelated pre-existing `docs/dev/kbd_ctrl_improve/` tree remains outside the tas
 - `scripts/tests/test_analyst_c0b2_runtime.py`
 - `scripts/tests/test_analyst_c0b2_stage_c.py`
 
-No other path is part of C0B-2B1. New focused test modules are required instead of
-growing the existing 1,633-line checkpoint test past the 1,700-line pause threshold.
+No other path is part of C0B-2B1. New focused test modules are required; the checkpoint
+test may not exceed the 1,700-line pause threshold.
 
 Before private census, create a protected worktree seal containing hashes of every
 tracked delta and untracked file plus the exact permitted aggregate path. Recheck it
@@ -1050,6 +1051,10 @@ python -m scripts.analyst_benchmark c0b2 status --run-id ID
 python -m scripts.analyst_benchmark c0b2 verify --run-id ID
 python -m scripts.analyst_benchmark c0b2 run --run-id ID --stage C --confirm-live
 python -m scripts.analyst_benchmark c0b2 resume --run-id ID --stage C --confirm-live
+python -m scripts.analyst_benchmark c0b2 run --run-id ID --stage D --confirm-live
+python -m scripts.analyst_benchmark c0b2 resume --run-id ID --stage D --confirm-live
+python -m scripts.analyst_benchmark c0b2 run --run-id ID --stage F --confirm-live
+python -m scripts.analyst_benchmark c0b2 resume --run-id ID --stage F --confirm-live
 python -m scripts.analyst_benchmark c0b2 create-private --parent-run ID \
   --confirm-live --confirm-private-corpus --confirm-private-authority \
   --confirm-trusted-local-boundary --private-root-prompt
@@ -1062,9 +1067,9 @@ python -m scripts.analyst_benchmark c0b2 resume-private --run-id ID \
 python -m scripts.analyst_benchmark c0b2 abandon --run-id ID --confirm-abandon
 ```
 
-Public create/status/verify are offline and contact no model/private root. In C0B-2B1,
-the public stage parser accepts only exact stage `C`; D/F are refused before path or
-network access. Private create
+Public create/status/verify are offline and contact no model/private root. The public
+stage parser accepts exact `C`, `D` and `F`; the state/decision matrix in §18.2 rejects a
+premature or mismatched stage before checkpoint mutation or network access. Private create
 performs an authorized metadata/content-HMAC census but no inference. Public run/resume
 cannot open a private run; private run/resume are syntactically distinct so every gate is
 checked before checkpoint/path imports. No command can change immutable config or offers
@@ -1089,3 +1094,435 @@ C0B is complete only when:
 
 If no unique winner exists, C0B honestly ends `INCONCLUSIVE`. No timing/offload tie-break,
 post-holdout retune or private-label fiction is allowed.
+
+## 18. Public C/D/F prefreeze amendment
+
+This section records the HI-approved 2026-08-05 course of action and is authoritative
+where it conflicts with the earlier Stage-C-only implementation wording in §§1, 9–13,
+15.2 or 16. It does not change the public evidence, thresholds or call ledgers.
+
+### 18.1 One source identity for the complete public run
+
+No public run may be created until all C/D/F schemas, planners, scorers, runtime
+orchestration and offline integration tests have passed independent review and are
+committed together. D and F are no longer implementation-held, but execution remains
+decision-gated: D requires an activated C decision, F requires an activated D decision,
+and acceptance requires one provisional F winner. Private E remains held.
+
+The run header freezes one Git HEAD, dirty-state seal, exact public task tree, this
+protocol, fixtures, schemas, prompts, chunker, all public scorers, all allowed generation
+options, nonce domains, model tags and full digests. `generation_options_sha256` covers
+every allowed C/D/F seed, chunk, overlap, context, output budget, thinking and keep-alive
+combination. `detector_sha256` covers the shared scorer plus the C, D and F aggregators.
+Every live entry revalidates the pins under the global lock before mutation or Ollama
+contact.
+
+The benchmark worktree is frozen from public `create` through its public terminal and
+verified backup receipt. Results and documentation changes wait until then. Unrelated
+work uses another worktree and may not change this worktree's HEAD or dirty seal.
+
+### 18.2 Stage entry and immutable phase plans
+
+The checkpoint persists `active_stage` separately from `active_plan_key`. Legal live
+entries are exact:
+
+| Command | Required state and predecessor | Effect |
+|---|---|---|
+| `run C` | `PREPARED`, active C | begin C |
+| `resume C` | ordinary resumable pause, active C | resume the persisted C plan |
+| `run D` | C `PAUSED_STAGE_BOUNDARY` with activated C decision | freeze/activate D1 and advance to D |
+| `resume D` | ordinary resumable pause, active D | resume the persisted D phase |
+| `run F` | D `PAUSED_STAGE_BOUNDARY` with activated D decision | freeze the F master plan, activate seed 1 and advance to F |
+| `resume F` | ordinary resumable pause, active F | resume the persisted F or acceptance phase |
+| `run/resume C` | C boundary, active C | complete/verify C backup only |
+| `run/resume D` | D boundary, active D | complete/verify D backup only |
+| `run/resume <active>` | public terminal | complete/verify terminal backup only |
+
+`run` starts C or crosses one authorized stage boundary; `resume` never crosses a stage
+boundary or creates an adaptive branch. Same-stage boundary and terminal re-entry returns
+the frozen result after satisfying §18.3. Any skipped, reversed, mismatched or premature
+stage fails before checkpoint mutation or Ollama contact. `status` and `verify` are
+read-only and never contact Ollama. A successor-stage `run` first requires the predecessor
+backup receipt; only the command whose stage equals `active_stage` may re-enter a boundary
+or terminal.
+
+Plan key→phase mappings are exactly `C→C`, `D1_OUTPUT→D1`, `D2_CHUNK→D2`,
+`D3_CONTEXT→D3`, `D4_CONFIRMATION→D4`, `F_SEED_1→F_SEED_1`,
+`F_SEED_17→F_SEED_17`, `F_SEED_20260804→F_SEED_20260804` and
+`F_ACCEPTANCE→F_ACCEPTANCE`. A plan
+has immutable `plan_key`, `budget_stage`, `phase`, parent hash, canonical JSON and SHA-256;
+work binds both `budget_stage` and `plan_key`. Request charging continues to use the C/D/F
+ledgers in §13.
+The frozen C payload keeps its existing Stage-C schema; a checkpoint adapter supplies its
+logical C key/stage. The added envelope and work-row fields apply to D/F only.
+
+C is frozen at create. D1–D3 are frozen sequentially from the preceding immutable
+aggregate/decision. D4 is frozen only when at least one D3 survivor selects a lower
+context; an all-16384 D3 result instead freezes final `stage-d-selection` rows with
+`evidence_source=D3_REUSE`, and no D4 work is invented. At D completion, the F
+master container freezes all possible seed groups, work, request hashes, nonces,
+activation predicates and acceptance construction before the first F call. Seed 1 is
+activated immediately; later seed work is plan-only until the immutable seed-1 qualifier
+decision activates both groups together. Only one provisional winner can activate the
+separate C44 acceptance plan.
+
+Before a phase's first HTTP call, one transaction verifies its parent, freezes or loads
+the exact plan, registers activated work and records activation. Plans and activation are
+append-only. Plan-only inactive work is not registered, claimable, pending or part of
+completeness. Resume loads persisted plans and decisions; it never recomputes them under
+changed code.
+
+### 18.3 Idempotent boundary and terminal backups
+
+A C/D boundary or public terminal decision commits atomically before external snapshot
+I/O, but the live command does not report success until a verified backup receipt exists.
+The receipt anchor hashes the run ID, active stage, state, F master when present, ordered
+activated plans, aggregate/evidence owner, decision/final artifact and charged-call total,
+using the exact catalog §11 state mapping.
+
+Under the global lock, backup completion accepts an existing exact receipt or creates a
+new unique 0600 SQLite Online Backup snapshot, verifies integrity and foreign keys,
+fsyncs file and parent, then appends the receipt without changing run state. A crash may
+leave an unreferenced snapshot; retry creates and receipts another without duplicating
+work, claiming an invocation or contacting Ollama. Receipt insertion is the only allowed
+same-state boundary/terminal mutation. `status` and `verify` only report a missing receipt.
+
+### 18.4 Exact Stage-D contract
+
+Each D phase plan has exact keys `version`, `stage`, `phase`, `plan_key`, `budget_stage`,
+`parent_decision_sha256`, `candidates`, `work`. Each work row has exact keys:
+
+`stage`, `phase`, `plan_key`, `budget_stage`, `activation_group_id`, `candidate_id`,
+`cell_id`, `work_id`, `model`, `model_digest`, `worksheet`, `doc_id`, `view_id`,
+`document_sha256`, `chunk_chars`, `overlap`, `num_ctx`, `num_predict`, `seed`,
+`chunk_index`, `chunk_sha256`, `nonce`, `prompt_sha256`, `request_sha256`.
+
+Plan version is `stage-d-phase-plan-v1`, aggregate version is
+`stage-d-phase-aggregate-v1`, and decision version is `stage-d-decision-v1`. Plan
+`candidates` and intermediate D1/D2/D3 `CONTINUE` decision `selections` use the same exact
+keys `candidate_id`, `model`, `model_digest`, `worksheet`, `chunk_chars`, `overlap`,
+`num_ctx`, `num_predict`; factors not yet selected are null. D3-all-reuse and D4 final
+decisions use the wrapped evidence rows below. `view_id` is string or null. A base
+`candidate_id` uses the exact domain-separated canonical JSON in the normative schema
+catalog §1. Candidate order is Stage-C survivor order; factor
+order is ascending D1 budget then D2 chunk order 2000, 4000, 8000; work order is
+candidate, factor, master-manifest document, chunk. Every factor level runs. Timing and
+offload are descriptive and eliminate nothing.
+
+Selected production factors by phase are exact; fixed experiment settings never become
+selected values:
+
+| Phase | Input selected values | Fixed test settings | Decision adds |
+|---|---|---|---|
+| D1 | worksheet | chunk 4000, overlap 256, context 8192 | `num_predict` |
+| D2 | worksheet, `num_predict` | overlap 256, context 16384 | chunk, overlap 256 |
+| D3 | worksheet, output, chunk, overlap | actual context 16384 | `num_ctx` |
+| D4 | all seven fields | selected context | nothing; confirms or eliminates |
+
+All D phase aggregates have exact top-level keys `version`, `stage`, `phase`,
+`plan_sha256`, `parent_decision_sha256`, `candidate_order`, `candidates`. A phase decision
+has exact keys `version`, `stage`, `phase`, `plan_sha256`, `aggregate_sha256`, `outcome`,
+`reason`, `selections`. Outcomes are `CONTINUE`, `FINALISTS` or `INCONCLUSIVE`; success
+reasons are `phase_passed` and `finalists_selected`. Ordered early-stop reasons are
+`no_d1_output_budget_survivor`, `no_d2_chunk_survivor`, `no_d3_context_survivor`,
+`no_d4_confirmation_finalist`. `selections` remains in candidate order and contains only
+factor values already selected by that phase.
+
+D1 rows have exact keys `candidate_id`, `levels`, `selected_num_predict`, `passed`,
+`failure_reasons`; each level has `num_predict`, `quality`. Ordered level reasons are
+`length_outcome_present`, `eventual_invalid_present`, `raw_grounding_below_0_99`,
+`expected_category_missing`, `unsupported_category_present`. Select the smallest passing
+budget. D1 `quality` has exact keys `planned_chunks`, `completed_chunks`,
+`eventual_invalid_chunks`, `raw_findings`, `raw_grounded_findings`,
+`expected_category_pass_documents`, `unsupported_category_documents`, `length_outcomes`,
+`passed`, `failure_reasons`.
+Candidate-level `failure_reasons` is empty on pass and exactly
+`["no_passing_output_budget"]` on failure; level reasons stay inside level rows.
+
+D2 rows have exact keys `candidate_id`, `num_predict`, `levels`,
+`selected_chunk_chars`, `overlap`, `passed`, `failure_reasons`; each level has
+`chunk_chars`, `quality`. Its 12 documents and 24 chunks use ordered reasons
+`boundary_identifier_missing`, `unsupported_category_present`,
+`eventual_invalid_present`, `raw_grounding_below_0_99`, `length_outcome_present`,
+`context_headroom_violation`. Select the largest passing chunk. D2 `quality` has exact
+keys `planned_documents`, `planned_chunks`, `completed_chunks`,
+`boundary_identifier_pass_documents`, `unsupported_category_documents`,
+`eventual_invalid_chunks`, `raw_findings`, `raw_grounded_findings`, `length_outcomes`,
+`headroom_violations`, `passed`, `failure_reasons`.
+Candidate-level `failure_reasons` is empty on pass and exactly
+`["no_passing_chunk"]` on failure.
+
+D3 executes one actual D50 high-context run per survivor at 16384. Its measured maximum
+prompt count is used to infer eligibility at 4096 and 8192; those contexts are not run.
+For each context, `analytical_output_fit` means
+`num_predict <= floor(0.85 * num_ctx)` and `measured_fit` means exactly
+`max_prompt_eval_count + num_predict <= floor(0.85 * num_ctx)`. Select the smallest
+eligible context only when the high-context D4 quality result passes. Maximum actual work
+is 81 chunks per candidate.
+D3 rows have exact keys `candidate_id`, `num_predict`, `chunk_chars`, `overlap`,
+`high_context_plan_sha256`, `high_context_quality`, `context_probe`, `context_census`,
+`selected_num_ctx`, `passed`, `failure_reasons`. Each census row has exact keys `num_ctx`,
+`analytical_output_fit`, `measured_fit`, `max_prompt_eval_count`, `num_predict`,
+`eligible`; candidate failure adds `no_context_candidate` after any ordered quality
+reasons. A persisted passed `context_probe` has exact keys `control_id`, `purpose`,
+`candidate_id`, `model`, `model_digest`, `config_sha256`, `expected_num_ctx`,
+`observed_context_length`, `trigger_work_id`, `state`, `response_sha256`, with
+`state=PASSED`.
+
+The shared `d4-quality-v1` object has exact keys `expected_chunk_count`,
+`completed_eventual_valid_chunks`, `first_pass_invalid_chunks`, `raw_findings`,
+`raw_grounded_findings`, `retained_findings`, `retained_grounded_findings`,
+`category_recall`, `negative_false_positive_documents`,
+`boundary_identifier_pass_documents`, `boundary_documents`, `length_outcomes`,
+`headroom_violations`, `context_probe_passed`, `tools_empty`, `images_empty`,
+`unknown_message_fields_empty`, `marker_empty`, `schema_escape_empty`, `passed`,
+`failure_reasons`. `category_recall` has the four frozen category keys and each value is
+`{true_positives, support}` with support six.
+
+D4 quality reasons are ordered:
+
+`eventual_invalid_or_missing_chunk`, `first_pass_invalid_above_1`,
+`raw_grounding_below_0_99`, `retained_grounding_below_1_00`,
+`pii_recall_below_6_of_6`, `financial_recall_below_6_of_6`,
+`contact_recall_below_6_of_6`, `demographic_recall_below_6_of_6`,
+`negative_false_positive_present`, `boundary_identifier_missing`,
+`length_outcome_present`, `context_headroom_violation`, `channel_violation_present`.
+
+Probe handling inherits §10: transient absence pauses; missing row or digest/config/
+allocation mismatch is `BLOCKED_PROVENANCE`; no quality aggregate or D decision may freeze
+until the required probe passes. A probe problem never eliminates a candidate as quality
+evidence.
+
+A D4 aggregate includes only rerun candidates; each row has exact keys `candidate_id`,
+`selection`, `context_probe`, `quality` and therefore never self-references its aggregate
+hash. The final D decision candidate row has exact keys `candidate_id`, `selection`,
+`evidence_source`, `source_aggregate_sha256`, `quality`; `evidence_source` is `D3_REUSE`
+or `D4_RERUN`.
+`selection` has exactly `model`, `model_digest`, `worksheet`, `chunk_chars`, `overlap`,
+`num_ctx`, `num_predict`. D3 performs one context probe per survivor with purpose
+`d3_context_16384`. D4 reruns perform one distinct probe with purpose
+`d4_context_selected`; reuse performs no duplicate probe.
+
+If D3 has no survivor, it emits `INCONCLUSIVE/no_d3_context_survivor`. If every D3
+survivor selects 16384, D3 emits `FINALISTS/finalists_selected`; no D4 plan or hash exists
+and final rows cite the D3 aggregate as `D3_REUSE`. If any survivor selects a lower
+context, D3 emits `CONTINUE/phase_passed`; D4 plans only those lower-context rerunners.
+The D4 aggregate contains that rerun subset only. Its final decision merges passing D4
+rows with unchanged D3-reuse rows in original candidate order, with each final row citing
+the aggregate that owns its quality evidence. Only a merged-empty result emits
+`INCONCLUSIVE/no_d4_confirmation_finalist`.
+
+Decision IDs are `stage-d-d1-selection`, `stage-d-d2-selection`,
+`stage-d-d3-selection` and final `stage-d-selection`. Each intermediate `CONTINUE`
+decision is `ACTIVATED` atomically with its exact successor plan. The final decision is
+`ACTIVATED` atomically with `PAUSED_STAGE_BOUNDARY`. A zero-result D1–D4 decision is
+`NOT_ACTIVATED` and atomically creates a `c0b2-result-v1` artifact with exact keys
+`version`, `terminal`, `stage`, `aggregate_sha256`, `reason`, plus decision
+`c0b2-completion`/schema `c0b2-completion-v1` with exact keys `outcome`,
+`artifact_sha256`, `facts`. Values are `terminal=INCONCLUSIVE`, `stage=D`, the owning
+aggregate hash/reason, and `facts={deterministic_stop:true, reason:<same reason>}`.
+The completion outcome and activation are exactly `INCONCLUSIVE` and `NOT_ACTIVATED`;
+checkpoint state becomes `INCONCLUSIVE` in the same transaction.
+
+The fixed D maxima remain D1 55, D2 216, D3 243 and D4 243: 757 scored calls. Preflight
+maximum is 30 and context-probe maximum is six, giving the §13 control total of 36.
+
+### 18.5 Exact Stage-F contract
+
+An F `candidate_id` hashes the activated D decision hash plus the exact seven-field
+selection. Seed order is `[1, 17, 20260804]`. For seed index `j`, filter base D order to
+activated candidates and left-rotate by `j % candidate_count`; execution order is seed,
+rotated candidate, F-manifest document, ascending chunk. Seed 1 runs all finalists. Seeds
+17 and 20260804 activate together only for candidates passing every seed-1 hard gate and
+their cancellation-health gate; a seed-17 failure does not suppress seed 20260804.
+
+The seed activation decision has exact keys `version`, `stage`, `plan_sha256`,
+`seed1_evidence_sha256`, `qualifier_rule`, `qualifier_candidate_ids`,
+`activated_group_ids`, `inactive_group_ids`; fixed version and rule are
+`stage-f-seed-activation-v1` and `seed1_all_hard_gates_and_cancellation_health-v1`.
+
+Nonces retain the implemented format: `FENCE_` plus 32 uppercase hexadecimal HMAC
+characters derived from the protected random run key. The registry identity is phase,
+document-view SHA-256 (or shared injection `pair_id`), worksheet and seed. A nonce must be
+absent from its source. Acceptance uses phase `acceptance-c44` and therefore fresh nonces.
+
+Schema retry uses the §5 answered-history rule. Transport/orphan attempts do not consume
+schema entitlement; the first HTTP-accepted invalid answer permits one identical retry,
+and the second closes the work invalid. Every HTTP-answered `done_reason=length` counts.
+Resource interruption pauses and is never a quality failure.
+
+Each finalist receives exactly one `stage_f_candidate_context` probe immediately after
+its first bounded HTTP-200 terminal normal seed-1 response, regardless of schema validity,
+and before its next scored work. It binds candidate, model, digest and final config and
+requires allocated context at least `num_ctx`. There is no later-seed or acceptance probe;
+every normal response independently satisfies the headroom equation.
+
+After a candidate's complete seed-1 work and context probe, run one cancellation control
+on `pos_pii_013` chunk 0. Close the owned stream after its first answer byte and within
+five seconds, persist `CANCELLED_UNVERIFIED`, and durably set a health not-before time at
+least two seconds later. The next invocation runs health before scored work using the
+same source/config and a fresh frozen nonce. Health gets the ordinary one schema retry
+and passes only with eventual strict validity, grounded retained PII, no length/channel/
+schema escape, and valid headroom. Resource failure pauses. Ordered cancellation reasons
+are `cancel_not_observed`, `cancel_after_5_seconds`, `health_missing`,
+`health_eventual_invalid`, `health_pii_missing`, `health_grounding_failure`,
+`health_length_outcome`, `health_channel_violation`,
+`health_context_headroom_failure`.
+
+Per-seed hard-gate reasons are ordered:
+
+`incomplete_chunk_coverage`, `injection_pairs_incomplete`, `injection_event_present`,
+`injection_robustness_failure`, `eventual_invalid_chunk_present`,
+`first_pass_invalid_chunks_above_1`, `raw_grounding_below_0_99`,
+`retained_grounding_below_1_00`, `pii_recall_below_7_of_8`,
+`financial_recall_below_7_of_8`, `contact_recall_below_7_of_8`,
+`demographic_recall_below_7_of_8`, `macro_f1_below_0_90`, `micro_f1_below_0_92`,
+`negative_false_positive_present`, `boundary_identifier_below_12_of_12`,
+`length_outcome_present`, `context_headroom_failure`, `channel_violation_present`.
+
+Shared chunk rows have exact keys `work_id`, `doc_id`, `chunk_index`,
+`first_pass_valid`, `eventual_valid`, `charged_attempt_count`,
+`strict_schema_invalid_attempts`, `semantic_invalid_attempts`, `assessment`,
+`predicted_categories`, `raw_findings`, `raw_grounded_findings`, `retained_findings`,
+`retained_grounded_findings`, `authoritative_done_reason`, `length_outcomes`,
+`max_answered_prompt_eval_count`, `headroom_passed`, `tools_empty`, `images_empty`,
+`unknown_message_fields_empty`, `schema_escape_empty`, `marker_in_answer`.
+
+Document rows have exact keys `doc_id`, `stratum`, `expected_categories`,
+`predicted_categories`, `expected_chunk_count`, `completed_chunk_count`,
+`first_pass_invalid_chunks`, `eventual_invalid_chunks`, `raw_findings`,
+`raw_grounded_findings`, `retained_findings`, `retained_grounded_findings`,
+`length_outcomes`, `context_headroom_failures`, `channel_violations`,
+`boundary_identifier_retained`, `chunks`.
+
+Per-seed rows have exact keys `candidate_id`, `seed`, `planned_chunks`,
+`completed_chunks`, `documents`, `category_metrics`, `macro_f1`, `micro_f1`,
+`raw_findings`, `raw_grounded_findings`, `retained_findings`,
+`retained_grounded_findings`, `negative_false_positive_documents`, `injection_pairs`,
+`injection_pairs_measured`, `injection_events`, `robustness_failures`,
+`boundary_documents`, `boundary_passed`, `length_outcomes`,
+`first_pass_invalid_chunks`, `eventual_invalid_chunks`, `context_headroom_failures`,
+`channel_violations`, `passed`, `failure_reasons`. Category metrics have exact keys
+`true_positives`, `false_positives`, `false_negatives`, `precision`, `recall`, `f1`.
+
+Candidate rows have exact keys `candidate_id`, `selection`, `seed1_qualified`,
+`all_seed_qualified`, `context_probe`, `cancellation_health`, `seed_results`,
+`worst_seed_macro_f1`. Top-level `stage-f-aggregate-v1` has exact keys `version`,
+`stage`, `plan_sha256`, `parent_decision_sha256`, `master_manifest_sha256`,
+`seed_activation_decision_sha256`, `candidate_order`, `seed_order`, `candidates`,
+`ranking`. Every stored rate is an exact reduced `{numerator, denominator}` fraction.
+`ranking` has exact keys `qualifier_candidate_ids`, `pairs`, `winner_candidate_id`.
+Each pair has exact keys `left_candidate_id`, `right_candidate_id`, `replicates`, `seed`,
+`rng`, `point`, `ci_low`, `ci_high`, `lower_index`, `upper_index`, `left_decisive`,
+`right_decisive`.
+
+Ranking uses 10,000 paired stratified bootstrap replicates, seed 20260804 and
+`sha256-counter-v1`. Strata order is positive PII, financial, contact, demographic,
+clean negative, near-miss; each has eight documents in manifest order. For replicate R,
+stratum S and draw D, hash canonical JSON exactly:
+
+`{"domain":"stage-f-ranking-bootstrap-v1","draw_index":D,"replicate":R,"seed":20260804,"stratum_index":S}`.
+
+Interpret the hash as unsigned big-endian modulo eight and use the same sampled document
+for both candidates and all seeds. Compute each candidate's macro F1 per seed, take its
+minimum, then left-minus-right. Sort exact fractions and use indices 83 and 9916 without
+interpolation. Pair order is base candidate order with `i < j`; left wins only when
+`ci_low > 3/100`, right only when `ci_high < -3/100`; equality is not decisive. A winner
+must decisively beat every other qualifier. The earlier undefined descriptive robustness
+bootstrap is removed; exact injection-pair rows and the zero-event hard gate remain, but
+do not enter ranking.
+
+The provisional decision has exact keys `version`, `stage`, `plan_sha256`,
+`aggregate_sha256`, `outcome`, `reason`, `selection`; version is
+`stage-f-selection-v1`, outcome is `PROVISIONAL_SELECTED` or `INCONCLUSIVE`, and reason is
+one of `single_qualifier`, `pairwise_decisive`, `no_seed1_qualifier`,
+`no_all_seed_qualifier`, `ranking_not_decisive`.
+
+A unique winner activates exactly 44 C44 final-factor calls at seed 1. Acceptance combines
+that rerun with immutable D50 confirmation and F72 seed-1 evidence. Its aggregate has
+exact keys `version`, `stage`, `acceptance_plan_sha256`,
+`parent_provisional_decision_sha256`, `master_manifest_sha256`, `selection`,
+`component_hashes`, `totals`, `passed`, `failure_reasons`. `component_hashes` contains
+`c44_rerun_aggregate_sha256`, `d50_confirmation_aggregate_sha256`,
+`f72_seed1_aggregate_sha256`. The fixed census is 166 documents, 80 positives, 40
+negatives, eight injection pairs, 24 boundaries and six truncation documents.
+`totals` has exact keys `document_count`, `positive_documents`, `negative_documents`,
+`injection_pairs`, `boundary_documents`, `truncation_documents`, `expected_chunks`,
+`completed_chunks`, `first_pass_invalid_chunks`, `eventual_invalid_chunks`,
+`raw_findings`, `raw_grounded_findings`, `retained_findings`,
+`retained_grounded_findings`, `category_recall`, `negative_false_positive_documents`,
+`injection_pairs_measured`, `injection_events`, `robustness_failures`, `boundary_passed`,
+`truncation_completed`, `length_outcomes`, `context_failures`, `channel_violations`,
+`cancellation_health_passed`, `provenance_passed`, `safety_passed`.
+
+Acceptance reasons are ordered:
+
+`incomplete_166_coverage`, `first_pass_invalid_chunks_above_2`,
+`eventual_invalid_chunk_present`, `raw_grounding_below_0_99`,
+`retained_grounding_below_1_00`, `pii_recall_below_18_of_20`,
+`financial_recall_below_18_of_20`, `contact_recall_below_18_of_20`,
+`demographic_recall_below_18_of_20`, `negative_false_positive_above_1`,
+`injection_pairs_incomplete`, `injection_event_present`,
+`injection_robustness_failure`, `boundary_identifier_below_24_of_24`,
+`truncation_below_6_of_6`, `length_outcome_present`, `context_gate_failure`,
+`channel_violation_present`, `cancellation_health_failure`, `component_gate_failure`.
+
+Failure is `INCONCLUSIVE/complete_corpus_acceptance_failed` and never promotes a runner-up.
+The selected artifact has exact keys `version`, `terminal`, `stage`,
+`master_manifest_sha256`, `stage_c_selection_sha256`, `stage_d_decision_sha256`,
+`stage_f_aggregate_sha256`, `provisional_decision_sha256`, `acceptance_plan_sha256`,
+`acceptance_aggregate_sha256`, `selection`. The inconclusive artifact has exact keys
+`version`, `terminal`, `stage`, `aggregate_sha256`, `reason`. Resource, budget,
+provenance, filesystem and safety terminals never become `INCONCLUSIVE`.
+Its reason is exactly one of `no_seed1_qualifier`, `no_all_seed_qualifier`,
+`ranking_not_decisive`, `complete_corpus_acceptance_failed`.
+
+The measured F maximum is 122 chunks per candidate/seed at chunk 2000. Thus the maximum
+remains `3 * 3 * 122 + 44 = 1,142` scored calls, matching §13.
+
+### 18.6 Complete-public implementation allowlist
+
+Exact strict types, nullability, ordering, identity domains, nested schemas and
+evidence-derived invariants for §§18.3–18.5 are frozen in the normative
+[`BENCHMARK_PUBLIC_CDF_SCHEMA.md`](BENCHMARK_PUBLIC_CDF_SCHEMA.md). Where it is more
+specific, that schema catalog governs; changing it requires protocol review before any
+live run.
+
+The C0B-2B2–B5 delta may touch only the exact workspace, implementation and test paths in
+§§15.1–15.2 plus these additions:
+
+- `docs/dev/ollama_integration/BENCHMARK_PUBLIC_CDF_SCHEMA.md`
+- `scripts/analyst_benchmark/c0b2_public_schema.py`
+- `scripts/analyst_benchmark/c0b2_public_scoring.py`
+- `scripts/analyst_benchmark/c0b2_runtime_common.py`
+- `scripts/analyst_benchmark/c0b2_runtime_d.py`
+- `scripts/analyst_benchmark/c0b2_runtime_f.py`
+- `scripts/analyst_benchmark/c0b2_stage_d_plan.py`
+- `scripts/analyst_benchmark/c0b2_stage_d.py`
+- `scripts/analyst_benchmark/c0b2_stage_f_plan.py`
+- `scripts/analyst_benchmark/c0b2_stage_f.py`
+- `scripts/tests/test_analyst_c0b2_public_schema.py`
+- `scripts/tests/test_analyst_c0b2_public_scoring.py`
+- `scripts/tests/test_analyst_c0b2_runtime_common.py`
+- `scripts/tests/test_analyst_c0b2_stage_d_plan.py`
+- `scripts/tests/test_analyst_c0b2_stage_d.py`
+- `scripts/tests/test_analyst_c0b2_runtime_d.py`
+- `scripts/tests/test_analyst_c0b2_stage_f_plan.py`
+- `scripts/tests/test_analyst_c0b2_stage_f.py`
+- `scripts/tests/test_analyst_c0b2_runtime_f.py`
+- `scripts/tests/test_analyst_c0b2_public_flow.py`
+
+No other path may change without reviewed protocol revision. New focused tests are
+required; the existing checkpoint test may not exceed the 1,700-line pause threshold.
+
+### 18.7 Card sequence and live gate
+
+1. **C0B-2B1R:** this docs-only sequencing/provenance amendment.
+2. **C0B-2B2:** phase-plan/checkpoint substrate, shared schemas/scoring/runtime, signal
+   order, generic context control, cancellation health and backup receipts.
+3. **C0B-2B3:** complete D planner, scorer, runtime and offline tests.
+4. **C0B-2B4:** complete F/acceptance planner, scorer, runtime and offline tests.
+5. **C0B-2B5:** bounded-transport fake-session C→D→F integration, leak scan, focused and
+   risk-warranted regression, README review, file-size check and independent audit.
+6. Only after B5 passes and the complete public tree is committed: create the immutable
+   public run and execute C. D and F run only when persisted decisions authorize them.
