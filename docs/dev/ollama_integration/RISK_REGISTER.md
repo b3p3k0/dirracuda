@@ -1,7 +1,9 @@
 # Ollama Integration — Risk Register
 
 Date: 2026-08-04
-Status: **C0A controls frozen; C0B-2A offline controls implemented and reviewed.** Controls are
+Status: **C0A controls frozen; C0B-2A offline controls implemented and reviewed; public
+C/D/F envelope authorized.** Stage-C live execution remains gated on C0B-2B1's bounded
+transport/orchestration review. Controls are
 authoritative in [`CONTRACT.md`](CONTRACT.md), accepted errata, and the reviewed
 [`BENCHMARK_PROTOCOL_C0B2.md`](BENCHMARK_PROTOCOL_C0B2.md); this register is the
 risk-indexed view.

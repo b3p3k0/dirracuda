@@ -3,7 +3,9 @@
 Date: 2026-08-04
 Status: **C0A contract frozen** (committed `91bb2aa`). **C0B-1 accepted and committed
 (`47e946b`).** **C0B-2A offline foundation passed implementation and independent
-adversarial review.** No C0B-2 scored call or private-corpus access has started.
+adversarial review.** The HI authorized the public C/D/F envelope on 2026-08-05.
+`C0B-2B1` is the Stage-C-only live-enablement card; no C0B-2 scored call or private-
+corpus access has started.
 
 The authoritative spec is [`CONTRACT.md`](CONTRACT.md), plus accepted errata in
 [`CONTRACT_ERRATA.md`](CONTRACT_ERRATA.md). The C0B-1 experiment is pre-registered in
@@ -111,7 +113,8 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
 3. `README.md` (this file) — status, decisions, orientation.
 4. `BENCHMARK_PROTOCOL_C0B1.md` — **pre-registered** C0B-1 decision rule, gates, factors, budgets. Hash-pinned.
 5. `BENCHMARK_PROTOCOL_C0B2.md` — reviewed C0B-2 public/private protocol; offline 2A is
-   implemented, while live execution remains held for explicit HI authorization.
+   implemented and the public envelope is authorized. The frozen B1 amendment permits
+   Stage C only after its offline live-transport/orchestration gate passes.
 6. `BENCHMARK.md` — instrument method, module dispositions, what is/is not committed.
 7. `LESSONS_LEARNED.md` — only what a card actually exercised.
 8. `RESEARCH_NOTES.md` — verified external findings with sources + corpus profile.
@@ -122,7 +125,8 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
 
 ## Next Step
 
-HI decision: authorize or decline the public C/D/F envelope of at most 2,750 Ollama
-requests and an estimated 27–44 active hours. Calendar time may be longer because the
-GPU is shared; the run is serial, resumable, permits CPU/GPU offload and may honestly end
-`INCONCLUSIVE`. Private E remains a later, separate authorization.
+Implement and independently review `C0B-2B1`: the bounded live transport, offline public
+run creation/resume, and deterministic Stage-C scorer. After that gate passes, run the
+264-item public Stage C within its 400-call cap. The run is serial and resumable; shared-
+GPU offload or slow execution is not a quality failure. Stage D/F implementation and
+private E remain held at this boundary.

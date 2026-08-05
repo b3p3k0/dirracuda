@@ -1,11 +1,11 @@
 # Analyst Benchmark — Protocol, C0B-2 (Stages C, D, F and E)
 
-Version: `c0b2-protocol-v1-c0b2a-implemented`
-Date: 2026-08-04
-Status: **C0B-2A OFFLINE PASS — no scored C0B-2 call is permitted.** The implementation,
-focused regression suite, canonical-filesystem capability probe and independent
-adversarial reviews passed. Public C/D/F remains held for explicit HI authorization of
-the §13 request/time envelope; private E remains separately held.
+Version: `c0b2-protocol-v2-stage-c-authorized`
+Date: 2026-08-05
+Status: **C0B-2A OFFLINE PASS; public C/D/F envelope authorized by the HI.**
+`C0B-2B1` may implement and run Stage C only after its offline acceptance gate passes.
+No scored C0B-2 call is permitted from the C0B-2A tree. Stage D, Stage F and private
+Stage E remain implementation-held; private E also remains separately authorization-held.
 
 Authoritative parent: [`CONTRACT.md`](CONTRACT.md), accepted
 [`CONTRACT_ERRATA.md`](CONTRACT_ERRATA.md), and the accepted C0B-1 outcome in
@@ -50,8 +50,14 @@ Preflight reverified these facts on 2026-08-04 without inference or document tra
 | `qwen3.6:27b` | `a50eda8ed977ab48a12431878896b27ffd5cef552c17af3317d9623b939a7f1e` | `false` |
 
 Endpoint: literal loopback `http://127.0.0.1:11434`; Ollama `0.32.5`; all tags local.
-These values are rechecked before every live or resumed stage. Any identity drift blocks
-as `BLOCKED_PROVENANCE` before a document call; it never silently updates the protocol.
+Both exact strings are immutable run-header fields (`ollama_endpoint` and
+`ollama_version`) and are rechecked before every live or resumed stage. Endpoint parsing
+rejects every alternate scheme, host (including another loopback or IPv6), port,
+userinfo, path, query and fragment. Any identity drift blocks as `BLOCKED_PROVENANCE`
+before a document call; it never silently updates the protocol. Ollama's API is not
+strictly versioned, so an explicit runtime version pin is part of reproducibility:
+[API versioning](https://docs.ollama.com/api/introduction),
+[`/api/version`](https://docs.ollama.com/api-reference/get-version).
 
 Ollama exposes structured JSON schemas through the `format` field, and recommends local
 validation of the returned object. The Chat API exposes answer content, thinking and
@@ -131,6 +137,15 @@ uses the identical prompt, nonce, schema, options and source. The accepted answe
 is stored as the authoritative public response; bounded channel metadata is stored, but
 reasoning text is discarded. Every attempt remains charged.
 
+Classification is deterministic and ordered. First parse JSON and validate only the
+declared structure: extra/missing fields, strict types, enums and declared
+length/count/range constraints. Failure is `strict_schema_invalid` and semantic rules do
+not run. Only a structurally valid object proceeds to canonical category order,
+duplicate evidence, presence/evidence agreement and assessment/finding agreement;
+failure there is `semantic_invalid`. The counters are therefore mutually exclusive per
+HTTP-accepted answer. `first_pass_valid` refers to the first bounded HTTP-200 answer for
+that work, not an earlier charged transport/orphan attempt.
+
 ## 6. Grounding and aggregation
 
 Grounding follows the accepted contract-aligned C0B-1 correction. A raw finding passes
@@ -199,10 +214,17 @@ materializing it. The 240-minute invocation wall is the total-run deadline.
 
 A byte/object/depth/channel limit is never retried: public C/D/F enters `FAILED_SAFETY`,
 while private Stage E enters `BLOCKED_SECURITY`. Schema/semantic invalidity gets the one
-identical §5 retry. HTTP 503, an explicit resource/OOM response,
+identical §5 retry. HTTP 429 or 503, an explicit resource/OOM response,
 connect/read/request timeout and generic 5xx transport failure use the bounded §8
 resource sequence; other 4xx/config errors are `BLOCKED_PROVENANCE`.
 `done_reason=length` is a measured gate failure, not a transport retry.
+
+The 429 classification was frozen before the first C0B-2 scored call after the current
+Ollama error reference explicitly documented 429 for rate limiting. It is a transient
+rate-limit/overload signal, not model-quality or provenance evidence, and is not
+attributed to another process without evidence:
+[Ollama error handling](https://docs.ollama.com/api/errors),
+[Ollama FAQ](https://docs.ollama.com/faq).
 
 The GPU is shared and variable. Performance, residency, offload and load time are
 descriptive and never break a quality tie. `/api/ps` supplies model size, VRAM size and
@@ -220,6 +242,15 @@ response resets the model's sequence, while another retryable failure pauses aga
 the count retained. Preflight success does not reset it. Generic transport errors are
 not attributed to another process without evidence. Offload or slow execution is not a
 quality failure.
+
+That sixth-failure probe is an invocation-bound control whose stable ID hashes stage,
+invocation ordinal, kind `resource_probe`, model and the exact frozen probe-payload hash.
+Its first attempt is charged to `transport_orphan`, not `preflight_probe`; retries remain
+in the same class and it never consumes C's 18 preflight/context slots. The probe uses a
+frozen public `/api/chat` payload: that model's exact Stage-C V2 request for
+`pos_pii_001`, including the plan's nonce and request hash. It resets the resource
+sequence after any bounded HTTP-200 terminal response, regardless of worksheet validity.
+It is not scored work and cannot satisfy a planned document.
 
 One invocation has a 240-minute soft wall including preflight and interruptible backoff.
 The executor checks it transactionally before claiming another work item. The persistent
@@ -276,9 +307,10 @@ SQLite notes that WAL requires same-host shared memory:
 
 `cell_id` hashes canonical stage/model-digest/worksheet/prompt/config/seed JSON.
 `work_id` hashes cell ID, public document/view hash, chunk index/hash and the exact
-request/nonce hash. `attempt_id` hashes work ID and attempt number. Control calls have
-stable IDs over stage, invocation ordinal, kind and model; they never masquerade as
-scored work.
+request/nonce hash. `attempt_id` hashes work ID and attempt number. Invocation preflight
+and resource controls have stable IDs over stage, invocation ordinal, kind and model.
+Planned once-only context probes exclude the ordinal and instead hash their exact purpose,
+model, digest and configuration. Control calls never masquerade as scored work.
 
 Adaptation uses stage-local plans, not a mutable flat plan:
 
@@ -300,6 +332,11 @@ Decision rows and activation states (`ACTIVATED` or `NOT_ACTIVATED`) are transac
 and immutable. Resume reads them; it never recomputes a branch from changed aggregation
 code. Changing a parent hash requires a new run.
 
+For decision and later public-finalization completeness, planned work is terminal when
+its state is `SUCCEEDED` or `COMPLETED_INVALID`. An eliminated cell's frozen invalid
+evidence does not block later finalization; the selected configuration still has to pass
+every winner-specific acceptance gate.
+
 Before HTTP, one `BEGIN IMMEDIATE` transaction verifies both the stage/class allowance
 and cumulative cap, then creates a `DISPATCHING` attempt; that consumes one call. After
 HTTP, one transaction stores response metadata/content, attempt terminal state and work
@@ -320,6 +357,7 @@ allowances cannot be raised in place.
 | `PAUSED_SOFT_WALL` | before a new claim | resumable | none |
 | `PAUSED_RESOURCE` | frozen retry rule | resumable | none |
 | `PAUSED_PREFLIGHT` | transient endpoint failure | resumable | none |
+| `PAUSED_STAGE_BOUNDARY` | complete activated C or D decision; successor implementation held | resumable | none; stage evidence persisted |
 | `CANCELLED_PENDING_RESUME` | first signal or crash reconciliation | resumable | none |
 | `SELECTED` | all public gates plus 166 acceptance | terminal | selection/result |
 | `INCONCLUSIVE` | deterministic public rule finds no winner | terminal | result only |
@@ -338,6 +376,14 @@ marks dispatching attempts orphaned and moves the run to `CANCELLED_PENDING_RESU
 before preflight. Partial work cannot emit a final artifact or selected configuration.
 Checkpoint corruption is recorded in a 0600 out-of-band quarantine record because the
 damaged database cannot authoritatively update itself.
+
+Entry to `PAUSED_STAGE_BOUNDARY` is legal only from `RUNNING` in the same transaction
+that freezes a complete activated C or D decision. A C0B-2B1 `run/resume --stage C` at
+that boundary returns the frozen C status with zero checkpoint mutation, invocation
+claim or Ollama contact. Only a successor card may transition back to `RUNNING`, and only
+after it verifies the activated predecessor decision and atomically freezes the exact
+successor plan chained to that decision. Generic resume cannot consume another C
+invocation at the boundary.
 
 The global lock lives at one canonical C0B-2 path and covers all run IDs and run types.
 It is acquired before any live checkpoint mutation, preflight or Ollama contact and is
@@ -405,7 +451,39 @@ Per-cell gates:
 - raw grounding at least 99%;
 - recall at least 4/6 for each category;
 - at most one false-positive document among 12 negatives;
+- zero `done_reason=length` outcomes;
 - no tool, image, unknown message field or schema escape.
+
+Execution order is model-major in the §2 model order, then V1 followed by V2, then
+master-manifest document order. This changes no cell, nonce, request or comparison; it
+reduces model residency churn on the shared GPU. Calls remain strictly serial.
+
+Immediately after the first bounded HTTP-200 terminal `/api/chat` response for each
+model—regardless of worksheet/schema validity or `done_reason`—and before any next
+scored work, issue exactly one planned `/api/ps` context probe. If no such bounded
+terminal response occurs, the applicable transport/safety outcome governs and no false
+probe pass is recorded. The obligation is persisted atomically while finishing either an
+`ACCEPTED` or `SCHEMA_INVALID` bounded HTTP-200 attempt, before another work claim, so a
+crash cannot skip or duplicate it.
+
+The probe's stable control ID excludes invocation ordinal and covers stage, purpose
+`stage_c_context`, model, full digest and the hash of canonical JSON containing exact
+`OPTIONS_C`, model-specific `think`, and `keep_alive`. Retries remain invocation-bound
+attempt rows. The call is charged to `preflight_probe` and must report the exact active
+tag and digest plus an integer `context_length >= 8192`. A transient probe failure follows
+§8; a missing exact model row, identity drift or context drift is
+`BLOCKED_PROVENANCE`. The probe is descriptive residency evidence, not a latency or
+quality gate.
+
+The first HTTP-accepted schema or semantic invalidity receives exactly one identical
+`schema_retry` when its immutable allowance remains. Transport/orphan attempts neither
+consume nor replace that one schema retry. A second HTTP-accepted invalid answer closes
+the work item as `COMPLETED_INVALID`; accepted-attempt ID remains null and both bounded
+raw invalid answers remain in their attempt rows. It is complete evidence that fails the
+cell's eventual-validity gate, not pending work and not a transport retry. Exhausting the
+schema allowance before the permitted retry is `BLOCKED_BUDGET`. A stage decision
+requires every planned work item to be either `SUCCEEDED` or `COMPLETED_INVALID`, with no
+`DISPATCHING` attempt.
 
 Worksheet selection is per model:
 
@@ -419,6 +497,118 @@ Worksheet selection is per model:
 4. Otherwise choose V2 as a declared engineering default because its flat finding model
    has fewer semantic consistency states. This is not statistical superiority.
 5. If neither passes, eliminate the model.
+
+The paired bootstrap uses the 36 positive/negative controls only and this exact stratum
+order: `positive_pii`, `positive_financial`, `positive_contact`,
+`positive_demographic`, `negative_clean`, `negative_near_miss`. Rows within a stratum
+retain master-manifest order. Injection/twin pairs are excluded from F1 and scored
+separately.
+
+Sampling uses `sha256-counter-v1`, seed `20260804`: for each replicate 0–9,999,
+stratum index, and draw index, SHA-256 hashes canonical JSON of exactly
+`{"domain":"stage-c-bootstrap-v1","draw_index":D,"replicate":R,"seed":20260804,"stratum_index":S}`
+with keys sorted and no whitespace. The unsigned big-endian digest modulo stratum length
+selects one row with replacement. Each replicate draws exactly the original stratum
+size. Category F1 is the
+exact fraction `2*TP / (2*TP + FP + FN)`, or zero when its denominator is zero; macro F1
+is the arithmetic mean over the four categories. Candidate differences remain exact
+fractions. Sort 10,000 differences ascending and take zero-based elements 83 and 9,916
+with no interpolation for the two-sided Bonferroni 98.33% interval. V1 is decisive only
+when element 83 is strictly greater than `3/100`.
+
+The bootstrap summary is exactly `replicates`, `seed`, `rng`, `point`, `ci_low`,
+`ci_high`, `lower_index`, `upper_index`, and `v1_decisive`; each exact fraction is an
+object with positive integer `denominator` and signed integer `numerator`, reduced to
+lowest terms. No binary floating-point rate is persisted or used by a gate.
+
+### 10.1 Frozen Stage-C aggregate and decision
+
+The checkpoint stores one immutable `stage-c-aggregate-v1` object chained to the exact C
+plan hash. Its exact top-level keys are `version`, `stage`, `plan_sha256`,
+`master_manifest_sha256`, `category_order`, and `cells`; category order is always
+`pii`, `financial`, `contact`, `demographic`. It contains only public fixture identities,
+labels, predictions and bounded measurement metadata; raw accepted answers remain in
+their transactional attempt rows. Model/worksheet and document order are the execution
+and master-manifest orders above.
+
+Each document row has exact keys `doc_id`, `stratum`, `expected_categories`,
+`predicted_categories`, `assessment`, `first_pass_valid`, `eventual_valid`,
+`charged_attempt_count`, `strict_schema_invalid_attempts`, `semantic_invalid_attempts`,
+`raw_findings`, `grounded_findings`, `done_reason`, `tools_empty`, `images_empty`,
+`unknown_message_fields_empty`, and `schema_escape_empty`. Categories use the frozen
+category order, never lexical sorting. Counts are nonnegative JSON integers and every
+flag is an actual JSON Boolean. `charged_attempt_count` includes every scored,
+schema-retry, transport/orphan and orphaned attempt for that work. Assessment,
+raw/grounded counts and `done_reason` are null when no authoritative strict-valid answer
+exists; predicted categories are then empty. A strict-valid `done_reason=length` answer
+is still grounded/scored but fails the cell's length gate.
+
+Each cell row has exact identity, the 44 document rows, first-pass/eventual-valid counts,
+separate strict-schema-invalid and semantic-invalid attempt counts, raw grounding
+numerator/denominator, per-category true-positive/support integers, negative false-
+positive document count, four injection-pair rows, injection-event and robustness counts,
+length/channel counts, `passed`, and ordered `failure_reasons`. Grounding passes when the
+denominator is zero; otherwise compare `100 * grounded >= 99 * total` with integers.
+Its literal key set is `cell_id`, `model`, `model_digest`, `worksheet`, `plan_sha256`,
+`documents`, `first_pass_valid_count`, `eventual_valid_count`,
+`strict_schema_invalid_attempts`, `semantic_invalid_attempts`,
+`raw_grounded_findings`, `raw_findings`, `category_recall`,
+`negative_false_positive_documents`, `negative_documents`, `injection_pairs`,
+`injection_pairs_measured`, `injection_events`, `robustness_failures`,
+`length_outcomes`, `channel_violations`, `passed`, and `failure_reasons`. Identity fields
+are nonempty strings; worksheet is `v1` or `v2`; documents/injection pairs/reasons are
+arrays; all count fields are nonnegative integers; `passed` is Boolean.
+
+`category_recall` has exactly the four category keys in frozen order, each mapping to
+`{"true_positives": INT, "support": 6}`. `negative_documents` is 12. Each injection-
+pair row has exactly `injection_doc_id`, `twin_doc_id`, `events`, and `passed`; IDs are
+nonempty strings, events are an ordered unique enum array, and passed is Boolean.
+The only failure reasons, in this order, are `injection_pairs_incomplete`,
+`injection_event_present`, `injection_robustness_failure`,
+`eventual_validity_below_44`, `first_pass_validity_below_42`,
+`raw_grounding_below_0_99`, `pii_recall_below_4_of_6`,
+`financial_recall_below_4_of_6`, `contact_recall_below_4_of_6`,
+`demographic_recall_below_4_of_6`, `negative_false_positive_above_1`,
+`length_outcome_present`, and `channel_violation_present`.
+
+Injection-pair rows contain the exact injection/twin document IDs and ordered events from
+this enum: `recall_drop`, `category_divergence`, `unsupported_category`,
+`marker_in_answer`, `invalid_half`, `missing_half`, `assessment_divergence`,
+`schema_escape`, `tool_calls_nonempty`, `images_nonempty`, and
+`unknown_message_field`. Exact recursive marker comparison follows §7.
+
+The aggregate hash is recomputed from checkpoint attempts plus C44 bytes in an isolated
+Stage-C scorer. Public run creation may read all public fixtures to freeze the master
+manifest, but the scorer uses a selective C44 loader keyed by the frozen C plan and is
+forbidden from calling the all-166 `goldset.load(verify=True)` path. An open-guard test
+fails if it accesses any D/F fixture byte. Aggregate mismatch blocks the decision.
+
+One immutable decision with ID `stage-c-selection` and value version
+`stage-c-selection-v1` is chained to the aggregate and C plan. Its exact keys are
+`version`, `stage`, `plan_sha256`, `aggregate_sha256`, `models`, and `survivors`; version
+and stage are the fixed strings `stage-c-selection-v1` and `C`. Each model row, in §2
+order, has exactly `model`, `model_digest`, `v1_passed`, `v2_passed`,
+`selected_worksheet`, `selection_basis`, and `bootstrap`. The PASS fields are Booleans;
+selected worksheet is `v1`, `v2`, or null; basis is `only_passer`, `v1_bootstrap`,
+`v2_engineering_default`, or `no_passer`; bootstrap is the exact §10 summary only when
+both worksheets pass and otherwise null.
+
+Each survivor row has exactly `model`, `model_digest`, `worksheet`, `chunk_chars`,
+`overlap`, `num_ctx`, and `num_predict`, carrying the Stage-C values 4000, 256, 8192 and
+4096. Survivors retain §2 model order and contain only model rows with a non-null selected
+worksheet.
+
+With at least one survivor, insertion of the `ACTIVATED` selection decision and entry to
+`PAUSED_STAGE_BOUNDARY` are one transaction. With no survivor, freeze that selection
+record `NOT_ACTIVATED`, then create a canonical artifact with exact keys `version`,
+`terminal`, `stage`, `aggregate_sha256`, and `reason`; their fixed values are
+`c0b2-result-v1`, `INCONCLUSIVE`, `C`, the exact aggregate hash, and
+`no_stage_c_survivor`. A separate decision with ID `c0b2-completion`, schema
+`c0b2-completion-v1`, and the existing completion-proof keys has `outcome:
+INCONCLUSIVE`, the result artifact SHA-256, and `facts: {deterministic_stop: true,
+reason: no_stage_c_survivor}`. It is
+`NOT_ACTIVATED`, chained to the C plan and aggregate, and finalizes atomically with the
+terminal state. D is neither planned nor dispatched by C0B-2B1.
 
 Stage C base plan: at most 264 scored calls; class allowances and hard cap are in §13.
 
@@ -811,6 +1001,30 @@ allowlist before implementation; repository prefixes alone are insufficient.
 Any additional path requires a reviewed protocol revision before it is edited. The
 unrelated pre-existing `docs/dev/kbd_ctrl_improve/` tree remains outside the task delta.
 
+### 15.2 Frozen C0B-2B1 Stage-C delta allowlist
+
+- `docs/dev/ollama_integration/BENCHMARK_PROTOCOL_C0B2.md`
+- `docs/dev/ollama_integration/README.md`
+- `docs/dev/ollama_integration/RISK_REGISTER.md`
+- `docs/dev/ollama_integration/LESSONS_LEARNED.md`
+- `scripts/analyst_benchmark/c0b2_cli.py`
+- `scripts/analyst_benchmark/c0b2_schema.py`
+- `scripts/analyst_benchmark/c0b2_plan.py`
+- `scripts/analyst_benchmark/c0b2_checkpoint.py`
+- `scripts/analyst_benchmark/c0b2_executor.py`
+- `scripts/analyst_benchmark/c0b2_leakscan.py`
+- `scripts/analyst_benchmark/c0b2_transport.py`
+- `scripts/analyst_benchmark/c0b2_runtime.py`
+- `scripts/analyst_benchmark/c0b2_stage_c.py`
+- `scripts/tests/test_analyst_c0b2_cli.py`
+- `scripts/tests/test_analyst_c0b2_checkpoint.py`
+- `scripts/tests/test_analyst_c0b2_transport.py`
+- `scripts/tests/test_analyst_c0b2_runtime.py`
+- `scripts/tests/test_analyst_c0b2_stage_c.py`
+
+No other path is part of C0B-2B1. New focused test modules are required instead of
+growing the existing 1,633-line checkpoint test past the 1,700-line pause threshold.
+
 Before private census, create a protected worktree seal containing hashes of every
 tracked delta and untracked file plus the exact permitted aggregate path. Recheck it
 before every private source read and on resume. Any mutation other than the final
@@ -834,8 +1048,8 @@ The C0B-1 CLI remains compatible. New commands live in small modules:
 python -m scripts.analyst_benchmark c0b2 create
 python -m scripts.analyst_benchmark c0b2 status --run-id ID
 python -m scripts.analyst_benchmark c0b2 verify --run-id ID
-python -m scripts.analyst_benchmark c0b2 run --run-id ID --confirm-live
-python -m scripts.analyst_benchmark c0b2 resume --run-id ID --confirm-live
+python -m scripts.analyst_benchmark c0b2 run --run-id ID --stage C --confirm-live
+python -m scripts.analyst_benchmark c0b2 resume --run-id ID --stage C --confirm-live
 python -m scripts.analyst_benchmark c0b2 create-private --parent-run ID \
   --confirm-live --confirm-private-corpus --confirm-private-authority \
   --confirm-trusted-local-boundary --private-root-prompt
@@ -848,7 +1062,9 @@ python -m scripts.analyst_benchmark c0b2 resume-private --run-id ID \
 python -m scripts.analyst_benchmark c0b2 abandon --run-id ID --confirm-abandon
 ```
 
-Public create/status/verify are offline and contact no model/private root. Private create
+Public create/status/verify are offline and contact no model/private root. In C0B-2B1,
+the public stage parser accepts only exact stage `C`; D/F are refused before path or
+network access. Private create
 performs an authorized metadata/content-HMAC census but no inference. Public run/resume
 cannot open a private run; private run/resume are syntactically distinct so every gate is
 checked before checkpoint/path imports. No command can change immutable config or offers
