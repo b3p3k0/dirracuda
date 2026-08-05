@@ -1,0 +1,10 @@
+Ashmere Regional Trust
+Remittance Advice 017
+
+Payer: Ilsa Kesterling
+Card on file: 4000000000000069
+ACH routing number: 110000000
+ACH account number: 000123456789
+International settlement IBAN: GB56NWBK49451516939964
+
+Settlement batch closes at 17:00. Retain this advice for reconciliation.

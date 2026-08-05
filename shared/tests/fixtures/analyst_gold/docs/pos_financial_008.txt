@@ -1,0 +1,10 @@
+Ashmere Regional Trust
+Remittance Advice 008
+
+Payer: Junia Drummonds
+Card on file: 5555555555554444
+ACH routing number: 110000000
+ACH account number: 000222222227
+International settlement IBAN: GB30NWBK34780399430113
+
+Settlement batch closes at 17:00. Retain this advice for reconciliation.

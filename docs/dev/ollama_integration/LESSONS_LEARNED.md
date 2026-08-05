@@ -1,0 +1,237 @@
+# Ollama Integration — Lessons Learned
+
+Only what a card actually exercised. Design decisions that have not yet been run
+against anything do not appear here until they have.
+
+---
+
+## C0B-1 (gold set, instrument, Stage A, Stage B pilot)
+
+### 1. PyMuPDF 1.28.0 embeds MuPDF 1.29.0, not 1.28.0
+
+The upstream release note for the 1.28.0 tag says verbatim *"Use MuPDF-1.28.0."* The
+measured value from `pymupdf.mupdf_version` is **1.29.0**.
+
+The package version and the embedded library version are genuinely independent, and the
+changelog is not a reliable proxy for either. CONTRACT.md §10 already required asserting
+both; this is the concrete case that justifies it. Preflight must keep checking both,
+and no card should ever infer the embedded version from the package number.
+
+### 2. `prlimit` must run inside bubblewrap, not around it
+
+`prlimit ... -- bwrap ...` fails with `Creating new namespace failed: Resource
+temporarily unavailable`. The limits land on namespace setup rather than on the parser.
+
+Correct shape: `bwrap <policy> -- /usr/bin/prlimit <limits> -- python <parser>`.
+
+### 3. `RLIMIT_NPROC` cannot bound a parser on a desktop UID
+
+It is a **per-UID** limit counting every process the user already owns — 227 at
+measurement. `--nproc=64` therefore makes `clone()` fail before the sandbox exists, and
+any value high enough to let the sandbox start is not a bound on anything.
+
+CONTRACT.md §5 asks for a process-count limit. On this platform the mechanism that
+actually works is a cgroup `pids.max`. **C3 owns that.** Until then the fork-bomb
+controls in force are the PID namespace and the process-group kill — stated plainly
+rather than left implied by a limit that is not doing its job.
+
+### 4. A non-zero exit code is not evidence a limit fired
+
+The first Stage A run recorded `rlimit_as_enforced: PASS` on `rc=127`. The child had
+never started — the interpreter path did not exist inside the sandbox — so the test was
+measuring an exec failure and calling it a resource limit.
+
+Any check whose success condition is "the child died" needs a sentinel proving the child
+first came alive. Applied to `check_rlimit_as`, which now prints `ALIVE` before
+allocating.
+
+### 5. Do not pass the repository's venv interpreter into a sandbox that excludes the repository
+
+Related to the above and worth stating separately: the sandbox deliberately does not
+bind the repo, so `sys.executable` is unreachable inside it. Probes use
+`/usr/bin/python3`, which lives under the bound `/usr`. The failure mode is silent —
+exec errors masquerading as probe results.
+
+### 6. `resolve()` on a venv interpreter walks out of the venv
+
+`Path("$SCRATCH/probe/bin/python").resolve()` follows the symlink to the system
+interpreter, so `parents[1]` becomes `/usr`. A cleanup routine that validates its target
+before `rm -rf` correctly refused to delete `/usr` — but only because it validated.
+Cleanup targets must be recorded before launching fallible child work, use the
+unresolved path, and be validated before recursive deletion. The C0B-1 repair also puts
+cleanup in a `finally` path so dependency failures, timeouts and sandbox exceptions
+cannot accumulate scratch trees.
+
+### 7. gpt-oss cannot be benchmarked on `/api/generate` with structured output
+
+Measured: `/api/generate` + `format` + `gpt-oss:20b` returns `done_reason=stop` with an
+**empty** response and no `thinking` field. The evaluated tokens are unreachable. The
+identical request on `/api/chat` returns both `message.thinking` and `message.content`.
+
+Qwen behaves the same on either endpoint, so `/api/chat` is the only endpoint that
+serves every candidate. Ported into the C9 client contract.
+
+### 8. A reasoning trace consumes the output budget
+
+`gpt-oss:20b` at `num_predict=1024` never reaches its answer: it exhausts the budget
+inside the trace and returns `done_reason=length` with empty content. At 2048 it emits a
+~3.4 KB trace plus a ~273-byte answer and stops cleanly.
+
+Erratum E1 required this to be measured rather than assumed. Two consequences:
+
+- output budgets for a thinking model must cover trace **plus** answer;
+- `eval_count` under-reports gpt-oss — it counts answer tokens (80) and excludes the
+  trace. Token accounting must not treat `eval_count` and `thinking_bytes` as the same
+  unit;
+- sensitive reasoning text need not be retained to measure that pressure. Count its
+  bytes while streaming, enforce the combined output cap, and discard the text.
+
+### 9. The fastest candidate is the biggest one
+
+Warm, on a contended card: `qwen3.6:35b` **9.7 s/call**, `gpt-oss:20b` 38.7 s,
+`qwen3.6:27b` 52.5 s. The 35b is a sparse MoE (~3B active parameters); the 27b is
+dense. Size on disk predicts neither latency nor residency.
+
+RESEARCH_NOTES had recorded an expectation that gpt-oss would lead on prompt processing.
+It does not, on this workload — its prompt is also ~2.8× larger in tokens for the same
+document because of the harmony template. Expectations from vendor notes are hypotheses,
+not measurements.
+
+### 10. Characters are not tokens, and the guard has to be exact
+
+`prompt_tokens + num_predict <= floor(0.85 * num_ctx)`, evaluated from Ollama's
+`prompt_eval_count`. The same 4000-character document produced 662 prompt tokens on Qwen
+and 1858 on gpt-oss. A chars-based headroom estimate would have been wrong by ~2.8× for
+one candidate.
+
+### 11. A scoring rule can manufacture the result it measures
+
+Two near-misses caught before any live call:
+
+- **Grounding** scored *after* the aggregator drops ungrounded findings would be 100 %
+  by construction. It must be measured on raw emitted findings.
+- An evidence-span cap of 25 % of the chunk rejected a legitimate
+  `Social Security Number: 900-12-3456` quote inside a 137-character fixture. A bound
+  meant to stop whole-chunk quoting was instead manufacturing failures on short
+  documents. Now 240 characters absolute, plus a 60 % whole-chunk guard floored at
+  64-character sources.
+
+Both were found by running the offline self-check against real fixtures rather than by
+reading the rule.
+
+### 12. Pre-registration has to be re-pinned when the instrument teaches you something
+
+The protocol was frozen and hash-pinned three times before the first scored call, as
+instrument validation corrected `num_predict`, the endpoint, and the envelope sampling
+rate. That is legitimate — the freeze binds from the first *scored* request — but it
+only stays legitimate because each change is recorded in the document with its measured
+justification, and the pin is recomputed.
+
+### 13. A leakage allowlist must be baseline-aware
+
+The worktree already held unrelated untracked work (`docs/dev/kbd_ctrl_improve/`). A
+repository-global "every changed path must be allowlisted" rule would either false-fail
+on it or tempt the implementation to tidy someone else's files. The scanner records an
+immutable baseline first and inspects only task deltas, hashing task-owned paths only.
+
+### 14. Test the code, not the prose
+
+Three guardrail tests failed on their first run by matching docstrings and, worse, by
+flagging the leak scanner's own detection pattern for the private corpus root — a
+scanner has to name what it searches for. Guardrails that grep raw file text produce
+false positives that erode trust in the guardrail; these now walk the AST and exclude
+docstrings, with the scanner explicitly exempted and separately tested.
+
+### 15. A model can quote reliably and still count characters badly
+
+Stage B failed every cell on grounding, two of them at exactly 0.000, while schema
+validity was 1.000. An exact zero across independent models is an instrument signal.
+
+The scorer consumed 679 findings. The raw sink retained 675 of them and all 675 quoted a
+bounded exact substring of their source. A successful four-finding retry was scored but
+not retained, so the honest conservative result is 675/679 = 99.4%, not an unsupported
+claim about all 679. Of the retained findings, just 5.9% of model-supplied character
+offsets were correct.
+
+Two separate lessons:
+
+- **The gate was stricter than the contract.** CONTRACT §7 verifies that *the quote is
+  an exact substring*; the offset is provenance. The protocol had made offset equality a
+  grounding condition, so the gate measured character-counting and reported it as
+  fabrication. A gate must be traceable to the contract clause it enforces.
+- **Models cannot produce reliable character offsets.** This is a real design
+  constraint, independent of how the gate is resolved: C1's aggregator must locate the
+  quote itself and treat any model-supplied offset as an untrusted hint.
+
+The result was reported as measured and the correction proposed for review rather than
+silently applied. Loosening a gate after seeing the data it produced is precisely what
+pre-registration exists to prevent. The contract-aligned rule and conservative lower
+bound were accepted only after an independent audit, focused regression tests and HI
+approval.
+
+### 16. A paired metric must not depend on input order
+
+Stage B listed injection documents before their clean twins, while the runner compared
+an injection only if its twin was already cached. The result was a perfect-looking zero
+because none of the 24 intended comparisons executed.
+
+Pair by stable document identity after both responses exist, assert the expected pair
+count, and make missing/unscorable pairs an explicit result. A zero without a coverage
+count is not evidence of resistance. C0B-1's injection result is INVALID / UNMEASURED.
+
+### 17. Persist the response that was actually scored
+
+On a successful schema retry, the scorer used the second response but the raw sink wrote
+the first invalid response. That broke reproducibility and created a mismatch between
+679 scored findings and 675 retained findings.
+
+The accepted response and attempt metadata must be written together, and a focused test
+must prove that the artifact can reproduce every aggregate counter. Related reporting
+discipline: **262/264** responses were valid on first pass; **263/264** were eventually
+valid after one retry. Those are different metrics and must not be collapsed.
+
+### 18. Count transport preflight and close the ledger state
+
+The pilot charged 332 calls, but its two read-only preflight requests happened before the
+ledger existed. The honest run total is therefore at least 334, still below the 400 cap.
+The stored ledger also remained `running` after normal completion.
+
+Construct the ledger before the first Ollama request and make terminal state transitions
+explicit. A call cap cannot be audited if some requests live outside its accounting.
+
+### 19. A resumable label requires a resumable implementation
+
+The shared-GPU policy declared backoff, checkpoint and resume, but the C0B-1 pilot runner
+could only mark a pause or skip an interrupted call. No interruption occurred during the
+133-minute run, so the missing path did not alter its data; it still means C0B-1 did not
+validate resumability. C0B-2 must implement and exercise it before a long or private run.
+
+### 20. Generated data still obeys the file-size gate
+
+The first deterministic manifest was 3311 lines, above the repository's explicit
+1700-line pause threshold. Pretty-printing each field onto its own line made a data
+artifact look like an oversized module. Keeping root metadata readable and one document
+record per line reduced it to 176 lines without changing any of the 166 fixture payloads.
+The generator test now enforces the limit so regeneration cannot reintroduce it.
+The commit whitespace gate also exposed a trailing space produced by the boundary filler;
+that was fixed in the generator and covered by a corpus-wide regression check.
+
+### 21. Fixed names in shared temporary directories are artifacts, not conveniences
+
+The original Stage A result used `/tmp/c0b1_stage_a.json`, inherited the process umask,
+and overwrote the same pathname on every run. That permits collisions and symlink
+redirection and can expose diagnostic metadata to other local users. Retained temporary
+artifacts now use an exclusive random name and explicit 0600 permissions; tests assert
+both properties. The old artifact and four test-only CLI captures were removed after
+their exact paths, ownership and file types were verified.
+
+---
+
+## Not yet learned
+
+Deliberately absent until the mechanisms exist and have been run:
+
+- private staging, HMAC pseudonymisation, and raw-result retention (designed in C0B-1,
+  exercised in C0B-2);
+- worker lease, heartbeat and crash recovery (C2/C8);
+- extraction-manifest identity handoff (C14).

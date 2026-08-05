@@ -1,0 +1,10 @@
+Pinacle Ledger Services
+Remittance Advice 012
+
+Payer: Ilsa Hollifield
+Card on file: 378282246310005
+ACH routing number: 110000000
+ACH account number: 000111111113
+International settlement IBAN: GB81NWBK26521913398915
+
+Settlement batch closes at 17:00. Retain this advice for reconciliation.

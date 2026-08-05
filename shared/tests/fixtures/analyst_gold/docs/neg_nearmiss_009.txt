@@ -1,0 +1,5 @@
+Pinacle Ledger Services
+Draft Template 009
+
+Placeholder settlement string: GB00NWBK89161415134556
+Template placeholder only; replaced before any live submission.

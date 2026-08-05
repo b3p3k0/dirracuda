@@ -1,0 +1,10 @@
+Northgate Clearing Cooperative
+Remittance Advice 010
+
+Payer: Rhoda Ashgrove
+Card on file: 5555555555554444
+ACH routing number: 110000000
+ACH account number: 000111111113
+International settlement IBAN: GB72NWBK53749260485303
+
+Settlement batch closes at 17:00. Retain this advice for reconciliation.

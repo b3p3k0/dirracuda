@@ -1,0 +1,5 @@
+Vellum & Sparrow Actuarial
+Returns Log 020
+
+Damaged goods barcode: 4000000000000000
+Barcode failed the checksum read three times at the depot.

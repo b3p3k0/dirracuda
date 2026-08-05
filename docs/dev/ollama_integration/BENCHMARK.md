@@ -1,0 +1,227 @@
+# Analyst Benchmark — Method and Instrument
+
+Companion to the pre-registered [`BENCHMARK_PROTOCOL_C0B1.md`](BENCHMARK_PROTOCOL_C0B1.md),
+which is the authority on gates, factors and budgets. This document explains how the
+instrument is built, what each module is for, how to reproduce a run, and — most
+importantly — exactly what is and is not committed.
+
+Everything here is a **measurement instrument**, not production runtime. No module in
+`scripts/analyst_benchmark/` is part of the shipped product.
+
+---
+
+## 1. What is and is not committed
+
+**Committed:**
+
+- the synthetic gold set (`shared/tests/fixtures/analyst_gold/`) and its generator;
+- the instrument (`scripts/analyst_benchmark/`) and its tests;
+- the protocol, this method document, the errata, and aggregate results.
+
+**Never committed:**
+
+- any private document, path, basename, content hash, host identifier, or pseudonym;
+- any raw model output or reasoning trace;
+- any per-document private result.
+
+Raw answer artifacts go to a **0600 sink outside the repository**, under
+`get_paths().experimental_dir / "analyst_bench" / "runs" / <run_id>/`. The path is
+always resolved through `get_paths()`; no module hand-builds a `~/.dirracuda` string,
+and a test enforces that. GPT-OSS reasoning text is not retained: the client counts its
+bytes for output-budget and operational reporting, then discards the text.
+
+`git status --porcelain` is not a leakage test. The real gate is
+`--leak-scan`, which records an immutable task baseline at C0B-1 start, inspects only
+task-created and task-modified deltas against an exact allowlist, and content-scans
+them. Pre-existing untracked work is reported and never touched. It fails closed.
+
+## 2. Coverage vocabulary
+
+Preserved from CONTRACT.md §4 without exception: **detector-scanned is not
+model-reviewed.** The two are always reported as separate percentages
+(`report.coverage_line`), and no output describes detector coverage as analysis.
+
+The private corpus is unlabelled. It cannot produce precision, recall, F1, or any
+accuracy claim, and detector agreement is not ground truth. `report.assert_no_accuracy_words`
+enforces that on the private results section.
+
+## 3. The gold set
+
+166 canonical-extracted-text documents. The model is benchmarked on the payload an
+extractor would hand it; parser correctness belongs to C4–C7.
+
+| Stratum | Count |
+|---|---|
+| Positive controls (20 per category × 4) | 80 |
+| Negative controls — clean | 20 |
+| Negative controls — near-miss lookalikes | 20 |
+| Prompt injection | 8 |
+| Matched clean twins | 8 |
+| Boundary (6 templates × 4 offsets) | 24 |
+| Output-truncation | 3 |
+| Input/context-truncation | 3 |
+| **Total** | **166** |
+
+Stage B uses a balanced 44-document screening subset (6 per positive category, 6
+clean, 6 near-miss, 4 injection + their 4 twins).
+
+**Identifier provenance**, recorded in the manifest and enforced by test: card PANs and
+ACH routing/account numbers are documented Stripe sandbox values
+(<https://docs.stripe.com/testing>); SSNs use SSA never-issued areas (900–999, 000,
+666); phones use 555-0100…555-0199; domains are `example.com`/`example.org` (RFC 2606);
+IPs come from RFC 5737/3849; names, streets and employers are invented.
+
+**No malicious container is committed.** XXE documents, zip bombs, extreme member
+counts, deep nesting, path-traversal members and a zip-mislabeled-`.pdf` are generated
+at test time under `tmp_path` by `shared/tests/analyst_container_cases.py`, with builder
+bounds (64 MiB / 2000 members) deliberately set above the supervisor gate thresholds
+(16 MiB / 1000 members) so a case can be built safely *and* rejected.
+
+The generator is committed alongside its output, and a test asserts regeneration is
+byte-identical. Generated `manifest.json` keeps one document record per line (176 lines
+total), remaining below the repository's 1700-line modularisation gate without changing
+the 166 fixture payloads.
+
+## 4. Module dispositions
+
+Every module has a named owner or a removal card. Nothing is left as "superseded
+later", which would just be known dead code.
+
+| Module | Disposition |
+|---|---|
+| `worksheet.py` | **Ported to production in C1**; the losing variant is deleted there |
+| `detectors.py` | **Ported to production in C1**, as a subset of the full detector set |
+| `chunker.py` | **Ported to production in C1** |
+| `preflight.py` | **Ported to production in C9** |
+| `client.py` | **Ported to production in C9** |
+| `sandbox_smoke.py` | **Deleted in C3**, when the real parser supervisor lands |
+| `protocol.py` | Retained diagnostic |
+| `resources.py` | Retained diagnostic |
+| `goldset.py` | Retained diagnostic; the fixture corpus becomes the C1+ test corpus |
+| `metrics.py` | Retained; reused by C15 acceptance |
+| `report.py` | Retained diagnostic |
+| `ledger.py` | Retained diagnostic |
+| `leakscan.py` | Retained diagnostic |
+| `runner.py` / `__main__.py` | Retained diagnostic |
+
+`corpus.py` (private sampler, HMAC pseudonyms, staging) is **not built in C0B-1**.
+C0B-1 touches no private data and the C0B-2 extraction protocol is deliberately
+deferred, so shipping an unreachable, unexercised private sampler would be untested
+code on speculation. It arrives in C0B-2 with its own tests.
+
+## 5. Confirmation gates
+
+| Invocation | Behaviour |
+|---|---|
+| no arguments | **does nothing** — usage to stderr, exit 2, zero side effects |
+| `--self-test` | offline instrument check; no network, no Ollama |
+| `--stage A --confirm-dependency-probe` | offline work **plus one external PyPI download**. "Zero calls" for Stage A means zero *Ollama* calls, not zero network |
+| `--confirm-live --preflight-only` | transport + digest preflight, then stop |
+| `--stage B --confirm-live` | the screening pilot |
+| `--confirm-exclusive-ollama` | cold-load measurement only; never used by default |
+| `--leak-scan --mode public` | task-delta allowlist and content scan |
+
+No Ollama request of any kind — including `/api/tags` and `/api/show` — happens before
+`--confirm-live` and a successful preflight.
+
+## 6. Reproduction
+
+```bash
+# Offline
+./venv/bin/python -m scripts.analyst_benchmark                       # must exit 2
+./venv/bin/python -m scripts.analyst_benchmark --self-test
+./venv/bin/python -m pytest -k analyst -v
+
+# Stage A (one PyPI download, zero Ollama calls)
+./venv/bin/python -m scripts.analyst_benchmark --stage A --confirm-dependency-probe
+
+# First Ollama contact, then the pilot
+./venv/bin/python -m scripts.analyst_benchmark --confirm-live --preflight-only
+./venv/bin/python -m scripts.analyst_benchmark --stage B --confirm-live \
+    --models gpt-oss:20b,qwen3.6:35b,qwen3.6:27b --worksheet v1,v2 \
+    --seed 1 --soft-wall-minutes 240
+
+# Leakage
+./venv/bin/python -m scripts.analyst_benchmark --leak-scan --mode public
+```
+
+### C0B-1 shared-resource limitation
+
+The frozen protocol declared backoff, checkpoint and resume behaviour. The executed
+C0B-1 pilot did not encounter a resource interruption, and audit found that its runner
+did not yet implement a durable resume path: it could mark a soft pause or skip a
+resource-interrupted call, but could not safely resume the incomplete design. That
+capability is therefore **held for C0B-2** and must be implemented and tested before any
+long shared-GPU or private-corpus run. C0B-1 does not claim to have validated it.
+
+## 7. PyMuPDF pin — measured, not assumed
+
+| Field | Value |
+|---|---|
+| Pin | `PyMuPDF==1.28.0` |
+| Wheel | `pymupdf-1.28.0-cp310-abi3-manylinux_2_28_x86_64.whl` |
+| Local sha256 | `44f0973f5e5edbaec95bc34b64e71d1959d4ee90b1328de1b4f4f5b4fa78673f` |
+| PyPI-published sha256 | identical — verified, fails closed on mismatch |
+| `pymupdf.__version__` | `1.28.0` |
+| **Embedded `mupdf_version`** | **`1.29.0`** |
+
+The embedded MuPDF is **1.29.0**, not the 1.28.0 its release note advertises — which is
+exactly why CONTRACT.md §10 requires asserting both versions rather than trusting the
+package number. It clears the ≥ 1.28.0 floor (CVE-2026-3308) and is well past PyMuPDF
+1.26.7 (CVE-2026-3029).
+
+**Honest scope:** this pin is selected on **version/security grounds plus an
+import-and-single-benign-PDF smoke test inside the sandbox**. C0B did **not** benchmark
+PDF extraction quality — that is C5.
+
+The probe downloads first, compares against PyPI's published digest for that exact
+filename, asserts exactly one wheel, then installs that file with `--no-index`. The
+probe creates an owner-only, task-prefixed scratch tree before launching the shell, so
+the parent always knows the cleanup target. Every failure, timeout, sandbox exception
+and normal return validates ownership, type and path before recursive deletion. The
+Stage A diagnostic now uses a random 0600 file instead of a fixed, permissive `/tmp`
+name. `requirements.txt`, CI, schema and auth are untouched.
+
+## 8. Sandbox smoke
+
+Bounded checks only, and explicitly **not** the Stage E extraction boundary.
+
+Verified on this host: network unreachable, host HOME absent, repository not bound,
+`RLIMIT_AS` enforced on the allocation itself, process-group kill, antiword sandboxed,
+PyMuPDF imported and a benign PDF text layer read inside the sandbox.
+
+Two findings worth carrying into C3:
+
+1. **prlimit must run inside the sandbox.** Wrapping `bwrap` in `prlimit` applies the
+   limits to namespace setup; `RLIMIT_NPROC` in particular makes `clone()` fail with
+   EAGAIN before the sandbox exists.
+2. **`RLIMIT_NPROC` is unusable here.** It is a per-UID limit counting every process the
+   user already owns (227 at measurement). Any value low enough to bound a fork bomb
+   also prevents the sandbox starting. The correct mechanism on this platform is a
+   cgroup `pids.max`; **C3 owns it.** Until then the fork-bomb controls actually in
+   force are the PID namespace and the process-group kill. Recorded, not papered over.
+
+## 9. Card-close documentation and file sizes
+
+The root `README.md` was reviewed after C0B-1. No edit is appropriate yet: Analyst is an
+unreleased development workspace with no user-facing entrypoint, installation step, or
+runtime behaviour. This method document and the workspace README are the correct scope
+until an implementation card changes the shipped product.
+
+Line counts before → after this remediation pass:
+
+| File | Before | After |
+|---|---:|---:|
+| root `README.md` | 714 | 714 |
+| `BENCHMARK_PROTOCOL_C0B1.md` | 257 | 257 (frozen run artifact; unchanged) |
+| `BENCHMARK.md` | 187 | 224 |
+| `STAGE_B_OUTCOME_C0B1.md` | 131 | 133 |
+| `LESSONS_LEARNED.md` | 174 | 223 |
+| workspace `README.md` | 122 | 126 |
+| `CONTRACT_ERRATA.md` | 59 | 59 (unchanged) |
+| gold-set `generate.py` | 505 | 534 |
+| gold-set `manifest.json` | **3311** | **176** |
+| `test_analyst_gold_set.py` | 223 | 227 |
+
+Every source/document file is below 1200 lines. The generated manifest now also clears
+the explicit 1700-line pause threshold.

@@ -1,10 +1,24 @@
 # Ollama Integration Workspace
 
 Date: 2026-08-04
-Status: **C0A contract frozen** (architecture approved across three senior reviews
-+ final contract review = PASS). The authoritative spec is
-[`CONTRACT.md`](CONTRACT.md). C0B and every coding card are HELD until these C0A
-docs are reviewed. No code written yet.
+Status: **C0A contract frozen** (committed `91bb2aa`). **C0B-1 accepted after senior
+audit and focused remediation.** C0B-2 protocol design is next; no C0B-2 execution has
+started.
+
+The authoritative spec is [`CONTRACT.md`](CONTRACT.md), plus accepted errata in
+[`CONTRACT_ERRATA.md`](CONTRACT_ERRATA.md). The C0B-1 experiment is pre-registered in
+[`BENCHMARK_PROTOCOL_C0B1.md`](BENCHMARK_PROTOCOL_C0B1.md); method and instrument
+dispositions are in [`BENCHMARK.md`](BENCHMARK.md).
+
+**C0B-1 delivered:** the 166-document synthetic gold set, the offline benchmark
+instrument under `scripts/analyst_benchmark/`, Stage A (PyMuPDF pin measured, sandbox
+smoke), and the Stage B screening pilot. The pilot's original injection result is
+**INVALID / UNMEASURED**; its grounding rule also exceeded CONTRACT §7. No private
+document was touched, and no model or worksheet was selected.
+**C0B-2** (Stages C–F–E: elimination, factor
+tuning, full-gold-set validation, private operational sample) has its own protocol
+document, written after C0B-1 review — so revising Stage E cannot invalidate a frozen
+artifact.
 
 ## Objective
 
@@ -68,9 +82,17 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
 
 ## Resolved Decisions
 
-- **D1 — primary model:** decided by the C0B benchmark
-   (`gpt-oss:20b` vs `qwen3.6:35b`, think=false); pinned by name + digest.
-- **D2 — chunk size / context:** decided by C0B (server currently caps at 16K).
+- **D1 — primary model:** **still open.** C0B-1 screens candidates only; selection
+   happens at C0B-2 Stage F against the complete gold set. Erratum E1 amends the
+   thinking contract: `gpt-oss:20b` cannot disable thinking and runs at `think:"low"`.
+- **D2 — chunk size / context:** **still open**, decided at C0B-2 Stage D. C0B-1 fixed
+   the Stage B reference config only (`chunk_chars=4000`, `overlap=256`, `num_ctx=8192`,
+   `num_predict=2048`).
+- **D8 — PyMuPDF pin: RESOLVED.** `PyMuPDF==1.28.0`, wheel
+   `pymupdf-1.28.0-cp310-abi3-manylinux_2_28_x86_64.whl`, digest verified against PyPI.
+   Measured embedded **MuPDF 1.29.0** — not the 1.28.0 its release note claims, which is
+   why the contract requires asserting both. Selected on version/security grounds plus a
+   sandboxed import-and-smoke test; extraction quality is C5, not C0B.
 - **D3 — report unit: per-host.** Corpus skew: one host = 46,724 docs, most a few
    hundred; same code path serves both.
 - **D5 — sidecar SQLite first**, migration-ready for later `dirracuda.db`
@@ -85,13 +107,19 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
 ## Document Map
 
 1. `CONTRACT.md` — **the frozen, authoritative spec.** Cards implement against it.
-2. `README.md` (this file) — status, decisions, orientation.
-3. `RESEARCH_NOTES.md` — verified external findings with sources + corpus profile.
-4. `RISK_REGISTER.md` — risk controls.
-5. `UI_MOCKUPS.md` — surface layouts (draft).
+2. `CONTRACT_ERRATA.md` — accepted narrow corrections to the frozen contract (E1).
+3. `README.md` (this file) — status, decisions, orientation.
+4. `BENCHMARK_PROTOCOL_C0B1.md` — **pre-registered** C0B-1 decision rule, gates, factors, budgets. Hash-pinned.
+5. `BENCHMARK.md` — instrument method, module dispositions, what is/is not committed.
+6. `LESSONS_LEARNED.md` — only what a card actually exercised.
+7. `RESEARCH_NOTES.md` — verified external findings with sources + corpus profile.
+8. `RISK_REGISTER.md` — risk controls.
+9. `UI_MOCKUPS.md` — surface layouts (draft).
+
+`BENCHMARK_RESULTS.md` is written at the end of **C0B-2**, not before.
 
 ## Next Step
 
-Review of these C0A documents. On acceptance: C0B (gold set + benchmark) — the
-first card, which selects the model and chunk size from measured numbers before
-any pipeline is sized.
+Write and review `BENCHMARK_PROTOCOL_C0B2.md`. Only after that protocol is frozen, run
+Stages C–F–E, which select the model, worksheet, chunk size, overlap, context and output
+budget from measured numbers before any pipeline is sized.

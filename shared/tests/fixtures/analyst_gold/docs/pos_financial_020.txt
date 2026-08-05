@@ -1,0 +1,10 @@
+Bramblewood Community Clinic
+Remittance Advice 020
+
+Payer: Verity Garrowmede
+Card on file: 4000000000000002
+ACH routing number: 110000000
+ACH account number: 000333333335
+International settlement IBAN: GB14NWBK73979424187531
+
+Settlement batch closes at 17:00. Retain this advice for reconciliation.

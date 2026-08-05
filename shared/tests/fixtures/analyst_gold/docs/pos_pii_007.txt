@@ -1,0 +1,10 @@
+Pinacle Ledger Services
+Patient Intake Record 007
+
+Full name: Osric Mordant
+Social Security Number: 999-88-5875
+Date of birth: 01/05/1980
+Passport number: X52590180
+
+Intake completed by front desk. Identity documents were photocopied
+and filed with the paper chart. No further verification required.

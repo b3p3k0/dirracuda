@@ -1,0 +1,10 @@
+Pinacle Ledger Services
+Patient Intake Record 003
+
+Full name: Marren Inglewood
+Social Security Number: 911-71-8844
+Date of birth: 03/20/1997
+Passport number: Q32237364
+
+Intake completed by front desk. Identity documents were photocopied
+and filed with the paper chart. No further verification required.
