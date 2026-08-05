@@ -225,6 +225,55 @@ artifacts now use an exclusive random name and explicit 0600 permissions; tests 
 both properties. The old artifact and four test-only CLI captures were removed after
 their exact paths, ownership and file types were verified.
 
+## C0B-2A (offline worksheet, plan, checkpoint and executor foundation)
+
+### 22. Green tests do not prove a persisted invariant
+
+Successive adversarial reviews reproduced fail-open paths in decision ordering, class
+budgets, restore provenance, finalization, preflight, cancellation, exact model binding,
+response-state mapping and per-finalist health evidence while the focused suite was
+green. Each fix moved the rule into the transactional boundary and added the failing
+case as a regression. For durable systems, test the forbidden state transition directly;
+do not infer it from a happy-path end-to-end result.
+
+### 23. A capability result is not a policy choice
+
+WAL and DELETE both passed the canonical mergerfs process-crash, lock, integrity and
+resume probe. DELETE+FULL was still the safer choice for this serial workload because
+the measured SQLite 3.46.1 falls within SQLite's current WAL-reset advisory. The probe
+answers "can this mode work here?"; workload and current upstream risk decide which
+passing mode to use. No power-loss claim was made.
+
+### 24. Read-only SQLite inspection must remain part of the lock model
+
+SQLite's `immutable=1` promise is unsafe when another actor can change the database:
+SQLite may omit locking and change detection. C0B-2 inspection uses `mode=ro`, refuses
+unexpected journal sidecars and keeps mutation, restore and recovery behind the same
+global execution lock. "Read-only" describes intent, not isolation.
+
+### 25. Restore needs two independent identity records
+
+A valid backup is not enough. Restore now creates a unique bounded storage identity on
+the same canonical root, requires the global lock, and records the origin both beside
+the database and inside it. Reopen compares both records. This permits normal later
+mutation while detecting a substituted or partially copied restore.
+
+### 26. Adaptive acceptance is a plan, not a derived count
+
+A provisional Stage-F winner does not become `SELECTED` from caller-supplied totals.
+The exact D1/D2 configuration must be frozen into a separate C44 acceptance sub-plan,
+its document identities must equal the original C44, and the final artifact must chain
+to its completion. Persist exact identities first; derive counts only as a verification.
+
+### 27. Python coercion can reopen a closed response matrix
+
+The executor initially compared `accepted` with Boolean equality. Python makes
+`1 == True` and `0 == False`, so integer values crossed a boundary described as strict.
+The transport response boundary now requires exact Boolean and string types, exact
+path-specific outcomes, and rejects retry/safety labels returned as ordinary responses.
+Retry and safety states can enter only through the branches that atomically update their
+backoff or terminal state.
+
 ---
 
 ## Not yet learned

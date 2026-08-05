@@ -1,9 +1,20 @@
-"""Entry point: python -m scripts.analyst_benchmark"""
+"""Entry point for the frozen C0B-1 CLI and namespaced C0B-2 commands."""
 from __future__ import annotations
 
 import sys
+from collections.abc import Sequence
 
-from .runner import main
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if args[:1] == ["c0b2"]:
+        from .c0b2_cli import main as c0b2_main
+        return c0b2_main(args[1:])
+
+    # Preserve the C0B-1 parser and dispatch byte-for-byte by delegating every
+    # non-namespaced invocation with its original argument sequence.
+    from .runner import main as c0b1_main
+    return c0b1_main(args)
 
 if __name__ == "__main__":
     sys.exit(main())

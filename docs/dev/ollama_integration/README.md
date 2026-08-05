@@ -2,8 +2,8 @@
 
 Date: 2026-08-04
 Status: **C0A contract frozen** (committed `91bb2aa`). **C0B-1 accepted and committed
-(`47e946b`).** C0B-2 protocol passed independent review for the offline C0B-2A
-foundation; no C0B-2 scored call or private-corpus access has started.
+(`47e946b`).** **C0B-2A offline foundation passed implementation and independent
+adversarial review.** No C0B-2 scored call or private-corpus access has started.
 
 The authoritative spec is [`CONTRACT.md`](CONTRACT.md), plus accepted errata in
 [`CONTRACT_ERRATA.md`](CONTRACT_ERRATA.md). The C0B-1 experiment is pre-registered in
@@ -111,7 +111,7 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
 3. `README.md` (this file) — status, decisions, orientation.
 4. `BENCHMARK_PROTOCOL_C0B1.md` — **pre-registered** C0B-1 decision rule, gates, factors, budgets. Hash-pinned.
 5. `BENCHMARK_PROTOCOL_C0B2.md` — reviewed C0B-2 public/private protocol; offline 2A is
-   authorized, live execution remains held until implementation artifacts freeze with it.
+   implemented, while live execution remains held for explicit HI authorization.
 6. `BENCHMARK.md` — instrument method, module dispositions, what is/is not committed.
 7. `LESSONS_LEARNED.md` — only what a card actually exercised.
 8. `RESEARCH_NOTES.md` — verified external findings with sources + corpus profile.
@@ -122,5 +122,7 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
 
 ## Next Step
 
-Implement the offline-only C0B-2A worksheet/plan/checkpoint/executor proof. Live public
-C/D/F and private E stay gated behind that reviewed and hash-frozen implementation.
+HI decision: authorize or decline the public C/D/F envelope of at most 2,750 Ollama
+requests and an estimated 27–44 active hours. Calendar time may be longer because the
+GPU is shared; the run is serial, resumable, permits CPU/GPU offload and may honestly end
+`INCONCLUSIVE`. Private E remains a later, separate authorization.

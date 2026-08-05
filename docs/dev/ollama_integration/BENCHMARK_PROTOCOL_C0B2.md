@@ -1,11 +1,11 @@
 # Analyst Benchmark — Protocol, C0B-2 (Stages C, D, F and E)
 
-Version: `c0b2-protocol-v1-c0b2a-reviewed`
+Version: `c0b2-protocol-v1-c0b2a-implemented`
 Date: 2026-08-04
-Status: **REVIEWED FOR OFFLINE C0B-2A — no scored C0B-2 call is permitted.** Three
-independent contract/privacy/recovery reviews passed. Freeze this document, the
-stage-plan hashes, strict worksheets and checkpoint implementation together before live
-execution.
+Status: **C0B-2A OFFLINE PASS — no scored C0B-2 call is permitted.** The implementation,
+focused regression suite, canonical-filesystem capability probe and independent
+adversarial reviews passed. Public C/D/F remains held for explicit HI authorization of
+the §13 request/time envelope; private E remains separately held.
 
 Authoritative parent: [`CONTRACT.md`](CONTRACT.md), accepted
 [`CONTRACT_ERRATA.md`](CONTRACT_ERRATA.md), and the accepted C0B-1 outcome in
@@ -245,13 +245,15 @@ Required properties:
 - protocol, Git HEAD/declared dirty state, task tree, fixture, schema, prompt, chunker,
   detector, generation option, work plan and full model digests pinned.
 
-The current canonical data directory is on `fuse.mergerfs`. C0B-2A must run a disposable
-filesystem capability test there before choosing a journal mode: process-crash old-or-
-new rollback, integrity, SQLite two-process exclusion, outer `flock` exclusion and
-resume must pass. This does not claim a power-loss test. WAL may be used only if its
-shared-memory/lock probe passes. Otherwise `journal_mode=DELETE` with
-`synchronous=FULL` is acceptable for this single-writer foreground benchmark. If neither
-passes, live execution is `BLOCKED_FILESYSTEM`.
+The current canonical data directory is on `fuse.mergerfs`. C0B-2A ran its disposable
+capability test there. Both WAL and DELETE passed process-crash old-or-new rollback,
+integrity, SQLite two-process exclusion, outer `flock` exclusion and resume. This does
+not claim a power-loss test. The measured stack was mergerfs, SQLite 3.46.1. C0B-2
+selects `journal_mode=DELETE` with `synchronous=FULL`: the workload is intentionally
+single-writer/serial, while SQLite's current advisory says the rare WAL-reset corruption
+bug affects 3.7.0 through 3.51.2 and is fixed in 3.51.3 or named backports. Passing a
+capability probe establishes support; it does not require choosing the more complex
+mode. If the selected DELETE probe later fails, live execution is `BLOCKED_FILESYSTEM`.
 
 The local header records the canonical pool path, mount ID/mountpoint/type/options,
 `st_dev`, kernel, mergerfs and SQLite versions, selected journal mode and capability-
@@ -267,7 +269,8 @@ pool path:
 [mergerfs limitations](https://trapexit.github.io/mergerfs/2.42.0/known_issues_bugs/),
 [mergerfs usage](https://trapexit.github.io/mergerfs/2.42.0/faq/usage_and_functionality/).
 SQLite notes that WAL requires same-host shared memory:
-[SQLite WAL](https://sqlite.org/wal.html).
+[SQLite WAL](https://sqlite.org/wal.html), including the current
+[WAL-reset advisory](https://sqlite.org/wal.html#the_wal_reset_bug).
 
 ### 9.1 Stable identity and conservative calls
 
@@ -286,8 +289,12 @@ Adaptation uses stage-local plans, not a mutable flat plan:
    generate and freeze the F plan—including every exact request hash, seed nonce and
    seed-qualification predicate—chained to the D hash before any F Ollama call. C/D
    selection code never receives F bytes or aggregates.
-4. Persist F decisions once; if there is one provisional winner, freeze its C-rerun
-   acceptance plan chained to the F hash.
+4. Persist the provisional F decision once. If there is one winner, freeze a distinct
+   C44 acceptance sub-plan chained to that exact decision. Every acceptance work item
+   carries the exact model, digest, worksheet, chunk size, overlap, context and output
+   budget from the provisional decision. Its document IDs must equal the frozen C44.
+5. Freeze the final `SELECTED` decision only after the acceptance sub-plan completes;
+   the final artifact must reproduce the same selection fields and chain to that plan.
 
 Decision rows and activation states (`ACTIVATED` or `NOT_ACTIVATED`) are transactional
 and immutable. Resume reads them; it never recomputes a branch from changed aggregation
@@ -296,10 +303,13 @@ code. Changing a parent hash requires a new run.
 Before HTTP, one `BEGIN IMMEDIATE` transaction verifies both the stage/class allowance
 and cumulative cap, then creates a `DISPATCHING` attempt; that consumes one call. After
 HTTP, one transaction stores response metadata/content, attempt terminal state and work
-result. A crash after Ollama accepts a request but before commit cannot be made exactly-
-once. On resume, surviving `DISPATCHING` rows become `ORPHANED_UNKNOWN`, remain charged,
-and the work receives a new attempt. Usage derives from attempt rows, never a mutable
-counter. Caps and class allowances cannot be raised in place.
+result. Work dispatch binds the exact frozen work, cell, request, model and digest.
+Returned response outcomes use a strict type-and-value matrix; retry/resource and safety
+outcomes can enter only through their stateful exception paths. A crash after Ollama
+accepts a request but before commit cannot be made exactly-once. On resume, surviving
+`DISPATCHING` rows become `ORPHANED_UNKNOWN`, remain charged, and the work receives a new
+attempt. Usage derives from attempt rows, never a mutable counter. Caps and class
+allowances cannot be raised in place.
 
 ### 9.2 State and artifact vocabulary
 
@@ -360,15 +370,22 @@ its predeclared health request.
 
 ### 9.4 Offline proof gate
 
-Fake-transport tests cover crash before/after precharge, response-before-commit, committed
-response, adaptive activation without recomputation, control-call identity/crashes,
-stage/class/cumulative cap boundaries, soft/resource pause, resume without duplicate
-accepted work, orphan charging, persisted-`RUNNING` recovery, main/WAL/journal corruption,
-verified backup restore, mount-fingerprint drift, WAL/DELETE capability paths, same- and
-different-run lock exclusion, locked abandon, operator versus probe cancellation, and
-aggregate completeness. They assert zero unload/kill behavior and zero network or private
-path calls before confirmation. This checkpoint is benchmark infrastructure, not the
-future C8 worker lease/heartbeat system.
+The gate passed with fake transport only. Tests cover crash before/after precharge,
+response-before-commit, committed response, adaptive activation without recomputation,
+control-call identity/crashes, stage/class/cumulative cap boundaries, soft/resource
+pause, resume without duplicate accepted work, orphan charging, persisted-`RUNNING`
+recovery, main/WAL/journal corruption, verified backup/restore, mount-fingerprint drift,
+WAL/DELETE capability paths, same- and different-run lock exclusion, locked abandon,
+operator versus per-finalist probe cancellation, exact C44 post-F acceptance and
+artifact-bound aggregate completeness.
+
+Adversarial reviews additionally reproduced and closed fail-open cases in stage ordering,
+work/control class transfer, restore provenance/locking, finalization, preflight,
+cancellation, exact work/model binding, outcome-to-state mapping, shared resource
+backoff, per-finalist health evidence and Python Boolean coercion at the response
+boundary. Tests assert zero unload/kill behavior and zero network or private-path calls
+before confirmation. No model inference or private-corpus access occurred. This
+checkpoint is benchmark infrastructure, not the future C8 worker lease/heartbeat system.
 
 ## 10. Stage C — strict worksheet qualification
 

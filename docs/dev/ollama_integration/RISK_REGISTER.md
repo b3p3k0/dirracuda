@@ -1,7 +1,7 @@
 # Ollama Integration — Risk Register
 
 Date: 2026-08-04
-Status: **C0A controls frozen; C0B-2 benchmark addenda reviewed.** Controls are
+Status: **C0A controls frozen; C0B-2A offline controls implemented and reviewed.** Controls are
 authoritative in [`CONTRACT.md`](CONTRACT.md), accepted errata, and the reviewed
 [`BENCHMARK_PROTOCOL_C0B2.md`](BENCHMARK_PROTOCOL_C0B2.md); this register is the
 risk-indexed view.
@@ -35,7 +35,7 @@ risk-indexed view.
 | R24 | Manifest lookup by `(ip, host_type, created_at)` selects the wrong run | Medium | Medium | Structured persistence return with the exact row id; Analyst looks up by row id only. Dashboard flow wired to persist before offering Analyst. |
 | R25 | Reduced-isolation mode misused on hostile input | Low | High | Per-run non-persistent ack; barred from the auto post-extract hook and from benchmark/acceptance; recorded in metadata; never default. |
 | R26 | Analyst optional deps break core GUI startup | Low | High | Separate `requirements-analyst.txt`; no optional parser imports at package/GUI-module import time; preflight reports missing deps cleanly; parser imports only inside the sandbox child (guardrail test). |
-| R27 | Benchmark checkpoint corrupts or loses exclusion on mergerfs | Medium | High | Disposable process-crash/SQLite-lock/`flock` capability probe on the canonical pool path; pin mount/kernel/mergerfs/SQLite fingerprint; recheck before resume; WAL only if proven, otherwise DELETE+FULL; verified Online Backup snapshots and out-of-band quarantine. |
+| R27 | Benchmark checkpoint corrupts or loses exclusion on mergerfs | Medium | High | The canonical mergerfs probe passed process-crash rollback, integrity, SQLite/`flock` exclusion and resume in both WAL and DELETE modes; it did not test power loss. DELETE+FULL is selected for the serial workload because local SQLite 3.46.1 falls within SQLite's current WAL-reset advisory. Pin/recheck the mount and runtime fingerprint; use verified Online Backup snapshots, same-root/global-lock restore and out-of-band quarantine. |
 | R28 | Crash after Ollama accepts a request causes an uncharged or duplicate result | Medium | Medium | Atomically precharge `DISPATCHING`; recovery marks it `ORPHANED_UNKNOWN`, keeps it charged, and creates a new attempt. Accepted answer and work terminal commit together. |
 | R29 | Resume recomputes an adaptive C/D/F branch under changed code | Low | High | Immutable stage-local plans chained by persisted parent aggregate/decision hashes; activation states are recorded once and resume never recomputes them. |
 | R30 | Stage-F holdout leaks into tuning | Low | High | Split/view manifest frozen before C; F bytes unavailable to C/D selection; F plan built only after D is immutable; any post-F retune produces `INCONCLUSIVE`. |
