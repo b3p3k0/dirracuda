@@ -195,14 +195,19 @@ class DurableExecutor:
         if self.cancellation.event.is_set():
             self.checkpoint.cancel()
             raise InvocationCancelled("cancelled before invocation claim")
-        self.checkpoint.load_plan(stage)
+        self._active_plan_raw(stage)
         header = self.checkpoint.header()
         try:
             revalidate_filesystem(
                 MountFingerprint(**header["mount"]), self.checkpoint.root,
                 header["journal_mode"], header["filesystem_capability_sha256"])
         except Exception:
-            self.checkpoint.transition("BLOCKED_FILESYSTEM")
+            if header["run_type"] == "public":
+                from .c0b2_runtime import finish_public_run_failure
+                finish_public_run_failure(
+                    self.checkpoint, terminal="BLOCKED_FILESYSTEM")
+            else:
+                self.checkpoint.transition("BLOCKED_FILESYSTEM")
             raise
         verification = verify_connection(self.checkpoint.conn)
         if not verification.ok:
@@ -215,7 +220,8 @@ class DurableExecutor:
         self.checkpoint.transition("RUNNING")
         try:
             ordinal = self.checkpoint.claim_invocation(
-                stage, claim_guard=self._guard_invocation_claim)
+                stage, claim_guard=self._guard_invocation_claim,
+                budget_failure_callback=self._budget_failure_callback)
         except InvocationCancelled:
             self.checkpoint.cancel()
             raise
@@ -231,6 +237,7 @@ class DurableExecutor:
         self._require_work_request_identity(request)
         self._require_context_probe_configuration(request.stage, request.model)
         self._require_preflight_complete(request.stage)
+        self._require_f_scored_control_order(request.stage)
         context = self.checkpoint.pending_context_obligation(request.stage)
         if context is not None:
             raise CheckpointError(f"context probe required for {context.model}")
@@ -249,7 +256,8 @@ class DurableExecutor:
                 attempt_id=attempt_id, stage=request.stage, call_class=request.call_class,
                 request_hash=request.request_hash, attempt_no=request.attempt_no,
                 work_id=request.work_id, invocation_ordinal=self.invocation_ordinal,
-                claim_guard=self._guard_soft_wall)
+                claim_guard=self._guard_soft_wall,
+                budget_failure_callback=self._budget_failure_callback)
         except SoftWallReached:
             self.checkpoint.transition("PAUSED_SOFT_WALL")
             return ExecutionResult("PAUSED_SOFT_WALL")
@@ -291,9 +299,7 @@ class DurableExecutor:
                 self.checkpoint.cancel(attempt_id)
                 return ExecutionResult("CANCELLED_PENDING_RESUME", attempt_id)
             terminal = self._safety_terminal()
-            self.checkpoint.finish_attempt(
-                attempt_id, outcome=terminal, response=None,
-                metadata={}, accept_work=False, terminal_state=terminal)
+            self._finish_failure_attempt(attempt_id, terminal)
             return ExecutionResult(terminal, attempt_id)
         except ProvenanceFailure:
             return self._finish_provenance(attempt_id)
@@ -325,7 +331,8 @@ class DurableExecutor:
                 request_hash=request.request_hash, attempt_no=request.attempt_no,
                 control_id=request.control_id, invocation_ordinal=self.invocation_ordinal,
                 first_control_class="transport_orphan",
-                claim_guard=self._guard_soft_wall)
+                claim_guard=self._guard_soft_wall,
+                budget_failure_callback=self._budget_failure_callback)
         except SoftWallReached:
             self.checkpoint.transition("PAUSED_SOFT_WALL")
             return ExecutionResult("PAUSED_SOFT_WALL")
@@ -362,9 +369,7 @@ class DurableExecutor:
                 self.checkpoint.cancel(attempt_id)
                 return ExecutionResult("CANCELLED_PENDING_RESUME", attempt_id)
             terminal = self._safety_terminal()
-            self.checkpoint.finish_attempt(
-                attempt_id, outcome=terminal, response=None, metadata={}, accept_work=False,
-                terminal_state=terminal)
+            self._finish_failure_attempt(attempt_id, terminal)
             return ExecutionResult(terminal, attempt_id)
         except ProvenanceFailure:
             return self._finish_provenance(attempt_id)
@@ -372,68 +377,8 @@ class DurableExecutor:
             self.current_attempt = None
 
     def run_context_probe(self, request: ControlRequest) -> ExecutionResult:
-        """Satisfy the durable once-per-model Stage-C `/api/ps` obligation."""
-        self._require_lock()
-        self._require_invocation_stage(request.stage)
-        if request.stage != "C":
-            raise CheckpointError("Stage-C context probes require stage C")
-        if self.cancellation.event.is_set():
-            self.checkpoint.cancel()
-            return ExecutionResult("CANCELLED_PENDING_RESUME")
-        self._require_preflight_complete("C")
-        obligation = self.checkpoint.pending_context_obligation("C")
-        if (obligation is None or request.model != obligation.model
-                or request.control_id != obligation.control_id
-                or request.request_hash != obligation.request_hash):
-            raise CheckpointError("context probe differs from the durable obligation")
-        resource_gate = self._resource_gate(request.model)
-        if resource_gate is not None:
-            return resource_gate
-        try:
-            inserted = self.checkpoint.precharge(
-                attempt_id=request.attempt_id, stage="C", call_class=request.call_class,
-                request_hash=request.request_hash, attempt_no=request.attempt_no,
-                control_id=request.control_id, invocation_ordinal=self.invocation_ordinal,
-                claim_guard=self._guard_soft_wall)
-        except SoftWallReached:
-            self.checkpoint.transition("PAUSED_SOFT_WALL")
-            return ExecutionResult("PAUSED_SOFT_WALL")
-        if not inserted:
-            state = self.checkpoint.conn.execute(
-                "SELECT state FROM attempts WHERE attempt_id=?",
-                (request.attempt_id,)).fetchone()[0]
-            return ExecutionResult(f"ALREADY_{state}", request.attempt_id)
-        self.current_attempt = request.attempt_id
-        try:
-            response = self.transport(request, self.cancellation.event)
-            if self.cancellation.event.is_set():
-                self.checkpoint.cancel(request.attempt_id)
-                return ExecutionResult("CANCELLED_PENDING_RESUME", request.attempt_id)
-            self._require_returned_response(response, {"ACCEPTED"})
-            self.checkpoint.finish_attempt(
-                request.attempt_id, outcome="ACCEPTED", response=response.content,
-                metadata=response.metadata, accept_work=False,
-                before_commit=lambda: self.checkpoint.complete_context_obligation(
-                    control_id=request.control_id, attempt_id=request.attempt_id))
-            return ExecutionResult("ACCEPTED", request.attempt_id)
-        except RetryableTransport:
-            if self.cancellation.event.is_set():
-                self.checkpoint.cancel(request.attempt_id)
-                return ExecutionResult("CANCELLED_PENDING_RESUME", request.attempt_id)
-            return self._finish_retryable_control(request)
-        except SafetyLimit:
-            if self.cancellation.event.is_set():
-                self.checkpoint.cancel(request.attempt_id)
-                return ExecutionResult("CANCELLED_PENDING_RESUME", request.attempt_id)
-            terminal = self._safety_terminal()
-            self.checkpoint.finish_attempt(
-                request.attempt_id, outcome=terminal, response=None, metadata={},
-                accept_work=False, terminal_state=terminal)
-            return ExecutionResult(terminal, request.attempt_id)
-        except ProvenanceFailure:
-            return self._finish_provenance(request.attempt_id)
-        finally:
-            self.current_attempt = None
+        from .c0b2_runtime_common import run_context_probe
+        return run_context_probe(self, request)
 
     def run_control(self, request: ControlRequest, *, kind: str) -> ExecutionResult:
         """Run one invocation-bound version/tags/model-show preflight call."""
@@ -464,7 +409,8 @@ class DurableExecutor:
                 call_class=request.call_class, request_hash=request.request_hash,
                 attempt_no=request.attempt_no, control_id=request.control_id,
                 invocation_ordinal=self.invocation_ordinal,
-                claim_guard=self._guard_soft_wall)
+                claim_guard=self._guard_soft_wall,
+                budget_failure_callback=self._budget_failure_callback)
         except SoftWallReached:
             self.checkpoint.transition("PAUSED_SOFT_WALL")
             return ExecutionResult("PAUSED_SOFT_WALL")
@@ -494,9 +440,7 @@ class DurableExecutor:
                 self.checkpoint.cancel(request.attempt_id)
                 return ExecutionResult("CANCELLED_PENDING_RESUME", request.attempt_id)
             terminal = self._safety_terminal()
-            self.checkpoint.finish_attempt(
-                request.attempt_id, outcome=terminal, response=None, metadata={},
-                accept_work=False, terminal_state=terminal)
+            self._finish_failure_attempt(request.attempt_id, terminal)
             return ExecutionResult(terminal, request.attempt_id)
         except ProvenanceFailure:
             return self._finish_provenance(request.attempt_id)
@@ -504,146 +448,18 @@ class DurableExecutor:
             self.current_attempt = None
 
     def run_cancellation_probe(self, request: ControlRequest) -> ExecutionResult:
-        """Issue the predeclared Stage-F cancellation call; never issue health here."""
-        self._require_lock()
-        self._require_invocation_stage(request.stage)
-        expected = control_id(
-            "F", int(self.invocation_ordinal or 0), "cancellation_probe", request.model)
-        if request.stage != "F" or request.control_id != expected:
-            raise CheckpointError("cancellation probe identity does not match this invocation")
-        if request.model not in self._stage_models("F"):
-            raise CheckpointError("cancellation probe model is outside the frozen Stage-F plan")
-        if self.cancellation.event.is_set():
-            self.checkpoint.cancel()
-            return ExecutionResult("CANCELLED_PENDING_RESUME")
-        self._require_preflight_complete("F")
-        resource_gate = self._resource_gate(request.model)
-        if resource_gate is not None:
-            return resource_gate
-        try:
-            inserted = self.checkpoint.precharge(
-                attempt_id=request.attempt_id, stage="F", call_class=request.call_class,
-                request_hash=request.request_hash, attempt_no=request.attempt_no,
-                control_id=request.control_id, invocation_ordinal=self.invocation_ordinal,
-                claim_guard=self._guard_soft_wall)
-        except SoftWallReached:
-            self.checkpoint.transition("PAUSED_SOFT_WALL")
-            return ExecutionResult("PAUSED_SOFT_WALL")
-        if not inserted:
-            state = self.checkpoint.conn.execute(
-                "SELECT state FROM attempts WHERE attempt_id=?",
-                (request.attempt_id,)).fetchone()[0]
-            return ExecutionResult(f"ALREADY_{state}", request.attempt_id)
-        self.current_attempt = request.attempt_id
-        try:
-            self.transport(request, self.cancellation.event)
-            if not self.cancellation.event.is_set():
-                self.checkpoint.finish_attempt(
-                    request.attempt_id, outcome="FAILED_SAFETY", response=None,
-                    metadata={"reason": "cancellation_not_observed"}, accept_work=False,
-                    terminal_state="FAILED_SAFETY")
-                return ExecutionResult("FAILED_SAFETY", request.attempt_id)
-            self.checkpoint.cancel(request.attempt_id)
-            return ExecutionResult("CANCELLED_PENDING_RESUME", request.attempt_id)
-        except RetryableTransport:
-            if self.cancellation.event.is_set():
-                self.checkpoint.cancel(request.attempt_id)
-                return ExecutionResult("CANCELLED_PENDING_RESUME", request.attempt_id)
-            return self._finish_retryable_control(request)
-        except SafetyLimit:
-            if self.cancellation.event.is_set():
-                self.checkpoint.cancel(request.attempt_id)
-                return ExecutionResult("CANCELLED_PENDING_RESUME", request.attempt_id)
-            self.checkpoint.finish_attempt(
-                request.attempt_id, outcome="FAILED_SAFETY", response=None,
-                metadata={}, accept_work=False, terminal_state="FAILED_SAFETY")
-            return ExecutionResult("FAILED_SAFETY", request.attempt_id)
-        except ProvenanceFailure:
-            return self._finish_provenance(request.attempt_id)
-        finally:
-            self.current_attempt = None
+        from .c0b2_runtime_common import run_cancellation_probe
+        return run_cancellation_probe(self, request)
 
     def run_cancellation_health(self, request: ControlRequest,
-                                *, cancelled_attempt_id: str) -> ExecutionResult:
-        """After resume, prove the cancelled Stage-F call did not poison Ollama."""
-        self._require_lock()
-        self._require_invocation_stage(request.stage)
-        expected = control_id(
-            "F", int(self.invocation_ordinal or 0), "cancellation_health", request.model)
-        if request.stage != "F" or request.control_id != expected:
-            raise CheckpointError("cancellation health identity does not match this invocation")
-        if request.model not in self._stage_models("F"):
-            raise CheckpointError("cancellation health model is outside the frozen Stage-F plan")
-        prior = self.checkpoint.conn.execute(
-            "SELECT control_id,stage,state FROM attempts WHERE attempt_id=?",
-            (cancelled_attempt_id,)).fetchone()
-        valid_predecessors = {
-            control_id("F", int(row[0]), "cancellation_probe", request.model)
-            for row in self.checkpoint.conn.execute(
-                "SELECT ordinal FROM invocations WHERE stage='F' AND ordinal<?",
-                (int(self.invocation_ordinal or 0),))
-        }
-        if (not prior or prior[0] not in valid_predecessors
-                or prior[1:] != ("F", "CANCELLED_UNVERIFIED")):
-            raise CheckpointError("health probe lacks a charged cancelled Stage-F attempt")
-        if self.cancellation.event.is_set():
-            self.checkpoint.cancel()
-            return ExecutionResult("CANCELLED_PENDING_RESUME")
-        self._require_preflight_complete("F")
-        resource_gate = self._resource_gate(request.model)
-        if resource_gate is not None:
-            return resource_gate
-        try:
-            inserted = self.checkpoint.precharge(
-                attempt_id=request.attempt_id, stage="F", call_class=request.call_class,
-                request_hash=request.request_hash, attempt_no=request.attempt_no,
-                control_id=request.control_id, invocation_ordinal=self.invocation_ordinal,
-                claim_guard=self._guard_soft_wall)
-        except SoftWallReached:
-            self.checkpoint.transition("PAUSED_SOFT_WALL")
-            return ExecutionResult("PAUSED_SOFT_WALL")
-        if not inserted:
-            state = self.checkpoint.conn.execute(
-                "SELECT state FROM attempts WHERE attempt_id=?",
-                (request.attempt_id,)).fetchone()[0]
-            return ExecutionResult(f"ALREADY_{state}", request.attempt_id)
-        self.current_attempt = request.attempt_id
-        try:
-            response = self.transport(request, self.cancellation.event)
-            if self.cancellation.event.is_set():
-                self.checkpoint.cancel(request.attempt_id)
-                return ExecutionResult("CANCELLED_PENDING_RESUME", request.attempt_id)
-            self._require_returned_response(response, {"ACCEPTED"})
-            detail = canonical_json({"cancelled_attempt_id": cancelled_attempt_id,
-                                     "health_attempt_id": request.attempt_id})
-            self.checkpoint.finish_attempt(
-                request.attempt_id, outcome=response.outcome, response=response.content,
-                metadata=response.metadata, accept_work=False,
-                before_commit=lambda: (
-                    self._reset_resource(request.model),
-                    self.checkpoint.conn.execute(
-                        "INSERT INTO events(kind,detail_json,created) "
-                        "VALUES('CANCELLATION_HEALTH_PASS',?,?)",
-                        (detail, time.time())),
-                ))
-            return ExecutionResult(response.outcome, request.attempt_id)
-        except RetryableTransport:
-            if self.cancellation.event.is_set():
-                self.checkpoint.cancel(request.attempt_id)
-                return ExecutionResult("CANCELLED_PENDING_RESUME", request.attempt_id)
-            return self._finish_retryable_control(request)
-        except SafetyLimit:
-            if self.cancellation.event.is_set():
-                self.checkpoint.cancel(request.attempt_id)
-                return ExecutionResult("CANCELLED_PENDING_RESUME", request.attempt_id)
-            self.checkpoint.finish_attempt(
-                request.attempt_id, outcome="FAILED_SAFETY", response=None,
-                metadata={}, accept_work=False, terminal_state="FAILED_SAFETY")
-            return ExecutionResult("FAILED_SAFETY", request.attempt_id)
-        except ProvenanceFailure:
-            return self._finish_provenance(request.attempt_id)
-        finally:
-            self.current_attempt = None
+                                *, cancelled_attempt_id: str, source: str,
+                                worksheet: str, num_predict: int,
+                                num_ctx: int) -> ExecutionResult:
+        from .c0b2_runtime_common import run_cancellation_health
+        return run_cancellation_health(
+            self, request, cancelled_attempt_id=cancelled_attempt_id,
+            source=source, worksheet=worksheet,
+            num_predict=num_predict, num_ctx=num_ctx)
 
     def cancel(self) -> None:
         self._require_lock()
@@ -667,7 +483,11 @@ class DurableExecutor:
 
     def abandon(self) -> None:
         self._require_lock()
-        self.checkpoint.transition("ABANDONED")
+        if self.checkpoint.header()["run_type"] == "public":
+            from .c0b2_runtime import finish_public_run_failure
+            finish_public_run_failure(self.checkpoint, terminal="ABANDONED")
+        else:
+            self.checkpoint.transition("ABANDONED")
 
     def finalize_complete(self, outcome: str, artifact: Mapping[str, Any]) -> str:
         self._require_lock()
@@ -828,14 +648,32 @@ class DurableExecutor:
         if not self.lock.held or self.lock.root != self.checkpoint.root:
             raise CheckpointError("executor lost its matching global lock")
 
+    def _budget_failure_callback(
+            self, payload: Mapping[str, Optional[str]]) -> None:
+        if self.checkpoint.header()["run_type"] != "public":
+            return
+        from .c0b2_runtime import finish_public_budget_failure
+        finish_public_budget_failure(self.checkpoint, payload)
+
     def _finish_provenance(self, attempt_id: str) -> ExecutionResult:
         if self.cancellation.event.is_set():
             self.checkpoint.cancel(attempt_id)
             return ExecutionResult("CANCELLED_PENDING_RESUME", attempt_id)
-        self.checkpoint.finish_attempt(
-            attempt_id, outcome="BLOCKED_PROVENANCE", response=None,
-            metadata={}, accept_work=False, terminal_state="BLOCKED_PROVENANCE")
+        self._finish_failure_attempt(attempt_id, "BLOCKED_PROVENANCE")
         return ExecutionResult("BLOCKED_PROVENANCE", attempt_id)
+
+    def _finish_failure_attempt(self, attempt_id: str, terminal: str) -> None:
+        row = self.checkpoint.conn.execute(
+            "SELECT stage FROM attempts WHERE attempt_id=?", (attempt_id,)
+        ).fetchone()
+        if row and self.checkpoint.header()["run_type"] == "public":
+            from .c0b2_runtime import finish_public_failure_attempt
+            finish_public_failure_attempt(
+                self.checkpoint, attempt_id=attempt_id, terminal=terminal)
+            return
+        self.checkpoint.finish_attempt(
+            attempt_id, outcome=terminal, response=None, metadata={},
+            accept_work=False, terminal_state=terminal)
 
     def _accepted_chat_side_effects(self, stage: str, model: str,
                                     attempt_id: str) -> None:
@@ -1058,8 +896,9 @@ class DurableExecutor:
 
     def _planned_items(self, stage: str, *,
                        include_acceptance: bool = True) -> list[dict[str, Any]]:
-        raws = [self.checkpoint.load_plan(stage)[2]]
-        acceptance = self.checkpoint.load_acceptance_plan()
+        raw, phased = self._active_plan_raw(stage)
+        raws = [raw]
+        acceptance = self.checkpoint.load_acceptance_plan() if not phased else None
         if include_acceptance and stage == "F" and acceptance:
             raws.append(acceptance[2])
         items: list[dict[str, Any]] = []
@@ -1069,6 +908,15 @@ class DurableExecutor:
                 raise CheckpointError(f"stage {stage} plan work must be a list of objects")
             items.extend(value)
         return items
+
+    def _active_plan_raw(self, stage: str) -> tuple[str, bool]:
+        """Return the activated phase plan, with legacy C/fixture compatibility."""
+        from .c0b2_runtime_common import load_phase_plan, runtime_position
+        position = runtime_position(self.checkpoint)
+        if position.active_stage == stage and position.active_plan_key != "C":
+            return load_phase_plan(
+                self.checkpoint, position.active_plan_key)[2], True
+        return self.checkpoint.load_plan(stage)[2], False
 
     def _stage_models(self, stage: str, *,
                       include_acceptance: bool = True) -> set[str]:
@@ -1159,6 +1007,90 @@ class DurableExecutor:
         if stage != self.invocation_stage:
             raise CheckpointError(
                 f"request stage {stage} does not match invocation stage {self.invocation_stage}")
+
+    def _f_seed1_control_groups(self) -> tuple[dict[str, Any], ...]:
+        from .c0b2_runtime_common import _bound_control, load_runtime_control
+
+        position = self.checkpoint.runtime_position()
+        if (position.active_stage, position.active_plan_key) != ("F", "F_SEED_1"):
+            return ()
+        _parent, _digest, raw = self.checkpoint.load_phase_plan("F_SEED_1")
+        plan = json.loads(raw)
+        groups = []
+        fields = {
+            "context": ("context_control", "context_probe"),
+            "cancel": ("cancellation_control", "cancellation_probe"),
+            "health": ("health_control", "cancellation_health"),
+        }
+        for group in plan["groups"]:
+            exact = {"group": group, "plan": plan}
+            for name, (field, kind) in fields.items():
+                value = group[field]
+                record = load_runtime_control(self.checkpoint, value["control_id"])
+                bound = _bound_control(self.checkpoint, "F_SEED_1", kind, value)
+                if (bound != value or record.plan_key != "F_SEED_1"
+                        or record.kind != kind):
+                    raise CheckpointError("F seed-1 runtime control binding changed")
+                exact[name] = record
+            groups.append(exact)
+        return tuple(groups)
+
+    def _f_group_work_evidence(
+            self, exact: Mapping[str, Any]) -> tuple[bool, bool]:
+        group, plan = exact["group"], exact["plan"]
+        planned = [row["work_id"] for row in plan["work"]
+                   if row["activation_group_id"] == group["group_id"]]
+        rows = self.checkpoint.conn.execute(
+            "SELECT r.work_id,w.state,w.accepted_attempt_id FROM phase_work_registry r "
+            "JOIN work_items w ON w.work_id=r.work_id WHERE r.plan_key='F_SEED_1' "
+            "AND r.activation_group_id=? ORDER BY r.rowid", (group["group_id"],)
+        ).fetchall()
+        if [row[0] for row in rows] != planned or len(rows) != group["planned_work_count"]:
+            raise CheckpointError("F seed-1 group work registry changed")
+        answered, complete = False, True
+        for work_id, state, accepted_id in rows:
+            answered = answered or bool(self.checkpoint.conn.execute(
+                "SELECT 1 FROM attempts WHERE work_id=? AND state IN "
+                "('ACCEPTED','SCHEMA_INVALID') LIMIT 1", (work_id,)).fetchone())
+            if state == "SUCCEEDED":
+                valid = self.checkpoint.conn.execute(
+                    "SELECT 1 FROM attempts WHERE attempt_id=? AND work_id=? "
+                    "AND state='ACCEPTED'", (accepted_id, work_id)).fetchone()
+            elif state == "COMPLETED_INVALID" and accepted_id is None:
+                valid = self.checkpoint.conn.execute(
+                    "SELECT count(*) FROM attempts WHERE work_id=? "
+                    "AND state='SCHEMA_INVALID'", (work_id,)).fetchone()[0] >= 2
+            else:
+                valid = False
+            complete = complete and bool(valid)
+        return answered, complete
+
+    def _require_f_scored_control_order(self, stage: str) -> None:
+        if stage != "F":
+            return
+        groups = self._f_seed1_control_groups()
+        evidence = [(row, *self._f_group_work_evidence(row)) for row in groups]
+        if any(answered and row["context"].state != "COMPLETE"
+               for row, answered, _complete in evidence):
+            raise CheckpointError("F context probe is required before more scored work")
+        if any(row["cancel"].state == "CANCELLED_UNVERIFIED"
+               and row["health"].state != "COMPLETE"
+               for row, _answered, _complete in evidence):
+            raise CheckpointError("F cancellation health is required before scored work")
+        if any(complete and row["context"].state == "COMPLETE"
+               and row["cancel"].state == "PENDING"
+               for row, _answered, complete in evidence):
+            raise CheckpointError("F cancellation probe is required before more scored work")
+
+    def _require_f_cancellation_ready(self, candidate_id: str) -> None:
+        matches = [row for row in self._f_seed1_control_groups()
+                   if row["group"]["candidate_id"] == candidate_id]
+        if len(matches) != 1:
+            raise CheckpointError("F cancellation candidate is not uniquely active")
+        _answered, complete = self._f_group_work_evidence(matches[0])
+        if matches[0]["context"].state != "COMPLETE" or not complete:
+            raise CheckpointError(
+                "F cancellation requires completed context and seed-1 work")
 
     def _guard_soft_wall(self) -> None:
         if self.clock.crossed():

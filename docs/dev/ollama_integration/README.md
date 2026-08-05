@@ -9,7 +9,10 @@ that pass the offline integration gate. No C0B-2 scored call or private-corpus a
 started. On 2026-08-05 the HI approved C0B-2B1R: freeze, review and commit the complete
 public D/F implementation in the same Git revision before live creation; otherwise the
 global source pin would strand a Stage-C survivor. B1R and its normative schema catalog
-passed three independent reviews; B2 is next.
+passed three independent reviews. **B2 shared public controls passed their offline,
+Analyst-regression and independent adversarial gates.** The HI reconfirmed this course on
+2026-08-05 and authorized milestone commits on `feature/ollama-analyst`; no push or
+promotion is authorized. Private Stage E remains held.
 
 The authoritative spec is [`CONTRACT.md`](CONTRACT.md), plus accepted errata in
 [`CONTRACT_ERRATA.md`](CONTRACT_ERRATA.md). The C0B-1 experiment is pre-registered in
@@ -132,8 +135,9 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
 
 ## Next Step
 
-Implement B2 shared phase/checkpoint controls, then B3 Stage D, B4 Stage F/acceptance and
-B5 full fake-session integration before creating the live
-checkpoint. One clean Git/tree pin covers the whole adaptive public run. Execution stays
+Implement B3 Stage D, then B4 Stage F/acceptance and B5 full fake-session integration
+before creating the live checkpoint. B4 owns exact, atomic activation of the paired
+later Stage-F seeds and acceptance; B2 deliberately holds those paths closed. One clean
+Git/tree pin covers the whole adaptive public run. Execution stays
 serial and resumable; shared-GPU offload or slow execution is not a quality failure.
 Private Stage E remains separately held.

@@ -4,7 +4,8 @@ Date: 2026-08-05
 Status: **C0A controls frozen; C0B-2A offline controls implemented and reviewed; public
 C/D/F envelope authorized.** The bounded Stage-C path passed its offline gate and the HI
 approved the complete-public prefreeze course of action on 2026-08-05. B1R passed three
-independent reviews. Live creation remains held until B2–B5 freeze and review D/F under
+independent reviews. B2 shared public controls passed their offline and independent
+adversarial gates. Live creation remains held until B3–B5 freeze and review D/F under
 the same source pin. Controls are
 authoritative in [`CONTRACT.md`](CONTRACT.md), accepted errata, and the reviewed
 [`BENCHMARK_PROTOCOL_C0B2.md`](BENCHMARK_PROTOCOL_C0B2.md); this register is the
@@ -53,6 +54,11 @@ risk-indexed view.
 | R38 | Conditional D/F work is counted as missing before its predecessor authorizes it | Low | High | Freeze immutable phase plans and one-way activation separately. Plan-only inactive work is neither registered nor counted toward completeness; only a persisted parent decision can activate it. |
 | R39 | Long shared-GPU run becomes non-resumable because results docs change the pinned worktree | Medium | High | Freeze the benchmark worktree from create through terminal backup. Write results/docs only after the public terminal; use another worktree for unrelated changes. |
 | R40 | Shape-valid nested D/F artifacts encode incompatible meanings or derived counters | Low | High | The normative public schema catalog freezes strict types, nullability, identity domains, ordering and derivations. Recompute every aggregate from attempts plus immutable fixtures and require canonical equality before freeze/load. |
+| R41 | Public terminal state commits without its required evidence artifacts, or the cap ledger commits without the attempt | Low | Critical | Public low-level terminal APIs fail closed. Terminal state, failure/completion artifacts and budget callback effects share one transaction; missing or throwing callbacks roll back, and denied work remains uncharged. |
+| R42 | A backup path is replaced after validation but before its receipt commits | Low | High | Keep directory and file descriptors pinned through receipt commit; verify device/inode, bytes, SQLite integrity, lineage and the live anchor from those descriptors. A matching checksum alone is not path identity. |
+| R43 | A caller satisfies a control endpoint but continues scored work before the control sequence is complete | Low | High | Context, owned cancellation and delayed health checks are scheduler barriers, not advisory events. The checkpoint rejects further scored work until each required barrier completes in order. |
+| R44 | A coherent rehash hides semantically inconsistent parent decisions or failure identities | Low | High | Re-derive stage, plan, aggregate, active-plan and terminal-specific identity links from checkpoint records. Hash validity is necessary but not sufficient. |
+| R45 | Stage-F later seeds become half-activated across a crash, or acceptance cites untyped evidence | Low | High | B2's generic activation API rejects both later seeds and acceptance without mutation. B4 must bind typed evidence and activate the seed-17/seed-20260804 pair and cursor change atomically, with crash, replay and half-state tests, before either path can open. |
 
 ## High-Likelihood Risks — Detailed Controls
 

@@ -14,8 +14,10 @@ import sqlite3
 import stat
 import time
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
+from urllib.parse import quote
 from .c0b2_plan import (MODELS, attempt_id as stable_attempt_id,
                         planned_work_identities, planned_work_ids)
 from .c0b2_schema import validate_run_header_pins, validate_stage_c_selection
@@ -87,6 +89,16 @@ def _regular_owner_file(path: Path) -> os.stat_result:
     if st.st_uid != os.getuid():
         raise PermissionError(f"file not owned by current user: {path}")
     return st
+
+
+def _owner_directory(path: Path) -> Path:
+    """Validate an existing owner directory without repairing or chmodding it."""
+    st = path.lstat()
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+        raise PermissionError(f"not a real directory: {path}")
+    if st.st_uid != os.getuid():
+        raise PermissionError(f"directory not owned by current user: {path}")
+    return path
 _SCHEMA = """
 CREATE TABLE run_header(id INTEGER PRIMARY KEY CHECK(id=1), json TEXT NOT NULL, sha256 TEXT NOT NULL);
 CREATE TABLE run_state(id INTEGER PRIMARY KEY CHECK(id=1), state TEXT NOT NULL, updated REAL NOT NULL);
@@ -126,6 +138,207 @@ CREATE TABLE invocations(stage TEXT NOT NULL, ordinal INTEGER NOT NULL,
 CREATE TABLE events(seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL,
  detail_json TEXT NOT NULL, created REAL NOT NULL);
 """
+_RUNTIME_TABLES = (
+    "CREATE TABLE IF NOT EXISTS runtime_cursor("
+    "id INTEGER PRIMARY KEY CHECK(id=1), active_stage TEXT NOT NULL, "
+    "active_plan_key TEXT NOT NULL, updated REAL NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS phase_plans("
+    "plan_key TEXT PRIMARY KEY, budget_stage TEXT NOT NULL, phase TEXT NOT NULL, "
+    "parent_decision_sha256 TEXT, plan_hash TEXT NOT NULL UNIQUE, "
+    "plan_json TEXT NOT NULL, created REAL NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS plan_activations("
+    "plan_key TEXT PRIMARY KEY REFERENCES phase_plans(plan_key), "
+    "activation_hash TEXT NOT NULL UNIQUE, activation_json TEXT NOT NULL, "
+    "created REAL NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS phase_aggregates("
+    "plan_key TEXT PRIMARY KEY REFERENCES phase_plans(plan_key), "
+    "plan_hash TEXT NOT NULL, aggregate_hash TEXT NOT NULL UNIQUE, "
+    "aggregate_json TEXT NOT NULL, created REAL NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS phase_work_registry("
+    "work_id TEXT PRIMARY KEY REFERENCES work_items(work_id), "
+    "plan_key TEXT NOT NULL REFERENCES phase_plans(plan_key), "
+    "activation_group_id TEXT)",
+    "CREATE TABLE IF NOT EXISTS runtime_controls("
+    "control_id TEXT PRIMARY KEY, plan_key TEXT NOT NULL REFERENCES phase_plans(plan_key), "
+    "kind TEXT NOT NULL, control_hash TEXT NOT NULL, control_json TEXT NOT NULL, "
+    "state TEXT NOT NULL, evidence_hash TEXT, evidence_json TEXT, "
+    "not_before_utc TEXT, updated REAL NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS runtime_control_events("
+    "control_id TEXT NOT NULL REFERENCES runtime_controls(control_id), "
+    "seq INTEGER NOT NULL, state TEXT NOT NULL, evidence_hash TEXT, "
+    "evidence_json TEXT, not_before_utc TEXT, created REAL NOT NULL, "
+    "PRIMARY KEY(control_id,seq))",
+    "CREATE TABLE IF NOT EXISTS public_artifacts("
+    "artifact_id TEXT PRIMARY KEY, terminal TEXT NOT NULL, artifact_hash TEXT NOT NULL UNIQUE, "
+    "artifact_json TEXT NOT NULL, created REAL NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS backup_receipts("
+    "anchor_hash TEXT PRIMARY KEY, anchor_json TEXT NOT NULL, "
+    "receipt_hash TEXT NOT NULL UNIQUE, receipt_json TEXT NOT NULL, created REAL NOT NULL)",
+)
+_RUNTIME_COLUMNS = {
+    "runtime_cursor": ("id", "active_stage", "active_plan_key", "updated"),
+    "phase_plans": ("plan_key", "budget_stage", "phase", "parent_decision_sha256",
+                    "plan_hash", "plan_json", "created"),
+    "plan_activations": ("plan_key", "activation_hash", "activation_json", "created"),
+    "phase_aggregates": ("plan_key", "plan_hash", "aggregate_hash",
+                         "aggregate_json", "created"),
+    "phase_work_registry": ("work_id", "plan_key", "activation_group_id"),
+    "runtime_controls": ("control_id", "plan_key", "kind", "control_hash",
+                         "control_json", "state", "evidence_hash", "evidence_json",
+                         "not_before_utc", "updated"),
+    "runtime_control_events": ("control_id", "seq", "state", "evidence_hash",
+                               "evidence_json", "not_before_utc", "created"),
+    "public_artifacts": ("artifact_id", "terminal", "artifact_hash",
+                         "artifact_json", "created"),
+    "backup_receipts": ("anchor_hash", "anchor_json", "receipt_hash",
+                        "receipt_json", "created"),
+}
+
+
+def _schema_signature(conn: sqlite3.Connection, table: str) -> tuple[Any, ...]:
+    table_ident = '"' + table.replace('"', '""') + '"'
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)
+    ).fetchone()
+    if not row or not isinstance(row[0], str):
+        raise ImmutableViolation(f"runtime table {table} is missing its DDL")
+    ddl = " ".join(row[0].split())
+    columns = tuple(conn.execute(f"PRAGMA table_xinfo({table_ident})"))
+    foreign_keys = tuple(sorted(conn.execute(f"PRAGMA foreign_key_list({table_ident})")))
+    indexes = []
+    for index in conn.execute(f"PRAGMA index_list({table})"):
+        name = str(index[1])
+        index_sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='index' AND name=?", (name,)
+        ).fetchone()
+        index_ident = '"' + name.replace('"', '""') + '"'
+        indexes.append((tuple(index), index_sql[0] if index_sql else None,
+                        tuple(conn.execute(f"PRAGMA index_xinfo({index_ident})"))))
+    return ddl, columns, foreign_keys, tuple(sorted(indexes, key=lambda item: item[0][1]))
+
+
+@lru_cache(maxsize=1)
+def _expected_runtime_schema() -> dict[str, tuple[Any, ...]]:
+    reference = sqlite3.connect(":memory:", isolation_level=None)
+    try:
+        reference.execute("PRAGMA foreign_keys=ON")
+        reference.executescript(_SCHEMA)
+        for statement in _RUNTIME_TABLES:
+            reference.execute(statement)
+        return {table: _schema_signature(reference, table)
+                for table in _RUNTIME_COLUMNS}
+    finally:
+        reference.close()
+
+
+def _ensure_runtime_schema(conn: sqlite3.Connection) -> None:
+    """Add the public phase substrate after checking the real on-disk schema."""
+    owns = not conn.in_transaction
+    if owns:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        base = {str(row[0]) for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        required = {"run_header", "run_state", "plans", "decisions", "work_items"}
+        if not required <= base:
+            raise ImmutableViolation("checkpoint base schema is incomplete")
+        runtime_tables = set(_RUNTIME_COLUMNS)
+        present = runtime_tables & base
+        if present and present != runtime_tables:
+            raise ImmutableViolation("checkpoint runtime schema is partial")
+        migrating = not present
+        if migrating:
+            for statement in _RUNTIME_TABLES:
+                conn.execute(statement)
+        signatures = _expected_runtime_schema()
+        for table, expected in _RUNTIME_COLUMNS.items():
+            actual = tuple(str(row[1]) for row in conn.execute(
+                f"PRAGMA table_info({table})"))
+            if actual != expected:
+                raise ImmutableViolation(f"runtime table {table} has unexpected columns")
+            if _schema_signature(conn, table) != signatures[table]:
+                raise ImmutableViolation(f"runtime table {table} has unexpected schema")
+        if migrating:
+            conn.execute("INSERT INTO runtime_cursor VALUES(1,'C','C',?)", (time.time(),))
+        else:
+            cursor = conn.execute(
+                "SELECT id,active_stage,active_plan_key FROM runtime_cursor").fetchall()
+            if len(cursor) != 1 or cursor[0][0] != 1:
+                raise ImmutableViolation("checkpoint runtime cursor is not the singleton row")
+        if owns:
+            conn.commit()
+    except Exception:
+        if owns:
+            conn.rollback()
+        raise
+
+
+_STORED_HEADER_FIELDS = {
+    "schema_version", "journal_mode", "cumulative_cap", "run_id", "limits",
+    "invocation_caps",
+}
+
+
+def _stored_header(conn: sqlite3.Connection) -> dict[str, Any]:
+    rows = conn.execute("SELECT json,sha256 FROM run_header WHERE id=1").fetchall()
+    if len(rows) != 1:
+        raise ImmutableViolation("run header is not the singleton row")
+    raw, digest = rows[0]
+    try:
+        value = json.loads(raw)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ImmutableViolation("run header is not valid JSON") from exc
+    if (not isinstance(value, dict) or canonical_json(value) != raw
+            or sha256_json(value) != digest):
+        raise ImmutableViolation("run header hash or canonical encoding mismatch")
+    if not _STORED_HEADER_FIELDS <= set(value):
+        raise ImmutableViolation("run header lacks persisted checkpoint fields")
+    pins = {key: item for key, item in value.items()
+            if key not in _STORED_HEADER_FIELDS}
+    try:
+        normalized = validate_run_header_pins(pins)
+    except (TypeError, ValueError) as exc:
+        raise ImmutableViolation("run header pins failed strict validation") from exc
+    limits = value["limits"]
+    valid_limits = isinstance(limits, dict) and all(
+        isinstance(stage, str) and stage and isinstance(classes, dict)
+        and all(call_class in CALL_CLASSES and type(allowance) is int and allowance >= 0
+                for call_class, allowance in classes.items())
+        for stage, classes in limits.items())
+    if (pins != normalized or set(value) != set(normalized) | _STORED_HEADER_FIELDS
+            or type(value["schema_version"]) is not int
+            or value["schema_version"] != SCHEMA_VERSION
+            or value["journal_mode"] not in {"DELETE", "WAL"}
+            or value["journal_mode"] != value["filesystem_selected_mode"]
+            or type(value["cumulative_cap"]) is not int
+            or value["cumulative_cap"] < 0
+            or not isinstance(value["run_id"], str)
+            or not RUN_ID_RE.fullmatch(value["run_id"])
+            or not valid_limits or value["invocation_caps"] != INVOCATION_CAPS):
+        raise ImmutableViolation("run header persisted fields failed strict validation")
+    return value
+
+
+def _read_owner_json(path: Path) -> dict[str, Any]:
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_size > 65536:
+            raise PermissionError(f"unsafe bounded JSON file: {path}")
+        raw = b""
+        while len(raw) <= 65536:
+            block = os.read(fd, 65537 - len(raw))
+            if not block:
+                break
+            raw += block
+        if len(raw) > 65536:
+            raise ImmutableViolation("restore record exceeds its bounded size")
+        value = json.loads(raw.decode("utf-8"))
+        if not isinstance(value, dict):
+            raise ImmutableViolation("restore record is not an object")
+        return value
+    finally:
+        os.close(fd)
 class Checkpoint:
     def __init__(self, db_path: Path, conn: sqlite3.Connection, benchmark_root: Path):
         self.path = Path(db_path)
@@ -172,6 +385,7 @@ class Checkpoint:
         try:
             cls._configure(conn, journal_mode)
             conn.executescript(_SCHEMA)
+            _ensure_runtime_schema(conn)
             now = time.time()
             conn.execute("INSERT INTO run_header VALUES(1,?,?)",
                          (canonical_json(frozen), sha256_json(frozen)))
@@ -203,45 +417,61 @@ class Checkpoint:
     @classmethod
     def open(cls, db_path: Path, benchmark_root: Path) -> "Checkpoint":
         path = Path(db_path)
-        root = _secure_dir(Path(benchmark_root))
-        runs = _secure_dir(root / "runs")
-        run_dir = _secure_dir(path.parent)
+        root = _owner_directory(Path(benchmark_root))
+        runs = _owner_directory(root / "runs")
+        run_dir = _owner_directory(path.parent)
         if run_dir.parent != runs or path.name != "checkpoint.sqlite3":
             raise PermissionError("checkpoint is outside benchmark_root/runs/<run>")
-        _regular_owner_file(path)
+        initial = _regular_owner_file(path)
+        readonly = sqlite3.connect(
+            f"file:{quote(str(path.resolve()), safe='/')}?mode=ro",
+            uri=True, isolation_level=None, timeout=5.0)
+        try:
+            readonly.execute("PRAGMA query_only=ON")
+            mode = str(readonly.execute("PRAGMA journal_mode").fetchone()[0]).upper()
+            header = _stored_header(readonly)
+            logical_run_id = header["run_id"]
+            if logical_run_id != run_dir.name:
+                record = _read_owner_json(run_dir / "restore.json")
+                expected = {
+                    "kind": "snapshot_restore_v1",
+                    "logical_run_id": logical_run_id,
+                    "storage_id": run_dir.name,
+                    "header_sha256": sha256_json(header),
+                }
+                if (set(record) != {*expected, "snapshot_sha256"}
+                        or any(record.get(key) != value for key, value in expected.items())
+                        or not isinstance(record.get("snapshot_sha256"), str)
+                        or not re.fullmatch(r"[0-9a-f]{64}", record["snapshot_sha256"])):
+                    raise ImmutableViolation("invalid snapshot restoration record")
+                origin = readonly.execute(
+                    "SELECT detail_json FROM events WHERE kind='RESTORE_ORIGIN' "
+                    "ORDER BY seq DESC LIMIT 1").fetchone()
+                if not origin or origin[0] != canonical_json(record):
+                    raise ImmutableViolation("restore origin does not match checkpoint")
+            if (header["mount"]["canonical_path"] != str(root.resolve())
+                    or header["filesystem_selected_mode"] != mode):
+                raise ImmutableViolation("checkpoint path does not match immutable run id")
+        finally:
+            readonly.close()
+        current = _regular_owner_file(path)
+        if (current.st_dev, current.st_ino) != (initial.st_dev, initial.st_ino):
+            raise ImmutableViolation("checkpoint identity changed during read-only validation")
         conn = sqlite3.connect(path, isolation_level=None, timeout=5.0)
-        mode = str(conn.execute("PRAGMA journal_mode").fetchone()[0]).upper()
-        cls._configure(conn, mode)
-        os.chmod(path, 0o600)
-        point = cls(path, conn, root)
-        header = point.header()
-        logical_run_id = header.get("run_id")
-        if logical_run_id != run_dir.name:
-            record_path = run_dir / "restore.json"
-            _regular_owner_file(record_path)
-            record = json.loads(record_path.read_text("utf-8"))
-            expected = {
-                "kind": "snapshot_restore_v1",
-                "logical_run_id": logical_run_id,
-                "storage_id": run_dir.name,
-                "header_sha256": sha256_json(header),
-            }
-            if (not isinstance(record, dict)
-                    or set(record) != {*expected, "snapshot_sha256"}
-                    or any(record.get(key) != value for key, value in expected.items())
-                    or not isinstance(record.get("snapshot_sha256"), str)
-                    or not re.fullmatch(r"[0-9a-f]{64}", record["snapshot_sha256"])):
-                conn.close(); raise ImmutableViolation("invalid snapshot restoration record")
-            origin = conn.execute(
-                "SELECT detail_json FROM events WHERE kind='RESTORE_ORIGIN' "
-                "ORDER BY seq DESC LIMIT 1").fetchone()
-            if not origin or origin[0] != canonical_json(record):
-                conn.close(); raise ImmutableViolation("restore origin does not match checkpoint")
-        if (header["mount"]["canonical_path"] != str(root.resolve())
-                or header["filesystem_selected_mode"] != mode):
+        try:
+            if (_stored_header(conn) != header
+                    or str(conn.execute("PRAGMA journal_mode").fetchone()[0]).upper() != mode):
+                raise ImmutableViolation("checkpoint changed after read-only validation")
+            current = _regular_owner_file(path)
+            if (current.st_dev, current.st_ino) != (initial.st_dev, initial.st_ino):
+                raise ImmutableViolation("checkpoint identity changed before migration")
+            cls._configure(conn, mode)
+            _ensure_runtime_schema(conn)
+            os.chmod(path, 0o600)
+            return cls(path, conn, root)
+        except Exception:
             conn.close()
-            raise ImmutableViolation("checkpoint path does not match immutable run id")
-        return point
+            raise
     def close(self) -> None:
         self.conn.close()
     def __enter__(self) -> "Checkpoint":
@@ -249,11 +479,7 @@ class Checkpoint:
     def __exit__(self, *_args: object) -> None:
         self.close()
     def header(self) -> dict[str, Any]:
-        raw, digest = self.conn.execute("SELECT json,sha256 FROM run_header WHERE id=1").fetchone()
-        value = json.loads(raw)
-        if sha256_json(value) != digest:
-            raise ImmutableViolation("run header hash mismatch")
-        return value
+        return _stored_header(self.conn)
     def state(self) -> str:
         return str(self.conn.execute("SELECT state FROM run_state WHERE id=1").fetchone()[0])
     def transition(self, new_state: str) -> None:
@@ -267,6 +493,10 @@ class Checkpoint:
                 "stage-boundary pause requires an atomic activated decision")
         blockers = {"BLOCKED_PROVENANCE", "BLOCKED_BUDGET", "BLOCKED_FILESYSTEM",
                     "BLOCKED_SECURITY", "ABANDONED"}
+        if (self.header()["run_type"] == "public"
+                and new_state in blockers | {"FAILED_SAFETY"}):
+            raise CheckpointError(
+                "public failure terminal requires atomic artifact finalization")
         if old == new_state:
             return
         if old == "PREPARED":
@@ -285,7 +515,9 @@ class Checkpoint:
                           (new_state, time.time()))
     def claim_invocation(
             self, stage: str, *,
-            claim_guard: Optional[Callable[[], None]] = None) -> int:
+            claim_guard: Optional[Callable[[], None]] = None,
+            budget_failure_callback: Optional[
+                Callable[[Mapping[str, Optional[str]]], None]] = None) -> int:
         if stage not in INVOCATION_CAPS:
             raise ValueError(f"unknown invocation stage {stage}")
         self.conn.execute("BEGIN IMMEDIATE")
@@ -299,13 +531,23 @@ class Checkpoint:
                 "SELECT coalesce(max(ordinal),0) FROM invocations WHERE stage=?",
                 (stage,)).fetchone()[0]
             ordinal = int(prior) + 1
-            cap = self.header()["invocation_caps"].get(stage)
+            header = self.header()
+            cap = header["invocation_caps"].get(stage)
             if cap != INVOCATION_CAPS[stage]:
                 raise ImmutableViolation("invocation cap differs from the implementation contract")
             if ordinal > cap:
                 self.conn.execute(
                     "UPDATE run_state SET state='BLOCKED_BUDGET',updated=? WHERE id=1",
                     (time.time(),))
+                if header["run_type"] == "public" and budget_failure_callback is None:
+                    raise CheckpointError(
+                        "public invocation cap requires atomic failure finalization")
+                if header["run_type"] == "public":
+                    assert budget_failure_callback is not None
+                    budget_failure_callback({
+                        "stage": stage, "attempt_id": None,
+                        "control_id": None, "work_id": None,
+                    })
                 self.conn.commit()
                 raise CapExceeded(f"invocation allowance exhausted for {stage}")
             if claim_guard:
@@ -317,6 +559,8 @@ class Checkpoint:
             self.conn.commit()
             return ordinal
         except CapExceeded:
+            if self.conn.in_transaction:
+                self.conn.rollback()
             raise
         except Exception:
             self.conn.rollback()
@@ -724,7 +968,9 @@ class Checkpoint:
                   control_id: Optional[str] = None,
                   invocation_ordinal: Optional[int] = None,
                   first_control_class: Optional[str] = None,
-                  claim_guard: Optional[Callable[[], None]] = None) -> bool:
+                  claim_guard: Optional[Callable[[], None]] = None,
+                  budget_failure_callback: Optional[
+                      Callable[[Mapping[str, Optional[str]]], None]] = None) -> bool:
         if (work_id is None) == (control_id is None) or attempt_no < 1:
             raise ValueError("exactly one of work_id or control_id is required")
         identity = work_id if work_id is not None else f"control:{control_id}"
@@ -819,6 +1065,15 @@ class Checkpoint:
             if used_class + 1 > limit[0] or used_stage + 1 > stage_cap or total + 1 > cap:
                 self.conn.execute("UPDATE run_state SET state='BLOCKED_BUDGET',updated=? WHERE id=1",
                                   (time.time(),))
+                if header["run_type"] == "public" and budget_failure_callback is None:
+                    raise CheckpointError(
+                        "public call cap requires atomic failure finalization")
+                if header["run_type"] == "public":
+                    assert budget_failure_callback is not None
+                    budget_failure_callback({
+                        "stage": stage, "attempt_id": None,
+                        "control_id": control_id, "work_id": work_id,
+                    })
                 self.conn.commit()
                 raise CapExceeded(f"call allowance exhausted for {stage}/{call_class}")
             now = time.time()
@@ -833,6 +1088,8 @@ class Checkpoint:
             self.conn.commit()
             return True
         except CapExceeded:
+            if self.conn.in_transaction:
+                self.conn.rollback()
             raise
         except Exception:
             self.conn.rollback()
@@ -848,6 +1105,9 @@ class Checkpoint:
             raise ValueError("invalid terminal state")
         if terminal_state is not None and terminal_state != outcome:
             raise ValueError("terminal state must match the attempt outcome")
+        if terminal_state is not None and self.header()["run_type"] == "public":
+            raise CheckpointError(
+                "public failure terminal requires atomic artifact finalization")
         self.conn.execute("BEGIN IMMEDIATE")
         try:
             row = self.conn.execute(
@@ -994,6 +1254,31 @@ class Checkpoint:
         if not row:
             raise CheckpointError(f"unknown work {work_id}")
         return str(row[0]), row[1]
+
+    def runtime_position(self):
+        from .c0b2_runtime_common import runtime_position
+        return runtime_position(self)
+
+    def load_phase_plan(self, plan_key: str) -> tuple[Optional[str], str, str]:
+        from .c0b2_runtime_common import load_phase_plan
+        return load_phase_plan(self, plan_key)
+
+    def freeze_activate_phase_plan(self, value: Mapping[str, Any], **kwargs: Any):
+        from .c0b2_runtime_common import freeze_activate_phase_plan
+        return freeze_activate_phase_plan(self, value, **kwargs)
+
+    def freeze_runtime_control(self, plan_key: str, control_id: str,
+                               kind: str, value: Mapping[str, Any]) -> str:
+        from .c0b2_runtime_common import freeze_runtime_control
+        return freeze_runtime_control(self, plan_key, control_id, kind, value)
+
+    def update_runtime_control(self, control_id: str, **kwargs: Any):
+        from .c0b2_runtime_common import update_runtime_control
+        return update_runtime_control(self, control_id, **kwargs)
+
+    def load_runtime_control(self, control_id: str):
+        from .c0b2_runtime_common import load_runtime_control
+        return load_runtime_control(self, control_id)
     @staticmethod
     def _fsync_file_and_parent(path: Path) -> None:
         fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))

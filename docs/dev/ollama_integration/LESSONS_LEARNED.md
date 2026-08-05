@@ -341,6 +341,51 @@ normative schema catalog so the implementation cannot invent those choices after
 results. Every aggregate must be independently re-derived from attempts and immutable
 fixtures; strict shape validation alone is insufficient.
 
+## C0B-2B2 (shared public phase, checkpoint and evidence controls)
+
+### 34. A durable control is a scheduler barrier
+
+Recording a valid context probe or cancellation event does not enforce the protocol if
+another scored item can run immediately afterward. The checkpoint now blocks scored
+work until the required context, stream-owned cancellation and delayed health sequence
+completes in order. Eligibility is checked before charge or transport.
+
+### 35. Public terminal state and evidence are one obligation
+
+A terminal label without its required artifacts is not a recoverable public result.
+Public low-level terminal transitions now fail closed; the runtime commits the terminal,
+artifacts and budget callback effects together. Callback denial, absence or exception
+rolls the whole invocation back, while private primitive semantics remain unchanged.
+
+### 36. Additive migration must validate before it mutates
+
+Column presence did not prove that a pre-existing table had the required constraints,
+and adding missing tables before rejecting a partial schema left a failed open with side
+effects. B2 inspects the whole checkpoint schema first, rejects partial or incompatible
+DDL, and only then performs the additive migration.
+
+### 37. A checksum does not pin a path
+
+A byte-identical file can replace a checked path and retain the same digest. Backup
+validation now holds directory and file descriptors through the receipt commit and
+rechecks device/inode, content, SQLite semantics, lineage and the live anchor. This
+closes the check/use gap rather than merely detecting changed bytes.
+
+### 38. Re-derive meaning across records
+
+An attacker or bug can coherently alter a record and recompute its hash. Parent
+decisions, completion decisions and terminal-specific failure identities are therefore
+checked against the stage, active plan, predecessor aggregate and checkpoint state that
+give them meaning.
+
+### 39. Activate adaptive pairs atomically or keep them closed
+
+Activating one later Stage-F seed before the other creates a durable half-state, while
+acceptance without its typed final-F evidence can attest the wrong result. B2's generic
+API rejects both later seeds and acceptance without mutation. B4 owns their evidence,
+paired seed activation, cursor transition, replay behavior and crash/half-state tests;
+until that complete API exists, those branches remain held.
+
 ---
 
 ## Not yet learned

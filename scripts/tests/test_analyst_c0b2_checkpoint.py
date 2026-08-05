@@ -76,12 +76,13 @@ def _header(root: Path, *, probe: bool = False,
     return header
 
 
-def _checkpoint(tmp_path: Path, run_id: str = "run-a", **limit_kwargs) -> ck.Checkpoint:
+def _checkpoint(tmp_path: Path, run_id: str = "run-a", *,
+                run_type: str = "public", **limit_kwargs) -> ck.Checkpoint:
     limits = _limits(**limit_kwargs)
     cap = sum(limits["C"].values())
     root = tmp_path / "bench"
     point = ck.Checkpoint.create(
-        root, run_id, header=_header(root, probe=True), limits=limits,
+        root, run_id, header=_header(root, probe=True, run_type=run_type), limits=limits,
         cumulative_cap=cap, journal_mode="DELETE")
     point.freeze_plan("C", "root", _plan("w1", "w2", "w3"))
     return point
@@ -307,7 +308,7 @@ def test_plan_and_allowance_table_tampering_is_detected(tmp_path: Path) -> None:
 
 
 def test_state_table_rejects_illegal_and_terminal_transitions(tmp_path: Path) -> None:
-    point = _checkpoint(tmp_path)
+    point = _checkpoint(tmp_path, run_type="private")
     try:
         with pytest.raises(ck.CheckpointError):
             point.transition("SELECTED")
@@ -326,7 +327,7 @@ def test_state_table_rejects_illegal_and_terminal_transitions(tmp_path: Path) ->
 
 
 def test_invocation_ordinals_are_atomic_persistent_and_capped(tmp_path: Path) -> None:
-    point = _checkpoint(tmp_path)
+    point = _checkpoint(tmp_path, run_type="private")
     try:
         with pytest.raises(ck.CheckpointError):
             point.claim_invocation("C")
@@ -419,7 +420,8 @@ def test_attempt_numbers_cannot_skip(tmp_path: Path) -> None:
 
 
 def test_class_cap_blocks_atomically_without_extra_attempt(tmp_path: Path) -> None:
-    point = _checkpoint(tmp_path, scored=1, schema=0, control=0, transport=0)
+    point = _checkpoint(
+        tmp_path, run_type="private", scored=1, schema=0, control=0, transport=0)
     try:
         _work(point, "w1")
         _work(point, "w2")
@@ -474,7 +476,7 @@ def test_cumulative_cap_blocks_independently_of_stage_and_class_caps(tmp_path: P
     limits = {stage: {"scored": 2} for stage in ("C", "D")}
     root = tmp_path / "bench"
     point = ck.Checkpoint.create(
-        root, "run-a", header=_header(root), limits=limits,
+        root, "run-a", header=_header(root, run_type="private"), limits=limits,
         cumulative_cap=3, journal_mode="DELETE")
     try:
         point.freeze_plan("C", "root", {
@@ -616,7 +618,7 @@ def test_persisted_running_reopens_recovers_and_resumes_without_duplicate(
 
 
 def test_safety_terminal_and_attempt_commit_atomically(tmp_path: Path) -> None:
-    point = _checkpoint(tmp_path)
+    point = _checkpoint(tmp_path, run_type="private")
     _work(point, "w1")
     _start(point)
     point.precharge(attempt_id=_attempt("w1", 1), stage="C", call_class="scored",
@@ -1352,75 +1354,6 @@ def test_returned_retry_label_cannot_clear_resource_probe_obligation(
     point.close()
 
 
-def test_stage_f_cancellation_probe_requires_resume_before_following_health(
-        tmp_path: Path) -> None:
-    root = tmp_path / "bench"
-    limits = {"C": {"scored": 1}, "D": {"scored": 1},
-              "F": {"preflight_probe": 10}}
-    header = _header(root, probe=True)
-    header["model_digests"]["model-2"] = "c" * 64
-    point = ck.Checkpoint.create(
-        root, "cancel-probe", header=header, limits=limits,
-        cumulative_cap=12)
-    c_hash = point.freeze_plan("C", "root", _plan("c1"))
-    _complete_work(point, "C", "c1")
-    c_decision = point.freeze_decision(
-        "c-next", "C", c_hash, "c-aggregate", "ACTIVATED", {"next": "D"})
-    d_hash = point.freeze_plan("D", c_decision, _plan("d1"))
-    _complete_work(point, "D", "d1")
-    d_decision = point.freeze_decision(
-        "d-next", "D", d_hash, "d-aggregate", "ACTIVATED", {"next": "F"})
-    point.freeze_plan("F", d_decision, {"work": [
-        *_plan("f-cancellation")["work"],
-        {"work_id": "f-cancellation-2", "cell_id": "cell-2",
-         "request_sha256": "r-2", "model": "model-2",
-         "model_digest": "c" * 64},
-    ]})
-    calls = []
-    cancellation = ex.CancellationController()
-
-    def cancel_transport(request, _event):
-        calls.append(request.control_id)
-        cancellation.first_signal()
-        return ex.FakeResponse("cancel-stream-closed")
-
-    with fs.GlobalExecutionLock(root) as lock:
-        executor = ex.DurableExecutor(
-            point, lock, cancel_transport, cancellation=cancellation)
-        executor.recover_and_start("F")
-        _seed_preflight(point, "F", 1)
-        cancel_request = ex.ControlRequest(
-            "F", ex.control_id("F", 1, "cancellation_probe", "model"),
-            "model", "cancel", 1)
-        assert executor.run_cancellation_probe(cancel_request).outcome == \
-            "CANCELLED_PENDING_RESUME"
-        assert len(calls) == 1 and point.state() == "CANCELLED_PENDING_RESUME"
-
-    with fs.GlobalExecutionLock(root) as lock:
-        resumed = ex.DurableExecutor(
-            point, lock,
-            lambda request, _event: calls.append(request.control_id)
-            or ex.FakeResponse("healthy"))
-        assert resumed.recover_and_start("F") == (0, 2)
-        _seed_preflight(point, "F", 2)
-        health_request = ex.ControlRequest(
-            "F", ex.control_id("F", 2, "cancellation_health", "model"),
-            "model", "health", 1)
-        assert resumed.run_cancellation_health(
-            health_request, cancelled_attempt_id=cancel_request.attempt_id).outcome == \
-            "ACCEPTED"
-        with pytest.raises(ck.CheckpointError, match="model-2"):
-            resumed._require_cancellation_health_event()
-    assert len(calls) == 2
-    event = point.conn.execute(
-        "SELECT detail_json FROM events WHERE kind='CANCELLATION_HEALTH_PASS'").fetchone()
-    assert event and json.loads(event[0]) == {
-        "cancelled_attempt_id": cancel_request.attempt_id,
-        "health_attempt_id": health_request.attempt_id,
-    }
-    point.close()
-
-
 def test_soft_wall_and_cancel_pause_without_phantom_calls(tmp_path: Path) -> None:
     point = _checkpoint(tmp_path)
     _work(point, "w1")
@@ -1697,3 +1630,59 @@ def test_stage_c_terminal_paths_recompute_selection(tmp_path: Path, monkeypatch:
         executor = ex.DurableExecutor(point, lock, lambda _request, _cancel: None)
         with pytest.raises(ck.CheckpointError, match="frozen evidence"): executor.finalize_stage_c_inconclusive(selection, artifact)
     point.close()
+
+
+@pytest.mark.parametrize("invalid", [None, "header", "root", "restore"])
+def test_legacy_open_validates_before_optional_runtime_migration(
+        tmp_path: Path, invalid: str | None) -> None:
+    point = _checkpoint(tmp_path)
+    path, root = point.path, point.root
+    header = point.header()
+    point.close()
+    conn = sqlite3.connect(path)
+    for table in reversed(tuple(ck._RUNTIME_COLUMNS)):
+        conn.execute(f"DROP TABLE {table}")
+    if invalid == "header":
+        header["unreviewed"] = True
+    elif invalid == "root":
+        header["mount"]["canonical_path"] = str(tmp_path / "wrong")
+        mount = {key: value for key, value in header["mount"].items() if key != "sha256"}
+        header["mount"]["sha256"] = ck.sha256_json(mount)
+    elif invalid == "restore":
+        header["run_id"] = "missing-restore-record"
+    conn.execute("UPDATE run_header SET json=?,sha256=? WHERE id=1",
+                 (ck.canonical_json(header), ck.sha256_json(header)))
+    conn.commit(); conn.close()
+
+    if invalid is None:
+        ck.Checkpoint.open(path, root).close()
+    else:
+        with pytest.raises((ck.ImmutableViolation, FileNotFoundError)):
+            ck.Checkpoint.open(path, root)
+    check = sqlite3.connect(path)
+    assert check.execute(
+        "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN "
+        f"({','.join('?' * len(ck._RUNTIME_COLUMNS))})",
+        tuple(ck._RUNTIME_COLUMNS)).fetchone()[0] == (
+            len(ck._RUNTIME_COLUMNS) if invalid is None else 0)
+    check.close()
+
+
+@pytest.mark.parametrize("table", ["runtime_cursor", "phase_plans"])
+def test_open_rejects_same_column_runtime_tables_with_wrong_constraints(
+        tmp_path: Path, table: str) -> None:
+    point = _checkpoint(tmp_path)
+    path, root = point.path, point.root
+    point.close()
+    conn = sqlite3.connect(path)
+    conn.execute(f"DROP TABLE {table}")
+    if table == "runtime_cursor":
+        conn.execute("CREATE TABLE runtime_cursor(id INTEGER,active_stage TEXT,"
+                     "active_plan_key TEXT,updated REAL)")
+        conn.execute("INSERT INTO runtime_cursor VALUES(1,'C','C',0)")
+    else:
+        conn.execute("CREATE TABLE phase_plans(plan_key TEXT,budget_stage TEXT,phase TEXT,"
+                     "parent_decision_sha256 TEXT,plan_hash TEXT,plan_json TEXT,created REAL)")
+    conn.commit(); conn.close()
+    with pytest.raises(ck.ImmutableViolation, match="unexpected schema"):
+        ck.Checkpoint.open(path, root)

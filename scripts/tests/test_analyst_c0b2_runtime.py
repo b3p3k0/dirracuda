@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import signal
 import sqlite3
 from pathlib import Path
@@ -66,6 +67,300 @@ def test_content_free_render_is_canonical_json() -> None:
     assert json.loads(rendered) == {"state": "PREPARED", "calls_total": 0}
 
 
+def _stage_c_boundary(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, run_id: str,
+) -> tuple[Path, runtime.Checkpoint]:
+    monkeypatch.setattr(runtime, "_require_clean_task_delta", lambda _seal: None)
+    root = tmp_path / "bench"
+    runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    point = runtime.Checkpoint.open(runtime._checkpoint_path(run_id, root), root)
+    _parent, plan_hash, _raw = point.load_plan("C")
+    aggregate = {"version": "test-stage-c-aggregate"}
+    aggregate_raw = runtime.canonical_json(aggregate)
+    aggregate_hash = runtime.sha256_json(aggregate)
+    point.conn.execute(
+        "INSERT INTO stage_aggregates VALUES(?,?,?,?,?)",
+        ("C", plan_hash, aggregate_hash, aggregate_raw, 1.0),
+    )
+    decision = {"version": "test-stage-c-selection"}
+    point.conn.execute(
+        "INSERT INTO decisions VALUES(?,?,?,?,?,?,?)",
+        ("stage-c-selection", "C", plan_hash, aggregate_hash, "ACTIVATED",
+         runtime.canonical_json(decision), 1.0),
+    )
+    point.conn.execute(
+        "UPDATE run_state SET state='PAUSED_STAGE_BOUNDARY' WHERE id=1")
+    return root, point
+
+
+def test_backup_receipt_recovers_both_crash_windows_without_reusing_orphan(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    root, point = _stage_c_boundary(
+        monkeypatch, tmp_path, "c0b2-backup-crash-windows")
+    with runtime.GlobalExecutionLock(root) as lock:
+        monkeypatch.setattr(
+            runtime, "_pre_receipt_commit_hook",
+            lambda *_args: (_ for _ in ()).throw(OSError("pre-receipt crash")))
+        with pytest.raises(OSError, match="pre-receipt crash"):
+            runtime.ensure_backup_receipt(point, lock)
+        assert point.conn.execute("SELECT count(*) FROM backup_receipts").fetchone()[0] == 0
+        orphan = tuple((point.path.parent / "backups").glob("snapshot-*.sqlite3"))
+        assert len(orphan) == 1
+
+        monkeypatch.setattr(runtime, "_pre_receipt_commit_hook", lambda *_args: None)
+        monkeypatch.setattr(
+            runtime, "_receipt_return_hook",
+            lambda *_args: (_ for _ in ()).throw(OSError("post-receipt crash")))
+        with pytest.raises(OSError, match="post-receipt crash"):
+            runtime.ensure_backup_receipt(point, lock)
+        snapshots = tuple((point.path.parent / "backups").glob("snapshot-*.sqlite3"))
+        assert len(snapshots) == 2 and orphan[0] in snapshots
+        assert point.conn.execute("SELECT count(*) FROM backup_receipts").fetchone()[0] == 1
+
+        monkeypatch.setattr(runtime, "_receipt_return_hook", lambda *_args: None)
+        receipt = runtime.ensure_backup_receipt(point, lock)
+        assert runtime.ensure_backup_receipt(point, lock) == receipt
+        assert len(tuple((point.path.parent / "backups").glob(
+            "snapshot-*.sqlite3"))) == 2
+
+        changed = runtime._current_backup_anchor(point)
+        changed["charged_call_total"] += 1
+        with pytest.raises(runtime.RuntimeGateError, match="differs"):
+            runtime.ensure_backup_receipt(point, lock, changed)
+    point.close()
+
+
+@pytest.mark.parametrize("swap", ["parent", "leaf"])
+def test_backup_receipt_rejects_parent_or_leaf_replacement_before_commit(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, swap: str) -> None:
+    root, point = _stage_c_boundary(
+        monkeypatch, tmp_path, f"c0b2-backup-swap-{swap}")
+    outside = tmp_path / "outside"
+    outside.mkdir(mode=0o700)
+
+    def replace(path: Path, _receipt: dict[str, Any]) -> None:
+        if swap == "parent":
+            moved = path.parent.with_name("backups-original")
+            path.parent.rename(moved)
+            path.parent.symlink_to(outside, target_is_directory=True)
+        else:
+            moved = path.with_suffix(".original")
+            path.rename(moved)
+            path.symlink_to(outside / "replacement.sqlite3")
+
+    monkeypatch.setattr(runtime, "_pre_receipt_commit_hook", replace)
+    with runtime.GlobalExecutionLock(root) as lock:
+        with pytest.raises((OSError, PermissionError, runtime.RuntimeGateError)):
+            runtime.ensure_backup_receipt(point, lock)
+    assert point.conn.execute("SELECT count(*) FROM backup_receipts").fetchone()[0] == 0
+    assert not tuple(outside.iterdir())
+    point.close()
+
+
+def test_backup_creation_stays_on_pinned_directory_and_rejects_parent_swap(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    root, point = _stage_c_boundary(
+        monkeypatch, tmp_path, "c0b2-backup-create-parent-swap")
+    outside = tmp_path / "outside-create"
+    outside.mkdir(mode=0o700)
+    original_open = runtime.os.open
+    swapped = False
+
+    def racing_open(path: Any, flags: int, mode: int = 0o777,
+                    *, dir_fd: int | None = None) -> int:
+        nonlocal swapped
+        if (not swapped and dir_fd is not None and isinstance(path, str)
+                and path.startswith("snapshot-")):
+            backup = point.path.parent / "backups"
+            backup.rename(point.path.parent / "backups-original")
+            backup.symlink_to(outside, target_is_directory=True)
+            swapped = True
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(runtime.os, "open", racing_open)
+    with runtime.GlobalExecutionLock(root) as lock:
+        with pytest.raises(runtime.RuntimeGateError, match="backup"):
+            runtime.ensure_backup_receipt(point, lock)
+    assert swapped and not tuple(outside.iterdir())
+    assert point.conn.execute("SELECT count(*) FROM backup_receipts").fetchone()[0] == 0
+    point.close()
+
+
+@pytest.mark.parametrize("swap", ["parent", "leaf"])
+def test_backup_receipt_rejects_byte_identical_inode_replacement_before_commit(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, swap: str) -> None:
+    root, point = _stage_c_boundary(
+        monkeypatch, tmp_path, f"c0b2-backup-identical-{swap}")
+    changed_inode = False
+
+    def replace(path: Path, _receipt: dict[str, Any]) -> None:
+        nonlocal changed_inode
+        original = path.stat()
+        if swap == "parent":
+            moved = path.parent.with_name("backups-original")
+            path.parent.rename(moved)
+            path.parent.mkdir(mode=0o700)
+            shutil.copyfile(moved / path.name, path)
+        else:
+            moved = path.with_suffix(".original")
+            path.rename(moved)
+            shutil.copyfile(moved, path)
+        path.chmod(0o600)
+        changed_inode = path.stat().st_ino != original.st_ino
+
+    monkeypatch.setattr(runtime, "_pre_receipt_commit_hook", replace)
+    with runtime.GlobalExecutionLock(root) as lock:
+        with pytest.raises(runtime.RuntimeGateError, match="pinned inode"):
+            runtime.ensure_backup_receipt(point, lock)
+    assert changed_inode
+    assert point.conn.execute("SELECT count(*) FROM backup_receipts").fetchone()[0] == 0
+    point.close()
+
+
+@pytest.mark.parametrize(
+    "mutation", ["terminal", "stage", "plan", "count", "control"])
+def test_backup_anchor_rejects_coherent_failure_cross_record_tampering(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mutation: str) -> None:
+    root, point = _stage_c_boundary(
+        monkeypatch, tmp_path, f"c0b2-failure-cross-{mutation}")
+    runtime.finish_public_run_failure(point, terminal="ABANDONED")
+    rows = point.conn.execute(
+        "SELECT artifact_id,artifact_json FROM public_artifacts").fetchall()
+    evidence_id, evidence = next(
+        (identity, json.loads(raw)) for identity, raw in rows if "evidence-v1" in raw)
+    artifact_id, artifact = next(
+        (identity, json.loads(raw)) for identity, raw in rows if "c0b2-failure-v1" in raw)
+    if mutation == "terminal":
+        evidence.update(terminal="BLOCKED_PROVENANCE",
+                        reason_code="provenance_identity_failure")
+        artifact.update(terminal="BLOCKED_PROVENANCE",
+                        reason="provenance_identity_failure")
+    elif mutation == "stage":
+        evidence.update(stage="D", plan_key="D1_OUTPUT")
+        artifact["stage"] = "D"
+    elif mutation == "plan":
+        evidence["plan_key"] = None
+    elif mutation == "control":
+        evidence["control_id"] = "f" * 64
+    else:
+        artifact["charged_call_total"] += 1
+    evidence_hash = runtime.sha256_json(evidence)
+    artifact["evidence_sha256"] = evidence_hash
+    point.conn.execute(
+        "UPDATE public_artifacts SET artifact_json=?,artifact_hash=? WHERE artifact_id=?",
+        (runtime.canonical_json(evidence), evidence_hash, evidence_id))
+    point.conn.execute(
+        "UPDATE public_artifacts SET artifact_json=?,artifact_hash=? WHERE artifact_id=?",
+        (runtime.canonical_json(artifact), runtime.sha256_json(artifact), artifact_id))
+    with runtime.GlobalExecutionLock(root) as lock:
+        with pytest.raises(runtime.RuntimeGateError):
+            runtime.ensure_backup_receipt(point, lock)
+    point.close()
+
+
+def test_result_artifact_must_match_authoritative_aggregate(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _root, point = _stage_c_boundary(
+        monkeypatch, tmp_path, "c0b2-result-aggregate-cross")
+    expected, wrong = "a" * 64, "b" * 64
+    artifact = {"version": "c0b2-result-v1", "terminal": "INCONCLUSIVE",
+                "stage": "D", "aggregate_sha256": wrong,
+                "reason": "no_d1_output_budget_survivor"}
+    artifact_hash = runtime.freeze_public_artifact(point, "result", artifact)
+    completion = {"outcome": "INCONCLUSIVE", "artifact_sha256": artifact_hash,
+                  "facts": {"deterministic_stop": True,
+                            "reason": "no_d1_output_budget_survivor"}}
+    point.conn.execute(
+        "INSERT INTO decisions VALUES(?,?,?,?,?,?,?)",
+        ("c0b2-completion", "D", "c" * 64, expected, "NOT_ACTIVATED",
+         runtime.canonical_json(completion), 1.0))
+    with pytest.raises(runtime.RuntimeGateError, match="aggregate"):
+        runtime._stored_public_artifact(
+            point.conn, "INCONCLUSIVE", active_stage="D",
+            active_plan_key="D1_OUTPUT", active_plan_hash="c" * 64,
+            aggregate_hash=expected, charged_total=0)
+    point.close()
+
+
+def test_completion_decision_must_match_active_plan_parent(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _root, point = _stage_c_boundary(
+        monkeypatch, tmp_path, "c0b2-completion-parent-cross")
+    aggregate_hash, active_plan_hash = "a" * 64, "b" * 64
+    artifact = {"version": "c0b2-result-v1", "terminal": "INCONCLUSIVE",
+                "stage": "D", "aggregate_sha256": aggregate_hash,
+                "reason": "no_d1_output_budget_survivor"}
+    artifact_hash = runtime.freeze_public_artifact(point, "result", artifact)
+    completion = {"outcome": "INCONCLUSIVE", "artifact_sha256": artifact_hash,
+                  "facts": {"deterministic_stop": True,
+                            "reason": "no_d1_output_budget_survivor"}}
+    point.conn.execute(
+        "INSERT INTO decisions VALUES(?,?,?,?,?,?,?)",
+        ("c0b2-completion", "D", "c" * 64, aggregate_hash, "NOT_ACTIVATED",
+         runtime.canonical_json(completion), 1.0))
+    with pytest.raises(runtime.RuntimeGateError, match="completion decision"):
+        runtime._stored_public_artifact(
+            point.conn, "INCONCLUSIVE", active_stage="D",
+            active_plan_key="D1_OUTPUT", active_plan_hash=active_plan_hash,
+            aggregate_hash=aggregate_hash, charged_total=0)
+    point.close()
+
+
+@pytest.mark.parametrize("damage", ["deleted", "corrupt", "symlink_dir"])
+def test_public_verify_detects_missing_corrupt_or_symlinked_receipt_snapshot(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, damage: str) -> None:
+    run_id = f"c0b2-backup-{damage}"
+    root, point = _stage_c_boundary(monkeypatch, tmp_path, run_id)
+    with runtime.GlobalExecutionLock(root) as lock:
+        receipt = runtime.ensure_backup_receipt(point, lock)
+    snapshot = runtime._receipt_snapshot_path(
+        point.path.parent, receipt["snapshot_run_relative_path"])
+    point.close()
+    if damage == "deleted":
+        snapshot.unlink()
+    elif damage == "corrupt":
+        snapshot.write_bytes(b"not sqlite")
+        snapshot.chmod(0o600)
+    else:
+        backup_root = snapshot.parent
+        moved = backup_root.with_name("backups-real")
+        backup_root.rename(moved)
+        backup_root.symlink_to(moved, target_is_directory=True)
+    result = runtime.public_verify(run_id, benchmark_root=root)
+    assert result["ok"] is False
+    assert any(error.startswith("backup_snapshot_invalid:")
+               for error in result["errors"])
+
+
+@pytest.mark.parametrize("mutation", ["receipt_link", "anchor_row"])
+def test_public_verify_reports_receipt_anchor_tampering_without_crashing(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mutation: str) -> None:
+    run_id = f"c0b2-backup-anchor-{mutation}"
+    root, point = _stage_c_boundary(monkeypatch, tmp_path, run_id)
+    with runtime.GlobalExecutionLock(root) as lock:
+        runtime.ensure_backup_receipt(point, lock)
+    row = point.conn.execute(
+        "SELECT anchor_hash,anchor_json,receipt_json FROM backup_receipts"
+    ).fetchone()
+    if mutation == "receipt_link":
+        value = json.loads(row[2])
+        value["anchor_sha256"] = "f" * 64
+        point.conn.execute(
+            "UPDATE backup_receipts SET receipt_json=?,receipt_hash=?",
+            (runtime.canonical_json(value), runtime.sha256_json(value)))
+    else:
+        value = json.loads(row[1])
+        value["charged_call_total"] += 1
+        point.conn.execute(
+            "UPDATE backup_receipts SET anchor_json=?",
+            (runtime.canonical_json(value),))
+    point.close()
+    result = runtime.public_verify(run_id, benchmark_root=root)
+    assert result["ok"] is False
+    assert any(error.startswith("backup_anchor_invalid:")
+               for error in result["errors"])
+
+
 def test_live_source_pin_revalidation_fails_closed(
         monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     current = {"git_head": "a" * 40, "ollama_version": runtime.OLLAMA_VERSION}
@@ -82,6 +377,7 @@ def test_public_stage_c_runs_exact_plan_and_finalizes_no_survivor(
         monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Exercise the whole runtime with a bounded fake, never a network client."""
     monkeypatch.setattr(runtime, "_require_clean_task_delta", lambda _seal: None)
+    monkeypatch.setattr(runtime, "revalidate_source_pins", lambda _header: None)
     run_id = runtime.create_public_run(
         benchmark_root=tmp_path / "bench", run_id="c0b2-test-public")
     calls: list[str] = []
@@ -121,44 +417,37 @@ def test_public_stage_c_runs_exact_plan_and_finalizes_no_survivor(
                     "semantic_invalid": False,
                 })
 
-    real_backup = runtime.backup_snapshot
-    monkeypatch.setattr(
-        runtime, "backup_snapshot",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("snapshot fault")))
-    with pytest.raises(OSError, match="snapshot fault"):
-        runtime.run_public_stage_c(
-            run_id, benchmark_root=tmp_path / "bench",
-            transport_factory=lambda resolver, _header: FakeTransport(resolver))
-
-    assert runtime.public_status(
-        run_id, benchmark_root=tmp_path / "bench") == {
-            "state": "INCONCLUSIVE", "calls_total": 272}
-    monkeypatch.setattr(runtime, "backup_snapshot", real_backup)
     result = runtime.run_public_stage_c(
-        run_id, resume=True, benchmark_root=tmp_path / "bench",
-        transport_factory=lambda *_args: pytest.fail(
-            "snapshot repair must not construct a transport"))
+        run_id, benchmark_root=tmp_path / "bench",
+        transport_factory=lambda resolver, _header: FakeTransport(resolver))
     assert result == {
         "run_id": run_id, "stage": "C", "state": "INCONCLUSIVE",
-        "calls_total": 272,
+        "calls_total": 272, "survivor_count": 0,
     }
-    assert any(
-        runtime.status_readonly(path)["state"] == "INCONCLUSIVE"
-        for path in (tmp_path / "bench" / "snapshots" / run_id).glob(
-            "snapshot-*.sqlite3"))
+    status = runtime.public_status(run_id, benchmark_root=tmp_path / "bench")
+    assert status["state"] == "INCONCLUSIVE" and status["calls_total"] == 272
+    assert status["backup"]["required"] is True
+    assert status["backup"]["receipt_present"] is True
+    assert len(status["backup"]["anchor_sha256"]) == 64
+    assert len(status["backup"]["snapshot_sha256"]) == 64
+    snapshots = list((tmp_path / "bench" / "runs" / run_id / "backups").glob(
+        "snapshot-*.sqlite3"))
+    assert len(snapshots) == 1
+    assert runtime.status_readonly(snapshots[0])["state"] == "INCONCLUSIVE"
     assert calls.count("chat") == 264
     assert calls.count("ps") == 3
     assert calls.count("version") == 1
     assert calls.count("tags") == 1
     assert calls.count("show") == 3
-    assert runtime.public_verify(
-        run_id, benchmark_root=tmp_path / "bench") == {"ok": True, "errors": []}
+    verification = runtime.public_verify(run_id, benchmark_root=tmp_path / "bench")
+    assert verification == {"ok": True, "errors": [], "backup": status["backup"]}
 
 
 def test_runtime_specs_cross_the_real_bounded_transport_offline(
         monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Prove runtime-built specs against the adapter using fake HTTP only."""
     monkeypatch.setattr(runtime, "_require_clean_task_delta", lambda _seal: None)
+    monkeypatch.setattr(runtime, "revalidate_source_pins", lambda _header: None)
     root = tmp_path / "bench"
     run_id = runtime.create_public_run(
         benchmark_root=root, run_id="c0b2-test-transport-seam")
@@ -249,6 +538,7 @@ def test_runtime_specs_cross_the_real_bounded_transport_offline(
 def test_first_signal_before_recovery_consumes_no_invocation(
         monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(runtime, "_require_clean_task_delta", lambda _seal: None)
+    monkeypatch.setattr(runtime, "revalidate_source_pins", lambda _header: None)
     root = tmp_path / "bench"
     run_id = runtime.create_public_run(
         benchmark_root=root, run_id="c0b2-test-early-signal")
@@ -267,6 +557,53 @@ def test_first_signal_before_recovery_consumes_no_invocation(
 
     monkeypatch.setattr(
         executor.DurableExecutor, "recover_and_start", interrupt_before_recovery)
+    result = runtime.run_public_stage_c(
+        run_id, benchmark_root=root,
+        transport_factory=lambda *_args: NoCallTransport())
+    assert result["state"] == "CANCELLED_PENDING_RESUME"
+    assert result["calls_total"] == 0
+    conn = sqlite3.connect(runtime._checkpoint_path(run_id, root))
+    try:
+        assert conn.execute("SELECT count(*) FROM invocations").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_first_signal_during_invocation_claim_consumes_no_invocation(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The in-transaction claim guard closes the signal/INSERT race."""
+    monkeypatch.setattr(runtime, "_require_clean_task_delta", lambda _seal: None)
+    monkeypatch.setattr(runtime, "revalidate_source_pins", lambda _header: None)
+    root = tmp_path / "bench"
+    run_id = runtime.create_public_run(
+        benchmark_root=root, run_id="c0b2-test-claim-signal")
+    original = runtime.Checkpoint.claim_invocation
+
+    def interrupt_during_claim(
+            self, stage, *, claim_guard=None, budget_failure_callback=None):
+        first_guard = True
+
+        def guarded_claim():
+            nonlocal first_guard
+            if first_guard:
+                first_guard = False
+                signal.raise_signal(signal.SIGINT)
+            assert claim_guard is not None
+            claim_guard()
+
+        return original(
+            self, stage, claim_guard=guarded_claim,
+            budget_failure_callback=budget_failure_callback)
+
+    class NoCallTransport:
+        def cancel_current(self) -> None:
+            return None
+
+        def __call__(self, *_args):
+            pytest.fail("a signal during claim must prevent transport contact")
+
+    monkeypatch.setattr(
+        runtime.Checkpoint, "claim_invocation", interrupt_during_claim)
     result = runtime.run_public_stage_c(
         run_id, benchmark_root=root,
         transport_factory=lambda *_args: NoCallTransport())
