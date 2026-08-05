@@ -1,8 +1,10 @@
 # Ollama Integration — Risk Register
 
 Date: 2026-08-04
-Status: **Frozen with the C0A contract.** Controls are authoritative in
-[`CONTRACT.md`](CONTRACT.md); this register is the risk-indexed view.
+Status: **C0A controls frozen; C0B-2 benchmark addenda reviewed.** Controls are
+authoritative in [`CONTRACT.md`](CONTRACT.md), accepted errata, and the reviewed
+[`BENCHMARK_PROTOCOL_C0B2.md`](BENCHMARK_PROTOCOL_C0B2.md); this register is the
+risk-indexed view.
 
 | ID | Risk | Likelihood | Impact | Mitigation / Control |
 |----|------|------------|--------|----------------------|
@@ -33,6 +35,14 @@ Status: **Frozen with the C0A contract.** Controls are authoritative in
 | R24 | Manifest lookup by `(ip, host_type, created_at)` selects the wrong run | Medium | Medium | Structured persistence return with the exact row id; Analyst looks up by row id only. Dashboard flow wired to persist before offering Analyst. |
 | R25 | Reduced-isolation mode misused on hostile input | Low | High | Per-run non-persistent ack; barred from the auto post-extract hook and from benchmark/acceptance; recorded in metadata; never default. |
 | R26 | Analyst optional deps break core GUI startup | Low | High | Separate `requirements-analyst.txt`; no optional parser imports at package/GUI-module import time; preflight reports missing deps cleanly; parser imports only inside the sandbox child (guardrail test). |
+| R27 | Benchmark checkpoint corrupts or loses exclusion on mergerfs | Medium | High | Disposable process-crash/SQLite-lock/`flock` capability probe on the canonical pool path; pin mount/kernel/mergerfs/SQLite fingerprint; recheck before resume; WAL only if proven, otherwise DELETE+FULL; verified Online Backup snapshots and out-of-band quarantine. |
+| R28 | Crash after Ollama accepts a request causes an uncharged or duplicate result | Medium | Medium | Atomically precharge `DISPATCHING`; recovery marks it `ORPHANED_UNKNOWN`, keeps it charged, and creates a new attempt. Accepted answer and work terminal commit together. |
+| R29 | Resume recomputes an adaptive C/D/F branch under changed code | Low | High | Immutable stage-local plans chained by persisted parent aggregate/decision hashes; activation states are recorded once and resume never recomputes them. |
+| R30 | Stage-F holdout leaks into tuning | Low | High | Split/view manifest frozen before C; F bytes unavailable to C/D selection; F plan built only after D is immutable; any post-F retune produces `INCONCLUSIVE`. |
+| R31 | Private traversal or source mutation reads the wrong file | Medium | Critical | Descriptor-relative `openat2`/no-follow traversal, excluded-tree overlap checks, mount-crossing skip, same-fd keyed content fingerprint, sealed memfd snapshot, and pre-inference revalidation. |
+| R32 | Private source/model content reaches Git or survives a crash on disk | Low | Critical | No plaintext staging; raw private answers/reasoning/prompts never persist; sealed worktree plus per-document in-memory leak scan; only schema-generated aggregate committable; private envelope breach blocks security. |
+| R33 | Unlabelled private data silently changes the selected model/config | Medium | High | Stage F selects first; Stage E is a separately authorized operational child run that may pass/block only. Any change requires a new public F run and fresh authorization. |
+| R34 | Shared GPU contention is misreported as model-quality failure | High | Medium | Serial requests, no unload/kill, persistent bounded backoff and pause, quality-neutral offload/timing, exact call ledgers and honest `BLOCKED_BUDGET` if evidence cannot complete. |
 
 ## High-Likelihood Risks — Detailed Controls
 

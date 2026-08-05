@@ -1,9 +1,9 @@
 # Ollama Integration Workspace
 
 Date: 2026-08-04
-Status: **C0A contract frozen** (committed `91bb2aa`). **C0B-1 accepted after senior
-audit and focused remediation.** C0B-2 protocol design is next; no C0B-2 execution has
-started.
+Status: **C0A contract frozen** (committed `91bb2aa`). **C0B-1 accepted and committed
+(`47e946b`).** C0B-2 protocol passed independent review for the offline C0B-2A
+foundation; no C0B-2 scored call or private-corpus access has started.
 
 The authoritative spec is [`CONTRACT.md`](CONTRACT.md), plus accepted errata in
 [`CONTRACT_ERRATA.md`](CONTRACT_ERRATA.md). The C0B-1 experiment is pre-registered in
@@ -110,16 +110,17 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
 2. `CONTRACT_ERRATA.md` — accepted narrow corrections to the frozen contract (E1).
 3. `README.md` (this file) — status, decisions, orientation.
 4. `BENCHMARK_PROTOCOL_C0B1.md` — **pre-registered** C0B-1 decision rule, gates, factors, budgets. Hash-pinned.
-5. `BENCHMARK.md` — instrument method, module dispositions, what is/is not committed.
-6. `LESSONS_LEARNED.md` — only what a card actually exercised.
-7. `RESEARCH_NOTES.md` — verified external findings with sources + corpus profile.
-8. `RISK_REGISTER.md` — risk controls.
-9. `UI_MOCKUPS.md` — surface layouts (draft).
+5. `BENCHMARK_PROTOCOL_C0B2.md` — reviewed C0B-2 public/private protocol; offline 2A is
+   authorized, live execution remains held until implementation artifacts freeze with it.
+6. `BENCHMARK.md` — instrument method, module dispositions, what is/is not committed.
+7. `LESSONS_LEARNED.md` — only what a card actually exercised.
+8. `RESEARCH_NOTES.md` — verified external findings with sources + corpus profile.
+9. `RISK_REGISTER.md` — risk controls.
+10. `UI_MOCKUPS.md` — surface layouts (draft).
 
 `BENCHMARK_RESULTS.md` is written at the end of **C0B-2**, not before.
 
 ## Next Step
 
-Write and review `BENCHMARK_PROTOCOL_C0B2.md`. Only after that protocol is frozen, run
-Stages C–F–E, which select the model, worksheet, chunk size, overlap, context and output
-budget from measured numbers before any pipeline is sized.
+Implement the offline-only C0B-2A worksheet/plan/checkpoint/executor proof. Live public
+C/D/F and private E stay gated behind that reviewed and hash-frozen implementation.
