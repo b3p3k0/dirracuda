@@ -68,14 +68,21 @@ def _checkpoint(
         classes: dict[str, int] | None = None,
         cumulative_cap: int | None = None) -> ck.Checkpoint:
     root = tmp_path / "bench"
-    class_limits = classes or {
-        "scored": 200, "schema_retry": 5,
-        "preflight_probe": 20, "transport_orphan": 10,
-    }
+    if classes is None and run_type == "public":
+        limits = {stage: dict(values)
+                  for stage, values in public_runtime.PUBLIC_LIMITS.items()}
+        default_cap = public_runtime.PUBLIC_CUMULATIVE_CAP
+    else:
+        class_limits = classes or {
+            "scored": 200, "schema_retry": 5,
+            "preflight_probe": 20, "transport_orphan": 10,
+        }
+        limits = {stage: class_limits for stage in ("C", "D", "F")}
+        default_cap = sum(class_limits.values()) * 3
     point = ck.Checkpoint.create(
         root, f"{run_type}-run", header=_header(root, run_type=run_type),
-        limits={stage: class_limits for stage in ("C", "D", "F")},
-        cumulative_cap=cumulative_cap or sum(class_limits.values()) * 3,
+        limits=limits,
+        cumulative_cap=(default_cap if cumulative_cap is None else cumulative_cap),
         journal_mode="DELETE",
     )
     c_plan = {"work": [
@@ -613,10 +620,17 @@ def test_backup_activation_rejects_coherently_rehashed_seed1_lineage(
 
 
 @pytest.mark.parametrize("key", ("F_SEED_17", "F_SEED_20260804", "F_ACCEPTANCE"))
-def test_backup_anchor_holds_b4_typed_activations(key: str) -> None:
-    with pytest.raises(public_runtime.RuntimeGateError, match="B4 typed evidence"):
-        public_runtime._validate_backup_activation(
-            None, {"run_id": "public-run"}, key, {}, {})
+def test_backup_anchor_delegates_b4_typed_activations(
+        monkeypatch: pytest.MonkeyPatch, key: str) -> None:
+    from scripts.analyst_benchmark import c0b2_runtime_f_evidence
+
+    received = []
+    monkeypatch.setattr(
+        c0b2_runtime_f_evidence, "validate_b4_backup_activation",
+        lambda *args: received.append(args))
+    values = (object(), {"run_id": "public-run"}, key, {}, {})
+    public_runtime._validate_backup_activation(*values)
+    assert received == [values]
 
 
 def test_runtime_controls_must_be_strict_bound_and_active(tmp_path: Path) -> None:
@@ -740,11 +754,160 @@ def test_f_context_rejects_zero_or_wrong_candidate_trigger_uncharged(
             "F", context["control_id"], "model:stable",
             context["payload_sha256"], 1)
         baseline = point.usage()["total"]
-        with pytest.raises(ck.CheckpointError, match="first answered trigger"):
+        with pytest.raises(
+                ck.CheckpointError,
+                match="pending Stage-F context has priority"):
             executor.run_context_probe(wrong)
         assert point.usage()["total"] == baseline and contacts == []
         assert point.conn.execute(
             "SELECT 1 FROM attempts WHERE attempt_id=?", (wrong.attempt_id,)
+        ).fetchone() is None
+    point.close()
+
+
+def test_f_context_recovery_replays_trigger_then_observes_ps_before_other_work(
+        tmp_path: Path) -> None:
+    point = _checkpoint(tmp_path)
+    plan, controls = _activated_f1(point, worksheets=("v1", "v2"))
+    first = plan["work"][0]
+    context = controls[0][0]
+    other_context = controls[1][0]
+    unrelated_model = "aaa-unrelated"
+    actions = []
+    resource_hash = first["request_sha256"]
+    resource_id = ex.resource_probe_id(
+        "F", 1, context["model"], resource_hash)
+
+    def transport(request, _event):
+        if isinstance(request, ex.WorkRequest):
+            actions.append(("work", request.work_id))
+            return ex.FakeResponse("{}")
+        if request.control_id == resource_id:
+            actions.append(("recovery", request.request_hash))
+            return ex.FakeResponse(
+                "{}", accepted=False, outcome="SCHEMA_INVALID")
+        if request.control_id == context["control_id"]:
+            actions.append(("ps", request.control_id))
+            value = {
+                "purpose": context["purpose"],
+                "config_sha256": context["config_sha256"],
+                "model": context["model"], "digest": context["model_digest"],
+                "size": 10, "size_vram": 0, "context_length": 8192,
+            }
+            return ex.FakeResponse(
+                ck.canonical_json(value),
+                metadata={"response_sha256": ck.sha256_json(value)})
+        actions.append(("generic", request.request_hash))
+        return ex.FakeResponse("{}")
+
+    with fs.GlobalExecutionLock(point.root) as lock:
+        executor = ex.DurableExecutor(point, lock, transport)
+        executor.recover_and_start("F")
+        _seed_preflight(point, "F", 1)
+        assert executor.run(ex.WorkRequest(
+            "F", first["work_id"], context["model"], resource_hash, 1,
+        )).outcome == "ACCEPTED"
+        point.conn.execute(
+            "INSERT INTO model_backoff VALUES(?,6,0,?)",
+            (context["model"], 1.0))
+        point.conn.execute(
+            "INSERT INTO model_backoff VALUES(?,6,0,?)",
+            (unrelated_model, 1.0))
+        generic = ex.ControlRequest(
+            "F", ex.resource_probe_id("F", 1, unrelated_model, "generic"),
+            unrelated_model, "generic", 1, "transport_orphan")
+        baseline = point.usage()["total"]
+        with pytest.raises(
+                ck.CheckpointError, match="context has priority over generic"):
+            executor.run_resource_probe(generic)
+        assert point.usage()["total"] == baseline
+
+        recovery = ex.ControlRequest(
+            "F", resource_id, context["model"], resource_hash,
+            1, "transport_orphan")
+        assert executor.run_resource_probe(
+            recovery,
+            prioritized_context_control_id=context["control_id"],
+        ).outcome == "SCHEMA_INVALID"
+        assert point.backoff(context["model"]).failures == 0
+        assert point.backoff(unrelated_model).failures == 6
+
+        other = next(row for row in plan["work"]
+                     if row["work_id"] != first["work_id"])
+        with pytest.raises(ck.CheckpointError, match="context probe is required"):
+            executor.run(ex.WorkRequest(
+                "F", other["work_id"], other["model"],
+                other["request_sha256"], 1))
+        with pytest.raises(
+                ck.CheckpointError, match="context has priority over another"):
+            executor.run_context_probe(ex.ControlRequest(
+                "F", other_context["control_id"], other_context["model"],
+                other_context["payload_sha256"], 1))
+        with pytest.raises(
+                ck.CheckpointError, match="context has priority over generic"):
+            executor.run_resource_probe(generic)
+
+        assert executor.run_context_probe(ex.ControlRequest(
+            "F", context["control_id"], context["model"],
+            context["payload_sha256"], 1)).outcome == "ACCEPTED"
+        with pytest.raises(
+                ck.CheckpointError, match="persisted resource obligation"):
+            executor.run_resource_probe(generic)
+        assert point.backoff(unrelated_model).failures == 6
+
+    assert actions == [
+        ("work", first["work_id"]),
+        ("recovery", first["request_sha256"]),
+        ("ps", context["control_id"]),
+    ]
+    point.close()
+
+
+@pytest.mark.parametrize("mismatch", ("owner", "request", "model"))
+def test_f_context_recovery_rejects_mismatched_trigger_uncharged(
+        tmp_path: Path, mismatch: str) -> None:
+    point = _checkpoint(tmp_path)
+    plan, controls = _activated_f1(point, worksheets=("v1", "v2"))
+    first, context = plan["work"][0], controls[0][0]
+    contacts = []
+
+    def transport(request, _event):
+        contacts.append(request.attempt_id)
+        return ex.FakeResponse("{}")
+
+    with fs.GlobalExecutionLock(point.root) as lock:
+        executor = ex.DurableExecutor(point, lock, transport)
+        executor.recover_and_start("F")
+        _seed_preflight(point, "F", 1)
+        assert executor.run(ex.WorkRequest(
+            "F", first["work_id"], first["model"],
+            first["request_sha256"], 1)).outcome == "ACCEPTED"
+        contacts.clear()
+        point.conn.execute(
+            "INSERT INTO model_backoff VALUES(?,6,0,?)",
+            (context["model"], 1.0))
+        with pytest.raises(
+                ck.CheckpointError, match="exact recovery replay"):
+            executor.run_context_probe(ex.ControlRequest(
+                "F", context["control_id"], context["model"],
+                context["payload_sha256"], 1))
+
+        owner = (controls[1][0]["control_id"] if mismatch == "owner"
+                 else context["control_id"])
+        request_hash = (_hash("wrong-trigger") if mismatch == "request"
+                        else first["request_sha256"])
+        model = "other:model" if mismatch == "model" else context["model"]
+        request = ex.ControlRequest(
+            "F", ex.resource_probe_id("F", 1, model, request_hash),
+            model, request_hash, 1, "transport_orphan")
+        baseline = point.usage()["total"]
+        with pytest.raises(
+                ck.CheckpointError, match="differs from its context trigger"):
+            executor.run_resource_probe(
+                request, prioritized_context_control_id=owner)
+        assert contacts == [] and point.usage()["total"] == baseline
+        assert point.conn.execute(
+            "SELECT 1 FROM attempts WHERE attempt_id=?", (request.attempt_id,)
         ).fetchone() is None
     point.close()
 

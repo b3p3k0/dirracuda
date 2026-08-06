@@ -312,6 +312,136 @@ def _finish_d1_inconclusive(point, inputs):
     return phase
 
 
+def _grounded_d_response(item, corpus) -> str:
+    from scripts.analyst_benchmark import chunker
+
+    document = corpus.by_id()[item["doc_id"]]
+    view = document.view_for(item["chunk_chars"])
+    source = view.text if view is not None else document.text
+    text = chunker.chunk(
+        source, chunk_chars=item["chunk_chars"], overlap_chars=256
+    )[item["chunk_index"]].text
+    findings = []
+    if document.categories_present:
+        category = document.categories_present[0]
+        for identifier in document.expected_identifiers:
+            if identifier in text:
+                findings.append({
+                    "category": category, "quote": identifier,
+                    "offset": text.index(identifier),
+                })
+                break
+    return canonical_json({
+        "document_type": "fixture", "subject": "",
+        "assessment": "findings_present" if findings else "no_findings",
+        "findings": findings,
+    })
+
+
+def _complete_d_context(point, phase, control) -> None:
+    response = {
+        "purpose": control["purpose"],
+        "config_sha256": control["config_sha256"],
+        "model": control["model"], "digest": control["model_digest"],
+        "size": 100, "size_vram": 80,
+        "context_length": control["minimum_context_length"],
+    }
+    response_hash = sha256_json(response)
+    first = next(row for row in phase.plan["work"]
+                 if row["candidate_id"] == control["candidate_id"])
+    evidence = {
+        "control_id": control["control_id"], "purpose": control["purpose"],
+        "candidate_id": control["candidate_id"], "model": control["model"],
+        "model_digest": control["model_digest"],
+        "config_sha256": control["config_sha256"],
+        "expected_num_ctx": control["minimum_context_length"],
+        "observed_context_length": control["minimum_context_length"],
+        "trigger_work_id": first["work_id"], "state": "PASSED",
+        "response_sha256": response_hash,
+    }
+    attempt_id = runtime_d.stable_attempt_id(
+        f"control:{control['control_id']}", 1)
+    now = time.time()
+    point.conn.execute(
+        "INSERT INTO attempts VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (attempt_id, None, control["control_id"], "D", 1,
+         "preflight_probe", 1, control["payload_sha256"], "ACCEPTED",
+         canonical_json(response), canonical_json({
+             "http_status": 200, "control": "ps",
+             "response_sha256": response_hash,
+         }), now, now),
+    )
+    raw, digest = canonical_json(evidence), sha256_json(evidence)
+    point.conn.execute(
+        "UPDATE runtime_controls SET state='COMPLETE',evidence_hash=?,"
+        "evidence_json=?,updated=? WHERE control_id=?",
+        (digest, raw, now, control["control_id"]),
+    )
+    point.conn.execute(
+        "INSERT INTO runtime_control_events VALUES(?,2,'COMPLETE',?,?,NULL,?)",
+        (control["control_id"], digest, raw, now),
+    )
+
+
+def _finish_d3_final_owner(point, inputs):
+    phase = runtime_d.start_stage_d(point, inputs)
+    point.conn.execute("INSERT INTO invocations VALUES('D',1,?)", (time.time(),))
+    while True:
+        prompt_count = 11000 if phase.plan["phase"] == "D3" else 1000
+        for candidate in phase.plan["candidates"]:
+            rows = [row for row in phase.plan["work"]
+                    if row["candidate_id"] == candidate["candidate_id"]]
+            for index, item in enumerate(rows):
+                _answer_work(point, item, response=_grounded_d_response(
+                    item, inputs.corpus), metadata={
+                        "done_reason": "stop",
+                        "prompt_eval_count": prompt_count,
+                        "tools_empty": True, "images_empty": True,
+                        "unknown_message_fields_empty": True,
+                    })
+                if index == 0 and phase.controls:
+                    control = next(row for row in phase.controls
+                                   if row["candidate_id"] == candidate["candidate_id"])
+                    _complete_d_context(point, phase, control)
+        result = runtime_d.finalize_d_phase(point, phase, inputs)
+        if result.outcome == "FINALISTS":
+            return phase
+        assert result.outcome == "CONTINUE"
+        phase = runtime_d.load_active_d_phase(point, inputs)
+
+
+def test_stored_final_d_owner_rederives_after_cursor_advances(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _root, point, inputs = _created_boundary(
+        monkeypatch, tmp_path, "c0b2-runtime-d-stored-final-owner")
+    try:
+        owner = _finish_d3_final_owner(point, inputs)
+        assert owner.plan["phase"] == "D3"
+        fresh = runtime_d.validate_final_d_boundary(point, inputs)
+
+        point.conn.execute(
+            "UPDATE runtime_cursor SET active_stage='F',"
+            "active_plan_key='F_SEED_1' WHERE id=1")
+        point.conn.execute(
+            "UPDATE run_state SET state='RUNNING' WHERE id=1")
+        assert runtime_d.validate_stored_final_d_owner(point, inputs) == fresh
+        with pytest.raises(runtime_d.StageDRuntimeError, match="exact D boundary"):
+            runtime_d.validate_final_d_boundary(point, inputs)
+
+        first = owner.plan["work"][0]
+        point.conn.execute(
+            "UPDATE attempts SET response=? WHERE work_id=?",
+            (canonical_json({
+                "document_type": "fixture", "subject": "",
+                "assessment": "no_findings", "findings": [],
+            }), first["work_id"]),
+        )
+        with pytest.raises(ImmutableViolation, match="aggregate changed"):
+            runtime_d.validate_stored_final_d_owner(point, inputs)
+    finally:
+        point.close()
+
+
 def test_d_phase_evidence_rejects_work_and_invocation_ownership_tamper(
         monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _root, point, inputs = _created_boundary(

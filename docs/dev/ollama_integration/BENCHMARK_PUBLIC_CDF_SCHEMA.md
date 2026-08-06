@@ -354,8 +354,12 @@ Cancellation-health evidence has exact keys:
 `unknown_message_fields_empty`, `schema_escape_empty`, `passed`, `failure_reasons`.
 
 IDs are sha256; state is `CANCELLED_UNVERIFIED`; timestamps are UTC RFC3339 strings and
-health starts no earlier than not-before. `authoritative_done_reason` is nullable until an
-eventually valid answer exists; maximum prompt count is nullable only with no HTTP answer.
+health starts no earlier than not-before. Its invocation is the first post-cancellation
+invocation containing non-preflight activity. Any intervening invocation is empty or
+contains only an ordered standard-preflight prefix, and every intervening invocation and
+attempt also starts no earlier than not-before. `authoritative_done_reason` is nullable
+until an eventually valid answer exists; maximum prompt count is nullable only with no
+HTTP answer.
 `length_outcomes` counts every bounded HTTP answer ending for length, including invalid
 answers. Attempt IDs are ordered, nonempty and include transport replacements plus at most
 one schema retry. Counts are nonnegative, including uncapped elapsed milliseconds;
@@ -460,6 +464,35 @@ aggregate.
 That provisional decision's `aggregate_sha256` is exactly the seed-1 evidence SHA-256;
 its selection is null. The field retains its historical name even though this early-stop
 owner is the distinct evidence artifact.
+
+Paired activation is not the execution boundary between the two later seeds. After every
+activated seed-17 registry row is terminal, the runtime inserts exactly one event with
+`kind=F_SEED_CURSOR_TRANSITION` and atomically advances the cursor from `F_SEED_17` to
+`F_SEED_20260804`. Its canonical `detail_json` has exact keys:
+
+`version`, `run_id`, `from_plan_key`, `to_plan_key`, `f_master_plan_sha256`,
+`seed_activation_decision_sha256`, `from_plan_sha256`, `from_activation_sha256`,
+`to_plan_sha256`, `to_activation_sha256`, `activated_from_group_ids`,
+`activated_to_group_ids`, `completed_from_work_ids`,
+`completed_from_work_census_sha256`, `transitioned_at_utc`, `transition_sha256`.
+
+The version and plan keys are `c0b2-f-seed-cursor-transition-v1`, `F_SEED_17` and
+`F_SEED_20260804`; `run_id` equals the exact frozen header value. Hash fields are sha256,
+group/work arrays are ordered unique sha256 arrays, and the timestamp is UTC RFC3339.
+The work-census hash is `sha256_json` of canonical JSON exactly
+`{"domain":"c0b2-f17-terminal-work-census-v1","rows":R}`, where `R` is registry-order
+objects with exact keys `work_id`, `state`, `accepted_attempt_id`; state is `SUCCEEDED` or
+`COMPLETED_INVALID`, and accepted ID is sha256 only for `SUCCEEDED` and null only for
+`COMPLETED_INVALID`. `transition_sha256` hashes the complete detail body without that
+field. One captured time value produces both `transitioned_at_utc` and `events.created`,
+and the transaction writes the same numeric value to `runtime_cursor.updated`.
+
+Fresh transition requires cursor F17/RUNNING, both exact paired activations and
+registries, terminal F17 work, no F20260804 attempt, and the full F control census. Replay
+requires the one byte-identical event. While the cursor remains F20260804 its `updated`
+time equals the event time; later acceptance may advance the cursor, but backup and
+terminal validation still rebuild the event/census. No F17 attempt may update after the
+event, and no F20260804 attempt may be created before it.
 
 ## 8. Final F aggregate and ranking
 
@@ -641,8 +674,9 @@ B5 passes only when all are true:
 2. `./venv/bin/python -m pytest -q -k analyst` passes.
 3. `./venv/bin/python -m pytest -q` has no new failure. The sole tolerated baseline is
    `experimental/webui/tests/test_daemon_cli.py::test_daemon_modules_import_without_tkinter`
-   only if this exact standalone command exits 1 with exactly that one failed node and no
-   additional error:
+   only when the full suite has exactly that one failed node and no additional error,
+   `./venv/bin/python -m pytest -q -k 'not analyst'` reproduces exactly that failure with
+   no additional error, and the exact standalone node passes:
    `./venv/bin/python -m pytest -q experimental/webui/tests/test_daemon_cli.py::test_daemon_modules_import_without_tkinter`.
 4. The fake-session public-flow test drives the actual `BoundedOllamaTransport` through
    C→D1→D2→D3→conditional D4→F seeds→acceptance, including pause/crash/resume and every
@@ -655,3 +689,11 @@ B5 passes only when all are true:
 
 Only after these proofs and one clean commit may `c0b2 create` produce the canonical
 public checkpoint or any scored Ollama call.
+
+For the B4 file-size guardrail, `c0b2_runtime_f.py` owns durable F orchestration and
+transport sequencing; `c0b2_runtime_f_evidence.py` owns read-only attempt/control facts,
+temporal ownership and full aggregate re-derivation; and
+`c0b2_runtime_f_namespace.py` owns the exact active and terminal SQLite namespace
+censuses. Neither read-only module may dispatch, mutate or accept caller-supplied
+summaries. The orchestration module must invoke their checks before activation, contact,
+finalization and receipt construction.

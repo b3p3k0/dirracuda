@@ -68,6 +68,94 @@ def test_content_free_render_is_canonical_json() -> None:
     assert json.loads(rendered) == {"state": "PREPARED", "calls_total": 0}
 
 
+@pytest.mark.parametrize(
+    "key", ("F_SEED_17", "F_SEED_20260804", "F_ACCEPTANCE"))
+def test_b4_backup_activation_delegates_after_common_identity_checks(
+        monkeypatch: pytest.MonkeyPatch, key: str) -> None:
+    from scripts.analyst_benchmark import c0b2_runtime_f_evidence as evidence
+
+    calls = []
+    monkeypatch.setattr(
+        evidence, "validate_b4_backup_activation",
+        lambda *args: calls.append(args))
+    conn = object()
+    header = {"run_id": "public-run"}
+    plan_value = {"budget_stage": "F"}
+    activation = {"run_id": "public-run", "budget_stage": "F"}
+    runtime._validate_backup_activation(
+        conn, header, key, plan_value, activation)
+    assert calls == [(conn, header, key, plan_value, activation)]
+
+
+@pytest.mark.parametrize("mismatch", ("run", "budget"))
+def test_b4_backup_activation_rejects_common_mismatch_before_delegation(
+        monkeypatch: pytest.MonkeyPatch, mismatch: str) -> None:
+    from scripts.analyst_benchmark import c0b2_runtime_f_evidence as evidence
+
+    calls = []
+    monkeypatch.setattr(
+        evidence, "validate_b4_backup_activation",
+        lambda *args: calls.append(args))
+    activation = {"run_id": "other" if mismatch == "run" else "public-run",
+                  "budget_stage": "D" if mismatch == "budget" else "F"}
+    with pytest.raises(runtime.RuntimeGateError, match="run or budget stage"):
+        runtime._validate_backup_activation(
+            object(), {"run_id": "public-run"}, "F_SEED_17",
+            {"budget_stage": "F"}, activation)
+    assert calls == []
+
+
+@pytest.mark.parametrize(("tail", "cursor", "accepted"), (
+    ("C", "C", True),
+    ("F_SEED_20260804", "F_SEED_17", True),
+    ("F_SEED_17", "F_SEED_20260804", False),
+    ("F_ACCEPTANCE", "F_SEED_17", False),
+    ("F_SEED_20260804", "F_SEED_1", False),
+))
+def test_backup_tail_accepts_only_exact_paired_f17_cursor_exception(
+        tail: str, cursor: str, accepted: bool) -> None:
+    assert runtime._backup_tail_matches_cursor(tail, cursor) is accepted
+
+
+def test_stage_f_terminal_owner_delegates_and_propagates_failure(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    from scripts.analyst_benchmark import c0b2_runtime_f_evidence as evidence
+
+    conn, header, calls = object(), {"run_id": "public-run"}, []
+    expected = "a" * 64
+    monkeypatch.setattr(
+        evidence, "validate_b4_terminal_owner",
+        lambda *args: calls.append(args) or expected)
+    kwargs = {
+        "active_stage": "F", "active_plan_key": "F_SEED_1",
+        "active_plan_hash": "b" * 64, "aggregate_hash": "c" * 64,
+        "charged_total": 0, "header": header,
+    }
+    assert runtime._stored_public_artifact(
+        conn, "INCONCLUSIVE", **kwargs) == expected
+    assert calls == [(conn, header)]
+
+    def reject(*_args: object) -> str:
+        raise checkpoint.ImmutableViolation("B4 finalizer is not authoritative yet")
+
+    monkeypatch.setattr(evidence, "validate_b4_terminal_owner", reject)
+    with pytest.raises(checkpoint.ImmutableViolation, match="not authoritative"):
+        runtime._stored_public_artifact(conn, "SELECTED", **kwargs)
+
+    failure_db = sqlite3.connect(":memory:")
+    failure_db.execute(
+        "CREATE TABLE public_artifacts(terminal TEXT,artifact_hash TEXT,artifact_json TEXT)")
+    calls.clear()
+    monkeypatch.setattr(
+        evidence, "validate_b4_terminal_owner",
+        lambda *args: calls.append(args) or expected)
+    with pytest.raises(runtime.RuntimeGateError, match="terminal requires"):
+        runtime._stored_public_artifact(
+            failure_db, "FAILED_SAFETY", **kwargs)
+    assert calls == []
+    failure_db.close()
+
+
 def _stage_c_boundary(
         monkeypatch: pytest.MonkeyPatch, tmp_path: Path, run_id: str,
 ) -> tuple[Path, runtime.Checkpoint]:

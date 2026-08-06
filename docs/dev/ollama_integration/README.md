@@ -1,6 +1,6 @@
 # Ollama Integration Workspace
 
-Date: 2026-08-05
+Date: 2026-08-06
 Status: **C0A contract frozen** (committed `91bb2aa`). **C0B-1 accepted and committed
 (`47e946b`).** **C0B-2A offline foundation passed implementation and independent
 adversarial review.** The HI authorized the public C/D/F envelope on 2026-08-05.
@@ -13,17 +13,23 @@ passed three independent reviews. **B2 shared public controls passed their offli
 Analyst-regression and independent adversarial gates.** **B3 Stage D passed its planner,
 scorer, durable-runtime, crash-recovery, Analyst-regression and independent adversarial
 gates.** The HI approved the exact-configuration context-recovery rule on 2026-08-05.
+**B4 Stage F passed its offline planner, scorer, durable-runtime, crash/replay,
+cancellation-health, exact-namespace, Analyst-regression and independent hostile-review
+gates.** Its source remains unexecuted against Ollama; B5 owns the full fake-session proof
+and final hostile reviews before any live checkpoint may be created.
 The HI reconfirmed this course on
 2026-08-05 and authorized milestone commits on `feature/ollama-analyst`; no push or
 promotion is authorized. Private Stage E remains held.
 
-The current B3 implementation freezes the protected run nonce key only in the backed-up 0600
-checkpoint; derived
+The current public implementation freezes the protected run nonce key only in the
+backed-up 0600 checkpoint; derived
 boundary work binds both the logical document hash and generated-view hash; and D3/D4
 context probes are phase-specific planned controls triggered by the first normal HTTP
-answer even when schema-invalid. Public creation now uses a durable internal state,
-atomic no-replace promotion and exact crash recovery before `PREPARED`. These controls
-do not change benchmark thresholds or budgets.
+answer even when schema-invalid. Stage F extends that barrier to each seed-1 candidate,
+activates later seeds atomically, and uses a durable cursor event to separate their
+execution. Public creation now uses a durable internal state, atomic no-replace promotion
+and exact crash recovery before `PREPARED`. These controls do not change benchmark
+thresholds or budgets.
 
 The authoritative spec is [`CONTRACT.md`](CONTRACT.md), plus accepted errata in
 [`CONTRACT_ERRATA.md`](CONTRACT_ERRATA.md). The C0B-1 experiment is pre-registered in
@@ -146,9 +152,9 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
 
 ## Next Step
 
-Implement B4 Stage F/acceptance and B5 full fake-session integration before creating the
-live checkpoint. B4 owns exact, atomic activation of the paired
-later Stage-F seeds and acceptance; B2 deliberately holds those paths closed. One clean
-Git/tree pin covers the whole adaptive public run. Execution stays
-serial and resumable; shared-GPU offload or slow execution is not a quality failure.
-Private Stage E remains separately held.
+Implement B5 full fake-session integration and complete its independent hostile reviews
+before creating the live checkpoint. B5 must drive the actual bounded transport through
+the complete C→D→F state machine, including pause/crash/resume, budget stops, cancellation
+health and every terminal. One clean Git/tree pin covers the whole adaptive public run.
+Execution stays serial and resumable; shared-GPU offload or slow execution is not a
+quality failure. Private Stage E remains separately held.

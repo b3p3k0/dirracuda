@@ -14,7 +14,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Optional, Union
 
-from .c0b2_checkpoint import (BackoffRecord, Checkpoint, CheckpointError,
+from .c0b2_checkpoint import (INVOCATION_CAPS, BackoffRecord, Checkpoint,
+                              CheckpointError, ImmutableViolation,
                               canonical_json, sha256_json)
 from .c0b2_fsprobe import (GlobalExecutionLock, MountFingerprint,
                            quarantine_corrupt, revalidate_filesystem,
@@ -103,6 +104,15 @@ class ExecutionResult:
     retry_not_before: float = 0.0
 
 
+@dataclass(frozen=True)
+class _FContextRecovery:
+    context_control_id: str
+    candidate_id: str
+    model: str
+    trigger_work_id: str
+    trigger_request_hash: str
+
+
 def control_id(stage: str, invocation_ordinal: int, kind: str, model: str) -> str:
     if invocation_ordinal < 1 or not all((stage, kind, model)):
         raise ValueError("control identity fields must be non-empty and ordinal positive")
@@ -172,6 +182,7 @@ class DurableExecutor:
                  clock: Optional[InvocationClock] = None,
                  cancellation: Optional[CancellationController] = None,
                  context_request_hashes: Optional[Mapping[str, str]] = None,
+                 enforce_public_budget_contract: bool = False,
                  now: Callable[[], float] = time.time):
         if not lock.held or lock.root != checkpoint.root:
             raise CheckpointError("executor requires the matching global lock")
@@ -181,12 +192,17 @@ class DurableExecutor:
         self.clock = clock or InvocationClock()
         self.cancellation = cancellation or CancellationController()
         self.context_request_hashes = dict(context_request_hashes or {})
+        self.enforce_public_budget_contract = enforce_public_budget_contract
         self._now = now
         self.current_attempt: Optional[str] = None
         self.invocation_stage: Optional[str] = None
         self.invocation_ordinal: Optional[int] = None
 
-    def recover_and_start(self, stage: str) -> tuple[int, int]:
+    def recover_and_start(
+            self, stage: str, *,
+            post_recovery_guard: Callable[[], None] | None = None,
+    ) -> tuple[int, int]:
+        """Recover crash windows, revalidate ownership, then claim an invocation."""
         self._require_lock()
         if self.invocation_stage is not None:
             raise CheckpointError("executor already owns an invocation")
@@ -197,6 +213,7 @@ class DurableExecutor:
             raise InvocationCancelled("cancelled before invocation claim")
         self._active_plan_raw(stage)
         header = self.checkpoint.header()
+        self._require_budget_ledger(header)
         try:
             revalidate_filesystem(
                 MountFingerprint(**header["mount"]), self.checkpoint.root,
@@ -217,6 +234,8 @@ class DurableExecutor:
                 path, root / "quarantine", reason="integrity_failed", lock=self.lock)
             raise CheckpointError(f"checkpoint verification failed: {verification.errors}")
         count = self.checkpoint.recover()
+        if post_recovery_guard is not None:
+            post_recovery_guard()
         self.checkpoint.transition("RUNNING")
         try:
             ordinal = self.checkpoint.claim_invocation(
@@ -227,6 +246,30 @@ class DurableExecutor:
             raise
         self.invocation_stage, self.invocation_ordinal = stage, ordinal
         return count, ordinal
+
+    def _require_budget_ledger(self, header: Mapping[str, Any]) -> None:
+        limits = header["limits"]
+        if self.enforce_public_budget_contract:
+            from .c0b2_runtime import PUBLIC_CUMULATIVE_CAP, PUBLIC_LIMITS
+            if (header.get("run_type") != "public"
+                    or canonical_json(limits) != canonical_json(PUBLIC_LIMITS)
+                    or type(header.get("cumulative_cap")) is not int
+                    or header["cumulative_cap"] != PUBLIC_CUMULATIVE_CAP):
+                raise ImmutableViolation(
+                    "public budget ledger differs from the implementation contract")
+        stages = sorted((stage, sum(classes.values()))
+                        for stage, classes in limits.items())
+        classes = sorted((stage, kind, allowance)
+                         for stage, values in limits.items()
+                         for kind, allowance in values.items())
+        stored_stages = self.checkpoint.conn.execute(
+            "SELECT stage,hard_cap FROM stage_limits ORDER BY 1").fetchall()
+        stored_classes = self.checkpoint.conn.execute(
+            "SELECT stage,call_class,allowance FROM class_limits ORDER BY 1,2"
+        ).fetchall()
+        if (header["invocation_caps"] != INVOCATION_CAPS
+                or stored_stages != stages or stored_classes != classes):
+            raise ImmutableViolation("budget ledger differs from its frozen header")
 
     def run(self, request: WorkRequest) -> ExecutionResult:
         self._require_lock()
@@ -309,6 +352,7 @@ class DurableExecutor:
     def run_resource_probe(
             self, request: ControlRequest, *,
             prioritized_obligation_model: Optional[str] = None,
+            prioritized_context_control_id: Optional[str] = None,
     ) -> ExecutionResult:
         self._require_lock()
         self._require_invocation_stage(request.stage)
@@ -316,7 +360,23 @@ class DurableExecutor:
             self.checkpoint.cancel()
             return ExecutionResult("CANCELLED_PENDING_RESUME")
         self._require_preflight_complete(request.stage)
-        if prioritized_obligation_model is None:
+        f_priority = (self._f_context_recovery_owner()
+                      if request.stage == "F" else None)
+        if prioritized_context_control_id is not None:
+            if (request.stage != "F" or prioritized_obligation_model is not None
+                    or f_priority is None
+                    or prioritized_context_control_id
+                    != f_priority.context_control_id
+                    or request.model != f_priority.model
+                    or request.request_hash != f_priority.trigger_request_hash):
+                raise CheckpointError(
+                    "prioritized Stage-F recovery differs from its context trigger")
+            exact = self.checkpoint.backoff(f_priority.model)
+            obligation = exact if exact.failures >= 6 else None
+        elif prioritized_obligation_model is None:
+            if f_priority is not None:
+                raise CheckpointError(
+                    "pending Stage-F context has priority over generic recovery")
             obligation = self._resource_obligation()
         else:
             if (request.stage != "D"
@@ -388,6 +448,13 @@ class DurableExecutor:
             self.current_attempt = None
 
     def run_context_probe(self, request: ControlRequest) -> ExecutionResult:
+        priority = (self._f_context_recovery_owner()
+                    if request.stage == "F" else None)
+        if priority is not None and (
+                request.control_id != priority.context_control_id
+                or request.model != priority.model):
+            raise CheckpointError(
+                "pending Stage-F context has priority over another candidate control")
         from .c0b2_runtime_common import run_context_probe
         return run_context_probe(self, request)
 
@@ -459,6 +526,9 @@ class DurableExecutor:
             self.current_attempt = None
 
     def run_cancellation_probe(self, request: ControlRequest) -> ExecutionResult:
+        if request.stage == "F" and self._f_context_recovery_owner() is not None:
+            raise CheckpointError(
+                "pending Stage-F context has priority over another candidate control")
         from .c0b2_runtime_common import run_cancellation_probe
         return run_cancellation_probe(self, request)
 
@@ -466,6 +536,9 @@ class DurableExecutor:
                                 *, cancelled_attempt_id: str, source: str,
                                 worksheet: str, num_predict: int,
                                 num_ctx: int) -> ExecutionResult:
+        if request.stage == "F" and self._f_context_recovery_owner() is not None:
+            raise CheckpointError(
+                "pending Stage-F context has priority over another candidate control")
         from .c0b2_runtime_common import run_cancellation_health
         return run_cancellation_health(
             self, request, cancelled_attempt_id=cancelled_attempt_id,
@@ -908,6 +981,8 @@ class DurableExecutor:
     def _planned_items(self, stage: str, *,
                        include_acceptance: bool = True) -> list[dict[str, Any]]:
         raw, phased = self._active_plan_raw(stage)
+        if stage == "F" and phased:
+            return self._activated_f_items(raw)
         raws = [raw]
         acceptance = self.checkpoint.load_acceptance_plan() if not phased else None
         if include_acceptance and stage == "F" and acceptance:
@@ -919,6 +994,65 @@ class DurableExecutor:
                 raise CheckpointError(f"stage {stage} plan work must be a list of objects")
             items.extend(value)
         return items
+
+    def _activated_f_items(self, raw: str) -> list[dict[str, Any]]:
+        """Return only work authorized by the exact active F activation."""
+        from .c0b2_runtime_common import runtime_position
+
+        position = runtime_position(self.checkpoint)
+        try:
+            plan = json.loads(raw)
+            key = str(plan["plan_key"])
+            work = list(plan["work"])
+            groups = list(plan.get("groups", ()))
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise CheckpointError("active F plan is not an exact work owner") from exc
+        if (position.active_stage, position.active_plan_key) != ("F", key):
+            raise CheckpointError("active F plan disagrees with the runtime cursor")
+        row = self.checkpoint.conn.execute(
+            "SELECT activation_hash,activation_json FROM plan_activations "
+            "WHERE plan_key=?", (key,)).fetchone()
+        if not row:
+            raise CheckpointError("active F plan lacks an activation")
+        try:
+            activation = json.loads(str(row[1]))
+        except json.JSONDecodeError as exc:
+            raise CheckpointError("active F activation is not valid JSON") from exc
+        if (not isinstance(activation, dict)
+                or canonical_json(activation) != row[1]
+                or sha256_json(activation) != row[0]
+                or activation.get("plan_key") != key
+                or activation.get("plan_sha256") != sha256_json(plan)
+                or activation.get("run_id") != self.checkpoint.header()["run_id"]
+                or activation.get("state") != "ACTIVATED"):
+            raise CheckpointError("active F activation identity changed")
+        activated = activation.get("activated_group_ids")
+        if not isinstance(activated, list) or any(
+                not isinstance(group, str) for group in activated):
+            raise CheckpointError("active F activation groups are invalid")
+        if key == "F_ACCEPTANCE":
+            if activated:
+                raise CheckpointError("F acceptance cannot activate groups")
+            expected = work
+        else:
+            ordered = [group.get("group_id") for group in groups]
+            if (not activated or len(set(activated)) != len(activated)
+                    or any(group not in ordered for group in activated)
+                    or key == "F_SEED_1" and activated != ordered):
+                raise CheckpointError("active F groups changed from their authority")
+            expected = [item for group in activated for item in work
+                        if item.get("activation_group_id") == group]
+        registry = self.checkpoint.conn.execute(
+            "SELECT r.work_id,r.activation_group_id,w.stage,w.cell_id,w.request_hash "
+            "FROM phase_work_registry r JOIN work_items w ON w.work_id=r.work_id "
+            "WHERE r.plan_key=? ORDER BY r.rowid", (key,)).fetchall()
+        expected_registry = [(item.get("work_id"),
+                              item.get("activation_group_id"), "F",
+                              item.get("cell_id"), item.get("request_sha256"))
+                             for item in expected]
+        if registry != expected_registry:
+            raise CheckpointError("active F work registry changed")
+        return expected
 
     def _active_plan_raw(self, stage: str) -> tuple[str, bool]:
         """Return the activated phase plan, with legacy C/fixture compatibility."""
@@ -987,6 +1121,20 @@ class DurableExecutor:
         return ExecutionResult(outcome, request.attempt_id, retry_at)
 
     def _resource_gate(self, model: str) -> Optional[ExecutionResult]:
+        priority = (self._f_context_recovery_owner()
+                    if self.invocation_stage == "F" else None)
+        if priority is not None:
+            if model != priority.model:
+                raise CheckpointError(
+                    "pending Stage-F context has priority over another model")
+            backoff = self.checkpoint.backoff(priority.model)
+            if backoff.failures >= 6:
+                raise CheckpointError(
+                    "Stage-F context trigger requires exact recovery replay")
+            if backoff.retry_not_before > self._now():
+                return ExecutionResult(
+                    "RETRY_WAIT", retry_not_before=backoff.retry_not_before)
+            return None
         obligation = self._resource_obligation()
         if obligation is not None:
             raise CheckpointError(f"resource probe required for {obligation.model}")
@@ -1076,6 +1224,60 @@ class DurableExecutor:
             complete = complete and bool(valid)
         return answered, complete
 
+    def _f_context_recovery_owner(self) -> Optional[_FContextRecovery]:
+        owners: list[_FContextRecovery] = []
+        frozen_models = self.checkpoint.header()["model_digests"]
+        for exact in self._f_seed1_control_groups():
+            answered, _complete = self._f_group_work_evidence(exact)
+            if not answered:
+                continue
+            context = exact["context"]
+            if context.state == "COMPLETE":
+                continue
+            if context.state != "PENDING":
+                raise CheckpointError(
+                    "answered Stage-F candidate has an invalid context state")
+            group, plan = exact["group"], exact["plan"]
+            controls = group["context_control"]
+            work = [row for row in plan["work"]
+                    if row["activation_group_id"] == group["group_id"]]
+            work_ids = [row["work_id"] for row in work]
+            counts = dict(self.checkpoint.conn.execute(
+                "SELECT work_id,count(*) FROM attempts WHERE work_id IN ("
+                + ",".join("?" for _ in work_ids)
+                + ") AND state IN ('ACCEPTED','SCHEMA_INVALID') GROUP BY work_id",
+                work_ids,
+            ))
+            triggered = [row for row in work if counts.get(row["work_id"], 0)]
+            answered_attempts = sum(int(value) for value in counts.values())
+            if not triggered:
+                raise CheckpointError(
+                    "Stage-F context owner lacks its answered trigger")
+            if len(triggered) != 1 or answered_attempts != 1:
+                raise CheckpointError(
+                    "Stage-F work crossed its pending context barrier")
+            trigger = triggered[0]
+            if (trigger["work_id"] != group["first_work_id"]
+                    or trigger["candidate_id"] != group["candidate_id"]
+                    or controls["candidate_id"] != group["candidate_id"]
+                    or trigger["model"] != controls["model"]
+                    or trigger["model_digest"] != controls["model_digest"]
+                    or frozen_models.get(trigger["model"])
+                    != trigger["model_digest"]):
+                raise CheckpointError(
+                    "Stage-F context trigger identity differs from its frozen owner")
+            owners.append(_FContextRecovery(
+                context_control_id=str(controls["control_id"]),
+                candidate_id=str(group["candidate_id"]),
+                model=str(trigger["model"]),
+                trigger_work_id=str(trigger["work_id"]),
+                trigger_request_hash=str(trigger["request_sha256"]),
+            ))
+        if len(owners) > 1:
+            raise CheckpointError(
+                "multiple Stage-F context recovery owners are pending")
+        return owners[0] if owners else None
+
     def _require_f_scored_control_order(self, stage: str) -> None:
         if stage != "F":
             return
@@ -1132,7 +1334,17 @@ class DurableExecutor:
         return BackoffRecord(model, failures, retry_at)
 
     def _resource_obligation(self) -> Optional[BackoffRecord]:
-        row = self.checkpoint.conn.execute(
-            "SELECT model,failures,retry_not_before FROM model_backoff "
-            "WHERE failures>=6 ORDER BY model LIMIT 1").fetchone()
+        if self.invocation_stage == "F":
+            models = sorted(self._stage_models("F"))
+            if not models:
+                return None
+            placeholders = ",".join("?" for _ in models)
+            row = self.checkpoint.conn.execute(
+                "SELECT model,failures,retry_not_before FROM model_backoff "
+                f"WHERE failures>=6 AND model IN ({placeholders}) "
+                "ORDER BY model LIMIT 1", models).fetchone()
+        else:
+            row = self.checkpoint.conn.execute(
+                "SELECT model,failures,retry_not_before FROM model_backoff "
+                "WHERE failures>=6 ORDER BY model LIMIT 1").fetchone()
         return BackoffRecord(str(row[0]), int(row[1]), float(row[2])) if row else None

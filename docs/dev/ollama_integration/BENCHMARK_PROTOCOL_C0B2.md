@@ -255,18 +255,18 @@ request hash. It resets the resource sequence after any bounded HTTP-200 termina
 response, regardless of worksheet validity. It is not scored work and cannot satisfy a
 planned document.
 
-A pending D3 or D4 context observation has scheduler priority over every unrelated model
-resource obligation. If its candidate reaches the sixth-failure recovery gate before the
-matching `/api/ps` control completes, its invocation-bound resource probe replays the
-exact frozen trigger-work request: model and digest, worksheet, prompt, chunk, overlap,
-nonce, `num_ctx`, `num_predict`, generation options, `think`, and `keep_alive` are
-byte-for-byte the trigger configuration. This is a distinct, unscored, charged recovery
-control, and its answer can be retained only as control evidence; it never becomes work
-or quality evidence. After a bounded HTTP-200 terminal response, the matching planned
-`/api/ps` control runs before any schema retry, next scored item, or unrelated resource
-probe. Other resource probes retain the fixed Stage-C V2 payload. This ordering prevents
-recovery traffic from silently replacing the allocation that `/api/ps` is meant to
-measure.
+A pending candidate-context observation in D3, D4 or F seed 1 has scheduler priority
+over every unrelated model resource obligation. If its candidate reaches the
+sixth-failure recovery gate before the matching `/api/ps` control completes, its
+invocation-bound resource probe replays the exact frozen trigger-work request: model and
+digest, worksheet, prompt, chunk, overlap, nonce, `num_ctx`, `num_predict`, generation
+options, `think`, and `keep_alive` are byte-for-byte the trigger configuration. This is a
+distinct, unscored, charged recovery control, and its answer can be retained only as
+control evidence; it never becomes work or quality evidence. After a bounded HTTP-200
+terminal response, the matching planned `/api/ps` control runs before any schema retry,
+next scored item, or unrelated resource probe. Other resource probes retain the fixed
+Stage-C V2 payload. This ordering prevents recovery traffic from silently replacing the
+allocation that `/api/ps` is meant to measure.
 
 One invocation has a 240-minute soft wall including preflight and interruptible backoff.
 The executor checks it transactionally before claiming another work item. The persistent
@@ -1436,6 +1436,13 @@ The seed activation decision has exact keys `version`, `stage`, `plan_sha256`,
 `activated_group_ids`, `inactive_group_ids`; fixed version and rule are
 `stage-f-seed-activation-v1` and `seed1_all_hard_gates_and_cancellation_health-v1`.
 
+Because seed 17 and seed 20260804 activate atomically, their activation timestamps do
+not define the later execution boundary. After every activated seed-17 work row is
+terminal, one exact `F_SEED_CURSOR_TRANSITION` event atomically records the completed
+seed-17 work census and advances the cursor to `F_SEED_20260804`. F17 attempts must end
+at or before this marker and F20260804 attempts must begin at or after it. The exact
+event schema, digest domains and replay rules are frozen in the schema catalog §7.
+
 Nonces retain the implemented format: `FENCE_` plus 32 uppercase hexadecimal HMAC
 characters derived from the protected random run key. The registry identity is phase,
 document-view SHA-256 (or shared injection `pair_id`), worksheet and seed. A nonce must be
@@ -1452,14 +1459,22 @@ and before its next scored work. It binds candidate, model, digest and final con
 requires allocated context at least `num_ctx`. There is no later-seed or acceptance probe;
 every normal response independently satisfies the headroom equation.
 
+While this F control is pending, it receives §8's scheduler priority. If recovery is
+required, the runtime replays the exact seed-1 trigger configuration and then runs the
+planned `/api/ps` call immediately. A generic Stage-C recovery payload cannot run between
+the trigger answer and the context observation.
+
 After a candidate's complete seed-1 work and context probe, run one cancellation control
 on `pos_pii_013` chunk 0. Close the owned stream after its first answer byte and within
 five seconds, persist `CANCELLED_UNVERIFIED`, and durably set a health not-before time at
-least two seconds later. The next invocation runs health before scored work using the
-same source/config and a fresh frozen nonce. Health gets the ordinary one schema retry
-and passes only with eventual strict validity, grounded retained PII, no length/channel/
-schema escape, and valid headroom. Resource failure pauses. Ordered cancellation reasons
-are `cancel_not_observed`, `cancel_after_5_seconds`, `health_missing`,
+least two seconds later. Health is the first non-preflight activity after cancellation
+and runs before scored work using the same source/config and a fresh frozen nonce. A
+crash may leave intervening invocation ordinals empty or with only an ordered prefix of
+the standard preflight; every such invocation and attempt is at or after the durable
+not-before time, and no scored, recovery or planned control may intervene. Health gets
+the ordinary one schema retry and passes only with eventual strict validity, grounded
+retained PII, no length/channel/schema escape, and valid headroom. Resource failure
+pauses. Ordered cancellation reasons are `cancel_not_observed`, `cancel_after_5_seconds`, `health_missing`,
 `health_eventual_invalid`, `health_pii_missing`, `health_grounding_failure`,
 `health_length_outcome`, `health_channel_violation`,
 `health_context_headroom_failure`.
@@ -1592,6 +1607,8 @@ The C0B-2B2–B5 delta may touch only the exact workspace, implementation and te
 - `scripts/analyst_benchmark/c0b2_runtime_common.py`
 - `scripts/analyst_benchmark/c0b2_runtime_d.py`
 - `scripts/analyst_benchmark/c0b2_runtime_f.py`
+- `scripts/analyst_benchmark/c0b2_runtime_f_evidence.py`
+- `scripts/analyst_benchmark/c0b2_runtime_f_namespace.py`
 - `scripts/analyst_benchmark/c0b2_stage_d_plan.py`
 - `scripts/analyst_benchmark/c0b2_stage_d.py`
 - `scripts/analyst_benchmark/c0b2_stage_f_plan.py`
@@ -1605,6 +1622,8 @@ The C0B-2B2–B5 delta may touch only the exact workspace, implementation and te
 - `scripts/tests/test_analyst_c0b2_stage_f_plan.py`
 - `scripts/tests/test_analyst_c0b2_stage_f.py`
 - `scripts/tests/test_analyst_c0b2_runtime_f.py`
+- `scripts/tests/test_analyst_c0b2_runtime_f_evidence.py`
+- `scripts/tests/test_analyst_c0b2_runtime_f_namespace.py`
 - `scripts/tests/test_analyst_c0b2_public_flow.py`
 
 No other path may change without reviewed protocol revision. New focused tests are

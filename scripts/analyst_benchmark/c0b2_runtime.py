@@ -635,7 +635,13 @@ def _decision_hash(conn: sqlite3.Connection, decision_id: str, *,
 def _stored_public_artifact(
         conn: sqlite3.Connection, terminal: str, *, active_stage: str,
         active_plan_key: str, active_plan_hash: str,
-        aggregate_hash: str | None, charged_total: int) -> str:
+        aggregate_hash: str | None, charged_total: int,
+        header: Mapping[str, Any] | None = None) -> str:
+    if active_stage == "F" and terminal in {"SELECTED", "INCONCLUSIVE"}:
+        if header is None:
+            raise RuntimeGateError("Stage-F terminal validation lacks its run header")
+        from .c0b2_runtime_f_evidence import validate_b4_terminal_owner
+        return validate_b4_terminal_owner(conn, header)
     rows = conn.execute(
         "SELECT terminal,artifact_hash,artifact_json FROM public_artifacts WHERE terminal=?",
         (terminal,),
@@ -736,28 +742,22 @@ def _legacy_stage_c_artifact(conn: sqlite3.Connection, aggregate_hash: str) -> s
     return str(detail["sha256"])
 
 
-def _plan_aggregate_hash(
-        conn: sqlite3.Connection, plan_key: str, plan_hash: str) -> str:
+def _plan_aggregate_hash(conn: sqlite3.Connection, plan_key: str, plan_hash: str) -> str:
     if plan_key == "C":
         rows = conn.execute(
             "SELECT plan_hash,aggregate_hash,aggregate_json FROM stage_aggregates "
-            "WHERE stage='C'"
-        ).fetchall()
+            "WHERE stage='C'").fetchall()
     else:
         rows = conn.execute(
             "SELECT plan_hash,aggregate_hash,aggregate_json FROM phase_aggregates "
-            "WHERE plan_key=?", (plan_key,),
-        ).fetchall()
+            "WHERE plan_key=?", (plan_key,)).fetchall()
     if len(rows) != 1 or str(rows[0][0]) != plan_hash:
-        raise RuntimeGateError(
-            f"decision owner {plan_key} lacks its exact aggregate")
-    _canonical_db_object(
-        str(rows[0][2]), str(rows[0][1]), f"aggregate owner {plan_key}")
+        raise RuntimeGateError(f"decision owner {plan_key} lacks its exact aggregate")
+    _canonical_db_object(str(rows[0][2]), str(rows[0][1]), f"aggregate owner {plan_key}")
     return str(rows[0][1])
 
 
-def _phase_parent_owner(plan_key: str,
-                        plan_hashes: Mapping[str, str]) -> str:
+def _phase_parent_owner(plan_key: str, plan_hashes: Mapping[str, str]) -> str:
     d_predecessors = {
         "D1_OUTPUT": "C", "D2_CHUNK": "D1_OUTPUT",
         "D3_CONTEXT": "D2_CHUNK", "D4_CONFIRMATION": "D3_CONTEXT",
@@ -767,33 +767,36 @@ def _phase_parent_owner(plan_key: str,
     elif plan_key == "F_ACCEPTANCE":
         owner = "F_SEED_20260804"
     else:
-        d_keys = [key for key in PLAN_ORDER
-                  if key.startswith("D") and key in plan_hashes]
+        d_keys = [key for key in PLAN_ORDER if key.startswith("D") and key in plan_hashes]
         if not d_keys:
             raise RuntimeGateError(f"phase plan {plan_key} lacks its D owner")
         owner = d_keys[-1]
     if owner not in plan_hashes:
-        raise RuntimeGateError(
-            f"phase plan {plan_key} skipped decision owner {owner}")
+        raise RuntimeGateError(f"phase plan {plan_key} skipped decision owner {owner}")
     return owner
 
 
-_B4_ACTIVATION_KEYS = frozenset({
-    "F_SEED_17", "F_SEED_20260804", "F_ACCEPTANCE",
-})
+_B4_ACTIVATION_KEYS = frozenset({"F_SEED_17", "F_SEED_20260804", "F_ACCEPTANCE"})
+
+
+def _backup_tail_matches_cursor(tail: str, cursor: str) -> bool:
+    return tail == cursor or (cursor, tail) == ("F_SEED_17", "F_SEED_20260804")
 
 
 def _validate_backup_activation(
         conn: sqlite3.Connection, header: Mapping[str, Any], key: str,
         plan: Mapping[str, Any], activation: Mapping[str, Any]) -> None:
     """Cross-bind a B2 activation to its run, plan, and exact work registry."""
+    if (("run_id" in activation and activation["run_id"] != header["run_id"])
+            or ("budget_stage" in activation
+                and activation["budget_stage"] != plan.get("budget_stage"))):
+        raise RuntimeGateError(f"phase activation {key} differs from its run or budget stage")
     if key in _B4_ACTIVATION_KEYS:
-        raise RuntimeGateError(
-            f"backup activation {key} requires B4 typed evidence validation")
-    if (activation["run_id"] != header["run_id"]
-            or activation["budget_stage"] != plan["budget_stage"]):
-        raise RuntimeGateError(
-            f"phase activation {key} differs from its run or budget stage")
+        from .c0b2_runtime_f_evidence import validate_b4_backup_activation
+        validate_b4_backup_activation(conn, header, key, plan, activation)
+        return
+    if "run_id" not in activation or "budget_stage" not in activation:
+        raise RuntimeGateError(f"phase activation {key} lacks its run or budget stage")
     if key == "F_SEED_1":
         expected_groups = [group["group_id"] for group in plan["groups"]]
         if activation["activated_group_ids"] != expected_groups:
@@ -810,8 +813,7 @@ def _validate_backup_activation(
         "WHERE r.plan_key=? ORDER BY r.rowid", (key,),
     ).fetchall()
     if registry != expected_registry:
-        raise RuntimeGateError(
-            f"phase activation {key} differs from its exact work registry")
+        raise RuntimeGateError(f"phase activation {key} differs from its exact work registry")
 
 
 def _anchor_from_connection(conn: sqlite3.Connection) -> dict[str, Any]:
@@ -833,8 +835,7 @@ def _anchor_from_connection(conn: sqlite3.Connection) -> dict[str, Any]:
         ).fetchone()
         if not master:
             raise RuntimeGateError("F backup lacks its frozen master plan")
-        _typed_db_object(
-            str(master[1]), str(master[0]), "F master plan", FMasterPlan)
+        _typed_db_object(str(master[1]), str(master[0]), "F master plan", FMasterPlan)
         f_master = str(master[0])
     else:
         f_master = None
@@ -843,8 +844,7 @@ def _anchor_from_connection(conn: sqlite3.Connection) -> dict[str, Any]:
     if not c_plan:
         raise RuntimeGateError("Stage-C plan is missing")
     _canonical_db_object(str(c_plan[1]), str(c_plan[0]), "Stage-C plan")
-    plans = [{"plan_key": "C", "plan_sha256": str(c_plan[0]),
-              "activation_sha256": None}]
+    plans = [{"plan_key": "C", "plan_sha256": str(c_plan[0]), "activation_sha256": None}]
     plan_hashes = {"C": str(c_plan[0])}
     phase_rows = conn.execute(
         "SELECT p.plan_key,p.plan_hash,p.plan_json,a.activation_hash,a.activation_json "
@@ -878,17 +878,14 @@ def _anchor_from_connection(conn: sqlite3.Connection) -> dict[str, Any]:
         owner_key = _phase_parent_owner(key, plan_hashes)
         owner_hash = plan_hashes[owner_key]
         owner_stage = "C" if owner_key == "C" else owner_key[0]
-        owner_aggregate = _plan_aggregate_hash(
-            conn, owner_key, owner_hash)
+        owner_aggregate = _plan_aggregate_hash(conn, owner_key, owner_hash)
         plan_parent = _decision_hash(
             conn, plan_parent_decisions[key], stage=owner_stage,
             parent_hash=owner_hash, aggregate_hash=owner_aggregate)
         if activation_parent_decisions[key] == plan_parent_decisions[key]:
             activation_parent = plan_parent
         else:
-            # B4 owns the seed-activation decision's typed evidence. B2 still
-            # requires it to be an activated Stage-F decision before accepting
-            # any externally restored later-seed lineage.
+            # B4 proves typed evidence; B2 still requires an activated F decision.
             activation_parent = _decision_hash(
                 conn, activation_parent_decisions[key], stage="F")
         if (activation["plan_key"] != key
@@ -900,7 +897,7 @@ def _anchor_from_connection(conn: sqlite3.Connection) -> dict[str, Any]:
         plans.append({"plan_key": str(key), "plan_sha256": str(plan_hash),
                       "activation_sha256": str(activation_hash)})
         plan_hashes[key] = str(plan_hash)
-    if plans[-1]["plan_key"] != active_key:
+    if not _backup_tail_matches_cursor(str(plans[-1]["plan_key"]), active_key):
         raise RuntimeGateError("backup plan lineage does not end at the active cursor")
     aggregate = None
     if state in {"PAUSED_STAGE_BOUNDARY", "SELECTED", "INCONCLUSIVE"}:
@@ -931,7 +928,7 @@ def _anchor_from_connection(conn: sqlite3.Connection) -> dict[str, Any]:
             conn, state, active_stage=active_stage, active_plan_key=active_key,
             active_plan_hash=str(plans[-1]["plan_sha256"]),
             aggregate_hash=str(aggregate[0]) if aggregate else None,
-            charged_total=charged_total)
+            charged_total=charged_total, header=header)
     return validate_artifact(BackupAnchor, {
         "version": "c0b2-backup-anchor-v1", "run_id": header["run_id"],
         "active_stage": active_stage, "state": state,
@@ -1511,7 +1508,8 @@ def _run_public_stage_c_locked(
 
     executor = DurableExecutor(
         point, lock, transport, cancellation=cancellation,
-        context_request_hashes=context_hashes)
+        context_request_hashes=context_hashes,
+        enforce_public_budget_contract=True)
     ordinal = 0
 
     def finish_or_wait(result: Any) -> dict[str, Any] | None:

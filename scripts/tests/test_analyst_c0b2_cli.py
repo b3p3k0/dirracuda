@@ -57,8 +57,10 @@ def _deny_side_effects(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
             "scripts.analyst_benchmark.client",
             "scripts.analyst_benchmark.report",
             "scripts.analyst_benchmark.c0b2_checkpoint",
+            "scripts.analyst_benchmark.c0b2_runtime_f",
         } or set(fromlist or ()) & {
-            "path_service", "client", "report", "c0b2_checkpoint"
+            "path_service", "client", "report", "c0b2_checkpoint",
+            "c0b2_runtime_f",
         }:
             raise AssertionError(f"gated command imported side-effect module {name}")
         return real_import(name, globals, locals, fromlist, level)
@@ -177,16 +179,23 @@ def test_public_offline_commands_delegate_without_live_transport(
     assert "PREPARED" in output
 
 
-@pytest.mark.parametrize("stage", ("F",))
-def test_unimplemented_public_stage_is_rejected_before_side_effects(
-        stage: str, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("command", ("run", "resume"))
+def test_public_stage_f_requires_confirmation_then_delegates(
+        command: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    args = [command, "--run-id", "c0b2-public", "--stage", "F"]
     with _deny_side_effects(monkeypatch):
-        with pytest.raises(SystemExit) as exc:
-            c0b2_cli.main([
-                "run", "--run-id", "c0b2-public", "--stage", stage,
-                "--confirm-live",
-            ])
-    assert exc.value.code == c0b2_cli.EXIT_USAGE
+        assert c0b2_cli.main(args) == c0b2_cli.EXIT_USAGE
+
+    from scripts.analyst_benchmark import c0b2_runtime_f
+    calls = []
+    monkeypatch.setattr(
+        c0b2_runtime_f, "run_public_stage_f",
+        lambda run_id, *, resume: calls.append((run_id, resume)) or {
+            "state": "RUNNING"},
+        raising=False,
+    )
+    assert c0b2_cli.main([*args, "--confirm-live"]) == 0
+    assert calls == [("c0b2-public", command == "resume")]
 
 
 def test_abandon_requires_confirmation_and_remains_offline_held(

@@ -443,6 +443,45 @@ now rebuilds every phase from its parent evidence and activation, assigns each a
 its real invocation window, and requires one phase/ordinal owner across a retry group.
 Well-shaped records without reachable ancestry are provenance failures.
 
+## C0B-2B4 (Stage F)
+
+### 47. A frozen plan is not execution authority
+
+Stage F freezes both later seed plans before deciding which candidate groups qualify.
+Only the canonical activation record authorizes work or controls. Scheduling, backoff and
+recovery therefore enumerate the activated groups, not every row present in a frozen
+plan; an inactive model cannot create traffic or block the active phase.
+
+### 48. Crash recovery needs guards on both sides of mutation
+
+A pre-recovery census proves the starting namespace, but orphan conversion legitimately
+changes it. The executor now validates structure before recovery, then re-runs the strict
+owner census after recovery and before transition or invocation claim. A final census
+after claim catches a poisoned transition without permitting transport.
+
+### 49. Expected rows do not prove an exact namespace
+
+Re-deriving every expected work and control still misses valid-looking aliases, foreign
+attempts and premature terminal evidence. B4 treats plans, registries, controls, attempts,
+events, decisions and artifacts as complete namespaces: every durable row must have one
+reachable owner, and every owner must have exactly its derived history.
+
+### 50. A durable delay is evidence, not a sleep suggestion
+
+Cancellation health is valid only when its not-before value is derived from the exact
+cancelled attempt. Crash windows may add empty invocations or ordered preflight prefixes,
+but they cannot insert scored work, recovery or another planned control. Every intervening
+timestamp must also satisfy the same durable lower bound. Health owns the first
+non-preflight attempt; after that attempt exists, mandatory resource recovery may precede
+a health retry so the scheduler cannot deadlock at the sixth transport failure.
+
+### 51. Validate hot-path plans once per invocation
+
+Stage F can contain more than a thousand request rows. Rebuilding and revalidating the
+whole plan for every dispatch creates a quadratic runtime cost. B4 proves the namespace
+once, builds an immutable request index once per invocation, and still checks each lookup
+against both work ID and request hash.
+
 ---
 
 ## Not yet learned

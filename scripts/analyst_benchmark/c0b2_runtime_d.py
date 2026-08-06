@@ -30,6 +30,7 @@ from .c0b2_public_schema import (
     BackupAnchor, ContextProbeEvidence, PlanActivation, validate_artifact,
 )
 from .c0b2_plan import attempt_id as stable_attempt_id
+from .c0b2_schema import CATEGORIES
 from .c0b2_runtime_common import (
     freeze_activate_phase_plan, load_phase_plan, runtime_position,
     runtime_transaction,
@@ -87,6 +88,20 @@ class StageDRunResult:
     active_plan_key: str
     outcome: str
     retry_not_before: float = 0.0
+
+
+def _restore_d_category_order(value: Any) -> Any:
+    """Restore the semantic order of category maps after canonical JSON sorting."""
+    if isinstance(value, list):
+        return [_restore_d_category_order(row) for row in value]
+    if not isinstance(value, dict):
+        return value
+    restored = {key: _restore_d_category_order(row)
+                for key, row in value.items()}
+    recall = restored.get("category_recall")
+    if isinstance(recall, dict) and set(recall) == set(CATEGORIES):
+        restored["category_recall"] = {name: recall[name] for name in CATEGORIES}
+    return restored
 
 
 def _decision_digest(point: Checkpoint, decision_id: str) -> tuple[str, dict[str, Any]]:
@@ -232,7 +247,8 @@ def _load_owned_intermediate(
     if not row:
         raise ImmutableViolation(f"{owner_key} aggregate is missing")
     try:
-        stored_aggregate = validate_stage_d_aggregate(json.loads(str(row[2])))
+        stored_aggregate = validate_stage_d_aggregate(
+            _restore_d_category_order(json.loads(str(row[2]))))
         rebuilt = build_stage_d_aggregate(
             owner.plan, _phase_evidence(point, owner), corpus=inputs.corpus,
             context_controls=owner.controls,
@@ -1254,7 +1270,8 @@ def run_stage_d_invocation(
 
     transport = transport_factory(resolver, header)
     executor = DurableExecutor(
-        point, lock, transport, cancellation=cancellation or CancellationController())
+        point, lock, transport, cancellation=cancellation or CancellationController(),
+        enforce_public_budget_contract=True)
     _orphans, ordinal = executor.recover_and_start("D")
     # Recovery first closes any DISPATCHING crash window.  The resulting durable
     # evidence must then be exact before this invocation makes a live request.
@@ -1382,35 +1399,36 @@ def start_stage_d(point: Checkpoint, inputs: StageDInputs) -> ActiveDPhase:
     return activate_d_phase(point, "D1_OUTPUT", inputs)
 
 
-def validate_final_d_boundary(
+def validate_stored_final_d_owner(
         point: Checkpoint, inputs: StageDInputs,
 ) -> tuple[str, dict[str, Any]]:
-    """Rebuild and validate the exact activated final D boundary for Stage F."""
+    """Rebuild the exact terminal D owner without consulting the active cursor."""
     from .c0b2_stage_d import validate_final_stage_d_decision
 
-    position = runtime_position(point)
-    if (point.state() != "PAUSED_STAGE_BOUNDARY" or position.active_stage != "D"
-            or position.active_plan_key not in {"D3_CONTEXT", "D4_CONFIRMATION"}):
-        raise StageDRuntimeError("final D validation requires the exact D boundary")
-    owner = _load_exact_phase_by_key(point, position.active_plan_key, inputs)
+    digest, stored = _decision_digest(point, "stage-d-selection")
+    stored = _restore_d_category_order(stored)
+    phase = stored.get("phase")
+    owner_key = {"D3": "D3_CONTEXT", "D4": "D4_CONFIRMATION"}.get(phase)
+    if owner_key is None:
+        raise ImmutableViolation("final D decision does not identify a terminal owner")
+    owner = _load_exact_phase_by_key(point, owner_key, inputs)
     rebuilt_aggregate, expected = build_phase_outcome(point, owner, inputs)
     row = point.conn.execute(
         "SELECT plan_hash,aggregate_hash,aggregate_json FROM phase_aggregates "
-        "WHERE plan_key=?", (position.active_plan_key,),
+        "WHERE plan_key=?", (owner_key,),
     ).fetchone()
     if (not row or row != (owner.plan_sha256, sha256_json(rebuilt_aggregate),
                            canonical_json(rebuilt_aggregate))
             or expected.get("outcome") != "FINALISTS"):
         raise ImmutableViolation("final D aggregate changed from durable evidence")
-    digest, stored = _decision_digest(point, "stage-d-selection")
     decision_owner = point.conn.execute(
-        "SELECT parent_hash,aggregate_hash FROM decisions "
+        "SELECT stage,parent_hash,aggregate_hash,activation,value_json FROM decisions "
         "WHERE decision_id='stage-d-selection'",
     ).fetchone()
-    if (decision_owner != (owner.plan_sha256, row[1])
-            or canonical_json(stored) != canonical_json(expected)):
+    if decision_owner != (
+            "D", owner.plan_sha256, row[1], "ACTIVATED", canonical_json(expected)):
         raise ImmutableViolation("final D decision changed from its exact owner")
-    if position.active_plan_key == "D3_CONTEXT":
+    if owner_key == "D3_CONTEXT":
         _require_no_d4_branch(point)
         normalized = validate_final_stage_d_decision(
             stored, owner_plan=owner.plan, owner_aggregate=rebuilt_aggregate)
@@ -1425,9 +1443,26 @@ def validate_final_d_boundary(
             raise ImmutableViolation("D4 final decision lacks D3 evidence")
         normalized = validate_final_stage_d_decision(
             stored, owner_plan=owner.plan, owner_aggregate=rebuilt_aggregate,
-            d3_plan=d3.plan, d3_aggregate=json.loads(str(d3_row[0])))
+            d3_plan=d3.plan, d3_aggregate=_restore_d_category_order(
+                json.loads(str(d3_row[0]))))
     _validate_d_control_history(point, inputs)
     return digest, normalized
+
+
+def validate_final_d_boundary(
+        point: Checkpoint, inputs: StageDInputs,
+) -> tuple[str, dict[str, Any]]:
+    """Validate the stored final D owner plus the fresh Stage-F boundary gate."""
+    position = runtime_position(point)
+    if (point.state() != "PAUSED_STAGE_BOUNDARY" or position.active_stage != "D"
+            or position.active_plan_key not in {"D3_CONTEXT", "D4_CONFIRMATION"}):
+        raise StageDRuntimeError("final D validation requires the exact D boundary")
+    digest, decision = validate_stored_final_d_owner(point, inputs)
+    expected_key = {
+        "D3": "D3_CONTEXT", "D4": "D4_CONFIRMATION"}[decision["phase"]]
+    if position.active_plan_key != expected_key:
+        raise ImmutableViolation("final D cursor differs from its stored owner")
+    return digest, decision
 
 
 def validate_inconclusive_d_terminal(
