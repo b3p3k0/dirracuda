@@ -29,6 +29,19 @@ def _hash(label: str) -> str:
 HEALTH_SOURCE = "Patient SSN 123-45-6789."
 
 
+@pytest.fixture(autouse=True)
+def _stub_typed_d_boundary_for_shared_substrate(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep generic F-activation tests focused; runtime-D owns full D evidence."""
+    from scripts.analyst_benchmark import c0b2_runtime_d
+
+    monkeypatch.setattr(c0b2_runtime_d, "load_stage_d_inputs", lambda _point: object())
+    monkeypatch.setattr(
+        c0b2_runtime_d, "validate_final_d_boundary",
+        lambda point, _inputs: (_decision_hash(point, "stage-d-selection"), {}),
+    )
+
+
 def _header(root: Path, *, run_type: str = "public") -> dict[str, object]:
     digest = "a" * 64
     probe = fs.probe_filesystem(root)
@@ -142,18 +155,43 @@ def _d1_plan(parent: str, *, doc_id: str = "public-doc") -> dict[str, object]:
     }
 
 
-def _f1_plan(point: ck.Checkpoint, *, worksheets: tuple[str, ...] = ("v2",)):
+def _f1_plan(
+        point: ck.Checkpoint, *, worksheets: tuple[str, ...] = ("v2",),
+        d_plan_key: str = "D4_CONFIRMATION"):
+    d_phase = {"D3_CONTEXT": "D3", "D4_CONFIRMATION": "D4"}[d_plan_key]
+    d_plan = {"version": f"test-{d_phase.lower()}-plan",
+              "worksheets": list(worksheets)}
+    d_plan_raw, d_plan_hash = ck.canonical_json(d_plan), ck.sha256_json(d_plan)
+    d_activation = {"version": "test-d4-activation", "plan_sha256": d_plan_hash}
+    d_activation_raw = ck.canonical_json(d_activation)
+    d_aggregate = {"version": "test-d4-aggregate", "plan_sha256": d_plan_hash}
+    d_aggregate_raw = ck.canonical_json(d_aggregate)
+    d_aggregate_hash = ck.sha256_json(d_aggregate)
+    point.conn.execute(
+        "INSERT INTO phase_plans VALUES(?,?,?,?,?,?,?)",
+        (d_plan_key, "D", d_phase, _hash("d-predecessor-decision"), d_plan_hash,
+         d_plan_raw, 1.0),
+    )
+    point.conn.execute(
+        "INSERT INTO plan_activations VALUES(?,?,?,?)",
+        (d_plan_key, ck.sha256_json(d_activation), d_activation_raw, 1.0),
+    )
+    point.conn.execute(
+        "INSERT INTO phase_aggregates VALUES(?,?,?,?,?)",
+        (d_plan_key, d_plan_hash, d_aggregate_hash,
+         d_aggregate_raw, 1.0),
+    )
     decision_value = {"finalists": list(worksheets)}
     decision_raw = ck.canonical_json(decision_value)
     point.conn.execute(
         "INSERT INTO decisions VALUES(?,?,?,?,?,?,?)",
-        ("stage-d-selection", "D", _hash("d-parent"), _hash("d-aggregate"),
+        ("stage-d-selection", "D", d_plan_hash, d_aggregate_hash,
          "ACTIVATED", decision_raw, 1.0),
     )
     parent = _decision_hash(point, "stage-d-selection")
     point.conn.execute(
         "UPDATE runtime_cursor SET active_stage='D',"
-        "active_plan_key='D4_CONFIRMATION' WHERE id=1")
+        "active_plan_key=? WHERE id=1", (d_plan_key,))
     point.conn.execute(
         "UPDATE run_state SET state='PAUSED_STAGE_BOUNDARY' WHERE id=1")
     candidates = []
@@ -412,8 +450,95 @@ def test_seed1_partial_group_activation_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(ck.ImmutableViolation, match="every frozen group"):
         point.freeze_activate_phase_plan(
             plan, activated_group_ids=(first_group,))
-    assert point.conn.execute("SELECT count(*) FROM phase_plans").fetchone()[0] == 0
+    assert point.conn.execute(
+        "SELECT count(*) FROM phase_plans WHERE plan_key='F_SEED_1'"
+    ).fetchone()[0] == 0
     assert point.conn.execute("SELECT count(*) FROM work_items WHERE stage='F'").fetchone()[0] == 0
+    point.close()
+
+
+def test_seed1_accepts_exact_d3_reuse_predecessor(tmp_path: Path) -> None:
+    point = _checkpoint(tmp_path)
+    plan, _controls = _f1_plan(point, d_plan_key="D3_CONTEXT")
+    groups = tuple(group["group_id"] for group in plan["groups"])
+
+    point.freeze_activate_phase_plan(plan, activated_group_ids=groups)
+
+    assert point.runtime_position() == runtime.RuntimePosition("F", "F_SEED_1")
+    point.close()
+
+
+def test_seed1_rejects_d3_reuse_when_any_d4_branch_exists(tmp_path: Path) -> None:
+    point = _checkpoint(tmp_path)
+    plan, _controls = _f1_plan(point, d_plan_key="D3_CONTEXT")
+    point.conn.execute(
+        "INSERT INTO phase_plans VALUES(?,?,?,?,?,?,?)",
+        ("D4_CONFIRMATION", "D", "D4", _hash("parent"), _hash("rogue-plan"),
+         ck.canonical_json({"rogue": True}), 1.0),
+    )
+    groups = tuple(group["group_id"] for group in plan["groups"])
+
+    with pytest.raises(ck.ImmutableViolation, match="cannot coexist"):
+        point.freeze_activate_phase_plan(plan, activated_group_ids=groups)
+
+    assert point.runtime_position() == runtime.RuntimePosition("D", "D3_CONTEXT")
+    assert point.conn.execute(
+        "SELECT count(*) FROM phase_plans WHERE plan_key='F_SEED_1'"
+    ).fetchone()[0] == 0
+    point.close()
+
+
+def test_seed1_rejects_when_typed_d_boundary_cannot_be_rebuilt(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from scripts.analyst_benchmark import c0b2_runtime_d
+
+    point = _checkpoint(tmp_path)
+    plan, _controls = _f1_plan(point)
+    groups = tuple(group["group_id"] for group in plan["groups"])
+    monkeypatch.setattr(
+        c0b2_runtime_d, "validate_final_d_boundary",
+        lambda _point, _inputs: (_ for _ in ()).throw(
+            c0b2_runtime_d.StageDRuntimeError("tampered final D evidence")),
+    )
+
+    with pytest.raises(ck.ImmutableViolation, match="cannot be rebuilt"):
+        point.freeze_activate_phase_plan(plan, activated_group_ids=groups)
+
+    assert point.runtime_position() == runtime.RuntimePosition("D", "D4_CONFIRMATION")
+    assert point.conn.execute(
+        "SELECT count(*) FROM phase_plans WHERE plan_key='F_SEED_1'"
+    ).fetchone()[0] == 0
+    point.close()
+
+
+@pytest.mark.parametrize("mutation", ("activation", "aggregate", "decision", "cursor"))
+def test_seed1_rejects_inexact_d4_predecessor(
+        tmp_path: Path, mutation: str) -> None:
+    point = _checkpoint(tmp_path)
+    plan, _controls = _f1_plan(point)
+    if mutation == "activation":
+        point.conn.execute(
+            "DELETE FROM plan_activations WHERE plan_key='D4_CONFIRMATION'")
+    elif mutation == "aggregate":
+        point.conn.execute(
+            "UPDATE phase_aggregates SET plan_hash=? "
+            "WHERE plan_key='D4_CONFIRMATION'", (_hash("wrong-plan"),))
+    elif mutation == "decision":
+        point.conn.execute(
+            "UPDATE decisions SET activation='NOT_ACTIVATED' "
+            "WHERE decision_id='stage-d-selection'")
+    else:
+        point.conn.execute(
+            "UPDATE runtime_cursor SET active_plan_key='D2_CHUNK' WHERE id=1")
+    groups = tuple(group["group_id"] for group in plan["groups"])
+
+    with pytest.raises((ck.CheckpointError, ck.ImmutableViolation)):
+        point.freeze_activate_phase_plan(plan, activated_group_ids=groups)
+
+    assert point.runtime_position().active_stage == "D"
+    assert point.conn.execute(
+        "SELECT count(*) FROM phase_plans WHERE plan_key='F_SEED_1'"
+    ).fetchone()[0] == 0
     point.close()
 
 

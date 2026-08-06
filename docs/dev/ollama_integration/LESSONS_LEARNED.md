@@ -386,6 +386,63 @@ API rejects both later seeds and acceptance without mutation. B4 owns their evid
 paired seed activation, cursor transition, replay behavior and crash/half-state tests;
 until that complete API exists, those branches remain held.
 
+## C0B-2B3 (public creation and Stage D)
+
+### 40. Durable creation needs an internal state
+
+Creating the directory directly as `PREPARED` made a crash indistinguishable from a
+usable run. Public creation now durably writes `INITIALIZING` in a unique owner-only
+directory, atomically promotes it without replacement, and only then commits the nonce
+key, manifest, C plan/work and `PREPARED` in one transaction. Recovery may delete only
+the exact evidence-free internal run; a prepared run is preserved and only its initial
+snapshot may be retried.
+
+### 41. Recovery must prove absence, not recognize a happy shape
+
+A partial SQLite schema can contain evidence even when another expected table is absent.
+Cleanup therefore checks every evidence table that actually exists and refuses any row,
+while promotion and deletion bind the named directory/database to the inode opened by
+the checkpoint. Owner identity alone is insufficient: key-bearing directories and files
+must remain exactly 0700 and 0600.
+
+### 42. Scan decoded answer values, not JSON spelling
+
+A fence marker encoded as `\u0046...` is the same Unicode value as a literal `F...`, but
+a raw serialized substring check misses it. Stage D decodes JSON, preserves duplicate-key
+values for the scan, recursively visits value scalars and compares Unicode NFC. Serialized
+bytes remain useful for canonical storage, not semantic injection detection.
+
+### 43. A decision hash identifies its checkpoint record
+
+The D3 payload hash is not its durable parent identity. D4 must hash the decision ID,
+stage, owning plan, aggregate, activation and canonical value exactly as stored. Final D
+validation rebuilds both the current phase and its D3 predecessor from attempts before
+Stage F can activate; matching record hashes without matching evidence are insufficient.
+
+### 44. Recovery traffic can change the condition being measured
+
+A generic warm-up request may load the right model with the wrong context allocation.
+When a D3/D4 context observation is pending, recovery now replays that candidate's exact
+trigger configuration and runs `/api/ps` immediately afterward. The pending candidate
+has priority over unrelated shared-GPU obligations; recovery output is charged control
+evidence and never scored work.
+
+### 45. Safe cleanup may end at quarantine
+
+Validating an inode and then unlinking its name leaves a final same-UID swap window. The
+creation path now atomically moves the exact pinned directory out of its public name,
+fsyncs the parent, and retains the owner-only contents. Automatic destructive garbage
+collection needs a separate protocol; benchmark recovery must not delete a replacement
+introduced after validation.
+
+### 46. Attempt identity includes its historical owner
+
+Stable IDs and request hashes did not stop a valid-looking later-phase control from being
+backdated, or one retry group from straddling a phase transition. Historical validation
+now rebuilds every phase from its parent evidence and activation, assigns each attempt to
+its real invocation window, and requires one phase/ordinal owner across a retry group.
+Well-shaped records without reachable ancestry are provenance failures.
+
 ---
 
 ## Not yet learned

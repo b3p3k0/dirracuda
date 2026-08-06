@@ -306,14 +306,25 @@ class DurableExecutor:
         finally:
             self.current_attempt = None
 
-    def run_resource_probe(self, request: ControlRequest) -> ExecutionResult:
+    def run_resource_probe(
+            self, request: ControlRequest, *,
+            prioritized_obligation_model: Optional[str] = None,
+    ) -> ExecutionResult:
         self._require_lock()
         self._require_invocation_stage(request.stage)
         if self.cancellation.event.is_set():
             self.checkpoint.cancel()
             return ExecutionResult("CANCELLED_PENDING_RESUME")
         self._require_preflight_complete(request.stage)
-        obligation = self._resource_obligation()
+        if prioritized_obligation_model is None:
+            obligation = self._resource_obligation()
+        else:
+            if (request.stage != "D"
+                    or prioritized_obligation_model != request.model):
+                raise CheckpointError(
+                    "prioritized resource obligation is Stage-D candidate-specific")
+            exact = self.checkpoint.backoff(prioritized_obligation_model)
+            obligation = exact if exact.failures >= 6 else None
         if obligation is None or obligation.model != request.model:
             raise CheckpointError("probe does not match the persisted resource obligation")
         expected_control = resource_probe_id(

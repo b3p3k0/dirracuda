@@ -25,9 +25,9 @@ from typing import Any, Callable, Mapping
 from urllib.parse import quote
 
 from . import chunker, goldset, metrics, report
-from .c0b2_checkpoint import (Checkpoint, CheckpointError, RESUMABLE_STATES,
-                              RUN_ID_RE, TERMINAL_STATES, canonical_json,
-                              sha256_json)
+from .c0b2_checkpoint import (INVOCATION_CAPS, SCHEMA_VERSION, Checkpoint,
+                              CheckpointError, RESUMABLE_STATES, RUN_ID_RE,
+                              TERMINAL_STATES, canonical_json, sha256_json)
 from .c0b2_fsprobe import (GlobalExecutionLock, backup_snapshot,
                            probe_filesystem, status_readonly,
                            verify_connection, verify_readonly)
@@ -172,37 +172,75 @@ def create_public_run(*, repo_root: Path = REPO_ROOT,
     identity = run_id or new_public_run_id()
     if not RUN_ID_RE.fullmatch(identity):
         raise ValueError("invalid public run id")
+    for existing in (root, root / "runs"):
+        if os.path.lexists(existing):
+            st = existing.lstat()
+            if (not stat.S_ISDIR(st.st_mode) or stat.S_ISLNK(st.st_mode)
+                    or st.st_uid != os.getuid()
+                    or stat.S_IMODE(st.st_mode) != 0o700):
+                raise PermissionError("existing benchmark directories must be exact 0700")
     seal = capture_worktree_seal(repo_root)
     _require_clean_task_delta(seal)
 
     corpus = goldset.load(verify=True)
     manifest = build_master_manifest(corpus)
-    plan = build_c_stage_plan(secrets.token_bytes(32), corpus)
     manifest_body = _manifest_payload(manifest)
-    plan_body = _plan_payload(plan)
-    if stable_hash(manifest_body) != manifest.sha256 or stable_hash(plan_body) != plan.sha256:
-        raise RuntimeGateError("generated manifest/plan hash is not canonical")
+    if stable_hash(manifest_body) != manifest.sha256:
+        raise RuntimeGateError("generated manifest hash is not canonical")
     filesystem = probe_filesystem(root)
     header = _header(repo_root, seal, filesystem, manifest)
-
-    point = Checkpoint.create(
-        root, identity, header=header, limits=PUBLIC_LIMITS,
-        cumulative_cap=PUBLIC_CUMULATIVE_CAP, journal_mode=JOURNAL_MODE,
-    )
-    try:
-        manifest_hash = point.freeze_manifest("master", manifest_body)
-        if manifest_hash != manifest.sha256:
-            raise RuntimeGateError("checkpoint master-manifest hash changed")
-        plan_hash = point.freeze_plan("C", manifest_hash, plan_body)
-        if plan_hash != plan.sha256:
-            raise RuntimeGateError("checkpoint Stage-C plan hash changed")
-        for item in plan.work:
-            point.register_work(
-                item.work_id, "C", item.cell_id, item.request_sha256)
-        with GlobalExecutionLock(root) as lock:
-            backup_snapshot(point, root / "snapshots" / identity, lock=lock)
-    finally:
-        point.close()
+    with GlobalExecutionLock(root) as lock:
+        point = _resume_public_creation(root, identity, manifest_body, header)
+        needs_fsync = False
+        if point is None:
+            key = secrets.token_bytes(32)
+            plan = build_c_stage_plan(key, corpus)
+            plan_body = _plan_payload(plan)
+            if stable_hash(plan_body) != plan.sha256:
+                raise RuntimeGateError("generated Stage-C plan hash is not canonical")
+            storage = f".c0b2-initializing-{identity}-{secrets.token_hex(16)}"
+            point = Checkpoint.create(
+                root, identity, header=header, limits=PUBLIC_LIMITS,
+                cumulative_cap=PUBLIC_CUMULATIVE_CAP, journal_mode=JOURNAL_MODE,
+                initial_state="INITIALIZING", storage_id=storage)
+            try:
+                point.promote(identity)
+            except Exception as primary:
+                try:
+                    point.discard_initializing(identity)
+                except Exception as cleanup:
+                    primary.add_note(f"initializing cleanup failed: {cleanup!r}")
+                raise
+            try:
+                point.conn.execute("BEGIN IMMEDIATE")
+                manifest_hash = point.freeze_manifest("master", manifest_body)
+                point.freeze_manifest("run_nonce_key", {
+                    "version": "c0b2-run-nonce-key-v1", "key_hex": key.hex()})
+                plan_hash = point.freeze_plan("C", manifest_hash, plan_body)
+                if manifest_hash != manifest.sha256 or plan_hash != plan.sha256:
+                    raise RuntimeGateError("checkpoint creation evidence changed")
+                for item in plan.work:
+                    point.register_work(
+                        item.work_id, "C", item.cell_id, item.request_sha256)
+                point.conn.execute(
+                    "UPDATE run_state SET state='PREPARED',updated=? WHERE id=1",
+                    (time.time(),))
+                point.conn.commit()
+                needs_fsync = True
+            except Exception:
+                point.conn.rollback()
+                if point.state() == "INITIALIZING":
+                    point.discard_initializing(identity)
+                else:
+                    point.close()
+                raise
+        try:
+            if needs_fsync:
+                Checkpoint._fsync_file_and_parent(point.path)
+            _validate_prepared_creation(point, manifest_body, header, identity)
+            _ensure_initial_snapshot(point, lock, identity)
+        finally:
+            point.close()
     return identity
 
 
@@ -211,6 +249,131 @@ def _checkpoint_path(run_id: str, benchmark_root: Path | None = None) -> Path:
         raise ValueError("invalid public run id")
     root = Path(benchmark_root) if benchmark_root is not None else report.bench_root()
     return root / "runs" / run_id / "checkpoint.sqlite3"
+
+
+def _run_nonce_key(point: Checkpoint) -> bytes:
+    try:
+        _digest, raw = point.load_manifest("run_nonce_key")
+        value = json.loads(raw)
+        key_hex = value.get("key_hex") if isinstance(value, dict) else None
+        if (set(value) != {"version", "key_hex"}
+                or value["version"] != "c0b2-run-nonce-key-v1"
+                or not isinstance(key_hex, str) or len(key_hex) != 64
+                or any(char not in "0123456789abcdef" for char in key_hex)):
+            raise ValueError
+        key = bytes.fromhex(key_hex)
+        parent, digest, plan_raw = point.load_plan("C")
+        master_hash = point.load_manifest("master")[0]
+        rebuilt = _plan_payload(build_c_stage_plan(key))
+        if (parent != master_hash or canonical_json(rebuilt) != plan_raw
+                or stable_hash(rebuilt) != digest):
+            raise ValueError
+        return key
+    except Exception as exc:
+        raise RuntimeGateError("run nonce key does not reproduce the frozen C plan") from exc
+
+
+def _validate_prepared_creation(point: Checkpoint,
+                                manifest_body: Mapping[str, Any],
+                                header: Mapping[str, Any], run_id: str) -> None:
+    expected_header = {**dict(header), "schema_version": SCHEMA_VERSION,
+                       "journal_mode": JOURNAL_MODE,
+                       "cumulative_cap": PUBLIC_CUMULATIVE_CAP, "run_id": run_id,
+                       "limits": {stage: dict(classes)
+                                  for stage, classes in PUBLIC_LIMITS.items()},
+                       "invocation_caps": INVOCATION_CAPS}
+    if (point.state() != "PREPARED" or point.conn.execute(
+            "SELECT count(*) FROM attempts").fetchone()[0] != 0
+            or point.header() != expected_header):
+        raise RuntimeGateError("create retry refuses a non-PREPARED or used run")
+    master_hash, master_raw = point.load_manifest("master")
+    if canonical_json(manifest_body) != master_raw or stable_hash(manifest_body) != master_hash:
+        raise RuntimeGateError("create retry master manifest changed")
+    _run_nonce_key(point)
+    plan = json.loads(point.load_plan("C")[2])
+    expected = [(row["work_id"], "C", row["cell_id"], row["request_sha256"])
+                for row in plan["work"]]
+    rows = point.conn.execute(
+        "SELECT work_id,stage,cell_id,request_hash FROM work_items ORDER BY rowid").fetchall()
+    empty_tables = ("stage_aggregates", "acceptance_plan", "decisions", "attempts",
+                    "model_backoff", "context_obligations", "invocations", "events",
+                    "phase_plans", "plan_activations", "phase_aggregates",
+                    "phase_work_registry", "runtime_controls", "runtime_control_events",
+                    "public_artifacts", "backup_receipts")
+    limits = point.header()["limits"]
+    expected_classes = sorted(
+        (stage, kind, count) for stage, classes in limits.items()
+        for kind, count in classes.items())
+    expected_stages = sorted((stage, sum(classes.values()))
+                             for stage, classes in limits.items())
+    if ({row[0] for row in point.conn.execute("SELECT name FROM manifests")}
+            != {"master", "run_nonce_key"}
+            or {row[0] for row in point.conn.execute("SELECT stage FROM plans")} != {"C"}
+            or rows != expected or any(point.conn.execute(
+                f"SELECT count(*) FROM {table}").fetchone()[0] for table in empty_tables)
+            or point.conn.execute(
+                "SELECT id,active_stage,active_plan_key FROM runtime_cursor").fetchall()
+            != [(1, "C", "C")]
+            or point.conn.execute(
+                "SELECT stage,call_class,allowance FROM class_limits ORDER BY 1,2"
+            ).fetchall() != expected_classes
+            or point.conn.execute(
+                "SELECT stage,hard_cap FROM stage_limits ORDER BY 1").fetchall()
+            != expected_stages):
+        raise RuntimeGateError("create retry work or receipt evidence changed")
+
+
+def _resume_public_creation(root: Path, run_id: str,
+                            manifest: Mapping[str, Any],
+                            header: Mapping[str, Any]) -> Checkpoint | None:
+    final = _checkpoint_path(run_id, root)
+    if os.path.lexists(final.parent):
+        if Checkpoint.recover_initializing_storage(root, run_id, run_id):
+            return None
+        point = Checkpoint.open(final, root)
+        _validate_prepared_creation(point, manifest, header, run_id)
+        return point
+    runs = root / "runs"
+    if not runs.exists():
+        return None
+    prefix = f".c0b2-initializing-{run_id}-"
+    candidates = [entry for entry in runs.iterdir() if entry.name.startswith(prefix)]
+    if not candidates:
+        return None
+    if len(candidates) != 1:
+        raise RuntimeGateError("create retry found ambiguous staging runs")
+    Checkpoint.recover_initializing_storage(root, run_id, candidates[0].name)
+    return None
+
+
+def _ensure_initial_snapshot(point: Checkpoint, lock: GlobalExecutionLock,
+                             run_id: str) -> Path:
+    parent = point.root / "snapshots"
+    if os.path.lexists(parent):
+        parent_stat = parent.lstat()
+        if (not stat.S_ISDIR(parent_stat.st_mode) or stat.S_ISLNK(parent_stat.st_mode)
+                or parent_stat.st_uid != os.getuid()
+                or stat.S_IMODE(parent_stat.st_mode) != 0o700):
+            raise PermissionError("initial snapshot parent must be exact 0700")
+    else:
+        parent.mkdir(mode=0o700)
+    root = parent / run_id
+    if root.exists():
+        st = root.lstat()
+        if (not stat.S_ISDIR(st.st_mode) or stat.S_ISLNK(st.st_mode)
+                or st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) != 0o700):
+            raise PermissionError("unsafe initial snapshot directory")
+        entries = list(root.iterdir())
+        if entries:
+            if (len(entries) != 1 or entries[0].is_symlink()
+                    or not entries[0].name.startswith("snapshot-")
+                    or not verify_readonly(entries[0]).ok
+                    or status_readonly(entries[0]) != {
+                        "state": "PREPARED", "calls_total": 0}
+                    or not point.initial_snapshot_matches(entries[0])):
+                raise RuntimeGateError("initial snapshot contains unexpected evidence")
+            return entries[0]
+    return backup_snapshot(point, root, lock=lock)
 
 
 _RESULT_MODELS = {
@@ -804,7 +967,7 @@ def _owner_dir_fd(path: Path | str, *, dir_fd: int | None = None) -> int:
     fd = os.open(path, flags, dir_fd=dir_fd)
     st = os.fstat(fd)
     if (not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid()
-            or st.st_mode & 0o077):
+            or stat.S_IMODE(st.st_mode) != 0o700):
         os.close(fd)
         raise PermissionError("backup path contains an unsafe directory")
     return fd
@@ -862,7 +1025,7 @@ class _PinnedBackupSnapshot:
             raise RuntimeGateError("backup snapshot descriptors are closed")
         st = os.fstat(self.snapshot_fd)
         if (not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid()
-                or st.st_mode & 0o077 or st.st_size != self.size
+                or stat.S_IMODE(st.st_mode) != 0o600 or st.st_size != self.size
                 or _hash_fd(self.snapshot_fd) != self.snapshot_hash):
             raise RuntimeGateError("pinned backup snapshot identity changed")
         _verify_sqlite_fd(self.snapshot_fd)
@@ -891,6 +1054,7 @@ def _write_backup_snapshot(point: Checkpoint, lock: GlobalExecutionLock,
     try:
         try:
             os.mkdir("backups", mode=0o700, dir_fd=run_fd)
+            os.fsync(run_fd)
         except FileExistsError:
             pass
         backup_fd = _owner_dir_fd("backups", dir_fd=run_fd)
@@ -971,7 +1135,7 @@ def _verify_receipt_file(run_dir: Path, receipt: Mapping[str, Any]) -> Path:
             | getattr(os, "O_CLOEXEC", 0), dir_fd=parent_fd)
         st = os.fstat(snapshot_fd)
         if (not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid()
-                or st.st_mode & 0o077
+                or stat.S_IMODE(st.st_mode) != 0o600
                 or st.st_size != receipt["snapshot_size_bytes"]
                 or _hash_fd(snapshot_fd) != receipt["snapshot_sha256"]):
             raise RuntimeGateError("backup receipt snapshot identity changed")
@@ -997,6 +1161,10 @@ def _receipt_return_hook(_receipt: Mapping[str, Any]) -> None:
     """Test seam for the post-commit/pre-return crash window."""
 
 
+def _post_receipt_commit_hook(_path: Path, _receipt: Mapping[str, Any]) -> None:
+    """Test seam for snapshot replacement after the receipt commit."""
+
+
 def _pre_receipt_commit_hook(_path: Path, _receipt: Mapping[str, Any]) -> None:
     """Test seam for a crash after snapshot fsync but before receipt insertion."""
 
@@ -1007,6 +1175,13 @@ def ensure_backup_receipt(
     """Idempotently bind an exact boundary/terminal anchor to a verified snapshot."""
     if point.conn.in_transaction:
         raise RuntimeGateError("backup receipt requires committed checkpoint evidence")
+    if point.state() != "BLOCKED_PROVENANCE":
+        try:
+            _run_nonce_key(point)
+        except RuntimeGateError:
+            if point.state() != "PAUSED_STAGE_BOUNDARY":
+                raise
+            finish_public_run_failure(point, terminal="BLOCKED_PROVENANCE")
     normalized = _current_backup_anchor(point, anchor)
     anchor_raw, anchor_hash = canonical_json(normalized), sha256_json(normalized)
     row = point.conn.execute(
@@ -1046,6 +1221,8 @@ def ensure_backup_receipt(
                 (anchor_hash, anchor_raw, receipt_hash, receipt_raw, time.time()))
             pinned.verify()
             point.conn.commit()
+            _post_receipt_commit_hook(pinned.path, receipt)
+            pinned.verify()
         except Exception:
             point.conn.rollback()
             raise
@@ -1089,11 +1266,16 @@ def backup_status_readonly(db_path: Path) -> dict[str, Any]:
 
 def public_status(run_id: str, *, benchmark_root: Path | None = None) -> dict[str, Any]:
     path = _checkpoint_path(run_id, benchmark_root)
-    return {**status_readonly(path), "backup": backup_status_readonly(path)}
+    status = status_readonly(path)
+    if status["state"] == "INITIALIZING":
+        raise RuntimeGateError("INITIALIZING public runs are create-recovery only")
+    return {**status, "backup": backup_status_readonly(path)}
 
 
 def public_verify(run_id: str, *, benchmark_root: Path | None = None) -> dict[str, Any]:
     path = _checkpoint_path(run_id, benchmark_root)
+    if status_readonly(path)["state"] == "INITIALIZING":
+        raise RuntimeGateError("INITIALIZING public runs are create-recovery only")
     result = verify_readonly(path)
     errors = list(result.errors)
     try:

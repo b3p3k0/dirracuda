@@ -10,15 +10,20 @@ started. On 2026-08-05 the HI approved C0B-2B1R: freeze, review and commit the c
 public D/F implementation in the same Git revision before live creation; otherwise the
 global source pin would strand a Stage-C survivor. B1R and its normative schema catalog
 passed three independent reviews. **B2 shared public controls passed their offline,
-Analyst-regression and independent adversarial gates.** The HI reconfirmed this course on
+Analyst-regression and independent adversarial gates.** **B3 Stage D passed its planner,
+scorer, durable-runtime, crash-recovery, Analyst-regression and independent adversarial
+gates.** The HI approved the exact-configuration context-recovery rule on 2026-08-05.
+The HI reconfirmed this course on
 2026-08-05 and authorized milestone commits on `feature/ollama-analyst`; no push or
 promotion is authorized. Private Stage E remains held.
 
-The B3 pre-implementation review froze three technical clarifications before Stage-D
-coding: the protected run nonce key lives only in the backed-up 0600 checkpoint; derived
+The current B3 implementation freezes the protected run nonce key only in the backed-up 0600
+checkpoint; derived
 boundary work binds both the logical document hash and generated-view hash; and D3/D4
 context probes are phase-specific planned controls triggered by the first normal HTTP
-answer even when schema-invalid. These do not change benchmark thresholds or budgets.
+answer even when schema-invalid. Public creation now uses a durable internal state,
+atomic no-replace promotion and exact crash recovery before `PREPARED`. These controls
+do not change benchmark thresholds or budgets.
 
 The authoritative spec is [`CONTRACT.md`](CONTRACT.md), plus accepted errata in
 [`CONTRACT_ERRATA.md`](CONTRACT_ERRATA.md). The C0B-1 experiment is pre-registered in
@@ -141,8 +146,8 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
 
 ## Next Step
 
-Implement B3 Stage D, then B4 Stage F/acceptance and B5 full fake-session integration
-before creating the live checkpoint. B4 owns exact, atomic activation of the paired
+Implement B4 Stage F/acceptance and B5 full fake-session integration before creating the
+live checkpoint. B4 owns exact, atomic activation of the paired
 later Stage-F seeds and acceptance; B2 deliberately holds those paths closed. One clean
 Git/tree pin covers the whole adaptive public run. Execution stays
 serial and resumable; shared-GPU offload or slow execution is not a quality failure.

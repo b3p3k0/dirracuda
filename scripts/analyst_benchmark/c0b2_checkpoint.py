@@ -6,6 +6,8 @@ provide an explicit benchmark root after their confirmation gates have passed.
 DISPOSITION: benchmark-only diagnostic; remove after C0B artifacts are accepted."""
 from __future__ import annotations
 
+import ctypes
+import errno
 import hashlib
 import json
 import os
@@ -34,12 +36,13 @@ RESUMABLE_STATES = {
     "PREPARED", "RUNNING", "PAUSED_SOFT_WALL", "PAUSED_RESOURCE",
     "PAUSED_PREFLIGHT", "PAUSED_STAGE_BOUNDARY", "CANCELLED_PENDING_RESUME",
 }
+INTERNAL_STATES = {"INITIALIZING"}
 TERMINAL_STATES = {
     "SELECTED", "INCONCLUSIVE", "FAILED_SAFETY", "BLOCKED_PROVENANCE",
     "BLOCKED_BUDGET", "BLOCKED_FILESYSTEM", "ABANDONED", "PASS_OPERATIONAL",
     "FAIL_OPERATIONAL", "INCOMPLETE", "BLOCKED_SECURITY",
 }
-ALL_STATES = RESUMABLE_STATES | TERMINAL_STATES
+ALL_STATES = INTERNAL_STATES | RESUMABLE_STATES | TERMINAL_STATES
 AGGREGATE_TERMINALS = {
     "SELECTED", "INCONCLUSIVE", "PASS_OPERATIONAL", "FAIL_OPERATIONAL", "INCOMPLETE",
 }
@@ -86,8 +89,8 @@ def _regular_owner_file(path: Path) -> os.stat_result:
     st = path.lstat()
     if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
         raise PermissionError(f"not an owner-controlled regular file: {path}")
-    if st.st_uid != os.getuid():
-        raise PermissionError(f"file not owned by current user: {path}")
+    if st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) != 0o600:
+        raise PermissionError(f"file is not exact owner-only mode 0600: {path}")
     return st
 
 
@@ -96,9 +99,76 @@ def _owner_directory(path: Path) -> Path:
     st = path.lstat()
     if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
         raise PermissionError(f"not a real directory: {path}")
-    if st.st_uid != os.getuid():
-        raise PermissionError(f"directory not owned by current user: {path}")
+    if st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) != 0o700:
+        raise PermissionError(f"directory is not exact owner-only mode 0700: {path}")
     return path
+
+
+def _rename_noreplace(parent_fd: int, source: str, target: str) -> None:
+    """Atomically rename one child without ever replacing an existing target."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is None:
+        raise OSError(errno.ENOSYS, "renameat2(RENAME_NOREPLACE) is unavailable")
+    renameat2.argtypes = (
+        ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint)
+    renameat2.restype = ctypes.c_int
+    if renameat2(parent_fd, os.fsencode(source), parent_fd,
+                 os.fsencode(target), 1) != 0:
+        code = ctypes.get_errno()
+        raise OSError(code, os.strerror(code), target)
+
+
+def _quarantine_child(parent_fd: int, name: str,
+                      expected: os.stat_result) -> str:
+    """Move one exact child out of its public name without deleting it."""
+    current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    if (current.st_dev, current.st_ino) != (expected.st_dev, expected.st_ino):
+        raise ImmutableViolation("checkpoint directory changed before quarantine")
+    quarantine = f".c0b2-quarantine-{os.urandom(16).hex()}"
+    _rename_noreplace(parent_fd, name, quarantine)
+    moved = os.stat(quarantine, dir_fd=parent_fd, follow_symlinks=False)
+    if (moved.st_dev, moved.st_ino) != (expected.st_dev, expected.st_ino):
+        raise ImmutableViolation("checkpoint directory changed during quarantine")
+    return quarantine
+
+
+def _remove_owner_storage(runs: Path, storage: str,
+                          expected_db: os.stat_result | None = None,
+                          expected_dir: os.stat_result | None = None,
+                          allowed: frozenset[str] | None = None) -> None:
+    """Quarantine one exact owner directory; a future protocol must define GC."""
+    flags = (os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+             | getattr(os, "O_NOFOLLOW", 0))
+    runs_fd = os.open(runs, flags)
+    stage_fd = os.open(storage, flags, dir_fd=runs_fd)
+    try:
+        directory = os.fstat(stage_fd)
+        names = set(os.listdir(stage_fd))
+        expected_names = allowed or frozenset({
+            "checkpoint.sqlite3", "checkpoint.sqlite3-journal",
+            "checkpoint.sqlite3-wal", "checkpoint.sqlite3-shm"})
+        if (directory.st_uid != os.getuid()
+                or stat.S_IMODE(directory.st_mode) != 0o700
+                or expected_dir is not None and (directory.st_dev, directory.st_ino) !=
+                (expected_dir.st_dev, expected_dir.st_ino)
+                or names - expected_names):
+            raise PermissionError("refusing unsafe checkpoint staging cleanup")
+        for name in names:
+            item = os.stat(name, dir_fd=stage_fd, follow_symlinks=False)
+            if (not stat.S_ISREG(item.st_mode) or item.st_uid != os.getuid()
+                    or stat.S_IMODE(item.st_mode) != 0o600):
+                raise PermissionError("refusing unsafe checkpoint staging file")
+            if (name == "checkpoint.sqlite3" and expected_db is not None
+                    and (item.st_dev, item.st_ino) !=
+                    (expected_db.st_dev, expected_db.st_ino)):
+                raise ImmutableViolation("checkpoint changed before staging cleanup")
+        _quarantine_child(runs_fd, storage, directory)
+        # Never unlink retained evidence here. Destructive GC needs its own protocol.
+        os.fsync(runs_fd)
+    finally:
+        os.close(stage_fd)
+        os.close(runs_fd)
 _SCHEMA = """
 CREATE TABLE run_header(id INTEGER PRIMARY KEY CHECK(id=1), json TEXT NOT NULL, sha256 TEXT NOT NULL);
 CREATE TABLE run_state(id INTEGER PRIMARY KEY CHECK(id=1), state TEXT NOT NULL, updated REAL NOT NULL);
@@ -193,6 +263,13 @@ _RUNTIME_COLUMNS = {
     "backup_receipts": ("anchor_hash", "anchor_json", "receipt_hash",
                         "receipt_json", "created"),
 }
+_INITIALIZING_EVIDENCE_TABLES = (
+    "plans", "manifests", "stage_aggregates", "acceptance_plan", "decisions",
+    "work_items", "attempts", "model_backoff", "context_obligations", "invocations",
+    "events", "phase_plans", "plan_activations", "phase_aggregates",
+    "phase_work_registry", "runtime_controls", "runtime_control_events",
+    "public_artifacts", "backup_receipts",
+)
 
 
 def _schema_signature(conn: sqlite3.Connection, table: str) -> tuple[Any, ...]:
@@ -229,6 +306,55 @@ def _expected_runtime_schema() -> dict[str, tuple[Any, ...]]:
                 for table in _RUNTIME_COLUMNS}
     finally:
         reference.close()
+
+
+@lru_cache(maxsize=1)
+def _expected_initializing_schema() -> dict[str, tuple[Any, ...]]:
+    reference = sqlite3.connect(":memory:", isolation_level=None)
+    try:
+        reference.execute("PRAGMA foreign_keys=ON")
+        reference.executescript(_SCHEMA)
+        for statement in _RUNTIME_TABLES:
+            reference.execute(statement)
+        tables = {str(row[0]) for row in reference.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name NOT LIKE 'sqlite_%'")}
+        return {table: _schema_signature(reference, table) for table in tables}
+    finally:
+        reference.close()
+
+
+def _validate_initializing_base(conn: sqlite3.Connection,
+                                run_id: str) -> dict[str, Any]:
+    tables = {str(row[0]) for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
+    expected_schema = _expected_initializing_schema()
+    if (tables != set(expected_schema)
+            or any(_schema_signature(conn, table) != signature
+                   for table, signature in expected_schema.items())
+            or conn.execute("SELECT count(*) FROM sqlite_master "
+                            "WHERE type IN ('view','trigger')").fetchone()[0]):
+        raise CheckpointError("refusing initializing staging with non-exact schema")
+    header = _stored_header(conn)
+    limits = header["limits"]
+    expected_stages = sorted((stage, sum(classes.values()))
+                             for stage, classes in limits.items())
+    expected_classes = sorted(
+        (stage, kind, count) for stage, classes in limits.items()
+        for kind, count in classes.items())
+    if (conn.execute("SELECT id,state FROM run_state").fetchall()
+            != [(1, "INITIALIZING")] or header["run_id"] != run_id
+            or conn.execute("SELECT id,active_stage,active_plan_key "
+                            "FROM runtime_cursor").fetchall() != [(1, "C", "C")]
+            or conn.execute("SELECT stage,hard_cap FROM stage_limits "
+                            "ORDER BY 1").fetchall() != expected_stages
+            or conn.execute("SELECT stage,call_class,allowance FROM class_limits "
+                            "ORDER BY 1,2").fetchall() != expected_classes
+            or conn.execute("SELECT count(*) FROM sqlite_sequence").fetchone()[0]
+            or any(conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+                   for table in _INITIALIZING_EVIDENCE_TABLES)):
+        raise CheckpointError("refusing changed initializing staging content")
+    return header
 
 
 def _ensure_runtime_schema(conn: sqlite3.Connection) -> None:
@@ -344,11 +470,17 @@ class Checkpoint:
         self.path = Path(db_path)
         self.root = Path(benchmark_root)
         self.conn = conn
+        db_stat = _regular_owner_file(self.path)
+        dir_stat = _owner_directory(self.path.parent).stat()
+        self._db_identity = (db_stat.st_dev, db_stat.st_ino)
+        self._dir_identity = (dir_stat.st_dev, dir_stat.st_ino)
+        self._closed = False
 
     @classmethod
     def create(cls, benchmark_root: Path, run_id: str, *, header: Mapping[str, Any],
                limits: Mapping[str, Mapping[str, int]], cumulative_cap: int,
-               journal_mode: str = "DELETE") -> "Checkpoint":
+               journal_mode: str = "DELETE", initial_state: str = "PREPARED",
+               storage_id: str | None = None) -> "Checkpoint":
         if not RUN_ID_RE.fullmatch(run_id) or run_id in (".", ".."):
             raise ValueError("invalid run id")
         mode = journal_mode.upper()
@@ -375,21 +507,36 @@ class Checkpoint:
                        "cumulative_cap": cumulative_cap, "run_id": run_id,
                        "limits": normalized, "invocation_caps": INVOCATION_CAPS})
         canonical_json(frozen)  # Reject non-canonical headers before creating the run.
+        if initial_state not in {"INITIALIZING", "PREPARED"}:
+            raise ValueError("checkpoint creation state must be INITIALIZING or PREPARED")
+        storage = storage_id or run_id
+        if (not isinstance(storage, str)
+                or not re.fullmatch(r"[A-Za-z0-9.][A-Za-z0-9._-]{0,255}", storage)
+                or storage in (".", "..")):
+            raise ValueError("invalid checkpoint storage id")
         root = _secure_dir(Path(benchmark_root), create=True)
         runs = _secure_dir(root / "runs", create=True)
-        run_dir = runs / run_id
+        run_dir = runs / storage
         run_dir.mkdir(mode=0o700, exist_ok=False)
         _secure_dir(run_dir)
         path = run_dir / "checkpoint.sqlite3"
-        conn = sqlite3.connect(path, isolation_level=None, timeout=5.0)
+        dir_flags = (os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+                     | getattr(os, "O_NOFOLLOW", 0))
+        run_fd = os.open(run_dir, dir_flags)
+        db_fd = os.open("checkpoint.sqlite3", os.O_CREAT | os.O_EXCL | os.O_RDWR
+                        | getattr(os, "O_NOFOLLOW", 0), 0o600, dir_fd=run_fd)
+        created_dir, created_db = os.fstat(run_fd), os.fstat(db_fd)
+        conn: sqlite3.Connection | None = None
         try:
+            conn = sqlite3.connect(path, isolation_level=None, timeout=5.0)
+            os.chmod(path, 0o600)
             cls._configure(conn, journal_mode)
             conn.executescript(_SCHEMA)
             _ensure_runtime_schema(conn)
             now = time.time()
             conn.execute("INSERT INTO run_header VALUES(1,?,?)",
                          (canonical_json(frozen), sha256_json(frozen)))
-            conn.execute("INSERT INTO run_state VALUES(1,'PREPARED',?)", (now,))
+            conn.execute("INSERT INTO run_state VALUES(1,?,?)", (initial_state, now))
             for stage, classes in normalized.items():
                 hard = sum(classes.values())
                 conn.execute("INSERT INTO stage_limits VALUES(?,?)", (stage, hard))
@@ -398,10 +545,207 @@ class Checkpoint:
                                  (stage, call_class, allowance))
             os.chmod(path, 0o600)
             cls._fsync_file_and_parent(path)
+            runs_fd = os.open(runs, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                os.fsync(runs_fd)
+            finally:
+                os.close(runs_fd)
+            named_db, named_dir = _regular_owner_file(path), _owner_directory(run_dir).stat()
+            if ((named_db.st_dev, named_db.st_ino) !=
+                    (created_db.st_dev, created_db.st_ino)
+                    or (named_dir.st_dev, named_dir.st_ino) !=
+                    (created_dir.st_dev, created_dir.st_ino)):
+                raise ImmutableViolation("created checkpoint path left its pinned inode")
+            if initial_state == "INITIALIZING":
+                pinned = sqlite3.connect(
+                    f"file:/proc/self/fd/{db_fd}?mode=ro&immutable=1",
+                    uri=True, isolation_level=None, timeout=1.0)
+                try:
+                    if _validate_initializing_base(pinned, run_id) != frozen:
+                        raise ImmutableViolation("created checkpoint header changed")
+                finally:
+                    pinned.close()
             return cls(path, conn, root)
         except Exception:
-            conn.close()
+            if conn is not None:
+                conn.close()
+            _remove_owner_storage(runs, storage, created_db, created_dir)
             raise
+        finally:
+            os.close(db_fd)
+            os.close(run_fd)
+
+    @classmethod
+    def recover_initializing_storage(cls, benchmark_root: Path, run_id: str,
+                                     storage: str) -> bool:
+        """Quarantine one exact initializing run; leave other finals alone."""
+        prefix = f".c0b2-initializing-{run_id}-"
+        suffix = storage.removeprefix(prefix)
+        final = storage == run_id
+        if (not RUN_ID_RE.fullmatch(run_id) or not final and (
+                not storage.startswith(prefix) or len(suffix) != 32
+                or any(char not in "0123456789abcdef" for char in suffix))):
+            raise PermissionError("invalid initializing storage identity")
+        runs = _owner_directory(Path(benchmark_root) / "runs")
+        flags = (os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+                 | getattr(os, "O_NOFOLLOW", 0))
+        runs_fd = os.open(runs, flags)
+        try:
+            stage_fd = os.open(storage, flags, dir_fd=runs_fd)
+        except Exception:
+            os.close(runs_fd)
+            raise
+        try:
+            directory = os.fstat(stage_fd)
+            names = set(os.listdir(stage_fd))
+            if (directory.st_uid != os.getuid()
+                    or stat.S_IMODE(directory.st_mode) != 0o700
+                    or names - {"checkpoint.sqlite3", "checkpoint.sqlite3-journal"}
+                    or "checkpoint.sqlite3" not in names and names):
+                raise PermissionError("initializing storage is not exact and owner-only")
+            db_stat = None
+            if "checkpoint.sqlite3" in names:
+                db_fd = os.open("checkpoint.sqlite3", os.O_RDONLY |
+                                getattr(os, "O_NOFOLLOW", 0), dir_fd=stage_fd)
+                try:
+                    db_stat = os.fstat(db_fd)
+                    if (not stat.S_ISREG(db_stat.st_mode)
+                            or db_stat.st_uid != os.getuid()
+                            or stat.S_IMODE(db_stat.st_mode) != 0o600):
+                        raise PermissionError("initializing checkpoint is unsafe")
+                    conn = sqlite3.connect(
+                        f"file:/proc/self/fd/{db_fd}?mode=ro&immutable=1",
+                        uri=True, isolation_level=None, timeout=1.0)
+                    try:
+                        state = conn.execute(
+                            "SELECT state FROM run_state WHERE id=1").fetchone()
+                        if final and state != ("INITIALIZING",):
+                            return False
+                        _validate_initializing_base(conn, run_id)
+                    finally:
+                        conn.close()
+                finally:
+                    os.close(db_fd)
+            elif final:
+                raise CheckpointError("final initializing checkpoint is missing")
+        finally:
+            os.close(stage_fd)
+            os.close(runs_fd)
+        _remove_owner_storage(
+            runs, storage, db_stat, directory,
+            frozenset({"checkpoint.sqlite3", "checkpoint.sqlite3-journal"}))
+        return True
+
+    def promote(self, run_id: str) -> None:
+        """Durably promote an initialized staging directory without replacement."""
+        if self.conn.in_transaction or self.state() != "INITIALIZING":
+            raise CheckpointError("only durable INITIALIZING staging may be promoted")
+        expected_header = self.header()
+        if expected_header["run_id"] != run_id or self.path.name != "checkpoint.sqlite3":
+            raise ImmutableViolation("staging checkpoint identity changed")
+        runs = _owner_directory(self.root / "runs")
+        staging = self.path.parent
+        prefix = f".c0b2-initializing-{run_id}-"
+        suffix = staging.name.removeprefix(prefix)
+        if (staging.parent != runs or not staging.name.startswith(prefix)
+                or len(suffix) != 32
+                or any(char not in "0123456789abcdef" for char in suffix)):
+            raise PermissionError("checkpoint is not a staging run")
+        flags = (os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+                 | getattr(os, "O_NOFOLLOW", 0))
+        runs_fd = os.open(runs, flags)
+        try:
+            staging_fd = os.open(staging.name, flags, dir_fd=runs_fd)
+        except Exception:
+            os.close(runs_fd)
+            raise
+        promoted = False
+        try:
+            before = os.fstat(staging_fd)
+            db_path_stat = _regular_owner_file(self.path)
+            db_fd = os.open("checkpoint.sqlite3", os.O_RDONLY |
+                            getattr(os, "O_NOFOLLOW", 0), dir_fd=staging_fd)
+            try:
+                db_stat = os.fstat(db_fd)
+                if (before.st_uid != os.getuid()
+                        or stat.S_IMODE(before.st_mode) != 0o700
+                        or set(os.listdir(staging_fd)) != {"checkpoint.sqlite3"}):
+                    raise PermissionError("staging checkpoint is not exact and owner-only")
+                if ((before.st_dev, before.st_ino) != self._dir_identity
+                        or (db_stat.st_dev, db_stat.st_ino) != self._db_identity
+                        or (db_stat.st_dev, db_stat.st_ino) !=
+                        (db_path_stat.st_dev, db_path_stat.st_ino)):
+                    raise ImmutableViolation("staging checkpoint left its pinned inode")
+                os.fsync(db_fd)
+                os.fsync(staging_fd)
+            finally:
+                os.close(db_fd)
+            mode = str(self.conn.execute("PRAGMA journal_mode").fetchone()[0]).upper()
+            self.close()
+            _rename_noreplace(runs_fd, staging.name, run_id)
+            promoted = True
+            self.path = runs / run_id / "checkpoint.sqlite3"
+            after = os.stat(run_id, dir_fd=runs_fd, follow_symlinks=False)
+            if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+                raise ImmutableViolation("promoted checkpoint directory identity changed")
+            os.fsync(runs_fd)
+            self.conn = sqlite3.connect(
+                self.path, isolation_level=None, timeout=5.0)
+            self._closed = False
+            reopened = _regular_owner_file(self.path)
+            reopened_dir = _owner_directory(self.path.parent).stat()
+            if ((reopened.st_dev, reopened.st_ino) != self._db_identity
+                    or (reopened_dir.st_dev, reopened_dir.st_ino)
+                    != self._dir_identity):
+                raise ImmutableViolation(
+                    "promoted connection path changed from its pinned inode")
+            self._configure(self.conn, mode)
+            if _validate_initializing_base(self.conn, run_id) != expected_header:
+                raise ImmutableViolation("promoted checkpoint evidence changed")
+            final_db = _regular_owner_file(self.path)
+            if (final_db.st_dev, final_db.st_ino) != self._db_identity:
+                raise ImmutableViolation("promoted checkpoint name changed after reopen")
+        except Exception as primary:
+            if not self._closed:
+                self.close()
+            if promoted:
+                try:
+                    published = os.stat(run_id, dir_fd=runs_fd, follow_symlinks=False)
+                    _quarantine_child(runs_fd, run_id, published)
+                    os.fsync(runs_fd)
+                except Exception as cleanup:
+                    primary.add_note(f"promotion quarantine failed: {cleanup!r}")
+            raise
+        finally:
+            os.close(staging_fd)
+            os.close(runs_fd)
+
+    def discard_initializing(self, run_id: str) -> None:
+        """Quarantine this exact unused INITIALIZING run through pinned parents."""
+        stage = self.path.parent
+        prefix = f".c0b2-initializing-{run_id}-"
+        suffix = stage.name.removeprefix(prefix)
+        if self._closed:
+            if not os.path.lexists(stage):
+                return
+            self.recover_initializing_storage(self.root, run_id, stage.name)
+            return
+        if (self.conn.in_transaction or stage.parent != self.root / "runs"
+                or (stage.name != run_id and (not stage.name.startswith(prefix)
+                    or len(suffix) != 32
+                    or any(char not in "0123456789abcdef" for char in suffix)))):
+            raise CheckpointError("refusing to remove non-empty or changed initializing run")
+        _validate_initializing_base(self.conn, run_id)
+        expected = _regular_owner_file(self.path)
+        expected_dir = _owner_directory(stage).stat()
+        if ((expected.st_dev, expected.st_ino) != self._db_identity
+                or (expected_dir.st_dev, expected_dir.st_ino) != self._dir_identity):
+            raise ImmutableViolation(
+                "initializing connection path changed from its pinned inode")
+        self.close()
+        allowed = frozenset({"checkpoint.sqlite3", "checkpoint.sqlite3-journal"})
+        _remove_owner_storage(
+            stage.parent, stage.name, expected, expected_dir, allowed)
     @staticmethod
     def _configure(conn: sqlite3.Connection, journal_mode: str) -> None:
         mode = journal_mode.upper()
@@ -467,13 +811,14 @@ class Checkpoint:
                 raise ImmutableViolation("checkpoint identity changed before migration")
             cls._configure(conn, mode)
             _ensure_runtime_schema(conn)
-            os.chmod(path, 0o600)
             return cls(path, conn, root)
         except Exception:
             conn.close()
             raise
     def close(self) -> None:
-        self.conn.close()
+        if not self._closed:
+            self.conn.close()
+            self._closed = True
     def __enter__(self) -> "Checkpoint":
         return self
     def __exit__(self, *_args: object) -> None:
@@ -502,7 +847,7 @@ class Checkpoint:
         if old == "PREPARED":
             allowed = blockers | {"RUNNING"}
         elif old == "RUNNING":
-            allowed = ALL_STATES - {"PREPARED", "RUNNING"}
+            allowed = ALL_STATES - INTERNAL_STATES - {"PREPARED", "RUNNING"}
         elif old == "PAUSED_STAGE_BOUNDARY":
             allowed = blockers
         elif old in RESUMABLE_STATES:
@@ -1254,6 +1599,41 @@ class Checkpoint:
         if not row:
             raise CheckpointError(f"unknown work {work_id}")
         return str(row[0]), row[1]
+
+    def initial_snapshot_matches(self, snapshot: Path) -> bool:
+        """Compare and fsync one pinned exact owner-only snapshot inode."""
+        path = Path(snapshot)
+        parent = _owner_directory(path.parent)
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        parent_fd = os.open(parent, flags | getattr(os, "O_DIRECTORY", 0))
+        snapshot_fd = os.open(path.name, flags, dir_fd=parent_fd)
+        try:
+            parent_stat, before = os.fstat(parent_fd), os.fstat(snapshot_fd)
+            if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.getuid()
+                    or stat.S_IMODE(before.st_mode) != 0o600):
+                raise PermissionError("initial snapshot must be an exact 0600 regular file")
+            other = sqlite3.connect(
+                f"file:/proc/self/fd/{snapshot_fd}?mode=ro&immutable=1",
+                uri=True, isolation_level=None, timeout=1.0)
+            try:
+                other.execute("PRAGMA query_only=ON")
+                matches = tuple(other.iterdump()) == tuple(self.conn.iterdump())
+            except sqlite3.DatabaseError:
+                matches = False
+            finally:
+                other.close()
+            os.fsync(snapshot_fd)
+            os.fsync(parent_fd)
+            named = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+            current_parent = os.stat(parent, follow_symlinks=False)
+            if ((named.st_dev, named.st_ino) != (before.st_dev, before.st_ino)
+                    or (current_parent.st_dev, current_parent.st_ino)
+                    != (parent_stat.st_dev, parent_stat.st_ino)):
+                raise ImmutableViolation("initial snapshot changed during pinned fsync")
+            return matches
+        finally:
+            os.close(snapshot_fd)
+            os.close(parent_fd)
 
     def runtime_position(self):
         from .c0b2_runtime_common import runtime_position

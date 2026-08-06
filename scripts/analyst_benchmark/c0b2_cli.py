@@ -1,7 +1,7 @@
-"""Fail-closed C0B-2 command surface for public Stage C.
+"""Fail-closed C0B-2 command surface for public Stages C and D.
 
 The parser owns confirmation ordering.  Live/path modules are imported only after a
-command has passed every applicable gate; D/F and every private operation remain held.
+command has passed every applicable gate; F and every private operation remain held.
 
 DISPOSITION: retained C0B-2 benchmark infrastructure; port or remove on C15.
 """
@@ -60,7 +60,7 @@ def _add_private_gate(parser: argparse.ArgumentParser) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m scripts.analyst_benchmark c0b2",
-        description="C0B-2 public Stage-C benchmark (D/F/private remain held).",
+        description="C0B-2 public Stage-C/D benchmark (F/private remain held).",
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
@@ -72,7 +72,7 @@ def build_parser() -> argparse.ArgumentParser:
     for name in ("run", "resume"):
         command = commands.add_parser(name, help=f"{name} a public run")
         _add_run_id(command)
-        command.add_argument("--stage", required=True, choices=("C",))
+        command.add_argument("--stage", required=True, choices=("C", "D"))
         command.add_argument("--confirm-live", action="store_true")
 
     abandon = commands.add_parser("abandon", help="abandon a run (C0B-2A held)")
@@ -145,7 +145,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(runtime.render_public(result))
             return 0 if result["ok"] else EXIT_BLOCKED
         if args.command in {"run", "resume"}:
-            result = runtime.run_public_stage_c(args.run_id, resume=args.command == "resume")
+            if args.stage == "C":
+                result = runtime.run_public_stage_c(
+                    args.run_id, resume=args.command == "resume")
+            else:
+                from .c0b2_runtime_d import run_public_stage_d
+                result = run_public_stage_d(
+                    args.run_id, resume=args.command == "resume")
             print(runtime.render_public(result))
             return 0
     except Exception as exc:  # bounded enums/types only; transport never exposes raw data

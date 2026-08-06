@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 
 from scripts.analyst_benchmark import c0b2_plan as plan
+from scripts.analyst_benchmark import c0b2_checkpoint as checkpoint
 from scripts.analyst_benchmark import c0b2_runtime as runtime
 from scripts.analyst_benchmark import c0b2_executor as executor
 from scripts.analyst_benchmark import c0b2_transport as transport
@@ -91,6 +92,774 @@ def _stage_c_boundary(
     point.conn.execute(
         "UPDATE run_state SET state='PAUSED_STAGE_BOUNDARY' WHERE id=1")
     return root, point
+
+
+class _CreationCrash(BaseException):
+    """Simulate process death, bypassing ordinary exception cleanup."""
+
+
+def _leave_initializing(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, run_id: str, *,
+        after_promotion: bool,
+) -> tuple[Path, Path]:
+    monkeypatch.setattr(runtime, "_require_clean_task_delta", lambda _seal: None)
+    root = tmp_path / "bench"
+    original = runtime.Checkpoint.promote
+
+    def crash(point: runtime.Checkpoint, identity: str) -> None:
+        if after_promotion:
+            original(point, identity)
+        point.close()
+        raise _CreationCrash
+
+    monkeypatch.setattr(runtime.Checkpoint, "promote", crash)
+    with pytest.raises(_CreationCrash):
+        runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    monkeypatch.setattr(runtime.Checkpoint, "promote", original)
+    candidates = tuple((root / "runs").iterdir())
+    assert len(candidates) == 1
+    return root, candidates[0]
+
+
+def test_public_create_freezes_private_nonce_and_is_idempotent(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(runtime, "_require_clean_task_delta", lambda _seal: None)
+    root, run_id = tmp_path / "bench", "c0b2-create-idempotent"
+    assert runtime.create_public_run(benchmark_root=root, run_id=run_id) == run_id
+    point = runtime.Checkpoint.open(runtime._checkpoint_path(run_id, root), root)
+    try:
+        digest, raw = point.load_manifest("run_nonce_key")
+        value = json.loads(raw)
+        assert set(value) == {"version", "key_hex"}
+        assert value["version"] == "c0b2-run-nonce-key-v1"
+        assert len(bytes.fromhex(value["key_hex"])) == 32
+        assert digest == runtime.sha256_json(value)
+        assert runtime._run_nonce_key(point) == bytes.fromhex(value["key_hex"])
+        first_key = value["key_hex"]
+    finally:
+        point.close()
+    assert runtime.create_public_run(benchmark_root=root, run_id=run_id) == run_id
+    point = runtime.Checkpoint.open(runtime._checkpoint_path(run_id, root), root)
+    try:
+        assert json.loads(point.load_manifest("run_nonce_key")[1])["key_hex"] == first_key
+        assert point.state() == "PREPARED"
+    finally:
+        point.close()
+    assert len(tuple((root / "snapshots" / run_id).iterdir())) == 1
+    rendered = runtime.render_public(runtime.public_status(run_id, benchmark_root=root))
+    assert first_key not in rendered and "run_nonce_key" not in rendered
+    assert not tuple((root / "runs").glob(f".c0b2-initializing-{run_id}-*"))
+
+
+@pytest.mark.parametrize("after_promotion", [False, True])
+def test_public_create_recovers_exact_initializing_crash_windows(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+        after_promotion: bool) -> None:
+    run_id = f"c0b2-create-crash-{after_promotion}"
+    root, leftover = _leave_initializing(
+        monkeypatch, tmp_path, run_id, after_promotion=after_promotion)
+    if after_promotion:
+        assert leftover.name == run_id
+    else:
+        suffix = leftover.name.removeprefix(f".c0b2-initializing-{run_id}-")
+        assert len(suffix) == 32 and set(suffix) <= set("0123456789abcdef")
+    assert runtime.create_public_run(benchmark_root=root, run_id=run_id) == run_id
+    assert runtime.public_status(run_id, benchmark_root=root)["state"] == "PREPARED"
+    assert not tuple((root / "runs").glob(f".c0b2-initializing-{run_id}-*"))
+
+
+def test_public_create_quarantines_ordinary_transaction_failure(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(runtime, "_require_clean_task_delta", lambda _seal: None)
+    root, run_id = tmp_path / "bench", "c0b2-create-txn-failure"
+    original = runtime.Checkpoint.freeze_plan
+    identities: tuple[tuple[int, int], tuple[int, int]] | None = None
+
+    def fail_plan(point: runtime.Checkpoint, *_args: Any, **_kwargs: Any) -> str:
+        nonlocal identities
+        identities = ((point.path.parent.stat().st_dev, point.path.parent.stat().st_ino),
+                      (point.path.stat().st_dev, point.path.stat().st_ino))
+        raise OSError("transaction cut")
+
+    monkeypatch.setattr(runtime.Checkpoint, "freeze_plan", fail_plan)
+    with pytest.raises(OSError, match="transaction cut"):
+        runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    retained = tuple((root / "runs").glob(".c0b2-quarantine-*"))
+    assert identities is not None and len(retained) == 1
+    assert (retained[0].stat().st_dev, retained[0].stat().st_ino) == identities[0]
+    retained_db = retained[0] / "checkpoint.sqlite3"
+    assert (retained_db.stat().st_dev, retained_db.stat().st_ino) == identities[1]
+    assert retained[0].stat().st_mode & 0o777 == 0o700
+    assert retained_db.stat().st_mode & 0o777 == 0o600
+    with sqlite3.connect(retained_db) as retained_conn:
+        assert retained_conn.execute(
+            "SELECT state FROM run_state WHERE id=1").fetchone() == ("INITIALIZING",)
+    assert not (root / "runs" / run_id).exists()
+    assert not tuple((root / "runs").glob(f".c0b2-initializing-{run_id}-*"))
+    monkeypatch.setattr(runtime.Checkpoint, "freeze_plan", original)
+    assert runtime.create_public_run(benchmark_root=root, run_id=run_id) == run_id
+
+
+def test_public_create_quarantines_failure_before_promotion(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(runtime, "_require_clean_task_delta", lambda _seal: None)
+    root, run_id = tmp_path / "bench", "c0b2-create-base-fsync"
+    original = runtime.Checkpoint._fsync_file_and_parent
+    identity: tuple[int, int] | None = None
+
+    def fail_staging(path: Path) -> None:
+        nonlocal identity
+        if path.parent.name.startswith(f".c0b2-initializing-{run_id}-"):
+            identity = (path.parent.stat().st_dev, path.parent.stat().st_ino)
+            raise OSError("base fsync cut")
+        original(path)
+
+    monkeypatch.setattr(runtime.Checkpoint, "_fsync_file_and_parent", fail_staging)
+    with pytest.raises(OSError, match="base fsync cut"):
+        runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    retained = tuple((root / "runs").glob(".c0b2-quarantine-*"))
+    assert identity is not None and len(retained) == 1
+    assert (retained[0].stat().st_dev, retained[0].stat().st_ino) == identity
+    assert not tuple((root / "runs").glob(f".c0b2-initializing-{run_id}-*"))
+
+
+def test_public_create_recovers_empty_pre_database_staging(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(runtime, "_require_clean_task_delta", lambda _seal: None)
+    root, run_id = tmp_path / "bench", "c0b2-create-empty-staging"
+    stage = root / "runs" / f".c0b2-initializing-{run_id}-{'b' * 32}"
+    stage.mkdir(parents=True, mode=0o700)
+    root.chmod(0o700)
+    (root / "runs").chmod(0o700)
+    assert runtime.create_public_run(benchmark_root=root, run_id=run_id) == run_id
+    assert not stage.exists()
+
+
+def test_public_create_never_replaces_a_racing_final_directory(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(runtime, "_require_clean_task_delta", lambda _seal: None)
+    root, run_id = tmp_path / "bench", "c0b2-create-noreplace"
+    original = runtime.Checkpoint.promote
+    marker = root / "runs" / run_id / "marker"
+
+    def race(point: runtime.Checkpoint, identity: str) -> None:
+        marker.parent.mkdir(mode=0o700)
+        marker.write_text("preserve", encoding="utf-8")
+        original(point, identity)
+
+    monkeypatch.setattr(runtime.Checkpoint, "promote", race)
+    with pytest.raises(FileExistsError):
+        runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    assert marker.read_text(encoding="utf-8") == "preserve"
+    assert not tuple((root / "runs").glob(f".c0b2-initializing-{run_id}-*"))
+
+
+def test_public_create_preserves_prepared_on_fsync_failure_and_retries(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(runtime, "_require_clean_task_delta", lambda _seal: None)
+    root, run_id = tmp_path / "bench", "c0b2-create-prepared-fsync"
+    original = runtime.Checkpoint._fsync_file_and_parent
+
+    def fail_final(path: Path) -> None:
+        if path.parent.name == run_id:
+            raise OSError("prepared fsync cut")
+        original(path)
+
+    monkeypatch.setattr(runtime.Checkpoint, "_fsync_file_and_parent", fail_final)
+    with pytest.raises(OSError, match="prepared fsync cut"):
+        runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    point = runtime.Checkpoint.open(runtime._checkpoint_path(run_id, root), root)
+    try:
+        assert point.state() == "PREPARED"
+        first_key = point.load_manifest("run_nonce_key")[1]
+    finally:
+        point.close()
+    monkeypatch.setattr(runtime.Checkpoint, "_fsync_file_and_parent", original)
+    assert runtime.create_public_run(benchmark_root=root, run_id=run_id) == run_id
+    point = runtime.Checkpoint.open(runtime._checkpoint_path(run_id, root), root)
+    try:
+        assert point.load_manifest("run_nonce_key")[1] == first_key
+    finally:
+        point.close()
+
+
+def test_public_create_reuses_exact_snapshot_after_return_window_crash(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(runtime, "_require_clean_task_delta", lambda _seal: None)
+    root, run_id = tmp_path / "bench", "c0b2-create-snapshot-retry"
+    original = runtime.backup_snapshot
+
+    def crash_after_snapshot(*args: Any, **kwargs: Any) -> Path:
+        original(*args, **kwargs)
+        raise OSError("snapshot return cut")
+
+    monkeypatch.setattr(runtime, "backup_snapshot", crash_after_snapshot)
+    with pytest.raises(OSError, match="snapshot return cut"):
+        runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    snapshots = tuple((root / "snapshots" / run_id).iterdir())
+    assert len(snapshots) == 1
+    monkeypatch.setattr(runtime, "backup_snapshot", original)
+    assert runtime.create_public_run(benchmark_root=root, run_id=run_id) == run_id
+    assert tuple((root / "snapshots" / run_id).iterdir()) == snapshots
+
+
+def test_public_create_retry_rejects_logically_changed_initial_snapshot(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(runtime, "_require_clean_task_delta", lambda _seal: None)
+    root, run_id = tmp_path / "bench", "c0b2-create-snapshot-tamper"
+    runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    snapshot = next((root / "snapshots" / run_id).iterdir())
+    conn = sqlite3.connect(snapshot)
+    try:
+        conn.execute("UPDATE run_state SET updated=updated+1 WHERE id=1")
+        conn.commit()
+    finally:
+        conn.close()
+    with pytest.raises(runtime.RuntimeGateError, match="unexpected evidence"):
+        runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    assert snapshot.exists()
+
+
+def test_public_create_refuses_unsafe_or_advanced_staging(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    run_id = "c0b2-create-hostile-staging"
+    root, stage = _leave_initializing(
+        monkeypatch, tmp_path, run_id, after_promotion=False)
+    marker = stage / "unexpected"
+    marker.write_text("preserve", encoding="utf-8")
+    with pytest.raises(PermissionError):
+        runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    assert marker.read_text(encoding="utf-8") == "preserve"
+    marker.unlink()
+    conn = sqlite3.connect(stage / "checkpoint.sqlite3")
+    try:
+        conn.execute("UPDATE run_state SET state='PREPARED' WHERE id=1")
+        conn.commit()
+    finally:
+        conn.close()
+    with pytest.raises(runtime.CheckpointError, match="content"):
+        runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    assert stage.exists()
+
+
+def test_public_create_refuses_symlink_staging_without_touching_target(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(runtime, "_require_clean_task_delta", lambda _seal: None)
+    root, run_id = tmp_path / "bench", "c0b2-create-symlink"
+    runs, outside = root / "runs", tmp_path / "outside"
+    runs.mkdir(parents=True, mode=0o700)
+    outside.mkdir(mode=0o700)
+    marker = outside / "marker"
+    marker.write_text("preserve", encoding="utf-8")
+    stage = runs / f".c0b2-initializing-{run_id}-{'a' * 32}"
+    stage.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(OSError):
+        runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    assert stage.is_symlink() and marker.read_text(encoding="utf-8") == "preserve"
+
+
+@pytest.mark.parametrize("extra", ["manifest", "plan"])
+def test_public_create_retry_rejects_extra_frozen_rows(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, extra: str) -> None:
+    monkeypatch.setattr(runtime, "_require_clean_task_delta", lambda _seal: None)
+    root, run_id = tmp_path / "bench", f"c0b2-create-extra-{extra}"
+    runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    point = runtime.Checkpoint.open(runtime._checkpoint_path(run_id, root), root)
+    try:
+        if extra == "manifest":
+            point.freeze_manifest("extra", {"unexpected": True})
+        else:
+            raw = runtime.canonical_json({"work": []})
+            point.conn.execute(
+                "INSERT INTO plans VALUES('X',?,?,?,1.0)",
+                ("a" * 64, runtime.sha256_json({"work": []}), raw))
+    finally:
+        point.close()
+    with pytest.raises(runtime.RuntimeGateError, match="work or receipt"):
+        runtime.create_public_run(benchmark_root=root, run_id=run_id)
+
+
+def test_initializing_is_rejected_by_status_verify_and_abandon(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    run_id = "c0b2-initializing-surfaces"
+    root, final = _leave_initializing(
+        monkeypatch, tmp_path, run_id, after_promotion=True)
+    assert final.name == run_id
+    with pytest.raises(runtime.RuntimeGateError, match="create-recovery"):
+        runtime.public_status(run_id, benchmark_root=root)
+    with pytest.raises(runtime.RuntimeGateError, match="create-recovery"):
+        runtime.public_verify(run_id, benchmark_root=root)
+    point = runtime.Checkpoint.open(runtime._checkpoint_path(run_id, root), root)
+    try:
+        with runtime.GlobalExecutionLock(root) as lock:
+            worker = executor.DurableExecutor(
+                point, lock, lambda *_args: executor.FakeResponse(""))
+            with pytest.raises(runtime.CheckpointError):
+                worker.abandon()
+        assert point.state() == "INITIALIZING"
+    finally:
+        point.close()
+
+
+def test_initializing_cannot_be_reentered_from_runtime_state(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(runtime, "_require_clean_task_delta", lambda _seal: None)
+    root, run_id = tmp_path / "bench", "c0b2-no-initializing-transition"
+    runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    point = runtime.Checkpoint.open(runtime._checkpoint_path(run_id, root), root)
+    try:
+        point.transition("RUNNING")
+        with pytest.raises(runtime.CheckpointError, match="illegal state transition"):
+            point.transition("INITIALIZING")
+    finally:
+        point.close()
+
+
+def test_nonce_tamper_at_boundary_becomes_idempotent_blocked_provenance(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    root, point = _stage_c_boundary(monkeypatch, tmp_path, "c0b2-nonce-tamper")
+    changed = {"version": "c0b2-run-nonce-key-v1", "key_hex": "ab" * 32}
+    point.conn.execute(
+        "UPDATE manifests SET manifest_hash=?,manifest_json=? WHERE name='run_nonce_key'",
+        (runtime.sha256_json(changed), runtime.canonical_json(changed)))
+    with runtime.GlobalExecutionLock(root) as lock:
+        receipt = runtime.ensure_backup_receipt(point, lock)
+        assert point.state() == "BLOCKED_PROVENANCE"
+        assert runtime.ensure_backup_receipt(point, lock) == receipt
+    rendered = runtime.render_public(
+        runtime.public_status("c0b2-nonce-tamper", benchmark_root=root))
+    assert changed["key_hex"] not in rendered and "run_nonce_key" not in rendered
+    point.close()
+
+
+def test_nonce_tamper_at_other_terminal_refuses_receipt(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(runtime, "_require_clean_task_delta", lambda _seal: None)
+    root, run_id = tmp_path / "bench", "c0b2-terminal-nonce-tamper"
+    runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    point = runtime.Checkpoint.open(runtime._checkpoint_path(run_id, root), root)
+    runtime.finish_public_run_failure(point, terminal="ABANDONED")
+    changed = {"version": "c0b2-run-nonce-key-v1", "key_hex": "cd" * 32}
+    point.conn.execute(
+        "UPDATE manifests SET manifest_hash=?,manifest_json=? WHERE name='run_nonce_key'",
+        (runtime.sha256_json(changed), runtime.canonical_json(changed)))
+    with runtime.GlobalExecutionLock(root) as lock:
+        with pytest.raises(runtime.RuntimeGateError, match="does not reproduce"):
+            runtime.ensure_backup_receipt(point, lock)
+    assert point.conn.execute("SELECT count(*) FROM backup_receipts").fetchone()[0] == 0
+    point.close()
+
+
+def test_partial_initializing_recovery_checks_present_evidence_tables(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    run_id = "c0b2-partial-initializing-evidence"
+    root, stage = _leave_initializing(
+        monkeypatch, tmp_path, run_id, after_promotion=False)
+    conn = sqlite3.connect(stage / "checkpoint.sqlite3")
+    try:
+        conn.execute("DROP TABLE backup_receipts")
+        conn.execute("INSERT INTO events(kind,detail_json,created) VALUES('evil','{}',1)")
+        conn.commit()
+    finally:
+        conn.close()
+    with pytest.raises(runtime.CheckpointError, match="schema"):
+        runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    assert stage.exists()
+
+
+@pytest.mark.parametrize("statement", [
+    "INSERT INTO decisions VALUES('evil','C','a','b','ACTIVATED','{}',1)",
+    "INSERT INTO stage_aggregates VALUES('C','a','b','{}',1)",
+    "INSERT INTO events(kind,detail_json,created) VALUES('evil','{}',1)",
+    "INSERT INTO runtime_controls VALUES('evil','C','kind','a','{}','PENDING',"
+    "NULL,NULL,NULL,1)",
+    "INSERT INTO public_artifacts VALUES('evil','BLOCKED_PROVENANCE','a','{}',1)",
+])
+def test_final_initializing_discard_rejects_all_evidence_families(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, statement: str) -> None:
+    run_id = f"c0b2-init-evidence-{runtime.sha256_json(statement)[:12]}"
+    root, final = _leave_initializing(
+        monkeypatch, tmp_path, run_id, after_promotion=True)
+    conn = sqlite3.connect(final / "checkpoint.sqlite3")
+    try:
+        conn.execute(statement)
+        conn.commit()
+    finally:
+        conn.close()
+    with pytest.raises(runtime.CheckpointError, match="schema|content"):
+        runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    assert final.exists()
+
+
+def test_promote_rejects_named_database_replacement(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(runtime, "_require_clean_task_delta", lambda _seal: None)
+    root, run_id = tmp_path / "bench", "c0b2-promote-inode-swap"
+    original = runtime.Checkpoint.promote
+    displaced = tmp_path / "promote-original.sqlite3"
+
+    def swap(point: runtime.Checkpoint, identity: str) -> None:
+        point.path.rename(displaced)
+        shutil.copy2(displaced, point.path)
+        point.path.chmod(0o600)
+        original(point, identity)
+
+    monkeypatch.setattr(runtime.Checkpoint, "promote", swap)
+    with pytest.raises(runtime.CheckpointError, match="pinned inode"):
+        runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    assert displaced.exists()
+
+
+def test_promote_quarantines_whole_directory_swap_at_rename(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(runtime, "_require_clean_task_delta", lambda _seal: None)
+    root, run_id = tmp_path / "bench", "c0b2-promote-directory-swap"
+    original = checkpoint._rename_noreplace
+    displaced = tmp_path / "promote-original-directory"
+
+    def swap(parent_fd: int, source: str, target: str) -> None:
+        source_path = root / "runs" / source
+        if target == run_id:
+            source_path.rename(displaced)
+            shutil.copytree(displaced, source_path)
+        original(parent_fd, source, target)
+
+    monkeypatch.setattr(checkpoint, "_rename_noreplace", swap)
+    with pytest.raises(runtime.CheckpointError, match="directory identity changed"):
+        runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    assert displaced.exists()
+    assert not (root / "runs" / run_id).exists()
+    assert len(tuple((root / "runs").glob(".c0b2-quarantine-*"))) == 1
+
+
+def test_discard_rejects_named_database_replacement(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    run_id = "c0b2-discard-inode-swap"
+    root, final = _leave_initializing(
+        monkeypatch, tmp_path, run_id, after_promotion=True)
+    point = runtime.Checkpoint.open(final / "checkpoint.sqlite3", root)
+    displaced = tmp_path / "discard-original.sqlite3"
+    try:
+        point.path.rename(displaced)
+        shutil.copy2(displaced, point.path)
+        point.path.chmod(0o600)
+        with pytest.raises(runtime.CheckpointError, match="pinned inode"):
+            point.discard_initializing(run_id)
+    finally:
+        point.close()
+    assert final.exists() and displaced.exists()
+
+
+def test_receipt_reverifies_snapshot_after_database_commit(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    root, point = _stage_c_boundary(
+        monkeypatch, tmp_path, "c0b2-receipt-post-commit-verify")
+
+    def relax(path: Path, _receipt: dict[str, Any]) -> None:
+        path.chmod(0o400)
+
+    monkeypatch.setattr(runtime, "_post_receipt_commit_hook", relax)
+    with runtime.GlobalExecutionLock(root) as lock:
+        with pytest.raises(runtime.RuntimeGateError, match="identity changed"):
+            runtime.ensure_backup_receipt(point, lock)
+    assert point.conn.execute("SELECT count(*) FROM backup_receipts").fetchone()[0] == 1
+    point.close()
+
+
+def test_backup_directory_creation_fsyncs_run_directory(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    root, point = _stage_c_boundary(
+        monkeypatch, tmp_path, "c0b2-backup-parent-fsync")
+    run_identity = (point.path.parent.stat().st_dev, point.path.parent.stat().st_ino)
+    original = runtime.os.fsync
+    synced: list[tuple[int, int]] = []
+
+    def record(fd: int) -> None:
+        st = runtime.os.fstat(fd)
+        synced.append((st.st_dev, st.st_ino))
+        original(fd)
+
+    monkeypatch.setattr(runtime.os, "fsync", record)
+    with runtime.GlobalExecutionLock(root) as lock:
+        runtime.ensure_backup_receipt(point, lock)
+    assert run_identity in synced
+    point.close()
+
+
+def test_prepared_create_retry_requires_current_exact_header(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(runtime, "_require_clean_task_delta", lambda _seal: None)
+    root, run_id = tmp_path / "bench", "c0b2-create-header-drift"
+    runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    original = runtime._source_pins
+
+    def changed(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        value = original(*args, **kwargs)
+        return {**value, "git_head": "f" * 40}
+
+    monkeypatch.setattr(runtime, "_source_pins", changed)
+    with pytest.raises(runtime.RuntimeGateError, match="create retry refuses"):
+        runtime.create_public_run(benchmark_root=root, run_id=run_id)
+
+
+def test_checkpoint_reopen_rejects_relaxed_modes_without_repair(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(runtime, "_require_clean_task_delta", lambda _seal: None)
+    root, run_id = tmp_path / "bench", "c0b2-reopen-modes"
+    runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    db = runtime._checkpoint_path(run_id, root)
+    run_dir = db.parent
+    run_dir.chmod(0o750)
+    with pytest.raises(PermissionError, match="0700"):
+        runtime.Checkpoint.open(db, root)
+    assert run_dir.stat().st_mode & 0o777 == 0o750
+    run_dir.chmod(0o700)
+    db.chmod(0o640)
+    with pytest.raises(PermissionError, match="0600"):
+        runtime.Checkpoint.open(db, root)
+    assert db.stat().st_mode & 0o777 == 0o640
+
+
+def test_initial_snapshot_retry_rejects_relaxed_mode_without_repair(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(runtime, "_require_clean_task_delta", lambda _seal: None)
+    root, run_id = tmp_path / "bench", "c0b2-snapshot-mode"
+    runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    snapshot = next((root / "snapshots" / run_id).iterdir())
+    snapshot.chmod(0o640)
+    with pytest.raises(PermissionError, match="0600"):
+        runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    assert snapshot.stat().st_mode & 0o777 == 0o640
+
+
+def test_nonce_rederive_binds_c_plan_to_master_manifest(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(runtime, "_require_clean_task_delta", lambda _seal: None)
+    root, run_id = tmp_path / "bench", "c0b2-plan-parent-tamper"
+    runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    point = runtime.Checkpoint.open(runtime._checkpoint_path(run_id, root), root)
+    try:
+        point.conn.execute("UPDATE plans SET parent_hash=? WHERE stage='C'", ("f" * 64,))
+        with pytest.raises(runtime.RuntimeGateError, match="does not reproduce"):
+            runtime._run_nonce_key(point)
+    finally:
+        point.close()
+
+
+def test_existing_initial_snapshot_is_fsynced_before_retry_success(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(runtime, "_require_clean_task_delta", lambda _seal: None)
+    root, run_id = tmp_path / "bench", "c0b2-snapshot-retry-fsync"
+    runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    snapshot = next((root / "snapshots" / run_id).iterdir())
+    snapshot_identity = (snapshot.stat().st_dev, snapshot.stat().st_ino)
+    original = runtime.os.fsync
+    synced: list[tuple[int, int]] = []
+
+    def record(fd: int) -> None:
+        st = runtime.os.fstat(fd)
+        synced.append((st.st_dev, st.st_ino))
+        original(fd)
+
+    monkeypatch.setattr(runtime.os, "fsync", record)
+    assert runtime.create_public_run(benchmark_root=root, run_id=run_id) == run_id
+    assert snapshot_identity in synced
+
+
+@pytest.mark.parametrize("swap", ["directory", "database"])
+def test_create_cleanup_refuses_replaced_staging_identity(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, swap: str) -> None:
+    monkeypatch.setattr(runtime, "_require_clean_task_delta", lambda _seal: None)
+    root, run_id = tmp_path / "bench", f"c0b2-create-cleanup-{swap}"
+    original = runtime.Checkpoint._fsync_file_and_parent
+    displaced = tmp_path / f"displaced-{swap}"
+    replacement: Path | None = None
+
+    def replace(path: Path) -> None:
+        nonlocal replacement
+        if not path.parent.name.startswith(".c0b2-initializing-"):
+            original(path)
+            return
+        if swap == "directory":
+            path.parent.rename(displaced)
+            path.parent.mkdir(mode=0o700)
+            replacement = path
+        else:
+            path.rename(displaced)
+            replacement = path
+        replacement.write_bytes(b"replacement")
+        replacement.chmod(0o600)
+        raise OSError("create cut after replacement")
+
+    monkeypatch.setattr(runtime.Checkpoint, "_fsync_file_and_parent", replace)
+    with pytest.raises((PermissionError, runtime.CheckpointError)):
+        runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    assert replacement is not None and replacement.read_bytes() == b"replacement"
+    assert displaced.exists()
+
+
+def test_create_cleanup_quarantines_directory_swapped_during_rename(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(runtime, "_require_clean_task_delta", lambda _seal: None)
+    root, run_id = tmp_path / "bench", "c0b2-cleanup-rename-swap"
+    original_fsync = runtime.Checkpoint._fsync_file_and_parent
+    original_rename = checkpoint._rename_noreplace
+    displaced = tmp_path / "cleanup-original-directory"
+
+    def fail_after_fsync(path: Path) -> None:
+        original_fsync(path)
+        raise OSError("force cleanup")
+
+    def swap(parent_fd: int, source: str, target: str) -> None:
+        source_path = root / "runs" / source
+        if target.startswith(".c0b2-quarantine-"):
+            source_path.rename(displaced)
+            shutil.copytree(displaced, source_path)
+        original_rename(parent_fd, source, target)
+
+    monkeypatch.setattr(runtime.Checkpoint, "_fsync_file_and_parent", fail_after_fsync)
+    monkeypatch.setattr(checkpoint, "_rename_noreplace", swap)
+    with pytest.raises(runtime.CheckpointError, match="changed during quarantine"):
+        runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    assert displaced.exists()
+    retained = tuple((root / "runs").glob(".c0b2-quarantine-*"))
+    assert len(retained) == 1
+    assert retained[0].stat().st_mode & 0o777 == 0o700
+    assert (retained[0] / "checkpoint.sqlite3").exists()
+    assert not tuple((root / "runs").glob(f".c0b2-initializing-{run_id}-*"))
+
+
+def test_create_cleanup_retains_file_swapped_during_quarantine(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(runtime, "_require_clean_task_delta", lambda _seal: None)
+    root, run_id = tmp_path / "bench", "c0b2-cleanup-file-swap"
+    original_fsync = runtime.Checkpoint._fsync_file_and_parent
+    original_rename = checkpoint._rename_noreplace
+    displaced = tmp_path / "cleanup-original.sqlite3"
+
+    def fail_after_fsync(path: Path) -> None:
+        original_fsync(path)
+        raise OSError("force cleanup")
+
+    def swap(parent_fd: int, source: str, target: str) -> None:
+        source_db = root / "runs" / source / "checkpoint.sqlite3"
+        if target.startswith(".c0b2-quarantine-"):
+            source_db.rename(displaced)
+            source_db.write_bytes(b"retained replacement")
+            source_db.chmod(0o600)
+        original_rename(parent_fd, source, target)
+
+    monkeypatch.setattr(runtime.Checkpoint, "_fsync_file_and_parent", fail_after_fsync)
+    monkeypatch.setattr(checkpoint, "_rename_noreplace", swap)
+    with pytest.raises(OSError, match="force cleanup"):
+        runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    retained = tuple((root / "runs").glob(".c0b2-quarantine-*"))
+    assert len(retained) == 1 and displaced.exists()
+    retained_db = retained[0] / "checkpoint.sqlite3"
+    assert retained_db.read_bytes() == b"retained replacement"
+    assert retained_db.stat().st_mode & 0o777 == 0o600
+    assert not tuple((root / "runs").glob(f".c0b2-initializing-{run_id}-*"))
+
+
+def test_create_success_validation_rejects_byte_identical_db_swap(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(runtime, "_require_clean_task_delta", lambda _seal: None)
+    root, run_id = tmp_path / "bench", "c0b2-create-success-inode-swap"
+    original = runtime.Checkpoint._fsync_file_and_parent
+    displaced = tmp_path / "create-success-original.sqlite3"
+
+    def replace(path: Path) -> None:
+        original(path)
+        if path.parent.name.startswith(".c0b2-initializing-"):
+            path.rename(displaced)
+            shutil.copy2(displaced, path)
+            path.chmod(0o600)
+
+    monkeypatch.setattr(runtime.Checkpoint, "_fsync_file_and_parent", replace)
+    with pytest.raises(runtime.CheckpointError, match="changed"):
+        runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    assert displaced.exists()
+
+
+def test_promote_reopen_rejects_byte_identical_named_db_swap(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(runtime, "_require_clean_task_delta", lambda _seal: None)
+    root, run_id = tmp_path / "bench", "c0b2-promote-reopen-swap"
+    original = runtime.Checkpoint._configure
+    displaced = tmp_path / "promote-reopen-original.sqlite3"
+    calls = 0
+
+    def replace(conn: sqlite3.Connection, mode: str) -> None:
+        nonlocal calls
+        original(conn, mode)
+        calls += 1
+        if calls == 2:
+            path = Path(conn.execute("PRAGMA database_list").fetchone()[2])
+            path.rename(displaced)
+            shutil.copy2(displaced, path)
+            path.chmod(0o600)
+
+    monkeypatch.setattr(runtime.Checkpoint, "_configure", staticmethod(replace))
+    with pytest.raises(runtime.CheckpointError, match="changed after reopen|pinned inode"):
+        runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    assert calls == 2 and displaced.exists()
+
+
+@pytest.mark.parametrize("after_promotion", [False, True])
+@pytest.mark.parametrize(
+    "mutation", ["cursor", "limits", "missing_table", "extra_table"])
+def test_initializing_recovery_requires_exact_base_shape_and_cursor(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mutation: str,
+        after_promotion: bool) -> None:
+    run_id = f"c0b2-initializing-{mutation}-{after_promotion}"
+    root, stage = _leave_initializing(
+        monkeypatch, tmp_path, run_id, after_promotion=after_promotion)
+    identity = (stage.stat().st_dev, stage.stat().st_ino)
+    conn = sqlite3.connect(stage / "checkpoint.sqlite3")
+    try:
+        if mutation == "cursor":
+            conn.execute(
+                "UPDATE runtime_cursor SET active_stage='D',active_plan_key='D1_OUTPUT'")
+        elif mutation == "limits":
+            conn.execute("UPDATE stage_limits SET hard_cap=hard_cap+1 WHERE stage='C'")
+        elif mutation == "missing_table":
+            conn.execute("DROP TABLE work_items")
+        else:
+            conn.execute("CREATE TABLE unexpected_evidence(value TEXT)")
+        conn.commit()
+    finally:
+        conn.close()
+    with pytest.raises(runtime.CheckpointError, match="schema|content"):
+        runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    assert stage.exists()
+    assert (stage.stat().st_dev, stage.stat().st_ino) == identity
+
+
+def test_initial_snapshot_pinned_fsync_rejects_named_inode_swap(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(runtime, "_require_clean_task_delta", lambda _seal: None)
+    root, run_id = tmp_path / "bench", "c0b2-snapshot-fsync-inode"
+    runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    snapshot = next((root / "snapshots" / run_id).iterdir())
+    identity = (snapshot.stat().st_dev, snapshot.stat().st_ino)
+    displaced = tmp_path / "displaced-initial-snapshot.sqlite3"
+    original = runtime.os.fsync
+    swapped = False
+
+    def replace(fd: int) -> None:
+        nonlocal swapped
+        st = runtime.os.fstat(fd)
+        if not swapped and (st.st_dev, st.st_ino) == identity:
+            snapshot.rename(displaced)
+            shutil.copy2(displaced, snapshot)
+            snapshot.chmod(0o600)
+            swapped = True
+        original(fd)
+
+    monkeypatch.setattr(runtime.os, "fsync", replace)
+    with pytest.raises(runtime.CheckpointError, match="pinned fsync"):
+        runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    assert swapped and snapshot.exists() and displaced.exists()
 
 
 def test_backup_receipt_recovers_both_crash_windows_without_reusing_orphan(

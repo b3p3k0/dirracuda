@@ -64,7 +64,6 @@ _PREVIOUS_PLAN = {
     "D2_CHUNK": "D1_OUTPUT",
     "D3_CONTEXT": "D2_CHUNK",
     "D4_CONFIRMATION": "D3_CONTEXT",
-    "F_SEED_1": "D4_CONFIRMATION",
     "F_SEED_17": "F_SEED_1",
     "F_SEED_20260804": "F_SEED_17",
     "F_ACCEPTANCE": "F_SEED_20260804",
@@ -275,16 +274,18 @@ def _register_activated_work(point: "Checkpoint", plan: Mapping[str, Any],
 def _advance_cursor(point: "Checkpoint", plan_key: str) -> None:
     position = runtime_position(point)
     target_stage = plan_key[0]
-    previous = _PREVIOUS_PLAN[plan_key]
     if plan_key == "F_SEED_1" and position.active_stage == "D":
         if point.state() != "PAUSED_STAGE_BOUNDARY":
             raise CheckpointError("F activation requires the D stage boundary")
+        _require_exact_d_final_predecessor(point, position.active_plan_key)
     elif plan_key == "D1_OUTPUT" and position.active_stage == "C":
         if point.state() != "PAUSED_STAGE_BOUNDARY":
             raise CheckpointError("D activation requires the C stage boundary")
-    elif (position.active_stage != target_stage
-          or position.active_plan_key != previous or point.state() != "RUNNING"):
-        raise CheckpointError(f"phase activation {plan_key} is out of order")
+    else:
+        previous = _PREVIOUS_PLAN[plan_key]
+        if (position.active_stage != target_stage
+                or position.active_plan_key != previous or point.state() != "RUNNING"):
+            raise CheckpointError(f"phase activation {plan_key} is out of order")
     point.conn.execute(
         "UPDATE runtime_cursor SET active_stage=?,active_plan_key=?,updated=? WHERE id=1",
         (target_stage, plan_key, time.time()),
@@ -292,6 +293,54 @@ def _advance_cursor(point: "Checkpoint", plan_key: str) -> None:
     if position.active_stage != target_stage:
         point.conn.execute(
             "UPDATE run_state SET state='RUNNING',updated=? WHERE id=1", (time.time(),))
+
+
+def _require_exact_d_final_predecessor(point: "Checkpoint", active_key: str) -> None:
+    """Prove the final D decision is owned by the exact D3-reuse or D4 branch."""
+    if active_key not in {"D3_CONTEXT", "D4_CONFIRMATION"}:
+        raise CheckpointError("F activation requires the exact final D cursor")
+    plan = point.conn.execute(
+        "SELECT plan_hash FROM phase_plans WHERE plan_key=?", (active_key,),
+    ).fetchone()
+    activation = point.conn.execute(
+        "SELECT 1 FROM plan_activations WHERE plan_key=?", (active_key,),
+    ).fetchone()
+    aggregate = point.conn.execute(
+        "SELECT plan_hash,aggregate_hash FROM phase_aggregates WHERE plan_key=?",
+        (active_key,),
+    ).fetchone()
+    decision = point.conn.execute(
+        "SELECT stage,parent_hash,aggregate_hash,activation FROM decisions "
+        "WHERE decision_id='stage-d-selection'"
+    ).fetchone()
+    if (not plan or not activation or not aggregate
+            or aggregate[0] != plan[0]
+            or decision != ("D", plan[0], aggregate[1], "ACTIVATED")):
+        raise ImmutableViolation(
+            "final D decision differs from its active plan and aggregate")
+    if active_key == "D3_CONTEXT":
+        d4_rows = sum(point.conn.execute(query).fetchone()[0] for query in (
+            "SELECT count(*) FROM phase_plans WHERE plan_key='D4_CONFIRMATION'",
+            "SELECT count(*) FROM plan_activations WHERE plan_key='D4_CONFIRMATION'",
+            "SELECT count(*) FROM phase_aggregates WHERE plan_key='D4_CONFIRMATION'",
+            "SELECT count(*) FROM phase_work_registry WHERE plan_key='D4_CONFIRMATION'",
+            "SELECT count(*) FROM decisions WHERE decision_id='stage-d-d3-selection'",
+        ))
+        if d4_rows:
+            raise ImmutableViolation(
+                "D3-reuse finalization cannot coexist with a D4 branch")
+    try:
+        from .c0b2_runtime_d import (
+            load_stage_d_inputs,
+            validate_final_d_boundary,
+        )
+        exact_digest, _decision = validate_final_d_boundary(
+            point, load_stage_d_inputs(point))
+    except Exception as exc:
+        raise ImmutableViolation(
+            "final D boundary cannot be rebuilt from durable evidence") from exc
+    if exact_digest != _decision_digest(point, "stage-d-selection"):
+        raise ImmutableViolation("final D decision digest changed during validation")
 
 
 def freeze_activate_phase_plan(

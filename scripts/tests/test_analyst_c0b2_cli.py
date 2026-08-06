@@ -141,6 +141,24 @@ def test_public_live_commands_require_confirmation_then_delegate_stage_c(
     assert calls == [("c0b2-public", command == "resume")]
 
 
+@pytest.mark.parametrize("command", ("run", "resume"))
+def test_public_stage_d_requires_confirmation_then_delegates(
+        command: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    args = [command, "--run-id", "c0b2-public", "--stage", "D"]
+    with _deny_side_effects(monkeypatch):
+        assert c0b2_cli.main(args) == c0b2_cli.EXIT_USAGE
+
+    from scripts.analyst_benchmark import c0b2_runtime_d
+    calls = []
+    monkeypatch.setattr(
+        c0b2_runtime_d, "run_public_stage_d",
+        lambda run_id, *, resume: calls.append((run_id, resume)) or {
+            "state": "RUNNING"},
+    )
+    assert c0b2_cli.main([*args, "--confirm-live"]) == 0
+    assert calls == [("c0b2-public", command == "resume")]
+
+
 def test_public_offline_commands_delegate_without_live_transport(
         monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     from scripts.analyst_benchmark import c0b2_runtime
@@ -159,7 +177,7 @@ def test_public_offline_commands_delegate_without_live_transport(
     assert "PREPARED" in output
 
 
-@pytest.mark.parametrize("stage", ("D", "F"))
+@pytest.mark.parametrize("stage", ("F",))
 def test_unimplemented_public_stage_is_rejected_before_side_effects(
         stage: str, monkeypatch: pytest.MonkeyPatch) -> None:
     with _deny_side_effects(monkeypatch):

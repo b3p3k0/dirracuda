@@ -142,8 +142,14 @@ No Ollama request of any kind — including `/api/tags` and `/api/show` — happ
     --seed 1 --soft-wall-minutes 240
 
 # Leakage
-./venv/bin/python -m scripts.analyst_benchmark --leak-scan --mode public
+./venv/bin/python -m scripts.analyst_benchmark --leak-scan --mode public \
+    --baseline-file /secure/path/to/pre-task-baseline.json \
+    --raw-artifact /secure/path/to/stage-b-raw.jsonl
 ```
+
+Substitute the exact owner-only baseline and raw-artifact paths created for that run.
+Both arguments are mandatory; repeat `--raw-artifact` when a run has more than one raw
+JSONL file.
 
 ### C0B-1 shared-resource limitation
 

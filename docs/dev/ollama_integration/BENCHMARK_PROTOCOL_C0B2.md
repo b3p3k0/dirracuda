@@ -248,11 +248,25 @@ quality failure.
 That sixth-failure probe is an invocation-bound control whose stable ID hashes stage,
 invocation ordinal, kind `resource_probe`, model and the exact frozen probe-payload hash.
 Its first attempt is charged to `transport_orphan`, not `preflight_probe`; retries remain
-in the same class and it never consumes C's 18 preflight/context slots. The probe uses a
-frozen public `/api/chat` payload: that model's exact Stage-C V2 request for
-`pos_pii_001`, including the plan's nonce and request hash. It resets the resource
-sequence after any bounded HTTP-200 terminal response, regardless of worksheet validity.
-It is not scored work and cannot satisfy a planned document.
+in the same class and it never consumes C's 18 preflight/context slots. Except for the
+pending Stage-D context case below, the probe uses a frozen public `/api/chat` payload:
+that model's exact Stage-C V2 request for `pos_pii_001`, including the plan's nonce and
+request hash. It resets the resource sequence after any bounded HTTP-200 terminal
+response, regardless of worksheet validity. It is not scored work and cannot satisfy a
+planned document.
+
+A pending D3 or D4 context observation has scheduler priority over every unrelated model
+resource obligation. If its candidate reaches the sixth-failure recovery gate before the
+matching `/api/ps` control completes, its invocation-bound resource probe replays the
+exact frozen trigger-work request: model and digest, worksheet, prompt, chunk, overlap,
+nonce, `num_ctx`, `num_predict`, generation options, `think`, and `keep_alive` are
+byte-for-byte the trigger configuration. This is a distinct, unscored, charged recovery
+control, and its answer can be retained only as control evidence; it never becomes work
+or quality evidence. After a bounded HTTP-200 terminal response, the matching planned
+`/api/ps` control runs before any schema retry, next scored item, or unrelated resource
+probe. Other resource probes retain the fixed Stage-C V2 payload. This ordering prevents
+recovery traffic from silently replacing the allocation that `/api/ps` is meant to
+measure.
 
 One invocation has a 240-minute soft wall including preflight and interruptible backoff.
 The executor checks it transactionally before claiming another work item. The persistent
@@ -1335,6 +1349,12 @@ regardless of schema validity. Resource/transport outcomes do not trigger it. D3
 purpose `d3_context_16384` and allocation at least 16384; D4 requires purpose
 `d4_context_selected` and allocation at least that candidate's selected context. A probe
 identity or allocation mismatch remains `BLOCKED_PROVENANCE`, never quality evidence.
+
+While one of these controls is pending, no unrelated resource obligation may run first.
+If recovery is required, §8's exact trigger-configuration replay must succeed before the
+planned `/api/ps` call. The context observation then runs immediately and remains the
+only evidence accepted for the candidate's allocation. A generic Stage-C recovery
+payload must never run between the trigger answer and this observation.
 
 At phase activation and on every load/resume, the runtime re-derives the complete ordered
 D control set from the active plan, candidate rows and exact request configuration.
