@@ -2,33 +2,22 @@
 
 Date: 2026-08-08
 Status: **C0A contract frozen** (committed `91bb2aa`). **C0B-1 accepted and committed
-(`47e946b`).** **C0B-2A offline foundation passed implementation and independent
-adversarial review.** The HI authorized the public C/D/F envelope on 2026-08-05.
-`C0B-2B1` now has a bounded Stage-C transport, durable runtime and deterministic scorer
-that pass the offline integration gate. No C0B-2 scored call or private-corpus access has
-started. On 2026-08-05 the HI approved C0B-2B1R: freeze, review and commit the complete
-public D/F implementation in the same Git revision before live creation; otherwise the
-global source pin would strand a Stage-C survivor. B1R and its normative schema catalog
-passed three independent reviews. **B2 shared public controls passed their offline,
-Analyst-regression and independent adversarial gates.** **B3 Stage D passed its planner,
-scorer, durable-runtime, crash-recovery, Analyst-regression and independent adversarial
-gates.** The HI approved the exact-configuration context-recovery rule on 2026-08-05.
-**B4 Stage F passed its offline planner, scorer, durable-runtime, crash/replay,
-cancellation-health, exact-namespace, Analyst-regression and independent hostile-review
-gates.** **B5 supplies the complete source/task-tree pin, real bounded-transport fake HTTP
-flow, crash/retry/resume proof, public abandon terminal and exact leak gate. Its
-exact-tree, Analyst, full-regression and three independent hostile-review gates passed on
-2026-08-07 and were committed as `bde8f92`.** The first canonical public preflight on
-2026-08-08 froze `FAILED_SAFETY` before scored work because current Ollama returned 4,109
-nodes of nonverbose show metadata against the 4,096-node general cap. That run is retained
-and receipted. E3's 8,192-node show-only correction was committed as `8d772c4`, but its
-replacement preflight froze the same terminal on `qwen3.6:35b` because E3 had measured
-only the first model. That second run is also retained and receipted with zero scored
-work. Accepted erratum E4 derives a 16,384-node show-only cap from all three candidates;
-a third public run remains held until E4 passes review and is committed cleanly.
-The HI reconfirmed this course on
-2026-08-05 and authorized milestone commits on `feature/ollama-analyst`; no push or
-promotion is authorized. Private Stage E remains held.
+(`47e946b`).** The complete public C/D/F executor passed its offline and hostile-review
+gates and was committed through B5 (`bde8f92`), with the current Ollama show-envelope
+corrections committed as E3 (`8d772c4`) and E4 (`5c154b5`). The canonical public run at
+that exact E4 source identity ended terminal **`INCONCLUSIVE`** after 530 charged calls.
+Stage C carried both Qwen models on worksheet v2. D1 continued both at
+`num_predict=1024`; D2 continued only `qwen3.6:27b` at `chunk_chars=8000` and
+`overlap=256`; D3 then eliminated it because one negative-control document produced a
+false positive. The 16,384-context allocation probe passed: context capacity was not the
+failure. No final D selection exists, so Stage F never activated and private Stage E was
+structurally ineligible and untouched. The terminal receipt and checkpoint verification
+both pass. See [`PUBLIC_CDF_OUTCOME_C0B2.md`](PUBLIC_CDF_OUTCOME_C0B2.md).
+
+Two earlier canonical preflights remain as receipted `FAILED_SAFETY` history with zero
+scored calls; E3 and E4 corrected their bounded `/api/show` compatibility findings
+prospectively. Work remains local on `feature/ollama-analyst`; no push or promotion is
+authorized.
 
 The current public implementation freezes the protected run nonce key only in the
 backed-up 0600 checkpoint; derived
@@ -115,14 +104,16 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
 10. **Optional dependency lane.** Analyst's heavy/AGPL deps live in
    `experimental/analyst/requirements-analyst.txt`; core GUI runs without them.
 
-## Resolved Decisions
+## Decision Status
 
-- **D1 — primary model:** **still open.** C0B-1 screens candidates only; selection
-   happens at C0B-2 Stage F against the complete gold set. Erratum E1 amends the
-   thinking contract: `gpt-oss:20b` cannot disable thinking and runs at `think:"low"`.
-- **D2 — chunk size / context:** **still open**, decided at C0B-2 Stage D. C0B-1 fixed
-   the Stage B reference config only (`chunk_chars=4000`, `overlap=256`, `num_ctx=8192`,
-   `num_predict=2048`).
+- **D1 — primary model: UNRESOLVED.** The canonical public run produced no finalist.
+  `gpt-oss:20b` stopped in Stage C; both Qwen candidates continued into D, but D3
+  eliminated the remaining `qwen3.6:27b` candidate. No partial survivor is a product
+  selection.
+- **D2 — chunk size / context: UNRESOLVED.** D1 and D2 measured useful intermediate
+  values, but the later D3 gate invalidated that path. `chunk_chars=8000`,
+  `overlap=256`, `num_ctx=16384` and `num_predict=1024` are not a deployable bundle and
+  must not be promoted outside a new preregistered run.
 - **D8 — PyMuPDF pin: RESOLVED.** `PyMuPDF==1.28.0`, wheel
    `pymupdf-1.28.0-cp310-abi3-manylinux_2_28_x86_64.whl`, digest verified against PyPI.
    Measured embedded **MuPDF 1.29.0** — not the 1.28.0 its release note claims, which is
@@ -142,7 +133,7 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
 ## Document Map
 
 1. `CONTRACT.md` — **the frozen, authoritative spec.** Cards implement against it.
-2. `CONTRACT_ERRATA.md` — accepted narrow corrections to the frozen contract (E1 and E2).
+2. `CONTRACT_ERRATA.md` — accepted narrow corrections to the frozen contract (E1–E4).
 3. `README.md` (this file) — status, decisions, orientation.
 4. `BENCHMARK_PROTOCOL_C0B1.md` — **pre-registered** C0B-1 decision rule, gates, factors, budgets. Hash-pinned.
 5. `BENCHMARK_PROTOCOL_C0B2.md` — reviewed C0B-2 public/private protocol; offline 2A is
@@ -152,17 +143,20 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
 6. `BENCHMARK_PUBLIC_CDF_SCHEMA.md` — normative strict artifact, identity, derivation and
    terminal schemas for the public C/D/F executor.
 7. `BENCHMARK.md` — instrument method, module dispositions, what is/is not committed.
-8. `LESSONS_LEARNED.md` — only what a card actually exercised.
-9. `RESEARCH_NOTES.md` — verified external findings with sources + corpus profile.
-10. `RISK_REGISTER.md` — risk controls.
-11. `UI_MOCKUPS.md` — surface layouts (draft).
+8. `PUBLIC_CDF_OUTCOME_C0B2.md` — public-only terminal result and decision chain.
+9. `LESSONS_LEARNED.md` — only what a card actually exercised.
+10. `RESEARCH_NOTES.md` — verified external findings with sources + corpus profile.
+11. `RISK_REGISTER.md` — risk controls.
+12. `UI_MOCKUPS.md` — surface layouts (draft).
 
-`BENCHMARK_RESULTS.md` is written at the end of **C0B-2**, not before.
+`BENCHMARK_RESULTS.md` remains absent. It is the private Stage-E aggregate, and Stage E
+never became eligible.
 
 ## Next Step
 
-Validate, review and commit erratum E4's complete-candidate show-control correction, then
-create a third public checkpoint and restart Stage C under the new source identity.
-The public run stays serial and resumable; shared-GPU offload or slow execution is not a
-quality failure. D and F remain decision-gated by durable public evidence, and private
-Stage E remains separately held.
+Treat the canonical `INCONCLUSIVE` result as valid evidence. Do not weaken the negative
+control after seeing it, promote D2's intermediate settings, or force this terminal into
+Stage F. The next step is a separate HI-approved investigation plan/card. Any attempt
+that changes a candidate, prompt, worksheet or quality rule must be preregistered and use
+a fresh source-pinned public run. C1 remains held until such a run produces an authorized
+final selection.

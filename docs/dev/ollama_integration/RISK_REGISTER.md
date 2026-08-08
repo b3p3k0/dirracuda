@@ -2,12 +2,11 @@
 
 Date: 2026-08-08
 Status: **C0A controls frozen; C0B-2A offline controls implemented and reviewed; public
-C/D/F envelope authorized.** The bounded Stage-C path passed its offline gate and the HI
-approved the complete-public prefreeze course of action on 2026-08-05. B1R passed three
-independent reviews. B2 shared public controls and B3 Stage D passed their offline,
-Analyst-regression and independent adversarial gates. B4 implemented and reviewed Stage F;
-B5 owns the exact-tree fake-transport, leak, regression and final hostile-review gate.
-Live creation remains held until that exact tree is committed. Controls are
+C/D/F envelope executed.** The complete public executor passed its offline, regression
+and hostile-review gates. The canonical run ended terminal
+`INCONCLUSIVE/no_d3_context_survivor`: D2 left one intermediate candidate, and D3's strict
+negative control eliminated it. Stage F never activated and private Stage E was
+structurally ineligible. Controls are
 authoritative in [`CONTRACT.md`](CONTRACT.md), accepted errata, and the reviewed
 [`BENCHMARK_PROTOCOL_C0B2.md`](BENCHMARK_PROTOCOL_C0B2.md); this register is the
 risk-indexed view.
@@ -68,6 +67,7 @@ risk-indexed view.
 | R51 | The adaptive D/F implementation, contract errata or leak scanner falls outside the source identity claimed by the public checkpoint, or a path swap makes the scanner read an unintended file | Low | Critical | One exact reviewed 48-path allowlist drives task-tree hashing, dirty-tree refusal and the C0B-2 public leak scanner; legacy C0B-1 scope is separate. Source, baseline and raw-response reads walk descriptor-relative from an explicit lexical trusted root or protected parent, retain no-follow descriptors for every directory component, and validate regular-file, owner, mode, stability and captured-inventory identity as applicable. Semantic pins bind public schemas/scorers and the complete C/D/F generation-factor domain. Every mutating operator path, including abandon, revalidates pins under the global lock before mutation. Any drift fails closed before further HTTP. |
 | R52 | A blocked or trickling HTTP peer exceeds the frozen 600-second request wall because socket timeouts measure gaps between reads rather than total elapsed time | Medium | High | Run the blocking request and bounded body parser in one globally permitted daemon worker while the caller owns the monotonic total deadline and checks operator cancellation first. Timeout/cancel abandons the result, asynchronously closes the exact active response, closes any late response before publication and returns without waiting on uncooperative I/O. The permit remains held until that worker reaches final teardown, so retries cannot accumulate orphan workers. Connect and idle-read timeouts remain defense in depth, not the total wall. |
 | R53 | Legitimate nonverbose `/api/show` tensor metadata exceeds the generic JSON node cap, or a compatibility increase weakens scored-output safety | Medium | Medium | Keep the 4,096-node cap for chat, scored answers and ordinary controls. Permit 16,384 nodes only for show, above the measured complete-candidate maximum of 11,318, under unchanged 2 MiB raw, 256 KiB canonical and depth-16 caps; sanitize to frozen hashes/safe fields and never persist tensors. Above-cap show remains `FAILED_SAFETY`. |
+| R54 | A partial D1/D2 survivor is promoted as a product default after a later gate eliminates every candidate | Medium | High | Product defaults and private Stage E require the activated final Stage-D selection and Stage-F selection chain. Intermediate factor decisions are evidence only. A terminal `INCONCLUSIVE` starts a new preregistered card/run; it never licenses post-hoc threshold changes or promotion of partial settings. |
 
 ## High-Likelihood Risks — Detailed Controls
 

@@ -680,13 +680,31 @@ one reviewed ceiling above the measured maximum. Preserve each failed preflight 
 receipted terminal; never revise its history. The complete set now supports a show-only
 16,384-node cap while every scored/general path remains at 4,096.
 
+### 73. Context allocation and context quality are separate gates
+
+The canonical D3 probe proved that Ollama allocated 16,384 tokens for
+`qwen3.6:27b`; all 66 chunks completed, every retained finding was grounded, every
+category met 6/6 recall and all 12 boundary documents passed. One negative document still
+produced a false positive. The context worked; the candidate did not clear the quality
+gate. Keep runtime-allocation evidence separate from model-quality evidence so a reason
+such as `no_d3_context_survivor` is not misread as a capacity failure.
+
+### 74. An adaptive-stage survivor is not a product selection
+
+D1 continued both Qwen candidates at a smaller output budget. D2 then continued
+`qwen3.6:27b` at the largest passing chunk. D3 eliminated that same candidate, producing
+the preregistered terminal `INCONCLUSIVE`. Intermediate tuning values are useful evidence,
+not defaults to salvage after a later gate fails. Do not enter Stage F or private Stage E,
+promote a runner-up, or loosen a threshold after seeing the result. A different candidate,
+prompt, worksheet or gate belongs to a new reviewed plan and source-pinned run.
+
 ---
 
 ## Not yet learned
 
 Deliberately absent until the mechanisms exist and have been run:
 
-- private staging, HMAC pseudonymisation, and raw-result retention (designed in C0B-1,
-  exercised in C0B-2);
+- private staging, HMAC pseudonymisation, and raw-result retention (designed, but not
+  exercised because no Stage-F selection made private Stage E eligible);
 - worker lease, heartbeat and crash recovery (C2/C8);
 - extraction-manifest identity handoff (C14).

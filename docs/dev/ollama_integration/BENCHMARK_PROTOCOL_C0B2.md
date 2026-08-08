@@ -8,12 +8,15 @@ retains the Stage-D nonce, derived-view and context-control clarifications and a
 legacy public leak scanner to the exact complete-public tree it enforces. B3–B5 implement
 the complete public executor and its offline proof, including accepted erratum E2. The
 exact-tree regression and three independent hostile-review gates passed on 2026-08-07.
-No scored C0B-2 call is permitted until this exact source tree is committed cleanly.
-Private Stage E remains implementation-held and separately authorization-held.
 Two canonical public preflights froze separate receipted `FAILED_SAFETY` terminals after
 three and four controls, respectively, before any scored work. E3 corrected the first
 observed show envelope; E4 supersedes its incomplete single-model headroom with the
-complete-candidate bound. A third public run remains held until E4 is committed cleanly.
+complete-candidate bound. The third canonical run at E4 commit `5c154b5` executed the
+frozen protocol and ended terminal `INCONCLUSIVE/no_d3_context_survivor` after 530 calls.
+Stage F never activated and private Stage E was structurally ineligible and untouched.
+The execution rules and measured gates below remain frozen; §18.6 records the reviewed
+post-terminal documentation carve-out. Measured results live in
+[`PUBLIC_CDF_OUTCOME_C0B2.md`](PUBLIC_CDF_OUTCOME_C0B2.md).
 
 Authoritative parent: [`CONTRACT.md`](CONTRACT.md), accepted
 [`CONTRACT_ERRATA.md`](CONTRACT_ERRATA.md), and the accepted C0B-1 outcome in
@@ -1639,6 +1642,15 @@ The C0B-2B2–B5 delta may touch only the exact workspace, implementation and te
 
 No other path may change without reviewed protocol revision. New focused tests are
 required; the existing checkpoint test may not exceed the 1,700-line pause threshold.
+
+Post-terminal documentation carve-out, reviewed 2026-08-08: after a public terminal has
+a verified receipt and produces no Stage-F selection parent, closeout may additionally
+touch only `docs/dev/ollama_integration/PUBLIC_CDF_OUTCOME_C0B2.md` and the historical
+status wording in `docs/dev/ollama_integration/STAGE_B_OUTCOME_C0B1.md`. The outcome is
+limited to public aggregate decisions, counters and validation commands; raw answers,
+reasoning, prompts and private facts or identifiers remain forbidden. These docs are not
+added to the runtime's frozen Python allowlist and do not alter the source identity of the
+completed run. Any other path still requires reviewed protocol revision.
 
 ### 18.7 Card sequence and live gate
 

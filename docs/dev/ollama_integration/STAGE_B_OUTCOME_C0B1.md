@@ -11,8 +11,9 @@ Raw answer JSON lives in the 0600 sink outside the repository and is not committ
 Reasoning text was **discarded after its byte count was recorded**; no reasoning trace was
 retained in the sink or repository.
 
-**Stage B does not select a model or worksheet.** C0B-2 execution remains held until its
-own protocol is written and reviewed.
+**Stage B does not select a model or worksheet.** At C0B-1 closeout, C0B-2 execution was
+held pending its own reviewed protocol. The later canonical result is recorded in
+[`PUBLIC_CDF_OUTCOME_C0B2.md`](PUBLIC_CDF_OUTCOME_C0B2.md).
 
 ---
 
@@ -135,5 +136,5 @@ performance ranking.
 - Corrected grounding: accepted retrospective conservative lower bound ≥99.4%.
 - Injection: INVALID / UNMEASURED.
 - Model and worksheet: not selected.
-- C0B-2: protocol design may begin; execution remains held until that protocol passes
-  review.
+- C0B-2 was held pending a reviewed protocol at this closeout. The later canonical public
+  run ended `INCONCLUSIVE`; see [`PUBLIC_CDF_OUTCOME_C0B2.md`](PUBLIC_CDF_OUTCOME_C0B2.md).
