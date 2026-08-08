@@ -21,7 +21,7 @@ from .c0b2_checkpoint import (
 )
 from .c0b2_executor import (
     SERVER_CONTROL_MODEL, CancellationController, ControlRequest, DurableExecutor,
-    ExecutionResult,
+    ExecutionResult, InvocationCancelled,
     FakeResponse, ProvenanceFailure, RetryableTransport, SafetyLimit, WorkRequest,
     SoftWallReached, control_id, resource_probe_id,
 )
@@ -32,8 +32,8 @@ from .c0b2_public_schema import (
 from .c0b2_plan import attempt_id as stable_attempt_id
 from .c0b2_schema import CATEGORIES
 from .c0b2_runtime_common import (
-    freeze_activate_phase_plan, load_phase_plan, runtime_position,
-    runtime_transaction,
+    DeferredTransport, _LiveSignalGuard, freeze_activate_phase_plan, load_phase_plan,
+    runtime_position, runtime_transaction,
 )
 from .c0b2_stage_d_plan import (
     D50Corpus, StageDContextControl, StageDPlanError, build_d1_plan,
@@ -98,9 +98,10 @@ def _restore_d_category_order(value: Any) -> Any:
         return value
     restored = {key: _restore_d_category_order(row)
                 for key, row in value.items()}
-    recall = restored.get("category_recall")
-    if isinstance(recall, dict) and set(recall) == set(CATEGORIES):
-        restored["category_recall"] = {name: recall[name] for name in CATEGORIES}
+    for field in ("category_recall", "category_metrics"):
+        metrics = restored.get(field)
+        if isinstance(metrics, dict) and set(metrics) == set(CATEGORIES):
+            restored[field] = {name: metrics[name] for name in CATEGORIES}
     return restored
 
 
@@ -1116,7 +1117,8 @@ def build_phase_outcome(point: Checkpoint, phase: ActiveDPhase,
             raise ImmutableViolation("D4 merge lacks its D3 aggregate")
         decision = build_d4_final_decision(
             aggregate, phase.plan,
-            d3_aggregate=json.loads(str(d3_row[0])), d3_plan=d3.plan)
+            d3_aggregate=_restore_d_category_order(
+                json.loads(str(d3_row[0]))), d3_plan=d3.plan)
     else:
         decision = build_stage_d_decision(aggregate, phase.plan)
     return aggregate, decision
@@ -1268,7 +1270,7 @@ def run_stage_d_invocation(
             raise StageDRuntimeError("transport requested an unknown D control")
         return spec
 
-    transport = transport_factory(resolver, header)
+    transport = DeferredTransport(lambda: transport_factory(resolver, header))
     executor = DurableExecutor(
         point, lock, transport, cancellation=cancellation or CancellationController(),
         enforce_public_budget_contract=True)
@@ -1547,8 +1549,8 @@ def run_public_stage_d(
 ) -> dict[str, Any]:
     """Gate, run, and receipt one live Stage-D command under the global lock."""
     from .c0b2_runtime import (
-        _LiveSignalGuard, _checkpoint_path, ensure_backup_receipt,
-        finish_public_run_failure, revalidate_source_pins,
+        _checkpoint_path, ensure_backup_receipt, finish_public_run_failure,
+        revalidate_source_pins,
     )
     from .c0b2_transport import BoundedOllamaTransport
 
@@ -1618,32 +1620,30 @@ def run_public_stage_d(
                     raise
 
             cancellation = CancellationController()
-            guard: Any = None
+            guard = _LiveSignalGuard(cancellation)
+            guard.__enter__()
 
             def guarded_factory(resolver: Callable[[Any], RequestSpec],
                                 header: Mapping[str, Any]) -> Any:
-                nonlocal guard
                 transport = (transport_factory(resolver, header)
                              if transport_factory is not None else
                              BoundedOllamaTransport(
                                  resolver, endpoint=header["ollama_endpoint"]))
-                cancel_current = getattr(transport, "cancel_current", lambda: None)
-                guard = _LiveSignalGuard(cancellation, cancel_current)
-                guard.__enter__()
                 return transport
 
             try:
                 result = run_stage_d_invocation(
                     point, lock, inputs, transport_factory=guarded_factory,
                     cancellation=cancellation)
+            except InvocationCancelled:
+                return _public_result(point, run_id, point.state())
             except (ImmutableViolation, StageDRuntimeError, StageDPlanError, StageDError):
                 if point.state() not in TERMINAL_STATES:
                     finish_public_run_failure(point, terminal="BLOCKED_PROVENANCE")
                     ensure_backup_receipt(point, lock)
                 raise
             finally:
-                if guard is not None:
-                    guard.__exit__(None, None, None)
+                guard.__exit__(None, None, None)
             if point.state() in TERMINAL_STATES | {"PAUSED_STAGE_BOUNDARY"}:
                 if point.state() == "PAUSED_STAGE_BOUNDARY":
                     validate_final_d_boundary(point, inputs)

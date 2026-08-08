@@ -11,11 +11,14 @@ from __future__ import annotations
 import json
 import hashlib
 import re
+import signal
 import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
+from types import FrameType
 from typing import Any, Callable, Iterator, Mapping, Optional, TYPE_CHECKING
 
 from .c0b2_checkpoint import (
@@ -108,6 +111,56 @@ class RuntimeControlRecord:
     not_before_utc: Optional[str]
 
 
+class DeferredTransport:
+    """Construct the HTTP/session transport only on the first actual dispatch."""
+
+    def __init__(self, factory: Callable[[], Any]):
+        self._factory = factory
+        self._transport: Any | None = None
+
+    def __call__(self, request: Any, cancel: threading.Event) -> Any:
+        if self._transport is None:
+            self._transport = self._factory()
+        return self._transport(request, cancel)
+
+    def cancel_current(self) -> None:
+        transport = self._transport
+        if transport is not None:
+            getattr(transport, "cancel_current", lambda: None)()
+
+
+class _LiveSignalGuard:
+    """Publish first-signal intent only; leave a forced second possible."""
+
+    def __init__(self, cancellation: Any):
+        self.cancellation = cancellation
+        self.old: dict[int, Any] = {}
+        self._signals: list[None] = []
+
+    @property
+    def count(self) -> int:
+        return len(self._signals)
+
+    def __enter__(self) -> "_LiveSignalGuard":
+        if threading.current_thread() is threading.main_thread():
+            for number in (signal.SIGINT, signal.SIGTERM):
+                self.old[number] = signal.getsignal(number)
+                signal.signal(number, self._handle)
+        return self
+
+    def _handle(self, _number: int, _frame: FrameType | None) -> None:
+        self._signals.append(None)
+        if len(self._signals) == 1:
+            self.cancellation.publish_first_signal()
+            return
+        self.cancellation.publish_second_signal()
+        raise KeyboardInterrupt
+
+    def __exit__(self, *_args: object) -> None:
+        for number, handler in self.old.items():
+            signal.signal(number, handler)
+
+
 @contextmanager
 def runtime_transaction(point: "Checkpoint") -> Iterator[None]:
     """Join the caller's transaction, or own a short immediate transaction."""
@@ -163,6 +216,45 @@ def runtime_position(point: "Checkpoint") -> RuntimePosition:
     if row[0] != expected_stage:
         raise ImmutableViolation("runtime stage and plan key disagree")
     return RuntimePosition(str(row[0]), str(row[1]))
+
+
+def abandon_public_run(
+        run_id: str, *, benchmark_root: Path | None = None,
+) -> dict[str, Any]:
+    """Atomically abandon one public run and receipt its terminal evidence."""
+    from . import report
+    from .c0b2_checkpoint import Checkpoint
+    from .c0b2_fsprobe import GlobalExecutionLock
+    from .c0b2_runtime import (
+        _checkpoint_path, ensure_backup_receipt, finish_public_run_failure,
+        revalidate_source_pins,
+    )
+
+    root = Path(benchmark_root) if benchmark_root is not None else report.bench_root()
+    path = _checkpoint_path(run_id, root)
+    with GlobalExecutionLock(root) as lock:
+        point = Checkpoint.open(path, root)
+        try:
+            if point.header().get("run_type") != "public":
+                raise CheckpointError("public abandon cannot open a private run")
+            if point.state() == "INITIALIZING":
+                raise CheckpointError("INITIALIZING runs require create recovery")
+            revalidate_source_pins(point.header())
+            finish_public_run_failure(point, terminal="ABANDONED")
+            receipt = ensure_backup_receipt(point, lock)
+            position = runtime_position(point)
+            return {
+                "run_id": run_id, "stage": position.active_stage,
+                "active_plan_key": position.active_plan_key,
+                "state": "ABANDONED", "outcome": "ABANDONED",
+                "calls_total": point.usage()["total"],
+                "backup": {
+                    "anchor_sha256": receipt["anchor_sha256"],
+                    "snapshot_sha256": receipt["snapshot_sha256"],
+                },
+            }
+        finally:
+            point.close()
 
 
 def _normalized_plan(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -677,10 +769,16 @@ def update_runtime_control(
 class _OwnedCancellationEvent(threading.Event):
     """A per-stream event that records the first-byte cancellation instant."""
 
-    def __init__(self, monotonic: Callable[[], float] = time.monotonic):
+    def __init__(self, operator: threading.Event,
+                 monotonic: Callable[[], float] = time.monotonic):
         super().__init__()
+        self._operator = operator
         self._monotonic = monotonic
         self.first_set_at: Optional[float] = None
+
+    def is_set(self) -> bool:
+        """Expose either cancellation without attributing operator intent to the probe."""
+        return super().is_set() or self._operator.is_set()
 
     def set(self) -> None:
         if self.first_set_at is None:
@@ -908,9 +1006,13 @@ def run_context_probe(executor: Any, request: Any) -> Any:
             return ExecutionResult("CANCELLED_PENDING_RESUME", request.attempt_id)
         return executor._finish_retryable_control(request)
     except SafetyLimit:
-        return _finish_public_failure(executor, request, "FAILED_SAFETY")
+        cancelled = executor._finish_operator_cancellation(request.attempt_id)
+        return (cancelled if cancelled is not None else
+                _finish_public_failure(executor, request, "FAILED_SAFETY"))
     except ProvenanceFailure:
-        return _finish_public_failure(executor, request, "BLOCKED_PROVENANCE")
+        cancelled = executor._finish_operator_cancellation(request.attempt_id)
+        return (cancelled if cancelled is not None else
+                _finish_public_failure(executor, request, "BLOCKED_PROVENANCE"))
     finally:
         executor.current_attempt = None
 
@@ -982,7 +1084,7 @@ def run_cancellation_probe(executor: Any, request: Any) -> Any:
     duplicate = _precharge_control(executor, request)
     if duplicate is not None:
         return duplicate
-    owned = _OwnedCancellationEvent()
+    owned = _OwnedCancellationEvent(executor.cancellation.event)
     executor.current_attempt = request.attempt_id
     try:
         executor.transport(request, owned)
@@ -1005,7 +1107,9 @@ def run_cancellation_probe(executor: Any, request: Any) -> Any:
             return ExecutionResult("CANCELLED_PENDING_RESUME", request.attempt_id)
         return _finish_public_failure(executor, request, "FAILED_SAFETY")
     except ProvenanceFailure:
-        return _finish_public_failure(executor, request, "BLOCKED_PROVENANCE")
+        cancelled = executor._finish_operator_cancellation(request.attempt_id)
+        return (cancelled if cancelled is not None else
+                _finish_public_failure(executor, request, "BLOCKED_PROVENANCE"))
     finally:
         executor.current_attempt = None
 
@@ -1233,8 +1337,12 @@ def run_cancellation_health(
             return ExecutionResult("CANCELLED_PENDING_RESUME", request.attempt_id)
         return executor._finish_retryable_control(request)
     except SafetyLimit:
-        return _finish_public_failure(executor, request, "FAILED_SAFETY")
+        cancelled = executor._finish_operator_cancellation(request.attempt_id)
+        return (cancelled if cancelled is not None else
+                _finish_public_failure(executor, request, "FAILED_SAFETY"))
     except ProvenanceFailure:
-        return _finish_public_failure(executor, request, "BLOCKED_PROVENANCE")
+        cancelled = executor._finish_operator_cancellation(request.attempt_id)
+        return (cancelled if cancelled is not None else
+                _finish_public_failure(executor, request, "BLOCKED_PROVENANCE"))
     finally:
         executor.current_attempt = None

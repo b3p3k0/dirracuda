@@ -75,7 +75,7 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--stage", required=True, choices=("C", "D", "F"))
         command.add_argument("--confirm-live", action="store_true")
 
-    abandon = commands.add_parser("abandon", help="abandon a run (C0B-2A held)")
+    abandon = commands.add_parser("abandon", help="abandon a public run")
     _add_run_id(abandon)
     abandon.add_argument("--confirm-abandon", action="store_true")
 
@@ -126,14 +126,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         # inspect the root fd after merely validating the selected input mode.
         return _held(args.command)
 
-    if args.command == "abandon":
-        return _held(args.command)
-
-    # Deliberately local: incomplete/held commands above cannot resolve paths, create
-    # checkpoints, or import the HTTP adapter.
-    from . import c0b2_runtime as runtime
-
     try:
+        # Deliberately local: incomplete/held commands above cannot resolve paths,
+        # create checkpoints, or import the HTTP adapter.  Keep this import inside
+        # the redaction boundary because import-time failures may contain paths.
+        from . import c0b2_runtime as runtime
+
         if args.command == "create":
             print(runtime.render_public({"run_id": runtime.create_public_run()}))
             return 0
@@ -144,6 +142,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = runtime.public_verify(args.run_id)
             print(runtime.render_public(result))
             return 0 if result["ok"] else EXIT_BLOCKED
+        if args.command == "abandon":
+            from .c0b2_runtime_common import abandon_public_run
+            print(runtime.render_public(abandon_public_run(args.run_id)))
+            return 0
         if args.command in {"run", "resume"}:
             if args.stage == "C":
                 result = runtime.run_public_stage_c(
@@ -158,8 +160,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.run_id, resume=args.command == "resume")
             print(runtime.render_public(result))
             return 0
-    except Exception as exc:  # bounded enums/types only; transport never exposes raw data
-        print(f"C0B-2 BLOCKED: {type(exc).__name__}: {str(exc)[:240]}", file=sys.stderr)
+    except Exception:  # Never expose exception text, paths, transport data, or type names.
+        print("C0B-2 BLOCKED: operation_failed", file=sys.stderr)
         return EXIT_BLOCKED
     raise AssertionError("unreachable C0B-2 command")
 

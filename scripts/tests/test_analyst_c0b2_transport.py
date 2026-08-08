@@ -7,6 +7,7 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
+import time
 from typing import Any
 
 import pytest
@@ -51,6 +52,24 @@ class BlockingRaw:
         yield b""  # pragma: no cover
 
 
+class UncooperativeBlockingRaw:
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def stream(self, *, amt: int, decode_content: bool):
+        self.started.set()
+        self.release.wait(2)
+        yield frame(content=valid_answer())
+
+
+class TricklingRaw:
+    def stream(self, *, amt: int, decode_content: bool):
+        while True:
+            time.sleep(0.005)
+            yield b" "
+
+
 class StubHTTPResponse:
     def __init__(self, chunks: list[bytes] | None = None, *, status: int = 200,
                  content_type: str = "application/x-ndjson",
@@ -69,6 +88,21 @@ class StubHTTPResponse:
             closed.set()
 
 
+class BlockingCloseResponse(StubHTTPResponse):
+    def __init__(self, *, raw: Any) -> None:
+        super().__init__(raw=raw)
+        self.close_started = threading.Event()
+        self.close_release = threading.Event()
+        self.close_calls = 0
+
+    def close(self) -> None:
+        self.close_calls += 1
+        self.close_started.set()
+        if not self.close_release.wait(2):
+            raise AssertionError("response close was not released")
+        super().close()
+
+
 class FakeSession:
     def __init__(self, responses: list[Any]) -> None:
         self.responses = list(responses)
@@ -82,6 +116,39 @@ class FakeSession:
         if isinstance(item, BaseException):
             raise item
         return item
+
+
+class BlockingHeaderSession(FakeSession):
+    def __init__(self, response: StubHTTPResponse) -> None:
+        super().__init__([])
+        self.response = response
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def request(self, method: str, url: str, **kwargs: Any) -> Any:
+        self.calls.append((method, url, kwargs))
+        self.started.set()
+        self.release.wait(2)
+        return self.response
+
+
+def wait_until(predicate, timeout: float = 1.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.005)
+    return predicate()
+
+
+def wait_for_request_worker_exit(timeout: float = 1.0) -> bool:
+    def worker_exited() -> bool:
+        if not tx._REQUEST_WORKER_SLOT.acquire(blocking=False):
+            return False
+        tx._REQUEST_WORKER_SLOT.release()
+        return True
+
+    return wait_until(worker_exited, timeout)
 
 
 def options() -> dict[str, int | float]:
@@ -545,7 +612,8 @@ def test_control_cancellation_on_first_content_closes_stream() -> None:
         lambda _request: spec, session=FakeSession([response]))
     with pytest.raises(RetryableTransport, match="cancelled"):
         transport(control_for(spec), cancel)
-    assert cancel.is_set() and response.closed
+    assert cancel.is_set() and wait_until(lambda: response.closed)
+    assert wait_for_request_worker_exit()
 
 
 def test_external_cancellation_closes_a_blocked_current_response() -> None:
@@ -571,14 +639,131 @@ def test_external_cancellation_closes_a_blocked_current_response() -> None:
     assert not thread.is_alive()
     assert len(caught) == 1 and isinstance(caught[0], RetryableTransport)
     assert str(caught[0]) == "cancelled" and response.closed
+    assert wait_for_request_worker_exit()
 
 
-def test_total_deadline_closes_response_and_is_retryable() -> None:
-    times = iter((0.0, tx.TOTAL_REQUEST_SECONDS + 0.01))
+def test_cancel_current_never_blocks_or_duplicates_a_blocked_close() -> None:
+    spec = chat_spec()
+    raw = BlockingRaw()
+    response = BlockingCloseResponse(raw=raw)
+    cancel = threading.Event()
+    transport = tx.BoundedOllamaTransport(
+        lambda _request: spec, session=FakeSession([response]))
+    caught: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            transport(work_for(spec), cancel)
+        except BaseException as exc:
+            caught.append(exc)
+
+    caller = threading.Thread(target=run)
+    caller.start()
+    assert raw.started.wait(1)
+    cancel.set()
+    started = time.monotonic()
+    transport.cancel_current()
+    assert time.monotonic() - started < 0.2
+    assert response.close_started.wait(1)
+    transport.cancel_current()
+    assert response.close_calls == 1
+    caller.join(1)
+    assert not caller.is_alive()
+    assert len(caught) == 1 and str(caught[0]) == "cancelled"
+    assert not response.closed
+    response.close_release.set()
+    assert wait_until(lambda: response.closed)
+    assert wait_for_request_worker_exit()
+    assert transport._active_response is None
+    assert transport._close_target is None and transport._close_done is None
+
+
+def test_total_deadline_bounds_blocked_header_and_late_response(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(tx, "TOTAL_REQUEST_SECONDS", 0.05)
+    spec = chat_spec()
     response = StubHTTPResponse([frame(content=valid_answer())])
+    session = BlockingHeaderSession(response)
+    transport = tx.BoundedOllamaTransport(lambda _request: spec, session=session)
+    started = time.monotonic()
+    try:
+        with pytest.raises(RetryableTransport, match="request_timeout"):
+            transport(work_for(spec), threading.Event())
+        assert time.monotonic() - started < 0.5
+        assert session.started.is_set()
+
+        other = FakeSession([StubHTTPResponse([frame(content=valid_answer())])])
+        blocked = tx.BoundedOllamaTransport(lambda _request: spec, session=other)
+        with pytest.raises(RetryableTransport, match="transport_error"):
+            blocked(work_for(spec), threading.Event())
+        assert other.calls == []
+    finally:
+        session.release.set()
+    assert wait_until(lambda: response.closed)
+    assert wait_for_request_worker_exit()
+
+
+def test_total_deadline_bounds_body_that_ignores_close(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(tx, "TOTAL_REQUEST_SECONDS", 0.05)
+    raw = UncooperativeBlockingRaw()
+    response = StubHTTPResponse(raw=raw)
+    spec = chat_spec()
+    transport = tx.BoundedOllamaTransport(
+        lambda _request: spec, session=FakeSession([response]))
+    started = time.monotonic()
+    try:
+        with pytest.raises(RetryableTransport, match="request_timeout"):
+            transport(work_for(spec), threading.Event())
+        assert time.monotonic() - started < 0.5
+        assert raw.started.is_set() and wait_until(lambda: response.closed)
+    finally:
+        raw.release.set()
+    assert wait_until(lambda: response.closed)
+    assert wait_for_request_worker_exit()
+
+
+def test_total_deadline_is_not_extended_by_trickling_body(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(tx, "TOTAL_REQUEST_SECONDS", 0.05)
+    response = StubHTTPResponse(raw=TricklingRaw())
     with pytest.raises(RetryableTransport, match="request_timeout"):
-        invoke(chat_spec(), response, monotonic=lambda: next(times))
+        invoke(chat_spec(), response)
     assert response.closed
+    assert wait_for_request_worker_exit()
+
+
+def test_operator_cancel_wins_when_deadline_is_also_due() -> None:
+    spec = chat_spec()
+    response = StubHTTPResponse([frame(content=valid_answer())])
+    session = BlockingHeaderSession(response)
+    cancel = threading.Event()
+    overdue = threading.Event()
+    transport = tx.BoundedOllamaTransport(
+        lambda _request: spec, session=session,
+        monotonic=lambda: tx.TOTAL_REQUEST_SECONDS + 1 if overdue.is_set() else 0.0,
+    )
+    caught: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            transport(work_for(spec), cancel)
+        except BaseException as exc:
+            caught.append(exc)
+
+    thread = threading.Thread(target=run)
+    thread.start()
+    try:
+        assert session.started.wait(1)
+        cancel.set()
+        overdue.set()
+        thread.join(1)
+        assert not thread.is_alive()
+        assert len(caught) == 1 and str(caught[0]) == "cancelled"
+    finally:
+        session.release.set()
+    assert wait_until(lambda: response.closed)
+    assert wait_for_request_worker_exit()
 
 
 def test_missing_raw_stream_and_nonbytes_chunks_fail_safety() -> None:

@@ -63,10 +63,47 @@ _RESOURCE_ERROR_RE = re.compile(
     r"(?:out of memory|insufficient memory|not enough memory|memory allocation|"
     r"cuda[^\n]{0,80}memory|resource exhausted)", re.IGNORECASE,
 )
+_REQUEST_WORKER_SLOT = threading.BoundedSemaphore(1)
+_CALLER_POLL_SECONDS = 0.01
 
 
 class _DuplicateKey(ValueError):
     pass
+
+
+class _RequestWorkerState:
+    """Thread-safe handoff for one caller-bounded blocking HTTP operation."""
+
+    def __init__(self) -> None:
+        self.done = threading.Event()
+        self._lock = threading.Lock()
+        self._abandoned = False
+        self._result: FakeResponse | None = None
+        self._error: BaseException | None = None
+
+    def abandon(self) -> bool:
+        with self._lock:
+            first = not self._abandoned
+            self._abandoned = True
+            return first
+
+    def is_abandoned(self) -> bool:
+        with self._lock:
+            return self._abandoned
+
+    def publish_result(self, result: FakeResponse) -> None:
+        with self._lock:
+            if not self._abandoned:
+                self._result = result
+
+    def publish_error(self, error: BaseException) -> None:
+        with self._lock:
+            if not self._abandoned:
+                self._error = error
+
+    def outcome(self) -> tuple[FakeResponse | None, BaseException | None]:
+        with self._lock:
+            return self._result, self._error
 
 
 @dataclass(frozen=True)
@@ -166,22 +203,21 @@ class BoundedOllamaTransport:
         self.resolver = resolver
         self.schema_validator = schema_validator
         self.monotonic = monotonic
-        self.session = session or requests.Session()
+        self.session = session if session is not None else requests.Session()
         self.session.trust_env = False
         self.session.max_redirects = 0
         self._call_lock = threading.Lock()
         self._active_lock = threading.Lock()
         self._active_response: Any | None = None
+        self._close_target: Any | None = None
+        self._close_done: threading.Event | None = None
 
     def cancel_current(self) -> None:
-        """Close only this adapter's current response, if one exists."""
+        """Initiate a nonblocking close of only this adapter's current response."""
         with self._active_lock:
             response = self._active_response
         if response is not None:
-            try:
-                response.close()
-            except Exception:  # closing is best effort; executor records uncertainty
-                pass
+            self._initiate_close(response)
 
     def __call__(self, request: DurableRequest,
                  cancel: threading.Event) -> FakeResponse:
@@ -194,50 +230,164 @@ class BoundedOllamaTransport:
                 raise ProvenanceFailure("request_resolution_failed") from None
             spec = self._prepare_spec(request, resolved)
             started = self.monotonic()
-            watcher_stop = threading.Event()
-            watcher = threading.Thread(
-                target=self._watch_cancel,
-                args=(cancel, watcher_stop), daemon=True,
-                name="c0b2-ollama-cancel",
-            )
-            watcher.start()
-            response = None
-            try:
-                method, path, payload, accept = self._http_request(spec)
-                response = self.session.request(
-                    method, self.endpoint + path, json=payload, stream=True,
-                    timeout=(CONNECT_TIMEOUT_SECONDS, IDLE_READ_TIMEOUT_SECONDS),
-                    allow_redirects=False, proxies={"http": None, "https": None},
-                    headers={"Accept": accept, "Accept-Encoding": "identity",
-                             "Content-Type": "application/json"},
-                )
-                self._set_active(response, cancel)
-                self._check_cancel_deadline(cancel, started)
-                self._classify_status(response, cancel, started)
-                self._validate_encoding(response)
-                if spec.kind == "chat":
-                    self._require_content_type(response, "application/x-ndjson")
-                    return self._read_chat(response, spec, cancel, started)
-                self._require_content_type(response, "application/json")
-                body = self._read_all(response, cancel, started)
-                value = _load_wire_json(body)
-                _bounded_json(value)
-                return self._control_result(spec, value)
-            except (SafetyLimit, ProvenanceFailure, RetryableTransport):
-                raise
-            except _RETRYABLE_EXCEPTIONS:
+            if not _REQUEST_WORKER_SLOT.acquire(blocking=False):
                 if cancel.is_set():
-                    raise RetryableTransport("cancelled") from None
-                raise RetryableTransport("transport_error") from None
-            finally:
-                watcher_stop.set()
-                if response is not None:
-                    self._clear_active(response)
-                    try:
-                        response.close()
-                    except Exception:
-                        pass
-                watcher.join(timeout=0.2)
+                    raise RetryableTransport("cancelled")
+                raise RetryableTransport("transport_error")
+            if cancel.is_set():
+                _REQUEST_WORKER_SLOT.release()
+                raise RetryableTransport("cancelled")
+            state = _RequestWorkerState()
+            worker = threading.Thread(
+                target=self._run_request_worker,
+                args=(spec, cancel, started, state), daemon=True,
+                name="c0b2-ollama-request",
+            )
+            try:
+                worker.start()
+            except BaseException:
+                _REQUEST_WORKER_SLOT.release()
+                raise
+            return self._await_request_worker(state, cancel, started)
+
+    def _run_request_worker(self, spec: RequestSpec, cancel: threading.Event,
+                            started: float, state: _RequestWorkerState) -> None:
+        try:
+            state.publish_result(
+                self._perform_request(spec, cancel, started, state))
+        except BaseException as exc:
+            state.publish_error(exc)
+        finally:
+            _REQUEST_WORKER_SLOT.release()
+            state.done.set()
+
+    def _await_request_worker(self, state: _RequestWorkerState,
+                              cancel: threading.Event,
+                              started: float) -> FakeResponse:
+        deadline = started + TOTAL_REQUEST_SECONDS
+        while True:
+            if cancel.is_set():
+                self._abandon_request_worker(state)
+                raise RetryableTransport("cancelled")
+            now = self.monotonic()
+            if now >= deadline:
+                self._abandon_request_worker(state)
+                raise RetryableTransport("request_timeout")
+            if not state.done.wait(min(_CALLER_POLL_SECONDS, deadline - now)):
+                continue
+            if cancel.is_set():
+                self._abandon_request_worker(state)
+                raise RetryableTransport("cancelled")
+            if self.monotonic() >= deadline:
+                self._abandon_request_worker(state)
+                raise RetryableTransport("request_timeout")
+            result, error = state.outcome()
+            if error is not None:
+                raise error
+            if result is None:  # defensive: worker completion must publish one outcome
+                raise RetryableTransport("transport_error")
+            return result
+
+    def _abandon_request_worker(self, state: _RequestWorkerState) -> None:
+        if not state.abandon():
+            return
+        with self._active_lock:
+            response = self._active_response
+        if response is not None:
+            self._initiate_close(response)
+
+    def _initiate_close(self, response: Any) -> None:
+        """Start at most one asynchronous close for the exact active response."""
+        with self._active_lock:
+            if self._active_response is not response:
+                return
+            if self._close_target is response:
+                return
+            if self._close_target is not None:  # serial transport makes this unreachable
+                return
+            done = threading.Event()
+            self._close_target = response
+            self._close_done = done
+        closer = threading.Thread(
+            target=self._close_response, args=(response, done), daemon=True,
+            name="c0b2-ollama-close",
+        )
+        try:
+            closer.start()
+        except Exception:
+            with self._active_lock:
+                if self._close_target is response:
+                    self._close_target = None
+                    self._close_done = None
+
+    @staticmethod
+    def _close_response(response: Any, done: threading.Event) -> None:
+        try:
+            try:
+                response.close()
+            except Exception:
+                pass
+        finally:
+            done.set()
+
+    def _finish_response(self, response: Any) -> None:
+        """Close once, retaining the worker slot until asynchronous close completes."""
+        with self._active_lock:
+            if self._close_target is response:
+                done = self._close_done
+                owns_close = False
+            else:
+                done = threading.Event()
+                self._close_target = response
+                self._close_done = done
+                owns_close = True
+        if owns_close:
+            self._close_response(response, done)
+        elif done is not None:
+            done.wait()
+        with self._active_lock:
+            if self._active_response is response:
+                self._active_response = None
+            if self._close_target is response:
+                self._close_target = None
+                self._close_done = None
+
+    def _perform_request(self, spec: RequestSpec, cancel: threading.Event,
+                         started: float,
+                         state: _RequestWorkerState) -> FakeResponse:
+        response = None
+        try:
+            method, path, payload, accept = self._http_request(spec)
+            response = self.session.request(
+                method, self.endpoint + path, json=payload, stream=True,
+                timeout=(CONNECT_TIMEOUT_SECONDS, IDLE_READ_TIMEOUT_SECONDS),
+                allow_redirects=False, proxies={"http": None, "https": None},
+                headers={"Accept": accept, "Accept-Encoding": "identity",
+                         "Content-Type": "application/json"},
+            )
+            self._set_active(response, cancel)
+            if state.is_abandoned():
+                raise RetryableTransport("transport_error")
+            self._check_cancel_deadline(cancel, started)
+            self._classify_status(response, cancel, started)
+            self._validate_encoding(response)
+            if spec.kind == "chat":
+                self._require_content_type(response, "application/x-ndjson")
+                return self._read_chat(response, spec, cancel, started)
+            self._require_content_type(response, "application/json")
+            body = self._read_all(response, cancel, started)
+            value = _load_wire_json(body)
+            _bounded_json(value)
+            return self._control_result(spec, value)
+        except (SafetyLimit, ProvenanceFailure, RetryableTransport):
+            raise
+        except _RETRYABLE_EXCEPTIONS:
+            if cancel.is_set():
+                raise RetryableTransport("cancelled") from None
+            raise RetryableTransport("transport_error") from None
+        finally:
+            if response is not None:
+                self._finish_response(response)
 
     def _prepare_spec(self, request: DurableRequest, spec: RequestSpec) -> RequestSpec:
         if not isinstance(spec, RequestSpec):
@@ -278,22 +428,11 @@ class BoundedOllamaTransport:
         paths = {"version": "/api/version", "tags": "/api/tags", "ps": "/api/ps"}
         return "GET", paths[spec.kind], None, "application/json"
 
-    def _watch_cancel(self, cancel: threading.Event, stop: threading.Event) -> None:
-        while not stop.wait(0.01):
-            if cancel.is_set():
-                self.cancel_current()
-                return
-
     def _set_active(self, response: Any, cancel: threading.Event) -> None:
         with self._active_lock:
             self._active_response = response
         if cancel.is_set():
             self.cancel_current()
-
-    def _clear_active(self, response: Any) -> None:
-        with self._active_lock:
-            if self._active_response is response:
-                self._active_response = None
 
     def _check_cancel_deadline(self, cancel: threading.Event, started: float) -> None:
         if cancel.is_set():

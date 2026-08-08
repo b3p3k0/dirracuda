@@ -10,7 +10,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from scripts.analyst_benchmark import leakscan, preflight, protocol, report, runner
+from scripts.analyst_benchmark import (c0b2_leakscan, leakscan, preflight,
+                                       protocol, report, runner)
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -107,6 +108,142 @@ def test_baseline_integrity_and_freshness_fail_closed(tmp_path: Path,
     os.chmod(stale, 0o600)
     with pytest.raises(leakscan.BaselineError, match="timestamp"):
         leakscan.load_baseline(stale)
+
+
+@pytest.mark.parametrize("kind", ("baseline", "raw"))
+def test_leak_input_loaders_reject_symlinks(
+        kind: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    secure = _protected_dir(tmp_path / "secure")
+    target = secure / f"{kind}-target"
+    target.write_text("{}\n")
+    os.chmod(target, 0o600)
+    link = secure / f"{kind}-link"
+    link.symlink_to(target)
+    monkeypatch.setattr(leakscan, "REPO_ROOT", repo)
+
+    with pytest.raises(leakscan.BaselineError, match="read safely"):
+        if kind == "baseline":
+            leakscan.load_baseline(link)
+        else:
+            leakscan.load_raw_responses([link])
+
+
+@pytest.mark.parametrize("kind", ("baseline", "raw"))
+def test_leak_input_loaders_reject_mid_read_name_swap(
+        kind: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    secure = _protected_dir(tmp_path / "secure")
+    target = secure / f"{kind}-input"
+    replacement = secure / f"{kind}-replacement"
+    displaced = secure / f"{kind}-displaced"
+    target.write_text("{}\n")
+    replacement.write_text("{}\n")
+    os.chmod(target, 0o600)
+    os.chmod(replacement, 0o600)
+    monkeypatch.setattr(leakscan, "REPO_ROOT", repo)
+    original_read = c0b2_leakscan.os.read
+    swapped = False
+
+    def swapping_read(fd: int, size: int) -> bytes:
+        nonlocal swapped
+        block = original_read(fd, size)
+        if block and not swapped:
+            swapped = True
+            target.replace(displaced)
+            replacement.replace(target)
+        return block
+
+    monkeypatch.setattr(c0b2_leakscan.os, "read", swapping_read)
+    with pytest.raises(leakscan.BaselineError, match="read safely"):
+        if kind == "baseline":
+            leakscan.load_baseline(target)
+        else:
+            leakscan.load_raw_responses([target])
+
+
+@pytest.mark.parametrize("kind", ("baseline", "raw"))
+def test_leak_input_loaders_require_0600_and_enforce_size_cap(
+        kind: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    secure = _protected_dir(tmp_path / "secure")
+    target = secure / f"{kind}-input"
+    target.write_text("{}\n")
+    monkeypatch.setattr(leakscan, "REPO_ROOT", repo)
+
+    os.chmod(target, 0o640)
+    with pytest.raises(leakscan.BaselineError, match="read safely"):
+        if kind == "baseline":
+            leakscan.load_baseline(target)
+        else:
+            leakscan.load_raw_responses([target])
+
+    os.chmod(target, 0o600)
+    limit_name = "BASELINE_MAX_BYTES" if kind == "baseline" \
+        else "RAW_ARTIFACT_MAX_BYTES"
+    monkeypatch.setattr(leakscan, limit_name, 1)
+    with pytest.raises(leakscan.BaselineError, match="read safely"):
+        if kind == "baseline":
+            leakscan.load_baseline(target)
+        else:
+            leakscan.load_raw_responses([target])
+
+
+@pytest.mark.parametrize("kind", ("baseline", "raw"))
+def test_leak_input_loaders_reject_intermediate_symlink(
+        kind: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    real = _protected_dir(tmp_path / "real-secure")
+    target = real / f"{kind}-input"
+    target.write_text("{}\n")
+    os.chmod(target, 0o600)
+    linked = tmp_path / "linked-secure"
+    linked.symlink_to(real, target_is_directory=True)
+    monkeypatch.setattr(leakscan, "REPO_ROOT", repo)
+
+    with pytest.raises(leakscan.BaselineError, match="read safely"):
+        if kind == "baseline":
+            leakscan.load_baseline(linked / target.name)
+        else:
+            leakscan.load_raw_responses([linked / target.name])
+
+
+@pytest.mark.parametrize("kind", ("baseline", "raw"))
+def test_leak_input_loaders_reject_intermediate_swap(
+        kind: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    secure = _protected_dir(tmp_path / "secure")
+    replacement = _protected_dir(tmp_path / "replacement")
+    displaced = tmp_path / "displaced"
+    target = secure / f"{kind}-input"
+    target.write_text("{}\n")
+    (replacement / target.name).write_text("{}\n")
+    os.chmod(target, 0o600)
+    os.chmod(replacement / target.name, 0o600)
+    monkeypatch.setattr(leakscan, "REPO_ROOT", repo)
+    original_read = c0b2_leakscan.os.read
+    swapped = False
+
+    def swapping_read(fd: int, size: int) -> bytes:
+        nonlocal swapped
+        block = original_read(fd, size)
+        if block and not swapped:
+            swapped = True
+            secure.replace(displaced)
+            replacement.replace(secure)
+        return block
+
+    monkeypatch.setattr(c0b2_leakscan.os, "read", swapping_read)
+    with pytest.raises(leakscan.BaselineError, match="read safely"):
+        if kind == "baseline":
+            leakscan.load_baseline(target)
+        else:
+            leakscan.load_raw_responses([target])
 
 
 def test_raw_artifact_and_run_writers_are_owner_only_and_symlink_safe(

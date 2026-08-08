@@ -159,15 +159,53 @@ class InvocationClock:
         return self.elapsed >= self.soft_wall_seconds
 
 
+class _CancellationEvent(threading.Event):
+    """Event-compatible view that also exposes lock-free signal intent."""
+
+    def __init__(self, controller: "CancellationController") -> None:
+        super().__init__()
+        self._controller = controller
+
+    def is_set(self) -> bool:
+        return self._controller.signal_requested or super().is_set()
+
+    def wait(self, timeout: Optional[float] = None) -> bool:
+        """Observe plain signal intent while preserving the Event wait contract."""
+        if self.is_set():
+            return True
+        deadline = None if timeout is None else time.monotonic() + max(0.0, timeout)
+        while not self.is_set():
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return self.is_set()
+                super().wait(min(0.01, remaining))
+            else:
+                super().wait(0.01)
+        return True
+
+
 class CancellationController:
     def __init__(self) -> None:
-        self.event = threading.Event()
+        self.signal_requested = False
         self.forced = False
+        self.event = _CancellationEvent(self)
+
+    def publish_first_signal(self) -> None:
+        """Publish from Python signal context without acquiring a lock."""
+        self.signal_requested = True
+
+    def publish_second_signal(self) -> None:
+        """Publish forced intent from Python signal context without a lock."""
+        self.signal_requested = True
+        self.forced = True
 
     def first_signal(self) -> None:
+        self.signal_requested = True
         self.event.set()
 
     def second_signal(self) -> None:
+        self.signal_requested = True
         self.forced = True
         self.event.set()
 
@@ -740,11 +778,18 @@ class DurableExecutor:
         finish_public_budget_failure(self.checkpoint, payload)
 
     def _finish_provenance(self, attempt_id: str) -> ExecutionResult:
-        if self.cancellation.event.is_set():
-            self.checkpoint.cancel(attempt_id)
-            return ExecutionResult("CANCELLED_PENDING_RESUME", attempt_id)
+        cancelled = self._finish_operator_cancellation(attempt_id)
+        if cancelled is not None:
+            return cancelled
         self._finish_failure_attempt(attempt_id, "BLOCKED_PROVENANCE")
         return ExecutionResult("BLOCKED_PROVENANCE", attempt_id)
+
+    def _finish_operator_cancellation(
+            self, attempt_id: str) -> Optional[ExecutionResult]:
+        if not self.cancellation.event.is_set():
+            return None
+        self.checkpoint.cancel(attempt_id)
+        return ExecutionResult("CANCELLED_PENDING_RESUME", attempt_id)
 
     def _finish_failure_attempt(self, attempt_id: str, terminal: str) -> None:
         row = self.checkpoint.conn.execute(

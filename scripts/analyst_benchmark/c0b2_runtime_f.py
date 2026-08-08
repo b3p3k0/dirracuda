@@ -30,8 +30,9 @@ from .c0b2_public_schema import (
     validate_artifact,
 )
 from .c0b2_runtime_common import (
-    PhaseActivation, RuntimePosition, _decision_digest, _register_activated_work,
-    _rfc3339,
+    DeferredTransport, PhaseActivation, RuntimePosition, _LiveSignalGuard,
+    _decision_digest,
+    _register_activated_work, _rfc3339,
     freeze_activate_phase_plan, freeze_phase_plan, freeze_runtime_control,
     load_phase_plan, runtime_position, runtime_transaction,
 )
@@ -1233,7 +1234,7 @@ def run_stage_f_invocation(
             raise StageFRuntimeError("transport requested an unknown F control")
         return spec
 
-    transport = transport_factory(resolver, header)
+    transport = DeferredTransport(lambda: transport_factory(resolver, header))
     executor = DurableExecutor(
         point, lock, transport,
         cancellation=cancellation or CancellationController(),
@@ -1454,8 +1455,8 @@ def run_public_stage_f(
 ) -> dict[str, Any]:
     """Gate, run, finalize, and receipt one live Stage-F invocation."""
     from .c0b2_runtime import (
-        _LiveSignalGuard, _checkpoint_path, ensure_backup_receipt,
-        finish_public_run_failure, revalidate_source_pins,
+        _checkpoint_path, ensure_backup_receipt, finish_public_run_failure,
+        revalidate_source_pins,
     )
     from .c0b2_transport import BoundedOllamaTransport
 
@@ -1510,20 +1511,17 @@ def run_public_stage_f(
                     ensure_backup_receipt(point, lock)
                     raise
             cancellation = CancellationController()
-            guard: Any = None
+            guard = _LiveSignalGuard(cancellation)
+            guard.__enter__()
 
             def guarded_factory(
                     resolver: Callable[[Any], RequestSpec],
                     header: Mapping[str, Any],
             ) -> Any:
-                nonlocal guard
                 transport = (transport_factory(resolver, header)
                              if transport_factory is not None else
                              BoundedOllamaTransport(
                                  resolver, endpoint=header["ollama_endpoint"]))
-                guard = _LiveSignalGuard(
-                    cancellation, getattr(transport, "cancel_current", lambda: None))
-                guard.__enter__()
                 return transport
 
             try:
@@ -1540,8 +1538,7 @@ def run_public_stage_f(
                     ensure_backup_receipt(point, lock)
                 raise
             finally:
-                if guard is not None:
-                    guard.__exit__(None, None, None)
+                guard.__exit__(None, None, None)
             if point.state() in TERMINAL_STATES:
                 if point.state() != "BLOCKED_PROVENANCE":
                     revalidate_source_pins(point.header())

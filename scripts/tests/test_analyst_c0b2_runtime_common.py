@@ -1418,6 +1418,128 @@ def test_stage_c_public_failure_is_atomic_rollback_safe_and_idempotent(
     point.close()
 
 
+def test_public_abandon_is_locked_receipted_and_idempotent(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from scripts.analyst_benchmark import c0b2_transport
+
+    monkeypatch.setattr(public_runtime, "_require_clean_task_delta", lambda _seal: None)
+    monkeypatch.setattr(
+        c0b2_transport, "BoundedOllamaTransport",
+        lambda *_args, **_kwargs: pytest.fail("abandon must not construct transport"))
+    root, run_id = tmp_path / "bench", "public-abandon"
+    public_runtime.create_public_run(benchmark_root=root, run_id=run_id)
+
+    first = runtime.abandon_public_run(run_id, benchmark_root=root)
+    second = runtime.abandon_public_run(run_id, benchmark_root=root)
+    assert first == second
+    assert first["state"] == first["outcome"] == "ABANDONED"
+
+    point = ck.Checkpoint.open(public_runtime._checkpoint_path(run_id, root), root)
+    try:
+        assert point.state() == "ABANDONED"
+        assert point.conn.execute("SELECT count(*) FROM attempts").fetchone()[0] == 0
+        assert point.conn.execute("SELECT count(*) FROM invocations").fetchone()[0] == 0
+        assert point.conn.execute(
+            "SELECT count(*) FROM public_artifacts WHERE terminal='ABANDONED'"
+        ).fetchone()[0] == 2
+        assert point.conn.execute(
+            "SELECT count(*) FROM backup_receipts").fetchone()[0] == 1
+    finally:
+        point.close()
+
+
+def test_public_abandon_rolls_back_if_artifact_freeze_crashes(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(public_runtime, "_require_clean_task_delta", lambda _seal: None)
+    root, run_id = tmp_path / "bench", "abandon-rollback"
+    public_runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    original, calls = public_runtime.freeze_public_artifact, []
+
+    def crash_second(*args, **kwargs):
+        calls.append(args[1])
+        if len(calls) == 2:
+            raise RuntimeError("artifact crash")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(public_runtime, "freeze_public_artifact", crash_second)
+    with pytest.raises(RuntimeError, match="artifact crash"):
+        runtime.abandon_public_run(run_id, benchmark_root=root)
+    point = ck.Checkpoint.open(public_runtime._checkpoint_path(run_id, root), root)
+    try:
+        assert point.state() == "PREPARED"
+        assert point.conn.execute(
+            "SELECT count(*) FROM public_artifacts").fetchone()[0] == 0
+        assert point.conn.execute(
+            "SELECT count(*) FROM backup_receipts").fetchone()[0] == 0
+    finally:
+        point.close()
+
+
+def test_public_abandon_source_drift_has_zero_mutation_or_transport(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from scripts.analyst_benchmark import c0b2_transport
+
+    monkeypatch.setattr(public_runtime, "_require_clean_task_delta", lambda _seal: None)
+    root, run_id = tmp_path / "bench", "abandon-source-drift"
+    public_runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    path = public_runtime._checkpoint_path(run_id, root)
+    before = path.read_bytes()
+    calls: list[str] = []
+
+    def source_drift(_header) -> None:
+        calls.append("pins")
+        with pytest.raises(ck.LockUnavailable, match="global lock"):
+            with fs.GlobalExecutionLock(root):
+                pass
+        raise public_runtime.RuntimeGateError("source drift")
+
+    monkeypatch.setattr(public_runtime, "revalidate_source_pins", source_drift)
+    monkeypatch.setattr(
+        public_runtime, "finish_public_run_failure",
+        lambda *_args, **_kwargs: calls.append("mutation"))
+    monkeypatch.setattr(
+        public_runtime, "ensure_backup_receipt",
+        lambda *_args, **_kwargs: calls.append("receipt"))
+    monkeypatch.setattr(
+        c0b2_transport, "BoundedOllamaTransport",
+        lambda *_args, **_kwargs: calls.append("transport"))
+
+    with pytest.raises(public_runtime.RuntimeGateError, match="source drift"):
+        runtime.abandon_public_run(run_id, benchmark_root=root)
+    assert calls == ["pins"]
+    assert path.read_bytes() == before
+
+
+def test_public_abandon_obeys_global_lock(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(public_runtime, "_require_clean_task_delta", lambda _seal: None)
+    root, run_id = tmp_path / "bench", "abandon-lock"
+    public_runtime.create_public_run(benchmark_root=root, run_id=run_id)
+    with fs.GlobalExecutionLock(root):
+        with pytest.raises(ck.LockUnavailable, match="global lock"):
+            runtime.abandon_public_run(run_id, benchmark_root=root)
+
+
+def test_public_abandon_rejects_initializing_without_terminal_evidence(
+        tmp_path: Path) -> None:
+    root, run_id = tmp_path / "bench", "initializing-abandon"
+    point = ck.Checkpoint.create(
+        root, run_id, header=_header(root), limits=public_runtime.PUBLIC_LIMITS,
+        cumulative_cap=public_runtime.PUBLIC_CUMULATIVE_CAP,
+        journal_mode="DELETE", initial_state="INITIALIZING")
+    point.close()
+
+    with pytest.raises(ck.CheckpointError, match="create recovery"):
+        runtime.abandon_public_run(run_id, benchmark_root=root)
+    point = ck.Checkpoint.open(public_runtime._checkpoint_path(run_id, root), root)
+    try:
+        assert point.state() == "INITIALIZING"
+        assert point.conn.execute("SELECT count(*) FROM public_artifacts").fetchone()[0] == 0
+        assert point.conn.execute("SELECT count(*) FROM backup_receipts").fetchone()[0] == 0
+    finally:
+        point.close()
+
+
 @pytest.mark.parametrize(
     "mutation", [
         "plan", "activation", "evidence", "unknown_key",

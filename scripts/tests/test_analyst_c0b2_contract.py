@@ -3,13 +3,15 @@ from __future__ import annotations
 
 import unicodedata
 from collections import Counter, defaultdict
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from scripts.analyst_benchmark import chunker, goldset
+from scripts.analyst_benchmark import chunker, goldset, leakscan
 from scripts.analyst_benchmark import c0b2_plan as plan
 from scripts.analyst_benchmark import c0b2_schema as schema
+from scripts.analyst_benchmark import c0b2_leakscan, c0b2_runtime
 
 
 def _evidence(quote: str = "900-12-3456", offset: object = 0) -> dict:
@@ -251,3 +253,161 @@ def test_request_hash_binds_exact_model_prompt_and_schema() -> None:
     assert len({item.prompt_sha256 for item in sample}) == 1
     assert len({item.request_sha256 for item in sample}) == 3
     assert len({item.work_id for item in sample}) == 3
+
+
+def test_complete_public_allowlist_matches_reviewed_protocol() -> None:
+    protocol = Path("docs/dev/ollama_integration/BENCHMARK_PROTOCOL_C0B2.md").read_text()
+    section = protocol.split(
+        "### 18.6 Complete-public implementation allowlist", 1)[1].split(
+        "### 18.7 Card sequence and live gate", 1)[0]
+    additions = {line[3:-1] for line in section.splitlines()
+                 if line.startswith("- `") and line.endswith("`")}
+    expected = (c0b2_leakscan.FROZEN_C0B2A_PATHS
+                | c0b2_leakscan.FROZEN_C0B2B1_PATHS | additions)
+    assert c0b2_leakscan.FROZEN_C0B2_PUBLIC_PATHS == expected
+    assert len(expected) == 48
+    assert expected == leakscan.ALLOWLIST_EXACT
+    assert leakscan.allowed_c0b1("scripts/analyst_benchmark/client.py")
+    assert not leakscan.allowed("scripts/analyst_benchmark/client.py")
+
+
+def test_safe_task_reader_rejects_symlink(tmp_path: Path) -> None:
+    target = tmp_path / "target.txt"
+    target.write_text("public evidence\n")
+    link = tmp_path / "link.txt"
+    link.symlink_to(target)
+
+    with pytest.raises(c0b2_leakscan.LeakGateError):
+        c0b2_leakscan.read_regular_file(link, trusted_root=tmp_path)
+    with pytest.raises(c0b2_leakscan.LeakGateError):
+        c0b2_runtime._sha256_file(link, trusted_root=tmp_path)
+
+
+def test_safe_task_reader_rejects_name_swap_during_read(
+        tmp_path: Path, monkeypatch) -> None:
+    target = tmp_path / "task.txt"
+    replacement = tmp_path / "replacement.txt"
+    displaced = tmp_path / "displaced.txt"
+    target.write_bytes(b"first public file")
+    replacement.write_bytes(b"second public file")
+    original_read = c0b2_leakscan.os.read
+    swapped = False
+
+    def swapping_read(fd: int, size: int) -> bytes:
+        nonlocal swapped
+        block = original_read(fd, size)
+        if block and not swapped:
+            swapped = True
+            target.replace(displaced)
+            replacement.replace(target)
+        return block
+
+    monkeypatch.setattr(c0b2_leakscan.os, "read", swapping_read)
+    with pytest.raises(c0b2_leakscan.LeakGateError,
+                       match="changed while being read"):
+        c0b2_leakscan.read_regular_file(target, trusted_root=tmp_path)
+
+
+def test_safe_task_reader_rejects_intermediate_symlink(tmp_path: Path) -> None:
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "task.txt").write_text("public evidence\n")
+    linked = tmp_path / "linked"
+    linked.symlink_to(real, target_is_directory=True)
+
+    with pytest.raises(c0b2_leakscan.LeakGateError):
+        c0b2_leakscan.read_regular_file(
+            linked / "task.txt", trusted_root=tmp_path)
+
+
+def test_safe_task_reader_rejects_trusted_root_dotdot_escape(
+        tmp_path: Path) -> None:
+    trusted = tmp_path / "trusted"
+    trusted.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("must not be read\n")
+
+    with pytest.raises(c0b2_leakscan.LeakGateError,
+                       match="unsafe lexical component"):
+        c0b2_leakscan.read_regular_file(
+            trusted / ".." / outside.name, trusted_root=trusted)
+
+
+def test_safe_task_reader_rejects_intermediate_swap_during_read(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    parent = tmp_path / "parent"
+    replacement = tmp_path / "replacement"
+    displaced = tmp_path / "displaced"
+    parent.mkdir()
+    replacement.mkdir()
+    (parent / "task.txt").write_text("first public file\n")
+    (replacement / "task.txt").write_text("other public file\n")
+    original_read = c0b2_leakscan.os.read
+    swapped = False
+
+    def swapping_read(fd: int, size: int) -> bytes:
+        nonlocal swapped
+        block = original_read(fd, size)
+        if block and not swapped:
+            swapped = True
+            parent.replace(displaced)
+            replacement.replace(parent)
+        return block
+
+    monkeypatch.setattr(c0b2_leakscan.os, "read", swapping_read)
+    with pytest.raises(c0b2_leakscan.LeakGateError,
+                       match="directory changed while being read"):
+        c0b2_leakscan.read_regular_file(
+            parent / "task.txt", trusted_root=tmp_path)
+
+
+def test_content_scan_is_bound_to_captured_inventory(
+        tmp_path: Path, monkeypatch) -> None:
+    relative = "scripts/analyst_benchmark/c0b2_cli.py"
+    target = tmp_path / relative
+    target.parent.mkdir(parents=True)
+    target.write_text("first public file\n")
+    monkeypatch.setattr(leakscan, "REPO_ROOT", tmp_path)
+    inventory = {relative: leakscan._metadata(relative, " M")}
+    replacement = tmp_path / "replacement.txt"
+    replacement.write_text("other public file\n")
+    replacement.replace(target)
+
+    with pytest.raises(leakscan.BaselineError,
+                       match="changed after inventory capture"):
+        leakscan.scan_content([relative], ["long enough raw model response"],
+                              inventory=inventory)
+
+
+def test_generation_pin_binds_c_d_and_f_factor_domains(monkeypatch) -> None:
+    from scripts.analyst_benchmark import c0b2_stage_d_plan, c0b2_stage_f_plan
+
+    original = c0b2_leakscan.public_generation_options_sha256()
+    monkeypatch.setattr(plan, "KEEP_ALIVE", "changed")
+    assert c0b2_leakscan.public_generation_options_sha256() != original
+    monkeypatch.undo()
+    budgets = dict(c0b2_stage_d_plan._D1_BUDGETS)
+    budgets["gpt-oss:20b"] = (*budgets["gpt-oss:20b"], 8192)
+    monkeypatch.setattr(c0b2_stage_d_plan, "_D1_BUDGETS", budgets)
+    assert c0b2_leakscan.public_generation_options_sha256() != original
+    monkeypatch.undo()
+    monkeypatch.setattr(c0b2_stage_f_plan, "SEEDS", (1, 17, 20260804, 99))
+    assert c0b2_leakscan.public_generation_options_sha256() != original
+
+
+def test_source_pins_name_public_schema_and_all_stage_scorers(
+        monkeypatch, tmp_path: Path) -> None:
+    seen = []
+    monkeypatch.setattr(c0b2_runtime, "_sha256_file",
+                        lambda path, **_kwargs: seen.append(Path(path).name) or "a" * 64)
+    monkeypatch.setattr(c0b2_runtime, "_git", lambda *_args: "b" * 40)
+    monkeypatch.setattr(c0b2_runtime, "_task_tree_hash", lambda _root: "c" * 64)
+    monkeypatch.setattr(c0b2_runtime, "public_generation_options_sha256",
+                        lambda: "d" * 64)
+    seal = c0b2_leakscan.WorktreeSeal("b" * 40, ())
+
+    pins = c0b2_runtime._source_pins(tmp_path, seal)
+
+    assert {"c0b2_public_schema.py", "c0b2_public_scoring.py",
+            "c0b2_stage_c.py", "c0b2_stage_d.py", "c0b2_stage_f.py"} <= set(seen)
+    assert pins["generation_options_sha256"] == "d" * 64

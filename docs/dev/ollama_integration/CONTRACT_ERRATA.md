@@ -57,3 +57,48 @@ If generated reasoning traces over private material are later judged unacceptabl
 `gpt-oss:20b` is eliminated from the candidate set rather than accommodated. This
 erratum does not authorize reasoning traces for any purpose beyond running the
 approved benchmark and the resulting Analyst pipeline.
+
+---
+
+## E2 — B5 terminal proof is compositional
+
+**Status:** ACCEPTED (HI, 2026-08-06)
+**Affects:** `BENCHMARK_PUBLIC_CDF_SCHEMA.md` §12.4
+**Raised by:** final B5 hostile review
+
+### The conflict
+
+The original B5 sentence required one fake-session flow to use the actual bounded
+transport through the selected C→D→F path and "every terminal branch." That is not a
+coherent requirement for terminals which occur before HTTP dispatch: filesystem refusal,
+an uncharged budget refusal, and explicit abandon must not send a request; abandon must
+not construct the client at all. Replaying the full expensive prefix for each quality reason would also
+duplicate evidence already divided deliberately between deterministic scorer tests and
+durable terminal/receipt tests.
+
+### The correction
+
+B5 terminal proof is compositional and closed:
+
+1. One fake-session flow uses the actual `BoundedOllamaTransport` for the complete
+   C→D1→D2→D3→conditional D4→F seeds→acceptance path, including crash, retry, pause,
+   cancellation and resume.
+2. Focused scorer and durable-runtime tests cover every enumerated C/D/F quality-terminal
+   reason and exact artifact/decision ownership. Production-generated checkpoints prove
+   receipt and no-transport re-entry for every structurally distinct terminal owner path:
+   C, each D phase, F seed 1, F final-seed ranking and F acceptance.
+3. Transport-originated safety and provenance terminals use the actual bounded adapter.
+   Pre-dispatch budget and filesystem terminals prove that no HTTP request is made;
+   abandon proves that the transport client is not constructed.
+4. The complete proof suite forbids socket connection and private-root discovery/access.
+
+The authoritative closed proof-node matrix is in
+`BENCHMARK_PUBLIC_CDF_SCHEMA.md` §12.4 and is checked against the frozen reason/state
+sets by `test_b5_terminal_proof_matrix_is_closed_and_names_existing_nodes`.
+
+### Consequences accepted with this erratum
+
+This changes proof composition, not a scoring threshold, terminal outcome, runtime
+behavior or live-data rule. It was accepted before B5 approval and before any public
+checkpoint or scored Ollama call. Any new terminal reason must update both the strict
+schema and the closed proof matrix; an unlisted reason fails the offline gate.

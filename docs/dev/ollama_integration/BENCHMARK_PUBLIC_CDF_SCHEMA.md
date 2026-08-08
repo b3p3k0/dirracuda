@@ -678,14 +678,93 @@ B5 passes only when all are true:
    `./venv/bin/python -m pytest -q -k 'not analyst'` reproduces exactly that failure with
    no additional error, and the exact standalone node passes:
    `./venv/bin/python -m pytest -q experimental/webui/tests/test_daemon_cli.py::test_daemon_modules_import_without_tkinter`.
-4. The fake-session public-flow test drives the actual `BoundedOllamaTransport` through
-   C→D1→D2→D3→conditional D4→F seeds→acceptance, including pause/crash/resume and every
-   terminal branch, with zero socket connection and zero private-root access.
+4. Per accepted erratum E2, the fake-session public-flow proof is compositional. One test
+   drives the actual `BoundedOllamaTransport` through
+   C→D1→D2→D3→conditional D4→F seeds→acceptance, including pause/crash/resume and
+   cancellation. Focused scorer/runtime tests cover every enumerated quality-terminal
+   reason and exact owner. Production-generated checkpoints prove receipt and no-transport
+   re-entry for every structurally distinct terminal owner path: C, each D phase, F seed 1,
+   F final-seed ranking and F acceptance. Transport-originated safety/provenance terminals
+   use the bounded adapter; pre-dispatch budget/filesystem proofs assert no HTTP request,
+   while abandon forbids client construction. The suite permits zero socket connection
+   and zero private-root discovery/access.
 5. Public leak-scan tests pass, `git diff --check` passes, and task-tree sealing rejects
    every path outside the exact allowlist.
 6. Before/after line counts are recorded; every touched file is at most 1,700 lines.
 7. Root `README.md` is reviewed, workspace docs match behavior, and three independent
    hostile reviews report PASS.
+
+### 12.1 B5 validation record — 2026-08-07
+
+- Exact C0B-2 tree: `823 passed, 6 skipped`.
+- Analyst selection: `971 passed, 6 skipped, 3835 deselected`; the only warning is the
+  existing FastAPI/Starlette test-client deprecation.
+- Full repository: `4805 passed, 6 skipped, 1 failed`. The sole failure is the tolerated
+  order-dependent daemon/Tkinter baseline named above.
+- Non-Analyst isolation: `3834 passed, 977 deselected, 1 failed`, with the same sole
+  daemon/Tkinter node; that exact node passes standalone (`1 passed`).
+- Three independent hostile reviews reported PASS. Root `README.md` was reviewed and
+  needs no pre-launch feature text because Analyst remains private and unlaunched.
+
+Before/after physical line counts for every B5 delta path are recorded below. All final
+counts are at most 1,700; the largest is 1,692.
+
+| Path | Before | After |
+|---|---:|---:|
+| `docs/dev/ollama_integration/BENCHMARK_PROTOCOL_C0B2.md` | 1642 | 1647 |
+| `docs/dev/ollama_integration/BENCHMARK_PUBLIC_CDF_SCHEMA.md` | 699 | 778 |
+| `docs/dev/ollama_integration/CONTRACT_ERRATA.md` | 59 | 104 |
+| `docs/dev/ollama_integration/LESSONS_LEARNED.md` | 494 | 661 |
+| `docs/dev/ollama_integration/README.md` | 160 | 161 |
+| `docs/dev/ollama_integration/RISK_REGISTER.md` | 141 | 144 |
+| `scripts/analyst_benchmark/c0b2_cli.py` | 168 | 170 |
+| `scripts/analyst_benchmark/c0b2_executor.py` | 1350 | 1395 |
+| `scripts/analyst_benchmark/c0b2_leakscan.py` | 209 | 365 |
+| `scripts/analyst_benchmark/c0b2_runtime.py` | 1694 | 1670 |
+| `scripts/analyst_benchmark/c0b2_runtime_common.py` | 1240 | 1348 |
+| `scripts/analyst_benchmark/c0b2_runtime_d.py` | 1656 | 1656 |
+| `scripts/analyst_benchmark/c0b2_runtime_f.py` | 1554 | 1551 |
+| `scripts/analyst_benchmark/c0b2_runtime_f_evidence.py` | 1509 | 1535 |
+| `scripts/analyst_benchmark/c0b2_transport.py` | 843 | 982 |
+| `scripts/analyst_benchmark/leakscan.py` | 324 | 373 |
+| `scripts/tests/test_analyst_c0b2_cli.py` | 302 | 355 |
+| `scripts/tests/test_analyst_c0b2_contract.py` | 253 | 413 |
+| `scripts/tests/test_analyst_c0b2_runtime.py` | 1473 | 1610 |
+| `scripts/tests/test_analyst_c0b2_runtime_common.py` | 1570 | 1692 |
+| `scripts/tests/test_analyst_c0b2_runtime_d.py` | 1329 | 1470 |
+| `scripts/tests/test_analyst_c0b2_runtime_f.py` | 961 | 1345 |
+| `scripts/tests/test_analyst_c0b2_runtime_f_evidence.py` | 582 | 634 |
+| `scripts/tests/test_analyst_c0b2_transport.py` | 592 | 777 |
+| `scripts/tests/test_analyst_security_provenance.py` | 200 | 337 |
+| `scripts/tests/test_analyst_c0b2_public_flow.py` | 0 | 732 |
+
+The closed §12.4 proof matrix is:
+
+| Outcome/reason | Exact reason/owner proof | Compositional companion proof |
+|---|---|---|
+| `SELECTED` | `test_analyst_c0b2_public_flow.py::test_selected_public_flow_uses_bounded_transport_and_recovers_one_crash` | same node |
+| `no_stage_c_survivor` | `test_analyst_c0b2_runtime.py::test_public_stage_c_runs_exact_plan_and_finalizes_no_survivor` | same node |
+| `no_d1_output_budget_survivor` | `test_analyst_c0b2_runtime_d.py::test_d_inconclusive_crash_window_rebuilds_terminal_before_receipt` | same node |
+| `no_d2_chunk_survivor`, `no_d3_context_survivor`, `no_d4_confirmation_finalist` | `test_analyst_c0b2_runtime_d.py::test_each_later_d_inconclusive_terminal_is_persisted_and_receiptable` | same node |
+| `no_seed1_qualifier` | `test_analyst_c0b2_runtime_f.py::test_seed1_no_qualifier_persists_exact_terminal_and_calls_validator` | `test_analyst_c0b2_public_flow.py::test_selected_public_flow_uses_bounded_transport_and_recovers_one_crash` (seed-1 terminal rewind) |
+| `no_all_seed_qualifier` | `test_analyst_c0b2_runtime_f.py::test_all_seed_no_qualifier_persists_exact_terminal_and_calls_validator` | preceding public-flow node (final-seed terminal rewind) |
+| `ranking_not_decisive` | `test_analyst_c0b2_runtime_f.py::test_all_seed_finalizer_rebuilds_authority_inside_write_transaction` | preceding public-flow node (same final-seed owner path) |
+| `complete_corpus_acceptance_failed` | `test_analyst_c0b2_runtime_f.py::test_failed_acceptance_persists_exact_terminal_and_calls_validator` | preceding public-flow node (acceptance terminal rewind) |
+| `FAILED_SAFETY`, `BLOCKED_PROVENANCE` | `test_analyst_c0b2_public_flow.py::test_bounded_adapter_freezes_transport_originated_terminal` | same node |
+| `BLOCKED_BUDGET` | `test_analyst_c0b2_public_flow.py::test_public_invocation_budget_blocks_before_transport_dispatch` | pre-dispatch; transport callable is not invoked |
+| `BLOCKED_FILESYSTEM` | `test_analyst_c0b2_checkpoint.py::test_invocation_guard_rechecks_filesystem_before_recovery` | pre-dispatch; transport callable is not invoked |
+| `ABANDONED` | `test_analyst_c0b2_runtime_common.py::test_public_abandon_is_locked_receipted_and_idempotent` | same node; client construction is fatal |
+
+`test_b5_terminal_proof_matrix_is_closed_and_names_existing_nodes` requires the owner
+matrix to cover exactly `SELECTED`, every strict C/D/F inconclusive reason and every public
+dedicated failure terminal; its quality-receipt matrix covers every quality key. Every
+named node must exist. Budget and filesystem proofs are pre-dispatch and assert zero HTTP
+calls; abandon additionally makes bounded-transport construction fatal.
+
+The three F companion branches use verified SQLite Online Backup snapshots to rewind the
+same temporary checkpoint path under the same global lock. This is an isolated test-time
+proof seam, not the production restore API and not an authorization to rewrite durable
+run history.
 
 Only after these proofs and one clean commit may `c0b2 create` produce the canonical
 public checkpoint or any scored Ollama call.

@@ -22,12 +22,17 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence, Set, Tuple
 
+from .c0b2_leakscan import (FROZEN_C0B2_PUBLIC_PATHS, LeakGateError,
+                            read_regular_file)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BASELINE_VERSION = 1
 BASELINE_MAX_AGE_S = 30 * 24 * 60 * 60
+BASELINE_MAX_BYTES = 16 * 1024 * 1024
+RAW_ARTIFACT_MAX_BYTES = 64 * 1024 * 1024
 
 # Exact expected task paths. Not broad globs.
-ALLOWLIST_EXACT: Set[str] = {
+C0B1_ALLOWLIST_EXACT: Set[str] = {
     "docs/dev/ollama_integration/BENCHMARK.md",
     "docs/dev/ollama_integration/BENCHMARK_PROTOCOL_C0B1.md",
     "docs/dev/ollama_integration/CONTRACT_ERRATA.md",
@@ -65,7 +70,11 @@ ALLOWLIST_EXACT: Set[str] = {
     "shared/tests/fixtures/analyst_gold/generate.py",
     "shared/tests/fixtures/analyst_gold/manifest.json",
 }
-ALLOWLIST_PREFIX: Tuple[str, ...] = ("shared/tests/fixtures/analyst_gold/docs/",)
+C0B1_ALLOWLIST_PREFIX: Tuple[str, ...] = (
+    "shared/tests/fixtures/analyst_gold/docs/",
+)
+ALLOWLIST_EXACT: Set[str] = set(FROZEN_C0B2_PUBLIC_PATHS)
+ALLOWLIST_PREFIX: Tuple[str, ...] = ()
 
 GENERIC_PATTERNS: Dict[str, re.Pattern] = {
     "home_path": re.compile(r"/home/[a-z][a-z0-9_-]*/(?!DEV/dirracuda)"),
@@ -143,6 +152,9 @@ def _metadata(rel: str, code: str) -> Dict[str, Any]:
         "mode": stat.S_IMODE(st.st_mode),
         "size": st.st_size,
         "mtime_ns": st.st_mtime_ns,
+        "ctime_ns": st.st_ctime_ns,
+        "dev": st.st_dev,
+        "ino": st.st_ino,
     }
 
 
@@ -163,13 +175,15 @@ def _outside_repo(path: Path) -> Path:
     raise BaselineError("baseline/raw artifact must live outside the repository")
 
 
-def _protected_file(path: Path) -> os.stat_result:
-    st = path.lstat()
-    if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
-        raise BaselineError(f"not a regular non-symlink file: {path}")
-    if st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) & 0o077:
-        raise BaselineError(f"file must be owner-only (0600): {path}")
-    return st
+def _read_owner_artifact(path: Path, *, max_bytes: int) -> bytes:
+    """Read one exact 0600 artifact through a stable no-follow descriptor."""
+    try:
+        _verified, body = read_regular_file(
+            path, trusted_root=path.parent, max_bytes=max_bytes,
+            required_mode=0o600, required_trusted_root_mode=0o700)
+    except LeakGateError as exc:
+        raise BaselineError(f"artifact cannot be read safely: {path}") from exc
+    return body
 
 
 def _protected_parent(path: Path) -> None:
@@ -209,9 +223,9 @@ def create_baseline(path: Path) -> Path:
 
 def load_baseline(path: Path, *, now: int | None = None) -> Dict[str, Any]:
     path = _outside_repo(path)
-    _protected_file(path)
     try:
-        artifact = json.loads(path.read_text(encoding="utf-8"))
+        artifact = json.loads(
+            _read_owner_artifact(path, max_bytes=BASELINE_MAX_BYTES).decode("utf-8"))
     except (OSError, ValueError) as exc:
         raise BaselineError(f"baseline unreadable: {type(exc).__name__}") from exc
     digest = artifact.pop("integrity_sha256", None)
@@ -244,22 +258,38 @@ def allowed(path: str) -> bool:
     return path in ALLOWLIST_EXACT or path.startswith(ALLOWLIST_PREFIX)
 
 
+def allowed_c0b1(path: str) -> bool:
+    """Retain the frozen C0B-1 scope without widening the C0B-2 gate."""
+    return path in C0B1_ALLOWLIST_EXACT or path.startswith(C0B1_ALLOWLIST_PREFIX)
+
+
+def _metadata_changed(before: Mapping[str, Any] | None,
+                      current: Mapping[str, Any] | None) -> bool:
+    """Compare old inventories compatibly; new baselines also bind file identity."""
+    if before is None or current is None:
+        return before != current
+    identity = {"dev", "ino", "ctime_ns"}
+    if identity <= before.keys():
+        return before != current
+    return ({key: value for key, value in before.items() if key not in identity}
+            != {key: value for key, value in current.items() if key not in identity})
+
+
 def load_raw_responses(paths: Sequence[Path]) -> List[str]:
     if not paths:
         raise BaselineError("at least one explicit raw Stage-B artifact is required")
     samples: List[str] = []
     for supplied in paths:
         path = _outside_repo(supplied)
-        _protected_file(path)
         try:
-            with path.open("r", encoding="utf-8") as fh:
-                for line_no, line in enumerate(fh, start=1):
-                    row = json.loads(line)
-                    value = row.get("raw_response")
-                    if not isinstance(value, str):
-                        raise BaselineError(f"raw_response missing at {path}:{line_no}")
-                    if len(" ".join(value.split())) >= 24:
-                        samples.append(value)
+            body = _read_owner_artifact(path, max_bytes=RAW_ARTIFACT_MAX_BYTES)
+            for line_no, line in enumerate(body.decode("utf-8").splitlines(), start=1):
+                row = json.loads(line)
+                value = row.get("raw_response")
+                if not isinstance(value, str):
+                    raise BaselineError(f"raw_response missing at {path}:{line_no}")
+                if len(" ".join(value.split())) >= 24:
+                    samples.append(value)
         except (OSError, ValueError) as exc:
             if isinstance(exc, BaselineError):
                 raise
@@ -269,14 +299,27 @@ def load_raw_responses(paths: Sequence[Path]) -> List[str]:
     return samples
 
 
-def scan_content(paths: Sequence[str], raw_responses: Sequence[str]) -> List[str]:
+def scan_content(paths: Sequence[str], raw_responses: Sequence[str], *,
+                 inventory: Mapping[str, Mapping[str, Any]] | None = None) -> List[str]:
     hits: List[str] = []
     normalized_samples = [" ".join(s.split()).lower() for s in raw_responses]
     for rel in paths:
         path = REPO_ROOT / rel
-        if not path.is_file() or path.is_symlink():
-            continue
-        text = path.read_text(encoding="utf-8", errors="replace")
+        expected = inventory.get(rel) if inventory is not None else _metadata(rel, "")
+        if not expected or expected.get("kind") != "file":
+            raise BaselineError(f"scan target is not an inventoried regular file: {rel}")
+        try:
+            verified, body = read_regular_file(path, trusted_root=REPO_ROOT)
+        except LeakGateError as exc:
+            raise BaselineError(f"scan target cannot be read safely: {rel}") from exc
+        observed = {"mode": stat.S_IMODE(verified.st_mode), "size": verified.st_size,
+                    "mtime_ns": verified.st_mtime_ns, "ctime_ns": verified.st_ctime_ns,
+                    "dev": verified.st_dev, "ino": verified.st_ino}
+        compared = set(observed) if {"dev", "ino", "ctime_ns"} <= expected.keys() \
+            else {"mode", "size", "mtime_ns"}
+        if any(expected.get(key) != observed[key] for key in compared):
+            raise BaselineError(f"scan target changed after inventory capture: {rel}")
+        text = body.decode("utf-8", errors="replace")
         exempt = SELF_REFERENTIAL.get(rel, {})
         for name, pattern in GENERIC_PATTERNS.items():
             match = pattern.search(text)
@@ -304,14 +347,20 @@ def run(*, baseline_path: Path, raw_artifacts: Sequence[Path],
         print(f"leak scan (public)\n  RESULT: FAIL CLOSED — {exc}")
         return 1
 
-    all_paths = sorted(set(before) | set(current))
-    task_delta = [p for p in all_paths if before.get(p) != current.get(p)]
-    preexisting = [p for p in all_paths if before.get(p) == current.get(p)]
-    unlisted = sorted(p for p in task_delta if not allowed(p))
+    try:
+        all_paths = sorted(set(before) | set(current))
+        task_delta = [p for p in all_paths
+                      if _metadata_changed(before.get(p), current.get(p))]
+        preexisting = [p for p in all_paths
+                       if not _metadata_changed(before.get(p), current.get(p))]
+        unlisted = sorted(p for p in task_delta if not allowed(p))
 
-    # Never open an unrelated delta. Its unexpected path is already a failure.
-    scan_paths = sorted(p for p in task_delta if allowed(p) and p in current)
-    content_hits = scan_content(scan_paths, raw_responses)
+        # Never open an unrelated delta. Its unexpected path is already a failure.
+        scan_paths = sorted(p for p in task_delta if allowed(p) and p in current)
+        content_hits = scan_content(scan_paths, raw_responses, inventory=current)
+    except (BaselineError, OSError) as exc:
+        print(f"leak scan (public)\n  RESULT: FAIL CLOSED — {exc}")
+        return 1
 
     print("leak scan (public)")
     print(f"  pre-existing, unchanged: {preexisting or '-'}")

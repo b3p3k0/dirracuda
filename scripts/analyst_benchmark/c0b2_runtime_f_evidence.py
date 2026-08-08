@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Literal, Mapping
 
@@ -121,6 +122,11 @@ def canonical_row(raw: str, digest: str, label: str) -> dict[str, Any]:
             or sha256_json(value) != digest):
         raise ImmutableViolation(f"{label} hash or canonical encoding changed")
     return value
+
+
+def _restore_category_order(value: Any) -> Any:
+    from .c0b2_runtime_d import _restore_d_category_order
+    return _restore_d_category_order(value)
 
 
 def seed_plans(master: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
@@ -908,8 +914,8 @@ def validate_seed_activation_owner(
         "WHERE plan_key='F_SEED_1'").fetchone()
     if not aggregate or aggregate[0] != sha256_json(plans["F_SEED_1"]):
         raise ImmutableViolation("seed activation lacks its nested seed-1 plan owner")
-    stored = typed(canonical_row(
-        str(aggregate[2]), str(aggregate[1]), "stored seed-1 evidence"),
+    stored = typed(_restore_category_order(canonical_row(
+        str(aggregate[2]), str(aggregate[1]), "stored seed-1 evidence")),
         Seed1Evidence)
     attempts, contexts, health = seed1_inputs(point, master, corpus)
     try:
@@ -941,7 +947,8 @@ def validate_final_aggregate_owner(
     if (not row or row[:2] != (
             sha256_json(plans["F_SEED_20260804"]), expected_hash)):
         raise ImmutableViolation("final F aggregate lacks its exact phase owner")
-    stored = canonical_row(str(row[2]), str(row[1]), "final F aggregate")
+    stored = _restore_category_order(canonical_row(
+        str(row[2]), str(row[1]), "final F aggregate"))
     try:
         aggregate = validate_stage_f_aggregate_from_attempts(
             stored, master, seed1, decision,
@@ -1041,9 +1048,28 @@ class _ReadonlyPoint:
     def header(self) -> dict[str, Any]:
         return dict(self._header)
 
+    @property
+    def path(self) -> Path:
+        rows = self.conn.execute("PRAGMA database_list").fetchall()
+        matches = [row for row in rows if row[1] == "main"]
+        if len(matches) != 1 or not isinstance(matches[0][2], str) or not matches[0][2]:
+            raise ImmutableViolation("read-only checkpoint lacks a main database path")
+        path = Path(matches[0][2])
+        if not path.is_absolute():
+            raise ImmutableViolation("read-only checkpoint path is not absolute")
+        return path
+
     def state(self) -> str:
         return str(self.conn.execute(
             "SELECT state FROM run_state WHERE id=1").fetchone()[0])
+
+    def work(self, work_id: str) -> tuple[str, str | None]:
+        row = self.conn.execute(
+            "SELECT state,accepted_attempt_id FROM work_items WHERE work_id=?",
+            (work_id,)).fetchone()
+        if not row:
+            raise CheckpointError(f"unknown work {work_id}")
+        return str(row[0]), str(row[1]) if row[1] is not None else None
 
     def load_manifest(self, name: str) -> tuple[str, str]:
         row = self.conn.execute(
@@ -1227,8 +1253,8 @@ def validate_b4_backup_activation(
     if (not final_row
             or final_row[0] != sha256_json(plans["F_SEED_20260804"])):
         raise ImmutableViolation("backup acceptance lacks final F aggregate")
-    stored_final = canonical_row(
-        str(final_row[2]), str(final_row[1]), "backup final F aggregate")
+    stored_final = _restore_category_order(canonical_row(
+        str(final_row[2]), str(final_row[1]), "backup final F aggregate"))
     try:
         final = validate_stage_f_aggregate_from_attempts(
             stored_final, master, seed1, decision,

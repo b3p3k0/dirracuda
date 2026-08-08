@@ -11,7 +11,6 @@ import hashlib
 import json
 import os
 import secrets
-import signal
 import sqlite3
 import stat
 import subprocess
@@ -20,7 +19,6 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from types import FrameType
 from typing import Any, Callable, Mapping
 from urllib.parse import quote
 
@@ -31,8 +29,9 @@ from .c0b2_checkpoint import (INVOCATION_CAPS, SCHEMA_VERSION, Checkpoint,
 from .c0b2_fsprobe import (GlobalExecutionLock, backup_snapshot,
                            probe_filesystem, status_readonly,
                            verify_connection, verify_readonly)
-from .c0b2_leakscan import (FROZEN_C0B2B1_PATHS, WorktreeSeal,
-                            capture_worktree_seal)
+from .c0b2_leakscan import (FROZEN_C0B2_PUBLIC_PATHS, LeakGateError,
+                            WorktreeSeal, capture_worktree_seal,
+                            public_generation_options_sha256, read_regular_file)
 from .c0b2_plan import (KEEP_ALIVE, MODELS, OPTIONS_C, WorkItem,
                         build_c_stage_plan, build_master_manifest,
                         master_manifest_payload, stage_plan_payload)
@@ -41,9 +40,10 @@ from .c0b2_public_schema import (
     AcceptancePlan, BackupAnchor, BackupReceipt, BackupStatus, DInconclusiveResult,
     DPhasePlan, FInconclusiveResult, FMasterPlan, FSeedPlan, FSelectedResult,
     FailureArtifact, FailureEvidence, FAILURE_REASON_BY_TERMINAL, PLAN_ORDER,
-    InconclusiveCompletion, PlanActivation, SelectedCompletion, validate_artifact,
+    InconclusiveCompletion, PlanActivation, SelectedCompletion, validate_artifact)
+from .c0b2_runtime_common import (
+    DeferredTransport, _LiveSignalGuard, runtime_position, runtime_transaction,
 )
-from .c0b2_runtime_common import runtime_position, runtime_transaction
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROTOCOL_PATH = REPO_ROOT / "docs/dev/ollama_integration/BENCHMARK_PROTOCOL_C0B2.md"
@@ -70,13 +70,9 @@ class RuntimeGateError(RuntimeError):
 def new_public_run_id() -> str:
     stamp = time.strftime("c0b2-%Y%m%d-%H%M%S", time.gmtime())
     return f"{stamp}-{secrets.token_hex(12)}"
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
+def _sha256_file(path: Path, *, trusted_root: Path = REPO_ROOT) -> str:
+    _verified, body = read_regular_file(path, trusted_root=trusted_root)
+    return hashlib.sha256(body).hexdigest()
 
 def _git(repo_root: Path, *args: str) -> str:
     result = subprocess.run(
@@ -86,53 +82,50 @@ def _git(repo_root: Path, *args: str) -> str:
     return result.stdout.strip()
 def _task_tree_hash(repo_root: Path) -> str:
     rows: dict[str, str] = {}
-    for relative in sorted(FROZEN_C0B2B1_PATHS):
-        path = repo_root / relative
-        if not path.is_file() or path.is_symlink():
-            raise RuntimeGateError(f"frozen task path is not a regular file: {relative}")
-        rows[relative] = _sha256_file(path)
+    for relative in sorted(FROZEN_C0B2_PUBLIC_PATHS):
+        try:
+            rows[relative] = _sha256_file(
+                repo_root / relative, trusted_root=repo_root)
+        except LeakGateError as exc:
+            raise RuntimeGateError(
+                f"frozen task path cannot be read safely: {relative}") from exc
     return stable_hash(rows)
 def _require_clean_task_delta(seal: WorktreeSeal) -> None:
     dirty = tuple(entry.path for entry in seal.entries
-                  if entry.path in FROZEN_C0B2B1_PATHS)
+                  if entry.path in FROZEN_C0B2_PUBLIC_PATHS)
     if dirty:
         raise RuntimeGateError(
-            "commit the frozen Stage-C implementation before create: " + ", ".join(dirty))
+            "commit the frozen public implementation before create: " + ", ".join(dirty))
 def _manifest_payload(manifest: Any) -> dict[str, Any]:
     return master_manifest_payload(manifest)
 def _plan_payload(plan: Any) -> dict[str, Any]:
     return stage_plan_payload(plan)
 
 
-def _model_generation_hash() -> str:
-    return stable_hash([
-        {"model": model, "model_digest": digest, "think": think,
-         "options": dict(OPTIONS_C), "keep_alive": KEEP_ALIVE}
-        for model, digest, think in MODELS
-    ])
-
-
 def _source_pins(repo_root: Path, seal: WorktreeSeal) -> dict[str, Any]:
     detector_hash = stable_hash({
-        "metrics.py": _sha256_file(Path(metrics.__file__)),
-        "stage_c.py": _sha256_file(
-            repo_root / "scripts/analyst_benchmark/c0b2_stage_c.py"),
+        "metrics.py": _sha256_file(Path(metrics.__file__), trusted_root=repo_root),
+        **{name: _sha256_file(repo_root / "scripts/analyst_benchmark" / name,
+                             trusted_root=repo_root)
+           for name in ("c0b2_public_scoring.py", "c0b2_stage_c.py",
+                        "c0b2_stage_d.py", "c0b2_stage_f.py")},
     })
     return {
-        "protocol_sha256": _sha256_file(PROTOCOL_PATH),
+        "protocol_sha256": _sha256_file(PROTOCOL_PATH, trusted_root=repo_root),
         "git_head": _git(repo_root, "rev-parse", "HEAD"),
         "declared_dirty_state_sha256": seal.digest,
         "task_tree_sha256": _task_tree_hash(repo_root),
-        "fixture_sha256": _sha256_file(goldset.MANIFEST),
-        "schema_sha256": stable_hash({
-            "v1": schema_hash("v1"), "v2": schema_hash("v2")}),
+        "fixture_sha256": _sha256_file(goldset.MANIFEST, trusted_root=repo_root),
+        "schema_sha256": stable_hash({"v1": schema_hash("v1"),
+            "v2": schema_hash("v2"), "public": _sha256_file(repo_root /
+            "scripts/analyst_benchmark/c0b2_public_schema.py", trusted_root=repo_root)}),
         "prompt_sha256": stable_hash({
             "v1": prompt_template_hash("v1"),
             "v2": prompt_template_hash("v2"),
         }),
-        "chunker_sha256": _sha256_file(Path(chunker.__file__)),
+        "chunker_sha256": _sha256_file(Path(chunker.__file__), trusted_root=repo_root),
         "detector_sha256": detector_hash,
-        "generation_options_sha256": _model_generation_hash(),
+        "generation_options_sha256": public_generation_options_sha256(),
         "worktree_seal_sha256": seal.digest,
         "model_digests": {model: digest for model, digest, _think in MODELS},
         "ollama_endpoint": OLLAMA_ENDPOINT,
@@ -776,6 +769,15 @@ def _phase_parent_owner(plan_key: str, plan_hashes: Mapping[str, str]) -> str:
     return owner
 
 
+def _decision_parent_hash(
+        plan_key: str, owner_hash: str, f_master: str | None) -> str:
+    if plan_key == "F_ACCEPTANCE":
+        if f_master is None:
+            raise RuntimeGateError("F acceptance decision lacks its master owner")
+        return f_master
+    return owner_hash
+
+
 _B4_ACTIVATION_KEYS = frozenset({"F_SEED_17", "F_SEED_20260804", "F_ACCEPTANCE"})
 
 
@@ -881,7 +883,8 @@ def _anchor_from_connection(conn: sqlite3.Connection) -> dict[str, Any]:
         owner_aggregate = _plan_aggregate_hash(conn, owner_key, owner_hash)
         plan_parent = _decision_hash(
             conn, plan_parent_decisions[key], stage=owner_stage,
-            parent_hash=owner_hash, aggregate_hash=owner_aggregate)
+            parent_hash=_decision_parent_hash(key, owner_hash, f_master),
+            aggregate_hash=owner_aggregate)
         if activation_parent_decisions[key] == plan_parent_decisions[key]:
             activation_parent = plan_parent
         else:
@@ -1402,36 +1405,6 @@ def _stage_c_evidence(point: Checkpoint, work_ids: tuple[str, ...]) -> dict[str,
     return evidence
 
 
-class _LiveSignalGuard:
-    """Make the first signal durable/cancellable; leave a forced second possible."""
-
-    def __init__(self, cancellation: Any, cancel_transport: Callable[[], None]):
-        self.cancellation = cancellation
-        self.cancel_transport = cancel_transport
-        self.old: dict[int, Any] = {}
-        self.count = 0
-
-    def __enter__(self) -> "_LiveSignalGuard":
-        if threading.current_thread() is threading.main_thread():
-            for number in (signal.SIGINT, signal.SIGTERM):
-                self.old[number] = signal.getsignal(number)
-                signal.signal(number, self._handle)
-        return self
-
-    def _handle(self, _number: int, _frame: FrameType | None) -> None:
-        self.count += 1
-        if self.count == 1:
-            self.cancellation.first_signal()
-            self.cancel_transport()
-            return
-        self.cancellation.second_signal()
-        raise KeyboardInterrupt
-
-    def __exit__(self, *_args: object) -> None:
-        for number, handler in self.old.items():
-            signal.signal(number, handler)
-
-
 def _run_public_stage_c_locked(
         point: Checkpoint, lock: GlobalExecutionLock, run_id: str,
         *, transport_factory: Callable[[Callable[[Any], Any], Mapping[str, Any]], Any] | None,
@@ -1487,9 +1460,9 @@ def _run_public_stage_c_locked(
             raise RuntimeGateError("transport requested an unknown frozen control")
         return spec
 
-    transport = (transport_factory(resolver, header) if transport_factory is not None
-                 else BoundedOllamaTransport(
-                     resolver, endpoint=header["ollama_endpoint"]))
+    transport = DeferredTransport(lambda: (
+        transport_factory(resolver, header) if transport_factory is not None else
+        BoundedOllamaTransport(resolver, endpoint=header["ollama_endpoint"])))
     cancellation = CancellationController()
     context_specs: dict[str, RequestSpec] = {}
     context_hashes: dict[str, str] = {}
@@ -1579,7 +1552,7 @@ def _run_public_stage_c_locked(
             if result.outcome != "RETRY_WAIT" or stopped is not None:
                 return stopped
 
-    with _LiveSignalGuard(cancellation, transport.cancel_current):
+    with _LiveSignalGuard(cancellation):
         try:
             _orphans, ordinal = executor.recover_and_start("C")
         except InvocationCancelled:
@@ -1654,7 +1627,6 @@ def _run_public_stage_c_locked(
         _ensure_final_snapshot(point, lock, run_id)
         return _public_result(point, run_id, survivor_count=survivors)
 
-
 def run_public_stage_c(
         run_id: str, *, resume: bool = False,
         benchmark_root: Path | None = None,
@@ -1668,6 +1640,8 @@ def run_public_stage_c(
         with GlobalExecutionLock(root) as lock:
             point = Checkpoint.open(path, root)
             try:
+                if point.state() != "BLOCKED_PROVENANCE":
+                    revalidate_source_pins(point.header())
                 _ensure_final_snapshot(point, lock, run_id)
                 return _public_result(point, run_id)
             finally:
@@ -1684,6 +1658,8 @@ def run_public_stage_c(
         try:
             state = point.state()
             if state in _BACKUP_REQUIRED_STATES:
+                if state != "BLOCKED_PROVENANCE":
+                    revalidate_source_pins(point.header())
                 _ensure_final_snapshot(point, lock, run_id)
                 return _public_result(point, run_id)
             if state in TERMINAL_STATES:

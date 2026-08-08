@@ -5,6 +5,9 @@ import json
 import shutil
 import signal
 import sqlite3
+import subprocess
+import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -117,6 +120,14 @@ def test_backup_tail_accepts_only_exact_paired_f17_cursor_exception(
     assert runtime._backup_tail_matches_cursor(tail, cursor) is accepted
 
 
+def test_acceptance_decision_is_owned_by_f_master_not_preceding_seed_plan() -> None:
+    master, seed_plan = "a" * 64, "b" * 64
+    assert runtime._decision_parent_hash("F_ACCEPTANCE", seed_plan, master) == master
+    assert runtime._decision_parent_hash("F_SEED_17", seed_plan, master) == seed_plan
+    with pytest.raises(runtime.RuntimeGateError, match="master owner"):
+        runtime._decision_parent_hash("F_ACCEPTANCE", seed_plan, None)
+
+
 def test_stage_f_terminal_owner_delegates_and_propagates_failure(
         monkeypatch: pytest.MonkeyPatch) -> None:
     from scripts.analyst_benchmark import c0b2_runtime_f_evidence as evidence
@@ -180,6 +191,60 @@ def _stage_c_boundary(
     point.conn.execute(
         "UPDATE run_state SET state='PAUSED_STAGE_BOUNDARY' WHERE id=1")
     return root, point
+
+
+@pytest.mark.parametrize("terminal", (None, "ABANDONED"))
+def test_c_backup_reentry_source_drift_has_zero_mutation_or_transport(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+        terminal: str | None) -> None:
+    run_id = f"c0b2-c-reentry-drift-{terminal or 'boundary'}"
+    root, point = _stage_c_boundary(monkeypatch, tmp_path, run_id)
+    if terminal is not None:
+        runtime.finish_public_run_failure(point, terminal=terminal)
+    expected_state = point.state()
+    receipt_count = point.conn.execute(
+        "SELECT count(*) FROM backup_receipts").fetchone()[0]
+    path = runtime._checkpoint_path(run_id, root)
+    point.close()
+    before = path.read_bytes()
+    calls: list[str] = []
+
+    def source_drift(_header: object) -> None:
+        calls.append("pins")
+        raise runtime.RuntimeGateError("source drift")
+
+    monkeypatch.setattr(runtime, "revalidate_source_pins", source_drift)
+    with pytest.raises(runtime.RuntimeGateError, match="source drift"):
+        runtime.run_public_stage_c(
+            run_id, benchmark_root=root,
+            transport_factory=lambda *_args: calls.append("transport"))
+    assert calls == ["pins"] and path.read_bytes() == before
+    reopened = runtime.Checkpoint.open(path, root)
+    try:
+        assert reopened.state() == expected_state
+        assert reopened.conn.execute(
+            "SELECT count(*) FROM backup_receipts").fetchone()[0] == receipt_count
+    finally:
+        reopened.close()
+
+
+def test_c_blocked_provenance_reentry_skips_pins_and_completes_receipt(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    run_id = "c0b2-c-reentry-blocked-provenance"
+    root, point = _stage_c_boundary(monkeypatch, tmp_path, run_id)
+    runtime.finish_public_run_failure(point, terminal="BLOCKED_PROVENANCE")
+    point.close()
+    monkeypatch.setattr(
+        runtime, "revalidate_source_pins",
+        lambda _header: pytest.fail("frozen provenance terminal must remain receiptable"))
+
+    result = runtime.run_public_stage_c(
+        run_id, benchmark_root=root,
+        transport_factory=lambda *_args: pytest.fail(
+            "terminal receipt re-entry must not construct transport"))
+    assert result["state"] == "BLOCKED_PROVENANCE"
+    status = runtime.public_status(run_id, benchmark_root=root)
+    assert status["backup"]["receipt_present"] is True
 
 
 class _CreationCrash(BaseException):
@@ -1298,6 +1363,13 @@ def test_public_stage_c_runs_exact_plan_and_finalizes_no_survivor(
     assert calls.count("show") == 3
     verification = runtime.public_verify(run_id, benchmark_root=tmp_path / "bench")
     assert verification == {"ok": True, "errors": [], "backup": status["backup"]}
+    calls_before_reentry = list(calls)
+    reentered = runtime.run_public_stage_c(
+        run_id, benchmark_root=tmp_path / "bench",
+        transport_factory=lambda *_args: pytest.fail(
+            "Stage-C terminal re-entry must not construct transport"))
+    assert reentered["state"] == "INCONCLUSIVE"
+    assert calls == calls_before_reentry
 
 
 def test_runtime_specs_cross_the_real_bounded_transport_offline(
@@ -1412,18 +1484,83 @@ def test_first_signal_before_recovery_consumes_no_invocation(
         def __call__(self, *_args):
             pytest.fail("an early signal must prevent transport contact")
 
+    constructed: list[str] = []
+
+    def factory(*_args):
+        constructed.append("transport")
+        return NoCallTransport()
+
     monkeypatch.setattr(
         executor.DurableExecutor, "recover_and_start", interrupt_before_recovery)
     result = runtime.run_public_stage_c(
         run_id, benchmark_root=root,
-        transport_factory=lambda *_args: NoCallTransport())
+        transport_factory=factory)
     assert result["state"] == "CANCELLED_PENDING_RESUME"
-    assert result["calls_total"] == 0
+    assert result["calls_total"] == 0 and constructed == []
     conn = sqlite3.connect(runtime._checkpoint_path(run_id, root))
     try:
         assert conn.execute("SELECT count(*) FROM invocations").fetchone()[0] == 0
     finally:
         conn.close()
+
+
+def test_live_signal_guard_only_publishes_first_signal_intent() -> None:
+    cancellation = executor.CancellationController()
+    guard = runtime._LiveSignalGuard(cancellation)
+
+    guard._handle(signal.SIGINT, None)
+
+    assert cancellation.event.is_set()
+    assert cancellation.forced is False
+    assert guard.count == 1
+
+
+def test_live_signal_guard_cannot_deadlock_on_event_condition() -> None:
+    code = """
+import signal
+from scripts.analyst_benchmark.c0b2_executor import CancellationController
+from scripts.analyst_benchmark.c0b2_runtime import _LiveSignalGuard
+cancellation = CancellationController()
+guard = _LiveSignalGuard(cancellation)
+with cancellation.event._cond:
+    guard._handle(signal.SIGINT, None)
+assert cancellation.event.is_set() and not cancellation.forced
+with cancellation.event._cond:
+    try:
+        guard._handle(signal.SIGINT, None)
+    except KeyboardInterrupt:
+        pass
+    else:
+        raise AssertionError("second signal did not force interruption")
+assert cancellation.event.is_set() and cancellation.forced
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code], cwd=Path(__file__).parents[2],
+        capture_output=True, text=True, timeout=2, check=False)
+    assert result.returncode == 0, result.stderr
+
+
+def test_signal_publication_satisfies_event_wait_contract() -> None:
+    immediate = executor.CancellationController()
+    immediate.publish_first_signal()
+    assert immediate.event.is_set() is True
+    assert immediate.event.wait(0) is True
+
+    blocked = executor.CancellationController()
+    observed: list[bool] = []
+    entered = threading.Event()
+
+    def wait_for_signal() -> None:
+        entered.set()
+        observed.append(blocked.event.wait(1))
+
+    waiter = threading.Thread(target=wait_for_signal)
+    waiter.start()
+    assert entered.wait(0.25)
+    blocked.publish_first_signal()
+    waiter.join(0.25)
+    assert not waiter.is_alive()
+    assert observed == [True]
 
 
 def test_first_signal_during_invocation_claim_consumes_no_invocation(

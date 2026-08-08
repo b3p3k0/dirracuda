@@ -1,12 +1,14 @@
 # Analyst Benchmark — Protocol, C0B-2 (Stages C, D, F and E)
 
-Version: `c0b2-protocol-v4-stage-d-clarifications`
-Date: 2026-08-05
+Version: `c0b2-protocol-v5-complete-public-gate`
+Date: 2026-08-07
 Status: **C0B-2B1R FROZEN after three independent PASS reviews; C0B-2B2 implemented and
-reviewed; complete public C/D/F prefreeze approved by the HI on 2026-08-05.** Version 4
-freezes the Stage-D nonce, derived-view and context-control details found during the B3
-pre-implementation review. No scored C0B-2 call is permitted until C0B-2B3–B5 implement,
-independently review and commit the complete public executor under one source pin.
+reviewed; complete public C/D/F prefreeze approved by the HI on 2026-08-05.** Version 5
+retains the Stage-D nonce, derived-view and context-control clarifications and adds the
+legacy public leak scanner to the exact complete-public tree it enforces. B3–B5 implement
+the complete public executor and its offline proof, including accepted erratum E2. The
+exact-tree regression and three independent hostile-review gates passed on 2026-08-07.
+No scored C0B-2 call is permitted until this exact source tree is committed cleanly.
 Private Stage E remains implementation-held and separately authorization-held.
 
 Authoritative parent: [`CONTRACT.md`](CONTRACT.md), accepted
@@ -1601,9 +1603,11 @@ live run.
 The C0B-2B2–B5 delta may touch only the exact workspace, implementation and test paths in
 §§15.1–15.2 plus these additions:
 
+- `docs/dev/ollama_integration/CONTRACT_ERRATA.md`
 - `docs/dev/ollama_integration/BENCHMARK_PUBLIC_CDF_SCHEMA.md`
 - `scripts/analyst_benchmark/c0b2_public_schema.py`
 - `scripts/analyst_benchmark/c0b2_public_scoring.py`
+- `scripts/analyst_benchmark/leakscan.py`
 - `scripts/analyst_benchmark/c0b2_runtime_common.py`
 - `scripts/analyst_benchmark/c0b2_runtime_d.py`
 - `scripts/analyst_benchmark/c0b2_runtime_f.py`
@@ -1625,6 +1629,7 @@ The C0B-2B2–B5 delta may touch only the exact workspace, implementation and te
 - `scripts/tests/test_analyst_c0b2_runtime_f_evidence.py`
 - `scripts/tests/test_analyst_c0b2_runtime_f_namespace.py`
 - `scripts/tests/test_analyst_c0b2_public_flow.py`
+- `scripts/tests/test_analyst_security_provenance.py`
 
 No other path may change without reviewed protocol revision. New focused tests are
 required; the existing checkpoint test may not exceed the 1,700-line pause threshold.

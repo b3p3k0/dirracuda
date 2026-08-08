@@ -1,7 +1,10 @@
 """Offline transaction and provenance tests for the Stage-F activation substrate."""
 from __future__ import annotations
 
+import json
 import sqlite3
+import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -10,11 +13,15 @@ from scripts.analyst_benchmark import c0b2_runtime as public_runtime
 from scripts.analyst_benchmark import c0b2_runtime_common as runtime_common
 from scripts.analyst_benchmark import c0b2_executor as executor_module
 from scripts.analyst_benchmark import c0b2_runtime_f as runtime_f
+from scripts.analyst_benchmark import c0b2_schema as schema_module
+from scripts.analyst_benchmark import c0b2_transport as transport_module
 from scripts.analyst_benchmark.c0b2_checkpoint import (
     CheckpointError, ImmutableViolation, canonical_json, sha256_json,
 )
 from scripts.analyst_benchmark.c0b2_executor import DurableExecutor, WorkRequest
-from scripts.analyst_benchmark.c0b2_plan import attempt_id as stable_attempt_id
+from scripts.analyst_benchmark.c0b2_plan import (
+    OPTIONS_C, attempt_id as stable_attempt_id,
+)
 
 
 def _point() -> SimpleNamespace:
@@ -147,8 +154,8 @@ def test_acceptance_requires_state_independent_stored_d_owner(
 def _transition_point(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     conn = sqlite3.connect(":memory:")
     conn.executescript("""
-        CREATE TABLE run_state(id INTEGER PRIMARY KEY,state TEXT);
-        INSERT INTO run_state VALUES(1,'RUNNING');
+        CREATE TABLE run_state(id INTEGER PRIMARY KEY,state TEXT,updated REAL);
+        INSERT INTO run_state VALUES(1,'RUNNING',0.0);
         CREATE TABLE runtime_cursor(
           id INTEGER PRIMARY KEY,active_stage TEXT,active_plan_key TEXT,updated REAL);
         INSERT INTO runtime_cursor VALUES(1,'F','F_SEED_17',1.0);
@@ -375,10 +382,12 @@ def test_health_not_before_wait_cancellation_spends_no_invocation(
     monkeypatch.setattr(
         runtime_f, "runtime_position",
         lambda _point: runtime_f.RuntimePosition("F", "F_SEED_1"))
+    factories: list[str] = []
     outcome = runtime_f.run_stage_f_invocation(
-        point, object(), transport_factory=lambda _resolver, _header: object(),
+        point, object(),
+        transport_factory=lambda *_args: factories.append("factory"),
         cancellation=object())
-    assert claimed == []
+    assert claimed == [] and factories == []
     assert outcome.retry_not_before == 123.5
     assert outcome.active_plan_key == "F_SEED_1"
 
@@ -754,7 +763,233 @@ def test_poisoned_transition_after_recovery_sends_no_transport_or_claim(
     with pytest.raises(ImmutableViolation, match="lineage changed"):
         runtime_f.run_stage_f_invocation(
             point, object(), transport_factory=factory)
-    assert events == ["factory", "recover", "strict-census"]
+    assert events == ["recover", "strict-census"]
+
+
+def test_deferred_transport_constructs_once_on_first_contact() -> None:
+    calls: list[str] = []
+
+    class Transport:
+        def __call__(self, request, _cancel):
+            calls.append(request)
+            return request
+
+        def cancel_current(self):
+            calls.append("cancel")
+
+    deferred = runtime_f.DeferredTransport(
+        lambda: calls.append("factory") or Transport())
+    deferred.cancel_current()
+    assert deferred("first", object()) == "first"
+    assert deferred("second", object()) == "second"
+    deferred.cancel_current()
+    assert calls == ["factory", "first", "second", "cancel"]
+
+
+@pytest.mark.parametrize("path", ("scored", "resource", "standard"))
+@pytest.mark.parametrize(
+    "failure", (executor_module.SafetyLimit, executor_module.ProvenanceFailure))
+def test_operator_cancellation_precedes_executor_dispatch_failure(
+        path, failure) -> None:
+    cancelled: list[str] = []
+
+    class Point:
+        root = object()
+        conn = None
+
+        def cancel(self, attempt_id=None):
+            cancelled.append(attempt_id)
+
+        def pending_context_obligation(self, _stage):
+            return None
+
+        def backoff(self, model):
+            return SimpleNamespace(
+                model=model, failures=6 if path == "resource" else 0,
+                retry_not_before=0.0)
+
+        def precharge(self, **_kwargs):
+            return True
+
+        def header(self):
+            pytest.fail("cancellation must precede terminal classification")
+
+    point = Point()
+    executor = object.__new__(DurableExecutor)
+    executor.checkpoint = point
+    executor.lock = SimpleNamespace(held=True, root=point.root)
+    executor.cancellation = executor_module.CancellationController()
+    executor.invocation_stage, executor.invocation_ordinal = "C", 1
+    executor.current_attempt = None
+    executor.clock = SimpleNamespace(crossed=lambda: False)
+    executor._now = lambda: 0.0
+    executor._require_budget_ledger = lambda _header: None
+    executor._require_work_request_identity = lambda _request: None
+    executor._require_context_probe_configuration = lambda *_args: None
+    executor._require_preflight_complete = lambda _stage: None
+    executor._require_f_scored_control_order = lambda _stage: None
+    executor._control_resource_models = lambda _request: set()
+    executor._resource_obligation = lambda: (
+        SimpleNamespace(model="model", failures=6, retry_not_before=0.0)
+        if path == "resource" else None)
+
+    def transport(*_args):
+        executor.cancellation.first_signal()
+        raise failure("after cancel")
+
+    executor.transport = transport
+    if path == "scored":
+        request = WorkRequest("C", "work", "model", "hash", 1, "scored")
+        result = executor.run(request)
+    elif path == "resource":
+        identity = executor_module.resource_probe_id("C", 1, "model", "hash")
+        request = executor_module.ControlRequest(
+            "C", identity, "model", "hash", 1, "transport_orphan")
+        result = executor.run_resource_probe(request)
+    else:
+        identity = executor_module.control_id(
+            "C", 1, "version", executor_module.SERVER_CONTROL_MODEL)
+        request = executor_module.ControlRequest(
+            "C", identity, executor_module.SERVER_CONTROL_MODEL, "hash", 1)
+        result = executor.run_control(request, kind="version")
+    assert result.outcome == "CANCELLED_PENDING_RESUME"
+    assert cancelled == [request.attempt_id]
+
+
+@pytest.mark.parametrize("path", ("context", "planned_cancel", "health"))
+@pytest.mark.parametrize(
+    "failure", (executor_module.SafetyLimit, executor_module.ProvenanceFailure))
+def test_operator_cancellation_precedes_shared_control_failure(
+        monkeypatch: pytest.MonkeyPatch, path, failure) -> None:
+    cancelled: list[str] = []
+    point = SimpleNamespace(cancel=lambda attempt=None: cancelled.append(attempt))
+    executor = SimpleNamespace(
+        checkpoint=point, cancellation=executor_module.CancellationController(),
+        invocation_stage="F", invocation_ordinal=1, current_attempt=None,
+        _now=lambda: 1.0, _require_lock=lambda: None,
+        _require_invocation_stage=lambda _stage: None,
+        _require_preflight_complete=lambda _stage: None,
+        _require_f_cancellation_ready=lambda _candidate: None,
+        _resource_gate=lambda _model: None)
+    executor._finish_operator_cancellation = lambda attempt: (
+        DurableExecutor._finish_operator_cancellation(executor, attempt))
+
+    def transport(*_args):
+        executor.cancellation.first_signal()
+        raise failure("after cancel")
+
+    executor.transport = transport
+    monkeypatch.setattr(runtime_common, "_precharge_control", lambda *_args: None)
+    monkeypatch.setattr(runtime_common, "_context_trigger", lambda *_args: "work")
+    monkeypatch.setattr(
+        runtime_common, "_finish_public_failure",
+        lambda *_args: pytest.fail("cancellation must precede terminal classification"))
+    control = {"candidate_id": "candidate"}
+    monkeypatch.setattr(
+        runtime_common, "_active_control",
+        lambda *_args: (SimpleNamespace(state="PENDING"), control, {}))
+    request = executor_module.ControlRequest(
+        "F", "control", "model", "hash", 1)
+    if path == "context":
+        result = runtime_common.run_context_probe(executor, request)
+    elif path == "planned_cancel":
+        result = runtime_common.run_cancellation_probe(executor, request)
+    else:
+        monkeypatch.setattr(
+            runtime_common, "_cancelled_predecessor",
+            lambda *_args: SimpleNamespace(
+                not_before_utc="1970-01-01T00:00:00.000000Z"))
+        result = runtime_common.run_cancellation_health(
+            executor, request, cancelled_attempt_id="old",
+            source="source", worksheet="v2", num_predict=1, num_ctx=2)
+    assert result.outcome == "CANCELLED_PENDING_RESUME"
+    assert cancelled == [request.attempt_id]
+
+
+def test_planned_probe_observes_operator_cancel_during_blocked_headers(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """The probe-owned event must also expose operator intent to real transport."""
+    class Response:
+        status_code = 200
+        headers = {"Content-Type": "application/x-ndjson"}
+
+        def __init__(self) -> None:
+            self.closed = threading.Event()
+            self.raw = SimpleNamespace(stream=lambda **_kwargs: iter(()))
+
+        def close(self) -> None:
+            self.closed.set()
+
+    response = Response()
+
+    class Session:
+        trust_env = True
+        max_redirects = 30
+
+        def __init__(self) -> None:
+            self.started = threading.Event()
+            self.release = threading.Event()
+
+        def request(self, *_args, **_kwargs):
+            self.started.set()
+            self.release.wait(1)
+            return response
+
+    payload = {
+        "model": "model:stable", "messages": [{"role": "user", "content": "x"}],
+        "stream": True, "format": schema_module.worksheet_schema("v2"),
+        "options": dict(OPTIONS_C), "think": False, "keep_alive": "15m",
+    }
+    spec = transport_module.RequestSpec(
+        kind="chat", payload=payload, worksheet="v2",
+        expected_model="model:stable", expected_digest="a" * 64,
+        cancel_on_first_content=True)
+    session = Session()
+    bounded = transport_module.BoundedOllamaTransport(
+        lambda _request: spec, session=session)
+    cancelled: list[str | None] = []
+    planned = SimpleNamespace(state="PENDING", evidence_json=None)
+    point = SimpleNamespace(cancel=lambda attempt=None: cancelled.append(attempt))
+    owner = SimpleNamespace(
+        checkpoint=point, cancellation=executor_module.CancellationController(),
+        invocation_stage="F", invocation_ordinal=1, current_attempt=None,
+        _require_lock=lambda: None, _require_invocation_stage=lambda _stage: None,
+        _require_preflight_complete=lambda _stage: None,
+        _require_f_cancellation_ready=lambda _candidate: None,
+        _resource_gate=lambda _model: None, transport=bounded)
+    owner._finish_operator_cancellation = lambda attempt: (
+        DurableExecutor._finish_operator_cancellation(owner, attempt))
+    monkeypatch.setattr(runtime_common, "_precharge_control", lambda *_args: None)
+    monkeypatch.setattr(
+        runtime_common, "_active_control",
+        lambda *_args: (planned, {"candidate_id": "candidate"}, {}))
+    monkeypatch.setattr(
+        runtime_common, "_persist_planned_cancellation",
+        lambda *_args: pytest.fail("operator cancel cannot become probe evidence"))
+    request = executor_module.ControlRequest(
+        "F", "control", "model:stable",
+        transport_module.request_spec_hash(spec), 1)
+    returned = threading.Event()
+
+    def cancel_then_release() -> None:
+        assert session.started.wait(1)
+        owner.cancellation.first_signal()
+        returned.wait(0.5)
+        session.release.set()
+
+    interrupter = threading.Thread(target=cancel_then_release)
+    interrupter.start()
+    started = time.monotonic()
+    result = runtime_common.run_cancellation_probe(owner, request)
+    elapsed = time.monotonic() - started
+    returned.set()
+    interrupter.join(1)
+    assert result.outcome == "CANCELLED_PENDING_RESUME" and elapsed < 0.25
+    assert cancelled == [request.attempt_id]
+    assert planned.state == "PENDING" and planned.evidence_json is None
+    assert response.closed.wait(1)
+    assert transport_module._REQUEST_WORKER_SLOT.acquire(timeout=1)
+    transport_module._REQUEST_WORKER_SLOT.release()
 
 
 def test_pending_health_barrier_uses_exact_durable_timestamp(
@@ -840,16 +1075,77 @@ def _finalizer_point(plan_key: str) -> SimpleNamespace:
         CREATE TABLE decisions(
           decision_id TEXT PRIMARY KEY, stage TEXT, parent_hash TEXT,
           aggregate_hash TEXT, activation TEXT, value_json TEXT, created REAL);
-        CREATE TABLE run_state(id INTEGER PRIMARY KEY,state TEXT);
-        INSERT INTO run_state VALUES(1,'RUNNING');
+        CREATE TABLE run_state(id INTEGER PRIMARY KEY,state TEXT,updated REAL);
+        INSERT INTO run_state VALUES(1,'RUNNING',0.0);
         CREATE TABLE runtime_cursor(
           id INTEGER PRIMARY KEY,active_stage TEXT,active_plan_key TEXT);
         INSERT INTO runtime_cursor VALUES(1,'F','{plan_key}');
+        CREATE TABLE public_artifacts(
+          artifact_id TEXT PRIMARY KEY,terminal TEXT,artifact_hash TEXT,
+          artifact_json TEXT,created REAL);
     """)
     return SimpleNamespace(
         conn=conn,
         state=lambda: conn.execute("SELECT state FROM run_state").fetchone()[0],
         header=lambda: {"run_id": "run"})
+
+
+def _assert_inconclusive_terminal(point, reason: str, owner_hash: str,
+                                  aggregate_hash: str) -> str:
+    assert point.state() == "INCONCLUSIVE"
+    artifact_row = point.conn.execute(
+        "SELECT artifact_hash,artifact_json FROM public_artifacts "
+        "WHERE artifact_id='stage-f-result'").fetchone()
+    artifact = json.loads(artifact_row[1])
+    assert artifact == {
+        "version": "c0b2-result-v1", "terminal": "INCONCLUSIVE", "stage": "F",
+        "aggregate_sha256": aggregate_hash, "reason": reason,
+    }
+    completion = point.conn.execute(
+        "SELECT stage,parent_hash,aggregate_hash,activation,value_json FROM decisions "
+        "WHERE decision_id='c0b2-completion'").fetchone()
+    assert completion[:4] == ("F", owner_hash, aggregate_hash, "NOT_ACTIVATED")
+    assert json.loads(completion[4]) == {
+        "outcome": "INCONCLUSIVE", "artifact_sha256": artifact_row[0],
+        "facts": {"deterministic_stop": True, "reason": reason},
+    }
+    return artifact_row[0]
+
+
+def test_seed1_no_qualifier_persists_exact_terminal_and_calls_validator(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    point = _finalizer_point("F_SEED_1")
+    master_hash, seed1_hash, evidence_hash = "1" * 64, "2" * 64, "3" * 64
+    evidence, decision = {"seed": 1}, {"qualifiers": []}
+    calls: list[str] = []
+
+    monkeypatch.setattr(runtime_f, "_seed1_inputs", lambda *_args: ({}, {}, {}))
+    monkeypatch.setattr(
+        runtime_f, "build_seed1_evidence_from_attempts",
+        lambda *_args, **_kwargs: evidence)
+    monkeypatch.setattr(
+        runtime_f, "build_seed_activation_decision",
+        lambda _master, _value: decision)
+
+    def activate(_point, _evidence, _decision):
+        assert (_evidence, _decision) == (evidence, decision)
+        with runtime_f.runtime_transaction(point):
+            runtime_f._finish_no_seed1(
+                point, master_hash, seed1_hash, evidence_hash)
+        return runtime_f.FLaterActivation(
+            evidence_hash, "4" * 64, (), "no_seed1_qualifier")
+
+    def validate(*_args):
+        assert point.conn.in_transaction is False
+        calls.append("validator")
+        return _assert_inconclusive_terminal(
+            point, "no_seed1_qualifier", seed1_hash, evidence_hash)
+
+    monkeypatch.setattr(runtime_f, "activate_f_later_seeds", activate)
+    monkeypatch.setattr(runtime_f, "validate_b4_terminal_owner", validate)
+    result = runtime_f._finalize_seed1(point, {}, object())
+    assert result.terminal_reason == "no_seed1_qualifier"
+    assert calls == ["validator"]
 
 
 def test_all_seed_finalizer_rebuilds_authority_inside_write_transaction(
@@ -898,6 +1194,42 @@ def test_all_seed_finalizer_rebuilds_authority_inside_write_transaction(
     assert calls == [
         "census", "seed-owner", "attempts", "aggregate", "provisional",
         "terminal", "validator"]
+
+
+def test_all_seed_no_qualifier_persists_exact_terminal_and_calls_validator(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    from scripts.analyst_benchmark import c0b2_runtime_f_evidence as evidence
+
+    point = _finalizer_point("F_SEED_20260804")
+    plan = {"plan_key": "F_SEED_20260804"}
+    master = {"plans": [{"payload": plan}]}
+    aggregate = {"ranking": {"winner_candidate_id": None}}
+    aggregate_hash, owner_hash = sha256_json(aggregate), sha256_json(plan)
+    provisional = {
+        "outcome": "INCONCLUSIVE", "reason": "no_all_seed_qualifier"}
+    calls: list[str] = []
+
+    monkeypatch.setattr(runtime_f, "validate_b4_f_control_census", lambda _point: None)
+    monkeypatch.setattr(
+        runtime_f, "validate_seed_activation_owner",
+        lambda *_args: ({}, {}, "4" * 64))
+    monkeypatch.setattr(evidence, "all_seed_attempt_inputs", lambda *_args: {})
+    monkeypatch.setattr(
+        runtime_f, "build_stage_f_aggregate_from_attempts",
+        lambda *_args, **_kwargs: aggregate)
+    monkeypatch.setattr(
+        runtime_f, "build_provisional_decision", lambda _aggregate: provisional)
+
+    def validate(*_args):
+        assert point.conn.in_transaction
+        calls.append("validator")
+        return _assert_inconclusive_terminal(
+            point, "no_all_seed_qualifier", owner_hash, aggregate_hash)
+
+    monkeypatch.setattr(runtime_f, "validate_b4_terminal_owner", validate)
+    assert runtime_f._finalize_all_seeds(
+        point, master, "5" * 64, object()) == "no_all_seed_qualifier"
+    assert calls == ["validator"]
 
 
 def test_acceptance_finalizer_rebuilds_every_owner_inside_write_transaction(
@@ -959,3 +1291,55 @@ def test_acceptance_finalizer_rebuilds_every_owner_inside_write_transaction(
     assert calls == [
         "census", "f-owner", "d-owner", "d-aggregate", "attempts",
         "c44", "acceptance", "result", "terminal", "validator"]
+
+
+def test_failed_acceptance_persists_exact_terminal_and_calls_validator(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    from scripts.analyst_benchmark import c0b2_runtime_f_evidence as evidence
+
+    point = _finalizer_point("F_ACCEPTANCE")
+    winner = "1" * 64
+    f_aggregate = {
+        "ranking": {"winner_candidate_id": winner},
+        "candidates": [{"candidate_id": winner,
+                        "cancellation_health": {"passed": True}}],
+    }
+    phase = runtime_f.ActiveFPhase(
+        {"plan_key": "F_ACCEPTANCE"}, "2" * 64, ())
+    acceptance = {"passed": False}
+    aggregate_hash = sha256_json(acceptance)
+    artifact = {
+        "version": "c0b2-result-v1", "terminal": "INCONCLUSIVE", "stage": "F",
+        "aggregate_sha256": aggregate_hash,
+        "reason": "complete_corpus_acceptance_failed",
+    }
+    calls: list[str] = []
+
+    monkeypatch.setattr(runtime_f, "validate_b4_f_control_census", lambda _point: None)
+    monkeypatch.setattr(
+        evidence, "validate_final_f_owner",
+        lambda *_args: (f_aggregate, "3" * 64, {}, "4" * 64))
+    monkeypatch.setattr(
+        runtime_f, "_validate_stored_d_owner", lambda _point: ("5" * 64, {}))
+    monkeypatch.setattr(runtime_f, "_d50_source_aggregate", lambda *_args: {})
+    monkeypatch.setattr(evidence, "acceptance_attempt_inputs", lambda *_args: {})
+    monkeypatch.setattr(
+        runtime_f, "build_c44_scored_aggregate", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        runtime_f, "build_acceptance_aggregate",
+        lambda *_args, **_kwargs: acceptance)
+    monkeypatch.setattr(runtime_f, "build_final_result", lambda **_kwargs: artifact)
+    monkeypatch.setattr(runtime_f, "_decision_digest", lambda *_args: "6" * 64)
+
+    def validate(*_args):
+        assert point.conn.in_transaction
+        calls.append("validator")
+        return _assert_inconclusive_terminal(
+            point, "complete_corpus_acceptance_failed",
+            phase.plan_sha256, aggregate_hash)
+
+    monkeypatch.setattr(runtime_f, "validate_b4_terminal_owner", validate)
+    assert runtime_f._finalize_acceptance(
+        point, phase, {}, "7" * 64,
+        SimpleNamespace(master_manifest_sha256="8" * 64)) == "INCONCLUSIVE"
+    assert calls == ["validator"]

@@ -29,6 +29,58 @@ def _namespace_point() -> SimpleNamespace:
     return SimpleNamespace(conn=conn)
 
 
+def test_readonly_backup_facade_exposes_d_owner_work_state(tmp_path) -> None:
+    database = tmp_path / "checkpoint.sqlite3"
+    conn = sqlite3.connect(database)
+    conn.execute(
+        "CREATE TABLE work_items(work_id TEXT,state TEXT,accepted_attempt_id TEXT)")
+    conn.execute("INSERT INTO work_items VALUES('done','SUCCEEDED','attempt-1')")
+    point = evidence._ReadonlyPoint(conn, {"run_id": "public"})
+
+    assert point.path == database
+    assert point.work("done") == ("SUCCEEDED", "attempt-1")
+    with pytest.raises(evidence.CheckpointError, match="unknown work"):
+        point.work("missing")
+
+
+def test_seed_activation_restores_category_order_before_strict_validation(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    plan = {"plan_key": "F_SEED_1"}
+    stored = {"category_metrics": {
+        "contact": 1, "demographic": 1, "financial": 1, "pii": 1}}
+    raw, digest = canonical_json(stored), sha256_json(stored)
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        "CREATE TABLE phase_aggregates(plan_key TEXT,plan_hash TEXT,"
+        "aggregate_hash TEXT,aggregate_json TEXT)")
+    conn.execute("INSERT INTO phase_aggregates VALUES(?,?,?,?)", (
+        "F_SEED_1", sha256_json(plan), digest, raw))
+    point = SimpleNamespace(conn=conn)
+    seen: list[list[str]] = []
+
+    def strict(value, model):
+        if model is evidence.Seed1Evidence:
+            seen.append(list(value["category_metrics"]))
+        return value
+
+    monkeypatch.setattr(evidence, "typed", strict)
+    monkeypatch.setattr(evidence, "seed1_inputs", lambda *_args: ({}, {}, {}))
+    monkeypatch.setattr(
+        evidence, "validate_seed1_evidence", lambda value, *_args, **_kwargs: value)
+    monkeypatch.setattr(
+        evidence, "build_seed_activation_decision",
+        lambda *_args: {"activated_group_ids": []})
+    monkeypatch.setattr(
+        evidence, "connection_decision",
+        lambda *_args: ({"activated_group_ids": []}, "d" * 64,
+                        ("F", "m", digest, "NOT_ACTIVATED", "{}")))
+    master = {"plans": [{"payload": plan}]}
+
+    result = evidence.validate_seed_activation_owner(point, master, "m", object())
+    assert result[1:] == ({"activated_group_ids": []}, "d" * 64)
+    assert seen == [["pii", "financial", "contact", "demographic"]]
+
+
 @pytest.mark.parametrize("table,values", [
     ("invocations", ("F",)),
     ("attempts", ("F",)),

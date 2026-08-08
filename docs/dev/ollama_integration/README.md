@@ -1,6 +1,6 @@
 # Ollama Integration Workspace
 
-Date: 2026-08-06
+Date: 2026-08-07
 Status: **C0A contract frozen** (committed `91bb2aa`). **C0B-1 accepted and committed
 (`47e946b`).** **C0B-2A offline foundation passed implementation and independent
 adversarial review.** The HI authorized the public C/D/F envelope on 2026-08-05.
@@ -15,8 +15,11 @@ scorer, durable-runtime, crash-recovery, Analyst-regression and independent adve
 gates.** The HI approved the exact-configuration context-recovery rule on 2026-08-05.
 **B4 Stage F passed its offline planner, scorer, durable-runtime, crash/replay,
 cancellation-health, exact-namespace, Analyst-regression and independent hostile-review
-gates.** Its source remains unexecuted against Ollama; B5 owns the full fake-session proof
-and final hostile reviews before any live checkpoint may be created.
+gates.** **B5 supplies the complete source/task-tree pin, real bounded-transport fake HTTP
+flow, crash/retry/resume proof, public abandon terminal and exact leak gate. Its
+exact-tree, Analyst, full-regression and three independent hostile-review gates passed on
+2026-08-07.** Its source remains unexecuted against Ollama; live creation stays held until
+this exact reviewed tree is committed cleanly.
 The HI reconfirmed this course on
 2026-08-05 and authorized milestone commits on `feature/ollama-analyst`; no push or
 promotion is authorized. Private Stage E remains held.
@@ -133,7 +136,7 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
 ## Document Map
 
 1. `CONTRACT.md` — **the frozen, authoritative spec.** Cards implement against it.
-2. `CONTRACT_ERRATA.md` — accepted narrow corrections to the frozen contract (E1).
+2. `CONTRACT_ERRATA.md` — accepted narrow corrections to the frozen contract (E1 and E2).
 3. `README.md` (this file) — status, decisions, orientation.
 4. `BENCHMARK_PROTOCOL_C0B1.md` — **pre-registered** C0B-1 decision rule, gates, factors, budgets. Hash-pinned.
 5. `BENCHMARK_PROTOCOL_C0B2.md` — reviewed C0B-2 public/private protocol; offline 2A is
@@ -152,9 +155,7 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
 
 ## Next Step
 
-Implement B5 full fake-session integration and complete its independent hostile reviews
-before creating the live checkpoint. B5 must drive the actual bounded transport through
-the complete C→D→F state machine, including pause/crash/resume, budget stops, cancellation
-health and every terminal. One clean Git/tree pin covers the whole adaptive public run.
-Execution stays serial and resumable; shared-GPU offload or slow execution is not a
-quality failure. Private Stage E remains separately held.
+Commit the exact reviewed B5 tree, then create the canonical public checkpoint and
+execute Stage C. The public run stays serial and resumable; shared-GPU offload or slow
+execution is not a quality failure. D and F remain decision-gated by durable public
+evidence, and private Stage E remains separately held.

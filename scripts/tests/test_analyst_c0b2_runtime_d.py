@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -11,11 +12,11 @@ from scripts.analyst_benchmark import c0b2_plan as legacy_plan
 from scripts.analyst_benchmark import c0b2_runtime as public_runtime
 from scripts.analyst_benchmark import c0b2_runtime_d as runtime_d
 from scripts.analyst_benchmark.c0b2_checkpoint import (
-    ImmutableViolation, canonical_json, sha256_json,
+    CheckpointError, ImmutableViolation, canonical_json, sha256_json,
 )
 from scripts.analyst_benchmark.c0b2_executor import (
-    SERVER_CONTROL_MODEL, ControlRequest, DurableExecutor, FakeResponse, WorkRequest,
-    control_id,
+    SERVER_CONTROL_MODEL, ControlRequest, DurableExecutor, FakeResponse,
+    WorkRequest, control_id,
 )
 from scripts.analyst_benchmark.c0b2_fsprobe import GlobalExecutionLock
 from scripts.analyst_benchmark.c0b2_public_schema import stage_d_candidate_id
@@ -408,6 +409,83 @@ def _finish_d3_final_owner(point, inputs):
             return phase
         assert result.outcome == "CONTINUE"
         phase = runtime_d.load_active_d_phase(point, inputs)
+
+
+@pytest.mark.parametrize("target_phase,reason", [
+    ("D2", "no_d2_chunk_survivor"),
+    ("D3", "no_d3_context_survivor"),
+    ("D4", "no_d4_confirmation_finalist"),
+])
+def test_each_later_d_inconclusive_terminal_is_persisted_and_receiptable(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+        target_phase: str, reason: str) -> None:
+    run_id = f"c0b2-runtime-{target_phase.lower()}-inconclusive"
+    root, point, inputs = _created_boundary(monkeypatch, tmp_path, run_id)
+    phase = runtime_d.start_stage_d(point, inputs)
+    point.conn.execute("INSERT INTO invocations VALUES('D',1,?)", (time.time(),))
+    no_findings = canonical_json({
+        "document_type": "unknown", "subject": "",
+        "assessment": "no_findings", "findings": [],
+    })
+
+    while True:
+        fail_phase = phase.plan["phase"] == target_phase
+        for candidate in phase.plan["candidates"]:
+            rows = [row for row in phase.plan["work"]
+                    if row["candidate_id"] == candidate["candidate_id"]]
+            for index, item in enumerate(rows):
+                _answer_work(
+                    point, item,
+                    response=(no_findings if fail_phase else
+                              _grounded_d_response(item, inputs.corpus)),
+                    metadata={
+                        "done_reason": "stop", "prompt_eval_count": 1000,
+                        "tools_empty": True, "images_empty": True,
+                        "unknown_message_fields_empty": True,
+                    },
+                )
+                if index == 0 and phase.controls:
+                    control = next(row for row in phase.controls
+                                   if row["candidate_id"] == candidate["candidate_id"])
+                    _complete_d_context(point, phase, control)
+        result = runtime_d.finalize_d_phase(point, phase, inputs)
+        if fail_phase:
+            assert result.outcome == "INCONCLUSIVE"
+            assert point.state() == "INCONCLUSIVE"
+            break
+        assert result.outcome == "CONTINUE"
+        phase = runtime_d.load_active_d_phase(point, inputs)
+
+    point.close()
+    contacted = False
+
+    def forbidden_transport(_resolver, _header):
+        nonlocal contacted
+        contacted = True
+        raise AssertionError("terminal re-entry must not construct transport")
+
+    result = runtime_d.run_public_stage_d(
+        run_id, benchmark_root=root, transport_factory=forbidden_transport)
+    assert result["state"] == "INCONCLUSIVE"
+    assert result["outcome"] == "STATUS"
+    reopened = public_runtime.Checkpoint.open(
+        public_runtime._checkpoint_path(run_id, root), root)
+    try:
+        artifact = json.loads(reopened.conn.execute(
+            "SELECT artifact_json FROM public_artifacts "
+            "WHERE artifact_id='stage-d-result'"
+        ).fetchone()[0])
+        completion = json.loads(reopened.conn.execute(
+            "SELECT value_json FROM decisions "
+            "WHERE decision_id='c0b2-completion'"
+        ).fetchone()[0])
+        assert artifact["reason"] == reason
+        assert completion["facts"]["reason"] == reason
+        assert reopened.conn.execute(
+            "SELECT count(*) FROM backup_receipts").fetchone()[0] == 2
+        assert contacted is False
+    finally:
+        reopened.close()
 
 
 def test_stored_final_d_owner_rederives_after_cursor_advances(
@@ -1068,7 +1146,11 @@ def test_context_recovery_replays_trigger_then_observes_ps_before_scored_work(
             "assessment": "no_findings", "findings": [],
         })
 
+        factory_calls = 0
+
         def factory(resolver, _header):
+            nonlocal factory_calls
+            factory_calls += 1
             def transport(request, _cancel):
                 spec = resolver(request)
                 if spec.kind in {"version", "tags", "show"}:
@@ -1105,12 +1187,37 @@ def test_context_recovery_replays_trigger_then_observes_ps_before_scored_work(
                     point, lock, inputs, transport_factory=factory)
         assert [row[0] for row in actions] == [
             "recovery", "ps", "recovery", "scored"]
+        assert factory_calls == 1
         assert actions[0][2] == first["request_sha256"]
         assert actions[0][1] != first["work_id"]
         assert actions[1][1] == control["control_id"]
         assert actions[2][2] != first["request_sha256"]
     finally:
         point.close()
+
+
+def test_stage_d_recovery_failure_does_not_construct_transport(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[str] = []
+    phase = runtime_d.ActiveDPhase(
+        {"plan_key": "D1_OUTPUT", "work": []}, "a" * 64, ())
+    point = SimpleNamespace(header=lambda: {"run_id": "run"})
+
+    class FailingExecutor:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def recover_and_start(self, _stage):
+            events.append("recovery")
+            raise CheckpointError("filesystem gate")
+
+    monkeypatch.setattr(runtime_d, "load_active_d_phase", lambda *_args: phase)
+    monkeypatch.setattr(runtime_d, "DurableExecutor", FailingExecutor)
+    with pytest.raises(CheckpointError, match="filesystem gate"):
+        runtime_d.run_stage_d_invocation(
+            point, object(), object(),
+            transport_factory=lambda *_args: events.append("factory"))
+    assert events == ["recovery"]
 
 
 def test_run_public_stage_d_rejects_resume_at_c_boundary_without_contact(
@@ -1130,6 +1237,40 @@ def test_run_public_stage_d_rejects_resume_at_c_boundary_without_contact(
             "c0b2-runtime-d-entry-gate", resume=True,
             benchmark_root=root, transport_factory=transport_factory)
     assert contacted is False
+
+
+def test_stage_d_early_signal_returns_resumable_without_contact_or_charge(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    run_id = "c0b2-runtime-d-early-signal"
+    root, point, _inputs = _created_boundary(monkeypatch, tmp_path, run_id)
+    point.close()
+    original = DurableExecutor.recover_and_start
+
+    def interrupt_before_recovery(self, stage):
+        self.cancellation.publish_first_signal()
+        return original(self, stage)
+
+    contacted = False
+
+    def transport_factory(_resolver, _header):
+        nonlocal contacted
+        contacted = True
+        raise AssertionError("early cancellation must not construct transport")
+
+    monkeypatch.setattr(
+        DurableExecutor, "recover_and_start", interrupt_before_recovery)
+    result = runtime_d.run_public_stage_d(
+        run_id, benchmark_root=root, transport_factory=transport_factory)
+
+    assert result["state"] == result["outcome"] == "CANCELLED_PENDING_RESUME"
+    assert result["calls_total"] == 0 and contacted is False
+    reopened = public_runtime.Checkpoint.open(
+        public_runtime._checkpoint_path(run_id, root), root)
+    try:
+        assert reopened.conn.execute(
+            "SELECT count(*) FROM invocations").fetchone()[0] == 0
+    finally:
+        reopened.close()
 
 
 def test_d3_all_reuse_rejects_any_preexisting_d4_branch(

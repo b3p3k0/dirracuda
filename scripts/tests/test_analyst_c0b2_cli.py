@@ -179,6 +179,52 @@ def test_public_offline_commands_delegate_without_live_transport(
     assert "PREPARED" in output
 
 
+def test_cli_generic_failure_is_stable_and_content_free(
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    from scripts.analyst_benchmark import c0b2_runtime
+
+    secret = "/opt/dirracuda-private/customer-record.txt"
+
+    class SentinelSecretFailure(RuntimeError):
+        pass
+
+    monkeypatch.setattr(
+        c0b2_runtime, "public_status",
+        lambda _run_id: (_ for _ in ()).throw(SentinelSecretFailure(secret)))
+    assert c0b2_cli.main(["status", "--run-id", "c0b2-public"]) == \
+        c0b2_cli.EXIT_BLOCKED
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "C0B-2 BLOCKED: operation_failed\n"
+    assert secret not in captured.err
+    assert "SentinelSecretFailure" not in captured.err
+
+
+def test_cli_runtime_import_failure_is_stable_and_content_free(
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str]) -> None:
+    real_import = builtins.__import__
+    secret = "/opt/dirracuda-private/customer-record.txt"
+
+    class SentinelSecretImportFailure(RuntimeError):
+        pass
+
+    def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if level == 1 and "c0b2_runtime" in tuple(fromlist or ()):
+            raise SentinelSecretImportFailure(secret)
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+    assert c0b2_cli.main(["status", "--run-id", "c0b2-public"]) == \
+        c0b2_cli.EXIT_BLOCKED
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "C0B-2 BLOCKED: operation_failed\n"
+    assert secret not in captured.err
+    assert "SentinelSecretImportFailure" not in captured.err
+
+
 @pytest.mark.parametrize("command", ("run", "resume"))
 def test_public_stage_f_requires_confirmation_then_delegates(
         command: str, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -198,12 +244,19 @@ def test_public_stage_f_requires_confirmation_then_delegates(
     assert calls == [("c0b2-public", command == "resume")]
 
 
-def test_abandon_requires_confirmation_and_remains_offline_held(
+def test_abandon_requires_confirmation_then_delegates_without_transport(
         monkeypatch: pytest.MonkeyPatch) -> None:
     args = ["abandon", "--run-id", "c0b2-public"]
     with _deny_side_effects(monkeypatch):
         assert c0b2_cli.main(args) == c0b2_cli.EXIT_USAGE
-        assert c0b2_cli.main([*args, "--confirm-abandon"]) == c0b2_cli.EXIT_HELD
+
+    from scripts.analyst_benchmark import c0b2_runtime_common
+    calls = []
+    monkeypatch.setattr(
+        c0b2_runtime_common, "abandon_public_run",
+        lambda run_id: calls.append(run_id) or {"state": "ABANDONED"})
+    assert c0b2_cli.main([*args, "--confirm-abandon"]) == 0
+    assert calls == ["c0b2-public"]
 
 
 @pytest.mark.parametrize("bad_id", ("../escape", "/absolute", "has space", ""))

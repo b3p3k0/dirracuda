@@ -251,12 +251,14 @@ SQLite may omit locking and change detection. C0B-2 inspection uses `mode=ro`, r
 unexpected journal sidecars and keeps mutation, restore and recovery behind the same
 global execution lock. "Read-only" describes intent, not isolation.
 
-### 25. Restore needs two independent identity records
+### 25. Restore identity records are necessary, not sufficient
 
-A valid backup is not enough. Restore now creates a unique bounded storage identity on
-the same canonical root, requires the global lock, and records the origin both beside
-the database and inside it. Reopen compares both records. This permits normal later
-mutation while detecting a substituted or partially copied restore.
+A valid SQLite file is not enough. The existing helper creates a unique bounded storage
+identity on the same canonical root and records the origin both beside and inside the
+database, which detects some substitution and partial-copy cases. It does not yet define
+disaster-recovery authority or carry every snapshot referenced by inherited receipt rows.
+Production restore therefore remains unexposed and held pending a self-contained evidence
+bundle, descriptor-pinned copy, atomic publication and crash/retry contract.
 
 ### 26. Adaptive acceptance is a plan, not a derived count
 
@@ -481,6 +483,171 @@ Stage F can contain more than a thousand request rows. Rebuilding and revalidati
 whole plan for every dispatch creates a quadratic runtime cost. B4 proves the namespace
 once, builds an immutable request index once per invocation, and still checks each lookup
 against both work ID and request hash.
+
+## C0B-2B5 (complete public offline gate)
+
+### 52. Every enforcement surface must share one allowlist
+
+The public task-tree pin had grown through D and F, while the executable leak scanner
+still recognized only C0B-1 files. Both controls were individually strict but disagreed
+about the protected tree, so the required leak command rejected legitimate B5 changes.
+The reviewed complete-public path set now drives dirty-tree refusal, task-tree hashing
+and the legacy scanner; the contract test checks exact docs/code equality.
+
+### 53. Name semantic source pins for the whole adaptive run
+
+A Git tree hash detects bytes, but a field labelled generation or detector identity must
+describe what it claims. The public header now separately binds the C/D/F schemas and
+scorers plus the full model, worksheet, chunk, overlap, context, output-budget, seed,
+thinking and keep-alive factor domain. Stage C can no longer freeze a C-only semantic
+identity and later execute D/F under an unlabeled extension.
+
+### 54. Canonical storage order is not domain order
+
+Canonical JSON sorts object keys. Rehydrating stored `category_recall` or
+`category_metrics` mappings with a plain JSON load therefore produced alphabetical
+order, while D/F strict validation requires the frozen category order. D4 and the stored
+F aggregate loaders now restore domain order at their persistence boundaries before
+strict validation; canonical bytes remain unchanged.
+
+### 55. Owned cancellation is a resumable boundary
+
+Stage F deliberately returns after closing its cancellation-probe stream. The delayed
+health request belongs to a later resume invocation so a crash cannot blur cancellation
+and recovery evidence. End-to-end expectations must observe `CANCELLED_UNVERIFIED`, then
+resume through the two-second health barrier before later seeds activate.
+
+### 56. A terminal operator action still needs evidence
+
+`abandon` was confirmation-gated but held, even though `ABANDONED` was part of the frozen
+public state machine. It now takes the global lock, freezes failure evidence, artifact
+and state atomically, writes a verified receipt, rejects unsafe states and is idempotent
+without constructing transport.
+
+### 57. A read-only facade must satisfy transitive validators
+
+Stage F's backup validator reused the authoritative Stage-D owner re-derivation, but its
+minimal read-only checkpoint facade omitted D's `work()` lookup and checkpoint `path`.
+The gaps appeared only after later-seed activation asked for a new receipt. Read-only
+adapters now expose the full interface required by every validator they call, and a
+focused regression binds the work-state/path lookups without granting mutation methods.
+
+### 58. A decision digest and its parent are different lineage edges
+
+The F acceptance plan is owned by the provisional-selection digest, but that
+provisional decision is owned by the frozen F master. Backup validation must verify both
+edges explicitly. Substituting the preceding seed-plan hash for the decision parent
+rejects an otherwise valid terminal checkpoint after all scoring has completed.
+
+### 59. Global file-read telemetry includes runtime dependencies
+
+Monkeypatching `Path.read_text` and `Path.read_bytes` observes interpreter and library
+reads as well as benchmark inputs. A privacy assertion must reject unexpected reads in
+the user's home while allowing system dependencies; otherwise a fully successful public
+run fails on unrelated runtime files. Keep the separate fail-closed `get_paths()` guard
+so any attempt to resolve canonical private Dirracuda data still aborts immediately.
+
+### 60. End-to-end does not mean forcing pre-dispatch failures onto the wire
+
+A single requirement combined a real bounded-transport happy path with "every terminal
+branch," even though filesystem, uncharged-budget and abandon terminals must occur before
+HTTP dispatch. Freeze a closed compositional matrix instead: one real end-to-end
+transport spine, exact scorer/runtime proofs for every quality reason, real bounded-wire
+proofs for transport-originated failures, and explicit zero-transport assertions for
+pre-dispatch requests; abandon alone forbids client construction. This preserves the
+boundary each test is meant to prove without creating slow duplicate benchmark prefixes
+or weakening terminal coverage.
+
+### 61. A scan mode must own one exact scope
+
+Unioning a legacy allowlist with a newer feature tree made the current public leak command
+accept paths outside the reviewed B5 boundary. Keep the C0B-1 scope available separately,
+but make C0B-2 public mode equal—not merely contain—the source-pinned 48-path set. Test
+that equality against the protocol so compatibility cannot silently widen a new gate.
+
+### 62. Path metadata is not a safe read primitive
+
+Checking `is_file()` and `is_symlink()` before reopening a path leaves a name-swap window
+that can follow a replacement symlink. Sensitive source and leak scans now open with
+`O_NOFOLLOW`, validate an owner-controlled regular file through `fstat`, read from that
+descriptor, then bind the still-named inode to the captured inventory. Fail closed when
+the platform or identity cannot provide that guarantee. Apply the same primitive to the
+owner-only baseline and raw-response inputs, with explicit read caps, so the leakage gate
+does not reintroduce the race while loading its own evidence. The caller must supply the
+lexical authority boundary: repository reads are rooted at the repository, while external
+artifacts are rooted at their protected parent. Walk and retain every directory descriptor
+from `/` without following symlinks, then rebind each component name after the read; final-
+component safety alone does not stop an intermediate-directory swap.
+
+### 63. Every operator mutation revalidates source identity
+
+An idempotent terminal command still changes durable evidence on its first invocation.
+`abandon` therefore revalidates the frozen Git/task-tree pins while holding the global
+lock and before any artifact or receipt write. The same rule applies when Stage C repairs
+a missing boundary or terminal receipt; only `BLOCKED_PROVENANCE` may remain receiptable
+after source drift because that drift is its frozen evidence. Drift regressions compare
+checkpoint bytes and keep mutation, receipt and transport seams untouched.
+
+### 64. Operator cancellation wins a simultaneous transport failure
+
+A first signal may close a response at the same instant the bounded parser classifies a
+safety or provenance failure. Every scored, recovery and control dispatch must check the
+operator event before freezing the competing terminal so the charged attempt becomes
+`CANCELLED_UNVERIFIED` and the run remains resumable. Test both failure types at every
+dispatch seam; success and retry paths alone do not prove this race.
+
+### 65. Safe CLI failures are content-free
+
+Exception messages and type names are not safe UI data: filesystem, checkpoint and
+transport errors can contain absolute paths or attacker-controlled detail. The public
+benchmark CLI maps an unexpected failure to one stable `operation_failed` token and
+tests with a sentinel private path. Detailed diagnosis belongs in explicit, separately
+designed local evidence—not generic stderr interpolation.
+
+### 66. A checkpoint backup is an evidence set, not one SQLite file
+
+Restoring a post-receipt database alone preserves rows that refer to snapshot files in
+the original physical run directory. Moving only the database therefore creates a
+shape-valid but unverifiable history. B5 terminal branching uses a test-local Online
+Backup rewind at the same immutable path, where inherited attachments remain available;
+it does not claim production restore. A future restore card must freeze receipt/anchor
+authority, package all referenced attachments, pin source descriptors through copy and
+publish the complete verified set atomically.
+
+### 67. Socket timeouts are not a total request deadline
+
+Requests defines its read timeout as the wait between server bytes, and urllib3
+explicitly warns that even its `total` timeout does not bound a complete streaming
+response. A peer that blocks before headers or sends one byte periodically can therefore
+outlive a nominal request wall. Keep connect and idle-read timeouts, but enforce the
+frozen total wall from the caller around the complete blocking request/body operation.
+One global worker permit prevents abandoned requests from accumulating; cancellation is
+checked before the deadline, late results are discarded and closed, and the permit is
+released only when the worker reaches final teardown. See the current
+[Requests timeout guidance](https://requests.readthedocs.io/en/latest/user/advanced/#timeouts)
+and [urllib3 timeout semantics](https://urllib3.readthedocs.io/en/stable/reference/urllib3.util.html#urllib3.util.Timeout).
+
+### 68. A signal handler publishes intent; it does not perform cleanup
+
+Calling `Response.close()` or even taking a transport lock from the first-signal handler
+can freeze the main thread before the caller-owned loop observes operator intent. The
+first signal now only records that intent. The normal caller loop observes it within its
+poll interval and initiates one response-scoped asynchronous close. Repeated cleanup
+requests cannot create duplicate close workers, and the request worker retains the
+global permit until that close reaches final teardown. Keep the second-signal force
+behavior independent so an operator still has an escape hatch. A `threading.Event` is
+not the signal-context primitive: `Event.set()` takes its condition lock and can
+self-deadlock if the signal interrupts that lock's owner. Publish first/second signal
+intent with plain flag assignments; normal execution exposes that flag through the
+event-compatible view and performs any condition notification outside signal context.
+
+### 69. Every stage entrypoint normalizes internal cancellation
+
+Recovery raises an internal `InvocationCancelled` after it durably records
+`CANCELLED_PENDING_RESUME`. Catch that control-flow exception at every public stage
+entrypoint and return the persisted resumable state. Missing the catch in only one stage
+turns a correct checkpoint transition into a generic CLI `operation_failed`, confusing
+the operator and breaking C/D/F parity even though no model call was charged.
 
 ---
 
