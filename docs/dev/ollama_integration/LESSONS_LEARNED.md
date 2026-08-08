@@ -649,6 +649,27 @@ entrypoint and return the persisted resumable state. Missing the catch in only o
 turns a correct checkpoint transition into a generic CLI `operation_failed`, confusing
 the operator and breaking C/D/F parity even though no model call was charged.
 
+### 70. Atomic publication is a runtime-filesystem capability
+
+SQLite and lock probes do not prove `renameat2(RENAME_NOREPLACE)`. The canonical Analyst
+path lived on mergerfs and passed the earlier database probe, but real checkpoint
+promotion failed with `EINVAL`; the same primitive passed on ext4 and tmpfs. Never fall
+back to ordinary rename, which may replace an existing target. Probe the exact runtime
+path before creation. On mergerfs-based hosts, preserve the canonical application path
+with an owner-only persistent bind mount backed by a filesystem that passes the atomic
+primitive. See the current [Linux rename documentation](https://man7.org/linux/man-pages/man2/renameat2.2.html)
+and [Python rename behavior](https://docs.python.org/3/library/os.html#os.rename).
+
+### 71. Bound control responses by their documented payload class
+
+A shared structural cap can reject legitimate metadata while appearing comfortably
+inside the wire-size limit. Current Ollama returned 459 tensor rows from `/api/show`
+despite `verbose:false`: 69,543 canonical bytes and depth 5, but 4,109 decoded nodes.
+Keep model answers and ordinary controls at 4,096 nodes; give only show an 8,192-node cap
+under the unchanged raw-byte, canonical-byte and depth limits, then discard tensor data
+from durable evidence. A live preflight terminal is immutable: receipt it, correct the
+contract and start a new source-pinned run rather than loosening or relabelling history.
+
 ---
 
 ## Not yet learned

@@ -39,6 +39,7 @@ MAX_CONTENT_BYTES = 256 * 1024
 MAX_CANONICAL_JSON_BYTES = 256 * 1024
 MAX_JSON_DEPTH = 16
 MAX_JSON_NODES = 4096
+MAX_SHOW_JSON_NODES = 8192
 _READ_CHUNK_BYTES = 64 * 1024
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 _OPTIONS = frozenset({
@@ -377,7 +378,9 @@ class BoundedOllamaTransport:
             self._require_content_type(response, "application/json")
             body = self._read_all(response, cancel, started)
             value = _load_wire_json(body)
-            _bounded_json(value)
+            _bounded_json(
+                value, max_nodes=(MAX_SHOW_JSON_NODES
+                                  if spec.kind == "show" else MAX_JSON_NODES))
             return self._control_result(spec, value)
         except (SafetyLimit, ProvenanceFailure, RetryableTransport):
             raise
@@ -895,13 +898,13 @@ def _reject_constant(value: str) -> None:
     raise ValueError(f"non-finite JSON constant {value}")
 
 
-def _bounded_json(value: Any) -> None:
-    _bounded_json_shape(value)
+def _bounded_json(value: Any, *, max_nodes: int = MAX_JSON_NODES) -> None:
+    _bounded_json_shape(value, max_nodes=max_nodes)
     if len(_canonical_json(value)) > MAX_CANONICAL_JSON_BYTES:
         raise SafetyLimit("canonical_json_limit")
 
 
-def _bounded_json_shape(value: Any) -> None:
+def _bounded_json_shape(value: Any, *, max_nodes: int = MAX_JSON_NODES) -> None:
     nodes = 0
     stack = [(value, 1)]
     while stack:
@@ -909,11 +912,11 @@ def _bounded_json_shape(value: Any) -> None:
         if depth > MAX_JSON_DEPTH:
             raise SafetyLimit("json_depth_limit")
         nodes += 1
-        if nodes > MAX_JSON_NODES:
+        if nodes > max_nodes:
             raise SafetyLimit("json_node_limit")
         if isinstance(item, dict):
             nodes += len(item)  # object keys are decoded nodes too
-            if nodes > MAX_JSON_NODES:
+            if nodes > max_nodes:
                 raise SafetyLimit("json_node_limit")
             stack.extend((child, depth + 1) for child in item.values())
         elif isinstance(item, list):

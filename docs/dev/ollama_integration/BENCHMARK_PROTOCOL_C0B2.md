@@ -1,7 +1,7 @@
 # Analyst Benchmark — Protocol, C0B-2 (Stages C, D, F and E)
 
 Version: `c0b2-protocol-v5-complete-public-gate`
-Date: 2026-08-07
+Date: 2026-08-08
 Status: **C0B-2B1R FROZEN after three independent PASS reviews; C0B-2B2 implemented and
 reviewed; complete public C/D/F prefreeze approved by the HI on 2026-08-05.** Version 5
 retains the Stage-D nonce, derived-view and context-control clarifications and adds the
@@ -10,6 +10,9 @@ the complete public executor and its offline proof, including accepted erratum E
 exact-tree regression and three independent hostile-review gates passed on 2026-08-07.
 No scored C0B-2 call is permitted until this exact source tree is committed cleanly.
 Private Stage E remains implementation-held and separately authorization-held.
+The first canonical public preflight froze a receipted `FAILED_SAFETY` before scored work;
+accepted erratum E3 corrects the show-only node envelope and requires a new source-pinned
+public run after the correction passes review and is committed.
 
 Authoritative parent: [`CONTRACT.md`](CONTRACT.md), accepted
 [`CONTRACT_ERRATA.md`](CONTRACT_ERRATA.md), and the accepted C0B-1 outcome in
@@ -212,7 +215,9 @@ The frozen transport envelope is: 64 KiB UTF-8 prompt, 10-second connect timeout
 180-second idle-read timeout, 600-second total request deadline, 512 KiB per raw NDJSON
 frame and 2 MiB cumulative raw HTTP-body bytes, 1 MiB combined streamed
 answer/reasoning bytes, 256 KiB answer-content and parsed-canonical-JSON caps, JSON depth
-16 and at most 4,096 decoded nodes. The client incrementally bounds wire bytes and each
+16 and at most 4,096 decoded nodes. Accepted erratum E3 permits only `/api/show` up to
+8,192 decoded nodes under the unchanged byte and depth caps; chat, scored answers and
+every other control retain 4,096. The client incrementally bounds wire bytes and each
 newline frame before `json.loads`; an overlong unterminated frame is rejected without
 materializing it. The 240-minute invocation wall is the total-run deadline.
 

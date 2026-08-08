@@ -102,3 +102,43 @@ This changes proof composition, not a scoring threshold, terminal outcome, runti
 behavior or live-data rule. It was accepted before B5 approval and before any public
 checkpoint or scored Ollama call. Any new terminal reason must update both the strict
 schema and the closed proof matrix; an unlisted reason fails the offline gate.
+
+---
+
+## E3 — `/api/show` has a control-specific JSON node cap
+
+**Status:** ACCEPTED FOR CORRECTION (standing HI authorization, 2026-08-08)
+**Affects:** `BENCHMARK_PROTOCOL_C0B2.md` §8
+**Raised by:** first canonical public preflight
+
+### The conflict
+
+The general 4,096-node decoded-JSON cap is sufficient for chat frames and ordinary
+controls, but current Ollama may include a `tensors` collection in `/api/show` even when
+the frozen request sends `verbose:false`. The first canonical public run received a
+69,543-byte, depth-5 response with 4,109 decoded nodes and 459 tensor rows for
+`gpt-oss:20b`. Version and tags passed; show then correctly froze `FAILED_SAFETY`. No
+scored document request occurred. The failed run is retained with a verified receipt.
+
+Ollama documents `verbose` as enabling large verbose fields, while its current API type
+also exposes optional tensors and the observed false/omitted behavior has an open
+upstream report:
+
+- [Show model details](https://docs.ollama.com/api-reference/show-model-details)
+- [Ollama API type](https://github.com/ollama/ollama/blob/main/api/types.go)
+- [Ollama issue 10286](https://github.com/ollama/ollama/issues/10286)
+
+### The correction
+
+Only a `show` control may contain up to 8,192 decoded JSON nodes. The 2 MiB raw-body,
+256 KiB canonical-JSON and depth-16 caps remain unchanged. The sanitizer still persists
+only the frozen model identity, capabilities, safe detail fields and hashes of parameters,
+template and model info; tensor names, shapes and values are discarded. Version, tags,
+ps, chat frames and scored answer JSON retain the 4,096-node cap.
+
+### Consequences accepted with this erratum
+
+This is a control-envelope compatibility correction, not a scoring threshold or model-
+quality change. The immutable failed run is not resumed or reclassified. After the exact
+correction passes review and is committed, a new public run starts from `PREPARED` under
+the new source identity. Any show response above 8,192 nodes remains `FAILED_SAFETY`.

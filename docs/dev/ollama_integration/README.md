@@ -1,6 +1,6 @@
 # Ollama Integration Workspace
 
-Date: 2026-08-07
+Date: 2026-08-08
 Status: **C0A contract frozen** (committed `91bb2aa`). **C0B-1 accepted and committed
 (`47e946b`).** **C0B-2A offline foundation passed implementation and independent
 adversarial review.** The HI authorized the public C/D/F envelope on 2026-08-05.
@@ -18,8 +18,11 @@ cancellation-health, exact-namespace, Analyst-regression and independent hostile
 gates.** **B5 supplies the complete source/task-tree pin, real bounded-transport fake HTTP
 flow, crash/retry/resume proof, public abandon terminal and exact leak gate. Its
 exact-tree, Analyst, full-regression and three independent hostile-review gates passed on
-2026-08-07.** Its source remains unexecuted against Ollama; live creation stays held until
-this exact reviewed tree is committed cleanly.
+2026-08-07 and were committed as `bde8f92`.** The first canonical public preflight on
+2026-08-08 froze `FAILED_SAFETY` before scored work because current Ollama returned 4,109
+nodes of nonverbose show metadata against the 4,096-node general cap. That run is retained
+and receipted. Accepted erratum E3 defines a show-only compatibility correction; a new
+public run remains held until that correction passes review and is committed cleanly.
 The HI reconfirmed this course on
 2026-08-05 and authorized milestone commits on `feature/ollama-analyst`; no push or
 promotion is authorized. Private Stage E remains held.
@@ -155,7 +158,8 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
 
 ## Next Step
 
-Commit the exact reviewed B5 tree, then create the canonical public checkpoint and
-execute Stage C. The public run stays serial and resumable; shared-GPU offload or slow
-execution is not a quality failure. D and F remain decision-gated by durable public
-evidence, and private Stage E remains separately held.
+Validate, review and commit erratum E3's show-control compatibility correction, then
+create a replacement public checkpoint and restart Stage C under the new source identity.
+The public run stays serial and resumable; shared-GPU offload or slow execution is not a
+quality failure. D and F remain decision-gated by durable public evidence, and private
+Stage E remains separately held.

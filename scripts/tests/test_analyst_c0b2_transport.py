@@ -550,6 +550,28 @@ def test_show_posts_nonverbose_and_persists_only_sanitized_hashes() -> None:
     assert session.calls[0][2]["json"] == {"model": MODEL, "verbose": False}
 
 
+def test_show_has_a_control_specific_node_cap_for_nonverbose_tensor_metadata() -> None:
+    current_ollama_shape = {"tensors": [0] * (tx.MAX_JSON_NODES + 10)}
+    result, *_ = invoke(show_spec(), json_response(current_ollama_shape))
+    assert json.loads(result.content)["model"] == MODEL
+    exact_boundary = {"tensors": [0] * (tx.MAX_SHOW_JSON_NODES - 3)}
+    assert invoke(show_spec(), json_response(exact_boundary))[0].outcome == "ACCEPTED"
+    with pytest.raises(SafetyLimit, match="json_node_limit"):
+        invoke(show_spec(), json_response(
+            {"tensors": [0] * (tx.MAX_SHOW_JSON_NODES - 2)}))
+    with pytest.raises(SafetyLimit, match="json_node_limit"):
+        invoke(version_spec(), json_response(
+            {"version": VERSION, "padding": [0] * tx.MAX_JSON_NODES}))
+    deep: Any = 0
+    for _ in range(tx.MAX_JSON_DEPTH):
+        deep = [deep]
+    with pytest.raises(SafetyLimit, match="json_depth_limit"):
+        invoke(show_spec(), json_response({"tensors": deep}))
+    with pytest.raises(SafetyLimit, match="canonical_json_limit"):
+        invoke(show_spec(), json_response(
+            {"license": "x" * tx.MAX_CANONICAL_JSON_BYTES}))
+
+
 def test_control_response_canonical_cap_is_enforced() -> None:
     value = {"version": VERSION, "padding": "x" * tx.MAX_CANONICAL_JSON_BYTES}
     with pytest.raises(SafetyLimit, match="canonical_json_limit"):
