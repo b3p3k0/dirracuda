@@ -10,9 +10,10 @@ the complete public executor and its offline proof, including accepted erratum E
 exact-tree regression and three independent hostile-review gates passed on 2026-08-07.
 No scored C0B-2 call is permitted until this exact source tree is committed cleanly.
 Private Stage E remains implementation-held and separately authorization-held.
-The first canonical public preflight froze a receipted `FAILED_SAFETY` before scored work;
-accepted erratum E3 corrects the show-only node envelope and requires a new source-pinned
-public run after the correction passes review and is committed.
+Two canonical public preflights froze separate receipted `FAILED_SAFETY` terminals after
+three and four controls, respectively, before any scored work. E3 corrected the first
+observed show envelope; E4 supersedes its incomplete single-model headroom with the
+complete-candidate bound. A third public run remains held until E4 is committed cleanly.
 
 Authoritative parent: [`CONTRACT.md`](CONTRACT.md), accepted
 [`CONTRACT_ERRATA.md`](CONTRACT_ERRATA.md), and the accepted C0B-1 outcome in
@@ -215,8 +216,8 @@ The frozen transport envelope is: 64 KiB UTF-8 prompt, 10-second connect timeout
 180-second idle-read timeout, 600-second total request deadline, 512 KiB per raw NDJSON
 frame and 2 MiB cumulative raw HTTP-body bytes, 1 MiB combined streamed
 answer/reasoning bytes, 256 KiB answer-content and parsed-canonical-JSON caps, JSON depth
-16 and at most 4,096 decoded nodes. Accepted erratum E3 permits only `/api/show` up to
-8,192 decoded nodes under the unchanged byte and depth caps; chat, scored answers and
+16 and at most 4,096 decoded nodes. Accepted errata E3–E4 permit only `/api/show` up to
+16,384 decoded nodes under the unchanged byte and depth caps; chat, scored answers and
 every other control retain 4,096. The client incrementally bounds wire bytes and each
 newline frame before `json.loads`; an overlong unterminated frame is rejected without
 materializing it. The 240-minute invocation wall is the total-run deadline.

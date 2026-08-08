@@ -21,8 +21,11 @@ exact-tree, Analyst, full-regression and three independent hostile-review gates 
 2026-08-07 and were committed as `bde8f92`.** The first canonical public preflight on
 2026-08-08 froze `FAILED_SAFETY` before scored work because current Ollama returned 4,109
 nodes of nonverbose show metadata against the 4,096-node general cap. That run is retained
-and receipted. Accepted erratum E3 defines a show-only compatibility correction; a new
-public run remains held until that correction passes review and is committed cleanly.
+and receipted. E3's 8,192-node show-only correction was committed as `8d772c4`, but its
+replacement preflight froze the same terminal on `qwen3.6:35b` because E3 had measured
+only the first model. That second run is also retained and receipted with zero scored
+work. Accepted erratum E4 derives a 16,384-node show-only cap from all three candidates;
+a third public run remains held until E4 passes review and is committed cleanly.
 The HI reconfirmed this course on
 2026-08-05 and authorized milestone commits on `feature/ollama-analyst`; no push or
 promotion is authorized. Private Stage E remains held.
@@ -158,8 +161,8 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
 
 ## Next Step
 
-Validate, review and commit erratum E3's show-control compatibility correction, then
-create a replacement public checkpoint and restart Stage C under the new source identity.
+Validate, review and commit erratum E4's complete-candidate show-control correction, then
+create a third public checkpoint and restart Stage C under the new source identity.
 The public run stays serial and resumable; shared-GPU offload or slow execution is not a
 quality failure. D and F remain decision-gated by durable public evidence, and private
 Stage E remains separately held.

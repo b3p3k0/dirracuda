@@ -670,6 +670,16 @@ under the unchanged raw-byte, canonical-byte and depth limits, then discard tens
 from durable evidence. A live preflight terminal is immutable: receipt it, correct the
 contract and start a new source-pinned run rather than loosening or relabelling history.
 
+### 72. Measure the complete compatibility domain before choosing headroom
+
+The first show-only correction measured `gpt-oss:20b` at 4,109 nodes and selected 8,192,
+but the next frozen candidate required 10,546 and the third required 11,318. That made a
+technically correct bound operationally incomplete. Before freezing compatibility
+headroom, inventory every member of the exact candidate/configuration domain and choose
+one reviewed ceiling above the measured maximum. Preserve each failed preflight as a
+receipted terminal; never revise its history. The complete set now supports a show-only
+16,384-node cap while every scored/general path remains at 4,096.
+
 ---
 
 ## Not yet learned

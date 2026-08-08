@@ -551,9 +551,10 @@ def test_show_posts_nonverbose_and_persists_only_sanitized_hashes() -> None:
 
 
 def test_show_has_a_control_specific_node_cap_for_nonverbose_tensor_metadata() -> None:
-    current_ollama_shape = {"tensors": [0] * (tx.MAX_JSON_NODES + 10)}
-    result, *_ = invoke(show_spec(), json_response(current_ollama_shape))
-    assert json.loads(result.content)["model"] == MODEL
+    for measured_nodes in (4109, 10_546, 11_318):
+        current_ollama_shape = {"tensors": [0] * (measured_nodes - 3)}
+        result, *_ = invoke(show_spec(), json_response(current_ollama_shape))
+        assert json.loads(result.content)["model"] == MODEL
     exact_boundary = {"tensors": [0] * (tx.MAX_SHOW_JSON_NODES - 3)}
     assert invoke(show_spec(), json_response(exact_boundary))[0].outcome == "ACCEPTED"
     with pytest.raises(SafetyLimit, match="json_node_limit"):

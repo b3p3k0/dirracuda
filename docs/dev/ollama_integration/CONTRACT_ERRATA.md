@@ -142,3 +142,40 @@ This is a control-envelope compatibility correction, not a scoring threshold or 
 quality change. The immutable failed run is not resumed or reclassified. After the exact
 correction passes review and is committed, a new public run starts from `PREPARED` under
 the new source identity. Any show response above 8,192 nodes remains `FAILED_SAFETY`.
+
+---
+
+## E4 — Size the show-control envelope from every frozen candidate
+
+**Status:** ACCEPTED FOR CORRECTION (standing HI authorization, 2026-08-08)
+**Affects:** E3 and `BENCHMARK_PROTOCOL_C0B2.md` §8
+**Raised by:** replacement canonical public preflight
+
+### The conflict
+
+E3 measured only the first model before selecting 8,192 nodes. The replacement run then
+passed version, tags and the `gpt-oss:20b` show control but froze `FAILED_SAFETY` on the
+next candidate. No scored document request occurred, and the second failed run is also
+retained with a verified receipt.
+
+Measurement of the complete frozen candidate set produced:
+
+| Model | Decoded nodes | Tensor rows | Canonical bytes | Depth |
+|---|---:|---:|---:|---:|
+| `gpt-oss:20b` | 4,109 | 459 | 69,543 | 5 |
+| `qwen3.6:35b` | 10,546 | 1,194 | 105,965 | 5 |
+| `qwen3.6:27b` | 11,318 | 1,307 | 110,924 | 5 |
+
+### The correction
+
+E4 supersedes only E3's 8,192-node value. The show-only limit is 16,384 decoded nodes,
+above the measured complete-candidate maximum. All unchanged E3 constraints still apply:
+2 MiB raw body, 256 KiB canonical JSON, depth 16, sanitized durable evidence and a 4,096-
+node cap for chat, scored answers and every other control.
+
+### Consequences accepted with this erratum
+
+Compatibility limits derived from a candidate set must measure the entire frozen set
+before selection. Tests pin all three observed counts, the exact 16,384/16,385 boundary
+and the unchanged byte/depth/general-control caps. The second failed run is neither
+resumed nor reclassified; a new committed source identity requires a third public run.
