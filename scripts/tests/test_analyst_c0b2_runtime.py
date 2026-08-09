@@ -1362,7 +1362,12 @@ def test_public_stage_c_runs_exact_plan_and_finalizes_no_survivor(
     assert calls.count("tags") == 1
     assert calls.count("show") == 3
     verification = runtime.public_verify(run_id, benchmark_root=tmp_path / "bench")
-    assert verification == {"ok": True, "errors": [], "backup": status["backup"]}
+    assert verification == {
+        "ok": True, "errors": [],
+        **{key: status[key] for key in (
+            "benchmark_protocol_id", "policy_id", "policy_sha256")},
+        "backup": status["backup"],
+    }
     calls_before_reentry = list(calls)
     reentered = runtime.run_public_stage_c(
         run_id, benchmark_root=tmp_path / "bench",

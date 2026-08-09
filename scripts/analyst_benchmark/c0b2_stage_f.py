@@ -13,7 +13,7 @@ import unicodedata
 from fractions import Fraction
 from typing import Any, Literal, Mapping, Sequence
 
-from pydantic import Field, model_validator
+from pydantic import Field, ValidationInfo, model_validator
 
 from .c0b2_public_schema import (
     AcceptancePlan, CancellationHealthEvidence, CandidateSelection,
@@ -33,6 +33,11 @@ from .c0b2_stage_d import (
 from .c0b2_stage_f_plan import (
     EXPECTED_ACCEPTANCE_CHUNKS, PublicCorpus, rotated_candidate_ids,
 )
+from .c0b3_policy import (CURRENT_POLICY, LEGACY_POLICY,
+                          false_positive_failure_reason, false_positive_limit,
+                          policy_binding, resolve_payload_policy)
+from .c0b3_schema import (AcceptancePlanV2, FMasterPlanV2, FSeedPlanV2,
+                          validate_versioned_legacy_shape)
 
 SEED_REASONS = (
     "incomplete_chunk_coverage", "injection_pairs_incomplete",
@@ -46,6 +51,9 @@ SEED_REASONS = (
     "length_outcome_present", "context_headroom_failure",
     "channel_violation_present",
 )
+CURRENT_SEED_REASONS = tuple(
+    "negative_false_positive_above_1" if reason ==
+    "negative_false_positive_present" else reason for reason in SEED_REASONS)
 CANCEL_REASONS = (
     "cancel_not_observed", "cancel_after_5_seconds", "health_missing",
     "health_eventual_invalid", "health_pii_missing", "health_grounding_failure",
@@ -215,8 +223,15 @@ class SeedResult(SeedEvidence):
     failure_reasons: list[str]
 
     @model_validator(mode="after")
-    def exact_gate(self) -> "SeedResult":
-        _ordered_subset(self.failure_reasons, SEED_REASONS, "seed reasons")
+    def exact_gate(self, info: ValidationInfo) -> "SeedResult":
+        policy = (info.context or {}).get("policy", LEGACY_POLICY)
+        order = CURRENT_SEED_REASONS if policy == CURRENT_POLICY else SEED_REASONS
+        _ordered_subset(self.failure_reasons, order, "seed reasons")
+        fp_reason = false_positive_failure_reason(policy, "stage_f_per_seed")
+        if ((self.negative_false_positive_documents >
+             false_positive_limit(policy, "stage_f_per_seed")) !=
+                (fp_reason in self.failure_reasons)):
+            raise ValueError("seed false-positive reason differs from exact count")
         if self.passed != (not self.failure_reasons):
             raise ValueError("seed pass differs from ordered reasons")
         return self
@@ -405,6 +420,83 @@ class AcceptanceAggregate(StrictModel):
     totals: AcceptanceTotals
     passed: bool
     failure_reasons: list[str]
+
+
+_ARTIFACT_VERSIONS = {
+    Seed1Evidence: ("stage-f-seed1-evidence-v1", "stage-f-seed1-evidence-v2"),
+    SeedActivationDecision: ("stage-f-seed-activation-v1", "stage-f-seed-activation-v2"),
+    StageFAggregate: ("stage-f-aggregate-v1", "stage-f-aggregate-v2"),
+    ProvisionalDecision: ("stage-f-selection-v1", "stage-f-selection-v2"),
+    C44ScoredAggregate: ("stage-f-c44-scored-v1", "stage-f-c44-scored-v2"),
+    AcceptanceComponent: ("stage-f-acceptance-component-v1", "stage-f-acceptance-component-v2"),
+    AcceptanceAggregate: ("stage-f-acceptance-aggregate-v1", "stage-f-acceptance-aggregate-v2"),
+    FinalDecision: ("stage-d-decision-v1", "stage-d-decision-v2"),
+    FInconclusiveResult: ("c0b2-result-v1", "c0b3-result-v1"),
+    FSelectedResult: ("c0b2-result-v1", "c0b3-result-v1")}
+
+
+def _owner(value: Mapping[str, Any], legacy: type, current: type) -> tuple[Any, Any]:
+    policy = resolve_payload_policy(value)
+    model = current if policy == CURRENT_POLICY else legacy
+    return policy, model.model_validate(value, strict=True)
+
+
+def _artifact(value: Mapping[str, Any], model: type) -> tuple[dict[str, Any], Any, Any]:
+    legacy_version, current_version = _ARTIFACT_VERSIONS[model]
+    normalized = validate_versioned_legacy_shape(
+        value, model, legacy_version=legacy_version, current_version=current_version)
+    policy = resolve_payload_policy(normalized)
+    legacy = dict(normalized)
+    if policy == CURRENT_POLICY:
+        legacy.pop("policy_id")
+        legacy.pop("policy_sha256")
+        legacy["version"] = legacy_version
+    parsed = model.model_validate(
+        legacy, strict=True, context={"policy": policy})
+    return normalized, parsed, policy
+
+
+def _build_artifact(model: type, policy: Any, body: Mapping[str, Any]) -> dict[str, Any]:
+    legacy_version, current_version = _ARTIFACT_VERSIONS[model]
+    current = policy == CURRENT_POLICY
+    value = {"version": current_version if current else legacy_version,
+             **(policy_binding() if current else {}), **body}
+    return _artifact(value, model)[0]
+
+
+def _same_policy(label: str, *values: Mapping[str, Any]) -> Any:
+    policies = {resolve_payload_policy(value) for value in values}
+    if len(policies) != 1:
+        raise StageFError(f"{label} mixes scoring-policy families")
+    return policies.pop()
+
+
+def validate_seed1_evidence_artifact(value: Mapping[str, Any]) -> dict[str, Any]:
+    return _artifact(value, Seed1Evidence)[0]
+
+
+def validate_seed_activation_artifact(value: Mapping[str, Any]) -> dict[str, Any]:
+    return _artifact(value, SeedActivationDecision)[0]
+
+
+def validate_stage_f_aggregate_artifact(value: Mapping[str, Any]) -> dict[str, Any]:
+    return _artifact(value, StageFAggregate)[0]
+
+
+def validate_provisional_decision_artifact(value: Mapping[str, Any]) -> dict[str, Any]:
+    return _artifact(value, ProvisionalDecision)[0]
+
+
+def validate_acceptance_component_artifact(value: Mapping[str, Any]) -> dict[str, Any]:
+    return _artifact(value, AcceptanceComponent)[0]
+
+
+def validate_acceptance_aggregate_artifact(value: Mapping[str, Any]) -> dict[str, Any]:
+    return _artifact(value, AcceptanceAggregate)[0]
+
+
+def validate_c44_scored_artifact(value: Mapping[str, Any]) -> dict[str, Any]:
+    return _artifact(value, C44ScoredAggregate)[0]
 
 
 def _ordered_categories(values: Sequence[str]) -> None:
@@ -631,6 +723,7 @@ def _build_seed_evidence(
         *, candidate_id: str, seed: int, work: Sequence[Mapping[str, Any]],
         evidence: Mapping[str, Sequence[Mapping[str, Any]]], corpus: PublicCorpus,
         document_order: Sequence[str], include_gate: bool,
+        policy: Any = LEGACY_POLICY,
 ) -> dict[str, Any]:
     documents = _document_rows(
         work, evidence, corpus=corpus, document_order=document_order)
@@ -691,18 +784,20 @@ def _build_seed_evidence(
            metrics[category]["false_negatives"] != 8 for category in CATEGORIES},
         "macro_f1_below_0_90": fraction_value(summary["macro_f1"]) < Fraction(9, 10),
         "micro_f1_below_0_92": fraction_value(summary["micro_f1"]) < Fraction(23, 25),
-        "negative_false_positive_present":
-            base["negative_false_positive_documents"] > 0,
+        false_positive_failure_reason(policy, "stage_f_per_seed"):
+            base["negative_false_positive_documents"] >
+            false_positive_limit(policy, "stage_f_per_seed"),
         "boundary_identifier_below_12_of_12":
             base["boundary_documents"] != 12 or base["boundary_passed"] != 12,
         "length_outcome_present": base["length_outcomes"] > 0,
         "context_headroom_failure": base["context_headroom_failures"] > 0,
         "channel_violation_present": base["channel_violations"] > 0,
     }
-    reasons = ordered_reasons(SEED_REASONS, failures)
+    order = CURRENT_SEED_REASONS if policy == CURRENT_POLICY else SEED_REASONS
+    reasons = ordered_reasons(order, failures)
     return SeedResult.model_validate({
         **base, "passed": not reasons, "failure_reasons": reasons,
-    }, strict=True).model_dump(mode="json")
+    }, strict=True, context={"policy": policy}).model_dump(mode="json")
 
 
 def build_f_seed_result(
@@ -712,8 +807,10 @@ def build_f_seed_result(
 ) -> dict[str, Any]:
     """Rebuild one candidate/seed result from its exact group and attempts."""
     from .c0b2_public_schema import FSeedPlan
+    policy = resolve_payload_policy(seed_plan)
     try:
-        plan = FSeedPlan.model_validate(seed_plan, strict=True)
+        model = FSeedPlanV2 if policy == CURRENT_POLICY else FSeedPlan
+        plan = model.model_validate(seed_plan, strict=True)
     except (TypeError, ValueError) as exc:
         raise StageFError("F seed plan fails strict validation") from exc
     groups = [row for row in plan.groups if row.candidate_id == candidate_id]
@@ -724,7 +821,7 @@ def build_f_seed_result(
     return _build_seed_evidence(
         candidate_id=candidate_id, seed=work[0]["seed"], work=work,
         evidence=evidence_by_work, corpus=corpus,
-        document_order=corpus.f_order, include_gate=True)
+        document_order=corpus.f_order, include_gate=True, policy=policy)
 
 
 def validate_f_seed_result(
@@ -735,7 +832,9 @@ def validate_f_seed_result(
     derived = build_f_seed_result(
         seed_plan, candidate_id, evidence_by_work, corpus=corpus)
     try:
-        parsed = SeedResult.model_validate(stored, strict=True).model_dump(mode="json")
+        policy = resolve_payload_policy(seed_plan)
+        parsed = SeedResult.model_validate(
+            stored, strict=True, context={"policy": policy}).model_dump(mode="json")
         require_exact(parsed, derived, label="Stage-F seed result")
     except (TypeError, ValueError, PublicScoringError) as exc:
         raise StageFError("stored F seed result is not exact") from exc
@@ -751,7 +850,7 @@ def build_seed1_evidence_from_attempts(
         corpus: PublicCorpus,
 ) -> dict[str, Any]:
     """Rebuild seed-1 metrics and activation evidence without trusted summaries."""
-    parsed = FMasterPlan.model_validate(master, strict=True)
+    _policy, parsed = _owner(master, FMasterPlan, FMasterPlanV2)
     ids = list(parsed.base_candidate_order)
     if type(evidence_by_candidate) is not dict or set(evidence_by_candidate) != set(ids):
         raise StageFError("seed-1 attempts must exactly cover finalists")
@@ -778,8 +877,7 @@ def validate_seed1_evidence(
         master, evidence_by_candidate, context_probes,
         cancellation_health, corpus=corpus)
     try:
-        parsed = Seed1Evidence.model_validate(
-            stored, strict=True).model_dump(mode="json")
+        parsed = validate_seed1_evidence_artifact(stored)
         require_exact(parsed, derived, label="Stage-F seed-1 evidence")
     except (TypeError, ValueError, PublicScoringError) as exc:
         raise StageFError("stored seed-1 evidence is not exact") from exc
@@ -787,7 +885,7 @@ def validate_seed1_evidence(
 
 
 def _seed1_group(master: Mapping[str, Any], candidate_id: str) -> tuple[Any, Any]:
-    parsed = FMasterPlan.model_validate(master, strict=True)
+    _policy, parsed = _owner(master, FMasterPlan, FMasterPlanV2)
     plan = parsed.plans[0].payload
     group = next((row for row in plan.groups if row.candidate_id == candidate_id), None)
     candidate = next((row for row in plan.candidates
@@ -803,7 +901,7 @@ def build_seed1_evidence(
         cancellation_health: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, Any]:
     """Freeze exact seed-1 evidence before any later-seed activation."""
-    parsed = FMasterPlan.model_validate(master, strict=True)
+    policy, parsed = _owner(master, FMasterPlan, FMasterPlanV2)
     ids = list(parsed.base_candidate_order)
     if any(type(value) is not dict or set(value) != set(ids) for value in (
             seed_results, context_probes, cancellation_health)):
@@ -812,7 +910,8 @@ def build_seed1_evidence(
     for candidate_id in ids:
         group, candidate = _seed1_group(master, candidate_id)
         try:
-            result = SeedResult.model_validate(seed_results[candidate_id], strict=True)
+            result = SeedResult.model_validate(
+                seed_results[candidate_id], strict=True, context={"policy": policy})
             probe = ContextProbeEvidence.model_validate(
                 context_probes[candidate_id], strict=True)
             health = CancellationHealthEvidence.model_validate(
@@ -846,14 +945,14 @@ def build_seed1_evidence(
             "failure_reasons": reasons,
         })
     value = {
-        "version": "stage-f-seed1-evidence-v1", "stage": "F",
+        "stage": "F",
         "plan_sha256": sha256_json(parsed),
         "seed1_plan_sha256": parsed.plans[0].plan_sha256,
         "parent_decision_sha256": parsed.parent_decision_sha256,
         "candidate_order": ids, "candidates": rows,
     }
     try:
-        return Seed1Evidence.model_validate(value, strict=True).model_dump(mode="json")
+        return _build_artifact(Seed1Evidence, policy, value)
     except (TypeError, ValueError) as exc:
         raise StageFError("derived seed-1 evidence violates strict schema") from exc
 
@@ -861,9 +960,10 @@ def build_seed1_evidence(
 def build_seed_activation_decision(
         master: Mapping[str, Any], seed1_evidence: Mapping[str, Any],
 ) -> dict[str, Any]:
-    parsed = FMasterPlan.model_validate(master, strict=True)
+    policy, parsed = _owner(master, FMasterPlan, FMasterPlanV2)
     try:
-        evidence = Seed1Evidence.model_validate(seed1_evidence, strict=True)
+        _same_policy("seed activation", master, seed1_evidence)
+        evidence_raw, evidence, _ = _artifact(seed1_evidence, Seed1Evidence)
     except (TypeError, ValueError) as exc:
         raise StageFError("seed-1 evidence fails strict validation") from exc
     if (evidence.plan_sha256 != sha256_json(parsed)
@@ -883,15 +983,14 @@ def build_seed_activation_decision(
             target = activated if candidate_id in qualifiers else inactive
             target.append(group_by_seed[seed][candidate_id])
     value = {
-        "version": "stage-f-seed-activation-v1", "stage": "F",
+        "stage": "F",
         "plan_sha256": sha256_json(parsed),
-        "seed1_evidence_sha256": sha256_json(evidence),
+        "seed1_evidence_sha256": sha256_json(evidence_raw),
         "qualifier_rule": "seed1_all_hard_gates_and_cancellation_health-v1",
         "qualifier_candidate_ids": qualifiers,
         "activated_group_ids": activated, "inactive_group_ids": inactive,
     }
-    return SeedActivationDecision.model_validate(
-        value, strict=True).model_dump(mode="json")
+    return _build_artifact(SeedActivationDecision, policy, value)
 
 
 def _sampled_worst(candidate: Mapping[int, SeedResult],
@@ -993,11 +1092,13 @@ def build_stage_f_aggregate(
         seed_results: Mapping[str, Sequence[Mapping[str, Any]]],
         *, seed_activation_decision_sha256: str,
 ) -> dict[str, Any]:
-    parsed = FMasterPlan.model_validate(master, strict=True)
-    evidence = Seed1Evidence.model_validate(seed1_evidence, strict=True)
-    activation = SeedActivationDecision.model_validate(seed_activation, strict=True)
+    policy = _same_policy("F aggregate", master, seed1_evidence, seed_activation)
+    _owner_policy, parsed = _owner(master, FMasterPlan, FMasterPlanV2)
+    _evidence_raw, evidence, _ = _artifact(seed1_evidence, Seed1Evidence)
+    activation_raw, _activation, _ = _artifact(
+        seed_activation, SeedActivationDecision)
     exact_activation = build_seed_activation_decision(master, seed1_evidence)
-    if canonical_json(activation.model_dump(mode="json")) != canonical_json(exact_activation):
+    if canonical_json(activation_raw) != canonical_json(exact_activation):
         raise StageFError("seed activation differs from seed-1 evidence")
     seed1_by_id = {row.candidate_id: row for row in evidence.candidates}
     if type(seed_results) is not dict or set(seed_results) != set(parsed.base_candidate_order):
@@ -1007,7 +1108,8 @@ def build_stage_f_aggregate(
         base = seed1_by_id[candidate.candidate_id]
         expected_seeds = list(SEEDS if base.qualified else (1,))
         try:
-            results = [SeedResult.model_validate(row, strict=True)
+            results = [SeedResult.model_validate(
+                row, strict=True, context={"policy": policy})
                        for row in seed_results[candidate.candidate_id]]
         except (TypeError, ValueError) as exc:
             raise StageFError("candidate seed results fail strict validation") from exc
@@ -1031,7 +1133,7 @@ def build_stage_f_aggregate(
         }, strict=True))
     ranking = _ranking(rows)
     value = {
-        "version": "stage-f-aggregate-v1", "stage": "F",
+        "stage": "F",
         "plan_sha256": sha256_json(parsed),
         "parent_decision_sha256": parsed.parent_decision_sha256,
         "master_manifest_sha256": parsed.master_manifest_sha256,
@@ -1041,7 +1143,7 @@ def build_stage_f_aggregate(
         "candidates": [row.model_dump(mode="json") for row in rows],
         "ranking": ranking,
     }
-    return StageFAggregate.model_validate(value, strict=True).model_dump(mode="json")
+    return _build_artifact(StageFAggregate, policy, value)
 
 
 def build_stage_f_aggregate_from_attempts(
@@ -1052,8 +1154,9 @@ def build_stage_f_aggregate_from_attempts(
         seed_activation_decision_sha256: str, corpus: PublicCorpus,
 ) -> dict[str, Any]:
     """Rebuild every activated seed row before final aggregation/ranking."""
-    parsed = FMasterPlan.model_validate(master, strict=True)
-    seed1 = Seed1Evidence.model_validate(seed1_evidence, strict=True)
+    _same_policy("F attempt aggregate", master, seed1_evidence, seed_activation)
+    _policy, parsed = _owner(master, FMasterPlan, FMasterPlanV2)
+    _seed1_raw, seed1, _ = _artifact(seed1_evidence, Seed1Evidence)
     ids = list(parsed.base_candidate_order)
     if type(evidence_by_candidate_seed) is not dict \
             or set(evidence_by_candidate_seed) != set(ids):
@@ -1084,7 +1187,7 @@ def validate_stage_f_aggregate_from_attempts(
 ) -> dict[str, Any]:
     """Reject a persisted aggregate unless every field rederives from attempts."""
     try:
-        parsed = StageFAggregate.model_validate(stored, strict=True)
+        parsed = validate_stage_f_aggregate_artifact(stored)
     except (TypeError, ValueError) as exc:
         raise StageFError("stored F aggregate fails strict validation") from exc
     exact = build_stage_f_aggregate_from_attempts(
@@ -1092,16 +1195,16 @@ def validate_stage_f_aggregate_from_attempts(
         evidence_by_candidate_seed,
         seed_activation_decision_sha256=seed_activation_decision_sha256,
         corpus=corpus)
-    if canonical_json(parsed.model_dump(mode="json")) != canonical_json(exact):
+    if canonical_json(parsed) != canonical_json(exact):
         raise StageFError("stored F aggregate is not exact")
-    return parsed.model_dump(mode="json")
+    return parsed
 
 
 def build_provisional_decision(
         aggregate: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Derive the selected/inconclusive provisional outcome without fallback."""
-    parsed = StageFAggregate.model_validate(aggregate, strict=True)
+    aggregate_raw, parsed, policy = _artifact(aggregate, StageFAggregate)
     qualifiers = parsed.ranking.qualifier_candidate_ids
     winner = parsed.ranking.winner_candidate_id
     if not qualifiers:
@@ -1115,33 +1218,32 @@ def build_provisional_decision(
                       for row in parsed.candidates
                       if row.candidate_id == winner), None)
     value = {
-        "version": "stage-f-selection-v1", "stage": "F",
+        "stage": "F",
         "plan_sha256": parsed.plan_sha256,
-        "aggregate_sha256": sha256_json(parsed),
+        "aggregate_sha256": sha256_json(aggregate_raw),
         "outcome": outcome, "reason": reason, "selection": selection,
     }
-    return ProvisionalDecision.model_validate(
-        value, strict=True).model_dump(mode="json")
+    return _build_artifact(ProvisionalDecision, policy, value)
 
 
 def build_no_seed1_provisional_decision(
         master: Mapping[str, Any], seed1_evidence: Mapping[str, Any],
 ) -> dict[str, Any]:
-    parsed = FMasterPlan.model_validate(master, strict=True)
-    evidence = Seed1Evidence.model_validate(seed1_evidence, strict=True)
+    policy = _same_policy("no-seed1 decision", master, seed1_evidence)
+    _owner_policy, parsed = _owner(master, FMasterPlan, FMasterPlanV2)
+    evidence_raw, evidence, _ = _artifact(seed1_evidence, Seed1Evidence)
     if (evidence.plan_sha256 != sha256_json(parsed)
             or evidence.candidate_order != parsed.base_candidate_order
             or any(row.qualified for row in evidence.candidates)):
         raise StageFError("no-seed1 decision requires exact zero-qualifier evidence")
     value = {
-        "version": "stage-f-selection-v1", "stage": "F",
+        "stage": "F",
         "plan_sha256": sha256_json(parsed),
-        "aggregate_sha256": sha256_json(evidence),
+        "aggregate_sha256": sha256_json(evidence_raw),
         "outcome": "INCONCLUSIVE", "reason": "no_seed1_qualifier",
         "selection": None,
     }
-    return ProvisionalDecision.model_validate(
-        value, strict=True).model_dump(mode="json")
+    return _build_artifact(ProvisionalDecision, policy, value)
 
 
 def build_c44_scored_aggregate(
@@ -1150,7 +1252,7 @@ def build_c44_scored_aggregate(
         corpus: PublicCorpus,
 ) -> dict[str, Any]:
     try:
-        plan = AcceptancePlan.model_validate(acceptance_plan, strict=True)
+        policy, plan = _owner(acceptance_plan, AcceptancePlan, AcceptancePlanV2)
     except (TypeError, ValueError) as exc:
         raise StageFError("acceptance plan fails strict validation") from exc
     candidate = plan.candidates[0]
@@ -1158,15 +1260,14 @@ def build_c44_scored_aggregate(
         candidate_id=candidate.candidate_id, seed=1,
         work=[row.model_dump(mode="json") for row in plan.work],
         evidence=evidence_by_work, corpus=corpus,
-        document_order=corpus.c_order, include_gate=False)
+        document_order=corpus.c_order, include_gate=False, policy=policy)
     value = {
-        "version": "stage-f-c44-scored-v1", "stage": "F",
+        "stage": "F",
         "acceptance_plan_sha256": sha256_json(plan),
         "parent_provisional_decision_sha256": plan.parent_decision_sha256,
         "candidate_id": candidate.candidate_id, "evidence": evidence,
     }
-    return C44ScoredAggregate.model_validate(
-        value, strict=True).model_dump(mode="json")
+    return _build_artifact(C44ScoredAggregate, policy, value)
 
 
 def validate_c44_scored_aggregate(
@@ -1178,8 +1279,7 @@ def validate_c44_scored_aggregate(
     exact = build_c44_scored_aggregate(
         acceptance_plan, evidence_by_work, corpus=corpus)
     try:
-        parsed = C44ScoredAggregate.model_validate(
-            stored, strict=True).model_dump(mode="json")
+        parsed = validate_c44_scored_artifact(stored)
         require_exact(parsed, exact, label="Stage-F C44 scored aggregate")
     except (TypeError, ValueError, PublicScoringError) as exc:
         raise StageFError("stored C44 scored aggregate is not exact") from exc
@@ -1198,10 +1298,11 @@ def build_c44_component(
         scored: Mapping[str, Any], acceptance_plan: Mapping[str, Any], *,
         source_aggregate_sha256: str, corpus: PublicCorpus,
 ) -> dict[str, Any]:
-    parsed = C44ScoredAggregate.model_validate(scored, strict=True)
-    plan = AcceptancePlan.model_validate(acceptance_plan, strict=True)
+    policy = _same_policy("C44 component", scored, acceptance_plan)
+    scored_raw, parsed, _ = _artifact(scored, C44ScoredAggregate)
+    _plan_policy, plan = _owner(acceptance_plan, AcceptancePlan, AcceptancePlanV2)
     candidate = plan.candidates[0]
-    if (sha256_json(parsed) != source_aggregate_sha256
+    if (sha256_json(scored_raw) != source_aggregate_sha256
             or parsed.acceptance_plan_sha256 != sha256_json(plan)
             or parsed.parent_provisional_decision_sha256 !=
                plan.parent_decision_sha256
@@ -1211,7 +1312,8 @@ def build_c44_component(
     value = _component_from_seed(
         "C44_RERUN", parsed.acceptance_plan_sha256, source_aggregate_sha256,
         parsed.candidate_id, candidate.selection(), evidence, corpus.c_order,
-        component_passed=(evidence["completed_chunks"] == evidence["planned_chunks"]))
+        component_passed=(evidence["completed_chunks"] == evidence["planned_chunks"]),
+        policy=policy)
     if (len(value["document_ids"]) != 44
             or any(row["support"] != 6 for row in value["category_recall"].values())):
         raise StageFError("C44 component differs from frozen census")
@@ -1221,13 +1323,13 @@ def build_c44_component(
 def _component_from_seed(
         component: str, source_plan_sha256: str, source_aggregate_sha256: str,
         candidate_id: str, selection: Mapping[str, Any], evidence: Mapping[str, Any],
-        document_ids: Sequence[str], *, component_passed: bool,
+        document_ids: Sequence[str], *, component_passed: bool, policy: Any,
 ) -> dict[str, Any]:
     docs = evidence["documents"]
     truncation = [row for row in docs
                   if row["stratum"] in {"output_truncation", "input_truncation"}]
     value = {
-        "version": "stage-f-acceptance-component-v1", "component": component,
+        "component": component,
         "source_plan_sha256": source_plan_sha256,
         "source_aggregate_sha256": source_aggregate_sha256,
         "candidate_id": candidate_id, "selection": selection,
@@ -1258,17 +1360,17 @@ def _component_from_seed(
         "channel_violations": evidence["channel_violations"],
         "component_passed": component_passed,
     }
-    return AcceptanceComponent.model_validate(
-        value, strict=True).model_dump(mode="json")
+    return _build_artifact(AcceptanceComponent, policy, value)
 
 
 def build_f72_component(
         aggregate: Mapping[str, Any], master: Mapping[str, Any], *,
         candidate_id: str, source_aggregate_sha256: str, corpus: PublicCorpus,
 ) -> dict[str, Any]:
-    owner = StageFAggregate.model_validate(aggregate, strict=True)
-    frozen = FMasterPlan.model_validate(master, strict=True)
-    if (sha256_json(owner) != source_aggregate_sha256
+    policy = _same_policy("F72 component", aggregate, master)
+    aggregate_raw, owner, _ = _artifact(aggregate, StageFAggregate)
+    _master_policy, frozen = _owner(master, FMasterPlan, FMasterPlanV2)
+    if (sha256_json(aggregate_raw) != source_aggregate_sha256
             or owner.plan_sha256 != sha256_json(frozen)
             or owner.parent_decision_sha256 != frozen.parent_decision_sha256):
         raise StageFError("F72 aggregate differs from its master owner")
@@ -1283,7 +1385,7 @@ def build_f72_component(
         "F72_SEED1", frozen.plans[0].plan_sha256, source_aggregate_sha256,
         candidate_id, candidate.selection.model_dump(mode="json"),
         result, corpus.f_order,
-        component_passed=result["passed"])
+        component_passed=result["passed"], policy=policy)
     if (len(value["document_ids"]) != 72
             or any(row["support"] != 8 for row in value["category_recall"].values())
             or value["injection_pairs"] != 4 or value["boundary_documents"] != 12
@@ -1297,7 +1399,8 @@ def build_d50_component(
         stage_d_decision_sha256: str, f_candidate_id: str, corpus: PublicCorpus,
 ) -> dict[str, Any]:
     try:
-        decision = FinalDecision.model_validate(final_decision, strict=True)
+        policy = _same_policy("D50 component", final_decision, source_aggregate)
+        _decision_raw, decision, _ = _artifact(final_decision, FinalDecision)
         aggregate = validate_stage_d_aggregate(source_aggregate)
     except (TypeError, ValueError, StageDError) as exc:
         raise StageFError("D50 final decision/source aggregate is invalid") from exc
@@ -1321,7 +1424,6 @@ def build_d50_component(
             or not quality["passed"]):
         raise StageFError("D50 quality differs from final winner evidence")
     value = {
-        "version": "stage-f-acceptance-component-v1",
         "component": "D50_CONFIRMATION",
         "source_plan_sha256": aggregate["plan_sha256"],
         "source_aggregate_sha256": sha256_json(aggregate),
@@ -1353,8 +1455,7 @@ def build_d50_component(
             quality["schema_escape_empty"]))),
         "component_passed": quality["passed"],
     }
-    return AcceptanceComponent.model_validate(
-        value, strict=True).model_dump(mode="json")
+    return _build_artifact(AcceptanceComponent, policy, value)
 
 
 def _build_acceptance_aggregate_from_components(
@@ -1362,7 +1463,7 @@ def _build_acceptance_aggregate_from_components(
         corpus: PublicCorpus, cancellation_health_passed: bool,
         provenance_passed: bool, safety_passed: bool,
 ) -> dict[str, Any]:
-    plan = AcceptancePlan.model_validate(acceptance_plan, strict=True)
+    policy, plan = _owner(acceptance_plan, AcceptancePlan, AcceptancePlanV2)
     if type(provenance_passed) is not bool or type(safety_passed) is not bool:
         raise StageFError("acceptance attestations must be exact Booleans")
     if not provenance_passed or not safety_passed:
@@ -1370,8 +1471,11 @@ def _build_acceptance_aggregate_from_components(
     if type(cancellation_health_passed) is not bool:
         raise StageFError("cancellation attestation must be an exact Boolean")
     try:
-        rows = [AcceptanceComponent.model_validate(row, strict=True)
-                for row in components]
+        if any(resolve_payload_policy(row) != policy for row in components):
+            raise StageFError("acceptance components mix scoring-policy families")
+        normalized_rows = [validate_acceptance_component_artifact(row)
+                           for row in components]
+        rows = [_artifact(row, AcceptanceComponent)[1] for row in normalized_rows]
     except (TypeError, ValueError) as exc:
         raise StageFError("acceptance component fails strict validation") from exc
     if [row.component for row in rows] != [
@@ -1443,20 +1547,19 @@ def _build_acceptance_aggregate_from_components(
     }
     reasons = ordered_reasons(ACCEPTANCE_REASONS, failures)
     value = {
-        "version": "stage-f-acceptance-aggregate-v1", "stage": "F",
+        "stage": "F",
         "acceptance_plan_sha256": sha256_json(plan),
         "parent_provisional_decision_sha256": plan.parent_decision_sha256,
         "master_manifest_sha256": corpus.master_manifest_sha256,
         "selection": selection,
         "component_hashes": {
-            "c44_rerun_aggregate_sha256": sha256_json(rows[0]),
-            "d50_confirmation_aggregate_sha256": sha256_json(rows[1]),
-            "f72_seed1_aggregate_sha256": sha256_json(rows[2]),
+            "c44_rerun_aggregate_sha256": sha256_json(normalized_rows[0]),
+            "d50_confirmation_aggregate_sha256": sha256_json(normalized_rows[1]),
+            "f72_seed1_aggregate_sha256": sha256_json(normalized_rows[2]),
         },
         "totals": totals, "passed": not reasons, "failure_reasons": reasons,
     }
-    return AcceptanceAggregate.model_validate(
-        value, strict=True).model_dump(mode="json")
+    return _build_artifact(AcceptanceAggregate, policy, value)
 
 
 def build_acceptance_aggregate(
@@ -1472,35 +1575,37 @@ def build_acceptance_aggregate(
 ) -> dict[str, Any]:
     """Rebuild all three normalized components from their immutable owners."""
     try:
-        plan = AcceptancePlan.model_validate(acceptance_plan, strict=True)
-        provisional = ProvisionalDecision.model_validate(
-            provisional_decision, strict=True)
-        f_owner = StageFAggregate.model_validate(stage_f_aggregate, strict=True)
-        frozen = FMasterPlan.model_validate(f_master, strict=True)
+        _policy = _same_policy(
+            "acceptance", acceptance_plan, provisional_decision,
+            stage_f_aggregate, f_master, c44_scored, final_d_decision,
+            d50_source_aggregate)
+        _plan_policy, plan = _owner(
+            acceptance_plan, AcceptancePlan, AcceptancePlanV2)
+        provisional_raw, provisional, _ = _artifact(
+            provisional_decision, ProvisionalDecision)
+        f_raw, f_owner, _ = _artifact(stage_f_aggregate, StageFAggregate)
+        _master_policy, frozen = _owner(f_master, FMasterPlan, FMasterPlanV2)
     except (TypeError, ValueError) as exc:
         raise StageFError("acceptance plan/provisional owner is invalid") from exc
     candidate_id = plan.candidates[0].candidate_id
-    exact_provisional = build_provisional_decision(
-        f_owner.model_dump(mode="json"))
+    exact_provisional = build_provisional_decision(stage_f_aggregate)
     if (plan.parent_decision_sha256 != provisional_decision_sha256
-            or canonical_json(provisional.model_dump(mode="json")) !=
-               canonical_json(exact_provisional)
+            or canonical_json(provisional_raw) != canonical_json(exact_provisional)
             or provisional.outcome != "PROVISIONAL_SELECTED"
             or provisional.selection is None
             or provisional.selection.model_dump(mode="json") !=
                plan.candidates[0].selection()):
         raise StageFError("acceptance plan differs from provisional decision owner")
     if (provisional.plan_sha256 != sha256_json(frozen)
-            or provisional.aggregate_sha256 != sha256_json(f_owner)
+            or provisional.aggregate_sha256 != sha256_json(f_raw)
             or f_owner.plan_sha256 != sha256_json(frozen)
             or f_owner.parent_decision_sha256 != stage_d_decision_sha256
             or frozen.parent_decision_sha256 != stage_d_decision_sha256
             or f_owner.ranking.winner_candidate_id != candidate_id):
         raise StageFError("acceptance winner differs from exact F aggregate lineage")
     try:
-        c44_hash = sha256_json(C44ScoredAggregate.model_validate(
-            c44_scored, strict=True))
-        f_hash = sha256_json(f_owner)
+        c44_hash = sha256_json(validate_c44_scored_artifact(c44_scored))
+        f_hash = sha256_json(f_raw)
     except (TypeError, ValueError) as exc:
         raise StageFError("acceptance source aggregate owner is invalid") from exc
     components = [
@@ -1529,18 +1634,19 @@ def build_final_result(
         acceptance_plan: Mapping[str, Any],
         acceptance_aggregate: Mapping[str, Any],
 ) -> dict[str, Any]:
-    owner = StageFAggregate.model_validate(stage_f_aggregate, strict=True)
-    provisional = ProvisionalDecision.model_validate(
-        provisional_decision, strict=True)
-    plan = AcceptancePlan.model_validate(acceptance_plan, strict=True)
-    aggregate = AcceptanceAggregate.model_validate(
-        acceptance_aggregate, strict=True)
-    exact_provisional = build_provisional_decision(
-        owner.model_dump(mode="json"))
+    policy = _same_policy(
+        "final result", stage_f_aggregate, provisional_decision,
+        acceptance_plan, acceptance_aggregate)
+    owner_raw, owner, _ = _artifact(stage_f_aggregate, StageFAggregate)
+    provisional_raw, provisional, _ = _artifact(
+        provisional_decision, ProvisionalDecision)
+    _plan_policy, plan = _owner(acceptance_plan, AcceptancePlan, AcceptancePlanV2)
+    aggregate_raw, aggregate, _ = _artifact(
+        acceptance_aggregate, AcceptanceAggregate)
+    exact_provisional = build_provisional_decision(stage_f_aggregate)
     if (provisional.outcome != "PROVISIONAL_SELECTED"
-            or canonical_json(provisional.model_dump(mode="json")) !=
-               canonical_json(exact_provisional)
-            or provisional.aggregate_sha256 != sha256_json(owner)
+            or canonical_json(provisional_raw) != canonical_json(exact_provisional)
+            or provisional.aggregate_sha256 != sha256_json(owner_raw)
             or provisional.plan_sha256 != owner.plan_sha256
             or plan.parent_decision_sha256 != provisional_decision_sha256
             or aggregate.acceptance_plan_sha256 != sha256_json(plan)
@@ -1555,27 +1661,29 @@ def build_final_result(
             or owner.parent_decision_sha256 != stage_d_decision_sha256):
         raise StageFError("final result lineage differs from exact owner artifacts")
     if not aggregate.passed:
-        return FInconclusiveResult.model_validate({
-            "version": "c0b2-result-v1", "terminal": "INCONCLUSIVE", "stage": "F",
-            "aggregate_sha256": sha256_json(aggregate),
+        return _build_artifact(FInconclusiveResult, policy, {
+            "terminal": "INCONCLUSIVE", "stage": "F",
+            "aggregate_sha256": sha256_json(aggregate_raw),
             "reason": "complete_corpus_acceptance_failed",
-        }, strict=True).model_dump(mode="json")
+        })
     value = {
-        "version": "c0b2-result-v1", "terminal": "SELECTED", "stage": "F",
+        "terminal": "SELECTED", "stage": "F",
         "master_manifest_sha256": master_manifest_sha256,
         "stage_c_selection_sha256": stage_c_selection_sha256,
         "stage_d_decision_sha256": stage_d_decision_sha256,
-        "stage_f_aggregate_sha256": sha256_json(owner),
+        "stage_f_aggregate_sha256": sha256_json(owner_raw),
         "provisional_decision_sha256": provisional_decision_sha256,
         "acceptance_plan_sha256": sha256_json(plan),
-        "acceptance_aggregate_sha256": sha256_json(aggregate),
+        "acceptance_aggregate_sha256": sha256_json(aggregate_raw),
         "selection": aggregate.selection.model_dump(mode="json"),
     }
-    return FSelectedResult.model_validate(value, strict=True).model_dump(mode="json")
+    return _build_artifact(FSelectedResult, policy, value)
 
 
-def build_inconclusive_result(reason: str, aggregate_sha256: str) -> dict[str, Any]:
-    return FInconclusiveResult.model_validate({
-        "version": "c0b2-result-v1", "terminal": "INCONCLUSIVE", "stage": "F",
+def build_inconclusive_result(
+        reason: str, aggregate_sha256: str, *, policy: Any = LEGACY_POLICY,
+) -> dict[str, Any]:
+    return _build_artifact(FInconclusiveResult, policy, {
+        "terminal": "INCONCLUSIVE", "stage": "F",
         "aggregate_sha256": aggregate_sha256, "reason": reason,
-    }, strict=True).model_dump(mode="json")
+    })

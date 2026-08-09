@@ -709,7 +709,10 @@ def test_selected_public_flow_uses_bounded_transport_and_recovers_one_crash(
     assert status["state"] == "SELECTED"
     assert status["backup"]["receipt_present"] is True
     assert runtime.public_verify(run_id, benchmark_root=benchmark_root) == {
-        "ok": True, "errors": [], "backup": status["backup"],
+        "ok": True, "errors": [],
+        **{key: status[key] for key in (
+            "benchmark_protocol_id", "policy_id", "policy_sha256")},
+        "backup": status["backup"],
     }
     assert {"/api/chat", "/api/version", "/api/tags", "/api/show", "/api/ps"} \
         <= set(session.paths)

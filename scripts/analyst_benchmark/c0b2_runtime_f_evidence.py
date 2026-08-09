@@ -36,37 +36,22 @@ from .c0b2_runtime_f_namespace import (
 )
 from .c0b2_stage_d import AttemptEvidence
 from .c0b2_stage_f import (
-    Seed1Evidence, SeedActivationDecision, StageFError,
+    Seed1Evidence, StageFError,
     build_acceptance_aggregate, build_c44_scored_aggregate, build_final_result,
     build_inconclusive_result, build_no_seed1_provisional_decision,
     build_provisional_decision, build_seed_activation_decision, validate_seed1_evidence,
-    validate_stage_f_aggregate_from_attempts,
+    validate_provisional_decision_artifact, validate_seed1_evidence_artifact,
+    validate_seed_activation_artifact, validate_stage_f_aggregate_from_attempts,
 )
 from .c0b2_stage_f_plan import PublicCorpus, build_acceptance_plan
+from .c0b3_policy import CURRENT_POLICY, policy_binding, resolve_header_policy
+from .c0b3_schema import (
+    FSeedCursorTransitionV2, build_completion_value, validate_current,
+    validate_plan_for_header,
+)
 
 LATER_KEYS = ("F_SEED_17", "F_SEED_20260804")
 B4_ACTIVATION_KEYS = frozenset((*LATER_KEYS, "F_ACCEPTANCE"))
-
-
-class ProvisionalDecision(StrictModel):
-    version: Literal["stage-f-selection-v1"]
-    stage: Literal["F"]
-    plan_sha256: Sha256
-    aggregate_sha256: Sha256
-    outcome: Literal["PROVISIONAL_SELECTED", "INCONCLUSIVE"]
-    reason: Literal[
-        "single_qualifier", "pairwise_decisive", "no_seed1_qualifier",
-        "no_all_seed_qualifier", "ranking_not_decisive"]
-    selection: CandidateSelection | None
-
-    @model_validator(mode="after")
-    def selection_matches_outcome(self) -> "ProvisionalDecision":
-        selected = self.outcome == "PROVISIONAL_SELECTED"
-        if selected != (self.selection is not None):
-            raise ValueError("provisional selection presence differs from outcome")
-        if selected != (self.reason in {"single_qualifier", "pairwise_decisive"}):
-            raise ValueError("provisional reason differs from outcome")
-        return self
 
 
 class F17TerminalWork(StrictModel):
@@ -111,6 +96,10 @@ def typed(value: Mapping[str, Any], model: Any) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise TypeError("Stage-F artifact must be a mapping")
     return validate_artifact(model, value)
+
+
+def _run_header(point: Any) -> dict[str, Any]:
+    return point.header() if callable(getattr(point, "header", None)) else {}
 
 
 def canonical_row(raw: str, digest: str, label: str) -> dict[str, Any]:
@@ -811,7 +800,9 @@ def all_seed_attempt_inputs(
         seed1_evidence: Mapping[str, Any],
 ) -> dict[str, dict[int, dict[str, list[dict[str, Any]]]]]:
     """Extract exact terminal attempt maps for every activated candidate/seed."""
-    parsed_seed1 = typed(seed1_evidence, Seed1Evidence)
+    parsed_seed1 = (typed(seed1_evidence, Seed1Evidence)
+                    if resolve_header_policy(_run_header(point)) != CURRENT_POLICY
+                    else validate_seed1_evidence_artifact(seed1_evidence))
     qualified = {row["candidate_id"] for row in parsed_seed1["candidates"]
                  if row["qualified"]}
     result: dict[str, dict[int, dict[str, list[dict[str, Any]]]]] = {
@@ -883,21 +874,24 @@ def validate_plan_work_serial_order(
 def acceptance_attempt_inputs(
         point: Checkpoint, acceptance_plan: Mapping[str, Any],
 ) -> dict[str, list[dict[str, Any]]]:
-    plan = typed(acceptance_plan, AcceptancePlan)
+    header = _run_header(point)
+    plan = (typed(acceptance_plan, AcceptancePlan)
+            if resolve_header_policy(header) != CURRENT_POLICY
+            else validate_plan_for_header(header, AcceptancePlan, acceptance_plan))
     validate_plan_work_serial_order(point, plan)
     return {str(work["work_id"]): _work_attempt_evidence(point, work)
             for work in plan["work"]}
 
 
 def connection_decision(
-        conn: Any, decision_id: str, model: Any,
+        conn: Any, decision_id: str, validator: Any,
 ) -> tuple[dict[str, Any], str, tuple[Any, ...]]:
     row = conn.execute(
         "SELECT stage,parent_hash,aggregate_hash,activation,value_json "
         "FROM decisions WHERE decision_id=?", (decision_id,)).fetchone()
     if not row:
         raise ImmutableViolation(f"checkpoint lacks {decision_id}")
-    value = typed(json.loads(str(row[4])), model)
+    value = validator(json.loads(str(row[4])))
     if canonical_json(value) != row[4]:
         raise ImmutableViolation(f"checkpoint {decision_id} is not canonical")
     return value, sha256_json((decision_id, *row)), row
@@ -914,9 +908,11 @@ def validate_seed_activation_owner(
         "WHERE plan_key='F_SEED_1'").fetchone()
     if not aggregate or aggregate[0] != sha256_json(plans["F_SEED_1"]):
         raise ImmutableViolation("seed activation lacks its nested seed-1 plan owner")
-    stored = typed(_restore_category_order(canonical_row(
-        str(aggregate[2]), str(aggregate[1]), "stored seed-1 evidence")),
-        Seed1Evidence)
+    restored = _restore_category_order(canonical_row(
+        str(aggregate[2]), str(aggregate[1]), "stored seed-1 evidence"))
+    stored = (typed(restored, Seed1Evidence)
+              if resolve_header_policy(_run_header(point)) != CURRENT_POLICY
+              else validate_seed1_evidence_artifact(restored))
     attempts, contexts, health = seed1_inputs(point, master, corpus)
     try:
         evidence = validate_seed1_evidence(
@@ -925,7 +921,7 @@ def validate_seed_activation_owner(
     except StageFError as exc:
         raise ImmutableViolation("stored seed activation cannot be re-derived") from exc
     decision, digest, row = connection_decision(
-        point.conn, "stage-f-seed-activation", SeedActivationDecision)
+        point.conn, "stage-f-seed-activation", validate_seed_activation_artifact)
     activation = "ACTIVATED" if expected["activated_group_ids"] else "NOT_ACTIVATED"
     if (decision != expected or row[:4] != (
             "F", master_hash, aggregate[1], activation)):
@@ -974,7 +970,8 @@ def validate_final_f_owner(
         point, master, master_hash, corpus, str(row[0]))
     expected = build_provisional_decision(aggregate)
     provisional, digest, owner = connection_decision(
-        point.conn, "stage-f-provisional-selection", ProvisionalDecision)
+        point.conn, "stage-f-provisional-selection",
+        validate_provisional_decision_artifact)
     activation = ("ACTIVATED" if expected["outcome"] == "PROVISIONAL_SELECTED"
                   else "NOT_ACTIVATED")
     if provisional != expected or owner[:4] != (
@@ -1016,10 +1013,11 @@ def transition_value(
         to_plan_hash: str, to_activation_hash: str,
         from_groups: list[str], to_groups: list[str],
         census: list[dict[str, Any]], transitioned_at_utc: str,
+        *, header: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     census_hash = sha256_json({
         "domain": "c0b2-f17-terminal-work-census-v1", "rows": census})
-    body = {
+    body: dict[str, Any] = {
         "version": "c0b2-f-seed-cursor-transition-v1", "run_id": run_id,
         "from_plan_key": "F_SEED_17", "to_plan_key": "F_SEED_20260804",
         "f_master_plan_sha256": master_hash,
@@ -1034,6 +1032,11 @@ def transition_value(
         "completed_from_work_census_sha256": census_hash,
         "transitioned_at_utc": transitioned_at_utc,
     }
+    if resolve_header_policy({} if header is None else header) == CURRENT_POLICY:
+        body.update(
+            version="c0b3-f-seed-cursor-transition-v1", **policy_binding())
+        value = {**body, "transition_sha256": sha256_json(body)}
+        return validate_current(FSeedCursorTransitionV2, value)
     return typed({**body, "transition_sha256": sha256_json(body)},
                  FSeedCursorTransition)
 
@@ -1173,8 +1176,8 @@ def _validate_backup_transition(
         sha256_json(plans["F_SEED_20260804"]),
         activation_hashes["F_SEED_20260804"],
         activation_groups["F_SEED_17"], activation_groups["F_SEED_20260804"],
-        census, _rfc3339(created))
-    if typed(json.loads(raw), FSeedCursorTransition) != expected \
+        census, _rfc3339(created), header=header)
+    if json.loads(raw) != expected \
             or canonical_json(expected) != raw:
         raise ImmutableViolation("backup seed transition marker changed")
     ids = [row["work_id"] for row in census]
@@ -1263,8 +1266,9 @@ def validate_b4_backup_activation(
     except StageFError as exc:
         raise ImmutableViolation("backup final F aggregate cannot re-derive") from exc
     provisional, provisional_digest, provisional_row = connection_decision(
-        conn, "stage-f-provisional-selection", ProvisionalDecision)
-    if provisional_row[:4] != ("F", master_hash, final_row[1], "ACTIVATED"):
+        conn, "stage-f-provisional-selection", validate_provisional_decision_artifact)
+    if (provisional != build_provisional_decision(final)
+            or provisional_row[:4] != ("F", master_hash, final_row[1], "ACTIVATED")):
         raise ImmutableViolation("backup provisional owner changed")
     selection = provisional["selection"]
     winner = next((candidate["candidate_id"]
@@ -1312,10 +1316,9 @@ def _validate_no_seed1_terminal_rows(
             canonical_json(provisional)):
         raise ImmutableViolation("no-seed1 provisional changed from its owner")
 
-    artifact = {
-        "version": "c0b2-result-v1", "terminal": "INCONCLUSIVE", "stage": "F",
-        "aggregate_sha256": seed1_hash, "reason": "no_seed1_qualifier",
-    }
+    artifact = build_inconclusive_result(
+        "no_seed1_qualifier", seed1_hash,
+        policy=resolve_header_policy(point.header()))
     artifact_hash = sha256_json(artifact)
     artifact_row = point.conn.execute(
         "SELECT terminal,artifact_hash,artifact_json FROM public_artifacts "
@@ -1324,13 +1327,12 @@ def _validate_no_seed1_terminal_rows(
     if artifact_row != (
             "INCONCLUSIVE", artifact_hash, canonical_json(artifact)):
         raise ImmutableViolation("no-seed1 result changed from its owner")
-    completion = {
-        "outcome": "INCONCLUSIVE", "artifact_sha256": artifact_hash,
-        "facts": {"deterministic_stop": True, "reason": "no_seed1_qualifier"},
-    }
+    completion_id, completion = build_completion_value(
+        artifact, artifact_hash,
+        {"deterministic_stop": True, "reason": "no_seed1_qualifier"})
     completion_row = point.conn.execute(
         "SELECT stage,parent_hash,aggregate_hash,activation,value_json "
-        "FROM decisions WHERE decision_id='c0b2-completion'",
+        "FROM decisions WHERE decision_id=?", (completion_id,),
     ).fetchone()
     if completion_row != (
             "F", seed1_plan_hash, seed1_hash, "NOT_ACTIVATED",
@@ -1360,17 +1362,16 @@ def _result_completion_owner(
             "retained_grounding", "category_recall", "false_positive_bound",
             "injection_robustness", "boundary_identifiers", "truncation_complete",
             "context_channel_cancellation_provenance_safety")}
-        completion = {"outcome": "SELECTED", "artifact_sha256": artifact_hash,
-                      "facts": {"accepted_document_count": 166, "gates": gates}}
+        facts = {"accepted_document_count": 166, "gates": gates}
         activation = "ACTIVATED"
     else:
-        completion = {"outcome": "INCONCLUSIVE", "artifact_sha256": artifact_hash,
-                      "facts": {"deterministic_stop": True,
-                                "reason": artifact["reason"]}}
+        facts = {"deterministic_stop": True, "reason": artifact["reason"]}
         activation = "NOT_ACTIVATED"
+    completion_id, completion = build_completion_value(
+        artifact, artifact_hash, facts)
     owner = point.conn.execute(
         "SELECT stage,parent_hash,aggregate_hash,activation,value_json FROM decisions "
-        "WHERE decision_id='c0b2-completion'").fetchone()
+        "WHERE decision_id=?", (completion_id,)).fetchone()
     if owner != ("F", parent_hash, aggregate_hash, activation,
                  canonical_json(completion)):
         raise ImmutableViolation("F completion changed from its public result")
@@ -1498,7 +1499,9 @@ def validate_b4_terminal_owner(conn: Any, header: Mapping[str, Any]) -> str:
     final, final_hash, provisional, provisional_digest = validate_final_f_owner(
         point, master, master_hash, corpus)
     if provisional["outcome"] == "INCONCLUSIVE":
-        artifact = build_inconclusive_result(provisional["reason"], final_hash)
+        artifact = build_inconclusive_result(
+            provisional["reason"], final_hash,
+            policy=resolve_header_policy(header))
         result = _result_completion_owner(
             point, artifact, sha256_json(later_plan), final_hash)
         assert_terminal_f_namespace(
@@ -1524,7 +1527,8 @@ def validate_b4_terminal_owner(conn: Any, header: Mapping[str, Any]) -> str:
         state = "SELECTED"
     else:
         artifact = build_inconclusive_result(
-            "complete_corpus_acceptance_failed", aggregate_hash)
+            "complete_corpus_acceptance_failed", aggregate_hash,
+            policy=resolve_header_policy(header))
         state = "INCONCLUSIVE"
     result = _result_completion_owner(point, artifact, plan_hash, aggregate_hash)
     assert_terminal_f_namespace(

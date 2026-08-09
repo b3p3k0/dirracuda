@@ -25,6 +25,10 @@ from .c0b2_public_scoring import (
 )
 from .c0b2_schema import CATEGORIES, build_prompt, canonical_json, stable_hash, worksheet_schema
 from .c0b2_transport import RequestSpec, request_spec_hash
+from .c0b3_policy import (CURRENT_POLICY, LEGACY_POLICY, ResolvedPolicy,
+                          policy_binding, resolve_payload_policy)
+from .c0b3_schema import (AcceptancePlanV2, FMasterPlanV2, FSeedPlanV2,
+                          policy_binding_fields)
 
 SEEDS = (1, 17, 20260804)
 PLAN_KEYS = {1: "F_SEED_1", 17: "F_SEED_17", 20260804: "F_SEED_20260804"}
@@ -35,6 +39,16 @@ _MODEL_THINK = {model: think for model, _digest, think in legacy_plan.MODELS}
 
 class StageFPlanError(RuntimeError):
     """A Stage-F fixture, lineage value, or derived request is not exact."""
+
+
+def _master_model(value: Mapping[str, Any]) -> type[FMasterPlan] | type[FMasterPlanV2]:
+    return FMasterPlanV2 if resolve_payload_policy(value) == CURRENT_POLICY else FMasterPlan
+
+
+def _acceptance_model(
+        value: Mapping[str, Any]) -> type[AcceptancePlan] | type[AcceptancePlanV2]:
+    return (AcceptancePlanV2 if resolve_payload_policy(value) == CURRENT_POLICY
+            else AcceptancePlan)
 
 
 @dataclass(frozen=True)
@@ -156,10 +170,16 @@ def selections_from_final_decision(
         decision: Mapping[str, Any], *, stage_d_decision_sha256: str,
 ) -> list[dict[str, Any]]:
     """Extract exact selection objects from an activated FINALISTS decision."""
-    if (type(decision) is not dict or set(decision) != {
+    policy = resolve_payload_policy(decision)
+    expected_keys = {
             "version", "stage", "phase", "plan_sha256", "aggregate_sha256",
             "outcome", "reason", "selections"}
-            or decision.get("version") != "stage-d-decision-v1"
+    if policy == CURRENT_POLICY:
+        expected_keys |= set(policy_binding())
+    if (type(decision) is not dict or set(decision) != expected_keys
+            or decision.get("version") != (
+                "stage-d-decision-v2" if policy == CURRENT_POLICY else
+                "stage-d-decision-v1")
             or decision.get("stage") != "D"
             or decision.get("phase") not in {"D3", "D4"}
             or (decision.get("outcome"), decision.get("reason")) !=
@@ -174,7 +194,7 @@ def selections_from_final_decision(
 def rotated_candidate_ids(master: Mapping[str, Any], seed: int) -> list[str]:
     """Return the frozen left-rotated execution order for one seed."""
     try:
-        parsed = FMasterPlan.model_validate(master, strict=True)
+        parsed = _master_model(master).model_validate(master, strict=True)
     except (TypeError, ValueError) as exc:
         raise StageFPlanError("Stage-F master fails strict validation") from exc
     if type(seed) is not int or seed not in SEEDS:
@@ -362,6 +382,7 @@ def _seed1_controls(
 def _seed_plan(
         parent: str, candidates: Sequence[Mapping[str, Any]], *, seed: int,
         corpus: PublicCorpus, run_nonce_key: bytes,
+        policy: ResolvedPolicy = LEGACY_POLICY,
 ) -> dict[str, Any]:
     key = PLAN_KEYS[seed]
     work: list[dict[str, Any]] = []
@@ -390,14 +411,19 @@ def _seed_plan(
             "planned_work_count": len(rows), "context_control": controls[0],
             "cancellation_control": controls[1], "health_control": controls[2],
         })
+    current = policy == CURRENT_POLICY
+    if policy not in {LEGACY_POLICY, CURRENT_POLICY}:
+        raise StageFPlanError("unknown Stage-F scoring policy")
     value = {
-        "version": "stage-f-seed-plan-v1", "stage": "F", "phase": key,
+        "version": "stage-f-seed-plan-v2" if current else "stage-f-seed-plan-v1",
+        **(policy_binding_fields() if current else {}), "stage": "F", "phase": key,
         "plan_key": key, "budget_stage": "F",
         "parent_decision_sha256": parent, "candidates": list(candidates),
         "work": work, "groups": groups,
     }
     try:
-        return FSeedPlan.model_validate(value, strict=True).model_dump(mode="json")
+        model = FSeedPlanV2 if current else FSeedPlan
+        return model.model_validate(value, strict=True).model_dump(mode="json")
     except (TypeError, ValueError) as exc:
         raise StageFPlanError(f"generated {key} plan violates the strict schema") from exc
 
@@ -405,6 +431,7 @@ def _seed_plan(
 def build_f_master_plan(
         stage_d_decision_sha256: str, selections: Sequence[Mapping[str, Any]], *,
         corpus: PublicCorpus, run_nonce_key: bytes,
+        policy: ResolvedPolicy = LEGACY_POLICY,
 ) -> dict[str, Any]:
     """Freeze all seed plans and every possible C44 template before seed 1."""
     candidates = _selection_rows(selections, stage_d_decision_sha256)
@@ -412,12 +439,14 @@ def build_f_master_plan(
     for seed in SEEDS:
         payload = _seed_plan(
             stage_d_decision_sha256, candidates, seed=seed,
-            corpus=corpus, run_nonce_key=run_nonce_key)
+            corpus=corpus, run_nonce_key=run_nonce_key, policy=policy)
         plans.append({"plan_sha256": sha256_json(payload), "payload": payload})
     templates = []
     for candidate in candidates:
         payload = {
-            "version": "stage-f-acceptance-plan-v1", "stage": "F",
+            "version": ("stage-f-acceptance-plan-v2" if policy == CURRENT_POLICY else
+                        "stage-f-acceptance-plan-v1"),
+            **(policy_binding_fields() if policy == CURRENT_POLICY else {}), "stage": "F",
             "phase": "F_ACCEPTANCE", "plan_key": "F_ACCEPTANCE",
             "budget_stage": "F", "parent_decision_sha256": None,
             "candidates": [candidate],
@@ -433,7 +462,10 @@ def build_f_master_plan(
             "candidate_id": candidate["candidate_id"], "payload": payload,
         })
     value = {
-        "version": "stage-f-master-plan-v1", "stage": "F", "budget_stage": "F",
+        "version": ("stage-f-master-plan-v2" if policy == CURRENT_POLICY else
+                    "stage-f-master-plan-v1"),
+        **(policy_binding_fields() if policy == CURRENT_POLICY else {}),
+        "stage": "F", "budget_stage": "F",
         "parent_decision_sha256": stage_d_decision_sha256,
         "master_manifest_sha256": corpus.master_manifest_sha256,
         "base_candidate_order": [row["candidate_id"] for row in candidates],
@@ -441,7 +473,8 @@ def build_f_master_plan(
         "acceptance_templates": templates,
     }
     try:
-        return FMasterPlan.model_validate(value, strict=True).model_dump(mode="json")
+        model = FMasterPlanV2 if policy == CURRENT_POLICY else FMasterPlan
+        return model.model_validate(value, strict=True).model_dump(mode="json")
     except (TypeError, ValueError) as exc:
         raise StageFPlanError("generated F master violates the strict schema") from exc
 
@@ -451,15 +484,17 @@ def validate_f_master_plan(
 ) -> dict[str, Any]:
     """Strictly parse and independently rebuild the complete frozen F tree."""
     try:
-        parsed = FMasterPlan.model_validate(
+        model = _master_model(value)
+        parsed = model.model_validate(
             value, strict=True).model_dump(mode="json")
     except (TypeError, ValueError) as exc:
         raise StageFPlanError("Stage-F master fails strict validation") from exc
-    selections = [row.selection() for row in FMasterPlan.model_validate(
+    selections = [row.selection() for row in model.model_validate(
         parsed, strict=True).plans[0].payload.candidates]
     expected = build_f_master_plan(
         parsed["parent_decision_sha256"], selections,
-        corpus=corpus, run_nonce_key=run_nonce_key)
+        corpus=corpus, run_nonce_key=run_nonce_key,
+        policy=resolve_payload_policy(parsed))
     if canonical_json(parsed) != canonical_json(expected):
         raise StageFPlanError("Stage-F master differs from independent re-derivation")
     return parsed
@@ -471,7 +506,8 @@ def build_acceptance_plan(
 ) -> dict[str, Any]:
     """Activate exactly one byte-frozen C44 template under its decision parent."""
     try:
-        parsed = FMasterPlan.model_validate(master, strict=True).model_dump(mode="json")
+        parsed = _master_model(master).model_validate(
+            master, strict=True).model_dump(mode="json")
     except (TypeError, ValueError) as exc:
         raise StageFPlanError("Stage-F master fails strict validation") from exc
     templates = [row for row in parsed["acceptance_templates"]
@@ -486,7 +522,8 @@ def build_acceptance_plan(
         "template_sha256": template["template_sha256"],
     }
     try:
-        return AcceptancePlan.model_validate(value, strict=True).model_dump(mode="json")
+        model = _acceptance_model(value)
+        return model.model_validate(value, strict=True).model_dump(mode="json")
     except (TypeError, ValueError) as exc:
         raise StageFPlanError("activated acceptance plan violates frozen template") from exc
 
@@ -494,7 +531,7 @@ def build_acceptance_plan(
 def _resolve_row(
         master: Mapping[str, Any], work_id: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    parsed = FMasterPlan.model_validate(master, strict=True).model_dump(mode="json")
+    parsed = _master_model(master).model_validate(master, strict=True).model_dump(mode="json")
     match = _validated_work_index(parsed).get(work_id)
     if match is None:
         raise StageFPlanError("unknown or duplicate Stage-F work identity")
@@ -593,7 +630,7 @@ def request_specs_for_activated_f_plan(
     parsed = validate_f_master_plan(
         master, corpus=corpus, run_nonce_key=run_nonce_key)
     try:
-        activated = AcceptancePlan.model_validate(
+        activated = _acceptance_model(plan).model_validate(
             plan, strict=True).model_dump(mode="json")
     except (TypeError, ValueError) as exc:
         raise StageFPlanError("activated acceptance plan fails strict validation") from exc

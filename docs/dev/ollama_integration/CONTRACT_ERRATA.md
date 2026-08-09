@@ -188,6 +188,13 @@ resumed nor reclassified; a new committed source identity requires a third publi
 **Affects:** `CONTRACT.md` §§7 and 14; public benchmark false-positive gates
 **Raised by:** canonical C0B-2 terminal review
 
+The HI reconfirmed this decision after reviewing the measured result: one bounded false
+positive across the public evidence is acceptable for a useful assistive partner at this
+stage. Analyst supports—not replaces—the human analyst, so this observed review cost is
+not a showstopper while the no-action, explicit-review and unchanged hard-safety controls
+below hold. This acceptance does not describe the model as perfect or authorize threshold
+drift.
+
 ### The conflict
 
 Analyst is a digital intern: it recommends findings to a human analyst and cannot act on

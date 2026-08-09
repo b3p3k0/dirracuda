@@ -23,9 +23,11 @@ On 2026-08-09 the HI accepted the observed false-positive review cost for Analys
 assistive, no-action role. E5 records that risk decision prospectively: D3/D4 and each
 Stage-F seed may continue with at most one false-positive document, while final acceptance
 remains capped at one across all 40 negatives. Every other gate is unchanged. C0B-2 stays
-`INCONCLUSIVE`. C0B-3A's prospective contract passed three independent reviews; C0B-3
-will run the complete public path from a fresh source-pinned checkpoint only after its
-implementation card also passes. Private Stage E remains held.
+`INCONCLUSIVE`. C0B-3A's prospective contract passed three independent reviews. C0B-3B
+implements the versioned policy split and exact legacy/current verification. Its offline
+suite, full fake-transport terminal flows, leak audit, legacy-checkpoint compatibility
+checks and three independent hostile reviews pass. The accepted tree is ready to freeze
+for one fresh C0B-3C public run. Private Stage E remains held.
 
 The current public implementation freezes the protected run nonce key only in the
 backed-up 0600 checkpoint; derived
@@ -163,8 +165,6 @@ never became eligible.
 
 ## Next Step
 
-Implement C0B-3A's frozen backward-compatible policy split in C0B-3B. The old checkpoint
-is never rescored or resumed. After the implementation passes its focused, Analyst, leak
-and risk-warranted regression gates, commit the exact tree and create one fresh public
-C→D→F run. C1 and private Stage E remain held until that run produces a verified
-selection and the HI chooses the next gate.
+The next card is one fresh public C→D→F run from the clean, accepted C0B-3B source
+commit. The old checkpoint is never rescored or resumed. C1 and private Stage E remain
+held until the new run produces a verified selection and the HI chooses the next gate.

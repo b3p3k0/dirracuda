@@ -3,7 +3,7 @@
 Benchmark protocol ID: `c0b3-assistive-confirmation-v1`
 Scoring policy ID: `c0b3-assistive-bounded-fp-v1`
 Date: 2026-08-09
-Status: **C0B-3A FROZEN / PASS. No implementation or live run yet.**
+Status: **C0B-3B ACCEPTED. C0B-3C live run not yet started.**
 
 Authoritative parents:
 
@@ -251,6 +251,7 @@ C0B-3B may edit only these literal paths:
 - `scripts/analyst_benchmark/c0b2_stage_d.py`
 - `scripts/analyst_benchmark/c0b2_stage_f_plan.py`
 - `scripts/analyst_benchmark/c0b2_stage_f.py`
+- `scripts/analyst_benchmark/leakscan.py`
 - `scripts/analyst_benchmark/c0b3_cli.py`
 - `scripts/analyst_benchmark/c0b3_policy.py`
 - `scripts/analyst_benchmark/c0b3_schema.py`
@@ -259,6 +260,9 @@ C0B-3B may edit only these literal paths:
 - `scripts/tests/test_analyst_c0b3_schema.py`
 - `scripts/tests/test_analyst_c0b3_runtime.py`
 - `scripts/tests/test_analyst_c0b3_public_flow.py`
+- `scripts/tests/test_analyst_c0b2_runtime.py`
+- `scripts/tests/test_analyst_c0b2_runtime_f.py`
+- `scripts/tests/test_analyst_c0b2_public_flow.py`
 - `docs/dev/ollama_integration/BENCHMARK_PROTOCOL_C0B2.md`
 - `docs/dev/ollama_integration/BENCHMARK_PROTOCOL_C0B3.md`
 - `docs/dev/ollama_integration/CONTRACT_ERRATA.md`
@@ -267,14 +271,32 @@ C0B-3B may edit only these literal paths:
 - `docs/dev/ollama_integration/LESSONS_LEARNED.md`
 - `docs/dev/ollama_integration/UI_MOCKUPS.md`
 
+The leak scanner and three legacy test paths above are a pre-live implementation
+correction to the edit set. The frozen task tree already included all four. C0B-3B made
+`status`/`verify`
+report the required resolved identity and added a read-only pre-open namespace guard;
+their exact-output and mocked-checkpoint assertions therefore had to name those new
+observable contracts. The changes do not alter a legacy checkpoint, scorer, artifact or
+runtime outcome. The scanner requires explicit protocol dispatch so C0B-2 keeps its exact
+48-path scope while C0B-3 scans its exact 58-path scope. These corrections were recorded
+before committing C0B-3B or creating a C0B-3 checkpoint.
+
 The three new source modules and five new focused tests absorb the policy/version logic;
-near-limit legacy files receive only small dispatch delegates. In particular,
-`c0b2_runtime.py` (1,670 lines), `c0b2_runtime_d.py` (1,656),
-`c0b2_checkpoint.py` (1,673), `test_analyst_c0b2_checkpoint.py` (1,688), and
-`test_analyst_c0b2_runtime_common.py` (1,692) must not exceed 1,700 lines. The checkpoint
-and two near-limit existing test files are outside the edit set. If any touched file would
-cross 1,700, stop and propose extraction before editing it. If another path proves
-necessary, stop and revise this protocol before touching it.
+near-limit legacy files receive only small dispatch delegates. Final C0B-3B sizes are
+`c0b2_runtime.py` 1,700 lines, `c0b2_runtime_d.py` 1,695 and `c0b2_stage_f.py` 1,689;
+none exceeds the 1,700-line pause threshold. `c0b2_checkpoint.py` and the two near-limit
+existing test files remain outside the edit set. If a later change would cross 1,700,
+stop and extract before editing further. If another path proves necessary, stop and
+revise this protocol before touching it.
+
+C0B-3B did not retain a valid pre-task leak-baseline artifact. It is forbidden to create
+one later and label it pre-task. The approved one-time substitute is an exact
+`b9155a4`-to-worktree path audit plus descriptor-verified content scanning of every
+changed C0B-3 task file against all 262 owner-only Stage-B raw responses. The final audit
+covers 31 in-scope changed paths; the only excluded delta is the eight-file,
+already-sealed, unrelated `docs/dev/kbd_ctrl_improve/` worktree. The scan must report zero
+unexpected paths and zero content hits before commit. Future cards require their baseline
+before the first edit; this substitute is not precedent for skipping that gate.
 
 Required tests include:
 
@@ -292,6 +314,16 @@ Before and after implementation, read-only `status` and `verify` must return the
 terminal/call facts for the three canonical C0B-2 checkpoints and their database file
 SHA-256 values must not change: the 13:53:58 run is `FAILED_SAFETY`/3 calls, the 14:11:11
 run is `FAILED_SAFETY`/4 calls, and the 14:23:58 run is `INCONCLUSIVE`/530 calls.
+
+C0B-3B passed its focused policy/runtime suites and deterministic full public-flow
+proofs, including both F terminals, the selected-checkpoint mixed-policy poison, D
+abandon/history reconstruction and the narrow `BLOCKED_PROVENANCE` nonce-drift receipt
+exception. Three independent hostile reviews accepted the final scope, lineage, backup,
+read-only verification and documentation controls. The risk-warranted full repository
+run produced 4,871 passes, six skips and two failures: the known import-order Tkinter
+flake passed in isolation, and the new C0B-3 CLI disposition omission was corrected and
+passed its enforcement test. The localized post-suite lineage fixes passed their focused
+regressions; the complete hour-plus suite was not repeated.
 
 No requirements, database schema/migration, auth or CI file is in scope.
 

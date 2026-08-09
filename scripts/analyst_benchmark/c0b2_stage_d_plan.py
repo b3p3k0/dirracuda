@@ -37,6 +37,9 @@ from .c0b2_schema import (
     worksheet_schema,
 )
 from .c0b2_transport import RequestSpec, request_spec_hash
+from .c0b3_policy import (CURRENT_POLICY, LEGACY_POLICY, ResolvedPolicy,
+                          resolve_payload_policy)
+from .c0b3_schema import DPhasePlanV2, policy_binding_fields
 
 OVERLAP = 256
 SEED = 1
@@ -600,13 +603,18 @@ def _work_rows(*, phase: str, plan_key: str, candidates: list[dict[str, Any]],
 
 def _build_plan(*, phase: str, plan_key: str, parent_decision_sha256: str,
                 candidates: Sequence[Mapping[str, Any]], corpus: D50Corpus,
-                run_nonce_key: bytes) -> dict[str, Any]:
+                run_nonce_key: bytes,
+                policy: ResolvedPolicy = LEGACY_POLICY) -> dict[str, Any]:
     _sha256(parent_decision_sha256, "parent decision hash")
     normalized = _candidates(candidates, phase)
     if phase == "D4" and any(row["num_ctx"] == 16384 for row in normalized):
         raise StageDPlanError("D4 may contain only lower-context rerun candidates")
+    current = policy == CURRENT_POLICY
+    if policy not in {LEGACY_POLICY, CURRENT_POLICY}:
+        raise StageDPlanError("unknown Stage-D scoring policy")
     payload = {
-        "version": "stage-d-phase-plan-v1", "stage": "D", "phase": phase,
+        "version": "stage-d-phase-plan-v2" if current else "stage-d-phase-plan-v1",
+        **(policy_binding_fields() if current else {}), "stage": "D", "phase": phase,
         "plan_key": plan_key, "budget_stage": "D",
         "parent_decision_sha256": parent_decision_sha256,
         "candidates": normalized,
@@ -615,49 +623,54 @@ def _build_plan(*, phase: str, plan_key: str, parent_decision_sha256: str,
             corpus=corpus, run_nonce_key=run_nonce_key),
     }
     try:
-        return DPhasePlan.model_validate(payload, strict=True).model_dump(mode="json")
+        model = DPhasePlanV2 if current else DPhasePlan
+        return model.model_validate(payload, strict=True).model_dump(mode="json")
     except (TypeError, ValueError) as exc:
         raise StageDPlanError(f"generated {phase} plan violates the strict schema") from exc
 
 
 def build_d1_plan(parent_decision_sha256: str,
                   candidates: Sequence[Mapping[str, Any]], *,
-                  corpus: D50Corpus, run_nonce_key: bytes) -> dict[str, Any]:
+                  corpus: D50Corpus, run_nonce_key: bytes,
+                  policy: ResolvedPolicy = LEGACY_POLICY) -> dict[str, Any]:
     """Build candidate→ascending-output-budget→D1-panel work."""
     return _build_plan(
         phase="D1", plan_key="D1_OUTPUT",
         parent_decision_sha256=parent_decision_sha256, candidates=candidates,
-        corpus=corpus, run_nonce_key=run_nonce_key)
+        corpus=corpus, run_nonce_key=run_nonce_key, policy=policy)
 
 
 def build_d2_plan(parent_decision_sha256: str,
                   candidates: Sequence[Mapping[str, Any]], *,
-                  corpus: D50Corpus, run_nonce_key: bytes) -> dict[str, Any]:
+                  corpus: D50Corpus, run_nonce_key: bytes,
+                  policy: ResolvedPolicy = LEGACY_POLICY) -> dict[str, Any]:
     """Build candidate→ascending-chunk→boundary-document→chunk D2 work."""
     return _build_plan(
         phase="D2", plan_key="D2_CHUNK",
         parent_decision_sha256=parent_decision_sha256, candidates=candidates,
-        corpus=corpus, run_nonce_key=run_nonce_key)
+        corpus=corpus, run_nonce_key=run_nonce_key, policy=policy)
 
 
 def build_d3_plan(parent_decision_sha256: str,
                   candidates: Sequence[Mapping[str, Any]], *,
-                  corpus: D50Corpus, run_nonce_key: bytes) -> dict[str, Any]:
+                  corpus: D50Corpus, run_nonce_key: bytes,
+                  policy: ResolvedPolicy = LEGACY_POLICY) -> dict[str, Any]:
     """Build complete selected-chunk D50 work at actual context 16384."""
     return _build_plan(
         phase="D3", plan_key="D3_CONTEXT",
         parent_decision_sha256=parent_decision_sha256, candidates=candidates,
-        corpus=corpus, run_nonce_key=run_nonce_key)
+        corpus=corpus, run_nonce_key=run_nonce_key, policy=policy)
 
 
 def build_d4_plan(parent_decision_sha256: str,
                   candidates: Sequence[Mapping[str, Any]], *,
-                  corpus: D50Corpus, run_nonce_key: bytes) -> dict[str, Any]:
+                  corpus: D50Corpus, run_nonce_key: bytes,
+                  policy: ResolvedPolicy = LEGACY_POLICY) -> dict[str, Any]:
     """Build only lower-context complete-D50 confirmation reruns."""
     return _build_plan(
         phase="D4", plan_key="D4_CONFIRMATION",
         parent_decision_sha256=parent_decision_sha256, candidates=candidates,
-        corpus=corpus, run_nonce_key=run_nonce_key)
+        corpus=corpus, run_nonce_key=run_nonce_key, policy=policy)
 
 
 _BUILDERS = {
@@ -670,13 +683,15 @@ def validate_d_plan(plan: Mapping[str, Any] | str, *, corpus: D50Corpus,
                     run_nonce_key: bytes) -> dict[str, Any]:
     """Strictly parse and independently re-derive a complete Stage-D phase plan."""
     raw = _mapping(plan, "Stage-D plan")
+    policy = resolve_payload_policy(raw)
     try:
-        normalized = DPhasePlan.model_validate(raw, strict=True).model_dump(mode="json")
+        model = DPhasePlanV2 if policy == CURRENT_POLICY else DPhasePlan
+        normalized = model.model_validate(raw, strict=True).model_dump(mode="json")
     except (TypeError, ValueError) as exc:
         raise StageDPlanError("Stage-D plan fails its strict schema") from exc
     expected = _BUILDERS[normalized["phase"]](
         normalized["parent_decision_sha256"], normalized["candidates"],
-        corpus=corpus, run_nonce_key=run_nonce_key,
+        corpus=corpus, run_nonce_key=run_nonce_key, policy=policy,
     )
     if canonical_json(normalized) != canonical_json(expected):
         raise StageDPlanError("Stage-D plan differs from independent re-derivation")

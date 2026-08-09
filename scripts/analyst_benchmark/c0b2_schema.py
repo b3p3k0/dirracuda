@@ -17,6 +17,9 @@ from typing import Annotated, Any, Literal, Mapping, TypeAlias
 from pydantic import (BaseModel, ConfigDict, Field, TypeAdapter,
                       field_validator, model_validator)
 
+from .c0b3_policy import (BENCHMARK_PROTOCOL_ID, POLICY_ID, POLICY_SHA256,
+                          CURRENT_POLICY, resolve_header_policy)
+
 CATEGORIES = ("pii", "financial", "contact", "demographic")
 Category: TypeAlias = Literal["pii", "financial", "contact", "demographic"]
 Assessment: TypeAlias = Literal[
@@ -83,9 +86,19 @@ class RunHeaderPins(_StrictModel):
         return self
 
 
+class CurrentRunHeaderPins(RunHeaderPins):
+    """C0B-3 header shape; legacy RunHeaderPins remains byte-exact."""
+
+    benchmark_protocol_id: Literal[BENCHMARK_PROTOCOL_ID]
+    policy_id: Literal[POLICY_ID]
+    policy_sha256: Literal[POLICY_SHA256]
+
+
 def validate_run_header_pins(value: Mapping[str, Any]) -> dict[str, Any]:
     """Reject missing, extra, coerced, or malformed provenance pins."""
-    return RunHeaderPins.model_validate(value, strict=True).model_dump(mode="json")
+    policy = resolve_header_policy(value)
+    model = CurrentRunHeaderPins if policy == CURRENT_POLICY else RunHeaderPins
+    return model.model_validate(value, strict=True).model_dump(mode="json")
 
 
 _C_STRATA = Literal[

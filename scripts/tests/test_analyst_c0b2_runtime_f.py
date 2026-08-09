@@ -1052,6 +1052,9 @@ def test_failure_terminal_reentry_has_no_quality_validation_or_transport(
         lambda _point: runtime_f.RuntimePosition("F", "F_SEED_1"))
     monkeypatch.setattr(public_runtime, "_checkpoint_path",
                         lambda _run_id, root: root / "run.sqlite")
+    monkeypatch.setattr(
+        "scripts.analyst_benchmark.c0b3_policy.require_checkpoint_header",
+        lambda *_args: {})
     monkeypatch.setattr(public_runtime, "revalidate_source_pins",
                         lambda _header: calls.append("pins"))
     monkeypatch.setattr(public_runtime, "ensure_backup_receipt",

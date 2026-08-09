@@ -22,8 +22,9 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence, Set, Tuple
 
-from .c0b2_leakscan import (FROZEN_C0B2_PUBLIC_PATHS, LeakGateError,
-                            read_regular_file)
+from .c0b2_leakscan import (FROZEN_C0B2_PUBLIC_PATHS, FROZEN_C0B3_PUBLIC_PATHS,
+                            LeakGateError, read_regular_file)
+from .c0b3_policy import BENCHMARK_PROTOCOL_ID
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BASELINE_VERSION = 1
@@ -74,6 +75,7 @@ C0B1_ALLOWLIST_PREFIX: Tuple[str, ...] = (
     "shared/tests/fixtures/analyst_gold/docs/",
 )
 ALLOWLIST_EXACT: Set[str] = set(FROZEN_C0B2_PUBLIC_PATHS)
+C0B3_ALLOWLIST_EXACT: Set[str] = set(FROZEN_C0B3_PUBLIC_PATHS)
 ALLOWLIST_PREFIX: Tuple[str, ...] = ()
 
 GENERIC_PATTERNS: Dict[str, re.Pattern] = {
@@ -254,8 +256,12 @@ def secrets_compare(a: str, b: str) -> bool:
     return hmac.compare_digest(a, b)
 
 
-def allowed(path: str) -> bool:
-    return path in ALLOWLIST_EXACT or path.startswith(ALLOWLIST_PREFIX)
+def allowed(path: str, protocol_id: str | None = None) -> bool:
+    if protocol_id not in {None, BENCHMARK_PROTOCOL_ID}:
+        raise BaselineError("unknown leak-scan protocol identity")
+    exact = C0B3_ALLOWLIST_EXACT if protocol_id == BENCHMARK_PROTOCOL_ID \
+        else ALLOWLIST_EXACT
+    return path in exact or path.startswith(ALLOWLIST_PREFIX)
 
 
 def allowed_c0b1(path: str) -> bool:
@@ -334,7 +340,7 @@ def scan_content(paths: Sequence[str], raw_responses: Sequence[str], *,
 
 
 def run(*, baseline_path: Path, raw_artifacts: Sequence[Path],
-        mode: str = "public") -> int:
+        mode: str = "public", protocol_id: str | None = None) -> int:
     if mode != "public":
         print("private leakage scanning is unavailable until C0B-2 gates exist")
         return 2
@@ -353,10 +359,11 @@ def run(*, baseline_path: Path, raw_artifacts: Sequence[Path],
                       if _metadata_changed(before.get(p), current.get(p))]
         preexisting = [p for p in all_paths
                        if not _metadata_changed(before.get(p), current.get(p))]
-        unlisted = sorted(p for p in task_delta if not allowed(p))
+        unlisted = sorted(p for p in task_delta if not allowed(p, protocol_id))
 
         # Never open an unrelated delta. Its unexpected path is already a failure.
-        scan_paths = sorted(p for p in task_delta if allowed(p) and p in current)
+        scan_paths = sorted(
+            p for p in task_delta if allowed(p, protocol_id) and p in current)
         content_hits = scan_content(scan_paths, raw_responses, inventory=current)
     except (BaselineError, OSError) as exc:
         print(f"leak scan (public)\n  RESULT: FAIL CLOSED — {exc}")

@@ -12,7 +12,7 @@ import json
 from typing import Any, Literal, Mapping, Sequence
 import unicodedata
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
 
 from . import chunker
 from .c0b2_plan import attempt_id as stable_attempt_id
@@ -30,6 +30,10 @@ from .c0b2_schema import CATEGORIES, canonical_json
 from .c0b2_stage_c import classify_answer
 from .c0b2_stage_d_plan import D1_PANEL, D2_CHUNKS, D50Corpus, StageDContextControl
 from .metrics import ground_finding
+from .c0b3_policy import (CURRENT_POLICY, LEGACY_POLICY, false_positive_failure_reason,
+                          false_positive_limit, policy_binding,
+                          resolve_payload_policy)
+from .c0b3_schema import (DPhasePlanV2, validate_versioned_legacy_shape)
 
 AGGREGATE_VERSION = "stage-d-phase-aggregate-v1"
 DECISION_VERSION = "stage-d-decision-v1"
@@ -52,6 +56,9 @@ _D4_REASONS = (
     "length_outcome_present", "context_headroom_violation",
     "channel_violation_present",
 )
+_D4_CURRENT_REASONS = tuple(
+    "negative_false_positive_above_1" if reason ==
+    "negative_false_positive_present" else reason for reason in _D4_REASONS)
 _ATTEMPT_STATES = {
     "ACCEPTED", "SCHEMA_INVALID", "RETRYABLE_TRANSPORT",
     "ORPHANED_UNKNOWN", "CANCELLED_UNVERIFIED",
@@ -272,7 +279,8 @@ class D4Quality(_Reasoned):
     schema_escape_empty: bool
 
     @model_validator(mode="after")
-    def exact_reasons(self) -> "D4Quality":
+    def exact_reasons(self, info: ValidationInfo) -> "D4Quality":
+        policy = (info.context or {}).get("policy", LEGACY_POLICY)
         if tuple(self.category_recall) != tuple(CATEGORIES):
             raise ValueError("D4 recall differs from frozen category order")
         if (self.completed_eventual_valid_chunks > self.expected_chunk_count
@@ -294,15 +302,17 @@ class D4Quality(_Reasoned):
             **{f"{category}_recall_below_6_of_6":
                self.category_recall[category].true_positives != 6
                for category in CATEGORIES},
-            "negative_false_positive_present":
-                self.negative_false_positive_documents > 0,
+            false_positive_failure_reason(policy, "stage_d3_d4"):
+                self.negative_false_positive_documents >
+                false_positive_limit(policy, "stage_d3_d4"),
             "boundary_identifier_missing":
                 self.boundary_identifier_pass_documents != self.boundary_documents,
             "length_outcome_present": self.length_outcomes > 0,
             "context_headroom_violation": self.headroom_violations > 0,
             "channel_violation_present": channel,
         }
-        _check_reasoned(self, _D4_REASONS, failures)
+        order = _D4_CURRENT_REASONS if policy == CURRENT_POLICY else _D4_REASONS
+        _check_reasoned(self, order, failures)
         return self
 
 
@@ -502,7 +512,8 @@ def _strict_plan(value: Mapping[str, Any]) -> tuple[dict[str, Any], DPhasePlan]:
     if type(value) is not dict:
         raise StageDError("Stage-D plan must be an exact JSON object")
     try:
-        model = DPhasePlan.model_validate(value, strict=True)
+        cls = DPhasePlanV2 if resolve_payload_policy(value) == CURRENT_POLICY else DPhasePlan
+        model = cls.model_validate(value, strict=True)
     except (TypeError, ValueError) as exc:
         raise StageDError("Stage-D plan fails strict validation") from exc
     payload = model.model_dump(mode="json")
@@ -760,7 +771,8 @@ def _probe(candidate: DPhaseCandidate, plan: DPhasePlan,
     return evidence.model_dump(mode="json")
 
 
-def _quality_d4(scores: Sequence[_WorkScore], corpus: D50Corpus) -> dict[str, Any]:
+def _quality_d4(scores: Sequence[_WorkScore], corpus: D50Corpus, *,
+                policy: Any = LEGACY_POLICY) -> dict[str, Any]:
     docs = _doc_facts(scores, corpus)
     controls = [row for row in docs if row["stratum"] in {
         "positive_control", "negative_clean", "negative_near_miss"}]
@@ -785,13 +797,16 @@ def _quality_d4(scores: Sequence[_WorkScore], corpus: D50Corpus) -> dict[str, An
         **{f"{category}_recall_below_6_of_6":
            recall[category]["true_positives"] != 6 or recall[category]["support"] != 6
            for category in CATEGORIES},
-        "negative_false_positive_present": any(row["predicted"] for row in negative),
+        false_positive_failure_reason(policy, "stage_d3_d4"):
+            sum(bool(row["predicted"]) for row in negative) >
+            false_positive_limit(policy, "stage_d3_d4"),
         "boundary_identifier_missing": not all(row["boundary_pass"] for row in boundaries),
         "length_outcome_present": any(row["length"] for row in docs),
         "context_headroom_violation": any(row["headroom"] for row in docs),
         "channel_violation_present": channel,
     }
-    reasons = ordered_reasons(_D4_REASONS, facts)
+    order = _D4_CURRENT_REASONS if policy == CURRENT_POLICY else _D4_REASONS
+    reasons = ordered_reasons(order, facts)
     return D4Quality.model_validate({
         "expected_chunk_count": len(scores),
         "completed_eventual_valid_chunks": sum(row["completed"] for row in docs),
@@ -811,7 +826,7 @@ def _quality_d4(scores: Sequence[_WorkScore], corpus: D50Corpus) -> dict[str, An
         "marker_empty": all(row["marker"] for row in docs),
         "schema_escape_empty": all(row["schema"] for row in docs),
         "passed": not reasons, "failure_reasons": reasons,
-    }, strict=True).model_dump(mode="json")
+    }, strict=True, context={"policy": policy}).model_dump(mode="json")
 
 
 def build_stage_d_aggregate(
@@ -823,6 +838,7 @@ def build_stage_d_aggregate(
 ) -> dict[str, Any]:
     """Rebuild one exact phase aggregate from plan-owned bounded evidence."""
     payload, plan = _strict_plan(phase_plan)
+    policy = resolve_payload_policy(payload)
     scores = _score_all(plan, corpus, evidence_by_work)
     plan_hash = sha256_json(payload)
     rows: list[dict[str, Any]] = []
@@ -868,7 +884,7 @@ def build_stage_d_aggregate(
         else:
             probe = _probe(candidate, plan, controls[candidate.candidate_id],
                            probes[candidate.candidate_id])
-            quality = _quality_d4(candidate_scores, corpus)
+            quality = _quality_d4(candidate_scores, corpus, policy=policy)
             if plan.phase == "D3":
                 maximum = max(row.max_prompt_eval_count for row in candidate_scores)
                 census = []
@@ -903,7 +919,10 @@ def build_stage_d_aggregate(
                     "context_probe": probe, "quality": quality,
                 })
     aggregate = {
-        "version": AGGREGATE_VERSION, "stage": "D", "phase": plan.phase,
+        "version": ("stage-d-phase-aggregate-v2" if policy == CURRENT_POLICY else
+                    AGGREGATE_VERSION),
+        **(policy_binding() if policy == CURRENT_POLICY else {}),
+        "stage": "D", "phase": plan.phase,
         "plan_sha256": plan_hash,
         "parent_decision_sha256": plan.parent_decision_sha256,
         "candidate_order": [row.candidate_id for row in plan.candidates],
@@ -921,12 +940,15 @@ def validate_stage_d_aggregate(value: Mapping[str, Any]) -> dict[str, Any]:
     if type(value) is not dict or value.get("phase") not in _AGGREGATES:
         raise StageDError("Stage-D aggregate has an unknown shape/phase")
     try:
-        parsed = _AGGREGATES[value["phase"]].model_validate(value, strict=True)
+        parsed = validate_versioned_legacy_shape(
+            value, _AGGREGATES[value["phase"]],
+            legacy_version=AGGREGATE_VERSION,
+            current_version="stage-d-phase-aggregate-v2")
     except (TypeError, ValueError) as exc:
         raise StageDError("Stage-D aggregate fails strict validation") from exc
-    if [row.candidate_id for row in parsed.candidates] != parsed.candidate_order:
+    if [row["candidate_id"] for row in parsed["candidates"]] != parsed["candidate_order"]:
         raise StageDError("Stage-D aggregate differs from frozen candidate order")
-    return parsed.model_dump(mode="json")
+    return parsed
 
 
 def _require_aggregate_plan_shape(aggregate: Mapping[str, Any],
@@ -995,6 +1017,9 @@ def build_stage_d_decision(aggregate: Mapping[str, Any],
     """Build a D1/D2/D3 decision; D3 all-reuse becomes the final decision."""
     normalized = validate_stage_d_aggregate(aggregate)
     payload, plan = _strict_plan(phase_plan)
+    policy = resolve_payload_policy(payload)
+    if resolve_payload_policy(normalized) != policy:
+        raise StageDError("aggregate and plan policies differ")
     if (normalized["phase"] != plan.phase
             or normalized["plan_sha256"] != sha256_json(payload)
             or normalized["parent_decision_sha256"] != plan.parent_decision_sha256
@@ -1019,11 +1044,16 @@ def build_stage_d_decision(aggregate: Mapping[str, Any],
         passing = [row for row in normalized["candidates"] if row["passed"]]
         if passing and all(row["selected_num_ctx"] == 16384 for row in passing):
             selections = [_d3_final_row(plan, normalized, row) for row in passing]
-            value = {"version": DECISION_VERSION, "stage": "D", "phase": "D3",
+            value = {"version": ("stage-d-decision-v2" if policy == CURRENT_POLICY else
+                                 DECISION_VERSION),
+                     **(policy_binding() if policy == CURRENT_POLICY else {}),
+                     "stage": "D", "phase": "D3",
                      "plan_sha256": normalized["plan_sha256"],
                      "aggregate_sha256": aggregate_hash, "outcome": "FINALISTS",
                      "reason": "finalists_selected", "selections": selections}
-            return FinalDecision.model_validate(value, strict=True).model_dump(mode="json")
+            return validate_versioned_legacy_shape(
+                value, FinalDecision, legacy_version=DECISION_VERSION,
+                current_version="stage-d-decision-v2")
         selections = [_candidate_row(base, num_ctx=row["selected_num_ctx"])
                       for base, row in zip(plan.candidates, normalized["candidates"], strict=True)
                       if row["passed"]]
@@ -1031,11 +1061,16 @@ def build_stage_d_decision(aggregate: Mapping[str, Any],
         outcome = "CONTINUE" if selections else "INCONCLUSIVE"
     else:
         raise StageDError("D4 requires the exact merge decision builder")
-    value = {"version": DECISION_VERSION, "stage": "D", "phase": plan.phase,
+    value = {"version": ("stage-d-decision-v2" if policy == CURRENT_POLICY else
+                         DECISION_VERSION),
+             **(policy_binding() if policy == CURRENT_POLICY else {}),
+             "stage": "D", "phase": plan.phase,
              "plan_sha256": normalized["plan_sha256"],
              "aggregate_sha256": aggregate_hash, "outcome": outcome,
              "reason": reason, "selections": selections}
-    return IntermediateDecision.model_validate(value, strict=True).model_dump(mode="json")
+    return validate_versioned_legacy_shape(
+        value, IntermediateDecision, legacy_version=DECISION_VERSION,
+        current_version="stage-d-decision-v2")
 
 
 def _d3_final_row(plan: DPhasePlan, aggregate: Mapping[str, Any],
@@ -1058,8 +1093,9 @@ def d3_decision_record_sha256(decision: Mapping[str, Any]) -> str:
     if type(decision) is not dict:
         raise StageDError("D3 decision must be an exact JSON object")
     try:
-        normalized = IntermediateDecision.model_validate(
-            decision, strict=True).model_dump(mode="json")
+        normalized = validate_versioned_legacy_shape(
+            decision, IntermediateDecision, legacy_version=DECISION_VERSION,
+            current_version="stage-d-decision-v2")
     except (TypeError, ValueError) as exc:
         raise StageDError("D3 decision fails strict validation") from exc
     if (normalized != decision or normalized["phase"] != "D3"
@@ -1079,6 +1115,9 @@ def build_d4_final_decision(
     """Merge passing lower-context reruns with untouched D3 reuse evidence."""
     d4 = validate_stage_d_aggregate(d4_aggregate)
     d3 = validate_stage_d_aggregate(d3_aggregate)
+    policy = resolve_payload_policy(d4)
+    if resolve_payload_policy(d3) != policy:
+        raise StageDError("D3/D4 aggregate policies differ")
     d4_payload, d4_model = _strict_plan(d4_plan)
     d3_payload, d3_model = _strict_plan(d3_plan)
     if (d4["phase"], d3["phase"]) != ("D4", "D3"):
@@ -1132,14 +1171,19 @@ def build_d4_final_decision(
                     "quality": d4_row["quality"],
                 })
     value = {
-        "version": DECISION_VERSION, "stage": "D", "phase": "D4",
+        "version": ("stage-d-decision-v2" if policy == CURRENT_POLICY else
+                    DECISION_VERSION),
+        **(policy_binding() if policy == CURRENT_POLICY else {}),
+        "stage": "D", "phase": "D4",
         "plan_sha256": d4["plan_sha256"], "aggregate_sha256": sha256_json(d4),
         "outcome": "FINALISTS" if selections else "INCONCLUSIVE",
         "reason": "finalists_selected" if selections else
                   "no_d4_confirmation_finalist",
         "selections": selections,
     }
-    return FinalDecision.model_validate(value, strict=True).model_dump(mode="json")
+    return validate_versioned_legacy_shape(
+        value, FinalDecision, legacy_version=DECISION_VERSION,
+        current_version="stage-d-decision-v2")
 
 
 def validate_final_stage_d_decision(
@@ -1151,7 +1195,9 @@ def validate_final_stage_d_decision(
     if type(decision) is not dict:
         raise StageDError("final Stage-D decision must be an exact JSON object")
     try:
-        parsed = FinalDecision.model_validate(decision, strict=True).model_dump(mode="json")
+        parsed = validate_versioned_legacy_shape(
+            decision, FinalDecision, legacy_version=DECISION_VERSION,
+            current_version="stage-d-decision-v2")
     except (TypeError, ValueError) as exc:
         raise StageDError("final Stage-D decision fails strict validation") from exc
     _owner_payload, owner = _strict_plan(owner_plan)

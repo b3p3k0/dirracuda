@@ -23,8 +23,7 @@ from .c0b2_fsprobe import (GlobalExecutionLock, MountFingerprint,
 from .c0b2_plan import (KEEP_ALIVE, MODELS, OPTIONS_C,
                         attempt_id as stable_attempt_id, planned_work_ids,
                         stable_hash)
-from .c0b2_schema import (validate_stage_c_inconclusive,
-                          validate_stage_c_selection)
+from .c0b2_schema import validate_stage_c_selection
 
 
 class RetryableTransport(RuntimeError):
@@ -695,7 +694,8 @@ class DurableExecutor:
         """Atomically persist the no-survivor decisions, artifact, and terminal."""
         self._require_lock()
         selected = validate_stage_c_selection(selection)
-        result = validate_stage_c_inconclusive(artifact)
+        from .c0b3_schema import validate_result_for_header
+        result = validate_result_for_header(self.checkpoint.header(), artifact)
         plan = self.checkpoint.load_plan("C")
         aggregate = self.checkpoint.load_aggregate("C")
         from .c0b2_stage_c import build_stage_c_selection
@@ -716,11 +716,10 @@ class DurableExecutor:
         result_hash = hashlib.sha256(result_raw.encode("utf-8")).hexdigest()
         selection_raw = canonical_json(selected)
         selection_row = ("C", plan[1], aggregate[1], "NOT_ACTIVATED", selection_raw)
-        completion = {
-            "outcome": "INCONCLUSIVE", "artifact_sha256": result_hash,
-            "facts": {"deterministic_stop": True,
-                      "reason": "no_stage_c_survivor"},
-        }
+        from .c0b3_schema import build_completion_value
+        completion_id, completion = build_completion_value(
+            result, result_hash, {"deterministic_stop": True,
+                                  "reason": "no_stage_c_survivor"})
         completion_row = (
             "C", plan[1], aggregate[1], "NOT_ACTIVATED", canonical_json(completion))
         conn = self.checkpoint.conn
@@ -748,7 +747,7 @@ class DurableExecutor:
                 raise CheckpointError("Stage-C inconclusive work has unbound acceptance")
             self._validate_control_obligations({"C": plan})
             for decision_id, row in (("stage-c-selection", selection_row),
-                                     ("c0b2-completion", completion_row)):
+                                     (completion_id, completion_row)):
                 if conn.execute("SELECT 1 FROM decisions WHERE decision_id=?",
                                 (decision_id,)).fetchone():
                     raise CheckpointError(f"decision {decision_id} already exists")

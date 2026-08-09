@@ -25,25 +25,38 @@ from urllib.parse import quote
 from . import chunker, goldset, metrics, report
 from .c0b2_checkpoint import (INVOCATION_CAPS, SCHEMA_VERSION, Checkpoint,
                               CheckpointError, RESUMABLE_STATES, RUN_ID_RE,
-                              TERMINAL_STATES, canonical_json, sha256_json)
+                              TERMINAL_STATES, _stored_header, canonical_json,
+                              sha256_json)
 from .c0b2_fsprobe import (GlobalExecutionLock, backup_snapshot,
                            probe_filesystem, status_readonly,
                            verify_connection, verify_readonly)
-from .c0b2_leakscan import (FROZEN_C0B2_PUBLIC_PATHS, LeakGateError,
-                            WorktreeSeal, capture_worktree_seal,
+from .c0b2_leakscan import (LeakGateError, WorktreeSeal, capture_worktree_seal,
                             public_generation_options_sha256, read_regular_file)
 from .c0b2_plan import (KEEP_ALIVE, MODELS, OPTIONS_C, WorkItem,
                         build_c_stage_plan, build_master_manifest,
                         master_manifest_payload, stage_plan_payload)
 from .c0b2_schema import (prompt_template_hash, schema_hash, stable_hash)
 from .c0b2_public_schema import (
-    AcceptancePlan, BackupAnchor, BackupReceipt, BackupStatus, DInconclusiveResult,
-    DPhasePlan, FInconclusiveResult, FMasterPlan, FSeedPlan, FSelectedResult,
+    AcceptancePlan, BackupAnchor, BackupReceipt, BackupStatus, DPhasePlan,
+    FMasterPlan, FSeedPlan,
     FailureArtifact, FailureEvidence, FAILURE_REASON_BY_TERMINAL, PLAN_ORDER,
-    InconclusiveCompletion, PlanActivation, SelectedCompletion, validate_artifact)
+    PlanActivation, validate_artifact)
 from .c0b2_runtime_common import (
     DeferredTransport, _LiveSignalGuard, runtime_position, runtime_transaction,
 )
+from .c0b3_policy import (BENCHMARK_PROTOCOL_ID, assert_clean_task_delta,
+                          CURRENT_POLICY, header_identity, protocol_sha256,
+                          read_checkpoint_header, reported_identity,
+                          require_checkpoint_header, require_expected_header,
+                          resolve_header_policy,
+                          task_tree_sha256)
+from .c0b3_schema import (completion_decision_id,
+                          validate_completion_for_header,
+                          validate_d_backup_history, validate_d_decision_owner,
+                          validate_plan_for_header,
+                          validate_public_artifact_for_header,
+                          validate_stage_c_completion_owner,
+                          validate_stage_c_terminal_event)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROTOCOL_PATH = REPO_ROOT / "docs/dev/ollama_integration/BENCHMARK_PROTOCOL_C0B2.md"
@@ -67,8 +80,11 @@ class RuntimeGateError(RuntimeError):
     """A frozen public-run identity or stage gate did not hold."""
 
 
-def new_public_run_id() -> str:
-    stamp = time.strftime("c0b2-%Y%m%d-%H%M%S", time.gmtime())
+def new_public_run_id(protocol_id: str | None = None) -> str:
+    prefix = "c0b3" if protocol_id == BENCHMARK_PROTOCOL_ID else "c0b2"
+    if protocol_id not in {None, BENCHMARK_PROTOCOL_ID}:
+        raise RuntimeGateError("unknown benchmark protocol identity")
+    stamp = time.strftime(f"{prefix}-%Y%m%d-%H%M%S", time.gmtime())
     return f"{stamp}-{secrets.token_hex(12)}"
 def _sha256_file(path: Path, *, trusted_root: Path = REPO_ROOT) -> str:
     _verified, body = read_regular_file(path, trusted_root=trusted_root)
@@ -80,29 +96,24 @@ def _git(repo_root: Path, *args: str) -> str:
         text=True, shell=False,
     )
     return result.stdout.strip()
-def _task_tree_hash(repo_root: Path) -> str:
-    rows: dict[str, str] = {}
-    for relative in sorted(FROZEN_C0B2_PUBLIC_PATHS):
-        try:
-            rows[relative] = _sha256_file(
-                repo_root / relative, trusted_root=repo_root)
-        except LeakGateError as exc:
-            raise RuntimeGateError(
-                f"frozen task path cannot be read safely: {relative}") from exc
-    return stable_hash(rows)
-def _require_clean_task_delta(seal: WorktreeSeal) -> None:
-    dirty = tuple(entry.path for entry in seal.entries
-                  if entry.path in FROZEN_C0B2_PUBLIC_PATHS)
-    if dirty:
-        raise RuntimeGateError(
-            "commit the frozen public implementation before create: " + ", ".join(dirty))
+def _task_tree_hash(repo_root: Path, protocol_id: str | None = None) -> str:
+    try:
+        return task_tree_sha256(repo_root, protocol_id)
+    except LeakGateError as exc:
+        raise RuntimeGateError("frozen task path cannot be read safely") from exc
+def _require_clean_task_delta(seal: WorktreeSeal, protocol_id: str | None = None) -> None:
+    try:
+        assert_clean_task_delta(seal, protocol_id)
+    except ValueError as exc:
+        raise RuntimeGateError(str(exc)) from exc
 def _manifest_payload(manifest: Any) -> dict[str, Any]:
     return master_manifest_payload(manifest)
 def _plan_payload(plan: Any) -> dict[str, Any]:
     return stage_plan_payload(plan)
 
 
-def _source_pins(repo_root: Path, seal: WorktreeSeal) -> dict[str, Any]:
+def _source_pins(repo_root: Path, seal: WorktreeSeal,
+                 protocol_id: str | None = None) -> dict[str, Any]:
     detector_hash = stable_hash({
         "metrics.py": _sha256_file(Path(metrics.__file__), trusted_root=repo_root),
         **{name: _sha256_file(repo_root / "scripts/analyst_benchmark" / name,
@@ -111,10 +122,13 @@ def _source_pins(repo_root: Path, seal: WorktreeSeal) -> dict[str, Any]:
                         "c0b2_stage_d.py", "c0b2_stage_f.py")},
     })
     return {
-        "protocol_sha256": _sha256_file(PROTOCOL_PATH, trusted_root=repo_root),
+        "protocol_sha256": (protocol_sha256(repo_root) if protocol_id is not None else
+                            _sha256_file(PROTOCOL_PATH, trusted_root=repo_root)),
         "git_head": _git(repo_root, "rev-parse", "HEAD"),
         "declared_dirty_state_sha256": seal.digest,
-        "task_tree_sha256": _task_tree_hash(repo_root),
+        "task_tree_sha256": (_task_tree_hash(repo_root, protocol_id)
+                             if protocol_id is not None else
+                             _task_tree_hash(repo_root)),
         "fixture_sha256": _sha256_file(goldset.MANIFEST, trusted_root=repo_root),
         "schema_sha256": stable_hash({"v1": schema_hash("v1"),
             "v2": schema_hash("v2"), "public": _sha256_file(repo_root /
@@ -134,14 +148,16 @@ def _source_pins(repo_root: Path, seal: WorktreeSeal) -> dict[str, Any]:
 
 
 def _header(repo_root: Path, seal: WorktreeSeal,
-            filesystem: Any, manifest: Any) -> dict[str, Any]:
+            filesystem: Any, manifest: Any,
+            protocol_id: str | None = None) -> dict[str, Any]:
     if filesystem.selected_mode != JOURNAL_MODE:
         raise RuntimeGateError("canonical filesystem did not pass DELETE+FULL")
     return {
         "run_type": "public",
         "parent_selection_sha256": None,
         "filesystem_selected_mode": JOURNAL_MODE,
-        **_source_pins(repo_root, seal),
+        **_source_pins(repo_root, seal, protocol_id),
+        **(header_identity() if protocol_id is not None else {}),
         "master_manifest_sha256": manifest.sha256,
         "filesystem_capability_sha256": filesystem.capability_sha256,
         "mount": asdict(filesystem.fingerprint),
@@ -151,7 +167,11 @@ def _header(repo_root: Path, seal: WorktreeSeal,
 def revalidate_source_pins(header: Mapping[str, Any], *,
                            repo_root: Path = REPO_ROOT) -> None:
     """Fail before HTTP if code, fixtures, endpoint, or declared dirt changed."""
-    current = _source_pins(repo_root, capture_worktree_seal(repo_root))
+    protocol_id = (BENCHMARK_PROTOCOL_ID
+                   if resolve_header_policy(header) == CURRENT_POLICY else None)
+    seal = capture_worktree_seal(repo_root)
+    current = (_source_pins(repo_root, seal, protocol_id)
+               if protocol_id is not None else _source_pins(repo_root, seal))
     changed = tuple(key for key, value in current.items() if header.get(key) != value)
     if changed:
         raise RuntimeGateError("immutable public-run identity drift: " + ", ".join(changed))
@@ -159,10 +179,13 @@ def revalidate_source_pins(header: Mapping[str, Any], *,
 
 def create_public_run(*, repo_root: Path = REPO_ROOT,
                       benchmark_root: Path | None = None,
-                      run_id: str | None = None) -> str:
+                      run_id: str | None = None,
+                      protocol_id: str | None = None) -> str:
     """Create and snapshot a complete immutable Stage-C plan without network I/O."""
+    if protocol_id not in {None, BENCHMARK_PROTOCOL_ID}:
+        raise RuntimeGateError("unknown benchmark protocol identity")
     root = Path(benchmark_root) if benchmark_root is not None else report.bench_root()
-    identity = run_id or new_public_run_id()
+    identity = run_id or new_public_run_id(protocol_id)
     if not RUN_ID_RE.fullmatch(identity):
         raise ValueError("invalid public run id")
     for existing in (root, root / "runs"):
@@ -173,7 +196,8 @@ def create_public_run(*, repo_root: Path = REPO_ROOT,
                     or stat.S_IMODE(st.st_mode) != 0o700):
                 raise PermissionError("existing benchmark directories must be exact 0700")
     seal = capture_worktree_seal(repo_root)
-    _require_clean_task_delta(seal)
+    (_require_clean_task_delta(seal, protocol_id) if protocol_id is not None else
+     _require_clean_task_delta(seal))
 
     corpus = goldset.load(verify=True)
     manifest = build_master_manifest(corpus)
@@ -181,7 +205,9 @@ def create_public_run(*, repo_root: Path = REPO_ROOT,
     if stable_hash(manifest_body) != manifest.sha256:
         raise RuntimeGateError("generated manifest hash is not canonical")
     filesystem = probe_filesystem(root)
-    header = _header(repo_root, seal, filesystem, manifest)
+    header = (_header(repo_root, seal, filesystem, manifest, protocol_id)
+              if protocol_id is not None else
+              _header(repo_root, seal, filesystem, manifest))
     with GlobalExecutionLock(root) as lock:
         point = _resume_public_creation(root, identity, manifest_body, header)
         needs_fsync = False
@@ -369,23 +395,9 @@ def _ensure_initial_snapshot(point: Checkpoint, lock: GlobalExecutionLock,
     return backup_snapshot(point, root, lock=lock)
 
 
-_RESULT_MODELS = {
-    ("SELECTED", "F"): FSelectedResult,
-    ("INCONCLUSIVE", "F"): FInconclusiveResult,
-    ("INCONCLUSIVE", "D"): DInconclusiveResult,
-}
-
-
-def _public_artifact(value: Mapping[str, Any]) -> dict[str, Any]:
-    terminal, stage = value.get("terminal"), value.get("stage")
-    model = (FailureEvidence if value.get("version") == "c0b2-failure-evidence-v1"
-             else FailureArtifact if terminal in {
-        "FAILED_SAFETY", "BLOCKED_PROVENANCE", "BLOCKED_BUDGET",
-        "BLOCKED_FILESYSTEM", "ABANDONED",
-    } else _RESULT_MODELS.get((terminal, stage)))
-    if model is None:
-        raise ValueError("unsupported public result/failure artifact")
-    return validate_artifact(model, value)
+def _public_artifact(value: Mapping[str, Any],
+                     header: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    return validate_public_artifact_for_header(header, value)
 
 
 def freeze_public_artifact(point: Checkpoint, artifact_id: str,
@@ -393,7 +405,7 @@ def freeze_public_artifact(point: Checkpoint, artifact_id: str,
     """Strict, transaction-joinable storage for D/F results and public failures."""
     if not isinstance(artifact_id, str) or not artifact_id:
         raise ValueError("public artifact ID must be nonempty")
-    normalized = _public_artifact(value)
+    normalized = _public_artifact(value, point.header())
     raw, digest = canonical_json(normalized), sha256_json(normalized)
     frozen = (normalized["terminal"], digest, raw)
     with runtime_transaction(point):
@@ -417,7 +429,7 @@ def load_public_artifact(point: Checkpoint, artifact_id: str) -> tuple[str, dict
     ).fetchone()
     if not row:
         raise CheckpointError(f"unknown public artifact {artifact_id}")
-    value = _public_artifact(json.loads(str(row[1])))
+    value = _public_artifact(json.loads(str(row[1])), point.header())
     if canonical_json(value) != row[1] or sha256_json(value) != row[0]:
         raise RuntimeGateError("public artifact hash or canonical encoding changed")
     return str(row[0]), value
@@ -596,10 +608,12 @@ def _canonical_db_object(raw: str, digest: str, label: str) -> dict[str, Any]:
     return value
 
 
-def _typed_db_object(raw: str, digest: str, label: str, model: Any) -> dict[str, Any]:
+def _typed_db_object(raw: str, digest: str, label: str, model: Any, *,
+                     header: Mapping[str, Any] | None = None) -> dict[str, Any]:
     value = _canonical_db_object(raw, digest, label)
     try:
-        normalized = validate_artifact(model, value)
+        normalized = (validate_plan_for_header(header, model, value)
+                      if header is not None else validate_artifact(model, value))
     except (TypeError, ValueError) as exc:
         raise RuntimeGateError(f"{label} failed semantic validation") from exc
     if canonical_json(normalized) != raw:
@@ -610,14 +624,18 @@ def _typed_db_object(raw: str, digest: str, label: str, model: Any) -> dict[str,
 def _decision_hash(conn: sqlite3.Connection, decision_id: str, *,
                    stage: str | None = None, parent_hash: str | None = None,
                    aggregate_hash: str | None = None,
-                   activation: str = "ACTIVATED") -> str:
+                   activation: str = "ACTIVATED",
+                   header: Mapping[str, Any] | None = None) -> str:
     row = conn.execute(
         "SELECT stage,parent_hash,aggregate_hash,activation,value_json "
         "FROM decisions WHERE decision_id=?", (decision_id,),
     ).fetchone()
     if not row:
         raise RuntimeGateError(f"required decision {decision_id} is missing")
-    _canonical_db_object(str(row[4]), sha256_json(json.loads(row[4])), decision_id)
+    value = _canonical_db_object(
+        str(row[4]), sha256_json(json.loads(row[4])), decision_id)
+    if header is not None and stage == "D":
+        validate_d_decision_owner(conn, header, decision_id, value)
     if (row[3] != activation or stage is not None and row[0] != stage
             or parent_hash is not None and row[1] != parent_hash
             or aggregate_hash is not None and row[2] != aggregate_hash):
@@ -640,7 +658,8 @@ def _stored_public_artifact(
         (terminal,),
     ).fetchall()
     try:
-        parsed = [(row, _public_artifact(json.loads(str(row[2])))) for row in rows]
+        parsed = [(row, _public_artifact(json.loads(str(row[2])), header))
+                  for row in rows]
     except (TypeError, ValueError, json.JSONDecodeError) as exc:
         raise RuntimeGateError("terminal public artifact failed validation") from exc
     if any(row[0] != value["terminal"] or value["terminal"] != terminal
@@ -690,15 +709,16 @@ def _stored_public_artifact(
                  if value["terminal"] == "SELECTED" else value.get("aggregate_sha256"))
         if owner != aggregate_hash:
             raise RuntimeGateError("public result differs from its aggregate owner")
+        decision_id = completion_decision_id(header)
         completion = conn.execute(
             "SELECT stage,parent_hash,aggregate_hash,activation,value_json FROM decisions "
-            "WHERE decision_id='c0b2-completion'").fetchall()
+            "WHERE decision_id=?", (decision_id,)).fetchall()
         if len(completion) != 1:
             raise RuntimeGateError("public result lacks its exact completion decision")
         decision = completion[0]
-        model = SelectedCompletion if terminal == "SELECTED" else InconclusiveCompletion
         try:
-            body = validate_artifact(model, json.loads(str(decision[4])))
+            body = validate_completion_for_header(
+                header, decision_id, json.loads(str(decision[4])))
         except (TypeError, ValueError, json.JSONDecodeError) as exc:
             raise RuntimeGateError("completion decision failed validation") from exc
         expected_activation = "ACTIVATED" if terminal == "SELECTED" else "NOT_ACTIVATED"
@@ -712,27 +732,27 @@ def _stored_public_artifact(
     return str(row[1])
 
 
-def _legacy_stage_c_artifact(conn: sqlite3.Connection, aggregate_hash: str) -> str:
+def _legacy_stage_c_artifact(
+        conn: sqlite3.Connection, aggregate_hash: str, plan_hash: str,
+        header: Mapping[str, Any] | None = None) -> str:
     rows = conn.execute(
         "SELECT detail_json FROM events WHERE kind='FINAL_ARTIFACT' ORDER BY seq"
     ).fetchall()
     if len(rows) != 1:
         raise RuntimeGateError("Stage-C terminal requires one final artifact")
-    detail = json.loads(str(rows[0][0]))
-    artifact = detail.get("artifact") if isinstance(detail, dict) else None
-    if (set(detail) != {"state", "sha256", "artifact"}
-            or detail["state"] != "INCONCLUSIVE"
-            or not isinstance(artifact, dict)
-            or set(artifact) != {
-                "version", "terminal", "stage", "aggregate_sha256", "reason"}
-            or artifact != {
-                "version": "c0b2-result-v1", "terminal": "INCONCLUSIVE",
-                "stage": "C", "aggregate_sha256": aggregate_hash,
-                "reason": "no_stage_c_survivor"}
-            or hashlib.sha256(canonical_json(artifact).encode()).hexdigest()
-            != detail["sha256"]):
-        raise RuntimeGateError("Stage-C final artifact changed")
-    return str(detail["sha256"])
+    try:
+        artifact_hash = validate_stage_c_terminal_event(
+            {} if header is None else header,
+            json.loads(str(rows[0][0])), aggregate_hash)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeGateError("Stage-C final artifact changed") from exc
+    try:
+        validate_stage_c_completion_owner(
+            conn, header, plan_sha256=plan_hash,
+            aggregate_sha256=aggregate_hash, artifact_sha256=artifact_hash)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeGateError("Stage-C completion failed validation") from exc
+    return artifact_hash
 
 
 def _plan_aggregate_hash(conn: sqlite3.Connection, plan_key: str, plan_hash: str) -> str:
@@ -819,10 +839,7 @@ def _validate_backup_activation(
 
 
 def _anchor_from_connection(conn: sqlite3.Connection) -> dict[str, Any]:
-    header_row = conn.execute("SELECT json,sha256 FROM run_header WHERE id=1").fetchone()
-    if not header_row:
-        raise RuntimeGateError("run header is missing")
-    header = _canonical_db_object(str(header_row[0]), str(header_row[1]), "run header")
+    header = _stored_header(conn)
     state = str(conn.execute("SELECT state FROM run_state WHERE id=1").fetchone()[0])
     if state not in _BACKUP_REQUIRED_STATES:
         raise RuntimeGateError(f"state {state} does not require a backup receipt")
@@ -831,13 +848,16 @@ def _anchor_from_connection(conn: sqlite3.Connection) -> dict[str, Any]:
     if not cursor:
         raise RuntimeGateError("runtime cursor is missing")
     active_stage, active_key = str(cursor[0]), str(cursor[1])
+    if active_stage == "D":
+        validate_d_backup_history(conn, header)
     if active_stage == "F":
         master = conn.execute(
             "SELECT manifest_hash,manifest_json FROM manifests WHERE name='f_master'"
         ).fetchone()
         if not master:
             raise RuntimeGateError("F backup lacks its frozen master plan")
-        _typed_db_object(str(master[1]), str(master[0]), "F master plan", FMasterPlan)
+        _typed_db_object(str(master[1]), str(master[0]), "F master plan", FMasterPlan,
+                         header=header)
         f_master = str(master[0])
     else:
         f_master = None
@@ -873,7 +893,8 @@ def _anchor_from_connection(conn: sqlite3.Connection) -> dict[str, Any]:
         model = (DPhasePlan if str(key).startswith("D")
                  else AcceptancePlan if key == "F_ACCEPTANCE" else FSeedPlan)
         plan = _typed_db_object(
-            str(plan_raw), str(plan_hash), f"phase plan {key}", model)
+            str(plan_raw), str(plan_hash), f"phase plan {key}", model,
+            header=header)
         activation = _typed_db_object(
             str(activation_raw), str(activation_hash),
             f"phase activation {key}", PlanActivation)
@@ -884,7 +905,7 @@ def _anchor_from_connection(conn: sqlite3.Connection) -> dict[str, Any]:
         plan_parent = _decision_hash(
             conn, plan_parent_decisions[key], stage=owner_stage,
             parent_hash=_decision_parent_hash(key, owner_hash, f_master),
-            aggregate_hash=owner_aggregate)
+            aggregate_hash=owner_aggregate, header=header)
         if activation_parent_decisions[key] == plan_parent_decisions[key]:
             activation_parent = plan_parent
         else:
@@ -921,9 +942,10 @@ def _anchor_from_connection(conn: sqlite3.Connection) -> dict[str, Any]:
         owner_hash = _decision_hash(
             conn, decision_id, stage=active_stage,
             parent_hash=str(plans[-1]["plan_sha256"]),
-            aggregate_hash=str(aggregate[0]))
+            aggregate_hash=str(aggregate[0]), header=header)
     elif active_stage == "C" and state == "INCONCLUSIVE":
-        owner_hash = _legacy_stage_c_artifact(conn, str(aggregate[0]))
+        owner_hash = _legacy_stage_c_artifact(
+            conn, str(aggregate[0]), str(plans[-1]["plan_sha256"]), header)
     else:
         charged_total = int(conn.execute(
             "SELECT count(*) FROM attempts").fetchone()[0])
@@ -1266,14 +1288,16 @@ def backup_status_readonly(db_path: Path) -> dict[str, Any]:
 
 def public_status(run_id: str, *, benchmark_root: Path | None = None) -> dict[str, Any]:
     path = _checkpoint_path(run_id, benchmark_root)
+    identity = reported_identity(read_checkpoint_header(path))
     status = status_readonly(path)
     if status["state"] == "INITIALIZING":
         raise RuntimeGateError("INITIALIZING public runs are create-recovery only")
-    return {**status, "backup": backup_status_readonly(path)}
+    return {**status, **identity, "backup": backup_status_readonly(path)}
 
 
 def public_verify(run_id: str, *, benchmark_root: Path | None = None) -> dict[str, Any]:
     path = _checkpoint_path(run_id, benchmark_root)
+    identity = reported_identity(read_checkpoint_header(path))
     if status_readonly(path)["state"] == "INITIALIZING":
         raise RuntimeGateError("INITIALIZING public runs are create-recovery only")
     result = verify_readonly(path)
@@ -1285,6 +1309,7 @@ def public_verify(run_id: str, *, benchmark_root: Path | None = None) -> dict[st
         return {
             "ok": False,
             "errors": errors + [f"backup_anchor_invalid:{type(exc).__name__}"],
+            **identity,
             "backup": {"required": True, "receipt_present": False,
                        "anchor_sha256": None, "snapshot_sha256": None},
         }
@@ -1312,7 +1337,7 @@ def public_verify(run_id: str, *, benchmark_root: Path | None = None) -> dict[st
         except (OSError, PermissionError, CheckpointError, RuntimeGateError,
                 sqlite3.DatabaseError) as exc:
             errors.append(f"backup_snapshot_invalid:{type(exc).__name__}")
-    return {"ok": not errors, "errors": errors, "backup": backup}
+    return {"ok": not errors, "errors": errors, **identity, "backup": backup}
 
 
 def render_public(value: Mapping[str, Any]) -> str:
@@ -1408,6 +1433,7 @@ def _stage_c_evidence(point: Checkpoint, work_ids: tuple[str, ...]) -> dict[str,
 def _run_public_stage_c_locked(
         point: Checkpoint, lock: GlobalExecutionLock, run_id: str,
         *, transport_factory: Callable[[Callable[[Any], Any], Mapping[str, Any]], Any] | None,
+        expected_protocol_id: str | None = None,
 ) -> dict[str, Any]:
     """Execute one already-authorized Stage-C invocation under the global lock."""
     from .c0b2_executor import (SERVER_CONTROL_MODEL, CancellationController,
@@ -1424,6 +1450,7 @@ def _run_public_stage_c_locked(
     header = point.header()
     if header.get("run_type") != "public":
         raise RuntimeGateError("public command cannot open a private run")
+    require_expected_header(header, expected_protocol_id)
     try:
         revalidate_source_pins(header)
         manifest_hash, _manifest_raw = point.load_manifest("master")
@@ -1619,11 +1646,9 @@ def _run_public_stage_c_locked(
             point.freeze_stage_boundary_decision(
                 "stage-c-selection", "C", plan_hash, aggregate_hash, selection)
         else:
-            executor.finalize_stage_c_inconclusive(selection, {
-                "version": "c0b2-result-v1", "terminal": "INCONCLUSIVE",
-                "stage": "C", "aggregate_sha256": aggregate_hash,
-                "reason": "no_stage_c_survivor",
-            })
+            from .c0b3_schema import build_stage_c_inconclusive_result
+            executor.finalize_stage_c_inconclusive(
+                selection, build_stage_c_inconclusive_result(header, aggregate_hash))
         _ensure_final_snapshot(point, lock, run_id)
         return _public_result(point, run_id, survivor_count=survivors)
 
@@ -1631,15 +1656,18 @@ def run_public_stage_c(
         run_id: str, *, resume: bool = False,
         benchmark_root: Path | None = None,
         transport_factory: Callable[[Callable[[Any], Any], Mapping[str, Any]], Any] | None = None,
+        expected_protocol_id: str | None = None,
 ) -> dict[str, Any]:
     """Run one live Stage-C invocation after the CLI's explicit confirmation gate."""
     root = Path(benchmark_root) if benchmark_root is not None else report.bench_root()
     path = _checkpoint_path(run_id, root)
+    require_checkpoint_header(path, expected_protocol_id)
     state = public_status(run_id, benchmark_root=root)["state"]
     if state in _BACKUP_REQUIRED_STATES:
         with GlobalExecutionLock(root) as lock:
             point = Checkpoint.open(path, root)
             try:
+                require_expected_header(point.header(), expected_protocol_id)
                 if point.state() != "BLOCKED_PROVENANCE":
                     revalidate_source_pins(point.header())
                 _ensure_final_snapshot(point, lock, run_id)
@@ -1656,6 +1684,7 @@ def run_public_stage_c(
     with GlobalExecutionLock(root) as lock:
         point = Checkpoint.open(path, root)
         try:
+            require_expected_header(point.header(), expected_protocol_id)
             state = point.state()
             if state in _BACKUP_REQUIRED_STATES:
                 if state != "BLOCKED_PROVENANCE":
@@ -1665,6 +1694,7 @@ def run_public_stage_c(
             if state in TERMINAL_STATES:
                 return _public_result(point, run_id)
             return _run_public_stage_c_locked(
-                point, lock, run_id, transport_factory=transport_factory)
+                point, lock, run_id, transport_factory=transport_factory,
+                expected_protocol_id=expected_protocol_id)
         finally:
             point.close()

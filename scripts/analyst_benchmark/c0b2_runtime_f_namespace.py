@@ -23,6 +23,12 @@ _ACTIVE_STATES = {"RUNNING", "PAUSED_RESOURCE", "PAUSED_PREFLIGHT",
                   "PAUSED_SOFT_WALL", "CANCELLED_PENDING_RESUME"}
 
 
+def _completion_id(point: Checkpoint) -> str:
+    from .c0b3_schema import completion_decision_id
+    header = point.header() if callable(getattr(point, "header", None)) else None
+    return completion_decision_id(header)
+
+
 def finite_timestamp(value: Any, label: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ImmutableViolation(f"{label} is not a finite real timestamp")
@@ -391,7 +397,7 @@ def validate_active_f_namespace(
             "SELECT plan_key FROM phase_aggregates WHERE plan_key LIKE 'F_%' ORDER BY rowid")),
         "decisions": tuple(row[0] for row in point.conn.execute(
             "SELECT decision_id FROM decisions WHERE stage='F' OR decision_id LIKE "
-            "'stage-f-%' OR decision_id='c0b2-completion' ORDER BY rowid")),
+            "'stage-f-%' OR decision_id=? ORDER BY rowid", (_completion_id(point),))),
         "events": point.conn.execute(
             "SELECT count(*) FROM events WHERE kind='F_SEED_CURSOR_TRANSITION' OR "
             "detail_json LIKE '%\"stage\":\"F\"%'").fetchone()[0],
@@ -459,8 +465,8 @@ def assert_f_namespace_empty_before_master(point: Checkpoint) -> None:
         ).fetchone()[0],
         "decisions": point.conn.execute(
             "SELECT count(*) FROM decisions WHERE stage='F' OR decision_id IN "
-            "('stage-f-seed-activation','stage-f-provisional-selection','c0b2-completion')"
-        ).fetchone()[0],
+            "('stage-f-seed-activation','stage-f-provisional-selection',?)",
+            (_completion_id(point),)).fetchone()[0],
         "events": point.conn.execute(
             "SELECT count(*) FROM events WHERE kind='F_SEED_CURSOR_TRANSITION' "
             "OR detail_json LIKE '%\"stage\":\"F\"%'").fetchone()[0],
@@ -481,8 +487,8 @@ def assert_seed1_replay_namespace(point: Checkpoint) -> None:
         ).fetchone()[0],
         "decisions": point.conn.execute(
             "SELECT count(*) FROM decisions WHERE stage='F' OR decision_id IN "
-            "('stage-f-seed-activation','stage-f-provisional-selection','c0b2-completion')"
-        ).fetchone()[0],
+            "('stage-f-seed-activation','stage-f-provisional-selection',?)",
+            (_completion_id(point),)).fetchone()[0],
         "events": point.conn.execute(
             "SELECT count(*) FROM events WHERE kind='F_SEED_CURSOR_TRANSITION' "
             "OR detail_json LIKE '%\"stage\":\"F\"%'").fetchone()[0],
@@ -514,8 +520,8 @@ def assert_acceptance_namespace_clean(point: Checkpoint) -> None:
             "SELECT count(*) FROM phase_aggregates WHERE plan_key='F_ACCEPTANCE'"
         ).fetchone()[0],
         "completion": point.conn.execute(
-            "SELECT count(*) FROM decisions WHERE decision_id='c0b2-completion'"
-        ).fetchone()[0],
+            "SELECT count(*) FROM decisions WHERE decision_id=?",
+            (_completion_id(point),)).fetchone()[0],
         "result": point.conn.execute(
             "SELECT count(*) FROM public_artifacts WHERE artifact_id='stage-f-result'"
         ).fetchone()[0],
@@ -545,7 +551,7 @@ def assert_terminal_f_namespace(
             "WHERE plan_key LIKE 'F_%' ORDER BY rowid")),
         "decisions": tuple(row[0] for row in point.conn.execute(
             "SELECT decision_id FROM decisions WHERE stage='F' OR decision_id LIKE "
-            "'stage-f-%' OR decision_id='c0b2-completion' ORDER BY rowid")),
+            "'stage-f-%' OR decision_id=? ORDER BY rowid", (_completion_id(point),))),
         "events": tuple(row[0] for row in point.conn.execute(
             "SELECT kind FROM events WHERE kind='F_SEED_CURSOR_TRANSITION' "
             "OR detail_json LIKE '%\"stage\":\"F\"%' ORDER BY seq")),
@@ -561,7 +567,7 @@ def assert_terminal_f_namespace(
         "aggregates": aggregate_keys, "activations": active_keys,
         "registries": active_keys,
         "decisions": ("stage-f-seed-activation",
-                      "stage-f-provisional-selection", "c0b2-completion"),
+                      "stage-f-provisional-selection", _completion_id(point)),
         "events": (() if active_keys == ("F_SEED_1",)
                    else ("F_SEED_CURSOR_TRANSITION",)),
         "artifacts": ("stage-f-result",), "legacy_acceptance": (),

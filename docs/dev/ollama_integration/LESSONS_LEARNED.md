@@ -562,8 +562,10 @@ or weakening terminal coverage.
 
 Unioning a legacy allowlist with a newer feature tree made the current public leak command
 accept paths outside the reviewed B5 boundary. Keep the C0B-1 scope available separately,
-but make C0B-2 public mode equal—not merely contain—the source-pinned 48-path set. Test
-that equality against the protocol so compatibility cannot silently widen a new gate.
+but make each protocol mode equal—not merely contain—its source-pinned set: 48 paths for
+C0B-2 and 58 for C0B-3. Select the scope only from the exact protocol identity, retain the
+legacy default, reject unknown paths, and test both equalities so a newer gate cannot
+silently widen an older one.
 
 ### 62. Path metadata is not a safe read primitive
 
@@ -706,6 +708,59 @@ positive. For an assistive, no-action tool, risk tolerance belongs in a numeric
 preregistered gate plus visible suggestion labels, source context and explicit human
 accept/reject—not in a vague “human in the loop” claim. Changing that tolerance after a
 terminal creates a new experiment and source identity; it never rewrites the old result.
+
+### 76. A policy migration needs a closed compatibility namespace
+
+Changing one numeric gate is not only a scorer edit. The run header, every
+policy-sensitive D/F owner, terminal result, completion row, backup rederiver and
+read-only verifier must dispatch from one exact stored discriminator. Run-ID prefixes
+are display data, and absent legacy fields remain meaningful; optional policy defaults
+would let mixed artifacts cross the boundary. Guard mutating commands with a read-only
+header check before opening the checkpoint writable, then repeat the check after open.
+Prove both mismatch directions and the legacy/current 0/1/2 boundaries without model or
+network calls.
+
+### 77. Exact-output tests are part of a compatibility contract
+
+Making `status` and `verify` explicitly report the resolved protocol/policy is required
+behavior, even for legacy checkpoints. Exact-dictionary assertions and mocked checkpoint
+entry tests must change with that public shape. Keep those test paths in the reviewed edit
+set and frozen task tree; otherwise an allowlist intended to prevent scope creep can block
+the tests that prove the promised compatibility. Verify real legacy checkpoints before
+and after the change and compare their database SHA-256 values, not only their reported
+state.
+
+### 78. A bounded miss is a product decision, not a hidden test exception
+
+The canonical C0B-2 run exposed one grounded but incorrectly classified negative
+document. For Analyst's recommendation-only role, the HI accepted that review cost: a
+useful partner with explicit human adjudication is preferable to indefinitely waiting for
+an unmeasured claim of perfection. Encode that judgement as prospective 0/1/2 numeric
+boundaries, distinct policy/version identities and visible `suggested/unreviewed` output;
+never special-case the observed document, rewrite the old terminal or relax unrelated
+schema, injection, grounding, provenance, privacy or final-acceptance controls. Production
+accept/reject counts are monitoring signals and rebenchmark triggers, not silent retuning.
+
+### 79. Never manufacture a missing pre-task baseline after the task
+
+A baseline created after implementation cannot prove what was present before the first
+edit. If the genuine artifact is unavailable, say so and use a separately approved,
+one-time substitute: compare the frozen parent commit with the complete worktree path set,
+exclude only a previously sealed unrelated delta, then descriptor-read and scan every
+changed task file against the complete owner-only raw-response inventory. Record exact
+counts and require zero hits. Future cards still create their baseline before editing.
+
+### 80. A generic terminal still inherits its stage history
+
+Changing an active Stage-D run to `ABANDONED` does not erase the adaptive decisions that
+led to its boundary. Validate and re-derive every completed attempt plus the final
+selection before the state mutation, then repeat that reconstruction when verifying the
+backup. Schema validity and internally consistent hashes are insufficient: a mixed-policy
+history can be coherently rehashed. Apply this rule to every backup from an active-D
+state, including generic failure terminals, rather than only D-specific outcomes. Keep
+the frozen `BLOCKED_PROVENANCE` exception narrow: validate its stored current-family
+lineage and exact failure artifact structurally, but do not demand the nonce key whose
+drift may be the failure being receipted.
 
 ---
 

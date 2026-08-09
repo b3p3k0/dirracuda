@@ -37,7 +37,6 @@ from .c0b2_runtime_common import (
     load_phase_plan, runtime_position, runtime_transaction,
 )
 from .c0b2_runtime_f_evidence import (
-    FSeedCursorTransition, ProvisionalDecision,
     attempt_in_invocation as _attempt_in_invocation,
     f17_terminal_census as _f17_terminal_census,
     seed1_inputs as _seed1_inputs,
@@ -54,11 +53,14 @@ from .c0b2_runtime_f_namespace import (
     assert_seed1_replay_namespace, later_namespace_census,
 )
 from .c0b2_stage_f import (
-    Seed1Evidence, SeedActivationDecision, StageFError,
+    ProvisionalDecision, StageFError,
     build_acceptance_aggregate, build_c44_scored_aggregate, build_final_result,
-    build_inconclusive_result, build_provisional_decision,
+    build_inconclusive_result, build_no_seed1_provisional_decision,
+    build_provisional_decision,
     build_seed1_evidence_from_attempts, build_seed_activation_decision,
-    build_stage_f_aggregate_from_attempts, validate_seed1_evidence,
+    build_stage_f_aggregate_from_attempts, validate_provisional_decision_artifact,
+    validate_seed1_evidence, validate_seed1_evidence_artifact,
+    validate_seed_activation_artifact,
 )
 from .c0b2_stage_f_plan import (
     PublicCorpus, StageFPlanError, build_acceptance_plan, build_f_master_plan,
@@ -66,6 +68,10 @@ from .c0b2_stage_f_plan import (
     request_specs_for_f_plan, resolve_f_seed1_control, validate_f_master_plan,
 )
 from .c0b2_transport import RequestSpec, request_spec_hash
+from .c0b3_policy import CURRENT_POLICY, resolve_header_policy, resolve_payload_policy
+from .c0b3_schema import (
+    build_completion_value, completion_decision_id, validate_plan_for_header,
+)
 
 _SEED_KEYS = ("F_SEED_1", "F_SEED_17", "F_SEED_20260804")
 _LATER_KEYS = _SEED_KEYS[1:]
@@ -121,6 +127,25 @@ def _typed(value: Mapping[str, Any], model: Any) -> dict[str, Any]:
     return validate_artifact(model, value)
 
 
+def _run_header(point: Any) -> dict[str, Any]:
+    return point.header() if callable(getattr(point, "header", None)) else {}
+
+
+def _plan_for_point(point: Any, model: Any,
+                    value: Mapping[str, Any]) -> dict[str, Any]:
+    header = _run_header(point)
+    if resolve_header_policy(header).benchmark_protocol_id is None:
+        return _typed(value, model)
+    return validate_plan_for_header(header, model, value)
+
+
+def _inconclusive(point: Any, reason: str, digest: str) -> dict[str, Any]:
+    policy = resolve_header_policy(_run_header(point))
+    if policy.benchmark_protocol_id is None:
+        return build_inconclusive_result(reason, digest)
+    return build_inconclusive_result(reason, digest, policy=policy)
+
+
 def _public_inputs(point: Checkpoint) -> tuple[PublicCorpus, bytes]:
     """Load the public corpus and protected nonce key from frozen checkpoint owners."""
     from .c0b2_stage_d_plan import verified_run_nonce_key
@@ -157,7 +182,8 @@ def _canonical_row(raw: str, digest: str, label: str) -> dict[str, Any]:
 
 def _master(point: Checkpoint) -> tuple[dict[str, Any], str]:
     digest, raw = point.load_manifest("f_master")
-    value = _typed(_canonical_row(raw, digest, "F master plan"), FMasterPlan)
+    value = _plan_for_point(
+        point, FMasterPlan, _canonical_row(raw, digest, "F master plan"))
     if (sha256_json(value) != digest
             or value["master_manifest_sha256"]
             != point.header()["master_manifest_sha256"]
@@ -203,9 +229,9 @@ def _active_f_phase(
         expected = _seed_plans(normalized)[key]
         if plan != expected or parent != expected["parent_decision_sha256"]:
             raise ImmutableViolation(f"active {key} differs from F master")
-        plan = _typed(plan, FSeedPlan)
+        plan = _plan_for_point(point, FSeedPlan, plan)
     else:
-        plan = _typed(plan, AcceptancePlan)
+        plan = _plan_for_point(point, AcceptancePlan, plan)
         if (plan["master_plan_sha256"] != sha256_json(master)
                 or parent != plan["parent_decision_sha256"]):
             raise ImmutableViolation("active acceptance plan changed lineage")
@@ -438,7 +464,7 @@ def _validate_seed1_tree(point: Checkpoint, master: Mapping[str, Any],
 def freeze_activate_f_master(
         point: Checkpoint, value: Mapping[str, Any]) -> FStartActivation:
     """Atomically freeze the complete F tree and activate only seed-1 work."""
-    _typed(value, FMasterPlan)  # cheap caller-shape gate; no authority is taken from it
+    _plan_for_point(point, FMasterPlan, value)
     with runtime_transaction(point):
         presence = _f_presence(point)
         fresh = not any((presence["master"], presence["plans"],
@@ -500,8 +526,7 @@ def expected_seed_activation(
         master: Mapping[str, Any], evidence: Mapping[str, Any]) -> dict[str, Any]:
     """Derive the only legal paired later-seed activation decision."""
     try:
-        return build_seed_activation_decision(
-            _typed(master, FMasterPlan), _typed(evidence, Seed1Evidence))
+        return build_seed_activation_decision(master, evidence)
     except StageFError as exc:
         raise ImmutableViolation("seed activation cannot be re-derived") from exc
 
@@ -581,8 +606,8 @@ def _branch_presence(point: Checkpoint, later_work_ids: set[str]) -> dict[str, A
             "WHERE decision_id='stage-f-provisional-selection'"
         ).fetchone()[0],
         "completion": point.conn.execute(
-            "SELECT count(*) FROM decisions WHERE decision_id='c0b2-completion'"
-        ).fetchone()[0],
+            "SELECT count(*) FROM decisions WHERE decision_id=?",
+            (completion_decision_id(point.header()),)).fetchone()[0],
         "artifact": point.conn.execute(
             "SELECT count(*) FROM public_artifacts WHERE artifact_id='stage-f-result'"
         ).fetchone()[0],
@@ -599,29 +624,32 @@ def _branch_presence(point: Checkpoint, later_work_ids: set[str]) -> dict[str, A
 
 
 def _finish_no_seed1(point: Checkpoint, master_hash: str, seed1_hash: str,
-                     evidence_hash: str) -> None:
+                     evidence_hash: str, *, master: Mapping[str, Any] | None = None,
+                     seed1_evidence: Mapping[str, Any] | None = None) -> None:
     from .c0b2_runtime import freeze_public_artifact
 
-    provisional = _typed({
-        "version": "stage-f-selection-v1", "stage": "F",
-        "plan_sha256": master_hash, "aggregate_sha256": evidence_hash,
-        "outcome": "INCONCLUSIVE", "reason": "no_seed1_qualifier",
-        "selection": None,
-    }, ProvisionalDecision)
+    if (resolve_header_policy(point.header()) == CURRENT_POLICY
+            and (master is None or seed1_evidence is None)):
+        raise ImmutableViolation("current no-seed1 finalization lacks exact owners")
+    if master is None or seed1_evidence is None:
+        provisional = _typed({
+            "version": "stage-f-selection-v1", "stage": "F",
+            "plan_sha256": master_hash, "aggregate_sha256": evidence_hash,
+            "outcome": "INCONCLUSIVE", "reason": "no_seed1_qualifier",
+            "selection": None,
+        }, ProvisionalDecision)
+    else:
+        provisional = build_no_seed1_provisional_decision(master, seed1_evidence)
     _freeze_decision(
         point, "stage-f-provisional-selection", master_hash,
         evidence_hash, "NOT_ACTIVATED", provisional)
-    artifact = {
-        "version": "c0b2-result-v1", "terminal": "INCONCLUSIVE", "stage": "F",
-        "aggregate_sha256": evidence_hash, "reason": "no_seed1_qualifier",
-    }
+    artifact = _inconclusive(point, "no_seed1_qualifier", evidence_hash)
     artifact_hash = freeze_public_artifact(point, "stage-f-result", artifact)
-    completion = {
-        "outcome": "INCONCLUSIVE", "artifact_sha256": artifact_hash,
-        "facts": {"deterministic_stop": True, "reason": "no_seed1_qualifier"},
-    }
+    completion_id, completion = build_completion_value(
+        artifact, artifact_hash,
+        {"deterministic_stop": True, "reason": "no_seed1_qualifier"})
     _freeze_decision(
-        point, "c0b2-completion", seed1_hash, evidence_hash,
+        point, completion_id, seed1_hash, evidence_hash,
         "NOT_ACTIVATED", completion)
     if point.state() != "INCONCLUSIVE":
         point.conn.execute(
@@ -633,8 +661,8 @@ def activate_f_later_seeds(
         point: Checkpoint, evidence: Mapping[str, Any],
         decision: Mapping[str, Any]) -> FLaterActivation:
     """Atomically freeze seed-1 evidence and activate both later seed subsets."""
-    _typed(evidence, Seed1Evidence)
-    _typed(decision, SeedActivationDecision)
+    validate_seed1_evidence_artifact(evidence)
+    validate_seed_activation_artifact(decision)
     _before_seed1_transaction()
     with runtime_transaction(point):
         validate_b4_f_control_census(point)
@@ -650,7 +678,7 @@ def activate_f_later_seeds(
             raise ImmutableViolation(
                 "seed-1 evidence differs from durable attempts") from exc
         expected_decision = expected_seed_activation(master, normalized)
-        if _typed(decision, SeedActivationDecision) != expected_decision:
+        if validate_seed_activation_artifact(decision) != expected_decision:
             raise ImmutableViolation("later-seed activation differs from exact rotation")
         evidence_hash = sha256_json(normalized)
         plans = _seed_plans(master)
@@ -711,7 +739,8 @@ def activate_f_later_seeds(
                     "active_plan_key='F_SEED_17',updated=? WHERE id=1", (time.time(),))
         else:
             _finish_no_seed1(
-                point, master_hash, seed1_hash, aggregate_hash)
+                point, master_hash, seed1_hash, aggregate_hash,
+                master=master, seed1_evidence=normalized)
         _before_activation_commit()
     return FLaterActivation(
         evidence_hash, decision_hash, _LATER_KEYS if qualifiers else (),
@@ -720,13 +749,17 @@ def activate_f_later_seeds(
 
 def _provisional_selection(
         point: Checkpoint, master: Mapping[str, Any], master_hash: str,
-        aggregate_hash: str) -> tuple[dict[str, Any], str]:
+        aggregate_hash: str, aggregate: Mapping[str, Any]) -> tuple[dict[str, Any], str]:
     row = point.conn.execute(
         "SELECT stage,parent_hash,aggregate_hash,activation,value_json FROM decisions "
         "WHERE decision_id='stage-f-provisional-selection'").fetchone()
     if not row:
         raise CheckpointError("acceptance requires a provisional Stage-F decision")
-    value = _typed(json.loads(str(row[4])), ProvisionalDecision)
+    value = validate_provisional_decision_artifact(json.loads(str(row[4])))
+    if (resolve_payload_policy(value)
+            != resolve_header_policy(point.header())
+            or value != build_provisional_decision(aggregate)):
+        raise ImmutableViolation("provisional Stage-F selection has mixed lineage")
     raw = canonical_json(value)
     if (row != ("F", master_hash, aggregate_hash, "ACTIVATED", raw)
             or value["plan_sha256"] != master_hash
@@ -742,7 +775,7 @@ def activate_f_acceptance(
     """Atomically activate the exact frozen C44 template for one provisional winner."""
     if not _SHA256.fullmatch(final_aggregate_sha256):
         raise ValueError("invalid final F aggregate SHA-256")
-    _typed(value, AcceptancePlan)
+    _plan_for_point(point, AcceptancePlan, value)
     with runtime_transaction(point):
         validate_b4_f_control_census(point)
         assert_acceptance_namespace_clean(point)
@@ -774,8 +807,8 @@ def activate_f_acceptance(
                 != master["base_candidate_order"]):
             raise ImmutableViolation("final F aggregate differs from activated lineage")
         provisional, parent = _provisional_selection(
-            point, master, master_hash, final_aggregate_sha256)
-        plan = _typed(value, AcceptancePlan)
+            point, master, master_hash, final_aggregate_sha256, aggregate_value)
+        plan = _plan_for_point(point, AcceptancePlan, value)
         selection = provisional["selection"]
         assert selection is not None
         candidate_id = next((
@@ -862,7 +895,7 @@ def _stored_plan_activation(
         point: Checkpoint, key: str,
 ) -> tuple[dict[str, Any], str, dict[str, Any], str]:
     _parent, plan_hash, plan_raw = load_phase_plan(point, key)
-    plan = _typed(json.loads(plan_raw), FSeedPlan)
+    plan = _plan_for_point(point, FSeedPlan, json.loads(plan_raw))
     row = point.conn.execute(
         "SELECT activation_hash,activation_json FROM plan_activations "
         "WHERE plan_key=?", (key,)).fetchone()
@@ -946,7 +979,8 @@ def advance_f_seed_cursor(point: Checkpoint) -> dict[str, Any]:
             value = _evidence_transition_value(
                 point.header()["run_id"], master_hash, decision_digest, from_hash,
                 from_activation_hash, to_hash, to_activation_hash,
-                from_groups, to_groups, census, _rfc3339(now))
+                from_groups, to_groups, census, _rfc3339(now),
+                header=point.header())
             point.conn.execute(
                 "INSERT INTO events(kind,detail_json,created) VALUES(?,?,?)",
                 ("F_SEED_CURSOR_TRANSITION", canonical_json(value), now))
@@ -957,14 +991,15 @@ def advance_f_seed_cursor(point: Checkpoint) -> dict[str, Any]:
             if len(marker_rows) != 1:
                 raise ImmutableViolation("F seed transition marker census changed")
             raw, created = str(marker_rows[0][0]), float(marker_rows[0][1])
-            value = _typed(json.loads(raw), FSeedCursorTransition)
             expected = _evidence_transition_value(
                 point.header()["run_id"], master_hash, decision_digest, from_hash,
                 from_activation_hash, to_hash, to_activation_hash,
-                from_groups, to_groups, census, _rfc3339(created))
+                from_groups, to_groups, census, _rfc3339(created),
+                header=point.header())
+            value = expected
             cursor_updated = point.conn.execute(
                 "SELECT updated FROM runtime_cursor WHERE id=1").fetchone()[0]
-            if (canonical_json(value) != raw or value != expected
+            if (canonical_json(expected) != raw or json.loads(raw) != expected
                     or float(cursor_updated) != created):
                 raise ImmutableViolation("F seed transition replay changed")
         else:
@@ -998,7 +1033,8 @@ def start_stage_f(point: Checkpoint) -> ActiveFPhase:
     d_digest, decision = _validate_current_d_boundary(point)
     master = build_f_master_plan(
         d_digest, [row["selection"] for row in decision["selections"]],
-        corpus=corpus, run_nonce_key=key)
+        corpus=corpus, run_nonce_key=key,
+        policy=resolve_header_policy(point.header()))
     freeze_activate_f_master(point, master)
     stored, _digest = _master(point)
     return _active_f_phase(point, stored, corpus, key)
@@ -1024,11 +1060,10 @@ def _terminal_artifact(
         activation = "NOT_ACTIVATED"
     else:  # pragma: no cover - strict result builders protect callers
         raise StageFRuntimeError("unsupported Stage-F quality terminal")
-    completion = {
-        "outcome": terminal, "artifact_sha256": artifact_hash, "facts": facts,
-    }
+    completion_id, completion = build_completion_value(
+        artifact, artifact_hash, facts)
     _freeze_decision(
-        point, "c0b2-completion", owner_plan_hash, aggregate_hash,
+        point, completion_id, owner_plan_hash, aggregate_hash,
         activation, completion)
     if point.state() != terminal:
         if point.state() != "RUNNING":
@@ -1090,8 +1125,8 @@ def _finalize_all_seeds(
             point, "stage-f-provisional-selection", master_hash,
             aggregate_hash, activation_state, provisional)
         if provisional["outcome"] == "INCONCLUSIVE":
-            artifact = build_inconclusive_result(
-                provisional["reason"], aggregate_hash)
+            artifact = _inconclusive(
+                point, provisional["reason"], aggregate_hash)
             _terminal_artifact(
                 point, owner_plan_hash=sha256_json(plan),
                 aggregate_hash=aggregate_hash, artifact=artifact)
@@ -1195,9 +1230,9 @@ def _preclaim_f_phase_index(
     key = runtime_position(point).active_plan_key
     if key == "F_ACCEPTANCE":
         _parent, plan_hash, plan_raw = load_phase_plan(point, key)
-        active_plan = _typed(
-            _canonical_row(plan_raw, plan_hash, "active acceptance plan"),
-            AcceptancePlan)
+        active_plan = _plan_for_point(
+            point, AcceptancePlan,
+            _canonical_row(plan_raw, plan_hash, "active acceptance plan"))
         indexed = request_specs_for_activated_f_plan(
             master, active_plan, corpus=corpus, run_nonce_key=run_nonce_key)
     else:
@@ -1452,6 +1487,7 @@ def run_public_stage_f(
         benchmark_root: Path | None = None,
         transport_factory: Callable[
             [Callable[[Any], RequestSpec], Mapping[str, Any]], Any] | None = None,
+        expected_protocol_id: str | None = None,
 ) -> dict[str, Any]:
     """Gate, run, finalize, and receipt one live Stage-F invocation."""
     from .c0b2_runtime import (
@@ -1459,12 +1495,15 @@ def run_public_stage_f(
         revalidate_source_pins,
     )
     from .c0b2_transport import BoundedOllamaTransport
+    from .c0b3_policy import require_checkpoint_header, require_expected_header
 
     root = Path(benchmark_root) if benchmark_root is not None else report.bench_root()
     path = _checkpoint_path(run_id, root)
+    require_checkpoint_header(path, expected_protocol_id)
     with GlobalExecutionLock(root) as lock:
         point = Checkpoint.open(path, root)
         try:
+            require_expected_header(point.header(), expected_protocol_id)
             position, state = runtime_position(point), point.state()
             if state in TERMINAL_STATES:
                 if position.active_stage != "F":

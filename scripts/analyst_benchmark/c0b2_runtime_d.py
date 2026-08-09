@@ -43,6 +43,7 @@ from .c0b2_stage_d_plan import (
 )
 from .c0b2_stage_d import StageDError
 from .c0b2_transport import RequestSpec, request_spec_hash
+from .c0b3_policy import resolve_header_policy
 
 
 PHASE_KEYS = ("D1_OUTPUT", "D2_CHUNK", "D3_CONTEXT", "D4_CONFIRMATION")
@@ -218,11 +219,14 @@ def load_stage_d_inputs(
 def _validated_d_decision(value: Mapping[str, Any], phase: str) -> dict[str, Any]:
     """Strictly parse a decision; evidence ownership is checked by its caller."""
     from .c0b2_stage_d import FinalDecision, IntermediateDecision
+    from .c0b3_schema import validate_versioned_legacy_shape
 
     model = (FinalDecision if phase == "D4" or value.get("outcome") == "FINALISTS"
              else IntermediateDecision)
     try:
-        normalized = model.model_validate(value, strict=True).model_dump(mode="json")
+        normalized = validate_versioned_legacy_shape(
+            value, model, legacy_version="stage-d-decision-v1",
+            current_version="stage-d-decision-v2")
     except Exception as exc:
         raise ImmutableViolation(f"{phase} decision is not exact") from exc
     if normalized["phase"] != phase:
@@ -299,7 +303,8 @@ def _expected_plan(point: Checkpoint, key: str,
                 raise ImmutableViolation("an all-16384 D3 decision cannot create D4")
     return builder(
         parent_hash, candidates, corpus=inputs.corpus,
-        run_nonce_key=inputs.run_nonce_key)
+        run_nonce_key=inputs.run_nonce_key,
+        policy=resolve_header_policy(point.header()))
 
 
 def _load_exact_phase_by_key(point: Checkpoint, key: str,
@@ -1181,22 +1186,18 @@ def _freeze_decision_row(point: Checkpoint, decision_id: str,
 def _finalize_inconclusive(point: Checkpoint, phase: ActiveDPhase,
                            aggregate_hash: str, decision: Mapping[str, Any]) -> None:
     from .c0b2_runtime import freeze_public_artifact
+    from .c0b3_schema import build_completion_value, build_d_inconclusive_result
 
     reason = str(decision["reason"])
-    artifact = {
-        "version": "c0b2-result-v1", "terminal": "INCONCLUSIVE", "stage": "D",
-        "aggregate_sha256": aggregate_hash, "reason": reason,
-    }
+    artifact = build_d_inconclusive_result(point.header(), aggregate_hash, reason)
     artifact_hash = freeze_public_artifact(point, "stage-d-result", artifact)
     _freeze_decision_row(
         point, _decision_id(phase.plan["phase"], decision), phase,
         aggregate_hash, decision, "NOT_ACTIVATED")
-    completion = {
-        "outcome": "INCONCLUSIVE", "artifact_sha256": artifact_hash,
-        "facts": {"deterministic_stop": True, "reason": reason},
-    }
+    completion_id, completion = build_completion_value(
+        artifact, artifact_hash, {"deterministic_stop": True, "reason": reason})
     _freeze_decision_row(
-        point, "c0b2-completion", phase, aggregate_hash,
+        point, completion_id, phase, aggregate_hash,
         completion, "NOT_ACTIVATED")
     point.conn.execute(
         "UPDATE run_state SET state='INCONCLUSIVE',updated=? WHERE id=1",
@@ -1451,6 +1452,42 @@ def validate_stored_final_d_owner(
     return digest, normalized
 
 
+def validate_stored_d_history(point: Checkpoint, inputs: StageDInputs) -> None:
+    """Rebuild every completed D owner visible at the active cursor."""
+    position = runtime_position(point)
+    if position.active_stage != "D" or position.active_plan_key not in PHASE_KEYS:
+        raise StageDRuntimeError("D history validation requires an active D cursor")
+    index = PHASE_KEYS.index(position.active_plan_key)
+    decisions = (
+        "stage-d-d1-selection", "stage-d-d2-selection",
+        "stage-d-d3-selection", "stage-d-selection",
+    )
+    for key, decision_id in zip(PHASE_KEYS[:index], decisions, strict=False):
+        _load_owned_intermediate(point, key, decision_id, inputs)
+    final = point.conn.execute(
+        "SELECT 1 FROM decisions WHERE decision_id='stage-d-selection'"
+    ).fetchall()
+    if final:
+        if len(final) != 1:
+            raise ImmutableViolation("final D decision namespace is not singular")
+        validate_stored_final_d_owner(point, inputs)
+        return
+    active_decisions = {
+        "D1_OUTPUT": ("stage-d-d1-selection",),
+        "D2_CHUNK": ("stage-d-d2-selection",),
+        "D3_CONTEXT": ("stage-d-d3-selection",),
+        "D4_CONFIRMATION": (),
+    }[position.active_plan_key]
+    partial = point.conn.execute(
+        "SELECT count(*) FROM phase_aggregates WHERE plan_key=?",
+        (position.active_plan_key,)).fetchone()[0]
+    partial += sum(point.conn.execute(
+        "SELECT count(*) FROM decisions WHERE decision_id=?", (decision_id,)
+    ).fetchone()[0] for decision_id in active_decisions)
+    if partial:
+        raise ImmutableViolation("resumable D cursor contains a partial finalization")
+
+
 def validate_final_d_boundary(
         point: Checkpoint, inputs: StageDInputs,
 ) -> tuple[str, dict[str, Any]]:
@@ -1472,6 +1509,7 @@ def validate_inconclusive_d_terminal(
 ) -> tuple[str, dict[str, Any]]:
     """Rebuild the active D zero-result and bind every terminal artifact row."""
     from .c0b2_runtime import load_public_artifact
+    from .c0b3_schema import build_completion_value, build_d_inconclusive_result
 
     position = runtime_position(point)
     if (point.state() != "INCONCLUSIVE" or position.active_stage != "D"
@@ -1505,20 +1543,17 @@ def validate_inconclusive_d_terminal(
         raise ImmutableViolation(
             "D inconclusive decision changed from its active aggregate")
     artifact_hash, artifact = load_public_artifact(point, "stage-d-result")
-    expected_artifact = {
-        "version": "c0b2-result-v1", "terminal": "INCONCLUSIVE", "stage": "D",
-        "aggregate_sha256": aggregate_hash, "reason": expected["reason"],
-    }
+    expected_artifact = build_d_inconclusive_result(
+        point.header(), aggregate_hash, expected["reason"])
     if artifact != expected_artifact:
         raise ImmutableViolation(
             "D inconclusive result differs from its zero-result decision")
-    completion = {
-        "outcome": "INCONCLUSIVE", "artifact_sha256": artifact_hash,
-        "facts": {"deterministic_stop": True, "reason": expected["reason"]},
-    }
+    completion_id, completion = build_completion_value(
+        expected_artifact, artifact_hash,
+        {"deterministic_stop": True, "reason": expected["reason"]})
     completion_row = point.conn.execute(
         "SELECT stage,parent_hash,aggregate_hash,activation,value_json "
-        "FROM decisions WHERE decision_id='c0b2-completion'",
+        "FROM decisions WHERE decision_id=?", (completion_id,),
     ).fetchone()
     if completion_row != (
             "D", owner.plan_sha256, aggregate_hash, "NOT_ACTIVATED",
@@ -1546,6 +1581,7 @@ def run_public_stage_d(
         benchmark_root: Path | None = None,
         transport_factory: Callable[
             [Callable[[Any], RequestSpec], Mapping[str, Any]], Any] | None = None,
+        expected_protocol_id: str | None = None,
 ) -> dict[str, Any]:
     """Gate, run, and receipt one live Stage-D command under the global lock."""
     from .c0b2_runtime import (
@@ -1553,12 +1589,15 @@ def run_public_stage_d(
         revalidate_source_pins,
     )
     from .c0b2_transport import BoundedOllamaTransport
+    from .c0b3_policy import require_checkpoint_header, require_expected_header
 
     root = Path(benchmark_root) if benchmark_root is not None else report.bench_root()
     path = _checkpoint_path(run_id, root)
+    require_checkpoint_header(path, expected_protocol_id)
     with GlobalExecutionLock(root) as lock:
         point = Checkpoint.open(path, root)
         try:
+            require_expected_header(point.header(), expected_protocol_id)
             position = runtime_position(point)
             state = point.state()
             if state in TERMINAL_STATES:

@@ -86,6 +86,21 @@ FROZEN_C0B2_PUBLIC_PATHS = FROZEN_C0B2A_PATHS | FROZEN_C0B2B1_PATHS | frozenset(
     "scripts/tests/test_analyst_security_provenance.py",
 })
 
+# C0B-3 gets a distinct source identity.  Never widen or reinterpret the
+# historical C0B-2 set: old checkpoints must continue to hash its exact tree.
+FROZEN_C0B3_PUBLIC_PATHS = FROZEN_C0B2_PUBLIC_PATHS | frozenset({
+    "docs/dev/ollama_integration/BENCHMARK_PROTOCOL_C0B3.md",
+    "docs/dev/ollama_integration/UI_MOCKUPS.md",
+    "scripts/analyst_benchmark/c0b3_cli.py",
+    "scripts/analyst_benchmark/c0b3_policy.py",
+    "scripts/analyst_benchmark/c0b3_schema.py",
+    "scripts/tests/test_analyst_c0b3_cli.py",
+    "scripts/tests/test_analyst_c0b3_policy.py",
+    "scripts/tests/test_analyst_c0b3_public_flow.py",
+    "scripts/tests/test_analyst_c0b3_runtime.py",
+    "scripts/tests/test_analyst_c0b3_schema.py",
+})
+
 
 def public_generation_options_sha256() -> str:
     """Hash every allowed C/D/F generation-factor combination."""

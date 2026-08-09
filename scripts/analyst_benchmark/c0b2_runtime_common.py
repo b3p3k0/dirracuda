@@ -30,6 +30,8 @@ from .c0b2_public_schema import (
     PLAN_ORDER, PlanActivation, validate_artifact,
 )
 from .c0b2_public_scoring import derive_health_answer_evidence, ordered_reasons
+from .c0b3_policy import CURRENT_POLICY, resolve_header_policy, resolve_payload_policy
+from .c0b3_schema import AcceptancePlanV2, DPhasePlanV2, FSeedPlanV2
 
 if TYPE_CHECKING:
     from .c0b2_checkpoint import Checkpoint
@@ -220,6 +222,7 @@ def runtime_position(point: "Checkpoint") -> RuntimePosition:
 
 def abandon_public_run(
         run_id: str, *, benchmark_root: Path | None = None,
+        expected_protocol_id: str | None = None,
 ) -> dict[str, Any]:
     """Atomically abandon one public run and receipt its terminal evidence."""
     from . import report
@@ -229,17 +232,26 @@ def abandon_public_run(
         _checkpoint_path, ensure_backup_receipt, finish_public_run_failure,
         revalidate_source_pins,
     )
+    from .c0b3_policy import require_checkpoint_header, require_expected_header
 
     root = Path(benchmark_root) if benchmark_root is not None else report.bench_root()
     path = _checkpoint_path(run_id, root)
+    require_checkpoint_header(path, expected_protocol_id)
     with GlobalExecutionLock(root) as lock:
         point = Checkpoint.open(path, root)
         try:
             if point.header().get("run_type") != "public":
                 raise CheckpointError("public abandon cannot open a private run")
+            require_expected_header(point.header(), expected_protocol_id)
             if point.state() == "INITIALIZING":
                 raise CheckpointError("INITIALIZING runs require create recovery")
             revalidate_source_pins(point.header())
+            if (resolve_header_policy(point.header()) == CURRENT_POLICY
+                    and runtime_position(point).active_stage == "D"):
+                from .c0b2_runtime_d import (
+                    load_stage_d_inputs, validate_stored_d_history,
+                )
+                validate_stored_d_history(point, load_stage_d_inputs(point))
             finish_public_run_failure(point, terminal="ABANDONED")
             receipt = ensure_backup_receipt(point, lock)
             position = runtime_position(point)
@@ -264,6 +276,9 @@ def _normalized_plan(value: Mapping[str, Any]) -> dict[str, Any]:
     model = _PLAN_MODELS.get(plan_key)
     if model is None:
         raise ValueError(f"unknown public phase plan {plan_key!r}")
+    if resolve_payload_policy(value) == CURRENT_POLICY:
+        model = (DPhasePlanV2 if str(plan_key).startswith("D") else
+                 AcceptancePlanV2 if plan_key == "F_ACCEPTANCE" else FSeedPlanV2)
     return validate_artifact(model, value)
 
 
