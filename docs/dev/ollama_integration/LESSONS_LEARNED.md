@@ -698,6 +698,15 @@ not defaults to salvage after a later gate fails. Do not enter Stage F or privat
 promote a runner-up, or loosen a threshold after seeing the result. A different candidate,
 prompt, worksheet or gate belongs to a new reviewed plan and source-pinned run.
 
+### 75. Grounded does not mean correctly classified
+
+An exact source quote proves the model did not invent the cited text; it can still assign
+the wrong category. That distinction produced C0B-2's single negative-document false
+positive. For an assistive, no-action tool, risk tolerance belongs in a numeric
+preregistered gate plus visible suggestion labels, source context and explicit human
+accept/reject—not in a vague “human in the loop” claim. Changing that tolerance after a
+terminal creates a new experiment and source identity; it never rewrites the old result.
+
 ---
 
 ## Not yet learned

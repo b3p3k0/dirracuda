@@ -179,3 +179,67 @@ Compatibility limits derived from a candidate set must measure the entire frozen
 before selection. Tests pin all three observed counts, the exact 16,384/16,385 boundary
 and the unchanged byte/depth/general-control caps. The second failed run is neither
 resumed nor reclassified; a new committed source identity requires a third public run.
+
+---
+
+## E5 — Model findings are bounded, human-reviewed suggestions
+
+**Status:** ACCEPTED FOR PROSPECTIVE CORRECTION (HI decision, 2026-08-09)
+**Affects:** `CONTRACT.md` §§7 and 14; public benchmark false-positive gates
+**Raised by:** canonical C0B-2 terminal review
+
+### The conflict
+
+Analyst is a digital intern: it recommends findings to a human analyst and cannot act on
+them. The frozen public protocol nevertheless used inconsistent false-positive gates.
+Stage C allowed one false-positive document among 12 negatives and final acceptance
+allowed one among 40, while D3/D4 and each Stage-F seed required zero. The canonical run
+hit exactly that mismatch: its remaining candidate cleared grounding, recall, boundary,
+schema, context and safety checks, but one negative document produced a retained finding.
+
+Exact-substring grounding proves that quoted evidence exists. It does not prove that the
+model classified that evidence correctly. A human-review control therefore needs both a
+numeric error budget and a UI/report contract; “human in the loop” is not a substitute
+for either.
+
+### The prospective correction
+
+C0B-3 uses these exact document-level limits:
+
+| Gate | Maximum false-positive documents |
+|---|---:|
+| Stage C, 12 negatives | 1 — unchanged |
+| D3/D4, 12 negatives | 1 — replaces zero |
+| Stage F, 16 negatives, independently at each seed | 1 — replaces zero |
+| Final 166-document acceptance, 40 negatives | 1 — unchanged |
+
+The final combined gate is deliberately tighter than the intermediate gates: a candidate
+may continue after one bounded miss, but additional seed-1 misses can still prevent final
+selection. Recall/F1, raw and retained grounding, schema, injection, boundary, length,
+context, cancellation, provenance and safety gates do not change. No metric compensates
+for failing another hard gate.
+
+### Human-review contract
+
+- Deterministic identifier counts remain a separate, authoritative evidence track.
+- Every model-derived finding is labelled **suggested / unreviewed**, shows its verified
+  source quote and provenance, and requires an explicit human accept/reject choice.
+- No model finding triggers copy, delete, move, quarantine, notification, authentication,
+  probing, tagging, upload or any other state change.
+- Findings export includes only rows the human explicitly selects. The report never
+  implies that unreviewed suggestions are adjudicated facts or that no finding means safe.
+- Rejection/override counts become monitoring evidence; they never silently retune the
+  prompt, model or threshold.
+
+### Non-retroactivity
+
+C0B-2 remains terminal `INCONCLUSIVE/no_d3_context_survivor`. E5 does not alter its
+checkpoint, decisions, artifacts, receipt, protocol, schema or outcome document. The
+bounded policy applies only to a fresh, preregistered C0B-3 run under a new source identity.
+Private Stage E remains held until that run produces a valid public selection and the HI
+separately authorizes or defers private execution.
+
+This is an assistive-workflow risk decision, not a claim of population accuracy. It
+follows NIST's context-specific treatment of human-AI roles, oversight and measured risk:
+[AI RMF Core](https://airc.nist.gov/airmf-resources/airmf/5-sec-core/) and
+[trustworthiness characteristics](https://airc.nist.gov/airmf-resources/airmf/3-sec-characteristics/).

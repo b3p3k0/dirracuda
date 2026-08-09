@@ -1652,6 +1652,22 @@ reasoning, prompts and private facts or identifiers remain forbidden. These docs
 added to the runtime's frozen Python allowlist and do not alter the source identity of the
 completed run. Any other path still requires reviewed protocol revision.
 
+Follow-on policy carve-out, authorized by the HI on 2026-08-09: the docs-only C0B-3A
+card may touch only the literal paths in this table:
+
+| C0B-3A docs-only path |
+|---|
+| `docs/dev/ollama_integration/BENCHMARK_PROTOCOL_C0B2.md` |
+| `docs/dev/ollama_integration/BENCHMARK_PROTOCOL_C0B3.md` |
+| `docs/dev/ollama_integration/CONTRACT_ERRATA.md` |
+| `docs/dev/ollama_integration/README.md` |
+| `docs/dev/ollama_integration/RISK_REGISTER.md` |
+| `docs/dev/ollama_integration/LESSONS_LEARNED.md` |
+| `docs/dev/ollama_integration/UI_MOCKUPS.md` |
+
+It cannot edit runtime code, fixtures or the C0B-2 outcome. C0B-3 implementation gets
+its own reviewed exact path set and new source identity before any live call.
+
 ### 18.7 Card sequence and live gate
 
 1. **C0B-2B1R:** this docs-only sequencing/provenance amendment.

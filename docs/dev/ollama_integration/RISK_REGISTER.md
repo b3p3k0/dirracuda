@@ -1,12 +1,14 @@
 # Ollama Integration — Risk Register
 
-Date: 2026-08-08
+Date: 2026-08-09
 Status: **C0A controls frozen; C0B-2A offline controls implemented and reviewed; public
 C/D/F envelope executed.** The complete public executor passed its offline, regression
 and hostile-review gates. The canonical run ended terminal
 `INCONCLUSIVE/no_d3_context_survivor`: D2 left one intermediate candidate, and D3's strict
 negative control eliminated it. Stage F never activated and private Stage E was
-structurally ineligible. Controls are
+structurally ineligible. The HI accepted E5's bounded, human-reviewed suggestion policy
+prospectively on 2026-08-09; C0B-3A passed three independent reviews, and live execution
+remains held until C0B-3B's implementation gates pass. Controls are
 authoritative in [`CONTRACT.md`](CONTRACT.md), accepted errata, and the reviewed
 [`BENCHMARK_PROTOCOL_C0B2.md`](BENCHMARK_PROTOCOL_C0B2.md); this register is the
 risk-indexed view.
@@ -18,7 +20,7 @@ risk-indexed view.
 | R3 | XXE in DOCX/XLSX/PPTX reads local files or triggers SSRF | Medium | Critical | `defusedxml` (no external entities, no network); member-count/size/ratio/path gates before parse. Guardrail test bans raw `xml.etree`/unsafe lxml in the analysis path. Runs inside the sandbox regardless. |
 | R4 | Zip bomb exhausts disk or memory during OOXML unpack | Medium | Medium | Cap uncompressed size and decompression ratio before extraction; reject and record. |
 | R5 | Prompt injection from document content corrupts findings | **High** | Medium | Schema-constrained output only; no tools bound; model output never drives an action. Mandatory evidence citations — uncited findings dropped. All rendered values as text nodes, never dynamic HTML. |
-| R6 | Model hallucinates findings that reach the report as fact | Medium | High | Identifier counts come from deterministic detectors, never the model. Model findings require a quoted span that must be present in the source chunk; aggregator verifies before including. |
+| R6 | A grounded model finding is treated as semantically correct fact | Medium | High | Identifier counts come from deterministic detectors, never the model. Exact-substring grounding proves source support, not correct classification. Model rows stay visibly `suggested/unreviewed`, show quote + provenance, and require explicit human accept/reject before findings export. |
 | R7 | Report implies full coverage it did not achieve | Medium | High | Every file carries a terminal state. Report header separates detector-scanned and model-reviewed percentages and gives terminal outcomes by reason. No report renders without the coverage table. |
 | R8 | Schema-invalid model responses silently drop findings | Medium | Medium | Pydantic-validate every response, retry once, then record `model_invalid` as a counted coverage state. |
 | R9 | Long run lost to crash, cancel, or reboot | High | Medium | Per-file checkpointing; resume skips completed files. Cancellation via the existing Running Tasks path. |
@@ -67,7 +69,8 @@ risk-indexed view.
 | R51 | The adaptive D/F implementation, contract errata or leak scanner falls outside the source identity claimed by the public checkpoint, or a path swap makes the scanner read an unintended file | Low | Critical | One exact reviewed 48-path allowlist drives task-tree hashing, dirty-tree refusal and the C0B-2 public leak scanner; legacy C0B-1 scope is separate. Source, baseline and raw-response reads walk descriptor-relative from an explicit lexical trusted root or protected parent, retain no-follow descriptors for every directory component, and validate regular-file, owner, mode, stability and captured-inventory identity as applicable. Semantic pins bind public schemas/scorers and the complete C/D/F generation-factor domain. Every mutating operator path, including abandon, revalidates pins under the global lock before mutation. Any drift fails closed before further HTTP. |
 | R52 | A blocked or trickling HTTP peer exceeds the frozen 600-second request wall because socket timeouts measure gaps between reads rather than total elapsed time | Medium | High | Run the blocking request and bounded body parser in one globally permitted daemon worker while the caller owns the monotonic total deadline and checks operator cancellation first. Timeout/cancel abandons the result, asynchronously closes the exact active response, closes any late response before publication and returns without waiting on uncooperative I/O. The permit remains held until that worker reaches final teardown, so retries cannot accumulate orphan workers. Connect and idle-read timeouts remain defense in depth, not the total wall. |
 | R53 | Legitimate nonverbose `/api/show` tensor metadata exceeds the generic JSON node cap, or a compatibility increase weakens scored-output safety | Medium | Medium | Keep the 4,096-node cap for chat, scored answers and ordinary controls. Permit 16,384 nodes only for show, above the measured complete-candidate maximum of 11,318, under unchanged 2 MiB raw, 256 KiB canonical and depth-16 caps; sanitize to frozen hashes/safe fields and never persist tensors. Above-cap show remains `FAILED_SAFETY`. |
-| R54 | A partial D1/D2 survivor is promoted as a product default after a later gate eliminates every candidate | Medium | High | Product defaults and private Stage E require the activated final Stage-D selection and Stage-F selection chain. Intermediate factor decisions are evidence only. A terminal `INCONCLUSIVE` starts a new preregistered card/run; it never licenses post-hoc threshold changes or promotion of partial settings. |
+| R54 | A partial D1/D2 survivor is promoted as a product default after a later gate eliminates every candidate | Medium | High | Product defaults and private Stage E require the activated final Stage-D selection and Stage-F selection chain. Intermediate factor decisions are evidence only. E5 cannot promote or rescore the old survivor; C0B-3 starts from a fresh checkpoint and must pass the complete public chain. |
+| R55 | Automation bias or review fatigue turns “human reviewed” into rubber-stamping | Medium | High | Model rows are visibly suggestions, deterministic evidence stays separate, source context is adjacent, and accept/reject is explicit with no hidden auto-accept. Capture bounded override/rejection counts for monitoring and rebenchmark triggers; feedback never silently retunes behavior. Model output triggers no action. |
 
 ## High-Likelihood Risks — Detailed Controls
 

@@ -1,6 +1,6 @@
 # Ollama Integration Workspace
 
-Date: 2026-08-08
+Date: 2026-08-09
 Status: **C0A contract frozen** (committed `91bb2aa`). **C0B-1 accepted and committed
 (`47e946b`).** The complete public C/D/F executor passed its offline and hostile-review
 gates and was committed through B5 (`bde8f92`), with the current Ollama show-envelope
@@ -18,6 +18,14 @@ Two earlier canonical preflights remain as receipted `FAILED_SAFETY` history wit
 scored calls; E3 and E4 corrected their bounded `/api/show` compatibility findings
 prospectively. Work remains local on `feature/ollama-analyst`; no push or promotion is
 authorized.
+
+On 2026-08-09 the HI accepted the observed false-positive review cost for Analyst's
+assistive, no-action role. E5 records that risk decision prospectively: D3/D4 and each
+Stage-F seed may continue with at most one false-positive document, while final acceptance
+remains capped at one across all 40 negatives. Every other gate is unchanged. C0B-2 stays
+`INCONCLUSIVE`. C0B-3A's prospective contract passed three independent reviews; C0B-3
+will run the complete public path from a fresh source-pinned checkpoint only after its
+implementation card also passes. Private Stage E remains held.
 
 The current public implementation freezes the protected run nonce key only in the
 backed-up 0600 checkpoint; derived
@@ -133,7 +141,7 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
 ## Document Map
 
 1. `CONTRACT.md` — **the frozen, authoritative spec.** Cards implement against it.
-2. `CONTRACT_ERRATA.md` — accepted narrow corrections to the frozen contract (E1–E4).
+2. `CONTRACT_ERRATA.md` — accepted narrow corrections to the frozen contract (E1–E5).
 3. `README.md` (this file) — status, decisions, orientation.
 4. `BENCHMARK_PROTOCOL_C0B1.md` — **pre-registered** C0B-1 decision rule, gates, factors, budgets. Hash-pinned.
 5. `BENCHMARK_PROTOCOL_C0B2.md` — reviewed C0B-2 public/private protocol; offline 2A is
@@ -142,21 +150,21 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
    first scored call.
 6. `BENCHMARK_PUBLIC_CDF_SCHEMA.md` — normative strict artifact, identity, derivation and
    terminal schemas for the public C/D/F executor.
-7. `BENCHMARK.md` — instrument method, module dispositions, what is/is not committed.
-8. `PUBLIC_CDF_OUTCOME_C0B2.md` — public-only terminal result and decision chain.
-9. `LESSONS_LEARNED.md` — only what a card actually exercised.
-10. `RESEARCH_NOTES.md` — verified external findings with sources + corpus profile.
-11. `RISK_REGISTER.md` — risk controls.
-12. `UI_MOCKUPS.md` — surface layouts (draft).
+7. `BENCHMARK_PROTOCOL_C0B3.md` — prospective bounded-FP confirmation and card gates.
+8. `BENCHMARK.md` — instrument method, module dispositions, what is/is not committed.
+9. `PUBLIC_CDF_OUTCOME_C0B2.md` — public-only terminal result and decision chain.
+10. `LESSONS_LEARNED.md` — only what a card actually exercised.
+11. `RESEARCH_NOTES.md` — verified external findings with sources + corpus profile.
+12. `RISK_REGISTER.md` — risk controls.
+13. `UI_MOCKUPS.md` — surface layouts (draft).
 
 `BENCHMARK_RESULTS.md` remains absent. It is the private Stage-E aggregate, and Stage E
 never became eligible.
 
 ## Next Step
 
-Treat the canonical `INCONCLUSIVE` result as valid evidence. Do not weaken the negative
-control after seeing it, promote D2's intermediate settings, or force this terminal into
-Stage F. The next step is a separate HI-approved investigation plan/card. Any attempt
-that changes a candidate, prompt, worksheet or quality rule must be preregistered and use
-a fresh source-pinned public run. C1 remains held until such a run produces an authorized
-final selection.
+Implement C0B-3A's frozen backward-compatible policy split in C0B-3B. The old checkpoint
+is never rescored or resumed. After the implementation passes its focused, Analyst, leak
+and risk-warranted regression gates, commit the exact tree and create one fresh public
+C→D→F run. C1 and private Stage E remain held until that run produces a verified
+selection and the HI chooses the next gate.
