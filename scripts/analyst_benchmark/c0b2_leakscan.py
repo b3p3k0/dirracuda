@@ -101,7 +101,7 @@ FROZEN_C0B3_PUBLIC_PATHS = FROZEN_C0B2_PUBLIC_PATHS | frozenset({
     "scripts/tests/test_analyst_c0b3_schema.py",
 })
 
-# C0B-4 has its own immutable 82-path source identity.  Do not widen either
+# C0B-4 has its own immutable 83-path source identity.  Do not widen either
 # historical set: their stored task-tree hashes retain their exact meanings.
 FROZEN_C0B4_PUBLIC_PATHS = FROZEN_C0B3_PUBLIC_PATHS | frozenset({
     "docs/dev/ollama_integration/BENCHMARK.md",
@@ -112,6 +112,7 @@ FROZEN_C0B4_PUBLIC_PATHS = FROZEN_C0B3_PUBLIC_PATHS | frozenset({
     "scripts/analyst_benchmark/c0b4_checkpoint.py",
     "scripts/analyst_benchmark/c0b4_cli.py",
     "scripts/analyst_benchmark/c0b4_executor.py",
+    "scripts/analyst_benchmark/c0b4_filesystem.py",
     "scripts/analyst_benchmark/c0b4_plan.py",
     "scripts/analyst_benchmark/c0b4_policy.py",
     "scripts/analyst_benchmark/c0b4_runtime.py",

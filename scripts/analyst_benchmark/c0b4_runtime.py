@@ -26,7 +26,6 @@ from .c0b2_fsprobe import (
     FilesystemProbe,
     GlobalExecutionLock,
     probe_filesystem,
-    revalidate_filesystem,
 )
 from .c0b2_leakscan import (
     FROZEN_C0B4_PUBLIC_PATHS,
@@ -76,6 +75,7 @@ from .c0b4_executor import (
     persist_scored_finish as _persist_finish,
     reconcile_runtime_events as _reconcile_runtime_events,
 )
+from .c0b4_filesystem import revalidate_frozen_filesystem
 from .c0b4_plan import (
     LANE_ORDER, SELECTION, build_master_plan, build_request_resolver,
     validate_master_plan,
@@ -350,7 +350,7 @@ def revalidate_source_pins(header: Mapping[str, Any], *, repo_root: Path = REPO_
     mount = header["mount"]
     from .c0b2_fsprobe import MountFingerprint
     try:
-        revalidate_filesystem(
+        revalidate_frozen_filesystem(
             MountFingerprint(**mount), Path(mount["canonical_path"]),
             header["journal_mode"], header["filesystem_capability_sha256"])
     except Exception as exc:

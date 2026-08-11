@@ -34,6 +34,8 @@ BASELINE_VERSION = 1
 BASELINE_MAX_AGE_S = 30 * 24 * 60 * 60
 BASELINE_MAX_BYTES = 16 * 1024 * 1024
 RAW_ARTIFACT_MAX_BYTES = 64 * 1024 * 1024
+COMMITTED_BLOB_MAX_BYTES = 16 * 1024 * 1024
+COMMIT_RE = re.compile(r"[0-9a-f]{40,64}")
 
 # Exact expected task paths. Not broad globs.
 C0B1_ALLOWLIST_EXACT: Set[str] = {
@@ -111,7 +113,10 @@ class BaselineError(RuntimeError):
 
 
 def _git(*args: str) -> bytes:
-    cp = subprocess.run(["git", *args], cwd=REPO_ROOT, capture_output=True,
+    # Replacement refs can make an object ID resolve to attacker-selected content.
+    # Provenance and blob reads must always observe the repository's real objects.
+    cp = subprocess.run(["git", "--no-replace-objects", *args], cwd=REPO_ROOT,
+                        capture_output=True,
                         check=True, shell=False)
     return cp.stdout
 
@@ -227,7 +232,29 @@ def create_baseline(path: Path) -> Path:
     return path
 
 
-def load_baseline(path: Path, *, now: int | None = None) -> Dict[str, Any]:
+def _direct_parent_delta(parent: str) -> tuple[str, ...]:
+    """Return one direct non-merge commit's net paths, with rename detection off."""
+    if not isinstance(parent, str) or not COMMIT_RE.fullmatch(parent):
+        raise BaselineError("baseline HEAD is invalid")
+    row = _git("rev-list", "--parents", "-n", "1", "HEAD").decode("ascii").split()
+    if len(row) != 2 or row[1] != parent:
+        raise BaselineError("baseline HEAD is stale")
+    fields = _git(
+        "diff", "--no-renames", "--name-only", "-z", parent, "HEAD").split(b"\0")
+    paths: list[str] = []
+    for raw in fields:
+        if not raw:
+            continue
+        value = raw.decode("utf-8", errors="surrogateescape")
+        pure = Path(value)
+        if pure.is_absolute() or ".." in pure.parts:
+            raise BaselineError("committed task path is unsafe")
+        paths.append(value)
+    return tuple(sorted(set(paths)))
+
+
+def load_baseline(path: Path, *, now: int | None = None,
+                  allow_direct_parent: bool = False) -> Dict[str, Any]:
     path = _outside_repo(path)
     try:
         artifact = json.loads(
@@ -243,7 +270,11 @@ def load_baseline(path: Path, *, now: int | None = None) -> Dict[str, Any]:
     if artifact.get("repo_root") != str(REPO_ROOT.resolve()):
         raise BaselineError("baseline belongs to a different repository")
     if artifact.get("head") != _head():
-        raise BaselineError("baseline HEAD is stale")
+        if not allow_direct_parent:
+            raise BaselineError("baseline HEAD is stale")
+        artifact["committed_delta"] = _direct_parent_delta(artifact.get("head"))
+    else:
+        artifact["committed_delta"] = ()
     current = int(time.time()) if now is None else now
     created = artifact.get("created_epoch")
     if not isinstance(created, int) or created > current + 300 or \
@@ -313,10 +344,26 @@ def load_raw_responses(paths: Sequence[Path]) -> List[str]:
     return samples
 
 
+def _scan_body(rel: str, body: bytes, raw_responses: Sequence[str]) -> List[str]:
+    hits: List[str] = []
+    normalized_samples = [" ".join(s.split()).lower() for s in raw_responses]
+    text = body.decode("utf-8", errors="replace")
+    exempt = SELF_REFERENTIAL.get(rel, {})
+    for name, pattern in GENERIC_PATTERNS.items():
+        match = pattern.search(text)
+        if match and name not in exempt:
+            hits.append(f"{rel}: generic pattern {name} at offset {match.start()}")
+    normalized = " ".join(text.split()).lower()
+    for sample in normalized_samples:
+        if sample in normalized:
+            hits.append(f"{rel}: exact raw model response matched")
+            break
+    return hits
+
+
 def scan_content(paths: Sequence[str], raw_responses: Sequence[str], *,
                  inventory: Mapping[str, Mapping[str, Any]] | None = None) -> List[str]:
     hits: List[str] = []
-    normalized_samples = [" ".join(s.split()).lower() for s in raw_responses]
     for rel in paths:
         path = REPO_ROOT / rel
         expected = inventory.get(rel) if inventory is not None else _metadata(rel, "")
@@ -333,17 +380,42 @@ def scan_content(paths: Sequence[str], raw_responses: Sequence[str], *,
             else {"mode", "size", "mtime_ns"}
         if any(expected.get(key) != observed[key] for key in compared):
             raise BaselineError(f"scan target changed after inventory capture: {rel}")
-        text = body.decode("utf-8", errors="replace")
-        exempt = SELF_REFERENTIAL.get(rel, {})
-        for name, pattern in GENERIC_PATTERNS.items():
-            match = pattern.search(text)
-            if match and name not in exempt:
-                hits.append(f"{rel}: generic pattern {name} at offset {match.start()}")
-        normalized = " ".join(text.split()).lower()
-        for sample in normalized_samples:
-            if sample in normalized:
-                hits.append(f"{rel}: exact raw model response matched")
-                break
+        hits.extend(_scan_body(rel, body, raw_responses))
+    return hits
+
+
+def scan_committed_content(paths: Sequence[str],
+                           raw_responses: Sequence[str]) -> List[str]:
+    """Scan exact HEAD blobs so a dirty overlay cannot hide committed content."""
+    hits: List[str] = []
+    for rel in paths:
+        rows = [row for row in _git("ls-tree", "-z", "HEAD", "--", rel).split(b"\0")
+                if row]
+        if not rows:  # The one direct commit deleted this path.
+            continue
+        if len(rows) != 1:
+            raise BaselineError(f"committed task path is ambiguous: {rel}")
+        metadata, separator, raw_name = rows[0].partition(b"\t")
+        fields = metadata.decode("ascii", errors="strict").split()
+        name = raw_name.decode("utf-8", errors="surrogateescape")
+        if (not separator or len(fields) != 3 or name != rel
+                or fields[0] not in {"100644", "100755"}
+                or fields[1] != "blob" or not COMMIT_RE.fullmatch(fields[2])):
+            raise BaselineError(f"committed task path is not a regular file: {rel}")
+        size_raw = _git("cat-file", "-s", fields[2]).decode("ascii").strip()
+        if not size_raw.isdigit() or int(size_raw) > COMMITTED_BLOB_MAX_BYTES:
+            raise BaselineError(f"committed task blob exceeds its safe limit: {rel}")
+        body = _git("cat-file", "blob", fields[2])
+        if len(body) != int(size_raw):
+            raise BaselineError(f"committed task blob changed while reading: {rel}")
+        hash_name = {40: "sha1", 64: "sha256"}.get(len(fields[2]))
+        if hash_name is None:
+            raise BaselineError(f"committed task blob has an invalid object ID: {rel}")
+        header = f"blob {len(body)}\0".encode("ascii")
+        if not secrets_compare(
+                hashlib.new(hash_name, header + body).hexdigest(), fields[2]):
+            raise BaselineError(f"committed task blob identity mismatch: {rel}")
+        hits.extend(_scan_body(rel, body, raw_responses))
     return hits
 
 
@@ -353,27 +425,42 @@ def run(*, baseline_path: Path, raw_artifacts: Sequence[Path],
         print("private leakage scanning is unavailable until C0B-2 gates exist")
         return 2
     try:
-        baseline = load_baseline(baseline_path)
+        baseline = load_baseline(
+            baseline_path,
+            allow_direct_parent=protocol_id == C0B4_PROTOCOL_ID)
         raw_responses = load_raw_responses(raw_artifacts)
         before: Dict[str, Dict[str, Any]] = baseline["inventory"]
-        current = status_inventory()
+        working = status_inventory()
+        current = dict(working)
+        committed = set(baseline["committed_delta"])
+        for rel in committed:
+            current.setdefault(rel, _metadata(rel, ""))
     except (BaselineError, OSError, subprocess.SubprocessError) as exc:
         print(f"leak scan (public)\n  RESULT: FAIL CLOSED — {exc}")
         return 1
 
     try:
         all_paths = sorted(set(before) | set(current))
-        task_delta = [p for p in all_paths
-                      if _metadata_changed(before.get(p), current.get(p))]
+        task_delta = [p for p in all_paths if p in committed
+                      or _metadata_changed(before.get(p), current.get(p))]
         preexisting = [p for p in all_paths
                        if not _metadata_changed(before.get(p), current.get(p))]
         unlisted = sorted(p for p in task_delta if not allowed(p, protocol_id))
 
         # Never open an unrelated delta. Its unexpected path is already a failure.
+        unsafe = sorted(
+            p for p in task_delta if allowed(p, protocol_id) and p in working
+            and current[p].get("kind") not in {"file", "missing"})
+        if unsafe:
+            raise BaselineError(f"task delta contains a non-regular path: {unsafe[0]}")
+        committed_hits = scan_committed_content(
+            sorted(p for p in committed if allowed(p, protocol_id)), raw_responses)
         scan_paths = sorted(
-            p for p in task_delta if allowed(p, protocol_id) and p in current)
-        content_hits = scan_content(scan_paths, raw_responses, inventory=current)
-    except (BaselineError, OSError) as exc:
+            p for p in task_delta if allowed(p, protocol_id)
+            and p in working and current[p].get("kind") == "file")
+        content_hits = committed_hits + scan_content(
+            scan_paths, raw_responses, inventory=current)
+    except (BaselineError, OSError, UnicodeError, subprocess.SubprocessError) as exc:
         print(f"leak scan (public)\n  RESULT: FAIL CLOSED — {exc}")
         return 1
 

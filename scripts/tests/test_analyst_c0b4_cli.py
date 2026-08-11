@@ -55,10 +55,12 @@ def test_leak_scan_uses_exact_c0b4_scope(monkeypatch: pytest.MonkeyPatch) -> Non
 
 def test_three_frozen_allowlists_remain_distinct() -> None:
     assert len(c0b2_leakscan.FROZEN_C0B3_PUBLIC_PATHS) == 58
-    assert len(c0b2_leakscan.FROZEN_C0B4_PUBLIC_PATHS) == 82
+    assert len(c0b2_leakscan.FROZEN_C0B4_PUBLIC_PATHS) == 83
     assert leakscan.C0B4_ALLOWLIST_EXACT == set(
         c0b2_leakscan.FROZEN_C0B4_PUBLIC_PATHS)
     current = "scripts/analyst_benchmark/c0b4_policy.py"
+    assert "scripts/analyst_benchmark/c0b4_filesystem.py" in (
+        c0b2_leakscan.FROZEN_C0B4_PUBLIC_PATHS)
     assert not leakscan.allowed(current)
     assert not leakscan.allowed(current, "c0b3-assistive-confirmation-v1")
     assert leakscan.allowed(current, c0b4_cli.BENCHMARK_PROTOCOL_ID)

@@ -300,6 +300,26 @@ def test_prepared_operator_cancel_is_zero_call_and_resumable(
     assert "claim" not in point.calls and "preflight" not in point.calls
 
 
+def test_filesystem_revalidation_failure_is_zero_call_and_backed_up(
+        monkeypatch, tmp_path) -> None:
+    point = FlowPoint()
+    _install_flow(monkeypatch, point, "confirmed")
+    monkeypatch.setattr(
+        runtime, "revalidate_source_pins",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            runtime.C0B4FilesystemError("capability mismatch")))
+
+    result = runtime.run_confirmation(
+        "flow", benchmark_root=tmp_path,
+        transport_factory=lambda *_args: pytest.fail("no transport"))
+
+    assert result["state"] == "BLOCKED_FILESYSTEM"
+    assert point.final_artifact["charged_call_total"] == 0
+    assert point.attempts == []
+    assert "claim" not in point.calls and "preflight" not in point.calls
+    assert point.calls[-2:] == ["finalize:BLOCKED_FILESYSTEM", "backup"]
+
+
 @pytest.mark.parametrize("fault", ["activation", "evidence", "acceptance"])
 def test_post_validation_faults_block_with_backup_and_no_false_quality(
         monkeypatch, tmp_path, fault) -> None:

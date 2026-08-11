@@ -262,5 +262,20 @@ change quality scoring. Run C0B-4C from a dedicated clean worktree and leave it 
 through the terminal receipt: the checkpoint deliberately seals the complete worktree,
 including unrelated dirty paths, across every resume.
 
-The root `README.md` was reviewed again after C0B-4B. No edit is appropriate: Analyst
-still has no released user-facing entrypoint, dependency lane or runtime behavior.
+The root `README.md` was reviewed again after C0B-4B and E7. No edit is appropriate:
+Analyst still has no released user-facing entrypoint, dependency lane or runtime behavior.
+
+The first C0B-4C child failed closed before transport with zero invocations and attempts.
+Creation probed only frozen `DELETE` mode, while inherited revalidation included both
+`DELETE` and `WAL` in the capability hash. E7 preserves that verified terminal and adds a
+C0B-4-only exact-mode revalidator; legacy behavior and all benchmark gates are unchanged.
+The corrected C0B-4 suite passes all 150 tests, and the final independent hostile review
+accepts the replacement-ref defense. A replacement child may be created only from the
+reviewed, committed corrected source.
+The leak gate retains the genuine pre-C0B-4B baseline: for C0B-4 only, it may cross one
+direct non-merge task commit, adds that commit's exact net paths to the scan and still
+rejects a second commit or any path outside the frozen allowlist. It never manufactures
+a post-task baseline. The scanner reads each immutable `HEAD` blob as well as any dirty
+overlay and rejects committed or current symlink/gitlink/non-regular task paths.
+All Git provenance and object reads disable replacement refs, and every committed blob is
+rehashed against its tree object ID before scanning.

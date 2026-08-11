@@ -5,8 +5,9 @@ Status: **C0A controls frozen; C0B-2A offline controls implemented and reviewed;
 C/D/F envelope executed.** C0B-3 reached Stage F and ended terminal
 `INCONCLUSIVE/no_seed1_qualifier` after one of 92 seed-1 chunks repeated an otherwise
 grounded finding. The HI accepted E6's narrow prospective correction; C0B-4 repair and
-stability confirmation passed its offline implementation and hostile-review gates. No
-C0B-4 live Ollama call has occurred. C1 and private Stage E remain held. Controls are
+stability confirmation passed its offline implementation and hostile-review gates. Its
+first live child failed closed before transport because of the E7 filesystem-probe
+preimage mismatch; no model request occurred. C1 and private Stage E remain held. Controls are
 authoritative in [`CONTRACT.md`](CONTRACT.md), accepted errata, and the reviewed
 benchmark protocols; this register is the
 risk-indexed view.
@@ -79,6 +80,8 @@ risk-indexed view.
 | R63 | Canonical JSON sorting changes mapping order and makes a valid stored aggregate unreadable | Medium | Medium | Schema semantics validate exact mapping key sets, not insertion order. Real scorer output must pass store-read-finalize canonical round trips. |
 | R64 | Backup verification trusts shape-valid aggregate hashes instead of the model-response evidence, or replay becomes quadratic | Low | Critical | Authoritative verification independently replays scoring for the live checkpoint and immutable snapshot. Cache the immutable attempt ledger once per replay; the 228-request proof asserts exactly two linear semantic replays and rejects a coherently changed raw response/history. |
 | R65 | A control response is recorded valid before context/health evidence requirements are checked | Medium | High | Treat evidence-required response metadata and parsing as part of the attempt outcome. Malformed context/health responses persist as charged safety failures with terminal backup; a durable valid response is rederived after crash without another call. |
+| R66 | Filesystem creation and revalidation hash different capability-probe mode sets | Low | High | C0B-4 creation and invocation revalidation both probe exactly the frozen header journal mode. Keep the historical C0B-2/C0B-3 helper unchanged. Real create-to-revalidate parity plus injected mismatch/exception tests run before a live child is created. A pre-contact failure remains immutable and backed up. |
+| R67 | A corrective commit makes the true pre-task leak baseline appear stale, encouraging a post-task replacement, dirty overlay or Git replacement ref that hides committed content | Medium | High | Never synthesize a new historical inventory. C0B-4 alone may carry its genuine baseline across one direct non-merge task commit; scan every immutable `HEAD` blob and dirty overlay independently against the exact allowlist. Disable Git replacement objects for every provenance/object read and rehash blob bytes against the tree object ID. Reject symlinks/gitlinks/non-regular entries, a second commit, merge, unsafe path or unlisted path. Create a fresh baseline immediately after the correction commit and before later result edits. |
 
 ## High-Likelihood Risks — Detailed Controls
 

@@ -3,10 +3,15 @@ from __future__ import annotations
 
 import json
 import threading
+from dataclasses import replace
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+import pytest
+
 from scripts.analyst_benchmark import c0b4_runtime as runtime
+from scripts.analyst_benchmark import c0b4_filesystem as filesystem
+from scripts.analyst_benchmark import c0b2_fsprobe as fsprobe
 from scripts.analyst_benchmark.c0b2_executor import FakeResponse, RetryableTransport
 from scripts.analyst_benchmark.c0b2_plan import stable_hash
 from scripts.analyst_benchmark.c0b2_transport import RequestSpec
@@ -115,6 +120,122 @@ def _work():
         "chunk_index": 0, "nonce": "FENCE_" + "A" * 32,
         "source": "source text",
     }
+
+
+def test_create_probe_and_live_revalidation_use_the_same_frozen_mode(
+        tmp_path) -> None:
+    root = tmp_path / "bench"
+    created = fsprobe.probe_filesystem(root, modes=(runtime.JOURNAL_MODE,))
+
+    checked = filesystem.revalidate_frozen_filesystem(
+        created.fingerprint, root, runtime.JOURNAL_MODE,
+        created.capability_sha256)
+
+    assert checked.capability_sha256 == created.capability_sha256
+    assert tuple(row.mode for row in checked.modes) == (runtime.JOURNAL_MODE,)
+
+
+def test_c0b4_revalidation_passes_only_the_frozen_mode(tmp_path) -> None:
+    created = fsprobe.probe_filesystem(
+        tmp_path / "bench", modes=(runtime.JOURNAL_MODE,))
+    calls = []
+
+    def probe(path, *, modes):
+        calls.append((path, tuple(modes)))
+        return created
+
+    filesystem.revalidate_frozen_filesystem(
+        created.fingerprint, tmp_path / "bench", runtime.JOURNAL_MODE,
+        created.capability_sha256, probe=probe)
+
+    assert calls == [(tmp_path / "bench", (runtime.JOURNAL_MODE,))]
+
+
+@pytest.mark.parametrize("changed", ["fingerprint", "capability", "mode"])
+def test_c0b4_revalidation_rejects_each_frozen_capability_mismatch(
+        tmp_path, changed) -> None:
+    created = fsprobe.probe_filesystem(
+        tmp_path / "bench", modes=(runtime.JOURNAL_MODE,))
+    result = created
+    if changed == "fingerprint":
+        result = replace(
+            created, fingerprint=replace(created.fingerprint, sha256="f" * 64))
+    elif changed == "capability":
+        result = replace(created, capability_sha256="f" * 64)
+    else:
+        result = replace(created, selected_mode="WAL")
+
+    with pytest.raises(fsprobe.CheckpointError,
+                       match="filesystem capability changed"):
+        filesystem.revalidate_frozen_filesystem(
+            created.fingerprint, tmp_path / "bench", runtime.JOURNAL_MODE,
+            created.capability_sha256, probe=lambda *_args, **_kwargs: result)
+
+
+def test_c0b4_revalidation_propagates_probe_failure(tmp_path) -> None:
+    created = fsprobe.probe_filesystem(
+        tmp_path / "bench", modes=(runtime.JOURNAL_MODE,))
+
+    def failed_probe(*_args, **_kwargs):
+        raise TimeoutError("probe timed out")
+
+    with pytest.raises(TimeoutError, match="probe timed out"):
+        filesystem.revalidate_frozen_filesystem(
+            created.fingerprint, tmp_path / "bench", runtime.JOURNAL_MODE,
+            created.capability_sha256, probe=failed_probe)
+
+
+def test_source_revalidation_routes_through_the_c0b4_exact_mode_helper(
+        monkeypatch, tmp_path) -> None:
+    source = {"source_pin": _hash("source")}
+    captured = {}
+    monkeypatch.setattr(runtime, "capture_worktree_seal", lambda _root: object())
+    monkeypatch.setattr(runtime, "_require_clean_source", lambda _seal: None)
+    monkeypatch.setattr(runtime, "_source_pins", lambda _root, _seal: source)
+
+    def revalidate(expected, path, selected_mode, capability_sha256):
+        captured.update(expected=expected, path=path, selected_mode=selected_mode,
+                        capability_sha256=capability_sha256)
+
+    monkeypatch.setattr(runtime, "revalidate_frozen_filesystem", revalidate)
+    mount = {
+        "canonical_path": str(tmp_path), "mount_id": "1",
+        "mountpoint": str(tmp_path), "fs_type": "ext4", "options": "rw",
+        "st_dev": 1, "kernel": "test", "mergerfs_version": "unavailable",
+        "sqlite_version": "test", "sha256": _hash("mount"),
+    }
+    runtime.revalidate_source_pins({
+        **source, "mount": mount, "journal_mode": runtime.JOURNAL_MODE,
+        "filesystem_capability_sha256": _hash("capability"),
+    }, repo_root=tmp_path)
+
+    assert captured["path"] == tmp_path
+    assert captured["selected_mode"] == runtime.JOURNAL_MODE
+
+
+def test_source_revalidation_classifies_exact_mode_helper_failure(
+        monkeypatch, tmp_path) -> None:
+    source = {"source_pin": _hash("source")}
+    monkeypatch.setattr(runtime, "capture_worktree_seal", lambda _root: object())
+    monkeypatch.setattr(runtime, "_require_clean_source", lambda _seal: None)
+    monkeypatch.setattr(runtime, "_source_pins", lambda _root, _seal: source)
+    monkeypatch.setattr(
+        runtime, "revalidate_frozen_filesystem",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            fsprobe.CheckpointError("capability mismatch")))
+    mount = {
+        "canonical_path": str(tmp_path), "mount_id": "1",
+        "mountpoint": str(tmp_path), "fs_type": "ext4", "options": "rw",
+        "st_dev": 1, "kernel": "test", "mergerfs_version": "unavailable",
+        "sqlite_version": "test", "sha256": _hash("mount"),
+    }
+
+    with pytest.raises(runtime.C0B4FilesystemError,
+                       match="filesystem capability changed"):
+        runtime.revalidate_source_pins({
+            **source, "mount": mount, "journal_mode": runtime.JOURNAL_MODE,
+            "filesystem_capability_sha256": _hash("capability"),
+        }, repo_root=tmp_path)
 
 
 def test_runtime_event_reconciliation_closes_finish_crash_gap_once() -> None:

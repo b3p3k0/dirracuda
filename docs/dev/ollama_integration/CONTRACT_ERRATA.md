@@ -303,3 +303,44 @@ new source/policy identity, requests and checkpoint for F72 seeds 17 and 2026080
 fresh C44 seed-1 acceptance lane. The new F responses are prospective stability evidence,
 not a new untouched document holdout. Final acceptance combines corrected C44 and F72
 evidence with the immutable parent D50/D4 result; Stages C and D are not rerun.
+
+---
+
+## E7 — C0B-4 revalidates the capability it created
+
+**Status:** ACCEPTED FOR CORRECTION (standing HI authorization, 2026-08-11)
+**Affects:** `BENCHMARK_PROTOCOL_C0B4.md` §§3, 7 and 9
+**Raised by:** first C0B-4C invocation
+
+### The conflict
+
+C0B-4 creation intentionally probed only its frozen `DELETE` journal mode. Invocation
+revalidation called the inherited C0B-2 helper, whose default probe covers both `DELETE`
+and `WAL`. The capability digest includes the complete ordered mode list, so the two-mode
+revalidation digest could never equal the stored one-mode creation digest.
+
+The first child therefore ended verified `BLOCKED_FILESYSTEM` before invocation claim,
+precharge, transport construction or model contact. It contains zero invocations and zero
+attempts. Its terminal backup and receipt verify, and the frozen mount fingerprint did
+not change.
+
+### The correction
+
+C0B-4 uses a local revalidator that probes exactly the journal mode frozen in its header,
+then compares mount fingerprint, capability digest and selected mode. C0B-2 and C0B-3
+retain their historical two-mode helper behavior. Offline tests cover real
+create-to-revalidate parity, the exact one-mode call, every comparison mismatch, probe
+failure and the zero-call backed-up filesystem terminal.
+
+The corrected C0B-4 suite passes all 150 tests. Independent hostile review also confirms
+that the associated leak gate scans the original committed bytes even when Git
+replacement refs and a safe dirty overlay are present; Git object reads disable
+replacements and rehash each blob against its tree object ID.
+
+### Non-retroactivity and replacement
+
+The failed child `c0b4-20260811-190217-ac970de2a2f6021965bcd948` remains immutable and is
+not resumed or reclassified. After this correction passes review and is committed under
+a new source/protocol identity, one fresh replacement child may start from `PREPARED`.
+Because the failed child made no request, this replacement does not discard or select on
+model evidence. All scoring, safety, budget, lane and acceptance rules remain unchanged.

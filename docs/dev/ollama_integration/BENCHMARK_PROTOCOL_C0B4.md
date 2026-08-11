@@ -3,12 +3,14 @@
 Benchmark protocol ID: `c0b4-grounded-duplicate-confirmation-v1`
 Policy ID: `c0b4-bounded-grounded-dedup-v1`
 Date: 2026-08-11
-Status: **C0B-4A accepted. C0B-4B implemented and independently accepted offline. No
-live Ollama call yet.**
+Status: **C0B-4A/B accepted offline. The first C0B-4C child failed closed before
+transport because creation and revalidation hashed different filesystem mode sets. E7's
+prospective correction passed the 150-test C0B-4 suite and independent hostile review;
+no C0B-4 model request was made.**
 
 Authoritative parents:
 
-- [`CONTRACT.md`](CONTRACT.md) plus accepted errata E1–E6;
+- [`CONTRACT.md`](CONTRACT.md) plus accepted errata E1–E7;
 - frozen C0B-2 and C0B-3 protocols;
 - [`PUBLIC_CDF_OUTCOME_C0B3.md`](PUBLIC_CDF_OUTCOME_C0B3.md);
 - the verified terminal C0B-3 checkpoint named below.
@@ -565,6 +567,7 @@ The exact new source set is:
 - `scripts/analyst_benchmark/c0b4_plan.py`
 - `scripts/analyst_benchmark/c0b4_checkpoint.py`
 - `scripts/analyst_benchmark/c0b4_executor.py`
+- `scripts/analyst_benchmark/c0b4_filesystem.py`
 - `scripts/analyst_benchmark/c0b4_scoring.py`
 - `scripts/analyst_benchmark/c0b4_backup.py`
 - `scripts/analyst_benchmark/c0b4_runtime.py`
@@ -590,23 +593,24 @@ The exact new tests are:
 - `scripts/tests/test_analyst_c0b4_cli.py`
 - `scripts/tests/test_analyst_c0b4_public_flow.py`
 
-C0B-4B documentation may change only this protocol, `BENCHMARK.md`, the workspace
-`README.md`, `RISK_REGISTER.md` and `LESSONS_LEARNED.md`.
+C0B-4B/E7 documentation may change only this protocol, `CONTRACT_ERRATA.md`,
+`BENCHMARK.md`, the workspace `README.md`, `RISK_REGISTER.md` and
+`LESSONS_LEARNED.md`.
 
 The exact source-identity set is named `FROZEN_C0B4_PUBLIC_PATHS`. It is the current
-58-path `FROZEN_C0B3_PUBLIC_PATHS` union these 24 literal paths, for exactly 82 paths:
+58-path `FROZEN_C0B3_PUBLIC_PATHS` union these 25 literal paths, for exactly 83 paths:
 
 - `docs/dev/ollama_integration/BENCHMARK.md`
 - `docs/dev/ollama_integration/BENCHMARK_PROTOCOL_C0B4.md`
 - `docs/dev/ollama_integration/PUBLIC_CDF_OUTCOME_C0B3.md`
-- the ten new `scripts/analyst_benchmark/c0b4_*.py` paths listed above;
+- the eleven new `scripts/analyst_benchmark/c0b4_*.py` paths listed above;
 - the eleven new `scripts/tests/test_analyst_c0b4_*.py` paths listed above.
 
 The inherited set already includes `CONTRACT_ERRATA.md`, the workspace README, risk and
 lessons documents, `__main__.py`, `c0b2_leakscan.py`, `leakscan.py`, transport,
 filesystem probe, metrics/scorers and every other imported security primitive. E6 and the
 C0B-3 outcome are therefore source-pinned even though C0B-4B may not edit them. Tests
-assert the exact 82-path set and reject widening either legacy set.
+assert the exact 83-path set and reject widening either legacy set.
 
 These near-limit legacy files are explicitly forbidden implementation targets:
 
@@ -650,7 +654,7 @@ The hostile review rejected mixed protocol and nonce lineage, fabricated preflig
 owners, coherently changed response histories, invalid terminal/receipt pairings and
 activation after a failing prerequisite. Crash recovery reuses durable context and
 cancellation observations without repeating their calls. The two largest files are
-`c0b4_checkpoint.py` at 1,678 lines and `c0b4_runtime.py` at 1,669 lines. Both remain
+`c0b4_checkpoint.py` at 1,680 lines and `c0b4_runtime.py` at 1,669 lines. Both remain
 below the 1,700-line pause threshold; future changes must extract rather than grow them.
 
 ### C0B-4C — live confirmation
@@ -658,6 +662,27 @@ below the 1,700-line pause threshold; future changes must extract rather than gr
 Commit the reviewed clean source, create one child checkpoint, then execute §5 without
 changing source. Verify each lane boundary and the final snapshot/receipt before any
 later source edit.
+
+The first child, `c0b4-20260811-190217-ac970de2a2f6021965bcd948`, ended verified
+`BLOCKED_FILESYSTEM` with zero invocations and attempts. Creation had hashed only the
+frozen `DELETE` probe while inherited revalidation hashed `DELETE` plus `WAL`; the mode
+list is part of the capability digest. This was an implementation mismatch, not mergerfs
+or ext4 drift. The child and receipt remain immutable.
+
+E7 corrects only that pre-contact gate: C0B-4 revalidates the exact single mode used at
+creation while legacy helpers keep their prior behavior. The corrected 150-test C0B-4
+suite and independent hostile review pass. After the correction is committed, one fresh
+replacement child may run under the new source/protocol identity. It remains the sole
+child allowed to contact the model.
+
+The original pre-C0B-4B leak baseline remains authoritative. The C0B-4 scanner may carry
+it across exactly one direct non-merge task commit, scanning that commit's net paths plus
+the current worktree delta against the 83-path allowlist. Any second commit, merge or
+unlisted path fails closed. Each committed `HEAD` blob and any dirty overlay are scanned
+independently; a symlink, gitlink or other non-regular task entry is rejected. This
+preserves a real pre-task inventory rather than creating a post-task substitute. Every
+Git read disables replacement refs, and committed bytes are rehashed against the object
+ID named by the tree before content scanning.
 
 ## 10. Acceptance
 

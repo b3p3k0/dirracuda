@@ -43,7 +43,12 @@ C0B-4A is accepted. C0B-4B is implemented and independently accepted offline: 14
 C0B-4 tests and a separate 37-test high-risk holdout pass. The real-plan fake flow made
 exactly 228 scored requests and 12 controls across three resumable stage invocations,
 then independently replayed the source checkpoint and immutable snapshot. No live
-Ollama call has occurred. C0B-4C is the next gate.
+model call occurred in that phase. The first C0B-4C child then failed closed with zero
+invocations and attempts because creation hashed one filesystem mode while revalidation
+hashed two. E7 preserves that verified terminal and corrects exact-mode revalidation
+prospectively. The corrected 150-test C0B-4 suite and independent hostile re-review pass.
+After the correction is committed, a fresh replacement child is the next gate; private
+Stage E and C1 remain held.
 
 The inherited C0B-3 public implementation freezes the protected run nonce key only in the
 backed-up 0600 checkpoint; derived
@@ -159,7 +164,7 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
 ## Document Map
 
 1. `CONTRACT.md` — **the frozen, authoritative spec.** Cards implement against it.
-2. `CONTRACT_ERRATA.md` — accepted narrow corrections to the frozen contract (E1–E6).
+2. `CONTRACT_ERRATA.md` — accepted narrow corrections to the frozen contract (E1–E7).
 3. `README.md` (this file) — status, decisions, orientation.
 4. `BENCHMARK_PROTOCOL_C0B1.md` — **pre-registered** C0B-1 decision rule, gates, factors, budgets. Hash-pinned.
 5. `BENCHMARK_PROTOCOL_C0B2.md` — reviewed C0B-2 public/private protocol; offline 2A is
@@ -183,9 +188,9 @@ never became eligible.
 
 ## Next Step
 
-Commit the reviewed C0B-4B offline source, freeze that identity, then create one C0B-4C
-child checkpoint from a dedicated clean worktree. Run F72 seed 17, verify its boundary,
-explicitly resume F72 seed
+Commit the accepted E7 exact-mode correction, create a fresh post-E7 leak baseline, then
+create one replacement C0B-4C child from a dedicated clean worktree. Run F72 seed
+17, verify its boundary, explicitly resume F72 seed
 20260804, verify again, then explicitly resume the C44 complete-corpus lane. The C0B-3
 checkpoint is never rescored or resumed. C1 and private Stage E remain held until C0B-4
 reaches a verified terminal and the HI chooses the next gate.

@@ -833,6 +833,27 @@ per invocation. Bind attempt IDs, owners, request hashes, classes and histories 
 exact plan. Check the per-lane retry partition and the version-tags-show barrier during
 read-only verification, not only in the live scheduler.
 
+### 91. Capability hashes require identical probe preimages
+
+Hashing successful facts is not enough when creation and revalidation enumerate different
+checks. C0B-4 created a one-mode filesystem capability but inherited a two-mode
+revalidator, so an unchanged ext4 mount was guaranteed to fail. Freeze the probe mode set
+as part of the contract, pass it explicitly at both boundaries and prove real
+create-to-revalidate parity. Preserve any zero-call terminal; correct it prospectively
+under a new source identity.
+
+### 92. Preserve a real baseline across a commit; do not reconstruct one
+
+A corrective card began after its parent implementation commit, so the genuine pre-task
+baseline had an older `HEAD`. Creating a new file after editing would erase the evidence
+the baseline exists to preserve. Permit only a directly proven, non-merge task commit,
+add all of its net paths to the scan and keep exact allowlist enforcement. Anything more
+complex needs a fresh baseline before the next edit. Scan immutable committed blobs and
+dirty overlays separately; otherwise a safe overlay or deletion can hide content already
+preserved in Git history. Git replacement refs can also substitute safe bytes for a named
+object without appearing in worktree status. Disable replacements for every Git ancestry,
+diff, tree and object read, then rehash returned blob bytes against the tree object ID.
+
 ---
 
 ## Not yet learned

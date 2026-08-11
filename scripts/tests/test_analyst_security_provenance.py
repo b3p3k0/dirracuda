@@ -110,6 +110,197 @@ def test_baseline_integrity_and_freshness_fail_closed(tmp_path: Path,
         leakscan.load_baseline(stale)
 
 
+def test_c0b4_scan_accepts_one_direct_nonmerge_task_commit(
+        tmp_path: Path, monkeypatch, capsys) -> None:
+    repo = _repo(tmp_path)
+    secure = _protected_dir(tmp_path / "secure")
+    baseline = secure / "baseline.json"
+    raw = secure / "raw.jsonl"
+    raw.write_text(json.dumps({
+        "raw_response": '{"subject":"long synthetic model response"}',
+    }) + "\n")
+    os.chmod(raw, 0o600)
+    monkeypatch.setattr(leakscan, "REPO_ROOT", repo)
+    monkeypatch.setattr(leakscan, "C0B4_ALLOWLIST_EXACT", {"task.txt"})
+    leakscan.create_baseline(baseline)
+    (repo / "task.txt").write_text("public aggregate only\n")
+    _git(repo, "add", "task.txt")
+    _git(repo, "commit", "-qm", "task")
+
+    with pytest.raises(leakscan.BaselineError, match="HEAD is stale"):
+        leakscan.load_baseline(baseline)
+    assert leakscan.run(
+        baseline_path=baseline, raw_artifacts=[raw],
+        protocol_id=leakscan.C0B4_PROTOCOL_ID) == 0
+    assert "task delta paths       : 1" in capsys.readouterr().out
+
+    (repo / "task.txt").write_text("second commit\n")
+    _git(repo, "add", "task.txt")
+    _git(repo, "commit", "-qm", "second")
+    assert leakscan.run(
+        baseline_path=baseline, raw_artifacts=[raw],
+        protocol_id=leakscan.C0B4_PROTOCOL_ID) == 1
+    assert "baseline HEAD is stale" in capsys.readouterr().out
+
+
+def test_c0b4_direct_commit_still_rejects_an_unlisted_path(
+        tmp_path: Path, monkeypatch, capsys) -> None:
+    repo = _repo(tmp_path)
+    secure = _protected_dir(tmp_path / "secure")
+    baseline = secure / "baseline.json"
+    raw = secure / "raw.jsonl"
+    raw.write_text(json.dumps({
+        "raw_response": '{"subject":"long synthetic model response"}',
+    }) + "\n")
+    os.chmod(raw, 0o600)
+    monkeypatch.setattr(leakscan, "REPO_ROOT", repo)
+    monkeypatch.setattr(leakscan, "C0B4_ALLOWLIST_EXACT", {"task.txt"})
+    leakscan.create_baseline(baseline)
+    (repo / "outside.txt").write_text("not approved\n")
+    _git(repo, "add", "outside.txt")
+    _git(repo, "commit", "-qm", "outside")
+
+    assert leakscan.run(
+        baseline_path=baseline, raw_artifacts=[raw],
+        protocol_id=leakscan.C0B4_PROTOCOL_ID) == 1
+    assert "outside.txt" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("overlay", ["safe", "deleted"])
+def test_c0b4_direct_commit_scans_head_blob_despite_worktree_overlay(
+        overlay: str, tmp_path: Path, monkeypatch, capsys) -> None:
+    repo = _repo(tmp_path)
+    secure = _protected_dir(tmp_path / "secure")
+    baseline = secure / "baseline.json"
+    raw = secure / "raw.jsonl"
+    response = '{"subject":"committed synthetic model response"}'
+    raw.write_text(json.dumps({"raw_response": response}) + "\n")
+    os.chmod(raw, 0o600)
+    monkeypatch.setattr(leakscan, "REPO_ROOT", repo)
+    monkeypatch.setattr(leakscan, "C0B4_ALLOWLIST_EXACT", {"task.txt"})
+    leakscan.create_baseline(baseline)
+    task = repo / "task.txt"
+    task.write_text(response + "\n")
+    _git(repo, "add", "task.txt")
+    _git(repo, "commit", "-qm", "leaking task")
+    if overlay == "safe":
+        task.write_text("safe dirty overlay\n")
+    else:
+        task.unlink()
+
+    assert leakscan.run(
+        baseline_path=baseline, raw_artifacts=[raw],
+        protocol_id=leakscan.C0B4_PROTOCOL_ID) == 1
+    assert "exact raw model response matched" in capsys.readouterr().out
+
+
+def test_c0b4_direct_commit_ignores_git_replacement_objects(
+        tmp_path: Path, monkeypatch, capsys) -> None:
+    repo = _repo(tmp_path)
+    secure = _protected_dir(tmp_path / "secure")
+    baseline = secure / "baseline.json"
+    raw = secure / "raw.jsonl"
+    response = '{"subject":"committed synthetic model response"}'
+    raw.write_text(json.dumps({"raw_response": response}) + "\n")
+    os.chmod(raw, 0o600)
+    monkeypatch.setattr(leakscan, "REPO_ROOT", repo)
+    monkeypatch.setattr(leakscan, "C0B4_ALLOWLIST_EXACT", {"task.txt"})
+    leakscan.create_baseline(baseline)
+    task = repo / "task.txt"
+    task.write_text(response + "\n")
+    _git(repo, "add", "task.txt")
+    _git(repo, "commit", "-qm", "leaking task")
+    leaking_oid = subprocess.run(
+        ["git", "rev-parse", "HEAD:task.txt"], cwd=repo, check=True,
+        capture_output=True, text=True, shell=False).stdout.strip()
+    safe_oid = subprocess.run(
+        ["git", "hash-object", "-w", "--stdin"], cwd=repo, check=True,
+        capture_output=True, input="safe substitute\n", text=True,
+        shell=False).stdout.strip()
+    _git(repo, "replace", leaking_oid, safe_oid)
+    task.write_text("safe dirty overlay\n")
+
+    assert leakscan.run(
+        baseline_path=baseline, raw_artifacts=[raw],
+        protocol_id=leakscan.C0B4_PROTOCOL_ID) == 1
+    assert "exact raw model response matched" in capsys.readouterr().out
+
+
+def test_c0b4_direct_commit_rejects_committed_symlink(
+        tmp_path: Path, monkeypatch, capsys) -> None:
+    repo = _repo(tmp_path)
+    secure = _protected_dir(tmp_path / "secure")
+    baseline = secure / "baseline.json"
+    raw = secure / "raw.jsonl"
+    raw.write_text(json.dumps({
+        "raw_response": '{"subject":"long synthetic model response"}',
+    }) + "\n")
+    os.chmod(raw, 0o600)
+    monkeypatch.setattr(leakscan, "REPO_ROOT", repo)
+    monkeypatch.setattr(leakscan, "C0B4_ALLOWLIST_EXACT", {"task.txt"})
+    leakscan.create_baseline(baseline)
+    (repo / "task.txt").symlink_to("regular-target")
+    _git(repo, "add", "task.txt")
+    _git(repo, "commit", "-qm", "symlink task")
+
+    assert leakscan.run(
+        baseline_path=baseline, raw_artifacts=[raw],
+        protocol_id=leakscan.C0B4_PROTOCOL_ID) == 1
+    assert "not a regular file" in capsys.readouterr().out
+
+
+def test_c0b4_direct_parent_exception_rejects_merge_commit(
+        tmp_path: Path, monkeypatch, capsys) -> None:
+    repo = _repo(tmp_path)
+    secure = _protected_dir(tmp_path / "secure")
+    baseline = secure / "baseline.json"
+    raw = secure / "raw.jsonl"
+    raw.write_text(json.dumps({
+        "raw_response": '{"subject":"long synthetic model response"}',
+    }) + "\n")
+    os.chmod(raw, 0o600)
+    monkeypatch.setattr(leakscan, "REPO_ROOT", repo)
+    monkeypatch.setattr(leakscan, "C0B4_ALLOWLIST_EXACT", {"task.txt"})
+    leakscan.create_baseline(baseline)
+    _git(repo, "checkout", "-qb", "task-branch")
+    (repo / "task.txt").write_text("task\n")
+    _git(repo, "add", "task.txt")
+    _git(repo, "commit", "-qm", "task")
+    _git(repo, "checkout", "-q", "-")
+    (repo / "tracked.txt").write_text("main change\n")
+    _git(repo, "add", "tracked.txt")
+    _git(repo, "commit", "-qm", "main")
+    _git(repo, "merge", "--no-ff", "-qm", "merge", "task-branch")
+
+    assert leakscan.run(
+        baseline_path=baseline, raw_artifacts=[raw],
+        protocol_id=leakscan.C0B4_PROTOCOL_ID) == 1
+    assert "baseline HEAD is stale" in capsys.readouterr().out
+
+
+def test_direct_parent_exception_is_not_available_to_c0b3(
+        tmp_path: Path, monkeypatch, capsys) -> None:
+    repo = _repo(tmp_path)
+    secure = _protected_dir(tmp_path / "secure")
+    baseline = secure / "baseline.json"
+    raw = secure / "raw.jsonl"
+    raw.write_text(json.dumps({
+        "raw_response": '{"subject":"long synthetic model response"}',
+    }) + "\n")
+    os.chmod(raw, 0o600)
+    monkeypatch.setattr(leakscan, "REPO_ROOT", repo)
+    monkeypatch.setattr(leakscan, "C0B3_ALLOWLIST_EXACT", {"task.txt"})
+    leakscan.create_baseline(baseline)
+    (repo / "task.txt").write_text("task\n")
+    _git(repo, "add", "task.txt")
+    _git(repo, "commit", "-qm", "task")
+
+    assert leakscan.run(
+        baseline_path=baseline, raw_artifacts=[raw],
+        protocol_id=leakscan.BENCHMARK_PROTOCOL_ID) == 1
+    assert "baseline HEAD is stale" in capsys.readouterr().out
+
+
 @pytest.mark.parametrize("kind", ("baseline", "raw"))
 def test_leak_input_loaders_reject_symlinks(
         kind: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
