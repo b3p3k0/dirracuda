@@ -231,3 +231,36 @@ Line counts before → after this remediation pass:
 
 Every source/document file is below 1200 lines. The generated manifest now also clears
 the explicit 1700-line pause threshold.
+
+## 10. C0B-4 offline confirmation instrument
+
+C0B-4 is a new artifact family. It does not rewrite or resume C0B-2/C0B-3. Its child
+checkpoint binds the verified C0B-3 finalist, fresh lane plans, a new prompt rule and the
+bounded grounded-duplicate policy defined in `BENCHMARK_PROTOCOL_C0B4.md`.
+
+The offline implementation passed 141 C0B-4 tests and a separate 37-test hostile
+holdout. The production-shaped fake run used real fixtures, plans, scoring and SQLite:
+228 scored requests, 12 controls and three stage-boundary invocations. It reached a
+backed-up `CONFIRMED` result without network access. Read-only verification replays the
+attempt evidence independently for both the live checkpoint and immutable snapshot; it
+does not trust stored aggregate hashes alone.
+
+The live command surface is intentionally gated:
+
+```bash
+./venv/bin/python -m scripts.analyst_benchmark c0b4 create
+./venv/bin/python -m scripts.analyst_benchmark c0b4 status --run-id <run-id>
+./venv/bin/python -m scripts.analyst_benchmark c0b4 run --run-id <run-id> --confirm-live
+./venv/bin/python -m scripts.analyst_benchmark c0b4 resume --run-id <run-id> --confirm-live
+./venv/bin/python -m scripts.analyst_benchmark c0b4 verify --run-id <run-id>
+```
+
+Do not run `create` until the reviewed C0B-4B source is committed and frozen. Each
+completed F lane pauses. Verify the boundary before the explicit resume that owns the
+next cursor transition and activation. Shared GPU use can increase duration; it does not
+change quality scoring. Run C0B-4C from a dedicated clean worktree and leave it unchanged
+through the terminal receipt: the checkpoint deliberately seals the complete worktree,
+including unrelated dirty paths, across every resume.
+
+The root `README.md` was reviewed again after C0B-4B. No edit is appropriate: Analyst
+still has no released user-facing entrypoint, dependency lane or runtime behavior.

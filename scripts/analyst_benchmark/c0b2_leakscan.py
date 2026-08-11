@@ -101,6 +101,35 @@ FROZEN_C0B3_PUBLIC_PATHS = FROZEN_C0B2_PUBLIC_PATHS | frozenset({
     "scripts/tests/test_analyst_c0b3_schema.py",
 })
 
+# C0B-4 has its own immutable 82-path source identity.  Do not widen either
+# historical set: their stored task-tree hashes retain their exact meanings.
+FROZEN_C0B4_PUBLIC_PATHS = FROZEN_C0B3_PUBLIC_PATHS | frozenset({
+    "docs/dev/ollama_integration/BENCHMARK.md",
+    "docs/dev/ollama_integration/BENCHMARK_PROTOCOL_C0B4.md",
+    "docs/dev/ollama_integration/PUBLIC_CDF_OUTCOME_C0B3.md",
+    "scripts/analyst_benchmark/c0b4_answer.py",
+    "scripts/analyst_benchmark/c0b4_backup.py",
+    "scripts/analyst_benchmark/c0b4_checkpoint.py",
+    "scripts/analyst_benchmark/c0b4_cli.py",
+    "scripts/analyst_benchmark/c0b4_executor.py",
+    "scripts/analyst_benchmark/c0b4_plan.py",
+    "scripts/analyst_benchmark/c0b4_policy.py",
+    "scripts/analyst_benchmark/c0b4_runtime.py",
+    "scripts/analyst_benchmark/c0b4_schema.py",
+    "scripts/analyst_benchmark/c0b4_scoring.py",
+    "scripts/tests/test_analyst_c0b4_answer.py",
+    "scripts/tests/test_analyst_c0b4_backup.py",
+    "scripts/tests/test_analyst_c0b4_checkpoint.py",
+    "scripts/tests/test_analyst_c0b4_cli.py",
+    "scripts/tests/test_analyst_c0b4_executor.py",
+    "scripts/tests/test_analyst_c0b4_plan.py",
+    "scripts/tests/test_analyst_c0b4_policy.py",
+    "scripts/tests/test_analyst_c0b4_public_flow.py",
+    "scripts/tests/test_analyst_c0b4_runtime.py",
+    "scripts/tests/test_analyst_c0b4_schema.py",
+    "scripts/tests/test_analyst_c0b4_scoring.py",
+})
+
 
 def public_generation_options_sha256() -> str:
     """Hash every allowed C/D/F generation-factor combination."""

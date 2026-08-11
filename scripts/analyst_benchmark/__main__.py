@@ -13,6 +13,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args[:1] == ["c0b3"]:
         from .c0b3_cli import main as c0b3_main
         return c0b3_main(args[1:])
+    if args[:1] == ["c0b4"]:
+        from .c0b4_cli import main as c0b4_main
+        return c0b4_main(args[1:])
 
     # Preserve the C0B-1 parser and dispatch byte-for-byte by delegating every
     # non-namespaced invocation with its original argument sequence.

@@ -5,7 +5,8 @@ Status: **C0A controls frozen; C0B-2A offline controls implemented and reviewed;
 C/D/F envelope executed.** C0B-3 reached Stage F and ended terminal
 `INCONCLUSIVE/no_seed1_qualifier` after one of 92 seed-1 chunks repeated an otherwise
 grounded finding. The HI accepted E6's narrow prospective correction; C0B-4 repair and
-stability confirmation is now the active card. C1 and private Stage E remain held. Controls are
+stability confirmation passed its offline implementation and hostile-review gates. No
+C0B-4 live Ollama call has occurred. C1 and private Stage E remain held. Controls are
 authoritative in [`CONTRACT.md`](CONTRACT.md), accepted errata, and the reviewed
 benchmark protocols; this register is the
 risk-indexed view.
@@ -73,6 +74,11 @@ risk-indexed view.
 | R58 | A legitimate repeated identifier is treated as a whole-chunk model failure, or broad deduplication hides malformed/unsupported output | Medium | Medium | C0B-4 permits only one strictly structured, fully grounded redundant `(category, NFC quote)` row in one chunk/document independently per scored lane. Preserve raw counts and response bytes, remove later duplicates deterministically, count the recovery explicitly and fail on 2 rows/chunks/documents, any second semantic error or any ungrounded row. Legacy protocols remain strict. |
 | R59 | A deterministic schema retry repeats the same failure while consuming time and call budget | High | Low | Duplicate-only recovery is local and uses no model retry. C1 gives any other repair a distinct error-specific request identity and one-call bound; changing only the seed is forbidden. Historical C0B-2/C0B-3 identical-retry evidence remains unchanged. |
 | R60 | Observed Stage-F documents or old seed plans are presented as a fresh holdout after the prompt/scorer changes | Medium | High | Call C0B-4 repair/stability confirmation, not new selection or population validation. Create fresh nonces/plans under a distinct protocol, run unexecuted F72 seeds 17 and 20260804 plus a new C44 acceptance lane, and never resume or copy old plans. Bind the exact verified C0B-3 final-D parent and receipt; state that C/D were not rerun under the correction. |
+| R61 | Individually valid checkpoint artifacts are mixed across protocols, nonces, plans or terminal owners | Low | Critical | One shared run-lineage validator binds every artifact, attempt, event, aggregate, activation, cursor, terminal and receipt to the exact header/master tree. It runs before mutation/contact and during source/snapshot verification. Strict mixed-lineage and fabricated-owner tests fail closed. |
+| R62 | A crash between attempt persistence and derived event/artifact storage causes a repeat call or an unverifiable run | Medium | High | Persist the charged attempt first, reconcile only missing events from that durable history, and rederive context/cancellation evidence locally. Existing altered events fail; missing crash-gap events repair idempotently before mutation or contact. |
+| R63 | Canonical JSON sorting changes mapping order and makes a valid stored aggregate unreadable | Medium | Medium | Schema semantics validate exact mapping key sets, not insertion order. Real scorer output must pass store-read-finalize canonical round trips. |
+| R64 | Backup verification trusts shape-valid aggregate hashes instead of the model-response evidence, or replay becomes quadratic | Low | Critical | Authoritative verification independently replays scoring for the live checkpoint and immutable snapshot. Cache the immutable attempt ledger once per replay; the 228-request proof asserts exactly two linear semantic replays and rejects a coherently changed raw response/history. |
+| R65 | A control response is recorded valid before context/health evidence requirements are checked | Medium | High | Treat evidence-required response metadata and parsing as part of the attempt outcome. Malformed context/health responses persist as charged safety failures with terminal backup; a durable valid response is rederived after crash without another call. |
 
 ## High-Likelihood Risks — Detailed Controls
 

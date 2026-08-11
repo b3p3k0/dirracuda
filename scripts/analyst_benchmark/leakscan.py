@@ -23,8 +23,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence, Set, Tuple
 
 from .c0b2_leakscan import (FROZEN_C0B2_PUBLIC_PATHS, FROZEN_C0B3_PUBLIC_PATHS,
-                            LeakGateError, read_regular_file)
+                            FROZEN_C0B4_PUBLIC_PATHS, LeakGateError,
+                            read_regular_file)
 from .c0b3_policy import BENCHMARK_PROTOCOL_ID
+
+C0B4_PROTOCOL_ID = "c0b4-grounded-duplicate-confirmation-v1"
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BASELINE_VERSION = 1
@@ -76,6 +79,7 @@ C0B1_ALLOWLIST_PREFIX: Tuple[str, ...] = (
 )
 ALLOWLIST_EXACT: Set[str] = set(FROZEN_C0B2_PUBLIC_PATHS)
 C0B3_ALLOWLIST_EXACT: Set[str] = set(FROZEN_C0B3_PUBLIC_PATHS)
+C0B4_ALLOWLIST_EXACT: Set[str] = set(FROZEN_C0B4_PUBLIC_PATHS)
 ALLOWLIST_PREFIX: Tuple[str, ...] = ()
 
 GENERIC_PATTERNS: Dict[str, re.Pattern] = {
@@ -257,10 +261,14 @@ def secrets_compare(a: str, b: str) -> bool:
 
 
 def allowed(path: str, protocol_id: str | None = None) -> bool:
-    if protocol_id not in {None, BENCHMARK_PROTOCOL_ID}:
+    if protocol_id not in {None, BENCHMARK_PROTOCOL_ID, C0B4_PROTOCOL_ID}:
         raise BaselineError("unknown leak-scan protocol identity")
-    exact = C0B3_ALLOWLIST_EXACT if protocol_id == BENCHMARK_PROTOCOL_ID \
-        else ALLOWLIST_EXACT
+    if protocol_id == C0B4_PROTOCOL_ID:
+        exact = C0B4_ALLOWLIST_EXACT
+    elif protocol_id == BENCHMARK_PROTOCOL_ID:
+        exact = C0B3_ALLOWLIST_EXACT
+    else:
+        exact = ALLOWLIST_EXACT
     return path in exact or path.startswith(ALLOWLIST_PREFIX)
 
 

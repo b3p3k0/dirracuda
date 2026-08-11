@@ -787,6 +787,52 @@ cannot restore a pristine document holdout or support a population-accuracy clai
 that narrower question before contact. Preserve the original complete-corpus gate with a
 fresh C44 acceptance lane instead of quietly reducing the acceptance surface.
 
+### 84. Schema-valid pieces do not prove one run lineage
+
+Strict artifact models can each pass while their protocol, nonce, plan or owner comes
+from another run. Validate the complete graph from one header and master plan at every
+publish, resume, terminal and backup boundary. Hash presence is not semantic ownership.
+
+### 85. Canonical storage must round-trip through its schema
+
+Canonical JSON sorts mapping keys. A validator that depends on insertion order can
+accept an in-memory aggregate and reject the same bytes after storage. Validate exact key
+sets and meaning, then test real constructor output through store, read and finalize.
+
+### 86. Durable attempts and derived events have separate crash boundaries
+
+Precharge and response persistence can commit before their runtime event or aggregate.
+Resume must validate every event that exists, reconstruct only missing events from the
+durable attempt history, then require completeness before contact. Never repeat a valid
+context or cancellation observation just because its derived artifact was not stored.
+
+### 87. Control validation belongs inside the attempt outcome
+
+Do not record a context or health response `RAW_VALID` before checking every field needed
+to build its evidence. A later parse failure otherwise contradicts the durable state and
+can strand the run. Validate first, then persist one coherent outcome and terminalize a
+bounded safety failure when required.
+
+### 88. Backup verification must replay meaning, not only hashes
+
+Corruption can coherently change a response and its history while leaving stored
+aggregates untouched. Recompute controls, lane metrics and acceptance from attempts for
+both the source checkpoint and snapshot. Cache the immutable attempt ledger once;
+re-reading it per work item creates an avoidable quadratic hot path.
+
+### 89. A stage pause owns the activation boundary
+
+Completing a lane does not authorize the next lane. Persist the aggregate, pause, then let
+the verified resume own the cursor transition and activation. Require the prerequisite
+aggregate to pass semantically before either artifact exists or any later contact occurs.
+
+### 90. Closed retry budgets need closed owner catalogs
+
+A global call cap does not enforce one schema retry per lane or three ordered preflights
+per invocation. Bind attempt IDs, owners, request hashes, classes and histories to the
+exact plan. Check the per-lane retry partition and the version-tags-show barrier during
+read-only verification, not only in the live scheduler.
+
 ---
 
 ## Not yet learned

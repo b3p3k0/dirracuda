@@ -3,7 +3,8 @@
 Benchmark protocol ID: `c0b4-grounded-duplicate-confirmation-v1`
 Policy ID: `c0b4-bounded-grounded-dedup-v1`
 Date: 2026-08-11
-Status: **C0B-4A draft for independent review. No implementation or live call yet.**
+Status: **C0B-4A accepted. C0B-4B implemented and independently accepted offline. No
+live Ollama call yet.**
 
 Authoritative parents:
 
@@ -392,6 +393,21 @@ keys `findings`, `grounded_findings`, `first_pass_valid` and `semantic_invalid_a
 `affected_chunk_count`, `affected_document_ids`, `affected_document_count` and
 `normalized_duplicate_chunks`, with sorted unique ID arrays and matching counts.
 
+Activations are monotonic. F72/17 binds the master-plan hash, activates all of its work
+and keeps both later lanes inactive. F72/20260804 binds the passing F72/17 aggregate,
+activates its work and keeps C44 inactive. C44 binds the passing F72/20260804 aggregate,
+activates C44 and leaves no inactive work. Each later activation is preceded by its
+cursor transition. `completed_work_census_sha256` is the canonical hash of exact keys
+`lane_id` and `completed_work_ids`, where the IDs are the sorted complete planned IDs for
+the source lane. A production invocation pauses at each newly completed F-lane boundary;
+the verified resume owns the next transition and activation before later-lane contact.
+
+The four schema-retry slots are partitioned, not pooled: at most one belongs to each of
+F72/17, F72/20260804 and C44/1, and at most one belongs to following-health. Transport or
+crash replacements use only the separate transport/orphan class. A durable successful
+cancellation is never repeated after a health pause; resume derives its original
+not-before time and every health attempt from the stored history.
+
 `parent_binding` has exact keys `run_id`, `source_commit`, `checkpoint_sha256`,
 `run_header_sha256`, `benchmark_protocol_id`, `protocol_sha256`, `policy_id`,
 `policy_sha256`, `task_tree_sha256`, `final_d_decision_sha256`, `d4_aggregate_sha256`,
@@ -416,6 +432,11 @@ field and add only `redundant_rows`, `affected_work_ids`,
 `normalized_duplicate_chunks` and `affected_document`. Category metrics and injection
 pair rows are byte-exact C0B-3 schemas.
 
+`RAW_VALID` describes the terminal retained answer. After the inherited one schema
+retry, it may therefore coexist with `raw_first_pass_valid=false` only when the charged
+attempt and invalid-attempt counters prove that the first answered attempt was invalid
+and the retry was raw-valid. It never erases the first-pass-invalid fact.
+
 `raw_metrics` has exact keys `raw_findings`, `raw_grounded_findings`,
 `first_pass_invalid_chunks` and `raw_semantic_invalid_attempts`. `retained_metrics` has
 exact keys `documents`, `category_metrics`, `macro_f1`, `micro_f1`, `retained_findings`,
@@ -430,7 +451,10 @@ Lane-aggregate top-level keys are exactly `version`, common identity, `lane_id`,
 `lane_plan_sha256`, `parent_binding`, `candidate`, `planned_chunks`, `completed_chunks`,
 `raw_metrics`, `retained_metrics`, `recovery_counters`, `context_evidence_sha256`,
 `cancellation_health_evidence_sha256`, `passed` and `failure_reasons`. The evidence hashes
-are required SHA-256 only for F72/17 and exact null for F72/20260804.
+are exact null for F72/20260804. F72/17 always requires the context hash. Its
+cancellation/health hash is required after those controls run, but is exact null when a
+non-control lane failure already proves `seed17_no_qualifier` before cancellation; that
+early aggregate cannot contain `cancellation_health_failure`.
 
 Lane `failure_reasons` is a unique ordered subset of `incomplete_chunk_coverage`,
 `injection_pairs_incomplete`, `injection_event_present`,
@@ -614,6 +638,20 @@ Required offline proof includes:
   cancellation, backup, permissions and read-only checks pass;
 - parent database, backup and legacy checkpoint hashes remain unchanged;
 - leak scan, file-size checks, Analyst regression and risk-warranted full regression pass.
+
+**C0B-4B outcome (2026-08-11): PASS.** The exact 11-file C0B-4 suite passed 141
+tests. A separate high-risk holdout passed 37 crash, lineage, ordering, cancellation,
+backup and tamper tests. The production-shaped fake flow used the real corpus, master
+plan, scorer and SQLite checkpoint across three stage-boundary invocations: 228 scored
+requests plus 12 controls, a `CONFIRMED` terminal, and independent semantic replay of
+both the source checkpoint and immutable snapshot. It contacted no network service.
+
+The hostile review rejected mixed protocol and nonce lineage, fabricated preflight
+owners, coherently changed response histories, invalid terminal/receipt pairings and
+activation after a failing prerequisite. Crash recovery reuses durable context and
+cancellation observations without repeating their calls. The two largest files are
+`c0b4_checkpoint.py` at 1,678 lines and `c0b4_runtime.py` at 1,669 lines. Both remain
+below the 1,700-line pause threshold; future changes must extract rather than grow them.
 
 ### C0B-4C — live confirmation
 

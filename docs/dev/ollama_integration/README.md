@@ -39,7 +39,13 @@ at seeds 17 and 20260804, then restore complete-corpus acceptance with a new cor
 C44 lane. This is repair/stability confirmation, not a new untouched holdout. Private
 Stage E and C1 remain held.
 
-The current public implementation freezes the protected run nonce key only in the
+C0B-4A is accepted. C0B-4B is implemented and independently accepted offline: 141
+C0B-4 tests and a separate 37-test high-risk holdout pass. The real-plan fake flow made
+exactly 228 scored requests and 12 controls across three resumable stage invocations,
+then independently replayed the source checkpoint and immutable snapshot. No live
+Ollama call has occurred. C0B-4C is the next gate.
+
+The inherited C0B-3 public implementation freezes the protected run nonce key only in the
 backed-up 0600 checkpoint; derived
 boundary work binds both the logical document hash and generated-view hash; and D3/D4
 context probes are phase-specific planned controls triggered by the first normal HTTP
@@ -177,7 +183,9 @@ never became eligible.
 
 ## Next Step
 
-The next card is C0B-4A review, followed by the isolated C0B-4 implementation, two F72
-seed confirmations and a fresh C44 complete-corpus acceptance lane. The C0B-3 checkpoint
-is never rescored or resumed. C1 and private Stage E remain held until C0B-4 reaches a
-verified terminal and the HI chooses the next gate.
+Commit the reviewed C0B-4B offline source, freeze that identity, then create one C0B-4C
+child checkpoint from a dedicated clean worktree. Run F72 seed 17, verify its boundary,
+explicitly resume F72 seed
+20260804, verify again, then explicitly resume the C44 complete-corpus lane. The C0B-3
+checkpoint is never rescored or resumed. C1 and private Stage E remain held until C0B-4
+reaches a verified terminal and the HI chooses the next gate.
