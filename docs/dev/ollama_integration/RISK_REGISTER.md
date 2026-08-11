@@ -1,16 +1,13 @@
 # Ollama Integration — Risk Register
 
-Date: 2026-08-09
+Date: 2026-08-11
 Status: **C0A controls frozen; C0B-2A offline controls implemented and reviewed; public
-C/D/F envelope executed.** The complete public executor passed its offline, regression
-and hostile-review gates. The canonical run ended terminal
-`INCONCLUSIVE/no_d3_context_survivor`: D2 left one intermediate candidate, and D3's strict
-negative control eliminated it. Stage F never activated and private Stage E was
-structurally ineligible. The HI accepted E5's bounded, human-reviewed suggestion policy
-prospectively on 2026-08-09; C0B-3A passed three independent reviews, and live execution
-remains held until C0B-3B's implementation gates pass. Controls are
+C/D/F envelope executed.** C0B-3 reached Stage F and ended terminal
+`INCONCLUSIVE/no_seed1_qualifier` after one of 92 seed-1 chunks repeated an otherwise
+grounded finding. The HI accepted E6's narrow prospective correction; C0B-4 repair and
+stability confirmation is now the active card. C1 and private Stage E remain held. Controls are
 authoritative in [`CONTRACT.md`](CONTRACT.md), accepted errata, and the reviewed
-[`BENCHMARK_PROTOCOL_C0B2.md`](BENCHMARK_PROTOCOL_C0B2.md); this register is the
+benchmark protocols; this register is the
 risk-indexed view.
 
 | ID | Risk | Likelihood | Impact | Mitigation / Control |
@@ -73,6 +70,9 @@ risk-indexed view.
 | R55 | Automation bias or review fatigue turns “human reviewed” into rubber-stamping | Medium | High | Model rows are visibly suggestions, deterministic evidence stays separate, source context is adjacent, and accept/reject is explicit with no hidden auto-accept. Capture bounded override/rejection counts for monitoring and rebenchmark triggers; feedback never silently retunes behavior. Model output triggers no action. |
 | R56 | A C0B-3 artifact is interpreted under C0B-2 rules, or mixed policy lineage passes through resume/backup verification | Low | High | The stored header is the sole protocol discriminator. Every policy-sensitive D/F plan, aggregate, decision, result and completion carries the exact current binding and a distinct version; legacy absence remains exact. Mutating namespaces check the header read-only before writable open and again after open. Before a Stage-D abandon mutates state, re-derive every completed adaptive attempt plus the final decision from durable evidence. Every backup of an active-D run, including a generic `ABANDONED` terminal, repeats that reconstruction. The frozen `BLOCKED_PROVENANCE` exception remains structural-only so a drifted nonce key cannot prevent its own mandatory failure receipt; the generic anchor still validates the current-family plan/decision lineage and exact failure artifact. Backup/status/verify dispatch from the stored header, reject mixed families, and are exercised against both fresh fake C0B-3 terminals and all three immutable C0B-2 checkpoints. |
 | R57 | The accepted single false-positive budget is misrepresented as accuracy perfection or silently widened after launch | Medium | Medium | Document the HI's assistive-product rationale, test exact 0/1/2 document boundaries at D/F and final acceptance, label model output `suggested/unreviewed`, require explicit human adjudication and retain accept/reject monitoring. The budget does not weaken schema, injection, grounding, provenance, privacy or no-action gates; any threshold change requires a new policy identity and benchmark. |
+| R58 | A legitimate repeated identifier is treated as a whole-chunk model failure, or broad deduplication hides malformed/unsupported output | Medium | Medium | C0B-4 permits only one strictly structured, fully grounded redundant `(category, NFC quote)` row in one chunk/document independently per scored lane. Preserve raw counts and response bytes, remove later duplicates deterministically, count the recovery explicitly and fail on 2 rows/chunks/documents, any second semantic error or any ungrounded row. Legacy protocols remain strict. |
+| R59 | A deterministic schema retry repeats the same failure while consuming time and call budget | High | Low | Duplicate-only recovery is local and uses no model retry. C1 gives any other repair a distinct error-specific request identity and one-call bound; changing only the seed is forbidden. Historical C0B-2/C0B-3 identical-retry evidence remains unchanged. |
+| R60 | Observed Stage-F documents or old seed plans are presented as a fresh holdout after the prompt/scorer changes | Medium | High | Call C0B-4 repair/stability confirmation, not new selection or population validation. Create fresh nonces/plans under a distinct protocol, run unexecuted F72 seeds 17 and 20260804 plus a new C44 acceptance lane, and never resume or copy old plans. Bind the exact verified C0B-3 final-D parent and receipt; state that C/D were not rerun under the correction. |
 
 ## High-Likelihood Risks — Detailed Controls
 

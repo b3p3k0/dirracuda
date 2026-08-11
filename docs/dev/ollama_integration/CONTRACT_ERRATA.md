@@ -250,3 +250,56 @@ This is an assistive-workflow risk decision, not a claim of population accuracy.
 follows NIST's context-specific treatment of human-AI roles, oversight and measured risk:
 [AI RMF Core](https://airc.nist.gov/airmf-resources/airmf/5-sec-core/) and
 [trustworthiness characteristics](https://airc.nist.gov/airmf-resources/airmf/3-sec-characteristics/).
+
+---
+
+## E6 — Repeated grounded evidence is normalized, not retried blindly
+
+**Status:** ACCEPTED FOR PROSPECTIVE CORRECTION (HI decision, 2026-08-11)
+**Affects:** `CONTRACT.md` §§7–8; worksheet prompt, evidence normalization and retry
+**Raised by:** canonical C0B-3 terminal review
+
+### The conflict
+
+The public output-truncation fixtures contain identifiers that legitimately occur more
+than once. C0B-3's prompt required exact quoted evidence but did not tell the model to
+emit each category/quote pair only once. One Stage-F answer therefore returned the same
+grounded contact quote twice. The schema was strict-valid, every quote was grounded and
+the source contained the repeated value twice, but the semantic validator rejected the
+answer as duplicate evidence.
+
+The frozen retry repeated the exact prompt, nonce, schema, options, source and seed. It
+returned byte-identical content and could not repair a deterministic semantic error.
+
+### The prospective correction
+
+The production prompt says to emit at most one finding for each unique category and exact
+quote, even when the value repeats in the source. After strict structural validation and
+raw grounding, the aggregator removes later duplicates by `(category, Unicode-NFC quote)`
+in stable first-seen order. Raw counts retain every original row; retained counts and
+display evidence use the normalized set and deterministic source location.
+
+The C0B-4 confirmation policy may recover at most one redundant row in at most one
+chunk/document independently in each scored lane. Recovery requires strict-valid raw
+structure, `duplicate_evidence` as the only semantic error, every raw row grounded, and a
+fully valid normalized answer. Two redundant rows, two affected chunks/documents,
+another semantic error or an ungrounded row fails the gate. The rule is global; it never
+names the observed fixture.
+
+All other schema, grounding, quality, injection, context, safety and provenance rules
+remain unchanged. C0B-2 and C0B-3 retain their exact old prompt, validator, retry and
+terminal meanings.
+
+Production C1 does not blindly repeat an identical deterministic request. Duplicate-only
+normalization is local and needs no second model call. Any future error-specific model
+repair gets a distinct prompt/request identity, hard one-repair bound and explicit tests;
+changing only the random seed is not an accepted repair design.
+
+### Non-retroactivity
+
+C0B-3 remains terminal `INCONCLUSIVE/no_seed1_qualifier`. Its response, attempts,
+aggregate, artifact, receipt and checkpoint are not rescored or resumed. C0B-4 creates a
+new source/policy identity, requests and checkpoint for F72 seeds 17 and 20260804 plus a
+fresh C44 seed-1 acceptance lane. The new F responses are prospective stability evidence,
+not a new untouched document holdout. Final acceptance combines corrected C44 and F72
+evidence with the immutable parent D50/D4 result; Stages C and D are not rerun.

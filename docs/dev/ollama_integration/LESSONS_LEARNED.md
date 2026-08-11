@@ -762,6 +762,31 @@ the frozen `BLOCKED_PROVENANCE` exception narrow: validate its stored current-fa
 lineage and exact failure artifact structurally, but do not demand the nonce key whose
 drift may be the failure being receipted.
 
+### 81. A structured schema does not express every semantic constraint
+
+The worksheet JSON Schema bounded shape and types correctly, but pairwise uniqueness over
+`category` plus normalized `quote` remained an application rule. The prompt never stated
+that rule, while the public fixture legitimately repeated identifiers. Keep prompt,
+validator and fixture semantics aligned. When a deterministic local transform can safely
+remove redundant grounded data, count and bound it instead of calling the whole answer
+unusable.
+
+### 82. An identical deterministic retry is evidence collection, not repair
+
+C0B-3 retried the same prompt, nonce, options, source and seed after semantic invalidity.
+Both responses were byte-identical. A local normalization needs no model call; a real
+model repair needs a new, frozen error-specific request identity. Do not spend a retry
+budget hoping fixed deterministic inputs change.
+
+### 83. After holdout inspection, say what the next run can prove
+
+Stage-F seed 1 and its failing synthetic document were inspected during the postmortem.
+The documents are no longer untouched. New responses at seeds 17 and 20260804 can confirm
+the prospective prompt/normalizer under different frozen generation conditions, but they
+cannot restore a pristine document holdout or support a population-accuracy claim. Freeze
+that narrower question before contact. Preserve the original complete-corpus gate with a
+fresh C44 acceptance lane instead of quietly reducing the acceptance surface.
+
 ---
 
 ## Not yet learned

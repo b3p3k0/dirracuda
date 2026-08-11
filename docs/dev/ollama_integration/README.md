@@ -1,6 +1,6 @@
 # Ollama Integration Workspace
 
-Date: 2026-08-09
+Date: 2026-08-11
 Status: **C0A contract frozen** (committed `91bb2aa`). **C0B-1 accepted and committed
 (`47e946b`).** The complete public C/D/F executor passed its offline and hostile-review
 gates and was committed through B5 (`bde8f92`), with the current Ollama show-envelope
@@ -26,8 +26,18 @@ remains capped at one across all 40 negatives. Every other gate is unchanged. C0
 `INCONCLUSIVE`. C0B-3A's prospective contract passed three independent reviews. C0B-3B
 implements the versioned policy split and exact legacy/current verification. Its offline
 suite, full fake-transport terminal flows, leak audit, legacy-checkpoint compatibility
-checks and three independent hostile reviews pass. The accepted tree is ready to freeze
-for one fresh C0B-3C public run. Private Stage E remains held.
+checks and three independent hostile reviews pass. The resulting C0B-3C run is complete
+and terminal
+`INCONCLUSIVE/no_seed1_qualifier`: 91 of 92 Stage-F seed-1 chunks were valid, and one
+fully grounded answer repeated a category/quote row. The identical retry returned
+identical bytes. See [`PUBLIC_CDF_OUTCOME_C0B3.md`](PUBLIC_CDF_OUTCOME_C0B3.md).
+
+The HI accepted E6's narrow prospective correction. C0B-4 will preserve C0B-3, add an
+explicit unique-evidence prompt rule, normalize at most one fully grounded redundant row
+under an independent per-lane bound, confirm the fixed finalist with fresh F72 requests
+at seeds 17 and 20260804, then restore complete-corpus acceptance with a new corrected
+C44 lane. This is repair/stability confirmation, not a new untouched holdout. Private
+Stage E and C1 remain held.
 
 The current public implementation freezes the protected run nonce key only in the
 backed-up 0600 checkpoint; derived
@@ -143,7 +153,7 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
 ## Document Map
 
 1. `CONTRACT.md` — **the frozen, authoritative spec.** Cards implement against it.
-2. `CONTRACT_ERRATA.md` — accepted narrow corrections to the frozen contract (E1–E5).
+2. `CONTRACT_ERRATA.md` — accepted narrow corrections to the frozen contract (E1–E6).
 3. `README.md` (this file) — status, decisions, orientation.
 4. `BENCHMARK_PROTOCOL_C0B1.md` — **pre-registered** C0B-1 decision rule, gates, factors, budgets. Hash-pinned.
 5. `BENCHMARK_PROTOCOL_C0B2.md` — reviewed C0B-2 public/private protocol; offline 2A is
@@ -153,18 +163,21 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
 6. `BENCHMARK_PUBLIC_CDF_SCHEMA.md` — normative strict artifact, identity, derivation and
    terminal schemas for the public C/D/F executor.
 7. `BENCHMARK_PROTOCOL_C0B3.md` — prospective bounded-FP confirmation and card gates.
-8. `BENCHMARK.md` — instrument method, module dispositions, what is/is not committed.
-9. `PUBLIC_CDF_OUTCOME_C0B2.md` — public-only terminal result and decision chain.
-10. `LESSONS_LEARNED.md` — only what a card actually exercised.
-11. `RESEARCH_NOTES.md` — verified external findings with sources + corpus profile.
-12. `RISK_REGISTER.md` — risk controls.
-13. `UI_MOCKUPS.md` — surface layouts (draft).
+8. `PUBLIC_CDF_OUTCOME_C0B3.md` — immutable C0B-3 terminal result and postmortem facts.
+9. `BENCHMARK_PROTOCOL_C0B4.md` — narrow grounded-duplicate confirmation protocol.
+10. `BENCHMARK.md` — instrument method, module dispositions, what is/is not committed.
+11. `PUBLIC_CDF_OUTCOME_C0B2.md` — public-only terminal result and decision chain.
+12. `LESSONS_LEARNED.md` — only what a card actually exercised.
+13. `RESEARCH_NOTES.md` — verified external findings with sources + corpus profile.
+14. `RISK_REGISTER.md` — risk controls.
+15. `UI_MOCKUPS.md` — surface layouts (draft).
 
 `BENCHMARK_RESULTS.md` remains absent. It is the private Stage-E aggregate, and Stage E
 never became eligible.
 
 ## Next Step
 
-The next card is one fresh public C→D→F run from the clean, accepted C0B-3B source
-commit. The old checkpoint is never rescored or resumed. C1 and private Stage E remain
-held until the new run produces a verified selection and the HI chooses the next gate.
+The next card is C0B-4A review, followed by the isolated C0B-4 implementation, two F72
+seed confirmations and a fresh C44 complete-corpus acceptance lane. The C0B-3 checkpoint
+is never rescored or resumed. C1 and private Stage E remain held until C0B-4 reaches a
+verified terminal and the HI chooses the next gate.
