@@ -869,6 +869,51 @@ rule without circularity. Freeze new seeds before contact, keep the prior termin
 immutable and describe the next run as operational-policy confirmation rather than an
 untouched holdout or population-accuracy estimate.
 
+## C0B-5B (offline implementation accepted)
+
+### 95. Review-cost limits need two independently derived units
+
+Counting affected documents alone can hide several suggestions that a human must reject
+inside one document. Rebuild both affected-document and retained-row counts from the
+normalized finding union, enforce both limits independently and carry the same evidence
+into the derived public summary.
+
+### 96. Parent proof and child proof are separate jobs
+
+A valid child header does not prove its frozen inputs are still valid. Verify both
+C0B-3/C0B-4 checkpoint/snapshot pairs read-only before child creation or contact, replay
+the observed C0B-4 terminal from its attempts, then separately replay the C0B-5 source
+checkpoint and snapshot at terminal verification. Shared hashes are references, not a
+substitute for either semantic replay.
+
+### 97. Resume authority belongs in durable state
+
+Persist the request charge before dispatch and allow only one in-flight request. Commit a
+lane aggregate and its pause before returning; a later verified resume owns the next
+activation. Crash recovery may fill a missing derived event from the durable attempt, but
+must never repeat the call or overwrite an existing event.
+
+### 98. Shared-GPU contention is a scheduling outcome
+
+A busy GPU changes elapsed time, not model quality. Keep dispatch serial and turn a
+retryable resource failure into `PAUSED_RESOURCE`; preserve the plan and resume later.
+Do not score contention as a miss or silently start the next lane.
+
+### 99. Size guardrails protect shipped code first
+
+The HI clarified that the mandatory production-code size limit does not automatically
+block test or benchmark instruments whose audit trail is inherently larger. Those files
+still need explicit size reporting and focused review. C0B-5 needed no exception after
+review: its largest instrument is 1699 lines, and no shipped production file changed.
+
+### 100. Source-sealed regressions need a frozen workspace and a realistic window
+
+The Analyst-wide run took 88 minutes, almost entirely in inherited fake-terminal replay
+matrices. Editing while those tests run changes their declared source seal and creates a
+false failure, so the workspace must stay frozen. The run found only two missing module
+disposition notes; the exact guardrail and focused suites passed after that correction.
+Optimize the inherited replay tests on a dedicated card rather than weakening this gate.
+
 ---
 
 ## Not yet learned

@@ -54,6 +54,14 @@ never activated. The HI accepted E8 prospectively: C0B-5 caps both affected nega
 documents and retained false-positive rows at 2 per F lane and 4 in the final aggregate,
 using two never-contacted seeds. Private Stage E and C1 remain held.
 
+C0B-5B's isolated offline implementation passed its focused, Analyst-wide, provenance,
+leak, compile/diff, file-size and independent hostile-review gates. It adds independent
+read-only replay of the frozen C0B-3/C0B-4 parents and the C0B-5 child, owner-only atomic
+checkpoint/backup handling, explicit boundary resumes and quality-neutral shared-GPU
+resource pauses. No C0B-5 model request occurred. C0B-5C remains held only until this
+reviewed source is committed and the genuine pre-task baseline passes its post-commit
+scan.
+
 The inherited C0B-3 public implementation freezes the protected run nonce key only in the
 backed-up 0600 checkpoint; derived
 boundary work binds both the logical document hash and generated-view hash; and D3/D4
@@ -194,9 +202,9 @@ never became eligible.
 
 ## Next Step
 
-C0B-5A is frozen and independently accepted. Implement C0B-5B under new
-protocol/policy/checkpoint identities without changing legacy verification. Offline proof
-must cover both document and row limits at exact boundaries before one clean,
-source-pinned C0B-5C run may contact the model. C0B-2/C0B-3/C0B-4 are never rescored or
-resumed. C1 and private Stage E remain held until C0B-5 reaches a verified terminal and
-the HI reviews it.
+C0B-5B passed its complete offline and hostile-review gates. Commit that reviewed source,
+prove the genuine pre-task leak baseline crossed exactly one direct commit, then create
+the sole clean, source-pinned C0B-5C child. Run F72/20260804, explicitly resume
+F72/20260811, explicitly resume C44/1, and verify the terminal snapshot and receipt.
+C0B-2/C0B-3/C0B-4 are never rescored or resumed. C1 and private Stage E remain held until
+C0B-5 reaches a verified terminal and the HI reviews it.

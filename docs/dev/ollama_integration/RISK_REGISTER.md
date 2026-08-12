@@ -10,7 +10,10 @@ first live child failed closed before transport because of the E7 filesystem-pro
 preimage mismatch. The verified replacement then ended
 `INCONCLUSIVE/seed17_no_qualifier` after two negative near-miss documents exceeded the
 one-document allowance. E8 prospectively bounds C0B-5 review load; C1 and private Stage E
-remain held. Controls are
+remain held. C0B-5B passed its complete offline and independent hostile-review gates;
+C0B-5C remains held until the reviewed source commit and post-commit leak proof. No
+C0B-5 model call has occurred.
+Controls are
 authoritative in [`CONTRACT.md`](CONTRACT.md), accepted errata, and the reviewed
 benchmark protocols; this register is the
 risk-indexed view.
@@ -87,6 +90,8 @@ risk-indexed view.
 | R67 | A corrective commit makes the true pre-task leak baseline appear stale, encouraging a post-task replacement, dirty overlay or Git replacement ref that hides committed content | Medium | High | Never synthesize a new historical inventory. C0B-4/C0B-5 alone may carry their genuine protocol-scoped baseline across one direct non-merge task commit; scan every immutable `HEAD` blob and dirty overlay independently against the exact allowlist. Disable Git replacement objects for every provenance/object read and rehash blob bytes against the tree object ID. Reject symlinks/gitlinks/non-regular entries, a second commit, merge, unsafe path or unlisted path. Create a fresh baseline immediately after the preceding reviewed commit and before the next card's edits; never reuse the earlier card's baseline. |
 | R68 | A post-observation threshold change overfits the seed that motivated it or becomes repeated threshold drift | Medium | High | Preserve C0B-4 as immutable descriptive evidence. C0B-5 freezes two never-contacted F seeds before contact, uses new protocol/policy/checkpoint identities and permits one reviewed public run. Any miss remains `INCONCLUSIVE`; no automatic widening, prompt retune or repeat run. |
 | R69 | A false-positive document cap understates the actual number of suggestions a human must dismiss | Medium | Medium | Independently cap both affected negative documents and retained findings on negatives: 2/2 per 16-negative F lane and 4/4 across the final 40 negatives. Keep suggestions labelled and require explicit human adjudication. |
+| R70 | C0B-5 trusts frozen parent hashes or its own stored aggregates without replaying the evidence | Low | Critical | Before child creation, mutation or contact, open and verify both C0B-3/C0B-4 checkpoint/snapshot pairs read-only and independently replay the observed C0B-4 terminal. At child terminal, independently replay the C0B-5 source checkpoint and immutable snapshot from attempt evidence. Parent files remain pinned and unchanged. |
+| R71 | A crash, resume or shared-GPU pause repeats a call or activates the next lane early | Medium | High | Persist one precharged request before serial dispatch; reconcile only missing derived events. Commit each aggregate and pause atomically, then require an explicit verified resume to activate the next lane. Retryable GPU contention yields `PAUSED_RESOURCE` and preserves the frozen plan; it is never scored as a quality failure. Terminal evidence is immutable before snapshot/receipt publication. |
 
 ## High-Likelihood Risks — Detailed Controls
 

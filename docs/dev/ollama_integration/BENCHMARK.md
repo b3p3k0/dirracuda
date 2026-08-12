@@ -299,3 +299,39 @@ No C0B-5 model call is allowed until its complete source passes offline and host
 review, the leak/file-size gates pass and the source is committed in a clean worktree.
 One quality miss stops `INCONCLUSIVE`; there is no automatic threshold widening or repeat
 run.
+
+## 12. C0B-5B offline implementation
+
+The isolated C0B-5 module family passed its complete offline gate: 106 focused tests, 30
+separate provenance/security tests, Analyst-wide regression, compile/diff, file-size and
+public leak checks. An independent hostile re-review found three ordering defects in
+resume control replay, semantic receipt publication and post-rename cleanup; the fixes
+and exact regressions passed re-review. This is an offline result, not a model result. No
+C0B-5 request occurred during C0B-5B.
+
+The scorer independently caps two different review costs: affected negative documents
+and retained suggestion rows on those documents. Each F lane must stay at or below 2/2;
+the final 40-negative aggregate must stay at or below 4/4. Boundary tests cover both
+units separately, and the derived public summary rebuilds document/category/template
+rows from canonical attempt evidence.
+
+Lineage verification opens the frozen C0B-3 and C0B-4 checkpoint/snapshot pairs
+read-only before child creation, mutation or model contact. C0B-4 parent facts are
+replayed independently rather than trusted from stored aggregate hashes. C0B-5 terminal
+verification likewise replays the child checkpoint and immutable snapshot from attempt
+evidence.
+
+The child checkpoint keeps one durable precharged request at a time. Lane completion
+commits its aggregate and pauses; only an explicit verified resume may activate the next
+lane. Terminal evidence becomes immutable before the owner-only snapshot and receipt are
+published. Crash-gap reconciliation may recreate missing derived events, but it cannot
+repeat a completed call or rewrite an existing event.
+
+Shared-GPU contention is operational, not a quality measurement. Dispatch stays serial;
+a retryable resource failure yields `PAUSED_RESOURCE` with no second in-flight request.
+The operator may resume later under the same frozen plan and source identity. Soft-wall
+and stage-boundary pauses follow the same no-silent-advance rule.
+
+C0B-5C remains held only until this complete reviewed source is committed and the
+post-commit leak scan proves the genuine pre-task baseline crossed exactly that one
+direct, non-merge commit.
