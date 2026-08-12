@@ -47,8 +47,12 @@ model call occurred in that phase. The first C0B-4C child then failed closed wit
 invocations and attempts because creation hashed one filesystem mode while revalidation
 hashed two. E7 preserves that verified terminal and corrects exact-mode revalidation
 prospectively. The corrected 150-test C0B-4 suite and independent hostile re-review pass.
-After the correction is committed, a fresh replacement child is the next gate; private
-Stage E and C1 remain held.
+The replacement completed F72 seed 17 and ended verified
+`INCONCLUSIVE/seed17_no_qualifier`: two negative near-miss documents each produced one
+grounded financial suggestion, while every other measured gate passed. Later lanes were
+never activated. The HI accepted E8 prospectively: C0B-5 caps both affected negative
+documents and retained false-positive rows at 2 per F lane and 4 in the final aggregate,
+using two never-contacted seeds. Private Stage E and C1 remain held.
 
 The inherited C0B-3 public implementation freezes the protected run nonce key only in the
 backed-up 0600 checkpoint; derived
@@ -164,7 +168,7 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
 ## Document Map
 
 1. `CONTRACT.md` — **the frozen, authoritative spec.** Cards implement against it.
-2. `CONTRACT_ERRATA.md` — accepted narrow corrections to the frozen contract (E1–E7).
+2. `CONTRACT_ERRATA.md` — accepted narrow corrections to the frozen contract (E1–E8).
 3. `README.md` (this file) — status, decisions, orientation.
 4. `BENCHMARK_PROTOCOL_C0B1.md` — **pre-registered** C0B-1 decision rule, gates, factors, budgets. Hash-pinned.
 5. `BENCHMARK_PROTOCOL_C0B2.md` — reviewed C0B-2 public/private protocol; offline 2A is
@@ -175,22 +179,24 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
    terminal schemas for the public C/D/F executor.
 7. `BENCHMARK_PROTOCOL_C0B3.md` — prospective bounded-FP confirmation and card gates.
 8. `PUBLIC_CDF_OUTCOME_C0B3.md` — immutable C0B-3 terminal result and postmortem facts.
-9. `BENCHMARK_PROTOCOL_C0B4.md` — narrow grounded-duplicate confirmation protocol.
-10. `BENCHMARK.md` — instrument method, module dispositions, what is/is not committed.
-11. `PUBLIC_CDF_OUTCOME_C0B2.md` — public-only terminal result and decision chain.
-12. `LESSONS_LEARNED.md` — only what a card actually exercised.
-13. `RESEARCH_NOTES.md` — verified external findings with sources + corpus profile.
-14. `RISK_REGISTER.md` — risk controls.
-15. `UI_MOCKUPS.md` — surface layouts (draft).
+9. `BENCHMARK_PROTOCOL_C0B4.md` — frozen grounded-duplicate confirmation protocol.
+10. `PUBLIC_CDF_OUTCOME_C0B4.md` — immutable C0B-4 terminal result and measurements.
+11. `BENCHMARK_PROTOCOL_C0B5.md` — prospective assistive review-budget confirmation.
+12. `BENCHMARK.md` — instrument method, module dispositions, what is/is not committed.
+13. `PUBLIC_CDF_OUTCOME_C0B2.md` — public-only terminal result and decision chain.
+14. `LESSONS_LEARNED.md` — only what a card actually exercised.
+15. `RESEARCH_NOTES.md` — verified external findings with sources + corpus profile.
+16. `RISK_REGISTER.md` — risk controls.
+17. `UI_MOCKUPS.md` — surface layouts (draft).
 
 `BENCHMARK_RESULTS.md` remains absent. It is the private Stage-E aggregate, and Stage E
 never became eligible.
 
 ## Next Step
 
-Commit the accepted E7 exact-mode correction, create a fresh post-E7 leak baseline, then
-create one replacement C0B-4C child from a dedicated clean worktree. Run F72 seed
-17, verify its boundary, explicitly resume F72 seed
-20260804, verify again, then explicitly resume the C44 complete-corpus lane. The C0B-3
-checkpoint is never rescored or resumed. C1 and private Stage E remain held until C0B-4
-reaches a verified terminal and the HI chooses the next gate.
+C0B-5A is frozen and independently accepted. Implement C0B-5B under new
+protocol/policy/checkpoint identities without changing legacy verification. Offline proof
+must cover both document and row limits at exact boundaries before one clean,
+source-pinned C0B-5C run may contact the model. C0B-2/C0B-3/C0B-4 are never rescored or
+resumed. C1 and private Stage E remain held until C0B-5 reaches a verified terminal and
+the HI reviews it.

@@ -131,6 +131,40 @@ FROZEN_C0B4_PUBLIC_PATHS = FROZEN_C0B3_PUBLIC_PATHS | frozenset({
     "scripts/tests/test_analyst_c0b4_scoring.py",
 })
 
+# C0B-5 has a separate 87-path identity rooted at C0B-3. It imports only the
+# three policy-neutral C0B-4 helpers named here; C0B-4 itself stays exact.
+FROZEN_C0B5_PUBLIC_PATHS = FROZEN_C0B3_PUBLIC_PATHS | frozenset({
+    "docs/dev/ollama_integration/BENCHMARK.md",
+    "docs/dev/ollama_integration/BENCHMARK_PROTOCOL_C0B4.md",
+    "docs/dev/ollama_integration/BENCHMARK_PROTOCOL_C0B5.md",
+    "docs/dev/ollama_integration/PUBLIC_CDF_OUTCOME_C0B3.md",
+    "docs/dev/ollama_integration/PUBLIC_CDF_OUTCOME_C0B4.md",
+    "scripts/analyst_benchmark/c0b4_answer.py",
+    "scripts/analyst_benchmark/c0b4_executor.py",
+    "scripts/analyst_benchmark/c0b4_filesystem.py",
+    "scripts/analyst_benchmark/c0b5_backup.py",
+    "scripts/analyst_benchmark/c0b5_checkpoint.py",
+    "scripts/analyst_benchmark/c0b5_cli.py",
+    "scripts/analyst_benchmark/c0b5_executor.py",
+    "scripts/analyst_benchmark/c0b5_lineage.py",
+    "scripts/analyst_benchmark/c0b5_plan.py",
+    "scripts/analyst_benchmark/c0b5_policy.py",
+    "scripts/analyst_benchmark/c0b5_replay.py",
+    "scripts/analyst_benchmark/c0b5_runtime.py",
+    "scripts/analyst_benchmark/c0b5_schema.py",
+    "scripts/analyst_benchmark/c0b5_scoring.py",
+    "scripts/tests/test_analyst_c0b5_backup.py",
+    "scripts/tests/test_analyst_c0b5_checkpoint.py",
+    "scripts/tests/test_analyst_c0b5_cli.py",
+    "scripts/tests/test_analyst_c0b5_executor.py",
+    "scripts/tests/test_analyst_c0b5_plan.py",
+    "scripts/tests/test_analyst_c0b5_policy.py",
+    "scripts/tests/test_analyst_c0b5_public_flow.py",
+    "scripts/tests/test_analyst_c0b5_runtime.py",
+    "scripts/tests/test_analyst_c0b5_schema.py",
+    "scripts/tests/test_analyst_c0b5_scoring.py",
+})
+
 
 def public_generation_options_sha256() -> str:
     """Hash every allowed C/D/F generation-factor combination."""

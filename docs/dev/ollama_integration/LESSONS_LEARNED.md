@@ -854,6 +854,21 @@ preserved in Git history. Git replacement refs can also substitute safe bytes fo
 object without appearing in worktree status. Disable replacements for every Git ancestry,
 diff, tree and object read, then rehash returned blob bytes against the tree object ID.
 
+### 93. A document cap is not a human-review workload cap
+
+One affected negative document may contain several false-positive rows. If the product
+rationale is a bounded number of human dismissals, freeze both limits independently:
+affected documents and retained findings on negatives. Test the exact pass/fail
+boundaries for each and never let one compensate for the other.
+
+### 94. Post-observation policy changes need fresh generation conditions
+
+C0B-4 measured two false-positive documents at seed 17 before the HI selected a broader
+review budget. That seed remains useful descriptive evidence but cannot qualify the new
+rule without circularity. Freeze new seeds before contact, keep the prior terminal
+immutable and describe the next run as operational-policy confirmation rather than an
+untouched holdout or population-accuracy estimate.
+
 ---
 
 ## Not yet learned

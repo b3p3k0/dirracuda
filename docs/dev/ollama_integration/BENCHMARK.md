@@ -245,7 +245,7 @@ backed-up `CONFIRMED` result without network access. Read-only verification repl
 attempt evidence independently for both the live checkpoint and immutable snapshot; it
 does not trust stored aggregate hashes alone.
 
-The live command surface is intentionally gated:
+The C0B-4 live command surface was intentionally gated:
 
 ```bash
 ./venv/bin/python -m scripts.analyst_benchmark c0b4 create
@@ -255,12 +255,9 @@ The live command surface is intentionally gated:
 ./venv/bin/python -m scripts.analyst_benchmark c0b4 verify --run-id <run-id>
 ```
 
-Do not run `create` until the reviewed C0B-4B source is committed and frozen. Each
-completed F lane pauses. Verify the boundary before the explicit resume that owns the
-next cursor transition and activation. Shared GPU use can increase duration; it does not
-change quality scoring. Run C0B-4C from a dedicated clean worktree and leave it unchanged
-through the terminal receipt: the checkpoint deliberately seals the complete worktree,
-including unrelated dirty paths, across every resume.
+C0B-4C ran from a dedicated clean worktree and stayed unchanged through its terminal
+receipt. The checkpoint sealed the complete worktree across execution. Shared GPU use
+increased duration but did not change quality scoring.
 
 The root `README.md` was reviewed again after C0B-4B and E7. No edit is appropriate:
 Analyst still has no released user-facing entrypoint, dependency lane or runtime behavior.
@@ -269,13 +266,36 @@ The first C0B-4C child failed closed before transport with zero invocations and 
 Creation probed only frozen `DELETE` mode, while inherited revalidation included both
 `DELETE` and `WAL` in the capability hash. E7 preserves that verified terminal and adds a
 C0B-4-only exact-mode revalidator; legacy behavior and all benchmark gates are unchanged.
-The corrected C0B-4 suite passes all 150 tests, and the final independent hostile review
-accepts the replacement-ref defense. A replacement child may be created only from the
-reviewed, committed corrected source.
-The leak gate retains the genuine pre-C0B-4B baseline: for C0B-4 only, it may cross one
-direct non-merge task commit, adds that commit's exact net paths to the scan and still
-rejects a second commit or any path outside the frozen allowlist. It never manufactures
-a post-task baseline. The scanner reads each immutable `HEAD` blob as well as any dirty
-overlay and rejects committed or current symlink/gitlink/non-regular task paths.
+The corrected C0B-4 suite passed all 150 tests, and the final independent hostile review
+accepted the replacement-ref defense. Its one authorized replacement is now terminal;
+`PUBLIC_CDF_OUTCOME_C0B4.md` records the result.
+The leak gate retains each genuine protocol-scoped baseline: C0B-4 and C0B-5 may each
+cross one direct non-merge task commit, add that commit's exact net paths to the scan and
+still reject a second commit or any path outside the matching frozen allowlist. It never
+manufactures a post-task baseline. The scanner reads each immutable `HEAD` blob as well
+as any dirty overlay and rejects committed or current symlink/gitlink/non-regular task
+paths.
 All Git provenance and object reads disable replacement refs, and every committed blob is
 rehashed against its tree object ID before scanning.
+
+## 11. C0B-4 terminal and C0B-5 policy handoff
+
+The verified E7 replacement completed F72 seed 17 and ended
+`INCONCLUSIVE/seed17_no_qualifier`: two of 16 negative near-miss documents each produced
+one grounded financial suggestion, exceeding the frozen one-document allowance. Every
+other measured gate passed, including 92/92 completed chunks, 168/168 grounding, 8/8
+recall per category, four injection pairs and 12/12 boundaries. Cancellation/health and
+the two later lanes did not run because the quality miss stopped the schedule. The
+terminal checkpoint, snapshot and receipt verify. Exact public measurements are in
+`PUBLIC_CDF_OUTCOME_C0B4.md`.
+
+E8 prospectively caps both affected negative documents and retained findings on negatives
+at 2 per 16-negative F lane and 4 across the final 40 negatives. Every other gate remains
+unchanged. C0B-5 uses fresh F seeds 20260804 and 20260811; the observed C0B-4 seed 17 is
+descriptive only. This is an operational review-cost limit on a curated synthetic set,
+not a production accuracy claim.
+
+No C0B-5 model call is allowed until its complete source passes offline and hostile
+review, the leak/file-size gates pass and the source is committed in a clean worktree.
+One quality miss stops `INCONCLUSIVE`; there is no automatic threshold widening or repeat
+run.

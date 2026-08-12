@@ -344,3 +344,58 @@ not resumed or reclassified. After this correction passes review and is committe
 a new source/protocol identity, one fresh replacement child may start from `PREPARED`.
 Because the failed child made no request, this replacement does not discard or select on
 model evidence. All scoring, safety, budget, lane and acceptance rules remain unchanged.
+
+---
+
+## E8 — Bound the human review workload explicitly
+
+**Status:** ACCEPTED FOR PROSPECTIVE CORRECTION (HI decision, 2026-08-11)
+**Affects:** `CONTRACT.md` §§7 and 14; public benchmark false-positive gates
+**Raised by:** verified C0B-4 terminal review
+
+### The measured conflict
+
+The verified C0B-4 replacement completed all 92 F72 seed-17 chunks and passed every
+measured grounding, recall, F1, injection, boundary, schema, channel, length and context
+gate. It ended `INCONCLUSIVE/seed17_no_qualifier` only because two of 16 negative
+near-miss documents each produced one grounded financial suggestion, while E5 allowed
+one affected document.
+
+Both cases were deliberately difficult public fixtures containing invalid settlement
+placeholders and explicit non-live context. This conservative classification weakness
+was observed across two template instances; it was not replicated across seeds or runs.
+It is not missing evidence or unsafe behavior. The HI accepted that bounded review cost
+for Analyst's recommendation-only role. C0B-4 remains immutable and is not rescored,
+resumed or reclassified.
+
+### The prospective correction
+
+C0B-5 freezes two independent human-review budgets:
+
+| Gate | Affected negative documents | Retained findings on negatives |
+|---|---:|---:|
+| Each F lane, 16 negatives | at most 2 | at most 2 |
+| Final 166-document aggregate, 40 negatives | at most 4 | at most 4 |
+
+The row cap is required as well as the document cap: four affected documents must not
+hide an unbounded number of suggestions. The final limit retains at least 90% negative-
+document specificity on this curated set and bounds the measured false-positive review
+workload to four rows. These are hard ceilings, not targets or population estimates.
+
+Recall/F1, raw and retained grounding, schema, duplicate recovery, injection, boundary,
+length, context, cancellation, provenance, privacy, budget and no-action gates do not
+change. No passing metric compensates for another failed gate. Deterministic findings
+remain separate and authoritative; model rows remain `suggested/unreviewed` until the
+human explicitly accepts or rejects them.
+
+### Prospective evidence and stop rule
+
+The observed C0B-4 seed 17 is descriptive evidence only and cannot qualify C0B-5 under a
+threshold chosen after seeing it. C0B-5 therefore uses two never-contacted F seeds:
+20260804, which C0B-4 planned but never activated, and 20260811, frozen before contact.
+The corrected C44 lane remains a new request lane. C0B-5 is operational-policy
+confirmation, not an untouched holdout or population-accuracy claim.
+
+One reviewed, source-pinned C0B-5 run is authorized after its offline implementation and
+hostile-review gates pass. A miss remains `INCONCLUSIVE`; it does not automatically widen
+the budget, retune the prompt, change the model or authorize another run.

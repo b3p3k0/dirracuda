@@ -14,6 +14,36 @@ from scripts.analyst_benchmark import (c0b2_leakscan, leakscan, preflight,
                                        protocol, report, runner)
 
 
+def test_four_frozen_public_allowlists_remain_distinct() -> None:
+    assert len(c0b2_leakscan.FROZEN_C0B2_PUBLIC_PATHS) == 48
+    assert len(c0b2_leakscan.FROZEN_C0B3_PUBLIC_PATHS) == 58
+    assert len(c0b2_leakscan.FROZEN_C0B4_PUBLIC_PATHS) == 83
+    assert len(c0b2_leakscan.FROZEN_C0B5_PUBLIC_PATHS) == 87
+    assert leakscan.C0B5_ALLOWLIST_EXACT == set(
+        c0b2_leakscan.FROZEN_C0B5_PUBLIC_PATHS)
+    c0b5_only = "scripts/analyst_benchmark/c0b5_policy.py"
+    assert not leakscan.allowed(c0b5_only, leakscan.C0B4_PROTOCOL_ID)
+    assert leakscan.allowed(c0b5_only, leakscan.C0B5_PROTOCOL_ID)
+
+
+def test_frozen_public_allowlist_literals_remain_exact() -> None:
+    expected = {
+        "C0B2": "15af54bc43fe4f0abcbe0d1cfeb507265cc7d857a585e19fc169e9d21870a651",
+        "C0B3": "5999e19c566168e8a2235a4773e26e16cd957bebeee75a82e6bfde2d2bb424ec",
+        "C0B4": "31822035daab54a84a163d20c0e35b8ee67eae31d5c1aa6a551ea3b78407e438",
+        "C0B5": "20990717679793872957300eaba1b4a203ebe43078f8ef2971e25e86eecc91e0",
+    }
+    actual = {
+        "C0B2": c0b2_leakscan.FROZEN_C0B2_PUBLIC_PATHS,
+        "C0B3": c0b2_leakscan.FROZEN_C0B3_PUBLIC_PATHS,
+        "C0B4": c0b2_leakscan.FROZEN_C0B4_PUBLIC_PATHS,
+        "C0B5": c0b2_leakscan.FROZEN_C0B5_PUBLIC_PATHS,
+    }
+    for name, paths in actual.items():
+        payload = json.dumps(sorted(paths), separators=(",", ":")).encode()
+        assert hashlib.sha256(payload).hexdigest() == expected[name]
+
+
 def _git(repo: Path, *args: str) -> None:
     subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True,
                    shell=False)
@@ -110,8 +140,13 @@ def test_baseline_integrity_and_freshness_fail_closed(tmp_path: Path,
         leakscan.load_baseline(stale)
 
 
-def test_c0b4_scan_accepts_one_direct_nonmerge_task_commit(
-        tmp_path: Path, monkeypatch, capsys) -> None:
+@pytest.mark.parametrize(("protocol_id", "allowlist_attr"), [
+    (leakscan.C0B4_PROTOCOL_ID, "C0B4_ALLOWLIST_EXACT"),
+    (leakscan.C0B5_PROTOCOL_ID, "C0B5_ALLOWLIST_EXACT"),
+])
+def test_c0b4_c0b5_scan_accepts_one_direct_nonmerge_task_commit(
+        protocol_id: str, allowlist_attr: str, tmp_path: Path, monkeypatch,
+        capsys) -> None:
     repo = _repo(tmp_path)
     secure = _protected_dir(tmp_path / "secure")
     baseline = secure / "baseline.json"
@@ -121,7 +156,7 @@ def test_c0b4_scan_accepts_one_direct_nonmerge_task_commit(
     }) + "\n")
     os.chmod(raw, 0o600)
     monkeypatch.setattr(leakscan, "REPO_ROOT", repo)
-    monkeypatch.setattr(leakscan, "C0B4_ALLOWLIST_EXACT", {"task.txt"})
+    monkeypatch.setattr(leakscan, allowlist_attr, {"task.txt"})
     leakscan.create_baseline(baseline)
     (repo / "task.txt").write_text("public aggregate only\n")
     _git(repo, "add", "task.txt")
@@ -131,7 +166,7 @@ def test_c0b4_scan_accepts_one_direct_nonmerge_task_commit(
         leakscan.load_baseline(baseline)
     assert leakscan.run(
         baseline_path=baseline, raw_artifacts=[raw],
-        protocol_id=leakscan.C0B4_PROTOCOL_ID) == 0
+        protocol_id=protocol_id) == 0
     assert "task delta paths       : 1" in capsys.readouterr().out
 
     (repo / "task.txt").write_text("second commit\n")
@@ -139,7 +174,7 @@ def test_c0b4_scan_accepts_one_direct_nonmerge_task_commit(
     _git(repo, "commit", "-qm", "second")
     assert leakscan.run(
         baseline_path=baseline, raw_artifacts=[raw],
-        protocol_id=leakscan.C0B4_PROTOCOL_ID) == 1
+        protocol_id=protocol_id) == 1
     assert "baseline HEAD is stale" in capsys.readouterr().out
 
 
