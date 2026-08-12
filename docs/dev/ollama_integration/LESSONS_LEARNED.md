@@ -914,6 +914,20 @@ false failure, so the workspace must stay frozen. The run found only two missing
 disposition notes; the exact guardrail and focused suites passed after that correction.
 Optimize the inherited replay tests on a dedicated card rather than weakening this gate.
 
+### 101. A read-only verifier must not make its caller read-only
+
+C0B-5 semantic replay set `PRAGMA query_only=ON` on the writable checkpoint connection.
+Replay passed, but the following receipt insert failed deterministically. Connection-local
+state is still a side effect: restore it in `finally` or replay through a separate pinned
+read-only connection. Tests must exercise the default verifier through the actual write.
+
+### 102. Safe errors still need closed diagnostic codes
+
+The sole C0B-5 child failed before its health call, but the CLI correctly discarded the
+exception text and persisted only `provenance_identity_failure`. That protected content
+while losing the exact internal boundary. Persist a predefined, content-free origin code
+such as `health_precharge_guard`; never persist arbitrary exception strings.
+
 ---
 
 ## Not yet learned

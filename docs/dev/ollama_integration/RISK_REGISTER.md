@@ -10,9 +10,11 @@ first live child failed closed before transport because of the E7 filesystem-pro
 preimage mismatch. The verified replacement then ended
 `INCONCLUSIVE/seed17_no_qualifier` after two negative near-miss documents exceeded the
 one-document allowance. E8 prospectively bounds C0B-5 review load; C1 and private Stage E
-remain held. C0B-5B passed its complete offline and independent hostile-review gates;
-C0B-5C remains held until the reviewed source commit and post-commit leak proof. No
-C0B-5 model call has occurred.
+remain held. C0B-5B passed its complete offline and independent hostile-review gates.
+Its sole C0B-5C child ended `BLOCKED_PROVENANCE` after 97 calls, before the health control
+or any lane aggregate. A deterministic receipt connection-state defect was confirmed;
+the earlier provenance trigger is narrowed but not exactly classified. No quality result
+exists and no replacement run is authorized.
 Controls are
 authoritative in [`CONTRACT.md`](CONTRACT.md), accepted errata, and the reviewed
 benchmark protocols; this register is the
@@ -92,6 +94,8 @@ risk-indexed view.
 | R69 | A false-positive document cap understates the actual number of suggestions a human must dismiss | Medium | Medium | Independently cap both affected negative documents and retained findings on negatives: 2/2 per 16-negative F lane and 4/4 across the final 40 negatives. Keep suggestions labelled and require explicit human adjudication. |
 | R70 | C0B-5 trusts frozen parent hashes or its own stored aggregates without replaying the evidence | Low | Critical | Before child creation, mutation or contact, open and verify both C0B-3/C0B-4 checkpoint/snapshot pairs read-only and independently replay the observed C0B-4 terminal. At child terminal, independently replay the C0B-5 source checkpoint and immutable snapshot from attempt evidence. Parent files remain pinned and unchanged. |
 | R71 | A crash, resume or shared-GPU pause repeats a call or activates the next lane early | Medium | High | Persist one precharged request before serial dispatch; reconcile only missing derived events. Commit each aggregate and pause atomically, then require an explicit verified resume to activate the next lane. Retryable GPU contention yields `PAUSED_RESOURCE` and preserves the frozen plan; it is never scored as a quality failure. Terminal evidence is immutable before snapshot/receipt publication. |
+| R72 | A semantic verifier changes connection-local SQLite state and prevents the receipt write it is meant to authorize | Medium | High | Never run read-only semantic replay against the writable publication connection unless every connection-local pragma is restored in `finally`. Prefer a separate pinned read-only connection. Test the default verifier through receipt insertion, not only a no-op verifier. |
+| R73 | Content-safe exception suppression leaves a terminal internally valid but too coarse to identify its failed boundary | Medium | High | Persist a closed, content-free failure-origin code before terminalization. Never store exception text, paths or response content. Test every broad exception boundary and require one exact diagnostic code. |
 
 ## High-Likelihood Risks — Detailed Controls
 

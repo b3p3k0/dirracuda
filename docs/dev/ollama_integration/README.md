@@ -58,9 +58,11 @@ C0B-5B's isolated offline implementation passed its focused, Analyst-wide, prove
 leak, compile/diff, file-size and independent hostile-review gates. It adds independent
 read-only replay of the frozen C0B-3/C0B-4 parents and the C0B-5 child, owner-only atomic
 checkpoint/backup handling, explicit boundary resumes and quality-neutral shared-GPU
-resource pauses. No C0B-5 model request occurred. C0B-5C remains held only until this
-reviewed source is committed and the genuine pre-task baseline passes its post-commit
-scan.
+resource pauses. Its sole live child then ended `BLOCKED_PROVENANCE` after completing all
+92 first-lane scored chunks plus context and cancellation controls, but before the health
+control or lane aggregate. This is not a quality result. A deterministic SQLite
+`query_only` state leak prevented receipt publication; the source and two owner-only
+snapshots still replay semantically without a receipt. Later lanes were untouched.
 
 The inherited C0B-3 public implementation freezes the protected run nonce key only in the
 backed-up 0600 checkpoint; derived
@@ -202,9 +204,8 @@ never became eligible.
 
 ## Next Step
 
-C0B-5B passed its complete offline and hostile-review gates. Commit that reviewed source,
-prove the genuine pre-task leak baseline crossed exactly one direct commit, then create
-the sole clean, source-pinned C0B-5C child. Run F72/20260804, explicitly resume
-F72/20260811, explicitly resume C44/1, and verify the terminal snapshot and receipt.
-C0B-2/C0B-3/C0B-4 are never rescored or resumed. C1 and private Stage E remain held until
-C0B-5 reaches a verified terminal and the HI reviews it.
+C0B-5 is terminal and cannot be resumed or repeated under its frozen one-child contract.
+Decide whether to authorize a narrow successor card with fresh generation conditions.
+That card must first fix and test receipt connection-state isolation, add content-free
+failure-origin codes, and prove the exact cancellation-to-health handoff on real SQLite.
+C0B-2 through C0B-5 remain immutable. C1 and private Stage E remain held.

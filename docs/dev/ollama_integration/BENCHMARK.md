@@ -332,6 +332,22 @@ a retryable resource failure yields `PAUSED_RESOURCE` with no second in-flight r
 The operator may resume later under the same frozen plan and source identity. Soft-wall
 and stage-boundary pauses follow the same no-silent-advance rule.
 
-C0B-5C remains held only until this complete reviewed source is committed and the
-post-commit leak scan proves the genuine pre-task baseline crossed exactly that one
-direct, non-merge commit.
+## 13. C0B-5C live outcome
+
+The sole child at source commit `a45c266` ended terminal `BLOCKED_PROVENANCE` after 97
+charged calls: three preflights, 92 scored F72/20260804 chunks, one context control and
+one planned cancellation control. The failure occurred before the cancellation health
+call. No lane aggregate exists, so this is not a model-quality pass or miss. F72/20260811
+and C44/1 were never activated.
+
+The terminal checkpoint and two owner-only snapshots independently pass structural and
+semantic replay without a receipt. Receipt publication deterministically fails because
+the semantic verifier sets `PRAGMA query_only=ON` on the live SQLite connection and does
+not restore it before receipt insertion. The earlier pre-health provenance trigger is
+narrowed to the mutation boundary but its exact exception class was intentionally
+discarded by the content-safe CLI, exposing a separate observability gap.
+
+C0B-5 cannot be resumed or repeated: its terminal is immutable and its one-child
+allowance is spent. C1 and private Stage E remain held. Any replacement must be a new,
+prospectively frozen card with a fixed receipt path, content-free failure codes and fresh
+generation conditions; it is not authorized by C0B-5.
