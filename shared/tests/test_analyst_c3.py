@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import fcntl
 import os
 import subprocess
 import threading
@@ -14,6 +15,7 @@ import pytest
 from experimental.analyst import sandbox
 from experimental.analyst.sandbox import (
     RuntimeBind,
+    SandboxInputMode,
     SandboxLimits,
     build_argv,
     run_sandboxed,
@@ -45,6 +47,19 @@ def _limits(**overrides) -> SandboxLimits:
     }
     values.update(overrides)
     return SandboxLimits(**values)
+
+
+def _sealed_memfd(body: bytes) -> int:
+    fd = os.memfd_create(
+        "dirracuda-c3-public", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING
+    )
+    os.write(fd, body)
+    fcntl.fcntl(
+        fd, fcntl.F_ADD_SEALS,
+        fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW
+        | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_SEAL,
+    )
+    return fd
 
 
 def test_argv_pins_namespaces_environment_limits_and_fd(tmp_path: Path) -> None:
@@ -79,6 +94,23 @@ def test_argv_pins_namespaces_environment_limits_and_fd(tmp_path: Path) -> None:
     assert "--cpu=5" in argv
     assert "--nofile=32" in argv
     assert "--core=0" in argv
+
+
+def test_sealed_data_argv_uses_read_only_copy_handoff() -> None:
+    fd = _sealed_memfd(b"public sealed bytes")
+    try:
+        argv, _unit = build_argv(
+            source_fd=fd,
+            command=("/runtime/parser",),
+            runtime_binds=(),
+            limits=_limits(),
+            unit_token="0123456789abcdef",
+            input_mode=SandboxInputMode.SEALED_DATA,
+        )
+    finally:
+        os.close(fd)
+    index = argv.index("--ro-bind-data")
+    assert argv[index + 1:index + 3] == [str(fd), "/input/document"]
 
 
 @pytest.mark.parametrize(
@@ -175,6 +207,52 @@ def test_live_source_fd_is_only_visible_at_fixed_mount(tmp_path: Path) -> None:
         os.close(fd)
     assert result.reason == "success", result.stderr
     assert result.stdout == b"known public bytes\nFalse\nFalse\n"
+
+
+def test_live_sealed_memfd_uses_read_only_data_handoff() -> None:
+    fd = _sealed_memfd(b"sealed public snapshot")
+    original_offset = os.lseek(fd, 0, os.SEEK_CUR)
+    try:
+        result = run_sandboxed(
+            source_fd=fd,
+            expected=sandbox._inventory_for_fd(fd),
+            command=_python(
+                'p="/input/document"; '
+                'print(open(p, "rb").read().decode("ascii")); '
+                '\ntry: open(p, "wb").write(b"changed")\n'
+                'except OSError: print("READ_ONLY")'
+            ),
+            runtime_binds=system_runtime_binds(),
+            limits=_limits(),
+            input_mode=SandboxInputMode.SEALED_DATA,
+        )
+        assert os.lseek(fd, 0, os.SEEK_CUR) == original_offset
+    finally:
+        os.close(fd)
+    assert result.reason == "success", result
+    assert result.stdout == b"sealed public snapshot\nREAD_ONLY\n"
+
+
+def test_unsealed_data_handoff_fails_before_launch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fd = os.memfd_create("dirracuda-c3-unsealed", os.MFD_CLOEXEC)
+    os.write(fd, b"unsealed")
+    monkeypatch.setattr(
+        sandbox.subprocess, "Popen",
+        lambda *args, **kwargs: pytest.fail("unsealed input reached parser"),
+    )
+    try:
+        result = run_sandboxed(
+            source_fd=fd,
+            expected=sandbox._inventory_for_fd(fd),
+            command=_python("pass"),
+            runtime_binds=system_runtime_binds(),
+            input_mode=SandboxInputMode.SEALED_DATA,
+        )
+    finally:
+        os.close(fd)
+    assert result.reason == "sandbox_error"
 
 
 @pytest.mark.parametrize(

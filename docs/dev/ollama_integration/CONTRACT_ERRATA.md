@@ -399,3 +399,43 @@ confirmation, not an untouched holdout or population-accuracy claim.
 One reviewed, source-pinned C0B-5 run is authorized after its offline implementation and
 hostile-review gates pass. A miss remains `INCONCLUSIVE`; it does not automatically widen
 the budget, retune the prompt, change the model or authorize another run.
+
+---
+
+## E9 — Sealed anonymous snapshots use bubblewrap's read-only data handoff
+
+**Status:** ACCEPTED FOR CORRECTION (standing HI authorization, 2026-08-14)
+**Affects:** `CONTRACT.md` §5; `BENCHMARK_PROTOCOL_C0B2.md` §14.5
+**Raised by:** C3 live FD-bound preflight and C4 planning
+
+### The conflict
+
+The frozen private protocol requires a sealed anonymous Linux `memfd`, then says to pass
+that descriptor to bubblewrap with `--ro-bind-fd`. Bubblewrap 0.11.1 accepts
+`--ro-bind-fd` for an opened named filesystem object but rejects a `memfd`: its procfs
+descriptor target is an anonymous deleted object and cannot be used as that bind-mount
+source.
+
+Bubblewrap separately defines `--ro-bind-data FD DEST`: copy bytes from an FD into a file
+that is read-only bind-mounted at the destination. That is the compatible operation for
+an anonymous sealed snapshot.
+
+Source: https://github.com/containers/bubblewrap/blob/main/bubblewrap.c
+
+### The correction
+
+- Named C2 input files continue to use `--ro-bind-fd` from the already-open no-follow
+  descriptor.
+- A bounded, sealed anonymous private snapshot uses `--ro-bind-data` at the same fixed
+  `/input/document` destination.
+- Only that snapshot FD is inherited. The parent validates the seal set and source
+  fingerprint before launch; C3's output, time, memory, task and cancellation bounds stay
+  unchanged.
+
+### Consequences accepted with this erratum
+
+`--ro-bind-data` makes one additional bounded copy into bubblewrap's private sandbox
+filesystem. The private protocol already caps the sealed snapshot at 16 MiB and forbids
+plaintext disk staging, so this is bounded memory/I/O cost rather than a retention or
+egress change. A missing option or failed copy is `sandbox_unavailable`/`sandbox_error`;
+there is no fallback to a named plaintext snapshot.

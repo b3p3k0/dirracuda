@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import math
@@ -14,6 +15,7 @@ import subprocess
 import tempfile
 import time
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Callable, Final
 
@@ -31,6 +33,11 @@ READ_SIZE: Final = 64 * 1024
 UNIT_TOKEN_RE: Final = re.compile(r"[0-9a-f]{16}\Z", re.ASCII)
 
 CancelCheck = Callable[[], bool]
+
+
+class SandboxInputMode(str, Enum):
+    NAMED_BIND = "named_bind"
+    SEALED_DATA = "sealed_data"
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,11 +110,12 @@ def build_argv(
     runtime_binds: tuple[RuntimeBind, ...],
     limits: SandboxLimits,
     unit_token: str,
+    input_mode: SandboxInputMode = SandboxInputMode.NAMED_BIND,
 ) -> tuple[list[str], str]:
     """Build the exact systemd -> bwrap -> prlimit -> parser command."""
     if not isinstance(limits, SandboxLimits):
         raise ValueError("sandbox limits have an invalid type")
-    _validate_request(source_fd, command, runtime_binds, unit_token)
+    _validate_request(source_fd, command, runtime_binds, unit_token, input_mode)
     unit = f"dirracuda-analyst-parser-{unit_token}.scope"
     argv = [
         str(SYSTEMD_RUN), "--user", "--scope", "--collect", "--quiet",
@@ -124,7 +132,10 @@ def build_argv(
         "--setenv", "PYTHONHASHSEED", "0",
         "--proc", "/proc", "--dev", "/dev",
         "--tmpfs", "/tmp", "--tmpfs", "/sandbox-home",
-        "--dir", "/input", "--ro-bind-fd", str(source_fd), SANDBOX_INPUT,
+        "--dir", "/input",
+        "--ro-bind-fd" if input_mode is SandboxInputMode.NAMED_BIND
+        else "--ro-bind-data",
+        str(source_fd), SANDBOX_INPUT,
     ]
     for binding in runtime_binds:
         argv.extend(("--ro-bind", str(binding.source), str(binding.destination)))
@@ -148,6 +159,7 @@ def run_sandboxed(
     limits: SandboxLimits | None = None,
     cancel_check: CancelCheck | None = None,
     unit_token: str | None = None,
+    input_mode: SandboxInputMode = SandboxInputMode.NAMED_BIND,
 ) -> SandboxResult:
     """Run one parser command and return only bounded in-memory output."""
     chosen_limits = limits or SandboxLimits()
@@ -156,21 +168,33 @@ def run_sandboxed(
         return SandboxResult("sandbox_error", None, b"", b"", None)
     if not all(value for _, value in _prerequisite_checks(False)):
         return SandboxResult("sandbox_unavailable", None, b"", b"", None)
+    handoff_fd = source_fd
+    close_handoff = False
     try:
+        if input_mode is SandboxInputMode.SEALED_DATA:
+            handoff_fd = _open_sealed_data_handoff(source_fd)
+            close_handoff = True
         argv, unit = build_argv(
-            source_fd=source_fd,
+            source_fd=handoff_fd,
             command=command,
             runtime_binds=runtime_binds,
             limits=chosen_limits,
             unit_token=token,
+            input_mode=input_mode,
         )
     except (OSError, ValueError):
+        if close_handoff:
+            os.close(handoff_fd)
         return SandboxResult("sandbox_error", None, b"", b"", None)
     try:
         source_matches = _source_matches(source_fd, expected, cancel_check)
     except _SourceCheckCancelled:
+        if close_handoff:
+            os.close(handoff_fd)
         return SandboxResult("cancelled", None, b"", b"", unit)
     if not source_matches:
+        if close_handoff:
+            os.close(handoff_fd)
         return SandboxResult(
             "source_changed_since_inventory", None, b"", b"", None
         )
@@ -182,14 +206,18 @@ def run_sandboxed(
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            pass_fds=(source_fd,),
+            pass_fds=(handoff_fd,),
             close_fds=True,
             shell=False,
             start_new_session=True,
             env=environment,
         )
     except OSError:
+        if close_handoff:
+            os.close(handoff_fd)
         return SandboxResult("sandbox_unavailable", None, b"", b"", unit)
+    if close_handoff:
+        os.close(handoff_fd)
 
     reason, stdout, stderr = _collect_bounded(
         process, unit, chosen_limits, cancel_check, environment
@@ -414,10 +442,14 @@ def _return_reason(returncode: int | None) -> str:
 
 def _validate_request(source_fd: int, command: tuple[str, ...],
                       runtime_binds: tuple[RuntimeBind, ...],
-                      unit_token: str) -> None:
+                      unit_token: str, input_mode: SandboxInputMode) -> None:
     if type(source_fd) is not int or source_fd < 0:
         raise ValueError("source fd must be nonnegative")
     os.fstat(source_fd)
+    if type(input_mode) is not SandboxInputMode:
+        raise ValueError("sandbox input mode is invalid")
+    if input_mode is SandboxInputMode.SEALED_DATA and not _has_required_seals(source_fd):
+        raise ValueError("anonymous input is not fully sealed")
     if type(command) is not tuple or not command or not all(
             type(item) is str and item for item in command):
         raise ValueError("sandbox command must be nonempty strings")
@@ -512,6 +544,35 @@ def _cancel_requested(cancel_check: CancelCheck | None) -> bool:
         return cancel_check() is not False
     except Exception:
         return True
+
+
+def _open_sealed_data_handoff(source_fd: int) -> int:
+    if not _has_required_seals(source_fd):
+        raise ValueError("anonymous input is not fully sealed")
+    cloned = os.open(
+        f"/proc/self/fd/{source_fd}", os.O_RDONLY | os.O_CLOEXEC
+    )
+    try:
+        left, right = os.fstat(source_fd), os.fstat(cloned)
+        if (left.st_dev, left.st_ino) != (right.st_dev, right.st_ino):
+            raise ValueError("anonymous input identity changed")
+        os.lseek(cloned, 0, os.SEEK_SET)
+        return cloned
+    except Exception:
+        os.close(cloned)
+        raise
+
+
+def _has_required_seals(fd: int) -> bool:
+    required = (
+        fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW
+        | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_SEAL
+    )
+    try:
+        seals = fcntl.fcntl(fd, fcntl.F_GET_SEALS)
+    except OSError:
+        return False
+    return seals & required == required
 
 
 def _systemd_environment() -> dict[str, str]:

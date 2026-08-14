@@ -78,7 +78,8 @@ The probe uses a named, owner-only temporary synthetic file. Linux `memfd` descr
 appear as deleted anonymous objects and bubblewrap 0.11.1 cannot use them as a
 `--ro-bind-fd` mount source. Production inputs are the named files already opened by C2;
 they still reach bubblewrap only through `pass_fds` and are re-fingerprinted before and
-after parsing.
+after parsing. E9/C4 subsequently added the exact sealed-snapshot alternative:
+`--ro-bind-data` copies one fully sealed anonymous FD to the same read-only sandbox path.
 
 ## Sources
 

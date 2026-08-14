@@ -999,9 +999,32 @@ prove that boundary; merely constructing the command is not enough.
 ### 112. Anonymous descriptors are not equivalent bind-mount sources
 
 Bubblewrap 0.11.1 accepted `--ro-bind-fd` for an opened named file but rejected a Linux
-`memfd` because its `/proc/self/fd` target is an anonymous deleted object. C3's public
-preflight therefore uses an owner-only named temporary fixture. Production still binds
-the already-open C2 source descriptor and never reopens the path in the parser child.
+`memfd` because its `/proc/self/fd` target is an anonymous deleted object. Named C2 files
+therefore use `--ro-bind-fd`; bounded, fully sealed anonymous snapshots use bubblewrap's
+`--ro-bind-data` read-only copy operation. Both pass one explicit descriptor, preserve
+the original descriptor offset and fail closed if their required runtime state differs.
+
+### 113. A parser runtime allowlist must include its launcher
+
+The first narrow Python bind list contained Python, its standard library and shared
+libraries but omitted `prlimit`, which is executed *inside* bubblewrap. The sandbox
+correctly failed before the parser. Runtime closure tests now execute the exact
+systemd → bubblewrap → prlimit → child chain; listing parser dependencies alone is not
+proof that the launch graph is complete.
+
+### 114. RTF code pages are state, not one document-wide decode
+
+RTF can change encoding through the font table. C4 tracks scoped font selection,
+Unicode-control fallback counts and multibyte hex runs rather than decoding each byte or
+the whole document as Windows-1252. Unsupported symbol/code pages fail closed so
+corrupted text cannot look like reliable source evidence.
+
+### 115. Failed extraction output is not diagnostic output
+
+Timeout, cancellation, malformed input, resource failure and output overflow may leave
+valid-looking partial text in a pipe. C3/C4 retain only a closed reason/detail enum on
+failure and discard both stdout and stderr. Bounded bytes are still sensitive bytes; a
+cap is not permission to persist or log them.
 
 ---
 
