@@ -14,8 +14,10 @@ remain held. C0B-5B passed its complete offline and independent hostile-review g
 Its sole C0B-5C child ended `BLOCKED_PROVENANCE` after 97 calls, before the health control
 or any lane aggregate. A deterministic receipt connection-state defect was confirmed;
 the earlier provenance trigger was an incompatible test-double method signature. No
-quality result exists. C0B-6 is the authorized prospective repair and has passed its
-offline gate before one replacement run.
+quality result existed at C0B-5. C0B-6 completed 240 calls but failed its final join;
+C0B-7 preserved that terminal and recovered the immutable evidence offline as
+`RECOVERED_CONFIRMED`. Public D1/D2 are resolved. Private Stage E awaits explicit HI
+authorization or deferral.
 Controls are
 authoritative in [`CONTRACT.md`](CONTRACT.md), accepted errata, and the reviewed
 benchmark protocols; this register is the

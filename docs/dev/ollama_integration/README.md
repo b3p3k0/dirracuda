@@ -80,6 +80,12 @@ verify; the terminal remains `BLOCKED_PROVENANCE`. The HI authorized C0B-7 to re
 the final decision offline from those immutable artifacts, with no additional Ollama
 calls and no threshold change.
 
+C0B-7 passed. Checkpoint and snapshot independently produced `RECOVERED_CONFIRMED` with
+the unchanged acceptance rule. D1/D2 are resolved to `qwen3.6:27b` at its frozen digest,
+worksheet v2, 8000/256-character chunks, `num_ctx=8192` and `num_predict=1024`. See
+[`PUBLIC_CDF_OUTCOME_C0B7.md`](PUBLIC_CDF_OUTCOME_C0B7.md). Private Stage E is eligible
+but still requires explicit HI authorization or deferral.
+
 The inherited C0B-3 public implementation freezes the protected run nonce key only in the
 backed-up 0600 checkpoint; derived
 boundary work binds both the logical document hash and generated-view hash; and D3/D4
@@ -167,14 +173,11 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
 
 ## Decision Status
 
-- **D1 — primary model: UNRESOLVED.** The canonical public run produced no finalist.
-  `gpt-oss:20b` stopped in Stage C; both Qwen candidates continued into D, but D3
-  eliminated the remaining `qwen3.6:27b` candidate. No partial survivor is a product
-  selection.
-- **D2 — chunk size / context: UNRESOLVED.** D1 and D2 measured useful intermediate
-  values, but the later D3 gate invalidated that path. `chunk_chars=8000`,
-  `overlap=256`, `num_ctx=16384` and `num_predict=1024` are not a deployable bundle and
-  must not be promoted outside a new preregistered run.
+- **D1 — primary model: RESOLVED.** C0B-7 recovered the completed public acceptance as
+  `RECOVERED_CONFIRMED`: `qwen3.6:27b` at digest
+  `a50eda8ed977ab48a12431878896b27ffd5cef552c17af3317d9623b939a7f1e`.
+- **D2 — chunk size / context: RESOLVED.** Worksheet v2, `chunk_chars=8000`,
+  `overlap=256`, `num_ctx=8192` and `num_predict=1024`.
 - **D8 — PyMuPDF pin: RESOLVED.** `PyMuPDF==1.28.0`, wheel
    `pymupdf-1.28.0-cp310-abi3-manylinux_2_28_x86_64.whl`, digest verified against PyPI.
    Measured embedded **MuPDF 1.29.0** — not the 1.28.0 its release note claims, which is
@@ -212,18 +215,19 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
 13. `BENCHMARK_PROTOCOL_C0B6.md` — prospective repaired confirmation protocol.
 14. `PUBLIC_CDF_OUTCOME_C0B6.md` — immutable C0B-6 terminal and recovery handoff.
 15. `BENCHMARK_PROTOCOL_C0B7.md` — offline-only evidence recovery protocol.
-16. `BENCHMARK.md` — instrument method, module dispositions, what is/is not committed.
-17. `PUBLIC_CDF_OUTCOME_C0B2.md` — public-only terminal result and decision chain.
-18. `LESSONS_LEARNED.md` — only what a card actually exercised.
-19. `RESEARCH_NOTES.md` — verified external findings with sources + corpus profile.
-20. `RISK_REGISTER.md` — risk controls.
-21. `UI_MOCKUPS.md` — surface layouts (draft).
+16. `PUBLIC_CDF_OUTCOME_C0B7.md` — recovered public decision and exact measurements.
+17. `BENCHMARK.md` — instrument method, module dispositions, what is/is not committed.
+18. `PUBLIC_CDF_OUTCOME_C0B2.md` — public-only terminal result and decision chain.
+19. `LESSONS_LEARNED.md` — only what a card actually exercised.
+20. `RESEARCH_NOTES.md` — verified external findings with sources + corpus profile.
+21. `RISK_REGISTER.md` — risk controls.
+22. `UI_MOCKUPS.md` — surface layouts (draft).
 
-`BENCHMARK_RESULTS.md` remains absent. It is the private Stage-E aggregate, and Stage E
-never became eligible.
+`BENCHMARK_RESULTS.md` remains absent. It is the private Stage-E aggregate; Stage E is
+eligible after the recovered public selection but remains held for HI authorization.
 
 ## Next Step
 
-C0B-7A freezes the offline-only recovery. Implement and validate its read-only replay,
-then record the recovered decision. C1 and private Stage E remain held until that result
-is reviewed.
+C0B-7 recovered the public decision successfully. The HI must now authorize private
+Stage E with its private-data prerequisites or explicitly defer it before C0B closes and
+C1 begins.

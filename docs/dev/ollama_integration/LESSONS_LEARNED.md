@@ -950,6 +950,13 @@ category mapping as semantic order, so valid reloaded evidence failed after all 
 work completed. Validate mapping key sets and use an explicit domain sequence for
 iteration; never infer domain order from a serialized object.
 
+### 106. Self-hashes exclude their self-hash field
+
+A cursor transition stores both its preimage self-hash and the database artifact hash of
+the complete object. Replay compared the former with the latter. Centralize each hash
+preimage and test it after durable serialization; a shared `sha256` type does not make
+different preimages interchangeable.
+
 ---
 
 ## Not yet learned

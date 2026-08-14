@@ -196,6 +196,7 @@ FROZEN_C0B6_PUBLIC_PATHS = FROZEN_C0B5_PUBLIC_PATHS | frozenset({
 FROZEN_C0B7_PUBLIC_PATHS = FROZEN_C0B6_PUBLIC_PATHS | frozenset({
     "docs/dev/ollama_integration/BENCHMARK_PROTOCOL_C0B7.md",
     "docs/dev/ollama_integration/PUBLIC_CDF_OUTCOME_C0B6.md",
+    "docs/dev/ollama_integration/PUBLIC_CDF_OUTCOME_C0B7.md",
     "scripts/analyst_benchmark/c0b7_cli.py",
     "scripts/analyst_benchmark/c0b7_recovery.py",
     "scripts/tests/test_analyst_c0b7_recovery.py",

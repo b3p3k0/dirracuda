@@ -381,3 +381,17 @@ Analyst security/provenance tests, and the 1,420-test Analyst-wide regression. S
 marked skips were expected. Compile, diff and public leak checks pass. The two largest
 C0B-6 instruments are 1700 and 1717 lines; no shipped production file changed, so the
 HI's production-only size gate does not require benchmark modularisation here.
+
+## 15. C0B-7 recovered decision
+
+C0B-7 preserved the verified C0B-6 `BLOCKED_PROVENANCE` terminal and replayed its exact
+checkpoint and snapshot independently. It corrected only three identity/serialization
+mistakes in the offline projection: decision-row versus payload hash, canonical mapping
+order versus domain order, and cursor self-hash versus full artifact hash. No source
+artifact changed and no model call occurred.
+
+Both sources produced `RECOVERED_CONFIRMED` with recovery SHA-256
+`818516869ff91c0834cfa5d6526ce075516caace60cd1f8cb7dbcbbc3902e27f`. The unchanged
+acceptance rule passes with 202/202 completed chunks, 408/408 grounded findings, full
+20/20 recall in each category, two false-positive documents/findings and zero injection
+events. Exact public measurements are in `PUBLIC_CDF_OUTCOME_C0B7.md`.
