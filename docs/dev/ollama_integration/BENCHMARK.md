@@ -351,3 +351,17 @@ C0B-5 cannot be resumed or repeated: its terminal is immutable and its one-child
 allowance is spent. C1 and private Stage E remain held. Any replacement must be a new,
 prospectively frozen card with a fixed receipt path, content-free failure codes and fresh
 generation conditions; it is not authorized by C0B-5.
+
+## 14. C0B-6 prospective repair
+
+C0B-6 is the authorized replacement card, not a reinterpretation of C0B-5. It keeps the
+model, prompt, scoring and review budgets unchanged and freezes never-contacted F72 seeds
+20260811 and 20260818. Before any live request, offline evidence must prove that semantic
+receipt replay uses a separate pinned read-only connection, every terminal exception
+boundary persists a closed content-free origin, and an exact 97-call C0B-5-shaped SQLite
+state resumes from cancellation to the following health request without repetition.
+
+The new artifact/checkpoint family is isolated under `c0b6-*-v1`; C0B-5 code and evidence
+remain read-only. One C0B-6 child may run only from the committed, leak-clean C0B-6B
+source. A quality miss stops `INCONCLUSIVE`; a harness fault fails closed and cannot
+authorize another child.

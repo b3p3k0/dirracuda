@@ -64,6 +64,13 @@ control or lane aggregate. This is not a quality result. A deterministic SQLite
 `query_only` state leak prevented receipt publication; the source and two owner-only
 snapshots still replay semantically without a receipt. Later lanes were untouched.
 
+C0B-6 is now authorized as a narrow, prospective harness repair. It preserves the
+candidate, prompts, quality thresholds and human-review budgets; uses fresh F72 seeds
+20260811 and 20260818; isolates semantic replay from writable SQLite state; adds closed
+content-free failure origins; and requires a real 97-call cancellation-to-health resume
+regression before one replacement child may contact Ollama. C0B-2 through C0B-5 remain
+immutable.
+
 The inherited C0B-3 public implementation freezes the protected run nonce key only in the
 backed-up 0600 checkpoint; derived
 boundary work binds both the logical document hash and generated-view hash; and D3/D4
@@ -192,20 +199,21 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
 9. `BENCHMARK_PROTOCOL_C0B4.md` — frozen grounded-duplicate confirmation protocol.
 10. `PUBLIC_CDF_OUTCOME_C0B4.md` — immutable C0B-4 terminal result and measurements.
 11. `BENCHMARK_PROTOCOL_C0B5.md` — prospective assistive review-budget confirmation.
-12. `BENCHMARK.md` — instrument method, module dispositions, what is/is not committed.
-13. `PUBLIC_CDF_OUTCOME_C0B2.md` — public-only terminal result and decision chain.
-14. `LESSONS_LEARNED.md` — only what a card actually exercised.
-15. `RESEARCH_NOTES.md` — verified external findings with sources + corpus profile.
-16. `RISK_REGISTER.md` — risk controls.
-17. `UI_MOCKUPS.md` — surface layouts (draft).
+12. `PUBLIC_CDF_OUTCOME_C0B5.md` — immutable C0B-5 harness-failure record.
+13. `BENCHMARK_PROTOCOL_C0B6.md` — prospective repaired confirmation protocol.
+14. `BENCHMARK.md` — instrument method, module dispositions, what is/is not committed.
+15. `PUBLIC_CDF_OUTCOME_C0B2.md` — public-only terminal result and decision chain.
+16. `LESSONS_LEARNED.md` — only what a card actually exercised.
+17. `RESEARCH_NOTES.md` — verified external findings with sources + corpus profile.
+18. `RISK_REGISTER.md` — risk controls.
+19. `UI_MOCKUPS.md` — surface layouts (draft).
 
 `BENCHMARK_RESULTS.md` remains absent. It is the private Stage-E aggregate, and Stage E
 never became eligible.
 
 ## Next Step
 
-C0B-5 is terminal and cannot be resumed or repeated under its frozen one-child contract.
-Decide whether to authorize a narrow successor card with fresh generation conditions.
-That card must first fix and test receipt connection-state isolation, add content-free
-failure-origin codes, and prove the exact cancellation-to-health handoff on real SQLite.
-C0B-2 through C0B-5 remain immutable. C1 and private Stage E remain held.
+C0B-6A is frozen. Implement C0B-6B's isolated receipt repair, closed failure origins and
+real-SQLite 97-call handoff regression. No model request is allowed until every offline,
+provenance and leak gate passes and the reviewed source is committed. C1 and private
+Stage E remain held.
