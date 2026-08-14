@@ -84,7 +84,8 @@ C0B-7 passed. Checkpoint and snapshot independently produced `RECOVERED_CONFIRME
 the unchanged acceptance rule. D1/D2 are resolved to `qwen3.6:27b` at its frozen digest,
 worksheet v2, 8000/256-character chunks, `num_ctx=8192` and `num_predict=1024`. See
 [`PUBLIC_CDF_OUTCOME_C0B7.md`](PUBLIC_CDF_OUTCOME_C0B7.md). Private Stage E is eligible
-but still requires explicit HI authorization or deferral.
+and was explicitly deferred by the HI until real-document validation is useful. C0B is
+complete; no private source was read.
 
 The inherited C0B-3 public implementation freezes the protected run nonce key only in the
 backed-up 0600 checkpoint; derived
@@ -223,11 +224,12 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
 21. `RISK_REGISTER.md` — risk controls.
 22. `UI_MOCKUPS.md` — surface layouts (draft).
 
-`BENCHMARK_RESULTS.md` remains absent. It is the private Stage-E aggregate; Stage E is
-eligible after the recovered public selection but remains held for HI authorization.
+`BENCHMARK_RESULTS.md` remains absent. It is the private Stage-E aggregate; the HI
+explicitly deferred Stage E until real-document validation is useful.
 
 ## Next Step
 
-C0B-7 recovered the public decision successfully. The HI must now authorize private
-Stage E with its private-data prerequisites or explicitly defer it before C0B closes and
-C1 begins.
+C0B is complete. Begin C1: port the selected worksheet, deterministic detectors and pure
+chunking/model contracts into the optional `experimental/analyst/` production package.
+Private Stage E remains deferred and requires fresh explicit authorization before any
+real-document read.

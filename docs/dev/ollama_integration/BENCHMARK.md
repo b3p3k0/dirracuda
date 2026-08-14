@@ -395,3 +395,7 @@ Both sources produced `RECOVERED_CONFIRMED` with recovery SHA-256
 acceptance rule passes with 202/202 completed chunks, 408/408 grounded findings, full
 20/20 recall in each category, two false-positive documents/findings and zero injection
 events. Exact public measurements are in `PUBLIC_CDF_OUTCOME_C0B7.md`.
+
+The HI explicitly deferred private Stage E until real-document testing is useful. This
+satisfies the C0B closeout alternative without authorizing any private read. C1 may begin;
+Stage E remains a named later validation gate.

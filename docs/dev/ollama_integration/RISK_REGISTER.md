@@ -16,8 +16,8 @@ or any lane aggregate. A deterministic receipt connection-state defect was confi
 the earlier provenance trigger was an incompatible test-double method signature. No
 quality result existed at C0B-5. C0B-6 completed 240 calls but failed its final join;
 C0B-7 preserved that terminal and recovered the immutable evidence offline as
-`RECOVERED_CONFIRMED`. Public D1/D2 are resolved. Private Stage E awaits explicit HI
-authorization or deferral.
+`RECOVERED_CONFIRMED`. Public D1/D2 are resolved. The HI explicitly deferred private
+Stage E until real-document validation is useful; C1 may begin.
 Controls are
 authoritative in [`CONTRACT.md`](CONTRACT.md), accepted errata, and the reviewed
 benchmark protocols; this register is the

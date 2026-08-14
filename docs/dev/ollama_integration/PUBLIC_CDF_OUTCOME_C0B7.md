@@ -44,8 +44,8 @@ not a new untouched holdout, and C0B-6 remains `BLOCKED_PROVENANCE`.
 The source checkpoint and snapshot retain their C0B-6 hashes after recovery. C0B-7
 created no model call, private read or replacement checkpoint.
 
-## Next gate
+## C0B closeout
 
-Public D1/D2 are resolved. Private Stage E is eligible but remains held until the HI
-either authorizes its private-data prerequisites or explicitly defers it. C1 does not
-start until that C0B closeout decision is recorded.
+Public D1/D2 are resolved. On 2026-08-14 the HI explicitly deferred private Stage E until
+the feature is ready for real-document validation. Deferral is not cancellation and does
+not authorize any private source read. C0B is complete and C1 may begin.
