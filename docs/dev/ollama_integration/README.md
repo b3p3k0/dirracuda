@@ -241,8 +241,8 @@ explicitly deferred Stage E until real-document validation is useful.
 
 ## Next Step
 
-C0B through C2 are complete. Begin C3: parser supervisor plus the frozen bubblewrap
-sandbox boundary.
+C0B through C3 are complete. Begin C4: the first format-specific parser, using the C3
+supervisor rather than importing parser libraries into the durable process.
 Private Stage E remains deferred and requires fresh explicit authorization before any
 real-document read. Adding Analyst's optional runtime dependencies also remains a future
 HI-approved card; core startup does not depend on them.

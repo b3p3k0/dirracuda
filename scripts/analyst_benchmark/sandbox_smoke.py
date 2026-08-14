@@ -1,10 +1,10 @@
 """
 Bounded bubblewrap smoke checks.
 
-DISPOSITION: DELETED IN C3, when the real parser supervisor lands. This is a
-measurement instrument, not the production sandbox, and it is explicitly NOT
-the Stage E extraction boundary - it proves the mechanism works on this host,
-nothing more.
+DISPOSITION: RETAINED as immutable C0B Stage-A evidence after C3. This is a
+measurement instrument, not the production sandbox, and production never imports it.
+It is explicitly NOT the Stage E extraction boundary - it proves the mechanism works
+on this host, nothing more.
 
 Checks (CONTRACT.md §5): network unreachable, host HOME absent, repository not
 bound, rlimits enforced via prlimit (never preexec_fn - the worker is threaded),

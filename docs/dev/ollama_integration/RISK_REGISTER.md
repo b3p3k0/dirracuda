@@ -18,8 +18,8 @@ quality result existed at C0B-5. C0B-6 completed 240 calls but failed its final 
 C0B-7 preserved that terminal and recovered the immutable evidence offline as
 `RECOVERED_CONFIRMED`. Public D1/D2 are resolved. The HI explicitly deferred private
 Stage E until real-document validation is useful; C1 was authorized.
-The C1 pure production contracts and C2 inventory/reattachment evidence are implemented;
-C3 may begin.
+The C1 pure production contracts, C2 inventory/reattachment evidence and C3 strict
+parser supervisor are implemented; C4 may begin.
 Controls are
 authoritative in [`CONTRACT.md`](CONTRACT.md), accepted errata, and the reviewed
 benchmark protocols; this register is the
@@ -107,6 +107,7 @@ risk-indexed view.
 | R77 | Nested detector terms count one source span more than once | Medium | Medium | Scan longer demographic phrases first, suppress overlapping spans, preserve stable source ordering and cover the nested phrase with a regression test. Cross-kind numeric overlap remains visible rather than silently deduplicated because kind-specific counts have different meanings. |
 | R78 | mergerfs inode reuse collapses distinct source paths or makes a hard-link cache skip content | Medium | High | Hash every visible path independently; never deduplicate/cache by `(st_dev, st_ino)`. Use descriptor metadata only for same-path race checks, retain the content hash as identity and revalidate before parse. A real canonical mergerfs smoke is required. |
 | R79 | A stale heartbeat clears an exact live worker and permits two GPU owners | Medium | High | PID + start ticks + boot UUID distinguish absence/reuse/reboot from an exact live process. Fresh exact identity reattaches; missing/mismatched identity may clear; stale-live, future-heartbeat or unverifiable evidence blocks until the process is safely resolved. C8 owns atomic persistence. |
+| R80 | A parser escapes resource cleanup, inherits an unrelated descriptor, or reads a replaced source | Low | Critical | C3 launches one exact no-shell systemd scope → bubblewrap → prlimit chain. `TasksMax` owns descendants; timeout/cancel/output overflow kills the exact cgroup. `close_fds` plus one explicit `pass_fds` source descriptor prevents unrelated inheritance. Device/inode/metadata/hash are checked on that same open descriptor before and after execution; mismatch discards output. Missing strict capability fails closed. |
 
 ## High-Likelihood Risks — Detailed Controls
 

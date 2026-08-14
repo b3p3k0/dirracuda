@@ -989,6 +989,20 @@ worker resume beside a new GPU owner. C2 reattaches only when identity and heart
 fresh, clears only a missing/reused/rebooted identity, and blocks stale-live or
 unverifiable states. C8 must resolve the exact live process before an atomic clear.
 
+### 111. Process limits belong to the parser cgroup, not the desktop user
+
+`RLIMIT_NPROC` counts processes for the whole user and can collide with unrelated desktop
+or service work. C3 uses a transient user-systemd scope with `TasksMax`, then kills the
+exact unit on timeout, cancellation or output overflow. The live finite-fork probe must
+prove that boundary; merely constructing the command is not enough.
+
+### 112. Anonymous descriptors are not equivalent bind-mount sources
+
+Bubblewrap 0.11.1 accepted `--ro-bind-fd` for an opened named file but rejected a Linux
+`memfd` because its `/proc/self/fd` target is an anonymous deleted object. C3's public
+preflight therefore uses an owner-only named temporary fixture. Production still binds
+the already-open C2 source descriptor and never reopens the path in the parser child.
+
 ---
 
 ## Not yet learned

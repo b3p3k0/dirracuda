@@ -94,7 +94,7 @@ later", which would just be known dead code.
 | `chunker.py` | **Ported to production in C1** |
 | `preflight.py` | **Ported to production in C9** |
 | `client.py` | **Ported to production in C9** |
-| `sandbox_smoke.py` | **Deleted in C3**, when the real parser supervisor lands |
+| `sandbox_smoke.py` | Retained as immutable C0B Stage-A evidence; C3 production never imports it |
 | `protocol.py` | Retained diagnostic |
 | `resources.py` | Retained diagnostic |
 | `goldset.py` | Retained diagnostic; the fixture corpus becomes the C1+ test corpus |
