@@ -365,3 +365,19 @@ The new artifact/checkpoint family is isolated under `c0b6-*-v1`; C0B-5 code and
 remain read-only. One C0B-6 child may run only from the committed, leak-clean C0B-6B
 source. A quality miss stops `INCONCLUSIVE`; a harness fault fails closed and cannot
 authorize another child.
+
+C0B-6B reproduced the lost pre-health failure exactly: the runtime passed an attempt ID
+to `C0B5Checkpoint.list_attempts()`, whose real API accepts no arguments. The in-memory
+test double accepted the extra optional argument, so the mismatch reached the live
+SQLite boundary only after the cancellation response. C0B-6 filters the no-argument
+result, narrows the double to the real signature and proves the 97-call
+cancellation-to-health handoff through the actual SQLite checkpoint. Receipt replay now
+opens its own pinned read-only connection; the writable publisher remains writable on
+both replay success and failure. Failure artifacts use a closed content-free origin
+vocabulary, and the CLI exposes only those safe codes.
+
+The final offline gate passed: 111 focused C0B-6 tests, 155 C0B-5 compatibility and
+Analyst security/provenance tests, and the 1,420-test Analyst-wide regression. Six
+marked skips were expected. Compile, diff and public leak checks pass. The two largest
+C0B-6 instruments are 1700 and 1717 lines; no shipped production file changed, so the
+HI's production-only size gate does not require benchmark modularisation here.

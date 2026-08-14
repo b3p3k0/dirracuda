@@ -165,6 +165,34 @@ FROZEN_C0B5_PUBLIC_PATHS = FROZEN_C0B3_PUBLIC_PATHS | frozenset({
     "scripts/tests/test_analyst_c0b5_scoring.py",
 })
 
+# C0B-6 preserves the exact C0B-5 set and adds only its prospectively frozen
+# harness-repair family. Historical task-tree meanings never widen in place.
+FROZEN_C0B6_PUBLIC_PATHS = FROZEN_C0B5_PUBLIC_PATHS | frozenset({
+    "docs/dev/ollama_integration/BENCHMARK_PROTOCOL_C0B6.md",
+    "docs/dev/ollama_integration/PUBLIC_CDF_OUTCOME_C0B5.md",
+    "scripts/analyst_benchmark/c0b6_backup.py",
+    "scripts/analyst_benchmark/c0b6_checkpoint.py",
+    "scripts/analyst_benchmark/c0b6_cli.py",
+    "scripts/analyst_benchmark/c0b6_executor.py",
+    "scripts/analyst_benchmark/c0b6_lineage.py",
+    "scripts/analyst_benchmark/c0b6_plan.py",
+    "scripts/analyst_benchmark/c0b6_policy.py",
+    "scripts/analyst_benchmark/c0b6_replay.py",
+    "scripts/analyst_benchmark/c0b6_runtime.py",
+    "scripts/analyst_benchmark/c0b6_schema.py",
+    "scripts/analyst_benchmark/c0b6_scoring.py",
+    "scripts/tests/test_analyst_c0b6_backup.py",
+    "scripts/tests/test_analyst_c0b6_checkpoint.py",
+    "scripts/tests/test_analyst_c0b6_cli.py",
+    "scripts/tests/test_analyst_c0b6_executor.py",
+    "scripts/tests/test_analyst_c0b6_plan.py",
+    "scripts/tests/test_analyst_c0b6_policy.py",
+    "scripts/tests/test_analyst_c0b6_public_flow.py",
+    "scripts/tests/test_analyst_c0b6_runtime.py",
+    "scripts/tests/test_analyst_c0b6_schema.py",
+    "scripts/tests/test_analyst_c0b6_scoring.py",
+})
+
 
 def public_generation_options_sha256() -> str:
     """Hash every allowed C/D/F generation-factor combination."""

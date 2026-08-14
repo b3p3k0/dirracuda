@@ -928,6 +928,14 @@ exception text and persisted only `provenance_identity_failure`. That protected 
 while losing the exact internal boundary. Persist a predefined, content-free origin code
 such as `health_precharge_guard`; never persist arbitrary exception strings.
 
+### 103. Test doubles must reject calls the real boundary rejects
+
+C0B-5's in-memory checkpoint allowed `list_attempts(attempt_id)` while the SQLite
+checkpoint exposed only `list_attempts()`. That permissive signature hid a deterministic
+failure until the sole live child crossed the cancellation-to-health boundary. Keep
+double signatures exact and add at least one live-shaped test through the real durable
+implementation for every resume or publication handoff.
+
 ---
 
 ## Not yet learned

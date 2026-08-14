@@ -69,7 +69,10 @@ candidate, prompts, quality thresholds and human-review budgets; uses fresh F72 
 20260811 and 20260818; isolates semantic replay from writable SQLite state; adds closed
 content-free failure origins; and requires a real 97-call cancellation-to-health resume
 regression before one replacement child may contact Ollama. C0B-2 through C0B-5 remain
-immutable.
+immutable. C0B-6B implements those controls and has reproduced the C0B-5 pre-health
+failure as an exact method-signature mismatch hidden by its in-memory test double. The
+focused, compatibility, provenance, leak and 1,420-test frozen-workspace gates pass. The
+reviewed source is ready for its implementation commit before live child creation.
 
 The inherited C0B-3 public implementation freezes the protected run nonce key only in the
 backed-up 0600 checkpoint; derived
@@ -213,7 +216,6 @@ never became eligible.
 
 ## Next Step
 
-C0B-6A is frozen. Implement C0B-6B's isolated receipt repair, closed failure origins and
-real-SQLite 97-call handoff regression. No model request is allowed until every offline,
-provenance and leak gate passes and the reviewed source is committed. C1 and private
-Stage E remain held.
+C0B-6A is frozen and C0B-6B has passed its offline gate. Commit the reviewed source, then
+create the single C0B-6 replacement child from a clean dedicated worktree. C1 and
+private Stage E remain held.

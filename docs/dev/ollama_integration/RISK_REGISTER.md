@@ -13,8 +13,9 @@ one-document allowance. E8 prospectively bounds C0B-5 review load; C1 and privat
 remain held. C0B-5B passed its complete offline and independent hostile-review gates.
 Its sole C0B-5C child ended `BLOCKED_PROVENANCE` after 97 calls, before the health control
 or any lane aggregate. A deterministic receipt connection-state defect was confirmed;
-the earlier provenance trigger is narrowed but not exactly classified. No quality result
-exists and no replacement run is authorized.
+the earlier provenance trigger was an incompatible test-double method signature. No
+quality result exists. C0B-6 is the authorized prospective repair and has passed its
+offline gate before one replacement run.
 Controls are
 authoritative in [`CONTRACT.md`](CONTRACT.md), accepted errata, and the reviewed
 benchmark protocols; this register is the
@@ -96,6 +97,7 @@ risk-indexed view.
 | R71 | A crash, resume or shared-GPU pause repeats a call or activates the next lane early | Medium | High | Persist one precharged request before serial dispatch; reconcile only missing derived events. Commit each aggregate and pause atomically, then require an explicit verified resume to activate the next lane. Retryable GPU contention yields `PAUSED_RESOURCE` and preserves the frozen plan; it is never scored as a quality failure. Terminal evidence is immutable before snapshot/receipt publication. |
 | R72 | A semantic verifier changes connection-local SQLite state and prevents the receipt write it is meant to authorize | Medium | High | Never run read-only semantic replay against the writable publication connection unless every connection-local pragma is restored in `finally`. Prefer a separate pinned read-only connection. Test the default verifier through receipt insertion, not only a no-op verifier. |
 | R73 | Content-safe exception suppression leaves a terminal internally valid but too coarse to identify its failed boundary | Medium | High | Persist a closed, content-free failure-origin code before terminalization. Never store exception text, paths or response content. Test every broad exception boundary and require one exact diagnostic code. |
+| R74 | A permissive in-memory test double accepts a call that the real SQLite boundary rejects during the sole live run | Medium | High | Match callable signatures exactly and exercise resume/publication handoffs through a real owner-only SQLite checkpoint. C0B-6 reproduces the 97-call cancellation state, reopens it and proves exactly one following health call with no repeated cancellation. |
 
 ## High-Likelihood Risks — Detailed Controls
 
