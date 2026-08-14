@@ -936,6 +936,20 @@ failure until the sole live child crossed the cancellation-to-health boundary. K
 double signatures exact and add at least one live-shaped test through the real durable
 implementation for every resume or publication handoff.
 
+### 104. A payload hash and a database-row hash are different identities
+
+C0B-6 replay correctly verified the complete C0B-3 decision-row hash, but final scoring
+later compared it with a hash of only the decoded JSON payload. Name identity hashes by
+their exact preimage and carry verified identity forward instead of recomputing another
+object at the consumer.
+
+### 105. Canonical mapping order is not domain order
+
+Canonical JSON sorts object keys. A legacy validator treated insertion order in a
+category mapping as semantic order, so valid reloaded evidence failed after all live
+work completed. Validate mapping key sets and use an explicit domain sequence for
+iteration; never infer domain order from a serialized object.
+
 ---
 
 ## Not yet learned

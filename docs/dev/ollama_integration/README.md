@@ -74,6 +74,12 @@ failure as an exact method-signature mismatch hidden by its in-memory test doubl
 focused, compatibility, provenance, leak and 1,420-test frozen-workspace gates pass. The
 reviewed source is ready for its implementation commit before live child creation.
 
+C0B-6C then completed all 240 planned calls, but its final acceptance join failed closed
+after both fresh F lanes passed and C44 completed. The checkpoint, snapshot and receipt
+verify; the terminal remains `BLOCKED_PROVENANCE`. The HI authorized C0B-7 to recover
+the final decision offline from those immutable artifacts, with no additional Ollama
+calls and no threshold change.
+
 The inherited C0B-3 public implementation freezes the protected run nonce key only in the
 backed-up 0600 checkpoint; derived
 boundary work binds both the logical document hash and generated-view hash; and D3/D4
@@ -204,18 +210,20 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
 11. `BENCHMARK_PROTOCOL_C0B5.md` — prospective assistive review-budget confirmation.
 12. `PUBLIC_CDF_OUTCOME_C0B5.md` — immutable C0B-5 harness-failure record.
 13. `BENCHMARK_PROTOCOL_C0B6.md` — prospective repaired confirmation protocol.
-14. `BENCHMARK.md` — instrument method, module dispositions, what is/is not committed.
-15. `PUBLIC_CDF_OUTCOME_C0B2.md` — public-only terminal result and decision chain.
-16. `LESSONS_LEARNED.md` — only what a card actually exercised.
-17. `RESEARCH_NOTES.md` — verified external findings with sources + corpus profile.
-18. `RISK_REGISTER.md` — risk controls.
-19. `UI_MOCKUPS.md` — surface layouts (draft).
+14. `PUBLIC_CDF_OUTCOME_C0B6.md` — immutable C0B-6 terminal and recovery handoff.
+15. `BENCHMARK_PROTOCOL_C0B7.md` — offline-only evidence recovery protocol.
+16. `BENCHMARK.md` — instrument method, module dispositions, what is/is not committed.
+17. `PUBLIC_CDF_OUTCOME_C0B2.md` — public-only terminal result and decision chain.
+18. `LESSONS_LEARNED.md` — only what a card actually exercised.
+19. `RESEARCH_NOTES.md` — verified external findings with sources + corpus profile.
+20. `RISK_REGISTER.md` — risk controls.
+21. `UI_MOCKUPS.md` — surface layouts (draft).
 
 `BENCHMARK_RESULTS.md` remains absent. It is the private Stage-E aggregate, and Stage E
 never became eligible.
 
 ## Next Step
 
-C0B-6A is frozen and C0B-6B has passed its offline gate. Commit the reviewed source, then
-create the single C0B-6 replacement child from a clean dedicated worktree. C1 and
-private Stage E remain held.
+C0B-7A freezes the offline-only recovery. Implement and validate its read-only replay,
+then record the recovered decision. C1 and private Stage E remain held until that result
+is reviewed.
