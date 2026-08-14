@@ -193,6 +193,14 @@ FROZEN_C0B6_PUBLIC_PATHS = FROZEN_C0B5_PUBLIC_PATHS | frozenset({
     "scripts/tests/test_analyst_c0b6_scoring.py",
 })
 
+FROZEN_C0B7_PUBLIC_PATHS = FROZEN_C0B6_PUBLIC_PATHS | frozenset({
+    "docs/dev/ollama_integration/BENCHMARK_PROTOCOL_C0B7.md",
+    "docs/dev/ollama_integration/PUBLIC_CDF_OUTCOME_C0B6.md",
+    "scripts/analyst_benchmark/c0b7_cli.py",
+    "scripts/analyst_benchmark/c0b7_recovery.py",
+    "scripts/tests/test_analyst_c0b7_recovery.py",
+})
+
 
 def public_generation_options_sha256() -> str:
     """Hash every allowed C/D/F generation-factor combination."""
