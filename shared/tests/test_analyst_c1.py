@@ -339,14 +339,17 @@ def test_grounding_drops_whole_chunk_quote() -> None:
     assert result.model_assessment is Assessment.FINDINGS_PRESENT
 
 
-def test_production_package_has_no_io_network_or_parser_imports() -> None:
+def test_c1_pure_modules_have_no_io_network_or_parser_imports() -> None:
     banned = {
         "os", "pathlib", "sqlite3", "subprocess", "socket", "urllib",
         "requests", "httpx", "fitz", "pymupdf", "docx", "openpyxl", "xlrd",
     }
     package = REPO_ROOT / "experimental" / "analyst"
+    c1_modules = {
+        "__init__.py", "chunking.py", "detectors.py", "models.py", "worksheet.py"
+    }
     offenders: list[str] = []
-    for path in package.glob("*.py"):
+    for path in (package / name for name in sorted(c1_modules)):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):

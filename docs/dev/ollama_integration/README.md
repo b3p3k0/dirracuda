@@ -93,6 +93,12 @@ selected worksheet-v2 schema and prompt identities, immutable coverage/default m
 and source-side quote grounding. The package root remains standard-library-only; no
 dependency file, I/O path, private source or Ollama endpoint was touched.
 
+C2 is complete. Source inventory now walks from pinned directory descriptors, refuses
+symlinks/special files/nested mounts, excludes `_analyst`, hashes each mergerfs-visible
+path independently and rejects mutation. Worker identity binds PID, Linux process-start
+ticks and boot UUID; reconciliation never clears an exact live worker merely because its
+heartbeat is stale. Persistence and atomic lease claims remain C8 work.
+
 The inherited C0B-3 public implementation freezes the protected run nonce key only in the
 backed-up 0600 checkpoint; derived
 boundary work binds both the logical document hash and generated-view hash; and D3/D4
@@ -235,7 +241,8 @@ explicitly deferred Stage E until real-document validation is useful.
 
 ## Next Step
 
-C0B and C1 are complete. Begin C2: safe inventory plus the pure lease/reattach contracts.
+C0B through C2 are complete. Begin C3: parser supervisor plus the frozen bubblewrap
+sandbox boundary.
 Private Stage E remains deferred and requires fresh explicit authorization before any
 real-document read. Adding Analyst's optional runtime dependencies also remains a future
 HI-approved card; core startup does not depend on them.

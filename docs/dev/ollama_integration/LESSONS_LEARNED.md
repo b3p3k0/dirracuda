@@ -974,6 +974,21 @@ phrases first and suppresses overlapping demographic terms before stable source-
 sorting. Deterministic detectors still need overlap rules even when every regex is
 individually correct.
 
+### 109. mergerfs inode values are race evidence, not document identity
+
+mergerfs may report one inode for distinct logical files. C2 therefore hashes every
+visible path independently and never caches/deduplicates by `(device, inode)`. Device,
+inode and timestamps still help compare two observations of the same opened path, while
+the content hash and later same-source revalidation own document identity. The measured
+mergerfs smoke passed descriptor traversal, `_analyst` exclusion and symlink rejection.
+
+### 110. A stale heartbeat does not prove a worker is dead
+
+Clearing a lease for an exact still-live PID/start-time/boot identity could let a paused
+worker resume beside a new GPU owner. C2 reattaches only when identity and heartbeat are
+fresh, clears only a missing/reused/rebooted identity, and blocks stale-live or
+unverifiable states. C8 must resolve the exact live process before an atomic clear.
+
 ---
 
 ## Not yet learned
@@ -982,5 +997,5 @@ Deliberately absent until the mechanisms exist and have been run:
 
 - private staging, HMAC pseudonymisation, and raw-result retention (designed, but not
   exercised because no Stage-F selection made private Stage E eligible);
-- worker lease, heartbeat and crash recovery (C2/C8);
+- persistent worker lease, heartbeat writes and crash recovery (C8);
 - extraction-manifest identity handoff (C14).
