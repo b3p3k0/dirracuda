@@ -957,6 +957,23 @@ the complete object. Replay compared the former with the latter. Centralize each
 preimage and test it after durable serialization; a shared `sha256` type does not make
 different preimages interchangeable.
 
+### 107. Equivalent generated schemas are not the same request contract
+
+The first C1 port expressed the same worksheet fields but changed their generated order
+and added a class-description field. Pydantic therefore produced a different canonical
+schema and prompt hash. Production now reproduces the exact benchmarked schema and prompt
+identities, asserts both at runtime, and fails closed on dependency-driven schema drift.
+Semantic equivalence is insufficient when the selected model was measured against exact
+request bytes.
+
+### 108. Longest-match ownership prevents nested detector double counts
+
+`not hispanic or latino` contains the shorter `hispanic or latino` detector phrase. A
+simple independent term scan counted one source span twice. Production scans longer
+phrases first and suppresses overlapping demographic terms before stable source-order
+sorting. Deterministic detectors still need overlap rules even when every regex is
+individually correct.
+
 ---
 
 ## Not yet learned

@@ -1,6 +1,6 @@
 # Ollama Integration — Risk Register
 
-Date: 2026-08-11
+Date: 2026-08-14
 Status: **C0A controls frozen; C0B-2A offline controls implemented and reviewed; public
 C/D/F envelope executed.** C0B-3 reached Stage F and ended terminal
 `INCONCLUSIVE/no_seed1_qualifier` after one of 92 seed-1 chunks repeated an otherwise
@@ -17,7 +17,8 @@ the earlier provenance trigger was an incompatible test-double method signature.
 quality result existed at C0B-5. C0B-6 completed 240 calls but failed its final join;
 C0B-7 preserved that terminal and recovered the immutable evidence offline as
 `RECOVERED_CONFIRMED`. Public D1/D2 are resolved. The HI explicitly deferred private
-Stage E until real-document validation is useful; C1 may begin.
+Stage E until real-document validation is useful; C1 was authorized.
+The C1 pure production contracts are implemented; C2 may begin.
 Controls are
 authoritative in [`CONTRACT.md`](CONTRACT.md), accepted errata, and the reviewed
 benchmark protocols; this register is the
@@ -101,6 +102,8 @@ risk-indexed view.
 | R73 | Content-safe exception suppression leaves a terminal internally valid but too coarse to identify its failed boundary | Medium | High | Persist a closed, content-free failure-origin code before terminalization. Never store exception text, paths or response content. Test every broad exception boundary and require one exact diagnostic code. |
 | R74 | A permissive in-memory test double accepts a call that the real SQLite boundary rejects during the sole live run | Medium | High | Match callable signatures exactly and exercise resume/publication handoffs through a real owner-only SQLite checkpoint. C0B-6 reproduces the 97-call cancellation state, reopens it and proves exactly one following health call with no repeated cancellation. |
 | R75 | A consumer compares hashes with different preimages or treats canonical JSON object order as semantic order | Medium | High | Name every identity by its exact preimage, carry verified row identities forward, validate mapping key sets independently of order and exercise the final join against real immutable parent evidence before live work. C0B-7 repairs only the offline join and preserves C0B-6 unchanged. |
+| R76 | A Pydantic upgrade or harmless-looking model edit silently changes the schema/prompt measured in C0B | Medium | High | C1 reproduces and asserts the exact selected worksheet schema and prompt SHA-256 identities before prompt construction. Drift fails closed and requires explicit review/rebenchmark; semantic similarity is not accepted as request identity. |
+| R77 | Nested detector terms count one source span more than once | Medium | Medium | Scan longer demographic phrases first, suppress overlapping spans, preserve stable source ordering and cover the nested phrase with a regression test. Cross-kind numeric overlap remains visible rather than silently deduplicated because kind-specific counts have different meanings. |
 
 ## High-Likelihood Risks — Detailed Controls
 

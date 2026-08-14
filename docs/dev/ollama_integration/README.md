@@ -1,6 +1,6 @@
 # Ollama Integration Workspace
 
-Date: 2026-08-11
+Date: 2026-08-14
 Status: **C0A contract frozen** (committed `91bb2aa`). **C0B-1 accepted and committed
 (`47e946b`).** The complete public C/D/F executor passed its offline and hostile-review
 gates and was committed through B5 (`bde8f92`), with the current Ollama show-envelope
@@ -86,6 +86,12 @@ worksheet v2, 8000/256-character chunks, `num_ctx=8192` and `num_predict=1024`. 
 [`PUBLIC_CDF_OUTCOME_C0B7.md`](PUBLIC_CDF_OUTCOME_C0B7.md). Private Stage E is eligible
 and was explicitly deferred by the HI until real-document validation is useful. C0B is
 complete; no private source was read.
+
+C1 is implemented in the optional `experimental/analyst/` package. It ports the exact
+selected worksheet-v2 schema and prompt identities, immutable coverage/default models,
+8000/256-character chunking, deterministic detectors, bounded duplicate normalization
+and source-side quote grounding. The package root remains standard-library-only; no
+dependency file, I/O path, private source or Ollama endpoint was touched.
 
 The inherited C0B-3 public implementation freezes the protected run nonce key only in the
 backed-up 0600 checkpoint; derived
@@ -229,7 +235,7 @@ explicitly deferred Stage E until real-document validation is useful.
 
 ## Next Step
 
-C0B is complete. Begin C1: port the selected worksheet, deterministic detectors and pure
-chunking/model contracts into the optional `experimental/analyst/` production package.
+C0B and C1 are complete. Begin C2: safe inventory plus the pure lease/reattach contracts.
 Private Stage E remains deferred and requires fresh explicit authorization before any
-real-document read.
+real-document read. Adding Analyst's optional runtime dependencies also remains a future
+HI-approved card; core startup does not depend on them.
