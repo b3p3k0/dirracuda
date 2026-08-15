@@ -16,6 +16,13 @@ from typing import Final
 
 from .formats import DocumentFormat, SNIFF_BYTES, sniff_document_format
 from .inventory import InventoryFile
+from .legacy_contract import (
+    ANTIWORD_PACKAGE_REVISION,
+    ANTIWORD_VERSION,
+    FRAME_MAGIC as LEGACY_FRAME_MAGIC,
+    MAX_HEADER_BYTES as MAX_LEGACY_HEADER_BYTES,
+)
+from .legacy_frame import LegacyUnit, decode_legacy_frame
 from .models import FileTerminal
 from .ooxml_contract import (
     DEFUSEDXML_VERSION, FRAME_MAGIC as OOXML_FRAME_MAGIC,
@@ -45,6 +52,15 @@ OOXML_CHILD_DESTINATION: Final = Path("/runtime/analyst_ooxml_child.py")
 OOXML_CONTRACT_PATH: Final = Path(__file__).with_name("ooxml_contract.py")
 OOXML_CONTRACT_DESTINATION: Final = Path("/runtime/ooxml_contract.py")
 OOXML_SITE_DESTINATION: Final = Path("/runtime/site-packages/defusedxml")
+LEGACY_CHILD_PATH: Final = Path(__file__).with_name("legacy_child.py")
+LEGACY_CHILD_DESTINATION: Final = Path("/runtime/analyst_legacy_child.py")
+LEGACY_CONTRACT_PATH: Final = Path(__file__).with_name("legacy_contract.py")
+LEGACY_CONTRACT_DESTINATION: Final = Path("/runtime/legacy_contract.py")
+ANTIWORD_HOST_PATH: Final = Path("/usr/bin/antiword")
+ANTIWORD_RUNTIME_PATH: Final = Path("/runtime/antiword")
+ANTIWORD_DATA_HOST_PATH: Final = Path("/usr/share/antiword/UTF-8.txt")
+ANTIWORD_DATA_RUNTIME_PATH: Final = Path("/runtime/antiword-data/UTF-8.txt")
+DPKG_QUERY: Final = Path("/usr/bin/dpkg-query")
 LDD: Final = Path("/usr/bin/ldd")
 
 _CHILD_DETAILS: Final = {
@@ -87,6 +103,8 @@ class ExtractionResult:
     primary_unit_count: int = 0
     member_count: int = 0
     expanded_bytes: int = 0
+    legacy_units: tuple[LegacyUnit, ...] = ()
+    package_revision: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -125,6 +143,8 @@ def extract_document(
             runtime_binds = pdf_runtime_binds()
         elif format_name is DocumentFormat.OOXML_CONTAINER:
             runtime_binds = ooxml_runtime_binds()
+        elif format_name is DocumentFormat.LEGACY_OFFICE:
+            runtime_binds = antiword_runtime_binds()
         else:
             runtime_binds = python_runtime_binds()
     except metadata.PackageNotFoundError:
@@ -152,6 +172,9 @@ def extract_document(
             else MAX_TEXT_BYTES + MAX_OOXML_HEADER_BYTES
             + len(OOXML_FRAME_MAGIC) + 1
             if format_name is DocumentFormat.OOXML_CONTAINER
+            else MAX_TEXT_BYTES + MAX_LEGACY_HEADER_BYTES
+            + len(LEGACY_FRAME_MAGIC) + 1
+            if format_name is DocumentFormat.LEGACY_OFFICE
             else MAX_TEXT_BYTES + MAX_HEADER_BYTES + len(FRAME_MAGIC) + 1
         ),
         stderr_bytes=64 * 1024,
@@ -166,6 +189,12 @@ def extract_document(
         command = (
             str(Path(sys.executable).resolve()), "-I", "-B",
             str(OOXML_CHILD_DESTINATION), str(MAX_TEXT_BYTES),
+            str(MAX_TEXT_CHARS),
+        )
+    elif format_name is DocumentFormat.LEGACY_OFFICE:
+        command = (
+            str(Path(sys.executable).resolve()), "-I", "-B",
+            str(LEGACY_CHILD_DESTINATION), str(MAX_TEXT_BYTES),
             str(MAX_TEXT_CHARS),
         )
     else:
@@ -202,6 +231,23 @@ def extract_document(
             primary_unit_count=decoded.primary_unit_count,
             member_count=decoded.member_count,
             expanded_bytes=decoded.expanded_bytes,
+        )
+    if format_name is DocumentFormat.LEGACY_OFFICE:
+        decoded = decode_legacy_frame(
+            sandbox_result.stdout,
+            max_text_bytes=MAX_TEXT_BYTES,
+            max_text_chars=MAX_TEXT_CHARS,
+        )
+        return ExtractionResult(
+            decoded.reason,
+            decoded.format_name,
+            "utf-8" if decoded.reason == "success" else None,
+            decoded.text,
+            decoded.detail,
+            parser_version=decoded.parser_version,
+            logical_unit_count=decoded.logical_unit_count,
+            legacy_units=decoded.units,
+            package_revision=decoded.package_revision,
         )
     return _decode_frame(sandbox_result.stdout, format_name)
 
@@ -261,6 +307,31 @@ def ooxml_runtime_binds() -> tuple[RuntimeBind, ...]:
     if (_runtime_identity(OOXML_CHILD_PATH) != child_identity
             or _runtime_identity(OOXML_CONTRACT_PATH) != contract_identity):
         raise RuntimeError("OOXML runtime changed during discovery")
+    return bindings
+
+
+def antiword_runtime_binds() -> tuple[RuntimeBind, ...]:
+    """Return the exact system Antiword runtime accepted for legacy DOC."""
+    _verify_antiword_package()
+    binary_identity = _runtime_identity(ANTIWORD_HOST_PATH)
+    data_identity = _runtime_identity(ANTIWORD_DATA_HOST_PATH)
+    child_identity = _runtime_identity(LEGACY_CHILD_PATH)
+    contract_identity = _runtime_identity(LEGACY_CONTRACT_PATH)
+    bindings = _discover_antiword_runtime_binds(
+        binary_identity, data_identity, child_identity, contract_identity
+    )
+    project_sources = {LEGACY_CHILD_PATH, LEGACY_CONTRACT_PATH}
+    for binding in bindings:
+        _require_trusted_runtime(
+            binding.source, allow_project=binding.source in project_sources
+        )
+    if (
+        _runtime_identity(ANTIWORD_HOST_PATH) != binary_identity
+        or _runtime_identity(ANTIWORD_DATA_HOST_PATH) != data_identity
+        or _runtime_identity(LEGACY_CHILD_PATH) != child_identity
+        or _runtime_identity(LEGACY_CONTRACT_PATH) != contract_identity
+    ):
+        raise RuntimeError("Antiword runtime changed during discovery")
     return bindings
 
 
@@ -375,6 +446,97 @@ def _discover_ooxml_runtime_binds(
             raise RuntimeError("OOXML runtime destinations conflict")
         unique[key] = binding
     return tuple(unique[key] for key in sorted(unique))
+
+
+@lru_cache(maxsize=2)
+def _discover_antiword_runtime_binds(
+    _binary_identity: tuple[int, int, int, int],
+    _data_identity: tuple[int, int, int, int],
+    _child_identity: tuple[int, int, int, int],
+    _contract_identity: tuple[int, int, int, int],
+) -> tuple[RuntimeBind, ...]:
+    base = [
+        binding for binding in python_runtime_binds()
+        if binding.destination != CHILD_DESTINATION
+    ]
+    for source in (
+        LEGACY_CHILD_PATH, LEGACY_CONTRACT_PATH, ANTIWORD_HOST_PATH,
+        ANTIWORD_DATA_HOST_PATH,
+    ):
+        _require_trusted_runtime(
+            source, allow_project=source in {LEGACY_CHILD_PATH, LEGACY_CONTRACT_PATH}
+        )
+    base.extend((
+        RuntimeBind(LEGACY_CHILD_PATH, LEGACY_CHILD_DESTINATION),
+        RuntimeBind(LEGACY_CONTRACT_PATH, LEGACY_CONTRACT_DESTINATION),
+        RuntimeBind(ANTIWORD_HOST_PATH, ANTIWORD_RUNTIME_PATH),
+        RuntimeBind(ANTIWORD_DATA_HOST_PATH, ANTIWORD_DATA_RUNTIME_PATH),
+    ))
+    base.extend(
+        RuntimeBind(source, destination)
+        for source, destination in _ldd_dependencies(ANTIWORD_HOST_PATH)
+    )
+    unique: dict[str, RuntimeBind] = {}
+    for binding in base:
+        key = str(binding.destination)
+        previous = unique.get(key)
+        if previous is not None and previous.source != binding.source:
+            raise RuntimeError("Antiword runtime destinations conflict")
+        unique[key] = binding
+    return tuple(unique[key] for key in sorted(unique))
+
+
+def _verify_antiword_package() -> None:
+    try:
+        binary = ANTIWORD_HOST_PATH.resolve(strict=True)
+        mapping = ANTIWORD_DATA_HOST_PATH.resolve(strict=True)
+        query = DPKG_QUERY.resolve(strict=True)
+    except FileNotFoundError as exc:
+        raise OptionalDependencyUnavailable("dependency_missing") from exc
+    if binary != ANTIWORD_HOST_PATH or mapping != ANTIWORD_DATA_HOST_PATH:
+        raise OptionalDependencyUnavailable("dependency_version")
+    _require_trusted_runtime(query)
+    completed = subprocess.run(
+        [
+            str(query), "-W",
+            "-f=${db:Status-Status}\\n${Version}\\n",
+            "antiword",
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=5,
+        check=False,
+        shell=False,
+        env={"LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin:/bin"},
+    )
+    expected = f"installed\n{ANTIWORD_PACKAGE_REVISION}\n".encode("ascii")
+    if (
+        completed.returncode != 0
+        or completed.stdout != expected
+        or completed.stderr
+    ):
+        raise OptionalDependencyUnavailable("dependency_version")
+    version = subprocess.run(
+        [str(binary), "-h"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=5,
+        check=False,
+        shell=False,
+        env={"LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin:/bin"},
+    )
+    expected_version_line = (
+        f"\tVersion: {ANTIWORD_VERSION}  (21 Oct 2005)".encode("ascii")
+    )
+    if (
+        version.returncode != 0
+        or version.stdout
+        or len(version.stderr) > 64 * 1024
+        or version.stderr.splitlines().count(expected_version_line) != 1
+    ):
+        raise OptionalDependencyUnavailable("dependency_version")
 
 
 @lru_cache(maxsize=1)

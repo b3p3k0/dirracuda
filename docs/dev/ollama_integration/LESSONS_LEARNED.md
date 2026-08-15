@@ -1100,6 +1100,30 @@ decompressed and parsed. The distinction must be explicit: a metadata cap is not
 permission to expand ignored media, and a historical hostile-fixture threshold is not
 silently rewritten as a production limit.
 
+### 125. A generic container signature is only a parser candidate
+
+The CFB/OLE signature is shared by legacy Word, Excel, PowerPoint and arbitrary compound
+files. C7A routes that signature to a candidate sandbox but calls content supported only
+when exact Antiword successfully authenticates and parses it. A `.doc` extension is not
+evidence, and an Excel workbook that reaches the Word parser stays unsupported rather
+than being silently mislabelled.
+
+### 126. A charset label does not prove standards-conforming output
+
+Antiword 0.37's `UTF-8.txt` mapping emitted supplementary Unicode characters as paired
+CESU-8 surrogates in a live public DOC. Replacing invalid bytes would silently corrupt
+evidence. C7A first requires strict UTF-8, then permits only a complete high-plus-low
+surrogate pair and converts it to one Unicode scalar; every other invalid form remains a
+closed `text_decode` failure.
+
+### 127. A small parser can still be an incompatible distribution dependency
+
+`xlrd 2.0.2` is technically attractive for historical Excel because it is pure Python
+and does not execute macros. Its exact licence still contains the original BSD
+advertising clause, which GNU classifies as GPL-incompatible. Dependency selection must
+review the shipped licence text, not only PyPI's short classifier or the parser's attack
+surface. C7B remains separate until a compatible route is accepted.
+
 ---
 
 ## Not yet learned

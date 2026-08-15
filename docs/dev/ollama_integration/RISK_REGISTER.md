@@ -19,8 +19,9 @@ C0B-7 preserved that terminal and recovered the immutable evidence offline as
 `RECOVERED_CONFIRMED`. Public D1/D2 are resolved. The HI explicitly deferred private
 Stage E until real-document validation is useful; C1 was authorized.
 The C1 pure production contracts, C2 inventory/reattachment evidence, C3 strict parser
-supervisor, C4 RTF/plain-text extraction, C5 PDF extraction and C6 bounded OOXML
-extraction are implemented; C7 may begin.
+supervisor, C4 RTF/plain-text extraction, C5 PDF extraction, C6 bounded OOXML extraction
+and C7A sandboxed legacy Word extraction are implemented. C7B legacy Excel parser
+selection remains in review.
 Controls are
 authoritative in [`CONTRACT.md`](CONTRACT.md), accepted errata, and the reviewed
 benchmark protocols; this register is the
@@ -44,7 +45,7 @@ risk-indexed view.
 | R14 | Model deprecation breaks the pipeline on an Ollama upgrade | Medium | Low | No hardcoded model name. Model is config, preflight verifies presence, benchmark harness is re-runnable against replacements. |
 
 | R15 | One host holds 46,724 documents; per-host reporting stalls or OOMs on it | High | High | Stream and checkpoint at file granularity — never hold a host's findings in memory. Report generation aggregates from the sidecar DB, not from a live object graph. Benchmark against the FMIC host specifically, not an average one. |
-| R16 | Legacy `.doc`/`.xls` (8,077 files) silently skipped | High | Medium | antiword for `.doc`; xlrd or sandboxed LibreOffice for `.xls` (C7). catdoc/xls2csv never used (TALOS-2024-2132). No approved parser → explicit `unsupported_format`, never an unreported gap. |
+| R16 | Legacy `.doc`/`.xls` (8,077 files) silently skipped | High | Medium | C7A routes CFB by magic and runs only exact Debian Antiword `0.37-17` inside C3 for authenticated Word content, with strict output-line provenance and no partial-output retention. C7B does not add GPL-incompatible `xlrd` or a broad LibreOffice runtime silently; the measured replacement recommendation is `python-calamine==0.8.2`. catdoc/xls2csv are never used (TALOS-2024-2132). No approved parser → explicit `unsupported_format`, never an unreported gap. |
 | R17 | Mislabeled extension routes a file to the wrong parser | High | Medium | Sniff magic bytes before parser selection. Extension is a hint, never authority. |
 | R18 | 31% of sampled PDFs have no text layer and could be silently reported as empty | Certain in sample | Medium | C5 returns a distinct `no_text_layer` terminal after all pages yield no non-whitespace text, distinguished from a successful terminal with zero findings. Every report prints its actual no-text-layer count/rate. |
 | R19 | 502 MB outlier or zero-byte file breaks a parse worker | High | Low | Pre-parse gates on size (upper and lower bound) before a worker is handed the file. |

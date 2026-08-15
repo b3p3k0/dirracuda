@@ -10,6 +10,7 @@ SNIFF_BYTES: Final = 4096
 
 
 class DocumentFormat(str, Enum):
+    LEGACY_OFFICE = "legacy_office"
     OOXML_CONTAINER = "ooxml"
     PDF = "pdf"
     RTF = "rtf"
@@ -48,6 +49,7 @@ _TEXT_BOMS: Final = (
     codecs.BOM_UTF16_BE,
 )
 _ZIP_SIGNATURES: Final = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
+_CFB_SIGNATURE: Final = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 
 
 def sniff_text_format(head: bytes) -> TextFormat | None:
@@ -83,6 +85,8 @@ def sniff_document_format(head: bytes) -> DocumentFormat | None:
         return DocumentFormat.PDF
     if any(head.startswith(signature) for signature in _ZIP_SIGNATURES):
         return DocumentFormat.OOXML_CONTAINER
+    if head.startswith(_CFB_SIGNATURE):
+        return DocumentFormat.LEGACY_OFFICE
     return sniff_text_format(head)
 
 

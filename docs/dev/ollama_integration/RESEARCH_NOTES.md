@@ -219,14 +219,28 @@ gates against zip bombs. Enforce with a guardrail test in the shape of
 ### Legacy `.doc`/`.xls` — catdoc is not safe
 
 `catdoc`/`xls2csv` carry a heap-corruption / code-execution CVE
-(TALOS-2024-2132) and predictable-temp symlink issues. **Not used.** Policy:
-`.doc` → antiword (installed, `/usr/bin/antiword` v0.37-17); `.xls` → xlrd 2.0.2
-(BSD, pure-Python, historical `.xls` only, cached formula results not formula
-text) or sandboxed LibreOffice; benchmarked in C7. `olefile` is container
-inspection only. All run inside the bubblewrap sandbox.
+(TALOS-2024-2132) and predictable-temp symlink issues. **Not used.** C7A uses exact
+Debian Antiword `0.37-17`, authenticated by parser success inside C3. Revision 17
+removes a document-summary parser with buffer overreads; the package has no active
+upstream. Measured output also showed that its UTF-8 mapping emits CESU-8 surrogate
+pairs for non-BMP characters, so C7A narrowly repairs paired surrogates and rejects
+every malformed form.
+
+The earlier `.xls` shortlist needs correction. `xlrd 2.0.2` is pure Python and
+technically narrow, but its exact licence retains the original BSD advertising clause;
+GNU classifies that licence as GPL-incompatible. LibreOffice is compatible but carries
+a far larger native conversion surface. The measured C7B recommendation is the
+MIT-licensed `python-calamine==0.8.2`: its attested 2.25 MiB wheel has a narrow runtime
+closure and matched `xlrd` on the public XLS fixture. It exposes cached formula values,
+not formula text or recalculation. `olefile` remains container inspection only. Every
+accepted parser runs inside bubblewrap.
 
 Sources: https://www.talosintelligence.com/vulnerability_reports/TALOS-2024-2132 ·
-https://pypi.org/project/xlrd/
+https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=968812 ·
+https://manpages.debian.org/testing/antiword/antiword.1.en.html ·
+https://github.com/python-excel/xlrd/blob/2.0.2/LICENSE ·
+https://www.gnu.org/licenses/license-list.html#OriginalBSD ·
+https://pypi.org/project/python-calamine/0.8.2/
 
 ### Sandbox mechanism (verified on this box)
 

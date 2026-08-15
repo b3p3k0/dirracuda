@@ -716,4 +716,6 @@ Analyst PDF support uses PyMuPDF/MuPDF under GNU AGPL v3; its attribution, sourc
 network-source notice are in `licenses/PyMuPDF-MuPDF-NOTICE.md`. Optional Analyst OOXML
 support uses defusedxml under the Python Software Foundation License Version 2; its
 notice and licence are in `licenses/defusedxml-NOTICE.md` and
-`licenses/defusedxml-PSF-2.0.txt`.
+`licenses/defusedxml-PSF-2.0.txt`. Optional legacy Word extraction uses the system
+Antiword `0.37-17` package under GPL-2.0-or-later; Dirracuda does not redistribute that
+binary. See `licenses/antiword-NOTICE.md`.

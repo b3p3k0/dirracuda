@@ -208,9 +208,11 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
 - **D5 — sidecar SQLite first**, migration-ready for later `dirracuda.db`
    adoption (no cross-DB joins, host keyed as the primary tables key it, additive
    columns). Dorkbook/Keymaster precedent.
-- **D6 — legacy `.doc`/`.xls`:** antiword for `.doc` (installed); xlrd or
-   sandboxed LibreOffice for `.xls` (benchmarked in C7); catdoc/xls2csv never
-   used.
+- **D6 — legacy `.doc`/`.xls`:** C7A uses exact Debian Antiword `0.37-17` for
+  `.doc` inside C3. C7B is resolving `.xls`: `xlrd` is technically small but its
+  original-BSD advertising clause conflicts with GPL distribution, while LibreOffice
+  is a much larger parser surface. The measured recommendation is the MIT-licensed
+  `python-calamine==0.8.2`; catdoc/xls2csv are never used.
 - **D7 — OCR:** deferred; every report prints its actual no-text-layer count and
   rate. The research sample measured 31% across the sampled corpus.
 
@@ -248,7 +250,8 @@ explicitly deferred Stage E until real-document validation is useful.
 
 ## Next Step
 
-C0B through C6 are complete. Begin C7: benchmark and implement sandboxed legacy `.doc`
-and `.xls` extraction without catdoc/xls2csv.
+C0B through C6 and C7A legacy Word extraction are complete. Finish C7B by accepting or
+rejecting the measured `python-calamine==0.8.2` recommendation, then implement one
+GPL-compatible sandboxed legacy Excel parser. Never use catdoc/xls2csv.
 Private Stage E remains deferred and requires fresh explicit authorization before any
 real-document read. Core startup does not depend on Analyst's optional parser lane.
