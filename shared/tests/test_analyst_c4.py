@@ -204,7 +204,7 @@ def test_live_sandbox_extracts_public_text_and_rtf(tmp_path: Path) -> None:
 def test_empty_oversize_and_unsupported_stop_before_sandbox(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _path, fd, expected = _source(tmp_path, b"%PDF-1.7")
+    _path, fd, expected = _source(tmp_path, b"\x89PNG\r\n\x1a\n")
     monkeypatch.setattr(
         extract, "run_sandboxed",
         lambda **kwargs: pytest.fail("rejected source reached sandbox"),

@@ -9,9 +9,15 @@ from typing import Final
 SNIFF_BYTES: Final = 4096
 
 
-class TextFormat(str, Enum):
+class DocumentFormat(str, Enum):
+    PDF = "pdf"
     RTF = "rtf"
     TEXT = "text"
+
+
+# Compatibility name retained for C4 callers.  PDF is intentionally returned
+# only by sniff_document_format(), never by the legacy text-only sniffer.
+TextFormat = DocumentFormat
 
 
 _BINARY_SIGNATURES: Final = (
@@ -65,6 +71,15 @@ def sniff_text_format(head: bytes) -> TextFormat | None:
         if _looks_textual(text):
             return TextFormat.TEXT
     return None
+
+
+def sniff_document_format(head: bytes) -> DocumentFormat | None:
+    """Classify every currently supported Analyst document family."""
+    if type(head) is not bytes or len(head) > SNIFF_BYTES:
+        raise ValueError("format sniff requires at most 4096 bytes")
+    if head.startswith(b"%PDF-"):
+        return DocumentFormat.PDF
+    return sniff_text_format(head)
 
 
 def _looks_textual(text: str) -> bool:

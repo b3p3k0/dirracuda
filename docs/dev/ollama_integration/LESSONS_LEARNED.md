@@ -1026,6 +1026,39 @@ valid-looking partial text in a pipe. C3/C4 retain only a closed reason/detail e
 failure and discard both stdout and stderr. Bounded bytes are still sensitive bytes; a
 cap is not permission to persist or log them.
 
+### 116. A valid wheel hash does not prove matching corresponding source
+
+The measured PyMuPDF 1.28.0 x86_64 wheel genuinely embeds MuPDF 1.29.0, but its build
+metadata names only an unidentified local checkout while the published source builds
+MuPDF 1.28.0. The PyMuPDF source build also downloads MuPDF itself without checking a
+digest and enables unused OCR libraries by default. C5 therefore verifies both source
+archives and every build wheel before an offline, no-OCR local build, then asserts both
+resulting versions. Package integrity, nested build inputs and binary/source provenance
+are separate checks.
+
+### 117. Native-library diagnostics must never share the IPC stream
+
+PyMuPDF writes diagnostics to stdout by default. A repaired or malformed PDF can
+therefore prefix a valid frame with warnings and turn a successful parse into an IPC
+failure. The child sets `PYMUPDF_MESSAGE=fd:2` before import; stderr stays bounded and is
+never returned as document output. A repairable PDF proves the success frame survives.
+
+### 118. Revalidate native output on the durable side
+
+The child rejects unsafe control characters and records per-page character counts, but
+the child is the compromise boundary. The durable decoder independently validates UTF-8,
+control characters, exact page counts, separators, text-bearing page count, byte/character
+totals, status/detail pairs and both parser versions. Strict IPC means distrusting even a
+well-formed success frame.
+
+### 119. Documented booleans may still arrive as integers
+
+PyMuPDF documents `Document.needs_pass` as boolean but returned integer `1` for the
+encrypted fixture. Identity comparison with `True` missed it and attempted page access.
+C5 now accepts only explicit `bool`/`int` values exactly equal to zero or one, then
+coerces deliberately. Validation should reflect measured runtime types without becoming
+generally permissive.
+
 ---
 
 ## Not yet learned

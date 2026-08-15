@@ -1,0 +1,6 @@
+# Install with: ./venv/bin/python scripts/install_analyst_deps.py
+# --no-index makes direct pip use fail closed in a fresh environment. The installer
+# separately verifies the nested MuPDF source and disables the unused OCR build.
+--no-index
+--no-binary PyMuPDF
+PyMuPDF==1.28.0 --hash=sha256:e53f3567403a92da15caa9e7ae0164327fff48817e9f40175367fb9de524258d

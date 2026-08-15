@@ -439,3 +439,51 @@ filesystem. The private protocol already caps the sealed snapshot at 16 MiB and 
 plaintext disk staging, so this is bounded memory/I/O cost rather than a retention or
 egress change. A missing option or failed copy is `sandbox_unavailable`/`sandbox_error`;
 there is no fallback to a named plaintext snapshot.
+
+---
+
+## E10 — Build the PDF parser from matching published source
+
+**Status:** ACCEPTED FOR CORRECTION (standing HI authorization, 2026-08-14)
+**Affects:** `CONTRACT.md` §10; D8; C5 dependency installation
+**Raised by:** C5 dependency provenance review
+
+### The conflict
+
+C0B correctly measured that PyPI's published x86_64 PyMuPDF 1.28.0 wheel embeds MuPDF
+1.29.0, despite the release notes saying 1.28.0. C5 found the more important consequence:
+the wheel records an unidentified local MuPDF checkout, while the published PyMuPDF
+1.28.0 source release and its declared upstream source build use MuPDF 1.28.0. The
+published source therefore does not demonstrably correspond to that wheel's native
+MuPDF 1.29.0 binary.
+
+The wheel's measured hash/version evidence remains historically correct for C0B. It is
+not accepted as the production artifact.
+
+### The correction
+
+- Production uses the controlled installer to verify both the official PyPI PyMuPDF
+  1.28.0 source distribution, SHA-256
+  `e53f3567403a92da15caa9e7ae0164327fff48817e9f40175367fb9de524258d`, and the official
+  MuPDF 1.28.0 source archive, SHA-256
+  `21c7f064903154f1c3a7458bee81f130fc36f9b5147ea13328f9980e02d2dea2`.
+- The build is offline after those verified downloads, uses exact hash-pinned build
+  wheels, disables unused Tesseract/Leptonica OCR code and forbids an implicit fallback
+  to any published PyMuPDF binary artifact.
+- The verified local build reports PyMuPDF 1.28.0 and embedded MuPDF 1.28.0. Every PDF
+  child asserts both exact values before parsing.
+- MuPDF 1.28.0 still satisfies the frozen security floor. Sandbox containment and all
+  parser limits remain unchanged.
+
+This adds a one-time native build and C/C++ toolchain cost to Analyst dependency
+installation. It removes both the unverifiable binary/source mismatch and the upstream
+build script's unverified nested download. Before any network-facing Analyst release,
+C13 must preserve or host both exact hashed dependency source archives and identify an
+exact public Dirracuda commit, tag or archive in the AGPL source offer.
+
+Sources:
+
+- https://pypi.org/pypi/pymupdf/1.28.0/json
+- https://raw.githubusercontent.com/pymupdf/PyMuPDF/1.28.0/setup.py
+- https://raw.githubusercontent.com/ArtifexSoftware/mupdf/1.28.0/include/mupdf/fitz/version.h
+- https://mupdf.com/downloads/archive/mupdf-1.28.0-source.tar.gz

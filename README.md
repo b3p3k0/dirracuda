@@ -711,4 +711,6 @@ have written permission that clearly covers the planned testing.
 
 ## Acknowledgements
 
-Licensed under GNU GPL v3. See `LICENSE.md` and `licenses/` for details.
+Licensed under GNU GPL v3. See `LICENSE.md` and `licenses/` for details. Optional
+Analyst PDF support uses PyMuPDF/MuPDF under GNU AGPL v3; its attribution, source and
+network-source notice are in `licenses/PyMuPDF-MuPDF-NOTICE.md`.

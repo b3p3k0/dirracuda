@@ -176,8 +176,10 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
    only the benchmarked tag+digest; server-level egress control is an operator
    prerequisite Analyst cannot prove. No "zero cloud egress" claim.
 8. **PDF parser: PyMuPDF, AGPL accepted** as a deliberate project-level decision
-   (Dirracuda ships a web UI → AGPL §13 attaches to the combined work). Pin an
-   approved version bundling MuPDF ≥ 1.28.0.
+   (Dirracuda ships a web UI → AGPL §13 attaches to the combined work). Production
+   hash-verifies both PyMuPDF and MuPDF 1.28.0 source releases, then builds offline with
+   unused OCR disabled; the provenance-mismatched published x86_64 wheel is benchmark
+   evidence only (E10).
 9. **Parser sandbox is mandatory (bubblewrap).** Sandbox unavailable → preflight
    fails. Not merely resource limits — a containment boundary against RCE-class
    parser bugs.
@@ -191,11 +193,13 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
   `a50eda8ed977ab48a12431878896b27ffd5cef552c17af3317d9623b939a7f1e`.
 - **D2 — chunk size / context: RESOLVED.** Worksheet v2, `chunk_chars=8000`,
   `overlap=256`, `num_ctx=8192` and `num_predict=1024`.
-- **D8 — PyMuPDF pin: RESOLVED.** `PyMuPDF==1.28.0`, wheel
-   `pymupdf-1.28.0-cp310-abi3-manylinux_2_28_x86_64.whl`, digest verified against PyPI.
-   Measured embedded **MuPDF 1.29.0** — not the 1.28.0 its release note claims, which is
-   why the contract requires asserting both. Selected on version/security grounds plus a
-   sandboxed import-and-smoke test; extraction quality is C5, not C0B.
+- **D8 — PyMuPDF pin: RESOLVED; production artifact corrected by E10.** C0B measured
+   PyPI's `PyMuPDF==1.28.0` x86_64 wheel and embedded MuPDF 1.29.0 correctly. C5 found
+   that wheel lacks demonstrably matching MuPDF source, so production instead builds the
+   official PyPI 1.28.0 source archive (SHA-256 `e53f3567403a92da15caa9e7ae0164327fff48817e9f40175367fb9de524258d`)
+   against separately verified MuPDF 1.28.0 source (SHA-256
+   `21c7f064903154f1c3a7458bee81f130fc36f9b5147ea13328f9980e02d2dea2`), disables OCR,
+   and asserts PyMuPDF/MuPDF **1.28.0/1.28.0** inside every sandbox child.
 - **D3 — report unit: per-host.** Corpus skew: one host = 46,724 docs, most a few
    hundred; same code path serves both.
 - **D5 — sidecar SQLite first**, migration-ready for later `dirracuda.db`
@@ -241,8 +245,7 @@ explicitly deferred Stage E until real-document validation is useful.
 
 ## Next Step
 
-C0B through C4 are complete. Begin C5: pinned PyMuPDF/PDF extraction through the C3
-supervisor, including the explicit `no_text_layer` outcome.
+C0B through C5 are complete. Begin C6: bounded OOXML container gates and defused XML
+extraction through the C3 supervisor.
 Private Stage E remains deferred and requires fresh explicit authorization before any
-real-document read. Adding Analyst's optional runtime dependencies also remains a future
-HI-approved card; core startup does not depend on them.
+real-document read. Core startup does not depend on Analyst's optional parser lane.
