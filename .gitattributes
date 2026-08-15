@@ -1,0 +1,2 @@
+# Preserve byte-exact upstream licence texts, including upstream EOF whitespace.
+licenses/defusedxml-PSF-2.0.txt -whitespace

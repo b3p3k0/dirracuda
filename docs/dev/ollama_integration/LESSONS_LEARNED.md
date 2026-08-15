@@ -1059,6 +1059,47 @@ C5 now accepts only explicit `bool`/`int` values exactly equal to zero or one, t
 coerces deliberately. Validation should reflect measured runtime types without becoming
 generally permissive.
 
+### 120. ZIP magic identifies a container candidate, not an Office format
+
+DOCX, XLSX and PPTX share ordinary ZIP signatures with unrelated archives. C6 routes ZIP
+magic only to a sandbox candidate, then requires content types and one internal root
+`officeDocument` relationship to agree on one non-macro main part. A filename extension
+never authenticates the package, and ambiguous evidence fails closed.
+
+### 121. Archive metadata gates must finish before the first XML parse
+
+Defusing XML does not stop decompression bombs, duplicate names, path ambiguity or
+special ZIP entries. C6 inventories every member and checks declared count, size,
+aggregate expansion, ratio, path, type, encryption and compression method first. It then
+streams only selected XML and independently counts actual decompressed bytes and CRC;
+no member is extracted to disk.
+
+### 122. Importing defusedxml is not the same as configuring it safely
+
+`forbid_dtd` defaults to false. Every C6 `iterparse` call explicitly sets
+`forbid_dtd=True`, `forbid_entities=True` and `forbid_external=True`, while separate
+depth, element, attribute, byte, CPU and wall limits own denial-of-service bounds. A
+valid-package DTD/XXE fixture proves the rejection reaches the XML layer after ZIP gates.
+
+### 123. OOXML order and provenance come from allowlisted relationships
+
+Lexical filenames do not define workbook sheet or presentation slide order. C6 follows
+only the small relationship types needed from authenticated roots, resolves internal
+package URIs without filesystem extraction, never fetches external targets and avoids a
+recursive graph walk. The strict frame carries bounded paragraph/cell/slide/notes units
+and the durable worker independently reconstructs every delimiter, identity and count.
+Whole-story or whole-sheet labels are too coarse to map a later finding back to its
+source paragraph or cell.
+
+### 124. Container inventory and decompression are different budgets
+
+A ZIP central directory describes every member even when the extractor never opens most
+of them. C6 permits a bounded 256 MiB of declared OOXML package expansion for
+compatibility, while independently allowing only 16 MiB of authenticated XML to be
+decompressed and parsed. The distinction must be explicit: a metadata cap is not
+permission to expand ignored media, and a historical hostile-fixture threshold is not
+silently rewritten as a production limit.
+
 ---
 
 ## Not yet learned

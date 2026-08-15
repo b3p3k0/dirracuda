@@ -10,6 +10,7 @@ SNIFF_BYTES: Final = 4096
 
 
 class DocumentFormat(str, Enum):
+    OOXML_CONTAINER = "ooxml"
     PDF = "pdf"
     RTF = "rtf"
     TEXT = "text"
@@ -46,6 +47,7 @@ _TEXT_BOMS: Final = (
     codecs.BOM_UTF16_LE,
     codecs.BOM_UTF16_BE,
 )
+_ZIP_SIGNATURES: Final = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
 
 
 def sniff_text_format(head: bytes) -> TextFormat | None:
@@ -79,6 +81,8 @@ def sniff_document_format(head: bytes) -> DocumentFormat | None:
         raise ValueError("format sniff requires at most 4096 bytes")
     if head.startswith(b"%PDF-"):
         return DocumentFormat.PDF
+    if any(head.startswith(signature) for signature in _ZIP_SIGNATURES):
+        return DocumentFormat.OOXML_CONTAINER
     return sniff_text_format(head)
 
 

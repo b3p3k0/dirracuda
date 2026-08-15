@@ -17,6 +17,7 @@ from typing import Iterator, List, Set, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PKG_DIR = REPO_ROOT / "scripts" / "analyst_benchmark"
+PRODUCTION_PKG_DIR = REPO_ROOT / "experimental" / "analyst"
 
 # Modules that make up the durable harness process.
 DURABLE_MODULES = sorted(p.name for p in PKG_DIR.glob("*.py"))
@@ -70,6 +71,20 @@ def test_no_raw_xml_parser_in_the_analysis_path() -> None:
                 offenders.append(f"{name}:{lineno} imports {mod}")
     assert not offenders, (
         f"use defusedxml behind the pre-parse gates, not a raw parser: {offenders}")
+
+
+def test_production_parser_imports_exist_only_in_exact_sandbox_children() -> None:
+    offenders: List[str] = []
+    for path in sorted(PRODUCTION_PKG_DIR.glob("*.py")):
+        for mod, lineno in _imports(path):
+            root = mod.split(".")[0]
+            if root in {"pymupdf", "fitz"} and path.name != "pdf_child.py":
+                offenders.append(f"{path.name}:{lineno} imports {mod}")
+            if root == "defusedxml" and path.name != "ooxml_child.py":
+                offenders.append(f"{path.name}:{lineno} imports {mod}")
+            if mod in BANNED_XML_IMPORTS or root == "lxml":
+                offenders.append(f"{path.name}:{lineno} imports raw XML {mod}")
+    assert not offenders, offenders
 
 
 def test_parser_imports_appear_only_as_sandbox_child_source() -> None:

@@ -7,8 +7,8 @@ disk or memory:
 
     MAX_BUILD_EXPANDED_BYTES = 64 MiB   (builder refuses to create more)
     MAX_BUILD_MEMBERS        = 2000     (builder refuses to create more)
-    MAX_EXPANDED_BYTES       = 16 MiB   (supervisor gate rejects at/above)
-    MAX_MEMBERS              = 1000     (supervisor gate rejects at/above)
+    MAX_EXPANDED_BYTES       = 16 MiB   (fixture gate rejects above)
+    MAX_MEMBERS              = 1000     (fixture gate rejects above)
 
 Cases: XXE OOXML, zip bomb, extreme member count, deep nesting, path-traversal
 member, and a zip mislabeled as .pdf.

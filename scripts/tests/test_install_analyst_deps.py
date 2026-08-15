@@ -24,6 +24,7 @@ def _archive(path: Path, name: str, body: bytes = b"ok") -> None:
 def test_all_downloads_are_exact_https_artifacts() -> None:
     artifacts = (
         installer.PYMUPDF_SOURCE, installer.MUPDF_SOURCE,
+        installer.DEFUSEDXML_WHEEL,
         *installer.BUILD_WHEELS,
     )
     assert len({item.filename for item in artifacts}) == len(artifacts)
@@ -33,6 +34,15 @@ def test_all_downloads_are_exact_https_artifacts() -> None:
         int(artifact.sha256, 16)
     assert installer.MUPDF_SOURCE.sha256 == \
         "21c7f064903154f1c3a7458bee81f130fc36f9b5147ea13328f9980e02d2dea2"
+    assert installer.DEFUSEDXML_WHEEL.sha256 == \
+        "a352e7e428770286cc899e2542b6cdaedb2b4953ff269a210103ec58f6198a61"
+
+
+def test_defusedxml_notice_keeps_the_exact_upstream_license() -> None:
+    license_path = Path(__file__).resolve().parents[2] / \
+        "licenses/defusedxml-PSF-2.0.txt"
+    assert hashlib.sha256(license_path.read_bytes()).hexdigest() == \
+        "b80ce9da8c42a1f91079627fbbe2bf27210ae108a0ffe5f077d5b08e076c24c8"
 
 
 def test_download_rejects_digest_mismatch_and_removes_partial(
@@ -118,6 +128,7 @@ def test_build_environment_is_offline_and_disables_ocr(
     assert Path(build_env["PYMUPDF_SETUP_MUPDF_BUILD"]).name == \
         "mupdf-1.28.0-source"
     assert calls[1][0][3:6] == ["install", "--force-reinstall", "--no-deps"]
+    assert calls[1][0][-1].endswith(installer.DEFUSEDXML_WHEEL.filename)
 
 
 def test_check_reports_current_exact_versions(
@@ -125,4 +136,6 @@ def test_check_reports_current_exact_versions(
 ) -> None:
     monkeypatch.setattr(installer, "_verify_installed", lambda: None)
     assert installer.main(["--check"]) == 0
-    assert "PyMuPDF 1.28.0, MuPDF 1.28.0" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "PyMuPDF 1.28.0, MuPDF 1.28.0" in output
+    assert "defusedxml 0.7.1" in output

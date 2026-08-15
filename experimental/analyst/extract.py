@@ -17,6 +17,11 @@ from typing import Final
 from .formats import DocumentFormat, SNIFF_BYTES, sniff_document_format
 from .inventory import InventoryFile
 from .models import FileTerminal
+from .ooxml_contract import (
+    DEFUSEDXML_VERSION, FRAME_MAGIC as OOXML_FRAME_MAGIC,
+    MAX_HEADER_BYTES as MAX_OOXML_HEADER_BYTES,
+)
+from .ooxml_frame import OoxmlUnit, decode_ooxml_frame
 from .sandbox import PRLIMIT, RuntimeBind, SandboxLimits, run_sandboxed
 
 MAX_SOURCE_BYTES: Final = 100 * 1024 * 1024
@@ -35,6 +40,11 @@ CHILD_DESTINATION: Final = Path("/runtime/analyst_parser_child.py")
 PDF_CHILD_PATH: Final = Path(__file__).with_name("pdf_child.py")
 PDF_CHILD_DESTINATION: Final = Path("/runtime/analyst_pdf_child.py")
 PDF_SITE_DESTINATION: Final = Path("/runtime/site-packages/pymupdf")
+OOXML_CHILD_PATH: Final = Path(__file__).with_name("ooxml_child.py")
+OOXML_CHILD_DESTINATION: Final = Path("/runtime/analyst_ooxml_child.py")
+OOXML_CONTRACT_PATH: Final = Path(__file__).with_name("ooxml_contract.py")
+OOXML_CONTRACT_DESTINATION: Final = Path("/runtime/ooxml_contract.py")
+OOXML_SITE_DESTINATION: Final = Path("/runtime/site-packages/defusedxml")
 LDD: Final = Path("/usr/bin/ldd")
 
 _CHILD_DETAILS: Final = {
@@ -72,6 +82,11 @@ class ExtractionResult:
     text_page_count: int = 0
     parser_version: str | None = None
     embedded_version: str | None = None
+    ooxml_units: tuple[OoxmlUnit, ...] = ()
+    logical_unit_count: int = 0
+    primary_unit_count: int = 0
+    member_count: int = 0
+    expanded_bytes: int = 0
 
     @property
     def ok(self) -> bool:
@@ -106,19 +121,21 @@ def extract_document(
     if format_name is None:
         return ExtractionResult(FileTerminal.UNSUPPORTED_FORMAT.value)
     try:
-        runtime_binds = (
-            pdf_runtime_binds()
-            if format_name is DocumentFormat.PDF
-            else python_runtime_binds()
-        )
+        if format_name is DocumentFormat.PDF:
+            runtime_binds = pdf_runtime_binds()
+        elif format_name is DocumentFormat.OOXML_CONTAINER:
+            runtime_binds = ooxml_runtime_binds()
+        else:
+            runtime_binds = python_runtime_binds()
     except metadata.PackageNotFoundError:
         return ExtractionResult(
-            FileTerminal.SANDBOX_UNAVAILABLE.value, "pdf",
+            FileTerminal.SANDBOX_UNAVAILABLE.value, format_name.value,
             detail="dependency_missing",
         )
     except OptionalDependencyUnavailable as exc:
         return ExtractionResult(
-            FileTerminal.SANDBOX_UNAVAILABLE.value, "pdf", detail=exc.detail
+            FileTerminal.SANDBOX_UNAVAILABLE.value, format_name.value,
+            detail=exc.detail,
         )
     except (ImportError, OSError, RuntimeError, ValueError,
             subprocess.SubprocessError):
@@ -132,6 +149,9 @@ def extract_document(
         stdout_bytes=(
             MAX_TEXT_BYTES + MAX_PDF_HEADER_BYTES + len(PDF_FRAME_MAGIC) + 1
             if format_name is DocumentFormat.PDF
+            else MAX_TEXT_BYTES + MAX_OOXML_HEADER_BYTES
+            + len(OOXML_FRAME_MAGIC) + 1
+            if format_name is DocumentFormat.OOXML_CONTAINER
             else MAX_TEXT_BYTES + MAX_HEADER_BYTES + len(FRAME_MAGIC) + 1
         ),
         stderr_bytes=64 * 1024,
@@ -141,6 +161,12 @@ def extract_document(
             str(Path(sys.executable).resolve()), "-I", "-B",
             str(PDF_CHILD_DESTINATION), str(MAX_PDF_PAGES),
             str(MAX_TEXT_BYTES), str(MAX_TEXT_CHARS),
+        )
+    elif format_name is DocumentFormat.OOXML_CONTAINER:
+        command = (
+            str(Path(sys.executable).resolve()), "-I", "-B",
+            str(OOXML_CHILD_DESTINATION), str(MAX_TEXT_BYTES),
+            str(MAX_TEXT_CHARS),
         )
     else:
         command = (
@@ -160,6 +186,23 @@ def extract_document(
         return ExtractionResult(sandbox_result.reason)
     if format_name is DocumentFormat.PDF:
         return _decode_pdf_frame(sandbox_result.stdout)
+    if format_name is DocumentFormat.OOXML_CONTAINER:
+        decoded = decode_ooxml_frame(
+            sandbox_result.stdout,
+            max_text_bytes=MAX_TEXT_BYTES,
+            max_text_chars=MAX_TEXT_CHARS,
+        )
+        return ExtractionResult(
+            decoded.reason, decoded.format_name,
+            "utf-8" if decoded.reason == "success" else None,
+            decoded.text, decoded.detail,
+            parser_version=decoded.parser_version,
+            ooxml_units=decoded.units,
+            logical_unit_count=decoded.logical_unit_count,
+            primary_unit_count=decoded.primary_unit_count,
+            member_count=decoded.member_count,
+            expanded_bytes=decoded.expanded_bytes,
+        )
     return _decode_frame(sandbox_result.stdout, format_name)
 
 
@@ -199,6 +242,28 @@ def pdf_runtime_binds() -> tuple[RuntimeBind, ...]:
     return bindings
 
 
+def ooxml_runtime_binds() -> tuple[RuntimeBind, ...]:
+    """Return base Python plus the exact pure-Python OOXML dependency."""
+    package_root = _defusedxml_package_root()
+    package_identity = _package_tree_identity(package_root)
+    child_identity = _runtime_identity(OOXML_CHILD_PATH)
+    contract_identity = _runtime_identity(OOXML_CONTRACT_PATH)
+    bindings = _discover_ooxml_runtime_binds(
+        package_root, package_identity, child_identity, contract_identity
+    )
+    project_sources = {OOXML_CHILD_PATH, OOXML_CONTRACT_PATH, package_root}
+    for binding in bindings:
+        _require_trusted_runtime(
+            binding.source, allow_project=binding.source in project_sources
+        )
+    if _package_tree_identity(package_root) != package_identity:
+        raise RuntimeError("defusedxml package changed during runtime discovery")
+    if (_runtime_identity(OOXML_CHILD_PATH) != child_identity
+            or _runtime_identity(OOXML_CONTRACT_PATH) != contract_identity):
+        raise RuntimeError("OOXML runtime changed during discovery")
+    return bindings
+
+
 def _pdf_package_root() -> Path:
     distribution = metadata.distribution("PyMuPDF")
     if distribution.version != PYMUPDF_VERSION:
@@ -213,19 +278,35 @@ def _pdf_package_root() -> Path:
     return root
 
 
+def _defusedxml_package_root() -> Path:
+    distribution = metadata.distribution("defusedxml")
+    if distribution.version != DEFUSEDXML_VERSION:
+        raise OptionalDependencyUnavailable("dependency_version")
+    root = Path(distribution.locate_file("defusedxml")).resolve(strict=True)
+    site_raw = sysconfig.get_path("purelib")
+    if not site_raw:
+        raise RuntimeError("Python pure library path is unavailable")
+    expected = (Path(site_raw).resolve(strict=True) / "defusedxml").resolve(
+        strict=True
+    )
+    if root != expected or root.name != "defusedxml":
+        raise RuntimeError("defusedxml is installed outside the optional lane")
+    return root
+
+
 def _package_tree_identity(root: Path) -> tuple[tuple[object, ...], ...]:
     observed: list[tuple[object, ...]] = []
     for path in sorted(root.rglob("*")):
         relative = path.relative_to(root).as_posix()
         item = path.lstat()
         if not (stat.S_ISREG(item.st_mode) or stat.S_ISDIR(item.st_mode)):
-            raise RuntimeError("PyMuPDF package contains an unsafe entry")
+            raise RuntimeError("optional package contains an unsafe entry")
         if item.st_uid != os.getuid() or item.st_mode & 0o002:
-            raise RuntimeError("PyMuPDF package is writable or untrusted")
+            raise RuntimeError("optional package is writable or untrusted")
         observed.append((relative, item.st_dev, item.st_ino, item.st_size,
                          item.st_mtime_ns, stat.S_IFMT(item.st_mode)))
     if not observed:
-        raise RuntimeError("PyMuPDF package is empty")
+        raise RuntimeError("optional package is empty")
     return tuple(observed)
 
 
@@ -264,6 +345,34 @@ def _discover_pdf_runtime_binds(
         previous = unique.get(key)
         if previous is not None and previous.source != binding.source:
             raise RuntimeError("PDF runtime destinations conflict")
+        unique[key] = binding
+    return tuple(unique[key] for key in sorted(unique))
+
+
+@lru_cache(maxsize=2)
+def _discover_ooxml_runtime_binds(
+    package_root: Path,
+    _package_identity: tuple[tuple[object, ...], ...],
+    _child_identity: tuple[int, int, int, int],
+    _contract_identity: tuple[int, int, int, int],
+) -> tuple[RuntimeBind, ...]:
+    base = [
+        binding for binding in python_runtime_binds()
+        if binding.destination != CHILD_DESTINATION
+    ]
+    for source in (OOXML_CHILD_PATH, OOXML_CONTRACT_PATH):
+        _require_trusted_runtime(source, allow_project=True)
+    base.extend((
+        RuntimeBind(OOXML_CHILD_PATH, OOXML_CHILD_DESTINATION),
+        RuntimeBind(OOXML_CONTRACT_PATH, OOXML_CONTRACT_DESTINATION),
+        RuntimeBind(package_root, OOXML_SITE_DESTINATION),
+    ))
+    unique: dict[str, RuntimeBind] = {}
+    for binding in base:
+        key = str(binding.destination)
+        previous = unique.get(key)
+        if previous is not None and previous.source != binding.source:
+            raise RuntimeError("OOXML runtime destinations conflict")
         unique[key] = binding
     return tuple(unique[key] for key in sorted(unique))
 

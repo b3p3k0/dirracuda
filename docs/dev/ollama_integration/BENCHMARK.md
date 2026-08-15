@@ -76,6 +76,9 @@ counts, deep nesting, path-traversal members and a zip-mislabeled-`.pdf` are gen
 at test time under `tmp_path` by `shared/tests/analyst_container_cases.py`, with builder
 bounds (64 MiB / 2000 members) deliberately set above the supervisor gate thresholds
 (16 MiB / 1000 members) so a case can be built safely *and* rejected.
+That value remains the historical C0B fixture threshold; production OOXML separates its
+package-inventory and parsed-XML budgets under
+[`CONTRACT_ERRATA.md` E11](CONTRACT_ERRATA.md#e11--separate-ooxml-package-metadata-from-parsed-xml-limits).
 
 The generator is committed alongside its output, and a test asserts regeneration is
 byte-identical. Generated `manifest.json` keeps one document record per line (176 lines

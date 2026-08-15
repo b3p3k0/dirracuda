@@ -487,3 +487,44 @@ Sources:
 - https://raw.githubusercontent.com/pymupdf/PyMuPDF/1.28.0/setup.py
 - https://raw.githubusercontent.com/ArtifexSoftware/mupdf/1.28.0/include/mupdf/fitz/version.h
 - https://mupdf.com/downloads/archive/mupdf-1.28.0-source.tar.gz
+
+---
+
+## E11 — Separate OOXML package metadata from parsed XML limits
+
+**Status:** ACCEPTED FOR CORRECTION (standing HI authorization, 2026-08-15)
+**Affects:** `CONTRACT.md` §5; C0B container fixture; C6 OOXML extraction
+**Raised by:** C6 hostile review
+
+### The conflict
+
+C0B's hostile-fixture generator used a 16 MiB expanded-container supervisor threshold.
+That prototype value became historical benchmark documentation before production OOXML
+coverage was defined. Applying it to the declared size of every OOXML member would reject
+ordinary image-heavy Office packages even though C6 neither decompresses nor parses their
+media. Silently replacing that value with a larger aggregate cap would also weaken a
+frozen security control without review.
+
+### The correction
+
+C6 distinguishes the package inventory gate from the content it actually expands:
+
+- the source archive remains capped at 100 MiB;
+- the central directory may declare at most 1,000 members, 128 MiB for one member and
+  256 MiB total expansion, with both per-member and aggregate ratios capped at 100:1;
+- only authenticated, allowlisted XML parts are decompressed, with an independently
+  enforced 8 MiB per-part and **16 MiB total parsed-XML** budget;
+- media, embedded packages and all other unsupported members are never decompressed;
+- exact-limit and limit-plus-one tests cover both layers before release.
+
+The 16 MiB C0B fixture remains historically correct for that benchmark. It is not the
+production package-metadata limit.
+
+### Consequences accepted with this erratum
+
+The larger declared-package allowance improves compatibility without granting more XML
+parser input or increasing the existing 512 MiB sandbox memory limit. A hostile archive
+may consume bounded central-directory inspection work up to the new cap, but cannot make
+C6 expand its ignored media. Any future extractor for media or embedded content must add
+its own reviewed decompression budget; E11 does not authorize reuse of this metadata cap
+as a parsing budget.

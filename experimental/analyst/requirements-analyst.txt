@@ -4,3 +4,4 @@
 --no-index
 --no-binary PyMuPDF
 PyMuPDF==1.28.0 --hash=sha256:e53f3567403a92da15caa9e7ae0164327fff48817e9f40175367fb9de524258d
+defusedxml==0.7.1 --hash=sha256:a352e7e428770286cc899e2542b6cdaedb2b4953ff269a210103ec58f6198a61

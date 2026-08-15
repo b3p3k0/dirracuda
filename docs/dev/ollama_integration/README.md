@@ -1,6 +1,6 @@
 # Ollama Integration Workspace
 
-Date: 2026-08-14
+Date: 2026-08-15
 Status: **C0A contract frozen** (committed `91bb2aa`). **C0B-1 accepted and committed
 (`47e946b`).** The complete public C/D/F executor passed its offline and hostile-review
 gates and was committed through B5 (`bde8f92`), with the current Ollama show-envelope
@@ -185,6 +185,9 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
    parser bugs.
 10. **Optional dependency lane.** Analyst's heavy/AGPL deps live in
    `experimental/analyst/requirements-analyst.txt`; core GUI runs without them.
+11. **OOXML is package-authenticated, not extension-trusted.** ZIP magic enters one
+   candidate sandbox. Content types plus the root relationship select non-macro
+   Transitional DOCX/XLSX/PPTX; generic ZIP, macro and Strict packages stay unsupported.
 
 ## Decision Status
 
@@ -245,7 +248,7 @@ explicitly deferred Stage E until real-document validation is useful.
 
 ## Next Step
 
-C0B through C5 are complete. Begin C6: bounded OOXML container gates and defused XML
-extraction through the C3 supervisor.
+C0B through C6 are complete. Begin C7: benchmark and implement sandboxed legacy `.doc`
+and `.xls` extraction without catdoc/xls2csv.
 Private Stage E remains deferred and requires fresh explicit authorization before any
 real-document read. Core startup does not depend on Analyst's optional parser lane.

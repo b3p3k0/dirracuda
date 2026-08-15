@@ -115,7 +115,9 @@ def _header(**changes) -> dict:
 def test_document_sniffer_routes_pdf_without_weakening_text_sniffer() -> None:
     assert sniff_document_format(b"%PDF-1.7\n") is DocumentFormat.PDF
     assert sniff_text_format(b"%PDF-1.7\n") is None
-    assert sniff_document_format(b"PK\x03\x04not-a-pdf") is None
+    assert sniff_document_format(b"PK\x03\x04not-a-pdf") is \
+        DocumentFormat.OOXML_CONTAINER
+    assert sniff_text_format(b"PK\x03\x04not-a-pdf") is None
 
 
 def test_child_rejects_a_non_pdf_even_if_upstream_opens_it() -> None:

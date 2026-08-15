@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and install the exact optional Analyst PDF dependency from source."""
+"""Install the exact optional Analyst document-parser dependencies."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from typing import Final
 
 PYMUPDF_VERSION: Final = "1.28.0"
 MUPDF_VERSION: Final = "1.28.0"
+DEFUSEDXML_VERSION: Final = "0.7.1"
 MAX_DOWNLOAD_BYTES: Final = 256 * 1024 * 1024
 READ_SIZE: Final = 1024 * 1024
 
@@ -41,6 +42,11 @@ MUPDF_SOURCE: Final = Artifact(
     "mupdf-1.28.0-source.tar.gz",
     "https://mupdf.com/downloads/archive/mupdf-1.28.0-source.tar.gz",
     "21c7f064903154f1c3a7458bee81f130fc36f9b5147ea13328f9980e02d2dea2",
+)
+DEFUSEDXML_WHEEL: Final = Artifact(
+    "defusedxml-0.7.1-py2.py3-none-any.whl",
+    "https://files.pythonhosted.org/packages/07/6c/aa3f2f849e01cb6a001cd8554a88d4c77c5c1a31c95bdf1cf9301e6d9ef4/defusedxml-0.7.1-py2.py3-none-any.whl",
+    "a352e7e428770286cc899e2542b6cdaedb2b4953ff269a210103ec58f6198a61",
 )
 BUILD_WHEELS: Final = (
     Artifact(
@@ -196,7 +202,8 @@ def _run(command: list[str], *, environment: dict[str, str] | None = None) -> No
 
 def _verify_installed() -> None:
     probe = (
-        "import json,pymupdf; print(json.dumps({"
+        "import json,pymupdf; from importlib import metadata; print(json.dumps({"
+        "'defusedxml':metadata.version('defusedxml'),"
         "'pymupdf':pymupdf.pymupdf_version,"
         "'mupdf':pymupdf.mupdf_version},sort_keys=True))"
     )
@@ -215,7 +222,9 @@ def _verify_installed() -> None:
     except (OSError, subprocess.SubprocessError, UnicodeError, ValueError) as exc:
         raise InstallError("installed dependency verification failed") from exc
     if completed.returncode != 0 or result != {
-        "mupdf": MUPDF_VERSION, "pymupdf": PYMUPDF_VERSION,
+        "defusedxml": DEFUSEDXML_VERSION,
+        "mupdf": MUPDF_VERSION,
+        "pymupdf": PYMUPDF_VERSION,
     }:
         raise InstallError("installed dependency versions do not match the lock")
 
@@ -238,6 +247,7 @@ def install() -> None:
         _download(MUPDF_SOURCE, mupdf_source)
         for artifact in BUILD_WHEELS:
             _download(artifact, wheelhouse / artifact.filename)
+        _download(DEFUSEDXML_WHEEL, wheelhouse / DEFUSEDXML_WHEEL.filename)
         mupdf_root = _safe_extract_mupdf(mupdf_source, source_dir)
 
         build_home = scratch / "home"
@@ -269,17 +279,18 @@ def install() -> None:
         _run([
             sys.executable, "-m", "pip", "install", "--force-reinstall",
             "--no-deps", "--no-index", str(wheels[0]),
+            str(wheelhouse / DEFUSEDXML_WHEEL.filename),
         ], environment=environment)
     _verify_installed()
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Install the exact source-built Analyst PDF dependency."
+        description="Install the exact Analyst parser dependencies."
     )
     parser.add_argument(
         "--check", action="store_true",
-        help="verify the installed PyMuPDF and embedded MuPDF versions only",
+        help="verify all installed Analyst parser dependency versions",
     )
     args = parser.parse_args(argv)
     try:
@@ -291,8 +302,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Analyst dependency install failed: {exc}", file=sys.stderr)
         return 1
     print(
-        f"Analyst PDF dependency PASS: PyMuPDF {PYMUPDF_VERSION}, "
-        f"MuPDF {MUPDF_VERSION}"
+        f"Analyst parser dependencies PASS: PyMuPDF {PYMUPDF_VERSION}, "
+        f"MuPDF {MUPDF_VERSION}, defusedxml {DEFUSEDXML_VERSION}"
     )
     return 0
 

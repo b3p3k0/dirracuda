@@ -1,6 +1,6 @@
 # Ollama Integration — Risk Register
 
-Date: 2026-08-14
+Date: 2026-08-15
 Status: **C0A controls frozen; C0B-2A offline controls implemented and reviewed; public
 C/D/F envelope executed.** C0B-3 reached Stage F and ended terminal
 `INCONCLUSIVE/no_seed1_qualifier` after one of 92 seed-1 chunks repeated an otherwise
@@ -19,8 +19,8 @@ C0B-7 preserved that terminal and recovered the immutable evidence offline as
 `RECOVERED_CONFIRMED`. Public D1/D2 are resolved. The HI explicitly deferred private
 Stage E until real-document validation is useful; C1 was authorized.
 The C1 pure production contracts, C2 inventory/reattachment evidence, C3 strict parser
-supervisor, C4 RTF/plain-text extraction and C5 PDF extraction are implemented; C6 may
-begin.
+supervisor, C4 RTF/plain-text extraction, C5 PDF extraction and C6 bounded OOXML
+extraction are implemented; C7 may begin.
 Controls are
 authoritative in [`CONTRACT.md`](CONTRACT.md), accepted errata, and the reviewed
 benchmark protocols; this register is the
@@ -30,8 +30,8 @@ risk-indexed view.
 |----|------|------------|--------|----------------------|
 | R1 | Document content egresses to Ollama Cloud | Medium | Critical | Client rejects known `:cloud` and `-cloud` tag forms, permits only the benchmarked local tag+digest, validates a literal-loopback endpoint, disables redirects, and ignores proxies. Tag checks are defense-in-depth. Server-level egress (Ollama cloud off) is an operator prerequisite Analyst cannot prove — stated honestly, not claimed as a guarantee. |
 | R2 | Crafted PDF achieves code execution or hangs/OOMs the parser | **High** | **Critical** | Every parser runs in **bubblewrap** (net off, caps dropped, read-only fd-bound input, private HOME/tmp) — a containment boundary against MuPDF RCE (CVE-2026-3308), not just resource limits. Plus wall-clock + `RLIMIT_*` for liveness and exact-cgroup kill. C5 builds the hash-pinned PyMuPDF 1.28.0 source with MuPDF 1.28.0 and asserts both versions in-child. Sandbox unavailable → preflight fails. |
-| R3 | XXE in DOCX/XLSX/PPTX reads local files or triggers SSRF | Medium | Critical | `defusedxml` (no external entities, no network); member-count/size/ratio/path gates before parse. Guardrail test bans raw `xml.etree`/unsafe lxml in the analysis path. Runs inside the sandbox regardless. |
-| R4 | Zip bomb exhausts disk or memory during OOXML unpack | Medium | Medium | Cap uncompressed size and decompression ratio before extraction; reject and record. |
+| R3 | XXE in DOCX/XLSX/PPTX reads local files or triggers SSRF | Medium | Critical | C6 parses only selected, bounded parts with pinned `defusedxml==0.7.1`; every parse explicitly forbids DTDs, entities and external references inside C3's networkless sandbox. Required relationships must be internal; unrelated external links are never followed. Purity tests ban raw XML parsers outside the exact child. |
+| R4 | Zip bomb exhausts disk or memory during OOXML unpack | Medium | Medium | C6 inspects every member before XML: ≤1,000 members, ≤128 MiB/member, ≤256 MiB aggregate expansion and ≤100:1 ratios. It rejects unsafe paths, duplicates, encryption, special entries and non-stored/deflated methods, then streams only selected XML with independent 8 MiB/part and 16 MiB/package actual-byte counters. Nothing is extracted to disk. |
 | R5 | Prompt injection from document content corrupts findings | **High** | Medium | Schema-constrained output only; no tools bound; model output never drives an action. Mandatory evidence citations — uncited findings dropped. All rendered values as text nodes, never dynamic HTML. |
 | R6 | A grounded model finding is treated as semantically correct fact | Medium | High | Identifier counts come from deterministic detectors, never the model. Exact-substring grounding proves source support, not correct classification. Model rows stay visibly `suggested/unreviewed`, show quote + provenance, and require explicit human accept/reject before findings export. |
 | R7 | Report implies full coverage it did not achieve | Medium | High | Every file carries a terminal state. Report header separates detector-scanned and model-reviewed percentages and gives terminal outcomes by reason. No report renders without the coverage table. |
@@ -111,6 +111,7 @@ risk-indexed view.
 | R80 | A parser escapes resource cleanup, inherits an unrelated descriptor, or reads a replaced source | Low | Critical | C3 launches one exact no-shell systemd scope → bubblewrap → prlimit chain. `TasksMax` owns descendants; timeout/cancel/output overflow kills the exact cgroup. `close_fds` plus one explicit `pass_fds` source descriptor prevents unrelated inheritance. Named sources use `--ro-bind-fd`; fully sealed anonymous snapshots use `--ro-bind-data` and preserve the caller's offset. Device/inode/metadata/hash are checked on the same source before and after execution; mismatch discards output. Missing strict capability fails closed. |
 | R81 | Malformed RTF or a font-specific code page silently produces misleading text | Medium | High | C4 uses a linear bounded parser with strict group/token/parameter/output ceilings, scoped Unicode fallback handling and font-table charset mappings. Unsupported symbol/code pages and malformed surrogate/control structure fail closed as `parse_error`; no replacement decoding or partial output survives. Seeded hostile-byte tests and live public sandbox fixtures cover the boundary. Private Stage E remains the later corpus-compatibility check, not an excuse to weaken these controls. |
 | R82 | A pinned PDF artifact has no demonstrably matching native-engine source, its source build fetches an unverified nested dependency, or a release cannot supply its exact sources | Medium | High | E10 rejects PyPI's x86_64 wheel despite its valid package hash: it embeds MuPDF 1.29.0 from an unidentified checkout while the published 1.28.0 source builds MuPDF 1.28.0. The controlled installer separately hash-verifies exact PyMuPDF, MuPDF and build-tool artifacts, builds offline with unused OCR disabled, and asserts exact package/engine versions in every child. C13 must preserve or host both exact dependency archives and identify exact Dirracuda release source before network exposure. |
+| R83 | OOXML provenance is too coarse to ground findings, or a forged child frame claims impossible/duplicate source identities | Medium | High | C6 emits nonempty DOCX paragraphs and XLSX cells as individual bounded units; PPTX uses exact slide/notes/comment units. The durable decoder enforces format-specific kinds, canonical unique labels, exact counts and delimiters, and rejects any mismatch. Empty physical stories/sheets/slides remain visible through a separate primary-unit count. |
 
 ## High-Likelihood Risks — Detailed Controls
 
