@@ -528,3 +528,60 @@ may consume bounded central-directory inspection work up to the new cap, but can
 C6 expand its ignored media. Any future extractor for media or embedded content must add
 its own reviewed decompression budget; E11 does not authorize reuse of this metadata cap
 as a parsing budget.
+
+---
+
+## E12 — Replace the legacy Excel parser shortlist with python-calamine
+
+**Status:** ACCEPTED FOR CORRECTION (HI decision, 2026-08-16)
+**Affects:** `CONTRACT.md` §6; D6; C7 legacy `.xls` extraction
+**Raised by:** C7 dependency and licence review
+
+### The conflict
+
+The frozen C7 shortlist named `xlrd` or sandboxed LibreOffice. `xlrd 2.0.2` is the
+technically smallest option, but its exact licence retains the original BSD advertising
+clause. GNU classifies that licence as incompatible with GPL distribution. LibreOffice
+does not have that conflict, but introduces a much larger mutable native runtime,
+conversion profile and parser surface than this extraction-only feature needs.
+
+### The correction
+
+C7B uses exact `python-calamine==0.8.2` for legacy `.xls`:
+
+- the approved CPython 3.14 / manylinux x86-64 wheel has SHA-256
+  `9d3cfce465ce82eb9100e5e90673a5844fd46eb7b8148c5404c70f941fd8280b`;
+- the Python binding and its embedded calamine 0.36.0 engine are MIT licensed; release
+  packaging preserves the wheel licence, SBOM and reviewed third-party notices;
+- the parser remains inside C3 with exact package/native identities and a narrow runtime
+  closure; Rust does not weaken any filesystem, network, process, time, memory or output
+  boundary;
+- CFB magic remains only a candidate. Successful XLS workbook parsing authenticates the
+  format; legacy Word remains authenticated independently by exact Antiword;
+- only worksheet cell values are supported, including hidden and very-hidden worksheets.
+  Macro, chart, dialog and VBA sheets are ignored, not executed;
+- formulas are never recalculated and formula source is not exposed. Any returned value
+  is the workbook's stored cached result;
+- error cells and blank/empty strings may collapse to an empty value, and date/time cells
+  are automatically converted by the parser. These are explicit coverage limitations,
+  not silently stronger semantics;
+- empty worksheets are detected before iteration because python-calamine 0.8.2 may panic
+  when iterating an empty sheet.
+
+### Consequences accepted with this erratum
+
+The first supported artifact is deliberately limited to the exact Python 3.14 x86-64
+wheel. A different Python ABI, architecture or platform requires its own verified wheel
+hash, runtime-closure review and live sandbox test. An offline source build is deferred:
+it would require a controlled Rust toolchain, vendored crates and an exact Git dependency.
+The wheel is a native parser and remains untrusted input-handling code; sandbox containment
+and hostile testing remain mandatory.
+
+Sources:
+
+- https://pypi.org/project/python-calamine/0.8.2/
+- https://github.com/dimastbk/python-calamine/blob/v0.8.2/LICENSE
+- https://github.com/dimastbk/python-calamine/blob/v0.8.2/Cargo.lock
+- https://github.com/dimastbk/python-calamine/blob/v0.8.2/python/python_calamine/_python_calamine.pyi
+- https://github.com/python-excel/xlrd/blob/2.0.2/LICENSE
+- https://www.gnu.org/licenses/license-list.html#OriginalBSD

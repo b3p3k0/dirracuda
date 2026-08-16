@@ -719,3 +719,7 @@ notice and licence are in `licenses/defusedxml-NOTICE.md` and
 `licenses/defusedxml-PSF-2.0.txt`. Optional legacy Word extraction uses the system
 Antiword `0.37-17` package under GPL-2.0-or-later; Dirracuda does not redistribute that
 binary. See `licenses/antiword-NOTICE.md`.
+Optional legacy Excel extraction uses python-calamine `0.8.2` and its embedded calamine
+engine under the MIT License. The exact wheel notice, licence and SBOM are in
+`licenses/python-calamine-NOTICE.md`, `licenses/python-calamine-MIT.txt` and
+`licenses/python-calamine-0.8.2.cyclonedx.json.txt`.

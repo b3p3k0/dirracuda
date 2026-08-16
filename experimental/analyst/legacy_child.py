@@ -33,6 +33,12 @@ UNIT_SEPARATOR = _contract.UNIT_SEPARATOR
 READ_SIZE = 64 * 1024
 ENCRYPTED_DIAGNOSTIC = b"Encrypted documents are not supported"
 NOT_WORD_DIAGNOSTIC = b"is not a Word Document."
+NOT_WORD_EXACT_LINES = frozenset(
+    {
+        b"Sorry, but this is an Excel spreadsheet",
+        b"This OLE file does not contain a Word document",
+    }
+)
 UNSUPPORTED_DIAGNOSTICS = (
     b"autosave documents are not supported",
     b"fast saved documents are not supported",
@@ -239,7 +245,9 @@ def _failure_from_result(returncode: int, stderr: bytes) -> ChildFailure:
         return ChildFailure("parse_error", "antiword_failed")
     if ENCRYPTED_DIAGNOSTIC in stderr:
         return ChildFailure("encrypted", "password_required")
-    if NOT_WORD_DIAGNOSTIC in stderr:
+    if NOT_WORD_DIAGNOSTIC in stderr or any(
+        line in NOT_WORD_EXACT_LINES for line in stderr.splitlines()
+    ):
         return ChildFailure("unsupported_format", "not_word_binary")
     if any(message in stderr for message in UNSUPPORTED_DIAGNOSTICS):
         return ChildFailure("unsupported_format", "unsupported_word_variant")

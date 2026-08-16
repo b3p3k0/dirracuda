@@ -1,7 +1,7 @@
 # C7 — Sandboxed legacy Office extraction
 
-Date: 2026-08-15
-Status: **C7A `.doc` complete; C7B `.xls` parser decision pending**
+Date: 2026-08-16
+Status: **Complete — sandboxed legacy `.doc` and `.xls` extraction**
 
 ## Issue
 
@@ -45,35 +45,65 @@ surrogates. The child first requires strict UTF-8, then narrowly accepts only a 
 high-plus-low surrogate pair and converts it to one Unicode scalar. Unpaired, reversed,
 truncated or otherwise invalid bytes still fail; there is no replacement decoding.
 
-## C7B gate — legacy Excel
+## C7B scope — legacy Excel
 
 The technically small `xlrd` option is not being added silently. Its exact 2.0.2 licence
 retains the original BSD advertising clause, which GNU classifies as GPL-incompatible.
 LibreOffice avoids that licence conflict but adds a much larger mutable native parser and
 conversion surface.
 
-The measured recommendation is `python-calamine==0.8.2`: MIT licensed, an attested
+E12 records the HI's acceptance of `python-calamine==0.8.2`: MIT licensed, an attested
 2.25 MiB native wheel, a narrow shared-library closure and successful C3/public-XLS
-smokes. It returns cached formula values without calculation and exposes hidden sheets.
-Its accepted costs would be an exact per-Python/architecture wheel allowlist, Rust-native
-parser containment, automatic temporal coercion and explicit handling of its empty-sheet
-iterator panic. Changing the frozen xlrd/LibreOffice choice requires an accepted erratum
-before implementation.
+smokes. The first approved artifact is exact CPython 3.14 / Linux x86-64 only. Other
+platforms fail closed until their wheels and native closures are independently reviewed.
+
+- Keep Antiword first for a CFB candidate. Only its exact authenticated non-Word outcome
+  falls through to the independent XLS sandbox; DOC success and all other DOC terminals
+  remain final.
+- Bind only the exact `python_calamine` initializer, native extension, child/contract and
+  measured shared-library closure. Recheck host identities and hashes before launch; the
+  child hashes its two package files again before import.
+- Read through one fixed private `.xls` alias so encrypted workbooks authenticate
+  correctly. No workbook content is copied or written.
+- Include visible, hidden and very-hidden worksheets. Skip macro, chart, dialog and VBA
+  sheets without executing them. Detect empty worksheets before calling the affected
+  0.8.2 iterator.
+- Preserve exact workbook-order `sheet-N!A1` cell provenance and scalar types. Apply hard
+  sheet, dense-cell, emitted-cell, cell-text, aggregate-text and frame limits.
+- Return cached formula results only. Never expose formula source, recalculate formulas or
+  imply that cached values are current. Blank/error cells may collapse to empty; temporal
+  values use explicit deterministic representations after calamine's conversion.
+- Revalidate the complete status/detail vocabulary, package/engine versions, scalar
+  grammar, provenance order, counts, delimiters, UTF-8 and controls in the durable process.
+
+## C7B outcome
+
+Legacy XLS now authenticates and extracts inside its own strict C3 sandbox without
+trusting extensions. The public workbook produced nine typed cell units with exact
+sheet/cell provenance. A legacy Word file still finishes in the Antiword lane; arbitrary
+CFB content is not silently labelled Word or Excel. Missing optional dependencies,
+encryption, malformed workbooks, native failure and resource limits all fail closed with
+no partial cell text.
 
 ## Validation
 
-- `./venv/bin/python -m pytest -q shared/tests/test_analyst_c7a.py` — PASS,
-  55 tests, including a live sandboxed public DOC generated in an isolated temporary
-  profile.
-- Focused C3–C7/purity/installer regression — PASS, 213 tests.
+- C7A/C7B/purity regression — PASS, 204 tests. This includes a live sandboxed public DOC,
+  a generated extensionless public XLS and an offline hash-attested upstream encrypted
+  XLS fixture through the real C3 boundary.
+- Focused installer plus C3–C7 hostile/purity regression — PASS, 356 tests.
+- Exact optional dependency check — PASS for PyMuPDF/MuPDF 1.28.0/1.28.0,
+  defusedxml 0.7.1 and python-calamine 0.8.2.
 - Production compilation and `git diff --check` — PASS.
-- Public privacy check — PASS across the exact 13-path C7A delta and 262 public model
-  responses. Eight pre-existing keyboard-control paths remained unchanged. The one
-  `RESEARCH_NOTES.md` private-corpus self-reference was byte-identical to `HEAD`; the
-  new diff contained no privacy hit.
-- Production sizes: `extract.py` 841, `legacy_child.py` 282,
-  `legacy_frame.py` 230, `formats.py` 100 and `legacy_contract.py` 21 lines. All are
-  below 1,200 lines.
+- Public privacy check — PASS across the exact 21-path C7B delta and 262 public model
+  responses. Eight pre-existing keyboard-control paths remained unchanged. The existing
+  `RESEARCH_NOTES.md` private-corpus self-reference was absent from this task's diff. The
+  exact upstream wheel SBOM contains only its public GitHub Actions build path; that
+  reviewed vendor field is the sole scanner exemption.
+- Production sizes: `extract.py` 1,123, `xls_child.py` 437, `xls_frame.py` 339,
+  `xls_contract.py` 33 and the controlled installer 376 lines. All are at or below the
+  1,200-line excellent threshold. The 1,210-line C7B test module is covered by the HI's
+  explicit test-only size exemption.
+- Independent hostile review — PASS; no blocker remains.
 - No private document was read. Private Stage E remains deferred.
 
 ## Sources

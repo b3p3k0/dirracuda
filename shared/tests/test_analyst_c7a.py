@@ -26,6 +26,11 @@ from experimental.analyst.legacy_contract import (
 from experimental.analyst.legacy_frame import decode_legacy_frame
 from experimental.analyst.models import FileTerminal
 from experimental.analyst.sandbox import SandboxResult, _inventory_for_fd
+from experimental.analyst.xls_contract import (
+    CALAMINE_VERSION,
+    FRAME_MAGIC as XLS_FRAME_MAGIC,
+    PYTHON_CALAMINE_VERSION,
+)
 
 
 def _frame(header: dict, body: bytes = b"") -> bytes:
@@ -459,7 +464,7 @@ def test_legacy_route_uses_exact_child_and_decodes_strict_frame(
         ("dependency_version", extract.OptionalDependencyUnavailable),
     ],
 )
-def test_missing_or_wrong_antiword_stops_before_sandbox(
+def test_missing_or_wrong_antiword_still_checks_xls_then_retains_doc_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     detail: str,
@@ -472,16 +477,40 @@ def test_missing_or_wrong_antiword_stops_before_sandbox(
         raise exception(detail)
 
     monkeypatch.setattr(extract, "antiword_runtime_binds", unavailable)
-    monkeypatch.setattr(
-        extract, "run_sandboxed",
-        lambda **_kwargs: pytest.fail("invalid Antiword dependency reached sandbox"),
-    )
+    monkeypatch.setattr(extract, "xls_runtime_binds", lambda: ())
+    observed: dict[str, object] = {}
+
+    def sandbox(**kwargs):
+        observed.update(kwargs)
+        header = {
+            "calamine_version": CALAMINE_VERSION,
+            "dense_cell_count": 0,
+            "detail": "not_xls",
+            "format": "xls",
+            "logical_unit_count": 0,
+            "python_calamine_version": PYTHON_CALAMINE_VERSION,
+            "sheet_count": 0,
+            "skipped_sheet_count": 0,
+            "status": "unsupported_format",
+            "text_bytes": 0,
+            "text_chars": 0,
+            "units": [],
+            "worksheet_count": 0,
+        }
+        payload = XLS_FRAME_MAGIC + json.dumps(
+            header, sort_keys=True, separators=(",", ":"),
+        ).encode("ascii") + b"\n"
+        return SandboxResult("success", 0, payload, b"", "test.scope")
+
+    monkeypatch.setattr(extract, "run_sandboxed", sandbox)
     result = _extract_path(path)
     assert (result.reason, result.format_name, result.detail) == (
         FileTerminal.SANDBOX_UNAVAILABLE.value,
         DocumentFormat.LEGACY_OFFICE.value,
         detail,
     )
+    assert observed["runtime_binds"] == ()
+    assert observed["command"][3] == str(extract.XLS_CHILD_DESTINATION)
 
 
 def test_antiword_package_probe_is_exact_and_bounded(

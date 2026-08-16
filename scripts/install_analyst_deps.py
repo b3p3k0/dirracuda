@@ -11,6 +11,7 @@ import platform
 import stat
 import subprocess
 import sys
+import sysconfig
 import tarfile
 import tempfile
 import urllib.parse
@@ -22,6 +23,21 @@ from typing import Final
 PYMUPDF_VERSION: Final = "1.28.0"
 MUPDF_VERSION: Final = "1.28.0"
 DEFUSEDXML_VERSION: Final = "0.7.1"
+PYTHON_CALAMINE_VERSION: Final = "0.8.2"
+PYTHON_CALAMINE_EXTENSION: Final = \
+    "_python_calamine.cpython-314-x86_64-linux-gnu.so"
+PYTHON_CALAMINE_EXTENSION_SHA256: Final = \
+    "b9c2cca174524f0ec7495c66725a839a092450fb69acc587991e3e0ec018ba85"
+PYTHON_CALAMINE_INIT_SHA256: Final = \
+    "bbfb1506618c5afd0355213f46b1ab2147b4b4260a95be08c52f46e5bbcd168a"
+PYTHON_CALAMINE_LICENSE_SHA256: Final = \
+    "6ced4640162333a7c880d45d346ae88409746709fafece61303768bc87d80bf0"
+PYTHON_CALAMINE_METADATA_SHA256: Final = \
+    "dc97fbbd7028f325cf382592ddc26810051a29d2ff8ba6dc00b64cd7bab34ace"
+PYTHON_CALAMINE_SBOM_SHA256: Final = \
+    "de6392f0f4e07fbe2406a7caee4a59afe144a4128e1288a609c4a2ad68298456"
+PYTHON_CALAMINE_WHEEL_METADATA_SHA256: Final = \
+    "1b85bc509658486a6c068cc33ad9306c802d469a25096a557faeb0a55595fc6b"
 MAX_DOWNLOAD_BYTES: Final = 256 * 1024 * 1024
 READ_SIZE: Final = 1024 * 1024
 
@@ -47,6 +63,11 @@ DEFUSEDXML_WHEEL: Final = Artifact(
     "defusedxml-0.7.1-py2.py3-none-any.whl",
     "https://files.pythonhosted.org/packages/07/6c/aa3f2f849e01cb6a001cd8554a88d4c77c5c1a31c95bdf1cf9301e6d9ef4/defusedxml-0.7.1-py2.py3-none-any.whl",
     "a352e7e428770286cc899e2542b6cdaedb2b4953ff269a210103ec58f6198a61",
+)
+PYTHON_CALAMINE_WHEEL: Final = Artifact(
+    "python_calamine-0.8.2-cp314-cp314-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+    "https://files.pythonhosted.org/packages/52/90/f7a71c8991911a431ed31f83cd9f3a49bf0e0e3395a27d3a47f60dd55826/python_calamine-0.8.2-cp314-cp314-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+    "9d3cfce465ce82eb9100e5e90673a5844fd46eb7b8148c5404c70f941fd8280b",
 )
 BUILD_WHEELS: Final = (
     Artifact(
@@ -85,7 +106,9 @@ def _supported_host() -> bool:
     return (
         sys.platform.startswith("linux")
         and platform.machine().lower() in {"x86_64", "amd64"}
-        and sys.version_info >= (3, 10)
+        and sys.implementation.name == "cpython"
+        and sys.version_info[:2] == (3, 14)
+        and not sysconfig.get_config_var("Py_GIL_DISABLED")
     )
 
 
@@ -202,10 +225,33 @@ def _run(command: list[str], *, environment: dict[str, str] | None = None) -> No
 
 def _verify_installed() -> None:
     probe = (
-        "import json,pymupdf; from importlib import metadata; print(json.dumps({"
+        "import hashlib,json,pymupdf,python_calamine; "
+        "from importlib import metadata; from pathlib import Path; "
+        "d=metadata.distribution('python-calamine'); "
+        "files={str(p):Path(d.locate_file(p)) for p in (d.files or ())}; "
+        "init_file=files['python_calamine/__init__.py']; "
+        "extension=files['python_calamine/"
+        + PYTHON_CALAMINE_EXTENSION + "']; "
+        "license_file=files['python_calamine-0.8.2.dist-info/licenses/LICENSE']; "
+        "metadata_file=files['python_calamine-0.8.2.dist-info/METADATA']; "
+        "sbom=files['python_calamine-0.8.2.dist-info/sboms/"
+        "python-calamine.cyclonedx.json']; "
+        "wheel_metadata=files['python_calamine-0.8.2.dist-info/WHEEL']; "
+        "digest=lambda p:hashlib.sha256(p.read_bytes()).hexdigest(); "
+        "print(json.dumps({"
         "'defusedxml':metadata.version('defusedxml'),"
         "'pymupdf':pymupdf.pymupdf_version,"
-        "'mupdf':pymupdf.mupdf_version},sort_keys=True))"
+        "'mupdf':pymupdf.mupdf_version,"
+        "'python_calamine':d.version,"
+        "'python_calamine_api':hasattr(python_calamine,'CalamineWorkbook'),"
+        "'python_calamine_extension':extension.name,"
+        "'python_calamine_extension_sha256':digest(extension),"
+        "'python_calamine_init_sha256':digest(init_file),"
+        "'python_calamine_license_sha256':digest(license_file),"
+        "'python_calamine_metadata_sha256':digest(metadata_file),"
+        "'python_calamine_sbom_sha256':digest(sbom),"
+        "'python_calamine_wheel_metadata_sha256':digest(wheel_metadata)},"
+        "sort_keys=True))"
     )
     try:
         completed = subprocess.run(
@@ -225,6 +271,17 @@ def _verify_installed() -> None:
         "defusedxml": DEFUSEDXML_VERSION,
         "mupdf": MUPDF_VERSION,
         "pymupdf": PYMUPDF_VERSION,
+        "python_calamine": PYTHON_CALAMINE_VERSION,
+        "python_calamine_api": True,
+        "python_calamine_extension": PYTHON_CALAMINE_EXTENSION,
+        "python_calamine_extension_sha256": PYTHON_CALAMINE_EXTENSION_SHA256,
+        "python_calamine_init_sha256": PYTHON_CALAMINE_INIT_SHA256,
+        "python_calamine_license_sha256": PYTHON_CALAMINE_LICENSE_SHA256,
+        "python_calamine_metadata_sha256": PYTHON_CALAMINE_METADATA_SHA256,
+        "python_calamine_sbom_sha256": PYTHON_CALAMINE_SBOM_SHA256,
+        "python_calamine_wheel_metadata_sha256": (
+            PYTHON_CALAMINE_WHEEL_METADATA_SHA256
+        ),
     }:
         raise InstallError("installed dependency versions do not match the lock")
 
@@ -232,7 +289,8 @@ def _verify_installed() -> None:
 def install() -> None:
     if not _supported_host():
         raise InstallError(
-            "controlled Analyst build supports Linux x86_64 with Python 3.10+"
+            "controlled Analyst build supports Linux x86_64 with "
+            "standard CPython 3.14"
         )
     with tempfile.TemporaryDirectory(prefix="dirracuda-analyst-deps-") as raw:
         scratch = Path(raw)
@@ -248,6 +306,10 @@ def install() -> None:
         for artifact in BUILD_WHEELS:
             _download(artifact, wheelhouse / artifact.filename)
         _download(DEFUSEDXML_WHEEL, wheelhouse / DEFUSEDXML_WHEEL.filename)
+        _download(
+            PYTHON_CALAMINE_WHEEL,
+            wheelhouse / PYTHON_CALAMINE_WHEEL.filename,
+        )
         mupdf_root = _safe_extract_mupdf(mupdf_source, source_dir)
 
         build_home = scratch / "home"
@@ -280,6 +342,7 @@ def install() -> None:
             sys.executable, "-m", "pip", "install", "--force-reinstall",
             "--no-deps", "--no-index", str(wheels[0]),
             str(wheelhouse / DEFUSEDXML_WHEEL.filename),
+            str(wheelhouse / PYTHON_CALAMINE_WHEEL.filename),
         ], environment=environment)
     _verify_installed()
 
@@ -303,7 +366,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     print(
         f"Analyst parser dependencies PASS: PyMuPDF {PYMUPDF_VERSION}, "
-        f"MuPDF {MUPDF_VERSION}, defusedxml {DEFUSEDXML_VERSION}"
+        f"MuPDF {MUPDF_VERSION}, defusedxml {DEFUSEDXML_VERSION}, "
+        f"python-calamine {PYTHON_CALAMINE_VERSION}"
     )
     return 0
 

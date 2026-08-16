@@ -1122,7 +1122,25 @@ closed `text_decode` failure.
 and does not execute macros. Its exact licence still contains the original BSD
 advertising clause, which GNU classifies as GPL-incompatible. Dependency selection must
 review the shipped licence text, not only PyPI's short classifier or the parser's attack
-surface. C7B remains separate until a compatible route is accepted.
+surface. C7B therefore uses MIT-licensed python-calamine under accepted erratum E12.
+
+### 128. Native package identity is both a host and child responsibility
+
+An exact wheel hash is not enough after installation, and binding a whole site-packages
+tree defeats a narrow parser runtime. C7B pins the exact ABI-specific wheel, initializer
+and native-extension hashes; the host verifies their paths, identities, hashes and shared
+library closure before launch, then the isolated child hashes the two package files again
+before import. Unsupported Python/platform combinations fail closed instead of finding a
+nearby wheel dynamically.
+
+### 129. Spreadsheet provenance must preserve geometry, not only displayed values
+
+A compact list of cell values loses sheet order and coordinates, while iterating the
+entire nominal XLS grid creates a denial-of-service path. C7B precharges each worksheet's
+bounded dense rectangle, then emits only nonblank typed values as canonical
+`sheet-N!A1` units. The durable decoder independently enforces workbook order, XLS bounds,
+scalar grammar and count relationships. Empty worksheets are recognized before calling
+python-calamine 0.8.2's iterator because that path can panic.
 
 ---
 

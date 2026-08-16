@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import stat
@@ -30,6 +31,16 @@ from .ooxml_contract import (
 )
 from .ooxml_frame import OoxmlUnit, decode_ooxml_frame
 from .sandbox import PRLIMIT, RuntimeBind, SandboxLimits, run_sandboxed
+from .xls_contract import (
+    CALAMINE_VERSION,
+    FRAME_MAGIC as XLS_FRAME_MAGIC,
+    MAX_HEADER_BYTES as MAX_XLS_HEADER_BYTES,
+    PYTHON_CALAMINE_EXTENSION,
+    PYTHON_CALAMINE_EXTENSION_SHA256,
+    PYTHON_CALAMINE_INIT_SHA256,
+    PYTHON_CALAMINE_VERSION,
+)
+from .xls_frame import XlsUnit, decode_xls_frame
 
 MAX_SOURCE_BYTES: Final = 100 * 1024 * 1024
 MAX_TEXT_BYTES: Final = 8 * 1024 * 1024
@@ -61,6 +72,11 @@ ANTIWORD_RUNTIME_PATH: Final = Path("/runtime/antiword")
 ANTIWORD_DATA_HOST_PATH: Final = Path("/usr/share/antiword/UTF-8.txt")
 ANTIWORD_DATA_RUNTIME_PATH: Final = Path("/runtime/antiword-data/UTF-8.txt")
 DPKG_QUERY: Final = Path("/usr/bin/dpkg-query")
+XLS_CHILD_PATH: Final = Path(__file__).with_name("xls_child.py")
+XLS_CHILD_DESTINATION: Final = Path("/runtime/analyst_xls_child.py")
+XLS_CONTRACT_PATH: Final = Path(__file__).with_name("xls_contract.py")
+XLS_CONTRACT_DESTINATION: Final = Path("/runtime/xls_contract.py")
+XLS_SITE_DESTINATION: Final = Path("/runtime/site-packages/python_calamine")
 LDD: Final = Path("/usr/bin/ldd")
 
 _CHILD_DETAILS: Final = {
@@ -105,6 +121,10 @@ class ExtractionResult:
     expanded_bytes: int = 0
     legacy_units: tuple[LegacyUnit, ...] = ()
     package_revision: str | None = None
+    xls_units: tuple[XlsUnit, ...] = ()
+    worksheet_count: int = 0
+    skipped_sheet_count: int = 0
+    dense_cell_count: int = 0
 
     @property
     def ok(self) -> bool:
@@ -138,13 +158,18 @@ def extract_document(
         return ExtractionResult(FileTerminal.SANDBOX_ERROR.value)
     if format_name is None:
         return ExtractionResult(FileTerminal.UNSUPPORTED_FORMAT.value)
+    if format_name is DocumentFormat.LEGACY_OFFICE:
+        return _extract_legacy_office(
+            source_fd=source_fd,
+            expected=expected,
+            cancel_check=cancel_check,
+            limits=limits,
+        )
     try:
         if format_name is DocumentFormat.PDF:
             runtime_binds = pdf_runtime_binds()
         elif format_name is DocumentFormat.OOXML_CONTAINER:
             runtime_binds = ooxml_runtime_binds()
-        elif format_name is DocumentFormat.LEGACY_OFFICE:
-            runtime_binds = antiword_runtime_binds()
         else:
             runtime_binds = python_runtime_binds()
     except metadata.PackageNotFoundError:
@@ -172,9 +197,6 @@ def extract_document(
             else MAX_TEXT_BYTES + MAX_OOXML_HEADER_BYTES
             + len(OOXML_FRAME_MAGIC) + 1
             if format_name is DocumentFormat.OOXML_CONTAINER
-            else MAX_TEXT_BYTES + MAX_LEGACY_HEADER_BYTES
-            + len(LEGACY_FRAME_MAGIC) + 1
-            if format_name is DocumentFormat.LEGACY_OFFICE
             else MAX_TEXT_BYTES + MAX_HEADER_BYTES + len(FRAME_MAGIC) + 1
         ),
         stderr_bytes=64 * 1024,
@@ -189,12 +211,6 @@ def extract_document(
         command = (
             str(Path(sys.executable).resolve()), "-I", "-B",
             str(OOXML_CHILD_DESTINATION), str(MAX_TEXT_BYTES),
-            str(MAX_TEXT_CHARS),
-        )
-    elif format_name is DocumentFormat.LEGACY_OFFICE:
-        command = (
-            str(Path(sys.executable).resolve()), "-I", "-B",
-            str(LEGACY_CHILD_DESTINATION), str(MAX_TEXT_BYTES),
             str(MAX_TEXT_CHARS),
         )
     else:
@@ -232,24 +248,141 @@ def extract_document(
             member_count=decoded.member_count,
             expanded_bytes=decoded.expanded_bytes,
         )
-    if format_name is DocumentFormat.LEGACY_OFFICE:
-        decoded = decode_legacy_frame(
-            sandbox_result.stdout,
+    return _decode_frame(sandbox_result.stdout, format_name)
+
+
+def _extract_legacy_office(
+    *,
+    source_fd: int,
+    expected: InventoryFile,
+    cancel_check,
+    limits: SandboxLimits | None,
+) -> ExtractionResult:
+    """Authenticate one CFB candidate through isolated DOC then XLS parsers."""
+    doc_unavailable: ExtractionResult | None = None
+    try:
+        doc_binds = antiword_runtime_binds()
+    except OptionalDependencyUnavailable as exc:
+        doc_unavailable = ExtractionResult(
+            FileTerminal.SANDBOX_UNAVAILABLE.value,
+            DocumentFormat.LEGACY_OFFICE.value,
+            detail=exc.detail,
+        )
+    except (ImportError, OSError, RuntimeError, ValueError,
+            subprocess.SubprocessError):
+        doc_unavailable = ExtractionResult(
+            FileTerminal.SANDBOX_UNAVAILABLE.value,
+            DocumentFormat.LEGACY_OFFICE.value,
+        )
+    else:
+        doc_result = run_sandboxed(
+            source_fd=source_fd,
+            expected=expected,
+            command=(
+                str(Path(sys.executable).resolve()), "-I", "-B",
+                str(LEGACY_CHILD_DESTINATION), str(MAX_TEXT_BYTES),
+                str(MAX_TEXT_CHARS),
+            ),
+            runtime_binds=doc_binds,
+            limits=limits or _legacy_limits(
+                LEGACY_FRAME_MAGIC, MAX_LEGACY_HEADER_BYTES
+            ),
+            cancel_check=cancel_check,
+        )
+        if not doc_result.ok:
+            return ExtractionResult(doc_result.reason)
+        decoded_doc = decode_legacy_frame(
+            doc_result.stdout,
             max_text_bytes=MAX_TEXT_BYTES,
             max_text_chars=MAX_TEXT_CHARS,
         )
-        return ExtractionResult(
-            decoded.reason,
-            decoded.format_name,
-            "utf-8" if decoded.reason == "success" else None,
-            decoded.text,
-            decoded.detail,
-            parser_version=decoded.parser_version,
-            logical_unit_count=decoded.logical_unit_count,
-            legacy_units=decoded.units,
-            package_revision=decoded.package_revision,
+        extracted_doc = ExtractionResult(
+            decoded_doc.reason,
+            decoded_doc.format_name,
+            "utf-8" if decoded_doc.reason == "success" else None,
+            decoded_doc.text,
+            decoded_doc.detail,
+            parser_version=decoded_doc.parser_version,
+            logical_unit_count=decoded_doc.logical_unit_count,
+            legacy_units=decoded_doc.units,
+            package_revision=decoded_doc.package_revision,
         )
-    return _decode_frame(sandbox_result.stdout, format_name)
+        if not (
+            extracted_doc.reason == FileTerminal.UNSUPPORTED_FORMAT.value
+            and extracted_doc.detail == "not_word_binary"
+        ):
+            return extracted_doc
+
+    try:
+        xls_binds = xls_runtime_binds()
+    except metadata.PackageNotFoundError:
+        return ExtractionResult(
+            FileTerminal.SANDBOX_UNAVAILABLE.value, "xls",
+            detail="dependency_missing",
+        )
+    except OptionalDependencyUnavailable as exc:
+        return ExtractionResult(
+            FileTerminal.SANDBOX_UNAVAILABLE.value, "xls", detail=exc.detail
+        )
+    except (ImportError, OSError, RuntimeError, ValueError,
+            subprocess.SubprocessError):
+        return ExtractionResult(FileTerminal.SANDBOX_UNAVAILABLE.value, "xls")
+    xls_result = run_sandboxed(
+        source_fd=source_fd,
+        expected=expected,
+        command=(
+            str(Path(sys.executable).resolve()), "-I", "-B",
+            str(XLS_CHILD_DESTINATION), str(MAX_TEXT_BYTES),
+            str(MAX_TEXT_CHARS),
+        ),
+        runtime_binds=xls_binds,
+        limits=limits or _legacy_limits(XLS_FRAME_MAGIC, MAX_XLS_HEADER_BYTES),
+        cancel_check=cancel_check,
+    )
+    if not xls_result.ok:
+        return ExtractionResult(xls_result.reason)
+    decoded_xls = decode_xls_frame(
+        xls_result.stdout,
+        max_text_bytes=MAX_TEXT_BYTES,
+        max_text_chars=MAX_TEXT_CHARS,
+    )
+    if (
+        decoded_xls.reason == FileTerminal.UNSUPPORTED_FORMAT.value
+        and decoded_xls.detail == "not_xls"
+    ):
+        if doc_unavailable is not None:
+            return doc_unavailable
+        return ExtractionResult(
+            FileTerminal.UNSUPPORTED_FORMAT.value,
+            DocumentFormat.LEGACY_OFFICE.value,
+        )
+    return ExtractionResult(
+        decoded_xls.reason,
+        decoded_xls.format_name,
+        "utf-8" if decoded_xls.reason == "success" else None,
+        decoded_xls.text,
+        decoded_xls.detail,
+        parser_version=decoded_xls.parser_version,
+        embedded_version=decoded_xls.embedded_version,
+        logical_unit_count=decoded_xls.logical_unit_count,
+        primary_unit_count=decoded_xls.sheet_count,
+        xls_units=decoded_xls.units,
+        worksheet_count=decoded_xls.worksheet_count,
+        skipped_sheet_count=decoded_xls.skipped_sheet_count,
+        dense_cell_count=decoded_xls.dense_cell_count,
+    )
+
+
+def _legacy_limits(frame_magic: bytes, header_bytes: int) -> SandboxLimits:
+    return SandboxLimits(
+        address_space_bytes=512 * 1024 * 1024,
+        cpu_seconds=20,
+        open_files=32,
+        tasks=8,
+        wall_seconds=30.0,
+        stdout_bytes=MAX_TEXT_BYTES + header_bytes + len(frame_magic) + 1,
+        stderr_bytes=64 * 1024,
+    )
 
 
 def python_runtime_binds() -> tuple[RuntimeBind, ...]:
@@ -333,6 +466,83 @@ def antiword_runtime_binds() -> tuple[RuntimeBind, ...]:
     ):
         raise RuntimeError("Antiword runtime changed during discovery")
     return bindings
+
+
+def xls_runtime_binds() -> tuple[RuntimeBind, ...]:
+    """Return base Python plus the exact attested python-calamine runtime."""
+    package_root, init_path, extension_path = _python_calamine_runtime_files()
+    init_identity = _runtime_identity(init_path)
+    extension_identity = _runtime_identity(extension_path)
+    init_digest = _runtime_sha256(init_path, 64 * 1024)
+    extension_digest = _runtime_sha256(extension_path, 8 * 1024 * 1024)
+    if (
+        init_digest != PYTHON_CALAMINE_INIT_SHA256
+        or extension_digest != PYTHON_CALAMINE_EXTENSION_SHA256
+    ):
+        raise OptionalDependencyUnavailable("dependency_version")
+    child_identity = _runtime_identity(XLS_CHILD_PATH)
+    contract_identity = _runtime_identity(XLS_CONTRACT_PATH)
+    bindings = _discover_xls_runtime_binds(
+        package_root,
+        init_path,
+        extension_path,
+        init_identity,
+        extension_identity,
+        init_digest,
+        extension_digest,
+        child_identity,
+        contract_identity,
+    )
+    project_sources = {
+        init_path, extension_path, XLS_CHILD_PATH, XLS_CONTRACT_PATH,
+    }
+    for binding in bindings:
+        _require_trusted_runtime(
+            binding.source, allow_project=binding.source in project_sources
+        )
+    if (
+        _runtime_identity(init_path) != init_identity
+        or _runtime_identity(extension_path) != extension_identity
+        or _runtime_sha256(init_path, 64 * 1024) != init_digest
+        or _runtime_sha256(extension_path, 8 * 1024 * 1024) != extension_digest
+        or _runtime_identity(XLS_CHILD_PATH) != child_identity
+        or _runtime_identity(XLS_CONTRACT_PATH) != contract_identity
+    ):
+        raise RuntimeError("python-calamine runtime changed during discovery")
+    return bindings
+
+
+def _python_calamine_runtime_files() -> tuple[Path, Path, Path]:
+    if (
+        sys.implementation.name != "cpython"
+        or sys.version_info[:2] != (3, 14)
+        or sys.platform != "linux"
+        or os.uname().machine != "x86_64"
+    ):
+        raise OptionalDependencyUnavailable("dependency_version")
+    distribution = metadata.distribution("python-calamine")
+    if distribution.version != PYTHON_CALAMINE_VERSION:
+        raise OptionalDependencyUnavailable("dependency_version")
+    package_root = Path(distribution.locate_file("python_calamine")).resolve(
+        strict=True
+    )
+    site_raw = sysconfig.get_path("platlib")
+    if not site_raw:
+        raise RuntimeError("Python platform library path is unavailable")
+    expected = (Path(site_raw).resolve(strict=True) / "python_calamine").resolve(
+        strict=True
+    )
+    if package_root != expected or package_root.name != "python_calamine":
+        raise RuntimeError("python-calamine is installed outside the optional lane")
+    init_candidate = package_root / "__init__.py"
+    extension_candidate = package_root / PYTHON_CALAMINE_EXTENSION
+    if init_candidate.is_symlink() or extension_candidate.is_symlink():
+        raise RuntimeError("python-calamine runtime contains a symlink")
+    init_path = init_candidate.resolve(strict=True)
+    extension_path = extension_candidate.resolve(strict=True)
+    if init_path.parent != package_root or extension_path.parent != package_root:
+        raise RuntimeError("python-calamine runtime path escaped its package")
+    return package_root, init_path, extension_path
 
 
 def _pdf_package_root() -> Path:
@@ -482,6 +692,48 @@ def _discover_antiword_runtime_binds(
         previous = unique.get(key)
         if previous is not None and previous.source != binding.source:
             raise RuntimeError("Antiword runtime destinations conflict")
+        unique[key] = binding
+    return tuple(unique[key] for key in sorted(unique))
+
+
+@lru_cache(maxsize=2)
+def _discover_xls_runtime_binds(
+    package_root: Path,
+    init_path: Path,
+    extension_path: Path,
+    _init_identity: tuple[int, int, int, int],
+    _extension_identity: tuple[int, int, int, int],
+    _init_digest: str,
+    _extension_digest: str,
+    _child_identity: tuple[int, int, int, int],
+    _contract_identity: tuple[int, int, int, int],
+) -> tuple[RuntimeBind, ...]:
+    base = [
+        binding for binding in python_runtime_binds()
+        if binding.destination != CHILD_DESTINATION
+    ]
+    for source in (init_path, extension_path, XLS_CHILD_PATH, XLS_CONTRACT_PATH):
+        _require_trusted_runtime(source, allow_project=True)
+    base.extend((
+        RuntimeBind(XLS_CHILD_PATH, XLS_CHILD_DESTINATION),
+        RuntimeBind(XLS_CONTRACT_PATH, XLS_CONTRACT_DESTINATION),
+        RuntimeBind(init_path, XLS_SITE_DESTINATION / "__init__.py"),
+        RuntimeBind(
+            extension_path, XLS_SITE_DESTINATION / PYTHON_CALAMINE_EXTENSION
+        ),
+    ))
+    for source, destination in _ldd_dependencies(
+        extension_path, user_owned_root=package_root
+    ):
+        if source == package_root or package_root in source.parents:
+            continue
+        base.append(RuntimeBind(source, destination))
+    unique: dict[str, RuntimeBind] = {}
+    for binding in base:
+        key = str(binding.destination)
+        previous = unique.get(key)
+        if previous is not None and previous.source != binding.source:
+            raise RuntimeError("python-calamine runtime destinations conflict")
         unique[key] = binding
     return tuple(unique[key] for key in sorted(unique))
 
@@ -637,6 +889,36 @@ def _runtime_identity(path: Path) -> tuple[int, int, int, int]:
     observed = path.stat()
     return (observed.st_dev, observed.st_ino, observed.st_size,
             observed.st_mtime_ns)
+
+
+def _runtime_sha256(path: Path, maximum: int) -> str:
+    before = path.lstat()
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or before.st_size <= 0
+        or before.st_size > maximum
+    ):
+        raise RuntimeError("runtime file is invalid")
+    digest = hashlib.sha256()
+    total = 0
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(64 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > maximum:
+                raise RuntimeError("runtime file exceeds its identity limit")
+            digest.update(chunk)
+    after = path.lstat()
+    stable_fields = (
+        "st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns", "st_ctime_ns",
+    )
+    if total != before.st_size or any(
+        getattr(before, field) != getattr(after, field) for field in stable_fields
+    ):
+        raise RuntimeError("runtime file changed while hashing")
+    return digest.hexdigest()
 
 
 def _decode_frame(payload: bytes, expected_format: DocumentFormat) -> ExtractionResult:

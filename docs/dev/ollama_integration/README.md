@@ -1,6 +1,6 @@
 # Ollama Integration Workspace
 
-Date: 2026-08-15
+Date: 2026-08-16
 Status: **C0A contract frozen** (committed `91bb2aa`). **C0B-1 accepted and committed
 (`47e946b`).** The complete public C/D/F executor passed its offline and hostile-review
 gates and was committed through B5 (`bde8f92`), with the current Ollama show-envelope
@@ -208,11 +208,11 @@ Full detail in [`CONTRACT.md`](CONTRACT.md); summary here.
 - **D5 — sidecar SQLite first**, migration-ready for later `dirracuda.db`
    adoption (no cross-DB joins, host keyed as the primary tables key it, additive
    columns). Dorkbook/Keymaster precedent.
-- **D6 — legacy `.doc`/`.xls`:** C7A uses exact Debian Antiword `0.37-17` for
-  `.doc` inside C3. C7B is resolving `.xls`: `xlrd` is technically small but its
-  original-BSD advertising clause conflicts with GPL distribution, while LibreOffice
-  is a much larger parser surface. The measured recommendation is the MIT-licensed
-  `python-calamine==0.8.2`; catdoc/xls2csv are never used.
+- **D6 — legacy `.doc`/`.xls`: RESOLVED.** C7A uses exact Debian Antiword `0.37-17`
+  for `.doc`; C7B uses the exact attested `python-calamine==0.8.2` CPython 3.14 /
+  Linux x86-64 wheel for `.xls`. Each parser runs in its own narrow C3 sandbox and
+  authenticates content rather than trusting an extension. Other platforms fail closed
+  pending artifact-specific review. catdoc/xls2csv, xlrd and LibreOffice are not used.
 - **D7 — OCR:** deferred; every report prints its actual no-text-layer count and
   rate. The research sample measured 31% across the sampled corpus.
 
@@ -250,8 +250,7 @@ explicitly deferred Stage E until real-document validation is useful.
 
 ## Next Step
 
-C0B through C6 and C7A legacy Word extraction are complete. Finish C7B by accepting or
-rejecting the measured `python-calamine==0.8.2` recommendation, then implement one
-GPL-compatible sandboxed legacy Excel parser. Never use catdoc/xls2csv.
+C0B through C7 are complete. Begin C8's persistent worker lease, heartbeat and crash
+recovery against the already frozen execution contract.
 Private Stage E remains deferred and requires fresh explicit authorization before any
 real-document read. Core startup does not depend on Analyst's optional parser lane.

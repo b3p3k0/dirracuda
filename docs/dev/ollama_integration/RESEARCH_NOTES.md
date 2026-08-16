@@ -226,14 +226,16 @@ upstream. Measured output also showed that its UTF-8 mapping emits CESU-8 surrog
 pairs for non-BMP characters, so C7A narrowly repairs paired surrogates and rejects
 every malformed form.
 
-The earlier `.xls` shortlist needs correction. `xlrd 2.0.2` is pure Python and
+The earlier `.xls` shortlist was corrected by accepted erratum E12. `xlrd 2.0.2` is pure Python and
 technically narrow, but its exact licence retains the original BSD advertising clause;
 GNU classifies that licence as GPL-incompatible. LibreOffice is compatible but carries
-a far larger native conversion surface. The measured C7B recommendation is the
+a far larger native conversion surface. C7B uses the
 MIT-licensed `python-calamine==0.8.2`: its attested 2.25 MiB wheel has a narrow runtime
-closure and matched `xlrd` on the public XLS fixture. It exposes cached formula values,
-not formula text or recalculation. `olefile` remains container inspection only. Every
-accepted parser runs inside bubblewrap.
+closure and matched `xlrd` on the public XLS fixture. The exact CPython 3.14 / Linux
+x86-64 artifact is hash- and ABI-pinned; other platforms fail closed. It exposes cached
+formula values, not formula text or recalculation. `olefile` was unnecessary: parser
+success independently authenticates XLS after CFB candidate routing. Every accepted
+parser runs inside bubblewrap.
 
 Sources: https://www.talosintelligence.com/vulnerability_reports/TALOS-2024-2132 ·
 https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=968812 ·
