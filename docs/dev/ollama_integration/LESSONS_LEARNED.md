@@ -1252,6 +1252,16 @@ completion to the exact worker fence or lease-free schedule revision, then marks
 backoff due or the paused retry authorized. The calculation and the dispatch gate must
 share evidence, not merely the same formula.
 
+### 144. Cancellation acceptance must name the phase it exercises
+
+A timer-based exploratory probe cancelled before response headers and the two-second
+health call found C9's global permit still held while the request unwound. That was the
+intended anti-accumulation guard, not evidence that a closed stream had recovered. The
+final public protocol observes real response headers, then cancels, requires
+`cancelled_unverified` within five seconds and performs exactly one health generation
+after the frozen delay. “Cancellation passed” is too vague unless the trigger, retained
+permit and following-health boundary are all explicit.
+
 ---
 
 ## Not yet learned

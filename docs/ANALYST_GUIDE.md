@@ -1,10 +1,10 @@
 # Analyst User Guide
 
-> **Unreleased feature — draft guide.** Analyst's inventory, parser sandbox and
-> durable-state foundation are under development on the feature branch. The launcher,
-> Ollama workflow, reports and post-extract hook are not available in the desktop app
-> yet. The workflow below describes the reviewed release target; labels may change
-> during final UI testing.
+> **Unreleased feature — draft guide.** Analyst's inventory, parser sandbox, durable
+> state and local Ollama boundary are implemented and tested on the feature branch.
+> Public-only Ollama acceptance has passed, but the launcher, orchestration, reports and
+> post-extract hook are not available in the desktop app yet. The workflow below
+> describes the reviewed release target; labels may change during final UI testing.
 
 Analyst reviews directories of already-extracted documents and builds a per-host
 exposure report. It looks for identifiers such as Social Security numbers, payment-card

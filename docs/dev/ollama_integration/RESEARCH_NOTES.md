@@ -1,15 +1,15 @@
 # Ollama Integration — Research Notes
 
-Date: 2026-08-04
-All findings verified against sources on this date. Re-check before implementation;
+Date: 2026-08-16
+All findings verified against sources through this date. Re-check before implementation;
 this field moves fast.
 
-## Local Stack (measured on kevin-pc, 2026-08-04)
+## Initial Local Stack (historical, measured on kevin-pc, 2026-08-04)
 
 | Item | Value |
 |------|-------|
 | Ollama server version | 0.32.5 (host `ollama` CLI is not on `PATH`) |
-| Verified endpoint | `http://127.0.0.1:11434`; listener is currently `*:11434` |
+| Verified endpoint | `http://127.0.0.1:11434`; listener was `*:11434` |
 | GPU | RTX 4060 Ti, 16 GB |
 | System RAM | 121 GB |
 | Cores | 24 |
@@ -17,8 +17,27 @@ this field moves fast.
 | `OLLAMA_CONTEXT_LENGTH` | 16384 |
 | `OLLAMA_KV_CACHE_TYPE` | q8_0 |
 | `OLLAMA_FLASH_ATTENTION` | 1 |
-| `OLLAMA_HOST` | 0.0.0.0:11434 (listening on `*`, no auth) |
+| `OLLAMA_HOST` | `0.0.0.0:11434` (listening on `*`, no auth) |
 | `OLLAMA_NO_CLOUD` | **not set** |
+
+## Hardened Deployment Recheck (measured 2026-08-16)
+
+| Item | Value |
+|------|-------|
+| Ollama server version | 0.32.5 |
+| Container image | `ollama/ollama@sha256:4dea9fb511947e24a84237bb636b0203abcb2ff0d3fbc7b4ff865deb91362131` |
+| `OLLAMA_HOST` | `127.0.0.1:11434`; loopback listener only |
+| `OLLAMA_NO_CLOUD` | `1`; daemon log confirms cloud disabled and worker is offline |
+| `OLLAMA_CONTEXT_LENGTH` | 64000 |
+| `OLLAMA_KV_CACHE_TYPE` | q8_0 |
+| `OLLAMA_FLASH_ATTENTION` | 1 |
+
+The listener and cloud settings were corrected from the unsafe initial state before C9
+live acceptance. Proxy-cleared control requests to the host's LAN, Tailscale, VPN and
+container-facing addresses all failed; loopback returned HTTP 200 and Ollama 0.32.5.
+These deployment checks used container metadata and `/api/version` only; they did not
+perform inference or read private data. The local API has no application authentication,
+so raw port 11434 remains loopback-only for MVP.
 
 Reference implementation already on the box: `~/openwebui/scripts/ask-local.sh`
 posts to `/api/chat` with `stream:false`, `options.temperature`, and an optional

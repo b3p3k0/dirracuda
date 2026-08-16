@@ -104,11 +104,14 @@ run/file state, content-free checkpoints, exact worker fencing, cancellation and
 recovery. E13 deliberately uses SQLite `DELETE + EXTRA` rather than WAL on the affected
 runtime. C9A's offline implementation is complete: it adds the exact loopback
 request contract, bounded streamed-response parser, cancellation-safe client and
-shared-GPU backoff policy without contacting Ollama. C9B is complete offline: schema v2
+shared-GPU backoff policy. C9B is complete: schema v2
 adds a content-free precharged HTTP-contact ledger and an explicit resource schedule
 without changing the two-attempt semantic budget. Explicit resource refusals back off
 without consuming an attempt; ambiguous contact, crash and cancel outcomes remain
-conservatively charged.
+conservatively charged. C9's public-only live acceptance also passed after the operator
+pinned the container image, disabled cloud features and restricted Ollama to loopback.
+It proved one strict structured response, post-header cancellation and a successful
+following-health response without printing or persisting model content.
 
 The inherited C0B-3 public implementation freezes the protected run nonce key only in the
 backed-up 0600 checkpoint; derived
@@ -261,9 +264,7 @@ explicitly deferred Stage E until real-document validation is useful.
 
 ## Next Step
 
-C0B through C9B's offline implementation are complete. Run C9A's public-only live
-acceptance after Ollama is restricted to loopback, cloud access is disabled and the
-container image is pinned. C10 then connects the durable worker pipeline to the reviewed
+C0B through C9 are complete. C10 connects the durable worker pipeline to the reviewed
 client/contact boundaries. Private Stage E remains deferred and requires fresh explicit
 authorization before any real-document read. Core startup does not depend on Analyst's
 optional parser lane.
