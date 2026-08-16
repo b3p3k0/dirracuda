@@ -65,12 +65,17 @@ Analyst fails preflight if the complete sandbox chain does not work. Finding the
 binaries is useful diagnosis, but it is not proof that the sandbox works.
 
 Install and start Ollama using the [official Ollama Linux guide](https://docs.ollama.com/linux).
-Basic checks:
+Bind its API to `127.0.0.1:11434`, set `OLLAMA_NO_CLOUD=1` and pin the reviewed server
+version rather than a mutable container tag. Basic checks:
 
 ```bash
-ollama --version
-ollama list
+curl --fail --noproxy '*' http://127.0.0.1:11434/api/version
+curl --fail --noproxy '*' http://127.0.0.1:11434/api/tags
 ```
+
+If Ollama runs only in a container, its CLI may not exist on the host; use the API checks
+above and run `ollama list` inside that container. Do not expose port 11434 on a LAN or
+VPN interface: the local API has no authentication.
 
 The approved model is `qwen3.6:27b` at digest
 `a50eda8ed977ab48a12431878896b27ffd5cef552c17af3317d9623b939a7f1e`. A matching

@@ -99,6 +99,13 @@ path independently and rejects mutation. Worker identity binds PID, Linux proces
 ticks and boot UUID; reconciliation never clears an exact live worker merely because its
 heartbeat is stale. Persistence and atomic lease claims remain C8 work.
 
+C8 is complete. Analyst now has an owner-only, mergerfs-tested sidecar with strict
+run/file state, content-free checkpoints, exact worker fencing, cancellation and crash
+recovery. E13 deliberately uses SQLite `DELETE + EXTRA` rather than WAL on the affected
+runtime. C9A's offline implementation is complete: it adds the exact loopback
+request contract, bounded streamed-response parser, cancellation-safe client and
+shared-GPU backoff policy without contacting Ollama or changing durable state.
+
 The inherited C0B-3 public implementation freezes the protected run nonce key only in the
 backed-up 0600 checkpoint; derived
 boundary work binds both the logical document hash and generated-view hash; and D3/D4
@@ -250,8 +257,10 @@ explicitly deferred Stage E until real-document validation is useful.
 
 ## Next Step
 
-C0B through C8 are complete. E13 replaced WAL with `DELETE + EXTRA`; C8 then passed its
-real multi-process crash/recovery gate on the canonical mergerfs-backed product path.
-Begin C9's loopback-only Ollama client, cancellation and shared-GPU pause controls.
-Private Stage E remains deferred and requires fresh explicit authorization before any
-real-document read. Core startup does not depend on Analyst's optional parser lane.
+C0B through C8 and C9A's offline implementation are complete. Run C9A's public-only live
+acceptance after Ollama is restricted to loopback, cloud access is disabled and the
+container image is pinned. Before C10 orchestration, review C9B's additive sidecar
+migration: temporary resource contacts need a durable pause ledger separate from the two
+semantic model attempts. Private Stage E remains deferred and requires fresh explicit
+authorization before any real-document read. Core startup does not depend on Analyst's
+optional parser lane.

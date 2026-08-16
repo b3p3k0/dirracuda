@@ -20,7 +20,9 @@ C0B-7 preserved that terminal and recovered the immutable evidence offline as
 Stage E until real-document validation is useful; C1 was authorized.
 The C1 pure production contracts, C2 inventory/reattachment evidence, C3 strict parser
 supervisor, C4 RTF/plain-text extraction, C5 PDF extraction, C6 bounded OOXML extraction
-and C7 sandboxed legacy Word/Excel extraction are implemented.
+and C7 sandboxed legacy Word/Excel extraction are implemented. C8's durable state/lease
+layer and C9A's offline strict Ollama client/resource policy are also complete; C9 live
+acceptance and the C9B durable resource-pause migration remain held.
 Controls are
 authoritative in [`CONTRACT.md`](CONTRACT.md), accepted errata, and the reviewed
 benchmark protocols; this register is the
@@ -117,6 +119,9 @@ risk-indexed view.
 | R86 | Python transaction helpers report success while an explicit transaction remains uncommitted | Medium | High | C8 uses `autocommit=True` with literal SQL `BEGIN IMMEDIATE`, `COMMIT` and `ROLLBACK`; it never calls the no-op DB-API helpers for owned transactions. Fresh initialization, callback failure and process-crash tests close/reopen the database and verify persisted or rolled-back state. |
 | R87 | Cancellation or finalization leaves a run permanently active or falsely complete | Medium | High | Cancel intent commits before signaling; pidfd signaling requires exact process identity; a missing lease immediately becomes `cancelled_pending_resume`. Finalization requires every file terminal and no dispatching attempt, uses a SHA-bound token, and commits completion evidence plus lease release atomically. Partial or normally cancelled runs cannot satisfy the complete-report invariant. |
 | R88 | Unbounded or internally impossible evidence exhausts SQLite, leaks document text or creates false grounding | Medium | High | C8 bounds detector evidence at 10,000 hits per file and atomically records `detector_output_limit` at cap + 1. Parser metadata is a closed scalar contract; content-free provenance uses its own 50,000-unit STRICT table with canonical kinds, labels and spans. Chunks, hits and findings are range-bound to their extracted text or parent chunk, and finding counts/assessment must reconcile exactly. Raw/nested text, paths, unknown detail codes and exception strings fail before persistence. Finalization revalidates successful terminal semantics from those durable rows. |
+| R89 | Ollama is reached through a proxy, redirect, non-loopback listener or cloud-capable server configuration | Medium | Critical | C9 accepts only the literal `http://127.0.0.1:11434` endpoint and fixed paths, disables redirects, sets `trust_env=False`, supplies no proxies, rejects compression and requires the exact local tag+digest. Server egress remains an operator prerequisite: public live acceptance is blocked until the current host-networked service is loopback-only, cloud-disabled and image-pinned. |
+| R90 | Cancellation returns while Ollama continues inference or a blocked close allows request-worker accumulation | Medium | High | C9 reports `cancelled_unverified`, never claims `/api/ps` proves termination and requires a later bounded health contact. One global nonblocking permit remains owned until the real request and exact-response close finish, even after the caller's deadline; another call cannot create a second orphan worker. Analyst never sends model-wide unload/stop controls. |
+| R91 | Temporary shared-GPU pressure consumes both semantic attempts and falsely terminalizes valid work | High | Medium | C9A returns a closed `resource_busy` scheduling outcome and pure bounded backoff without touching C8 attempts. C9B must add a reviewed durable contact/pause ledger before C10; `interrupted`, model timeout and model transport failure are not overloaded. GPU telemetry is advisory and CPU offload remains valid. |
 
 ## High-Likelihood Risks — Detailed Controls
 

@@ -1198,6 +1198,29 @@ their chunk. The durable boundary now binds every range to its parent evidence a
 rechecks finding counters and assessment semantics. Dataclass membership proves shape,
 not truth.
 
+### 137. A request hash must identify the exact bytes sent
+
+C9 builds one canonical JSON body, hashes those bytes, re-derives the prompt, schema and
+options immediately before dispatch, then sends the same bytes with `data=`. Rebuilding
+an equivalent object through an HTTP library's `json=` path could change the wire body
+after its durable charge. Semantic equality is not request identity.
+
+### 138. A caller deadline does not stop a blocked network worker
+
+Requests' connect/read timeouts do not provide a total wall clock, and closing a stream
+can itself block. C9 runs each contact in one daemon worker, lets the caller return on
+cancel or the 600-second wall, discards every late result and retains the global permit
+until response teardown really finishes. Prompt return and proven server termination are
+different claims.
+
+### 139. Resource contention is scheduling evidence, not a failed model answer
+
+The GPU is intentionally shared and the selected model may CPU-offload. Utilization and
+free-memory snapshots therefore cannot decide admission or quality. C9 classifies only
+explicit bounded 429/503/memory-resource responses, backs off, and never unloads or kills
+another workload. C8's two attempts are semantic attempts, so a separate durable contact
+ledger is required before orchestration can retry resource contacts honestly.
+
 ---
 
 ## Not yet learned
