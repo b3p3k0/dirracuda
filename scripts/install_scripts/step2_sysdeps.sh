@@ -1,7 +1,7 @@
 # Sourced by install.sh — not standalone.
 # Step 2: System package dependencies (apt-get).
 
-section "[Step 2 of 8]  System dependencies"
+section "[Step 2 of 10]  System dependencies"
 
 echo "  The following system packages are required to build and run Dirracuda:"
 echo

@@ -1,7 +1,7 @@
 # Sourced by install.sh — not standalone.
 # Step 3: Python virtual environment creation and dependency install.
 
-section "[Step 3 of 8]  Python virtual environment"
+section "[Step 3 of 10]  Python virtual environment"
 
 echo "  A virtual environment keeps Dirracuda's Python packages isolated from"
 echo "  the rest of your system, so they don't interfere with other software."

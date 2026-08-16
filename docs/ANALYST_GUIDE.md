@@ -1,11 +1,11 @@
 # Analyst User Guide
 
-> **Unreleased feature — draft guide.** Analyst's inventory, parser sandbox, durable
-> state, Phase 1/Phase 2 worker orchestration, local Ollama boundary, atomic report
+> **Experimental feature.** Analyst's inventory, parser sandbox, durable state,
+> Phase 1/Phase 2 worker orchestration, local Ollama boundary, atomic report
 > publication, standalone-directory and extraction-manifest launchers, opt-in
-> post-extract handoff, task hydration and report browser are implemented and tested
-> on the feature branch. Public-only Ollama acceptance has passed. The final release
-> matrix remains unfinished; labels may change during final UI testing.
+> post-extract handoff, task hydration and report browser are implemented and tested.
+> Public-only Ollama and full production-pipeline acceptance passed using synthetic data
+> only; private real-document validation remains explicitly deferred.
 
 Analyst reviews directories of already-extracted documents and builds a per-host
 exposure report. It looks for identifiers such as Social Security numbers, payment-card
@@ -40,15 +40,17 @@ Only one Analyst worker can own the GPU at a time. Other software can still use 
 so a run may slow down when the machine is busy. Closing or hiding the desktop window
 does not stop the worker.
 
-## Before release: dependency setup
+## Dependency setup
 
-These commands prepare the current development build. They do not add an Analyst tab or
-start an analysis run.
+The interactive `bash install.sh` workflow offers Analyst as an optional, default-No
+step. Declining it leaves core Dirracuda fully usable. The step installs the reviewed
+system tools, uses the controlled dependency installer below, verifies its exact pins,
+and runs a public strict-sandbox preflight. It does not start an analysis run.
+
+For manual setup, use these commands from the repository root:
 
 V1's reviewed dependency lane is Linux x86-64, CPython 3.14. Other platforms fail
 preflight until their native artifacts receive separate review.
-
-From the repository root:
 
 ```bash
 ./venv/bin/python scripts/install_analyst_deps.py
@@ -90,9 +92,9 @@ The approved model is `qwen3.6:27b` at digest
 tag with a different digest is rejected. Model tags can move, so do not bypass this
 check or substitute a similarly named model.
 
-## Running Analyst from the feature branch
+## Running Analyst
 
-The planned primary entry point is:
+The primary entry point is:
 
 1. Start Dirracuda with `./dirracuda`.
 2. Open **Accessories → Analyst**.
@@ -133,9 +135,9 @@ offers always use Fast mode and strict isolation.
 - **Abandon** is final. Remaining files are marked abandoned so the report can describe
   the incomplete coverage honestly.
 
-A crash or reboot leaves resumable work, not a report labelled complete. The
-Running Tasks view is planned to recover active and interrupted runs from Analyst's
-sidecar database after the GUI restarts.
+A crash or reboot leaves resumable work, not a report labelled complete. The Running
+Tasks view recovers active and interrupted runs from Analyst's sidecar database after
+the GUI restarts.
 
 ## Reading the report
 

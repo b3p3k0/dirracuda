@@ -1,7 +1,7 @@
 # Sourced by install.sh — not standalone.
 # Step 4: Config file creation and supplemental config files.
 
-section "[Step 4 of 8]  Configuration file"
+section "[Step 4 of 10]  Configuration file"
 
 echo "  Dirracuda reads settings from ~/.dirracuda/conf/config.json."
 echo "  We'll create one from the bundled example. You can edit it"

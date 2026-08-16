@@ -21,7 +21,7 @@ Or for the latest development (experimental features and brand new bugs!) versio
 git clone https://github.com/b3p3k0/dirracuda -b development --single-branch
 cd dirracuda
 ```
-Optionally, run the interactive installer (designed for Ubuntu 24.04 LTS+ )— it handles dependencies, venv, config, and optional extras:
+Optionally, run the interactive installer (designed for Ubuntu 24.04 LTS+ )— it handles dependencies, venv, config, and optional extras. Its Analyst document-review step is optional and defaults to No:
 
 ```bash
 bash install.sh
@@ -388,6 +388,7 @@ The dialog is modeless and tab-based. Current tabs:
 - `Dorkbook`
 - `Keymaster`
 - `Sherlock`
+- `Analyst`
 
 ### SearXNG
 
@@ -581,6 +582,26 @@ colors. Detail popups and Web UI Results show the latest saved Sherlock summary;
 the Web UI is currently read-only for Sherlock.
 
 Settings are stored at `~/.dirracuda/conf.d/experimental/sherlock.json`.
+
+### Analyst
+
+Analyst is an optional, Linux-only local document-review workflow. It inventories a
+directory or an exact persisted extraction manifest, parses supported documents inside
+a strict sandbox, runs deterministic exposure detectors, sends selected text only to a
+digest-pinned Ollama model on loopback, and publishes a coverage-first report. It never
+logs in to a server or downloads source files.
+
+Start Dirracuda with `./dirracuda`, then open **Accessories → Analyst**. Fast mode scans
+every supported document with deterministic detectors and sends only flagged files to
+the model; Deep mode reviews every supported nonempty document. The optional automatic
+post-extract offer is off by default and binds a run to the exact saved extraction
+manifest.
+
+Analyst has an isolated dependency lane because its reviewed V1 parser stack requires
+Linux x86-64, CPython 3.14, bubblewrap, Antiword, and exact hash-pinned parser artifacts.
+The interactive installer can prepare that lane without making it a core dependency.
+See the [Analyst User Guide](docs/ANALYST_GUIDE.md) for setup, Ollama hardening,
+supported formats, report interpretation, privacy boundaries, and troubleshooting.
 
 ### Censys Discovery
 
