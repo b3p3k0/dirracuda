@@ -1,7 +1,7 @@
 # C10 — Phase 1 worker orchestration
 
 Date: 2026-08-16
-Status: **C10A and C10B complete; C10C worker shell and acceptance next**
+Status: **C10 complete at the reviewed Phase 1 boundary; C11 next**
 
 ## Issue
 
@@ -81,10 +81,10 @@ handoff evidence; it does not release the lease or label the run complete.
 
 ### C10C — worker shell and acceptance
 
-- Add the thin `python -m experimental.analyst.worker --run-id ID` shell with a signal
+- [x] Add the thin `python -m experimental.analyst.worker --run-id ID` shell with a signal
   Event and closed exit codes. Invalid invocation performs zero DB, source, process and
   network actions.
-- Prove strict preflight, lease race, cancellation, crash recovery, privacy and public
+- [x] Prove strict preflight, lease race, cancellation, crash recovery, privacy and public
   parser behavior. Keep desktop launch held for C11.
 
 ## C10A outcome
@@ -105,6 +105,24 @@ ownership release. Exact extraction and detector drift return the closed
 chunk caps, atomic selected-file handoff, crash recovery, successor-fence pulses and zero
 Ollama contacts are regression-covered. The full shared Analyst suite passed 1,200 tests;
 all touched production files remain below the 1,700-line pause threshold.
+
+## C10C outcome
+
+C10C passed its focused acceptance and hostile review. A canonical parser-bundle v1
+binds the exact parser, detector, checkpoint, sandbox and Phase 1 source identities plus
+frozen dependency versions; drift fails before dependency probes, lease claim or source
+access. Preflight verifies every runtime closure, exercises the exact PDF child on a
+public synthetic document and requires PyMuPDF/MuPDF 1.28.0/1.28.0, then proves the
+strict networkless sandbox. Generated public PDF, DOCX, DOC and XLS files traverse the
+complete worker path; a parse longer than ten seconds preserves strictly advancing
+heartbeats. Signal handling is Event-only and distinguishes a durable cancel from a raw
+local interruption. The focused C10C suite passed 53 tests and the full shared Analyst
+suite passed 1,253 tests. All touched production files remain below 1,200 lines.
+
+The standalone module remains deliberately activation-held: valid CLI syntax returns a
+fixed content-free outcome before opening the database or starting preflight. C11 must
+consume the returned Phase 1 fence in the same process before this gate may be removed.
+No temporary exit/release path was added.
 
 ## Exact Phase 1 flow
 

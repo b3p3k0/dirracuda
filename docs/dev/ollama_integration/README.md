@@ -265,10 +265,12 @@ explicitly deferred Stage E until real-document validation is useful.
 ## Next Step
 
 C0B through C9 are complete. C10A provides the typed worker context,
-descriptor-safe source reopen and honest candidate-format evidence; C10B now provides
-the bounded, resumable Phase 1 extraction/detector/chunk handoff with zero model
-contacts. C10C next adds the thin detached worker shell and final public acceptance;
-C11 then connects its handoff to the reviewed Ollama client/contact boundary. Private
+descriptor-safe source reopen and honest candidate-format evidence; C10B provides the
+bounded, resumable Phase 1 extraction/detector/chunk handoff with zero model contacts;
+C10C adds exact preflight, signal/lease handling and public worker acceptance. The
+standalone worker stays activation-held so it cannot strand the live Phase 1 fence.
+C11 next consumes that handoff in-process through the reviewed Ollama client/contact
+boundary and only then may enable the executable path. Private
 Stage E remains deferred and requires fresh explicit
 authorization before any real-document read. Core startup does not depend on Analyst's
 optional parser lane.

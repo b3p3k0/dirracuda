@@ -78,10 +78,18 @@ class WorkerOutcome(str, Enum):
 
     PHASE1_HANDOFF = "phase1_handoff"
     CANCELLED = "cancelled"
+    INTERRUPTED = "interrupted"
     LEASE_BUSY = "lease_busy"
     PREFLIGHT_FAILED = "preflight_failed"
     RUN_INVALID = "run_invalid"
     INTERNAL_ERROR = "internal_error"
+
+
+def validate_worker_run_id(value: object) -> str:
+    """Return one canonical worker run id without echoing rejected input."""
+    if type(value) is not str or _RUN_ID.fullmatch(value) is None:
+        raise WorkerContractError("run id is outside the worker contract")
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,8 +128,7 @@ class WorkerRunContext:
     extract_summary_row_id: int | None = None
 
     def __post_init__(self) -> None:
-        if type(self.run_id) is not str or _RUN_ID.fullmatch(self.run_id) is None:
-            raise WorkerContractError("run id is outside the worker contract")
+        validate_worker_run_id(self.run_id)
         if type(self.observed_state) is not RunState:
             raise WorkerContractError("run state is outside the worker contract")
         _nonnegative_int(self.observed_revision, "run revision")
@@ -570,4 +577,5 @@ __all__ = [
     "WorkerRunContext",
     "build_source_identity",
     "parse_source_identity",
+    "validate_worker_run_id",
 ]

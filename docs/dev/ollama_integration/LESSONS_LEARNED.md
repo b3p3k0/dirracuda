@@ -1310,6 +1310,30 @@ uses a narrow mismatch exception at the compare-only boundary so the worker retu
 closed `resume_mismatch` outcome without conflating cancellation, stale ownership or
 database corruption.
 
+### 151. A partial executable must not manufacture a lifecycle seam
+
+Phase 1 returns a live fenced handoff that C11 must consume in the same process. Letting
+a C10-only command exit would strand that lease; releasing it “temporarily” would weaken
+the reviewed ownership contract. C10C therefore ships the internal worker boundary but
+keeps the standalone CLI activation-held before even opening the database. A safe hold
+is more honest than a disposable transition that the final pipeline will not use.
+
+### 152. Version strings do not identify a parser bundle
+
+Dependency versions alone miss local changes to routing, frames, detector rules,
+checkpoint semantics and sandbox policy. C10C hashes the bounded production source files
+that define those behaviors, stores one canonical bundle identity and compares both it
+and the exact detector-rules identity before source access. Per-file runtime discovery
+still revalidates artifacts to close the later TOCTOU window.
+
+### 153. Native dependency preflight needs an execution proof
+
+Locating a PyMuPDF distribution tagged 1.28.0 does not prove that its embedded MuPDF is
+1.28.0—the published wheel discrepancy already demonstrated that. C10C runs one public
+synthetic PDF through the exact sandbox child before claiming a worker lease and checks
+both returned versions. Metadata inspection and native execution answer different
+supply-chain questions.
+
 ---
 
 ## Not yet learned

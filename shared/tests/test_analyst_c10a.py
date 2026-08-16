@@ -515,6 +515,7 @@ def test_worker_contract_constants_and_outcomes_are_exact() -> None:
     assert {item.value for item in WorkerOutcome} == {
         "phase1_handoff",
         "cancelled",
+        "interrupted",
         "lease_busy",
         "preflight_failed",
         "run_invalid",

@@ -235,7 +235,9 @@ def run_sandboxed(
     return SandboxResult(reason, returncode, stdout, stderr, unit)
 
 
-def strict_preflight() -> SandboxCapability:
+def strict_preflight(
+    cancel_check: CancelCheck | None = None,
+) -> SandboxCapability:
     """Live synthetic proof for the strict sandbox and cgroup boundary."""
     missing = tuple((name, value) for name, value in _prerequisite_checks(True)
                     if not value)
@@ -252,6 +254,7 @@ def strict_preflight() -> SandboxCapability:
             command=(str(SYSTEM_PYTHON), "-c", probe),
             runtime_binds=system_runtime_binds(),
             limits=SandboxLimits(wall_seconds=20.0, stdout_bytes=64 * 1024),
+            cancel_check=cancel_check,
         )
     finally:
         os.close(source_fd)
