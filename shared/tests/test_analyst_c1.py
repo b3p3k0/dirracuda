@@ -129,6 +129,7 @@ def test_coverage_vocabulary_exactly_matches_frozen_contract() -> None:
         "parse_signal",
         "parse_error",
         "parser_output_limit",
+        "detector_output_limit",
         "oversize",
         "empty",
         "encrypted",

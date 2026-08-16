@@ -47,6 +47,7 @@ class DirracudaPaths:
     reddit_od_db_file: Path
     dorkbook_db_file: Path
     keymaster_db_file: Path
+    analyst_db_file: Path
     quarantine_dir: Path
     extracted_dir: Path
     tmpfs_quarantine_dir: Path
@@ -146,6 +147,7 @@ def get_paths(*, home_root: Optional[Path] = None, repo_root: Optional[Path] = N
         reddit_od_db_file=experimental_dir / "reddit_od.db",
         dorkbook_db_file=experimental_dir / "dorkbook.db",
         keymaster_db_file=experimental_dir / "keymaster.db",
+        analyst_db_file=experimental_dir / "analyst.db",
         quarantine_dir=data_dir / "quarantine",
         extracted_dir=data_dir / "extracted",
         tmpfs_quarantine_dir=data_dir / "tmpfs_quarantine",

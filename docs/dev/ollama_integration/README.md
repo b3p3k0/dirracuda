@@ -250,7 +250,8 @@ explicitly deferred Stage E until real-document validation is useful.
 
 ## Next Step
 
-C0B through C7 are complete. Begin C8's persistent worker lease, heartbeat and crash
-recovery against the already frozen execution contract.
+C0B through C8 are complete. E13 replaced WAL with `DELETE + EXTRA`; C8 then passed its
+real multi-process crash/recovery gate on the canonical mergerfs-backed product path.
+Begin C9's loopback-only Ollama client, cancellation and shared-GPU pause controls.
 Private Stage E remains deferred and requires fresh explicit authorization before any
 real-document read. Core startup does not depend on Analyst's optional parser lane.

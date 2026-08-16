@@ -585,3 +585,94 @@ Sources:
 - https://github.com/dimastbk/python-calamine/blob/v0.8.2/python/python_calamine/_python_calamine.pyi
 - https://github.com/python-excel/xlrd/blob/2.0.2/LICENSE
 - https://www.gnu.org/licenses/license-list.html#OriginalBSD
+
+---
+
+## E13 — Use rollback journal mode for the Analyst sidecar
+
+**Status:** ACCEPTED FOR CORRECTION (HI decision, 2026-08-16)
+**Affects:** `CONTRACT.md` §3.2; C8 sidecar schema, resume and concurrency
+**Raised by:** C8 current-runtime and mergerfs review
+
+### The conflict
+
+The frozen contract requires SQLite WAL mode. The active Python runtime links SQLite
+3.46.1, and the distro currently offers no fixed upgrade. SQLite now documents a rare
+WAL-reset corruption race affecting versions 3.7.0 through 3.51.2 when two or more
+connections write or checkpoint concurrently. C8 deliberately has a service process and
+a worker process accessing one database, so it matches the affected shape. The canonical
+sidecar directory is also on mergerfs; WAL adds shared-memory behavior that C8 does not
+need for its short serialized control writes.
+
+### The correction
+
+C8 uses `journal_mode=DELETE` and `synchronous=EXTRA` instead of WAL:
+
+- every write uses a short explicit `BEGIN IMMEDIATE` transaction;
+- the worker remains the only steady-state writer, while service writes are brief control
+  transactions protected by the same atomic compare-and-set rules;
+- a fixed busy timeout plus bounded whole-transaction retry owns normal contention;
+- no process, parser, signal wait, GUI callback or network operation occurs inside a
+  transaction;
+- `mmap_size=0` avoids a second mergerfs/FUSE mapping dependency;
+- runtime initialization verifies the selected journal and synchronous modes rather than
+  assuming the PRAGMAs succeeded;
+- C8 must pass real multi-process exclusion, crash rollback, integrity, foreign-key and
+  resume tests at the canonical mergerfs-backed product path before closure.
+
+### Consequences accepted with this erratum
+
+Readers and writers may briefly block one another during the deliberately small control
+transactions. The bounded busy policy makes that visible and recoverable. In return, C8
+avoids the affected WAL path, requires no private SQLite runtime, and uses SQLite's
+strongest rollback-journal durability setting. This does not authorize long write
+transactions or a claim of power-loss testing.
+
+Sources:
+
+- https://sqlite.org/wal.html#the_wal_reset_bug
+- https://sqlite.org/pragma.html#pragma_synchronous
+- https://sqlite.org/lang_transaction.html
+- https://sqlite.org/lockingv3.html
+
+---
+
+## E14 — Bound detector evidence and retain content-free source provenance
+
+**Status:** ACCEPTED FOR IMPLEMENTATION (C8 safety correction, 2026-08-16)
+**Affects:** `CONTRACT.md` §4 and §7; C8 sidecar schema and checkpoint API
+**Raised by:** C8 hostile resource, privacy and coverage review
+
+### The conflict
+
+The frozen contract requires honest source grounding after crash/resume and prohibits
+extracted document bodies in SQLite. Persisting only final finding offsets loses their
+page, paragraph, slide, line or cell identity if the source changes before report
+finalization. Conversely, a generic metadata JSON field can accidentally retain document
+text. Deterministic detectors also had no output-count ceiling, so one bounded 8 MiB text
+could still create hundreds of thousands of hits in one write transaction.
+
+### The correction
+
+- C8 stores bounded, typed, content-free provenance units in a dedicated STRICT table:
+  only canonical parser-generated labels, kinds and character spans; never unit text.
+- Parser identity and extraction metadata use closed keys and safe scalar values. Raw
+  text, nested objects, paths and exception strings are rejected at the persistence
+  boundary.
+- Deterministic hits are capped at 10,000 per file before the first insert. Cap + 1
+  atomically writes the new stable `detector_output_limit/detector_hit_limit` terminal;
+  it cannot loop forever on resume or masquerade as detector-complete.
+- Successful terminals are checked against their exact stage, selection and chunk state
+  both when written and again during finalization. `complete_no_supported_content` is
+  derived from durable file evidence rather than trusted from a caller boolean.
+- Chunks must cover the exact extracted character span. Detector hits must fit that span,
+  and grounded model findings must fit their exact chunk with internally consistent
+  counts and assessment. Typed dataclasses are revalidated rather than trusted.
+
+### Consequences
+
+The schema has nine content tables instead of the preliminary eight-table sketch. This
+is still pre-release schema v1, so no deployed migration or compatibility contract is
+changed. Files that exceed the detector-evidence ceiling remain visible as incomplete
+coverage with an exact stable reason rather than exhausting memory or holding a long
+SQLite write transaction.

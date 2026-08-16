@@ -40,6 +40,7 @@ class FileTerminal(str, Enum):
     PARSE_SIGNAL = "parse_signal"
     PARSE_ERROR = "parse_error"
     PARSER_OUTPUT_LIMIT = "parser_output_limit"
+    DETECTOR_OUTPUT_LIMIT = "detector_output_limit"
     OVERSIZE = "oversize"
     EMPTY = "empty"
     ENCRYPTED = "encrypted"

@@ -1142,6 +1142,62 @@ bounded dense rectangle, then emits only nonblank typed values as canonical
 scalar grammar and count relationships. Empty worksheets are recognized before calling
 python-calamine 0.8.2's iterator because that path can panic.
 
+### 130. A frozen database mode still needs a current-runtime safety check
+
+The original contract selected WAL before SQLite disclosed its WAL-reset corruption
+race. The active 3.46.1 runtime falls inside the affected range, C8 intentionally uses
+multiple processes and the canonical sidecar lives on mergerfs. E13 therefore switches
+only this sidecar to `DELETE` plus `synchronous=EXTRA`, short `BEGIN IMMEDIATE`
+transactions and bounded contention. Runtime facts can invalidate an otherwise sound
+design; verify them before implementing the first write path.
+
+### 131. Python autocommit and explicit SQLite transactions are separate layers
+
+On Python 3.14, `sqlite3.connect(..., autocommit=True)` leaves transaction ownership to
+explicit SQL. After `BEGIN IMMEDIATE`, `Connection.commit()` and `rollback()` are no-ops;
+an early C8 integration check appeared to succeed but closing the connection discarded
+the entire new schema. Every owned transaction now executes literal `COMMIT` or
+`ROLLBACK`, and close/reopen tests prove persistence and crash rollback.
+
+### 132. Cancellation without a signal target must still reach a resumable state
+
+Persisting `cancel_requested` is necessary but insufficient when a crashed worker has
+already lost its lease. There is nobody to acknowledge the request, so leaving that state
+would strand the run permanently. C8 atomically converts the no-lease case to
+`cancelled_pending_resume`, marks only nonterminal files resumable and returns no signal
+target. Operator intent survives without guessing a PID.
+
+### 133. Resume skips work only after re-deriving its identity
+
+C8 never stores extracted text. After a crash it may reuse complete detector evidence or
+valid model results, but it re-extracts selected documents, regenerates chunk boundaries
+and requires exact ordered start/end/hash equality before skipping a completed chunk.
+This keeps the sidecar content-minimal without trusting stale runtime memory.
+
+### 134. Content-free metadata still needs a typed contract
+
+A generic JSON metadata field can store an entire document body just as easily as a page
+count. C8 accepts only closed parser-identity strings, bounded scalar extraction counts
+and canonical provenance kinds, labels and spans. Provenance needs durable storage—final
+finding offsets alone cannot recover a page or cell after the source changes—but its text
+does not. Value-level leak tests matter more than checking that no column is named
+`raw_text`.
+
+### 135. Deterministic output needs a cap even when input is bounded
+
+An 8 MiB text limit still permits hundreds of thousands of repeated email matches. E14
+caps detector hits before the first insert and writes a stable
+`detector_output_limit` terminal at cap + 1. Bounding parser output while leaving derived
+evidence unbounded merely moves the denial-of-service path into the database.
+
+### 136. Typed evidence still needs range validation at the database boundary
+
+A correctly typed checkpoint can still claim impossible offsets. C8 initially accepted
+chunks beyond extracted text, detector hits beyond the file and grounded findings beyond
+their chunk. The durable boundary now binds every range to its parent evidence and
+rechecks finding counters and assessment semantics. Dataclass membership proves shape,
+not truth.
+
 ---
 
 ## Not yet learned
@@ -1150,5 +1206,4 @@ Deliberately absent until the mechanisms exist and have been run:
 
 - private staging, HMAC pseudonymisation, and raw-result retention (designed, but not
   exercised because no Stage-F selection made private Stage E eligible);
-- persistent worker lease, heartbeat writes and crash recovery (C8);
 - extraction-manifest identity handoff (C14).
