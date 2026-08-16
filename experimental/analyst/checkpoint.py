@@ -988,7 +988,28 @@ def _require_terminal_semantics(
         if pending is not None:
             raise CheckpointError("model failure terminal has unfinished chunks")
     elif terminal in _DISCOVERED_TERMINALS:
-        if stage is not FileStage.DISCOVERED:
+        candidate_unsupported = (
+            terminal is FileTerminal.UNSUPPORTED_FORMAT
+            and stage is FileStage.FORMAT_IDENTIFIED
+            and row["format_name"] in _FORMAT_CANDIDATES
+            and row["encoding"] is None
+            and row["parser_identity_json"] is None
+            and row["parser_identity_sha256"] is None
+            and row["extraction_meta_json"] is None
+            and row["selected_for_model"] is None
+            and conn.execute(
+                "SELECT 1 FROM analyst_provenance_units WHERE file_id=? LIMIT 1",
+                (file_id,),
+            ).fetchone() is None
+            and conn.execute(
+                "SELECT 1 FROM analyst_detector_hits WHERE file_id=? LIMIT 1",
+                (file_id,),
+            ).fetchone() is None
+            and conn.execute(
+                "SELECT 1 FROM analyst_chunks WHERE file_id=? LIMIT 1", (file_id,),
+            ).fetchone() is None
+        )
+        if stage is not FileStage.DISCOVERED and not candidate_unsupported:
             raise CheckpointError("pre-extraction terminal contradicts file coverage")
     elif terminal in _FORMAT_FAILURE_TERMINALS:
         if stage is not FileStage.FORMAT_IDENTIFIED:

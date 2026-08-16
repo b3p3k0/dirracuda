@@ -1286,6 +1286,30 @@ C10A loads the stored canonical bytes read-only, verifies their SHA-256 and exac
 and accepts only the frozen model, parser, chunk and strict-isolation contract. Legacy
 rows remain valid history but fail closed before private source access.
 
+### 148. A bounded worker queue also needs bounded completed-result lifetime
+
+Limiting an executor to four tasks does not cap private text if completed `Future`
+objects remain referenced while the next wave starts. C10B removes each submitted and
+completed future, clears batch-local collections and drops result frames before another
+file is admitted. Concurrency bounds must cover results awaiting collection as well as
+threads currently running.
+
+### 149. Durable cancellation requires cooperation inside deterministic work
+
+Polling only around extraction is insufficient when an 8 MiB document can spend time in
+detectors or chunk hashing. C10B passes one shared cancellation probe through extraction,
+bounded scanning and chunk construction, discards partial derived evidence, drains every
+task and only then acknowledges cancellation and releases the lease. Pure CPU work needs
+the same bounded stop contract as subprocess and network work.
+
+### 150. Resume verification errors are not generic state failures
+
+A regenerated parser identity, provenance row or detector hit that differs from its
+durable checkpoint is evidence drift, while a lost fence is an ownership failure. C10B
+uses a narrow mismatch exception at the compare-only boundary so the worker returns the
+closed `resume_mismatch` outcome without conflating cancellation, stale ownership or
+database corruption.
+
 ---
 
 ## Not yet learned

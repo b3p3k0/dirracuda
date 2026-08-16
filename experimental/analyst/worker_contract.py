@@ -43,9 +43,9 @@ _EXACT_FORMATS: Final = frozenset(
     {"text", "rtf", "pdf", "docx", "xlsx", "pptx", "doc", "xls"}
 )
 _FORMAT_CANDIDATES: Final = frozenset({"ooxml", "legacy_office"})
-_MAX_DETECTOR_HITS: Final = 10_000
-_MAX_PHASE1_FILES: Final = 100_000
-_MAX_CHUNKS_PER_FILE: Final = 1_034
+MAX_DETECTOR_HITS: Final = 10_000
+MAX_PHASE1_FILES: Final = 100_000
+MAX_CHUNKS_PER_FILE: Final = 1_034
 _ENCODINGS: Final = frozenset(
     {
         "rtf",
@@ -228,7 +228,7 @@ class Phase1FileHandoff:
         _nonnegative_int(self.ordinal, "file ordinal")
         if type(self.chunks) is not tuple or not self.chunks:
             raise WorkerContractError("selected file requires durable chunks")
-        if len(self.chunks) > _MAX_CHUNKS_PER_FILE:
+        if len(self.chunks) > MAX_CHUNKS_PER_FILE:
             raise WorkerContractError("selected file exceeds the chunk bound")
         if any(type(chunk) is not Phase1ChunkIdentity for chunk in self.chunks):
             raise WorkerContractError("file handoff contains an invalid chunk")
@@ -263,7 +263,7 @@ class FileResumeSnapshot:
         if type(self.stage) is not FileStage or self.stage not in _PRE_MODEL_STAGES:
             raise WorkerContractError("resume stage is outside Phase 1")
         _nonnegative_int(self.detector_hit_count, "detector hit count")
-        if self.detector_hit_count > _MAX_DETECTOR_HITS:
+        if self.detector_hit_count > MAX_DETECTOR_HITS:
             raise WorkerContractError("resume detector hit count exceeds its bound")
         if type(self.chunks) is not tuple or any(
             type(chunk) is not Phase1ChunkIdentity for chunk in self.chunks
@@ -359,7 +359,7 @@ class Phase1Handoff:
             type(item) is not Phase1FileHandoff for item in self.files
         ):
             raise WorkerContractError("Phase 1 handoff files are invalid")
-        if len(self.files) > _MAX_PHASE1_FILES:
+        if len(self.files) > MAX_PHASE1_FILES:
             raise WorkerContractError("Phase 1 handoff exceeds the file bound")
         order = tuple((item.ordinal, item.file_id) for item in self.files)
         if (
@@ -554,6 +554,9 @@ def _optional_host_identity(
 __all__ = [
     "FileResumeSnapshot",
     "HEARTBEAT_INTERVAL_SECONDS",
+    "MAX_CHUNKS_PER_FILE",
+    "MAX_DETECTOR_HITS",
+    "MAX_PHASE1_FILES",
     "MAX_PHASE1_TASKS",
     "Phase1ChunkIdentity",
     "Phase1FileHandoff",

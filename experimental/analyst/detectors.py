@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from datetime import date
+from typing import Callable
 
 from .models import Category, DetectorHit
 
@@ -114,43 +115,104 @@ KIND_TO_CATEGORY = {
 }
 
 
+class _DetectorLimitReached(Exception):
+    pass
+
+
+class DetectorScanCancelled(Exception):
+    """Raised without partial evidence when cooperative scanning is cancelled."""
+
+
 def scan(text: str) -> list[DetectorHit]:
     """Return checksum/structure-validated hits in stable source order."""
-    if not isinstance(text, str):
+    hits, overflow = _scan(text, max_hits=None)
+    assert not overflow
+    return hits
+
+
+def scan_bounded(
+    text: str,
+    *,
+    max_hits: int,
+    cancel_check: Callable[[], bool] | None = None,
+) -> tuple[list[DetectorHit], bool]:
+    """Return no partial evidence when unique findings exceed ``max_hits``."""
+    if type(max_hits) is not int or max_hits <= 0:
+        raise ValueError("max_hits must be a positive integer")
+    if cancel_check is not None and not callable(cancel_check):
+        raise TypeError("cancel_check must be callable")
+    return _scan(text, max_hits=max_hits, cancel_check=cancel_check)
+
+
+def _scan(
+    text: str,
+    *,
+    max_hits: int | None,
+    cancel_check: Callable[[], bool] | None = None,
+) -> tuple[list[DetectorHit], bool]:
+    if type(text) is not str:
         raise TypeError("text must be a string")
-    hits: list[DetectorHit] = []
+    unique: dict[tuple[str, int, int, str], DetectorHit] = {}
 
-    _append_matches(hits, "ssn", _SSN, text, ssn_plausible)
-    for match in _PAN.finditer(text):
-        digits = re.sub(r"[ -]", "", match.group())
-        if luhn_ok(digits):
-            hits.append(_hit("card", match.group(), match.start(), match.end()))
-    _append_matches(hits, "routing", _ABA, text, aba_ok)
-    _append_matches(hits, "iban", _IBAN, text, iban_ok)
-    _append_matches(hits, "email", _EMAIL, text)
-    _append_matches(hits, "phone", _PHONE, text)
-    for match in _DOB.finditer(text):
-        if _valid_date(match.group()):
-            hits.append(_hit("dob", match.group(), match.start(), match.end()))
-    _append_group_matches(hits, "bank_account", _BANK_ACCOUNT, text)
-    _append_group_matches(hits, "passport", _PASSPORT, text)
+    def check_cancelled() -> None:
+        if cancel_check is not None and cancel_check():
+            raise DetectorScanCancelled
 
-    lowered = text.lower()
-    demographic_spans: list[tuple[int, int]] = []
-    for term in sorted(_DEMOGRAPHIC_TERMS, key=len, reverse=True):
-        start = lowered.find(term)
-        while start >= 0:
-            end = start + len(term)
-            if not any(start < prior_end and prior_start < end
-                       for prior_start, prior_end in demographic_spans):
-                hits.append(_hit(
-                    "demographic_term", text[start:end], start, end,
-                ))
-                demographic_spans.append((start, end))
-            start = lowered.find(term, start + 1)
+    def record(hit: DetectorHit) -> None:
+        check_cancelled()
+        key = (hit.kind, hit.start, hit.end, hit.value)
+        if key in unique:
+            return
+        unique[key] = hit
+        if max_hits is not None and len(unique) > max_hits:
+            raise _DetectorLimitReached
 
-    unique = {(item.kind, item.start, item.end, item.value): item for item in hits}
-    return sorted(unique.values(), key=lambda item: (item.start, item.end, item.kind))
+    try:
+        check_cancelled()
+        _append_matches(record, "ssn", _SSN, text, ssn_plausible)
+        check_cancelled()
+        for match in _PAN.finditer(text):
+            digits = re.sub(r"[ -]", "", match.group())
+            if luhn_ok(digits):
+                record(_hit("card", match.group(), match.start(), match.end()))
+        _append_matches(record, "routing", _ABA, text, aba_ok)
+        check_cancelled()
+        _append_matches(record, "iban", _IBAN, text, iban_ok)
+        check_cancelled()
+        _append_matches(record, "email", _EMAIL, text)
+        check_cancelled()
+        _append_matches(record, "phone", _PHONE, text)
+        check_cancelled()
+        for match in _DOB.finditer(text):
+            if _valid_date(match.group()):
+                record(_hit("dob", match.group(), match.start(), match.end()))
+        _append_group_matches(record, "bank_account", _BANK_ACCOUNT, text)
+        check_cancelled()
+        _append_group_matches(record, "passport", _PASSPORT, text)
+        check_cancelled()
+
+        lowered = text.lower()
+        demographic_spans: list[tuple[int, int]] = []
+        for term in sorted(_DEMOGRAPHIC_TERMS, key=len, reverse=True):
+            check_cancelled()
+            start = lowered.find(term)
+            while start >= 0:
+                check_cancelled()
+                end = start + len(term)
+                if not any(start < prior_end and prior_start < end
+                           for prior_start, prior_end in demographic_spans):
+                    record(_hit(
+                        "demographic_term", text[start:end], start, end,
+                    ))
+                    demographic_spans.append((start, end))
+                start = lowered.find(term, start + 1)
+    except _DetectorLimitReached:
+        return [], True
+
+    check_cancelled()
+    return sorted(
+        unique.values(), key=lambda item: (item.start, item.end, item.kind)
+    ), False
 
 
 def categories(text: str) -> set[Category]:
@@ -158,7 +220,7 @@ def categories(text: str) -> set[Category]:
 
 
 def _append_matches(
-    hits: list[DetectorHit],
+    record: Callable[[DetectorHit], None],
     kind: str,
     pattern: re.Pattern[str],
     text: str,
@@ -167,15 +229,18 @@ def _append_matches(
     for match in pattern.finditer(text):
         value = match.group()
         if validator is None or validator(value):
-            hits.append(_hit(kind, value, match.start(), match.end()))
+            record(_hit(kind, value, match.start(), match.end()))
 
 
 def _append_group_matches(
-    hits: list[DetectorHit], kind: str, pattern: re.Pattern[str], text: str
+    record: Callable[[DetectorHit], None],
+    kind: str,
+    pattern: re.Pattern[str],
+    text: str,
 ) -> None:
     for match in pattern.finditer(text):
         value = match.group("value")
-        hits.append(_hit(kind, value, match.start("value"), match.end("value")))
+        record(_hit(kind, value, match.start("value"), match.end("value")))
 
 
 def _valid_date(value: str) -> bool:

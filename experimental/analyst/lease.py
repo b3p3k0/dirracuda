@@ -73,6 +73,20 @@ class LeaseFence:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class WorkerPulse:
+    """A successor lease fence paired with the same transaction's cancel state."""
+
+    fence: LeaseFence
+    cancel_requested: bool
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.fence, LeaseFence):
+            raise ValueError("worker pulse requires a lease fence")
+        if type(self.cancel_requested) is not bool:
+            raise ValueError("worker pulse cancel state must be bool")
+
+
 def claim_worker(
     run_id: str,
     process: ProcessIdentity,
@@ -199,6 +213,60 @@ def heartbeat(
         return LeaseFence(
             fence.generation, fence.run_id, fence.owner_token, fence.process, value
         )
+
+    return run_immediate(operation, path=path)
+
+
+def pulse_worker(
+    fence: LeaseFence,
+    *,
+    heartbeat_monotonic_ns: int | None = None,
+    now_utc: str | None = None,
+    path: Path | None = None,
+) -> WorkerPulse:
+    """Advance the exact fence and read durable cancellation in one transaction."""
+    if not isinstance(fence, LeaseFence):
+        raise TypeError("fence must be a LeaseFence")
+    value = (
+        time.monotonic_ns()
+        if heartbeat_monotonic_ns is None
+        else _require_nonnegative_int(heartbeat_monotonic_ns, "heartbeat")
+    )
+    if value <= fence.heartbeat_monotonic_ns:
+        raise LeaseError("Analyst pulse heartbeat must advance")
+    timestamp = _utc_now() if now_utc is None else _require_text(now_utc, "now_utc")
+
+    def operation(conn: sqlite3.Connection) -> WorkerPulse:
+        _require_exact_lease(conn, fence)
+        run = conn.execute(
+            "SELECT state,cancel_requested_at_utc FROM analyst_runs WHERE run_id=?",
+            (fence.run_id,),
+        ).fetchone()
+        if run is None:
+            raise LeaseError("Analyst run does not exist")
+        state = RunState(str(run["state"]))
+        cancel_timestamp = run["cancel_requested_at_utc"]
+        if state is RunState.RUNNING and cancel_timestamp is None:
+            cancel_requested = False
+        elif (
+            state is RunState.CANCEL_REQUESTED
+            and isinstance(cancel_timestamp, str)
+            and cancel_timestamp
+        ):
+            cancel_requested = True
+        else:
+            raise LeaseError("Analyst run state contradicts its cancel intent")
+        cursor = conn.execute(
+            "UPDATE analyst_gpu_lease SET heartbeat_monotonic_ns=?,"
+            "heartbeat_at_utc=? WHERE " + _FENCE_WHERE,
+            (value, timestamp, *_fence_values(fence)),
+        )
+        if cursor.rowcount != 1:
+            raise LeaseError("Analyst worker lease fence no longer matches")
+        successor = LeaseFence(
+            fence.generation, fence.run_id, fence.owner_token, fence.process, value,
+        )
+        return WorkerPulse(successor, cancel_requested)
 
     return run_immediate(operation, path=path)
 
@@ -573,10 +641,12 @@ __all__ = [
     "LeaseError",
     "LeaseFence",
     "ReconcileResult",
+    "WorkerPulse",
     "acknowledge_cancel",
     "claim_worker",
     "current_lease",
     "heartbeat",
+    "pulse_worker",
     "reconcile_lease",
     "release_worker",
     "request_cancel",

@@ -1,7 +1,7 @@
 # C10 — Phase 1 worker orchestration
 
 Date: 2026-08-16
-Status: **C10A complete; C10B Phase 1 state engine next**
+Status: **C10A and C10B complete; C10C worker shell and acceptance next**
 
 ## Issue
 
@@ -74,10 +74,10 @@ handoff evidence; it does not release the lease or label the run complete.
 
 ### C10B — Phase 1 state engine
 
-- Add pre-model-only claims, typed resume snapshots, exact extraction verification,
+- [x] Add pre-model-only claims, typed resume snapshots, exact extraction verification,
   atomic selected-file chunk handoff and a successor-fence cancel/heartbeat pulse.
-- Implement the bounded four-slot engine with all durable writes on the main thread.
-- Resume from every Phase 1 boundary without rewriting immutable evidence.
+- [x] Implement the bounded four-slot engine with all durable writes on the main thread.
+- [x] Resume from every Phase 1 boundary without rewriting immutable evidence.
 
 ### C10C — worker shell and acceptance
 
@@ -94,6 +94,17 @@ loading, descriptor ownership and cleanup, path/symlink/mount/binding drift,
 cancellation before and during reopen, malformed parser frames, and atomic candidate
 format refinement. The full shared Analyst suite passed with no private data, network or
 model contact. All touched production files remain below the 1,700-line pause threshold.
+
+## C10B outcome
+
+C10B passed independent hostile review. The engine keeps at most four private extraction
+results alive, drops completed futures before admitting the next wave, and cooperatively
+cancels extraction, deterministic detection and chunking before acknowledging durable
+ownership release. Exact extraction and detector drift return the closed
+`resume_mismatch` outcome without rewriting evidence. Fast/Deep selection, detector and
+chunk caps, atomic selected-file handoff, crash recovery, successor-fence pulses and zero
+Ollama contacts are regression-covered. The full shared Analyst suite passed 1,200 tests;
+all touched production files remain below the 1,700-line pause threshold.
 
 ## Exact Phase 1 flow
 
