@@ -154,6 +154,9 @@ DEFAULT_GUI_SETTINGS = {
     'dorkbook': {
         'active_protocol_tab': 'SMB',
     },
+    'analyst': {
+        'offer_after_extract': False,
+    },
     'backend': {
         'mock_mode': False,
         'backend_path': '.',

@@ -14,8 +14,10 @@ from pathlib import Path
 from typing import Callable, Final, Sequence
 
 from shared.path_service import DirracudaPaths, get_paths
+from shared.extract_manifest import ExtractSummaryReference
 
 from .inventory import InventoryResult, inventory_tree
+from .manifest import ExtractionManifest, ManifestError, load_extraction_manifest
 from .models import ANALYST_DEFAULTS
 from .state import RunState
 from .store import RunSpec, create_run, initialize_database, open_connection
@@ -316,6 +318,105 @@ def create_and_launch(
     return launch_run(run_id, path=path, paths=paths)
 
 
+def create_manifest_run(
+    reference: ExtractSummaryReference,
+    *,
+    main_db_path: Path | None,
+    output_base: Path | None,
+    report_label: str,
+    mode: str = "fast",
+    path: Path | None = None,
+    run_id_factory: TokenFactory = secrets.token_hex,
+    cancel_check: Callable[[], bool] | None = None,
+) -> tuple[str, ExtractionManifest]:
+    """Persist one exact extraction-manifest run without guessing host identity."""
+    if type(reference) is not ExtractSummaryReference:
+        raise TypeError("manifest run requires a structured extraction reference")
+    try:
+        from .worker_preflight import (
+            current_detector_rules,
+            current_parser_bundle_mapping,
+        )
+        from .worksheet import prompt_template_hash, schema_hash
+
+        manifest = load_extraction_manifest(
+            reference,
+            main_db_path=main_db_path,
+            cancel_check=cancel_check,
+        )
+        selected_output = manifest.source_root if output_base is None else output_base
+        request = DirectoryRunRequest(
+            manifest.source_root, selected_output, report_label, mode,
+        )
+        _require_existing_directory(selected_output)
+        run_id = run_id_factory(_RUN_ID_BYTES)
+        if type(run_id) is not str or _RUN_ID.fullmatch(run_id) is None:
+            raise ValueError("run id source returned an invalid value")
+        detector_version, detector_sha256 = current_detector_rules()
+        output_root = _manifest_output_root(request, run_id, manifest.ip_address)
+        spec = RunSpec(
+            run_id=run_id,
+            mode=mode,
+            source_mode="extraction_manifest",
+            source_root=str(manifest.source_root),
+            output_root=str(output_root),
+            source_identity=build_source_identity(manifest.inventory),
+            report_label=report_label,
+            model_tag=ANALYST_DEFAULTS.model_tag,
+            model_digest=ANALYST_DEFAULTS.model_digest,
+            worksheet_version=ANALYST_DEFAULTS.worksheet_version,
+            prompt_sha256=prompt_template_hash(),
+            response_schema_sha256=schema_hash(),
+            detector_rules_version=detector_version,
+            detector_rules_sha256=detector_sha256,
+            parser_bundle=current_parser_bundle_mapping(),
+            chunk_chars=ANALYST_DEFAULTS.chunk_chars,
+            overlap_chars=ANALYST_DEFAULTS.overlap_chars,
+            num_ctx=ANALYST_DEFAULTS.num_ctx,
+            num_predict=ANALYST_DEFAULTS.num_predict,
+            isolation_mode="strict",
+            reduced_isolation_ack=False,
+            host_type=manifest.host_type,
+            protocol_server_id=manifest.protocol_server_id,
+            ip_address=manifest.ip_address,
+            port=manifest.port,
+            extract_summary_row_id=reference.db_row_id,
+        )
+        initialize_database(path)
+        create_run(spec, manifest.inventory, path=path)
+        return run_id, manifest
+    except ManifestError:
+        raise AnalystServiceError(ServiceFailure.INVENTORY) from None
+    except (TypeError, ValueError, OSError):
+        raise AnalystServiceError(ServiceFailure.CONTRACT) from None
+    except AnalystServiceError:
+        raise
+    except Exception:
+        raise AnalystServiceError(ServiceFailure.STORAGE) from None
+
+
+def create_manifest_and_launch(
+    reference: ExtractSummaryReference,
+    *,
+    main_db_path: Path | None,
+    output_base: Path | None,
+    report_label: str,
+    mode: str = "fast",
+    path: Path | None = None,
+    paths: DirracudaPaths | None = None,
+) -> RunLaunch:
+    """Persist an exact manifest run first, then detach the production worker."""
+    run_id, _manifest = create_manifest_run(
+        reference,
+        main_db_path=main_db_path,
+        output_base=output_base,
+        report_label=report_label,
+        mode=mode,
+        path=path,
+    )
+    return launch_run(run_id, path=path, paths=paths)
+
+
 def cancel_run(run_id: str, *, path: Path | None = None) -> CancelResult:
     """Persist cancellation intent before any exact worker signal."""
     try:
@@ -466,6 +567,17 @@ def _run_output_root(request: DirectoryRunRequest, run_id: str) -> Path:
     return request.output_base / "_analyst" / component
 
 
+def _manifest_output_root(
+    request: DirectoryRunRequest, run_id: str, host_identity: str,
+) -> Path:
+    label = host_identity.casefold().encode("ascii", "ignore").decode("ascii")
+    slug = re.sub(r"[^a-z0-9]+", "-", label).strip("-")[:_LABEL_COMPONENT_CHARS]
+    if not slug:
+        slug = "host"
+    digest = hashlib.sha256(host_identity.encode("utf-8")).hexdigest()[:8]
+    return request.output_base / "_analyst" / f"{slug}-{digest}-{run_id[:12]}"
+
+
 def _require_launchable_run(run_id: str, *, path: Path | None) -> None:
     conn = open_connection(path, read_only=True)
     try:
@@ -557,6 +669,8 @@ __all__: Sequence[str] = (
     "cancel_run",
     "completed_report_html",
     "create_and_launch",
+    "create_manifest_and_launch",
+    "create_manifest_run",
     "create_directory_run",
     "launch_run",
     "list_run_summaries",

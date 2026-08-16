@@ -21,6 +21,7 @@ class AnalystTab:
         self._theme = get_theme()
         self._busy = False
         self._summaries = []
+        self._manifest_choices = []
         self._report_window = None
         self.frame = tk.Frame(parent)
         self._theme.apply_to_widget(self.frame, "main_window")
@@ -52,22 +53,51 @@ class AnalystTab:
         self._output_var = tk.StringVar(value="")
         self._label_var = tk.StringVar(value="")
         self._mode_var = tk.StringVar(value="fast")
-        self._add_path_row(form, 0, "Source directory", self._source_var, self._browse_source)
-        self._add_path_row(form, 1, "Output base", self._output_var, self._browse_output)
+        self._source_kind_var = tk.StringVar(value="directory")
+        source_modes = tk.Frame(form)
+        self._theme.apply_to_widget(source_modes, "main_window")
+        source_modes.grid(row=0, column=0, columnspan=3, sticky="w", pady=3)
+        for value, text in (
+            ("directory", "Directory"),
+            ("manifest", "Persisted extraction manifest"),
+        ):
+            button = tk.Radiobutton(
+                source_modes, text=text, variable=self._source_kind_var,
+                value=value, command=self._update_source_controls,
+            )
+            self._theme.apply_to_widget(button, "checkbox")
+            button.pack(side=tk.LEFT, padx=(0, 12))
+
+        self._add_path_row(form, 1, "Source directory", self._source_var, self._browse_source)
+        manifest_label = tk.Label(form, text="Extraction")
+        self._theme.apply_to_widget(manifest_label, "label")
+        manifest_label.grid(row=2, column=0, sticky="w", pady=3)
+        self._manifest_var = tk.StringVar(value="No persisted extraction selected")
+        self._manifest_combo = ttk.Combobox(
+            form, textvariable=self._manifest_var, state="disabled",
+        )
+        self._manifest_combo.grid(row=2, column=1, sticky="ew", padx=(8, 7), pady=3)
+        self._manifest_combo.bind("<<ComboboxSelected>>", self._manifest_selected, add="+")
+        self._manifest_refresh_btn = tk.Button(
+            form, text="Reload", command=self._refresh_manifest_choices,
+        )
+        self._theme.apply_to_widget(self._manifest_refresh_btn, "button_secondary")
+        self._manifest_refresh_btn.grid(row=2, column=2, pady=3)
+        self._add_path_row(form, 3, "Output base", self._output_var, self._browse_output)
 
         label = tk.Label(form, text="Report label")
         self._theme.apply_to_widget(label, "label")
-        label.grid(row=2, column=0, sticky="w", pady=3)
+        label.grid(row=4, column=0, sticky="w", pady=3)
         entry = tk.Entry(form, textvariable=self._label_var)
         self._theme.apply_to_widget(entry, "entry")
-        entry.grid(row=2, column=1, columnspan=2, sticky="ew", padx=(8, 0), pady=3)
+        entry.grid(row=4, column=1, columnspan=2, sticky="ew", padx=(8, 0), pady=3)
 
         mode_label = tk.Label(form, text="Depth")
         self._theme.apply_to_widget(mode_label, "label")
-        mode_label.grid(row=3, column=0, sticky="w", pady=3)
+        mode_label.grid(row=5, column=0, sticky="w", pady=3)
         modes = tk.Frame(form)
         self._theme.apply_to_widget(modes, "main_window")
-        modes.grid(row=3, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=3)
+        modes.grid(row=5, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=3)
         for value, text in (
             ("fast", "Fast — model-review deterministic hits"),
             ("deep", "Deep — model-review every nonempty supported file"),
@@ -84,7 +114,24 @@ class AnalystTab:
             anchor="w",
         )
         self._theme.apply_to_widget(model, "label")
-        model.grid(row=4, column=0, columnspan=3, sticky="w", pady=(6, 3))
+        model.grid(row=6, column=0, columnspan=3, sticky="w", pady=(6, 3))
+
+        settings_manager = self._context.get("settings_manager")
+        try:
+            offer_enabled = settings_manager is not None and (
+                settings_manager.get_setting("analyst.offer_after_extract", False) is True
+            )
+        except Exception:
+            offer_enabled = False
+        self._offer_var = tk.BooleanVar(value=offer_enabled)
+        offer = tk.Checkbutton(
+            form,
+            text="Offer Fast Analyst review after a successful extraction",
+            variable=self._offer_var,
+            command=self._persist_offer_setting,
+        )
+        self._theme.apply_to_widget(offer, "checkbox")
+        offer.grid(row=7, column=0, columnspan=3, sticky="w", pady=(3, 0))
 
         controls = tk.Frame(frame)
         self._theme.apply_to_widget(controls, "main_window")
@@ -132,6 +179,7 @@ class AnalystTab:
             self._runs.column(key, width=width, anchor="w")
         self._runs.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 12))
         self._runs.bind("<<TreeviewSelect>>", self._on_selection, add="+")
+        self._refresh_manifest_choices()
 
     def _add_path_row(self, parent, row, text, variable, command) -> None:
         label = tk.Label(parent, text=text)
@@ -156,6 +204,65 @@ class AnalystTab:
         if selected:
             self._output_var.set(selected)
 
+    def _update_source_controls(self) -> None:
+        manifest = self._source_kind_var.get() == "manifest"
+        self._manifest_combo.configure(
+            state="readonly" if manifest and self._manifest_choices else "disabled",
+        )
+
+    def _main_db_path(self) -> Path | None:
+        raw = self._context.get("main_db_path")
+        if type(raw) is not str or not raw:
+            return None
+        candidate = Path(raw).expanduser().absolute()
+        return candidate if candidate.is_absolute() else None
+
+    def _refresh_manifest_choices(self) -> None:
+        db_path = self._main_db_path()
+        if db_path is None:
+            self._finish_manifest_refresh(())
+            return
+
+        def work() -> None:
+            try:
+                from experimental.analyst.manifest import list_extraction_manifests
+
+                choices = list_extraction_manifests(db_path)
+            except Exception:
+                choices = ()
+            self._schedule(lambda: self._finish_manifest_refresh(choices))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _finish_manifest_refresh(self, choices) -> None:
+        self._manifest_choices = list(choices)
+        labels = [choice.display_label for choice in self._manifest_choices]
+        self._manifest_combo.configure(values=labels)
+        if labels:
+            self._manifest_combo.current(0)
+            self._manifest_var.set(labels[0])
+            self._manifest_selected()
+        else:
+            self._manifest_var.set("No persisted extraction available")
+        self._update_source_controls()
+
+    def _manifest_selected(self, _event=None) -> None:
+        index = self._manifest_combo.current()
+        if 0 <= index < len(self._manifest_choices) and not self._label_var.get().strip():
+            self._label_var.set(self._manifest_choices[index].ip_address)
+
+    def _persist_offer_setting(self) -> None:
+        settings_manager = self._context.get("settings_manager")
+        if settings_manager is None:
+            self._offer_var.set(False)
+            return
+        try:
+            settings_manager.set_setting(
+                "analyst.offer_after_extract", bool(self._offer_var.get()),
+            )
+        except Exception:
+            self._offer_var.set(False)
+
     def _schedule(self, callback) -> None:
         try:
             if self.frame.winfo_exists():
@@ -166,18 +273,36 @@ class AnalystTab:
     def _start_analysis(self) -> None:
         if self._busy:
             return
+        source_kind = self._source_kind_var.get()
+        request = None
+        choice = None
+        manifest_output = None
+        report_label = self._label_var.get()
+        mode = self._mode_var.get()
         try:
-            from experimental.analyst.service import DirectoryRunRequest
+            if source_kind == "directory":
+                from experimental.analyst.service import DirectoryRunRequest
 
-            request = DirectoryRunRequest(
-                Path(self._source_var.get()),
-                Path(self._output_var.get()),
-                self._label_var.get(),
-                self._mode_var.get(),
-            )
+                request = DirectoryRunRequest(
+                    Path(self._source_var.get()),
+                    Path(self._output_var.get()),
+                    report_label,
+                    mode,
+                )
+            elif source_kind == "manifest":
+                index = self._manifest_combo.current()
+                choice = self._manifest_choices[index]
+                output_text = self._output_var.get().strip()
+                manifest_output = Path(output_text) if output_text else None
+                if manifest_output is not None and not manifest_output.is_absolute():
+                    raise ValueError("output base must be absolute")
+                if not report_label.strip():
+                    raise ValueError("report label is required")
+            else:
+                raise ValueError("unknown source kind")
         except Exception:
             safe_messagebox.showerror(
-                "Analyst", "Choose absolute source/output directories and enter a report label.",
+                "Analyst", "Choose a valid source and enter a report label.",
                 parent=self.frame.winfo_toplevel(),
             )
             return
@@ -185,9 +310,20 @@ class AnalystTab:
 
         def work() -> None:
             try:
-                from experimental.analyst.service import create_and_launch
+                if source_kind == "directory":
+                    from experimental.analyst.service import create_and_launch
 
-                launch = create_and_launch(request)
+                    launch = create_and_launch(request)
+                else:
+                    from experimental.analyst.service import create_manifest_and_launch
+
+                    launch = create_manifest_and_launch(
+                        choice.reference,
+                        main_db_path=self._main_db_path(),
+                        output_base=manifest_output,
+                        report_label=report_label,
+                        mode=mode,
+                    )
             except Exception:
                 self._schedule(lambda: self._finish_action(False, "Run creation or launch failed."))
                 return

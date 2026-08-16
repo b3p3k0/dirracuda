@@ -2,10 +2,10 @@
 
 > **Unreleased feature — draft guide.** Analyst's inventory, parser sandbox, durable
 > state, Phase 1/Phase 2 worker orchestration, local Ollama boundary, atomic report
-> publication, standalone-directory launcher, task hydration and report browser are
-> implemented and tested on the feature branch. Public-only Ollama acceptance has
-> passed. The extraction-manifest/post-extract hook and final release matrix remain
-> unfinished; labels may change during final UI testing.
+> publication, standalone-directory and extraction-manifest launchers, opt-in
+> post-extract handoff, task hydration and report browser are implemented and tested
+> on the feature branch. Public-only Ollama acceptance has passed. The final release
+> matrix remains unfinished; labels may change during final UI testing.
 
 Analyst reviews directories of already-extracted documents and builds a per-host
 exposure report. It looks for identifiers such as Social Security numbers, payment-card
@@ -96,21 +96,24 @@ The planned primary entry point is:
 
 1. Start Dirracuda with `./dirracuda`.
 2. Open **Accessories → Analyst**.
-3. Choose an existing directory of extracted files and an output base directory.
-4. Enter a report label. Analyst does not guess identity from a directory name.
+3. Choose an existing directory, or select an exact persisted extraction manifest.
+   A manifest run analyzes only the final saved files named by that extraction.
+4. Choose an output base if desired and enter a report label. Manifest runs carry the
+   persisted protocol/host identity; standalone directories do not guess one.
 5. Choose Fast or Deep mode and select **Analyze**.
 
-The current C13 launcher creates a standalone, unattributed directory run. Selecting the
-latest extraction manifest and carrying its authenticated host identity is C14 work; do
-not substitute a guessed host identity in the meantime.
+The launcher supports both standalone directories and recent primary-database
+extraction manifests. A manifest choice is bound to its exact summary row id; it never
+silently switches to a newer extraction for the same host.
 
 **Fast** is the sensible default. Detectors still scan every document with extracted
 text; the model spends time only on selected material. **Deep** costs much more time and
 GPU capacity because every supported document with text goes through model review.
 
-The automatic post-extract offer is planned as an opt-in setting and will be off by
-default. It uses the saved extraction manifest rather than trying to reconstruct host
-identity from filenames.
+The automatic post-extract offer is opt-in and off by default. Enable it in the Analyst
+tab. The offer appears only after the extraction summary has been durably persisted and
+uses that exact manifest rather than reconstructing identity from filenames. Accepted
+offers always use Fast mode and strict isolation.
 
 ### Common use cases
 

@@ -264,7 +264,7 @@ explicitly deferred Stage E until real-document validation is useful.
 
 ## Next Step
 
-C0B through C13 are complete at their reviewed boundaries. C10 provides the typed,
+C0B through C14 are complete at their reviewed boundaries. C10 provides the typed,
 descriptor-safe and resumable Phase 1 worker handoff. C11 now consumes that handoff
 through separately charged Ollama controls/chats, exact repair and recovery-health
 rules, grounded evidence and atomic per-file model closure while retaining the live
@@ -273,8 +273,10 @@ JSON and static partitioned HTML, then atomically commits their manifest and cle
 lease. The standalone worker is active because it consumes both handoffs and finalizes
 in one process. C13 adds the standalone-directory Accessories launcher, detached
 worker control, restart-safe Running Tasks hydration and a manifest-verified,
-paginated report browser. C14 next adds extraction-manifest identity and the opt-in
-post-extract handoff.
+paginated report browser. C14 adds exact extraction-summary row/file references,
+manifest-only descriptor-safe inventory, recent-manifest selection and the default-off
+post-extract handoff across single, batch and post-scan extraction flows. C15 next owns
+the final release matrix and packaging gate.
 Private Stage E remains deferred and requires fresh explicit
 authorization before any real-document read. Core startup does not depend on Analyst's
 optional parser lane.

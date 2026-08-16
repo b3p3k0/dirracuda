@@ -28,7 +28,7 @@ from gui.utils.keybindings import add_shortcut_hint, bind_close_shortcuts, bind_
 
 _DISMISSED_KEY = "experimental.warning_dismissed"
 _DIALOG_TITLE = "Accessories"
-_DIALOG_GEOMETRY = "655x420"
+_DIALOG_GEOMETRY = "655x650"
 _WARNING_TEXT = (
     "Some items here may require additional setup before first use.\n"
     "Check per-tool documentation for dependencies and configuration."

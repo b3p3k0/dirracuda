@@ -8,9 +8,13 @@ anonymous/guest-accessible shares while respecting configurable safety limits.
 from __future__ import annotations
 
 import datetime as _dt
+import hashlib
+import ipaddress
 import json
 import os
 import re
+import secrets
+import stat
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -26,6 +30,7 @@ from shared.quarantine_promotion import (
     safe_move,
 )
 from shared.path_service import get_paths, get_legacy_paths, select_existing_path
+from shared.extract_manifest import ExtractSummaryReference, ExtractSummarySource
 
 try:  # pragma: no cover - runtime dependency
     from impacket.smbconnection import SMBConnection, SessionError
@@ -34,6 +39,7 @@ except ImportError:  # pragma: no cover - handled upstream
     SessionError = Exception
 
 DEFAULT_CLIENT_NAME = "dirracuda-extract"
+MAX_EXTRACT_SUMMARY_BYTES = 64 * 1024 * 1024
 _PATHS = get_paths()
 _LEGACY = get_legacy_paths(paths=_PATHS)
 
@@ -660,29 +666,43 @@ def write_extract_log(
     host_type: str = "S",
     protocol_server_id: Optional[int] = None,
     port: Optional[int] = None,
-) -> Path:
+) -> ExtractSummaryReference:
     """
     Persist extraction summary metadata into main DB when db_path is available.
     Falls back to legacy file logs when DB persistence is unavailable.
 
-    Returns:
-        DB marker path (preferred) or legacy filesystem path.
+    Returns one structured primary-row or fallback-file reference.
     """
-    if db_path:
+    normalized_type, normalized_ip, normalized_server_id, normalized_port = (
+        _validated_extract_identity(
+            host_type,
+            ip_address if ip_address is not None else summary.get("ip_address"),
+            protocol_server_id,
+            port,
+        )
+    )
+    if (
+        type(db_path) is str
+        and db_path.startswith("/")
+        and "\\" not in db_path
+        and "\x00" not in db_path
+    ):
         try:
             from gui.utils.database_access import DatabaseReader
 
             reader = DatabaseReader(str(db_path))
             summary_id = reader.upsert_extract_run_summary(
                 summary,
-                ip_address=ip_address,
-                host_type=host_type,
-                protocol_server_id=protocol_server_id,
-                port=port,
+                ip_address=normalized_ip,
+                host_type=normalized_type,
+                protocol_server_id=normalized_server_id,
+                port=normalized_port,
                 source="extract_runner",
             )
             if summary_id is not None:
-                return Path(f"db_extract_run_summary_{summary_id}.json")
+                return ExtractSummaryReference(
+                    summary_id, None, ExtractSummarySource.PRIMARY_DB,
+                )
         except Exception:
             # Fall through to legacy file persistence.
             pass
@@ -694,14 +714,143 @@ def write_extract_log(
             _LEGACY.legacy_home_root / "extract_logs",
         ],
     )
-    logs_dir.mkdir(parents=True, exist_ok=True)
-
     timestamp = summary.get("finished_at") or summary.get("started_at") or _utcnow()
-    ip_fragment = (summary.get("ip_address") or "host").replace(":", "-")
-    safe_timestamp = timestamp.replace(":", "").replace("-", "")
-    log_file = logs_dir / f"extract_{ip_fragment}_{safe_timestamp}.json"
-    log_file.write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    return log_file
+    host_value = normalized_ip
+    host_fragment = hashlib.sha256(host_value.encode("utf-8")).hexdigest()[:12]
+    safe_timestamp = re.sub(r"[^0-9TZ]", "", str(timestamp))[:32] or "unknown"
+    suffix = secrets.token_hex(8)
+    log_file = (
+        logs_dir / f"extract_{host_fragment}_{safe_timestamp}_{suffix}.json"
+    ).absolute()
+    envelope = {
+        "host": {
+            "host_type": normalized_type,
+            "ip_address": normalized_ip,
+            "port": normalized_port,
+            "protocol_server_id": normalized_server_id,
+        },
+        "schema": "dirracuda-extract-summary-v1",
+        "summary": summary,
+    }
+    payload = json.dumps(
+        envelope, indent=2, ensure_ascii=False, allow_nan=False,
+    ).encode("utf-8")
+    if not payload or len(payload) > MAX_EXTRACT_SUMMARY_BYTES:
+        raise OSError("extract summary exceeds its persistence bound")
+    logs_fd = _open_private_log_directory(logs_dir, create=True)
+    try:
+        fd = os.open(
+            log_file.name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=logs_fd,
+        )
+        try:
+            os.fchmod(fd, 0o600)
+            view = memoryview(payload)
+            while view:
+                written = os.write(fd, view)
+                if written <= 0:
+                    raise OSError("extract summary write made no progress")
+                view = view[written:]
+            os.fsync(fd)
+            written_info = os.fstat(fd)
+        finally:
+            os.close(fd)
+        os.fsync(logs_fd)
+        verify_dir = _open_private_log_directory(logs_dir, create=False)
+        try:
+            if (
+                os.fstat(verify_dir).st_dev,
+                os.fstat(verify_dir).st_ino,
+            ) != (os.fstat(logs_fd).st_dev, os.fstat(logs_fd).st_ino):
+                raise OSError("extract log directory changed during persistence")
+            verify_file = os.open(
+                log_file.name, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                dir_fd=verify_dir,
+            )
+            try:
+                observed = os.fstat(verify_file)
+                if (observed.st_dev, observed.st_ino, observed.st_size) != (
+                    written_info.st_dev, written_info.st_ino, written_info.st_size,
+                ):
+                    raise OSError("extract summary binding changed during persistence")
+            finally:
+                os.close(verify_file)
+        finally:
+            os.close(verify_dir)
+    finally:
+        os.close(logs_fd)
+    return ExtractSummaryReference(
+        None, log_file, ExtractSummarySource.FALLBACK_JSON,
+    )
+
+
+def _open_private_log_directory(path: Path, *, create: bool) -> int:
+    """Create/open the selected log directory without following components."""
+    if type(create) is not bool:
+        raise TypeError("create must be bool")
+    absolute = path.absolute()
+    raw = os.fspath(absolute)
+    parts = tuple(raw.split("/")[1:])
+    if not parts or any(part in {"", ".", ".."} for part in parts) or "\\" in raw:
+        raise OSError("extract log directory is unsafe")
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+    current = os.open("/", flags)
+    try:
+        for component in parts:
+            try:
+                child = os.open(component, flags, dir_fd=current)
+            except FileNotFoundError:
+                if not create:
+                    raise
+                os.mkdir(component, 0o700, dir_fd=current)
+                child = os.open(component, flags, dir_fd=current)
+            os.close(current)
+            current = child
+        info = os.fstat(current)
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+            raise OSError("extract log directory is unsafe")
+        if stat.S_IMODE(info.st_mode) != 0o700:
+            if not create:
+                raise OSError("extract log directory permissions changed")
+            os.fchmod(current, 0o700)
+        result = current
+        current = -1
+        return result
+    finally:
+        if current >= 0:
+            os.close(current)
+
+
+def _validated_extract_identity(
+    host_type: object,
+    ip_address: object,
+    protocol_server_id: object,
+    port: object,
+) -> tuple[str, str, int | None, int | None]:
+    normalized_type = str(host_type or "S").upper()
+    if normalized_type not in {"S", "F", "H"}:
+        raise ValueError("extract host type is invalid")
+    if (
+        type(ip_address) is not str
+        or not ip_address.strip()
+        or ip_address != ip_address.strip()
+        or len(ip_address) > 255
+        or any(ord(char) < 32 or ord(char) == 127 for char in ip_address)
+    ):
+        raise ValueError("extract address is invalid")
+    try:
+        ipaddress.ip_address(ip_address)
+    except ValueError:
+        raise ValueError("extract address is invalid") from None
+    if protocol_server_id is not None and (
+        type(protocol_server_id) is not int or protocol_server_id <= 0
+    ):
+        raise ValueError("extract server id is invalid")
+    if port is not None and (type(port) is not int or not 1 <= port <= 65535):
+        raise ValueError("extract port is invalid")
+    return normalized_type, ip_address, protocol_server_id, port
 
 
 def _connect(ip_address: str, timeout_seconds: int) -> SMBConnection:

@@ -7,7 +7,7 @@ import os
 import stat
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Final
+from typing import Callable, Final, Iterable
 
 HASH_READ_SIZE: Final = 1024 * 1024
 FDINFO_MAX_BYTES: Final = 16 * 1024
@@ -242,6 +242,128 @@ def inventory_tree(root: Path, *,
         )
     finally:
         handle.close()
+
+
+def inventory_selected_paths(
+    root: Path,
+    relative_paths: Iterable[str],
+    *,
+    limits: InventoryLimits | None = None,
+    cancel_check: CancelCheck | None = None,
+) -> InventoryResult:
+    """Inventory only an ordered manifest path set beneath one exact root."""
+    selected_limits = limits or InventoryLimits()
+    try:
+        selected = tuple(relative_paths)
+    except TypeError:
+        raise TypeError("manifest paths must be iterable text") from None
+    if len(selected) > selected_limits.max_entries:
+        raise InventoryLimitError("manifest entry limit exceeded")
+    if len(set(selected)) != len(selected):
+        raise InventoryRootError("manifest paths must be unique")
+    handle = _open_root(root)
+    files: list[InventoryFile] = []
+    exclusions: list[InventoryExclusion] = []
+    try:
+        root_stat = os.fstat(handle.root_fd)
+        root_mount_id = _mount_id(handle.root_fd)
+        for relative in selected:
+            if cancel_check is not None and cancel_check():
+                raise InventoryCancelled("inventory cancelled")
+            parts = _selected_relative_parts(relative, selected_limits.max_depth)
+            parent_fd = os.dup(handle.root_fd)
+            try:
+                excluded = False
+                for component in parts[:-1]:
+                    try:
+                        child_fd = os.open(component, _directory_flags(), dir_fd=parent_fd)
+                    except OSError:
+                        exclusions.append(InventoryExclusion(relative, "entry_unreadable"))
+                        excluded = True
+                        break
+                    os.close(parent_fd)
+                    parent_fd = child_fd
+                    if _mount_id(parent_fd) != root_mount_id:
+                        exclusions.append(InventoryExclusion(relative, "mount_boundary"))
+                        excluded = True
+                        break
+                if excluded:
+                    continue
+                name = parts[-1]
+                try:
+                    observed = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+                except OSError:
+                    exclusions.append(InventoryExclusion(relative, "entry_unreadable"))
+                    continue
+                if stat.S_ISLNK(observed.st_mode):
+                    exclusions.append(InventoryExclusion(relative, "symlink"))
+                    continue
+                if not stat.S_ISREG(observed.st_mode):
+                    exclusions.append(InventoryExclusion(relative, "special_file"))
+                    continue
+                try:
+                    file_fd = os.open(name, _file_flags(), dir_fd=parent_fd)
+                except OSError:
+                    exclusions.append(InventoryExclusion(relative, "entry_unreadable"))
+                    continue
+                try:
+                    opened = os.fstat(file_fd)
+                    if not _same_object(observed, opened, stat.S_ISREG):
+                        exclusions.append(
+                            InventoryExclusion(relative, "changed_during_inventory")
+                        )
+                        continue
+                    if _mount_id(file_fd) != root_mount_id:
+                        exclusions.append(InventoryExclusion(relative, "mount_boundary"))
+                        continue
+                    try:
+                        digest = _hash_fd(file_fd, cancel_check)
+                        after = os.fstat(file_fd)
+                    except OSError:
+                        exclusions.append(
+                            InventoryExclusion(relative, "entry_unreadable")
+                        )
+                        continue
+                    if (
+                        not _stable_file(opened, after)
+                        or not _name_still_binds(parent_fd, name, after, stat.S_ISREG)
+                    ):
+                        exclusions.append(
+                            InventoryExclusion(relative, "changed_during_inventory")
+                        )
+                        continue
+                    files.append(InventoryFile(
+                        relative, after.st_size, after.st_mtime_ns,
+                        after.st_ctime_ns, after.st_dev, after.st_ino,
+                        stat.S_IMODE(after.st_mode), digest,
+                    ))
+                finally:
+                    os.close(file_fd)
+            finally:
+                os.close(parent_fd)
+        _verify_root_bindings(handle)
+        return InventoryResult(
+            root_stat.st_dev,
+            root_stat.st_ino,
+            root_mount_id,
+            tuple(files),
+            tuple(exclusions),
+        )
+    finally:
+        handle.close()
+
+
+def _selected_relative_parts(value: object, max_depth: int) -> tuple[str, ...]:
+    if type(value) is not str or not value or value.startswith("/"):
+        raise InventoryRootError("manifest path must be canonical relative text")
+    if "\\" in value or "\x00" in value:
+        raise InventoryRootError("manifest path is not canonical")
+    parts = tuple(value.split("/"))
+    if any(part in {"", ".", ".."} for part in parts):
+        raise InventoryRootError("manifest path is not canonical")
+    if len(parts) - 1 > max_depth:
+        raise InventoryLimitError("manifest directory depth limit exceeded")
+    return parts
 
 
 def _open_root(root: Path) -> _RootHandle:

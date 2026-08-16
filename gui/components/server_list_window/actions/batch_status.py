@@ -9,6 +9,7 @@ import platform
 import json
 import threading
 from concurrent.futures import Future
+from pathlib import Path
 from typing import Dict, Any, Optional, List
 
 from gui.components.server_list_window import table, filters
@@ -221,6 +222,28 @@ class ServerListWindowBatchStatusMixin:
                 }
 
             job["results"].append(result)
+            if (
+                job.get("type") == "extract"
+                and result.get("status") == "success"
+                and int(result.get("_analyst_file_count") or 0) > 0
+            ):
+                try:
+                    from gui.utils.analyst_post_extract import offer_after_extract
+
+                    raw_db_path = getattr(getattr(self, "db_reader", None), "db_path", None)
+                    db_path = (
+                        Path(raw_db_path).expanduser().absolute()
+                        if raw_db_path else None
+                    )
+                    offer_after_extract(
+                        self.window,
+                        getattr(self, "settings_manager", None),
+                        result.get("_analyst_reference"),
+                        main_db_path=db_path,
+                        report_label=str(result.get("ip_address") or "host"),
+                    )
+                except Exception:
+                    pass
             units = 1
             try:
                 units = int(result.get("units", 1))

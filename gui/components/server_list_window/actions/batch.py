@@ -615,7 +615,7 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                 )
             try:
                 db_reader = getattr(self, "db_reader", None)
-                log_path = extract_runner.write_extract_log(
+                summary_reference = extract_runner.write_extract_log(
                     summary,
                     db_path=str(getattr(db_reader, "db_path", "") or ""),
                     ip_address=ip_address,
@@ -625,7 +625,7 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                 )
             except TypeError:
                 # Test doubles may still provide the legacy single-arg signature.
-                log_path = extract_runner.write_extract_log(summary)
+                summary_reference = extract_runner.write_extract_log(summary)
         except extract_runner.ExtractError as exc:
             status = "cancelled" if "cancel" in str(exc).lower() else "failed"
             return {
@@ -643,7 +643,10 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
             note_parts.append("timed out")
         if summary.get("stop_reason"):
             note_parts.append(summary["stop_reason"].replace("_", " "))
-        note_parts.append(f"log: {log_path}")
+        note_parts.append(
+            "summary: "
+            + str(getattr(summary_reference, "display_token", summary_reference))
+        )
 
         # Mark host as extracted (successful run, even if zero files)
         self._handle_extracted_update(ip_address, row_key=row_key, host_type=host_type)
@@ -657,6 +660,8 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
             "status": "success",
             "notes": ", ".join(note_parts),
             "clamav": summary.get("clamav", {"enabled": False}),
+            "_analyst_reference": summary_reference,
+            "_analyst_file_count": files,
         }
 
     # Probe status helpers
