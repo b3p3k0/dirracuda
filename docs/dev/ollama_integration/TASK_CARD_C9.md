@@ -1,8 +1,8 @@
 # C9 — Strict Ollama client, cancellation and shared-GPU policy
 
 Date: 2026-08-16
-Status: **C9A offline implementation complete; public live acceptance and C9B
-durable resource-pause migration held**
+Status: **C9A and C9B offline implementation complete; public live acceptance held on
+operator Ollama hardening**
 
 ## Issue
 
@@ -43,14 +43,13 @@ against those two attempts would falsely terminalize healthy work.
 - Provide a pure bounded backoff decision for later orchestration. C9A does not mutate
   C8 or consume semantic attempts.
 
-## C9B gate before C10
+## C9B outcome before C10
 
-C8 v1 cannot durably represent retryable resource contacts separately from its two
-semantic attempts. Before orchestration, review an additive v2 migration for a bounded
-contact/resource ledger, `not_before` evidence and an honest `paused_resource` state.
-Do not overload `interrupted` or silently edit the now-existing canonical v1 database.
-The C9B/C10 orchestration gate, not C9A's pure policy, owns cancel-aware waiting and
-durable retry scheduling.
+C8 v1 could not durably represent retryable resource contacts separately from its two
+semantic attempts. C9B's reviewed additive v2 migration now provides the bounded
+contact/resource ledger, `not_before` evidence, cancel-aware waits and explicit joined
+`paused_resource` schedule required by C10. Process lifecycle still uses C8's
+`interrupted` state when the resource-paused worker releases its lease.
 
 ## Current live-test blocker
 
@@ -59,6 +58,11 @@ reports cloud support enabled. The unauthenticated API answered on LAN, Tailscal
 addresses. Offline implementation may continue, but no live C9 acceptance or private
 content is authorized until the operator makes Ollama loopback-only, sets
 `OLLAMA_NO_CLOUD=1`, pins the image/version and verifies non-loopback requests fail.
+
+The HI accepted loopback-only as the MVP boundary, not the permanent deployment model.
+A later card may add LAN/Tailscale use through a separately reviewed authenticated TLS
+gateway and explicit device/user access policy while Ollama itself remains loopback-only.
+Direct unauthenticated port 11434 exposure and public-internet access remain out of scope.
 
 ## Validation gate
 

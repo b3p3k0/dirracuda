@@ -590,6 +590,12 @@ def precharge_attempt(
 
     def operation(conn: sqlite3.Connection) -> tuple[str, int]:
         _require_running_fence(conn, fence)
+        if conn.execute(
+            "SELECT 1 FROM analyst_ollama_contacts "
+            "WHERE run_id=? AND chunk_id=? AND state='dispatching' LIMIT 1",
+            (fence.run_id, chunk_id),
+        ).fetchone() is not None:
+            raise CheckpointError("chunk already has a charged Ollama contact")
         row = conn.execute(
             "SELECT c.state,f.work_state,f.active_generation FROM analyst_chunks c "
             "JOIN analyst_files f ON f.file_id=c.file_id "
@@ -649,6 +655,13 @@ def finish_attempt_failure(
     def operation(conn: sqlite3.Connection) -> None:
         _require_running_fence(conn, fence)
         row = _attempt_owned_by_fence(conn, fence, attempt_id)
+        if conn.execute(
+            "SELECT 1 FROM analyst_ollama_contacts "
+            "WHERE attempt_id=? AND state='success' LIMIT 1", (attempt_id,),
+        ).fetchone() is not None:
+            raise CheckpointError(
+                "successful Ollama contact requires valid checkpoint or recovery"
+            )
         cursor = conn.execute(
             "UPDATE analyst_model_attempts SET state=?,finished_at_utc=?,failure_code=? "
             "WHERE attempt_id=? AND state='dispatching'",
@@ -780,7 +793,22 @@ def begin_finalization(
             "WHERE f.run_id=? AND a.state='dispatching' LIMIT 1",
             (fence.run_id,),
         ).fetchone()
-        if incomplete is not None or dispatching is not None:
+        dispatching_contact = conn.execute(
+            "SELECT 1 FROM analyst_ollama_contacts "
+            "WHERE run_id=? AND state='dispatching' LIMIT 1",
+            (fence.run_id,),
+        ).fetchone()
+        schedule = conn.execute(
+            "SELECT state FROM analyst_ollama_schedule WHERE run_id=?",
+            (fence.run_id,),
+        ).fetchone()
+        if (
+            incomplete is not None
+            or dispatching is not None
+            or dispatching_contact is not None
+            or schedule is None
+            or str(schedule["state"]) != "available"
+        ):
             raise CheckpointError("run cannot finalize with incomplete work")
         _require_run_terminal_semantics(conn, fence.run_id)
         cursor = conn.execute(

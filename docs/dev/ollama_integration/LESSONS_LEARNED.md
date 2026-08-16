@@ -1221,6 +1221,37 @@ explicit bounded 429/503/memory-resource responses, backs off, and never unloads
 another workload. C8's two attempts are semantic attempts, so a separate durable contact
 ledger is required before orchestration can retry resource contacts honestly.
 
+### 140. Network contact and semantic attempt are different durable facts
+
+A request can reach a server and receive an explicit resource refusal without producing
+a model answer. C9B therefore charges every HTTP intent in its own content-free row
+before dispatch, but materializes one of the two semantic attempts only for a real or
+execution-uncertain chat outcome. A crash is never rewritten as resource contention.
+
+### 141. Effective scheduling state does not require rebuilding lifecycle tables
+
+Adding `paused_resource` directly to C8's run-state CHECK would require rebuilding a
+foreign-key parent table. An additive one-to-one schedule table preserves the tested C8
+process lifecycle while carrying exact backoff, cooldown and resume authorization. The
+smallest compatible migration is often safer than making every status native to one
+table.
+
+### 142. A successful contact must checkpoint before another contact starts
+
+C9B first allowed a terminal-success contact to leave its linked semantic attempt
+`dispatching` while another HTTP contact began. A later resource pause could then clear
+the lease and strand that attempt. Precharge now rejects every new contact until the
+successful answer is durably validated or recovery closes it; serial networking alone
+does not provide durable ordering.
+
+### 143. Clamped wait arithmetic needs a durable eligibility handoff
+
+Computing `min(recorded_delay, wall_deadline - now)` bounds a monotonic sleep, but a
+later wall-clock comparison can still reject forever after clock rollback. C9B binds wait
+completion to the exact worker fence or lease-free schedule revision, then marks the
+backoff due or the paused retry authorized. The calculation and the dispatch gate must
+share evidence, not merely the same formula.
+
 ---
 
 ## Not yet learned

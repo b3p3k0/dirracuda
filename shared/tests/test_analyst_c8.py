@@ -118,6 +118,11 @@ def _insert_run(
                 finalization_token,
             ),
         )
+        conn.execute(
+            "INSERT INTO analyst_ollama_schedule(run_id,updated_at_utc) "
+            "VALUES(?,?)",
+            (run_id, _NOW),
+        )
 
     run_immediate(operation, path=db_path)
 
@@ -446,6 +451,8 @@ def test_fresh_database_has_exact_identity_schema_and_owner_permissions(
             "analyst_detector_hits",
             "analyst_model_findings",
             "analyst_gpu_lease",
+            "analyst_ollama_contacts",
+            "analyst_ollama_schedule",
         }
         indexes = {
             row[0]
@@ -468,6 +475,11 @@ def test_fresh_database_has_exact_identity_schema_and_owner_permissions(
             "idx_analyst_exclusions_reason",
             "idx_analyst_detector_kind",
             "idx_analyst_findings_category",
+            "idx_analyst_contacts_run",
+            "idx_analyst_contacts_chunk",
+            "ux_analyst_contacts_one_dispatching",
+            "ux_analyst_contacts_semantic_slot",
+            "idx_analyst_schedule_state",
         }
         assert all(
             row[5] == 1

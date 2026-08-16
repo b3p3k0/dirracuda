@@ -18,11 +18,14 @@ from shared.path_service import get_paths
 
 from .db_schema import (
     APPLICATION_ID,
+    KNOWN_SCHEMA_VERSIONS,
+    PREVIOUS_SCHEMA_VERSION,
     SCHEMA_VERSION,
     AnalystSchemaError,
     initialize_schema,
     validate_runtime_schema,
     validate_schema,
+    validate_v1_migration_candidate,
 )
 from .inventory import InventoryResult
 from .state import RESUMABLE_RUN_STATES, RunState
@@ -89,7 +92,7 @@ def get_db_path(override: Path | None = None) -> Path:
 
 
 def initialize_database(path: Path | None = None) -> Path:
-    """Create or validate the exact owner-only Analyst v1 sidecar."""
+    """Create, narrowly migrate, or validate the owner-only Analyst v2 sidecar."""
     resolved = get_db_path(path)
     _ensure_owner_directory(resolved.parent)
     created = _create_database_file(resolved)
@@ -116,7 +119,7 @@ def initialize_database(path: Path | None = None) -> Path:
 def open_connection(
     path: Path | None = None, *, read_only: bool = False,
 ) -> sqlite3.Connection:
-    """Open one exact v1 connection with the frozen C8 PRAGMA policy."""
+    """Open one exact v2 connection with the frozen C8 PRAGMA policy."""
     return _connect(get_db_path(path), read_only=read_only, validate=True)
 
 
@@ -189,6 +192,10 @@ def create_run(
                 spec.num_ctx, spec.num_predict, spec.isolation_mode,
                 int(spec.reduced_isolation_ack),
             ),
+        )
+        conn.execute(
+            "INSERT INTO analyst_ollama_schedule(run_id,updated_at_utc) VALUES(?,?)",
+            (spec.run_id, timestamp),
         )
         conn.executemany(
             "INSERT INTO analyst_files("
@@ -284,6 +291,8 @@ def abandon_run(
     timestamp = _utc_now() if now_utc is None else _require_text(now_utc, "now_utc")
 
     def operation(conn: sqlite3.Connection) -> None:
+        from .ollama_state import reconcile_dispatching_contacts
+
         lease = conn.execute(
             "SELECT 1 FROM analyst_gpu_lease WHERE slot=1 AND run_id=?", (run_id,)
         ).fetchone()
@@ -297,6 +306,9 @@ def abandon_run(
         state = RunState(str(row["state"]))
         if state not in RESUMABLE_RUN_STATES:
             raise AnalystStoreError("Analyst run is not abandonable")
+        reconcile_dispatching_contacts(
+            conn, run_id, timestamp, cancelled=True,
+        )
         conn.execute(
             "UPDATE analyst_model_attempts SET state='cancelled_unverified',"
             "finished_at_utc=?,failure_code='cancelled_unverified' "
@@ -369,6 +381,8 @@ def _audit_existing_database(path: Path) -> None:
         ).fetchone()
         if identity == (APPLICATION_ID, SCHEMA_VERSION):
             validate_schema(conn)
+        elif identity == (APPLICATION_ID, PREVIOUS_SCHEMA_VERSION):
+            validate_v1_migration_candidate(conn)
         elif identity != (0, 0) or objects is not None:
             raise AnalystSchemaError(
                 "refusing to open a partial, foreign, or versioned Analyst database"
@@ -386,7 +400,10 @@ def _recover_hot_journal(path: Path) -> None:
     before = _require_owner_file(path)
     if before.st_size:
         application_id, user_version = _raw_sqlite_identity(path)
-        if (application_id, user_version) != (APPLICATION_ID, SCHEMA_VERSION):
+        if (
+            application_id != APPLICATION_ID
+            or user_version not in KNOWN_SCHEMA_VERSIONS
+        ):
             raise AnalystSchemaError(
                 "refusing hot-journal recovery for untrusted database identity"
             )

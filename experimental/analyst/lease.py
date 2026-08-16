@@ -8,7 +8,7 @@ import signal
 import sqlite3
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Callable
@@ -118,6 +118,25 @@ def claim_worker(
         state = RunState(str(run["state"]))
         if state not in RESUMABLE_RUN_STATES:
             raise LeaseError("Analyst run is not claimable")
+        schedule = conn.execute(
+            "SELECT state,not_before_utc,resume_authorized_at_utc "
+            "FROM analyst_ollama_schedule WHERE run_id=?", (run_id,),
+        ).fetchone()
+        if schedule is None:
+            raise LeaseError("Analyst run has no Ollama schedule")
+        schedule_state = str(schedule["state"])
+        if schedule_state == "backoff" or (
+            schedule_state == "paused_resource"
+            and schedule["resume_authorized_at_utc"] is None
+        ):
+            deadline = _parse_utc(str(schedule["not_before_utc"]))
+            if _parse_utc(timestamp) < deadline:
+                raise LeaseError("Analyst resource retry is not due")
+        if (
+            schedule_state == "paused_resource"
+            and schedule["resume_authorized_at_utc"] is None
+        ):
+            raise LeaseError("Analyst resource pause requires explicit authorization")
 
         generation = int(lease["generation"]) + 1
         cursor = conn.execute(
@@ -234,6 +253,30 @@ def request_cancel(
         if row is None:
             raise LeaseError("Analyst run does not exist")
         state = RunState(str(row["state"]))
+        if state is RunState.INTERRUPTED:
+            schedule = conn.execute(
+                "SELECT state FROM analyst_ollama_schedule WHERE run_id=?",
+                (run_id,),
+            ).fetchone()
+            if schedule is not None and str(schedule["state"]) == "paused_resource":
+                _cancel_inflight(conn, run_id, timestamp, cancelled=True)
+                cursor = conn.execute(
+                    "UPDATE analyst_runs SET state='cancelled_pending_resume',"
+                    "cancel_requested_at_utc=?,updated_at_utc=?,revision=revision+1 "
+                    "WHERE run_id=? AND state='interrupted'",
+                    (timestamp, timestamp, run_id),
+                )
+                if cursor.rowcount != 1:
+                    raise LeaseError("Analyst paused cancel state changed")
+                schedule_cursor = conn.execute(
+                    "UPDATE analyst_ollama_schedule SET "
+                    "resume_authorized_at_utc=NULL,revision=revision+1,"
+                    "updated_at_utc=? WHERE run_id=? AND state='paused_resource'",
+                    (timestamp, run_id),
+                )
+                if schedule_cursor.rowcount != 1:
+                    raise LeaseError("Analyst paused schedule changed during cancel")
+                return None
         if state is RunState.RUNNING:
             conn.execute(
                 "UPDATE analyst_runs SET state='cancel_requested',"
@@ -462,6 +505,12 @@ def _clear_exact_lease(conn: sqlite3.Connection, fence: LeaseFence) -> int:
 def _cancel_inflight(
     conn: sqlite3.Connection, run_id: str, timestamp: str, *, cancelled: bool,
 ) -> None:
+    # Imported lazily because the contact module uses LeaseFence as its public fence.
+    from .ollama_state import reconcile_dispatching_contacts
+
+    reconcile_dispatching_contacts(
+        conn, run_id, timestamp, cancelled=cancelled,
+    )
     attempt_state = "cancelled_unverified" if cancelled else "orphaned_unknown"
     conn.execute(
         "UPDATE analyst_model_attempts SET state=?,finished_at_utc=?,failure_code=? "
@@ -484,6 +533,16 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace(
         "+00:00", "Z"
     )
+
+
+def _parse_utc(value: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (TypeError, ValueError) as exc:
+        raise LeaseError("Analyst resource deadline is malformed") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
+        raise LeaseError("Analyst resource deadline is not UTC")
+    return parsed.astimezone(timezone.utc)
 
 
 def _require_run_id(value: str) -> None:

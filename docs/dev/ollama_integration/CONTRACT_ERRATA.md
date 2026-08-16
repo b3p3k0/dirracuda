@@ -676,3 +676,42 @@ is still pre-release schema v1, so no deployed migration or compatibility contra
 changed. Files that exceed the detector-evidence ceiling remain visible as incomplete
 coverage with an exact stable reason rather than exhausting memory or holding a long
 SQLite write transaction.
+
+---
+
+## E15 — Separate Ollama contacts from semantic model attempts
+
+**Status:** ACCEPTED FOR IMPLEMENTATION (HI decision, 2026-08-16)
+**Affects:** `CONTRACT.md` §3 and §8; C9 shared-resource handling and C10 orchestration
+**Raised by:** C9A/C9B durable scheduling review
+
+### The conflict
+
+C8 permits exactly two semantic attempts per chunk. C9A can identify an explicit
+Ollama resource refusal, but persisting that refusal as timeout, transport failure or a
+generic interruption would either consume a quality attempt or hide the real scheduling
+state. A crash after precharge remains execution-uncertain and must still consume an
+attempt.
+
+### The correction
+
+- Sidecar schema v2 adds a bounded, content-free Ollama contact ledger. Every control,
+  chat and cancellation-health request is charged before network contact.
+- Explicit `resource_busy` contacts advance the exact bounded backoff schedule without
+  creating a semantic attempt. Every other chat terminal, cancellation or orphaned
+  contact atomically links to one of the existing two attempt slots.
+- Failures one through five retain the exact worker lease. Failure six records a
+  300-second `paused_resource` schedule, returns active work to pending, interrupts the
+  run and releases the fence. Resume requires both elapsed cooldown and explicit
+  authorization.
+- C8 run lifecycle values remain unchanged. The one-to-one schedule table is the
+  authoritative joined resource state, avoiding a foreign-key parent-table rebuild.
+- Only the exact empty development v1 sidecar may migrate automatically. Populated v1,
+  partial, foreign and active states fail without mutation.
+
+### Consequences
+
+The sidecar retains more content-free operational rows, bounded at 64 controls per run
+and 16 chat contacts per chunk. Resource pressure no longer spends the two-answer budget,
+but ambiguous delivery remains conservative. C10 must use the charged contact API and
+must not call the C9A client directly.

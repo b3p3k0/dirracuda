@@ -75,7 +75,9 @@ curl --fail --noproxy '*' http://127.0.0.1:11434/api/tags
 
 If Ollama runs only in a container, its CLI may not exist on the host; use the API checks
 above and run `ollama list` inside that container. Do not expose port 11434 on a LAN or
-VPN interface: the local API has no authentication.
+VPN interface: the local API has no authentication. A future supported LAN/Tailscale
+mode is planned around an authenticated TLS gateway while Ollama stays on loopback; it
+will not make the raw API public.
 
 The approved model is `qwen3.6:27b` at digest
 `a50eda8ed977ab48a12431878896b27ffd5cef552c17af3317d9623b939a7f1e`. A matching
@@ -230,7 +232,10 @@ available to the automatic post-extract hook. Strict mode is the normal choice.
 
 Large language models are slow, and Analyst does not reserve the GPU against unrelated
 programs. Use Fast mode, let other GPU work finish, or leave the run in the background.
-Only one Analyst run uses the GPU at once.
+Only one Analyst run uses the GPU at once. Explicit Ollama resource refusals use bounded
+backoff and do not spend one of the two model-answer attempts. After repeated refusals,
+the run pauses for five minutes and requires an explicit Resume; ambiguous disconnects
+remain conservatively charged because Analyst cannot prove whether inference started.
 
 ### A PDF says `no text layer`
 

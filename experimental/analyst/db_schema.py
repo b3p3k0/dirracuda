@@ -1,4 +1,4 @@
-"""Exact version-one SQLite schema for durable Analyst state.
+"""Exact versioned SQLite schemas for durable Analyst state.
 
 This module owns schema identity and validation only. Connection policy, file
 creation, transaction retry, and state transitions belong to the store layer.
@@ -12,9 +12,20 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Final
 
+from .contact_contract import (
+    ContactKind,
+    ContactStatus,
+    MAX_CHAT_CONTACTS_PER_CHUNK,
+    MAX_CONTROL_CONTACTS_PER_RUN,
+    ScheduleState,
+)
+from .resource_policy import RESOURCE_BACKOFF_SECONDS
+
 
 APPLICATION_ID: Final = 0x44414E41  # DANA
-SCHEMA_VERSION: Final = 1
+PREVIOUS_SCHEMA_VERSION: Final = 1
+SCHEMA_VERSION: Final = 2
+KNOWN_SCHEMA_VERSIONS: Final = (PREVIOUS_SCHEMA_VERSION, SCHEMA_VERSION)
 
 RUN_STATES: Final = (
     "ready", "running", "cancel_requested", "cancelled_pending_resume",
@@ -65,6 +76,9 @@ ASSESSMENTS: Final = (
     "findings_present", "no_findings", "insufficient_evidence",
 )
 REVIEW_STATES: Final = ("unreviewed", "accepted", "rejected")
+OLLAMA_CONTACT_KINDS: Final = tuple(item.value for item in ContactKind)
+OLLAMA_CONTACT_STATES: Final = tuple(item.value for item in ContactStatus)
+OLLAMA_SCHEDULE_STATES: Final = tuple(item.value for item in ScheduleState)
 
 
 class AnalystSchemaError(RuntimeError):
@@ -77,7 +91,7 @@ def _values(values: tuple[str, ...]) -> str:
 
 _LOWER_SHA = "length({0})=64 AND {0} NOT GLOB '*[^0-9a-f]*'"
 
-_TABLE_DDL: Final = (
+_V1_TABLE_DDL: Final = (
     f"""CREATE TABLE analyst_runs (
         run_id TEXT PRIMARY KEY,
         state TEXT NOT NULL CHECK(state IN ({_values(RUN_STATES)})),
@@ -298,7 +312,7 @@ _TABLE_DDL: Final = (
     ) STRICT""",
 )
 
-_INDEX_DDL: Final = (
+_V1_INDEX_DDL: Final = (
     "CREATE INDEX idx_analyst_runs_state_updated ON analyst_runs(state,updated_at_utc,run_id)",
     "CREATE INDEX idx_analyst_runs_host ON analyst_runs(host_type,protocol_server_id,created_at_utc,run_id)",
     "CREATE INDEX idx_analyst_runs_endpoint ON analyst_runs(ip_address,port,created_at_utc,run_id)",
@@ -314,6 +328,117 @@ _INDEX_DDL: Final = (
     "CREATE INDEX idx_analyst_findings_category ON analyst_model_findings(category,review_state,finding_id)",
 )
 
+_V2_ADDITIONAL_TABLE_DDL: Final = (
+    f"""CREATE TABLE analyst_ollama_contacts (
+        contact_id TEXT PRIMARY KEY CHECK({_LOWER_SHA.format('contact_id')}),
+        run_id TEXT NOT NULL,
+        contact_no INTEGER NOT NULL CHECK(contact_no > 0),
+        kind TEXT NOT NULL CHECK(kind IN ({_values(OLLAMA_CONTACT_KINDS)})),
+        chunk_id INTEGER CHECK(chunk_id IS NULL OR chunk_id > 0),
+        semantic_attempt_no INTEGER
+            CHECK(semantic_attempt_no IS NULL OR semantic_attempt_no BETWEEN 1 AND 2),
+        request_sha256 TEXT NOT NULL CHECK({_LOWER_SHA.format('request_sha256')}),
+        lease_generation INTEGER NOT NULL CHECK(lease_generation > 0),
+        state TEXT NOT NULL CHECK(state IN ({_values(OLLAMA_CONTACT_STATES)})),
+        charged_at_utc TEXT NOT NULL
+            CHECK(length(charged_at_utc) BETWEEN 1 AND 40),
+        finished_at_utc TEXT
+            CHECK(finished_at_utc IS NULL OR length(finished_at_utc) BETWEEN 1 AND 40),
+        attempt_id TEXT UNIQUE
+            CHECK(attempt_id IS NULL OR {_LOWER_SHA.format('attempt_id')}),
+        resource_failures_before INTEGER NOT NULL
+            CHECK(resource_failures_before BETWEEN 0 AND 6),
+        resource_failures_after INTEGER
+            CHECK(resource_failures_after IS NULL
+                  OR resource_failures_after BETWEEN 0 AND 6),
+        FOREIGN KEY(run_id) REFERENCES analyst_runs(run_id) ON DELETE RESTRICT,
+        FOREIGN KEY(chunk_id) REFERENCES analyst_chunks(chunk_id) ON DELETE RESTRICT,
+        FOREIGN KEY(attempt_id) REFERENCES analyst_model_attempts(attempt_id)
+            ON DELETE RESTRICT,
+        UNIQUE(run_id, contact_no),
+        CHECK((kind='chat' AND chunk_id IS NOT NULL AND semantic_attempt_no IS NOT NULL)
+              OR (kind!='chat' AND chunk_id IS NULL AND semantic_attempt_no IS NULL)),
+        CHECK(state!='model_invalid' OR kind IN ('chat','cancellation_health')),
+        CHECK((state='dispatching' AND finished_at_utc IS NULL
+                  AND resource_failures_after IS NULL)
+              OR (state!='dispatching' AND finished_at_utc IS NOT NULL
+                  AND resource_failures_after IS NOT NULL)),
+        CHECK((kind='chat' AND state NOT IN ('dispatching','resource_busy')
+                  AND attempt_id IS NOT NULL)
+              OR ((kind!='chat' OR state IN ('dispatching','resource_busy'))
+                  AND attempt_id IS NULL)),
+        CHECK(state='dispatching'
+              OR (state='resource_busy'
+                  AND resource_failures_after=min(resource_failures_before+1,6))
+              OR (kind IN ('chat','cancellation_health')
+                  AND state IN ('success','model_invalid')
+                  AND resource_failures_after=0)
+              OR ((kind NOT IN ('chat','cancellation_health')
+                       OR state NOT IN ('success','model_invalid','resource_busy'))
+                  AND state!='resource_busy'
+                  AND resource_failures_after=resource_failures_before))
+    ) STRICT""",
+    f"""CREATE TABLE analyst_ollama_schedule (
+        run_id TEXT PRIMARY KEY,
+        state TEXT NOT NULL DEFAULT 'available'
+            CHECK(state IN ({_values(OLLAMA_SCHEDULE_STATES)})),
+        consecutive_failures INTEGER NOT NULL DEFAULT 0
+            CHECK(consecutive_failures BETWEEN 0 AND 6),
+        delay_seconds INTEGER NOT NULL DEFAULT 0
+            CHECK(delay_seconds IN (0,15,30,60,120,240,300)),
+        not_before_utc TEXT
+            CHECK(not_before_utc IS NULL OR length(not_before_utc) BETWEEN 1 AND 40),
+        resume_authorized_at_utc TEXT
+            CHECK(resume_authorized_at_utc IS NULL
+                  OR length(resume_authorized_at_utc) BETWEEN 1 AND 40),
+        revision INTEGER NOT NULL DEFAULT 0 CHECK(revision >= 0),
+        updated_at_utc TEXT NOT NULL
+            CHECK(length(updated_at_utc) BETWEEN 1 AND 40),
+        FOREIGN KEY(run_id) REFERENCES analyst_runs(run_id) ON DELETE RESTRICT,
+        CHECK((state='available' AND consecutive_failures=0
+                  AND delay_seconds=0 AND not_before_utc IS NULL
+                  AND resume_authorized_at_utc IS NULL)
+              OR (state='backoff' AND consecutive_failures BETWEEN 1 AND 5
+                  AND not_before_utc IS NOT NULL
+                  AND resume_authorized_at_utc IS NULL
+                  AND ((consecutive_failures=1 AND delay_seconds=15)
+                    OR (consecutive_failures=2 AND delay_seconds=30)
+                    OR (consecutive_failures=3 AND delay_seconds=60)
+                    OR (consecutive_failures=4 AND delay_seconds=120)
+                    OR (consecutive_failures=5 AND delay_seconds=240)))
+              OR (state='paused_resource' AND consecutive_failures=6
+                  AND delay_seconds=300 AND not_before_utc IS NOT NULL))
+    ) STRICT""",
+)
+
+_V2_ADDITIONAL_INDEX_DDL: Final = (
+    "CREATE INDEX idx_analyst_contacts_run ON "
+    "analyst_ollama_contacts(run_id,kind,state,contact_no)",
+    "CREATE INDEX idx_analyst_contacts_chunk ON "
+    "analyst_ollama_contacts(chunk_id,semantic_attempt_no,contact_no)",
+    "CREATE UNIQUE INDEX ux_analyst_contacts_one_dispatching ON "
+    "analyst_ollama_contacts((1)) WHERE state='dispatching'",
+    "CREATE UNIQUE INDEX ux_analyst_contacts_semantic_slot ON "
+    "analyst_ollama_contacts(chunk_id,semantic_attempt_no) "
+    "WHERE kind='chat' AND state!='resource_busy'",
+    "CREATE INDEX idx_analyst_schedule_state ON "
+    "analyst_ollama_schedule(state,not_before_utc,run_id)",
+)
+
+_TABLE_DDL: Final = (*_V1_TABLE_DDL, *_V2_ADDITIONAL_TABLE_DDL)
+_INDEX_DDL: Final = (*_V1_INDEX_DDL, *_V2_ADDITIONAL_INDEX_DDL)
+
+_V1_DOMAIN_TABLES: Final = (
+    "analyst_runs",
+    "analyst_files",
+    "analyst_inventory_exclusions",
+    "analyst_provenance_units",
+    "analyst_chunks",
+    "analyst_model_attempts",
+    "analyst_detector_hits",
+    "analyst_model_findings",
+)
+
 
 @dataclass(frozen=True)
 class _SchemaSnapshot:
@@ -326,10 +451,10 @@ class _SchemaSnapshot:
 
 
 def initialize_schema(conn: sqlite3.Connection) -> None:
-    """Create v1 only over a truly empty, version-zero main database.
+    """Create v2 or upgrade the one frozen empty-v1 development state.
 
-    An existing exact v1 schema is accepted idempotently. Any other on-disk
-    state is rejected before DDL and is never repaired in place.
+    An existing exact v2 schema is accepted idempotently. Any populated v1 or
+    other on-disk state is rejected and is never repaired in place.
     """
     _require_transaction_boundary(conn)
     identity = _identity(conn)
@@ -337,7 +462,9 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
     if identity == (APPLICATION_ID, SCHEMA_VERSION):
         validate_schema(conn)
         return
-    if identity != (0, 0) or objects:
+    if identity == (APPLICATION_ID, PREVIOUS_SCHEMA_VERSION):
+        validate_v1_migration_candidate(conn)
+    elif identity != (0, 0) or objects:
         raise AnalystSchemaError(
             "refusing to initialize a nonempty, partial, foreign, or versioned database"
         )
@@ -354,14 +481,21 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
             validate_schema(conn)
             conn.execute("COMMIT")
             return
-        if concurrent_identity != (0, 0) or concurrent_objects:
+        if concurrent_identity == (APPLICATION_ID, PREVIOUS_SCHEMA_VERSION):
+            validate_v1_migration_candidate(conn)
+            for statement in (
+                *_V2_ADDITIONAL_TABLE_DDL, *_V2_ADDITIONAL_INDEX_DDL,
+            ):
+                conn.execute(statement)
+        elif concurrent_identity == (0, 0) and not concurrent_objects:
+            for statement in (*_TABLE_DDL, *_INDEX_DDL):
+                conn.execute(statement)
+            conn.execute(
+                "INSERT INTO analyst_gpu_lease(slot,generation) VALUES(1,0)"
+            )
+            conn.execute(f"PRAGMA application_id={APPLICATION_ID}")
+        else:
             raise AnalystSchemaError("database changed during schema initialization")
-        for statement in (*_TABLE_DDL, *_INDEX_DDL):
-            conn.execute(statement)
-        conn.execute(
-            "INSERT INTO analyst_gpu_lease(slot,generation) VALUES(1,0)"
-        )
-        conn.execute(f"PRAGMA application_id={APPLICATION_ID}")
         conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         validate_schema(conn)
         if conn.execute("PRAGMA foreign_key_check").fetchall():
@@ -370,6 +504,10 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
         if quick_check is None or str(quick_check[0]) != "ok":
             raise AnalystSchemaError("new schema failed SQLite quick_check")
         conn.execute("COMMIT")
+        conn.execute("PRAGMA foreign_keys=ON")
+        foreign_keys = conn.execute("PRAGMA foreign_keys").fetchone()
+        if foreign_keys is None or int(foreign_keys[0]) != 1:
+            raise AnalystSchemaError("SQLite foreign-key enforcement was not restored")
     except BaseException:
         if conn.in_transaction:
             conn.execute("ROLLBACK")
@@ -377,13 +515,44 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
 
 
 def validate_schema(conn: sqlite3.Connection) -> None:
-    """Read and exactly validate schema v1 without mutating the connection DB."""
-    if _identity(conn) != (APPLICATION_ID, SCHEMA_VERSION):
-        raise AnalystSchemaError("Analyst database identity or schema version is not v1")
+    """Read and exactly validate schema v2 without mutating the database."""
+    _validate_schema_version(conn, SCHEMA_VERSION)
+
+
+def validate_schema_v1(conn: sqlite3.Connection) -> None:
+    """Read and exactly validate the frozen v1 migration source."""
+    _validate_schema_version(conn, PREVIOUS_SCHEMA_VERSION)
+
+
+def validate_v1_migration_candidate(conn: sqlite3.Connection) -> None:
+    """Require exact v1, zero domain rows and the pristine singleton lease."""
+    validate_schema_v1(conn)
+    for table in _V1_DOMAIN_TABLES:
+        if conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone() is not None:
+            raise AnalystSchemaError(
+                "populated Analyst v1 requires an explicit later migration"
+            )
+    rows = conn.execute(
+        "SELECT slot,generation,run_id,owner_token,pid,start_ticks,boot_id,"
+        "heartbeat_monotonic_ns,claimed_at_utc,heartbeat_at_utc "
+        "FROM analyst_gpu_lease"
+    ).fetchall()
+    expected = (1, 0, None, None, None, None, None, None, None, None)
+    if len(rows) != 1 or tuple(rows[0]) != expected:
+        raise AnalystSchemaError(
+            "Analyst v1 migration requires the unowned generation-zero lease"
+        )
+
+
+def _validate_schema_version(conn: sqlite3.Connection, version: int) -> None:
+    if _identity(conn) != (APPLICATION_ID, version):
+        raise AnalystSchemaError(
+            f"Analyst database identity or schema version is not v{version}"
+        )
     actual = _schema_snapshot(conn)
-    expected = _expected_snapshot()
+    expected = _expected_snapshot(version)
     if actual != expected:
-        raise AnalystSchemaError("Analyst v1 schema signature does not match")
+        raise AnalystSchemaError(f"Analyst v{version} schema signature does not match")
     if conn.execute("PRAGMA foreign_key_check").fetchall():
         raise AnalystSchemaError("Analyst database has foreign-key violations")
     rows = conn.execute(
@@ -400,18 +569,124 @@ def validate_schema(conn: sqlite3.Connection) -> None:
     ).fetchone()
     if invalid_accepted is not None:
         raise AnalystSchemaError("accepted model attempt is not valid for its chunk")
+    if version == SCHEMA_VERSION:
+        _validate_v2_rows(conn)
+
+
+def _validate_v2_rows(conn: sqlite3.Connection) -> None:
+    missing_schedule = conn.execute(
+        "SELECT 1 FROM analyst_runs r LEFT JOIN analyst_ollama_schedule s "
+        "ON s.run_id=r.run_id WHERE s.run_id IS NULL LIMIT 1"
+    ).fetchone()
+    if missing_schedule is not None:
+        raise AnalystSchemaError("Analyst run is missing its Ollama schedule")
+    wrong_chunk = conn.execute(
+        "SELECT 1 FROM analyst_ollama_contacts o JOIN analyst_chunks c "
+        "ON c.chunk_id=o.chunk_id JOIN analyst_files f ON f.file_id=c.file_id "
+        "WHERE f.run_id!=o.run_id LIMIT 1"
+    ).fetchone()
+    if wrong_chunk is not None:
+        raise AnalystSchemaError("Ollama contact chunk belongs to another run")
+    wrong_attempt = conn.execute(
+        "SELECT 1 FROM analyst_ollama_contacts o "
+        "JOIN analyst_model_attempts a ON a.attempt_id=o.attempt_id "
+        "WHERE a.chunk_id!=o.chunk_id OR a.attempt_no!=o.semantic_attempt_no LIMIT 1"
+    ).fetchone()
+    if wrong_attempt is not None:
+        raise AnalystSchemaError("Ollama contact attempt does not match its slot")
+    wrong_attempt_state = conn.execute(
+        "SELECT 1 FROM analyst_ollama_contacts o "
+        "JOIN analyst_model_attempts a ON a.attempt_id=o.attempt_id WHERE "
+        "(o.state='success' AND a.state NOT IN "
+        "('dispatching','valid','orphaned_unknown','cancelled_unverified')) OR "
+        "(o.state='model_invalid' AND a.state!='schema_invalid') OR "
+        "(o.state='request_timeout' AND a.state!='model_timeout') OR "
+        "(o.state IN ('transport_unavailable','protocol_violation',"
+        "'response_limit','identity_mismatch') "
+        "AND a.state!='model_transport_error') OR "
+        "(o.state='cancelled_unverified' AND a.state!='cancelled_unverified') OR "
+        "(o.state='orphaned_unknown' AND a.state!='orphaned_unknown') LIMIT 1"
+    ).fetchone()
+    if wrong_attempt_state is not None:
+        raise AnalystSchemaError("Ollama contact outcome contradicts its attempt")
+    excess_controls = conn.execute(
+        "SELECT 1 FROM analyst_ollama_contacts WHERE kind!='chat' "
+        "GROUP BY run_id HAVING count(*)>? LIMIT 1",
+        (MAX_CONTROL_CONTACTS_PER_RUN,),
+    ).fetchone()
+    excess_chats = conn.execute(
+        "SELECT 1 FROM analyst_ollama_contacts WHERE kind='chat' "
+        "GROUP BY chunk_id HAVING count(*)>? LIMIT 1",
+        (MAX_CHAT_CONTACTS_PER_CHUNK,),
+    ).fetchone()
+    if excess_controls is not None or excess_chats is not None:
+        raise AnalystSchemaError("Ollama contact evidence exceeds its frozen bound")
+    _validate_contact_schedule_history(conn)
+
+
+def _validate_contact_schedule_history(conn: sqlite3.Connection) -> None:
+    schedules = {
+        str(row[0]): int(row[1])
+        for row in conn.execute(
+            "SELECT run_id,consecutive_failures FROM analyst_ollama_schedule"
+        ).fetchall()
+    }
+    histories: dict[str, list[tuple[object, ...]]] = {}
+    for row in conn.execute(
+        "SELECT run_id,contact_no,kind,state,resource_failures_before,"
+        "resource_failures_after FROM analyst_ollama_contacts "
+        "ORDER BY run_id,contact_no"
+    ).fetchall():
+        histories.setdefault(str(row[0]), []).append(tuple(row[1:]))
+    for run_id, expected_final in schedules.items():
+        prior = 0
+        rows = histories.get(run_id, [])
+        for expected_no, row in enumerate(rows, start=1):
+            contact_no, kind, state, before, after = row
+            if int(contact_no) != expected_no or int(before) != prior:
+                raise AnalystSchemaError(
+                    "Ollama contact history is not contiguous or replayable"
+                )
+            if str(state) == ContactStatus.DISPATCHING.value:
+                if after is not None:
+                    raise AnalystSchemaError("dispatching contact has terminal counters")
+                if expected_no != len(rows):
+                    raise AnalystSchemaError(
+                        "dispatching Ollama contact is not the final contact"
+                    )
+                continue
+            if str(state) == ContactStatus.RESOURCE_BUSY.value:
+                expected_after = min(prior + 1, 6)
+            elif (
+                str(kind) in {
+                    ContactKind.CHAT.value,
+                    ContactKind.CANCELLATION_HEALTH.value,
+                }
+                and str(state) in {
+                    ContactStatus.SUCCESS.value,
+                    ContactStatus.MODEL_INVALID.value,
+                }
+            ):
+                expected_after = 0
+            else:
+                expected_after = prior
+            if after is None or int(after) != expected_after:
+                raise AnalystSchemaError("Ollama contact resource history is invalid")
+            prior = expected_after
+        if prior != expected_final:
+            raise AnalystSchemaError("Ollama schedule is not derived from contact history")
 
 
 def validate_runtime_schema(conn: sqlite3.Connection) -> None:
     """Validate constant-cost schema identity for an already audited sidecar."""
     if _identity(conn) != (APPLICATION_ID, SCHEMA_VERSION):
-        raise AnalystSchemaError("Analyst database identity or schema version is not v1")
+        raise AnalystSchemaError("Analyst database identity or schema version is not v2")
     objects = tuple(
         (kind, name, _normalize_sql(sql))
         for kind, name, sql in _user_objects(conn)
     )
-    if objects != _expected_snapshot().objects:
-        raise AnalystSchemaError("Analyst v1 runtime schema signature does not match")
+    if objects != _expected_snapshot(SCHEMA_VERSION).objects:
+        raise AnalystSchemaError("Analyst v2 runtime schema signature does not match")
     rows = conn.execute(
         "SELECT slot,generation,run_id FROM analyst_gpu_lease"
     ).fetchall()
@@ -484,12 +759,18 @@ def _schema_snapshot(conn: sqlite3.Connection) -> _SchemaSnapshot:
     )
 
 
-@lru_cache(maxsize=1)
-def _expected_snapshot() -> _SchemaSnapshot:
+@lru_cache(maxsize=2)
+def _expected_snapshot(version: int = SCHEMA_VERSION) -> _SchemaSnapshot:
+    if version == PREVIOUS_SCHEMA_VERSION:
+        table_ddl, index_ddl = _V1_TABLE_DDL, _V1_INDEX_DDL
+    elif version == SCHEMA_VERSION:
+        table_ddl, index_ddl = _TABLE_DDL, _INDEX_DDL
+    else:
+        raise ValueError("unsupported Analyst schema snapshot version")
     conn = sqlite3.connect(":memory:", isolation_level=None)
     try:
         conn.execute("PRAGMA foreign_keys=ON")
-        for statement in (*_TABLE_DDL, *_INDEX_DDL):
+        for statement in (*table_ddl, *index_ddl):
             conn.execute(statement)
         return _schema_snapshot(conn)
     finally:
@@ -506,9 +787,17 @@ def _sql_string(value: str) -> str:
 
 __all__ = [
     "APPLICATION_ID",
+    "KNOWN_SCHEMA_VERSIONS",
+    "OLLAMA_CONTACT_KINDS",
+    "OLLAMA_CONTACT_STATES",
+    "OLLAMA_SCHEDULE_STATES",
+    "PREVIOUS_SCHEMA_VERSION",
+    "RESOURCE_BACKOFF_SECONDS",
     "SCHEMA_VERSION",
     "AnalystSchemaError",
     "initialize_schema",
     "validate_runtime_schema",
     "validate_schema",
+    "validate_schema_v1",
+    "validate_v1_migration_candidate",
 ]

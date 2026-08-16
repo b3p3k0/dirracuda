@@ -21,8 +21,9 @@ Stage E until real-document validation is useful; C1 was authorized.
 The C1 pure production contracts, C2 inventory/reattachment evidence, C3 strict parser
 supervisor, C4 RTF/plain-text extraction, C5 PDF extraction, C6 bounded OOXML extraction
 and C7 sandboxed legacy Word/Excel extraction are implemented. C8's durable state/lease
-layer and C9A's offline strict Ollama client/resource policy are also complete; C9 live
-acceptance and the C9B durable resource-pause migration remain held.
+layer plus C9A's strict Ollama client and C9B's durable resource schedule/contact ledger
+are also complete offline. C9 public live acceptance remains held on operator Ollama
+hardening.
 Controls are
 authoritative in [`CONTRACT.md`](CONTRACT.md), accepted errata, and the reviewed
 benchmark protocols; this register is the
@@ -42,7 +43,7 @@ risk-indexed view.
 | R10 | GPU contention between analysis and any other stack workload | Medium | Medium | CPU-only text extraction (PyMuPDF). No ML document converter. Serial model calls, one job at a time. |
 | R11 | Ollama unreachable, model missing, or stack reconfigured mid-run | Medium | Medium | Preflight checks endpoint, version, and model presence before starting. Mid-run failure pauses and checkpoints rather than discarding the run. |
 | R12 | Feature bloats a near-limit GUI module | Medium | Medium | New logic in new modules under `experimental/`. GUI gets thin wiring only, per the Sherlock C21 precedent. |
-| R13 | Ollama listening on `0.0.0.0:11434` with no auth | Low | High | HI to confirm ufw blocks 11434 from non-loopback. Out of scope for this repo but in scope for the stack it depends on. |
+| R13 | Ollama listening on a LAN/VPN interface with no application authentication | Medium | High | MVP binds Ollama itself to loopback and verifies LAN/Tailscale/VPN refusal. The HI wants future private-network use, so a later reviewed mode must place authenticated TLS and explicit LAN/Tailscale access policy in front of loopback Ollama; never expose raw port 11434 or use Tailscale Funnel/public internet. |
 | R14 | Model deprecation breaks the pipeline on an Ollama upgrade | Medium | Low | No hardcoded model name. Model is config, preflight verifies presence, benchmark harness is re-runnable against replacements. |
 
 | R15 | One host holds 46,724 documents; per-host reporting stalls or OOMs on it | High | High | Stream and checkpoint at file granularity — never hold a host's findings in memory. Report generation aggregates from the sidecar DB, not from a live object graph. Benchmark against the FMIC host specifically, not an average one. |
@@ -121,7 +122,7 @@ risk-indexed view.
 | R88 | Unbounded or internally impossible evidence exhausts SQLite, leaks document text or creates false grounding | Medium | High | C8 bounds detector evidence at 10,000 hits per file and atomically records `detector_output_limit` at cap + 1. Parser metadata is a closed scalar contract; content-free provenance uses its own 50,000-unit STRICT table with canonical kinds, labels and spans. Chunks, hits and findings are range-bound to their extracted text or parent chunk, and finding counts/assessment must reconcile exactly. Raw/nested text, paths, unknown detail codes and exception strings fail before persistence. Finalization revalidates successful terminal semantics from those durable rows. |
 | R89 | Ollama is reached through a proxy, redirect, non-loopback listener or cloud-capable server configuration | Medium | Critical | C9 accepts only the literal `http://127.0.0.1:11434` endpoint and fixed paths, disables redirects, sets `trust_env=False`, supplies no proxies, rejects compression and requires the exact local tag+digest. Server egress remains an operator prerequisite: public live acceptance is blocked until the current host-networked service is loopback-only, cloud-disabled and image-pinned. |
 | R90 | Cancellation returns while Ollama continues inference or a blocked close allows request-worker accumulation | Medium | High | C9 reports `cancelled_unverified`, never claims `/api/ps` proves termination and requires a later bounded health contact. One global nonblocking permit remains owned until the real request and exact-response close finish, even after the caller's deadline; another call cannot create a second orphan worker. Analyst never sends model-wide unload/stop controls. |
-| R91 | Temporary shared-GPU pressure consumes both semantic attempts and falsely terminalizes valid work | High | Medium | C9A returns a closed `resource_busy` scheduling outcome and pure bounded backoff without touching C8 attempts. C9B must add a reviewed durable contact/pause ledger before C10; `interrupted`, model timeout and model transport failure are not overloaded. GPU telemetry is advisory and CPU offload remains valid. |
+| R91 | Temporary shared-GPU pressure consumes both semantic attempts and falsely terminalizes valid work | High | Medium | C9B precharges every HTTP contact in a content-free ledger. An explicit `resource_busy` closes only that contact and advances the exact 15/30/60/120/240/300-second schedule; it creates no semantic attempt. Every ambiguous, cancelled or non-resource chat outcome conservatively consumes one of two attempts. Failure six pauses and releases the lease; resume requires the elapsed cooldown plus explicit authorization. GPU telemetry remains advisory and CPU offload remains valid. |
 
 ## High-Likelihood Risks — Detailed Controls
 
