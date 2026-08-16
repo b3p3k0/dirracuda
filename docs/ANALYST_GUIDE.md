@@ -1,9 +1,10 @@
 # Analyst User Guide
 
 > **Unreleased feature — draft guide.** Analyst's inventory, parser sandbox, durable
-> state, Phase 1/Phase 2 worker orchestration and local Ollama boundary are implemented
-> and tested on the feature branch. Public-only Ollama acceptance has passed, but the
-> launcher, report publication and post-extract hook are not available in the desktop app yet. The workflow below
+> state, Phase 1/Phase 2 worker orchestration, local Ollama boundary and atomic report
+> publication are implemented and tested on the feature branch. Public-only Ollama
+> acceptance has passed, but the launcher, report browser and post-extract hook are not
+> available in the desktop app yet. The workflow below
 > describes the reviewed release target; labels may change during final UI testing.
 
 Analyst reviews directories of already-extracted documents and builds a per-host
@@ -184,8 +185,8 @@ is recorded against that file while the rest of the run continues when safe.
 ### There is no Analyst tab
 
 That is expected on the current feature branch. The user-facing launcher is scheduled
-after orchestration and report generation. Installing parser dependencies does not make
-the unfinished UI appear.
+for C13; the worker and report publication boundary are already implemented. Installing
+parser dependencies does not make the unfinished desktop UI appear.
 
 ### Dependency check fails
 

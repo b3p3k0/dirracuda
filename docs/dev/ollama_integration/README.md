@@ -264,12 +264,14 @@ explicitly deferred Stage E until real-document validation is useful.
 
 ## Next Step
 
-C0B through C11 are complete at their reviewed boundaries. C10 provides the typed,
+C0B through C12 are complete at their reviewed boundaries. C10 provides the typed,
 descriptor-safe and resumable Phase 1 worker handoff. C11 now consumes that handoff
 through separately charged Ollama controls/chats, exact repair and recovery-health
 rules, grounded evidence and atomic per-file model closure while retaining the live
-successor fence. The standalone worker stays activation-held so it cannot strand that
-fence. C12 next generates the coverage-first artifacts and atomically finalizes the run
-in the same process. Private Stage E remains deferred and requires fresh explicit
+successor fence. C12 now streams the canonical JSONL, spreadsheet-safe CSV, compact run
+JSON and static partitioned HTML, then atomically commits their manifest and clears the
+lease. The standalone worker is active because it consumes both handoffs and finalizes
+in one process. C13 next adds the desktop launcher, task hydration and report browser.
+Private Stage E remains deferred and requires fresh explicit
 authorization before any real-document read. Core startup does not depend on Analyst's
 optional parser lane.

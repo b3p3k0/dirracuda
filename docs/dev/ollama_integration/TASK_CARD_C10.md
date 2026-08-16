@@ -1,7 +1,7 @@
 # C10 — Phase 1 worker orchestration
 
 Date: 2026-08-16
-Status: **C10 complete at the reviewed Phase 1 boundary; C11 complete; C12 next**
+Status: **C10 complete at the reviewed Phase 1 boundary; C11 and C12 complete**
 
 ## Issue
 
@@ -24,7 +24,7 @@ chunk handoff. It imports or calls no Ollama client/contact code and creates no
 `analyst_ollama_contacts` rows. C11 owns every version, tag, chat, retry and resource
 contact.
 
-Production activation was held for C11 and remains held until C12 consumes the Phase-2
+Production activation was held for C11 and C12 until C12 consumed the Phase-2
 handoff in the same worker process. A successful Phase 1 function returns the current lease plus content-free
 handoff evidence; it does not release the lease or label the run complete.
 
@@ -119,10 +119,10 @@ heartbeats. Signal handling is Event-only and distinguishes a durable cancel fro
 local interruption. The focused C10C suite passed 53 tests and the full shared Analyst
 suite passed 1,253 tests. All touched production files remain below 1,200 lines.
 
-The standalone module remains deliberately activation-held: valid CLI syntax returns a
-fixed content-free outcome before opening the database or starting preflight. C11 now
-consumes the returned Phase 1 fence, but C12 must still consume C11's live Phase-2 fence
-and finalize reporting in the same process before this gate may be removed. No temporary
+At the C10 boundary the standalone module remained deliberately activation-held: valid CLI syntax returned a
+fixed content-free outcome before opening the database or starting preflight. C11 then
+consumed the returned Phase 1 fence, and C12 now consumes C11's live Phase-2 fence and
+atomically finalizes the report. That temporary hold is resolved; no disposable
 exit/release path was added.
 
 ## Exact Phase 1 flow

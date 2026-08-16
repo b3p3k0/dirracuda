@@ -1,7 +1,7 @@
 # C11 — Phase 2 model orchestration
 
 Date: 2026-08-16
-Status: **offline implementation and acceptance PASS; C12 reporting/finalization next**
+Status: **offline implementation and acceptance PASS; C12 reporting/finalization complete**
 
 ## Issue
 
@@ -125,9 +125,9 @@ successor heartbeats; cancellation and lease loss stop private work without misc
 source drift. Privacy scans retain no prompt, raw response, thinking or exception detail.
 
 This was offline acceptance with synthetic public fixtures and fake transport. It made no
-live Ollama request and read no private corpus. The standalone worker remains deliberately
-activation-held until C12 consumes the live Phase-2 fence and finalizes reporting in the
-same process.
+live Ollama request and read no private corpus. The standalone worker remained deliberately
+activation-held at the C11 boundary; C12 now consumes the live Phase-2 fence, finalizes
+reporting in the same process and removes that temporary hold.
 
 ## Primary sources
 

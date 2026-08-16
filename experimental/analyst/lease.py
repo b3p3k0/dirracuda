@@ -246,7 +246,7 @@ def pulse_worker(
             raise LeaseError("Analyst run does not exist")
         state = RunState(str(run["state"]))
         cancel_timestamp = run["cancel_requested_at_utc"]
-        if state is RunState.RUNNING and cancel_timestamp is None:
+        if state in {RunState.RUNNING, RunState.FINALIZING} and cancel_timestamp is None:
             cancel_requested = False
         elif (
             state is RunState.CANCEL_REQUESTED

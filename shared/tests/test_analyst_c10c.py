@@ -1,8 +1,7 @@
-"""C10C held CLI and same-process Phase 1 worker acceptance tests."""
+"""C10C invocation and same-process Phase 1 worker acceptance tests."""
 
 from __future__ import annotations
 
-import builtins
 import hashlib
 import io
 import json
@@ -36,6 +35,7 @@ from experimental.analyst.store import (
     open_connection,
 )
 from experimental.analyst.worker import (
+    EXIT_FAILURE,
     EXIT_HELD_OR_BUSY,
     EXIT_SUCCESS,
     EXIT_USAGE,
@@ -255,27 +255,24 @@ def test_worker_cli_help_is_fixed_and_side_effect_free(
     assert captured.err == ""
 
 
-def test_worker_cli_valid_invocation_is_activation_held_before_runtime_imports(
+def test_worker_cli_valid_invocation_dispatches_full_worker_once(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    imported: list[str] = []
-    original_import = builtins.__import__
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "experimental.analyst.worker.run_worker",
+        lambda run_id, _event: (
+            calls.append(run_id) or WorkerRunResult(WorkerOutcome.COMPLETE)
+        ),
+    )
 
-    def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
-        if name.startswith("experimental.analyst"):
-            imported.append(name)
-            raise AssertionError("held CLI imported a runtime Analyst module")
-        return original_import(name, globals, locals, fromlist, level)
-
-    monkeypatch.setattr(builtins, "__import__", guarded_import)
-
-    assert main(("--run-id", "public-c10c")) == EXIT_HELD_OR_BUSY
+    assert main(("--run-id", "public-c10c")) == EXIT_SUCCESS
 
     captured = capsys.readouterr()
-    assert captured.out == '{"outcome":"activation_held"}\n'
+    assert captured.out == '{"outcome":"complete"}\n'
     assert captured.err == ""
-    assert imported == []
+    assert calls == ["public-c10c"]
 
 
 def test_worker_cli_valid_invocation_does_not_touch_default_database(
@@ -285,9 +282,9 @@ def test_worker_cli_valid_invocation_does_not_touch_default_database(
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
 
-    assert main(("--run-id", "public-c10c")) == EXIT_HELD_OR_BUSY
+    assert main(("--run-id", "public-c10c")) == EXIT_FAILURE
 
-    assert capsys.readouterr().out == '{"outcome":"activation_held"}\n'
+    assert capsys.readouterr().out == '{"outcome":"internal_error"}\n'
     assert tuple(tmp_path.rglob("*")) == ()
 
 
@@ -296,8 +293,8 @@ def test_worker_cli_valid_invocation_does_not_touch_default_database(
     [
         (
             ("--run-id", "public-c10c"),
-            EXIT_HELD_OR_BUSY,
-            '{"outcome":"activation_held"}\n',
+            EXIT_FAILURE,
+            '{"outcome":"internal_error"}\n',
             "",
         ),
         (

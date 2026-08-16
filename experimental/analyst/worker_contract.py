@@ -77,6 +77,9 @@ class WorkerOutcome(str, Enum):
     """Closed, privacy-safe outcomes for the later worker shell."""
 
     PHASE1_HANDOFF = "phase1_handoff"
+    COMPLETE = "complete"
+    PAUSED_RESOURCE = "paused_resource"
+    REPORT_FAILED = "report_failed"
     CANCELLED = "cancelled"
     INTERRUPTED = "interrupted"
     LEASE_BUSY = "lease_busy"

@@ -1316,7 +1316,9 @@ Phase 1 returns a live fenced handoff that C11 must consume in the same process.
 a C10-only command exit would strand that lease; releasing it “temporarily” would weaken
 the reviewed ownership contract. C10C therefore ships the internal worker boundary but
 keeps the standalone CLI activation-held before even opening the database. A safe hold
-is more honest than a disposable transition that the final pipeline will not use.
+is more honest than a disposable transition that the final pipeline will not use. C12
+resolved that hold only after the same process could consume both phase handoffs and
+atomically publish completion.
 
 ### 152. Version strings do not identify a parser bundle
 
@@ -1364,6 +1366,29 @@ persisted. Running that sandbox call synchronously would stale the ten-second le
 hide durable cancellation. C11 keeps one bounded private-work helper while the sole DB
 owner advances the successor fence, then drops the regenerated text before any release,
 pause or cancellation acknowledgement.
+
+### 158. Atomic files are not the report publication commit
+
+Replacing each artifact safely can still leave a mixed set when the worker dies between
+renames. C12 treats every file present during `finalizing` as provisional. Only after all
+four owner-only files are flushed, fsynced and represented by one canonical manifest does
+SQLite atomically mark the run complete and clear the lease. Recovery may overwrite
+provisional files; it never infers completion from their presence.
+
+### 159. Streaming output also requires short-lived database reads
+
+A generator that keeps one cursor open while rendering avoids Python memory growth but
+still holds a long rollback-journal reader and blocks worker heartbeats. C12 opens and
+closes one bounded page at a time, renders it, then advances the finalizing fence before
+the next page. Streaming is an end-to-end ownership property, not merely an iterator.
+
+### 160. Canonical evidence and safe display copies need separate identities
+
+Spreadsheet guards and HTML escaping necessarily change attacker-controlled strings.
+Applying them before persistence would destroy the evidence the report claims to show.
+C12 writes unmodified canonical JSONL, derives CSV/HTML independently, and hashes the
+exact bytes of every artifact. A later browser reopens all fixed names without following
+symlinks and recomputes that manifest before trusting the report set.
 
 ---
 

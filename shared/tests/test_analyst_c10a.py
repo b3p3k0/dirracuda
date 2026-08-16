@@ -514,6 +514,9 @@ def test_worker_contract_constants_and_outcomes_are_exact() -> None:
     assert HEARTBEAT_INTERVAL_SECONDS == 2.0
     assert {item.value for item in WorkerOutcome} == {
         "phase1_handoff",
+        "complete",
+        "paused_resource",
+        "report_failed",
         "cancelled",
         "interrupted",
         "lease_busy",
