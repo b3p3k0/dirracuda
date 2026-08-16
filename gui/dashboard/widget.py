@@ -270,6 +270,7 @@ class DashboardWidget:
 
         self._build_dashboard()
         self.running_tasks_registry.subscribe(self._on_running_tasks_changed)
+        dashboard_experimental.start_analyst_task_hydration(self)
 
         # Initial data load
         self._refresh_dashboard_data()
@@ -845,6 +846,7 @@ class DashboardWidget:
 
     def teardown_dashboard_monitors(self) -> None:
         """Destroy non-modal monitor windows during application shutdown."""
+        dashboard_experimental.stop_analyst_task_hydration(self)
         try:
             if self.running_tasks_window is not None:
                 self.running_tasks_window.destroy()

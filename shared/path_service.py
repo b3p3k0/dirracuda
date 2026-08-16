@@ -70,6 +70,7 @@ class DirracudaPaths:
     logs_dir: Path
     extract_logs_dir: Path
     app_logs_dir: Path
+    analyst_logs_dir: Path
 
 
 @dataclass(frozen=True)
@@ -168,6 +169,7 @@ def get_paths(*, home_root: Optional[Path] = None, repo_root: Optional[Path] = N
         logs_dir=logs_dir,
         extract_logs_dir=logs_dir / "extract",
         app_logs_dir=logs_dir / "app",
+        analyst_logs_dir=logs_dir / "analyst",
     )
 
 
@@ -716,6 +718,7 @@ def ensure_layout_dirs(*, paths: Optional[DirracudaPaths] = None) -> Dict[str, A
         p.logs_dir,
         p.extract_logs_dir,
         p.app_logs_dir,
+        p.analyst_logs_dir,
         p.wordlists_dir,
     ]
     for d in required:

@@ -187,7 +187,7 @@ def load_inventory_page(
             "WHERE f.run_id=? AND f.ordinal>? ORDER BY f.ordinal LIMIT ?",
             (fence.run_id, after_ordinal, limit),
         ).fetchall()
-        return tuple(_inventory_row(row) for row in rows)
+        return tuple(decode_inventory_report_row(row) for row in rows)
     except (ValueError, TypeError, KeyError, OverflowError) as exc:
         raise ReportStateError("durable inventory report row is invalid") from exc
     finally:
@@ -215,7 +215,9 @@ def load_detector_finding_page(
             "WHERE f.run_id=? AND h.hit_id>? ORDER BY h.hit_id LIMIT ?",
             (fence.run_id, after_id, limit),
         ).fetchall()
-        return tuple((int(row["hit_id"]), _detector_row(row)) for row in rows)
+        return tuple(
+            (int(row["hit_id"]), decode_detector_report_row(row)) for row in rows
+        )
     except (ValueError, TypeError, KeyError, OverflowError) as exc:
         raise ReportStateError("durable detector report row is invalid") from exc
     finally:
@@ -255,7 +257,9 @@ def load_model_finding_page(
             "ORDER BY m.finding_id LIMIT ?",
             (fence.run_id, after_id, limit),
         ).fetchall()
-        return tuple((int(row["finding_id"]), _model_row(row)) for row in rows)
+        return tuple(
+            (int(row["finding_id"]), decode_model_report_row(row)) for row in rows
+        )
     except (ValueError, TypeError, KeyError, OverflowError) as exc:
         raise ReportStateError("durable model report row is invalid") from exc
     finally:
@@ -279,7 +283,7 @@ def _require_finalizing(
     return row
 
 
-def _inventory_row(row: sqlite3.Row) -> InventoryReportRow:
+def decode_inventory_report_row(row: sqlite3.Row) -> InventoryReportRow:
     selected = row["selected_for_model"]
     return InventoryReportRow(
         int(row["file_id"]), int(row["ordinal"]), str(row["relative_path"]),
@@ -292,7 +296,7 @@ def _inventory_row(row: sqlite3.Row) -> InventoryReportRow:
     )
 
 
-def _detector_row(row: sqlite3.Row) -> FindingReportRow:
+def decode_detector_report_row(row: sqlite3.Row) -> FindingReportRow:
     return FindingReportRow(
         EvidenceKind.DETECTOR, int(row["file_id"]), int(row["file_ordinal"]),
         str(row["relative_path"]), str(row["format_name"]), int(row["ordinal"]),
@@ -301,7 +305,7 @@ def _detector_row(row: sqlite3.Row) -> FindingReportRow:
     )
 
 
-def _model_row(row: sqlite3.Row) -> FindingReportRow:
+def decode_model_report_row(row: sqlite3.Row) -> FindingReportRow:
     source_start = int(row["start_char"]) + int(row["canonical_offset"])
     source_end = int(row["start_char"]) + int(row["canonical_end"])
     return FindingReportRow(
@@ -393,6 +397,9 @@ def _optional_int(value: object) -> int | None:
 
 __all__ = [
     "ReportStateError",
+    "decode_detector_report_row",
+    "decode_inventory_report_row",
+    "decode_model_report_row",
     "load_detector_finding_page",
     "load_inventory_page",
     "load_model_finding_page",

@@ -1390,6 +1390,14 @@ C12 writes unmodified canonical JSONL, derives CSV/HTML independently, and hashe
 exact bytes of every artifact. A later browser reopens all fixed names without following
 symlinks and recomputes that manifest before trusting the report set.
 
+### 161. A readiness probe is still a network contact
+
+An early UI mockup treated `/api/tags` on tab-open as harmless status discovery. Once
+C9B required every Ollama HTTP intent to be durably precharged, that probe became
+incompatible with a pre-run screen. C13 keeps the tab network-free and lets the worker
+verify version, tag and digest after run creation. UI convenience cannot bypass the
+same contact ledger used for scored work.
+
 ---
 
 ## Not yet learned

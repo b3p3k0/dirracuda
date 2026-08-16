@@ -1,11 +1,11 @@
 # Analyst User Guide
 
 > **Unreleased feature — draft guide.** Analyst's inventory, parser sandbox, durable
-> state, Phase 1/Phase 2 worker orchestration, local Ollama boundary and atomic report
-> publication are implemented and tested on the feature branch. Public-only Ollama
-> acceptance has passed, but the launcher, report browser and post-extract hook are not
-> available in the desktop app yet. The workflow below
-> describes the reviewed release target; labels may change during final UI testing.
+> state, Phase 1/Phase 2 worker orchestration, local Ollama boundary, atomic report
+> publication, standalone-directory launcher, task hydration and report browser are
+> implemented and tested on the feature branch. Public-only Ollama acceptance has
+> passed. The extraction-manifest/post-extract hook and final release matrix remain
+> unfinished; labels may change during final UI testing.
 
 Analyst reviews directories of already-extracted documents and builds a per-host
 exposure report. It looks for identifiers such as Social Security numbers, payment-card
@@ -30,6 +30,11 @@ changes a scan result.
    source text.
 7. Analyst writes a coverage-first report. Files that could not be parsed stay visible
    as failures or unsupported content; they are not quietly counted as clean.
+
+The desktop report browser keeps deterministic hits separate from model suggestions.
+Accept/Reject records an explicit human review decision. Export starts with nothing
+selected; choose individual model rows or explicitly select all before writing a 0600
+JSONL or spreadsheet-guarded CSV copy.
 
 Only one Analyst worker can own the GPU at a time. Other software can still use the GPU,
 so a run may slow down when the machine is busy. Closing or hiding the desktop window
@@ -85,17 +90,19 @@ The approved model is `qwen3.6:27b` at digest
 tag with a different digest is rejected. Model tags can move, so do not bypass this
 check or substitute a similarly named model.
 
-## Running Analyst after the UI ships
+## Running Analyst from the feature branch
 
 The planned primary entry point is:
 
 1. Start Dirracuda with `./dirracuda`.
 2. Open **Accessories → Analyst**.
-3. Choose the latest completed extract or an existing directory of extracted files.
-4. Confirm the report label and host identity. Analyst does not guess identity from a
-   directory name.
-5. Review the pre-scan counts, output location and mode.
-6. Select **Analyze**.
+3. Choose an existing directory of extracted files and an output base directory.
+4. Enter a report label. Analyst does not guess identity from a directory name.
+5. Choose Fast or Deep mode and select **Analyze**.
+
+The current C13 launcher creates a standalone, unattributed directory run. Selecting the
+latest extraction manifest and carrying its authenticated host identity is C14 work; do
+not substitute a guessed host identity in the meantime.
 
 **Fast** is the sensible default. Detectors still scan every document with extracted
 text; the model spends time only on selected material. **Deep** costs much more time and
@@ -107,8 +114,6 @@ identity from filenames.
 
 ### Common use cases
 
-- **Triage a completed bulk extract:** choose the latest extract, keep Fast mode, then
-  review the suggested findings after checking coverage.
 - **Review files already on disk:** choose the directory, supply the correct host label
   and write the report beside the source under `_analyst/`.
 - **Continue interrupted work:** reopen Running Tasks and resume the existing run. Do
@@ -184,9 +189,9 @@ is recorded against that file while the rest of the run continues when safe.
 
 ### There is no Analyst tab
 
-That is expected on the current feature branch. The user-facing launcher is scheduled
-for C13; the worker and report publication boundary are already implemented. Installing
-parser dependencies does not make the unfinished desktop UI appear.
+Use the current `feature/ollama-analyst` branch and start the desktop through
+`./dirracuda`. The tab is under **Accessories → Analyst**. Installing parser dependencies
+does not add the tab to older builds.
 
 ### Dependency check fails
 

@@ -329,9 +329,11 @@ Contract (implemented in C14):
 ## 14. UI surfaces
 
 - **Accessories → Analyst tab:** low-input launcher. Source (latest tmpfs extract
-  / a directory); output dir; model (populated from `/api/tags` in a background
-  worker on open / manual refresh, non-cloud installed models only); live
-  reachability indicator; a fast pre-scan scope line (sniff only, no parse).
+  / a directory); output dir; fixed qualified model identity; a fast pre-scan scope
+  line (sniff only, no parse). C9B supersedes the early mockup's pre-run `/api/tags`
+  refresh: every Ollama contact is durably precharged, so version/tag/digest and
+  reachability are verified by the worker only after a run exists. C14 supplies the
+  latest-extract manifest choice; C13 exposes standalone directories.
 - **Advanced:** Fast/Deep depth, file-type toggles, size cap, parse timeout.
 - **Progress:** the existing scan/probe/extract monitor + Running Tasks; two
   progress lines (detector, model); live per-stage coverage counters; Hide/Cancel.

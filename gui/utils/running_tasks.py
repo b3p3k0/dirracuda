@@ -67,6 +67,42 @@ class RunningTaskRegistry:
         self._notify_listeners()
         return task_id
 
+    def upsert_task(
+        self,
+        task_id: str,
+        *,
+        task_type: str,
+        name: str,
+        state: str = "running",
+        progress: str = "",
+        started_at: Optional[str] = None,
+        reopen_callback: Optional[Callable[[], None]] = None,
+        cancel_callback: Optional[Callable[[], None]] = None,
+    ) -> None:
+        """Create or replace one caller-owned stable task identity."""
+        canonical_id = str(task_id or "").strip()
+        if not canonical_id or len(canonical_id) > 256:
+            raise ValueError("task id must be nonempty bounded text")
+        with self._lock:
+            current = self._tasks.get(canonical_id)
+            started = (
+                current.started_at
+                if current is not None and started_at is None
+                else str(started_at or "").strip()
+                or datetime.now().strftime("%H:%M:%S")
+            )
+            self._tasks[canonical_id] = RunningTaskSnapshot(
+                task_id=canonical_id,
+                task_type=str(task_type or "").strip() or "task",
+                name=str(name or "").strip() or "Unnamed Task",
+                state=str(state or "").strip() or "running",
+                progress=str(progress or "").strip(),
+                started_at=started,
+                reopen_callback=reopen_callback,
+                cancel_callback=cancel_callback,
+            )
+        self._notify_listeners()
+
     def update_task(
         self,
         task_id: str,

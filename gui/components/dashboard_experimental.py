@@ -127,10 +127,108 @@ def handle_experimental_button_click(widget) -> None:
         "open_keymaster": lambda: open_keymaster(widget),
         "parent": widget.parent,
         "main_db_path": str(_resolve_main_db_path(widget)),
+        "running_tasks_registry": getattr(widget, "running_tasks_registry", None),
     }
     if config_path is not None:
         context["webui_config_path"] = config_path
     show_experimental_features_dialog(widget.parent, context, widget.settings_manager)
+
+
+def start_analyst_task_hydration(widget) -> None:
+    """Reconcile once and restore durable Analyst tasks after GUI startup."""
+    if getattr(widget, "_analyst_hydration_started", False):
+        return
+    registry = getattr(widget, "running_tasks_registry", None)
+    parent = getattr(widget, "parent", None)
+    if registry is None or parent is None:
+        return
+    widget._analyst_hydration_started = True
+    widget._analyst_hydration_stopped = False
+    widget._analyst_hydration_after_id = None
+    widget._analyst_hydration_reconciled = False
+    widget._analyst_hydration_busy = False
+
+    def _schedule(callback) -> None:
+        try:
+            if not getattr(widget, "_analyst_hydration_stopped", True):
+                parent.after(0, callback)
+        except Exception:
+            pass
+
+    def _cancel_factory(run_id: str):
+        def _cancel() -> None:
+            def _work() -> None:
+                try:
+                    from experimental.analyst.service import cancel_run
+
+                    cancel_run(run_id)
+                except Exception:
+                    return
+            threading.Thread(target=_work, daemon=True).start()
+        return _cancel
+
+    def _reopen_factory(_run_id: str):
+        return lambda: handle_experimental_button_click(widget)
+
+    def _apply(summaries) -> None:
+        try:
+            if summaries is not None:
+                from gui.utils.analyst_tasks import apply_analyst_task_hydration
+
+                apply_analyst_task_hydration(
+                    registry,
+                    summaries,
+                    reopen=_reopen_factory,
+                    cancel=_cancel_factory,
+                )
+        except Exception:
+            pass
+        finally:
+            widget._analyst_hydration_busy = False
+            try:
+                if not getattr(widget, "_analyst_hydration_stopped", True):
+                    widget._analyst_hydration_after_id = parent.after(5000, _launch)
+            except Exception:
+                pass
+
+    def _work() -> None:
+        try:
+            from experimental.analyst.service import (
+                list_run_summaries,
+                reconcile_for_hydration,
+            )
+
+            if not getattr(widget, "_analyst_hydration_reconciled", False):
+                reconcile_for_hydration()
+                widget._analyst_hydration_reconciled = True
+            summaries = list_run_summaries()
+        except Exception:
+            summaries = None
+        _schedule(lambda: _apply(summaries))
+
+    def _launch() -> None:
+        if (
+            getattr(widget, "_analyst_hydration_stopped", True)
+            or getattr(widget, "_analyst_hydration_busy", False)
+        ):
+            return
+        widget._analyst_hydration_busy = True
+        threading.Thread(target=_work, daemon=True).start()
+
+    _launch()
+
+
+def stop_analyst_task_hydration(widget) -> None:
+    """Stop the dashboard-owned durable Analyst refresh loop."""
+    widget._analyst_hydration_stopped = True
+    after_id = getattr(widget, "_analyst_hydration_after_id", None)
+    parent = getattr(widget, "parent", None)
+    if after_id is not None and parent is not None:
+        try:
+            parent.after_cancel(after_id)
+        except Exception:
+            pass
+    widget._analyst_hydration_after_id = None
 
 
 def open_reddit_post_db(widget) -> None:
