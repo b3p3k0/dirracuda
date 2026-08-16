@@ -247,7 +247,7 @@ def test_supervisor_failure_reasons_pass_through_without_output(
         result = extract_document(source_fd=fd, expected=expected)
     finally:
         os.close(fd)
-    assert result == ExtractionResult(reason)
+    assert result == ExtractionResult(reason, "text")
 
 
 def test_frame_validator_rejects_partial_or_coerced_payloads() -> None:

@@ -1262,6 +1262,30 @@ final public protocol observes real response headers, then cancels, requires
 after the frozen delay. “Cancellation passed” is too vague unless the trigger, retained
 permit and following-health boundary are all explicit.
 
+### 145. A stored relative path is not a safe reopen recipe
+
+Joining a trusted root string to an inventoried relative path leaves every intermediate
+name open to symlink and rebinding races. C10A reopens the absolute root and each source
+component with no-follow directory descriptors, rechecks root and mount identity, then
+verifies the already-open file's full inventory fingerprint and hash. Resume trusts the
+descriptor and evidence, not a freshly resolved pathname.
+
+### 146. Container magic is provenance, not subtype authentication
+
+ZIP and CFB signatures identify container families, not DOCX/XLSX/PPTX or DOC/XLS by
+themselves. A runtime-bind failure or malformed child frame must therefore retain
+`ooxml` or `legacy_office`, not invent an exact subtype or drop all format evidence.
+Only the strict sandbox child may refine a candidate while committing extraction
+evidence, and the durable checkpoint revalidates the allowed family transition.
+
+### 147. A run-id-only worker must revalidate persisted identity bytes
+
+A detached worker cannot safely reconstruct defaults or trust a decoded JSON object
+because the row may be stale, noncanonical or from an older experimental contract.
+C10A loads the stored canonical bytes read-only, verifies their SHA-256 and exact shape,
+and accepts only the frozen model, parser, chunk and strict-isolation contract. Legacy
+rows remain valid history but fail closed before private source access.
+
 ---
 
 ## Not yet learned

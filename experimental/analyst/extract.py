@@ -9,7 +9,7 @@ import stat
 import subprocess
 import sys
 import sysconfig
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from importlib import metadata
 from pathlib import Path
@@ -184,7 +184,9 @@ def extract_document(
         )
     except (ImportError, OSError, RuntimeError, ValueError,
             subprocess.SubprocessError):
-        return ExtractionResult(FileTerminal.SANDBOX_UNAVAILABLE.value)
+        return ExtractionResult(
+            FileTerminal.SANDBOX_UNAVAILABLE.value, format_name.value,
+        )
     chosen_limits = limits or SandboxLimits(
         address_space_bytes=512 * 1024 * 1024,
         cpu_seconds=20,
@@ -228,16 +230,18 @@ def extract_document(
         cancel_check=cancel_check,
     )
     if not sandbox_result.ok:
-        return ExtractionResult(sandbox_result.reason)
+        return ExtractionResult(sandbox_result.reason, format_name.value)
     if format_name is DocumentFormat.PDF:
-        return _decode_pdf_frame(sandbox_result.stdout)
+        return _preserve_candidate(
+            _decode_pdf_frame(sandbox_result.stdout), format_name,
+        )
     if format_name is DocumentFormat.OOXML_CONTAINER:
         decoded = decode_ooxml_frame(
             sandbox_result.stdout,
             max_text_bytes=MAX_TEXT_BYTES,
             max_text_chars=MAX_TEXT_CHARS,
         )
-        return ExtractionResult(
+        result = ExtractionResult(
             decoded.reason, decoded.format_name,
             "utf-8" if decoded.reason == "success" else None,
             decoded.text, decoded.detail,
@@ -248,7 +252,10 @@ def extract_document(
             member_count=decoded.member_count,
             expanded_bytes=decoded.expanded_bytes,
         )
-    return _decode_frame(sandbox_result.stdout, format_name)
+        return _preserve_candidate(result, format_name)
+    return _preserve_candidate(
+        _decode_frame(sandbox_result.stdout, format_name), format_name,
+    )
 
 
 def _extract_legacy_office(
@@ -290,13 +297,15 @@ def _extract_legacy_office(
             cancel_check=cancel_check,
         )
         if not doc_result.ok:
-            return ExtractionResult(doc_result.reason)
+            return ExtractionResult(
+                doc_result.reason, DocumentFormat.LEGACY_OFFICE.value,
+            )
         decoded_doc = decode_legacy_frame(
             doc_result.stdout,
             max_text_bytes=MAX_TEXT_BYTES,
             max_text_chars=MAX_TEXT_CHARS,
         )
-        extracted_doc = ExtractionResult(
+        extracted_doc = _preserve_candidate(ExtractionResult(
             decoded_doc.reason,
             decoded_doc.format_name,
             "utf-8" if decoded_doc.reason == "success" else None,
@@ -306,7 +315,7 @@ def _extract_legacy_office(
             logical_unit_count=decoded_doc.logical_unit_count,
             legacy_units=decoded_doc.units,
             package_revision=decoded_doc.package_revision,
-        )
+        ), DocumentFormat.LEGACY_OFFICE)
         if not (
             extracted_doc.reason == FileTerminal.UNSUPPORTED_FORMAT.value
             and extracted_doc.detail == "not_word_binary"
@@ -317,16 +326,22 @@ def _extract_legacy_office(
         xls_binds = xls_runtime_binds()
     except metadata.PackageNotFoundError:
         return ExtractionResult(
-            FileTerminal.SANDBOX_UNAVAILABLE.value, "xls",
+            FileTerminal.SANDBOX_UNAVAILABLE.value,
+            DocumentFormat.LEGACY_OFFICE.value,
             detail="dependency_missing",
         )
     except OptionalDependencyUnavailable as exc:
         return ExtractionResult(
-            FileTerminal.SANDBOX_UNAVAILABLE.value, "xls", detail=exc.detail
+            FileTerminal.SANDBOX_UNAVAILABLE.value,
+            DocumentFormat.LEGACY_OFFICE.value,
+            detail=exc.detail,
         )
     except (ImportError, OSError, RuntimeError, ValueError,
             subprocess.SubprocessError):
-        return ExtractionResult(FileTerminal.SANDBOX_UNAVAILABLE.value, "xls")
+        return ExtractionResult(
+            FileTerminal.SANDBOX_UNAVAILABLE.value,
+            DocumentFormat.LEGACY_OFFICE.value,
+        )
     xls_result = run_sandboxed(
         source_fd=source_fd,
         expected=expected,
@@ -340,7 +355,9 @@ def _extract_legacy_office(
         cancel_check=cancel_check,
     )
     if not xls_result.ok:
-        return ExtractionResult(xls_result.reason)
+        return ExtractionResult(
+            xls_result.reason, DocumentFormat.LEGACY_OFFICE.value,
+        )
     decoded_xls = decode_xls_frame(
         xls_result.stdout,
         max_text_bytes=MAX_TEXT_BYTES,
@@ -356,7 +373,7 @@ def _extract_legacy_office(
             FileTerminal.UNSUPPORTED_FORMAT.value,
             DocumentFormat.LEGACY_OFFICE.value,
         )
-    return ExtractionResult(
+    return _preserve_candidate(ExtractionResult(
         decoded_xls.reason,
         decoded_xls.format_name,
         "utf-8" if decoded_xls.reason == "success" else None,
@@ -370,7 +387,16 @@ def _extract_legacy_office(
         worksheet_count=decoded_xls.worksheet_count,
         skipped_sheet_count=decoded_xls.skipped_sheet_count,
         dense_cell_count=decoded_xls.dense_cell_count,
-    )
+    ), DocumentFormat.LEGACY_OFFICE)
+
+
+def _preserve_candidate(
+    result: ExtractionResult, candidate: DocumentFormat,
+) -> ExtractionResult:
+    """Retain the sniffed format when a child cannot authenticate a subtype."""
+    if result.format_name is not None:
+        return result
+    return replace(result, format_name=candidate.value)
 
 
 def _legacy_limits(frame_magic: bytes, header_bytes: int) -> SandboxLimits:

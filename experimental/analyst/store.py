@@ -29,6 +29,11 @@ from .db_schema import (
 )
 from .inventory import InventoryResult
 from .state import RESUMABLE_RUN_STATES, RunState
+from .worker_contract import (
+    WorkerContractError,
+    WorkerRunContext,
+    parse_source_identity,
+)
 
 
 BUSY_TIMEOUT_MS = 250
@@ -281,6 +286,83 @@ def verify_run_spec(spec: RunSpec, *, path: Path | None = None) -> None:
             raise ForkRequired("Analyst run identity changed; fork a new run")
     finally:
         conn.close()
+
+
+def load_worker_run(
+    run_id: str, *, path: Path | None = None,
+) -> WorkerRunContext:
+    """Load one exact, runnable C10 context without mutating durable state."""
+    _require_text(run_id, "run_id")
+    columns = (
+        "run_id,state,revision,mode,source_mode,source_root,output_root,"
+        "source_identity_json,source_identity_sha256,report_label,host_type,"
+        "protocol_server_id,ip_address,port,extract_summary_row_id,model_tag,"
+        "model_digest,worksheet_version,prompt_sha256,response_schema_sha256,"
+        "detector_rules_version,detector_rules_sha256,parser_bundle_json,"
+        "parser_bundle_sha256,chunk_chars,overlap_chars,num_ctx,num_predict,"
+        "isolation_mode,reduced_isolation_ack"
+    )
+    conn = open_connection(path, read_only=True)
+    try:
+        row = conn.execute(
+            f"SELECT {columns} FROM analyst_runs WHERE run_id=?", (run_id,)
+        ).fetchone()
+        if row is None:
+            raise AnalystStoreError("Analyst run does not exist")
+    finally:
+        conn.close()
+
+    try:
+        source = _decode_canonical_identity(
+            row["source_identity_json"],
+            row["source_identity_sha256"],
+            "source identity",
+        )
+        root_identity = parse_source_identity(source)
+        _decode_canonical_identity(
+            row["parser_bundle_json"],
+            row["parser_bundle_sha256"],
+            "parser bundle",
+        )
+        ack = row["reduced_isolation_ack"]
+        if type(ack) is not int or ack not in {0, 1}:
+            raise WorkerContractError("reduced-isolation acknowledgement is invalid")
+        return WorkerRunContext(
+            run_id=row["run_id"],
+            observed_state=RunState(row["state"]),
+            observed_revision=row["revision"],
+            mode=row["mode"],
+            source_mode=row["source_mode"],
+            source_root=row["source_root"],
+            output_root=row["output_root"],
+            root_identity=root_identity,
+            source_identity_sha256=row["source_identity_sha256"],
+            report_label=row["report_label"],
+            host_type=row["host_type"],
+            protocol_server_id=row["protocol_server_id"],
+            ip_address=row["ip_address"],
+            port=row["port"],
+            extract_summary_row_id=row["extract_summary_row_id"],
+            model_tag=row["model_tag"],
+            model_digest=row["model_digest"],
+            worksheet_version=row["worksheet_version"],
+            prompt_sha256=row["prompt_sha256"],
+            response_schema_sha256=row["response_schema_sha256"],
+            detector_rules_version=row["detector_rules_version"],
+            detector_rules_sha256=row["detector_rules_sha256"],
+            parser_bundle_json=row["parser_bundle_json"],
+            parser_bundle_sha256=row["parser_bundle_sha256"],
+            chunk_chars=row["chunk_chars"],
+            overlap_chars=row["overlap_chars"],
+            num_ctx=row["num_ctx"],
+            num_predict=row["num_predict"],
+            isolation_mode=row["isolation_mode"],
+            reduced_isolation_ack=bool(ack),
+        )
+    except (KeyError, TypeError, ValueError, WorkerContractError) as exc:
+        raise ForkRequired(
+            "persisted Analyst run identity is not a runnable C10 contract"
+        ) from exc
 
 
 def abandon_run(
@@ -547,6 +629,49 @@ def _canonical_json_identity(value: Mapping[str, object]) -> tuple[str, str]:
     return body, hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
+def _decode_canonical_identity(
+    body: object, digest: object, label: str,
+) -> dict[str, object]:
+    """Revalidate exact stored JSON bytes, object shape, and self-hash."""
+    if type(body) is not str or not body or len(body) > 65_536:
+        raise WorkerContractError(f"{label} JSON is invalid")
+    if type(digest) is not str or len(digest) != 64:
+        raise WorkerContractError(f"{label} hash is invalid")
+    try:
+        encoded = body.encode("utf-8", errors="strict")
+    except UnicodeEncodeError as exc:
+        raise WorkerContractError(f"{label} JSON is not Unicode scalar text") from exc
+    if hashlib.sha256(encoded).hexdigest() != digest:
+        raise WorkerContractError(f"{label} hash does not match its JSON")
+
+    def reject_duplicates(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise WorkerContractError(f"{label} JSON has a duplicate key")
+            result[key] = value
+        return result
+
+    try:
+        value = json.loads(
+            body,
+            object_pairs_hook=reject_duplicates,
+            parse_constant=lambda _value: (_ for _ in ()).throw(
+                WorkerContractError(f"{label} JSON has a non-finite number")
+            ),
+        )
+    except WorkerContractError:
+        raise
+    except (json.JSONDecodeError, RecursionError, UnicodeError, ValueError) as exc:
+        raise WorkerContractError(f"{label} JSON cannot be decoded") from exc
+    if type(value) is not dict:
+        raise WorkerContractError(f"{label} JSON must be an object")
+    canonical, _ = _canonical_json_identity(value)
+    if canonical != body:
+        raise WorkerContractError(f"{label} JSON is not canonical")
+    return value
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace(
         "+00:00", "Z"
@@ -571,6 +696,7 @@ __all__ = [
     "get_db_path",
     "initialize_database",
     "list_active_runs",
+    "load_worker_run",
     "open_connection",
     "run_immediate",
     "verify_run_spec",

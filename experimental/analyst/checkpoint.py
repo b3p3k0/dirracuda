@@ -29,6 +29,7 @@ _SHA_RE = re.compile(r"[0-9a-f]{64}\Z")
 _IDENTITY_VALUE_RE = re.compile(r"[A-Za-z0-9_.:+-]{1,128}\Z")
 _PROVENANCE_LABEL_RE = re.compile(r"[A-Za-z0-9._/!#:+-]{1,256}\Z")
 _FORMAT_NAMES = frozenset({"text", "rtf", "pdf", "docx", "xlsx", "pptx", "doc", "xls"})
+_FORMAT_CANDIDATES = frozenset({"ooxml", "legacy_office"})
 _ENCODINGS = frozenset({
     "rtf", "utf-8", "utf-8-bom", "utf-16-le-bom", "utf-16-be-bom",
     "utf-32-le-bom", "utf-32-be-bom", "windows-1252",
@@ -321,6 +322,7 @@ def advance_file_stage(
     target: FileStage,
     *,
     format_name: str | None = None,
+    authenticated_format_name: str | None = None,
     encoding: str | None = None,
     parser_identity: Mapping[str, object] | None = None,
     extraction_meta: Mapping[str, object] | None = None,
@@ -338,15 +340,21 @@ def advance_file_stage(
     extraction_json: str | None = None
     provenance_units = _bounded_provenance(provenance)
     if target is FileStage.FORMAT_IDENTIFIED:
-        if format_name not in _FORMAT_NAMES:
+        if format_name not in _FORMAT_NAMES | _FORMAT_CANDIDATES:
             raise ValueError("format checkpoint requires a closed format name")
         if any(value is not None for value in (
-            encoding, parser_identity, extraction_meta, selected_for_model,
+            authenticated_format_name, encoding, parser_identity, extraction_meta,
+            selected_for_model,
         )) or provenance_units:
             raise ValueError("format checkpoint received later-stage evidence")
     elif target is FileStage.TEXT_EXTRACTED:
         if format_name is not None or selected_for_model is not None:
             raise ValueError("text checkpoint received another stage's evidence")
+        if (
+            authenticated_format_name is not None
+            and authenticated_format_name not in _FORMAT_NAMES
+        ):
+            raise ValueError("authenticated format is not in the closed vocabulary")
         if encoding is not None and encoding not in _ENCODINGS:
             raise ValueError("text checkpoint encoding is not in the closed vocabulary")
         parser_json, parser_sha = _parser_identity(parser_identity)
@@ -386,9 +394,12 @@ def advance_file_stage(
                 ),
             )
         elif target is FileStage.TEXT_EXTRACTED:
-            _require_provenance_format(str(row["format_name"]), provenance_units)
+            resolved_format = _resolved_format(
+                str(row["format_name"]), authenticated_format_name,
+            )
+            _require_provenance_format(resolved_format, provenance_units)
             _require_provenance_counts(
-                str(row["format_name"]), provenance_units, extraction_meta,
+                resolved_format, provenance_units, extraction_meta,
             )
             conn.executemany(
                 "INSERT INTO analyst_provenance_units("
@@ -399,14 +410,15 @@ def advance_file_stage(
                 ),
             )
             cursor = conn.execute(
-                "UPDATE analyst_files SET stage=?,encoding=?,parser_identity_json=?,"
+                "UPDATE analyst_files SET stage=?,format_name=?,encoding=?,parser_identity_json=?,"
                 "parser_identity_sha256=?,extraction_meta_json=?,"
                 "updated_at_utc=?,revision=revision+1 "
                 "WHERE file_id=? AND run_id=? AND work_state='active' "
                 "AND active_generation=? AND stage=? AND parser_identity_json IS NULL "
                 "AND parser_identity_sha256 IS NULL AND extraction_meta_json IS NULL",
                 (
-                    target.value, encoding, parser_json, parser_sha, extraction_json,
+                    target.value, resolved_format, encoding, parser_json, parser_sha,
+                    extraction_json,
                     timestamp, file_id, fence.run_id, fence.generation, source.value,
                 ),
             )
@@ -1059,6 +1071,22 @@ def _canonical_json(value: Mapping[str, object]) -> str:
     if not body or len(body) > 65_536:
         raise ValueError("checkpoint metadata exceeds its JSON bound")
     return body
+
+
+def _resolved_format(stored: str, authenticated: str | None) -> str:
+    """Return one exact format, permitting only candidate-to-subtype refinement."""
+    if stored in _FORMAT_NAMES:
+        if authenticated is not None and authenticated != stored:
+            raise CheckpointError("authenticated format contradicts the durable format")
+        return stored
+    allowed = {
+        "ooxml": frozenset({"docx", "xlsx", "pptx"}),
+        "legacy_office": frozenset({"doc", "xls"}),
+    }.get(stored)
+    if allowed is None or authenticated not in allowed:
+        raise CheckpointError("format candidate was not authentically refined")
+    assert authenticated is not None
+    return authenticated
 
 
 def _require_sha(value: str, name: str) -> None:

@@ -264,7 +264,10 @@ explicitly deferred Stage E until real-document validation is useful.
 
 ## Next Step
 
-C0B through C9 are complete. C10 connects the durable worker pipeline to the reviewed
-client/contact boundaries. Private Stage E remains deferred and requires fresh explicit
+C0B through C9 are complete. C10A now provides the typed worker context,
+descriptor-safe source reopen and honest candidate-format evidence. C10B next builds
+the Phase 1 state engine through the reviewed inventory/parser/detector/checkpoint
+boundaries; C11 then connects its handoff to the
+reviewed Ollama client/contact boundary. Private Stage E remains deferred and requires fresh explicit
 authorization before any real-document read. Core startup does not depend on Analyst's
 optional parser lane.

@@ -928,7 +928,7 @@ def test_xls_dependency_failure_stops_before_second_sandbox(
     result = _extract_path(path)
     assert calls == 1
     assert (result.reason, result.format_name, result.detail) == (
-        FileTerminal.SANDBOX_UNAVAILABLE.value, "xls", detail,
+        FileTerminal.SANDBOX_UNAVAILABLE.value, "legacy_office", detail,
     )
 
 
