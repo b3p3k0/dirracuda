@@ -34,6 +34,7 @@ from experimental.analyst.ollama_contract import (
     OLLAMA_TAGS_URL,
     OLLAMA_VERSION_URL,
 )
+from experimental.analyst.phase2_contract import HEALTH_REQUEST_SHA256
 from experimental.analyst.state import AttemptState
 from experimental.analyst import db_schema
 from experimental.analyst.db_schema import (
@@ -820,7 +821,7 @@ def test_create_run_seeds_exact_available_schedule_and_reopens(
         (ContactKind.VERSION, VERSION_REQUEST_SHA256),
         (ContactKind.TAGS, TAGS_REQUEST_SHA256),
         (ContactKind.PS, PS_REQUEST_SHA256),
-        (ContactKind.CANCELLATION_HEALTH, "9" * 64),
+        (ContactKind.CANCELLATION_HEALTH, HEALTH_REQUEST_SHA256),
     ],
 )
 def test_control_contact_precharge_and_finish_are_exact_and_attempt_free(
@@ -874,7 +875,7 @@ def test_control_precharge_revalidates_intent_and_stale_fence_without_mutation(
         )
     with pytest.raises(OllamaStateError, match="fence"):
         precharge_control_contact(
-            stale, ContactKind.CANCELLATION_HEALTH, _sha("9"), path=path,
+            stale, ContactKind.CANCELLATION_HEALTH, HEALTH_REQUEST_SHA256, path=path,
         )
     conn = open_connection(path, read_only=True)
     try:
@@ -1096,9 +1097,9 @@ def test_global_dispatch_contact_gate_is_atomic_across_processes(
     processes = [
         context.Process(
             target=_race_precharge_control,
-            args=(path, fence, character * 64, start, results),
+            args=(path, fence, HEALTH_REQUEST_SHA256, start, results),
         )
-        for character in ("8", "9")
+        for _index in range(2)
     ]
     for process in processes:
         process.start()
@@ -1301,11 +1302,10 @@ def test_control_contact_cap_accepts_64_and_refuses_65_without_mutation(
 ) -> None:
     path, fence, _ = _setup_runtime(tmp_path, with_chunk=False)
     for ordinal in range(1, MAX_CONTROL_CONTACTS_PER_RUN + 1):
-        request_sha = f"{ordinal:064x}"
         charge = precharge_control_contact(
             fence,
             ContactKind.CANCELLATION_HEALTH,
-            request_sha,
+            HEALTH_REQUEST_SHA256,
             now_utc=_NOW,
             path=path,
         )
@@ -1320,7 +1320,7 @@ def test_control_contact_cap_accepts_64_and_refuses_65_without_mutation(
         precharge_control_contact(
             fence,
             ContactKind.CANCELLATION_HEALTH,
-            _sha("f"),
+            HEALTH_REQUEST_SHA256,
             now_utc=_NOW,
             path=path,
         )
@@ -1400,7 +1400,7 @@ def test_terminal_contact_cannot_be_finished_or_overwritten_twice(
     charge = precharge_control_contact(
         fence,
         ContactKind.CANCELLATION_HEALTH,
-        _sha("9"),
+        HEALTH_REQUEST_SHA256,
         now_utc=_NOW,
         path=path,
     )
@@ -1879,7 +1879,7 @@ def test_success_attempt_must_checkpoint_before_any_later_http_contact(
         lambda: precharge_control_contact(
             fence,
             ContactKind.CANCELLATION_HEALTH,
-            _sha("8"),
+            HEALTH_REQUEST_SHA256,
             now_utc=_timestamp(1),
             path=path,
         ),
@@ -2084,7 +2084,7 @@ def test_full_audit_rejects_contact_ordinal_or_counter_history_drift(
     first = precharge_control_contact(
         fence,
         ContactKind.CANCELLATION_HEALTH,
-        _sha("8"),
+        HEALTH_REQUEST_SHA256,
         now_utc=_NOW,
         path=path,
     )
@@ -2095,7 +2095,7 @@ def test_full_audit_rejects_contact_ordinal_or_counter_history_drift(
     second = precharge_control_contact(
         fence,
         ContactKind.CANCELLATION_HEALTH,
-        _sha("9"),
+        HEALTH_REQUEST_SHA256,
         now_utc=_timestamp(15),
         path=path,
     )
@@ -2179,7 +2179,7 @@ def test_retry_handoff_closes_wall_rollback_then_allows_precharge(
     next_contact = precharge_control_contact(
         successor,
         ContactKind.CANCELLATION_HEALTH,
-        _sha("8"),
+        HEALTH_REQUEST_SHA256,
         now_utc=rollback_wall,
         path=path,
     )
@@ -2299,7 +2299,7 @@ def test_full_audit_rejects_terminal_contact_after_dispatching_contact(
     dispatching = precharge_control_contact(
         fence,
         ContactKind.CANCELLATION_HEALTH,
-        _sha("8"),
+        HEALTH_REQUEST_SHA256,
         now_utc=_NOW,
         path=path,
     )
@@ -2313,7 +2313,10 @@ def test_full_audit_rejects_terminal_contact_after_dispatching_contact(
             "resource_failures_after) "
             "VALUES(?,'run',2,'cancellation_health',?,?,'request_timeout',"
             "?,?,0,0)",
-            (_sha("9"), _sha("7"), fence.generation, _NOW, _timestamp(1)),
+            (
+                _sha("9"), HEALTH_REQUEST_SHA256,
+                fence.generation, _NOW, _timestamp(1),
+            ),
         )
         with pytest.raises(
             AnalystSchemaError, match="dispatching Ollama contact is not the final",

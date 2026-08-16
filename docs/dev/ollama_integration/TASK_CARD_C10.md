@@ -1,7 +1,7 @@
 # C10 — Phase 1 worker orchestration
 
 Date: 2026-08-16
-Status: **C10 complete at the reviewed Phase 1 boundary; C11 next**
+Status: **C10 complete at the reviewed Phase 1 boundary; C11 complete; C12 next**
 
 ## Issue
 
@@ -24,8 +24,8 @@ chunk handoff. It imports or calls no Ollama client/contact code and creates no
 `analyst_ollama_contacts` rows. C11 owns every version, tag, chat, retry and resource
 contact.
 
-Production activation remains held until C11 can consume the handoff in the same worker
-process. A successful Phase 1 function returns the current lease plus content-free
+Production activation was held for C11 and remains held until C12 consumes the Phase-2
+handoff in the same worker process. A successful Phase 1 function returns the current lease plus content-free
 handoff evidence; it does not release the lease or label the run complete.
 
 ## Locked decisions
@@ -85,7 +85,7 @@ handoff evidence; it does not release the lease or label the run complete.
   Event and closed exit codes. Invalid invocation performs zero DB, source, process and
   network actions.
 - [x] Prove strict preflight, lease race, cancellation, crash recovery, privacy and public
-  parser behavior. Keep desktop launch held for C11.
+  parser behavior. Keep desktop launch held for the same-process model/report continuation.
 
 ## C10A outcome
 
@@ -120,9 +120,10 @@ local interruption. The focused C10C suite passed 53 tests and the full shared A
 suite passed 1,253 tests. All touched production files remain below 1,200 lines.
 
 The standalone module remains deliberately activation-held: valid CLI syntax returns a
-fixed content-free outcome before opening the database or starting preflight. C11 must
-consume the returned Phase 1 fence in the same process before this gate may be removed.
-No temporary exit/release path was added.
+fixed content-free outcome before opening the database or starting preflight. C11 now
+consumes the returned Phase 1 fence, but C12 must still consume C11's live Phase-2 fence
+and finalize reporting in the same process before this gate may be removed. No temporary
+exit/release path was added.
 
 ## Exact Phase 1 flow
 

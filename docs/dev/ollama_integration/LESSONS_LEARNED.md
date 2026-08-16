@@ -1334,6 +1334,37 @@ synthetic PDF through the exact sandbox child before claiming a worker lease and
 both returned versions. Metadata inspection and native execution answer different
 supply-chain questions.
 
+### 154. One HTTP intent needs one durable charge
+
+A compound version-and-tags helper cannot prove which request was sent when a worker
+dies between them. C11 exposes the two control calls separately and precharges each one
+before transport. The same rule covers public recovery health and every scored chat:
+the ledger is an ordered wire-intent history, not a summary of a higher-level method.
+
+### 155. Semantic repair and delivery recovery are different retries
+
+A schema-invalid answer permits one fixed error-specific repair request; changing only
+the seed or blindly repeating the same prompt would not be a repair. A timeout,
+transport loss, cancellation or orphan instead preserves the primary request identity
+and requires a later public health generation before its delivery retry. Resource busy
+is scheduling evidence and consumes neither semantic slot.
+
+### 156. A successful contact can still have an orphaned checkpoint
+
+The server may finish and the contact may close successfully before the worker commits
+the validated grounded chunk. If the worker dies in that gap, reconciliation must mark
+the dispatching semantic attempt orphaned even though the contact says success. C11
+derives the health obligation from the joined contact-and-attempt history, so this gap
+cannot bypass recovery or silently resend attempt one.
+
+### 157. Resume extraction needs heartbeats just as much as model transport
+
+Phase 2 intentionally reopens and re-extracts selected files because raw text is never
+persisted. Running that sandbox call synchronously would stale the ten-second lease and
+hide durable cancellation. C11 keeps one bounded private-work helper while the sole DB
+owner advances the successor fence, then drops the regenerated text before any release,
+pause or cancellation acknowledgement.
+
 ---
 
 ## Not yet learned

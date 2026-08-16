@@ -32,6 +32,8 @@ from .ollama_contract import (
     OllamaStatus,
     PreflightResult,
     QUALIFIED_OLLAMA_VERSION,
+    TagsCheckResult,
+    VersionCheckResult,
     validate_chat_request,
 )
 from .ollama_protocol import (
@@ -69,6 +71,7 @@ _TRANSPORT_EXCEPTIONS = (
 _GLOBAL_REQUEST_SLOT = threading.BoundedSemaphore(1)
 
 CancelProbe = Callable[[], bool]
+CallerPoll = Callable[[], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,49 +141,92 @@ class OllamaClient:
         expected: OllamaIdentity = EXPECTED_IDENTITY,
         *,
         cancel: CancelProbe,
+        poll: CallerPoll | None = None,
     ) -> PreflightResult:
         """Verify daemon version plus the exact local tag/digest without inference."""
         _require_cancel_probe(cancel)
+        _require_caller_poll(poll)
+        _run_caller_poll(poll)
         if cancel():
             return PreflightResult(OllamaStatus.CANCELLED_UNVERIFIED)
         if type(expected) is not OllamaIdentity:
             raise TypeError("preflight identity must use the exact OllamaIdentity type")
         if not _matches_expected_identity(expected):
             return PreflightResult(OllamaStatus.IDENTITY_MISMATCH)
+        version = self.check_version(cancel=cancel, poll=poll)
+        if version.status is not OllamaStatus.SUCCESS:
+            return PreflightResult(version.status)
+        tags = self.check_tags(expected, cancel=cancel, poll=poll)
+        if tags.status is not OllamaStatus.SUCCESS:
+            return PreflightResult(tags.status)
+        return PreflightResult(
+            OllamaStatus.SUCCESS,
+            observed_version=version.observed_version,
+            model_digest=tags.model_digest,
+        )
+
+    def check_version(
+        self, *, cancel: CancelProbe, poll: CallerPoll | None = None,
+    ) -> VersionCheckResult:
+        """Perform exactly one separately chargeable version contact."""
+        _require_cancel_probe(cancel)
+        _require_caller_poll(poll)
+        _run_caller_poll(poll)
+        if cancel():
+            return VersionCheckResult(OllamaStatus.CANCELLED_UNVERIFIED)
         version_intent = _HttpIntent(
             "GET", OLLAMA_VERSION_URL, None, "application/json", "version",
         )
-        version, status = self._execute(version_intent, cancel)
+        version, status = self._execute(version_intent, cancel, poll)
         if status is not None:
-            return PreflightResult(status)
+            return VersionCheckResult(status)
         try:
             observed = parse_version_response(
                 _require_bytes(version), QUALIFIED_OLLAMA_VERSION,
             )
         except OllamaProvenanceError:
-            return PreflightResult(OllamaStatus.IDENTITY_MISMATCH)
+            return VersionCheckResult(OllamaStatus.IDENTITY_MISMATCH)
         except OllamaSafetyError as exc:
-            return PreflightResult(_safety_status(exc))
+            return VersionCheckResult(_safety_status(exc))
+        return VersionCheckResult(
+            OllamaStatus.SUCCESS, observed_version=observed.version,
+        )
+
+    def check_tags(
+        self,
+        expected: OllamaIdentity = EXPECTED_IDENTITY,
+        *,
+        cancel: CancelProbe,
+        poll: CallerPoll | None = None,
+    ) -> TagsCheckResult:
+        """Perform exactly one separately chargeable tag/digest contact."""
+        _require_cancel_probe(cancel)
+        _require_caller_poll(poll)
+        _run_caller_poll(poll)
+        if cancel():
+            return TagsCheckResult(OllamaStatus.CANCELLED_UNVERIFIED)
+        if type(expected) is not OllamaIdentity:
+            raise TypeError("tags identity must use the exact OllamaIdentity type")
+        if not _matches_expected_identity(expected):
+            return TagsCheckResult(OllamaStatus.IDENTITY_MISMATCH)
         tags_intent = _HttpIntent(
             "GET", OLLAMA_TAGS_URL, None, "application/json", "tags",
         )
-        tags, status = self._execute(tags_intent, cancel)
+        tags, status = self._execute(tags_intent, cancel, poll)
         if status is not None:
-            return PreflightResult(status)
+            return TagsCheckResult(status)
         try:
             parsed_tags = parse_tags_response(
                 _require_bytes(tags), {expected.model_tag: expected.model_digest},
             )
         except OllamaProvenanceError:
-            return PreflightResult(OllamaStatus.IDENTITY_MISMATCH)
+            return TagsCheckResult(OllamaStatus.IDENTITY_MISMATCH)
         except OllamaSafetyError as exc:
-            return PreflightResult(_safety_status(exc))
+            return TagsCheckResult(_safety_status(exc))
         if len(parsed_tags.models) != 1:
-            return PreflightResult(OllamaStatus.IDENTITY_MISMATCH)
-        return PreflightResult(
-            OllamaStatus.SUCCESS,
-            observed_version=observed.version,
-            model_digest=parsed_tags.models[0].digest,
+            return TagsCheckResult(OllamaStatus.IDENTITY_MISMATCH)
+        return TagsCheckResult(
+            OllamaStatus.SUCCESS, model_digest=parsed_tags.models[0].digest,
         )
 
     def chat(
@@ -189,9 +235,12 @@ class OllamaClient:
         *,
         expected_sha256: str,
         cancel: CancelProbe,
+        poll: CallerPoll | None = None,
     ) -> ChatResult:
         """Run one exact chat request and retain text only on validated success."""
         _require_cancel_probe(cancel)
+        _require_caller_poll(poll)
+        _run_caller_poll(poll)
         if cancel():
             return ChatResult(OllamaStatus.CANCELLED_UNVERIFIED)
         try:
@@ -207,7 +256,7 @@ class OllamaClient:
             "POST", OLLAMA_CHAT_URL, request.body,
             "application/x-ndjson", "chat",
         )
-        value, status = self._execute(intent, cancel)
+        value, status = self._execute(intent, cancel, poll)
         if status is not None:
             return ChatResult(status)
         if not isinstance(value, ChatResult):
@@ -222,7 +271,10 @@ class OllamaClient:
             self._initiate_close(response)
 
     def _execute(
-        self, intent: _HttpIntent, cancel: CancelProbe,
+        self,
+        intent: _HttpIntent,
+        cancel: CancelProbe,
+        poll: CallerPoll | None,
     ) -> tuple[object | None, OllamaStatus | None]:
         if cancel():
             return None, OllamaStatus.CANCELLED_UNVERIFIED
@@ -247,7 +299,7 @@ class OllamaClient:
         except BaseException:
             _GLOBAL_REQUEST_SLOT.release()
             raise
-        return self._await_worker(state, cancel, started)
+        return self._await_worker(state, cancel, started, poll)
 
     def _request_worker(
         self,
@@ -283,10 +335,19 @@ class OllamaClient:
             state.done.set()
 
     def _await_worker(
-        self, state: _WorkerState, cancel: CancelProbe, started: float,
+        self,
+        state: _WorkerState,
+        cancel: CancelProbe,
+        started: float,
+        poll: CallerPoll | None,
     ) -> tuple[object | None, OllamaStatus | None]:
         deadline = started + TOTAL_REQUEST_SECONDS
         while True:
+            try:
+                _run_caller_poll(poll)
+            except BaseException:
+                self._abandon_worker(state)
+                raise
             if cancel():
                 self._abandon_worker(state)
                 return None, OllamaStatus.CANCELLED_UNVERIFIED
@@ -427,9 +488,9 @@ class OllamaClient:
             return ChatResult(OllamaStatus.PROTOCOL_VIOLATION)
         try:
             parse_answer_json(parsed.content)
-            from .worksheet import validate
+            from .worksheet import validate_shape
 
-            validate(parsed.content)
+            validate_shape(parsed.content)
         except OllamaSafetyError as exc:
             return ChatResult(_safety_status(exc))
         except OllamaAnswerError:
@@ -562,6 +623,16 @@ def _require_cancel_probe(cancel: CancelProbe) -> None:
         raise TypeError("cancel probe must be callable")
 
 
+def _require_caller_poll(poll: CallerPoll | None) -> None:
+    if poll is not None and not callable(poll):
+        raise TypeError("caller poll hook must be callable")
+
+
+def _run_caller_poll(poll: CallerPoll | None) -> None:
+    if poll is not None:
+        poll()
+
+
 def _matches_expected_identity(identity: OllamaIdentity) -> bool:
     try:
         return (
@@ -624,4 +695,4 @@ def _safety_status(exc: OllamaSafetyError) -> OllamaStatus:
     )
 
 
-__all__ = ["CancelProbe", "OllamaClient"]
+__all__ = ["CallerPoll", "CancelProbe", "OllamaClient"]

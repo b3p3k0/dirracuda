@@ -319,6 +319,10 @@ def precharge_control_contact(
         raise ValueError("control contact kind is not allowed")
     _require_sha(request_sha256, "request sha256")
     expected = _CONTROL_HASHES.get(kind)
+    if kind is ContactKind.CANCELLATION_HEALTH:
+        from .phase2_contract import HEALTH_REQUEST_SHA256
+
+        expected = HEALTH_REQUEST_SHA256
     if expected is not None and request_sha256 != expected:
         raise ValueError("control request hash does not match its frozen intent")
     return _precharge(
@@ -358,6 +362,10 @@ def precharge_chat_contact(
             raise OllamaStateError("chunk exhausted its two-attempt budget")
         if attempt_rows and str(attempt_rows[-1]["state"]) == "dispatching":
             raise OllamaStateError("chunk already has a live semantic attempt")
+        if _has_unresolved_health_obligation(conn, fence.run_id):
+            raise OllamaStateError(
+                "scored chat requires a later answered recovery-health contact"
+            )
         row = conn.execute(
             "SELECT c.state,f.work_state,f.active_generation "
             "FROM analyst_chunks c JOIN analyst_files f ON f.file_id=c.file_id "
@@ -383,6 +391,30 @@ def precharge_chat_contact(
         )
 
     return run_immediate(operation, path=path)
+
+
+def _has_unresolved_health_obligation(
+    conn: sqlite3.Connection, run_id: str,
+) -> bool:
+    row = conn.execute(
+        "SELECT o.contact_no FROM analyst_ollama_contacts o "
+        "LEFT JOIN analyst_model_attempts a ON a.attempt_id=o.attempt_id "
+        "WHERE o.run_id=? AND o.kind='chat' AND ("
+        "o.state IN ('request_timeout','transport_unavailable',"
+        "'cancelled_unverified','orphaned_unknown') OR "
+        "(o.state='success' AND "
+        "a.state IN ('orphaned_unknown','cancelled_unverified'))) "
+        "ORDER BY o.contact_no DESC LIMIT 1",
+        (run_id,),
+    ).fetchone()
+    if row is None:
+        return False
+    return conn.execute(
+        "SELECT 1 FROM analyst_ollama_contacts WHERE run_id=? AND contact_no>? "
+        "AND kind='cancellation_health' AND state IN ('success','model_invalid') "
+        "LIMIT 1",
+        (run_id, int(row["contact_no"])),
+    ).fetchone() is None
 
 
 def finish_contact(

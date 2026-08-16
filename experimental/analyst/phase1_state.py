@@ -151,8 +151,13 @@ def load_phase1_handoff(
             raise CheckpointError("Phase 1 handoff exceeds its file bound")
         handoffs: list[Phase1FileHandoff] = []
         for row in rows:
+            stage = FileStage(str(row["stage"]))
+            if stage in {FileStage.MODEL_REVIEWED, FileStage.MODEL_RESPONSE_VALID}:
+                if row["work_state"] != "pending" or row["active_generation"] is not None:
+                    raise CheckpointError("later model-stage work is not resumable")
+                continue
             if not (
-                row["stage"] == FileStage.SELECTED_FOR_MODEL.value
+                stage is FileStage.SELECTED_FOR_MODEL
                 and row["selected_for_model"] == 1
                 and row["work_state"] == "pending"
                 and row["active_generation"] is None
@@ -212,7 +217,11 @@ def verify_extraction_evidence(
         _require_running_fence(conn, fence)
         row = _active_file(conn, fence, file_id)
         if FileStage(str(row["stage"])) not in {
-            FileStage.TEXT_EXTRACTED, FileStage.DETECTOR_SCANNED,
+            FileStage.TEXT_EXTRACTED,
+            FileStage.DETECTOR_SCANNED,
+            FileStage.SELECTED_FOR_MODEL,
+            FileStage.MODEL_REVIEWED,
+            FileStage.MODEL_RESPONSE_VALID,
         }:
             raise CheckpointError(
                 "extraction verification requires a completed text checkpoint"
@@ -269,7 +278,12 @@ def verify_detector_checkpoint(
     def operation(conn: sqlite3.Connection) -> None:
         _require_running_fence(conn, fence)
         row = _active_file(conn, fence, file_id)
-        if FileStage(str(row["stage"])) is not FileStage.DETECTOR_SCANNED:
+        if FileStage(str(row["stage"])) not in {
+            FileStage.DETECTOR_SCANNED,
+            FileStage.SELECTED_FOR_MODEL,
+            FileStage.MODEL_REVIEWED,
+            FileStage.MODEL_RESPONSE_VALID,
+        }:
             raise CheckpointError(
                 "detector verification requires detector-scanned stage"
             )

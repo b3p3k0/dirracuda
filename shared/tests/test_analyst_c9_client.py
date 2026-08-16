@@ -31,8 +31,11 @@ from experimental.analyst.ollama_contract import (
     OllamaStatus,
     QUALIFIED_OLLAMA_VERSION,
     TOTAL_REQUEST_SECONDS,
+    TagsCheckResult,
+    VersionCheckResult,
     build_chat_request,
 )
+from experimental.analyst.worksheet import parse_and_ground
 
 
 _NONCE = "FENCE_0123456789ABCDEF"
@@ -213,6 +216,68 @@ def test_preflight_uses_only_exact_version_then_tags_gets() -> None:
     assert version.close_count == tags.close_count == 1
 
 
+def test_split_version_contact_is_exactly_one_get_and_content_free_on_failure() -> None:
+    success_response = FakeResponse(
+        [_encoded({"version": QUALIFIED_OLLAMA_VERSION})],
+        content_type="application/json",
+    )
+    success_session = FakeSession(success_response)
+    success = OllamaClient(session=success_session).check_version(cancel=lambda: False)
+
+    assert success == VersionCheckResult(
+        OllamaStatus.SUCCESS, observed_version=QUALIFIED_OLLAMA_VERSION,
+    )
+    assert [(call["method"], call["url"], call["data"])
+            for call in success_session.calls] == [
+        ("GET", OLLAMA_VERSION_URL, None),
+    ]
+    assert success_response.close_count == 1
+
+    failure_response = FakeResponse(
+        [_encoded({"version": "0.0.0"})], content_type="application/json",
+    )
+    failure_session = FakeSession(failure_response)
+    failure = OllamaClient(session=failure_session).check_version(cancel=lambda: False)
+    assert failure == VersionCheckResult(OllamaStatus.IDENTITY_MISMATCH)
+    assert len(failure_session.calls) == 1
+    assert failure_response.close_count == 1
+
+
+def test_split_tags_contact_is_exactly_one_get_and_validates_expected_digest() -> None:
+    response = FakeResponse(
+        [_encoded({"models": [{
+            "name": MODEL_TAG, "model": MODEL_TAG, "digest": MODEL_DIGEST,
+        }]})],
+        content_type="application/json",
+    )
+    session = FakeSession(response)
+    result = OllamaClient(session=session).check_tags(cancel=lambda: False)
+
+    assert result == TagsCheckResult(
+        OllamaStatus.SUCCESS, model_digest=MODEL_DIGEST,
+    )
+    assert [(call["method"], call["url"], call["data"])
+            for call in session.calls] == [("GET", OLLAMA_TAGS_URL, None)]
+    assert response.close_count == 1
+
+
+def test_split_contacts_cancel_and_forged_identity_make_zero_http_requests() -> None:
+    session = FakeSession()
+    client = OllamaClient(session=session)
+    assert client.check_version(cancel=lambda: True) == VersionCheckResult(
+        OllamaStatus.CANCELLED_UNVERIFIED,
+    )
+
+    forged = object.__new__(OllamaIdentity)
+    object.__setattr__(forged, "endpoint", "http://localhost:11434")
+    object.__setattr__(forged, "model_tag", MODEL_TAG)
+    object.__setattr__(forged, "model_digest", MODEL_DIGEST)
+    assert client.check_tags(forged, cancel=lambda: False) == TagsCheckResult(
+        OllamaStatus.IDENTITY_MISMATCH,
+    )
+    assert session.calls == []
+
+
 @pytest.mark.parametrize(
     ("version", "digest", "expected"),
     [
@@ -343,6 +408,109 @@ def test_cancel_before_preflight_or_chat_makes_zero_http_requests() -> None:
     assert session.calls == []
 
 
+@pytest.mark.parametrize("operation", ["version", "tags", "chat"])
+def test_caller_poll_runs_only_on_the_calling_thread(operation: str) -> None:
+    caller_thread = threading.get_ident()
+    poll_threads: list[int] = []
+    if operation == "version":
+        response = FakeResponse(
+            [_encoded({"version": QUALIFIED_OLLAMA_VERSION})],
+            content_type="application/json",
+        )
+    elif operation == "tags":
+        response = FakeResponse(
+            [_encoded({"models": [{
+                "name": MODEL_TAG, "model": MODEL_TAG, "digest": MODEL_DIGEST,
+            }]})],
+            content_type="application/json",
+        )
+    else:
+        response = FakeResponse([_chat_wire()])
+    client = OllamaClient(session=FakeSession(response))
+    poll = lambda: poll_threads.append(threading.get_ident())
+
+    if operation == "version":
+        result = client.check_version(cancel=lambda: False, poll=poll)
+    elif operation == "tags":
+        result = client.check_tags(cancel=lambda: False, poll=poll)
+    else:
+        request = build_chat_request("public", nonce=_NONCE)
+        result = client.chat(
+            request,
+            expected_sha256=request.request_sha256,
+            cancel=lambda: False,
+            poll=poll,
+        )
+
+    assert result.status is OllamaStatus.SUCCESS
+    assert poll_threads
+    assert set(poll_threads) == {caller_thread}
+
+
+def test_caller_poll_exception_abandons_contact_and_releases_permit_after_cleanup() -> None:
+    class PollFailure(RuntimeError):
+        pass
+
+    raw = BlockingRaw()
+    response = FakeResponse(raw=raw, content_type="application/json")
+    session = FakeSession(response)
+    client = OllamaClient(session=session)
+    caller_thread = threading.get_ident()
+    poll_threads: list[int] = []
+
+    def poll() -> None:
+        poll_threads.append(threading.get_ident())
+        if raw.entered.is_set():
+            raise PollFailure("public poll failure")
+
+    with pytest.raises(PollFailure, match="public poll failure"):
+        client.check_version(cancel=lambda: False, poll=poll)
+
+    assert set(poll_threads) == {caller_thread}
+    assert len(session.calls) == 1
+    deadline = time.monotonic() + 2
+    while response.close_count != 1 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert response.close_count == 1
+
+    following_response = FakeResponse(
+        [_encoded({"version": QUALIFIED_OLLAMA_VERSION})],
+        content_type="application/json",
+    )
+    following_session = FakeSession(following_response)
+    following_client = OllamaClient(session=following_session)
+    deadline = time.monotonic() + 2
+    following = None
+    while time.monotonic() < deadline:
+        following = following_client.check_version(cancel=lambda: False)
+        if following.status is OllamaStatus.SUCCESS:
+            break
+        assert following.status is OllamaStatus.TRANSPORT_UNAVAILABLE
+        assert following_session.calls == []
+        time.sleep(0.01)
+    assert following == VersionCheckResult(
+        OllamaStatus.SUCCESS, observed_version=QUALIFIED_OLLAMA_VERSION,
+    )
+
+
+def test_chat_retains_one_duplicate_for_c11_local_normalization() -> None:
+    row = {"category": "pii", "quote": "900-12-3456", "offset": 99}
+    raw = json.dumps({
+        "document_type": "Public note",
+        "subject": "Synthetic",
+        "assessment": "findings_present",
+        "findings": [row, {**row, "offset": 0}],
+    }, separators=(",", ":"))
+    result = _chat(_client_with_chat_response(FakeResponse([_chat_wire(raw)]))[0])
+
+    assert result.status is OllamaStatus.SUCCESS
+    assert result.content == raw
+    grounded = parse_and_ground(result.content, "900-12-3456")
+    assert grounded.raw_finding_count == 2
+    assert grounded.removed_duplicate_count == 1
+    assert len(grounded.findings) == 1
+
+
 def test_chat_hash_or_request_identity_mismatch_makes_zero_http_requests() -> None:
     session = FakeSession()
     client = OllamaClient(session=session)
@@ -376,7 +544,7 @@ def test_forged_request_exact_types_are_identity_mismatch_with_zero_http(
     valid = build_chat_request("public", nonce=_NONCE)
     forged = object.__new__(ChatRequest)
     for name in (
-        "source_text", "nonce", "body", "request_sha256", "model_tag",
+        "source_text", "nonce", "body", "request_sha256", "prompt_kind", "model_tag",
         "model_digest", "endpoint",
     ):
         object.__setattr__(forged, name, value if name == field else getattr(valid, name))
@@ -807,6 +975,25 @@ def test_cancel_probe_must_be_callable(cancel: object) -> None:
             request, expected_sha256=request.request_sha256,
             cancel=cancel,  # type: ignore[arg-type]
         )
+
+
+@pytest.mark.parametrize("poll", [False, 1, "poll"])
+def test_caller_poll_must_be_callable_before_any_http(poll: object) -> None:
+    session = FakeSession()
+    client = OllamaClient(session=session)
+    with pytest.raises(TypeError, match="caller poll"):
+        client.check_version(cancel=lambda: False, poll=poll)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="caller poll"):
+        client.check_tags(cancel=lambda: False, poll=poll)  # type: ignore[arg-type]
+    request = build_chat_request("public", nonce=_NONCE)
+    with pytest.raises(TypeError, match="caller poll"):
+        client.chat(
+            request,
+            expected_sha256=request.request_sha256,
+            cancel=lambda: False,
+            poll=poll,  # type: ignore[arg-type]
+        )
+    assert session.calls == []
 
 
 def test_constructor_requires_callable_clock() -> None:

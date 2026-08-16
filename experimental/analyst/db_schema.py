@@ -6,6 +6,7 @@ creation, transaction retry, and state transitions belong to the store layer.
 
 from __future__ import annotations
 
+import hashlib
 import re
 import sqlite3
 from dataclasses import dataclass
@@ -17,6 +18,9 @@ from .contact_contract import (
     ContactStatus,
     MAX_CHAT_CONTACTS_PER_CHUNK,
     MAX_CONTROL_CONTACTS_PER_RUN,
+    PS_REQUEST_SHA256,
+    TAGS_REQUEST_SHA256,
+    VERSION_REQUEST_SHA256,
     ScheduleState,
 )
 from .resource_policy import RESOURCE_BACKOFF_SECONDS
@@ -622,9 +626,53 @@ def _validate_v2_rows(conn: sqlite3.Connection) -> None:
     if excess_controls is not None or excess_chats is not None:
         raise AnalystSchemaError("Ollama contact evidence exceeds its frozen bound")
     _validate_contact_schedule_history(conn)
+    _validate_contact_and_attempt_ids(conn)
+
+
+def _validate_contact_and_attempt_ids(conn: sqlite3.Connection) -> None:
+    for row in conn.execute(
+        "SELECT contact_id,run_id,contact_no,kind,chunk_id,semantic_attempt_no,"
+        "request_sha256,lease_generation FROM analyst_ollama_contacts"
+    ).fetchall():
+        expected = hashlib.sha256("\0".join((
+            str(row[1]),
+            str(int(row[2])),
+            str(row[3]),
+            "" if row[4] is None else str(int(row[4])),
+            "" if row[5] is None else str(int(row[5])),
+            str(row[6]),
+            str(int(row[7])),
+        )).encode("utf-8")).hexdigest()
+        if str(row[0]) != expected:
+            raise AnalystSchemaError("Ollama contact id is not deterministic")
+    for row in conn.execute(
+        "SELECT attempt_id,chunk_id,attempt_no,request_sha256 "
+        "FROM analyst_model_attempts"
+    ).fetchall():
+        expected = hashlib.sha256(
+            f"{int(row[1])}\0{int(row[2])}\0{str(row[3])}".encode("ascii")
+        ).hexdigest()
+        if str(row[0]) != expected:
+            raise AnalystSchemaError("model attempt id is not deterministic")
 
 
 def _validate_contact_schedule_history(conn: sqlite3.Connection) -> None:
+    from .phase2_contract import HEALTH_REQUEST_SHA256
+
+    expected_control_hashes = {
+        "version": VERSION_REQUEST_SHA256,
+        "tags": TAGS_REQUEST_SHA256,
+        "ps": PS_REQUEST_SHA256,
+        "cancellation_health": HEALTH_REQUEST_SHA256,
+    }
+    controls = conn.execute(
+        "SELECT kind,request_sha256 FROM analyst_ollama_contacts WHERE kind!='chat'"
+    ).fetchall()
+    if any(
+        str(row[1]) != expected_control_hashes.get(str(row[0]))
+        for row in controls
+    ):
+        raise AnalystSchemaError("Ollama control request identity is invalid")
     schedules = {
         str(row[0]): int(row[1])
         for row in conn.execute(
@@ -675,6 +723,52 @@ def _validate_contact_schedule_history(conn: sqlite3.Connection) -> None:
             prior = expected_after
         if prior != expected_final:
             raise AnalystSchemaError("Ollama schedule is not derived from contact history")
+    _validate_health_barrier_history(conn)
+
+
+def _validate_health_barrier_history(conn: sqlite3.Connection) -> None:
+    histories: dict[str, list[tuple[str, str, str | None]]] = {}
+    for row in conn.execute(
+        "SELECT o.run_id,o.kind,o.state,a.state FROM analyst_ollama_contacts o "
+        "LEFT JOIN analyst_model_attempts a ON a.attempt_id=o.attempt_id "
+        "ORDER BY o.run_id,o.contact_no"
+    ).fetchall():
+        histories.setdefault(str(row[0]), []).append((
+            str(row[1]),
+            str(row[2]),
+            None if row[3] is None else str(row[3]),
+        ))
+    ambiguous_contacts = {
+        ContactStatus.REQUEST_TIMEOUT.value,
+        ContactStatus.TRANSPORT_UNAVAILABLE.value,
+        ContactStatus.CANCELLED_UNVERIFIED.value,
+        ContactStatus.ORPHANED_UNKNOWN.value,
+    }
+    ambiguous_attempts = {"orphaned_unknown", "cancelled_unverified"}
+    answered = {
+        ContactStatus.SUCCESS.value,
+        ContactStatus.MODEL_INVALID.value,
+    }
+    for rows in histories.values():
+        unresolved = False
+        for kind, status, attempt_state in rows:
+            if kind == ContactKind.CHAT.value:
+                if unresolved:
+                    raise AnalystSchemaError(
+                        "scored chat bypassed its recovery-health barrier"
+                    )
+                unresolved = (
+                    status in ambiguous_contacts
+                    or (
+                        status == ContactStatus.SUCCESS.value
+                        and attempt_state in ambiguous_attempts
+                    )
+                )
+            elif (
+                kind == ContactKind.CANCELLATION_HEALTH.value
+                and status in answered
+            ):
+                unresolved = False
 
 
 def validate_runtime_schema(conn: sqlite3.Connection) -> None:
