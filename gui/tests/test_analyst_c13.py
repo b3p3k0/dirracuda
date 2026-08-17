@@ -156,6 +156,9 @@ def test_creation_failures_are_closed_and_actionable():
 
 def test_run_browser_status_distinguishes_live_queued_and_completed_runs():
     from gui.components.experimental_features.analyst_tab import (
+        _ACTIVE_REFRESH_MS,
+        _IDLE_REFRESH_MS,
+        _refresh_interval_ms,
         _run_browser_status,
     )
 
@@ -167,6 +170,13 @@ def test_run_browser_status_distinguishes_live_queued_and_completed_runs():
     )
     assert _run_browser_status((_summary(state=RunState.COMPLETE),)) == (
         "No active analyses. Completed reports are available below."
+    )
+    assert _refresh_interval_ms((_summary(),)) == _ACTIVE_REFRESH_MS
+    assert _refresh_interval_ms((_summary(state=RunState.READY),)) == (
+        _ACTIVE_REFRESH_MS
+    )
+    assert _refresh_interval_ms((_summary(state=RunState.COMPLETE),)) == (
+        _IDLE_REFRESH_MS
     )
 
 
@@ -193,9 +203,11 @@ def test_tab_auto_refresh_repeats_only_while_live():
     tab._refresh_after_id = None
     tab._busy = False
     tab._refreshing = False
+    tab._refresh_interval = 60_000
     tab._refresh_runs = lambda: calls.append("refresh")
     tab._schedule_auto_refresh()
     assert len(callbacks) == 1
+    assert callbacks[0][0] == 60_000
     callbacks.pop()[1]()
     assert calls == ["refresh"]
     assert tab._refresh_after_id is None
@@ -242,6 +254,7 @@ def test_live_refresh_preserves_selection_and_disables_empty_report_browser():
     tab = AnalystTab.__new__(AnalystTab)
     tab._busy = False
     tab._refreshing = True
+    tab._refresh_interval = 60_000
     tab._summaries = []
     tab._runs = Tree()
     tab._reports_btn = type(
@@ -262,6 +275,7 @@ def test_live_refresh_preserves_selection_and_disables_empty_report_browser():
     )
     assert button_states == [{"state": "disabled"}]
     assert statuses[-1].startswith("Running · Public Report ·")
+    assert tab._refresh_interval == 2_000
 
 
 def test_dashboard_hydration_reconciles_once_then_refreshes_and_stops(monkeypatch):

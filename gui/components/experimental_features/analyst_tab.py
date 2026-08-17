@@ -24,7 +24,8 @@ _CREATE_FAILURE_MESSAGES = {
     ),
     "state": "Analyst durable state prevented this run from starting.",
 }
-_AUTO_REFRESH_MS = 2_000
+_ACTIVE_REFRESH_MS = 2_000
+_IDLE_REFRESH_MS = 60_000
 _ACTIVE_RUN_STATES = frozenset({"running", "cancel_requested", "finalizing"})
 _RESUMABLE_RUN_STATES = frozenset({
     "ready", "interrupted", "cancelled_pending_resume",
@@ -70,6 +71,15 @@ def _run_browser_status(summaries) -> str:
     return "No Analyst runs yet."
 
 
+def _refresh_interval_ms(summaries) -> int:
+    if any(
+        item.state.value in _ACTIVE_RUN_STATES or item.state.value == "ready"
+        for item in summaries
+    ):
+        return _ACTIVE_REFRESH_MS
+    return _IDLE_REFRESH_MS
+
+
 class AnalystTab:
     """Low-input launcher; all durable and blocking work stays off the Tk thread."""
 
@@ -79,6 +89,7 @@ class AnalystTab:
         self._busy = False
         self._refreshing = False
         self._refresh_after_id = None
+        self._refresh_interval = _IDLE_REFRESH_MS
         self._summaries = []
         self._manifest_choices = []
         self._report_window = None
@@ -200,9 +211,6 @@ class AnalystTab:
         )
         self._theme.apply_to_widget(self._analyze_btn, "button_primary")
         self._analyze_btn.pack(side=tk.LEFT, padx=(0, 7))
-        refresh = tk.Button(controls, text="Refresh", command=self._refresh_runs)
-        self._theme.apply_to_widget(refresh, "button_secondary")
-        refresh.pack(side=tk.LEFT, padx=(0, 7))
         self._resume_btn = tk.Button(
             controls, text="Resume", state="disabled", command=self._resume_selected,
         )
@@ -427,6 +435,7 @@ class AnalystTab:
         selected = self._runs.selection()
         selected_run_id = selected[0] if selected else None
         self._summaries = list(summaries)
+        self._refresh_interval = _refresh_interval_ms(self._summaries)
         self._runs.delete(*self._runs.get_children(""))
         for item in self._summaries:
             state = "paused_resource" if item.schedule_state == "paused_resource" else item.state.value
@@ -474,7 +483,7 @@ class AnalystTab:
         try:
             if self.frame.winfo_exists():
                 self._refresh_after_id = self.frame.after(
-                    _AUTO_REFRESH_MS, refresh,
+                    self._refresh_interval, refresh,
                 )
         except Exception:
             self._refresh_after_id = None
