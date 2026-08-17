@@ -1,5 +1,16 @@
 # Ollama Integration Workspace
 
+## Workspace Layout (2026-08-17)
+
+- Active continuation anchors stay in this directory: this README, `CONTRACT.md`,
+  `CONTRACT_ERRATA.md`, `RISK_REGISTER.md`, `LESSONS_LEARNED.md`, and
+  `RESEARCH_NOTES.md`.
+- Completed C1–C15 task cards are archived under [`phase_1/`](phase_1/README.md).
+- The next-agent orientation and planning-only workspace are under
+  [`phase_2/`](phase_2/README.md).
+- Benchmark protocols/outcomes remain here intentionally because frozen tooling,
+  source seals, and provenance tests reference their exact repository paths.
+
 Date: 2026-08-16
 Status: **C0A contract frozen** (committed `91bb2aa`). **C0B-1 accepted and committed
 (`47e946b`).** The complete public C/D/F executor passed its offline and hostile-review
@@ -286,3 +297,9 @@ findings and a manifest-verified report without private input.
 Private Stage E remains deferred and requires fresh explicit
 authorization before any real-document read. Core startup does not depend on Analyst's
 optional parser lane.
+
+The operator has since initiated the first normal private desktop run, which is the
+explicit authorization for that run—not blanket authorization for agents to inspect its
+documents, findings, model output, or report content. Close its content-free operational
+acceptance before freezing a Phase 2 objective. Candidate Phase 2 directions and the
+next-agent prompt are recorded in [`phase_2/`](phase_2/README.md).
