@@ -17,6 +17,7 @@ from .checkpoint import (
     ExtractionCheckpointEvidence,
     ProvenanceUnit,
 )
+from .file_identity import join_unsigned_u64
 from .inventory import InventoryFile
 from .lease import LeaseFence
 from .models import DetectorHit, FileStage
@@ -414,7 +415,13 @@ def _load_snapshot(
         inventory_file=InventoryFile(
             relative_path=str(row["relative_path"]), size=int(row["size"]),
             mtime_ns=int(row["mtime_ns"]), ctime_ns=int(row["ctime_ns"]),
-            device=int(row["device"]), inode=int(row["inode"]),
+            device=join_unsigned_u64(
+                int(row["device"]), int(row["device_high_bit"]),
+            ),
+            inode=join_unsigned_u64(
+                int(row["inode"]), int(row["inode_high_bit"]),
+                require_positive=True,
+            ),
             mode=int(row["mode"]), sha256=str(row["sha256"]),
         ),
         stage=stage,

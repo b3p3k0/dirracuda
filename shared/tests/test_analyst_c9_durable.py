@@ -39,8 +39,8 @@ from experimental.analyst.state import AttemptState
 from experimental.analyst import db_schema
 from experimental.analyst.db_schema import (
     APPLICATION_ID,
-    PREVIOUS_SCHEMA_VERSION,
     SCHEMA_VERSION,
+    V1_SCHEMA_VERSION,
     AnalystSchemaError,
     validate_schema,
     validate_schema_v1,
@@ -247,19 +247,21 @@ def _race_precharge_control(
 
 
 def _downgrade_empty_database_to_exact_v1(path: Path) -> None:
+    path.unlink()
     conn = sqlite3.connect(path, isolation_level=None)
     try:
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("BEGIN IMMEDIATE")
-        for name in sorted(_V2_INDEXES):
-            conn.execute(f"DROP INDEX {name}")
-        for name in ("analyst_ollama_contacts", "analyst_ollama_schedule"):
-            conn.execute(f"DROP TABLE {name}")
-        conn.execute(f"PRAGMA user_version={PREVIOUS_SCHEMA_VERSION}")
+        for statement in (*db_schema._V1_TABLE_DDL, *db_schema._V1_INDEX_DDL):
+            conn.execute(statement)
+        conn.execute("INSERT INTO analyst_gpu_lease(slot,generation) VALUES(1,0)")
+        conn.execute(f"PRAGMA application_id={APPLICATION_ID}")
+        conn.execute(f"PRAGMA user_version={V1_SCHEMA_VERSION}")
         conn.execute("COMMIT")
         validate_schema_v1(conn)
     finally:
         conn.close()
+    path.chmod(0o600)
 
 
 def _insert_v1_run(conn: sqlite3.Connection, run_id: str = "run") -> None:
@@ -312,11 +314,12 @@ def _crash_during_v1_migration(path: Path, boundary: int) -> None:
     statements = (
         *db_schema._V2_ADDITIONAL_TABLE_DDL,
         *db_schema._V2_ADDITIONAL_INDEX_DDL,
+        *db_schema._V3_ADDITIONAL_DDL,
     )
     for statement in statements[:boundary]:
         conn.execute(statement)
     if boundary > len(statements):
-        conn.execute("PRAGMA user_version=2")
+        conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
     os._exit(73)
 
 
@@ -675,7 +678,7 @@ def test_exact_empty_v1_migrates_additively_and_reopen_is_idempotent(
     conn = open_connection(path, read_only=True)
     try:
         validate_schema(conn)
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         assert conn.execute(
             "SELECT count(*) FROM analyst_ollama_contacts"
         ).fetchone()[0] == 0
@@ -687,9 +690,11 @@ def test_exact_empty_v1_migrates_additively_and_reopen_is_idempotent(
                 "SELECT type,name,sql FROM sqlite_schema "
                 "WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name"
             )
-            if str(row[1]) not in _V2_TABLES | _V2_INDEXES
+            if str(row[1]) not in _V2_TABLES | _V2_INDEXES | {"analyst_files"}
         )
-        assert after_v1 == before
+        assert after_v1 == tuple(
+            row for row in before if str(row[1]) != "analyst_files"
+        )
     finally:
         conn.close()
 
@@ -734,6 +739,7 @@ def test_populated_or_active_v1_is_refused_without_mutation(
         1,
         len(db_schema._V2_ADDITIONAL_TABLE_DDL)
         + len(db_schema._V2_ADDITIONAL_INDEX_DDL)
+        + len(db_schema._V3_ADDITIONAL_DDL)
         + 2,
     ),
     ids=lambda boundary: f"boundary-{boundary}",
@@ -755,7 +761,7 @@ def test_crash_at_each_v1_migration_boundary_rolls_back_then_migrates_cleanly(
     conn = open_connection(path, read_only=True)
     try:
         validate_schema(conn)
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
     finally:
@@ -793,7 +799,7 @@ def test_two_processes_racing_exact_v1_migration_converge_on_one_v2(
         results.close()
         results.join_thread()
 
-    assert observed == [("ok", (APPLICATION_ID, 2))] * 2
+    assert observed == [("ok", (APPLICATION_ID, SCHEMA_VERSION))] * 2
     conn = open_connection(path, read_only=True)
     try:
         validate_schema(conn)

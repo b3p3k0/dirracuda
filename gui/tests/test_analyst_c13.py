@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from experimental.analyst.service import AnalystRunSummary
+from experimental.analyst.service import (
+    AnalystRunSummary,
+    AnalystServiceError,
+    ServiceFailure,
+)
 from experimental.analyst.state import RunState
 from gui.utils.analyst_tasks import apply_analyst_task_hydration
 from gui.utils.running_tasks import RunningTaskRegistry
@@ -129,6 +133,25 @@ def test_analyst_ui_modules_import_without_service_actions(monkeypatch):
     assert report_window.AnalystReportWindow is not None
     assert analyst_tab.AnalystTab is not None
     assert calls == []
+
+
+def test_creation_failures_are_closed_and_actionable():
+    from gui.components.experimental_features.analyst_tab import (
+        _creation_failure_message,
+    )
+
+    expected = {
+        ServiceFailure.INVENTORY: "inventory failed",
+        ServiceFailure.STORAGE: "save the durable run",
+        ServiceFailure.LAUNCH: "saved, but its worker",
+    }
+    marker = "PRIVATE_EXCEPTION_MARKER"
+    for code, fragment in expected.items():
+        error = AnalystServiceError(code)
+        error.__cause__ = RuntimeError(marker)
+        message = _creation_failure_message(error)
+        assert fragment in message
+        assert marker not in message
 
 
 def test_dashboard_hydration_reconciles_once_then_refreshes_and_stops(monkeypatch):

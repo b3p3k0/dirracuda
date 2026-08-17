@@ -715,3 +715,36 @@ The sidecar retains more content-free operational rows, bounded at 64 controls p
 and 16 chat contacts per chunk. Resource pressure no longer spends the two-answer budget,
 but ambiguous delivery remains conservative. C10 must use the charged contact API and
 must not call the C9A client directly.
+
+---
+
+## E16 — Encode unsigned filesystem identities losslessly in SQLite
+
+**Status:** ACCEPTED AND IMPLEMENTED (first-run correction, 2026-08-17)
+**Affects:** C2 inventory identity; C8 sidecar schema and C10/C11 resume reopening
+**Raised by:** first operator run on the canonical mergerfs extraction tree
+
+### The conflict
+
+Linux exposes filesystem device and inode identities as unsigned values, while SQLite
+INTEGER and Python's SQLite binding accept only signed 64-bit integers. The first real
+mergerfs inventory contained valid device and inode values with bit 63 set. Inventory
+succeeded, but durable run creation failed before launch with an integer-conversion
+overflow.
+
+### The correction
+
+- Sidecar schema v3 additively appends one constrained high-bit column for each persisted
+  device and inode. Existing columns retain the low 63 bits.
+- Every write accepts exact uint64 identities, rejects booleans/out-of-range values, and
+  stores only SQLite-safe integers. Every worker/resume read reconstructs the original
+  unsigned value before descriptor-safe source reopening.
+- Exact idle v2 databases migrate transactionally in place; existing v2 rows receive
+  zero high bits. V1 retains its earlier pristine-only migration restriction.
+- The desktop maps closed service failure codes to useful operator guidance without
+  displaying paths, source content or exception text.
+
+### Consequences
+
+Mergerfs identities above `2^63 - 1` now round-trip without truncation or collision.
+Schema v3 changes no run, contact, model-attempt or report semantics.

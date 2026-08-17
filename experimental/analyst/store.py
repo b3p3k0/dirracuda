@@ -21,13 +21,16 @@ from .db_schema import (
     KNOWN_SCHEMA_VERSIONS,
     PREVIOUS_SCHEMA_VERSION,
     SCHEMA_VERSION,
+    V1_SCHEMA_VERSION,
     AnalystSchemaError,
     initialize_schema,
     validate_runtime_schema,
     validate_schema,
     validate_v1_migration_candidate,
+    validate_v2_migration_candidate,
 )
-from .inventory import InventoryResult
+from .file_identity import split_unsigned_u64
+from .inventory import InventoryFile, InventoryResult
 from .state import RESUMABLE_RUN_STATES, RunState
 from .worker_contract import (
     WorkerContractError,
@@ -97,7 +100,7 @@ def get_db_path(override: Path | None = None) -> Path:
 
 
 def initialize_database(path: Path | None = None) -> Path:
-    """Create, narrowly migrate, or validate the owner-only Analyst v2 sidecar."""
+    """Create, narrowly migrate, or validate the owner-only Analyst v3 sidecar."""
     resolved = get_db_path(path)
     _ensure_owner_directory(resolved.parent)
     created = _create_database_file(resolved)
@@ -124,7 +127,7 @@ def initialize_database(path: Path | None = None) -> Path:
 def open_connection(
     path: Path | None = None, *, read_only: bool = False,
 ) -> sqlite3.Connection:
-    """Open one exact v2 connection with the frozen C8 PRAGMA policy."""
+    """Open one exact v3 connection with the frozen C8 PRAGMA policy."""
     return _connect(get_db_path(path), read_only=read_only, validate=True)
 
 
@@ -205,14 +208,11 @@ def create_run(
         conn.executemany(
             "INSERT INTO analyst_files("
             "run_id,ordinal,relative_path,size,mtime_ns,ctime_ns,device,inode,"
-            "mode,sha256,stage,work_state,updated_at_utc) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,'discovered','pending',?)",
+            "mode,sha256,stage,work_state,updated_at_utc,device_high_bit,"
+            "inode_high_bit) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,'discovered','pending',?,?,?)",
             (
-                (
-                    spec.run_id, ordinal, item.relative_path, item.size,
-                    item.mtime_ns, item.ctime_ns, item.device, item.inode,
-                    item.mode, item.sha256, timestamp,
-                )
+                _file_insert_values(spec.run_id, ordinal, item, timestamp)
                 for ordinal, item in enumerate(inventory.files)
             ),
         )
@@ -226,6 +226,20 @@ def create_run(
         )
 
     run_immediate(operation, path=path)
+
+
+def _file_insert_values(
+    run_id: str, ordinal: int, item: InventoryFile, timestamp: str,
+) -> tuple[object, ...]:
+    device, device_high_bit = split_unsigned_u64(item.device)
+    inode, inode_high_bit = split_unsigned_u64(
+        item.inode, require_positive=True,
+    )
+    return (
+        run_id, ordinal, item.relative_path, item.size, item.mtime_ns,
+        item.ctime_ns, device, inode, item.mode, item.sha256, timestamp,
+        device_high_bit, inode_high_bit,
+    )
 
 
 def list_active_runs(
@@ -464,6 +478,8 @@ def _audit_existing_database(path: Path) -> None:
         if identity == (APPLICATION_ID, SCHEMA_VERSION):
             validate_schema(conn)
         elif identity == (APPLICATION_ID, PREVIOUS_SCHEMA_VERSION):
+            validate_v2_migration_candidate(conn)
+        elif identity == (APPLICATION_ID, V1_SCHEMA_VERSION):
             validate_v1_migration_candidate(conn)
         elif identity != (0, 0) or objects is not None:
             raise AnalystSchemaError(

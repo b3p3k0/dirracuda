@@ -13,6 +13,28 @@ from gui.utils.running_tasks import get_running_task_registry
 from gui.utils.style import get_theme
 
 
+_CREATE_FAILURE_MESSAGES = {
+    "contract": "The source or output directory is not supported by Analyst.",
+    "inventory": (
+        "Source inventory failed. Check that the directory is readable and stable."
+    ),
+    "storage": "Analyst could not save the durable run. No worker was launched.",
+    "launch": (
+        "The run was saved, but its worker could not be launched. Refresh to resume it."
+    ),
+    "state": "Analyst durable state prevented this run from starting.",
+}
+
+
+def _creation_failure_message(error: BaseException) -> str:
+    code = getattr(getattr(error, "code", None), "value", None)
+    if type(code) is str:
+        return _CREATE_FAILURE_MESSAGES.get(
+            code, "Run creation or launch failed.",
+        )
+    return "Run creation or launch failed."
+
+
 class AnalystTab:
     """Low-input launcher; all durable and blocking work stays off the Tk thread."""
 
@@ -324,8 +346,9 @@ class AnalystTab:
                         report_label=report_label,
                         mode=mode,
                     )
-            except Exception:
-                self._schedule(lambda: self._finish_action(False, "Run creation or launch failed."))
+            except Exception as exc:
+                message = _creation_failure_message(exc)
+                self._schedule(lambda: self._finish_action(False, message))
                 return
             self._schedule(
                 lambda: self._finish_action(

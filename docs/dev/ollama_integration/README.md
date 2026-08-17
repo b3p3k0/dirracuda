@@ -112,6 +112,9 @@ conservatively charged. C9's public-only live acceptance also passed after the o
 pinned the container image, disabled cloud features and restricted Ollama to loopback.
 It proved one strict structured response, post-header cancellation and a successful
 following-health response without printing or persisting model content.
+The first operator run subsequently exposed valid mergerfs device/inode values above
+SQLite's signed integer range. E16 schema v3 now stores their low 63 bits plus explicit
+high-bit flags and reconstructs the exact unsigned identities during worker resume.
 
 The inherited C0B-3 public implementation freezes the protected run nonce key only in the
 backed-up 0600 checkpoint; derived

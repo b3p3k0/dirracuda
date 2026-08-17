@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Mapping
 
+from .file_identity import join_unsigned_u64
 from .lease import LeaseFence
 from .models import (
     Assessment,
@@ -290,7 +291,8 @@ def claim_next_file(
         _require_running_fence(conn, fence)
         row = conn.execute(
             "SELECT file_id,ordinal,relative_path,size,mtime_ns,ctime_ns,device,"
-            "inode,mode,sha256,stage FROM analyst_files WHERE run_id=? "
+            "inode,mode,sha256,stage,device_high_bit,inode_high_bit "
+            "FROM analyst_files WHERE run_id=? "
             "AND work_state='pending' ORDER BY ordinal LIMIT 1",
             (fence.run_id,),
         ).fetchone()
@@ -308,7 +310,13 @@ def claim_next_file(
             file_id=int(row["file_id"]), ordinal=int(row["ordinal"]),
             relative_path=str(row["relative_path"]), size=int(row["size"]),
             mtime_ns=int(row["mtime_ns"]), ctime_ns=int(row["ctime_ns"]),
-            device=int(row["device"]), inode=int(row["inode"]),
+            device=join_unsigned_u64(
+                int(row["device"]), int(row["device_high_bit"]),
+            ),
+            inode=join_unsigned_u64(
+                int(row["inode"]), int(row["inode_high_bit"]),
+                require_positive=True,
+            ),
             mode=int(row["mode"]), sha256=str(row["sha256"]),
             stage=FileStage(str(row["stage"])),
         )
