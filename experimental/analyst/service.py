@@ -159,7 +159,7 @@ class AnalystRunSummary:
     @property
     def progress(self) -> str:
         return (
-            f"{self.terminal_files}/{self.discovered_files} files · "
+            f"{self.terminal_files}/{self.discovered_files} finalized · "
             f"{self.model_reviewed_files}/{self.selected_files} model-reviewed"
         )
 

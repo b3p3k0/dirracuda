@@ -62,7 +62,7 @@ def test_hydration_uses_stable_ids_without_duplicates_and_preserves_other_tasks(
     task = registry.get_task(item.task_id)
     assert task is not None
     assert task.state == "running"
-    assert task.progress == "4/10 files · 2/3 model-reviewed"
+    assert task.progress == "4/10 finalized · 2/3 model-reviewed"
     task.reopen_callback()
     task.cancel_callback()
     assert reopened == [item.run_id]
@@ -152,6 +152,116 @@ def test_creation_failures_are_closed_and_actionable():
         message = _creation_failure_message(error)
         assert fragment in message
         assert marker not in message
+
+
+def test_run_browser_status_distinguishes_live_queued_and_completed_runs():
+    from gui.components.experimental_features.analyst_tab import (
+        _run_browser_status,
+    )
+
+    assert _run_browser_status((_summary(),)) == (
+        "Running · Public Report · 4/10 finalized · 2/3 model-reviewed."
+    )
+    assert _run_browser_status((_summary(state=RunState.READY),)).startswith(
+        "Queued · Public Report ·"
+    )
+    assert _run_browser_status((_summary(state=RunState.COMPLETE),)) == (
+        "No active analyses. Completed reports are available below."
+    )
+
+
+def test_tab_auto_refresh_repeats_only_while_live():
+    from types import SimpleNamespace
+
+    from gui.components.experimental_features.analyst_tab import AnalystTab
+
+    callbacks = []
+    calls = []
+
+    class Frame:
+        @staticmethod
+        def winfo_exists():
+            return True
+
+        @staticmethod
+        def after(delay, callback):
+            callbacks.append((delay, callback))
+            return "refresh-1"
+
+    tab = AnalystTab.__new__(AnalystTab)
+    tab.frame = Frame()
+    tab._refresh_after_id = None
+    tab._busy = False
+    tab._refreshing = False
+    tab._refresh_runs = lambda: calls.append("refresh")
+    tab._schedule_auto_refresh()
+    assert len(callbacks) == 1
+    callbacks.pop()[1]()
+    assert calls == ["refresh"]
+    assert tab._refresh_after_id is None
+
+    tab.frame = SimpleNamespace(winfo_exists=lambda: False)
+    tab._schedule_auto_refresh()
+    assert tab._refresh_after_id is None
+
+
+def test_live_refresh_preserves_selection_and_disables_empty_report_browser():
+    from gui.components.experimental_features.analyst_tab import AnalystTab
+
+    summary = _summary()
+    inserted = []
+    selected = [summary.run_id]
+    button_states = []
+    statuses = []
+
+    class Tree:
+        @staticmethod
+        def selection():
+            return tuple(selected)
+
+        @staticmethod
+        def get_children(_parent):
+            return (summary.run_id,)
+
+        @staticmethod
+        def delete(*_items):
+            return None
+
+        @staticmethod
+        def insert(*args, **kwargs):
+            inserted.append((args, kwargs))
+
+        @staticmethod
+        def selection_set(run_id):
+            selected[:] = [run_id]
+
+        @staticmethod
+        def focus(_run_id):
+            return None
+
+    tab = AnalystTab.__new__(AnalystTab)
+    tab._busy = False
+    tab._refreshing = True
+    tab._summaries = []
+    tab._runs = Tree()
+    tab._reports_btn = type(
+        "Button", (), {"configure": lambda _self, **kw: button_states.append(kw)}
+    )()
+    tab._status_var = type(
+        "Var", (), {"set": lambda _self, value: statuses.append(value)}
+    )()
+    tab._hydrate_registry = lambda: None
+    tab._on_selection = lambda: None
+    tab._schedule_auto_refresh = lambda: None
+
+    tab._finish_refresh((summary,))
+
+    assert selected == [summary.run_id]
+    assert inserted[0][1]["values"][2:] == (
+        "running", "4/10 finalized · 2/3 model-reviewed",
+    )
+    assert button_states == [{"state": "disabled"}]
+    assert statuses[-1].startswith("Running · Public Report ·")
 
 
 def test_dashboard_hydration_reconciles_once_then_refreshes_and_stops(monkeypatch):

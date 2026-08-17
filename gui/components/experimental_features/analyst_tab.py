@@ -24,6 +24,11 @@ _CREATE_FAILURE_MESSAGES = {
     ),
     "state": "Analyst durable state prevented this run from starting.",
 }
+_AUTO_REFRESH_MS = 2_000
+_ACTIVE_RUN_STATES = frozenset({"running", "cancel_requested", "finalizing"})
+_RESUMABLE_RUN_STATES = frozenset({
+    "ready", "interrupted", "cancelled_pending_resume",
+})
 
 
 def _creation_failure_message(error: BaseException) -> str:
@@ -35,6 +40,36 @@ def _creation_failure_message(error: BaseException) -> str:
     return "Run creation or launch failed."
 
 
+def _run_browser_status(summaries) -> str:
+    active = next(
+        (
+            item for item in summaries
+            if item.state.value in _ACTIVE_RUN_STATES
+            or item.schedule_state == "paused_resource"
+        ),
+        None,
+    )
+    if active is not None:
+        state = (
+            "Paused for shared GPU resources"
+            if active.schedule_state == "paused_resource"
+            else active.state.value.replace("_", " ").title()
+        )
+        return f"{state} · {active.report_label} · {active.progress}."
+    resumable = next(
+        (item for item in summaries if item.state.value in _RESUMABLE_RUN_STATES),
+        None,
+    )
+    if resumable is not None:
+        label = "Queued" if resumable.state.value == "ready" else "Paused"
+        return f"{label} · {resumable.report_label} · {resumable.progress}."
+    if any(item.state.value == "complete" for item in summaries):
+        return "No active analyses. Completed reports are available below."
+    if summaries:
+        return "No active analyses."
+    return "No Analyst runs yet."
+
+
 class AnalystTab:
     """Low-input launcher; all durable and blocking work stays off the Tk thread."""
 
@@ -42,6 +77,8 @@ class AnalystTab:
         self._context = context
         self._theme = get_theme()
         self._busy = False
+        self._refreshing = False
+        self._refresh_after_id = None
         self._summaries = []
         self._manifest_choices = []
         self._report_window = None
@@ -176,9 +213,12 @@ class AnalystTab:
         )
         self._theme.apply_to_widget(self._cancel_btn, "button_danger")
         self._cancel_btn.pack(side=tk.LEFT, padx=(0, 7))
-        reports = tk.Button(controls, text="Reports", command=self._open_reports)
-        self._theme.apply_to_widget(reports, "button_secondary")
-        reports.pack(side=tk.LEFT)
+        self._reports_btn = tk.Button(
+            controls, text="Completed Reports", state="disabled",
+            command=self._open_reports,
+        )
+        self._theme.apply_to_widget(self._reports_btn, "button_secondary")
+        self._reports_btn.pack(side=tk.LEFT)
 
         self._status_var = tk.StringVar(value="Ready.")
         status = tk.Label(frame, textvariable=self._status_var, anchor="w")
@@ -192,7 +232,7 @@ class AnalystTab:
             height=6,
         )
         for key, text, width in (
-            ("label", "Report", 190),
+            ("label", "Analysis", 190),
             ("mode", "Depth", 65),
             ("state", "State", 145),
             ("progress", "Coverage", 250),
@@ -359,9 +399,11 @@ class AnalystTab:
         threading.Thread(target=work, daemon=True).start()
 
     def _refresh_runs(self) -> None:
-        if self._busy:
+        if self._refreshing:
             return
-        self._set_busy(True, "Loading durable Analyst runs…")
+        self._refreshing = True
+        if not self._busy:
+            self._status_var.set("Refreshing durable Analyst progress…")
 
         def work() -> None:
             try:
@@ -376,9 +418,14 @@ class AnalystTab:
         threading.Thread(target=work, daemon=True).start()
 
     def _finish_refresh(self, summaries) -> None:
-        self._set_busy(False, "Ready." if summaries is not None else "No Analyst state yet.")
+        self._refreshing = False
         if summaries is None:
+            if not self._busy:
+                self._status_var.set("Analyst progress is temporarily unavailable.")
+            self._schedule_auto_refresh()
             return
+        selected = self._runs.selection()
+        selected_run_id = selected[0] if selected else None
         self._summaries = list(summaries)
         self._runs.delete(*self._runs.get_children(""))
         for item in self._summaries:
@@ -387,8 +434,50 @@ class AnalystTab:
                 "", "end", iid=item.run_id,
                 values=(item.report_label, item.mode, state, item.progress),
             )
+        run_ids = {item.run_id for item in self._summaries}
+        selected_run_id = (
+            selected_run_id if selected_run_id in run_ids
+            else (self._summaries[0].run_id if self._summaries else None)
+        )
+        if selected_run_id is not None:
+            self._runs.selection_set(selected_run_id)
+            self._runs.focus(selected_run_id)
+        self._reports_btn.configure(
+            state=(
+                "normal"
+                if any(item.state.value == "complete" for item in self._summaries)
+                else "disabled"
+            )
+        )
+        if not self._busy:
+            self._status_var.set(_run_browser_status(self._summaries))
         self._hydrate_registry()
         self._on_selection()
+        self._schedule_auto_refresh()
+
+    def _schedule_auto_refresh(self) -> None:
+        if self._refresh_after_id is not None:
+            return
+
+        def refresh() -> None:
+            self._refresh_after_id = None
+            try:
+                if not self.frame.winfo_exists():
+                    return
+            except Exception:
+                return
+            if self._busy or self._refreshing:
+                self._schedule_auto_refresh()
+                return
+            self._refresh_runs()
+
+        try:
+            if self.frame.winfo_exists():
+                self._refresh_after_id = self.frame.after(
+                    _AUTO_REFRESH_MS, refresh,
+                )
+        except Exception:
+            self._refresh_after_id = None
 
     def _hydrate_registry(self) -> None:
         registry = self._context.get("running_tasks_registry")
