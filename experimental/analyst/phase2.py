@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import math
 import threading
 import time
@@ -36,19 +37,19 @@ from .lease import (
 from .models import Assessment, FileTerminal
 from .ollama_client import OllamaClient
 from .ollama_contract import (
-    EXPECTED_IDENTITY,
-    MODEL_DIGEST,
-    MODEL_TAG,
     NUM_CTX,
     NUM_PREDICT,
     WORKSHEET_VERSION,
     OllamaStatus,
     PromptKind,
     ChatResult,
+    OllamaIdentity,
     TagsCheckResult,
     VersionCheckResult,
     build_chat_request,
     build_repair_chat_request,
+    valid_model_digest,
+    valid_model_tag,
 )
 from .ollama_state import (
     ResourceWaitCancelled,
@@ -107,6 +108,7 @@ class Phase2Failure(str, Enum):
     CONTRACT = "contract"
     LEASE = "lease"
     PREFLIGHT = "preflight"
+    MODEL_DIGEST_MISMATCH = "model_digest_mismatch"
     SOURCE = "source"
     RESUME_MISMATCH = "resume_mismatch"
     MODEL = "model"
@@ -273,7 +275,7 @@ def run_phase2(
         while snapshot is not None:
             if _snapshot_needs_model(snapshot):
                 if not preflight_done:
-                    _run_identity_preflight(owner)
+                    _run_identity_preflight(context, owner)
                     preflight_done = True
                 _ensure_health(owner)
                 try:
@@ -347,8 +349,8 @@ def _best_effort_acknowledge_cancel(owner: _FenceOwner) -> None:
 
 def _require_runtime_contract(context: WorkerRunContext) -> None:
     if (
-        context.model_tag != MODEL_TAG
-        or context.model_digest != MODEL_DIGEST
+        not valid_model_tag(context.model_tag)
+        or not valid_model_digest(context.model_digest)
         or context.worksheet_version != WORKSHEET_VERSION
         or context.prompt_sha256 != prompt_template_hash()
         or context.response_schema_sha256 != schema_hash()
@@ -362,7 +364,10 @@ def _snapshot_needs_model(snapshot: Phase2FileSnapshot) -> bool:
     return any(chunk.state.value == "pending" for chunk in snapshot.chunks)
 
 
-def _run_identity_preflight(owner: _FenceOwner) -> None:
+def _run_identity_preflight(
+    context: WorkerRunContext,
+    owner: _FenceOwner,
+) -> None:
     version = _run_control(
         owner,
         ContactKind.VERSION,
@@ -372,21 +377,26 @@ def _run_identity_preflight(owner: _FenceOwner) -> None:
         ),
         VersionCheckResult,
     )
-    if version is not OllamaStatus.SUCCESS:
+    if version.status is not OllamaStatus.SUCCESS:
         raise Phase2Error(Phase2Failure.PREFLIGHT)
     tags = _run_control(
         owner,
         ContactKind.TAGS,
         TAGS_REQUEST_SHA256,
         lambda: owner.dependencies.client.check_tags(
-            EXPECTED_IDENTITY,
+            OllamaIdentity(
+                model_tag=context.model_tag,
+                model_digest=context.model_digest,
+            ),
             cancel=owner.stop_event.is_set,
             poll=owner.client_poll,
         ),
         TagsCheckResult,
     )
-    if tags is not OllamaStatus.SUCCESS:
+    if tags.status is not OllamaStatus.SUCCESS:
         raise Phase2Error(Phase2Failure.PREFLIGHT)
+    if not hmac.compare_digest(tags.model_digest, context.model_digest):
+        raise Phase2Error(Phase2Failure.MODEL_DIGEST_MISMATCH)
 
 
 def _run_control(
@@ -395,7 +405,7 @@ def _run_control(
     request_sha256: str,
     invoke: Callable[[], Any],
     result_type: type,
-) -> OllamaStatus:
+) -> Any:
     while True:
         charge = precharge_control_contact(
             owner.pulse(force=True), kind, request_sha256, path=owner.path,
@@ -411,7 +421,7 @@ def _run_control(
             ContactStatus(status.value), path=owner.path,
         )
         if status is not OllamaStatus.RESOURCE_BUSY:
-            return status
+            return result
         if finished.lease_released:
             raise _ResourcePause
         _wait_resource(owner, finished.schedule)
@@ -435,7 +445,7 @@ def _ensure_health(owner: _FenceOwner) -> None:
         ),
         ChatResult,
     )
-    if status not in {OllamaStatus.SUCCESS, OllamaStatus.MODEL_INVALID}:
+    if status.status not in {OllamaStatus.SUCCESS, OllamaStatus.MODEL_INVALID}:
         raise Phase2Error(Phase2Failure.MODEL)
     if load_health_obligation(owner.pulse(force=True), path=owner.path) is not None:
         raise Phase2Error(Phase2Failure.STATE)
@@ -514,7 +524,7 @@ def _process_selected_file(
                     continue
             chunk_text = source_text[pending.identity.start:pending.identity.end]
             _validate_attempt_request_history(
-                context.run_id, pending, chunk_text,
+                context, pending, chunk_text,
             )
             prompt_kind = (
                 PromptKind.MODEL_INVALID_REPAIR
@@ -523,7 +533,7 @@ def _process_selected_file(
                 else PromptKind.PRIMARY
             )
             request = _build_request(
-                context.run_id, pending.identity, prompt_kind, chunk_text,
+                context, pending.identity, prompt_kind, chunk_text,
             )
             try:
                 _dispatch_chunk(
@@ -646,23 +656,37 @@ def _regenerate_product(
 
 
 def _build_request(
-    run_id: str,
+    context: WorkerRunContext,
     identity: Any,
     prompt_kind: PromptKind,
     chunk_text: str,
 ) -> Any:
     nonce = derive_nonce(
-        run_id, identity.chunk_id, identity.sha256, prompt_kind, chunk_text,
+        context.run_id,
+        identity.chunk_id,
+        identity.sha256,
+        prompt_kind,
+        chunk_text,
     )
     return (
-        build_repair_chat_request(chunk_text, nonce=nonce)
+        build_repair_chat_request(
+            chunk_text,
+            nonce=nonce,
+            model_tag=context.model_tag,
+            model_digest=context.model_digest,
+        )
         if prompt_kind is PromptKind.MODEL_INVALID_REPAIR
-        else build_chat_request(chunk_text, nonce=nonce)
+        else build_chat_request(
+            chunk_text,
+            nonce=nonce,
+            model_tag=context.model_tag,
+            model_digest=context.model_digest,
+        )
     )
 
 
 def _validate_attempt_request_history(
-    run_id: str,
+    context: WorkerRunContext,
     chunk: Any,
     chunk_text: str,
 ) -> None:
@@ -671,7 +695,7 @@ def _validate_attempt_request_history(
     if not attempts:
         return
     primary = _build_request(
-        run_id, chunk.identity, PromptKind.PRIMARY, chunk_text,
+        context, chunk.identity, PromptKind.PRIMARY, chunk_text,
     )
     try:
         if attempts[0].request_sha256 != primary.request_sha256:
@@ -681,7 +705,7 @@ def _validate_attempt_request_history(
         first_state = attempts[0].state
         if first_state is AttemptState.SCHEMA_INVALID:
             expected = _build_request(
-                run_id,
+                context,
                 chunk.identity,
                 PromptKind.MODEL_INVALID_REPAIR,
                 chunk_text,

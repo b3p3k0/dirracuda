@@ -159,11 +159,14 @@ def test_generation_options_reject_value_or_type_drift(
         {"endpoint": "http://localhost:11434"},
         {"endpoint": "http://127.0.0.1:11435"},
         {"model_tag": "qwen3.6:27b-cloud"},
-        {"model_digest": "a" * 64},
+        {"model_tag": ""},
+        {"model_digest": "x" * 64},
         {"model_digest": contract.MODEL_DIGEST.upper()},
     ],
 )
-def test_identity_rejects_every_nonfrozen_value(changes: dict[str, str]) -> None:
+def test_identity_rejects_invalid_endpoint_or_model_value(
+    changes: dict[str, str],
+) -> None:
     with pytest.raises(ContractError, match="identity"):
         OllamaIdentity(**changes)
 
@@ -179,7 +182,7 @@ def test_chat_request_payload_and_hash_are_exact_and_deterministic() -> None:
     assert set(payload) == {
         "model", "messages", "stream", "format", "options", "think", "keep_alive",
     }
-    assert payload["model"] == contract.MODEL_TAG
+    assert payload["model"] == first.model_tag
     assert payload["stream"] is True
     assert payload["format"] == worksheet_schema()
     assert payload["options"] == contract.GENERATION_OPTIONS.as_payload()
@@ -196,7 +199,7 @@ def test_payload_returns_detached_data_and_repr_hides_prompt() -> None:
     payload["model"] = "forged"
     payload["messages"][0]["content"] = "forged"
 
-    assert request.payload()["model"] == contract.MODEL_TAG
+    assert request.payload()["model"] == request.model_tag
     assert "DO_NOT_ECHO_PUBLIC_MARKER" not in repr(request)
     assert _NONCE not in repr(request)
     assert "body=" not in repr(request)
@@ -246,7 +249,8 @@ def test_request_revalidation_rejects_body_hash_identity_and_canonical_drift() -
         _forged_request(body=valid.body + b" "),
         _forged_request(request_sha256="0" * 64),
         _forged_request(model_tag="other"),
-        _forged_request(model_digest="0" * 64),
+        _forged_request(model_tag="other:cloud"),
+        _forged_request(model_digest="x" * 64),
         _forged_request(endpoint="http://localhost:11434"),
         _forged_request(source_text="different public source"),
         _forged_request(nonce="FENCE_FEDCBA9876543210"),
@@ -360,7 +364,7 @@ def test_preflight_result_retains_identity_only_on_success() -> None:
 def test_request_body_is_valid_utf8_json_without_ascii_escaping() -> None:
     request = build_chat_request("café", nonce=_NONCE)
     assert "café" in request.body.decode("utf-8")
-    assert json.loads(request.body)["model"] == contract.MODEL_TAG
+    assert json.loads(request.body)["model"] == request.model_tag
 
 
 def test_c9_pure_modules_have_no_database_network_or_path_imports() -> None:

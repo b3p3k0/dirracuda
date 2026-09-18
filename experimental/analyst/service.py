@@ -28,8 +28,9 @@ from .ollama_contract import (
     DiscoveredModel,
     OllamaStatus,
     build_discovery_request,
+    is_cloud_model_tag,
+    valid_model_digest,
 )
-from .ollama_protocol import _is_cloud_model, valid_digest
 from .ollama_state import (
     finish_discovery_contact,
     precharge_discovery_contact,
@@ -273,6 +274,8 @@ def list_discovered_models(
 def create_directory_run(
     request: DirectoryRunRequest,
     *,
+    model_tag: str | None = None,
+    model_digest: str | None = None,
     path: Path | None = None,
     run_id_factory: TokenFactory = secrets.token_hex,
     cancel_check: Callable[[], bool] | None = None,
@@ -284,6 +287,12 @@ def create_directory_run(
         raise TypeError("run id factory must be callable")
     if cancel_check is not None and not callable(cancel_check):
         raise TypeError("cancel_check must be callable")
+    try:
+        selected_model_tag, selected_model_digest = _run_model_identity(
+            model_tag, model_digest,
+        )
+    except (TypeError, ValueError):
+        raise AnalystServiceError(ServiceFailure.CONTRACT) from None
     try:
         _require_existing_directory(request.output_base)
     except OSError:
@@ -314,8 +323,8 @@ def create_directory_run(
             output_root=str(output_root),
             source_identity=build_source_identity(inventory),
             report_label=request.report_label,
-            model_tag=ANALYST_DEFAULTS.model_tag,
-            model_digest=ANALYST_DEFAULTS.model_digest,
+            model_tag=selected_model_tag,
+            model_digest=selected_model_digest,
             worksheet_version=ANALYST_DEFAULTS.worksheet_version,
             prompt_sha256=prompt_template_hash(),
             response_schema_sha256=schema_hash(),
@@ -427,6 +436,8 @@ def create_manifest_run(
     output_base: Path | None,
     report_label: str,
     mode: str = "fast",
+    model_tag: str | None = None,
+    model_digest: str | None = None,
     path: Path | None = None,
     run_id_factory: TokenFactory = secrets.token_hex,
     cancel_check: Callable[[], bool] | None = None,
@@ -434,6 +445,12 @@ def create_manifest_run(
     """Persist one exact extraction-manifest run without guessing host identity."""
     if type(reference) is not ExtractSummaryReference:
         raise TypeError("manifest run requires a structured extraction reference")
+    try:
+        selected_model_tag, selected_model_digest = _run_model_identity(
+            model_tag, model_digest,
+        )
+    except (TypeError, ValueError):
+        raise AnalystServiceError(ServiceFailure.CONTRACT) from None
     try:
         from .worker_preflight import (
             current_detector_rules,
@@ -464,8 +481,8 @@ def create_manifest_run(
             output_root=str(output_root),
             source_identity=build_source_identity(manifest.inventory),
             report_label=report_label,
-            model_tag=ANALYST_DEFAULTS.model_tag,
-            model_digest=ANALYST_DEFAULTS.model_digest,
+            model_tag=selected_model_tag,
+            model_digest=selected_model_digest,
             worksheet_version=ANALYST_DEFAULTS.worksheet_version,
             prompt_sha256=prompt_template_hash(),
             response_schema_sha256=schema_hash(),
@@ -696,14 +713,30 @@ def _normalize_discovered_models(value: object) -> tuple[DiscoveredModel, ...]:
         if (
             type(tag) is not str
             or not tag
-            or _is_cloud_model(tag)
+            or is_cloud_model_tag(tag)
             or tag in seen
-            or not valid_digest(digest)
+            or not valid_model_digest(digest)
         ):
             raise ValueError("discovered model identity is invalid")
         seen.add(tag)
         models.append(DiscoveredModel(tag, digest))
     return tuple(sorted(models, key=lambda model: model.model_tag))
+
+
+def _run_model_identity(
+    model_tag: str | None,
+    model_digest: str | None,
+) -> tuple[str, str]:
+    if model_tag is None and model_digest is None:
+        return ANALYST_DEFAULTS.model_tag, ANALYST_DEFAULTS.model_digest
+    if (
+        type(model_tag) is not str
+        or not model_tag
+        or is_cloud_model_tag(model_tag)
+        or not valid_model_digest(model_digest)
+    ):
+        raise ValueError("run model identity is invalid")
+    return model_tag, model_digest
 
 
 def _finish_failed_discovery(

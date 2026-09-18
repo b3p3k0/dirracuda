@@ -168,7 +168,12 @@ def run_read_reduce(
     attempt_no = reduce_input.next_attempt_no
     while attempt_no <= 2:
         nonce = new_prompt_nonce(reduce_input.summary_text)
-        request = build_read_chat_request(reduce_input.summary_text, nonce=nonce)
+        request = build_read_chat_request(
+            reduce_input.summary_text,
+            nonce=nonce,
+            model_tag=context.model_tag,
+            model_digest=context.model_digest,
+        )
         while True:
             if stop_event.is_set():
                 raise ReadReduceCancelled

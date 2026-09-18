@@ -243,7 +243,7 @@ def test_split_version_contact_is_exactly_one_get_and_content_free_on_failure() 
     assert failure_response.close_count == 1
 
 
-def test_split_tags_contact_is_exactly_one_get_and_validates_expected_digest() -> None:
+def test_split_tags_contact_is_exactly_one_get_and_resolves_expected_tag() -> None:
     response = FakeResponse(
         [_encoded({"models": [{
             "name": MODEL_TAG, "model": MODEL_TAG, "digest": MODEL_DIGEST,
@@ -316,7 +316,7 @@ def test_preflight_fails_closed_on_version_or_digest_drift(
         ("model_digest", type("DigestSubclass", (str,), {})(MODEL_DIGEST)),
         ("endpoint", "http://localhost:11434"),
         ("model_tag", "qwen3.6:27b-cloud"),
-        ("model_digest", "1" * 64),
+        ("model_digest", "x" * 64),
     ],
 )
 def test_forged_preflight_identity_is_rejected_with_zero_http(

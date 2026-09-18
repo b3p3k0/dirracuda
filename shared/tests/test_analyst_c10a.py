@@ -657,8 +657,6 @@ def test_load_worker_run_missing_row_is_content_free(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("column", "value"),
     [
-        ("model_tag", "qwen3.6:35b"),
-        ("model_digest", "f" * 64),
         ("worksheet_version", "v1"),
         ("chunk_chars", 7999),
         ("overlap_chars", 255),
@@ -677,6 +675,51 @@ def test_load_worker_run_rejects_default_type_and_isolation_drift(
         load_worker_run(spec.run_id, path=db_path)
 
     assert db_path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("model_tag", "qwen3.6:35b"),
+        ("model_digest", "a" * 64),
+    ],
+)
+def test_load_worker_run_accepts_wellformed_nondefault_model(
+    tmp_path: Path, column: str, value: object,
+) -> None:
+    # R4c: the model pin relaxed to a per-run recorded selection; a well-formed
+    # non-default local model tag/digest is accepted, not forked.
+    db_path, spec, _inventory_result = _valid_run(tmp_path)
+    _raw_update(db_path, f"{column}=?", (value,))
+    context = load_worker_run(spec.run_id, path=db_path)
+    assert getattr(context, column) == value
+
+
+def test_load_worker_run_rejects_cloud_model_tag(tmp_path: Path) -> None:
+    # R4c relaxed the exact pin but cloud tags stay rejected (R1). A cloud tag
+    # passes the schema CHECK (nonempty) yet fails the worker contract, so
+    # load_worker_run forks rather than running an off-box model.
+    db_path, spec, _inventory_result = _valid_run(tmp_path)
+    _raw_update(db_path, "model_tag=?", ("qwen3.6:cloud",))
+    before = db_path.read_bytes()
+    with pytest.raises(ForkRequired):
+        load_worker_run(spec.run_id, path=db_path)
+    assert db_path.read_bytes() == before
+
+
+def test_schema_rejects_malformed_model_identity_writes(tmp_path: Path) -> None:
+    # Empty tag and non-canonical digest are blocked by the analyst_runs CHECK
+    # before load ever runs (defense in depth alongside the worker contract).
+    for assignment, value in (
+        ("model_tag=?", ""),
+        ("model_digest=?", "z" * 64),
+        ("model_digest=?", "a" * 63),
+    ):
+        db_path, _spec, _inv = _valid_run(
+            tmp_path / hashlib.sha256((assignment + str(value)).encode()).hexdigest()[:8],
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            _raw_update(db_path, assignment, (value,))
 
 
 def test_schema_rejects_impossible_worker_enum_and_split_isolation_drift(

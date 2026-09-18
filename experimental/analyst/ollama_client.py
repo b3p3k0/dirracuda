@@ -21,7 +21,6 @@ from .ollama_contract import (
     EXPECTED_IDENTITY,
     IDLE_READ_TIMEOUT_SECONDS,
     MAX_BODY_BYTES,
-    MODEL_TAG,
     OLLAMA_CHAT_URL,
     OLLAMA_TAGS_URL,
     OLLAMA_VERSION_URL,
@@ -37,6 +36,8 @@ from .ollama_contract import (
     VersionCheckResult,
     build_discovery_request,
     list_local_models,
+    valid_model_digest,
+    valid_model_tag,
     validate_chat_request,
 )
 from .ollama_protocol import (
@@ -48,7 +49,6 @@ from .ollama_protocol import (
     SafetyCode,
     StreamCode,
     parse_answer_json,
-    parse_tags_response,
     parse_version_response,
 )
 
@@ -94,6 +94,7 @@ class _HttpIntent:
     body: bytes | None
     accept: str
     kind: str
+    model_tag: str | None = None
 
 
 class _WorkerState:
@@ -172,6 +173,8 @@ class OllamaClient:
         tags = self.check_tags(expected, cancel=cancel, poll=poll)
         if tags.status is not OllamaStatus.SUCCESS:
             return PreflightResult(tags.status)
+        if not hmac.compare_digest(tags.model_digest, expected.model_digest):
+            return PreflightResult(OllamaStatus.IDENTITY_MISMATCH)
         return PreflightResult(
             OllamaStatus.SUCCESS,
             observed_version=version.observed_version,
@@ -229,17 +232,19 @@ class OllamaClient:
         if status is not None:
             return TagsCheckResult(status)
         try:
-            parsed_tags = parse_tags_response(
-                _require_bytes(tags), {expected.model_tag: expected.model_digest},
-            )
+            parsed_tags = list_local_models(_require_bytes(tags))
         except OllamaProvenanceError:
             return TagsCheckResult(OllamaStatus.IDENTITY_MISMATCH)
         except OllamaSafetyError as exc:
             return TagsCheckResult(_safety_status(exc))
-        if len(parsed_tags.models) != 1:
+        observed = next(
+            (model for model in parsed_tags if model.model_tag == expected.model_tag),
+            None,
+        )
+        if observed is None:
             return TagsCheckResult(OllamaStatus.IDENTITY_MISMATCH)
         return TagsCheckResult(
-            OllamaStatus.SUCCESS, model_digest=parsed_tags.models[0].digest,
+            OllamaStatus.SUCCESS, model_digest=observed.model_digest,
         )
 
     def list_models(self) -> tuple[DiscoveredModel, ...]:
@@ -285,7 +290,7 @@ class OllamaClient:
             return ChatResult(OllamaStatus.IDENTITY_MISMATCH)
         intent = _HttpIntent(
             "POST", OLLAMA_CHAT_URL, request.body,
-            "application/x-ndjson", "chat",
+            "application/x-ndjson", "chat", request.model_tag,
         )
         value, status = self._execute(intent, cancel, poll)
         if status is not None:
@@ -438,7 +443,9 @@ class OllamaClient:
             if not _content_type_is(response, intent.accept):
                 return None, OllamaStatus.PROTOCOL_VIOLATION
             if intent.kind == "chat":
-                return self._read_chat(response, cancel, started), None
+                return self._read_chat(
+                    response, cancel, started, intent.model_tag,
+                ), None
             return self._read_all(response, cancel, started), None
         finally:
             if response is not None:
@@ -481,9 +488,13 @@ class OllamaClient:
         return OllamaStatus.PROTOCOL_VIOLATION
 
     def _read_chat(
-        self, response: Any, cancel: CancelProbe, started: float,
+        self,
+        response: Any,
+        cancel: CancelProbe,
+        started: float,
+        model_tag: str | None = EXPECTED_IDENTITY.model_tag,
     ) -> ChatResult:
-        parser = ChatStreamParser(MODEL_TAG)
+        parser = ChatStreamParser(model_tag)
         try:
             for chunk in self._wire_chunks(response, cancel, started):
                 parser.feed(
@@ -669,12 +680,8 @@ def _matches_expected_identity(identity: OllamaIdentity) -> bool:
         return (
             type(identity.endpoint) is str
             and identity.endpoint == EXPECTED_IDENTITY.endpoint
-            and type(identity.model_tag) is str
-            and identity.model_tag == EXPECTED_IDENTITY.model_tag
-            and type(identity.model_digest) is str
-            and hmac.compare_digest(
-                identity.model_digest, EXPECTED_IDENTITY.model_digest,
-            )
+            and valid_model_tag(identity.model_tag)
+            and valid_model_digest(identity.model_digest)
         )
     except AttributeError:
         return False

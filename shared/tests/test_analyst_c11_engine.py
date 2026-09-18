@@ -21,7 +21,6 @@ from experimental.analyst.lease import (
     release_worker,
 )
 from experimental.analyst.ollama_contract import (
-    MODEL_DIGEST,
     QUALIFIED_OLLAMA_VERSION,
     ChatMetrics,
     ChatResult,
@@ -150,7 +149,10 @@ class FakeClient:
         status = self.tags.popleft()
         return TagsCheckResult(
             status,
-            model_digest=MODEL_DIGEST if status is OllamaStatus.SUCCESS else None,
+            model_digest=(
+                expected.model_digest
+                if status is OllamaStatus.SUCCESS else None
+            ),
         )
 
     def chat(self, request, *, expected_sha256, cancel, poll=None) -> ChatResult:
@@ -258,6 +260,7 @@ def test_success_runs_exact_identity_contacts_then_chat_and_keeps_lease(
     assert [kind for kind, _value in client.calls] == ["version", "tags", "chat"]
     request = client.calls[-1][1]
     assert request.prompt_kind is PromptKind.PRIMARY
+    assert request.model_tag == context.model_tag
     assert (result.reviewed_file_count, result.valid_chunk_count,
             result.retained_finding_count) == (1, 1, 0)
     assert _contacts(path) == (

@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Final, Mapping
 
 from .inventory import InventoryFile, InventoryResult
 from .models import ANALYST_DEFAULTS, FileStage
+from .ollama_contract import valid_model_digest, valid_model_tag
 from .source_reopen import SourceRootIdentity
 from .state import RunState
 
@@ -157,10 +158,10 @@ class WorkerRunContext:
         ):
             raise WorkerContractError("source identity hash does not match its value")
         _bounded_text(self.report_label, "report label", 1024)
-        if self.model_tag != ANALYST_DEFAULTS.model_tag:
-            raise WorkerContractError("model tag differs from the frozen default")
-        if self.model_digest != ANALYST_DEFAULTS.model_digest:
-            raise WorkerContractError("model digest differs from the frozen default")
+        if not valid_model_tag(self.model_tag):
+            raise WorkerContractError("model tag is outside the worker contract")
+        if not valid_model_digest(self.model_digest):
+            raise WorkerContractError("model digest is outside the worker contract")
         if self.worksheet_version != ANALYST_DEFAULTS.worksheet_version:
             raise WorkerContractError("worksheet version differs from the frozen default")
         for value, label in (

@@ -79,6 +79,24 @@ _OPTION_KEYS = frozenset(
 )
 
 
+def is_cloud_model_tag(value: object) -> bool:
+    """Return whether an exact string names a known Ollama cloud tag."""
+    if type(value) is not str:
+        return False
+    lowered = value.lower()
+    return lowered.endswith(":cloud") or "-cloud" in lowered
+
+
+def valid_model_tag(value: object) -> bool:
+    """Accept one nonempty local model tag and reject known cloud forms."""
+    return type(value) is str and bool(value) and not is_cloud_model_tag(value)
+
+
+def valid_model_digest(value: object) -> bool:
+    """Accept one canonical lowercase SHA-256 model digest."""
+    return type(value) is str and _SHA256.fullmatch(value) is not None
+
+
 def _discovery_identity_bytes() -> bytes:
     return json.dumps(
         {
@@ -203,23 +221,20 @@ GENERATION_OPTIONS: Final = GenerationOptions()
 
 @dataclass(frozen=True, slots=True)
 class OllamaIdentity:
-    """Expected local endpoint and immutable model identity."""
+    """Expected local endpoint and one immutable per-run model identity."""
 
     endpoint: str = OLLAMA_ENDPOINT
-    model_tag: str = MODEL_TAG
-    model_digest: str = MODEL_DIGEST
+    model_tag: str = ANALYST_DEFAULTS.model_tag
+    model_digest: str = ANALYST_DEFAULTS.model_digest
 
     def __post_init__(self) -> None:
         if (
             type(self.endpoint) is not str
             or self.endpoint != OLLAMA_ENDPOINT
-            or type(self.model_tag) is not str
-            or self.model_tag != MODEL_TAG
-            or type(self.model_digest) is not str
-            or self.model_digest != MODEL_DIGEST
-            or _SHA256.fullmatch(self.model_digest) is None
+            or not valid_model_tag(self.model_tag)
+            or not valid_model_digest(self.model_digest)
         ):
-            raise ContractError("Ollama identity differs from the frozen benchmark")
+            raise ContractError("Ollama identity is invalid")
 
 
 EXPECTED_IDENTITY: Final = OllamaIdentity()
@@ -276,8 +291,8 @@ class ChatRequest:
     body: bytes = field(repr=False)
     request_sha256: str
     prompt_kind: PromptKind = PromptKind.PRIMARY
-    model_tag: str = MODEL_TAG
-    model_digest: str = MODEL_DIGEST
+    model_tag: str = ANALYST_DEFAULTS.model_tag
+    model_digest: str = ANALYST_DEFAULTS.model_digest
     endpoint: str = OLLAMA_ENDPOINT
 
     def __post_init__(self) -> None:
@@ -392,8 +407,7 @@ class PreflightResult:
             valid = (
                 type(self.observed_version) is str
                 and _VERSION.fullmatch(self.observed_version) is not None
-                and type(self.model_digest) is str
-                and self.model_digest == MODEL_DIGEST
+                and valid_model_digest(self.model_digest)
             )
         else:
             valid = self.observed_version is None and self.model_digest is None
@@ -444,8 +458,7 @@ class TagsCheckResult:
         if self.status not in _CONTROL_STATUSES:
             raise ContractError("status is not valid for a tags contact")
         valid = (
-            type(self.model_digest) is str
-            and self.model_digest == MODEL_DIGEST
+            valid_model_digest(self.model_digest)
             if self.status is OllamaStatus.SUCCESS
             else self.model_digest is None
         )
@@ -511,19 +524,40 @@ def new_prompt_nonce(source_text: str) -> str:
             return nonce
 
 
-def build_chat_request(source_text: str, *, nonce: str) -> ChatRequest:
+def build_chat_request(
+    source_text: str,
+    *,
+    nonce: str,
+    model_tag: str = ANALYST_DEFAULTS.model_tag,
+    model_digest: str = ANALYST_DEFAULTS.model_digest,
+) -> ChatRequest:
     """Build the only scored-chat request admitted by the V1 Analyst client."""
-    return _build_chat_request(source_text, nonce, PromptKind.PRIMARY)
-
-
-def build_repair_chat_request(source_text: str, *, nonce: str) -> ChatRequest:
-    """Build the one error-specific C11 model-invalid repair request."""
     return _build_chat_request(
-        source_text, nonce, PromptKind.MODEL_INVALID_REPAIR,
+        source_text, nonce, PromptKind.PRIMARY, model_tag, model_digest,
     )
 
 
-def build_read_chat_request(source_text: str, *, nonce: str) -> ChatRequest:
+def build_repair_chat_request(
+    source_text: str,
+    *,
+    nonce: str,
+    model_tag: str = ANALYST_DEFAULTS.model_tag,
+    model_digest: str = ANALYST_DEFAULTS.model_digest,
+) -> ChatRequest:
+    """Build the one error-specific C11 model-invalid repair request."""
+    return _build_chat_request(
+        source_text, nonce, PromptKind.MODEL_INVALID_REPAIR,
+        model_tag, model_digest,
+    )
+
+
+def build_read_chat_request(
+    source_text: str,
+    *,
+    nonce: str,
+    model_tag: str = ANALYST_DEFAULTS.model_tag,
+    model_digest: str = ANALYST_DEFAULTS.model_digest,
+) -> ChatRequest:
     """Build the pinned host READ reduce request."""
     if type(source_text) is not str or type(nonce) is not str:
         raise TypeError("source text and nonce must be strings")
@@ -531,6 +565,7 @@ def build_read_chat_request(source_text: str, *, nonce: str) -> ChatRequest:
         raise ContractError("source text is outside the frozen chunk bound")
     if _NONCE.fullmatch(nonce) is None or nonce in source_text:
         raise ContractError("nonce must be a fresh FENCE token absent from source")
+    _require_model_identity(model_tag, model_digest)
 
     from .read_worksheet import build_read_prompt, read_schema
 
@@ -538,7 +573,7 @@ def build_read_chat_request(source_text: str, *, nonce: str) -> ChatRequest:
     if _utf8_size(prompt, "prompt") > MAX_PROMPT_BYTES:
         raise ContractError("prompt exceeds the request bound")
     payload = {
-        "model": MODEL_TAG,
+        "model": model_tag,
         "messages": [{"role": "user", "content": prompt}],
         "stream": True,
         "format": read_schema(),
@@ -553,11 +588,17 @@ def build_read_chat_request(source_text: str, *, nonce: str) -> ChatRequest:
         body=body,
         request_sha256=hashlib.sha256(body).hexdigest(),
         prompt_kind=PromptKind.PRIMARY,
+        model_tag=model_tag,
+        model_digest=model_digest,
     )
 
 
 def _build_chat_request(
-    source_text: str, nonce: str, prompt_kind: PromptKind,
+    source_text: str,
+    nonce: str,
+    prompt_kind: PromptKind,
+    model_tag: str,
+    model_digest: str,
 ) -> ChatRequest:
     if type(source_text) is not str or type(nonce) is not str:
         raise TypeError("source text and nonce must be strings")
@@ -567,6 +608,7 @@ def _build_chat_request(
         raise ContractError("source text is outside the frozen chunk bound")
     if _NONCE.fullmatch(nonce) is None or nonce in source_text:
         raise ContractError("nonce must be a fresh FENCE token absent from source")
+    _require_model_identity(model_tag, model_digest)
 
     from .worksheet import build_prompt, build_repair_prompt, worksheet_schema
 
@@ -579,7 +621,7 @@ def _build_chat_request(
     if _utf8_size(prompt, "prompt") > MAX_PROMPT_BYTES:
         raise ContractError("prompt exceeds the request bound")
     payload = {
-        "model": MODEL_TAG,
+        "model": model_tag,
         "messages": [{"role": "user", "content": prompt}],
         "stream": True,
         "format": worksheet_schema(),
@@ -594,6 +636,8 @@ def _build_chat_request(
         body=body,
         request_sha256=hashlib.sha256(body).hexdigest(),
         prompt_kind=prompt_kind,
+        model_tag=model_tag,
+        model_digest=model_digest,
     )
 
 
@@ -613,10 +657,8 @@ def validate_chat_request(request: ChatRequest) -> None:
         or type(getattr(request, "prompt_kind", None)) is not PromptKind
         or type(request) is ReadChatRequest
         and request.prompt_kind is not PromptKind.PRIMARY
-        or type(request.model_tag) is not str
-        or request.model_tag != MODEL_TAG
-        or type(request.model_digest) is not str
-        or request.model_digest != MODEL_DIGEST
+        or not valid_model_tag(request.model_tag)
+        or not valid_model_digest(request.model_digest)
         or type(request.endpoint) is not str
         or request.endpoint != OLLAMA_ENDPOINT
     ):
@@ -628,7 +670,7 @@ def validate_chat_request(request: ChatRequest) -> None:
         raise ContractError("chat request body is not canonical JSON")
     _validate_payload(
         payload, request.source_text, request.nonce, request.prompt_kind,
-        type(request) is ReadChatRequest,
+        type(request) is ReadChatRequest, request.model_tag,
     )
 
 
@@ -653,6 +695,7 @@ def _validate_payload(
     nonce: str,
     prompt_kind: PromptKind,
     read_request: bool,
+    model_tag: str,
 ) -> None:
     if read_request:
         from .read_worksheet import build_read_prompt, read_schema
@@ -669,7 +712,7 @@ def _validate_payload(
         )
         response_schema = worksheet_schema()
 
-    if set(payload) != _REQUEST_KEYS or payload.get("model") != MODEL_TAG:
+    if set(payload) != _REQUEST_KEYS or payload.get("model") != model_tag:
         raise ContractError("chat request field set is invalid")
     messages = payload.get("messages")
     if (
@@ -714,6 +757,11 @@ def _utf8_size(value: str, label: str) -> int:
         return len(value.encode("utf-8", errors="strict"))
     except UnicodeEncodeError as exc:
         raise ContractError(f"{label} is not valid Unicode scalar text") from exc
+
+
+def _require_model_identity(model_tag: object, model_digest: object) -> None:
+    if not valid_model_tag(model_tag) or not valid_model_digest(model_digest):
+        raise ContractError("model identity is invalid")
 
 
 def _load_json_object(raw: bytes) -> dict[str, Any]:
@@ -804,7 +852,10 @@ __all__ = [
     "build_read_chat_request",
     "build_repair_chat_request",
     "canonical_json",
+    "is_cloud_model_tag",
     "list_local_models",
     "new_prompt_nonce",
+    "valid_model_digest",
+    "valid_model_tag",
     "validate_chat_request",
 ]
