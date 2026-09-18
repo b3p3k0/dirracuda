@@ -94,6 +94,10 @@ class AnalystTab:
         self._summaries = []
         self._manifest_choices = []
         self._manifest_index = -1
+        self._model_choices = []
+        self._model_combo = None
+        self._model_connect_btn = None
+        self._model_status_var = None
         self._report_window = None
         self._advanced_dialog = None
         self._export_dialog = None
@@ -133,6 +137,7 @@ class AnalystTab:
         self._server_kind_var = tk.StringVar(value="local")
         self._server_host_var = tk.StringVar(value="127.0.0.1")
         self._server_port_var = tk.StringVar(value="11434")
+        self._model_var = tk.StringVar(value="")
         self._manifest_combo = None
         self._manifest_refresh_btn = None
 
@@ -175,6 +180,9 @@ class AnalystTab:
         except Exception:
             offer_enabled = False
         self._offer_var = tk.BooleanVar(value=offer_enabled)
+        self._selected_model_tag, self._selected_model_digest = (
+            self._load_selected_model(settings_manager)
+        )
 
         controls = tk.Frame(frame)
         self._theme.apply_to_widget(controls, "main_window")
@@ -300,6 +308,8 @@ class AnalystTab:
             "manifest": self._manifest_var.get(),
             "manifest_index": self._manifest_index,
             "offer": self._offer_var.get(),
+            "model_tag": self._selected_model_tag,
+            "model_digest": self._selected_model_digest,
         }
 
         outer = tk.Frame(dialog)
@@ -406,16 +416,50 @@ class AnalystTab:
         model_heading.grid(
             row=7, column=0, columnspan=3, sticky="w", pady=(12, 3),
         )
-        model = tk.Label(
+        self._model_combo = ttk.Combobox(
+            outer, textvariable=self._model_var, state="readonly",
+        )
+        self._model_combo.grid(
+            row=8, column=0, columnspan=2, sticky="ew", pady=3,
+        )
+        self._model_connect_btn = tk.Button(
+            outer, text="Connect / Refresh", command=self._discover_models,
+        )
+        self._theme.apply_to_widget(
+            self._model_connect_btn, "button_secondary",
+        )
+        self._model_connect_btn.grid(row=8, column=2, padx=(7, 0), pady=3)
+
+        helper = tk.Label(
             outer,
             text=(
-                "qwen3.6:27b · fixed digest · local loopback · "
-                "strict sandbox"
+                "Connect once to pull the model list from the server, then pick "
+                "one. Refresh if you change your backend."
             ),
+            justify="left",
             anchor="w",
+            wraplength=500,
         )
-        self._theme.apply_to_widget(model, "label")
-        model.grid(row=8, column=0, columnspan=3, sticky="w", pady=3)
+        self._theme.apply_to_widget(helper, "label")
+        helper.grid(
+            row=9, column=0, columnspan=3, sticky="w", pady=(1, 0),
+        )
+        self._model_status_var = tk.StringVar(value="")
+        model_status = tk.Label(
+            outer, textvariable=self._model_status_var, anchor="w",
+        )
+        self._theme.apply_to_widget(model_status, "label")
+        model_status.grid(
+            row=10, column=0, columnspan=3, sticky="w", pady=(1, 3),
+        )
+
+        try:
+            from experimental.analyst.service import list_discovered_models
+
+            model_choices = list_discovered_models()
+        except Exception:
+            model_choices = ()
+        self._populate_model_choices(model_choices)
 
         offer = tk.Checkbutton(
             outer,
@@ -424,25 +468,32 @@ class AnalystTab:
         )
         self._theme.apply_to_widget(offer, "checkbox")
         offer.grid(
-            row=9, column=0, columnspan=3, sticky="w", pady=(12, 3),
+            row=11, column=0, columnspan=3, sticky="w", pady=(12, 3),
         )
 
         actions = tk.Frame(outer)
         self._theme.apply_to_widget(actions, "main_window")
-        actions.grid(row=10, column=0, columnspan=3, sticky="e", pady=(14, 0))
+        actions.grid(row=12, column=0, columnspan=3, sticky="e", pady=(14, 0))
 
         def close(*, save: bool) -> None:
             if save:
                 self._persist_offer_setting()
+                self._persist_model_selection()
             else:
                 self._output_var.set(snapshot["output"])
                 self._source_kind_var.set(snapshot["source_kind"])
                 self._manifest_var.set(snapshot["manifest"])
                 self._manifest_index = snapshot["manifest_index"]
                 self._offer_var.set(snapshot["offer"])
+                self._selected_model_tag = snapshot["model_tag"]
+                self._selected_model_digest = snapshot["model_digest"]
+                self._model_var.set(snapshot["model_tag"] or "")
             self._advanced_dialog = None
             self._manifest_combo = None
             self._manifest_refresh_btn = None
+            self._model_combo = None
+            self._model_connect_btn = None
+            self._model_status_var = None
             dialog.grab_release()
             dialog.destroy()
 
@@ -460,6 +511,137 @@ class AnalystTab:
         dialog.grab_set()
         self._refresh_manifest_choices()
         ensure_dialog_focus(dialog, parent)
+
+    @staticmethod
+    def _load_selected_model(settings_manager) -> tuple[str | None, str | None]:
+        if settings_manager is None:
+            return None, None
+        try:
+            tag = settings_manager.get_setting(
+                "analyst.selected_model_tag", None,
+            )
+            digest = settings_manager.get_setting(
+                "analyst.selected_model_digest", None,
+            )
+        except Exception:
+            return None, None
+        if type(tag) is not str or not tag or type(digest) is not str or not digest:
+            return None, None
+        return tag, digest
+
+    def _populate_model_choices(self, choices, *, preferred_tag=None) -> None:
+        self._model_choices = list(choices)
+        combo = self._model_combo
+        status = self._model_status_var
+        if combo is None or status is None:
+            return
+        if self._model_choices:
+            tags = [choice.model_tag for choice in self._model_choices]
+            combo.configure(values=tags)
+            wanted = preferred_tag or self._selected_model_tag
+            index = tags.index(wanted) if wanted in tags else 0
+            combo.current(index)
+            count = len(tags)
+            status.set(
+                f"Found {count} model{'s' if count != 1 else ''} on this server."
+            )
+            return
+
+        if self._selected_model_tag is not None:
+            shown_tag = self._selected_model_tag
+            message = "Saved model shown. Connect to refresh the model list."
+        else:
+            from experimental.analyst.models import ANALYST_DEFAULTS
+
+            shown_tag = ANALYST_DEFAULTS.model_tag
+            message = "Pinned default shown. Connect to load the model list."
+        combo.configure(values=(shown_tag,))
+        combo.current(0)
+        status.set(message)
+
+    def _discover_models(self) -> None:
+        dialog = self._advanced_dialog
+        button = self._model_connect_btn
+        if dialog is None or button is None:
+            return
+        button.configure(state="disabled")
+        if self._model_status_var is not None:
+            self._model_status_var.set("Connecting to the local model server…")
+        preferred_tag = self._model_var.get()
+
+        def work() -> None:
+            try:
+                from experimental.analyst.service import discover_models
+
+                choices = discover_models()
+            except Exception:
+                self._schedule(
+                    lambda: self._finish_model_discovery(
+                        dialog, None, preferred_tag,
+                    )
+                )
+                return
+            self._schedule(
+                lambda: self._finish_model_discovery(
+                    dialog, choices, preferred_tag,
+                )
+            )
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _finish_model_discovery(self, dialog, choices, preferred_tag) -> None:
+        if self._advanced_dialog is not dialog:
+            return
+        try:
+            if not dialog.winfo_exists():
+                return
+        except Exception:
+            return
+        if self._model_connect_btn is not None:
+            self._model_connect_btn.configure(state="normal")
+        if choices is None:
+            if self._model_status_var is not None:
+                self._model_status_var.set("Model server is unavailable.")
+            safe_messagebox.showerror(
+                "Analyst",
+                "Could not reach the model server on loopback.",
+                parent=dialog,
+            )
+            return
+        self._populate_model_choices(choices, preferred_tag=preferred_tag)
+
+    def _persist_model_selection(self) -> None:
+        selected_tag = None
+        selected_digest = None
+        combo = self._model_combo
+        if combo is not None:
+            index = combo.current()
+            if 0 <= index < len(self._model_choices):
+                choice = self._model_choices[index]
+                selected_tag = choice.model_tag
+                selected_digest = choice.model_digest
+            elif (
+                not self._model_choices
+                and self._selected_model_tag is not None
+                and self._model_var.get() == self._selected_model_tag
+            ):
+                selected_tag = self._selected_model_tag
+                selected_digest = self._selected_model_digest
+        self._selected_model_tag = selected_tag
+        self._selected_model_digest = selected_digest
+
+        settings_manager = self._context.get("settings_manager")
+        if settings_manager is None:
+            return
+        try:
+            settings_manager.set_setting(
+                "analyst.selected_model_tag", selected_tag,
+            )
+            settings_manager.set_setting(
+                "analyst.selected_model_digest", selected_digest,
+            )
+        except Exception:
+            pass
 
     def _select_all_runs(self) -> None:
         children = self._runs.get_children("")
@@ -788,6 +970,8 @@ class AnalystTab:
         manifest_output = None
         report_label = self._label_var.get().strip()
         mode = self._mode_var.get()
+        model_tag = self._selected_model_tag
+        model_digest = self._selected_model_digest
         try:
             if source_kind == "directory":
                 from experimental.analyst.service import DirectoryRunRequest
@@ -825,7 +1009,11 @@ class AnalystTab:
                 if source_kind == "directory":
                     from experimental.analyst.service import create_and_launch
 
-                    launch = create_and_launch(request)
+                    launch = create_and_launch(
+                        request,
+                        model_tag=model_tag,
+                        model_digest=model_digest,
+                    )
                 else:
                     from experimental.analyst.service import create_manifest_and_launch
 
@@ -835,6 +1023,8 @@ class AnalystTab:
                         output_base=manifest_output,
                         report_label=report_label,
                         mode=mode,
+                        model_tag=model_tag,
+                        model_digest=model_digest,
                     )
             except Exception as exc:
                 message = _creation_failure_message(exc)

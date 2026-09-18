@@ -421,11 +421,15 @@ def launch_run(
 def create_and_launch(
     request: DirectoryRunRequest,
     *,
+    model_tag: str | None = None,
+    model_digest: str | None = None,
     path: Path | None = None,
     paths: DirracudaPaths | None = None,
 ) -> RunLaunch:
     """Persist a run first, then launch it; launch failure leaves it resumable."""
-    run_id, _inventory = create_directory_run(request, path=path)
+    run_id, _inventory = create_directory_run(
+        request, model_tag=model_tag, model_digest=model_digest, path=path,
+    )
     return launch_run(run_id, path=path, paths=paths)
 
 
@@ -521,6 +525,8 @@ def create_manifest_and_launch(
     output_base: Path | None,
     report_label: str,
     mode: str = "fast",
+    model_tag: str | None = None,
+    model_digest: str | None = None,
     path: Path | None = None,
     paths: DirracudaPaths | None = None,
 ) -> RunLaunch:
@@ -531,6 +537,8 @@ def create_manifest_and_launch(
         output_base=output_base,
         report_label=report_label,
         mode=mode,
+        model_tag=model_tag,
+        model_digest=model_digest,
         path=path,
     )
     return launch_run(run_id, path=path, paths=paths)
