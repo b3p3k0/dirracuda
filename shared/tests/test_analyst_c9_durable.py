@@ -106,6 +106,13 @@ _V2_INDEXES = {
     "ux_analyst_contacts_semantic_slot",
     "idx_analyst_schedule_state",
 }
+_V4_TABLES = {
+    "analyst_detector_hits",
+    "analyst_model_findings",
+    "analyst_read",
+    "analyst_read_exposures",
+}
+_V4_INDEXES = {"idx_analyst_read_risk"}
 _NOW = "2026-08-16T12:00:00Z"
 _BOOT_ID = "00000000-0000-0000-0000-000000000001"
 
@@ -690,10 +697,14 @@ def test_exact_empty_v1_migrates_additively_and_reopen_is_idempotent(
                 "SELECT type,name,sql FROM sqlite_schema "
                 "WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name"
             )
-            if str(row[1]) not in _V2_TABLES | _V2_INDEXES | {"analyst_files"}
+            if str(row[1])
+            not in _V2_TABLES | _V2_INDEXES | _V4_TABLES | _V4_INDEXES
+            | {"analyst_files"}
         )
         assert after_v1 == tuple(
-            row for row in before if str(row[1]) != "analyst_files"
+            row
+            for row in before
+            if str(row[1]) not in _V4_TABLES | {"analyst_files"}
         )
     finally:
         conn.close()

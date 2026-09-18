@@ -9,8 +9,8 @@ import pytest
 
 from experimental.analyst.checkpoint import claim_next_file
 from experimental.analyst.db_schema import (
-    PREVIOUS_SCHEMA_VERSION,
     SCHEMA_VERSION,
+    V2_SCHEMA_VERSION,
     validate_schema_v2,
 )
 from experimental.analyst.file_identity import (
@@ -118,9 +118,13 @@ def test_populated_exact_v2_migrates_in_place_with_zero_high_bits(
     inode_before = path.stat().st_ino
     conn = sqlite3.connect(path, autocommit=True)
     try:
+        conn.execute("DROP TABLE analyst_read_exposures")
+        conn.execute("DROP TABLE analyst_read")
+        conn.execute("ALTER TABLE analyst_detector_hits DROP COLUMN fact_rank")
+        conn.execute("ALTER TABLE analyst_model_findings DROP COLUMN fact_rank")
         conn.execute("ALTER TABLE analyst_files DROP COLUMN inode_high_bit")
         conn.execute("ALTER TABLE analyst_files DROP COLUMN device_high_bit")
-        conn.execute(f"PRAGMA user_version={PREVIOUS_SCHEMA_VERSION}")
+        conn.execute(f"PRAGMA user_version={V2_SCHEMA_VERSION}")
         validate_schema_v2(conn)
     finally:
         conn.close()

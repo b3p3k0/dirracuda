@@ -453,6 +453,8 @@ def test_fresh_database_has_exact_identity_schema_and_owner_permissions(
             "analyst_gpu_lease",
             "analyst_ollama_contacts",
             "analyst_ollama_schedule",
+            "analyst_read",
+            "analyst_read_exposures",
         }
         indexes = {
             row[0]
@@ -480,6 +482,7 @@ def test_fresh_database_has_exact_identity_schema_and_owner_permissions(
             "ux_analyst_contacts_one_dispatching",
             "ux_analyst_contacts_semantic_slot",
             "idx_analyst_schedule_state",
+            "idx_analyst_read_risk",
         }
         assert all(
             row[5] == 1

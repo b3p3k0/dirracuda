@@ -19,15 +19,17 @@ from shared.path_service import get_paths
 from .db_schema import (
     APPLICATION_ID,
     KNOWN_SCHEMA_VERSIONS,
-    PREVIOUS_SCHEMA_VERSION,
     SCHEMA_VERSION,
     V1_SCHEMA_VERSION,
+    V2_SCHEMA_VERSION,
+    V3_SCHEMA_VERSION,
     AnalystSchemaError,
     initialize_schema,
     validate_runtime_schema,
     validate_schema,
     validate_v1_migration_candidate,
     validate_v2_migration_candidate,
+    validate_v3_migration_candidate,
 )
 from .file_identity import split_unsigned_u64
 from .inventory import InventoryFile, InventoryResult
@@ -477,7 +479,9 @@ def _audit_existing_database(path: Path) -> None:
         ).fetchone()
         if identity == (APPLICATION_ID, SCHEMA_VERSION):
             validate_schema(conn)
-        elif identity == (APPLICATION_ID, PREVIOUS_SCHEMA_VERSION):
+        elif identity == (APPLICATION_ID, V3_SCHEMA_VERSION):
+            validate_v3_migration_candidate(conn)
+        elif identity == (APPLICATION_ID, V2_SCHEMA_VERSION):
             validate_v2_migration_candidate(conn)
         elif identity == (APPLICATION_ID, V1_SCHEMA_VERSION):
             validate_v1_migration_candidate(conn)
