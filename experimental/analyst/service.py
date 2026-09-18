@@ -117,6 +117,7 @@ class AnalystRunSummary:
     model_findings: int
     schedule_state: str
     resource_not_before_utc: str | None
+    risk_level: str | None = None
 
     def __post_init__(self) -> None:
         validate_worker_run_id(self.run_id)
@@ -146,6 +147,7 @@ class AnalystRunSummary:
             or self.selected_files > self.discovered_files
             or self.model_reviewed_files > self.selected_files
             or self.schedule_state not in {"available", "backoff", "paused_resource"}
+            or self.risk_level not in {None, "HIGH", "MED", "LOW"}
             or (
                 self.resource_not_before_utc is not None
                 and type(self.resource_not_before_utc) is not str
@@ -163,6 +165,18 @@ class AnalystRunSummary:
             f"{self.terminal_files}/{self.discovered_files} finalized · "
             f"{self.model_reviewed_files}/{self.selected_files} model-reviewed"
         )
+
+    @property
+    def result_label(self) -> str:
+        if self.risk_level is not None:
+            return f"● {self.risk_level} risk"
+        if self.state in {
+            RunState.RUNNING,
+            RunState.CANCEL_REQUESTED,
+            RunState.FINALIZING,
+        }:
+            return self.progress
+        return "-"
 
 
 TokenFactory = Callable[[int], str]
@@ -478,6 +492,7 @@ def list_run_summaries(
             rows = conn.execute(
                 "SELECT r.run_id,r.state,r.report_label,r.mode,r.created_at_utc,"
                 "r.updated_at_utc,s.state AS schedule_state,s.not_before_utc,"
+                "rd.risk_level,"
                 "count(f.file_id) AS discovered_files,"
                 "sum(CASE WHEN f.work_state='terminal' THEN 1 ELSE 0 END) terminal_files,"
                 "sum(CASE WHEN f.selected_for_model=1 THEN 1 ELSE 0 END) selected_files,"
@@ -490,8 +505,10 @@ def list_run_summaries(
                 "WHERE mf.run_id=r.run_id AND mf.terminal_code='complete_model_reviewed') "
                 "model_findings FROM analyst_runs r "
                 "JOIN analyst_ollama_schedule s ON s.run_id=r.run_id "
+                "LEFT JOIN analyst_read rd ON rd.run_id=r.run_id "
                 "LEFT JOIN analyst_files f ON f.run_id=r.run_id "
-                "GROUP BY r.run_id ORDER BY r.updated_at_utc DESC,r.run_id LIMIT ?",
+                "GROUP BY r.run_id,rd.risk_level "
+                "ORDER BY r.updated_at_utc DESC,r.run_id LIMIT ?",
                 (limit,),
             ).fetchall()
         finally:
@@ -514,6 +531,9 @@ def list_run_summaries(
                 resource_not_before_utc=(
                     None if row["not_before_utc"] is None
                     else str(row["not_before_utc"])
+                ),
+                risk_level=(
+                    None if row["risk_level"] is None else str(row["risk_level"])
                 ),
             )
             for row in rows

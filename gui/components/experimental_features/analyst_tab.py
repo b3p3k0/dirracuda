@@ -9,6 +9,7 @@ from tkinter import filedialog, ttk
 
 from gui.utils import safe_messagebox
 from gui.utils.analyst_tasks import apply_analyst_task_hydration
+from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.running_tasks import get_running_task_registry
 from gui.utils.style import get_theme
 
@@ -92,7 +93,11 @@ class AnalystTab:
         self._refresh_interval = _IDLE_REFRESH_MS
         self._summaries = []
         self._manifest_choices = []
+        self._manifest_index = -1
         self._report_window = None
+        self._advanced_dialog = None
+        self._auto_label = ""
+        self._auto_output = ""
         self.frame = tk.Frame(parent)
         self._theme.apply_to_widget(self.frame, "main_window")
         self._build()
@@ -103,9 +108,8 @@ class AnalystTab:
         description = tk.Label(
             frame,
             text=(
-                "Analyze a directory with deterministic detectors and the fixed local "
-                "model. Ollama version, tag, and digest are verified after launch; "
-                "opening this tab makes no model-server request."
+                "Point Analyst at a folder of a host's extracted files. It reads "
+                "them and tells you what the host is and what is worth your attention."
             ),
             justify="left",
             anchor="w",
@@ -114,77 +118,53 @@ class AnalystTab:
         self._theme.apply_to_widget(description, "label")
         description.pack(fill=tk.X, padx=16, pady=(14, 10))
 
-        form = tk.Frame(frame)
-        self._theme.apply_to_widget(form, "main_window")
-        form.pack(fill=tk.X, padx=16)
-        form.columnconfigure(1, weight=1)
+        self._main_form = tk.Frame(frame)
+        self._theme.apply_to_widget(self._main_form, "main_window")
+        self._main_form.pack(fill=tk.X, padx=16)
+        self._main_form.columnconfigure(1, weight=1)
 
         self._source_var = tk.StringVar(value="")
         self._output_var = tk.StringVar(value="")
         self._label_var = tk.StringVar(value="")
         self._mode_var = tk.StringVar(value="fast")
         self._source_kind_var = tk.StringVar(value="directory")
-        source_modes = tk.Frame(form)
-        self._theme.apply_to_widget(source_modes, "main_window")
-        source_modes.grid(row=0, column=0, columnspan=3, sticky="w", pady=3)
-        for value, text in (
-            ("directory", "Directory"),
-            ("manifest", "Persisted extraction manifest"),
-        ):
-            button = tk.Radiobutton(
-                source_modes, text=text, variable=self._source_kind_var,
-                value=value, command=self._update_source_controls,
-            )
-            self._theme.apply_to_widget(button, "checkbox")
-            button.pack(side=tk.LEFT, padx=(0, 12))
-
-        self._add_path_row(form, 1, "Source directory", self._source_var, self._browse_source)
-        manifest_label = tk.Label(form, text="Extraction")
-        self._theme.apply_to_widget(manifest_label, "label")
-        manifest_label.grid(row=2, column=0, sticky="w", pady=3)
         self._manifest_var = tk.StringVar(value="No persisted extraction selected")
-        self._manifest_combo = ttk.Combobox(
-            form, textvariable=self._manifest_var, state="disabled",
-        )
-        self._manifest_combo.grid(row=2, column=1, sticky="ew", padx=(8, 7), pady=3)
-        self._manifest_combo.bind("<<ComboboxSelected>>", self._manifest_selected, add="+")
-        self._manifest_refresh_btn = tk.Button(
-            form, text="Reload", command=self._refresh_manifest_choices,
-        )
-        self._theme.apply_to_widget(self._manifest_refresh_btn, "button_secondary")
-        self._manifest_refresh_btn.grid(row=2, column=2, pady=3)
-        self._add_path_row(form, 3, "Output base", self._output_var, self._browse_output)
+        self._server_kind_var = tk.StringVar(value="local")
+        self._server_host_var = tk.StringVar(value="127.0.0.1")
+        self._server_port_var = tk.StringVar(value="11434")
+        self._manifest_combo = None
+        self._manifest_refresh_btn = None
 
-        label = tk.Label(form, text="Report label")
+        self._add_path_row(
+            self._main_form, 0, "Folder", self._source_var, self._browse_source,
+        )
+        self._source_var.trace_add("write", self._source_changed)
+
+        label = tk.Label(self._main_form, text="Name")
         self._theme.apply_to_widget(label, "label")
-        label.grid(row=4, column=0, sticky="w", pady=3)
-        entry = tk.Entry(form, textvariable=self._label_var)
+        label.grid(row=1, column=0, sticky="w", pady=3)
+        entry = tk.Entry(self._main_form, textvariable=self._label_var)
         self._theme.apply_to_widget(entry, "entry")
-        entry.grid(row=4, column=1, columnspan=2, sticky="ew", padx=(8, 0), pady=3)
+        entry.grid(row=1, column=1, sticky="ew", padx=(8, 7), pady=3)
+        optional = tk.Label(self._main_form, text="optional")
+        self._theme.apply_to_widget(optional, "label")
+        optional.grid(row=1, column=2, sticky="w", pady=3)
 
-        mode_label = tk.Label(form, text="Depth")
+        mode_label = tk.Label(self._main_form, text="Read")
         self._theme.apply_to_widget(mode_label, "label")
-        mode_label.grid(row=5, column=0, sticky="w", pady=3)
-        modes = tk.Frame(form)
+        mode_label.grid(row=2, column=0, sticky="w", pady=(8, 3))
+        modes = tk.Frame(self._main_form)
         self._theme.apply_to_widget(modes, "main_window")
-        modes.grid(row=5, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=3)
+        modes.grid(row=2, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=(8, 3))
         for value, text in (
-            ("fast", "Fast — model-review deterministic hits"),
-            ("deep", "Deep — model-review every nonempty supported file"),
+            ("fast", "Quick look"),
+            ("deep", "Full read"),
         ):
             button = tk.Radiobutton(
                 modes, text=text, variable=self._mode_var, value=value,
             )
             self._theme.apply_to_widget(button, "checkbox")
-            button.pack(anchor="w")
-
-        model = tk.Label(
-            form,
-            text="Model: qwen3.6:27b · fixed digest · local loopback · strict sandbox",
-            anchor="w",
-        )
-        self._theme.apply_to_widget(model, "label")
-        model.grid(row=6, column=0, columnspan=3, sticky="w", pady=(6, 3))
+            button.pack(side=tk.LEFT, padx=(0, 14))
 
         settings_manager = self._context.get("settings_manager")
         try:
@@ -194,14 +174,6 @@ class AnalystTab:
         except Exception:
             offer_enabled = False
         self._offer_var = tk.BooleanVar(value=offer_enabled)
-        offer = tk.Checkbutton(
-            form,
-            text="Offer Fast Analyst review after a successful extraction",
-            variable=self._offer_var,
-            command=self._persist_offer_setting,
-        )
-        self._theme.apply_to_widget(offer, "checkbox")
-        offer.grid(row=7, column=0, columnspan=3, sticky="w", pady=(3, 0))
 
         controls = tk.Frame(frame)
         self._theme.apply_to_widget(controls, "main_window")
@@ -211,70 +183,305 @@ class AnalystTab:
         )
         self._theme.apply_to_widget(self._analyze_btn, "button_primary")
         self._analyze_btn.pack(side=tk.LEFT, padx=(0, 7))
-        self._resume_btn = tk.Button(
-            controls, text="Resume", state="disabled", command=self._resume_selected,
+        self._advanced_btn = tk.Button(
+            controls, text="Advanced...", command=self._open_advanced,
         )
-        self._theme.apply_to_widget(self._resume_btn, "button_secondary")
-        self._resume_btn.pack(side=tk.LEFT, padx=(0, 7))
-        self._cancel_btn = tk.Button(
-            controls, text="Cancel", state="disabled", command=self._cancel_selected,
-        )
-        self._theme.apply_to_widget(self._cancel_btn, "button_danger")
-        self._cancel_btn.pack(side=tk.LEFT, padx=(0, 7))
-        self._reports_btn = tk.Button(
-            controls, text="Completed Reports", state="disabled",
-            command=self._open_reports,
-        )
-        self._theme.apply_to_widget(self._reports_btn, "button_secondary")
-        self._reports_btn.pack(side=tk.LEFT)
+        self._theme.apply_to_widget(self._advanced_btn, "button_secondary")
+        self._advanced_btn.pack(side=tk.RIGHT)
 
-        self._status_var = tk.StringVar(value="Ready.")
-        status = tk.Label(frame, textvariable=self._status_var, anchor="w")
-        self._theme.apply_to_widget(status, "label")
-        status.pack(fill=tk.X, padx=16, pady=(0, 5))
+        runs_header = tk.Frame(frame)
+        self._theme.apply_to_widget(runs_header, "main_window")
+        runs_header.pack(fill=tk.X, padx=16, pady=(8, 4))
+        runs_label = tk.Label(runs_header, text="Runs", anchor="w")
+        self._theme.apply_to_widget(runs_label, "label")
+        runs_label.pack(side=tk.LEFT)
+        self._select_all_btn = tk.Button(
+            runs_header, text="Select all", command=self._select_all_runs,
+        )
+        self._theme.apply_to_widget(self._select_all_btn, "button_secondary")
+        self._select_all_btn.pack(side=tk.RIGHT)
 
         self._runs = ttk.Treeview(
             frame,
             columns=("label", "mode", "state", "progress"),
             show="headings",
             height=6,
+            selectmode="extended",
         )
         for key, text, width in (
             ("label", "Analysis", 190),
-            ("mode", "Depth", 65),
+            ("mode", "Read", 65),
             ("state", "State", 145),
-            ("progress", "Coverage", 250),
+            ("progress", "Result", 250),
         ):
             self._runs.heading(key, text=text)
             self._runs.column(key, width=width, anchor="w")
-        self._runs.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 12))
+        self._runs.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 7))
         self._runs.bind("<<TreeviewSelect>>", self._on_selection, add="+")
-        self._refresh_manifest_choices()
 
-    def _add_path_row(self, parent, row, text, variable, command) -> None:
+        run_controls = tk.Frame(frame)
+        self._theme.apply_to_widget(run_controls, "main_window")
+        run_controls.pack(fill=tk.X, padx=16, pady=(0, 7))
+        self._reports_btn = tk.Button(
+            run_controls, text="Open report", state="disabled",
+            command=self._open_reports,
+        )
+        self._theme.apply_to_widget(self._reports_btn, "button_secondary")
+        self._reports_btn.pack(side=tk.LEFT, padx=(0, 7))
+        self._export_btn = tk.Button(
+            run_controls, text="Export selected...", state="disabled",
+        )
+        self._theme.apply_to_widget(self._export_btn, "button_secondary")
+        self._export_btn.pack(side=tk.LEFT, padx=(0, 5))
+        export_note = tk.Label(run_controls, text="batch export (R6b)")
+        self._theme.apply_to_widget(export_note, "label")
+        export_note.pack(side=tk.LEFT, padx=(0, 12))
+        self._resume_btn = tk.Button(
+            run_controls, text="Resume", state="disabled", command=self._resume_selected,
+        )
+        self._theme.apply_to_widget(self._resume_btn, "button_secondary")
+        self._resume_btn.pack(side=tk.LEFT, padx=(0, 7))
+        self._cancel_btn = tk.Button(
+            run_controls, text="Cancel", state="disabled", command=self._cancel_selected,
+        )
+        self._theme.apply_to_widget(self._cancel_btn, "button_danger")
+        self._cancel_btn.pack(side=tk.LEFT, padx=(0, 7))
+
+        self._status_var = tk.StringVar(value="Ready.")
+        status = tk.Label(frame, textvariable=self._status_var, anchor="w")
+        self._theme.apply_to_widget(status, "label")
+        status.pack(fill=tk.X, padx=16, pady=(0, 12))
+
+    def _add_path_row(
+        self, parent, row, text, variable, command, *, button_text="Browse",
+    ) -> None:
         label = tk.Label(parent, text=text)
         self._theme.apply_to_widget(label, "label")
         label.grid(row=row, column=0, sticky="w", pady=3)
         entry = tk.Entry(parent, textvariable=variable)
         self._theme.apply_to_widget(entry, "entry")
         entry.grid(row=row, column=1, sticky="ew", padx=(8, 7), pady=3)
-        button = tk.Button(parent, text="Browse…", command=command)
+        button = tk.Button(parent, text=button_text, command=command)
         self._theme.apply_to_widget(button, "button_secondary")
         button.grid(row=row, column=2, pady=3)
+
+    def _source_changed(self, *_args) -> None:
+        source = self._source_var.get().strip()
+        basename = Path(source).name if source else ""
+        current_label = self._label_var.get().strip()
+        if not current_label or current_label == self._auto_label:
+            self._label_var.set(basename)
+            self._auto_label = basename
+        current_output = self._output_var.get().strip()
+        if not current_output or current_output == self._auto_output:
+            self._output_var.set(source)
+            self._auto_output = source
+
+    def _open_advanced(self) -> None:
+        existing = self._advanced_dialog
+        if existing is not None:
+            try:
+                if existing.winfo_exists():
+                    existing.lift()
+                    existing.focus_force()
+                    return
+            except Exception:
+                pass
+
+        parent = self.frame.winfo_toplevel()
+        dialog = tk.Toplevel(parent)
+        dialog.title("Analyst - Advanced")
+        dialog.transient(parent)
+        dialog.resizable(True, False)
+        self._theme.apply_to_widget(dialog, "main_window")
+        self._advanced_dialog = dialog
+        snapshot = {
+            "output": self._output_var.get(),
+            "source_kind": self._source_kind_var.get(),
+            "manifest": self._manifest_var.get(),
+            "manifest_index": self._manifest_index,
+            "offer": self._offer_var.get(),
+        }
+
+        outer = tk.Frame(dialog)
+        self._theme.apply_to_widget(outer, "main_window")
+        outer.pack(fill=tk.BOTH, expand=True, padx=16, pady=14)
+        outer.columnconfigure(1, weight=1)
+        self._add_path_row(
+            outer, 0, "Output folder", self._output_var, self._browse_output,
+        )
+
+        source_heading = tk.Label(outer, text="Source")
+        self._theme.apply_to_widget(source_heading, "label")
+        source_heading.grid(
+            row=1, column=0, columnspan=3, sticky="w", pady=(12, 3),
+        )
+        source_modes = tk.Frame(outer)
+        self._theme.apply_to_widget(source_modes, "main_window")
+        source_modes.grid(row=2, column=0, columnspan=3, sticky="w")
+        for value, text in (
+            ("directory", "A folder"),
+            ("manifest", "From a saved scan"),
+        ):
+            button = tk.Radiobutton(
+                source_modes,
+                text=text,
+                variable=self._source_kind_var,
+                value=value,
+                command=self._update_source_controls,
+            )
+            self._theme.apply_to_widget(button, "checkbox")
+            button.pack(side=tk.LEFT, padx=(0, 14))
+
+        manifest_label = tk.Label(outer, text="Saved scan")
+        self._theme.apply_to_widget(manifest_label, "label")
+        manifest_label.grid(row=3, column=0, sticky="w", pady=3)
+        self._manifest_combo = ttk.Combobox(
+            outer, textvariable=self._manifest_var, state="disabled",
+        )
+        self._manifest_combo.grid(
+            row=3, column=1, sticky="ew", padx=(8, 7), pady=3,
+        )
+        self._manifest_combo.bind(
+            "<<ComboboxSelected>>", self._manifest_selected, add="+",
+        )
+        self._manifest_refresh_btn = tk.Button(
+            outer, text="Reload", command=self._refresh_manifest_choices,
+        )
+        self._theme.apply_to_widget(
+            self._manifest_refresh_btn, "button_secondary",
+        )
+        self._manifest_refresh_btn.grid(row=3, column=2, pady=3)
+
+        server_heading = tk.Label(outer, text="Model server")
+        self._theme.apply_to_widget(server_heading, "label")
+        server_heading.grid(
+            row=4, column=0, columnspan=3, sticky="w", pady=(12, 3),
+        )
+        server_modes = tk.Frame(outer)
+        self._theme.apply_to_widget(server_modes, "main_window")
+        server_modes.grid(row=5, column=0, columnspan=3, sticky="w")
+        local = tk.Radiobutton(
+            server_modes, text="Local", variable=self._server_kind_var,
+            value="local",
+        )
+        self._theme.apply_to_widget(local, "checkbox")
+        local.pack(side=tk.LEFT, padx=(0, 14))
+        remote = tk.Radiobutton(
+            server_modes, text="Remote AI box", variable=self._server_kind_var,
+            value="remote", state="disabled",
+        )
+        self._theme.apply_to_widget(remote, "checkbox")
+        remote.pack(side=tk.LEFT, padx=(0, 7))
+        later = tk.Label(server_modes, text="later card")
+        self._theme.apply_to_widget(later, "label")
+        later.pack(side=tk.LEFT)
+
+        connection = tk.Frame(outer)
+        self._theme.apply_to_widget(connection, "main_window")
+        connection.grid(row=6, column=0, columnspan=3, sticky="w", pady=3)
+        host_label = tk.Label(connection, text="Host")
+        self._theme.apply_to_widget(host_label, "label")
+        host_label.pack(side=tk.LEFT)
+        host = tk.Entry(
+            connection, textvariable=self._server_host_var,
+            state="disabled", width=18,
+        )
+        self._theme.apply_to_widget(host, "entry")
+        host.pack(side=tk.LEFT, padx=(7, 12))
+        port_label = tk.Label(connection, text="Port")
+        self._theme.apply_to_widget(port_label, "label")
+        port_label.pack(side=tk.LEFT)
+        port = tk.Entry(
+            connection, textvariable=self._server_port_var,
+            state="disabled", width=8,
+        )
+        self._theme.apply_to_widget(port, "entry")
+        port.pack(side=tk.LEFT, padx=(7, 12))
+        test = tk.Button(connection, text="Test", state="disabled")
+        self._theme.apply_to_widget(test, "button_secondary")
+        test.pack(side=tk.LEFT)
+
+        model_heading = tk.Label(outer, text="Model")
+        self._theme.apply_to_widget(model_heading, "label")
+        model_heading.grid(
+            row=7, column=0, columnspan=3, sticky="w", pady=(12, 3),
+        )
+        model = tk.Label(
+            outer,
+            text=(
+                "qwen3.6:27b · fixed digest · local loopback · "
+                "strict sandbox"
+            ),
+            anchor="w",
+        )
+        self._theme.apply_to_widget(model, "label")
+        model.grid(row=8, column=0, columnspan=3, sticky="w", pady=3)
+
+        offer = tk.Checkbutton(
+            outer,
+            text="Offer a quick review after an extraction",
+            variable=self._offer_var,
+        )
+        self._theme.apply_to_widget(offer, "checkbox")
+        offer.grid(
+            row=9, column=0, columnspan=3, sticky="w", pady=(12, 3),
+        )
+
+        actions = tk.Frame(outer)
+        self._theme.apply_to_widget(actions, "main_window")
+        actions.grid(row=10, column=0, columnspan=3, sticky="e", pady=(14, 0))
+
+        def close(*, save: bool) -> None:
+            if save:
+                self._persist_offer_setting()
+            else:
+                self._output_var.set(snapshot["output"])
+                self._source_kind_var.set(snapshot["source_kind"])
+                self._manifest_var.set(snapshot["manifest"])
+                self._manifest_index = snapshot["manifest_index"]
+                self._offer_var.set(snapshot["offer"])
+            self._advanced_dialog = None
+            self._manifest_combo = None
+            self._manifest_refresh_btn = None
+            dialog.grab_release()
+            dialog.destroy()
+
+        cancel = tk.Button(
+            actions, text="Cancel", command=lambda: close(save=False),
+        )
+        self._theme.apply_to_widget(cancel, "button_secondary")
+        cancel.pack(side=tk.LEFT, padx=(0, 7))
+        save = tk.Button(
+            actions, text="Save", command=lambda: close(save=True),
+        )
+        self._theme.apply_to_widget(save, "button_primary")
+        save.pack(side=tk.LEFT)
+        dialog.protocol("WM_DELETE_WINDOW", lambda: close(save=False))
+        dialog.grab_set()
+        self._refresh_manifest_choices()
+        ensure_dialog_focus(dialog, parent)
+
+    def _select_all_runs(self) -> None:
+        children = self._runs.get_children("")
+        if children:
+            self._runs.selection_set(*children)
+            self._on_selection()
 
     def _browse_source(self) -> None:
         selected = filedialog.askdirectory(parent=self.frame.winfo_toplevel())
         if selected:
             self._source_var.set(selected)
-            if not self._output_var.get().strip():
-                self._output_var.set(selected)
 
     def _browse_output(self) -> None:
-        selected = filedialog.askdirectory(parent=self.frame.winfo_toplevel())
+        parent = self._advanced_dialog or self.frame.winfo_toplevel()
+        selected = filedialog.askdirectory(parent=parent)
         if selected:
             self._output_var.set(selected)
 
     def _update_source_controls(self) -> None:
+        if self._manifest_combo is None:
+            return
         manifest = self._source_kind_var.get() == "manifest"
         self._manifest_combo.configure(
             state="readonly" if manifest and self._manifest_choices else "disabled",
@@ -307,17 +514,24 @@ class AnalystTab:
     def _finish_manifest_refresh(self, choices) -> None:
         self._manifest_choices = list(choices)
         labels = [choice.display_label for choice in self._manifest_choices]
+        if self._manifest_combo is None:
+            return
         self._manifest_combo.configure(values=labels)
         if labels:
             self._manifest_combo.current(0)
+            self._manifest_index = 0
             self._manifest_var.set(labels[0])
             self._manifest_selected()
         else:
+            self._manifest_index = -1
             self._manifest_var.set("No persisted extraction available")
         self._update_source_controls()
 
     def _manifest_selected(self, _event=None) -> None:
+        if self._manifest_combo is None:
+            return
         index = self._manifest_combo.current()
+        self._manifest_index = index
         if 0 <= index < len(self._manifest_choices) and not self._label_var.get().strip():
             self._label_var.set(self._manifest_choices[index].ip_address)
 
@@ -347,12 +561,15 @@ class AnalystTab:
         request = None
         choice = None
         manifest_output = None
-        report_label = self._label_var.get()
+        report_label = self._label_var.get().strip()
         mode = self._mode_var.get()
         try:
             if source_kind == "directory":
                 from experimental.analyst.service import DirectoryRunRequest
 
+                if not report_label:
+                    report_label = Path(self._source_var.get()).name
+                    self._label_var.set(report_label)
                 request = DirectoryRunRequest(
                     Path(self._source_var.get()),
                     Path(self._output_var.get()),
@@ -360,7 +577,7 @@ class AnalystTab:
                     mode,
                 )
             elif source_kind == "manifest":
-                index = self._manifest_combo.current()
+                index = self._manifest_index
                 choice = self._manifest_choices[index]
                 output_text = self._output_var.get().strip()
                 manifest_output = Path(output_text) if output_text else None
@@ -433,7 +650,6 @@ class AnalystTab:
             self._schedule_auto_refresh()
             return
         selected = self._runs.selection()
-        selected_run_id = selected[0] if selected else None
         self._summaries = list(summaries)
         self._refresh_interval = _refresh_interval_ms(self._summaries)
         self._runs.delete(*self._runs.get_children(""))
@@ -441,16 +657,20 @@ class AnalystTab:
             state = "paused_resource" if item.schedule_state == "paused_resource" else item.state.value
             self._runs.insert(
                 "", "end", iid=item.run_id,
-                values=(item.report_label, item.mode, state, item.progress),
+                values=(
+                    item.report_label,
+                    "Quick" if item.mode == "fast" else "Full",
+                    state,
+                    item.result_label,
+                ),
             )
         run_ids = {item.run_id for item in self._summaries}
-        selected_run_id = (
-            selected_run_id if selected_run_id in run_ids
-            else (self._summaries[0].run_id if self._summaries else None)
-        )
-        if selected_run_id is not None:
-            self._runs.selection_set(selected_run_id)
-            self._runs.focus(selected_run_id)
+        retained = tuple(run_id for run_id in selected if run_id in run_ids)
+        if not retained and self._summaries:
+            retained = (self._summaries[0].run_id,)
+        if retained:
+            self._runs.selection_set(*retained)
+            self._runs.focus(retained[0])
         self._reports_btn.configure(
             state=(
                 "normal"
