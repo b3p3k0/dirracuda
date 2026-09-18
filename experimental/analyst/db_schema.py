@@ -32,11 +32,12 @@ V1_SCHEMA_VERSION: Final = 1
 V2_SCHEMA_VERSION: Final = 2
 V3_SCHEMA_VERSION: Final = 3
 V4_SCHEMA_VERSION: Final = 4
-PREVIOUS_SCHEMA_VERSION: Final = V4_SCHEMA_VERSION
-SCHEMA_VERSION: Final = 5
+V5_SCHEMA_VERSION: Final = 5
+PREVIOUS_SCHEMA_VERSION: Final = V5_SCHEMA_VERSION
+SCHEMA_VERSION: Final = 6
 KNOWN_SCHEMA_VERSIONS: Final = (
     V1_SCHEMA_VERSION, V2_SCHEMA_VERSION, V3_SCHEMA_VERSION, V4_SCHEMA_VERSION,
-    SCHEMA_VERSION,
+    V5_SCHEMA_VERSION, SCHEMA_VERSION,
 )
 
 RUN_STATES: Final = (
@@ -510,6 +511,34 @@ _V5_ADDITIONAL_DDL: Final = (
     "CREATE INDEX idx_analyst_read_contact_run ON analyst_read_contact(run_id)",
 )
 
+_V6_ADDITIONAL_DDL: Final = (
+    f"""CREATE TABLE analyst_discovery_contact (
+        contact_id TEXT PRIMARY KEY CHECK({_LOWER_SHA.format('contact_id')}),
+        contact_no INTEGER NOT NULL CHECK(contact_no > 0),
+        endpoint TEXT NOT NULL,
+        request_sha256 TEXT NOT NULL CHECK({_LOWER_SHA.format('request_sha256')}),
+        state TEXT NOT NULL CHECK(state IN ({_values(OLLAMA_CONTACT_STATES)})),
+        models_found INTEGER CHECK(models_found IS NULL OR models_found >= 0),
+        charged_at_utc TEXT NOT NULL,
+        finished_at_utc TEXT,
+        UNIQUE(contact_no),
+        CHECK((state='dispatching' AND finished_at_utc IS NULL)
+              OR (state!='dispatching' AND finished_at_utc IS NOT NULL))
+    ) STRICT""",
+    f"""CREATE TABLE analyst_discovered_model (
+        endpoint TEXT NOT NULL,
+        model_tag TEXT NOT NULL CHECK(length(model_tag) > 0),
+        model_digest TEXT NOT NULL CHECK({_LOWER_SHA.format('model_digest')}),
+        first_seen_utc TEXT NOT NULL,
+        last_seen_utc TEXT NOT NULL,
+        PRIMARY KEY(endpoint, model_tag)
+    ) STRICT""",
+    "CREATE INDEX idx_analyst_discovery_contact_endpoint ON "
+    "analyst_discovery_contact(endpoint,contact_no)",
+    "CREATE INDEX idx_analyst_discovered_model_endpoint ON "
+    "analyst_discovered_model(endpoint)",
+)
+
 @dataclass(frozen=True)
 class _SchemaSnapshot:
     objects: tuple[tuple[str, str, str], ...]
@@ -521,7 +550,7 @@ class _SchemaSnapshot:
 
 
 def initialize_schema(conn: sqlite3.Connection) -> None:
-    """Create v5 or narrowly upgrade an exact known Analyst schema.
+    """Create v6 or narrowly upgrade an exact known Analyst schema.
 
     V1 remains restricted to the frozen pristine development state. Later
     migration sources must be exact and idle.
@@ -532,18 +561,29 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
     if identity == (APPLICATION_ID, SCHEMA_VERSION):
         validate_schema(conn)
         return
-    if identity == (APPLICATION_ID, V4_SCHEMA_VERSION):
-        validate_v4_migration_candidate(conn)
-    elif identity == (APPLICATION_ID, V3_SCHEMA_VERSION):
-        validate_v3_migration_candidate(conn)
-    elif identity == (APPLICATION_ID, V2_SCHEMA_VERSION):
-        validate_v2_migration_candidate(conn)
-    elif identity == (APPLICATION_ID, V1_SCHEMA_VERSION):
-        validate_v1_migration_candidate(conn)
-    elif identity != (0, 0) or objects:
-        raise AnalystSchemaError(
-            "refusing to initialize a nonempty, partial, foreign, or versioned database"
-        )
+    try:
+        if identity == (APPLICATION_ID, V5_SCHEMA_VERSION):
+            validate_v5_migration_candidate(conn)
+        elif identity == (APPLICATION_ID, V4_SCHEMA_VERSION):
+            validate_v4_migration_candidate(conn)
+        elif identity == (APPLICATION_ID, V3_SCHEMA_VERSION):
+            validate_v3_migration_candidate(conn)
+        elif identity == (APPLICATION_ID, V2_SCHEMA_VERSION):
+            validate_v2_migration_candidate(conn)
+        elif identity == (APPLICATION_ID, V1_SCHEMA_VERSION):
+            validate_v1_migration_candidate(conn)
+        elif identity != (0, 0) or objects:
+            raise AnalystSchemaError(
+                "refusing to initialize a nonempty, partial, foreign, or "
+                "versioned database"
+            )
+    except AnalystSchemaError:
+        # Another initializer may atomically promote the schema between the
+        # identity read and the exact read-only snapshot audit above.
+        if _identity(conn) == (APPLICATION_ID, SCHEMA_VERSION):
+            validate_schema(conn)
+            return
+        raise
 
     conn.execute("PRAGMA foreign_keys=ON")
     foreign_keys = conn.execute("PRAGMA foreign_keys").fetchone()
@@ -557,13 +597,21 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
             validate_schema(conn)
             conn.execute("COMMIT")
             return
-        if concurrent_identity == (APPLICATION_ID, V4_SCHEMA_VERSION):
+        if concurrent_identity == (APPLICATION_ID, V5_SCHEMA_VERSION):
+            validate_v5_migration_candidate(conn)
+            for statement in _V6_ADDITIONAL_DDL:
+                conn.execute(statement)
+        elif concurrent_identity == (APPLICATION_ID, V4_SCHEMA_VERSION):
             validate_v4_migration_candidate(conn)
-            for statement in _V5_ADDITIONAL_DDL:
+            for statement in (*_V5_ADDITIONAL_DDL, *_V6_ADDITIONAL_DDL):
                 conn.execute(statement)
         elif concurrent_identity == (APPLICATION_ID, V3_SCHEMA_VERSION):
             validate_v3_migration_candidate(conn)
-            for statement in (*_V4_ADDITIONAL_DDL, *_V5_ADDITIONAL_DDL):
+            for statement in (
+                *_V4_ADDITIONAL_DDL,
+                *_V5_ADDITIONAL_DDL,
+                *_V6_ADDITIONAL_DDL,
+            ):
                 conn.execute(statement)
         elif concurrent_identity == (APPLICATION_ID, V2_SCHEMA_VERSION):
             validate_v2_migration_candidate(conn)
@@ -571,6 +619,7 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
                 *_V3_ADDITIONAL_DDL,
                 *_V4_ADDITIONAL_DDL,
                 *_V5_ADDITIONAL_DDL,
+                *_V6_ADDITIONAL_DDL,
             ):
                 conn.execute(statement)
         elif concurrent_identity == (APPLICATION_ID, V1_SCHEMA_VERSION):
@@ -580,6 +629,7 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
                 *_V3_ADDITIONAL_DDL,
                 *_V4_ADDITIONAL_DDL,
                 *_V5_ADDITIONAL_DDL,
+                *_V6_ADDITIONAL_DDL,
             ):
                 conn.execute(statement)
         elif concurrent_identity == (0, 0) and not concurrent_objects:
@@ -590,6 +640,8 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
             for statement in _V4_ADDITIONAL_DDL:
                 conn.execute(statement)
             for statement in _V5_ADDITIONAL_DDL:
+                conn.execute(statement)
+            for statement in _V6_ADDITIONAL_DDL:
                 conn.execute(statement)
             conn.execute(
                 "INSERT INTO analyst_gpu_lease(slot,generation) VALUES(1,0)"
@@ -616,7 +668,7 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
 
 
 def validate_schema(conn: sqlite3.Connection) -> None:
-    """Read and exactly validate schema v5 without mutating the database."""
+    """Read and exactly validate schema v6 without mutating the database."""
     _validate_schema_version(conn, SCHEMA_VERSION)
 
 
@@ -638,6 +690,11 @@ def validate_schema_v3(conn: sqlite3.Connection) -> None:
 def validate_schema_v4(conn: sqlite3.Connection) -> None:
     """Read and exactly validate the frozen v4 migration source."""
     _validate_schema_version(conn, V4_SCHEMA_VERSION)
+
+
+def validate_schema_v5(conn: sqlite3.Connection) -> None:
+    """Read and exactly validate the frozen v5 migration source."""
+    _validate_schema_version(conn, V5_SCHEMA_VERSION)
 
 
 def validate_v1_migration_candidate(conn: sqlite3.Connection) -> None:
@@ -736,6 +793,42 @@ def validate_v4_migration_candidate(conn: sqlite3.Connection) -> None:
         for value in (owned, active_run, active_file, active_attempt, active_contact)
     ):
         raise AnalystSchemaError("Analyst v4 migration requires idle durable state")
+
+
+def validate_v5_migration_candidate(conn: sqlite3.Connection) -> None:
+    """Require exact v5 with no live writer or in-flight durable work."""
+    validate_schema_v5(conn)
+    owned = conn.execute(
+        "SELECT 1 FROM analyst_gpu_lease WHERE run_id IS NOT NULL LIMIT 1"
+    ).fetchone()
+    active_run = conn.execute(
+        "SELECT 1 FROM analyst_runs WHERE state IN "
+        "('running','cancel_requested','finalizing') LIMIT 1"
+    ).fetchone()
+    active_file = conn.execute(
+        "SELECT 1 FROM analyst_files WHERE work_state='active' LIMIT 1"
+    ).fetchone()
+    active_attempt = conn.execute(
+        "SELECT 1 FROM analyst_model_attempts WHERE state='dispatching' LIMIT 1"
+    ).fetchone()
+    active_contact = conn.execute(
+        "SELECT 1 FROM analyst_ollama_contacts WHERE state='dispatching' LIMIT 1"
+    ).fetchone()
+    active_read_contact = conn.execute(
+        "SELECT 1 FROM analyst_read_contact WHERE state='dispatching' LIMIT 1"
+    ).fetchone()
+    if any(
+        value is not None
+        for value in (
+            owned,
+            active_run,
+            active_file,
+            active_attempt,
+            active_contact,
+            active_read_contact,
+        )
+    ):
+        raise AnalystSchemaError("Analyst v5 migration requires idle durable state")
 
 
 def _validate_schema_version(conn: sqlite3.Connection, version: int) -> None:
@@ -1018,13 +1111,13 @@ def _validate_health_barrier_history(conn: sqlite3.Connection) -> None:
 def validate_runtime_schema(conn: sqlite3.Connection) -> None:
     """Validate constant-cost schema identity for an already audited sidecar."""
     if _identity(conn) != (APPLICATION_ID, SCHEMA_VERSION):
-        raise AnalystSchemaError("Analyst database identity or schema version is not v5")
+        raise AnalystSchemaError("Analyst database identity or schema version is not v6")
     objects = tuple(
         (kind, name, _normalize_sql(sql))
         for kind, name, sql in _user_objects(conn)
     )
     if objects != _expected_snapshot(SCHEMA_VERSION).objects:
-        raise AnalystSchemaError("Analyst v5 runtime schema signature does not match")
+        raise AnalystSchemaError("Analyst v6 runtime schema signature does not match")
     rows = conn.execute(
         "SELECT slot,generation,run_id FROM analyst_gpu_lease"
     ).fetchall()
@@ -1097,7 +1190,7 @@ def _schema_snapshot(conn: sqlite3.Connection) -> _SchemaSnapshot:
     )
 
 
-@lru_cache(maxsize=5)
+@lru_cache(maxsize=6)
 def _expected_snapshot(version: int = SCHEMA_VERSION) -> _SchemaSnapshot:
     if version == V1_SCHEMA_VERSION:
         table_ddl, index_ddl = _V1_TABLE_DDL, _V1_INDEX_DDL
@@ -1111,12 +1204,20 @@ def _expected_snapshot(version: int = SCHEMA_VERSION) -> _SchemaSnapshot:
     elif version == V4_SCHEMA_VERSION:
         table_ddl, index_ddl = _TABLE_DDL, _INDEX_DDL
         additional_ddl = (*_V3_ADDITIONAL_DDL, *_V4_ADDITIONAL_DDL)
+    elif version == V5_SCHEMA_VERSION:
+        table_ddl, index_ddl = _TABLE_DDL, _INDEX_DDL
+        additional_ddl = (
+            *_V3_ADDITIONAL_DDL,
+            *_V4_ADDITIONAL_DDL,
+            *_V5_ADDITIONAL_DDL,
+        )
     elif version == SCHEMA_VERSION:
         table_ddl, index_ddl = _TABLE_DDL, _INDEX_DDL
         additional_ddl = (
             *_V3_ADDITIONAL_DDL,
             *_V4_ADDITIONAL_DDL,
             *_V5_ADDITIONAL_DDL,
+            *_V6_ADDITIONAL_DDL,
         )
     else:
         raise ValueError("unsupported Analyst schema snapshot version")
@@ -1153,6 +1254,7 @@ __all__ = [
     "V2_SCHEMA_VERSION",
     "V3_SCHEMA_VERSION",
     "V4_SCHEMA_VERSION",
+    "V5_SCHEMA_VERSION",
     "AnalystSchemaError",
     "initialize_schema",
     "validate_runtime_schema",
@@ -1161,8 +1263,10 @@ __all__ = [
     "validate_schema_v2",
     "validate_schema_v3",
     "validate_schema_v4",
+    "validate_schema_v5",
     "validate_v1_migration_candidate",
     "validate_v2_migration_candidate",
     "validate_v3_migration_candidate",
     "validate_v4_migration_candidate",
+    "validate_v5_migration_candidate",
 ]

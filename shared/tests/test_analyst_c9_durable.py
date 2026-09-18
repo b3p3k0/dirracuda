@@ -115,6 +115,11 @@ _V4_TABLES = {
 _V4_INDEXES = {"idx_analyst_read_risk"}
 _V5_TABLES = {"analyst_read_contact"}
 _V5_INDEXES = {"idx_analyst_read_contact_run"}
+_V6_TABLES = {"analyst_discovery_contact", "analyst_discovered_model"}
+_V6_INDEXES = {
+    "idx_analyst_discovery_contact_endpoint",
+    "idx_analyst_discovered_model_endpoint",
+}
 _NOW = "2026-08-16T12:00:00Z"
 _BOOT_ID = "00000000-0000-0000-0000-000000000001"
 
@@ -702,6 +707,7 @@ def test_exact_empty_v1_migrates_additively_and_reopen_is_idempotent(
             if str(row[1])
             not in _V2_TABLES | _V2_INDEXES | _V4_TABLES | _V4_INDEXES
             | _V5_TABLES | _V5_INDEXES
+            | _V6_TABLES | _V6_INDEXES
             | {"analyst_files"}
         )
         assert after_v1 == tuple(

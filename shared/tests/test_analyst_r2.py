@@ -256,7 +256,7 @@ def test_v4_snapshot_verifies() -> None:
         assert db_schema._schema_snapshot(conn) == db_schema._expected_snapshot(
             SCHEMA_VERSION
         )
-        for version in (1, 2, 3, 4, 5):
+        for version in (1, 2, 3, 4, 5, 6):
             assert db_schema._expected_snapshot(version)
     finally:
         conn.close()

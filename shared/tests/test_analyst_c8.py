@@ -456,6 +456,8 @@ def test_fresh_database_has_exact_identity_schema_and_owner_permissions(
             "analyst_read",
             "analyst_read_exposures",
             "analyst_read_contact",
+            "analyst_discovery_contact",
+            "analyst_discovered_model",
         }
         indexes = {
             row[0]
@@ -485,6 +487,8 @@ def test_fresh_database_has_exact_identity_schema_and_owner_permissions(
             "idx_analyst_schedule_state",
             "idx_analyst_read_risk",
             "idx_analyst_read_contact_run",
+            "idx_analyst_discovery_contact_endpoint",
+            "idx_analyst_discovered_model_endpoint",
         }
         assert all(
             row[5] == 1

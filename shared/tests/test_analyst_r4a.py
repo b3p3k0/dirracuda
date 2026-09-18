@@ -1,4 +1,4 @@
-"""Analyst host-read contact schema v5 and additive migration regressions."""
+"""Analyst model-discovery schema v6 and additive migration regressions."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from experimental.analyst import db_schema
+from experimental.analyst.contact_contract import TAGS_REQUEST_SHA256
 from experimental.analyst.db_schema import (
     APPLICATION_ID,
     SCHEMA_VERSION,
@@ -16,21 +17,24 @@ from experimental.analyst.db_schema import (
     V2_SCHEMA_VERSION,
     V3_SCHEMA_VERSION,
     V4_SCHEMA_VERSION,
+    V5_SCHEMA_VERSION,
     AnalystSchemaError,
     initialize_schema,
     validate_schema,
 )
+from experimental.analyst.store import initialize_database, open_connection
 
 
-_NOW = "2026-09-18T16:00:00Z"
+_NOW = "2026-09-18T18:00:00Z"
 _RUN_ID = "r" * 32
+_ENDPOINT = "127.0.0.1:11434"
 
 
 def _sha(value: str) -> str:
     return hashlib.sha256(value.encode("ascii")).hexdigest()
 
 
-def _insert_run(conn: sqlite3.Connection, version: int) -> None:
+def _insert_existing_rows(conn: sqlite3.Connection, version: int) -> None:
     conn.execute(
         "INSERT INTO analyst_runs("
         "run_id,state,created_at_utc,updated_at_utc,mode,source_mode,"
@@ -68,10 +72,13 @@ def _insert_run(conn: sqlite3.Connection, version: int) -> None:
             "VALUES(?,1,'quick','LOW','Existing read','[]',0,0,0,?)",
             (_RUN_ID, _NOW),
         )
+    if version >= V5_SCHEMA_VERSION:
         conn.execute(
-            "INSERT INTO analyst_read_exposures(run_id,ordinal,severity,text) "
-            "VALUES(?,1,'LOW','Existing exposure')",
-            (_RUN_ID,),
+            "INSERT INTO analyst_read_contact("
+            "contact_id,run_id,attempt_no,request_sha256,lease_generation,state,"
+            "charged_at_utc,finished_at_utc,resource_failures_before,"
+            "resource_failures_after) VALUES(?,?,1,?,1,'success',?,?,0,0)",
+            (_sha("read-contact"), _RUN_ID, _sha("read-request"), _NOW, _NOW),
         )
 
 
@@ -94,9 +101,12 @@ def _create_version(path: Path, version: int, *, populated: bool) -> None:
         if version >= V4_SCHEMA_VERSION:
             for statement in db_schema._V4_ADDITIONAL_DDL:
                 conn.execute(statement)
+        if version >= V5_SCHEMA_VERSION:
+            for statement in db_schema._V5_ADDITIONAL_DDL:
+                conn.execute(statement)
         conn.execute("INSERT INTO analyst_gpu_lease(slot,generation) VALUES(1,0)")
         if populated:
-            _insert_run(conn, version)
+            _insert_existing_rows(conn, version)
         conn.execute(f"PRAGMA application_id={APPLICATION_ID}")
         conn.execute(f"PRAGMA user_version={version}")
         conn.execute("COMMIT")
@@ -120,72 +130,96 @@ def _identity_and_objects(
     )
 
 
-def _insert_read_contact(
+def _insert_discovery_contact(
     conn: sqlite3.Connection,
     *,
-    attempt_no: int,
+    contact_no: int,
     state: str,
     finished_at_utc: str | None,
 ) -> None:
     conn.execute(
-        "INSERT INTO analyst_read_contact("
-        "contact_id,run_id,attempt_no,request_sha256,lease_generation,state,"
-        "charged_at_utc,finished_at_utc,resource_failures_before,"
-        "resource_failures_after) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO analyst_discovery_contact("
+        "contact_id,contact_no,endpoint,request_sha256,state,models_found,"
+        "charged_at_utc,finished_at_utc) VALUES(?,?,?,?,?,?,?,?)",
         (
-            _sha(f"contact-{attempt_no}-{state}"),
-            _RUN_ID,
-            attempt_no,
-            _sha("request"),
-            1,
+            _sha(f"discovery-{contact_no}-{state}"),
+            contact_no,
+            _ENDPOINT,
+            TAGS_REQUEST_SHA256,
             state,
+            None if state == "dispatching" else 1,
             _NOW,
             finished_at_utc,
-            0,
-            None,
         ),
     )
 
 
-def test_fresh_schema_has_read_contact_table_index_and_v6_identity() -> None:
+def test_fresh_v6_has_discovery_tables_indexes_and_identity() -> None:
     conn = sqlite3.connect(":memory:", isolation_level=None)
     try:
         initialize_schema(conn)
 
         assert conn.execute("PRAGMA application_id").fetchone()[0] == APPLICATION_ID
         assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 6
-        assert conn.execute(
-            "SELECT strict FROM pragma_table_list "
-            "WHERE name='analyst_read_contact'"
-        ).fetchone()[0] == 1
+        assert {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_schema WHERE type='table'"
+            )
+        } >= {"analyst_discovery_contact", "analyst_discovered_model"}
+        assert all(
+            conn.execute(
+                "SELECT strict FROM pragma_table_list WHERE name=?", (table,),
+            ).fetchone()[0] == 1
+            for table in ("analyst_discovery_contact", "analyst_discovered_model")
+        )
         assert {
             str(row[1])
-            for row in conn.execute("PRAGMA table_xinfo(analyst_read_contact)")
+            for row in conn.execute("PRAGMA table_xinfo(analyst_discovery_contact)")
         } == {
             "contact_id",
-            "run_id",
-            "attempt_no",
+            "contact_no",
+            "endpoint",
             "request_sha256",
-            "lease_generation",
             "state",
+            "models_found",
             "charged_at_utc",
             "finished_at_utc",
-            "resource_failures_before",
-            "resource_failures_after",
         }
-        assert conn.execute(
-            "SELECT 1 FROM sqlite_schema WHERE type='index' "
-            "AND name='idx_analyst_read_contact_run'"
-        ).fetchone() is not None
+        assert {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_xinfo(analyst_discovered_model)")
+        } == {
+            "endpoint",
+            "model_tag",
+            "model_digest",
+            "first_seen_utc",
+            "last_seen_utc",
+        }
+        assert {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_schema WHERE type='index'"
+            )
+        } >= {
+            "idx_analyst_discovery_contact_endpoint",
+            "idx_analyst_discovered_model_endpoint",
+        }
     finally:
         conn.close()
 
 
 @pytest.mark.parametrize(
     "version",
-    (V1_SCHEMA_VERSION, V2_SCHEMA_VERSION, V3_SCHEMA_VERSION, V4_SCHEMA_VERSION),
+    (
+        V1_SCHEMA_VERSION,
+        V2_SCHEMA_VERSION,
+        V3_SCHEMA_VERSION,
+        V4_SCHEMA_VERSION,
+        V5_SCHEMA_VERSION,
+    ),
 )
-def test_v1_through_v4_migrate_additively_and_preserve_rows(
+def test_v1_through_v5_migrate_additively_and_preserve_rows(
     tmp_path: Path, version: int,
 ) -> None:
     path = tmp_path / f"v{version}.db"
@@ -215,19 +249,43 @@ def test_v1_through_v4_migrate_additively_and_preserve_rows(
             assert conn.execute(
                 "SELECT state FROM analyst_runs WHERE run_id=?", (_RUN_ID,),
             ).fetchone()[0] == "ready"
-        if version == V4_SCHEMA_VERSION:
+        if version >= V4_SCHEMA_VERSION:
             assert conn.execute(
                 "SELECT host_summary FROM analyst_read WHERE run_id=?", (_RUN_ID,),
             ).fetchone()[0] == "Existing read"
+        if version >= V5_SCHEMA_VERSION:
+            assert conn.execute(
+                "SELECT state FROM analyst_read_contact WHERE run_id=?", (_RUN_ID,),
+            ).fetchone()[0] == "success"
         assert conn.execute(
-            "SELECT count(*) FROM analyst_read_contact"
+            "SELECT count(*) FROM analyst_discovery_contact"
+        ).fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT count(*) FROM analyst_discovered_model"
         ).fetchone()[0] == 0
         validate_schema(conn)
     finally:
         conn.close()
 
 
-def test_current_schema_reinitialization_is_idempotent() -> None:
+def test_store_audit_accepts_exact_idle_v5_before_migration(tmp_path: Path) -> None:
+    path = tmp_path / "analyst.db"
+    _create_version(path, V5_SCHEMA_VERSION, populated=True)
+    path.chmod(0o600)
+
+    assert initialize_database(path) == path
+
+    conn = open_connection(path, read_only=True)
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+        assert conn.execute(
+            "SELECT state FROM analyst_read_contact WHERE run_id=?", (_RUN_ID,),
+        ).fetchone()[0] == "success"
+    finally:
+        conn.close()
+
+
+def test_v6_reinitialization_is_idempotent() -> None:
     conn = sqlite3.connect(":memory:", isolation_level=None)
     try:
         initialize_schema(conn)
@@ -244,9 +302,7 @@ def test_current_schema_reinitialization_is_idempotent() -> None:
 
 
 @pytest.mark.parametrize("kind", ("foreign", "partial"))
-def test_foreign_or_partial_database_is_refused_without_mutation(
-    kind: str,
-) -> None:
+def test_foreign_or_partial_database_is_refused_without_mutation(kind: str) -> None:
     conn = sqlite3.connect(":memory:", isolation_level=None)
     try:
         if kind == "foreign":
@@ -264,7 +320,7 @@ def test_foreign_or_partial_database_is_refused_without_mutation(
         conn.close()
 
 
-def test_v6_snapshot_verifies() -> None:
+def test_v6_snapshot_verifies_full_version_chain() -> None:
     conn = sqlite3.connect(":memory:", isolation_level=None)
     try:
         initialize_schema(conn)
@@ -277,53 +333,60 @@ def test_v6_snapshot_verifies() -> None:
         conn.close()
 
 
-@pytest.mark.parametrize("attempt_no", (0, 3))
-def test_read_contact_rejects_attempt_number_outside_one_or_two(
-    attempt_no: int,
+@pytest.mark.parametrize(
+    ("state", "finished_at_utc"),
+    (("dispatching", _NOW), ("success", None)),
+)
+def test_discovery_contact_enforces_dispatching_finished_check(
+    state: str, finished_at_utc: str | None,
 ) -> None:
     conn = sqlite3.connect(":memory:", isolation_level=None)
     try:
         initialize_schema(conn)
-        _insert_run(conn, SCHEMA_VERSION)
 
         with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
-            _insert_read_contact(
+            _insert_discovery_contact(
                 conn,
-                attempt_no=attempt_no,
-                state="dispatching",
-                finished_at_utc=None,
+                contact_no=1,
+                state=state,
+                finished_at_utc=finished_at_utc,
             )
     finally:
         conn.close()
 
 
-def test_read_contact_rejects_dispatching_row_with_finished_timestamp() -> None:
+def test_discovered_model_primary_key_deduplicates_endpoint_and_tag() -> None:
     conn = sqlite3.connect(":memory:", isolation_level=None)
     try:
         initialize_schema(conn)
-        _insert_run(conn, SCHEMA_VERSION)
+        conn.execute(
+            "INSERT INTO analyst_discovered_model("
+            "endpoint,model_tag,model_digest,first_seen_utc,last_seen_utc) "
+            "VALUES(?,?,?,?,?)",
+            (_ENDPOINT, "qwen3.6:27b", _sha("digest-1"), _NOW, _NOW),
+        )
 
-        with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
-            _insert_read_contact(
-                conn,
-                attempt_no=1,
-                state="dispatching",
-                finished_at_utc=_NOW,
+        with pytest.raises(sqlite3.IntegrityError, match="UNIQUE constraint failed"):
+            conn.execute(
+                "INSERT INTO analyst_discovered_model("
+                "endpoint,model_tag,model_digest,first_seen_utc,last_seen_utc) "
+                "VALUES(?,?,?,?,?)",
+                (_ENDPOINT, "qwen3.6:27b", _sha("digest-2"), _NOW, _NOW),
             )
     finally:
         conn.close()
 
 
-def test_owned_v4_lease_is_refused_without_mutation(tmp_path: Path) -> None:
-    path = tmp_path / "owned-v4.db"
-    _create_version(path, V4_SCHEMA_VERSION, populated=True)
+def test_v5_dispatching_read_contact_is_refused_without_mutation(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "active-v5.db"
+    _create_version(path, V5_SCHEMA_VERSION, populated=True)
     conn = sqlite3.connect(path, isolation_level=None)
     try:
         conn.execute(
-            "UPDATE analyst_gpu_lease SET generation=1,run_id=?,owner_token=?,"
-            "pid=1,start_ticks=0,boot_id='boot',heartbeat_monotonic_ns=0,"
-            "claimed_at_utc=?,heartbeat_at_utc=? WHERE slot=1",
-            (_RUN_ID, "a" * 64, _NOW, _NOW),
+            "UPDATE analyst_read_contact SET state='dispatching',"
+            "finished_at_utc=NULL,resource_failures_after=NULL"
         )
         before = _identity_and_objects(conn)
 
@@ -332,8 +395,8 @@ def test_owned_v4_lease_is_refused_without_mutation(tmp_path: Path) -> None:
 
         assert _identity_and_objects(conn) == before
         assert conn.execute(
-            "SELECT generation,run_id FROM analyst_gpu_lease WHERE slot=1"
-        ).fetchone() == (1, _RUN_ID)
+            "SELECT state FROM analyst_read_contact"
+        ).fetchone()[0] == "dispatching"
         assert conn.in_transaction is False
     finally:
         conn.close()

@@ -315,3 +315,26 @@ Decision:
 
 All other read-first contract points (two-layer report, ranking rubric §5.3, owner wording
 §5.2, report.json source of truth §8, warn-not-block §9, fail-closed §10) are unchanged.
+
+---
+
+## Amendment A2 (2026-09-18, HI-approved) — pre-run model discovery ledger
+
+Refines section 7.3. The per-run contact ledger (`analyst_ollama_contacts`) requires a run and a
+fence, but model discovery happens before a run exists. Rather than weaken the "the tab makes no
+uncharged Ollama contact" rule or force a fake run, add a small ADDITIVE pre-run discovery ledger.
+
+Decision (HI-approved UX: "connect once to pull the model list; then select from menu; persist the
+list; refresh if the backend changes"):
+- Discovery is EXPLICIT and user-initiated (a Connect/Refresh button in Advanced), never on open.
+- Each discovery `/api/tags` call is CHARGED before contact in a new additive
+  `analyst_discovery_contact` ledger (schema v6): loopback-only, redirects off, proxies ignored,
+  known cloud tags rejected, response bounded, content-free. It is not tied to a run/fence.
+- The returned non-cloud model list is PERSISTED (`analyst_discovered_model`) so the dropdown
+  works without re-querying; Refresh re-queries and updates it.
+- The user selects a model from the persisted list. The chosen tag + its resolved digest are
+  recorded per run; the worker still re-verifies the chosen tag's digest at run time (the single
+  benchmarked-digest pin is relaxed to a per-run recorded selection, contract section 7.2).
+
+Unchanged: loopback-only endpoint, cloud rejection, no `/api/show`, content-free ledgers, the
+worker's post-run verification, and every other fail-closed control.
