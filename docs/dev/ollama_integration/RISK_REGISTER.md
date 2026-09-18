@@ -128,6 +128,17 @@ risk-indexed view.
 | R94 | Opening the desktop tab makes an uncharged Ollama request, a detached launch leaks descriptors/content, or a restarted GUI loses control of live work | Medium | Critical | C13 performs no pre-run model-server contact; the worker precharges version, tags and chat only after a durable run and lease exist. It launches the exact venv module with no shell, closed descriptors, a new session and a 0600 log in a no-follow 0700 directory. Startup reconciliation and stable `analyst:<run-id>` task upserts hydrate progress/cancel controls from SQLite. Completed browsing re-verifies the artifact manifest and pages immutable DB evidence. |
 | R95 | A post-extract Analyst offer guesses host identity, drifts to another summary, or inventories unrelated quarantine files | Medium | Critical | C14 persists a typed exact row/file reference before the offer, copies the durable host identity, queries primary summaries by row id only, validates versioned 0600 fallback envelopes, and inventories only ordered final `saved_to` paths by no-follow descriptors. The hook is off by default, unavailable for legacy untyped references, and launches Fast/strict runs only after explicit acceptance. |
 
+## Phase 2 (Read-First Redesign) Risks
+
+Added by the R0 contract-freeze card (2026-09-18). Frozen Phase 1 entries R1–R95 are unchanged.
+
+| ID | Risk | Likelihood | Impact | Mitigation / Control |
+|----|------|------------|--------|----------------------|
+| R96 | The "read" (host summary, owner, risk) is a model guess presented as fact | High | Medium | Two clearly separated layers: the read is labelled "Model's read - not verified", owner/contacts are prefixed "Likely", facts are grounded and shown separately. Risk is forced to at least HIGH by grounded HIGH facts, so the risk line is defensible even when prose is wrong. No read field triggers an action. |
+| R97 | Warn-not-block integrity opens a moved/tampered report | Medium | Medium | On open, still recompute the on-disk manifest hash; on mismatch show a "changed since saved" badge and never present the report as verified. Owner-only 0600/0700 creation, atomic temp+rename, symlink-safe containment and unmodified canonical evidence all stay fail-closed. Only the read-time block relaxes. |
+| R98 | The model dropdown broadens `/api/tags` parsing or makes an uncharged contact | Medium | High | `parse_tags_response` returns the full local model list but keeps `:cloud`/`-cloud` rejection. Refresh/Test are explicit, user-initiated, charged control contacts in the ledger, never on-open probes (lesson 161 / R94). Endpoint stays literal-loopback-only; no raw 11434 LAN/Tailscale exposure; remote is a separate reviewed card. |
+| R99 | Map-reduce read leaks raw document text across files or into the read prompt | Medium | High | Map step carries only bounded grounded facts plus a one-line gist forward, never raw bodies. Per-chunk isolation, untrusted-nonce fence, temperature 0 and the two-attempt budget stay. No private content in logs, reprs, exceptions, tests, prompts or `report.json` beyond grounded quotes. |
+
 ## High-Likelihood Risks — Detailed Controls
 
 ### R2: Parser code execution, hang, or memory exhaustion
