@@ -289,3 +289,29 @@ remote card). Named explicitly:
 See `R0_CARD.md`. R1 pure models/prompts/report.json builder; R2 sidecar v4; R3 read-first
 worker; R4 model dropdown; R5 render + warn-not-block; R6 launch UI; R7 report view + export +
 copy + batch; R8 closeout. Remote model server is a later, separate gate.
+
+---
+
+## Amendment A1 (2026-09-18, HI-approved) — reuse worksheet-v2 as the facts map
+
+Supersedes the parts of §4 and §6.1 that said to retire the four-tag prompt and introduce a
+new per-chunk FACTS prompt. Reason: the existing worksheet-v2 per-chunk engine already extracts
+grounded facts in the same four categories with verbatim quotes and provenance, plus a per-chunk
+`document_type` and `subject` (a <=160-char summary). It lives inside the safety-critical C11
+engine (charged contacts, fence, two-attempt budget, cancellation, resume, R92 request
+identity) guarded by a hard `analyst_chunks` CHECK. Rewiring the per-chunk prompt there is high
+churn/risk for a small semantic gain.
+
+Decision:
+- The **per-chunk map keeps worksheet-v2 unchanged** as the grounded facts + per-chunk-summary
+  producer. No change to `_dispatch_chunk`, `finish_valid_attempt`, `analyst_chunks`, request
+  identity, or the C11 content tests.
+- Read-first adds three things on top: a **host READ reduce** (new host-level model call over the
+  per-chunk summaries + a facts digest), **deterministic fact ranking**, and **`report.json`**
+  (+ `analyst_read` / `analyst_read_exposures`).
+- The R1 `read_worksheet` READ prompt is used for the reduce. The R1 FACTS prompt is unused for
+  now (kept in the module; may be removed at closeout). §6.1 grounding reuse still holds via
+  worksheet-v2's existing grounding.
+
+All other read-first contract points (two-layer report, ranking rubric §5.3, owner wording
+§5.2, report.json source of truth §8, warn-not-block §9, fail-closed §10) are unchanged.

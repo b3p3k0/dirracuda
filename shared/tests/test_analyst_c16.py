@@ -118,6 +118,7 @@ def test_populated_exact_v2_migrates_in_place_with_zero_high_bits(
     inode_before = path.stat().st_ino
     conn = sqlite3.connect(path, autocommit=True)
     try:
+        conn.execute("DROP TABLE analyst_read_contact")
         conn.execute("DROP TABLE analyst_read_exposures")
         conn.execute("DROP TABLE analyst_read")
         conn.execute("ALTER TABLE analyst_detector_hits DROP COLUMN fact_rank")

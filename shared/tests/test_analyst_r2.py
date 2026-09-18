@@ -128,7 +128,7 @@ def test_fresh_v4_create_has_read_tables_rank_columns_and_index() -> None:
     try:
         initialize_schema(conn)
 
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         assert conn.execute("PRAGMA application_id").fetchone()[0] == APPLICATION_ID
         assert {
             str(row[0])
@@ -253,8 +253,10 @@ def test_v4_snapshot_verifies() -> None:
     try:
         initialize_schema(conn)
         validate_schema(conn)
-        assert db_schema._schema_snapshot(conn) == db_schema._expected_snapshot(4)
-        for version in (1, 2, 3, 4):
+        assert db_schema._schema_snapshot(conn) == db_schema._expected_snapshot(
+            SCHEMA_VERSION
+        )
+        for version in (1, 2, 3, 4, 5):
             assert db_schema._expected_snapshot(version)
     finally:
         conn.close()
