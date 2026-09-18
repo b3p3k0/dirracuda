@@ -21,6 +21,7 @@ from .worker_contract import (
 if TYPE_CHECKING:
     from .phase1 import Phase1Dependencies
     from .phase2 import Phase2Dependencies
+    from .read_reduce import ReadReduceDependencies
     from .report import ReportDependencies
     from .worker_contract import Phase1Handoff, WorkerRunContext
     from .worker_preflight import WorkerPreflightResult
@@ -179,6 +180,7 @@ def run_worker(
     path: Path | None = None,
     phase1_dependencies: "Phase1Dependencies | None" = None,
     phase2_dependencies: "Phase2Dependencies | None" = None,
+    read_reduce_dependencies: "ReadReduceDependencies | None" = None,
     report_dependencies: "ReportDependencies | None" = None,
     preflight: PreflightFn | None = None,
 ) -> WorkerRunResult:
@@ -199,6 +201,13 @@ def run_worker(
         Phase2PausedResource,
         run_phase2,
     )
+    from .phase2_contract import Phase2Handoff
+    from .read_reduce import (
+        ReadReduceCancelled,
+        ReadReduceDependencies,
+        ReadReducePausedResource,
+        run_read_reduce,
+    )
     from .report import (
         ReportDependencies,
         ReportFinalizationError,
@@ -211,6 +220,8 @@ def run_worker(
         and type(phase1_dependencies) is not Phase1Dependencies
         or phase2_dependencies is not None
         and type(phase2_dependencies) is not Phase2Dependencies
+        or read_reduce_dependencies is not None
+        and type(read_reduce_dependencies) is not ReadReduceDependencies
         or report_dependencies is not None
         and type(report_dependencies) is not ReportDependencies
     ):
@@ -252,6 +263,43 @@ def run_worker(
         return WorkerRunResult(WorkerOutcome.INTERNAL_ERROR)
     except Exception:
         _release_handoff(phase1_handoff.fence, path)
+        return WorkerRunResult(WorkerOutcome.INTERNAL_ERROR)
+    chosen_read_dependencies = read_reduce_dependencies
+    if chosen_read_dependencies is None and phase2_dependencies is not None:
+        chosen_read_dependencies = ReadReduceDependencies(
+            client=phase2_dependencies.client,
+            monotonic=phase2_dependencies.monotonic,
+            monotonic_ns=phase2_dependencies.phase1.monotonic_ns,
+            sleep=phase2_dependencies.sleep,
+            utc_now=phase2_dependencies.utc_now,
+        )
+    try:
+        run_read_reduce(
+            context,
+            phase2_handoff,
+            stop_event,
+            path=path,
+            dependencies=chosen_read_dependencies,
+        )
+    except ReadReduceCancelled:
+        return WorkerRunResult(WorkerOutcome.CANCELLED)
+    except ReadReducePausedResource:
+        return WorkerRunResult(WorkerOutcome.PAUSED_RESOURCE)
+    except Exception:
+        pass
+    try:
+        from .lease import current_lease
+
+        refreshed_fence = current_lease(path=path)
+        if refreshed_fence is None or refreshed_fence.run_id != context.run_id:
+            return WorkerRunResult(WorkerOutcome.INTERNAL_ERROR)
+        phase2_handoff = Phase2Handoff(
+            refreshed_fence,
+            phase2_handoff.reviewed_file_count,
+            phase2_handoff.valid_chunk_count,
+            phase2_handoff.retained_finding_count,
+        )
+    except Exception:
         return WorkerRunResult(WorkerOutcome.INTERNAL_ERROR)
     try:
         finalize_report(

@@ -35,6 +35,7 @@ from .db_schema import (
 )
 from .file_identity import split_unsigned_u64
 from .inventory import InventoryFile, InventoryResult
+from .report_json import REPORT_SCHEMA_VERSION, HostRead
 from .state import RESUMABLE_RUN_STATES, RunState
 from .worker_contract import (
     WorkerContractError,
@@ -164,6 +165,96 @@ def run_immediate(
         if attempt < len(TRANSACTION_BACKOFF_SECONDS):
             time.sleep(TRANSACTION_BACKOFF_SECONDS[attempt])
     raise AnalystStoreBusy("Analyst sidecar remained busy after bounded retry") from last_busy
+
+
+def write_host_read(
+    fence: object,
+    read: HostRead,
+    *,
+    read_mode: str,
+    files_read: int,
+    files_total: int,
+    flagged_files: int,
+    now_utc: str | None = None,
+    path: Path | None = None,
+) -> None:
+    """Atomically persist one fenced model host read and its exposures."""
+    from .lease import LeaseFence
+
+    if type(fence) is not LeaseFence or type(read) is not HostRead:
+        raise TypeError("host read requires a lease fence and HostRead")
+    if read_mode not in {"quick", "full"}:
+        raise ValueError("read mode is invalid")
+    counts = (files_read, files_total, flagged_files)
+    if (
+        any(type(value) is not int or value < 0 for value in counts)
+        or files_read > files_total
+        or flagged_files > files_total
+    ):
+        raise ValueError("host read counts are invalid")
+    if any(
+        exposure.rank != index
+        for index, exposure in enumerate(read.top_exposures, start=1)
+    ):
+        raise ValueError("host read exposure ranks are not canonical")
+    timestamp = _utc_now() if now_utc is None else now_utc
+    if type(timestamp) is not str or not 1 <= len(timestamp) <= 40:
+        raise ValueError("host read timestamp is invalid")
+    try:
+        parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    except ValueError:
+        raise ValueError("host read timestamp is invalid") from None
+    if parsed.tzinfo is None or parsed.utcoffset() != timezone.utc.utcoffset(parsed):
+        raise ValueError("host read timestamp must be UTC")
+    contacts_json = json.dumps(
+        list(read.contacts),
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+    def operation(conn: sqlite3.Connection) -> None:
+        lease = conn.execute(
+            "SELECT 1 FROM analyst_gpu_lease WHERE slot=1 AND generation=? "
+            "AND run_id=? AND owner_token=? AND pid=? AND start_ticks=? "
+            "AND boot_id=? AND heartbeat_monotonic_ns=?",
+            (
+                fence.generation, fence.run_id, fence.owner_token,
+                fence.process.pid, fence.process.start_ticks,
+                fence.process.boot_id, fence.heartbeat_monotonic_ns,
+            ),
+        ).fetchone()
+        run = conn.execute(
+            "SELECT 1 FROM analyst_runs WHERE run_id=? AND state='running'",
+            (fence.run_id,),
+        ).fetchone()
+        if lease is None or run is None:
+            raise AnalystStoreError("host read fence no longer authorizes writes")
+        try:
+            conn.execute(
+                "INSERT INTO analyst_read("
+                "run_id,report_schema_version,read_mode,risk_level,host_summary,"
+                "likely_owner,contacts_json,files_read,files_total,flagged_files,"
+                "created_at_utc) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    fence.run_id, REPORT_SCHEMA_VERSION, read_mode, read.risk_level,
+                    read.host_summary, read.likely_owner, contacts_json, files_read,
+                    files_total, flagged_files, timestamp,
+                ),
+            )
+            conn.executemany(
+                "INSERT INTO analyst_read_exposures(run_id,ordinal,severity,text) "
+                "VALUES(?,?,?,?)",
+                (
+                    (fence.run_id, index, exposure.severity, exposure.text)
+                    for index, exposure in enumerate(read.top_exposures, start=1)
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise AnalystStoreError("host read conflicts with durable state") from exc
+
+    run_immediate(operation, path=path)
 
 
 def create_run(
@@ -724,4 +815,5 @@ __all__ = [
     "open_connection",
     "run_immediate",
     "verify_run_spec",
+    "write_host_read",
 ]

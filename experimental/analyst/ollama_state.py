@@ -7,6 +7,7 @@ import math
 import re
 import sqlite3
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
@@ -50,6 +51,29 @@ class OllamaStateError(RuntimeError):
 
 class ResourceWaitCancelled(OllamaStateError):
     """The operator cancelled while waiting for a due resource retry."""
+
+
+@dataclass(frozen=True, slots=True)
+class ReadContactCharge:
+    """One precharged host READ generation."""
+
+    contact_id: str
+    run_id: str
+    attempt_no: int
+    request_sha256: str
+    lease_generation: int
+    resource_failures_before: int
+
+
+@dataclass(frozen=True, slots=True)
+class ReadContactFinish:
+    """Terminal state and shared resource schedule for a host READ contact."""
+
+    contact_id: str
+    attempt_no: int
+    status: ContactStatus
+    schedule: ScheduleSnapshot
+    lease_released: bool
 
 
 def get_schedule(
@@ -336,6 +360,88 @@ def precharge_control_contact(
     )
 
 
+def precharge_read_contact(
+    fence: LeaseFence,
+    attempt_no: int,
+    request_sha256: str,
+    *,
+    now_utc: str | None = None,
+    path: Path | None = None,
+) -> ReadContactCharge:
+    """Charge one host READ request before its loopback HTTP dispatch."""
+    _require_fence_value(fence)
+    if type(attempt_no) is not int or attempt_no not in {1, 2}:
+        raise ValueError("read attempt number must be one or two")
+    _require_sha(request_sha256, "request sha256")
+    timestamp = _timestamp(now_utc)
+
+    def operation(conn: sqlite3.Connection) -> ReadContactCharge:
+        _require_running_fence(conn, fence)
+        schedule = _require_schedule_dispatchable(conn, fence.run_id, timestamp)
+        if conn.execute(
+            "SELECT 1 FROM analyst_read WHERE run_id=?", (fence.run_id,),
+        ).fetchone() is not None:
+            raise OllamaStateError("host read is already durable")
+        if conn.execute(
+            "SELECT 1 FROM analyst_ollama_contacts WHERE state='dispatching' LIMIT 1"
+        ).fetchone() is not None or conn.execute(
+            "SELECT 1 FROM analyst_read_contact WHERE state='dispatching' LIMIT 1"
+        ).fetchone() is not None:
+            raise OllamaStateError("another Ollama contact is already dispatching")
+
+        rows = conn.execute(
+            "SELECT * FROM analyst_read_contact WHERE run_id=? ORDER BY attempt_no",
+            (fence.run_id,),
+        ).fetchall()
+        current = next(
+            (row for row in rows if int(row["attempt_no"]) == attempt_no), None,
+        )
+        contact_id = _read_contact_id(
+            fence, attempt_no, request_sha256,
+        )
+        if current is not None:
+            if str(current["state"]) != ContactStatus.RESOURCE_BUSY.value:
+                raise OllamaStateError("read attempt slot is already consumed")
+            cursor = conn.execute(
+                "UPDATE analyst_read_contact SET contact_id=?,request_sha256=?,"
+                "lease_generation=?,state='dispatching',charged_at_utc=?,"
+                "finished_at_utc=NULL,resource_failures_before=?,"
+                "resource_failures_after=NULL WHERE run_id=? AND attempt_no=? "
+                "AND state='resource_busy'",
+                (
+                    contact_id, request_sha256, fence.generation, timestamp,
+                    schedule.consecutive_failures, fence.run_id, attempt_no,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise OllamaStateError("read resource retry changed during charge")
+        else:
+            expected = len(rows) + 1
+            if attempt_no != expected or expected > 2:
+                raise OllamaStateError("read attempts are not contiguous")
+            try:
+                conn.execute(
+                    "INSERT INTO analyst_read_contact("
+                    "contact_id,run_id,attempt_no,request_sha256,lease_generation,"
+                    "state,charged_at_utc,resource_failures_before) "
+                    "VALUES(?,?,?,?,?,'dispatching',?,?)",
+                    (
+                        contact_id, fence.run_id, attempt_no, request_sha256,
+                        fence.generation, timestamp, schedule.consecutive_failures,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise OllamaStateError(
+                    "read contact charge conflicts with durable evidence"
+                ) from exc
+        return ReadContactCharge(
+            contact_id, fence.run_id, attempt_no, request_sha256,
+            fence.generation, schedule.consecutive_failures,
+        )
+
+    return run_immediate(operation, path=path)
+
+
 def precharge_chat_contact(
     fence: LeaseFence,
     chunk_id: int,
@@ -491,6 +597,62 @@ def finish_contact(
     return run_immediate(operation, path=path)
 
 
+def finish_read_contact(
+    fence: LeaseFence,
+    contact_id: str,
+    status: ContactStatus,
+    *,
+    now_utc: str | None = None,
+    path: Path | None = None,
+) -> ReadContactFinish:
+    """Close one precharged host READ contact on its dedicated ledger."""
+    _require_fence_value(fence)
+    _require_sha(contact_id, "contact id")
+    if not isinstance(status, ContactStatus) or status is ContactStatus.DISPATCHING:
+        raise ValueError("contact status must be terminal")
+    timestamp = _timestamp(now_utc)
+
+    def operation(conn: sqlite3.Connection) -> ReadContactFinish:
+        _require_running_fence(conn, fence)
+        row = conn.execute(
+            "SELECT * FROM analyst_read_contact WHERE contact_id=?", (contact_id,),
+        ).fetchone()
+        if row is None or str(row["state"]) != ContactStatus.DISPATCHING.value:
+            raise OllamaStateError("read contact is missing or already terminal")
+        if (
+            str(row["run_id"]) != fence.run_id
+            or int(row["lease_generation"]) != fence.generation
+        ):
+            raise OllamaStateError("read contact is not owned by this worker generation")
+        before = int(row["resource_failures_before"])
+        schedule = _schedule_from_row(_schedule_row(conn, fence.run_id))
+        if schedule.consecutive_failures != before:
+            raise OllamaStateError("read contact and resource schedule have drifted")
+
+        lease_released = False
+        if status is ContactStatus.RESOURCE_BUSY:
+            after = min(schedule.consecutive_failures + 1, 6)
+            _close_read_contact(conn, row, status, timestamp, after)
+            schedule, lease_released = _advance_resource_schedule(
+                conn, fence, schedule, timestamp,
+            )
+        else:
+            after = (
+                0
+                if status in {ContactStatus.SUCCESS, ContactStatus.MODEL_INVALID}
+                else before
+            )
+            _close_read_contact(conn, row, status, timestamp, after)
+            if after == 0 and before != 0:
+                _reset_schedule(conn, fence.run_id, timestamp)
+            schedule = _schedule_from_row(_schedule_row(conn, fence.run_id))
+        return ReadContactFinish(
+            contact_id, int(row["attempt_no"]), status, schedule, lease_released,
+        )
+
+    return run_immediate(operation, path=path)
+
+
 def reconcile_dispatching_contacts(
     conn: sqlite3.Connection,
     run_id: str,
@@ -625,15 +787,26 @@ def _finish_resource_busy(
     timestamp: str,
 ) -> tuple[ScheduleSnapshot, bool]:
     failures = min(schedule.consecutive_failures + 1, 6)
+    _close_contact(
+        conn, row, ContactStatus.RESOURCE_BUSY, timestamp, None, failures,
+    )
+    return _advance_resource_schedule(conn, fence, schedule, timestamp)
+
+
+def _advance_resource_schedule(
+    conn: sqlite3.Connection,
+    fence: LeaseFence,
+    schedule: ScheduleSnapshot,
+    timestamp: str,
+) -> tuple[ScheduleSnapshot, bool]:
+    """Advance the shared resource schedule after any charged busy contact."""
+    failures = min(schedule.consecutive_failures + 1, 6)
     delay = RESOURCE_BACKOFF_SECONDS[failures - 1]
     deadline = _format_timestamp(_parse_timestamp(timestamp) + timedelta(seconds=delay))
     state = (
         ScheduleState.PAUSED_RESOURCE
         if failures == 6
         else ScheduleState.BACKOFF
-    )
-    _close_contact(
-        conn, row, ContactStatus.RESOURCE_BUSY, timestamp, None, failures,
     )
     cursor = conn.execute(
         "UPDATE analyst_ollama_schedule SET state=?,consecutive_failures=?,"
@@ -664,6 +837,25 @@ def _finish_resource_busy(
         if _clear_lease(conn, fence) != 1:
             raise OllamaStateError("worker fence changed during resource pause")
     return _schedule_from_row(_schedule_row(conn, fence.run_id)), released
+
+
+def _close_read_contact(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    status: ContactStatus,
+    timestamp: str,
+    resource_after: int,
+) -> None:
+    cursor = conn.execute(
+        "UPDATE analyst_read_contact SET state=?,finished_at_utc=?,"
+        "resource_failures_after=? WHERE contact_id=? AND state='dispatching' "
+        "AND finished_at_utc IS NULL",
+        (
+            status.value, timestamp, resource_after, str(row["contact_id"]),
+        ),
+    )
+    if cursor.rowcount != 1:
+        raise OllamaStateError("read contact changed while it was being closed")
 
 
 def _materialize_semantic_attempt(
@@ -895,6 +1087,18 @@ def _contact_id(
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _read_contact_id(
+    fence: LeaseFence, attempt_no: int, request_sha256: str,
+) -> str:
+    encoded = "\0".join(
+        (
+            fence.run_id, "read", str(attempt_no), request_sha256,
+            str(fence.generation),
+        )
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _timestamp(value: str | None) -> str:
     timestamp = _format_timestamp(datetime.now(timezone.utc)) if value is None else value
     if type(timestamp) is not str or not 1 <= len(timestamp) <= 40:
@@ -939,12 +1143,16 @@ def _require_sha(value: str, name: str) -> None:
 
 __all__ = [
     "OllamaStateError",
+    "ReadContactCharge",
+    "ReadContactFinish",
     "ResourceWaitCancelled",
     "authorize_resource_resume",
     "finish_contact",
+    "finish_read_contact",
     "get_schedule",
     "precharge_chat_contact",
     "precharge_control_contact",
+    "precharge_read_contact",
     "reconcile_dispatching_contacts",
     "remaining_resource_wait",
     "wait_for_resource_retry",

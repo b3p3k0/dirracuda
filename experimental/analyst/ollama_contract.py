@@ -222,6 +222,12 @@ class ChatRequest:
         return value
 
 
+class ReadChatRequest(ChatRequest):
+    """Fieldless discriminator for the READ prompt/schema request identity."""
+
+    __slots__ = ()
+
+
 @dataclass(frozen=True, slots=True)
 class ChatMetrics:
     """Bounded, content-free metadata from one completed chat stream."""
@@ -402,6 +408,39 @@ def build_repair_chat_request(source_text: str, *, nonce: str) -> ChatRequest:
     )
 
 
+def build_read_chat_request(source_text: str, *, nonce: str) -> ChatRequest:
+    """Build the pinned host READ reduce request."""
+    if type(source_text) is not str or type(nonce) is not str:
+        raise TypeError("source text and nonce must be strings")
+    if not 1 <= len(source_text) <= MAX_SOURCE_CHARS:
+        raise ContractError("source text is outside the frozen chunk bound")
+    if _NONCE.fullmatch(nonce) is None or nonce in source_text:
+        raise ContractError("nonce must be a fresh FENCE token absent from source")
+
+    from .read_worksheet import build_read_prompt, read_schema
+
+    prompt = build_read_prompt(source_text, nonce=nonce)
+    if _utf8_size(prompt, "prompt") > MAX_PROMPT_BYTES:
+        raise ContractError("prompt exceeds the request bound")
+    payload = {
+        "model": MODEL_TAG,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": True,
+        "format": read_schema(),
+        "options": GENERATION_OPTIONS.as_payload(),
+        "think": False,
+        "keep_alive": KEEP_ALIVE,
+    }
+    body = canonical_json(payload)
+    return ReadChatRequest(
+        source_text=source_text,
+        nonce=nonce,
+        body=body,
+        request_sha256=hashlib.sha256(body).hexdigest(),
+        prompt_kind=PromptKind.PRIMARY,
+    )
+
+
 def _build_chat_request(
     source_text: str, nonce: str, prompt_kind: PromptKind,
 ) -> ChatRequest:
@@ -457,6 +496,8 @@ def validate_chat_request(request: ChatRequest) -> None:
         or type(request.request_sha256) is not str
         or _SHA256.fullmatch(request.request_sha256) is None
         or type(getattr(request, "prompt_kind", None)) is not PromptKind
+        or type(request) is ReadChatRequest
+        and request.prompt_kind is not PromptKind.PRIMARY
         or type(request.model_tag) is not str
         or request.model_tag != MODEL_TAG
         or type(request.model_digest) is not str
@@ -472,6 +513,7 @@ def validate_chat_request(request: ChatRequest) -> None:
         raise ContractError("chat request body is not canonical JSON")
     _validate_payload(
         payload, request.source_text, request.nonce, request.prompt_kind,
+        type(request) is ReadChatRequest,
     )
 
 
@@ -495,14 +537,22 @@ def _validate_payload(
     source_text: str,
     nonce: str,
     prompt_kind: PromptKind,
+    read_request: bool,
 ) -> None:
-    from .worksheet import build_prompt, build_repair_prompt, worksheet_schema
+    if read_request:
+        from .read_worksheet import build_read_prompt, read_schema
 
-    prompt_builder = (
-        build_prompt
-        if prompt_kind is PromptKind.PRIMARY
-        else build_repair_prompt
-    )
+        prompt_builder = build_read_prompt
+        response_schema = read_schema()
+    else:
+        from .worksheet import build_prompt, build_repair_prompt, worksheet_schema
+
+        prompt_builder = (
+            build_prompt
+            if prompt_kind is PromptKind.PRIMARY
+            else build_repair_prompt
+        )
+        response_schema = worksheet_schema()
 
     if set(payload) != _REQUEST_KEYS or payload.get("model") != MODEL_TAG:
         raise ContractError("chat request field set is invalid")
@@ -520,7 +570,7 @@ def _validate_payload(
         raise ContractError("chat message contract is invalid")
     if payload.get("stream") is not True:
         raise ContractError("streaming must remain enabled for cancellation")
-    if payload.get("format") != worksheet_schema():
+    if payload.get("format") != response_schema:
         raise ContractError("worksheet schema differs from the selected contract")
     if payload.get("think") is not False or payload.get("keep_alive") != KEEP_ALIVE:
         raise ContractError("chat runtime controls are invalid")
@@ -632,6 +682,7 @@ __all__ = [
     "VersionCheckResult",
     "WORKSHEET_VERSION",
     "build_chat_request",
+    "build_read_chat_request",
     "build_repair_chat_request",
     "canonical_json",
     "new_prompt_nonce",
