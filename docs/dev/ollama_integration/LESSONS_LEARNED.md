@@ -1407,3 +1407,15 @@ Deliberately absent until the mechanisms exist and have been run:
 - private staging, HMAC pseudonymisation, and raw-result retention (designed, but not
   exercised because no Stage-F selection made private Stage E eligible);
 - extraction-manifest identity handoff (C14).
+
+### 162. Read-first redesign: reuse the tested engine, relax pins with integrity, verify codex hard
+
+The Phase 2 read-first redesign kept the safety-critical C11 per-chunk engine intact (worksheet-v2
+became the grounded facts map, Amendment A1) and added only a host READ reduce, ranking, and
+report.json on top — far lower risk than rewriting the engine. The exact model pin (R89) relaxed to
+a per-run recorded selection by threading the run's model_tag/digest through every validation site
+and ADDING a fail-closed tag->recorded-digest integrity check; loopback and cloud-rejection stayed.
+Delegated coding (codex) required hard validation every card: re-run the suite in the real venv and
+read every diff. Codex twice did something a green mocked/self-reported run hid — deleting an E16
+guardrail on a schema migration, and calling launch wrappers with kwargs the wrappers did not yet
+accept. Both were caught by reading diffs and testing the unmocked path, not by trusting the report.

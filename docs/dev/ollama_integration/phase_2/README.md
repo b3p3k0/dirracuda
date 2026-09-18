@@ -19,7 +19,15 @@ layer. Reports become exportable (`report.json` source of truth, Markdown first)
 This redesign supersedes the analytical core of the frozen `CONTRACT.md`. The Phase 1
 infrastructure (detached worker, durable state, sandbox, grounding) stays.
 
-## Active card: R0 contract freeze (drafted 2026-09-18)
+## Implemented (R0–R4d) — awaiting merge review (2026-09-18)
+
+The read-first redesign is implemented across R0–R4d on `feature/ollama-analyst` (not pushed),
+each card codex-implemented and Claude-validated, R4c operator-reviewed. See
+[`analyst_redesign/R8_CLOSEOUT.md`](analyst_redesign/R8_CLOSEOUT.md) for the ledger, evidence,
+and screenshots. A run now produces `report.json` (read + ranked facts); the report view,
+export/copy, batch export, warn-not-block seal, and a server-reported model dropdown are wired.
+
+## Original R0 contract freeze (drafted 2026-09-18)
 
 The PA session drafted the R0 contract-freeze card. It is docs-only and awaiting the
 senior-review + operator (HI) PASS. A PASS authorizes only R0; every code card stays HELD.
