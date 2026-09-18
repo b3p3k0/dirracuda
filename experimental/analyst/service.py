@@ -20,8 +20,28 @@ from shared.extract_manifest import ExtractSummaryReference
 from .inventory import InventoryResult, inventory_tree
 from .manifest import ExtractionManifest, ManifestError, load_extraction_manifest
 from .models import ANALYST_DEFAULTS
+from .contact_contract import ContactStatus
+from .ollama_client import OllamaClient, OllamaDiscoveryError
+from .ollama_contract import (
+    MAX_JSON_NODES,
+    OLLAMA_ENDPOINT,
+    DiscoveredModel,
+    OllamaStatus,
+    build_discovery_request,
+)
+from .ollama_protocol import _is_cloud_model, valid_digest
+from .ollama_state import (
+    finish_discovery_contact,
+    precharge_discovery_contact,
+)
 from .state import RunState
-from .store import RunSpec, create_run, initialize_database, open_connection
+from .store import (
+    RunSpec,
+    create_run,
+    initialize_database,
+    open_connection,
+    run_immediate,
+)
 from .worker_contract import build_source_identity, validate_worker_run_id
 
 
@@ -41,6 +61,7 @@ class ServiceFailure(str, Enum):
     LAUNCH = "launch"
     CANCEL = "cancel"
     REPORT = "report"
+    DISCOVERY = "discovery"
 
 
 class AnalystServiceError(RuntimeError):
@@ -181,6 +202,72 @@ class AnalystRunSummary:
 
 TokenFactory = Callable[[int], str]
 PopenFactory = Callable[..., subprocess.Popen[bytes]]
+
+
+def discover_models(*, path: Path | None = None) -> tuple[DiscoveredModel, ...]:
+    """Explicitly discover, charge, and persist bounded local model identities."""
+    try:
+        initialize_database(path)
+        request = build_discovery_request()
+        charge = precharge_discovery_contact(
+            request.endpoint, request.request_sha256, path=path,
+        )
+    except Exception:
+        raise AnalystServiceError(ServiceFailure.STORAGE) from None
+
+    try:
+        discovered = OllamaClient().list_models()
+    except OllamaDiscoveryError as exc:
+        _finish_failed_discovery(charge.contact_id, exc.status, path=path)
+        raise AnalystServiceError(ServiceFailure.DISCOVERY) from None
+    except Exception:
+        _finish_failed_discovery(
+            charge.contact_id, OllamaStatus.TRANSPORT_UNAVAILABLE, path=path,
+        )
+        raise AnalystServiceError(ServiceFailure.DISCOVERY) from None
+    try:
+        models = _normalize_discovered_models(discovered)
+    except Exception:
+        _finish_failed_discovery(
+            charge.contact_id, OllamaStatus.PROTOCOL_VIOLATION, path=path,
+        )
+        raise AnalystServiceError(ServiceFailure.DISCOVERY) from None
+
+    try:
+        finished = finish_discovery_contact(
+            charge.contact_id,
+            ContactStatus.SUCCESS,
+            len(models),
+            path=path,
+        )
+        _upsert_discovered_models(
+            request.endpoint, models, finished.finished_at_utc, path=path,
+        )
+        return models
+    except Exception:
+        raise AnalystServiceError(ServiceFailure.STORAGE) from None
+
+
+def list_discovered_models(
+    *, path: Path | None = None,
+) -> tuple[DiscoveredModel, ...]:
+    """Read the persisted model list without contacting Ollama."""
+    try:
+        conn = open_connection(path, read_only=True)
+        try:
+            rows = conn.execute(
+                "SELECT model_tag,model_digest FROM analyst_discovered_model "
+                "WHERE endpoint=? ORDER BY model_tag",
+                (OLLAMA_ENDPOINT,),
+            ).fetchall()
+        finally:
+            conn.close()
+        return tuple(
+            DiscoveredModel(str(row["model_tag"]), str(row["model_digest"]))
+            for row in rows
+        )
+    except Exception:
+        raise AnalystServiceError(ServiceFailure.STORAGE) from None
 
 
 def create_directory_run(
@@ -597,6 +684,72 @@ def read_report_json(
         raise AnalystServiceError(ServiceFailure.REPORT) from None
 
 
+def _normalize_discovered_models(value: object) -> tuple[DiscoveredModel, ...]:
+    if type(value) is not tuple or len(value) > MAX_JSON_NODES:
+        raise ValueError("discovered model result is outside its bound")
+    models: list[DiscoveredModel] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, tuple) or len(item) != 2:
+            raise ValueError("discovered model row is malformed")
+        tag, digest = item
+        if (
+            type(tag) is not str
+            or not tag
+            or _is_cloud_model(tag)
+            or tag in seen
+            or not valid_digest(digest)
+        ):
+            raise ValueError("discovered model identity is invalid")
+        seen.add(tag)
+        models.append(DiscoveredModel(tag, digest))
+    return tuple(sorted(models, key=lambda model: model.model_tag))
+
+
+def _finish_failed_discovery(
+    contact_id: str,
+    status: OllamaStatus,
+    *,
+    path: Path | None,
+) -> None:
+    if status in {OllamaStatus.SUCCESS, OllamaStatus.MODEL_INVALID}:
+        status = OllamaStatus.PROTOCOL_VIOLATION
+    try:
+        durable_status = ContactStatus(status.value)
+        finish_discovery_contact(
+            contact_id, durable_status, None, path=path,
+        )
+    except Exception:
+        raise AnalystServiceError(ServiceFailure.STORAGE) from None
+
+
+def _upsert_discovered_models(
+    endpoint: str,
+    models: tuple[DiscoveredModel, ...],
+    timestamp: str,
+    *,
+    path: Path | None,
+) -> None:
+    def operation(conn) -> None:
+        for model in models:
+            conn.execute(
+                "INSERT INTO analyst_discovered_model("
+                "endpoint,model_tag,model_digest,first_seen_utc,last_seen_utc) "
+                "VALUES(?,?,?,?,?) ON CONFLICT(endpoint,model_tag) DO UPDATE SET "
+                "model_digest=excluded.model_digest,"
+                "last_seen_utc=excluded.last_seen_utc",
+                (
+                    endpoint,
+                    model.model_tag,
+                    model.model_digest,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+
+    run_immediate(operation, path=path)
+
+
 def _run_output_root(request: DirectoryRunRequest, run_id: str) -> Path:
     label = request.report_label.casefold().encode("ascii", "ignore").decode("ascii")
     slug = re.sub(r"[^a-z0-9]+", "-", label).strip("-")[:_LABEL_COMPONENT_CHARS]
@@ -713,6 +866,8 @@ __all__: Sequence[str] = (
     "create_manifest_run",
     "create_directory_run",
     "launch_run",
+    "discover_models",
+    "list_discovered_models",
     "list_run_summaries",
     "reconcile_for_hydration",
     "read_report_json",

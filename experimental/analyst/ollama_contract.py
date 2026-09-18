@@ -13,7 +13,7 @@ import re
 import secrets
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Final
+from typing import Any, Final, NamedTuple
 
 from .models import ANALYST_DEFAULTS
 
@@ -77,6 +77,31 @@ _OPTION_KEYS = frozenset(
         "num_predict",
     }
 )
+
+
+def _discovery_identity_bytes() -> bytes:
+    return json.dumps(
+        {
+            "accept": "application/json",
+            "accept_encoding": "identity",
+            "allow_redirects": False,
+            "kind": "model_discovery",
+            "method": "GET",
+            "proxies_ignored": True,
+            "trust_env": False,
+            "url": OLLAMA_TAGS_URL,
+            "version": 1,
+        },
+        ensure_ascii=True,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("ascii")
+
+
+DISCOVERY_REQUEST_SHA256: Final = hashlib.sha256(
+    _discovery_identity_bytes()
+).hexdigest()
 
 
 class ContractError(ValueError):
@@ -198,6 +223,48 @@ class OllamaIdentity:
 
 
 EXPECTED_IDENTITY: Final = OllamaIdentity()
+
+
+@dataclass(frozen=True, slots=True)
+class DiscoveryRequest:
+    """Content-free identity for one explicit local model-list request."""
+
+    endpoint: str = OLLAMA_ENDPOINT
+    url: str = OLLAMA_TAGS_URL
+    method: str = "GET"
+    body: None = None
+    accept: str = "application/json"
+    accept_encoding: str = "identity"
+    allow_redirects: bool = False
+    trust_env: bool = False
+    request_sha256: str = DISCOVERY_REQUEST_SHA256
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.endpoint) is not str
+            or self.endpoint != OLLAMA_ENDPOINT
+            or type(self.url) is not str
+            or self.url != OLLAMA_TAGS_URL
+            or type(self.method) is not str
+            or self.method != "GET"
+            or self.body is not None
+            or type(self.accept) is not str
+            or self.accept != "application/json"
+            or type(self.accept_encoding) is not str
+            or self.accept_encoding != "identity"
+            or self.allow_redirects is not False
+            or self.trust_env is not False
+            or type(self.request_sha256) is not str
+            or self.request_sha256 != DISCOVERY_REQUEST_SHA256
+        ):
+            raise ContractError("model discovery request identity is invalid")
+
+
+class DiscoveredModel(NamedTuple):
+    """One bounded local model identity, safe to persist or display."""
+
+    model_tag: str
+    model_digest: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -384,6 +451,54 @@ class TagsCheckResult:
         )
         if not valid:
             raise ContractError("tags contact fields contradict its status")
+
+
+def build_discovery_request() -> DiscoveryRequest:
+    """Build the fixed, content-free ``GET /api/tags`` discovery intent."""
+    return DiscoveryRequest()
+
+
+def list_local_models(body: bytes) -> tuple[DiscoveredModel, ...]:
+    """Return every valid non-cloud identity from one bounded tags response."""
+    # Imported lazily because the wire parser imports this contract module.
+    from . import ollama_protocol
+
+    value = ollama_protocol.parse_wire_json(body)
+    if (
+        type(value) is not dict
+        or set(value) != {"models"}
+        or type(value["models"]) is not list
+    ):
+        raise ollama_protocol.OllamaProvenanceError(
+            ollama_protocol.ProvenanceCode.TAGS_SHAPE
+        )
+
+    found: dict[str, str] = {}
+    for row in value["models"]:
+        if type(row) is not dict:
+            raise ollama_protocol.OllamaProvenanceError(
+                ollama_protocol.ProvenanceCode.TAGS_ROW_SHAPE
+            )
+        name, alias, digest = row.get("name"), row.get("model"), row.get("digest")
+        if type(name) is not str or type(alias) is not str or name != alias:
+            raise ollama_protocol.OllamaProvenanceError(
+                ollama_protocol.ProvenanceCode.TAGS_NAME_MISMATCH
+            )
+        if name in found:
+            raise ollama_protocol.OllamaProvenanceError(
+                ollama_protocol.ProvenanceCode.DUPLICATE_MODEL_TAG
+            )
+        if not ollama_protocol.valid_digest(digest):
+            raise ollama_protocol.OllamaProvenanceError(
+                ollama_protocol.ProvenanceCode.INVALID_MODEL_DIGEST
+            )
+        found[name] = digest
+
+    return tuple(
+        DiscoveredModel(model, found[model])
+        for model in sorted(found)
+        if not ollama_protocol._is_cloud_model(model)
+    )
 
 
 def new_prompt_nonce(source_text: str) -> str:
@@ -648,6 +763,9 @@ __all__ = [
     "ChatRequest",
     "ChatResult",
     "ContractError",
+    "DISCOVERY_REQUEST_SHA256",
+    "DiscoveredModel",
+    "DiscoveryRequest",
     "EXPECTED_IDENTITY",
     "GENERATION_OPTIONS",
     "GenerationOptions",
@@ -682,9 +800,11 @@ __all__ = [
     "VersionCheckResult",
     "WORKSHEET_VERSION",
     "build_chat_request",
+    "build_discovery_request",
     "build_read_chat_request",
     "build_repair_chat_request",
     "canonical_json",
+    "list_local_models",
     "new_prompt_nonce",
     "validate_chat_request",
 ]

@@ -28,12 +28,15 @@ from .ollama_contract import (
     TOTAL_REQUEST_SECONDS,
     ChatRequest,
     ChatResult,
+    DiscoveredModel,
     OllamaIdentity,
     OllamaStatus,
     PreflightResult,
     QUALIFIED_OLLAMA_VERSION,
     TagsCheckResult,
     VersionCheckResult,
+    build_discovery_request,
+    list_local_models,
     validate_chat_request,
 )
 from .ollama_protocol import (
@@ -72,6 +75,16 @@ _GLOBAL_REQUEST_SLOT = threading.BoundedSemaphore(1)
 
 CancelProbe = Callable[[], bool]
 CallerPoll = Callable[[], None]
+
+
+class OllamaDiscoveryError(RuntimeError):
+    """A closed, content-free failure from explicit model discovery."""
+
+    def __init__(self, status: OllamaStatus) -> None:
+        if not isinstance(status, OllamaStatus) or status is OllamaStatus.SUCCESS:
+            raise ValueError("discovery failure status must be terminal")
+        self.status = status
+        super().__init__(status.value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,6 +241,24 @@ class OllamaClient:
         return TagsCheckResult(
             OllamaStatus.SUCCESS, model_digest=parsed_tags.models[0].digest,
         )
+
+    def list_models(self) -> tuple[DiscoveredModel, ...]:
+        """Perform one bounded local tags request without running inference."""
+        request = build_discovery_request()
+        intent = _HttpIntent(
+            request.method, request.url, request.body, request.accept, "discovery",
+        )
+        body, status = self._execute(intent, lambda: False, None)
+        if status is not None:
+            raise OllamaDiscoveryError(status)
+        try:
+            return list_local_models(_require_bytes(body))
+        except OllamaProvenanceError:
+            raise OllamaDiscoveryError(OllamaStatus.IDENTITY_MISMATCH) from None
+        except OllamaSafetyError as exc:
+            raise OllamaDiscoveryError(_safety_status(exc)) from None
+        except Exception:
+            raise OllamaDiscoveryError(OllamaStatus.PROTOCOL_VIOLATION) from None
 
     def chat(
         self,
@@ -695,4 +726,6 @@ def _safety_status(exc: OllamaSafetyError) -> OllamaStatus:
     )
 
 
-__all__ = ["CallerPoll", "CancelProbe", "OllamaClient"]
+__all__ = [
+    "CallerPoll", "CancelProbe", "OllamaClient", "OllamaDiscoveryError",
+]

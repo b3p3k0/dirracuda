@@ -28,6 +28,7 @@ from .contact_contract import (
     semantic_attempt_state,
 )
 from .lease import LeaseFence
+from .ollama_contract import DISCOVERY_REQUEST_SHA256, OLLAMA_ENDPOINT
 from .resource_policy import RESOURCE_BACKOFF_SECONDS
 from .state import AttemptState, RunState
 from .store import open_connection, run_immediate
@@ -74,6 +75,28 @@ class ReadContactFinish:
     status: ContactStatus
     schedule: ScheduleSnapshot
     lease_released: bool
+
+
+@dataclass(frozen=True, slots=True)
+class DiscoveryCharge:
+    """One precharged model-discovery contact with no run or lease fence."""
+
+    contact_id: str
+    contact_no: int
+    endpoint: str
+    request_sha256: str
+    charged_at_utc: str
+
+
+@dataclass(frozen=True, slots=True)
+class DiscoveryFinish:
+    """Terminal content-free evidence for one discovery contact."""
+
+    contact_id: str
+    contact_no: int
+    status: ContactStatus
+    models_found: int | None
+    finished_at_utc: str
 
 
 def get_schedule(
@@ -358,6 +381,101 @@ def precharge_control_contact(
         timestamp=_timestamp(now_utc),
         path=path,
     )
+
+
+def precharge_discovery_contact(
+    endpoint: str,
+    request_sha256: str,
+    *,
+    now_utc: str | None = None,
+    path: Path | None = None,
+) -> DiscoveryCharge:
+    """Charge one explicit pre-run model-list contact before dispatch."""
+    _require_discovery_endpoint(endpoint)
+    _require_sha(request_sha256, "request sha256")
+    if request_sha256 != DISCOVERY_REQUEST_SHA256:
+        raise ValueError("discovery request hash does not match its fixed intent")
+    timestamp = _timestamp(now_utc)
+
+    def operation(conn: sqlite3.Connection) -> DiscoveryCharge:
+        contact_no = int(conn.execute(
+            "SELECT coalesce(max(contact_no),0)+1 "
+            "FROM analyst_discovery_contact"
+        ).fetchone()[0])
+        if contact_no <= 0:
+            raise OllamaStateError("discovery contact sequence is invalid")
+        contact_id = hashlib.sha256(
+            "\0".join(
+                (endpoint, "model_discovery", str(contact_no), request_sha256)
+            ).encode("ascii")
+        ).hexdigest()
+        try:
+            conn.execute(
+                "INSERT INTO analyst_discovery_contact("
+                "contact_id,contact_no,endpoint,request_sha256,state,"
+                "models_found,charged_at_utc,finished_at_utc) "
+                "VALUES(?,?,?,?,'dispatching',NULL,?,NULL)",
+                (
+                    contact_id, contact_no, endpoint, request_sha256, timestamp,
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise OllamaStateError(
+                "discovery contact charge conflicts with durable evidence"
+            ) from exc
+        return DiscoveryCharge(
+            contact_id, contact_no, endpoint, request_sha256, timestamp,
+        )
+
+    return run_immediate(operation, path=path)
+
+
+def finish_discovery_contact(
+    contact_id: str,
+    state: ContactStatus,
+    models_found: int | None,
+    *,
+    now_utc: str | None = None,
+    path: Path | None = None,
+) -> DiscoveryFinish:
+    """Close one precharged discovery contact without a run lease."""
+    _require_sha(contact_id, "contact id")
+    if (
+        not isinstance(state, ContactStatus)
+        or state in {ContactStatus.DISPATCHING, ContactStatus.MODEL_INVALID}
+    ):
+        raise ValueError("discovery contact state must be terminal")
+    if state is ContactStatus.SUCCESS:
+        if type(models_found) is not int or models_found < 0:
+            raise ValueError("successful discovery requires a model count")
+    elif models_found is not None:
+        raise ValueError("failed discovery cannot report a model count")
+    timestamp = _timestamp(now_utc)
+
+    def operation(conn: sqlite3.Connection) -> DiscoveryFinish:
+        row = conn.execute(
+            "SELECT contact_no FROM analyst_discovery_contact "
+            "WHERE contact_id=? AND state='dispatching' "
+            "AND finished_at_utc IS NULL",
+            (contact_id,),
+        ).fetchone()
+        if row is None:
+            raise OllamaStateError(
+                "discovery contact is missing or already terminal"
+            )
+        cursor = conn.execute(
+            "UPDATE analyst_discovery_contact SET state=?,models_found=?,"
+            "finished_at_utc=? WHERE contact_id=? AND state='dispatching' "
+            "AND finished_at_utc IS NULL",
+            (state.value, models_found, timestamp, contact_id),
+        )
+        if cursor.rowcount != 1:
+            raise OllamaStateError("discovery contact changed while closing")
+        return DiscoveryFinish(
+            contact_id, int(row["contact_no"]), state, models_found, timestamp,
+        )
+
+    return run_immediate(operation, path=path)
 
 
 def precharge_read_contact(
@@ -1131,6 +1249,11 @@ def _require_fence_value(fence: LeaseFence) -> None:
         raise TypeError("fence must be a LeaseFence")
 
 
+def _require_discovery_endpoint(value: str) -> None:
+    if type(value) is not str or value != OLLAMA_ENDPOINT:
+        raise ValueError("discovery endpoint must be the fixed loopback endpoint")
+
+
 def _require_run_id(value: str) -> None:
     if type(value) is not str or not value or len(value) > 128:
         raise ValueError("run id is invalid")
@@ -1142,16 +1265,20 @@ def _require_sha(value: str, name: str) -> None:
 
 
 __all__ = [
+    "DiscoveryCharge",
+    "DiscoveryFinish",
     "OllamaStateError",
     "ReadContactCharge",
     "ReadContactFinish",
     "ResourceWaitCancelled",
     "authorize_resource_resume",
     "finish_contact",
+    "finish_discovery_contact",
     "finish_read_contact",
     "get_schedule",
     "precharge_chat_contact",
     "precharge_control_contact",
+    "precharge_discovery_contact",
     "precharge_read_contact",
     "reconcile_dispatching_contacts",
     "remaining_resource_wait",
