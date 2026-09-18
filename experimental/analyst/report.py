@@ -58,6 +58,19 @@ class ReportFinalizationError(RuntimeError):
 
 
 @dataclass(frozen=True, slots=True)
+class CompletedReadResult:
+    """A safely inspected complete report and its content-seal status."""
+
+    output_root: Path = field(repr=False)
+    manifest: ReportManifest
+    changed: bool
+
+    @property
+    def report_json_path(self) -> Path:
+        return self.output_root / "report.json"
+
+
+@dataclass(frozen=True, slots=True)
 class ReportDependencies:
     """Injectable time/token/writer seams; none may read document content."""
 
@@ -264,6 +277,46 @@ def verify_completed_report(
         raise ReportFinalizationError(ReportFailure.STATE) from None
 
 
+def open_completed_report_relaxed(
+    run_id: str, *, path: Path | None = None,
+) -> CompletedReadResult:
+    """Inspect a complete report while warning on content-hash drift only."""
+    try:
+        canonical_run_id = validate_worker_run_id(run_id)
+    except (TypeError, WorkerContractError):
+        raise ReportFinalizationError(ReportFailure.CONTRACT) from None
+    try:
+        conn = open_connection(path, read_only=True)
+        try:
+            row = conn.execute(
+                "SELECT state,output_root,report_manifest_sha256 FROM analyst_runs "
+                "WHERE run_id=?", (canonical_run_id,),
+            ).fetchone()
+            if (
+                row is None
+                or str(row["state"]) != "complete"
+                or type(row["output_root"]) is not str
+                or type(row["report_manifest_sha256"]) is not str
+            ):
+                raise ReportFinalizationError(ReportFailure.STATE)
+            output_root = Path(str(row["output_root"]))
+            expected_sha256 = str(row["report_manifest_sha256"])
+        finally:
+            conn.close()
+        manifest = inspect_report_manifest(output_root)
+        return CompletedReadResult(
+            output_root=output_root,
+            manifest=manifest,
+            changed=manifest.sha256 != expected_sha256,
+        )
+    except ReportFinalizationError:
+        raise
+    except ReportWriteError:
+        raise ReportFinalizationError(ReportFailure.OUTPUT) from None
+    except BaseException:
+        raise ReportFinalizationError(ReportFailure.STATE) from None
+
+
 def _best_effort_release(fence: LeaseFence, path: Path | None) -> None:
     try:
         release_worker(fence, path=path)
@@ -272,10 +325,12 @@ def _best_effort_release(fence: LeaseFence, path: Path | None) -> None:
 
 
 __all__ = [
+    "CompletedReadResult",
     "HEARTBEAT_INTERVAL_NS",
     "ReportDependencies",
     "ReportFailure",
     "ReportFinalizationError",
     "finalize_report",
+    "open_completed_report_relaxed",
     "verify_completed_report",
 ]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import secrets
@@ -557,6 +558,25 @@ def completed_report_html(run_id: str, *, path: Path | None = None) -> Path:
         raise AnalystServiceError(ServiceFailure.REPORT) from None
 
 
+def read_report_json(
+    run_id: str, *, path: Path | None = None,
+) -> tuple[dict, bool]:
+    """Read validated report.json while surfacing content-seal drift."""
+    try:
+        from .report import open_completed_report_relaxed
+        from .report_json import validate_report_json
+
+        canonical = validate_worker_run_id(run_id)
+        opened = open_completed_report_relaxed(canonical, path=path)
+        payload = json.loads(opened.report_json_path.read_bytes())
+        validate_report_json(payload)
+        if payload["run"]["run_id"] != canonical:
+            raise ValueError("report identity does not match the completed run")
+        return payload, opened.changed
+    except Exception:
+        raise AnalystServiceError(ServiceFailure.REPORT) from None
+
+
 def _run_output_root(request: DirectoryRunRequest, run_id: str) -> Path:
     label = request.report_label.casefold().encode("ascii", "ignore").decode("ascii")
     slug = re.sub(r"[^a-z0-9]+", "-", label).strip("-")[:_LABEL_COMPONENT_CHARS]
@@ -675,5 +695,6 @@ __all__: Sequence[str] = (
     "launch_run",
     "list_run_summaries",
     "reconcile_for_hydration",
+    "read_report_json",
     "resume_run",
 )
