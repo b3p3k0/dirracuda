@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 from pathlib import Path
 
+from . import report_json
 from .lease import LeaseFence
 from .models import FileStage, FileTerminal
 from .report_contract import (
@@ -15,6 +17,7 @@ from .report_contract import (
     InventoryReportRow,
     MAX_REPORT_FILES,
     MAX_REPORT_FINDINGS,
+    MAX_REPORT_JSON_FACTS,
     READ_PAGE_ROWS,
     ReportRun,
     ReportSnapshot,
@@ -155,6 +158,80 @@ def load_report_snapshot(
         return ReportSnapshot(run, coverage, str(row["output_root"]))
     except (ValueError, TypeError, KeyError, OverflowError) as exc:
         raise ReportStateError("durable report state is invalid") from exc
+    finally:
+        conn.close()
+
+
+def build_report_json_payload(
+    fence: LeaseFence,
+    finalization_token: str,
+    snapshot: ReportSnapshot,
+    *,
+    path: Path | None = None,
+) -> dict[str, object]:
+    """Build the bounded report.json projection from durable finalizing state."""
+    _require_inputs(fence, finalization_token)
+    if type(snapshot) is not ReportSnapshot:
+        raise TypeError("report JSON requires a ReportSnapshot")
+    if snapshot.run.run_id != fence.run_id:
+        raise ReportStateError("report snapshot does not match the finalizing run")
+    conn = open_connection(path, read_only=True)
+    try:
+        _require_finalizing(conn, fence, finalization_token)
+        facts = _load_ranked_facts(conn, fence.run_id)
+        flagged_files = _scalar_count(
+            conn,
+            "SELECT count(*) FROM ("
+            "SELECT f.file_id FROM analyst_detector_hits h JOIN analyst_files f "
+            "ON f.file_id=h.file_id WHERE f.run_id=? UNION "
+            "SELECT f.file_id FROM analyst_model_findings m "
+            "JOIN analyst_chunks c ON c.chunk_id=m.chunk_id "
+            "JOIN analyst_files f ON f.file_id=c.file_id WHERE f.run_id=? "
+            "AND f.work_state='terminal' "
+            "AND f.terminal_code='complete_model_reviewed')",
+            (fence.run_id, fence.run_id),
+            maximum=MAX_REPORT_FILES,
+        )
+        run = snapshot.run
+        coverage_summary = snapshot.coverage
+        run_meta = report_json.RunMeta(
+            run_id=run.run_id,
+            report_label=run.report_label,
+            read_mode={"fast": "quick", "deep": "full"}[run.mode],
+            model_tag=run.model_tag,
+            model_digest=run.model_digest,
+            created_at_utc=run.created_at_utc,
+            files_read=coverage_summary.model_reviewed_files,
+            files_total=coverage_summary.discovered_files,
+            flagged_files=flagged_files,
+        )
+        read = _load_host_read(conn, fence.run_id)
+        if read is None:
+            read = report_json.build_fallback_read(
+                facts,
+                files_read=run_meta.files_read,
+                files_total=run_meta.files_total,
+                flagged_files=run_meta.flagged_files,
+            )
+        terminal_counts = {
+            item.name: item.count for item in coverage_summary.terminal_counts
+        }
+        coverage = report_json.Coverage(
+            discovered=coverage_summary.discovered_files,
+            terminal=sum(terminal_counts.values()),
+            no_text_layer=terminal_counts.get("no_text_layer", 0),
+            parse_failed=sum(
+                terminal_counts.get(name, 0)
+                for name in (
+                    "parse_timeout", "parse_oom", "parse_signal", "parse_error",
+                    "parser_output_limit",
+                )
+            ),
+            unsupported=terminal_counts.get("unsupported_format", 0),
+        )
+        return report_json.build_report_json(run_meta, read, facts, coverage)
+    except (ValueError, TypeError, KeyError, OverflowError) as exc:
+        raise ReportStateError("durable report JSON state is invalid") from exc
     finally:
         conn.close()
 
@@ -324,15 +401,170 @@ def decode_model_report_row(row: sqlite3.Row) -> FindingReportRow:
 
 
 def _scalar_count(
-    conn: sqlite3.Connection, sql: str, run_id: str, *, maximum: int,
+    conn: sqlite3.Connection,
+    sql: str,
+    parameters: str | tuple[object, ...],
+    *,
+    maximum: int,
 ) -> int:
-    row = conn.execute(sql, (run_id,)).fetchone()
+    values = (parameters,) if type(parameters) is str else parameters
+    row = conn.execute(sql, values).fetchone()
     if row is None:
         raise ReportStateError("report count query returned no row")
     value = int(row[0])
     if value < 0 or value > maximum:
         raise ReportStateError("report count exceeds the frozen bound")
     return value
+
+
+def _load_host_read(
+    conn: sqlite3.Connection, run_id: str,
+) -> report_json.HostRead | None:
+    row = conn.execute(
+        "SELECT report_schema_version,risk_level,host_summary,likely_owner,"
+        "contacts_json FROM analyst_read WHERE run_id=?",
+        (run_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    if int(row["report_schema_version"]) != report_json.REPORT_SCHEMA_VERSION:
+        raise ReportStateError("durable host read version is unsupported")
+    contact_values = json.loads(str(row["contacts_json"]))
+    if type(contact_values) is not list:
+        raise ReportStateError("durable host read contacts are invalid")
+    exposure_rows = conn.execute(
+        "SELECT ordinal,severity,text FROM analyst_read_exposures "
+        "WHERE run_id=? ORDER BY ordinal",
+        (run_id,),
+    ).fetchall()
+    if tuple(int(item["ordinal"]) for item in exposure_rows) != tuple(
+        range(1, len(exposure_rows) + 1)
+    ):
+        raise ReportStateError("durable host read exposures are not canonical")
+    return report_json.HostRead(
+        host_summary=str(row["host_summary"]),
+        likely_owner=_optional_text(row["likely_owner"]),
+        contacts=tuple(contact_values),
+        risk_level=str(row["risk_level"]),
+        top_exposures=tuple(
+            report_json.TopExposure(
+                rank=int(item["ordinal"]),
+                severity=str(item["severity"]),
+                text=str(item["text"]),
+            )
+            for item in exposure_rows
+        ),
+    )
+
+
+def _load_ranked_facts(
+    conn: sqlite3.Connection, run_id: str,
+) -> tuple[report_json.GroundedFact, ...]:
+    candidates: list[
+        tuple[tuple[int, int, int, int], report_json.GroundedFact]
+    ] = []
+    counts: dict[tuple[str, str], int] = {}
+    rank_order = {"HIGH": 0, "MED": 1, "low": 2}
+    detector_rows = conn.execute(
+        "SELECT h.hit_id,h.kind,h.value,h.start_char,h.end_char,"
+        "f.ordinal AS file_ordinal,f.relative_path,"
+        "(SELECT p.kind FROM analyst_provenance_units p WHERE p.file_id=f.file_id "
+        "AND p.start_char<=h.start_char AND p.end_char>=h.end_char "
+        "ORDER BY p.ordinal LIMIT 1) AS provenance_kind,"
+        "(SELECT p.label FROM analyst_provenance_units p WHERE p.file_id=f.file_id "
+        "AND p.start_char<=h.start_char AND p.end_char>=h.end_char "
+        "ORDER BY p.ordinal LIMIT 1) AS provenance_label "
+        "FROM analyst_detector_hits h JOIN analyst_files f ON f.file_id=h.file_id "
+        "WHERE f.run_id=? ORDER BY f.ordinal,h.hit_id",
+        (run_id,),
+    )
+    for row in detector_rows:
+        kind = str(row["kind"])
+        category = _detector_category(kind)
+        rank = report_json.rank_fact(kind, category, "detector")
+        key = (rank, "detector")
+        counts[key] = counts.get(key, 0) + 1
+        if counts[key] > MAX_REPORT_JSON_FACTS:
+            continue
+        fact = report_json.GroundedFact(
+            kind=kind,
+            category=category,
+            quote=str(row["value"]),
+            file=str(row["relative_path"]),
+            provenance=_fact_provenance(
+                row, int(row["start_char"]), int(row["end_char"]),
+            ),
+            rank=rank,
+            source="detector",
+        )
+        candidates.append((
+            (rank_order[rank], int(row["file_ordinal"]), 0, int(row["hit_id"])),
+            fact,
+        ))
+    model_rows = conn.execute(
+        "SELECT m.finding_id,m.category,m.quote,m.canonical_offset,m.canonical_end,"
+        "c.start_char,f.ordinal AS file_ordinal,f.relative_path,"
+        "(SELECT p.kind FROM analyst_provenance_units p WHERE p.file_id=f.file_id "
+        "AND p.start_char<=c.start_char+m.canonical_offset "
+        "AND p.end_char>=c.start_char+m.canonical_end "
+        "ORDER BY p.ordinal LIMIT 1) AS provenance_kind,"
+        "(SELECT p.label FROM analyst_provenance_units p WHERE p.file_id=f.file_id "
+        "AND p.start_char<=c.start_char+m.canonical_offset "
+        "AND p.end_char>=c.start_char+m.canonical_end "
+        "ORDER BY p.ordinal LIMIT 1) AS provenance_label "
+        "FROM analyst_model_findings m JOIN analyst_chunks c ON c.chunk_id=m.chunk_id "
+        "JOIN analyst_files f ON f.file_id=c.file_id WHERE f.run_id=? "
+        "AND f.work_state='terminal' "
+        "AND f.terminal_code='complete_model_reviewed' "
+        "ORDER BY f.ordinal,m.finding_id",
+        (run_id,),
+    )
+    for row in model_rows:
+        category = str(row["category"])
+        rank = report_json.rank_fact("model", category, "model")
+        key = (rank, "model")
+        counts[key] = counts.get(key, 0) + 1
+        if counts[key] > MAX_REPORT_JSON_FACTS:
+            continue
+        start = int(row["start_char"]) + int(row["canonical_offset"])
+        end = int(row["start_char"]) + int(row["canonical_end"])
+        fact = report_json.GroundedFact(
+            kind="model",
+            category=category,
+            quote=str(row["quote"]),
+            file=str(row["relative_path"]),
+            provenance=_fact_provenance(row, start, end),
+            rank=rank,
+            source="model",
+        )
+        candidates.append((
+            (rank_order[rank], int(row["file_ordinal"]), 1, int(row["finding_id"])),
+            fact,
+        ))
+    candidates.sort(key=lambda item: item[0])
+    return tuple(item[1] for item in candidates[:MAX_REPORT_JSON_FACTS])
+
+
+def _detector_category(kind: str) -> str:
+    if kind in {"ssn", "dob", "passport"}:
+        return "pii"
+    if kind in {"card", "routing", "bank_account", "iban"}:
+        return "financial"
+    if kind in {"email", "phone"}:
+        return "contact"
+    if kind == "demographic_term":
+        return "demographic"
+    raise ReportStateError("durable detector kind is invalid")
+
+
+def _fact_provenance(row: sqlite3.Row, start: int, end: int) -> str:
+    kind = _optional_text(row["provenance_kind"])
+    label = _optional_text(row["provenance_label"])
+    if kind is not None and label is not None:
+        return f"{kind} {label}"
+    if kind is not None or label is not None:
+        raise ReportStateError("durable fact provenance is incomplete")
+    return f"characters {start}-{end}"
 
 
 def _group_counts(
@@ -400,6 +632,7 @@ __all__ = [
     "decode_detector_report_row",
     "decode_inventory_report_row",
     "decode_model_report_row",
+    "build_report_json_payload",
     "load_detector_finding_page",
     "load_inventory_page",
     "load_model_finding_page",

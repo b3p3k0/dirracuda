@@ -183,6 +183,48 @@ def min_risk_from_facts(facts: Iterable[GroundedFact]) -> RiskLevel:
     return minimum
 
 
+def build_fallback_read(
+    facts: Iterable[GroundedFact],
+    *,
+    files_read: int,
+    files_total: int,
+    flagged_files: int,
+) -> HostRead:
+    """Build a deterministic grounded read when the model read is unavailable."""
+    fact_values = tuple(facts)
+    if any(type(fact) is not GroundedFact for fact in fact_values):
+        raise TypeError("facts must contain GroundedFact values")
+    counts = (files_read, files_total, flagged_files)
+    if (
+        any(type(value) is not int or value < 0 for value in counts)
+        or files_read > files_total
+        or flagged_files > files_total
+    ):
+        raise ReportValidationError("fallback read counts are invalid")
+    rank_order = {"HIGH": 0, "MED": 1, "low": 2}
+    ordered = sorted(fact_values, key=lambda fact: rank_order[fact.rank])
+    exposure_facts = tuple(
+        fact for fact in ordered if fact.rank != "low"
+    )[:5]
+    return HostRead(
+        host_summary=(
+            f"Automated read unavailable. {files_read} files reviewed, "
+            f"{flagged_files} flagged."
+        ),
+        likely_owner=None,
+        contacts=(),
+        risk_level=min_risk_from_facts(fact_values),
+        top_exposures=tuple(
+            TopExposure(
+                rank=index,
+                severity=fact.rank,
+                text=f"{_fact_label(fact)} in {fact.file}",
+            )
+            for index, fact in enumerate(exposure_facts, start=1)
+        ),
+    )
+
+
 def reconcile_risk(
     model_risk: str, facts: Iterable[GroundedFact]
 ) -> RiskLevel:
@@ -358,6 +400,17 @@ def validate_report_json(obj: dict[str, object]) -> None:
         "coverage",
     )
     Coverage(**coverage)
+
+
+def _fact_label(fact: GroundedFact) -> str:
+    labels = {
+        "ssn": "SSN",
+        "dob": "date of birth",
+        "iban": "IBAN",
+        "pii": "PII",
+    }
+    value = fact.category if fact.kind == "model" else fact.kind
+    return labels.get(value, value.replace("_", " "))
 
 
 def _object(value: object, name: str) -> dict[str, object]:

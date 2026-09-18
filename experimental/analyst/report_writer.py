@@ -26,6 +26,7 @@ from .report_contract import (
     canonical_json_bytes,
     csv_safe,
 )
+from .report_json import dumps_report
 
 
 _T = TypeVar("_T")
@@ -202,11 +203,12 @@ class SecureReportDirectory:
 def publish_report(
     snapshot: ReportSnapshot,
     *,
+    report_json_payload: dict[str, object],
     inventory_pages: PageFactory[InventoryReportRow],
     finding_pages: PageFactory[FindingReportRow],
     progress: Callable[[], None] | None = None,
 ) -> ReportManifest:
-    """Stream and atomically publish the frozen four-artifact report."""
+    """Stream and atomically publish the frozen five-artifact report."""
     if type(snapshot) is not ReportSnapshot:
         raise TypeError("report publication requires a ReportSnapshot")
     if (
@@ -236,6 +238,11 @@ def publish_report(
             lambda sink: _render_html(
                 sink, snapshot, inventory_pages(), finding_pages(),
             ),
+        )
+        pulse()
+        identities["report.json"] = target.publish(
+            "report.json",
+            lambda sink: _render_report_json(sink, report_json_payload),
         )
         pulse()
     return ReportManifest(tuple(identities[name] for name in REPORT_ARTIFACT_NAMES))
@@ -283,6 +290,12 @@ def _render_run_json(sink: ArtifactSink, snapshot: ReportSnapshot) -> None:
         "schema": REPORT_SCHEMA,
     }
     sink.write_bytes(canonical_json_bytes(payload) + b"\n")
+
+
+def _render_report_json(
+    sink: ArtifactSink, payload: dict[str, object],
+) -> None:
+    sink.write_bytes(dumps_report(payload).encode("utf-8"))
 
 
 def _render_jsonl(

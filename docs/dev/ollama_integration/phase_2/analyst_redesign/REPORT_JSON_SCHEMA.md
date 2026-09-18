@@ -82,7 +82,9 @@ grounded evidence file. It carries the read (Layer 1) and the ranked facts (Laye
   ranks HIGH (rubric, contract §5.3).
 - `read.top_exposures` — 3 to 5 entries, worst first, each with `rank` (1-based), `severity`
   (`HIGH`/`MED`/`LOW`), and English `text`. No low-ranked fact appears here.
-- `facts[]` — grounded only. Each carries a verbatim `quote`, its `file`, human `provenance`,
+- `facts[]` — bounded to the highest-ranked facts (cap `MAX_REPORT_JSON_FACTS`, e.g. 500) so
+  report.json stays small even for a 46k-file host. The FULL grounded evidence remains in
+  `findings.jsonl` (canonical). Each entry is grounded only. Each carries a verbatim `quote`, its `file`, human `provenance`,
   a `rank` (`HIGH`/`MED`/`low`), and `source` (`detector` or `model`). Every quote is an exact
   substring of its source (contract §6.1). `category` reuses the existing detector categories.
 - `coverage` — the honest counts. Coverage stays computed (frozen §4); it moves out of the

@@ -21,6 +21,7 @@ from .report_contract import (
 )
 from .report_state import (
     ReportStateError,
+    build_report_json_payload,
     load_detector_finding_page,
     load_inventory_page,
     load_model_finding_page,
@@ -184,8 +185,12 @@ def finalize_report(
             or coverage.retained_model_findings != handoff.retained_finding_count
         ):
             raise ReportFinalizationError(ReportFailure.CONTRACT)
+        report_json_payload = build_report_json_payload(
+            owner.fence, token, snapshot, path=path,
+        )
         manifest = chosen.publisher(
             snapshot,
+            report_json_payload=report_json_payload,
             inventory_pages=owner.inventory_pages,
             finding_pages=owner.finding_pages,
             progress=owner.progress,

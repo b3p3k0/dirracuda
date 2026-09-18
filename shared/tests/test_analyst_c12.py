@@ -138,6 +138,13 @@ def test_csv_safe_prefix_guard_is_display_only(value: str, expected: str) -> Non
 
 
 def test_manifest_is_ordered_exact_and_byte_stable() -> None:
+    assert REPORT_ARTIFACT_NAMES == (
+        "findings.csv",
+        "findings.jsonl",
+        "report.html",
+        "report.json",
+        "run.json",
+    )
     manifest = ReportManifest(tuple(
         ArtifactIdentity(name, index, f"{index + 1:064x}")
         for index, name in enumerate(REPORT_ARTIFACT_NAMES)
@@ -149,7 +156,9 @@ def test_manifest_is_ordered_exact_and_byte_stable() -> None:
         ],
         "schema": "dirracuda-analyst-report-v1",
     })
-    assert len(manifest.sha256) == 64
+    assert manifest.sha256 == (
+        "980bc2c477bf1329e9646c105984363b5e81618e8d1c31f8d7cf8306e82344fc"
+    )
 
 
 def test_empty_run_publishes_owner_only_report_then_clears_lease(

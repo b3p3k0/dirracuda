@@ -19,10 +19,12 @@ REPORT_ARTIFACT_NAMES: Final = (
     "findings.csv",
     "findings.jsonl",
     "report.html",
+    "report.json",
     "run.json",
 )
 REPORT_PAGE_ROWS: Final = 500
 READ_PAGE_ROWS: Final = 500
+MAX_REPORT_JSON_FACTS: Final = 500
 MAX_REPORT_FILES: Final = 1_000_000
 MAX_REPORT_FINDINGS: Final = 10_000_000
 HTML_CSP: Final = (
@@ -511,6 +513,7 @@ __all__ = [
     "InventoryReportRow",
     "MAX_REPORT_FILES",
     "MAX_REPORT_FINDINGS",
+    "MAX_REPORT_JSON_FACTS",
     "READ_PAGE_ROWS",
     "REPORT_ARTIFACT_NAMES",
     "REPORT_PAGE_ROWS",
