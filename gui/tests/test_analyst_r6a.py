@@ -121,13 +121,24 @@ def test_tab_has_read_first_main_form_and_advanced_dialog(monkeypatch):
         tab = module.AnalystTab(root, {"settings_manager": settings})
         main_texts = _widget_texts(tab._main_form)
         assert main_texts == {
-            "Folder", "Browse", "Name", "optional", "Read",
+            "Input Dir", "Output Dir", "Browse", "Name", "optional", "Read",
             "Quick look", "Full read",
         }
+        labels = {
+            str(widget.cget("text")): widget
+            for widget in _widgets(tab._main_form)
+            if widget.winfo_class() == "Label"
+        }
+        assert int(labels["Input Dir"].grid_info()["row"]) == 0
+        assert int(labels["Output Dir"].grid_info()["row"]) == 1
+        assert sum(
+            widget.winfo_class() == "Button" and widget.cget("text") == "Browse"
+            for widget in _widgets(tab._main_form)
+        ) == 2
         assert tab._analyze_btn.cget("text") == "Analyze"
         assert tab._advanced_btn.cget("text") == "Advanced..."
         assert {
-            "Output folder", "Source", "Saved scan", "Model server", "Model",
+            "Source", "Saved scan", "Model server", "Model",
             "Offer a quick review after an extraction",
         }.isdisjoint(_widget_texts(tab.frame))
 
@@ -153,11 +164,13 @@ def test_tab_has_read_first_main_form_and_advanced_dialog(monkeypatch):
         assert dialog is not None
         advanced_texts = _widget_texts(dialog)
         assert {
-            "Output folder", "Source", "A folder", "From a saved scan",
+            "Source", "A folder", "From a saved scan",
             "Saved scan", "Reload", "Model server", "Local", "Remote AI box",
             "later card", "Host", "Port", "Test", "Model",
             "Offer a quick review after an extraction", "Cancel", "Save",
         } <= advanced_texts
+        assert "Output Dir" not in advanced_texts
+        assert "Output folder" not in advanced_texts
         remote = next(
             widget for widget in _widgets(dialog)
             if widget.winfo_class() == "Radiobutton"

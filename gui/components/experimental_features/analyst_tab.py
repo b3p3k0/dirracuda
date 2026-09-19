@@ -161,26 +161,32 @@ class AnalystTab:
         self._manifest_refresh_btn = None
 
         self._add_path_row(
-            self._main_form, 0, "Folder", self._source_var, self._browse_source,
+            self._main_form, 0, "Input Dir", self._source_var, self._browse_source,
+        )
+        self._add_path_row(
+            self._main_form, 1, "Output Dir", self._output_var, self._browse_output,
         )
         self._source_var.trace_add("write", self._source_changed)
 
         label = tk.Label(self._main_form, text="Name")
         self._theme.apply_to_widget(label, "label")
-        label.grid(row=1, column=0, sticky="w", pady=3)
+        label.grid(row=2, column=0, sticky="w", pady=3)
         entry = tk.Entry(self._main_form, textvariable=self._label_var)
         self._theme.apply_to_widget(entry, "entry")
-        entry.grid(row=1, column=1, sticky="ew", padx=(8, 7), pady=3)
+        entry.grid(row=2, column=1, sticky="ew", padx=(8, 7), pady=3)
         optional = tk.Label(self._main_form, text="optional")
         self._theme.apply_to_widget(optional, "label")
-        optional.grid(row=1, column=2, sticky="w", pady=3)
+        optional.grid(row=2, column=2, sticky="w", pady=3)
 
         mode_label = tk.Label(self._main_form, text="Read")
         self._theme.apply_to_widget(mode_label, "label")
-        mode_label.grid(row=2, column=0, sticky="w", pady=(8, 3))
+        mode_label.grid(row=3, column=0, sticky="w", pady=(8, 3))
         modes = tk.Frame(self._main_form)
         self._theme.apply_to_widget(modes, "main_window")
-        modes.grid(row=2, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=(8, 3))
+        modes.grid(
+            row=3, column=1, columnspan=2, sticky="w",
+            padx=(8, 0), pady=(8, 3),
+        )
         for value, text in (
             ("fast", "Quick look"),
             ("deep", "Full read"),
@@ -323,7 +329,6 @@ class AnalystTab:
         self._theme.apply_to_widget(dialog, "main_window")
         self._advanced_dialog = dialog
         snapshot = {
-            "output": self._output_var.get(),
             "source_kind": self._source_kind_var.get(),
             "manifest": self._manifest_var.get(),
             "manifest_index": self._manifest_index,
@@ -336,18 +341,15 @@ class AnalystTab:
         self._theme.apply_to_widget(outer, "main_window")
         outer.pack(fill=tk.BOTH, expand=True, padx=16, pady=14)
         outer.columnconfigure(1, weight=1)
-        self._add_path_row(
-            outer, 0, "Output folder", self._output_var, self._browse_output,
-        )
 
         source_heading = tk.Label(outer, text="Source")
         self._theme.apply_to_widget(source_heading, "label")
         source_heading.grid(
-            row=1, column=0, columnspan=3, sticky="w", pady=(12, 3),
+            row=0, column=0, columnspan=3, sticky="w", pady=(0, 3),
         )
         source_modes = tk.Frame(outer)
         self._theme.apply_to_widget(source_modes, "main_window")
-        source_modes.grid(row=2, column=0, columnspan=3, sticky="w")
+        source_modes.grid(row=1, column=0, columnspan=3, sticky="w")
         for value, text in (
             ("directory", "A folder"),
             ("manifest", "From a saved scan"),
@@ -364,12 +366,12 @@ class AnalystTab:
 
         manifest_label = tk.Label(outer, text="Saved scan")
         self._theme.apply_to_widget(manifest_label, "label")
-        manifest_label.grid(row=3, column=0, sticky="w", pady=3)
+        manifest_label.grid(row=2, column=0, sticky="w", pady=3)
         self._manifest_combo = ttk.Combobox(
             outer, textvariable=self._manifest_var, state="disabled",
         )
         self._manifest_combo.grid(
-            row=3, column=1, sticky="ew", padx=(8, 7), pady=3,
+            row=2, column=1, sticky="ew", padx=(8, 7), pady=3,
         )
         self._manifest_combo.bind(
             "<<ComboboxSelected>>", self._manifest_selected, add="+",
@@ -380,16 +382,16 @@ class AnalystTab:
         self._theme.apply_to_widget(
             self._manifest_refresh_btn, "button_secondary",
         )
-        self._manifest_refresh_btn.grid(row=3, column=2, pady=3)
+        self._manifest_refresh_btn.grid(row=2, column=2, pady=3)
 
         server_heading = tk.Label(outer, text="Model server")
         self._theme.apply_to_widget(server_heading, "label")
         server_heading.grid(
-            row=4, column=0, columnspan=3, sticky="w", pady=(12, 3),
+            row=3, column=0, columnspan=3, sticky="w", pady=(12, 3),
         )
         server_modes = tk.Frame(outer)
         self._theme.apply_to_widget(server_modes, "main_window")
-        server_modes.grid(row=5, column=0, columnspan=3, sticky="w")
+        server_modes.grid(row=4, column=0, columnspan=3, sticky="w")
         local = tk.Radiobutton(
             server_modes, text="Local", variable=self._server_kind_var,
             value="local",
@@ -408,7 +410,7 @@ class AnalystTab:
 
         connection = tk.Frame(outer)
         self._theme.apply_to_widget(connection, "main_window")
-        connection.grid(row=6, column=0, columnspan=3, sticky="w", pady=3)
+        connection.grid(row=5, column=0, columnspan=3, sticky="w", pady=3)
         host_label = tk.Label(connection, text="Host")
         self._theme.apply_to_widget(host_label, "label")
         host_label.pack(side=tk.LEFT)
@@ -434,13 +436,13 @@ class AnalystTab:
         model_heading = tk.Label(outer, text="Model")
         self._theme.apply_to_widget(model_heading, "label")
         model_heading.grid(
-            row=7, column=0, columnspan=3, sticky="w", pady=(12, 3),
+            row=6, column=0, columnspan=3, sticky="w", pady=(12, 3),
         )
         self._model_combo = ttk.Combobox(
             outer, textvariable=self._model_var, state="readonly",
         )
         self._model_combo.grid(
-            row=8, column=0, columnspan=2, sticky="ew", pady=3,
+            row=7, column=0, columnspan=2, sticky="ew", pady=3,
         )
         self._model_connect_btn = tk.Button(
             outer, text="Connect / Refresh", command=self._discover_models,
@@ -448,7 +450,7 @@ class AnalystTab:
         self._theme.apply_to_widget(
             self._model_connect_btn, "button_secondary",
         )
-        self._model_connect_btn.grid(row=8, column=2, padx=(7, 0), pady=3)
+        self._model_connect_btn.grid(row=7, column=2, padx=(7, 0), pady=3)
 
         helper = tk.Label(
             outer,
@@ -462,7 +464,7 @@ class AnalystTab:
         )
         self._theme.apply_to_widget(helper, "label")
         helper.grid(
-            row=9, column=0, columnspan=3, sticky="w", pady=(1, 0),
+            row=8, column=0, columnspan=3, sticky="w", pady=(1, 0),
         )
         self._model_status_var = tk.StringVar(value="")
         model_status = tk.Label(
@@ -470,7 +472,7 @@ class AnalystTab:
         )
         self._theme.apply_to_widget(model_status, "label")
         model_status.grid(
-            row=10, column=0, columnspan=3, sticky="w", pady=(1, 3),
+            row=9, column=0, columnspan=3, sticky="w", pady=(1, 3),
         )
 
         try:
@@ -488,12 +490,12 @@ class AnalystTab:
         )
         self._theme.apply_to_widget(offer, "checkbox")
         offer.grid(
-            row=11, column=0, columnspan=3, sticky="w", pady=(12, 3),
+            row=10, column=0, columnspan=3, sticky="w", pady=(12, 3),
         )
 
         actions = tk.Frame(outer)
         self._theme.apply_to_widget(actions, "main_window")
-        actions.grid(row=12, column=0, columnspan=3, sticky="e", pady=(14, 0))
+        actions.grid(row=11, column=0, columnspan=3, sticky="e", pady=(14, 0))
 
         def close(*, save: bool) -> None:
             if save:
@@ -501,7 +503,6 @@ class AnalystTab:
                 self._persist_model_selection()
                 self._persist_output_folder()
             else:
-                self._output_var.set(snapshot["output"])
                 self._source_kind_var.set(snapshot["source_kind"])
                 self._manifest_var.set(snapshot["manifest"])
                 self._manifest_index = snapshot["manifest_index"]
@@ -676,8 +677,7 @@ class AnalystTab:
             self._source_var.set(selected)
 
     def _browse_output(self) -> None:
-        parent = self._advanced_dialog or self.frame.winfo_toplevel()
-        selected = filedialog.askdirectory(parent=parent)
+        selected = filedialog.askdirectory(parent=self.frame.winfo_toplevel())
         if selected:
             self._output_var.set(selected)
 

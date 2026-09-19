@@ -214,8 +214,8 @@ def test_output_folder_defaults_saves_loads_and_analyze_persists(
 
     saved = tmp_path / "saved"
     saved.mkdir()
-    tab._open_advanced()
     tab._output_var.set(str(saved))
+    tab._open_advanced()
     _find_button(tab._advanced_dialog, "Save").invoke()
     assert settings.values["analyst.output_folder"] == str(saved)
 
