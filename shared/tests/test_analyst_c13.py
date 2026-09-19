@@ -29,6 +29,7 @@ from experimental.analyst.service import (
     AnalystServiceError,
     DirectoryRunRequest,
     ServiceFailure,
+    abandon_run,
     cancel_run,
     completed_report_html,
     create_directory_run,
@@ -95,6 +96,34 @@ def test_directory_run_persists_exact_frozen_identity_and_safe_output(tmp_path):
     assert row["model_tag"] == "qwen3.6:27b"
 
 
+def test_directory_run_without_output_base_uses_local_reports_dir(
+    tmp_path, monkeypatch,
+):
+    paths = get_paths(home_root=tmp_path / "home")
+    source = tmp_path / "source"
+    source.mkdir()
+    monkeypatch.setattr(
+        "experimental.analyst.service.get_paths", lambda: paths,
+    )
+
+    run_id, _inventory = create_directory_run(
+        DirectoryRunRequest(source, None, "Local report", "fast"),
+        path=paths.analyst_db_file,
+        run_id_factory=lambda _size: _RUN_ID,
+    )
+    conn = open_connection(paths.analyst_db_file, read_only=True)
+    try:
+        output_root = Path(conn.execute(
+            "SELECT output_root FROM analyst_runs WHERE run_id=?", (run_id,),
+        ).fetchone()[0])
+    finally:
+        conn.close()
+
+    assert output_root.parent == paths.analyst_reports_dir / "_analyst"
+    assert output_root.is_dir()
+    assert stat.S_IMODE(output_root.stat().st_mode) == 0o700
+
+
 @pytest.mark.parametrize(
     "source,output,label,mode",
     [
@@ -136,7 +165,38 @@ def test_symlink_output_base_fails_before_inventory_or_database(tmp_path):
     request = DirectoryRunRequest(source, linked_output, "Public", "fast")
     with pytest.raises(AnalystServiceError) as caught:
         create_directory_run(request, path=db)
-    assert caught.value.code is ServiceFailure.CONTRACT
+    assert caught.value.code is ServiceFailure.OUTPUT_INVALID
+    assert str(caught.value) == "output_invalid"
+    assert "PRIVATE SOURCE MARKER" not in repr(caught.value)
+    assert not db.exists()
+
+
+def test_output_filesystem_that_ignores_private_mode_fails_closed(
+    tmp_path, monkeypatch,
+):
+    import experimental.analyst.service as service
+
+    request = _request(tmp_path)
+    db = tmp_path / "state" / "analyst.db"
+    real_fstat = service.os.fstat
+
+    def unsafe_fstat(fd):
+        info = real_fstat(fd)
+        if "/_analyst" in os.readlink(f"/proc/self/fd/{fd}"):
+            values = list(info)
+            values[0] = (info.st_mode & ~0o777) | 0o777
+            return os.stat_result(values)
+        return info
+
+    monkeypatch.setattr(service.os, "fstat", unsafe_fstat)
+    with pytest.raises(AnalystServiceError) as caught:
+        create_directory_run(
+            request,
+            path=db,
+            run_id_factory=lambda _size: _RUN_ID,
+        )
+    assert caught.value.code is ServiceFailure.OUTPUT_UNSAFE_FS
+    assert str(caught.value) == "output_unsafe_fs"
     assert not db.exists()
 
 
@@ -239,6 +299,40 @@ def test_cancel_persists_intent_before_signal(tmp_path, monkeypatch):
     result = cancel_run(run_id, path=paths.analyst_db_file)
     assert result.signal_sent is True
     assert observed == [(fence, "cancel_requested")]
+
+
+def test_service_abandon_terminalizes_resumable_run(tmp_path):
+    paths, _request_value, run_id, _inventory = _create(tmp_path)
+
+    assert abandon_run(run_id, path=paths.analyst_db_file) is None
+    assert list_run_summaries(path=paths.analyst_db_file)[0].state \
+        is RunState.ABANDONED
+
+    with pytest.raises(AnalystServiceError) as caught:
+        abandon_run(run_id, path=paths.analyst_db_file)
+    assert caught.value.code is ServiceFailure.ABANDON
+    assert str(caught.value) == "abandon"
+    assert "Public Directory" not in repr(caught.value)
+
+
+def test_service_abandon_refuses_lease_held_run_content_free(tmp_path):
+    paths, _request_value, run_id, _inventory = _create(tmp_path)
+    fence = claim_worker(
+        run_id,
+        current_process_identity(),
+        owner_token="c" * 64,
+        heartbeat_monotonic_ns=1,
+        path=paths.analyst_db_file,
+    )
+    assert fence is not None
+
+    with pytest.raises(AnalystServiceError) as caught:
+        abandon_run(run_id, path=paths.analyst_db_file)
+    assert caught.value.code is ServiceFailure.ABANDON
+    assert str(caught.value) == "abandon"
+    assert "Public Directory" not in repr(caught.value)
+    assert list_run_summaries(path=paths.analyst_db_file)[0].state \
+        is RunState.RUNNING
 
 
 def test_ready_resume_launches_and_hydration_is_content_free(tmp_path):

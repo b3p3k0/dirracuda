@@ -37,7 +37,9 @@ from .ollama_state import (
 )
 from .state import RunState
 from .store import (
+    AnalystStoreError,
     RunSpec,
+    abandon_run as abandon_stored_run,
     create_run,
     initialize_database,
     open_connection,
@@ -56,11 +58,14 @@ _MODE_VALUES = frozenset({"fast", "deep"})
 
 class ServiceFailure(str, Enum):
     CONTRACT = "contract"
+    OUTPUT_INVALID = "output_invalid"
+    OUTPUT_UNSAFE_FS = "output_unsafe_fs"
     INVENTORY = "inventory"
     STATE = "state"
     STORAGE = "storage"
     LAUNCH = "launch"
     CANCEL = "cancel"
+    ABANDON = "abandon"
     REPORT = "report"
     DISCOVERY = "discovery"
 
@@ -80,13 +85,14 @@ class DirectoryRunRequest:
     """Validated low-input request used by the Accessories launcher."""
 
     source_root: Path = field(repr=False)
-    output_base: Path = field(repr=False)
+    output_base: Path | None = field(repr=False)
     report_label: str = field(repr=False)
     mode: str = "fast"
 
     def __post_init__(self) -> None:
         _require_absolute_path(self.source_root, "source")
-        _require_absolute_path(self.output_base, "output")
+        if self.output_base is not None:
+            _require_absolute_path(self.output_base, "output")
         if (
             type(self.report_label) is not str
             or not self.report_label.strip()
@@ -294,9 +300,10 @@ def create_directory_run(
     except (TypeError, ValueError):
         raise AnalystServiceError(ServiceFailure.CONTRACT) from None
     try:
-        _require_existing_directory(request.output_base)
-    except OSError:
-        raise AnalystServiceError(ServiceFailure.CONTRACT) from None
+        selected_output = _selected_output_base(request.output_base)
+        _require_existing_directory(selected_output)
+    except AnalystServiceError:
+        raise
     try:
         inventory = inventory_tree(
             request.source_root, cancel_check=cancel_check,
@@ -315,6 +322,7 @@ def create_directory_run(
             raise ValueError("run id source returned an invalid value")
         detector_version, detector_sha256 = current_detector_rules()
         output_root = _run_output_root(request, run_id)
+        _create_private_output_directory(selected_output, output_root)
         spec = RunSpec(
             run_id=run_id,
             mode=request.mode,
@@ -467,7 +475,7 @@ def create_manifest_run(
             main_db_path=main_db_path,
             cancel_check=cancel_check,
         )
-        selected_output = manifest.source_root if output_base is None else output_base
+        selected_output = _selected_output_base(output_base)
         request = DirectoryRunRequest(
             manifest.source_root, selected_output, report_label, mode,
         )
@@ -477,6 +485,7 @@ def create_manifest_run(
             raise ValueError("run id source returned an invalid value")
         detector_version, detector_sha256 = current_detector_rules()
         output_root = _manifest_output_root(request, run_id, manifest.ip_address)
+        _create_private_output_directory(selected_output, output_root)
         spec = RunSpec(
             run_id=run_id,
             mode=mode,
@@ -555,6 +564,14 @@ def cancel_run(run_id: str, *, path: Path | None = None) -> CancelResult:
         return CancelResult(canonical, signalled)
     except Exception:
         raise AnalystServiceError(ServiceFailure.CANCEL) from None
+
+
+def abandon_run(run_id: str, *, path: Path | None = None) -> None:
+    """Terminalize one lease-free resumable run."""
+    try:
+        abandon_stored_run(run_id, path=path)
+    except AnalystStoreError:
+        raise AnalystServiceError(ServiceFailure.ABANDON) from None
 
 
 def resume_run(
@@ -798,7 +815,7 @@ def _run_output_root(request: DirectoryRunRequest, run_id: str) -> Path:
         slug = "unattributed"
     digest = hashlib.sha256(request.report_label.encode("utf-8")).hexdigest()[:8]
     component = f"{slug}-{digest}-{run_id[:12]}"
-    return request.output_base / "_analyst" / component
+    return _selected_output_base(request.output_base) / "_analyst" / component
 
 
 def _manifest_output_root(
@@ -861,6 +878,36 @@ def _ensure_private_directory(path: Path) -> Path:
 
 def _require_existing_directory(path: Path) -> None:
     """Open every existing output-base component without following symlinks."""
+    try:
+        _require_absolute_path(path, "output")
+        current = _open_existing_directory(path)
+    except (OSError, TypeError, ValueError):
+        raise AnalystServiceError(ServiceFailure.OUTPUT_INVALID) from None
+    os.close(current)
+
+
+def _selected_output_base(output_base: Path | None) -> Path:
+    if output_base is not None:
+        return output_base
+    try:
+        selected = get_paths().analyst_reports_dir
+        selected.mkdir(mode=0o700, parents=True, exist_ok=True)
+        info = selected.lstat()
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            raise AnalystServiceError(ServiceFailure.OUTPUT_INVALID)
+        if info.st_uid != os.getuid():
+            raise AnalystServiceError(ServiceFailure.OUTPUT_UNSAFE_FS)
+        os.chmod(selected, 0o700)
+        if stat.S_IMODE(selected.lstat().st_mode) != 0o700:
+            raise AnalystServiceError(ServiceFailure.OUTPUT_UNSAFE_FS)
+        return selected
+    except AnalystServiceError:
+        raise
+    except OSError:
+        raise AnalystServiceError(ServiceFailure.OUTPUT_UNSAFE_FS) from None
+
+
+def _open_existing_directory(path: Path) -> int:
     components = tuple(os.fspath(path).split("/")[1:])
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
     current = os.open("/", flags)
@@ -871,8 +918,44 @@ def _require_existing_directory(path: Path) -> None:
             current = child
         if not stat.S_ISDIR(os.fstat(current).st_mode):
             raise OSError("output base is not a directory")
-    finally:
+        return current
+    except BaseException:
         os.close(current)
+        raise
+
+
+def _create_private_output_directory(output_base: Path, output_root: Path) -> None:
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+    try:
+        relative = output_root.relative_to(output_base)
+        if len(relative.parts) != 2:
+            raise OSError("output root is outside the output contract")
+        current = _open_existing_directory(output_base)
+        try:
+            for index, component in enumerate(relative.parts):
+                is_target = index == len(relative.parts) - 1
+                try:
+                    os.mkdir(component, 0o700, dir_fd=current)
+                except FileExistsError:
+                    if is_target:
+                        raise OSError("output target already exists") from None
+                child = os.open(component, flags, dir_fd=current)
+                info = os.fstat(child)
+                if (
+                    not stat.S_ISDIR(info.st_mode)
+                    or info.st_uid != os.getuid()
+                    or stat.S_IMODE(info.st_mode) != 0o700
+                ):
+                    os.close(child)
+                    raise AnalystServiceError(ServiceFailure.OUTPUT_UNSAFE_FS)
+                os.close(current)
+                current = child
+        finally:
+            os.close(current)
+    except AnalystServiceError:
+        raise
+    except (OSError, TypeError, ValueError):
+        raise AnalystServiceError(ServiceFailure.OUTPUT_INVALID) from None
 
 
 def _require_absolute_path(path: object, label: str) -> Path:
@@ -900,6 +983,7 @@ __all__: Sequence[str] = (
     "MAX_RUN_LIST",
     "RunLaunch",
     "ServiceFailure",
+    "abandon_run",
     "cancel_run",
     "completed_report_html",
     "create_and_launch",

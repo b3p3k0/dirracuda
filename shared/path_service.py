@@ -19,6 +19,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,6 +49,7 @@ class DirracudaPaths:
     dorkbook_db_file: Path
     keymaster_db_file: Path
     analyst_db_file: Path
+    analyst_reports_dir: Path
     quarantine_dir: Path
     extracted_dir: Path
     tmpfs_quarantine_dir: Path
@@ -117,6 +119,20 @@ def get_repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def _ensure_owner_only_directory(path: Path) -> None:
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    info = path.lstat()
+    if (
+        stat.S_ISLNK(info.st_mode)
+        or not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != os.getuid()
+    ):
+        raise PermissionError("private data directory is unsafe")
+    os.chmod(path, 0o700)
+    if stat.S_IMODE(path.lstat().st_mode) != 0o700:
+        raise PermissionError("private data directory mode is unsafe")
+
+
 def get_paths(*, home_root: Optional[Path] = None, repo_root: Optional[Path] = None) -> DirracudaPaths:
     repo = (repo_root or get_repo_root()).expanduser().resolve(strict=False)
     home = (home_root or (Path.home() / HOME_DIRNAME)).expanduser().resolve(strict=False)
@@ -127,6 +143,7 @@ def get_paths(*, home_root: Optional[Path] = None, repo_root: Optional[Path] = N
     logs_dir = home / "logs"
 
     experimental_dir = data_dir / "experimental"
+    analyst_reports_dir = experimental_dir / "analyst_reports"
     cache_dir = data_dir / "cache"
     cache_probe_dir = cache_dir / "probes"
 
@@ -149,6 +166,7 @@ def get_paths(*, home_root: Optional[Path] = None, repo_root: Optional[Path] = N
         dorkbook_db_file=experimental_dir / "dorkbook.db",
         keymaster_db_file=experimental_dir / "keymaster.db",
         analyst_db_file=experimental_dir / "analyst.db",
+        analyst_reports_dir=analyst_reports_dir,
         quarantine_dir=data_dir / "quarantine",
         extracted_dir=data_dir / "extracted",
         tmpfs_quarantine_dir=data_dir / "tmpfs_quarantine",
@@ -703,6 +721,7 @@ def ensure_layout_dirs(*, paths: Optional[DirracudaPaths] = None) -> Dict[str, A
         p.conf_dir,
         p.data_dir,
         p.experimental_dir,
+        p.analyst_reports_dir,
         p.quarantine_dir,
         p.extracted_dir,
         p.tmpfs_quarantine_dir,
@@ -722,7 +741,12 @@ def ensure_layout_dirs(*, paths: Optional[DirracudaPaths] = None) -> Dict[str, A
         p.wordlists_dir,
     ]
     for d in required:
-        if not d.exists():
+        if d == p.analyst_reports_dir:
+            was_missing = not d.exists()
+            _ensure_owner_only_directory(d)
+            if was_missing:
+                created.append(str(d))
+        elif not d.exists():
             d.mkdir(parents=True, exist_ok=True)
             created.append(str(d))
     return {"created": created, "required_count": len(required)}

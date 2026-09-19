@@ -38,6 +38,7 @@ from experimental.analyst.service import (
 )
 from experimental.analyst.store import load_worker_run, open_connection
 from shared.extract_manifest import ExtractSummaryReference, ExtractSummarySource
+from shared.path_service import get_paths
 from shared.tests.test_analyst_c14 import _db_row, _main_db, _summary
 from shared.tests.test_analyst_c9_client import (
     FakeResponse,
@@ -221,7 +222,9 @@ def test_run_creation_records_a_nondefault_model(tmp_path: Path) -> None:
     )
 
 
-def test_manifest_run_creation_records_a_nondefault_model(tmp_path: Path) -> None:
+def test_manifest_run_creation_records_a_nondefault_model(
+    tmp_path: Path, monkeypatch,
+) -> None:
     root = tmp_path / "saved"
     root.mkdir()
     item = root / "public.txt"
@@ -229,6 +232,10 @@ def test_manifest_run_creation_records_a_nondefault_model(tmp_path: Path) -> Non
     main_db = tmp_path / "main.db"
     _main_db(main_db, [_db_row(7, _summary([item]))])
     analyst_db = tmp_path / "analyst.db"
+    paths = get_paths(home_root=tmp_path / "home")
+    monkeypatch.setattr(
+        "experimental.analyst.service.get_paths", lambda: paths,
+    )
     run_id, _manifest = create_manifest_run(
         ExtractSummaryReference(7, None, ExtractSummarySource.PRIMARY_DB),
         main_db_path=main_db.absolute(),

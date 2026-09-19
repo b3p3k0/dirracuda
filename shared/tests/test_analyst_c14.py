@@ -15,6 +15,7 @@ from experimental.analyst.manifest import (
 )
 from experimental.analyst.service import create_manifest_run
 from shared.extract_manifest import ExtractSummaryReference, ExtractSummarySource
+from shared.path_service import get_paths
 
 
 RUN_ID = "d" * 32
@@ -351,7 +352,7 @@ def test_extract_reference_persistence_rejects_invalid_identity_before_file(
 
 
 def test_manifest_run_copies_identity_and_defaults_output_to_common_root(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch,
 ) -> None:
     root = tmp_path / "saved"
     root.mkdir()
@@ -360,6 +361,10 @@ def test_manifest_run_copies_identity_and_defaults_output_to_common_root(
     db = tmp_path / "main.db"
     _main_db(db, [_db_row(7, _summary([item]))])
     analyst_db = tmp_path / "analyst.db"
+    paths = get_paths(home_root=tmp_path / "home")
+    monkeypatch.setattr(
+        "experimental.analyst.service.get_paths", lambda: paths,
+    )
     run_id, manifest = create_manifest_run(
         ExtractSummaryReference(7, None, ExtractSummarySource.PRIMARY_DB),
         main_db_path=db.absolute(),
@@ -381,11 +386,13 @@ def test_manifest_run_copies_identity_and_defaults_output_to_common_root(
     finally:
         conn.close()
     assert row[:2] == ("extraction_manifest", str(root))
-    assert Path(row[2]).parent == root / "_analyst"
+    assert Path(row[2]).parent == paths.analyst_reports_dir / "_analyst"
     assert row[3:] == ("S", 41, "203.0.113.7", 445, 7)
 
 
-def test_fallback_manifest_run_keeps_row_id_null(tmp_path: Path) -> None:
+def test_fallback_manifest_run_keeps_row_id_null(
+    tmp_path: Path, monkeypatch,
+) -> None:
     root = tmp_path / "saved"
     root.mkdir()
     item = root / "one.txt"
@@ -401,6 +408,10 @@ def test_fallback_manifest_run_keeps_row_id_null(tmp_path: Path) -> None:
     }), encoding="utf-8")
     fallback.chmod(0o600)
     analyst_db = tmp_path / "analyst.db"
+    paths = get_paths(home_root=tmp_path / "home")
+    monkeypatch.setattr(
+        "experimental.analyst.service.get_paths", lambda: paths,
+    )
     run_id, _manifest = create_manifest_run(
         ExtractSummaryReference(
             None, fallback.absolute(), ExtractSummarySource.FALLBACK_JSON,
