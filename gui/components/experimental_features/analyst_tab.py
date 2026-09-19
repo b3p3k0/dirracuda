@@ -12,10 +12,19 @@ from gui.utils.analyst_tasks import apply_analyst_task_hydration
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.running_tasks import get_running_task_registry
 from gui.utils.style import get_theme
+from shared.path_service import get_paths
 
 
 _CREATE_FAILURE_MESSAGES = {
     "contract": "The source or output directory is not supported by Analyst.",
+    "output_invalid": (
+        "Output folder must be an existing local directory (not a symlink)."
+    ),
+    "output_unsafe_fs": (
+        "Output folder can't keep reports private (e.g. a network/CIFS mount). "
+        "Choose a local folder."
+    ),
+    "abandon": "Could not abandon the run.",
     "inventory": (
         "Source inventory failed. Check that the directory is readable and stable."
     ),
@@ -102,7 +111,6 @@ class AnalystTab:
         self._advanced_dialog = None
         self._export_dialog = None
         self._auto_label = ""
-        self._auto_output = ""
         self.frame = tk.Frame(parent)
         self._theme.apply_to_widget(self.frame, "main_window")
         self._build()
@@ -129,7 +137,18 @@ class AnalystTab:
         self._main_form.columnconfigure(1, weight=1)
 
         self._source_var = tk.StringVar(value="")
-        self._output_var = tk.StringVar(value="")
+        output_folder = str(get_paths().analyst_reports_dir)
+        settings_manager = self._context.get("settings_manager")
+        if settings_manager is not None:
+            try:
+                persisted_output = settings_manager.get_setting(
+                    "analyst.output_folder", None,
+                )
+                if type(persisted_output) is str and persisted_output.strip():
+                    output_folder = persisted_output
+            except Exception:
+                pass
+        self._output_var = tk.StringVar(value=output_folder)
         self._label_var = tk.StringVar(value="")
         self._mode_var = tk.StringVar(value="fast")
         self._source_kind_var = tk.StringVar(value="directory")
@@ -172,7 +191,6 @@ class AnalystTab:
             self._theme.apply_to_widget(button, "checkbox")
             button.pack(side=tk.LEFT, padx=(0, 14))
 
-        settings_manager = self._context.get("settings_manager")
         try:
             offer_enabled = settings_manager is not None and (
                 settings_manager.get_setting("analyst.offer_after_extract", False) is True
@@ -253,6 +271,12 @@ class AnalystTab:
         )
         self._theme.apply_to_widget(self._cancel_btn, "button_danger")
         self._cancel_btn.pack(side=tk.LEFT, padx=(0, 7))
+        self._abandon_btn = tk.Button(
+            run_controls, text="Abandon", state="disabled",
+            command=self._abandon_selected,
+        )
+        self._theme.apply_to_widget(self._abandon_btn, "button_danger")
+        self._abandon_btn.pack(side=tk.LEFT, padx=(0, 7))
 
         self._status_var = tk.StringVar(value="Ready.")
         status = tk.Label(frame, textvariable=self._status_var, anchor="w")
@@ -279,10 +303,6 @@ class AnalystTab:
         if not current_label or current_label == self._auto_label:
             self._label_var.set(basename)
             self._auto_label = basename
-        current_output = self._output_var.get().strip()
-        if not current_output or current_output == self._auto_output:
-            self._output_var.set(source)
-            self._auto_output = source
 
     def _open_advanced(self) -> None:
         existing = self._advanced_dialog
@@ -479,6 +499,7 @@ class AnalystTab:
             if save:
                 self._persist_offer_setting()
                 self._persist_model_selection()
+                self._persist_output_folder()
             else:
                 self._output_var.set(snapshot["output"])
                 self._source_kind_var.set(snapshot["source_kind"])
@@ -954,6 +975,17 @@ class AnalystTab:
         except Exception:
             self._offer_var.set(False)
 
+    def _persist_output_folder(self) -> None:
+        settings_manager = self._context.get("settings_manager")
+        if settings_manager is None:
+            return
+        try:
+            settings_manager.set_setting(
+                "analyst.output_folder", self._output_var.get().strip(),
+            )
+        except Exception:
+            pass
+
     def _schedule(self, callback) -> None:
         try:
             if self.frame.winfo_exists():
@@ -964,6 +996,7 @@ class AnalystTab:
     def _start_analysis(self) -> None:
         if self._busy:
             return
+        self._persist_output_folder()
         source_kind = self._source_kind_var.get()
         request = None
         choice = None
@@ -1134,8 +1167,12 @@ class AnalystTab:
         def cancel(run_id: str):
             return lambda: self._cancel_run_id(run_id)
 
+        def abandon(run_id: str):
+            return lambda: self._abandon_run_id(run_id)
+
         apply_analyst_task_hydration(
             registry, self._summaries, reopen=reopen, cancel=cancel,
+            abandon=abandon,
         )
 
     def _reopen(self) -> None:
@@ -1161,20 +1198,28 @@ class AnalystTab:
         if item is None:
             self._resume_btn.configure(state="disabled")
             self._cancel_btn.configure(state="disabled")
+            self._abandon_btn.configure(state="disabled")
             return
         from experimental.analyst.state import RunState
 
-        resumable = item.state in {
-            RunState.READY, RunState.INTERRUPTED, RunState.CANCELLED_PENDING_RESUME,
-        }
+        resumable = (
+            item.state in {
+                RunState.READY, RunState.INTERRUPTED,
+                RunState.CANCELLED_PENDING_RESUME,
+            }
+            and item.schedule_state != "paused_resource"
+        )
         cancellable = (
-            item.state in {RunState.RUNNING, RunState.CANCEL_REQUESTED}
+            item.state in {
+                RunState.RUNNING, RunState.CANCEL_REQUESTED, RunState.FINALIZING,
+            }
             or (
                 item.state is RunState.INTERRUPTED
                 and item.schedule_state == "paused_resource"
             )
         )
         self._resume_btn.configure(state="normal" if resumable else "disabled")
+        self._abandon_btn.configure(state="normal" if resumable else "disabled")
         self._cancel_btn.configure(state="normal" if cancellable else "disabled")
 
     def _resume_selected(self) -> None:
@@ -1190,6 +1235,14 @@ class AnalystTab:
     def _cancel_run_id(self, run_id: str) -> None:
         self._run_service_action(run_id, "cancel")
 
+    def _abandon_selected(self) -> None:
+        item = self._selected_summary()
+        if item is not None:
+            self._abandon_run_id(item.run_id)
+
+    def _abandon_run_id(self, run_id: str) -> None:
+        self._run_service_action(run_id, "abandon")
+
     def _run_service_action(self, run_id: str, action: str) -> None:
         if self._busy:
             return
@@ -1201,16 +1254,38 @@ class AnalystTab:
                     from experimental.analyst.service import resume_run
 
                     resume_run(run_id)
-                else:
+                elif action == "cancel":
                     from experimental.analyst.service import cancel_run
 
                     cancel_run(run_id)
-            except Exception:
-                self._schedule(lambda: self._finish_action(False, action.capitalize() + " failed."))
+                else:
+                    from experimental.analyst.service import abandon_run
+
+                    abandon_run(run_id)
+            except Exception as exc:
+                message = (
+                    _creation_failure_message(exc)
+                    if action == "abandon"
+                    else action.capitalize() + " failed."
+                )
+                self._schedule(lambda: self._finish_action(False, message))
                 return
-            self._schedule(lambda: self._finish_action(True, action.capitalize() + " requested."))
+            self._schedule(
+                lambda: self._finish_service_action(run_id, action),
+            )
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _finish_service_action(self, run_id: str, action: str) -> None:
+        if action == "abandon":
+            registry = self._context.get("running_tasks_registry")
+            if registry is None:
+                registry = get_running_task_registry()
+            registry.remove_task(f"analyst:{run_id}")
+            message = "Run abandoned."
+        else:
+            message = action.capitalize() + " requested."
+        self._finish_action(True, message)
 
     def _finish_action(self, success: bool, message: str) -> None:
         self._set_busy(False, message)

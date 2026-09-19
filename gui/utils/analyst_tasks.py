@@ -18,11 +18,16 @@ def apply_analyst_task_hydration(
     *,
     reopen: Callable[[str], Callable[[], None]],
     cancel: Callable[[str], Callable[[], None]],
+    abandon: Callable[[str], Callable[[], None]] | None = None,
 ) -> None:
     """Idempotently replace only the Analyst-owned registry projection."""
     if not isinstance(registry, RunningTaskRegistry):
         raise TypeError("Analyst hydration requires a RunningTaskRegistry")
-    if not callable(reopen) or not callable(cancel):
+    if (
+        not callable(reopen)
+        or not callable(cancel)
+        or (abandon is not None and not callable(abandon))
+    ):
         raise TypeError("Analyst task callbacks must be factories")
     active = {
         item.task_id: item
@@ -34,12 +39,17 @@ def apply_analyst_task_hydration(
             registry.remove_task(snapshot.task_id)
     for task_id, item in active.items():
         state = _task_state(item)
-        can_cancel = (
-            item.state in {RunState.RUNNING, RunState.CANCEL_REQUESTED}
+        is_active = (
+            item.state in {
+                RunState.RUNNING, RunState.CANCEL_REQUESTED, RunState.FINALIZING,
+            }
             or (
                 item.state is RunState.INTERRUPTED
                 and item.schedule_state == "paused_resource"
             )
+        )
+        callback = cancel(item.run_id) if is_active else (
+            abandon(item.run_id) if abandon is not None else None
         )
         registry.upsert_task(
             task_id,
@@ -49,7 +59,7 @@ def apply_analyst_task_hydration(
             progress=item.progress,
             started_at=item.created_at_utc,
             reopen_callback=reopen(item.run_id),
-            cancel_callback=cancel(item.run_id) if can_cancel else None,
+            cancel_callback=callback,
         )
 
 
