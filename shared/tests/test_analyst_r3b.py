@@ -9,7 +9,11 @@ from pathlib import Path
 import pytest
 
 from experimental.analyst.lease import current_lease
-from experimental.analyst.ollama_contract import OllamaStatus
+from experimental.analyst.ollama_contract import (
+    READ_MAX_SOURCE_CHARS,
+    OllamaStatus,
+    PromptKind,
+)
 from experimental.analyst.phase1 import Phase1Dependencies
 from experimental.analyst.phase2 import run_phase2
 from experimental.analyst.phase2_contract import Phase2Handoff
@@ -138,7 +142,7 @@ def test_success_persists_read_exposures_and_bounded_safe_input(tmp_path: Path) 
         (2, "MED", "The register identifies its subject."),
     )
     request = [value for kind, value in client.calls if kind == "chat"][0]
-    assert len(request.source_text) <= 8000
+    assert len(request.source_text) <= READ_MAX_SOURCE_CHARS
     assert _MAP_QUOTE in request.source_text
     assert "PRIVATE_RAW_PREFIX" not in request.source_text
     assert "PRIVATE_RAW_SUFFIX" not in request.source_text
@@ -179,6 +183,13 @@ def test_two_invalid_answers_leave_read_unavailable(tmp_path: Path) -> None:
     requests = [value for kind, value in client.calls if kind == "chat"]
     assert len(requests) == 2
     assert requests[0].nonce != requests[1].nonce
+    assert [request.prompt_kind for request in requests] == [
+        PromptKind.PRIMARY,
+        PromptKind.MODEL_INVALID_REPAIR,
+    ]
+    assert "return ONLY the JSON object" in (
+        requests[1].payload()["messages"][0]["content"]
+    )
     assert _rows(path, "SELECT count(*) FROM analyst_read") == ((0,),)
     assert _rows(
         path,

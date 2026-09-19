@@ -12,6 +12,7 @@ from experimental.analyst.read_worksheet import (
     EXPECTED_FACTS_PROMPT_TEMPLATE_SHA256,
     EXPECTED_FACTS_SCHEMA_SHA256,
     EXPECTED_READ_PROMPT_TEMPLATE_SHA256,
+    EXPECTED_READ_REPAIR_PROMPT_TEMPLATE_SHA256,
     EXPECTED_READ_SCHEMA_SHA256,
     build_facts_prompt,
     build_read_prompt,
@@ -21,6 +22,7 @@ from experimental.analyst.read_worksheet import (
     parse_facts,
     parse_read,
     read_prompt_template_hash,
+    read_repair_prompt_template_hash,
     read_schema_hash,
     validate_facts,
     validate_read,
@@ -94,11 +96,16 @@ def test_sha_pins_are_stable_and_prompt_drift_fails_closed(
     assert read_schema_hash() == EXPECTED_READ_SCHEMA_SHA256
     assert facts_prompt_template_hash() == EXPECTED_FACTS_PROMPT_TEMPLATE_SHA256
     assert read_prompt_template_hash() == EXPECTED_READ_PROMPT_TEMPLATE_SHA256
+    assert (
+        read_repair_prompt_template_hash()
+        == EXPECTED_READ_REPAIR_PROMPT_TEMPLATE_SHA256
+    )
     assert all(len(value) == 64 for value in (
         EXPECTED_FACTS_SCHEMA_SHA256,
         EXPECTED_READ_SCHEMA_SHA256,
         EXPECTED_FACTS_PROMPT_TEMPLATE_SHA256,
         EXPECTED_READ_PROMPT_TEMPLATE_SHA256,
+        EXPECTED_READ_REPAIR_PROMPT_TEMPLATE_SHA256,
     ))
 
     monkeypatch.setattr(
@@ -140,7 +147,7 @@ def test_response_schemas_accept_valid_json_and_are_strictly_bounded() -> None:
             "offset": 0,
         }]))
     with pytest.raises(ValidationError):
-        validate_read(_read_answer(host_summary="X" * 601))
+        validate_read(_read_answer(host_summary="X" * 1201))
     with pytest.raises(ValidationError):
         validate_read(_read_answer(contacts=[str(index) for index in range(11)]))
 
@@ -208,7 +215,7 @@ def test_high_grounded_fact_forces_high_risk() -> None:
     assert reconcile_risk("LOW", (_fact("ssn", "HIGH"),)) == "HIGH"
 
 
-def test_build_report_has_exact_shape_sorted_facts_and_no_low_exposure() -> None:
+def test_build_report_has_exact_shape_sorted_facts_and_model_exposures() -> None:
     run = RunMeta(
         run_id="synthetic-run",
         report_label="Synthetic Host",
@@ -247,7 +254,8 @@ def test_build_report_has_exact_shape_sorted_facts_and_no_low_exposure() -> None
     assert report["read"]["risk_level"] == "HIGH"
     assert report["read"]["top_exposures"] == [
         {"rank": 1, "severity": "HIGH", "text": "Synthetic account identifier"},
-        {"rank": 2, "severity": "MED", "text": "Synthetic identity cluster"},
+        {"rank": 2, "severity": "LOW", "text": "Incidental synthetic contact"},
+        {"rank": 3, "severity": "MED", "text": "Synthetic identity cluster"},
     ]
     assert [item["rank"] for item in report["facts"]] == ["HIGH", "MED", "low"]
     validate_report_json(report)

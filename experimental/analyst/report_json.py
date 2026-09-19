@@ -9,6 +9,7 @@ from typing import Iterable, Literal
 
 REPORT_SCHEMA_VERSION = 1
 UNVERIFIED_NOTICE = "Model's read - not verified. Facts below are grounded."
+MAX_HOST_SUMMARY_CHARS = 1200
 
 FactRank = Literal["HIGH", "MED", "low"]
 RiskLevel = Literal["HIGH", "MED", "LOW"]
@@ -88,7 +89,7 @@ class HostRead:
     def __post_init__(self) -> None:
         if (
             type(self.host_summary) is not str
-            or not 1 <= len(self.host_summary) <= 600
+            or not 1 <= len(self.host_summary) <= MAX_HOST_SUMMARY_CHARS
             or (
                 self.likely_owner is not None
                 and type(self.likely_owner) is not str
@@ -256,11 +257,10 @@ def build_report_json(
         fact_values,
         key=lambda fact: rank_order[fact.rank],
     ))
-    exposures = tuple(
-        exposure
-        for exposure in read.top_exposures
-        if exposure.severity != "LOW"
-    )
+    # READ exposures are model judgments and may be semantic rather than regex
+    # findings.  Preserve all validated items; grounded facts separately impose the
+    # minimum risk level below.
+    exposures = read.top_exposures
     reconciled_risk = reconcile_risk(read.risk_level, ordered_facts)
 
     report: dict[str, object] = {
@@ -364,7 +364,7 @@ def validate_report_json(obj: dict[str, object]) -> None:
         exposure = _object(value, "top exposure")
         _require_keys(exposure, {"rank", "severity", "text"}, "top exposure")
         parsed = TopExposure(**exposure)
-        if parsed.rank != expected_rank or parsed.severity == "LOW":
+        if parsed.rank != expected_rank:
             raise ReportValidationError("top exposures are not canonical")
         exposures.append(parsed)
     HostRead(

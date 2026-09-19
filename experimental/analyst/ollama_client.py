@@ -32,6 +32,7 @@ from .ollama_contract import (
     OllamaStatus,
     PreflightResult,
     QUALIFIED_OLLAMA_VERSION,
+    ReadChatRequest,
     TagsCheckResult,
     VersionCheckResult,
     build_discovery_request,
@@ -95,6 +96,7 @@ class _HttpIntent:
     accept: str
     kind: str
     model_tag: str | None = None
+    read_response: bool = False
 
 
 class _WorkerState:
@@ -291,6 +293,7 @@ class OllamaClient:
         intent = _HttpIntent(
             "POST", OLLAMA_CHAT_URL, request.body,
             "application/x-ndjson", "chat", request.model_tag,
+            type(request) is ReadChatRequest,
         )
         value, status = self._execute(intent, cancel, poll)
         if status is not None:
@@ -445,6 +448,7 @@ class OllamaClient:
             if intent.kind == "chat":
                 return self._read_chat(
                     response, cancel, started, intent.model_tag,
+                    read_response=intent.read_response,
                 ), None
             return self._read_all(response, cancel, started), None
         finally:
@@ -493,6 +497,8 @@ class OllamaClient:
         cancel: CancelProbe,
         started: float,
         model_tag: str | None = EXPECTED_IDENTITY.model_tag,
+        *,
+        read_response: bool = False,
     ) -> ChatResult:
         parser = ChatStreamParser(model_tag)
         try:
@@ -528,17 +534,18 @@ class OllamaClient:
             return ChatResult(OllamaStatus.MODEL_INVALID, metrics=metrics)
         if metrics.done_reason != "stop":
             return ChatResult(OllamaStatus.PROTOCOL_VIOLATION)
-        try:
-            parse_answer_json(parsed.content)
-            from .worksheet import validate_shape
+        if not read_response:
+            try:
+                parse_answer_json(parsed.content)
+                from .worksheet import validate_shape
 
-            validate_shape(parsed.content)
-        except OllamaSafetyError as exc:
-            return ChatResult(_safety_status(exc))
-        except OllamaAnswerError:
-            return ChatResult(OllamaStatus.MODEL_INVALID, metrics=metrics)
-        except ValueError:
-            return ChatResult(OllamaStatus.MODEL_INVALID, metrics=metrics)
+                validate_shape(parsed.content)
+            except OllamaSafetyError as exc:
+                return ChatResult(_safety_status(exc))
+            except OllamaAnswerError:
+                return ChatResult(OllamaStatus.MODEL_INVALID, metrics=metrics)
+            except ValueError:
+                return ChatResult(OllamaStatus.MODEL_INVALID, metrics=metrics)
         return ChatResult(
             OllamaStatus.SUCCESS,
             content=parsed.content,

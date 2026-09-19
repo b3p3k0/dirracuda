@@ -15,10 +15,11 @@ from .contact_contract import ContactStatus, ScheduleState
 from .lease import LeaseError, LeaseFence, pulse_worker
 from .ollama_client import OllamaClient
 from .ollama_contract import (
-    MAX_SOURCE_CHARS,
+    READ_MAX_SOURCE_CHARS,
     ChatResult,
     OllamaStatus,
     build_read_chat_request,
+    build_read_repair_chat_request,
     new_prompt_nonce,
 )
 from .ollama_state import (
@@ -35,7 +36,13 @@ from .worker_contract import WorkerRunContext
 
 HEARTBEAT_INTERVAL_SECONDS = 2.0
 WAIT_PULSE_SECONDS = 1.0
-MAX_TOP_QUOTES = 16
+MAX_INVENTORY_LINES = 400
+MAX_HIGH_VALUE_FACTS = 72
+MAX_CONTACT_FACTS = 40
+MAX_DEMOGRAPHIC_FACTS = 16
+INVENTORY_SECTION_CHARS = 12000
+FACT_SECTION_CHARS = 6500
+SUMMARY_SECTION_CHARS = 4800
 
 
 class ReadReduceError(RuntimeError):
@@ -168,7 +175,12 @@ def run_read_reduce(
     attempt_no = reduce_input.next_attempt_no
     while attempt_no <= 2:
         nonce = new_prompt_nonce(reduce_input.summary_text)
-        request = build_read_chat_request(
+        request_builder = (
+            build_read_chat_request
+            if attempt_no == 1
+            else build_read_repair_chat_request
+        )
+        request = request_builder(
             reduce_input.summary_text,
             nonce=nonce,
             model_tag=context.model_tag,
@@ -281,14 +293,26 @@ def _load_reduce_input(
         if next_attempt > 2:
             return None
         category_counts = _category_counts(conn, fence.run_id)
-        quotes = conn.execute(
-            "SELECT f.relative_path,m.category,m.quote FROM analyst_model_findings m "
-            "JOIN analyst_chunks c ON c.chunk_id=m.chunk_id "
-            "JOIN analyst_files f ON f.file_id=c.file_id WHERE f.run_id=? "
-            "ORDER BY CASE m.category WHEN 'financial' THEN 0 WHEN 'pii' THEN 1 "
-            "WHEN 'contact' THEN 2 ELSE 3 END,m.finding_id LIMIT ?",
-            (fence.run_id, MAX_TOP_QUOTES),
+        files = conn.execute(
+            "SELECT f.ordinal,f.relative_path,f.format_name,f.terminal_code,f.stage,"
+            "(SELECT group_concat(kind,'|') FROM (SELECT DISTINCT h.kind AS kind "
+            "FROM analyst_detector_hits h WHERE h.file_id=f.file_id ORDER BY h.kind)) "
+            "AS detector_kinds,"
+            "(SELECT group_concat(category,'|') FROM (SELECT DISTINCT m.category "
+            "AS category FROM analyst_model_findings m JOIN analyst_chunks c "
+            "ON c.chunk_id=m.chunk_id WHERE c.file_id=f.file_id ORDER BY m.category)) "
+            "AS model_categories,"
+            "(SELECT count(*) FROM analyst_detector_hits h WHERE h.file_id=f.file_id) "
+            "+(SELECT count(*) FROM analyst_model_findings m JOIN analyst_chunks c "
+            "ON c.chunk_id=m.chunk_id WHERE c.file_id=f.file_id) AS finding_count "
+            "FROM analyst_files f WHERE f.run_id=? ORDER BY f.ordinal",
+            (fence.run_id,),
         ).fetchall()
+        files.sort(key=lambda row: (
+            0 if int(row["finding_count"]) > 0 else 1,
+            int(row["ordinal"]),
+        ))
+        salient_facts = _load_salient_facts(conn, fence.run_id)
         files_total = int(conn.execute(
             "SELECT count(*) FROM analyst_files WHERE run_id=?", (fence.run_id,),
         ).fetchone()[0])
@@ -301,7 +325,7 @@ def _load_reduce_input(
             (fence.run_id, fence.run_id),
         ).fetchone()[0])
         return _ReduceInput(
-            _render_summary(chunks, category_counts, quotes),
+            _render_summary(files, chunks, category_counts, salient_facts),
             files_total,
             flagged_files,
             next_attempt,
@@ -345,38 +369,130 @@ def _category_counts(conn: Any, run_id: str) -> dict[str, int]:
 
 
 def _render_summary(
-    chunks: list[Any], category_counts: dict[str, int], quotes: list[Any],
+    files: list[Any],
+    chunks: list[Any],
+    category_counts: dict[str, int],
+    salient_facts: list[Any],
 ) -> str:
     lines = [
         "HOST READ REDUCE INPUT",
+        "All identities, ownership guesses, contacts, and summaries are unverified.",
         "Grounded fact counts:",
         *(f"- {name}: {category_counts[name]}" for name in (
             "pii", "financial", "contact", "demographic"
         )),
-        "Top grounded quotes:",
     ]
-    if quotes:
-        lines.extend(
-            "- file=" + _text(row["relative_path"], 512)
-            + "; category=" + str(row["category"])
-            + "; quote=" + _text(row["quote"], 240)
-            for row in quotes
+    inventory_lines = [
+        "- path=" + _text(row["relative_path"], 384)
+        + "; format_name=" + _text(row["format_name"] or "unidentified", 80)
+        + "; terminal_code=" + _text(row["terminal_code"] or "not_terminal", 80)
+        + "; detector_kinds=" + _text(row["detector_kinds"] or "none", 160)
+        + "; model_categories=" + _text(row["model_categories"] or "none", 80)
+        + "; model_reviewed=" + (
+            "yes" if str(row["stage"]) in {"model_reviewed", "model_response_valid"}
+            else "no"
         )
-    else:
-        lines.append("- none")
-    lines.append("Model-reviewed chunks:")
-    lines.extend(
-        "- file=" + _text(row["relative_path"], 512)
+        + "; finding_count=" + str(int(row["finding_count"]))
+        for row in files
+    ]
+    lines.extend(_bounded_section(
+        "File inventory (flagged first):",
+        inventory_lines,
+        max_lines=MAX_INVENTORY_LINES,
+        max_chars=INVENTORY_SECTION_CHARS,
+        tail_name="files",
+    ))
+    fact_lines = [
+        "- file=" + _text(row["relative_path"], 384)
+        + "; category=" + str(row["category"])
+        + "; kind=" + str(row["kind"])
+        + "; value=" + _text(row["value"], 240)
+        for row in salient_facts
+    ]
+    lines.extend(_bounded_section(
+        "Salient grounded facts with values:",
+        fact_lines,
+        max_lines=len(fact_lines),
+        max_chars=FACT_SECTION_CHARS,
+        tail_name="facts",
+    ))
+    chunk_lines = [
+        "- file=" + _text(row["relative_path"], 384)
         + "; document_type=" + _text(row["document_type"], 80)
         + "; subject=" + _text(row["subject"], 160)
         + "; assessment=" + str(row["assessment"])
         for row in chunks
-    )
+    ]
+    lines.extend(_bounded_section(
+        "Model-reviewed summaries:",
+        chunk_lines,
+        max_lines=len(chunk_lines),
+        max_chars=SUMMARY_SECTION_CHARS,
+        tail_name="summaries",
+    ))
     rendered = "\n".join(lines)
-    if len(rendered) <= MAX_SOURCE_CHARS:
+    if len(rendered) <= READ_MAX_SOURCE_CHARS:
         return rendered
     marker = "\n...[bounded]"
-    return rendered[:MAX_SOURCE_CHARS - len(marker)] + marker
+    return rendered[:READ_MAX_SOURCE_CHARS - len(marker)] + marker
+
+
+def _load_salient_facts(conn: Any, run_id: str) -> list[Any]:
+    sql = (
+        "SELECT relative_path,category,kind,value,file_ordinal,source_order,item_id "
+        "FROM (SELECT f.relative_path,CASE "
+        "WHEN h.kind IN ('ssn','dob','passport') THEN 'pii' "
+        "WHEN h.kind IN ('card','routing','bank_account','iban') THEN 'financial' "
+        "WHEN h.kind IN ('email','phone') THEN 'contact' ELSE 'demographic' END "
+        "AS category,h.kind AS kind,h.value AS value,f.ordinal AS file_ordinal,"
+        "0 AS source_order,h.hit_id AS item_id FROM analyst_detector_hits h "
+        "JOIN analyst_files f ON f.file_id=h.file_id WHERE f.run_id=? UNION ALL "
+        "SELECT f.relative_path,m.category,'model' AS kind,m.quote AS value,"
+        "f.ordinal AS file_ordinal,1 AS source_order,m.finding_id AS item_id "
+        "FROM analyst_model_findings m JOIN analyst_chunks c ON c.chunk_id=m.chunk_id "
+        "JOIN analyst_files f ON f.file_id=c.file_id WHERE f.run_id=?) "
+        "WHERE category IN ({categories}) "
+        "ORDER BY file_ordinal,source_order,item_id LIMIT ?"
+    )
+
+    def load(categories: tuple[str, ...], limit: int) -> list[Any]:
+        placeholders = ",".join("?" for _item in categories)
+        return conn.execute(
+            sql.format(categories=placeholders),
+            (run_id, run_id, *categories, limit),
+        ).fetchall()
+
+    # Separate quotas prevent a large identity/financial cluster from hiding every
+    # contact point, while retaining substantially more than the former 16 facts.
+    return [
+        *load(("financial", "pii"), MAX_HIGH_VALUE_FACTS),
+        *load(("contact",), MAX_CONTACT_FACTS),
+        *load(("demographic",), MAX_DEMOGRAPHIC_FACTS),
+    ]
+
+
+def _bounded_section(
+    title: str,
+    values: list[str],
+    *,
+    max_lines: int,
+    max_chars: int,
+    tail_name: str,
+) -> list[str]:
+    result = [title]
+    used = len(title)
+    emitted = 0
+    for line in values:
+        if emitted >= max_lines or used + 1 + len(line) > max_chars:
+            break
+        result.append(line)
+        used += 1 + len(line)
+        emitted += 1
+    if not values:
+        result.append("- none")
+    elif emitted < len(values):
+        result.append(f"- +{len(values) - emitted} more {tail_name} not listed")
+    return result
 
 
 def _text(value: object, limit: int) -> str:

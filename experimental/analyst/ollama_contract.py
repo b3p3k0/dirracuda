@@ -40,9 +40,15 @@ REPEAT_LAST_N: Final = 0
 SEED: Final = 1
 NUM_CTX: Final = 8192
 NUM_PREDICT: Final = 1024
+# Host READ is a separate reduce workload: it needs the full bounded inventory and
+# more output room.  These are intentionally tunable without changing the frozen
+# worksheet-v2 per-chunk generation profile above.
+READ_NUM_CTX: Final = 16384
+READ_NUM_PREDICT: Final = 2048
 KEEP_ALIVE: Final = "15m"
 
 MAX_SOURCE_CHARS: Final = 8000
+READ_MAX_SOURCE_CHARS: Final = 24000
 MAX_PROMPT_BYTES: Final = 64 * 1024
 MAX_FRAME_BYTES: Final = 512 * 1024
 MAX_BODY_BYTES: Final = 2 * 1024 * 1024
@@ -217,6 +223,56 @@ class GenerationOptions:
 
 
 GENERATION_OPTIONS: Final = GenerationOptions()
+
+
+@dataclass(frozen=True, slots=True)
+class ReadGenerationOptions:
+    """Generation controls for the host-level READ reduce workload."""
+
+    temperature: float = TEMPERATURE
+    top_p: float = TOP_P
+    top_k: int = TOP_K
+    min_p: float = MIN_P
+    repeat_penalty: float = REPEAT_PENALTY
+    repeat_last_n: int = REPEAT_LAST_N
+    seed: int = SEED
+    num_ctx: int = READ_NUM_CTX
+    num_predict: int = READ_NUM_PREDICT
+
+    def __post_init__(self) -> None:
+        expected = (
+            TEMPERATURE, TOP_P, TOP_K, MIN_P, REPEAT_PENALTY, REPEAT_LAST_N,
+            SEED, READ_NUM_CTX, READ_NUM_PREDICT,
+        )
+        observed = (
+            self.temperature, self.top_p, self.top_k, self.min_p,
+            self.repeat_penalty, self.repeat_last_n, self.seed, self.num_ctx,
+            self.num_predict,
+        )
+        if tuple(type(value) for value in observed) != (
+            float, float, int, float, float, int, int, int, int,
+        ) or any(
+            value.hex() != frozen.hex() if type(value) is float
+            else value != frozen
+            for value, frozen in zip(observed, expected, strict=True)
+        ):
+            raise ContractError("READ generation options differ from their profile")
+
+    def as_payload(self) -> dict[str, int | float]:
+        return {
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "top_k": self.top_k,
+            "min_p": self.min_p,
+            "repeat_penalty": self.repeat_penalty,
+            "repeat_last_n": self.repeat_last_n,
+            "seed": self.seed,
+            "num_ctx": self.num_ctx,
+            "num_predict": self.num_predict,
+        }
+
+
+READ_GENERATION_OPTIONS: Final = ReadGenerationOptions()
 
 
 @dataclass(frozen=True, slots=True)
@@ -559,17 +615,54 @@ def build_read_chat_request(
     model_digest: str = ANALYST_DEFAULTS.model_digest,
 ) -> ChatRequest:
     """Build the pinned host READ reduce request."""
+    return _build_read_chat_request(
+        source_text, nonce, PromptKind.PRIMARY, model_tag, model_digest,
+    )
+
+
+def build_read_repair_chat_request(
+    source_text: str,
+    *,
+    nonce: str,
+    model_tag: str = ANALYST_DEFAULTS.model_tag,
+    model_digest: str = ANALYST_DEFAULTS.model_digest,
+) -> ChatRequest:
+    """Build the error-specific host READ repair request."""
+    return _build_read_chat_request(
+        source_text, nonce, PromptKind.MODEL_INVALID_REPAIR,
+        model_tag, model_digest,
+    )
+
+
+def _build_read_chat_request(
+    source_text: str,
+    nonce: str,
+    prompt_kind: PromptKind,
+    model_tag: str,
+    model_digest: str,
+) -> ChatRequest:
     if type(source_text) is not str or type(nonce) is not str:
         raise TypeError("source text and nonce must be strings")
-    if not 1 <= len(source_text) <= MAX_SOURCE_CHARS:
-        raise ContractError("source text is outside the frozen chunk bound")
+    if type(prompt_kind) is not PromptKind:
+        raise TypeError("prompt kind must use the closed enum")
+    if not 1 <= len(source_text) <= READ_MAX_SOURCE_CHARS:
+        raise ContractError("source text is outside the READ source bound")
     if _NONCE.fullmatch(nonce) is None or nonce in source_text:
         raise ContractError("nonce must be a fresh FENCE token absent from source")
     _require_model_identity(model_tag, model_digest)
 
-    from .read_worksheet import build_read_prompt, read_schema
+    from .read_worksheet import (
+        build_read_prompt,
+        build_read_repair_prompt,
+        read_schema,
+    )
 
-    prompt = build_read_prompt(source_text, nonce=nonce)
+    prompt_builder = (
+        build_read_prompt
+        if prompt_kind is PromptKind.PRIMARY
+        else build_read_repair_prompt
+    )
+    prompt = prompt_builder(source_text, nonce=nonce)
     if _utf8_size(prompt, "prompt") > MAX_PROMPT_BYTES:
         raise ContractError("prompt exceeds the request bound")
     payload = {
@@ -577,7 +670,7 @@ def build_read_chat_request(
         "messages": [{"role": "user", "content": prompt}],
         "stream": True,
         "format": read_schema(),
-        "options": GENERATION_OPTIONS.as_payload(),
+        "options": READ_GENERATION_OPTIONS.as_payload(),
         "think": False,
         "keep_alive": KEEP_ALIVE,
     }
@@ -587,7 +680,7 @@ def build_read_chat_request(
         nonce=nonce,
         body=body,
         request_sha256=hashlib.sha256(body).hexdigest(),
-        prompt_kind=PromptKind.PRIMARY,
+        prompt_kind=prompt_kind,
         model_tag=model_tag,
         model_digest=model_digest,
     )
@@ -645,9 +738,11 @@ def validate_chat_request(request: ChatRequest) -> None:
     """Revalidate a request immediately before transport dispatch."""
     if not isinstance(request, ChatRequest):
         raise TypeError("request must be a ChatRequest")
+    read_request = type(request) is ReadChatRequest
+    source_limit = READ_MAX_SOURCE_CHARS if read_request else MAX_SOURCE_CHARS
     if (
         type(request.source_text) is not str
-        or not 1 <= len(request.source_text) <= MAX_SOURCE_CHARS
+        or not 1 <= len(request.source_text) <= source_limit
         or type(request.nonce) is not str
         or _NONCE.fullmatch(request.nonce) is None
         or request.nonce in request.source_text
@@ -655,8 +750,10 @@ def validate_chat_request(request: ChatRequest) -> None:
         or type(request.request_sha256) is not str
         or _SHA256.fullmatch(request.request_sha256) is None
         or type(getattr(request, "prompt_kind", None)) is not PromptKind
-        or type(request) is ReadChatRequest
-        and request.prompt_kind is not PromptKind.PRIMARY
+        or read_request
+        and request.prompt_kind not in {
+            PromptKind.PRIMARY, PromptKind.MODEL_INVALID_REPAIR,
+        }
         or not valid_model_tag(request.model_tag)
         or not valid_model_digest(request.model_digest)
         or type(request.endpoint) is not str
@@ -670,7 +767,7 @@ def validate_chat_request(request: ChatRequest) -> None:
         raise ContractError("chat request body is not canonical JSON")
     _validate_payload(
         payload, request.source_text, request.nonce, request.prompt_kind,
-        type(request) is ReadChatRequest, request.model_tag,
+        read_request, request.model_tag,
     )
 
 
@@ -698,9 +795,17 @@ def _validate_payload(
     model_tag: str,
 ) -> None:
     if read_request:
-        from .read_worksheet import build_read_prompt, read_schema
+        from .read_worksheet import (
+            build_read_prompt,
+            build_read_repair_prompt,
+            read_schema,
+        )
 
-        prompt_builder = build_read_prompt
+        prompt_builder = (
+            build_read_prompt
+            if prompt_kind is PromptKind.PRIMARY
+            else build_read_repair_prompt
+        )
         response_schema = read_schema()
     else:
         from .worksheet import build_prompt, build_repair_prompt, worksheet_schema
@@ -735,7 +840,11 @@ def _validate_payload(
     options = payload.get("options")
     if type(options) is not dict or set(options) != _OPTION_KEYS:
         raise ContractError("generation option field set is invalid")
-    expected_options = GENERATION_OPTIONS.as_payload()
+    expected_options = (
+        READ_GENERATION_OPTIONS.as_payload()
+        if read_request
+        else GENERATION_OPTIONS.as_payload()
+    )
     if canonical_json(options) != canonical_json(expected_options):
         raise ContractError("generation options differ from the frozen benchmark")
     if tuple(type(options[name]) for name in expected_options) != (
@@ -832,6 +941,11 @@ __all__ = [
     "MODEL_TAG",
     "NUM_CTX",
     "NUM_PREDICT",
+    "READ_GENERATION_OPTIONS",
+    "READ_MAX_SOURCE_CHARS",
+    "READ_NUM_CTX",
+    "READ_NUM_PREDICT",
+    "ReadGenerationOptions",
     "OLLAMA_CHAT_URL",
     "OLLAMA_ENDPOINT",
     "OLLAMA_PS_URL",
@@ -842,6 +956,7 @@ __all__ = [
     "PreflightResult",
     "PromptKind",
     "QUALIFIED_OLLAMA_VERSION",
+    "ReadChatRequest",
     "SEED",
     "TOTAL_REQUEST_SECONDS",
     "TagsCheckResult",
@@ -850,6 +965,7 @@ __all__ = [
     "build_chat_request",
     "build_discovery_request",
     "build_read_chat_request",
+    "build_read_repair_chat_request",
     "build_repair_chat_request",
     "canonical_json",
     "is_cloud_model_tag",
