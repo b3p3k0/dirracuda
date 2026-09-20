@@ -37,15 +37,42 @@ Move `OLLAMA_ENDPOINT`, `OLLAMA_VERSION_URL`, `OLLAMA_TAGS_URL`, `OLLAMA_PS_URL`
 
 ### 2. Relax the identity assertion
 
-`OllamaIdentity.__post_init__` currently requires `self.endpoint == OLLAMA_ENDPOINT`.
-It must accept any endpoint that `endpoint.py` validates.
+There are **five** frozen-endpoint checks, not one. All five move together or the diff
+does not compile. Corrected 2026-09-20 — `ARCHITECTURE.md` §2.2 named only the first.
 
-`_discovery_identity_bytes()` keeps the URL as an input, so `EXPECTED_IDENTITY` becomes a
-function of the endpoint rather than a module-level `Final`. This is correct — the
-endpoint is part of the request shape.
+| Symbol | Line | Check |
+| --- | --- | --- |
+| `OllamaIdentity.__post_init__` | 286-292 | `self.endpoint != OLLAMA_ENDPOINT` |
+| `DiscoveryRequest.__post_init__` | 313-330 | `self.endpoint != OLLAMA_ENDPOINT` |
+| `DiscoveryRequest.__post_init__` | 318 | `self.url != OLLAMA_TAGS_URL` |
+| `DiscoveryRequest.__post_init__` | 322 | `self.request_sha256 != DISCOVERY_REQUEST_SHA256` |
+| `validate_chat_request` | 759-760 | `request.endpoint != OLLAMA_ENDPOINT` |
 
-Call sites, excluding tests: `ollama_client.py` (11), `contact_contract.py` (4),
-`service.py` (2), `ollama_state.py` (2).
+Each must accept any endpoint that `endpoint.py` validates.
+
+`_discovery_identity_bytes()` (line 106) keeps the URL as an input, so
+`DISCOVERY_REQUEST_SHA256` (line 125) and `EXPECTED_IDENTITY` (line 296) become functions
+of the endpoint rather than module-level `Final`s. This is correct — the endpoint is part
+of the request shape.
+
+Call sites, excluding tests. Counts measured 2026-09-20, not carried over from
+`ARCHITECTURE.md` §2.2, which was wrong on three rows:
+
+| File | Occurrences | Note |
+| --- | --- | --- |
+| `experimental/analyst/ollama_contract.py` | 23 | the definitions themselves |
+| `experimental/analyst/ollama_client.py` | 6 | import `:24-26`, use `:196`, `:231`, `:294` |
+| `experimental/analyst/contact_contract.py` | 6 | import `:12`, bindings `:77`, `:80`, `:83` |
+| `experimental/analyst/service.py` | 2 | import `:27`, bind `:268` |
+| `experimental/analyst/ollama_state.py` | 2 | import `:31`, validator `:1253` |
+| `scripts/analyst_c9_live_acceptance.py` | 7 | **not** frozen; tested by `scripts/tests/test_analyst_c9_live_acceptance.py:100-103` |
+
+`scripts/analyst_benchmark/c0b{2,4,5,6}_runtime.py` declare their **own** literal
+`OLLAMA_ENDPOINT = "http://127.0.0.1:11434"` and never import `ollama_contract`. They are
+insulated from this change by construction. The module-level loopback default is
+belt-and-braces there, not load-bearing. The seals genuinely at risk are the hardcoded
+`docs/dev/ollama_integration/` paths in `c0b2_leakscan.py:21-141`, which endpoint work
+does not touch.
 
 ### 3. Profiles
 
@@ -81,6 +108,20 @@ intercepting.
 
 `discover_models()` and `list_discovered_models()` in `service.py` take an endpoint.
 
+## Remote is saved but not reachable (D17)
+
+N1 parameterises the endpoint. N3 writes the transport policy. Between them the door
+exists with no lock, so N1 supplies a temporary one.
+
+- The profile editor **saves** a non-loopback profile normally. Full CRUD, no special case.
+- The network client **refuses to open a connection** to any non-loopback endpoint, with
+  an explicit "remote servers are not enabled yet" result. Not a transport error.
+- The guard lives in `ollama_client.py`, the last step before the socket. Not in the UI —
+  a script or a direct DB write must not be able to bypass it.
+- The profile editor states plainly that a remote profile cannot run yet. Silent failure
+  is not acceptable.
+- N3 removes the guard. One place to unwind.
+
 ## Out of scope
 
 No OpenAI adapter. No TLS. No Keymaster. No consent dialog. No backend detection. Those
@@ -93,6 +134,7 @@ are N2 and N3.
 | `ollama_contract.py` | 977 | should **shrink** — constants move out |
 | `analyst_tab.py` | 1323 | must not exceed 1500; use a satellite module |
 | `service.py` | 1000 | ≤1200 |
+| `ollama_state.py` | 1288 | ≤1400 |
 | `db_schema.py` | 1272 | ≤1500 |
 
 ## Acceptance
@@ -107,5 +149,8 @@ are N2 and N3.
 5. Profile CRUD round-trips. Migration on an existing DB is additive and reversible in
    the sense that old rows still read.
 6. The GUI host/port controls drive a real profile, or are gone.
-7. `./venv/bin/python -m pytest` for `shared`/`experimental` and `gui` separately, both
+7. A non-loopback profile saves and round-trips, and a connection attempt against it is
+   refused with the "remote servers are not enabled yet" result. A test asserts the
+   refusal happens in the client, not only in the UI.
+8. `./venv/bin/python -m pytest` for `shared`/`experimental` and `gui` separately, both
    green. Xvfb screenshot of the profile editor.

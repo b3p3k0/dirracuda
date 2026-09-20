@@ -63,22 +63,34 @@ The URL is also an input to `_discovery_identity_bytes()`, alongside
 the request shape.
 
 `OllamaIdentity.__post_init__` (line 286) hard-asserts `self.endpoint == OLLAMA_ENDPOINT`.
-That single assertion is the blocking one.
 
-Usage count, excluding tests:
+**Corrected 2026-09-20.** This section previously said that was "the single blocking
+assertion." It is not. There are five frozen-endpoint checks:
+`OllamaIdentity.__post_init__:289`, `DiscoveryRequest.__post_init__:316`, `:318`
+(`url != OLLAMA_TAGS_URL`), `:322` (`request_sha256 != DISCOVERY_REQUEST_SHA256`), and
+`validate_chat_request:760`. `N1_CARD.md` §2 carries the authoritative table.
 
-| File | References |
-| --- | --- |
-| `experimental/analyst/ollama_contract.py` | 21 |
-| `experimental/analyst/ollama_client.py` | 11 |
-| `scripts/analyst_c9_live_acceptance.py` | 9 |
-| `experimental/analyst/contact_contract.py` | 4 |
-| `scripts/analyst_benchmark/c0b{2,4,5,6}_runtime.py` | 2 each |
-| `experimental/analyst/service.py` | 2 |
-| `experimental/analyst/ollama_state.py` | 2 |
+Usage count, excluding tests. **Re-measured 2026-09-20**; three rows in the original
+table were wrong and are corrected here:
+
+| File | References | Was |
+| --- | --- | --- |
+| `experimental/analyst/ollama_contract.py` | 23 | 21 |
+| `scripts/analyst_c9_live_acceptance.py` | 7 | 9 |
+| `experimental/analyst/ollama_client.py` | 6 | 11 |
+| `experimental/analyst/contact_contract.py` | 6 | 4 |
+| `experimental/analyst/service.py` | 2 | — |
+| `experimental/analyst/ollama_state.py` | 2 | — |
+| `scripts/analyst_benchmark/c0b{2,4,5,6}_runtime.py` | 2 each, self-declared | — |
 
 The benchmark scripts under `scripts/analyst_benchmark/` are frozen evidence. They must
 keep resolving to loopback. Give them a module-level default rather than editing them.
+
+**They are already insulated.** `c0b{2,4,5,6}_runtime.py` declare their own literal
+`OLLAMA_ENDPOINT = "http://127.0.0.1:11434"` and never import `ollama_contract`. The
+module-level default is belt-and-braces for them, not load-bearing. `scripts/analyst_c9_live_acceptance.py`
+does import the URL constants and is **not** frozen — it is the script that actually
+breaks, along with `scripts/tests/test_analyst_c9_live_acceptance.py:100-103`.
 
 ### 2.3 The database is already multi-endpoint
 
@@ -512,7 +524,7 @@ Backends) Risks". The RB-* ids below are the working labels used during planning
 | RB-3 | `analyst_tab.py` crosses 1700 lines. | Put profile management in a satellite module in N1, before the UI grows. |
 | RB-4 | A DNS name resolves private at Test time and public at run time. | Re-resolve and re-check at run start (§7.1). |
 | RB-5 | Keymaster lock state blocks an unattended run. | Explicit "Keymaster is locked" failure, not a transport error. Cache session keys per app lifetime. |
-| RB-6 | Endpoint parameterisation leaks into frozen benchmark scripts and invalidates a seal. | Module-level loopback default; do not edit `scripts/analyst_benchmark/*`. Re-run the leak scan and provenance checks in N1. |
+| RB-6 | Endpoint parameterisation leaks into frozen benchmark scripts and invalidates a seal. | **Downgraded 2026-09-20.** `c0b{2,4,5,6}_runtime.py` declare their own endpoint literal and never import `ollama_contract`, so they cannot be reached by this change. The exposed script is `scripts/analyst_c9_live_acceptance.py`, which is not frozen. Keep the module-level loopback default; do not edit `scripts/analyst_benchmark/*`; re-run the leak scan and provenance checks in N1. |
 | RB-7 | Two Dirracuda instances hit one remote server and interleave. | Accepted and documented (§9, D11). Warn, fail clearly, record contention. No arbitration attempted. |
 | RB-9 | The context gate reads the wrong context number. | **Reshaped by probe P2.** Division by slots is version-dependent and did not occur on `b1-f280b26`. The real failure is a router reporting `n_ctx: 0`. Detect router vs single (§6.1); the server's own `exceed_context_size_error` is the backstop. |
 | RB-11 | A cold or sleeping model makes the first request take minutes; Analyst times out and records a false failure. | Measured: 11k prompt tokens took 33s to process on a warm 27B. A cold 120B load is far longer. Read timeouts must tolerate it, and the UI must distinguish "loading" from "stuck". |
@@ -520,6 +532,7 @@ Backends) Risks". The RB-* ids below are the working labels used during planning
 | RB-13 | An embeddings or vision model is offered in the dropdown and fails at runtime. | Filter to text-generation models (§7.5). |
 | RB-10 | Ollama model thrashing when two clients want different models. | Out of scope for the client. Documented in the ANALYST_GUIDE section (§9.1). |
 | RB-8 | Token leaks into logs or `report.json`. | The existing leak-scan tooling covers this. Extend its patterns to bearer tokens and add a test. |
+| RB-14 | Between N1 and N3 the endpoint is parameterised but the transport policy is not written, so a remote endpoint is reachable with no TLS, no token, and no address check. | **D17.** N1's network client refuses any non-loopback connection outright. The guard sits in `ollama_client.py`, not the UI. N3 replaces it with the real policy. |
 
 ---
 

@@ -72,6 +72,7 @@ Decided with the HI on 2026-09-20. Do not relitigate without a new decision here
 | D11 | Analyst does not arbitrate access to a shared server. It warns when slots are busy, maps capacity errors to plain messages, and records contention in `report.json`. | Neither backend exposes a lock primitive. Arbitration would need a sidecar coordinator — more moving parts than the problem is worth. |
 | D12 | Server-admin guidance is a new section in `docs/ANALYST_GUIDE.md`, not a new document. | The guide already carries hardening, troubleshooting, and privacy. One discoverable place beats a second file nobody opens. |
 | D13 | N2 covers local and LAN together. There is no local-only stage. | The D2 plaintext opt-out already makes a remote private-range host reachable, so a local-first split buys nothing. |
+| D17 | N1 saves a non-loopback profile but refuses to open a connection to one. The guard lives in the network client, not the profile editor. N3 lifts it. | N1 parameterises the endpoint; N3 writes the transport policy. Between them the door exists with no lock. Guarding at the transport layer is the last step before the socket, so a script or a direct DB write cannot bypass it, and N1's profile CRUD stays testable. Decided with the HI 2026-09-20. |
 
 ## Test hosts
 
