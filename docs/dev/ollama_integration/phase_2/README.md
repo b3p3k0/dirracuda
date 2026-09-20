@@ -45,10 +45,11 @@ at R1.
 
 Not authorization to implement. Sequenced after the read-first redesign.
 
-1. Remote model server, plus llama.cpp support. **Planning opened 2026-09-20** in
-   [`remote_backends/`](remote_backends/README.md). Originally scoped as a split card in
-   the redesign brief, section 11. Step 0 is an HI-run probe against a real llama.cpp
-   host; every code card stays HELD.
+1. Remote model server, plus llama.cpp support. **N0 complete 2026-09-20** in
+   [`remote_backends/`](remote_backends/README.md): Step 0 probes executed against a real
+   llama.cpp host, contract frozen, erratum E17 accepted, risks R102-R114 registered, and
+   cards N1-N3 written. Every code card stays HELD until its own PASS. Start the next
+   session with [`remote_backends/KICKOFF_PROMPT.md`](remote_backends/KICKOFF_PROMPT.md).
 2. OCR / image coverage under a separately reviewed parser, licensing, sandbox, and
    resource contract.
 3. Measured performance or report-workflow improvements from real operator use.

@@ -502,6 +502,9 @@ and never from a public address.
 
 ## 11. Risks
 
+These are registered in `RISK_REGISTER.md` as **R102–R114** under "Phase 2 (Remote
+Backends) Risks". The RB-* ids below are the working labels used during planning.
+
 | ID | Risk | Mitigation |
 | --- | --- | --- |
 | RB-1 | llama.cpp honours `response_format: json_schema` loosely. | **Closed by probe P4.** Strict JSON, enum and `additionalProperties:false` honoured, no fence. No GBNF fallback needed. |

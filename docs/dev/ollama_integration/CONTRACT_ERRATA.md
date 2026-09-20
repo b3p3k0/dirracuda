@@ -748,3 +748,76 @@ overflow.
 
 Mergerfs identities above `2^63 - 1` now round-trip without truncation or collision.
 Schema v3 changes no run, contact, model-attempt or report semantics.
+
+---
+
+## E17 — Analyst may connect to an operator-configured endpoint
+
+**Status:** ACCEPTED (HI, 2026-09-20)
+**Affects:** §8 (Ollama request contract), §18 (prerequisites)
+**Raised by:** remote-backends N0 planning, after the `mimir` Step 0 probe
+
+### The conflict
+
+§8 requires "exact loopback URL validation (no DNS-derived hosts)" and states verbatim
+that "Analyst connects only to a literal-loopback Ollama endpoint". §18 requires the
+operator to "publish 11434 on host loopback only".
+
+The operator's goal is to offload Analyst to stronger hardware on another machine. That
+is impossible under the literal reading, and the wording would become false the moment a
+remote profile exists.
+
+### The correction
+
+§8's local-only paragraph (lines 218-224) is replaced by:
+
+> Analyst connects only to an endpoint the operator configured. It disables redirects,
+> ignores ambient proxies, and rejects known cloud tag forms (`:cloud` and `-cloud`) on
+> the Ollama backend. A non-loopback endpoint requires TLS and a bearer token, or an
+> explicit per-profile acknowledgement that is accepted only for private address ranges;
+> a public plaintext endpoint is refused with no override. Analyst records the endpoint,
+> backend, and model identity with every run. Analyst cannot prove where a server sends
+> data after receiving it. Server-level egress control remains an operator prerequisite.
+
+§18's loopback publication rule survives as the **default**, not as a constraint. An
+operator who configures a remote profile has accepted the consequence, and the UI
+confirms it per run.
+
+The full policy is frozen in
+[`phase_2/remote_backends/CONTRACT_REMOTE_BACKENDS.md`](phase_2/remote_backends/CONTRACT_REMOTE_BACKENDS.md).
+
+### What does not change
+
+1. Redirects stay disabled. Ambient proxies stay ignored. `trust_env` stays `False`.
+2. Cloud tag rejection stays in force on the Ollama backend.
+3. Bounded response bytes, bounded parsed-object size, and per-read / per-request /
+   total-run deadlines are unchanged.
+4. No "local only" or "zero cloud egress" claim appears anywhere, consistent with the
+   original §8 honesty rule.
+5. The Ollama native transport is not rewritten. It keeps `/api/chat`, per-request
+   `num_ctx`, and tag+digest identity, exactly as benchmarked through C0B-7.
+
+### Consequences accepted with this erratum
+
+1. **Extracted file text leaves the machine on a remote run.** That text is harvested
+   from open directories and is frequently sensitive. Mitigated by per-run consent,
+   a persistent remote marker, and address policy — not eliminated.
+2. **An unauthenticated private-range server is permitted** behind an explicit per-profile
+   acknowledgement. The probed host (`mimir`) is exactly this case: no `--api-key`,
+   reachable only over Tailscale because firewalld admits nothing on the LAN interface.
+   Analyst cannot verify that firewall posture and does not claim to.
+3. **A second backend dialect enters the codebase.** llama.cpp is reached over
+   `/v1/chat/completions`. Ollama's own `/v1` shim is never used: it silently ignores
+   `num_ctx` and returns no model digest, so using it would downgrade the benchmarked
+   local path.
+4. **Model identity weakens for the new backend.** llama.cpp exposes no cryptographic
+   digest. Identity is recorded as `reported` — model id, path, parameter count, size,
+   quantisation type, vocabulary size, and the server build fingerprint — and is labelled
+   unverified everywhere it renders. It is never presented as a digest.
+
+### Reversal condition
+
+If remote runs are later judged unacceptable for the data Analyst handles, remote
+profiles are removed and the loopback default stands alone. This erratum does not
+authorize any hosted or cloud model provider; §8's cloud rejection is unchanged and the
+address policy blocks public endpoints independently.

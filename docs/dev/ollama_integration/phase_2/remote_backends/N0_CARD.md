@@ -3,7 +3,7 @@
 - Date drafted: 2026-09-20
 - Branch: `feature/ollama-analyst`
 - Type: **docs / contract freeze.** No product code.
-- Status: **ready to write.** Step 0 completed 2026-09-20; see `PROBE_RESULTS.md`.
+- Status: **executed 2026-09-20.** Awaiting senior review + HI PASS.
 
 ## Why N0 exists
 
@@ -43,7 +43,7 @@ New documents in this directory:
 Pointer and append edits (no frozen file is changed):
 
 - `phase_2/README.md` — links this workspace as active.
-- `RISK_REGISTER.md` — appends RB-1 through RB-13 from `ARCHITECTURE.md` §11. Frozen
+- `RISK_REGISTER.md` — appends RB-1 through RB-13 from `ARCHITECTURE.md` §11 as **R102-R114**. Frozen
   Phase 1 entries untouched.
 - `CONTRACT_ERRATA.md` — appends one entry superseding the local-only wording at
   `CONTRACT.md:218-224`.

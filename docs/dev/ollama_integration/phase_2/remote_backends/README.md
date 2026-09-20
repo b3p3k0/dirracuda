@@ -31,7 +31,10 @@ longer Ollama-only.
 | --- | --- | --- |
 | `ARCHITECTURE.md` | Proposed design. Read this first. | Draft, 2026-09-20 |
 | `PROBE_PROTOCOL.md` | Step 0. Read-only probes the HI runs against a real llama.cpp host. | Ready to run |
-| `N0_CARD.md` | Contract freeze card. | **Unblocked 2026-09-20** — ready to write |
+| `N0_CARD.md` | Contract freeze card. | **Executed 2026-09-20** |
+| `CONTRACT_REMOTE_BACKENDS.md` | The frozen contract. Changes need an erratum. | Frozen at N0 |
+| `KICKOFF_PROMPT.md` | Paste-able starting prompt for the inheriting PA/RA. | Ready |
+| `N1_CARD.md` / `N2_CARD.md` / `N3_CARD.md` | Implementation cards. | HELD, each needs its own PASS |
 | `PROBE_RESULTS.md` | Step 0 output, run against `mimir`. Read this with ARCHITECTURE. | Complete |
 
 ## Sequence
@@ -39,7 +42,7 @@ longer Ollama-only.
 | Step | Name | Type | Gate |
 | --- | --- | --- | --- |
 | 0 | Probe | ~~HI runs~~ **Done 2026-09-20** over SSH against `mimir`. See `PROBE_RESULTS.md`. | Complete |
-| N0 | Contract freeze | Docs. Writes `CONTRACT_REMOTE_BACKENDS.md` + N1-N3 cards. | Senior review + HI PASS |
+| N0 | Contract freeze | ~~Docs.~~ **Done 2026-09-20.** Contract frozen, E17 accepted, R102-R114 registered, N1-N3 written. | Senior review + HI PASS |
 | N1 | Endpoint + profile plumbing | Code. Un-freezes the endpoint, adds server profiles, wires the dead GUI controls. | Own review |
 | N2 | OpenAI-compatible adapter | Code. llama.cpp support, local and LAN. | Own review |
 | N3 | Remote security | Code. TLS, token in Keymaster, cert pinning, egress consent. | Own review |
@@ -82,10 +85,12 @@ Decided with the HI on 2026-09-20. Do not relitigate without a new decision here
 - **Remote transport, manual**: the HI connects from a laptop over Tailscale.
 - **Remote Ollama**: no dedicated host. Covered by the same self-connect path.
 
-## Not decided
+## Resolved at N0
 
-Carry this into N0.
+The `CONTRACT.md` local-only wording (lines 218-224) is superseded by **erratum E17**,
+following the established pattern. `CONTRACT.md` itself is unedited.
 
-1. Whether the frozen `CONTRACT.md` local-only wording (lines 218-224) gets an errata
-   entry or a supersession note in the new contract. Errata is the established pattern
-   and is the working assumption.
+## Starting the next session
+
+Paste [`KICKOFF_PROMPT.md`](KICKOFF_PROMPT.md). It front-loads the five failure modes the
+inheriting agent is most likely to hit.
