@@ -45,8 +45,10 @@ at R1.
 
 Not authorization to implement. Sequenced after the read-first redesign.
 
-1. Remote model server (authenticated TLS gateway for a private AI box). Already scoped as
-   a split card inside the redesign brief, section 11.
+1. Remote model server, plus llama.cpp support. **Planning opened 2026-09-20** in
+   [`remote_backends/`](remote_backends/README.md). Originally scoped as a split card in
+   the redesign brief, section 11. Step 0 is an HI-run probe against a real llama.cpp
+   host; every code card stays HELD.
 2. OCR / image coverage under a separately reviewed parser, licensing, sandbox, and
    resource contract.
 3. Measured performance or report-workflow improvements from real operator use.
