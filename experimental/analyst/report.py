@@ -32,7 +32,7 @@ from .report_writer import (
     inspect_report_manifest,
     publish_report,
 )
-from .store import open_connection
+from .store import AnalystStoreBusy, open_connection, run_read
 from .worker_contract import WorkerContractError, validate_worker_run_id
 
 
@@ -286,23 +286,22 @@ def open_completed_report_relaxed(
     except (TypeError, WorkerContractError):
         raise ReportFinalizationError(ReportFailure.CONTRACT) from None
     try:
-        conn = open_connection(path, read_only=True)
-        try:
-            row = conn.execute(
+        row = run_read(
+            lambda conn: conn.execute(
                 "SELECT state,output_root,report_manifest_sha256 FROM analyst_runs "
                 "WHERE run_id=?", (canonical_run_id,),
-            ).fetchone()
-            if (
-                row is None
-                or str(row["state"]) != "complete"
-                or type(row["output_root"]) is not str
-                or type(row["report_manifest_sha256"]) is not str
-            ):
-                raise ReportFinalizationError(ReportFailure.STATE)
-            output_root = Path(str(row["output_root"]))
-            expected_sha256 = str(row["report_manifest_sha256"])
-        finally:
-            conn.close()
+            ).fetchone(),
+            path=path,
+        )
+        if (
+            row is None
+            or str(row["state"]) != "complete"
+            or type(row["output_root"]) is not str
+            or type(row["report_manifest_sha256"]) is not str
+        ):
+            raise ReportFinalizationError(ReportFailure.STATE)
+        output_root = Path(str(row["output_root"]))
+        expected_sha256 = str(row["report_manifest_sha256"])
         manifest = inspect_report_manifest(output_root)
         return CompletedReadResult(
             output_root=output_root,
@@ -313,6 +312,8 @@ def open_completed_report_relaxed(
         raise
     except ReportWriteError:
         raise ReportFinalizationError(ReportFailure.OUTPUT) from None
+    except AnalystStoreBusy:
+        raise
     except BaseException:
         raise ReportFinalizationError(ReportFailure.STATE) from None
 

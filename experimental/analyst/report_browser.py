@@ -31,7 +31,7 @@ from .report_state import (
     decode_inventory_report_row,
     decode_model_report_row,
 )
-from .store import open_connection, run_immediate
+from .store import run_immediate, run_read
 from .worker_contract import validate_worker_run_id
 
 
@@ -135,8 +135,7 @@ def list_completed_reports(
     """List compact completed run identities without touching report files."""
     if type(limit) is not int or not 1 <= limit <= MAX_BROWSER_RUNS:
         raise ValueError("completed report limit is invalid")
-    conn = open_connection(path, read_only=True)
-    try:
+    def operation(conn):
         rows = conn.execute(
             "SELECT run_id,report_label,finished_at_utc FROM analyst_runs "
             "WHERE state='complete' AND report_manifest_sha256 IS NOT NULL "
@@ -146,8 +145,8 @@ def list_completed_reports(
             (str(row["run_id"]), str(row["report_label"]), str(row["finished_at_utc"]))
             for row in rows
         )
-    finally:
-        conn.close()
+
+    return run_read(operation, path=path)
 
 
 def open_completed_report(
@@ -156,9 +155,8 @@ def open_completed_report(
     """Verify fixed artifacts, then return a bounded durable coverage handle."""
     canonical = validate_worker_run_id(run_id)
     manifest = verify_completed_report(canonical, path=path)
-    conn = open_connection(path, read_only=True)
-    try:
-        row = conn.execute(
+    row = run_read(
+        lambda conn: conn.execute(
             "SELECT run_id,report_manifest_sha256,report_label,mode,finished_at_utc,"
             "output_root,(SELECT count(*) FROM analyst_files f WHERE f.run_id=r.run_id) "
             "discovered,(SELECT count(*) FROM analyst_inventory_exclusions e "
@@ -177,9 +175,9 @@ def open_completed_report(
             "WHERE f.run_id=r.run_id AND f.terminal_code='complete_model_reviewed') "
             "model_findings FROM analyst_runs r WHERE run_id=? AND state='complete'",
             (canonical,),
-        ).fetchone()
-    finally:
-        conn.close()
+        ).fetchone(),
+        path=path,
+    )
     if row is None or str(row["report_manifest_sha256"]) != manifest.sha256:
         raise ReportStateError("completed report identity changed after verification")
     return CompletedReportHandle(
@@ -201,8 +199,7 @@ def load_completed_inventory_page(
 ) -> tuple[InventoryReportRow, ...]:
     """Load one ordinal page after rechecking the immutable DB identity."""
     _require_handle_page(handle, after_ordinal, limit, allow_zero=False)
-    conn = open_connection(path, read_only=True)
-    try:
+    def operation(conn):
         _require_completed_identity(conn, handle)
         rows = conn.execute(
             "SELECT f.file_id,f.ordinal,f.relative_path,f.size,f.sha256,f.stage,"
@@ -219,10 +216,11 @@ def load_completed_inventory_page(
             (handle.run_id, after_ordinal, limit),
         ).fetchall()
         return tuple(decode_inventory_report_row(row) for row in rows)
+
+    try:
+        return run_read(operation, path=path)
     except (ValueError, TypeError, KeyError, OverflowError) as exc:
         raise ReportStateError("completed inventory row is invalid") from exc
-    finally:
-        conn.close()
 
 
 def load_completed_detector_page(
@@ -234,8 +232,7 @@ def load_completed_detector_page(
 ) -> tuple[tuple[int, FindingReportRow], ...]:
     """Load one deterministic-evidence page with a private durable cursor."""
     _require_handle_page(handle, after_id, limit, allow_zero=True)
-    conn = open_connection(path, read_only=True)
-    try:
+    def operation(conn):
         _require_completed_identity(conn, handle)
         rows = conn.execute(
             "SELECT h.hit_id,h.ordinal,h.kind,h.value,h.start_char,h.end_char,"
@@ -247,10 +244,11 @@ def load_completed_detector_page(
         return tuple(
             (int(row["hit_id"]), decode_detector_report_row(row)) for row in rows
         )
+
+    try:
+        return run_read(operation, path=path)
     except (ValueError, TypeError, KeyError, OverflowError) as exc:
         raise ReportStateError("completed detector row is invalid") from exc
-    finally:
-        conn.close()
 
 
 def load_completed_model_page(
@@ -262,8 +260,7 @@ def load_completed_model_page(
 ) -> tuple[tuple[int, FindingReportRow], ...]:
     """Load suggested model evidence only from fully reviewed terminal files."""
     _require_handle_page(handle, after_id, limit, allow_zero=True)
-    conn = open_connection(path, read_only=True)
-    try:
+    def operation(conn):
         _require_completed_identity(conn, handle)
         rows = conn.execute(
             "SELECT m.finding_id,m.ordinal,m.category,m.quote,m.model_offset,"
@@ -287,10 +284,11 @@ def load_completed_model_page(
         return tuple(
             (int(row["finding_id"]), decode_model_report_row(row)) for row in rows
         )
+
+    try:
+        return run_read(operation, path=path)
     except (ValueError, TypeError, KeyError, OverflowError) as exc:
         raise ReportStateError("completed model row is invalid") from exc
-    finally:
-        conn.close()
 
 
 def review_model_finding(

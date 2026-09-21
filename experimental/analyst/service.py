@@ -37,6 +37,7 @@ from .ollama_state import (
 )
 from .state import RunState
 from .store import (
+    AnalystStoreBusy,
     AnalystStoreError,
     RunSpec,
     abandon_run as abandon_stored_run,
@@ -57,6 +58,7 @@ _MODE_VALUES = frozenset({"fast", "deep"})
 
 
 class ServiceFailure(str, Enum):
+    BUSY = "busy"
     CONTRACT = "contract"
     OUTPUT_INVALID = "output_invalid"
     OUTPUT_UNSAFE_FS = "output_unsafe_fs"
@@ -722,6 +724,8 @@ def read_report_json(
         if payload["run"]["run_id"] != canonical:
             raise ValueError("report identity does not match the completed run")
         return payload, opened.changed
+    except AnalystStoreBusy:
+        raise AnalystServiceError(ServiceFailure.BUSY) from None
     except Exception:
         raise AnalystServiceError(ServiceFailure.REPORT) from None
 

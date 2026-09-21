@@ -9,6 +9,8 @@ from tkinter import filedialog, ttk
 
 from experimental.analyst.report_json import UNVERIFIED_NOTICE, dumps_report
 from experimental.analyst.report_render import render, render_markdown
+from experimental.analyst.service import AnalystServiceError, ServiceFailure
+from experimental.analyst.store import AnalystStoreBusy
 from gui.utils import safe_messagebox
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.keybindings import bind_close_shortcuts
@@ -75,6 +77,9 @@ class AnalystReportWindow:
         refresh = tk.Button(row, text="Refresh", command=self._load_runs)
         self.theme.apply_to_widget(refresh, "button_secondary")
         refresh.pack(side=tk.LEFT)
+
+        self._retry_btn = tk.Button(row, text="Retry", command=self._load_runs)
+        self.theme.apply_to_widget(self._retry_btn, "button_secondary")
 
         self._status_var = tk.StringVar(value="")
         status = tk.Label(parent, textvariable=self._status_var, anchor="w", justify="left")
@@ -238,12 +243,19 @@ class AnalystReportWindow:
         self.window = None
 
     def _load_runs(self) -> None:
+        self._hide_retry()
         self._status_var.set("Loading completed reports…")
         self._set_report_actions(False)
         try:
             from experimental.analyst.report_browser import list_completed_reports
 
             rows = list_completed_reports(path=self.db_path)
+        except AnalystStoreBusy:
+            message = "Reports are busy — the analysis is still writing. Click Retry."
+            self._run_var.set(message)
+            self._status_var.set(message)
+            self._show_retry()
+            return
         except Exception:
             self._runs = []
             self._run_box.configure(values=())
@@ -252,6 +264,7 @@ class AnalystReportWindow:
             return
 
         self._runs = list(rows)
+        self._hide_retry()
         labels = [
             f"{label} · {finished} · {run_id[:12]}"
             for run_id, label, finished in self._runs
@@ -280,12 +293,22 @@ class AnalystReportWindow:
             from experimental.analyst.service import read_report_json
 
             report, changed = read_report_json(run_id, path=self.db_path)
+        except AnalystServiceError as exc:
+            if exc.code is ServiceFailure.BUSY:
+                self._status_var.set(
+                    "Report is busy — the analysis is still writing. Click Retry."
+                )
+                self._show_retry()
+                return
+            self._show_legacy_run()
+            return
         except Exception:
             self._show_legacy_run()
             return
         self._show_report(report, changed=changed)
 
     def _show_report(self, report: dict, *, changed: bool) -> None:
+        self._hide_retry()
         self._report = report
         run = report["run"]
         read = report["read"]
@@ -342,6 +365,12 @@ class AnalystReportWindow:
         self._clear_report()
         self._host_summary_var.set(_LEGACY_MESSAGE)
         self._status_var.set(_LEGACY_MESSAGE)
+
+    def _show_retry(self) -> None:
+        self._retry_btn.pack(side=tk.LEFT, padx=(6, 0))
+
+    def _hide_retry(self) -> None:
+        self._retry_btn.pack_forget()
 
     def _apply_fact_filter(self, _event=None) -> None:
         self._facts.delete(*self._facts.get_children(""))

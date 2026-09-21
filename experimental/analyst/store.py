@@ -49,6 +49,9 @@ from .worker_contract import (
 BUSY_TIMEOUT_MS = 250
 TRANSACTION_ATTEMPTS = 4
 TRANSACTION_BACKOFF_SECONDS = (0.025, 0.050, 0.100)
+READ_BUSY_TIMEOUT_MS = 2000
+READ_ATTEMPTS = 6
+READ_BACKOFF_SECONDS = (0.05, 0.10, 0.15, 0.20, 0.25)
 
 _T = TypeVar("_T")
 Transaction = Callable[[sqlite3.Connection], _T]
@@ -132,10 +135,18 @@ def initialize_database(path: Path | None = None) -> Path:
 
 
 def open_connection(
-    path: Path | None = None, *, read_only: bool = False,
+    path: Path | None = None,
+    *,
+    read_only: bool = False,
+    busy_timeout_ms: int = BUSY_TIMEOUT_MS,
 ) -> sqlite3.Connection:
     """Open one exact v3 connection with the frozen C8 PRAGMA policy."""
-    return _connect(get_db_path(path), read_only=read_only, validate=True)
+    return _connect(
+        get_db_path(path),
+        read_only=read_only,
+        validate=True,
+        busy_timeout_ms=busy_timeout_ms,
+    )
 
 
 def run_immediate(
@@ -167,6 +178,30 @@ def run_immediate(
         if attempt < len(TRANSACTION_BACKOFF_SECONDS):
             time.sleep(TRANSACTION_BACKOFF_SECONDS[attempt])
     raise AnalystStoreBusy("Analyst sidecar remained busy after bounded retry") from last_busy
+
+
+def run_read(operation: Transaction[_T], *, path: Path | None = None) -> _T:
+    """Run one read-only query with bounded whole-operation busy retry."""
+    last_busy = None
+    for attempt in range(READ_ATTEMPTS):
+        conn = None
+        try:
+            conn = open_connection(
+                path, read_only=True, busy_timeout_ms=READ_BUSY_TIMEOUT_MS,
+            )
+            return operation(conn)
+        except sqlite3.Error as exc:
+            if not _is_primary_busy(exc):
+                raise
+            last_busy = exc
+        finally:
+            if conn is not None:
+                conn.close()
+        if attempt < len(READ_BACKOFF_SECONDS):
+            time.sleep(READ_BACKOFF_SECONDS[attempt])
+    raise AnalystStoreBusy(
+        "Analyst sidecar remained busy after bounded read retry"
+    ) from last_busy
 
 
 def write_host_read(
@@ -530,7 +565,11 @@ def abandon_run(
 
 
 def _connect(
-    path: Path, *, read_only: bool, validate: bool,
+    path: Path,
+    *,
+    read_only: bool,
+    validate: bool,
+    busy_timeout_ms: int = BUSY_TIMEOUT_MS,
 ) -> sqlite3.Connection:
     before = _require_owner_file(path)
     mode = "ro" if read_only else "rw"
@@ -541,14 +580,16 @@ def _connect(
             uri,
             uri=True,
             autocommit=True,
-            timeout=BUSY_TIMEOUT_MS / 1000,
+            timeout=busy_timeout_ms / 1000,
         )
     except sqlite3.Error:
         after = _require_owner_file(path)
         _require_same_file(before, after)
         raise
     try:
-        _configure_connection(conn, read_only=read_only)
+        _configure_connection(
+            conn, read_only=read_only, busy_timeout_ms=busy_timeout_ms,
+        )
         after = _require_owner_file(path)
         _require_same_file(before, after)
         if validate:
@@ -637,7 +678,12 @@ def _raw_sqlite_identity(path: Path) -> tuple[int, int]:
     )
 
 
-def _configure_connection(conn: sqlite3.Connection, *, read_only: bool) -> None:
+def _configure_connection(
+    conn: sqlite3.Connection,
+    *,
+    read_only: bool,
+    busy_timeout_ms: int = BUSY_TIMEOUT_MS,
+) -> None:
     if not read_only:
         row = conn.execute("PRAGMA journal_mode=DELETE").fetchone()
         if row is None or str(row[0]).lower() != "delete":
@@ -649,7 +695,7 @@ def _configure_connection(conn: sqlite3.Connection, *, read_only: bool) -> None:
     settings = (
         ("synchronous", "EXTRA", 3),
         ("foreign_keys", "ON", 1),
-        ("busy_timeout", str(BUSY_TIMEOUT_MS), BUSY_TIMEOUT_MS),
+        ("busy_timeout", str(busy_timeout_ms), busy_timeout_ms),
         ("mmap_size", "0", 0),
         ("temp_store", "MEMORY", 2),
         ("trusted_schema", "OFF", 0),
@@ -808,6 +854,9 @@ __all__ = [
     "AnalystStoreError",
     "BUSY_TIMEOUT_MS",
     "ForkRequired",
+    "READ_ATTEMPTS",
+    "READ_BACKOFF_SECONDS",
+    "READ_BUSY_TIMEOUT_MS",
     "RunSpec",
     "TRANSACTION_ATTEMPTS",
     "abandon_run",
@@ -818,6 +867,7 @@ __all__ = [
     "load_worker_run",
     "open_connection",
     "run_immediate",
+    "run_read",
     "verify_run_spec",
     "write_host_read",
 ]
