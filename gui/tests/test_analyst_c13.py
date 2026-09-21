@@ -273,7 +273,6 @@ def test_live_refresh_preserves_selection_and_disables_empty_report_browser():
     assert inserted[0][1]["values"][2:] == (
         "running", "4/10 finalized · 2/3 model-reviewed",
     )
-    assert button_states == [{"state": "disabled"}]
     assert statuses[-1].startswith("Running · Public Report ·")
     assert tab._refresh_interval == 2_000
 

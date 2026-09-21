@@ -10,7 +10,6 @@ from tkinter import filedialog, ttk
 from experimental.analyst.report_json import UNVERIFIED_NOTICE, dumps_report
 from experimental.analyst.report_render import render, render_markdown
 from experimental.analyst.service import AnalystServiceError, ServiceFailure
-from experimental.analyst.store import AnalystStoreBusy
 from gui.utils import safe_messagebox
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.keybindings import bind_close_shortcuts
@@ -24,15 +23,18 @@ _LEGACY_MESSAGE = "Legacy run - re-run to view a read."
 class AnalystReportWindow:
     """Modeless, read-only browser for the sealed read-first report artifact."""
 
-    def __init__(self, parent: tk.Widget, *, db_path: Path | None = None) -> None:
+    def __init__(
+        self, parent: tk.Widget, run_id=None, *, db_path: Path | None = None,
+    ) -> None:
         self.parent = parent
+        self._run_id = run_id
         self.db_path = db_path
         self.theme = get_theme()
         self.window: tk.Toplevel | None = None
-        self._runs: list[tuple[str, str, str]] = []
         self._report: dict | None = None
         self._build()
-        self._load_runs()
+        if run_id is not None:
+            self._open_run(run_id)
 
     def _build(self) -> None:
         window = tk.Toplevel(self.parent)
@@ -60,25 +62,9 @@ class AnalystReportWindow:
         self.theme.apply_to_widget(row, "main_window")
         row.pack(fill=tk.X, pady=(0, 8))
 
-        label = tk.Label(row, text="Completed report:")
-        self.theme.apply_to_widget(label, "label")
-        label.pack(side=tk.LEFT)
-
-        self._run_var = tk.StringVar(value="Loading…")
-        self._run_box = ttk.Combobox(
-            row,
-            textvariable=self._run_var,
-            state="readonly",
-            width=58,
+        self._retry_btn = tk.Button(
+            row, text="Retry", command=lambda: self._open_run(self._run_id),
         )
-        self._run_box.pack(side=tk.LEFT, padx=(8, 8), fill=tk.X, expand=True)
-        self._run_box.bind("<<ComboboxSelected>>", self._on_run_selected, add="+")
-
-        refresh = tk.Button(row, text="Refresh", command=self._load_runs)
-        self.theme.apply_to_widget(refresh, "button_secondary")
-        refresh.pack(side=tk.LEFT)
-
-        self._retry_btn = tk.Button(row, text="Retry", command=self._load_runs)
         self.theme.apply_to_widget(self._retry_btn, "button_secondary")
 
         self._status_var = tk.StringVar(value="")
@@ -242,51 +228,10 @@ class AnalystReportWindow:
             self.window.destroy()
         self.window = None
 
-    def _load_runs(self) -> None:
+    def _open_run(self, run_id) -> None:
+        if run_id is None:
+            return
         self._hide_retry()
-        self._status_var.set("Loading completed reports…")
-        self._set_report_actions(False)
-        try:
-            from experimental.analyst.report_browser import list_completed_reports
-
-            rows = list_completed_reports(path=self.db_path)
-        except AnalystStoreBusy:
-            message = "Reports are busy — the analysis is still writing. Click Retry."
-            self._run_var.set(message)
-            self._status_var.set(message)
-            self._show_retry()
-            return
-        except Exception:
-            self._runs = []
-            self._run_box.configure(values=())
-            self._run_var.set("Completed reports unavailable")
-            self._status_var.set("Completed reports are unavailable.")
-            return
-
-        self._runs = list(rows)
-        self._hide_retry()
-        labels = [
-            f"{label} · {finished} · {run_id[:12]}"
-            for run_id, label, finished in self._runs
-        ]
-        self._run_box.configure(values=labels)
-        if not labels:
-            self._run_var.set("No completed reports")
-            self._status_var.set("No completed Analyst report is available yet.")
-            self._clear_report()
-            return
-        self._run_box.current(0)
-        self._open_selected(0)
-
-    def _on_run_selected(self, _event=None) -> None:
-        index = self._run_box.current()
-        if index >= 0:
-            self._open_selected(index)
-
-    def _open_selected(self, index: int) -> None:
-        if not 0 <= index < len(self._runs):
-            return
-        run_id = self._runs[index][0]
         self._status_var.set("Opening report…")
         self._set_report_actions(False)
         try:
@@ -305,7 +250,11 @@ class AnalystReportWindow:
         except Exception:
             self._show_legacy_run()
             return
+        self._run_id = run_id
         self._show_report(report, changed=changed)
+
+    def open_run(self, run_id) -> None:
+        self._open_run(run_id)
 
     def _show_report(self, report: dict, *, changed: bool) -> None:
         self._hide_retry()
@@ -463,10 +412,10 @@ class AnalystReportWindow:
 
 
 def show_analyst_report_window(
-    parent: tk.Widget, *, db_path: Path | None = None,
+    parent: tk.Widget, run_id=None, *, db_path: Path | None = None,
 ) -> AnalystReportWindow:
     """Build and return one modeless read-first report browser."""
-    return AnalystReportWindow(parent, db_path=db_path)
+    return AnalystReportWindow(parent, run_id, db_path=db_path)
 
 
 __all__ = ["AnalystReportWindow", "show_analyst_report_window"]

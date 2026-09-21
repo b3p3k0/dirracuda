@@ -104,8 +104,7 @@ def report():
 
 
 @pytest.fixture
-def view(monkeypatch):
-    monkeypatch.setattr(report_window.AnalystReportWindow, "_load_runs", lambda self: None)
+def view():
     root = tk.Tk()
     root.withdraw()
     window = report_window.AnalystReportWindow(root)
@@ -188,12 +187,11 @@ def test_changed_badge_and_legacy_run_state(view, report, monkeypatch):
     assert str(view._export_btn["state"]) == "normal"
     assert str(view._copy_btn["state"]) == "normal"
 
-    view._runs = [("b" * 32, "legacy", "2026-09-18T12:00:00Z")]
     read_report_json = MagicMock(side_effect=RuntimeError("no report.json"))
     monkeypatch.setattr(
         "experimental.analyst.service.read_report_json", read_report_json,
     )
-    view._open_selected(0)
+    view._open_run("b" * 32)
 
     assert view._status_var.get() == "Legacy run - re-run to view a read."
     assert view._host_summary_var.get() == "Legacy run - re-run to view a read."

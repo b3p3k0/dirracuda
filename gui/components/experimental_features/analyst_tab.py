@@ -1160,13 +1160,6 @@ class AnalystTab:
         if retained:
             self._runs.selection_set(*retained)
             self._runs.focus(retained[0])
-        self._reports_btn.configure(
-            state=(
-                "normal"
-                if any(item.state.value == "complete" for item in self._summaries)
-                else "disabled"
-            )
-        )
         if not self._busy:
             self._status_var.set(_run_browser_status(self._summaries))
         self._hydrate_registry()
@@ -1248,11 +1241,15 @@ class AnalystTab:
         )
         self._delete_btn.configure(state="normal" if deletable else "disabled")
         if item is None:
+            self._reports_btn.configure(state="disabled")
             self._resume_btn.configure(state="disabled")
             self._cancel_btn.configure(state="disabled")
             self._abandon_btn.configure(state="disabled")
             return
 
+        self._reports_btn.configure(
+            state="normal" if item.state is RunState.COMPLETE else "disabled",
+        )
         resumable = (
             item.state in {
                 RunState.READY, RunState.INTERRUPTED,
@@ -1402,18 +1399,26 @@ class AnalystTab:
         self._analyze_btn.configure(state="disabled" if busy else "normal")
 
     def _open_reports(self) -> None:
+        from experimental.analyst.state import RunState
+
+        item = self._selected_summary()
+        if item is None or item.state is not RunState.COMPLETE:
+            return
         from gui.components.analyst_report_window import show_analyst_report_window
 
         existing = self._report_window
         if existing is not None and existing.window is not None:
             try:
                 if existing.window.winfo_exists():
+                    existing.open_run(item.run_id)
                     existing.window.lift()
                     existing.window.focus_force()
                     return
             except Exception:
                 pass
-        self._report_window = show_analyst_report_window(self.frame.winfo_toplevel())
+        self._report_window = show_analyst_report_window(
+            self.frame.winfo_toplevel(), item.run_id,
+        )
 
 
 def build_analyst_tab(parent: tk.Widget, context: dict) -> tk.Widget:
