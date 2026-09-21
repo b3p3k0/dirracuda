@@ -1086,8 +1086,15 @@ class AnalystTab:
 
         def work() -> None:
             try:
-                from experimental.analyst.service import list_run_summaries
+                from experimental.analyst.service import (
+                    list_run_summaries,
+                    reconcile_for_hydration,
+                )
 
+                try:
+                    reconcile_for_hydration()
+                except Exception:
+                    pass
                 summaries = list_run_summaries()
             except Exception:
                 self._schedule(lambda: self._finish_refresh(None))

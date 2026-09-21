@@ -278,7 +278,7 @@ def test_live_refresh_preserves_selection_and_disables_empty_report_browser():
     assert tab._refresh_interval == 2_000
 
 
-def test_dashboard_hydration_reconciles_once_then_refreshes_and_stops(monkeypatch):
+def test_dashboard_hydration_reconciles_each_refresh_and_stops(monkeypatch):
     from types import SimpleNamespace
 
     from gui.components import dashboard_experimental
@@ -330,6 +330,6 @@ def test_dashboard_hydration_reconciles_once_then_refreshes_and_stops(monkeypatc
     assert widget.running_tasks_registry.get_task(summary.task_id) is not None
     assert len(delayed) == 1
     delayed.pop()()
-    assert calls == ["reconcile", "list", "list"]
+    assert calls == ["reconcile", "list", "reconcile", "list"]
     dashboard_experimental.stop_analyst_task_hydration(widget)
     assert calls[-1][0] == "after_cancel"

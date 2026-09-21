@@ -135,7 +135,7 @@ def handle_experimental_button_click(widget) -> None:
 
 
 def start_analyst_task_hydration(widget) -> None:
-    """Reconcile once and restore durable Analyst tasks after GUI startup."""
+    """Restore durable Analyst tasks after GUI startup."""
     if getattr(widget, "_analyst_hydration_started", False):
         return
     registry = getattr(widget, "running_tasks_registry", None)
@@ -145,7 +145,6 @@ def start_analyst_task_hydration(widget) -> None:
     widget._analyst_hydration_started = True
     widget._analyst_hydration_stopped = False
     widget._analyst_hydration_after_id = None
-    widget._analyst_hydration_reconciled = False
     widget._analyst_hydration_busy = False
 
     def _schedule(callback) -> None:
@@ -198,9 +197,10 @@ def start_analyst_task_hydration(widget) -> None:
                 reconcile_for_hydration,
             )
 
-            if not getattr(widget, "_analyst_hydration_reconciled", False):
+            try:
                 reconcile_for_hydration()
-                widget._analyst_hydration_reconciled = True
+            except Exception:
+                pass
             summaries = list_run_summaries()
         except Exception:
             summaries = None
