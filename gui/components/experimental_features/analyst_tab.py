@@ -682,13 +682,38 @@ class AnalystTab:
             self._runs.selection_set(*children)
             self._on_selection()
 
+    def _browse_initialdir(self, current: str, persisted_key: str) -> str | None:
+        candidate = (current or "").strip()
+        if candidate and Path(candidate).is_dir():
+            return candidate
+        settings_manager = self._context.get("settings_manager")
+        if settings_manager is not None:
+            try:
+                saved = settings_manager.get_setting(persisted_key, None)
+            except Exception:
+                saved = None
+            if type(saved) is str and saved.strip() and Path(saved.strip()).is_dir():
+                return saved.strip()
+        return None
+
     def _browse_source(self) -> None:
-        selected = filedialog.askdirectory(parent=self.frame.winfo_toplevel())
+        selected = filedialog.askdirectory(
+            parent=self.frame.winfo_toplevel(),
+            initialdir=self._browse_initialdir(
+                self._source_var.get(), "analyst.input_folder",
+            ),
+        )
         if selected:
             self._source_var.set(selected)
+            self._persist_input_folder()
 
     def _browse_output(self) -> None:
-        selected = filedialog.askdirectory(parent=self.frame.winfo_toplevel())
+        selected = filedialog.askdirectory(
+            parent=self.frame.winfo_toplevel(),
+            initialdir=self._browse_initialdir(
+                self._output_var.get(), "analyst.output_folder",
+            ),
+        )
         if selected:
             self._output_var.set(selected)
 
@@ -997,6 +1022,17 @@ class AnalystTab:
         except Exception:
             pass
 
+    def _persist_input_folder(self) -> None:
+        settings_manager = self._context.get("settings_manager")
+        if settings_manager is None:
+            return
+        try:
+            settings_manager.set_setting(
+                "analyst.input_folder", self._source_var.get().strip(),
+            )
+        except Exception:
+            pass
+
     def _schedule(self, callback) -> None:
         try:
             if self.frame.winfo_exists():
@@ -1008,6 +1044,7 @@ class AnalystTab:
         if self._busy:
             return
         self._persist_output_folder()
+        self._persist_input_folder()
         source_kind = self._source_kind_var.get()
         request = None
         choice = None
