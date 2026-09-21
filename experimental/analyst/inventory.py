@@ -11,6 +11,7 @@ from typing import Callable, Final, Iterable
 
 HASH_READ_SIZE: Final = 1024 * 1024
 FDINFO_MAX_BYTES: Final = 16 * 1024
+INVENTORY_PROGRESS_INTERVAL = 512
 
 
 class InventoryError(RuntimeError):
@@ -34,6 +35,7 @@ class InventoryCancelled(InventoryError):
 
 
 CancelCheck = Callable[[], bool]
+ProgressCallback = Callable[[int], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,11 +98,13 @@ class _RootHandle:
 class _Walker:
     def __init__(self, root_stat: os.stat_result, mount_id: int,
                  limits: InventoryLimits,
-                 cancel_check: CancelCheck | None) -> None:
+                 cancel_check: CancelCheck | None,
+                 progress_callback: ProgressCallback | None = None) -> None:
         self.root_stat = root_stat
         self.mount_id = mount_id
         self.limits = limits
         self.cancel_check = cancel_check
+        self.progress_callback = progress_callback
         self.entries_seen = 0
         self.files: list[InventoryFile] = []
         self.exclusions: list[InventoryExclusion] = []
@@ -118,6 +122,11 @@ class _Walker:
         for name in names:
             self._check_cancel()
             self.entries_seen += 1
+            if (
+                self.progress_callback is not None
+                and self.entries_seen % INVENTORY_PROGRESS_INTERVAL == 0
+            ):
+                self.progress_callback(self.entries_seen)
             if self.entries_seen > self.limits.max_entries:
                 raise InventoryLimitError("inventory entry limit exceeded")
             relative = _relative(parts + (name,))
@@ -217,9 +226,13 @@ class _Walker:
             raise InventoryCancelled("inventory cancelled")
 
 
-def inventory_tree(root: Path, *,
-                   limits: InventoryLimits | None = None,
-                   cancel_check: CancelCheck | None = None) -> InventoryResult:
+def inventory_tree(
+    root: Path,
+    *,
+    limits: InventoryLimits | None = None,
+    cancel_check: CancelCheck | None = None,
+    progress_callback: ProgressCallback | None = None,
+) -> InventoryResult:
     """Inventory one absolute tree without following names after validation.
 
     The result is all-or-nothing for traversal/limit races. Individual unsafe
@@ -230,7 +243,10 @@ def inventory_tree(root: Path, *,
     try:
         root_stat = os.fstat(handle.root_fd)
         root_mount_id = _mount_id(handle.root_fd)
-        walker = _Walker(root_stat, root_mount_id, selected_limits, cancel_check)
+        walker = _Walker(
+            root_stat, root_mount_id, selected_limits, cancel_check,
+            progress_callback,
+        )
         walker.walk(handle.root_fd, (), 0)
         _verify_root_bindings(handle)
         return InventoryResult(

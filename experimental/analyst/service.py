@@ -290,6 +290,7 @@ def create_directory_run(
     path: Path | None = None,
     run_id_factory: TokenFactory = secrets.token_hex,
     cancel_check: Callable[[], bool] | None = None,
+    progress_callback: Callable[[int], None] | None = None,
 ) -> tuple[str, InventoryResult]:
     """Inventory and atomically persist one standalone directory run."""
     if type(request) is not DirectoryRunRequest:
@@ -311,7 +312,9 @@ def create_directory_run(
         raise
     try:
         inventory = inventory_tree(
-            request.source_root, cancel_check=cancel_check,
+            request.source_root,
+            cancel_check=cancel_check,
+            progress_callback=progress_callback,
         )
     except Exception:
         raise AnalystServiceError(ServiceFailure.INVENTORY) from None
@@ -438,10 +441,17 @@ def create_and_launch(
     model_digest: str | None = None,
     path: Path | None = None,
     paths: DirracudaPaths | None = None,
+    cancel_check: Callable[[], bool] | None = None,
+    progress_callback: Callable[[int], None] | None = None,
 ) -> RunLaunch:
     """Persist a run first, then launch it; launch failure leaves it resumable."""
     run_id, _inventory = create_directory_run(
-        request, model_tag=model_tag, model_digest=model_digest, path=path,
+        request,
+        model_tag=model_tag,
+        model_digest=model_digest,
+        path=path,
+        cancel_check=cancel_check,
+        progress_callback=progress_callback,
     )
     return launch_run(run_id, path=path, paths=paths)
 

@@ -192,10 +192,10 @@ def test_analyze_forwards_saved_pair_and_none_without_server_contact(
     tab._start_analysis()
     callbacks.get(timeout=2.0)()
 
-    assert launches[0][1] == {
-        "model_tag": _MODEL_TWO.model_tag,
-        "model_digest": _MODEL_TWO.model_digest,
-    }
+    assert launches[0][1]["model_tag"] == _MODEL_TWO.model_tag
+    assert launches[0][1]["model_digest"] == _MODEL_TWO.model_digest
+    assert callable(launches[0][1]["cancel_check"])
+    assert callable(launches[0][1]["progress_callback"])
     discover.assert_not_called()
 
     tab._selected_model_tag = None
@@ -203,5 +203,8 @@ def test_analyze_forwards_saved_pair_and_none_without_server_contact(
     tab._start_analysis()
     callbacks.get(timeout=2.0)()
 
-    assert launches[1][1] == {"model_tag": None, "model_digest": None}
+    assert launches[1][1]["model_tag"] is None
+    assert launches[1][1]["model_digest"] is None
+    assert callable(launches[1][1]["cancel_check"])
+    assert callable(launches[1][1]["progress_callback"])
     discover.assert_not_called()

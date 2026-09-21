@@ -110,6 +110,7 @@ class AnalystTab:
         self._report_window = None
         self._advanced_dialog = None
         self._export_dialog = None
+        self._launch_cancel_event = None
         self._auto_label = ""
         self.frame = tk.Frame(parent)
         self._theme.apply_to_widget(self.frame, "main_window")
@@ -216,6 +217,10 @@ class AnalystTab:
         )
         self._theme.apply_to_widget(self._analyze_btn, "button_primary")
         self._analyze_btn.pack(side=tk.LEFT, padx=(0, 7))
+        self._cancel_launch_btn = tk.Button(
+            controls, text="Cancel", state="normal", command=self._cancel_launch,
+        )
+        self._theme.apply_to_widget(self._cancel_launch_btn, "button_danger")
         self._advanced_btn = tk.Button(
             controls, text="Advanced...", command=self._open_advanced,
         )
@@ -1042,6 +1047,15 @@ class AnalystTab:
             )
             return
         self._set_busy(True, "Inventorying and creating the durable run…")
+        self._launch_cancel_event = None
+        if source_kind == "directory":
+            self._launch_cancel_event = threading.Event()
+            self._cancel_launch_btn.pack(side=tk.LEFT, padx=(0, 7))
+
+            def _progress(seen: int) -> None:
+                self._schedule(
+                    lambda: self._status_var.set(f"Inventorying… {seen} files")
+                )
 
         def work() -> None:
             try:
@@ -1052,6 +1066,8 @@ class AnalystTab:
                         request,
                         model_tag=model_tag,
                         model_digest=model_digest,
+                        cancel_check=self._launch_cancel_event.is_set,
+                        progress_callback=_progress,
                     )
                 else:
                     from experimental.analyst.service import create_manifest_and_launch
@@ -1066,7 +1082,13 @@ class AnalystTab:
                         model_digest=model_digest,
                     )
             except Exception as exc:
-                message = _creation_failure_message(exc)
+                if (
+                    self._launch_cancel_event is not None
+                    and self._launch_cancel_event.is_set()
+                ):
+                    message = "Inventory cancelled."
+                else:
+                    message = _creation_failure_message(exc)
                 self._schedule(lambda: self._finish_action(False, message))
                 return
             self._schedule(
@@ -1076,6 +1098,12 @@ class AnalystTab:
             )
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _cancel_launch(self) -> None:
+        event = self._launch_cancel_event
+        if event is not None:
+            event.set()
+            self._status_var.set("Cancelling inventory…")
 
     def _refresh_runs(self) -> None:
         if self._refreshing:
@@ -1360,6 +1388,7 @@ class AnalystTab:
         self._finish_action(True, message)
 
     def _finish_action(self, success: bool, message: str) -> None:
+        self._cancel_launch_btn.pack_forget()
         self._set_busy(False, message)
         if not success:
             safe_messagebox.showerror(
