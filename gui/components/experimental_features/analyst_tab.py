@@ -283,6 +283,12 @@ class AnalystTab:
         )
         self._theme.apply_to_widget(self._abandon_btn, "button_danger")
         self._abandon_btn.pack(side=tk.LEFT, padx=(0, 7))
+        self._delete_btn = tk.Button(
+            run_controls, text="Delete", state="disabled",
+            command=self._delete_selected,
+        )
+        self._theme.apply_to_widget(self._delete_btn, "button_danger")
+        self._delete_btn.pack(side=tk.LEFT, padx=(0, 7))
 
         self._status_var = tk.StringVar(value="Ready.")
         status = tk.Label(frame, textvariable=self._status_var, anchor="w")
@@ -1190,17 +1196,27 @@ class AnalystTab:
             return None
         return next((item for item in self._summaries if item.run_id == selected[0]), None)
 
+    def _selected_summaries(self):
+        selected = set(self._runs.selection())
+        return [item for item in self._summaries if item.run_id in selected]
+
     def _on_selection(self, _event=None) -> None:
         self._export_btn.configure(
             state="normal" if self._runs.selection() else "disabled",
         )
         item = self._selected_summary()
+        from experimental.analyst.state import RunState, TERMINAL_RUN_STATES
+
+        chosen = self._selected_summaries()
+        deletable = bool(chosen) and all(
+            summary.state in TERMINAL_RUN_STATES for summary in chosen
+        )
+        self._delete_btn.configure(state="normal" if deletable else "disabled")
         if item is None:
             self._resume_btn.configure(state="disabled")
             self._cancel_btn.configure(state="disabled")
             self._abandon_btn.configure(state="disabled")
             return
-        from experimental.analyst.state import RunState
 
         resumable = (
             item.state in {
@@ -1242,6 +1258,55 @@ class AnalystTab:
 
     def _abandon_run_id(self, run_id: str) -> None:
         self._run_service_action(run_id, "abandon")
+
+    def _delete_selected(self) -> None:
+        if self._busy:
+            return
+        from experimental.analyst.state import TERMINAL_RUN_STATES
+
+        chosen = [
+            summary for summary in self._selected_summaries()
+            if summary.state in TERMINAL_RUN_STATES
+        ]
+        if not chosen:
+            return
+        count = len(chosen)
+        if not safe_messagebox.askyesno(
+            "Analyst",
+            f"Delete {count} report(s)? This removes the report files and cannot be undone.",
+            parent=self.frame.winfo_toplevel(),
+        ):
+            return
+        run_ids = [summary.run_id for summary in chosen]
+        self._set_busy(True, "Deleting…")
+
+        def work() -> None:
+            failed = 0
+            for run_id in run_ids:
+                try:
+                    from experimental.analyst.service import delete_run
+
+                    delete_run(run_id)
+                except Exception:
+                    failed += 1
+            self._schedule(lambda: self._finish_delete(run_ids, failed))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _finish_delete(self, run_ids, failed) -> None:
+        registry = (
+            self._context.get("running_tasks_registry")
+            or get_running_task_registry()
+        )
+        for run_id in run_ids:
+            registry.remove_task(f"analyst:{run_id}")
+        total = len(run_ids)
+        deleted = total - failed
+        if failed:
+            message = f"Deleted {deleted} of {total}; {failed} failed."
+        else:
+            message = f"Deleted {deleted} report(s)."
+        self._finish_action(failed == 0, message)
 
     def _run_service_action(self, run_id: str, action: str) -> None:
         if self._busy:

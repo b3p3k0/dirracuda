@@ -7,6 +7,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import stat
 import subprocess
 from dataclasses import dataclass, field
@@ -42,6 +43,7 @@ from .store import (
     RunSpec,
     abandon_run as abandon_stored_run,
     create_run,
+    delete_run as store_delete_run,
     initialize_database,
     open_connection,
     run_immediate,
@@ -68,6 +70,7 @@ class ServiceFailure(str, Enum):
     LAUNCH = "launch"
     CANCEL = "cancel"
     ABANDON = "abandon"
+    DELETE = "delete"
     REPORT = "report"
     DISCOVERY = "discovery"
 
@@ -576,6 +579,50 @@ def abandon_run(run_id: str, *, path: Path | None = None) -> None:
         raise AnalystServiceError(ServiceFailure.ABANDON) from None
 
 
+def delete_run(run_id: str, *, path: Path | None = None) -> None:
+    try:
+        output_root = store_delete_run(run_id, path=path)
+    except AnalystStoreError:
+        raise AnalystServiceError(ServiceFailure.DELETE) from None
+    _remove_report_dir(output_root, run_id)
+    _remove_run_logs(run_id)
+
+
+def _remove_report_dir(output_root: str, run_id: str) -> None:
+    path = Path(output_root)
+    if not path.is_absolute():
+        return
+    try:
+        info = path.lstat()
+    except OSError:
+        return
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        return
+    if info.st_uid != os.getuid():
+        return
+    if run_id[:12] not in path.name:
+        return
+    shutil.rmtree(path, ignore_errors=True)
+
+
+def _remove_run_logs(run_id: str) -> None:
+    logs_dir = get_paths().analyst_logs_dir
+    try:
+        logs = tuple(logs_dir.glob(f"{run_id}-*.log"))
+    except OSError:
+        return
+    for log in logs:
+        try:
+            info = log.lstat()
+            if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+                continue
+            if info.st_uid != os.getuid():
+                continue
+            log.unlink()
+        except OSError:
+            continue
+
+
 def resume_run(
     run_id: str,
     *,
@@ -994,6 +1041,7 @@ __all__: Sequence[str] = (
     "create_manifest_and_launch",
     "create_manifest_run",
     "create_directory_run",
+    "delete_run",
     "launch_run",
     "discover_models",
     "list_discovered_models",

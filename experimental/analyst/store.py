@@ -38,7 +38,7 @@ from .db_schema import (
 from .file_identity import split_unsigned_u64
 from .inventory import InventoryFile, InventoryResult
 from .report_json import REPORT_SCHEMA_VERSION, HostRead
-from .state import RESUMABLE_RUN_STATES, RunState
+from .state import RESUMABLE_RUN_STATES, TERMINAL_RUN_STATES, RunState
 from .worker_contract import (
     WorkerContractError,
     WorkerRunContext,
@@ -564,6 +564,74 @@ def abandon_run(
     run_immediate(operation, path=path)
 
 
+def delete_run(run_id: str, *, path: Path | None = None) -> str:
+    _require_text(run_id, "run_id")
+
+    def operation(conn: sqlite3.Connection) -> str:
+        row = conn.execute(
+            "SELECT state,output_root FROM analyst_runs WHERE run_id=?", (run_id,)
+        ).fetchone()
+        if row is None:
+            raise AnalystStoreError("Analyst run does not exist")
+        if RunState(str(row["state"])) not in TERMINAL_RUN_STATES:
+            raise AnalystStoreError("Analyst run is not deletable")
+        lease = conn.execute(
+            "SELECT 1 FROM analyst_gpu_lease WHERE slot=1 AND run_id=?", (run_id,)
+        ).fetchone()
+        if lease is not None:
+            raise AnalystStoreError(
+                "cannot delete a run with an active worker lease"
+            )
+        output_root = row["output_root"]
+        conn.execute("PRAGMA defer_foreign_keys=ON")
+        conn.execute(
+            "DELETE FROM analyst_model_findings WHERE chunk_id IN ("
+            "SELECT c.chunk_id FROM analyst_chunks c JOIN analyst_files f "
+            "ON f.file_id=c.file_id WHERE f.run_id=?)",
+            (run_id,),
+        )
+        conn.execute(
+            "DELETE FROM analyst_model_attempts WHERE chunk_id IN ("
+            "SELECT c.chunk_id FROM analyst_chunks c JOIN analyst_files f "
+            "ON f.file_id=c.file_id WHERE f.run_id=?)",
+            (run_id,),
+        )
+        conn.execute(
+            "DELETE FROM analyst_chunks WHERE file_id IN ("
+            "SELECT file_id FROM analyst_files WHERE run_id=?)",
+            (run_id,),
+        )
+        conn.execute(
+            "DELETE FROM analyst_detector_hits WHERE file_id IN ("
+            "SELECT file_id FROM analyst_files WHERE run_id=?)",
+            (run_id,),
+        )
+        conn.execute(
+            "DELETE FROM analyst_provenance_units WHERE file_id IN ("
+            "SELECT file_id FROM analyst_files WHERE run_id=?)",
+            (run_id,),
+        )
+        conn.execute("DELETE FROM analyst_ollama_contacts WHERE run_id=?", (run_id,))
+        conn.execute("DELETE FROM analyst_read_exposures WHERE run_id=?", (run_id,))
+        conn.execute("DELETE FROM analyst_read_contact WHERE run_id=?", (run_id,))
+        conn.execute("DELETE FROM analyst_read WHERE run_id=?", (run_id,))
+        conn.execute("DELETE FROM analyst_ollama_schedule WHERE run_id=?", (run_id,))
+        conn.execute(
+            "DELETE FROM analyst_inventory_exclusions WHERE run_id=?", (run_id,)
+        )
+        conn.execute("DELETE FROM analyst_files WHERE run_id=?", (run_id,))
+        cursor = conn.execute(
+            "DELETE FROM analyst_runs WHERE run_id=? "
+            "AND state IN ('complete','abandoned')",
+            (run_id,),
+        )
+        if cursor.rowcount != 1:
+            raise AnalystStoreError("Analyst run changed during delete")
+        return str(output_root)
+
+    return run_immediate(operation, path=path)
+
+
 def _connect(
     path: Path,
     *,
@@ -861,6 +929,7 @@ __all__ = [
     "TRANSACTION_ATTEMPTS",
     "abandon_run",
     "create_run",
+    "delete_run",
     "get_db_path",
     "initialize_database",
     "list_active_runs",
