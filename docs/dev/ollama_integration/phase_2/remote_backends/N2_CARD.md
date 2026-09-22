@@ -124,8 +124,21 @@ Three things worth carrying into N2b:
 
 # N2b — The OpenAI-compatible adapter
 
-- Status: **HELD.** Requires N2a. Needs its own PASS.
-- Contract: §3, §4.1-4.3, §5, §7, §8, §11. Decision D19.
+- Status: **reviewed 2026-09-22.** Requires N2a (done).
+- Contract: §3, §4.1-4.3, §5, §7, §8, §11. Decisions D19, D20.
+
+## Senior review outcome (2026-09-22)
+
+| # | Finding | Resolution |
+| --- | --- | --- |
+| B1 | Contract §4 needs `exceed_context_size_error` and the empty-content/`reasoning_content` case to be distinguishable from `model_invalid` and from a transport failure. `ContactStatus` feeds `OLLAMA_CONTACT_STATES`, baked into three schema CHECKs (`db_schema.py:360`, `:501`, `:525`). Widening a CHECK needs a table rebuild. | **D20** — schema v9 adds both statuses and rebuilds the three contact tables. |
+| B2 | `RunSpec.model_digest` is a required `str` (`store.py:76`) and `create_run` is the only way a run is made, so a reported-identity run still could not be **created**. N2a's acceptance 3 was validated by direct INSERT, which is how this survived. | `RunSpec` gains an optional digest, the identity kind and the reported fields. |
+| M1 | `analyst_runs.profile_id` and `backend_kind` were added in v7 and nothing writes either. N3's run pinning (§6.4) would have nothing to pin against. | Run creation records both. |
+| M2 | `worker_preflight._PARSER_FILES` feeds every run's `parser_bundle_sha256`. `backends/*.py` is absent, so a run's provenance would not cover the code that talked to the model. `endpoint.py` is absent too, and it decides which server is contacted. | Both added to the bundle. |
+
+**Already in place, no work needed:** the chat path is injectable. `phase2.Dependencies.client`
+and `read_reduce` both accept any object exposing `.chat(...)`, so `backends/ollama.py`
+works as a thin wrapper with no restructuring.
 
 ## Work
 
