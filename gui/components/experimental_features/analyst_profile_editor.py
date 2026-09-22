@@ -464,6 +464,14 @@ def selected_profile(tab):
     return tab._profile_choices[0] if tab._profile_choices else None
 
 
+def selected_endpoint(tab) -> str:
+    """Return the tab's chosen endpoint, or the loopback default."""
+    from experimental.analyst.endpoint import DEFAULT_ENDPOINT
+
+    profile = selected_profile(tab)
+    return DEFAULT_ENDPOINT if profile is None else profile.endpoint_url
+
+
 def profile_selected(tab, _event=None) -> None:
     """Show the D17 note when the chosen profile cannot be contacted yet."""
     profile = selected_profile(tab)
@@ -491,5 +499,6 @@ __all__ = [
     "open_profile_editor",
     "profile_selected",
     "refresh_profile_choices",
+    "selected_endpoint",
     "selected_profile",
 ]

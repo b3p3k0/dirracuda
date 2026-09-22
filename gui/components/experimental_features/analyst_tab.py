@@ -479,7 +479,9 @@ class AnalystTab:
         try:
             from experimental.analyst.service import list_discovered_models
 
-            model_choices = list_discovered_models()
+            model_choices = list_discovered_models(
+                endpoint=self._selected_endpoint(),
+            )
         except Exception:
             model_choices = ()
         self._populate_model_choices(model_choices)
@@ -590,6 +592,10 @@ class AnalystTab:
         """Return the chosen profile, or None when none is stored."""
         return _editor().selected_profile(self)
 
+    def _selected_endpoint(self) -> str:
+        """Return the chosen profile's endpoint, or the loopback default."""
+        return _editor().selected_endpoint(self)
+
     def _profile_selected(self, _event=None) -> None:
         _editor().profile_selected(self)
 
@@ -605,18 +611,13 @@ class AnalystTab:
         if self._model_status_var is not None:
             self._model_status_var.set("Connecting to the model server…")
         preferred_tag = self._model_var.get()
-        profile = self._selected_profile()
-        endpoint = None if profile is None else profile.endpoint_url
+        endpoint = self._selected_endpoint()
 
         def work() -> None:
             try:
                 from experimental.analyst.service import discover_models
 
-                choices = (
-                    discover_models()
-                    if endpoint is None
-                    else discover_models(endpoint=endpoint)
-                )
+                choices = discover_models(endpoint=endpoint)
             except Exception as exc:
                 held = type(exc).__name__ == "RemoteNotEnabledError"
                 self._schedule(

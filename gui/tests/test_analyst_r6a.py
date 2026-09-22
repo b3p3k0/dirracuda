@@ -62,6 +62,23 @@ def _widgets(widget: tk.Misc):
         yield from _widgets(child)
 
 
+@pytest.fixture(autouse=True)
+def _isolated_profiles(tmp_path, monkeypatch):
+    """N1: keep the profile selector off the real user database."""
+    from experimental.analyst import profiles as profile_store
+
+    path = tmp_path / "profiles.db"
+    real_ensure = profile_store.ensure_default_profile
+    real_list = profile_store.list_profiles
+    monkeypatch.setattr(
+        profile_store, "ensure_default_profile",
+        lambda **kwargs: real_ensure(path=path),
+    )
+    monkeypatch.setattr(
+        profile_store, "list_profiles", lambda **kwargs: real_list(path=path),
+    )
+
+
 def test_run_summaries_surface_read_risk_and_result_labels(tmp_path: Path):
     source = tmp_path / "source"
     output = tmp_path / "output"
@@ -163,21 +180,25 @@ def test_tab_has_read_first_main_form_and_advanced_dialog(monkeypatch):
         dialog = tab._advanced_dialog
         assert dialog is not None
         advanced_texts = _widget_texts(dialog)
+        # N1: the disabled Local/Remote radios, the Host/Port entries and the
+        # Test button are replaced by a live profile selector plus "Manage...".
         assert {
             "Source", "A folder", "From a saved scan",
-            "Saved scan", "Reload", "Model server", "Local", "Remote AI box",
-            "later card", "Host", "Port", "Test", "Model",
+            "Saved scan", "Reload", "Model server", "Manage\u2026", "Model",
             "Offer a quick review after an extraction", "Cancel", "Save",
         } <= advanced_texts
+        assert not (
+            {"Local", "Remote AI box", "later card", "Host", "Port", "Test"}
+            & advanced_texts
+        )
         assert "Output Dir" not in advanced_texts
         assert "Output folder" not in advanced_texts
-        remote = next(
-            widget for widget in _widgets(dialog)
-            if widget.winfo_class() == "Radiobutton"
-            and widget.cget("text") == "Remote AI box"
-        )
-        assert remote.cget("state") == "disabled"
-        assert tab._server_kind_var.get() == "local"
+        # The selector is live and defaults to the loopback profile.
+        assert tab._profile_combo is not None
+        assert str(tab._profile_combo.cget("state")) == "readonly"
+        assert "127.0.0.1:11434" in tab._profile_var.get()
+        assert tab._selected_endpoint() == "http://127.0.0.1:11434"
+        assert tab._profile_note_var.get() == ""
         assert dialog.grab_current() == dialog
         focus.assert_called_once_with(dialog, root)
     finally:

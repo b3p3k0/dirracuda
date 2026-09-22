@@ -16,6 +16,7 @@ from experimental.analyst.ollama_contract import DiscoveredModel
 
 _MODEL_ONE = DiscoveredModel("model-one:7b", "1" * 64)
 _MODEL_TWO = DiscoveredModel("model-two:14b", "2" * 64)
+_LOOPBACK = "http://127.0.0.1:11434"
 
 
 class _Settings:
@@ -41,6 +42,23 @@ def _find_button(widget: tk.Misc, text: str) -> tk.Button:
         except LookupError:
             pass
     raise LookupError(text)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_profiles(tmp_path, monkeypatch):
+    """N1: keep the profile selector off the real user database."""
+    from experimental.analyst import profiles as profile_store
+
+    path = tmp_path / "profiles.db"
+    real_ensure = profile_store.ensure_default_profile
+    real_list = profile_store.list_profiles
+    monkeypatch.setattr(
+        profile_store, "ensure_default_profile",
+        lambda **kwargs: real_ensure(path=path),
+    )
+    monkeypatch.setattr(
+        profile_store, "list_profiles", lambda **kwargs: real_list(path=path),
+    )
 
 
 @pytest.fixture
@@ -77,7 +95,7 @@ def test_open_lists_persisted_models_without_contact_and_preselects_saved(
 
     tab._open_advanced()
 
-    listed.assert_called_once_with()
+    listed.assert_called_once_with(endpoint=_LOOPBACK)
     discover.assert_not_called()
     assert str(tab._model_combo.cget("state")) == "readonly"
     assert tuple(tab._model_combo.cget("values")) == (
@@ -93,12 +111,13 @@ def test_connect_discovers_off_thread_repopulates_and_failure_keeps_list(
     module, root = gui
     monkeypatch.setattr(
         "experimental.analyst.service.list_discovered_models",
-        lambda: (_MODEL_ONE,),
+        lambda **kwargs: (_MODEL_ONE,),
     )
     worker_threads = []
 
-    def discover():
+    def discover(*, endpoint=None):
         worker_threads.append(threading.get_ident())
+        assert endpoint == _LOOPBACK
         return (_MODEL_TWO,)
 
     monkeypatch.setattr(
@@ -120,7 +139,7 @@ def test_connect_discovers_off_thread_repopulates_and_failure_keeps_list(
     error = MagicMock()
     monkeypatch.setattr(module.safe_messagebox, "showerror", error)
 
-    def fail():
+    def fail(*, endpoint=None):
         raise RuntimeError("private transport detail")
 
     monkeypatch.setattr(
@@ -132,7 +151,7 @@ def test_connect_discovers_off_thread_repopulates_and_failure_keeps_list(
     assert tuple(tab._model_combo.cget("values")) == previous
     error.assert_called_once_with(
         "Analyst",
-        "Could not reach the model server on loopback.",
+        "Could not reach the model server.",
         parent=tab._advanced_dialog,
     )
 
@@ -143,7 +162,7 @@ def test_save_persists_selected_tag_and_digest(gui, monkeypatch) -> None:
     settings = _Settings()
     monkeypatch.setattr(
         "experimental.analyst.service.list_discovered_models",
-        lambda: (_MODEL_ONE, _MODEL_TWO),
+        lambda **kwargs: (_MODEL_ONE, _MODEL_TWO),
     )
     tab = module.AnalystTab(root, {"settings_manager": settings})
     tab._open_advanced()

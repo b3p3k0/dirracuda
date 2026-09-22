@@ -66,6 +66,23 @@ def _find_button(widget: tk.Misc, text: str) -> tk.Button:
     raise LookupError(text)
 
 
+@pytest.fixture(autouse=True)
+def _isolated_profiles(tmp_path, monkeypatch):
+    """N1: keep the profile selector off the real user database."""
+    from experimental.analyst import profiles as profile_store
+
+    path = tmp_path / "profiles.db"
+    real_ensure = profile_store.ensure_default_profile
+    real_list = profile_store.list_profiles
+    monkeypatch.setattr(
+        profile_store, "ensure_default_profile",
+        lambda **kwargs: real_ensure(path=path),
+    )
+    monkeypatch.setattr(
+        profile_store, "list_profiles", lambda **kwargs: real_list(path=path),
+    )
+
+
 @pytest.fixture
 def gui(monkeypatch):
     from gui.components.experimental_features import analyst_tab as module
