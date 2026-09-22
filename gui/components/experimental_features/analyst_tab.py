@@ -15,6 +15,13 @@ from gui.utils.style import get_theme
 from shared.path_service import get_paths
 
 
+def _editor():
+    """Resolve the profile-editor satellite at call time (one-way import)."""
+    from gui.components.experimental_features import analyst_profile_editor
+
+    return analyst_profile_editor
+
+
 _CREATE_FAILURE_MESSAGES = {
     "contract": "The source or output directory is not supported by Analyst.",
     "output_invalid": (
@@ -154,9 +161,11 @@ class AnalystTab:
         self._mode_var = tk.StringVar(value="fast")
         self._source_kind_var = tk.StringVar(value="directory")
         self._manifest_var = tk.StringVar(value="No persisted extraction selected")
-        self._server_kind_var = tk.StringVar(value="local")
-        self._server_host_var = tk.StringVar(value="127.0.0.1")
-        self._server_port_var = tk.StringVar(value="11434")
+        self._profile_var = tk.StringVar(value="")
+        self._profile_note_var = tk.StringVar(value="")
+        self._profile_choices: tuple = ()
+        self._profile_combo = None
+        self._profile_manage_btn = None
         self._model_var = tk.StringVar(value="")
         self._manifest_combo = None
         self._manifest_refresh_btn = None
@@ -400,49 +409,30 @@ class AnalystTab:
         server_heading.grid(
             row=3, column=0, columnspan=3, sticky="w", pady=(12, 3),
         )
-        server_modes = tk.Frame(outer)
-        self._theme.apply_to_widget(server_modes, "main_window")
-        server_modes.grid(row=4, column=0, columnspan=3, sticky="w")
-        local = tk.Radiobutton(
-            server_modes, text="Local", variable=self._server_kind_var,
-            value="local",
+        self._profile_combo = ttk.Combobox(
+            outer, textvariable=self._profile_var, state="readonly",
         )
-        self._theme.apply_to_widget(local, "checkbox")
-        local.pack(side=tk.LEFT, padx=(0, 14))
-        remote = tk.Radiobutton(
-            server_modes, text="Remote AI box", variable=self._server_kind_var,
-            value="remote", state="disabled",
+        self._profile_combo.grid(
+            row=4, column=0, columnspan=2, sticky="ew", pady=3,
         )
-        self._theme.apply_to_widget(remote, "checkbox")
-        remote.pack(side=tk.LEFT, padx=(0, 7))
-        later = tk.Label(server_modes, text="later card")
-        self._theme.apply_to_widget(later, "label")
-        later.pack(side=tk.LEFT)
+        self._profile_combo.bind(
+            "<<ComboboxSelected>>", self._profile_selected, add="+",
+        )
+        self._profile_manage_btn = tk.Button(
+            outer, text="Manage…", command=self._manage_profiles,
+        )
+        self._theme.apply_to_widget(
+            self._profile_manage_btn, "button_secondary",
+        )
+        self._profile_manage_btn.grid(row=4, column=2, padx=(7, 0), pady=3)
 
-        connection = tk.Frame(outer)
-        self._theme.apply_to_widget(connection, "main_window")
-        connection.grid(row=5, column=0, columnspan=3, sticky="w", pady=3)
-        host_label = tk.Label(connection, text="Host")
-        self._theme.apply_to_widget(host_label, "label")
-        host_label.pack(side=tk.LEFT)
-        host = tk.Entry(
-            connection, textvariable=self._server_host_var,
-            state="disabled", width=18,
+        profile_note = tk.Label(
+            outer, textvariable=self._profile_note_var, wraplength=520,
+            justify=tk.LEFT,
         )
-        self._theme.apply_to_widget(host, "entry")
-        host.pack(side=tk.LEFT, padx=(7, 12))
-        port_label = tk.Label(connection, text="Port")
-        self._theme.apply_to_widget(port_label, "label")
-        port_label.pack(side=tk.LEFT)
-        port = tk.Entry(
-            connection, textvariable=self._server_port_var,
-            state="disabled", width=8,
-        )
-        self._theme.apply_to_widget(port, "entry")
-        port.pack(side=tk.LEFT, padx=(7, 12))
-        test = tk.Button(connection, text="Test", state="disabled")
-        self._theme.apply_to_widget(test, "button_secondary")
-        test.pack(side=tk.LEFT)
+        self._theme.apply_to_widget(profile_note, "label")
+        profile_note.grid(row=5, column=0, columnspan=3, sticky="w", pady=(0, 3))
+        self._refresh_profile_choices()
 
         model_heading = tk.Label(outer, text="Model")
         self._theme.apply_to_widget(model_heading, "label")
@@ -592,6 +582,20 @@ class AnalystTab:
         combo.current(0)
         status.set(message)
 
+    def _refresh_profile_choices(self, *, select_id: int | None = None) -> None:
+        """Load stored profiles into the selector (see analyst_profile_editor)."""
+        _editor().refresh_profile_choices(self, select_id=select_id)
+
+    def _selected_profile(self):
+        """Return the chosen profile, or None when none is stored."""
+        return _editor().selected_profile(self)
+
+    def _profile_selected(self, _event=None) -> None:
+        _editor().profile_selected(self)
+
+    def _manage_profiles(self) -> None:
+        _editor().manage_profiles(self)
+
     def _discover_models(self) -> None:
         dialog = self._advanced_dialog
         button = self._model_connect_btn
@@ -599,18 +603,25 @@ class AnalystTab:
             return
         button.configure(state="disabled")
         if self._model_status_var is not None:
-            self._model_status_var.set("Connecting to the local model server…")
+            self._model_status_var.set("Connecting to the model server…")
         preferred_tag = self._model_var.get()
+        profile = self._selected_profile()
+        endpoint = None if profile is None else profile.endpoint_url
 
         def work() -> None:
             try:
                 from experimental.analyst.service import discover_models
 
-                choices = discover_models()
-            except Exception:
+                choices = (
+                    discover_models()
+                    if endpoint is None
+                    else discover_models(endpoint=endpoint)
+                )
+            except Exception as exc:
+                held = type(exc).__name__ == "RemoteNotEnabledError"
                 self._schedule(
                     lambda: self._finish_model_discovery(
-                        dialog, None, preferred_tag,
+                        dialog, None, preferred_tag, held=held,
                     )
                 )
                 return
@@ -622,7 +633,9 @@ class AnalystTab:
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _finish_model_discovery(self, dialog, choices, preferred_tag) -> None:
+    def _finish_model_discovery(
+        self, dialog, choices, preferred_tag, *, held: bool = False,
+    ) -> None:
         if self._advanced_dialog is not dialog:
             return
         try:
@@ -633,11 +646,23 @@ class AnalystTab:
         if self._model_connect_btn is not None:
             self._model_connect_btn.configure(state="normal")
         if choices is None:
+            from gui.components.experimental_features import (
+                analyst_profile_editor,
+            )
+
+            if held:
+                if self._model_status_var is not None:
+                    self._model_status_var.set("Remote servers are not enabled yet.")
+                safe_messagebox.showinfo(
+                    "Analyst", analyst_profile_editor.REMOTE_HELD_NOTE,
+                    parent=dialog,
+                )
+                return
             if self._model_status_var is not None:
                 self._model_status_var.set("Model server is unavailable.")
             safe_messagebox.showerror(
                 "Analyst",
-                "Could not reach the model server on loopback.",
+                "Could not reach the model server.",
                 parent=dialog,
             )
             return
