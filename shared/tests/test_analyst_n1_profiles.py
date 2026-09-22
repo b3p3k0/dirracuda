@@ -374,3 +374,65 @@ def test_a_loopback_profile_is_reachable(db: Path):
     profile = ensure_default_profile(path=db)
     assert profile.is_reachable_now is True
     assert OllamaClient(endpoint=profile.endpoint_url).endpoint.is_loopback
+
+
+# --------------------------------------------------------------------------
+# The service surfaces D17 honestly and leaves no dangling contact
+# --------------------------------------------------------------------------
+
+def test_discover_models_against_a_remote_endpoint_raises_and_closes_the_contact(
+    tmp_path: Path,
+):
+    """Acceptance 7: the refusal comes from the client, not the UI."""
+    from experimental.analyst import service
+
+    path = tmp_path / "analyst.db"
+    with pytest.raises(RemoteNotEnabledError):
+        service.discover_models(endpoint=_REMOTE, path=path)
+
+    conn = open_connection(path, read_only=True)
+    try:
+        rows = conn.execute(
+            "SELECT endpoint,state FROM analyst_discovery_contact"
+        ).fetchall()
+    finally:
+        conn.close()
+    assert len(rows) == 1
+    assert rows[0]["endpoint"] == _REMOTE
+    assert rows[0]["state"] != "dispatching", "the charge must be closed out"
+
+
+def test_discover_models_does_not_collapse_d17_into_a_service_error(tmp_path: Path):
+    """A generic AnalystServiceError would read as 'the server is down'."""
+    from experimental.analyst.service import AnalystServiceError
+
+    path = tmp_path / "analyst.db"
+    try:
+        __import__(
+            "experimental.analyst.service", fromlist=["discover_models"]
+        ).discover_models(endpoint=_REMOTE, path=path)
+    except AnalystServiceError:  # pragma: no cover - would be the bug
+        pytest.fail("D17 was reported as a generic discovery failure")
+    except RemoteNotEnabledError as exc:
+        assert "not enabled yet" in str(exc)
+
+
+def test_discover_models_persists_per_endpoint(tmp_path: Path, monkeypatch):
+    """Two endpoints keep separate model lists."""
+    from experimental.analyst import service
+    from experimental.analyst.ollama_contract import DiscoveredModel
+
+    path = tmp_path / "analyst.db"
+    digest = "c" * 64
+
+    class _FakeClient:
+        def __init__(self, *, endpoint=None, **kwargs):
+            self.endpoint = endpoint
+
+        def list_models(self):
+            return (DiscoveredModel("alpha:3b", digest),)
+
+    monkeypatch.setattr(service, "OllamaClient", _FakeClient)
+    service.discover_models(path=path)
+    assert len(service.list_discovered_models(path=path)) == 1
+    assert service.list_discovered_models(endpoint=_REMOTE, path=path) == ()
