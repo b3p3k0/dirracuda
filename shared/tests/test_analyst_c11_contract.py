@@ -6,6 +6,7 @@ import hashlib
 
 import pytest
 
+from experimental.analyst import ollama_contract as contract
 from experimental.analyst import worksheet
 from experimental.analyst.ollama_contract import (
     MODEL_DIGEST,
@@ -140,9 +141,11 @@ def test_repair_prompt_identity_is_hash_pinned_and_drift_fails_closed(
 
 
 def test_split_control_results_are_content_free_on_every_failure() -> None:
+    # D20: context_exceeded and configuration_failure are chat-only, so a
+    # control contact may not carry them.
     allowed_failures = set(OllamaStatus) - {
         OllamaStatus.SUCCESS, OllamaStatus.MODEL_INVALID,
-    }
+    } - contract.CHAT_ONLY_STATUSES
     for status in allowed_failures:
         assert VersionCheckResult(status).observed_version is None
         assert TagsCheckResult(status).model_digest is None

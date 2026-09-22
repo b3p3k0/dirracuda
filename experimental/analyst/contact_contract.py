@@ -53,6 +53,14 @@ class ContactStatus(str, Enum):
     RESPONSE_LIMIT = "response_limit"
     IDENTITY_MISMATCH = "identity_mismatch"
     ORPHANED_UNKNOWN = "orphaned_unknown"
+    # Contract section 4: both must stay distinguishable from model_invalid and
+    # from a generic transport failure, on the durable record as well as in the
+    # returned result. Decision D20.
+    #: The server refused the prompt as larger than its context.
+    CONTEXT_EXCEEDED = "context_exceeded"
+    #: The server answered, but Analyst had asked for something unusable -
+    #: empty content beside a populated reasoning channel, for instance.
+    CONFIGURATION_FAILURE = "configuration_failure"
 
 
 class ScheduleState(str, Enum):
@@ -272,6 +280,14 @@ def semantic_attempt_state(status: ContactStatus) -> AttemptState | None:
         ContactStatus.IDENTITY_MISMATCH: AttemptState.MODEL_TRANSPORT_ERROR,
         ContactStatus.CANCELLED_UNVERIFIED: AttemptState.CANCELLED_UNVERIFIED,
         ContactStatus.ORPHANED_UNKNOWN: AttemptState.ORPHANED_UNKNOWN,
+        # Contract section 4 requires both to be distinguishable from
+        # model_invalid, which is SCHEMA_INVALID here. Neither is the model's
+        # fault, so neither may map to it. MODEL_TRANSPORT_ERROR consumes a
+        # semantic attempt and exhausts after two, which is right: both are
+        # deterministic for a given prompt, so retrying forever would loop.
+        # The durable contact row carries the precise reason.
+        ContactStatus.CONTEXT_EXCEEDED: AttemptState.MODEL_TRANSPORT_ERROR,
+        ContactStatus.CONFIGURATION_FAILURE: AttemptState.MODEL_TRANSPORT_ERROR,
         ContactStatus.RESOURCE_BUSY: None,
     }
     if status is ContactStatus.DISPATCHING:

@@ -403,6 +403,8 @@ def test_contact_schedule_vocabularies_and_caps_are_exact() -> None:
         "request_timeout", "resource_busy", "transport_unavailable",
         "protocol_violation", "response_limit", "identity_mismatch",
         "orphaned_unknown",
+        # D20: contract section 4 outcomes that must not read as model_invalid.
+        "context_exceeded", "configuration_failure",
     }
     assert {item.value for item in ScheduleState} == {
         "available", "backoff", "paused_resource",
@@ -556,6 +558,9 @@ def test_semantic_attempt_mapping_is_closed_and_resource_never_consumes() -> Non
         ContactStatus.RESOURCE_BUSY: None,
         ContactStatus.TRANSPORT_UNAVAILABLE: AttemptState.MODEL_TRANSPORT_ERROR,
         ContactStatus.PROTOCOL_VIOLATION: AttemptState.MODEL_TRANSPORT_ERROR,
+        # D20: neither may map to SCHEMA_INVALID, which is model_invalid.
+        ContactStatus.CONTEXT_EXCEEDED: AttemptState.MODEL_TRANSPORT_ERROR,
+        ContactStatus.CONFIGURATION_FAILURE: AttemptState.MODEL_TRANSPORT_ERROR,
         ContactStatus.RESPONSE_LIMIT: AttemptState.MODEL_TRANSPORT_ERROR,
         ContactStatus.IDENTITY_MISMATCH: AttemptState.MODEL_TRANSPORT_ERROR,
         ContactStatus.ORPHANED_UNKNOWN: AttemptState.ORPHANED_UNKNOWN,

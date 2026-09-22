@@ -111,6 +111,29 @@ def test_high_bit_mergerfs_identity_persists_and_claims_losslessly(
     ) == (device, inode)
 
 
+def _restore_frozen_table(conn, ddl: str, table: str) -> None:
+    """Rebuild one table to its frozen literal, preserving the rows it shares.
+
+    Later schema versions rebuilt these tables, and dropping columns cannot undo
+    a relaxed NOT NULL or a widened CHECK. Drop and recreate under the original
+    name rather than renaming: ALTER TABLE ... RENAME TO writes the name quoted
+    into sqlite_schema and would not match the literal byte for byte.
+    """
+    probe = sqlite3.connect(":memory:")
+    probe.execute(ddl)
+    columns = [row[1] for row in probe.execute(f"PRAGMA table_info({table})")]
+    probe.close()
+    kept = list(conn.execute(f"SELECT {','.join(columns)} FROM {table}"))
+    conn.execute(f"DROP TABLE {table}")
+    conn.execute(ddl)
+    if kept:
+        conn.executemany(
+            f"INSERT INTO {table}({','.join(columns)}) "
+            f"VALUES({','.join('?' * len(columns))})",
+            kept,
+        )
+
+
 def test_populated_exact_v2_migrates_in_place_with_zero_high_bits(
     tmp_path: Path,
 ) -> None:
@@ -126,19 +149,14 @@ def test_populated_exact_v2_migrates_in_place_with_zero_high_bits(
         # Rebuild by dropping and recreating under the original name, not by
         # renaming: ALTER TABLE ... RENAME TO writes the name quoted into
         # sqlite_schema, which would not match the v1 literal byte for byte.
-        v1_runs = db_schema._V1_TABLE_DDL[0]
-        probe = sqlite3.connect(":memory:")
-        probe.execute(v1_runs)
-        v1_cols = [row[1] for row in probe.execute("PRAGMA table_info(analyst_runs)")]
-        probe.close()
-        kept = list(conn.execute(f"SELECT {','.join(v1_cols)} FROM analyst_runs"))
-        conn.execute("DROP TABLE analyst_runs")
-        conn.execute(v1_runs)
-        conn.executemany(
-            f"INSERT INTO analyst_runs({','.join(v1_cols)}) "
-            f"VALUES({','.join('?' * len(v1_cols))})",
-            kept,
+        _restore_frozen_table(conn, db_schema._V1_TABLE_DDL[0], "analyst_runs")
+        # v9 widened the contact state CHECK, which a DROP COLUMN cannot undo.
+        _restore_frozen_table(
+            conn, db_schema._V2_ADDITIONAL_TABLE_DDL[0], "analyst_ollama_contacts",
         )
+        for statement in db_schema._V2_ADDITIONAL_INDEX_DDL:
+            if "analyst_ollama_contacts" in statement:
+                conn.execute(statement)
         for statement in db_schema._V1_INDEX_DDL:
             if "analyst_runs" in statement:
                 conn.execute(statement)

@@ -107,6 +107,12 @@ def test_status_vocabulary_is_closed_and_exact() -> None:
         "protocol_violation",
         "response_limit",
         "identity_mismatch",
+        # D20: contract section 4 outcomes, chat-only.
+        "context_exceeded",
+        "configuration_failure",
+    }
+    assert contract.CHAT_ONLY_STATUSES == {
+        OllamaStatus.CONTEXT_EXCEEDED, OllamaStatus.CONFIGURATION_FAILURE,
     }
 
 
@@ -373,7 +379,7 @@ def test_preflight_result_retains_identity_only_on_success() -> None:
     assert result.model_digest == contract.MODEL_DIGEST
     for status in set(OllamaStatus) - {
         OllamaStatus.SUCCESS, OllamaStatus.MODEL_INVALID,
-    }:
+    } - contract.CHAT_ONLY_STATUSES:
         assert PreflightResult(status).observed_version is None
     with pytest.raises(ContractError):
         PreflightResult(OllamaStatus.SUCCESS, None, contract.MODEL_DIGEST)

@@ -174,6 +174,21 @@ class OllamaStatus(str, Enum):
     PROTOCOL_VIOLATION = "protocol_violation"
     RESPONSE_LIMIT = "response_limit"
     IDENTITY_MISMATCH = "identity_mismatch"
+    #: The server refused the prompt as larger than its context (contract 5.4).
+    CONTEXT_EXCEEDED = "context_exceeded"
+    #: Analyst asked for something the server could not usefully answer
+    #: (contract 7.4): never recorded as model_invalid, which would blame the
+    #: model for an Analyst misconfiguration.
+    CONFIGURATION_FAILURE = "configuration_failure"
+
+
+#: Outcomes only a chat contact can produce. A control contact (version, tags,
+#: ps) sends no prompt, so it can neither exceed a context nor return an
+#: unusable answer shape. D20.
+CHAT_ONLY_STATUSES: Final = frozenset({
+    OllamaStatus.CONTEXT_EXCEEDED,
+    OllamaStatus.CONFIGURATION_FAILURE,
+})
 
 
 class PromptKind(str, Enum):
@@ -962,6 +977,7 @@ if (
 
 __all__ = [
     "CANCEL_HEALTH_DELAY_SECONDS",
+    "CHAT_ONLY_STATUSES",
     "CONNECT_TIMEOUT_SECONDS",
     "ChatMetrics",
     "ChatRequest",

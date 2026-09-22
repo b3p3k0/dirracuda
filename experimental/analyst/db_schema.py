@@ -35,11 +35,13 @@ V4_SCHEMA_VERSION: Final = 4
 V5_SCHEMA_VERSION: Final = 5
 V6_SCHEMA_VERSION: Final = 6
 V7_SCHEMA_VERSION: Final = 7
-PREVIOUS_SCHEMA_VERSION: Final = V7_SCHEMA_VERSION
-SCHEMA_VERSION: Final = 8
+V8_SCHEMA_VERSION: Final = 8
+PREVIOUS_SCHEMA_VERSION: Final = V8_SCHEMA_VERSION
+SCHEMA_VERSION: Final = 9
 KNOWN_SCHEMA_VERSIONS: Final = (
     V1_SCHEMA_VERSION, V2_SCHEMA_VERSION, V3_SCHEMA_VERSION, V4_SCHEMA_VERSION,
-    V5_SCHEMA_VERSION, V6_SCHEMA_VERSION, V7_SCHEMA_VERSION, SCHEMA_VERSION,
+    V5_SCHEMA_VERSION, V6_SCHEMA_VERSION, V7_SCHEMA_VERSION, V8_SCHEMA_VERSION,
+    SCHEMA_VERSION,
 )
 
 RUN_STATES: Final = (
@@ -96,6 +98,15 @@ ASSESSMENTS: Final = (
 REVIEW_STATES: Final = ("unreviewed", "accepted", "rejected")
 OLLAMA_CONTACT_KINDS: Final = tuple(item.value for item in ContactKind)
 OLLAMA_CONTACT_STATES: Final = tuple(item.value for item in ContactStatus)
+#: The contact states as frozen into the v2, v5 and v6 table DDL. Those literals
+#: must never move when ContactStatus grows, or every historical schema snapshot
+#: would change underneath us. v9's rebuilt tables use OLLAMA_CONTACT_STATES.
+_LEGACY_CONTACT_STATES: Final = (
+    "dispatching", "success", "model_invalid", "cancelled_unverified",
+    "request_timeout", "resource_busy", "transport_unavailable",
+    "protocol_violation", "response_limit", "identity_mismatch",
+    "orphaned_unknown",
+)
 OLLAMA_SCHEDULE_STATES: Final = tuple(item.value for item in ScheduleState)
 
 
@@ -357,7 +368,7 @@ _V2_ADDITIONAL_TABLE_DDL: Final = (
             CHECK(semantic_attempt_no IS NULL OR semantic_attempt_no BETWEEN 1 AND 2),
         request_sha256 TEXT NOT NULL CHECK({_LOWER_SHA.format('request_sha256')}),
         lease_generation INTEGER NOT NULL CHECK(lease_generation > 0),
-        state TEXT NOT NULL CHECK(state IN ({_values(OLLAMA_CONTACT_STATES)})),
+        state TEXT NOT NULL CHECK(state IN ({_values(_LEGACY_CONTACT_STATES)})),
         charged_at_utc TEXT NOT NULL
             CHECK(length(charged_at_utc) BETWEEN 1 AND 40),
         finished_at_utc TEXT
@@ -498,7 +509,7 @@ _V5_ADDITIONAL_DDL: Final = (
         attempt_no INTEGER NOT NULL CHECK(attempt_no BETWEEN 1 AND 2),
         request_sha256 TEXT NOT NULL CHECK({_LOWER_SHA.format('request_sha256')}),
         lease_generation INTEGER NOT NULL CHECK(lease_generation > 0),
-        state TEXT NOT NULL CHECK(state IN ({_values(OLLAMA_CONTACT_STATES)})),
+        state TEXT NOT NULL CHECK(state IN ({_values(_LEGACY_CONTACT_STATES)})),
         charged_at_utc TEXT NOT NULL
             CHECK(length(charged_at_utc) BETWEEN 1 AND 40),
         finished_at_utc TEXT
@@ -522,7 +533,7 @@ _V6_ADDITIONAL_DDL: Final = (
         contact_no INTEGER NOT NULL CHECK(contact_no > 0),
         endpoint TEXT NOT NULL,
         request_sha256 TEXT NOT NULL CHECK({_LOWER_SHA.format('request_sha256')}),
-        state TEXT NOT NULL CHECK(state IN ({_values(OLLAMA_CONTACT_STATES)})),
+        state TEXT NOT NULL CHECK(state IN ({_values(_LEGACY_CONTACT_STATES)})),
         models_found INTEGER CHECK(models_found IS NULL OR models_found >= 0),
         charged_at_utc TEXT NOT NULL,
         finished_at_utc TEXT,
@@ -1001,6 +1012,65 @@ _V8_ADDITIONAL_DDL: Final = (
 )
 
 
+def _widen_contact_states(ddl: str, table: str) -> str:
+    """Return one contact table's DDL with the current state set, under a temp name."""
+    legacy = f"CHECK(state IN ({_values(_LEGACY_CONTACT_STATES)}))"
+    current = f"CHECK(state IN ({_values(OLLAMA_CONTACT_STATES)}))"
+    if ddl.count(legacy) != 1:
+        raise AnalystSchemaError(f"{table} state CHECK moved")
+    return ddl.replace(legacy, current).replace(
+        f"CREATE TABLE {table} (", f"CREATE TABLE {table}_v9 (", 1
+    )
+
+
+def _rebuild_contact_table(ddl: str, table: str, indexes: tuple[str, ...]):
+    """Return the statements that rebuild one contact table in place.
+
+    Only the state CHECK changes, so the column list is identical and
+    ``SELECT *`` copies faithfully.
+    """
+    return (
+        _widen_contact_states(ddl, table),
+        f"INSERT INTO {table}_v9 SELECT * FROM {table}",
+        f"DROP TABLE {table}",
+        f"ALTER TABLE {table}_v9 RENAME TO {table}",
+        *indexes,
+    )
+
+
+# v9 widens the contact state CHECK on three tables so context_exceeded and
+# configuration_failure can be recorded (decision D20). SQLite cannot widen a
+# CHECK in place, so each table is rebuilt; every column is unchanged.
+_V9_ADDITIONAL_DDL: Final = (
+    *_rebuild_contact_table(
+        _V2_ADDITIONAL_TABLE_DDL[0],
+        "analyst_ollama_contacts",
+        tuple(
+            statement for statement in _V2_ADDITIONAL_INDEX_DDL
+            if "analyst_ollama_contacts" in statement
+        ),
+    ),
+    *_rebuild_contact_table(
+        _V5_ADDITIONAL_DDL[0],
+        "analyst_read_contact",
+        tuple(
+            statement for statement in _V5_ADDITIONAL_DDL
+            if statement.lstrip().upper().startswith("CREATE INDEX")
+            and "analyst_read_contact" in statement
+        ),
+    ),
+    *_rebuild_contact_table(
+        _V6_ADDITIONAL_DDL[0],
+        "analyst_discovery_contact",
+        tuple(
+            statement for statement in _V6_ADDITIONAL_DDL
+            if statement.lstrip().upper().startswith("CREATE INDEX")
+            and "analyst_discovery_contact" in statement
+        ),
+    ),
+)
+
+
 @dataclass(frozen=True)
 class _SchemaStep:
     """One version of the Analyst sidecar schema."""
@@ -1043,7 +1113,11 @@ _LADDER: Final = (
     # v7 adds analyst_llm_profile, which holds no in-flight state.
     _SchemaStep(V7_SCHEMA_VERSION, _V7_ADDITIONAL_DDL, None, None),
     # v8 rebuilds analyst_runs so a reported identity can carry no digest.
-    _SchemaStep(SCHEMA_VERSION, _V8_ADDITIONAL_DDL, None, None, rebuilds_a_table=True),
+    _SchemaStep(
+        V8_SCHEMA_VERSION, _V8_ADDITIONAL_DDL, None, None, rebuilds_a_table=True,
+    ),
+    # v9 widens the contact state CHECK on the three contact tables (D20).
+    _SchemaStep(SCHEMA_VERSION, _V9_ADDITIONAL_DDL, None, None, rebuilds_a_table=True),
 )
 
 
@@ -1378,6 +1452,8 @@ __all__ = [
     "V4_SCHEMA_VERSION",
     "V5_SCHEMA_VERSION",
     "V6_SCHEMA_VERSION",
+    "V7_SCHEMA_VERSION",
+    "V8_SCHEMA_VERSION",
     "AnalystSchemaError",
     "initialize_schema",
     "validate_runtime_schema",
