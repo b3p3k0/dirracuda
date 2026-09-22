@@ -110,6 +110,20 @@ def test_describe_labels_each_address_class(db):
 # Tab-side helpers
 # --------------------------------------------------------------------------
 
+def test_short_label_stays_compact_for_the_narrow_selector(db):
+    profile = profile_store.create_profile("mimir", _REMOTE, path=db)
+    short = editor.describe_profile_short(profile)
+    assert short == "mimir — http://100.125.197.36:9292  — held"
+    assert len(short) < len(editor.describe_profile(profile))
+
+
+def test_short_label_has_no_held_marker_for_loopback(db):
+    profile = profile_store.ensure_default_profile(path=db)
+    assert editor.describe_profile_short(profile) == (
+        "Local Ollama — http://127.0.0.1:11434"
+    )
+
+
 def test_refresh_creates_and_selects_the_loopback_default(db):
     tab = _FakeTab()
     editor.refresh_profile_choices(tab)

@@ -52,10 +52,16 @@ def _profiles():
 
 
 def describe_profile(profile) -> str:
-    """Return one list row for a profile."""
+    """Return one list row for a profile, with its address class spelled out."""
     where = _ADDRESS_LABELS.get(profile.address_class.value, "Unknown")
     held = "" if profile.is_reachable_now else "  — held until N3"
     return f"{profile.name}  ({profile.endpoint_url})  [{where}]{held}"
+
+
+def describe_profile_short(profile) -> str:
+    """Return a compact row for the tab's selector, which is narrow."""
+    held = "" if profile.is_reachable_now else "  — held"
+    return f"{profile.name} — {profile.endpoint_url}{held}"
 
 
 class ProfileEditorDialog:
@@ -421,7 +427,7 @@ def refresh_profile_choices(tab, *, select_id: int | None = None) -> None:
     except Exception:
         tab._profile_choices = ()
     combo = tab._profile_combo
-    labels = [describe_profile(profile) for profile in tab._profile_choices]
+    labels = [describe_profile_short(profile) for profile in tab._profile_choices]
     if combo is not None:
         try:
             combo.configure(values=labels)
@@ -480,6 +486,7 @@ __all__ = [
     "REMOTE_HELD_NOTE",
     "ProfileEditorDialog",
     "describe_profile",
+    "describe_profile_short",
     "manage_profiles",
     "open_profile_editor",
     "profile_selected",
