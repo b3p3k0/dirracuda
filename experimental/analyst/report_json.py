@@ -29,6 +29,22 @@ _HIGH_KINDS = frozenset({
 })
 
 
+def model_identity_label(run: dict) -> str:
+    """Return a one-line model identity description for a report's run block.
+
+    Erratum E18: a reported identity is never described as verified. A v1
+    report carries no kind and is a digest run by definition, so the absent
+    key reads as "digest" rather than as unknown.
+    """
+    tag = run.get("model_tag") or "(unknown model)"
+    kind = run.get("identity_kind") or "digest"
+    if kind == "digest":
+        return f"{tag} (verified digest)"
+    fingerprint = run.get("server_fingerprint")
+    server = f", server {fingerprint}" if fingerprint else ""
+    return f"{tag} (reported by the server, not verified{server})"
+
+
 class ReportValidationError(ValueError):
     """A report value does not match the frozen versioned shape."""
 

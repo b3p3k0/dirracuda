@@ -7,7 +7,11 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, ttk
 
-from experimental.analyst.report_json import UNVERIFIED_NOTICE, dumps_report
+from experimental.analyst.report_json import (
+    UNVERIFIED_NOTICE,
+    dumps_report,
+    model_identity_label,
+)
 from experimental.analyst.report_render import render, render_markdown
 from experimental.analyst.service import AnalystServiceError, ServiceFailure
 from gui.utils import safe_messagebox
@@ -130,7 +134,14 @@ class AnalystReportWindow:
         self._counts_var = tk.StringVar(value="Files read   : —      Flagged files: —")
         counts = tk.Label(read_card, textvariable=self._counts_var, anchor="w")
         self.theme.apply_to_widget(counts, "label")
-        counts.pack(fill=tk.X, padx=10, pady=(0, 8))
+        counts.pack(fill=tk.X, padx=10)
+
+        # E18: the report must say which model identity kind backs the run, and
+        # a reported identity must never read as verified.
+        self._model_var = tk.StringVar(value="Model        : —")
+        model = tk.Label(read_card, textvariable=self._model_var, anchor="w")
+        self.theme.apply_to_widget(model, "label")
+        model.pack(fill=tk.X, padx=10, pady=(0, 8))
 
         exposures_heading = tk.Label(read_card, text="TOP EXPOSURES", anchor="w")
         self.theme.apply_to_widget(exposures_heading, "label")
@@ -280,6 +291,7 @@ class AnalystReportWindow:
             f"Files read   : {run['files_read']}      "
             f"Flagged files: {run['flagged_files']}"
         )
+        self._model_var.set(f"Model        : {model_identity_label(run)}")
         exposures = [
             item for item in read["top_exposures"]
             if item["severity"] != "LOW"
@@ -304,6 +316,7 @@ class AnalystReportWindow:
         self._host_summary_var.set("Select a completed report.")
         self._owner_var.set("Likely owner : —")
         self._contacts_var.set("Contacts     : —")
+        self._model_var.set("Model        : —")
         self._counts_var.set("Files read   : —      Flagged files: —")
         self._exposures_var.set("(none)")
         self._notice_var.set(UNVERIFIED_NOTICE)
