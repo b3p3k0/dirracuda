@@ -15,14 +15,24 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Final, NamedTuple
 
+from .endpoint import (
+    DEFAULT_ENDPOINT,
+    EndpointError,
+    normalize_endpoint,
+    ollama_urls,
+)
 from .models import ANALYST_DEFAULTS
 
 
-OLLAMA_ENDPOINT: Final = "http://127.0.0.1:11434"
-OLLAMA_VERSION_URL: Final = f"{OLLAMA_ENDPOINT}/api/version"
-OLLAMA_TAGS_URL: Final = f"{OLLAMA_ENDPOINT}/api/tags"
-OLLAMA_PS_URL: Final = f"{OLLAMA_ENDPOINT}/api/ps"
-OLLAMA_CHAT_URL: Final = f"{OLLAMA_ENDPOINT}/api/chat"
+# N1: the endpoint is a supplied value.  These module-level constants remain the
+# loopback default every shipped call site still resolves to, so a default run is
+# byte-identical to the pre-N1 build.
+OLLAMA_ENDPOINT: Final = DEFAULT_ENDPOINT
+_LOOPBACK_URLS: Final = ollama_urls(OLLAMA_ENDPOINT)
+OLLAMA_VERSION_URL: Final = _LOOPBACK_URLS.version
+OLLAMA_TAGS_URL: Final = _LOOPBACK_URLS.tags
+OLLAMA_PS_URL: Final = _LOOPBACK_URLS.ps
+OLLAMA_CHAT_URL: Final = _LOOPBACK_URLS.chat
 
 MODEL_TAG: Final = "qwen3.6:27b"
 MODEL_DIGEST: Final = (
@@ -103,7 +113,17 @@ def valid_model_digest(value: object) -> bool:
     return type(value) is str and _SHA256.fullmatch(value) is not None
 
 
-def _discovery_identity_bytes() -> bytes:
+def valid_endpoint(value: object) -> bool:
+    """Accept one canonical ``scheme://host:port`` endpoint string."""
+    if type(value) is not str:
+        return False
+    try:
+        return normalize_endpoint(value) == value
+    except EndpointError:
+        return False
+
+
+def _discovery_identity_bytes(tags_url: str) -> bytes:
     return json.dumps(
         {
             "accept": "application/json",
@@ -113,7 +133,7 @@ def _discovery_identity_bytes() -> bytes:
             "method": "GET",
             "proxies_ignored": True,
             "trust_env": False,
-            "url": OLLAMA_TAGS_URL,
+            "url": tags_url,
             "version": 1,
         },
         ensure_ascii=True,
@@ -123,9 +143,19 @@ def _discovery_identity_bytes() -> bytes:
     ).encode("ascii")
 
 
-DISCOVERY_REQUEST_SHA256: Final = hashlib.sha256(
-    _discovery_identity_bytes()
-).hexdigest()
+def discovery_request_sha256(endpoint: str = OLLAMA_ENDPOINT) -> str:
+    """Return the discovery request identity hash for one endpoint.
+
+    N1: the endpoint is part of the request shape, so this seal is a function of
+    it rather than a module-level constant.  Two endpoints hash differently.
+    """
+    return hashlib.sha256(
+        _discovery_identity_bytes(ollama_urls(endpoint).tags)
+    ).hexdigest()
+
+
+#: The loopback discovery seal, unchanged from the pre-N1 build.
+DISCOVERY_REQUEST_SHA256: Final = discovery_request_sha256(OLLAMA_ENDPOINT)
 
 
 class ContractError(ValueError):
@@ -285,8 +315,7 @@ class OllamaIdentity:
 
     def __post_init__(self) -> None:
         if (
-            type(self.endpoint) is not str
-            or self.endpoint != OLLAMA_ENDPOINT
+            not valid_endpoint(self.endpoint)
             or not valid_model_tag(self.model_tag)
             or not valid_model_digest(self.model_digest)
         ):
@@ -311,11 +340,13 @@ class DiscoveryRequest:
     request_sha256: str = DISCOVERY_REQUEST_SHA256
 
     def __post_init__(self) -> None:
+        if not valid_endpoint(self.endpoint):
+            raise ContractError("model discovery request identity is invalid")
+        expected_url = ollama_urls(self.endpoint).tags
+        expected_sha = discovery_request_sha256(self.endpoint)
         if (
-            type(self.endpoint) is not str
-            or self.endpoint != OLLAMA_ENDPOINT
-            or type(self.url) is not str
-            or self.url != OLLAMA_TAGS_URL
+            type(self.url) is not str
+            or self.url != expected_url
             or type(self.method) is not str
             or self.method != "GET"
             or self.body is not None
@@ -326,7 +357,7 @@ class DiscoveryRequest:
             or self.allow_redirects is not False
             or self.trust_env is not False
             or type(self.request_sha256) is not str
-            or self.request_sha256 != DISCOVERY_REQUEST_SHA256
+            or self.request_sha256 != expected_sha
         ):
             raise ContractError("model discovery request identity is invalid")
 
@@ -522,9 +553,16 @@ class TagsCheckResult:
             raise ContractError("tags contact fields contradict its status")
 
 
-def build_discovery_request() -> DiscoveryRequest:
-    """Build the fixed, content-free ``GET /api/tags`` discovery intent."""
-    return DiscoveryRequest()
+def build_discovery_request(
+    endpoint: str = OLLAMA_ENDPOINT,
+) -> DiscoveryRequest:
+    """Build the content-free ``GET /api/tags`` discovery intent for one endpoint."""
+    resolved = normalize_endpoint(endpoint)
+    return DiscoveryRequest(
+        endpoint=resolved,
+        url=ollama_urls(resolved).tags,
+        request_sha256=discovery_request_sha256(resolved),
+    )
 
 
 def list_local_models(body: bytes) -> tuple[DiscoveredModel, ...]:
@@ -586,10 +624,11 @@ def build_chat_request(
     nonce: str,
     model_tag: str = ANALYST_DEFAULTS.model_tag,
     model_digest: str = ANALYST_DEFAULTS.model_digest,
+    endpoint: str = OLLAMA_ENDPOINT,
 ) -> ChatRequest:
     """Build the only scored-chat request admitted by the V1 Analyst client."""
     return _build_chat_request(
-        source_text, nonce, PromptKind.PRIMARY, model_tag, model_digest,
+        source_text, nonce, PromptKind.PRIMARY, model_tag, model_digest, endpoint,
     )
 
 
@@ -599,11 +638,12 @@ def build_repair_chat_request(
     nonce: str,
     model_tag: str = ANALYST_DEFAULTS.model_tag,
     model_digest: str = ANALYST_DEFAULTS.model_digest,
+    endpoint: str = OLLAMA_ENDPOINT,
 ) -> ChatRequest:
     """Build the one error-specific C11 model-invalid repair request."""
     return _build_chat_request(
         source_text, nonce, PromptKind.MODEL_INVALID_REPAIR,
-        model_tag, model_digest,
+        model_tag, model_digest, endpoint,
     )
 
 
@@ -613,10 +653,11 @@ def build_read_chat_request(
     nonce: str,
     model_tag: str = ANALYST_DEFAULTS.model_tag,
     model_digest: str = ANALYST_DEFAULTS.model_digest,
+    endpoint: str = OLLAMA_ENDPOINT,
 ) -> ChatRequest:
     """Build the pinned host READ reduce request."""
     return _build_read_chat_request(
-        source_text, nonce, PromptKind.PRIMARY, model_tag, model_digest,
+        source_text, nonce, PromptKind.PRIMARY, model_tag, model_digest, endpoint,
     )
 
 
@@ -626,11 +667,12 @@ def build_read_repair_chat_request(
     nonce: str,
     model_tag: str = ANALYST_DEFAULTS.model_tag,
     model_digest: str = ANALYST_DEFAULTS.model_digest,
+    endpoint: str = OLLAMA_ENDPOINT,
 ) -> ChatRequest:
     """Build the error-specific host READ repair request."""
     return _build_read_chat_request(
         source_text, nonce, PromptKind.MODEL_INVALID_REPAIR,
-        model_tag, model_digest,
+        model_tag, model_digest, endpoint,
     )
 
 
@@ -640,6 +682,7 @@ def _build_read_chat_request(
     prompt_kind: PromptKind,
     model_tag: str,
     model_digest: str,
+    endpoint: str = OLLAMA_ENDPOINT,
 ) -> ChatRequest:
     if type(source_text) is not str or type(nonce) is not str:
         raise TypeError("source text and nonce must be strings")
@@ -650,6 +693,7 @@ def _build_read_chat_request(
     if _NONCE.fullmatch(nonce) is None or nonce in source_text:
         raise ContractError("nonce must be a fresh FENCE token absent from source")
     _require_model_identity(model_tag, model_digest)
+    resolved_endpoint = normalize_endpoint(endpoint)
 
     from .read_worksheet import (
         build_read_prompt,
@@ -683,6 +727,7 @@ def _build_read_chat_request(
         prompt_kind=prompt_kind,
         model_tag=model_tag,
         model_digest=model_digest,
+        endpoint=resolved_endpoint,
     )
 
 
@@ -692,6 +737,7 @@ def _build_chat_request(
     prompt_kind: PromptKind,
     model_tag: str,
     model_digest: str,
+    endpoint: str = OLLAMA_ENDPOINT,
 ) -> ChatRequest:
     if type(source_text) is not str or type(nonce) is not str:
         raise TypeError("source text and nonce must be strings")
@@ -702,6 +748,7 @@ def _build_chat_request(
     if _NONCE.fullmatch(nonce) is None or nonce in source_text:
         raise ContractError("nonce must be a fresh FENCE token absent from source")
     _require_model_identity(model_tag, model_digest)
+    resolved_endpoint = normalize_endpoint(endpoint)
 
     from .worksheet import build_prompt, build_repair_prompt, worksheet_schema
 
@@ -731,6 +778,7 @@ def _build_chat_request(
         prompt_kind=prompt_kind,
         model_tag=model_tag,
         model_digest=model_digest,
+        endpoint=resolved_endpoint,
     )
 
 
@@ -756,8 +804,7 @@ def validate_chat_request(request: ChatRequest) -> None:
         }
         or not valid_model_tag(request.model_tag)
         or not valid_model_digest(request.model_digest)
-        or type(request.endpoint) is not str
-        or request.endpoint != OLLAMA_ENDPOINT
+        or not valid_endpoint(request.endpoint)
     ):
         raise ContractError("chat request identity is invalid")
     if hashlib.sha256(request.body).hexdigest() != request.request_sha256:
@@ -968,10 +1015,12 @@ __all__ = [
     "build_read_repair_chat_request",
     "build_repair_chat_request",
     "canonical_json",
+    "discovery_request_sha256",
     "is_cloud_model_tag",
     "list_local_models",
     "new_prompt_nonce",
     "valid_model_digest",
+    "valid_endpoint",
     "valid_model_tag",
     "validate_chat_request",
 ]

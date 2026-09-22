@@ -1,7 +1,12 @@
-"""Bounded loopback-only Ollama transport for Analyst.
+"""Bounded Ollama transport for Analyst.
 
 The client owns HTTP and cancellation only. It never reads or writes Analyst's
 database, logs prompt/model text, or decides durable retry state.
+
+N1: the endpoint is supplied per client instead of being a module constant.
+D17: until N3 writes the transport policy, construction refuses any non-loopback
+endpoint.  That guard lives here, the last step before the socket, so a script or
+a direct database write cannot bypass it.
 """
 
 from __future__ import annotations
@@ -16,14 +21,12 @@ from typing import Any, Callable
 import requests
 import urllib3
 
+from .endpoint import DEFAULT_ENDPOINT, Endpoint, require_connectable
 from .ollama_contract import (
     CONNECT_TIMEOUT_SECONDS,
     EXPECTED_IDENTITY,
     IDLE_READ_TIMEOUT_SECONDS,
     MAX_BODY_BYTES,
-    OLLAMA_CHAT_URL,
-    OLLAMA_TAGS_URL,
-    OLLAMA_VERSION_URL,
     TOTAL_REQUEST_SECONDS,
     ChatRequest,
     ChatResult,
@@ -133,16 +136,20 @@ class _WorkerState:
 
 
 class OllamaClient:
-    """One serial, caller-bounded client for the exact V1 loopback endpoint."""
+    """One serial, caller-bounded client for exactly one supplied endpoint."""
 
     def __init__(
         self,
         *,
+        endpoint: str | Endpoint = DEFAULT_ENDPOINT,
         session: Any | None = None,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         if not callable(monotonic):
             raise TypeError("monotonic clock must be callable")
+        # D17: refuse a non-loopback endpoint before any socket work happens.
+        self._endpoint = require_connectable(endpoint)
+        self._urls = self._endpoint.urls()
         self._monotonic = monotonic
         self._session = session if session is not None else requests.Session()
         self._session.trust_env = False
@@ -151,6 +158,11 @@ class OllamaClient:
         self._active_response: Any | None = None
         self._close_target: Any | None = None
         self._close_done: threading.Event | None = None
+
+    @property
+    def endpoint(self) -> Endpoint:
+        """Return the validated endpoint this client is bound to."""
+        return self._endpoint
 
     def preflight(
         self,
@@ -193,7 +205,7 @@ class OllamaClient:
         if cancel():
             return VersionCheckResult(OllamaStatus.CANCELLED_UNVERIFIED)
         version_intent = _HttpIntent(
-            "GET", OLLAMA_VERSION_URL, None, "application/json", "version",
+            "GET", self._urls.version, None, "application/json", "version",
         )
         version, status = self._execute(version_intent, cancel, poll)
         if status is not None:
@@ -228,7 +240,7 @@ class OllamaClient:
         if not _matches_expected_identity(expected):
             return TagsCheckResult(OllamaStatus.IDENTITY_MISMATCH)
         tags_intent = _HttpIntent(
-            "GET", OLLAMA_TAGS_URL, None, "application/json", "tags",
+            "GET", self._urls.tags, None, "application/json", "tags",
         )
         tags, status = self._execute(tags_intent, cancel, poll)
         if status is not None:
@@ -251,7 +263,7 @@ class OllamaClient:
 
     def list_models(self) -> tuple[DiscoveredModel, ...]:
         """Perform one bounded local tags request without running inference."""
-        request = build_discovery_request()
+        request = build_discovery_request(self._endpoint.base_url)
         intent = _HttpIntent(
             request.method, request.url, request.body, request.accept, "discovery",
         )
@@ -290,8 +302,10 @@ class OllamaClient:
             or not hmac.compare_digest(request.request_sha256, expected_sha256)
         ):
             return ChatResult(OllamaStatus.IDENTITY_MISMATCH)
+        if request.endpoint != self._endpoint.base_url:
+            return ChatResult(OllamaStatus.IDENTITY_MISMATCH)
         intent = _HttpIntent(
-            "POST", OLLAMA_CHAT_URL, request.body,
+            "POST", self._urls.chat, request.body,
             "application/x-ndjson", "chat", request.model_tag,
             type(request) is ReadChatRequest,
         )

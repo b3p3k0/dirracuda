@@ -156,8 +156,11 @@ def test_generation_options_reject_value_or_type_drift(
 @pytest.mark.parametrize(
     "changes",
     [
-        {"endpoint": "http://localhost:11434"},
-        {"endpoint": "http://127.0.0.1:11435"},
+        {"endpoint": "127.0.0.1:11434"},
+        {"endpoint": "ftp://127.0.0.1:11434"},
+        {"endpoint": "http://127.0.0.1:11434/"},
+        {"endpoint": "http://127.0.0.1:70000"},
+        {"endpoint": ""},
         {"model_tag": "qwen3.6:27b-cloud"},
         {"model_tag": ""},
         {"model_digest": "x" * 64},
@@ -169,6 +172,26 @@ def test_identity_rejects_invalid_endpoint_or_model_value(
 ) -> None:
     with pytest.raises(ContractError, match="identity"):
         OllamaIdentity(**changes)
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "http://127.0.0.1:11434",
+        "http://localhost:11434",
+        "http://127.0.0.1:11435",
+        "http://mimir:9292",
+        "https://mimir:9292",
+        "http://[::1]:11434",
+    ],
+)
+def test_identity_accepts_any_canonical_endpoint_after_n1(endpoint: str) -> None:
+    """N1: the endpoint is a supplied value, not a pinned module constant.
+
+    D17 still refuses to *contact* a non-loopback endpoint; that guard lives in
+    OllamaClient, not in this identity type.
+    """
+    assert OllamaIdentity(endpoint=endpoint).endpoint == endpoint
 
 
 def test_chat_request_payload_and_hash_are_exact_and_deterministic() -> None:
@@ -251,7 +274,8 @@ def test_request_revalidation_rejects_body_hash_identity_and_canonical_drift() -
         _forged_request(model_tag="other"),
         _forged_request(model_tag="other:cloud"),
         _forged_request(model_digest="x" * 64),
-        _forged_request(endpoint="http://localhost:11434"),
+        _forged_request(endpoint="127.0.0.1:11434"),
+        _forged_request(endpoint="http://127.0.0.1:11434/"),
         _forged_request(source_text="different public source"),
         _forged_request(nonce="FENCE_FEDCBA9876543210"),
     )

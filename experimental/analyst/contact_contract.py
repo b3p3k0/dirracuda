@@ -9,7 +9,13 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Final
 
-from .ollama_contract import OLLAMA_PS_URL, OLLAMA_TAGS_URL, OLLAMA_VERSION_URL
+from .endpoint import ollama_urls
+from .ollama_contract import (
+    OLLAMA_ENDPOINT,
+    OLLAMA_PS_URL,
+    OLLAMA_TAGS_URL,
+    OLLAMA_VERSION_URL,
+)
 from .resource_policy import (
     MAX_CONSECUTIVE_RESOURCE_FAILURES,
     RESOURCE_BACKOFF_SECONDS,
@@ -73,6 +79,44 @@ def _control_request_sha256(kind: ContactKind, url: str) -> str:
     return hashlib.sha256(body).hexdigest()
 
 
+_CONTROL_URL_FIELD: Final = {
+    ContactKind.VERSION: "version",
+    ContactKind.TAGS: "tags",
+    ContactKind.PS: "ps",
+}
+
+
+def control_request_sha256(
+    kind: ContactKind, endpoint: str = OLLAMA_ENDPOINT,
+) -> str:
+    """Return one control-contact request seal for a supplied endpoint.
+
+    N1: the URL is part of the request shape, so each control seal is a function
+    of the endpoint rather than a module-level constant.  The three constants
+    below keep the pre-N1 loopback values.
+    """
+    field = _CONTROL_URL_FIELD.get(kind)
+    if field is None:
+        raise ContactContractError("kind has no control URL")
+    return _control_request_sha256(kind, getattr(ollama_urls(endpoint), field))
+
+
+def version_request_sha256(endpoint: str = OLLAMA_ENDPOINT) -> str:
+    """Return the ``/api/version`` contact seal for one endpoint."""
+    return control_request_sha256(ContactKind.VERSION, endpoint)
+
+
+def tags_request_sha256(endpoint: str = OLLAMA_ENDPOINT) -> str:
+    """Return the ``/api/tags`` contact seal for one endpoint."""
+    return control_request_sha256(ContactKind.TAGS, endpoint)
+
+
+def ps_request_sha256(endpoint: str = OLLAMA_ENDPOINT) -> str:
+    """Return the ``/api/ps`` contact seal for one endpoint."""
+    return control_request_sha256(ContactKind.PS, endpoint)
+
+
+#: The loopback control seals, unchanged from the pre-N1 build.
 VERSION_REQUEST_SHA256: Final = _control_request_sha256(
     ContactKind.VERSION, OLLAMA_VERSION_URL,
 )

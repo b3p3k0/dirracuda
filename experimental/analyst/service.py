@@ -23,6 +23,7 @@ from .manifest import ExtractionManifest, ManifestError, load_extraction_manifes
 from .models import ANALYST_DEFAULTS
 from .contact_contract import ContactStatus
 from .ollama_client import OllamaClient, OllamaDiscoveryError
+from .endpoint import RemoteNotEnabledError, normalize_endpoint
 from .ollama_contract import (
     MAX_JSON_NODES,
     OLLAMA_ENDPOINT,
@@ -216,11 +217,20 @@ TokenFactory = Callable[[int], str]
 PopenFactory = Callable[..., subprocess.Popen[bytes]]
 
 
-def discover_models(*, path: Path | None = None) -> tuple[DiscoveredModel, ...]:
-    """Explicitly discover, charge, and persist bounded local model identities."""
+def discover_models(
+    *, endpoint: str = OLLAMA_ENDPOINT, path: Path | None = None,
+) -> tuple[DiscoveredModel, ...]:
+    """Explicitly discover, charge, and persist bounded model identities.
+
+    ``endpoint`` selects the server.  D17 is enforced inside ``OllamaClient``;
+    a non-loopback endpoint raises ``RemoteNotEnabledError`` before any socket
+    work, and the caller surfaces that verbatim rather than as a transport
+    failure.
+    """
+    resolved = normalize_endpoint(endpoint)
     try:
         initialize_database(path)
-        request = build_discovery_request()
+        request = build_discovery_request(resolved)
         charge = precharge_discovery_contact(
             request.endpoint, request.request_sha256, path=path,
         )
@@ -228,7 +238,12 @@ def discover_models(*, path: Path | None = None) -> tuple[DiscoveredModel, ...]:
         raise AnalystServiceError(ServiceFailure.STORAGE) from None
 
     try:
-        discovered = OllamaClient().list_models()
+        discovered = OllamaClient(endpoint=resolved).list_models()
+    except RemoteNotEnabledError:
+        _finish_failed_discovery(
+            charge.contact_id, OllamaStatus.TRANSPORT_UNAVAILABLE, path=path,
+        )
+        raise
     except OllamaDiscoveryError as exc:
         _finish_failed_discovery(charge.contact_id, exc.status, path=path)
         raise AnalystServiceError(ServiceFailure.DISCOVERY) from None
@@ -261,16 +276,17 @@ def discover_models(*, path: Path | None = None) -> tuple[DiscoveredModel, ...]:
 
 
 def list_discovered_models(
-    *, path: Path | None = None,
+    *, endpoint: str = OLLAMA_ENDPOINT, path: Path | None = None,
 ) -> tuple[DiscoveredModel, ...]:
-    """Read the persisted model list without contacting Ollama."""
+    """Read one endpoint's persisted model list without contacting Ollama."""
+    resolved = normalize_endpoint(endpoint)
     try:
         conn = open_connection(path, read_only=True)
         try:
             rows = conn.execute(
                 "SELECT model_tag,model_digest FROM analyst_discovered_model "
                 "WHERE endpoint=? ORDER BY model_tag",
-                (OLLAMA_ENDPOINT,),
+                (resolved,),
             ).fetchall()
         finally:
             conn.close()

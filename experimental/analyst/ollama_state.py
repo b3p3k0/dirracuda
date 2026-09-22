@@ -28,7 +28,7 @@ from .contact_contract import (
     semantic_attempt_state,
 )
 from .lease import LeaseFence
-from .ollama_contract import DISCOVERY_REQUEST_SHA256, OLLAMA_ENDPOINT
+from .ollama_contract import discovery_request_sha256, valid_endpoint
 from .resource_policy import RESOURCE_BACKOFF_SECONDS
 from .state import AttemptState, RunState
 from .store import open_connection, run_immediate
@@ -393,7 +393,7 @@ def precharge_discovery_contact(
     """Charge one explicit pre-run model-list contact before dispatch."""
     _require_discovery_endpoint(endpoint)
     _require_sha(request_sha256, "request sha256")
-    if request_sha256 != DISCOVERY_REQUEST_SHA256:
+    if request_sha256 != discovery_request_sha256(endpoint):
         raise ValueError("discovery request hash does not match its fixed intent")
     timestamp = _timestamp(now_utc)
 
@@ -1250,8 +1250,8 @@ def _require_fence_value(fence: LeaseFence) -> None:
 
 
 def _require_discovery_endpoint(value: str) -> None:
-    if type(value) is not str or value != OLLAMA_ENDPOINT:
-        raise ValueError("discovery endpoint must be the fixed loopback endpoint")
+    if not valid_endpoint(value):
+        raise ValueError("discovery endpoint is not a canonical scheme://host:port")
 
 
 def _require_run_id(value: str) -> None:

@@ -120,6 +120,11 @@ _V6_INDEXES = {
     "idx_analyst_discovery_contact_endpoint",
     "idx_analyst_discovered_model_endpoint",
 }
+_V7_TABLES = {"analyst_llm_profile"}
+_V7_INDEXES = {"idx_analyst_runs_profile"}
+# v3 ALTERed analyst_files and v7 ALTERed analyst_runs, so both carry a
+# different CREATE TABLE text than their v1 source.
+_ALTERED_TABLES = {"analyst_files", "analyst_runs"}
 _NOW = "2026-08-16T12:00:00Z"
 _BOOT_ID = "00000000-0000-0000-0000-000000000001"
 
@@ -708,12 +713,13 @@ def test_exact_empty_v1_migrates_additively_and_reopen_is_idempotent(
             not in _V2_TABLES | _V2_INDEXES | _V4_TABLES | _V4_INDEXES
             | _V5_TABLES | _V5_INDEXES
             | _V6_TABLES | _V6_INDEXES
-            | {"analyst_files"}
+            | _V7_TABLES | _V7_INDEXES
+            | _ALTERED_TABLES
         )
         assert after_v1 == tuple(
             row
             for row in before
-            if str(row[1]) not in _V4_TABLES | {"analyst_files"}
+            if str(row[1]) not in _V4_TABLES | _ALTERED_TABLES
         )
     finally:
         conn.close()

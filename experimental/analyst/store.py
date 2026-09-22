@@ -25,6 +25,7 @@ from .db_schema import (
     V3_SCHEMA_VERSION,
     V4_SCHEMA_VERSION,
     V5_SCHEMA_VERSION,
+    V6_SCHEMA_VERSION,
     AnalystSchemaError,
     initialize_schema,
     validate_runtime_schema,
@@ -34,6 +35,7 @@ from .db_schema import (
     validate_v3_migration_candidate,
     validate_v4_migration_candidate,
     validate_v5_migration_candidate,
+    validate_v6_migration_candidate,
 )
 from .file_identity import split_unsigned_u64
 from .inventory import InventoryFile, InventoryResult
@@ -683,6 +685,8 @@ def _audit_existing_database(path: Path) -> None:
         ).fetchone()
         if identity == (APPLICATION_ID, SCHEMA_VERSION):
             validate_schema(conn)
+        elif identity == (APPLICATION_ID, V6_SCHEMA_VERSION):
+            validate_v6_migration_candidate(conn)
         elif identity == (APPLICATION_ID, V5_SCHEMA_VERSION):
             validate_v5_migration_candidate(conn)
         elif identity == (APPLICATION_ID, V4_SCHEMA_VERSION):

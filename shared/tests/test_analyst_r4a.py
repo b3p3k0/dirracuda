@@ -160,7 +160,7 @@ def test_fresh_v6_has_discovery_tables_indexes_and_identity() -> None:
         initialize_schema(conn)
 
         assert conn.execute("PRAGMA application_id").fetchone()[0] == APPLICATION_ID
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 6
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 7
         assert {
             str(row[0])
             for row in conn.execute(
@@ -326,7 +326,9 @@ def test_v6_snapshot_verifies_full_version_chain() -> None:
         initialize_schema(conn)
 
         validate_schema(conn)
-        assert db_schema._schema_snapshot(conn) == db_schema._expected_snapshot(6)
+        assert db_schema._schema_snapshot(conn) == db_schema._expected_snapshot(
+            db_schema.SCHEMA_VERSION
+        )
         for version in (1, 2, 3, 4, 5, 6):
             assert db_schema._expected_snapshot(version)
     finally:

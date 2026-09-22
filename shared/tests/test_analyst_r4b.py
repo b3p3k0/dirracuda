@@ -71,6 +71,9 @@ def test_discover_models_charges_finishes_and_upserts(
     ]
 
     class FakeClient:
+        def __init__(self, *, endpoint=None, **kwargs):
+            self.endpoint = endpoint
+
         def list_models(self):
             return responses.pop(0)
 
