@@ -1060,6 +1060,113 @@ def _validate_v2_rows(conn: sqlite3.Connection) -> None:
     _validate_contact_and_attempt_ids(conn)
 
 
+# ---------------------------------------------------------------------------
+# The schema ladder.
+#
+# One ordered record per version: what that version adds, the in-flight check
+# its new tables need, and its row-level validator.  Every version-aware site
+# in this module and in store.py derives from this tuple, so adding a schema
+# version is one appended step plus its DDL constant.
+#
+# It lives here rather than beside the DDL constants only because the row
+# validators above must be defined first.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _SchemaStep:
+    """One version of the Analyst sidecar schema."""
+
+    version: int
+    #: DDL this version adds on top of the previous one.
+    ddl: tuple[str, ...]
+    #: "Is durable work in flight?" probe for the table this version introduces.
+    idle_query: str | None
+    #: Row-level invariants this version introduces.
+    row_validator: object | None
+
+
+_LADDER: Final = (
+    _SchemaStep(V1_SCHEMA_VERSION, (), None, None),
+    _SchemaStep(
+        V2_SCHEMA_VERSION,
+        (*_V2_ADDITIONAL_TABLE_DDL, *_V2_ADDITIONAL_INDEX_DDL),
+        "SELECT 1 FROM analyst_ollama_contacts WHERE state='dispatching' LIMIT 1",
+        _validate_v2_rows,
+    ),
+    _SchemaStep(V3_SCHEMA_VERSION, _V3_ADDITIONAL_DDL, None, _validate_v3_rows),
+    _SchemaStep(V4_SCHEMA_VERSION, _V4_ADDITIONAL_DDL, None, _validate_v4_rows),
+    _SchemaStep(
+        V5_SCHEMA_VERSION,
+        _V5_ADDITIONAL_DDL,
+        "SELECT 1 FROM analyst_read_contact WHERE state='dispatching' LIMIT 1",
+        None,
+    ),
+    _SchemaStep(
+        V6_SCHEMA_VERSION,
+        _V6_ADDITIONAL_DDL,
+        "SELECT 1 FROM analyst_discovery_contact WHERE state='dispatching' LIMIT 1",
+        None,
+    ),
+    # v7 adds analyst_llm_profile, which holds no in-flight state.
+    _SchemaStep(SCHEMA_VERSION, _V7_ADDITIONAL_DDL, None, None),
+)
+
+#: In-flight probes that exist at every version from v2 onward.
+_BASE_IDLE_QUERIES: Final = (
+    "SELECT 1 FROM analyst_gpu_lease WHERE run_id IS NOT NULL LIMIT 1",
+    "SELECT 1 FROM analyst_runs WHERE state IN "
+    "('running','cancel_requested','finalizing') LIMIT 1",
+    "SELECT 1 FROM analyst_files WHERE work_state='active' LIMIT 1",
+    "SELECT 1 FROM analyst_model_attempts WHERE state='dispatching' LIMIT 1",
+)
+
+#: Known versions a database may be upgraded *from*.
+MIGRATABLE_VERSIONS: Final = tuple(
+    step.version for step in _LADDER if step.version != SCHEMA_VERSION
+)
+
+
+def _steps_through(version: int) -> tuple[_SchemaStep, ...]:
+    """Return every ladder step up to and including one version."""
+    steps = tuple(step for step in _LADDER if step.version <= version)
+    if not steps or steps[-1].version != version:
+        raise ValueError("unsupported Analyst schema snapshot version")
+    return steps
+
+
+def _ddl_through(version: int) -> tuple[str, ...]:
+    """Return the DDL that builds one version from empty, minus the v1 base."""
+    return tuple(
+        statement
+        for step in _steps_through(version)
+        for statement in step.ddl
+    )
+
+
+def _ddl_after(version: int) -> tuple[str, ...]:
+    """Return the DDL that upgrades one version to the current schema."""
+    _steps_through(version)
+    return tuple(
+        statement
+        for step in _LADDER
+        if step.version > version
+        for statement in step.ddl
+    )
+
+
+def _idle_queries_through(version: int) -> tuple[str, ...]:
+    """Return every in-flight probe that applies at one version."""
+    return (
+        *_BASE_IDLE_QUERIES,
+        *(
+            step.idle_query
+            for step in _steps_through(version)
+            if step.idle_query is not None
+        ),
+    )
+
+
 def _validate_contact_and_attempt_ids(conn: sqlite3.Connection) -> None:
     for row in conn.execute(
         "SELECT contact_id,run_id,contact_no,kind,chunk_id,semantic_attempt_no,"
