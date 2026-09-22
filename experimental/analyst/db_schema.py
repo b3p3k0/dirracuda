@@ -586,7 +586,10 @@ class _SchemaSnapshot:
 
 
 def initialize_schema(conn: sqlite3.Connection) -> None:
-    """Create v6 or narrowly upgrade an exact known Analyst schema.
+    """Create the current schema, or narrowly upgrade an exact known one.
+
+    Every accepted upgrade source is named by ``MIGRATABLE_VERSIONS`` and the
+    DDL comes from ``_LADDER``, so a new schema version needs no change here.
 
     V1 remains restricted to the frozen pristine development state. Later
     migration sources must be exact and idle.
@@ -598,18 +601,8 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
         validate_schema(conn)
         return
     try:
-        if identity == (APPLICATION_ID, V6_SCHEMA_VERSION):
-            validate_v6_migration_candidate(conn)
-        elif identity == (APPLICATION_ID, V5_SCHEMA_VERSION):
-            validate_v5_migration_candidate(conn)
-        elif identity == (APPLICATION_ID, V4_SCHEMA_VERSION):
-            validate_v4_migration_candidate(conn)
-        elif identity == (APPLICATION_ID, V3_SCHEMA_VERSION):
-            validate_v3_migration_candidate(conn)
-        elif identity == (APPLICATION_ID, V2_SCHEMA_VERSION):
-            validate_v2_migration_candidate(conn)
-        elif identity == (APPLICATION_ID, V1_SCHEMA_VERSION):
-            validate_v1_migration_candidate(conn)
+        if identity[0] == APPLICATION_ID and identity[1] in MIGRATABLE_VERSIONS:
+            validate_migration_candidate(conn, identity[1])
         elif identity != (0, 0) or objects:
             raise AnalystSchemaError(
                 "refusing to initialize a nonempty, partial, foreign, or "
@@ -635,62 +628,20 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
             validate_schema(conn)
             conn.execute("COMMIT")
             return
-        if concurrent_identity == (APPLICATION_ID, V6_SCHEMA_VERSION):
-            validate_v6_migration_candidate(conn)
-            for statement in _V7_ADDITIONAL_DDL:
-                conn.execute(statement)
-        elif concurrent_identity == (APPLICATION_ID, V5_SCHEMA_VERSION):
-            validate_v5_migration_candidate(conn)
-            for statement in (*_V6_ADDITIONAL_DDL, *_V7_ADDITIONAL_DDL):
-                conn.execute(statement)
-        elif concurrent_identity == (APPLICATION_ID, V4_SCHEMA_VERSION):
-            validate_v4_migration_candidate(conn)
-            for statement in (
-                *_V5_ADDITIONAL_DDL, *_V6_ADDITIONAL_DDL, *_V7_ADDITIONAL_DDL,
-            ):
-                conn.execute(statement)
-        elif concurrent_identity == (APPLICATION_ID, V3_SCHEMA_VERSION):
-            validate_v3_migration_candidate(conn)
-            for statement in (
-                *_V4_ADDITIONAL_DDL,
-                *_V5_ADDITIONAL_DDL,
-                *_V6_ADDITIONAL_DDL,
-                *_V7_ADDITIONAL_DDL,
-            ):
-                conn.execute(statement)
-        elif concurrent_identity == (APPLICATION_ID, V2_SCHEMA_VERSION):
-            validate_v2_migration_candidate(conn)
-            for statement in (
-                *_V3_ADDITIONAL_DDL,
-                *_V4_ADDITIONAL_DDL,
-                *_V5_ADDITIONAL_DDL,
-                *_V6_ADDITIONAL_DDL,
-                *_V7_ADDITIONAL_DDL,
-            ):
-                conn.execute(statement)
-        elif concurrent_identity == (APPLICATION_ID, V1_SCHEMA_VERSION):
-            validate_v1_migration_candidate(conn)
-            for statement in (
-                *_V2_ADDITIONAL_TABLE_DDL, *_V2_ADDITIONAL_INDEX_DDL,
-                *_V3_ADDITIONAL_DDL,
-                *_V4_ADDITIONAL_DDL,
-                *_V5_ADDITIONAL_DDL,
-                *_V6_ADDITIONAL_DDL,
-                *_V7_ADDITIONAL_DDL,
-            ):
+        if (
+            concurrent_identity[0] == APPLICATION_ID
+            and concurrent_identity[1] in MIGRATABLE_VERSIONS
+        ):
+            source = concurrent_identity[1]
+            validate_migration_candidate(conn, source)
+            for statement in _ddl_after(source):
                 conn.execute(statement)
         elif concurrent_identity == (0, 0) and not concurrent_objects:
+            # _TABLE_DDL and _INDEX_DDL are read here at call time so tests can
+            # monkeypatch them to force a mid-DDL failure.
             for statement in (*_TABLE_DDL, *_INDEX_DDL):
                 conn.execute(statement)
-            for statement in _V3_ADDITIONAL_DDL:
-                conn.execute(statement)
-            for statement in _V4_ADDITIONAL_DDL:
-                conn.execute(statement)
-            for statement in _V5_ADDITIONAL_DDL:
-                conn.execute(statement)
-            for statement in _V6_ADDITIONAL_DDL:
-                conn.execute(statement)
-            for statement in _V7_ADDITIONAL_DDL:
+            for statement in _ddl_after(V2_SCHEMA_VERSION):
                 conn.execute(statement)
             conn.execute(
                 "INSERT INTO analyst_gpu_lease(slot,generation) VALUES(1,0)"
@@ -751,9 +702,12 @@ def validate_schema_v6(conn: sqlite3.Connection) -> None:
     _validate_schema_version(conn, V6_SCHEMA_VERSION)
 
 
-def validate_v1_migration_candidate(conn: sqlite3.Connection) -> None:
-    """Require exact v1, zero domain rows and the pristine singleton lease."""
-    validate_schema_v1(conn)
+def _validate_v1_pristine(conn: sqlite3.Connection) -> None:
+    """Require zero domain rows and the pristine singleton lease.
+
+    v1 is the one version admitted only when it is untouched: the frozen
+    development state, not merely an idle one.
+    """
     for table in _V1_DOMAIN_TABLES:
         if conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone() is not None:
             raise AnalystSchemaError(
@@ -771,158 +725,25 @@ def validate_v1_migration_candidate(conn: sqlite3.Connection) -> None:
         )
 
 
-def validate_v2_migration_candidate(conn: sqlite3.Connection) -> None:
-    """Require exact v2 with no live writer or in-flight durable work."""
-    validate_schema_v2(conn)
-    owned = conn.execute(
-        "SELECT 1 FROM analyst_gpu_lease WHERE run_id IS NOT NULL LIMIT 1"
-    ).fetchone()
-    active_run = conn.execute(
-        "SELECT 1 FROM analyst_runs WHERE state IN "
-        "('running','cancel_requested','finalizing') LIMIT 1"
-    ).fetchone()
-    active_file = conn.execute(
-        "SELECT 1 FROM analyst_files WHERE work_state='active' LIMIT 1"
-    ).fetchone()
-    active_attempt = conn.execute(
-        "SELECT 1 FROM analyst_model_attempts WHERE state='dispatching' LIMIT 1"
-    ).fetchone()
-    active_contact = conn.execute(
-        "SELECT 1 FROM analyst_ollama_contacts WHERE state='dispatching' LIMIT 1"
-    ).fetchone()
-    if any(
-        value is not None
-        for value in (owned, active_run, active_file, active_attempt, active_contact)
-    ):
-        raise AnalystSchemaError("Analyst v2 migration requires idle durable state")
+def validate_migration_candidate(conn: sqlite3.Connection, version: int) -> None:
+    """Require an exact known version with no in-flight durable work.
 
-
-def validate_v3_migration_candidate(conn: sqlite3.Connection) -> None:
-    """Require exact v3 with no live writer or in-flight durable work."""
-    validate_schema_v3(conn)
-    owned = conn.execute(
-        "SELECT 1 FROM analyst_gpu_lease WHERE run_id IS NOT NULL LIMIT 1"
-    ).fetchone()
-    active_run = conn.execute(
-        "SELECT 1 FROM analyst_runs WHERE state IN "
-        "('running','cancel_requested','finalizing') LIMIT 1"
-    ).fetchone()
-    active_file = conn.execute(
-        "SELECT 1 FROM analyst_files WHERE work_state='active' LIMIT 1"
-    ).fetchone()
-    active_attempt = conn.execute(
-        "SELECT 1 FROM analyst_model_attempts WHERE state='dispatching' LIMIT 1"
-    ).fetchone()
-    active_contact = conn.execute(
-        "SELECT 1 FROM analyst_ollama_contacts WHERE state='dispatching' LIMIT 1"
-    ).fetchone()
-    if any(
-        value is not None
-        for value in (owned, active_run, active_file, active_attempt, active_contact)
-    ):
-        raise AnalystSchemaError("Analyst v3 migration requires idle durable state")
-
-
-def validate_v4_migration_candidate(conn: sqlite3.Connection) -> None:
-    """Require exact v4 with no live writer or in-flight durable work."""
-    validate_schema_v4(conn)
-    owned = conn.execute(
-        "SELECT 1 FROM analyst_gpu_lease WHERE run_id IS NOT NULL LIMIT 1"
-    ).fetchone()
-    active_run = conn.execute(
-        "SELECT 1 FROM analyst_runs WHERE state IN "
-        "('running','cancel_requested','finalizing') LIMIT 1"
-    ).fetchone()
-    active_file = conn.execute(
-        "SELECT 1 FROM analyst_files WHERE work_state='active' LIMIT 1"
-    ).fetchone()
-    active_attempt = conn.execute(
-        "SELECT 1 FROM analyst_model_attempts WHERE state='dispatching' LIMIT 1"
-    ).fetchone()
-    active_contact = conn.execute(
-        "SELECT 1 FROM analyst_ollama_contacts WHERE state='dispatching' LIMIT 1"
-    ).fetchone()
-    if any(
-        value is not None
-        for value in (owned, active_run, active_file, active_attempt, active_contact)
-    ):
-        raise AnalystSchemaError("Analyst v4 migration requires idle durable state")
-
-
-def validate_v5_migration_candidate(conn: sqlite3.Connection) -> None:
-    """Require exact v5 with no live writer or in-flight durable work."""
-    validate_schema_v5(conn)
-    owned = conn.execute(
-        "SELECT 1 FROM analyst_gpu_lease WHERE run_id IS NOT NULL LIMIT 1"
-    ).fetchone()
-    active_run = conn.execute(
-        "SELECT 1 FROM analyst_runs WHERE state IN "
-        "('running','cancel_requested','finalizing') LIMIT 1"
-    ).fetchone()
-    active_file = conn.execute(
-        "SELECT 1 FROM analyst_files WHERE work_state='active' LIMIT 1"
-    ).fetchone()
-    active_attempt = conn.execute(
-        "SELECT 1 FROM analyst_model_attempts WHERE state='dispatching' LIMIT 1"
-    ).fetchone()
-    active_contact = conn.execute(
-        "SELECT 1 FROM analyst_ollama_contacts WHERE state='dispatching' LIMIT 1"
-    ).fetchone()
-    active_read_contact = conn.execute(
-        "SELECT 1 FROM analyst_read_contact WHERE state='dispatching' LIMIT 1"
-    ).fetchone()
-    if any(
-        value is not None
-        for value in (
-            owned,
-            active_run,
-            active_file,
-            active_attempt,
-            active_contact,
-            active_read_contact,
+    One entry point for every upgrade source, so adding a schema version needs
+    no new validator here and no new branch in any caller.
+    """
+    if version not in MIGRATABLE_VERSIONS:
+        raise AnalystSchemaError(
+            f"Analyst v{version} is not a known migration source"
         )
-    ):
-        raise AnalystSchemaError("Analyst v5 migration requires idle durable state")
-
-
-def validate_v6_migration_candidate(conn: sqlite3.Connection) -> None:
-    """Require exact v6 with no live writer or in-flight durable work."""
-    validate_schema_v6(conn)
-    owned = conn.execute(
-        "SELECT 1 FROM analyst_gpu_lease WHERE run_id IS NOT NULL LIMIT 1"
-    ).fetchone()
-    active_run = conn.execute(
-        "SELECT 1 FROM analyst_runs WHERE state IN "
-        "('running','cancel_requested','finalizing') LIMIT 1"
-    ).fetchone()
-    active_file = conn.execute(
-        "SELECT 1 FROM analyst_files WHERE work_state='active' LIMIT 1"
-    ).fetchone()
-    active_attempt = conn.execute(
-        "SELECT 1 FROM analyst_model_attempts WHERE state='dispatching' LIMIT 1"
-    ).fetchone()
-    active_contact = conn.execute(
-        "SELECT 1 FROM analyst_ollama_contacts WHERE state='dispatching' LIMIT 1"
-    ).fetchone()
-    active_read_contact = conn.execute(
-        "SELECT 1 FROM analyst_read_contact WHERE state='dispatching' LIMIT 1"
-    ).fetchone()
-    active_discovery = conn.execute(
-        "SELECT 1 FROM analyst_discovery_contact WHERE state='dispatching' LIMIT 1"
-    ).fetchone()
-    if any(
-        value is not None
-        for value in (
-            owned,
-            active_run,
-            active_file,
-            active_attempt,
-            active_contact,
-            active_read_contact,
-            active_discovery,
-        )
-    ):
-        raise AnalystSchemaError("Analyst v6 migration requires idle durable state")
+    _validate_schema_version(conn, version)
+    if version == V1_SCHEMA_VERSION:
+        _validate_v1_pristine(conn)
+        return
+    for query in _idle_queries_through(version):
+        if conn.execute(query).fetchone() is not None:
+            raise AnalystSchemaError(
+                f"Analyst v{version} migration requires idle durable state"
+            )
 
 
 def _validate_schema_version(conn: sqlite3.Connection, version: int) -> None:
@@ -950,12 +771,9 @@ def _validate_schema_version(conn: sqlite3.Connection, version: int) -> None:
     ).fetchone()
     if invalid_accepted is not None:
         raise AnalystSchemaError("accepted model attempt is not valid for its chunk")
-    if version >= V2_SCHEMA_VERSION:
-        _validate_v2_rows(conn)
-    if version >= V3_SCHEMA_VERSION:
-        _validate_v3_rows(conn)
-    if version >= V4_SCHEMA_VERSION:
-        _validate_v4_rows(conn)
+    for step in _steps_through(version):
+        if step.row_validator is not None:
+            step.row_validator(conn)
 
 
 def _validate_v4_rows(conn: sqlite3.Connection) -> None:
@@ -1391,46 +1209,10 @@ def _schema_snapshot(conn: sqlite3.Connection) -> _SchemaSnapshot:
     )
 
 
-@lru_cache(maxsize=6)
+@lru_cache(maxsize=len(_LADDER))
 def _expected_snapshot(version: int = SCHEMA_VERSION) -> _SchemaSnapshot:
-    if version == V1_SCHEMA_VERSION:
-        table_ddl, index_ddl = _V1_TABLE_DDL, _V1_INDEX_DDL
-        additional_ddl: tuple[str, ...] = ()
-    elif version == V2_SCHEMA_VERSION:
-        table_ddl, index_ddl = _TABLE_DDL, _INDEX_DDL
-        additional_ddl = ()
-    elif version == V3_SCHEMA_VERSION:
-        table_ddl, index_ddl = _TABLE_DDL, _INDEX_DDL
-        additional_ddl = _V3_ADDITIONAL_DDL
-    elif version == V4_SCHEMA_VERSION:
-        table_ddl, index_ddl = _TABLE_DDL, _INDEX_DDL
-        additional_ddl = (*_V3_ADDITIONAL_DDL, *_V4_ADDITIONAL_DDL)
-    elif version == V5_SCHEMA_VERSION:
-        table_ddl, index_ddl = _TABLE_DDL, _INDEX_DDL
-        additional_ddl = (
-            *_V3_ADDITIONAL_DDL,
-            *_V4_ADDITIONAL_DDL,
-            *_V5_ADDITIONAL_DDL,
-        )
-    elif version == V6_SCHEMA_VERSION:
-        table_ddl, index_ddl = _TABLE_DDL, _INDEX_DDL
-        additional_ddl = (
-            *_V3_ADDITIONAL_DDL,
-            *_V4_ADDITIONAL_DDL,
-            *_V5_ADDITIONAL_DDL,
-            *_V6_ADDITIONAL_DDL,
-        )
-    elif version == SCHEMA_VERSION:
-        table_ddl, index_ddl = _TABLE_DDL, _INDEX_DDL
-        additional_ddl = (
-            *_V3_ADDITIONAL_DDL,
-            *_V4_ADDITIONAL_DDL,
-            *_V5_ADDITIONAL_DDL,
-            *_V6_ADDITIONAL_DDL,
-            *_V7_ADDITIONAL_DDL,
-        )
-    else:
-        raise ValueError("unsupported Analyst schema snapshot version")
+    additional_ddl = _ddl_through(version)
+    table_ddl, index_ddl = _V1_TABLE_DDL, _V1_INDEX_DDL
     conn = sqlite3.connect(":memory:", isolation_level=None)
     try:
         conn.execute("PRAGMA foreign_keys=ON")
@@ -1477,10 +1259,5 @@ __all__ = [
     "validate_schema_v4",
     "validate_schema_v5",
     "validate_schema_v6",
-    "validate_v1_migration_candidate",
-    "validate_v2_migration_candidate",
-    "validate_v3_migration_candidate",
-    "validate_v4_migration_candidate",
-    "validate_v5_migration_candidate",
-    "validate_v6_migration_candidate",
+    "validate_migration_candidate",
 ]

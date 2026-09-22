@@ -177,3 +177,56 @@ def test_migrating_twice_is_idempotent(tmp_path, version):
     first = hashlib.sha256(path.read_bytes()).hexdigest()
     initialize_database(path)
     assert hashlib.sha256(path.read_bytes()).hexdigest() == first
+# --------------------------------------------------------------------------
+# The ladder is not re-duplicated elsewhere
+# --------------------------------------------------------------------------
+
+_STORE = Path(db_schema.__file__).with_name("store.py")
+
+
+def test_store_has_no_per_version_ladder():
+    """store.py must derive from MIGRATABLE_VERSIONS, never branch per version.
+
+    A hand-written ladder here is exactly what went stale during N1.
+    """
+    source = _STORE.read_text(encoding="utf-8")
+    offenders = [
+        name
+        for name in (
+            "V1_SCHEMA_VERSION",
+            "V2_SCHEMA_VERSION",
+            "V3_SCHEMA_VERSION",
+            "V4_SCHEMA_VERSION",
+            "V5_SCHEMA_VERSION",
+            "V6_SCHEMA_VERSION",
+        )
+        if name in source
+    ]
+    assert offenders == [], (
+        f"store.py names individual schema versions {offenders}; it should use "
+        "MIGRATABLE_VERSIONS so a new version needs no edit here"
+    )
+
+
+def test_store_imports_no_per_version_validator():
+    tree = ast.parse(_STORE.read_text(encoding="utf-8"), filename=str(_STORE))
+    imported = [
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+    ]
+    offenders = [
+        name
+        for name in imported
+        if name.startswith("validate_v") and name.endswith("_migration_candidate")
+    ]
+    assert offenders == [], f"store.py imports per-version validators {offenders}"
+
+
+def test_db_schema_exports_the_generic_candidate_validator():
+    assert "validate_migration_candidate" in db_schema.__all__
+    assert not any(
+        name.startswith("validate_v") and name.endswith("_migration_candidate")
+        for name in db_schema.__all__
+    )

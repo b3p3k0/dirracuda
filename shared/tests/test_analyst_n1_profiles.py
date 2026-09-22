@@ -20,7 +20,7 @@ from experimental.analyst.db_schema import (
     V6_SCHEMA_VERSION,
     AnalystSchemaError,
     validate_schema,
-    validate_v6_migration_candidate,
+    validate_migration_candidate,
 )
 from experimental.analyst.endpoint import RemoteNotEnabledError
 from experimental.analyst.ollama_client import OllamaClient
@@ -184,7 +184,7 @@ def test_v6_candidate_refuses_a_database_with_work_in_flight(tmp_path: Path):
             "UPDATE analyst_runs SET state='running' WHERE run_id=?", (_RUN_ID,)
         )
         with pytest.raises(AnalystSchemaError):
-            validate_v6_migration_candidate(conn)
+            validate_migration_candidate(conn, V6_SCHEMA_VERSION)
     finally:
         conn.close()
 

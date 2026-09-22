@@ -273,7 +273,7 @@ def test_v6_snapshot_verifies() -> None:
         assert db_schema._schema_snapshot(conn) == db_schema._expected_snapshot(
             db_schema.SCHEMA_VERSION
         )
-        for version in (1, 2, 3, 4, 5, 6):
+        for version in db_schema.KNOWN_SCHEMA_VERSIONS:
             assert db_schema._expected_snapshot(version)
     finally:
         conn.close()

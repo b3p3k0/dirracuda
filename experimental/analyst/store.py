@@ -19,23 +19,13 @@ from shared.path_service import get_paths
 from .db_schema import (
     APPLICATION_ID,
     KNOWN_SCHEMA_VERSIONS,
+    MIGRATABLE_VERSIONS,
     SCHEMA_VERSION,
-    V1_SCHEMA_VERSION,
-    V2_SCHEMA_VERSION,
-    V3_SCHEMA_VERSION,
-    V4_SCHEMA_VERSION,
-    V5_SCHEMA_VERSION,
-    V6_SCHEMA_VERSION,
     AnalystSchemaError,
     initialize_schema,
+    validate_migration_candidate,
     validate_runtime_schema,
     validate_schema,
-    validate_v1_migration_candidate,
-    validate_v2_migration_candidate,
-    validate_v3_migration_candidate,
-    validate_v4_migration_candidate,
-    validate_v5_migration_candidate,
-    validate_v6_migration_candidate,
 )
 from .file_identity import split_unsigned_u64
 from .inventory import InventoryFile, InventoryResult
@@ -685,18 +675,8 @@ def _audit_existing_database(path: Path) -> None:
         ).fetchone()
         if identity == (APPLICATION_ID, SCHEMA_VERSION):
             validate_schema(conn)
-        elif identity == (APPLICATION_ID, V6_SCHEMA_VERSION):
-            validate_v6_migration_candidate(conn)
-        elif identity == (APPLICATION_ID, V5_SCHEMA_VERSION):
-            validate_v5_migration_candidate(conn)
-        elif identity == (APPLICATION_ID, V4_SCHEMA_VERSION):
-            validate_v4_migration_candidate(conn)
-        elif identity == (APPLICATION_ID, V3_SCHEMA_VERSION):
-            validate_v3_migration_candidate(conn)
-        elif identity == (APPLICATION_ID, V2_SCHEMA_VERSION):
-            validate_v2_migration_candidate(conn)
-        elif identity == (APPLICATION_ID, V1_SCHEMA_VERSION):
-            validate_v1_migration_candidate(conn)
+        elif identity[0] == APPLICATION_ID and identity[1] in MIGRATABLE_VERSIONS:
+            validate_migration_candidate(conn, identity[1])
         elif identity != (0, 0) or objects is not None:
             raise AnalystSchemaError(
                 "refusing to open a partial, foreign, or versioned Analyst database"
