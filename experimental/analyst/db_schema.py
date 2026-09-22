@@ -34,11 +34,12 @@ V3_SCHEMA_VERSION: Final = 3
 V4_SCHEMA_VERSION: Final = 4
 V5_SCHEMA_VERSION: Final = 5
 V6_SCHEMA_VERSION: Final = 6
-PREVIOUS_SCHEMA_VERSION: Final = V6_SCHEMA_VERSION
-SCHEMA_VERSION: Final = 7
+V7_SCHEMA_VERSION: Final = 7
+PREVIOUS_SCHEMA_VERSION: Final = V7_SCHEMA_VERSION
+SCHEMA_VERSION: Final = 8
 KNOWN_SCHEMA_VERSIONS: Final = (
     V1_SCHEMA_VERSION, V2_SCHEMA_VERSION, V3_SCHEMA_VERSION, V4_SCHEMA_VERSION,
-    V5_SCHEMA_VERSION, V6_SCHEMA_VERSION, SCHEMA_VERSION,
+    V5_SCHEMA_VERSION, V6_SCHEMA_VERSION, V7_SCHEMA_VERSION, SCHEMA_VERSION,
 )
 
 RUN_STATES: Final = (
@@ -616,9 +617,16 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
             return
         raise
 
-    conn.execute("PRAGMA foreign_keys=ON")
+    # A rebuild step drops a table other rows reference, which SQLite permits
+    # only with enforcement off. The pragma is a no-op inside a transaction, so
+    # the mode is chosen here and restored after COMMIT. foreign_key_check still
+    # gates the COMMIT in both modes.
+    source = identity[1] if identity[0] == APPLICATION_ID else None
+    rebuilding = _requires_foreign_keys_off(source)
+    wanted = 0 if rebuilding else 1
+    conn.execute(f"PRAGMA foreign_keys={'OFF' if rebuilding else 'ON'}")
     foreign_keys = conn.execute("PRAGMA foreign_keys").fetchone()
-    if foreign_keys is None or int(foreign_keys[0]) != 1:
+    if foreign_keys is None or int(foreign_keys[0]) != wanted:
         raise AnalystSchemaError("SQLite foreign-key enforcement is unavailable")
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -657,6 +665,12 @@ def initialize_schema(conn: sqlite3.Connection) -> None:
         if quick_check is None or str(quick_check[0]) != "ok":
             raise AnalystSchemaError("new schema failed SQLite quick_check")
         conn.execute("COMMIT")
+        if rebuilding:
+            # A rebuild drops a table, leaving its pages on the freelist. Reclaim
+            # them so a database built through the ladder is byte-for-byte what a
+            # database built directly would be. VACUUM cannot run in a
+            # transaction, so it goes here, after COMMIT.
+            conn.execute("VACUUM")
         conn.execute("PRAGMA foreign_keys=ON")
         foreign_keys = conn.execute("PRAGMA foreign_keys").fetchone()
         if foreign_keys is None or int(foreign_keys[0]) != 1:
@@ -891,6 +905,102 @@ def _validate_v2_rows(conn: sqlite3.Connection) -> None:
 # ---------------------------------------------------------------------------
 
 
+#: Identity kinds a run may record (contract 6.1).
+IDENTITY_KINDS: Final = ("digest", "reported")
+
+#: Columns v7 added to analyst_runs by ALTER, which a rebuild must carry.
+_V7_RUN_COLUMNS: Final = (
+    "profile_id INTEGER REFERENCES analyst_llm_profile(profile_id)",
+    f"backend_kind TEXT "
+    f"CHECK(backend_kind IS NULL OR backend_kind IN ({_values(BACKEND_KINDS)}))",
+)
+
+#: The reported-identity record of contract 6.1, plus the kind discriminator.
+_V8_RUN_COLUMNS: Final = (
+    f"identity_kind TEXT CHECK(identity_kind IS NULL "
+    f"OR identity_kind IN ({_values(IDENTITY_KINDS)}))",
+    "model_path TEXT",
+    "model_n_params INTEGER CHECK(model_n_params IS NULL OR model_n_params > 0)",
+    "model_size_bytes INTEGER CHECK(model_size_bytes IS NULL OR model_size_bytes > 0)",
+    "model_ftype TEXT",
+    "model_n_vocab INTEGER CHECK(model_n_vocab IS NULL OR model_n_vocab > 0)",
+    "model_n_ctx INTEGER CHECK(model_n_ctx IS NULL OR model_n_ctx > 0)",
+    "model_n_ctx_train INTEGER "
+    "CHECK(model_n_ctx_train IS NULL OR model_n_ctx_train > 0)",
+    "server_fingerprint TEXT",
+)
+
+#: A reported identity has no cryptographic digest; a digest identity must have one.
+#: Rows written before v8 carry a NULL kind and keep their digest.
+_V8_IDENTITY_CHECK: Final = (
+    "CHECK((identity_kind IS NULL AND model_digest IS NOT NULL)"
+    " OR (identity_kind='digest' AND model_digest IS NOT NULL)"
+    " OR (identity_kind='reported' AND model_digest IS NULL))"
+)
+
+
+def _rebuilt_analyst_runs_ddl(table: str) -> str:
+    """Return the post-v8 analyst_runs definition under a supplied table name.
+
+    Derived from the frozen v1 literal so the column bodies have a single
+    source. The v8 snapshot digest in the ladder guardrail pins the result.
+    """
+    base = _V1_TABLE_DDL[0]
+    old_digest = f"model_digest TEXT NOT NULL CHECK({_LOWER_SHA.format('model_digest')})"
+    new_digest = (
+        "model_digest TEXT "
+        f"CHECK(model_digest IS NULL OR ({_LOWER_SHA.format('model_digest')}))"
+    )
+    if base.count(old_digest) != 1:
+        raise AnalystSchemaError("v1 analyst_runs digest column moved")
+    body = base.replace(old_digest, new_digest)
+    body = body.replace("CREATE TABLE analyst_runs (", f"CREATE TABLE {table} (", 1)
+    # Column definitions must precede table-level constraints, so the new
+    # columns go in before the first CHECK and the identity rule goes last.
+    added = ",\n        ".join((*_V7_RUN_COLUMNS, *_V8_RUN_COLUMNS))
+    first_check = "        CHECK((isolation_mode='strict'"
+    tail = "\n    ) STRICT"
+    if body.count(first_check) != 1 or body.count(tail) != 1:
+        raise AnalystSchemaError("v1 analyst_runs layout moved")
+    body = body.replace(first_check, f"        {added},\n{first_check}", 1)
+    return body.replace(tail, f",\n        {_V8_IDENTITY_CHECK}{tail}", 1)
+
+
+#: Columns carried across the rebuild: everything analyst_runs held at v7.
+_V7_RUN_COLUMN_NAMES: Final = tuple(
+    line.split()[0]
+    for line in (
+        "run_id", "state", "revision", "created_at_utc", "updated_at_utc",
+        "finished_at_utc", "completion_code", "mode", "source_mode", "source_root",
+        "output_root", "source_identity_json", "source_identity_sha256",
+        "report_label", "host_type", "protocol_server_id", "ip_address", "port",
+        "extract_summary_row_id", "model_tag", "model_digest", "worksheet_version",
+        "prompt_sha256", "response_schema_sha256", "detector_rules_version",
+        "detector_rules_sha256", "parser_bundle_json", "parser_bundle_sha256",
+        "chunk_chars", "overlap_chars", "num_ctx", "num_predict", "isolation_mode",
+        "reduced_isolation_ack", "cancel_requested_at_utc", "finalization_token",
+        "report_manifest_sha256", "profile_id", "backend_kind",
+    )
+)
+
+# v8 rebuilds analyst_runs: SQLite cannot relax NOT NULL or a CHECK in place.
+# This is the first non-additive step, so it runs with foreign_keys OFF, per
+# SQLite's documented table-rebuild procedure. initialize_schema still runs
+# PRAGMA foreign_key_check and quick_check before COMMIT.
+_V8_ADDITIONAL_DDL: Final = (
+    _rebuilt_analyst_runs_ddl("analyst_runs_v8"),
+    f"INSERT INTO analyst_runs_v8({','.join(_V7_RUN_COLUMN_NAMES)}) "
+    f"SELECT {','.join(_V7_RUN_COLUMN_NAMES)} FROM analyst_runs",
+    "DROP TABLE analyst_runs",
+    "ALTER TABLE analyst_runs_v8 RENAME TO analyst_runs",
+    # Dropping the table dropped its indexes; recreate every one, v1 and v7.
+    "CREATE INDEX idx_analyst_runs_state_updated ON analyst_runs(state,updated_at_utc,run_id)",
+    "CREATE INDEX idx_analyst_runs_host ON analyst_runs(host_type,protocol_server_id,created_at_utc,run_id)",
+    "CREATE INDEX idx_analyst_runs_endpoint ON analyst_runs(ip_address,port,created_at_utc,run_id)",
+    "CREATE INDEX idx_analyst_runs_profile ON analyst_runs(profile_id)",
+)
+
+
 @dataclass(frozen=True)
 class _SchemaStep:
     """One version of the Analyst sidecar schema."""
@@ -902,6 +1012,10 @@ class _SchemaStep:
     idle_query: str | None
     #: Row-level invariants this version introduces.
     row_validator: object | None
+    #: True when this step rebuilds a table. SQLite cannot relax NOT NULL or a
+    #: CHECK in place, and its documented rebuild procedure requires
+    #: foreign_keys OFF for the transaction. Default False: every additive step.
+    rebuilds_a_table: bool = False
 
 
 _LADDER: Final = (
@@ -927,8 +1041,23 @@ _LADDER: Final = (
         None,
     ),
     # v7 adds analyst_llm_profile, which holds no in-flight state.
-    _SchemaStep(SCHEMA_VERSION, _V7_ADDITIONAL_DDL, None, None),
+    _SchemaStep(V7_SCHEMA_VERSION, _V7_ADDITIONAL_DDL, None, None),
+    # v8 rebuilds analyst_runs so a reported identity can carry no digest.
+    _SchemaStep(SCHEMA_VERSION, _V8_ADDITIONAL_DDL, None, None, rebuilds_a_table=True),
 )
+
+
+def _requires_foreign_keys_off(source_version: int | None) -> bool:
+    """Return whether the pending upgrade includes a table rebuild.
+
+    A rebuild drops and recreates a table other rows reference, which SQLite
+    only permits with foreign_keys OFF. Everything else migrates with
+    enforcement on, and PRAGMA foreign_key_check gates the COMMIT either way.
+    """
+    floor = -1 if source_version is None else source_version
+    return any(
+        step.rebuilds_a_table for step in _LADDER if step.version > floor
+    )
 
 #: In-flight probes that exist at every version from v2 onward.
 _BASE_IDLE_QUERIES: Final = (

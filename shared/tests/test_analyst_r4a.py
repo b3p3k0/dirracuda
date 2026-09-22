@@ -160,7 +160,7 @@ def test_fresh_v6_has_discovery_tables_indexes_and_identity() -> None:
         initialize_schema(conn)
 
         assert conn.execute("PRAGMA application_id").fetchone()[0] == APPLICATION_ID
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 7
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 8
         assert {
             str(row[0])
             for row in conn.execute(

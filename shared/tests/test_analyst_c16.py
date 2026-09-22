@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from experimental.analyst.checkpoint import claim_next_file
+from experimental.analyst import db_schema
 from experimental.analyst.db_schema import (
     SCHEMA_VERSION,
     V2_SCHEMA_VERSION,
@@ -118,9 +119,29 @@ def test_populated_exact_v2_migrates_in_place_with_zero_high_bits(
     inode_before = path.stat().st_ino
     conn = sqlite3.connect(path, autocommit=True)
     try:
+        # v8 rebuilt analyst_runs (nullable digest, identity columns), so the
+        # downgrade must rebuild it back to its v1 shape. Dropping columns
+        # cannot restore a NOT NULL constraint. The v1 literal is the source.
         conn.execute("DROP INDEX idx_analyst_runs_profile")
-        conn.execute("ALTER TABLE analyst_runs DROP COLUMN backend_kind")
-        conn.execute("ALTER TABLE analyst_runs DROP COLUMN profile_id")
+        # Rebuild by dropping and recreating under the original name, not by
+        # renaming: ALTER TABLE ... RENAME TO writes the name quoted into
+        # sqlite_schema, which would not match the v1 literal byte for byte.
+        v1_runs = db_schema._V1_TABLE_DDL[0]
+        probe = sqlite3.connect(":memory:")
+        probe.execute(v1_runs)
+        v1_cols = [row[1] for row in probe.execute("PRAGMA table_info(analyst_runs)")]
+        probe.close()
+        kept = list(conn.execute(f"SELECT {','.join(v1_cols)} FROM analyst_runs"))
+        conn.execute("DROP TABLE analyst_runs")
+        conn.execute(v1_runs)
+        conn.executemany(
+            f"INSERT INTO analyst_runs({','.join(v1_cols)}) "
+            f"VALUES({','.join('?' * len(v1_cols))})",
+            kept,
+        )
+        for statement in db_schema._V1_INDEX_DDL:
+            if "analyst_runs" in statement:
+                conn.execute(statement)
         conn.execute("DROP TABLE analyst_llm_profile")
         conn.execute("DROP TABLE analyst_discovered_model")
         conn.execute("DROP TABLE analyst_discovery_contact")

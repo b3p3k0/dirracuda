@@ -37,6 +37,7 @@ _GOLDEN_SNAPSHOT_SHA256 = {
     5: "8b78ef1a9679ba65eae6b7c3f16df2618fbbbb8daaa3e199fc0a6aa64cfd94b4",
     6: "8dbfc02f1222777d4c5a533bff8e517b4ff663571e20841dc24f0ddff2df117d",
     7: "7475975e3aab5c4dcc8f9ff0a1a0a93962e6d44d5856e4fe114d9c0c94955c18",
+    8: "238c15063de4286bef2cb20fcda94bfddd0deab7fc002eed6b939c916e78a5a5",
 }
 
 

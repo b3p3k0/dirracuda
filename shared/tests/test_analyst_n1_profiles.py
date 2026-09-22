@@ -59,13 +59,13 @@ def db(tmp_path: Path) -> Path:
 # Schema v7
 # --------------------------------------------------------------------------
 
-def test_schema_version_is_seven_and_v6_is_the_previous(db: Path):
+def test_schema_version_is_current_and_the_prior_one_is_previous(db: Path):
     conn = open_connection(db, read_only=True)
     try:
-        assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == 7
+        assert int(conn.execute("PRAGMA user_version").fetchone()[0]) == SCHEMA_VERSION
     finally:
         conn.close()
-    assert db_schema.PREVIOUS_SCHEMA_VERSION == V6_SCHEMA_VERSION
+    assert db_schema.PREVIOUS_SCHEMA_VERSION == SCHEMA_VERSION - 1
     assert V6_SCHEMA_VERSION in db_schema.KNOWN_SCHEMA_VERSIONS
 
 
