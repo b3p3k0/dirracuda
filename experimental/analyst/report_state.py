@@ -427,7 +427,10 @@ def _load_host_read(
     ).fetchone()
     if row is None:
         return None
-    if int(row["report_schema_version"]) != report_json.REPORT_SCHEMA_VERSION:
+    if (
+        int(row["report_schema_version"])
+        not in report_json.SUPPORTED_REPORT_SCHEMA_VERSIONS
+    ):
         raise ReportStateError("durable host read version is unsupported")
     contact_values = json.loads(str(row["contacts_json"]))
     if type(contact_values) is not list:

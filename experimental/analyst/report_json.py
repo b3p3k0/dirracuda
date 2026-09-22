@@ -7,7 +7,12 @@ from dataclasses import dataclass, field
 from typing import Iterable, Literal
 
 
-REPORT_SCHEMA_VERSION = 1
+REPORT_SCHEMA_VERSION = 2
+#: Versions this module can still read. v1 predates the model-identity kind
+#: (erratum E18); reports and durable host reads written before N2a stay
+#: readable rather than being orphaned by the bump.
+SUPPORTED_REPORT_SCHEMA_VERSIONS = (1, 2)
+IDENTITY_KINDS = ("digest", "reported")
 UNVERIFIED_NOTICE = "Model's read - not verified. Facts below are grounded."
 MAX_HOST_SUMMARY_CHARS = 1200
 
@@ -112,18 +117,34 @@ class RunMeta:
     report_label: str = field(repr=False)
     read_mode: str
     model_tag: str
-    model_digest: str
+    model_digest: str | None
     created_at_utc: str
     files_read: int
     files_total: int
     flagged_files: int
+    # Contract 6.1: a "digest" identity is verified by a SHA-256 model digest;
+    # a "reported" identity is what a server said about itself and is never
+    # presented as verified. Defaults keep every pre-N2a caller working.
+    identity_kind: str = "digest"
+    model_path: str | None = None
+    model_n_params: int | None = None
+    model_size_bytes: int | None = None
+    model_ftype: str | None = None
+    model_n_vocab: int | None = None
+    model_n_ctx: int | None = None
+    model_n_ctx_train: int | None = None
+    server_fingerprint: str | None = None
+
+    @property
+    def is_verified_identity(self) -> bool:
+        """Return whether a cryptographic digest backs this run's model."""
+        return self.identity_kind == "digest"
 
     def __post_init__(self) -> None:
         text_values = (
             self.run_id,
             self.report_label,
             self.model_tag,
-            self.model_digest,
             self.created_at_utc,
         )
         counts = (self.files_read, self.files_total, self.flagged_files)
@@ -131,12 +152,34 @@ class RunMeta:
             any(type(value) is not str or not value for value in text_values)
             or type(self.read_mode) is not str
             or self.read_mode not in _READ_MODES
-            or len(self.model_digest) != 64
-            or any(char not in "0123456789abcdef" for char in self.model_digest)
+            or type(self.identity_kind) is not str
+            or self.identity_kind not in IDENTITY_KINDS
             or any(type(value) is not int or value < 0 for value in counts)
             or self.files_read > self.files_total
         ):
             raise ReportValidationError("run metadata is invalid")
+        if self.identity_kind == "digest":
+            if (
+                type(self.model_digest) is not str
+                or len(self.model_digest) != 64
+                or any(char not in "0123456789abcdef" for char in self.model_digest)
+            ):
+                raise ReportValidationError("run metadata is invalid")
+        elif self.model_digest is not None:
+            raise ReportValidationError(
+                "a reported identity must carry no model digest"
+            )
+        for value in (
+            self.model_path, self.model_ftype, self.server_fingerprint,
+        ):
+            if value is not None and (type(value) is not str or not value):
+                raise ReportValidationError("reported identity text is invalid")
+        for value in (
+            self.model_n_params, self.model_size_bytes, self.model_n_vocab,
+            self.model_n_ctx, self.model_n_ctx_train,
+        ):
+            if value is not None and (type(value) is not int or value <= 0):
+                raise ReportValidationError("reported identity counts are invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,6 +314,15 @@ def build_report_json(
             "read_mode": run.read_mode,
             "model_tag": run.model_tag,
             "model_digest": run.model_digest,
+            "identity_kind": run.identity_kind,
+            "model_path": run.model_path,
+            "model_n_params": run.model_n_params,
+            "model_size_bytes": run.model_size_bytes,
+            "model_ftype": run.model_ftype,
+            "model_n_vocab": run.model_n_vocab,
+            "model_n_ctx": run.model_n_ctx,
+            "model_n_ctx_train": run.model_n_ctx_train,
+            "server_fingerprint": run.server_fingerprint,
             "created_at_utc": run.created_at_utc,
             "files_read": run.files_read,
             "files_total": run.files_total,
@@ -335,7 +387,8 @@ def validate_report_json(obj: dict[str, object]) -> None:
         raise ReportVersionError("report_schema_version is required")
     if type(obj["report_schema_version"]) is not int:
         raise ReportVersionError("report_schema_version must be an integer")
-    if obj["report_schema_version"] != REPORT_SCHEMA_VERSION:
+    version = obj["report_schema_version"]
+    if version not in SUPPORTED_REPORT_SCHEMA_VERSIONS:
         raise ReportVersionError("report_schema_version is unsupported")
 
     _require_keys(
@@ -344,10 +397,17 @@ def validate_report_json(obj: dict[str, object]) -> None:
         "report",
     )
     run = _object(obj["run"], "run")
-    _require_keys(run, {
+    run_keys = {
         "run_id", "report_label", "read_mode", "model_tag", "model_digest",
         "created_at_utc", "files_read", "files_total", "flagged_files",
-    }, "run")
+    }
+    if version >= 2:
+        run_keys |= {
+            "identity_kind", "model_path", "model_n_params", "model_size_bytes",
+            "model_ftype", "model_n_vocab", "model_n_ctx", "model_n_ctx_train",
+            "server_fingerprint",
+        }
+    _require_keys(run, run_keys, "run")
     RunMeta(**run)
 
     read = _object(obj["read"], "read")
