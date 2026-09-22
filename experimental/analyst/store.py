@@ -73,7 +73,9 @@ class RunSpec:
     source_identity: Mapping[str, object]
     report_label: str
     model_tag: str
-    model_digest: str
+    #: None only for a "reported" identity, which carries no cryptographic
+    #: digest (contract 6.1). The schema CHECK enforces the pairing.
+    model_digest: str | None
     worksheet_version: str
     prompt_sha256: str
     response_schema_sha256: str
@@ -91,6 +93,19 @@ class RunSpec:
     ip_address: str | None = None
     port: int | None = None
     extract_summary_row_id: int | None = None
+    # Which model server produced this run, and how strongly its identity is
+    # established. identity_kind is None on a run created before schema v8.
+    profile_id: int | None = None
+    backend_kind: str | None = None
+    identity_kind: str | None = None
+    model_path: str | None = None
+    model_n_params: int | None = None
+    model_size_bytes: int | None = None
+    model_ftype: str | None = None
+    model_n_vocab: int | None = None
+    model_n_ctx: int | None = None
+    model_n_ctx_train: int | None = None
+    server_fingerprint: str | None = None
 
 
 def get_db_path(override: Path | None = None) -> Path:
@@ -310,8 +325,12 @@ def create_run(
             "prompt_sha256,response_schema_sha256,detector_rules_version,"
             "detector_rules_sha256,parser_bundle_json,parser_bundle_sha256,"
             "chunk_chars,overlap_chars,num_ctx,num_predict,isolation_mode,"
-            "reduced_isolation_ack) VALUES(?, 'ready', ?, ?, ?, ?, ?, ?, ?, ?,"
-            "?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "reduced_isolation_ack,profile_id,backend_kind,identity_kind,"
+            "model_path,model_n_params,model_size_bytes,model_ftype,"
+            "model_n_vocab,model_n_ctx,model_n_ctx_train,server_fingerprint) "
+            "VALUES(?, 'ready', ?, ?, ?, ?, ?, ?, ?, ?,"
+            "?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,"
+            "?,?,?,?,?,?,?,?,?,?,?)",
             (
                 spec.run_id, timestamp, timestamp, spec.mode, spec.source_mode,
                 spec.source_root, spec.output_root, source_json, source_sha,
@@ -323,6 +342,10 @@ def create_run(
                 parser_json, parser_sha, spec.chunk_chars, spec.overlap_chars,
                 spec.num_ctx, spec.num_predict, spec.isolation_mode,
                 int(spec.reduced_isolation_ack),
+                spec.profile_id, spec.backend_kind, spec.identity_kind,
+                spec.model_path, spec.model_n_params, spec.model_size_bytes,
+                spec.model_ftype, spec.model_n_vocab, spec.model_n_ctx,
+                spec.model_n_ctx_train, spec.server_fingerprint,
             ),
         )
         conn.execute(

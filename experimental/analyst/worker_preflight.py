@@ -54,6 +54,11 @@ _PARSER_FILES: Final = (
     "ooxml_child.py",
     "ooxml_contract.py",
     "ooxml_frame.py",
+    # The transport layer, and the module that decides which server it reaches.
+    # A run's provenance bundle must cover the code that talked to the model.
+    "backends/__init__.py",
+    "backends/base.py",
+    "endpoint.py",
     "ollama_client.py",
     "ollama_contract.py",
     "ollama_protocol.py",
@@ -126,8 +131,10 @@ class WorkerPreflightResult:
 
 def current_parser_bundle() -> ParserBundleIdentity:
     """Hash the exact parser/sandbox contract and frozen dependency versions."""
+    # Keys stay path-free (C10c): a subpackage member is named by its dotted
+    # module path, so the bundle never carries a filesystem separator.
     files = {
-        name: _hash_contract_file(_MODULE_ROOT / name)
+        name.replace("/", "."): _hash_contract_file(_MODULE_ROOT / name)
         for name in _PARSER_FILES
     }
     value = {
