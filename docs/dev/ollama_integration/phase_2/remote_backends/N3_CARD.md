@@ -2,8 +2,9 @@
 
 - Branch: `feature/ollama-analyst`
 - Type: **code + docs.** Implemented by codex (DA) under Claude orchestration.
-- Status: **HELD.** Requires N2 merged.
-- Contract: [`CONTRACT_REMOTE_BACKENDS.md`](CONTRACT_REMOTE_BACKENDS.md) §4, §9, §10, §11
+- Status: **HELD.** Requires N2b merged.
+- Contract: [`CONTRACT_REMOTE_BACKENDS.md`](CONTRACT_REMOTE_BACKENDS.md) §4.4, §9, §10, §11
+- Decisions: **D19** — §4.1-4.3 moved to N2b
 - **Security-critical. Flag the diff for HI review before merge.**
 
 ## Goal
@@ -12,13 +13,15 @@ Make a remote profile safe to use, and say honestly what it does and does not pr
 
 ## Work
 
-### 1. Address policy (§4.1–4.3)
+### 1. Address policy (§4.1-4.3) — **moved to N2b**
 
-- Loopback: no TLS, no token required. Unchanged default.
-- Non-loopback: `https` + bearer token, **or** `plaintext_ack` limited to RFC1918,
-  loopback, `100.64/10`, `fd00::/8`.
-- Public plaintext: refused. **No override path may exist.**
-- Re-resolve and re-check the address at run start, not only at Test time.
+Decision **D19**, 2026-09-22. N2b could not legally reach `mimir` while this lived here,
+and a new adapter would have inherited no address guard at all. N2b now owns address
+classification, the plaintext acknowledgement, the public-plaintext refusal and run-start
+re-resolution.
+
+N3 adds only what remains: a non-loopback `https` profile, refused by N2b, becomes usable
+once TLS verification and bearer tokens land below.
 
 ### 2. TLS (§4.4)
 
@@ -71,15 +74,14 @@ Extend the existing leak-scan patterns to bearer tokens and to `reasoning_conten
 
 ## Acceptance
 
-1. A public plaintext endpoint is refused and no code path permits it.
-2. A self-signed server works via a pinned fingerprint; a changed certificate is refused.
-3. `verify=False` appears nowhere; the guardrail test proves it.
-4. A token appears in no log, no error message, and no artifact.
-5. Keymaster locked produces the explicit message.
-6. Consent appears on every remote run until muted; session mute resets on restart;
+1. A self-signed server works via a pinned fingerprint; a changed certificate is refused.
+2. `verify=False` appears nowhere; the guardrail test proves it.
+3. A token appears in no log, no error message, and no artifact.
+4. Keymaster locked produces the explicit message.
+5. Consent appears on every remote run until muted; session mute resets on restart;
    profile mute survives; a new profile re-prompts; the `Remote:` marker always shows.
-7. A resume against a different model is refused.
-8. A second client on the HI's laptop over Tailscale works alongside the dev box.
-9. Both test suites green; Xvfb screenshots of the consent dialog, profile editor with
+6. A resume against a different model is refused.
+7. A second client on the HI's laptop over Tailscale works alongside the dev box.
+8. Both test suites green; Xvfb screenshots of the consent dialog, profile editor with
    pinning, and a remote run.
-10. HI reviewed the security diff before merge.
+9. HI reviewed the security diff before merge.

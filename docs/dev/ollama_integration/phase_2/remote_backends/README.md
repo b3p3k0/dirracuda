@@ -44,8 +44,9 @@ longer Ollama-only.
 | 0 | Probe | ~~HI runs~~ **Done 2026-09-20** over SSH against `mimir`. See `PROBE_RESULTS.md`. | Complete |
 | N0 | Contract freeze | ~~Docs.~~ **Done 2026-09-20.** Contract frozen, E17 accepted, R102-R114 registered, N1-N3 written. | Senior review + HI PASS |
 | N1 | Endpoint + profile plumbing | Code. Un-freezes the endpoint, adds server profiles, wires the dead GUI controls. | Own review |
-| N2 | OpenAI-compatible adapter | Code. llama.cpp support, local and LAN. | Own review |
-| N3 | Remote security | Code. TLS, token in Keymaster, cert pinning, egress consent. | Own review |
+| N2a | Identity, schema, pure types | Code. Schema v8 identity kind, report payload, `backends/base.py`. No network. | Own review |
+| N2b | OpenAI-compatible adapter | Code. llama.cpp support, local and LAN, plus the §4.1-4.3 address policy (D19). | Own review |
+| N3 | Remote security | Code. TLS, token in Keymaster, cert pinning, egress consent. Address policy moved to N2b. | Own review |
 
 A PASS on one card authorizes only that card.
 
@@ -73,6 +74,8 @@ Decided with the HI on 2026-09-20. Do not relitigate without a new decision here
 | D12 | Server-admin guidance is a new section in `docs/ANALYST_GUIDE.md`, not a new document. | The guide already carries hardening, troubleshooting, and privacy. One discoverable place beats a second file nobody opens. |
 | D13 | N2 covers local and LAN together. There is no local-only stage. | The D2 plaintext opt-out already makes a remote private-range host reachable, so a local-first split buys nothing. |
 | D17 | N1 saves a non-loopback profile but refuses to open a connection to one. The guard lives in the network client, not the profile editor. N3 lifts it. | N1 parameterises the endpoint; N3 writes the transport policy. Between them the door exists with no lock. Guarding at the transport layer is the last step before the socket, so a script or a direct DB write cannot bypass it, and N1's profile CRUD stays testable. Decided with the HI 2026-09-20. |
+| D18 | A run records an identity **kind**. `analyst_runs.model_digest` becomes nullable and an `identity_kind` column is added, carried through to `report.json`. | The column and `report_json.RunMeta` both hard-require 64 lowercase hex, so an OpenAI-compatible run could not be stored or reported at all. Storing a non-cryptographic properties hash in a field named `model_digest` was rejected: it is exactly the confusion D3 exists to prevent. Decided with the HI 2026-09-22. |
+| D19 | Contract §4.1-4.3 (address classification, the plaintext acknowledgement, the public-plaintext refusal, run-start re-resolution) moves from N3 into N2. N3 keeps TLS, pinning, Keymaster, consent and run pinning. | D13 justified N2 covering LAN by "the D2 plaintext opt-out already makes a remote private-range host reachable" - but that opt-out was assigned to N3, so N2 could not legally reach `mimir`. Moving it also means no unguarded remote path ever exists: D17's guard covers only the Ollama client, and a new adapter would otherwise inherit none. Decided with the HI 2026-09-22. |
 
 ## Test hosts
 

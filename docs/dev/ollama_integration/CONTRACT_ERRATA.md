@@ -821,3 +821,66 @@ If remote runs are later judged unacceptable for the data Analyst handles, remot
 profiles are removed and the loopback default stands alone. This erratum does not
 authorize any hosted or cloud model provider; §8's cloud rejection is unchanged and the
 address policy blocks public endpoints independently.
+
+---
+
+## E18 — Model identity rendering is in scope for the remote-backends contract
+
+**Status:** ACCEPTED (HI, 2026-09-22)
+**Affects:** `phase_2/remote_backends/CONTRACT_REMOTE_BACKENDS.md` §2 (scope), §6.1 (identity)
+**Raised by:** the N2 senior review
+
+### The conflict
+
+The remote-backends contract contradicts itself.
+
+§2 puts **`report.json` content** out of scope:
+
+> **Out of scope.** Prompts, chunking, detectors, the risk rubric, grounding rules,
+> `report.json` content, and the sandbox.
+
+§6.1 then requires a new field in exactly that file:
+
+> `report.json` and the report view must render which kind applies. A `reported` identity
+> is never presented as verified.
+
+Both cannot hold. Taken literally, §2 forbids the labelling §6.1 mandates, and an
+OpenAI-compatible run could only be reported by presenting an unverified identity as
+though it were a digest — which is the failure D3 exists to prevent.
+
+### The correction
+
+§2's exclusion is narrowed. It now reads:
+
+> **Out of scope.** Prompts, chunking, detectors, the risk rubric, grounding rules, and
+> the sandbox. `report.json` content is out of scope **except** for the model-identity
+> block governed by §6, which gains an identity kind. A remote run and a local run must
+> produce the same report for the same input and model, given the same model.
+
+§6.1 is unchanged and remains normative.
+
+### Why this direction
+
+The alternative — honouring §2 and dropping the label — was rejected. It would make
+`report.json` present a server-reported model name with the same authority as a verified
+SHA-256 digest. The whole grounding claim of the read-first contract rests on knowing
+which model produced a report and how strongly that is established.
+
+### What does not change
+
+1. Prompts, chunking, detectors, the risk rubric, grounding rules and the sandbox stay
+   out of scope, unchanged.
+2. The report payload is otherwise untouched. This erratum admits the identity block
+   only.
+3. `REPORT_SCHEMA_VERSION` governs the payload as before.
+4. A `reported` identity is still never presented as verified.
+
+### Consequences accepted with this erratum
+
+- `analyst_runs.model_digest` is `NOT NULL CHECK(64 lowercase hex)`
+  (`db_schema.py:136`), and `report_json.RunMeta.__post_init__` enforces the same shape.
+  Neither can hold a `reported` identity, so N2 carries a schema version that makes the
+  digest nullable and adds an identity kind.
+- `report_json` gains the identity kind and the reported-identity fields from §6.1.
+- The desktop report view and the Web UI results page must render the kind. A run whose
+  identity is `reported` must not display as verified anywhere.
