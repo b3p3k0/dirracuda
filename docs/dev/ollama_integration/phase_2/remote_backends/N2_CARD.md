@@ -37,7 +37,7 @@ requires.
 
 # N2a — Identity, schema and pure backend types
 
-- Status: **HELD.** Needs its own PASS.
+- Status: **IMPLEMENTED 2026-09-22.** Awaiting HI review.
 - Contract: §6.1, §6.2, §6.3 (types only), §3 (types only). Erratum E18, decision D18.
 
 No network. No adapter. Nothing in this stage opens a socket.
@@ -68,9 +68,16 @@ Existing rows keep `identity_kind = NULL`, read as `digest` for compatibility.
 
 ### 3. Rendering, per E18
 
-A `reported` identity must never display as verified: the desktop report view and the Web
-UI results page both show the kind. The Web UI stays read-only and renders via
-`textContent`.
+A `reported` identity must never display as verified.
+
+**Finding, 2026-09-22:** nothing displayed model identity anywhere before this card — the
+report view showed risk, owner, contacts, counts and exposures, but never the model. So
+E18's requirement needed a new line, not an edit to an existing one. It is driven by one
+pure helper, `report_json.model_identity_label()`, so no surface can drift from another.
+
+**The Web UI clause has no target.** `experimental/webui/` contains zero references to
+Analyst across every module and template — it surfaces scan results and Sherlock, not
+Analyst reports. Recorded rather than inventing a surface. N3 revisits the Web UI.
 
 ### 4. `backends/base.py`
 
@@ -88,6 +95,30 @@ filesystem, network and Tk imports. `experimental/analyst/endpoint.py` is the pr
 6. The `base.py` purity guardrail passes.
 7. `shared`/`experimental` and `gui` suites green. Xvfb screenshot of a report view
    showing a reported identity.
+
+## N2a closeout
+
+All seven met.
+
+| Acceptance | Evidence |
+| --- | --- |
+| 1 | v1-v7 all migrate to v8; a populated v7 keeps every row across the FK web; a copy of the real sidecar (4 runs) migrated with labels intact |
+| 2 | 45 ladder guardrail tests; **`store.py` unedited** — S1 paying for itself |
+| 3 | `analyst_runs` stores a NULL digest with `identity_kind='reported'`; `RunMeta` round-trips it |
+| 4 | digest runs still refuse a non-64-hex or NULL digest, at both the CHECK and `RunMeta` |
+| 5 | `model_identity_label()` never emits "verified" for a reported run; asserted in `gui/tests/test_analyst_n2a_identity_display.py` |
+| 6 | AST purity guardrail on `backends/base.py` |
+| 7 | 3526 shared+experimental (1 pre-existing daemon tkinter failure), 2091 gui, screenshot taken |
+
+Three things worth carrying into N2b:
+
+1. **v8 is the first non-additive step.** `initialize_schema` now runs with
+   `foreign_keys=OFF` when a rebuild is pending, and `VACUUM`s after, because the dropped
+   table's pages otherwise broke a crash-recovery test asserting byte-exact rollback.
+2. **`REPORT_SCHEMA_VERSION` is 2, and 1 is still read.** A naive bump would have
+   orphaned every report already on disk.
+3. **`BackendCapabilities.admits()` already encodes 5.3/5.4** — an unknown context admits
+   the run. N2b supplies the number; it does not re-decide the rule.
 
 ---
 
