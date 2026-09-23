@@ -73,6 +73,9 @@ def test_create_and_launch_forwards_inventory_callbacks(
         {
             "model_tag": None,
             "model_digest": None,
+            "identity_kind": "digest",
+            "profile_id": None,
+            "backend_kind": None,
             "path": tmp_path / "analyst.db",
             "cancel_check": cancel_check,
             "progress_callback": progress_callback,

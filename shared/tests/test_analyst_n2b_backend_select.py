@@ -133,3 +133,44 @@ def test_an_unknown_backend_kind_is_refused(db: Path):
         conn.close()
     with pytest.raises(BackendSelectionError, match="unknown backend"):
         run_backend_spec("g" * 32, path=db)
+
+
+# --------------------------------------------------------------------------
+# Run creation records the identity kind and the profile (erratum E19)
+# --------------------------------------------------------------------------
+
+def test_the_identity_helper_keeps_the_pre_n2b_digest_rules():
+    from experimental.analyst.models import ANALYST_DEFAULTS
+    from experimental.analyst.service import _run_model_identity
+
+    assert _run_model_identity(None, None) == (
+        ANALYST_DEFAULTS.model_tag, ANALYST_DEFAULTS.model_digest, "digest",
+    )
+    assert _run_model_identity("qwen3.6:27b", _DIGEST) == (
+        "qwen3.6:27b", _DIGEST, "digest",
+    )
+
+
+def test_the_identity_helper_accepts_a_reported_model():
+    from experimental.analyst.service import _run_model_identity
+
+    assert _run_model_identity("qwen3.8-27b", None, "reported") == (
+        "qwen3.8-27b", None, "reported",
+    )
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ("qwen3.8-27b", _DIGEST, "reported"),   # reported may not carry a digest
+        ("qwen3.6:27b", None, "digest"),        # digest must carry one
+        ("", None, "reported"),                 # a name is still required
+        ("qwen3.8-27b:cloud", None, "reported"),  # cloud tags stay rejected
+        ("qwen3.6:27b", _DIGEST, "trusted"),    # unknown kind
+    ],
+)
+def test_the_identity_helper_refuses_incoherent_identities(args):
+    from experimental.analyst.service import _run_model_identity
+
+    with pytest.raises(ValueError):
+        _run_model_identity(*args)

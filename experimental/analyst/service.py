@@ -303,6 +303,9 @@ def create_directory_run(
     *,
     model_tag: str | None = None,
     model_digest: str | None = None,
+    identity_kind: str = "digest",
+    profile_id: int | None = None,
+    backend_kind: str | None = None,
     path: Path | None = None,
     run_id_factory: TokenFactory = secrets.token_hex,
     cancel_check: Callable[[], bool] | None = None,
@@ -316,9 +319,11 @@ def create_directory_run(
     if cancel_check is not None and not callable(cancel_check):
         raise TypeError("cancel_check must be callable")
     try:
-        selected_model_tag, selected_model_digest = _run_model_identity(
-            model_tag, model_digest,
-        )
+        (
+            selected_model_tag,
+            selected_model_digest,
+            selected_identity_kind,
+        ) = _run_model_identity(model_tag, model_digest, identity_kind)
     except (TypeError, ValueError):
         raise AnalystServiceError(ServiceFailure.CONTRACT) from None
     try:
@@ -357,6 +362,9 @@ def create_directory_run(
             report_label=request.report_label,
             model_tag=selected_model_tag,
             model_digest=selected_model_digest,
+            identity_kind=selected_identity_kind,
+            profile_id=profile_id,
+            backend_kind=backend_kind,
             worksheet_version=ANALYST_DEFAULTS.worksheet_version,
             prompt_sha256=prompt_template_hash(),
             response_schema_sha256=schema_hash(),
@@ -455,6 +463,9 @@ def create_and_launch(
     *,
     model_tag: str | None = None,
     model_digest: str | None = None,
+    identity_kind: str = "digest",
+    profile_id: int | None = None,
+    backend_kind: str | None = None,
     path: Path | None = None,
     paths: DirracudaPaths | None = None,
     cancel_check: Callable[[], bool] | None = None,
@@ -465,6 +476,9 @@ def create_and_launch(
         request,
         model_tag=model_tag,
         model_digest=model_digest,
+        identity_kind=identity_kind,
+        profile_id=profile_id,
+        backend_kind=backend_kind,
         path=path,
         cancel_check=cancel_check,
         progress_callback=progress_callback,
@@ -481,6 +495,9 @@ def create_manifest_run(
     mode: str = "fast",
     model_tag: str | None = None,
     model_digest: str | None = None,
+    identity_kind: str = "digest",
+    profile_id: int | None = None,
+    backend_kind: str | None = None,
     path: Path | None = None,
     run_id_factory: TokenFactory = secrets.token_hex,
     cancel_check: Callable[[], bool] | None = None,
@@ -489,9 +506,11 @@ def create_manifest_run(
     if type(reference) is not ExtractSummaryReference:
         raise TypeError("manifest run requires a structured extraction reference")
     try:
-        selected_model_tag, selected_model_digest = _run_model_identity(
-            model_tag, model_digest,
-        )
+        (
+            selected_model_tag,
+            selected_model_digest,
+            selected_identity_kind,
+        ) = _run_model_identity(model_tag, model_digest, identity_kind)
     except (TypeError, ValueError):
         raise AnalystServiceError(ServiceFailure.CONTRACT) from None
     try:
@@ -527,6 +546,9 @@ def create_manifest_run(
             report_label=report_label,
             model_tag=selected_model_tag,
             model_digest=selected_model_digest,
+            identity_kind=selected_identity_kind,
+            profile_id=profile_id,
+            backend_kind=backend_kind,
             worksheet_version=ANALYST_DEFAULTS.worksheet_version,
             prompt_sha256=prompt_template_hash(),
             response_schema_sha256=schema_hash(),
@@ -567,6 +589,9 @@ def create_manifest_and_launch(
     mode: str = "fast",
     model_tag: str | None = None,
     model_digest: str | None = None,
+    identity_kind: str = "digest",
+    profile_id: int | None = None,
+    backend_kind: str | None = None,
     path: Path | None = None,
     paths: DirracudaPaths | None = None,
 ) -> RunLaunch:
@@ -579,6 +604,9 @@ def create_manifest_and_launch(
         mode=mode,
         model_tag=model_tag,
         model_digest=model_digest,
+        identity_kind=identity_kind,
+        profile_id=profile_id,
+        backend_kind=backend_kind,
         path=path,
     )
     return launch_run(run_id, path=path, paths=paths)
@@ -828,9 +856,26 @@ def _normalize_discovered_models(value: object) -> tuple[DiscoveredModel, ...]:
 def _run_model_identity(
     model_tag: str | None,
     model_digest: str | None,
-) -> tuple[str, str]:
+    identity_kind: str = "digest",
+) -> tuple[str, str | None, str]:
+    """Return the model identity one run records (erratum E19).
+
+    A reported identity carries a name and no digest; a digest identity keeps
+    the pre-N2b rules exactly.
+    """
+    if identity_kind == "reported":
+        if (
+            type(model_tag) is not str
+            or not model_tag
+            or is_cloud_model_tag(model_tag)
+            or model_digest is not None
+        ):
+            raise ValueError("run model identity is invalid")
+        return model_tag, None, "reported"
+    if identity_kind != "digest":
+        raise ValueError("run model identity is invalid")
     if model_tag is None and model_digest is None:
-        return ANALYST_DEFAULTS.model_tag, ANALYST_DEFAULTS.model_digest
+        return ANALYST_DEFAULTS.model_tag, ANALYST_DEFAULTS.model_digest, "digest"
     if (
         type(model_tag) is not str
         or not model_tag
@@ -838,7 +883,7 @@ def _run_model_identity(
         or not valid_model_digest(model_digest)
     ):
         raise ValueError("run model identity is invalid")
-    return model_tag, model_digest
+    return model_tag, model_digest, "digest"
 
 
 def _finish_failed_discovery(
