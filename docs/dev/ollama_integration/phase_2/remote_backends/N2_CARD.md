@@ -249,6 +249,41 @@ unauthenticated, reachable from the dev box. SSH as `claude@mimir` is HI-authori
 Use `qwen3.8-27b` — it is the closest analogue to the C0B-7 benchmark model and was
 already warm during probing.
 
+## Stage E blocker, found 2026-09-23
+
+The adapter works end-to-end against `mimir` when driven directly. Wiring it
+into the **run engine** is blocked by a frozen seal, and the fix is a contract
+decision rather than a judgment call, so it is recorded here rather than taken.
+
+**The run engine is digest-shaped.** Two places refuse a model with no
+cryptographic digest:
+
+| Location | Constraint |
+| --- | --- |
+| `ollama_contract._require_model_identity` (`:933`) | every `ChatRequest` needs a valid 64-hex `model_digest`; a `reported` identity has none |
+| `phase2.Phase2Dependencies.__post_init__` | an injected client must expose `check_version` and `check_tags`, both digest-shaped |
+
+A llama.cpp chat request therefore cannot be built without supplying some
+digest. In the live probe the adapter overrode the model id at send time while
+the request still carried the Ollama default tag and digest -- which works, but
+means the **recorded request identity would not describe what was sent**. That
+is a provenance defect, not a cosmetic one, so it was not shipped.
+
+Three ways out, all contract-level:
+
+1. **Relax `ChatRequest` to carry an identity kind**, mirroring what N2a did for
+   `analyst_runs` and `report_json`. Most consistent, but the request identity
+   hash is the provenance backbone and is frozen, so it needs an erratum.
+2. **Give the adapter its own request type** and teach `phase2` to dispatch on
+   backend kind. Leaves the Ollama seal untouched, at the cost of two request
+   contracts.
+3. **Derive a 64-hex properties hash** and store it as the digest. Smallest
+   change, already rejected once as decision D18 because it is exactly the
+   confusion D3 exists to prevent.
+
+Recommendation: option 1 with an erratum, since N2a already established the
+identity-kind pattern through the schema and the report payload.
+
 ## N2b acceptance
 
 1. A run completes end-to-end against `mimir` and produces a valid `report.json`.
