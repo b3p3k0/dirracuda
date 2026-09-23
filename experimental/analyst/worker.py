@@ -245,6 +245,24 @@ def run_worker(
     except Exception:
         _release_handoff(phase1_handoff.fence, path)
         return WorkerRunResult(WorkerOutcome.INTERNAL_ERROR)
+    if phase2_dependencies is None:
+        # Talk to the server this run was created against, not to whatever the
+        # default happens to be. A run with no recorded profile gets exactly
+        # what it got before N2b: a loopback Ollama client.
+        from .backend_select import BackendSelectionError, backend_for_run
+
+        try:
+            phase2_dependencies = Phase2Dependencies(
+                client=backend_for_run(run_id, path=path),
+            )
+        except (BackendSelectionError, ValueError):
+            # The recorded server is gone or now outside the permitted address
+            # ranges (contract 4.3). Fail closed rather than retarget.
+            _release_handoff(phase1_handoff.fence, path)
+            return WorkerRunResult(WorkerOutcome.RUN_INVALID)
+        except Exception:
+            _release_handoff(phase1_handoff.fence, path)
+            return WorkerRunResult(WorkerOutcome.INTERNAL_ERROR)
     try:
         phase2_handoff = run_phase2(
             context,
