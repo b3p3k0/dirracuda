@@ -243,6 +243,64 @@ def is_loopback_endpoint(value: object) -> bool:
         return False
 
 
+class AddressPolicyError(EndpointError):
+    """An endpoint is refused by the transport policy (contract 4.1-4.3)."""
+
+
+def permits_plaintext(address_class: AddressClass) -> bool:
+    """Return whether contract 4.2 admits plaintext to this address class.
+
+    RFC1918, loopback, RFC6598 CGNAT (which covers Tailscale) and fd00::/8.
+    Anything else -- including a name nothing has resolved -- is not admitted.
+    """
+    return address_class in PRIVATE_CLASSES
+
+
+def check_address_policy(
+    value: object,
+    *,
+    plaintext_ack: bool = False,
+    resolved_class: AddressClass | None = None,
+) -> Endpoint:
+    """Apply contract 4.1-4.3 to one endpoint and return it, or refuse.
+
+    ``resolved_class`` is what the host actually resolves to. It is supplied by
+    the caller because resolution is I/O and this module performs none. A
+    literal address classifies itself; a name must be resolved first.
+
+    The rule that matters: plaintext to a public address is refused, and there
+    is no override. That is the constraint preserving the Phase 1 promise that
+    raw port 11434 never becomes a public interface.
+    """
+    endpoint = parse_endpoint(value)
+    if endpoint.is_loopback:
+        return endpoint
+    if endpoint.scheme == "https":
+        # TLS verification and bearer tokens are N3. Until then an https
+        # profile is refused rather than silently unverified.
+        raise AddressPolicyError(
+            f"{endpoint.base_url} needs TLS verification, which arrives with "
+            "the security card (N3)."
+        )
+    actual = resolved_class if resolved_class is not None else endpoint.address_class
+    if actual is AddressClass.UNRESOLVED:
+        raise AddressPolicyError(
+            f"{endpoint.host} has not been resolved, so its address class is "
+            "unknown. Analyst refuses plaintext to an unknown address."
+        )
+    if not permits_plaintext(actual):
+        raise AddressPolicyError(
+            f"{endpoint.base_url} is a {actual.value} address. Analyst refuses "
+            "plaintext outside private ranges, and there is no override."
+        )
+    if not plaintext_ack:
+        raise AddressPolicyError(
+            f"{endpoint.base_url} is plaintext on a {actual.value} address. "
+            "Acknowledge plaintext on the profile to allow it."
+        )
+    return endpoint
+
+
 def require_connectable(value: object) -> Endpoint:
     """Return the endpoint, or refuse it under D17.
 
@@ -261,6 +319,7 @@ def require_connectable(value: object) -> Endpoint:
 
 __all__ = [
     "AddressClass",
+    "AddressPolicyError",
     "DEFAULT_ENDPOINT",
     "DEFAULT_HOST",
     "DEFAULT_PORT",
@@ -273,9 +332,11 @@ __all__ = [
     "OllamaUrls",
     "PRIVATE_CLASSES",
     "RemoteNotEnabledError",
+    "check_address_policy",
     "classify_host",
     "is_loopback_endpoint",
     "normalize_endpoint",
+    "permits_plaintext",
     "ollama_urls",
     "parse_endpoint",
     "require_connectable",

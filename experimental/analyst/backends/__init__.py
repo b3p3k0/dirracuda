@@ -1,7 +1,7 @@
 """Backend transports for Analyst.
 
-The registry dispatches by ``BackendKind``. N2a shipped the pure types; the
-OpenAI-compatible adapter joins the registry in N2b stage C.
+The registry dispatches by ``BackendKind``. N2a shipped the pure types; both
+transports are registered.
 """
 
 from __future__ import annotations
@@ -17,10 +17,12 @@ from .base import (
     ModelIdentity,
 )
 from .ollama import OllamaBackend
+from .openai_api import OpenAICompatBackend
 
 #: One factory per transport. Adding a backend is one entry here.
 _REGISTRY: dict[BackendKind, Callable[..., Any]] = {
     BackendKind.OLLAMA: OllamaBackend,
+    BackendKind.OPENAI_COMPAT: OpenAICompatBackend,
 }
 
 
@@ -51,6 +53,7 @@ __all__ = [
     "IdentityKind",
     "ModelIdentity",
     "OllamaBackend",
+    "OpenAICompatBackend",
     "UNKNOWN_CONTEXT",
     "build_backend",
     "supported_kinds",

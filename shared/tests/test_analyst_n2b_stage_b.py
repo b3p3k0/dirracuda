@@ -25,8 +25,8 @@ _DIGEST = "a" * 64
 # The registry
 # --------------------------------------------------------------------------
 
-def test_only_ollama_is_serviceable_until_the_adapter_lands():
-    assert supported_kinds() == (BackendKind.OLLAMA,)
+def test_both_transports_are_serviceable():
+    assert set(supported_kinds()) == {BackendKind.OLLAMA, BackendKind.OPENAI_COMPAT}
 
 
 def test_building_the_ollama_backend_binds_the_loopback_default():
@@ -42,11 +42,6 @@ def test_a_kind_may_be_given_as_a_string():
 def test_an_unknown_kind_is_refused():
     with pytest.raises(BackendError, match="not a known transport"):
         build_backend("vllm")
-
-
-def test_a_known_but_unserviceable_kind_says_so():
-    with pytest.raises(BackendError, match="not available in this build"):
-        build_backend(BackendKind.OPENAI_COMPAT)
 
 
 def test_the_ollama_backend_forwards_to_its_client():

@@ -21,6 +21,7 @@ nonblocking close -- is identical for every backend.
 from __future__ import annotations
 
 import re
+import socket
 import threading
 import time
 from dataclasses import dataclass
@@ -29,6 +30,13 @@ from typing import Any, Callable
 import requests
 import urllib3
 
+from .endpoint import (
+    AddressClass,
+    Endpoint,
+    check_address_policy,
+    classify_host,
+    parse_endpoint,
+)
 from .ollama_contract import (
     CONNECT_TIMEOUT_SECONDS,
     IDLE_READ_TIMEOUT_SECONDS,
@@ -411,6 +419,46 @@ class BoundedHttpClient:
                 self._close_target = None
                 self._close_done = None
 
+def resolve_address_class(host: str) -> AddressClass:
+    """Resolve one host and classify what it actually points at.
+
+    Contract 4.3: the check runs at Test time and again at run start, because
+    a name that resolves inside a private range today can resolve to a public
+    address tomorrow. Resolution is I/O, which is why it lives here and not in
+    the pure endpoint module.
+
+    A name that does not resolve stays UNRESOLVED, and the policy refuses it.
+    """
+    literal = classify_host(host)
+    if literal is not AddressClass.UNRESOLVED:
+        return literal
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except OSError:
+        return AddressClass.UNRESOLVED
+    classes = {classify_host(info[4][0]) for info in infos}
+    if not classes:
+        return AddressClass.UNRESOLVED
+    # Fail closed: one public answer makes the whole name public.
+    for unsafe in (AddressClass.PUBLIC, AddressClass.UNRESOLVED,
+                   AddressClass.LINK_LOCAL):
+        if unsafe in classes:
+            return unsafe
+    return sorted(classes, key=lambda item: item.value)[0]
+
+
+def require_permitted(
+    endpoint: object, *, plaintext_ack: bool = False,
+) -> Endpoint:
+    """Resolve an endpoint's host and apply contract 4.1-4.3, or refuse."""
+    parsed = parse_endpoint(endpoint)
+    return check_address_policy(
+        parsed,
+        plaintext_ack=plaintext_ack,
+        resolved_class=resolve_address_class(parsed.host),
+    )
+
+
 def require_cancel_probe(cancel: CancelProbe) -> None:
     if not callable(cancel):
         raise TypeError("cancel probe must be callable")
@@ -474,6 +522,8 @@ def safety_status(exc: OllamaSafetyError) -> OllamaStatus:
 
 __all__ = [
     "BoundedHttpClient",
+    "require_permitted",
+    "resolve_address_class",
     "TIMEOUT_EXCEPTIONS",
     "TRANSPORT_EXCEPTIONS",
     "CallerPoll",
