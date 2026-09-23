@@ -52,7 +52,7 @@ def _forged_request(**changes: object) -> ChatRequest:
     forged = object.__new__(ChatRequest)
     for name in (
         "source_text", "nonce", "body", "request_sha256", "prompt_kind", "model_tag",
-        "model_digest", "endpoint",
+        "model_digest", "endpoint", "identity_kind",
     ):
         object.__setattr__(forged, name, changes.get(name, getattr(source, name)))
     return forged

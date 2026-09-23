@@ -249,7 +249,7 @@ unauthenticated, reachable from the dev box. SSH as `claude@mimir` is HI-authori
 Use `qwen3.8-27b` — it is the closest analogue to the C0B-7 benchmark model and was
 already warm during probing.
 
-## Stage E blocker, found 2026-09-23
+## Stage E blocker, found and cleared 2026-09-23
 
 The adapter works end-to-end against `mimir` when driven directly. Wiring it
 into the **run engine** is blocked by a frozen seal, and the fix is a contract
@@ -283,6 +283,18 @@ Three ways out, all contract-level:
 
 Recommendation: option 1 with an erratum, since N2a already established the
 identity-kind pattern through the schema and the report payload.
+
+**Resolved.** Option 1 taken, as erratum **E19** and decision **D21**.
+`ChatRequest` now carries `identity_kind`; a digest identity still requires its
+SHA-256 and a reported identity must carry none. The adapter gained the control
+surface the run engine validates: `check_version` reports the server build,
+`check_model` verifies the model exists and is a text-generation model, and
+`check_tags` refuses loudly because a digest check can never succeed here.
+
+Verified live against `mimir`: a reported-identity request names `qwen3.8-27b`
+with no digest, the body sends `qwen3.8-27b`, and that is the model that
+answered -- so the recorded identity describes what was actually sent, which is
+the defect this blocker existed to prevent. A digest request is unchanged.
 
 ## N2b acceptance
 

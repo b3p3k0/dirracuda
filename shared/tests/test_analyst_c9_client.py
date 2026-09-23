@@ -545,7 +545,7 @@ def test_forged_request_exact_types_are_identity_mismatch_with_zero_http(
     forged = object.__new__(ChatRequest)
     for name in (
         "source_text", "nonce", "body", "request_sha256", "prompt_kind", "model_tag",
-        "model_digest", "endpoint",
+        "model_digest", "endpoint", "identity_kind",
     ):
         object.__setattr__(forged, name, value if name == field else getattr(valid, name))
     session = FakeSession()

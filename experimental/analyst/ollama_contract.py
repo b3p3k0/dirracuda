@@ -185,6 +185,11 @@ class OllamaStatus(str, Enum):
 #: Outcomes only a chat contact can produce. A control contact (version, tags,
 #: ps) sends no prompt, so it can neither exceed a context nor return an
 #: unusable answer shape. D20.
+#: How strongly a request's model identity is established (contract 6.1,
+#: erratum E19). "digest" is verified by a SHA-256; "reported" is the server's
+#: own account of itself and carries no digest.
+IDENTITY_KINDS: Final = ("digest", "reported")
+
 CHAT_ONLY_STATUSES: Final = frozenset({
     OllamaStatus.CONTEXT_EXCEEDED,
     OllamaStatus.CONFIGURATION_FAILURE,
@@ -394,8 +399,10 @@ class ChatRequest:
     request_sha256: str
     prompt_kind: PromptKind = PromptKind.PRIMARY
     model_tag: str = ANALYST_DEFAULTS.model_tag
-    model_digest: str = ANALYST_DEFAULTS.model_digest
+    #: None only when identity_kind is "reported" (erratum E19).
+    model_digest: str | None = ANALYST_DEFAULTS.model_digest
     endpoint: str = OLLAMA_ENDPOINT
+    identity_kind: str = "digest"
 
     def __post_init__(self) -> None:
         validate_chat_request(self)
@@ -638,12 +645,14 @@ def build_chat_request(
     *,
     nonce: str,
     model_tag: str = ANALYST_DEFAULTS.model_tag,
-    model_digest: str = ANALYST_DEFAULTS.model_digest,
+    model_digest: str | None = ANALYST_DEFAULTS.model_digest,
     endpoint: str = OLLAMA_ENDPOINT,
+    identity_kind: str = "digest",
 ) -> ChatRequest:
     """Build the only scored-chat request admitted by the V1 Analyst client."""
     return _build_chat_request(
         source_text, nonce, PromptKind.PRIMARY, model_tag, model_digest, endpoint,
+        identity_kind,
     )
 
 
@@ -652,13 +661,14 @@ def build_repair_chat_request(
     *,
     nonce: str,
     model_tag: str = ANALYST_DEFAULTS.model_tag,
-    model_digest: str = ANALYST_DEFAULTS.model_digest,
+    model_digest: str | None = ANALYST_DEFAULTS.model_digest,
     endpoint: str = OLLAMA_ENDPOINT,
+    identity_kind: str = "digest",
 ) -> ChatRequest:
     """Build the one error-specific C11 model-invalid repair request."""
     return _build_chat_request(
         source_text, nonce, PromptKind.MODEL_INVALID_REPAIR,
-        model_tag, model_digest, endpoint,
+        model_tag, model_digest, endpoint, identity_kind,
     )
 
 
@@ -667,12 +677,14 @@ def build_read_chat_request(
     *,
     nonce: str,
     model_tag: str = ANALYST_DEFAULTS.model_tag,
-    model_digest: str = ANALYST_DEFAULTS.model_digest,
+    model_digest: str | None = ANALYST_DEFAULTS.model_digest,
     endpoint: str = OLLAMA_ENDPOINT,
+    identity_kind: str = "digest",
 ) -> ChatRequest:
     """Build the pinned host READ reduce request."""
     return _build_read_chat_request(
         source_text, nonce, PromptKind.PRIMARY, model_tag, model_digest, endpoint,
+        identity_kind,
     )
 
 
@@ -681,13 +693,14 @@ def build_read_repair_chat_request(
     *,
     nonce: str,
     model_tag: str = ANALYST_DEFAULTS.model_tag,
-    model_digest: str = ANALYST_DEFAULTS.model_digest,
+    model_digest: str | None = ANALYST_DEFAULTS.model_digest,
     endpoint: str = OLLAMA_ENDPOINT,
+    identity_kind: str = "digest",
 ) -> ChatRequest:
     """Build the error-specific host READ repair request."""
     return _build_read_chat_request(
         source_text, nonce, PromptKind.MODEL_INVALID_REPAIR,
-        model_tag, model_digest, endpoint,
+        model_tag, model_digest, endpoint, identity_kind,
     )
 
 
@@ -696,8 +709,9 @@ def _build_read_chat_request(
     nonce: str,
     prompt_kind: PromptKind,
     model_tag: str,
-    model_digest: str,
+    model_digest: str | None,
     endpoint: str = OLLAMA_ENDPOINT,
+    identity_kind: str = "digest",
 ) -> ChatRequest:
     if type(source_text) is not str or type(nonce) is not str:
         raise TypeError("source text and nonce must be strings")
@@ -707,7 +721,7 @@ def _build_read_chat_request(
         raise ContractError("source text is outside the READ source bound")
     if _NONCE.fullmatch(nonce) is None or nonce in source_text:
         raise ContractError("nonce must be a fresh FENCE token absent from source")
-    _require_model_identity(model_tag, model_digest)
+    _require_model_identity(model_tag, model_digest, identity_kind)
     resolved_endpoint = normalize_endpoint(endpoint)
 
     from .read_worksheet import (
@@ -743,6 +757,7 @@ def _build_read_chat_request(
         model_tag=model_tag,
         model_digest=model_digest,
         endpoint=resolved_endpoint,
+        identity_kind=identity_kind,
     )
 
 
@@ -751,8 +766,9 @@ def _build_chat_request(
     nonce: str,
     prompt_kind: PromptKind,
     model_tag: str,
-    model_digest: str,
+    model_digest: str | None,
     endpoint: str = OLLAMA_ENDPOINT,
+    identity_kind: str = "digest",
 ) -> ChatRequest:
     if type(source_text) is not str or type(nonce) is not str:
         raise TypeError("source text and nonce must be strings")
@@ -762,7 +778,7 @@ def _build_chat_request(
         raise ContractError("source text is outside the frozen chunk bound")
     if _NONCE.fullmatch(nonce) is None or nonce in source_text:
         raise ContractError("nonce must be a fresh FENCE token absent from source")
-    _require_model_identity(model_tag, model_digest)
+    _require_model_identity(model_tag, model_digest, identity_kind)
     resolved_endpoint = normalize_endpoint(endpoint)
 
     from .worksheet import build_prompt, build_repair_prompt, worksheet_schema
@@ -794,6 +810,7 @@ def _build_chat_request(
         model_tag=model_tag,
         model_digest=model_digest,
         endpoint=resolved_endpoint,
+        identity_kind=identity_kind,
     )
 
 
@@ -817,8 +834,13 @@ def validate_chat_request(request: ChatRequest) -> None:
         and request.prompt_kind not in {
             PromptKind.PRIMARY, PromptKind.MODEL_INVALID_REPAIR,
         }
-        or not valid_model_tag(request.model_tag)
-        or not valid_model_digest(request.model_digest)
+        or not valid_model_identity(
+            request.model_tag,
+            request.model_digest,
+            # A forged request may omit the field entirely; refuse rather than
+            # raise, matching the prompt_kind check above.
+            getattr(request, "identity_kind", None),
+        )
         or not valid_endpoint(request.endpoint)
     ):
         raise ContractError("chat request identity is invalid")
@@ -930,8 +952,28 @@ def _utf8_size(value: str, label: str) -> int:
         raise ContractError(f"{label} is not valid Unicode scalar text") from exc
 
 
-def _require_model_identity(model_tag: object, model_digest: object) -> None:
-    if not valid_model_tag(model_tag) or not valid_model_digest(model_digest):
+def valid_model_identity(
+    model_tag: object, model_digest: object, identity_kind: object = "digest",
+) -> bool:
+    """Return whether one model identity is coherent for its kind (E19).
+
+    A digest identity must carry a lowercase SHA-256. A reported identity must
+    carry none: nothing proves which weights answered, and a digest-shaped
+    field would present the server's word as verified.
+    """
+    if not valid_model_tag(model_tag):
+        return False
+    if identity_kind == "digest":
+        return valid_model_digest(model_digest)
+    if identity_kind == "reported":
+        return model_digest is None
+    return False
+
+
+def _require_model_identity(
+    model_tag: object, model_digest: object, identity_kind: object = "digest",
+) -> None:
+    if not valid_model_identity(model_tag, model_digest, identity_kind):
         raise ContractError("model identity is invalid")
 
 
@@ -989,6 +1031,7 @@ __all__ = [
     "EXPECTED_IDENTITY",
     "GENERATION_OPTIONS",
     "GenerationOptions",
+    "IDENTITY_KINDS",
     "IDLE_READ_TIMEOUT_SECONDS",
     "KEEP_ALIVE",
     "MAX_BODY_BYTES",
@@ -1037,6 +1080,7 @@ __all__ = [
     "new_prompt_nonce",
     "valid_model_digest",
     "valid_endpoint",
+    "valid_model_identity",
     "valid_model_tag",
     "validate_chat_request",
 ]

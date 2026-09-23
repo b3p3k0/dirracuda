@@ -13,11 +13,12 @@ from typing import Any
 
 from ..endpoint import Endpoint, parse_endpoint
 from ..ollama_contract import (
-    MAX_SOURCE_CHARS,
     ChatMetrics,
     ChatRequest,
     ChatResult,
     OllamaStatus,
+    TagsCheckResult,
+    VersionCheckResult,
     validate_chat_request,
 )
 from ..transport import (
@@ -193,6 +194,64 @@ class OpenAICompatBackend(BoundedHttpClient):
         if status is not None:
             return ChatResult(status)
         return self._result_from(require_bytes(value), request)
+
+    # ---- the control surface the run engine expects ---------------------
+    #
+    # Erratum E19: this backend cannot answer a digest preflight, because it
+    # publishes no digest. It is preflighted against what it can prove -- that
+    # the server answers, and that the model exists and is a text-generation
+    # model -- and its identity is recorded as "reported".
+
+    def check_version(
+        self, *, cancel: CancelProbe, poll: CallerPoll = None,
+    ) -> VersionCheckResult:
+        """Report the server build, which stands in for a daemon version."""
+        require_cancel_probe(cancel)
+        require_caller_poll(poll)
+        run_caller_poll(poll)
+        if cancel():
+            return VersionCheckResult(OllamaStatus.CANCELLED_UNVERIFIED)
+        try:
+            build = protocol.server_build(self.props(cancel=cancel))
+        except BackendError:
+            return VersionCheckResult(OllamaStatus.TRANSPORT_UNAVAILABLE)
+        if not build:
+            return VersionCheckResult(OllamaStatus.IDENTITY_MISMATCH)
+        return VersionCheckResult(OllamaStatus.SUCCESS, observed_version=build)
+
+    def check_model(
+        self, model_id: str, *, cancel: CancelProbe, poll: CallerPoll = None,
+    ) -> OllamaStatus:
+        """Verify the model exists here and can serve a chat run.
+
+        The digest-shaped `check_tags` has no meaning for this backend, so the
+        run engine calls this instead when the identity kind is "reported".
+        """
+        require_cancel_probe(cancel)
+        require_caller_poll(poll)
+        run_caller_poll(poll)
+        if cancel():
+            return OllamaStatus.CANCELLED_UNVERIFIED
+        try:
+            models = self.list_models(cancel=cancel)
+        except BackendError:
+            return OllamaStatus.TRANSPORT_UNAVAILABLE
+        if not models:
+            return OllamaStatus.IDENTITY_MISMATCH
+        if not any(m.model_id == model_id for m in models):
+            return OllamaStatus.IDENTITY_MISMATCH
+        return OllamaStatus.SUCCESS
+
+    def check_tags(
+        self, expected: Any = None, *, cancel: CancelProbe, poll: CallerPoll = None,
+    ) -> TagsCheckResult:
+        """Refuse a digest check this backend can never satisfy.
+
+        Kept so the backend presents the surface the run engine validates, and
+        so calling it is a loud identity mismatch rather than an AttributeError.
+        """
+        require_cancel_probe(cancel)
+        return TagsCheckResult(OllamaStatus.IDENTITY_MISMATCH)
 
     # ---- transport hooks ------------------------------------------------
 

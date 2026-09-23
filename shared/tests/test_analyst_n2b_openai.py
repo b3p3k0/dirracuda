@@ -355,3 +355,85 @@ def test_a_missing_token_reads_as_identity_mismatch_not_transport():
     assert backend._classify_http_status(
         _Resp(), None, lambda: False, 0.0,
     ) is OllamaStatus.IDENTITY_MISMATCH
+
+
+# --------------------------------------------------------------------------
+# Erratum E19: a request may carry a reported identity
+# --------------------------------------------------------------------------
+
+def test_a_reported_request_carries_no_digest():
+    request = build_chat_request(
+        "public", nonce=_NONCE, model_tag="qwen3.8-27b",
+        model_digest=None, identity_kind="reported",
+    )
+    assert request.identity_kind == "reported"
+    assert request.model_digest is None
+
+
+def test_a_reported_request_identity_names_the_model_that_answers():
+    """The defect E19 exists to prevent: a request whose recorded identity
+    describes a different model than the one actually sent."""
+    request = build_chat_request(
+        "public", nonce=_NONCE, model_tag="qwen3.8-27b",
+        model_digest=None, identity_kind="reported",
+    )
+    assert json.loads(request.body)["model"] == request.model_tag == "qwen3.8-27b"
+
+
+def test_a_digest_request_is_unchanged():
+    """Contract 12.1: the Ollama path must not move."""
+    request = build_chat_request("public", nonce=_NONCE)
+    assert request.identity_kind == "digest"
+    assert len(request.model_digest) == 64
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"identity_kind": "reported"},                      # reported with a digest
+        {"model_digest": None},                             # digest without one
+        {"identity_kind": "trusted", "model_digest": None},  # unknown kind
+    ],
+)
+def test_incoherent_request_identities_are_refused(kwargs):
+    from experimental.analyst.ollama_contract import ContractError
+
+    with pytest.raises(ContractError):
+        build_chat_request("public", nonce=_NONCE, **kwargs)
+
+
+def test_a_request_missing_the_kind_is_refused_not_crashed():
+    """A forged request may omit the field; refuse rather than raise."""
+    from experimental.analyst.ollama_contract import (
+        ChatRequest,
+        ContractError,
+        validate_chat_request,
+    )
+
+    source = build_chat_request("public", nonce=_NONCE)
+    forged = object.__new__(ChatRequest)
+    for name in ("source_text", "nonce", "body", "request_sha256",
+                 "prompt_kind", "model_tag", "model_digest", "endpoint"):
+        object.__setattr__(forged, name, getattr(source, name))
+    with pytest.raises(ContractError):
+        validate_chat_request(forged)
+
+
+# --------------------------------------------------------------------------
+# The control surface the run engine validates
+# --------------------------------------------------------------------------
+
+def test_the_adapter_satisfies_the_injected_client_contract():
+    from experimental.analyst.phase2 import Phase2Dependencies
+
+    backend = OpenAICompatBackend(endpoint="http://127.0.0.1:9292")
+    assert Phase2Dependencies(client=backend).client is backend
+
+
+def test_a_digest_tag_check_is_refused_loudly():
+    """This backend publishes no digest, so check_tags can never succeed. It
+    exists so calling it is an identity mismatch, not an AttributeError."""
+    backend = OpenAICompatBackend(endpoint="http://127.0.0.1:9292")
+    assert backend.check_tags(cancel=lambda: False).status is (
+        OllamaStatus.IDENTITY_MISMATCH
+    )
