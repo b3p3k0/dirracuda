@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS keymaster_keys (
     key_ciphertext      TEXT NOT NULL DEFAULT '',
     key_fingerprint     TEXT NOT NULL DEFAULT '',
     is_encrypted        INTEGER NOT NULL DEFAULT 0,
-    CHECK (provider IN ('SHODAN'))
+    CHECK (provider IN ('SHODAN','LLM_SERVER'))
 )
 """
 
@@ -237,6 +237,34 @@ def _ensure_column(conn: sqlite3.Connection, table_name: str, column_name: str, 
         conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {decl}")
 
 
+def _ensure_provider_vocabulary(conn: sqlite3.Connection) -> None:
+    """Widen the provider CHECK on a sidecar created before LLM_SERVER existed.
+
+    SQLite cannot widen a CHECK in place, so the table is rebuilt by its
+    documented procedure. Every column is unchanged, so SELECT * copies
+    faithfully. A sidecar already carrying the wider vocabulary is left alone.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='keymaster_keys'"
+    ).fetchone()
+    if row is None:
+        return
+    sql = str(row[0] if not isinstance(row, sqlite3.Row) else row["sql"])
+    if "LLM_SERVER" in sql:
+        return
+    rebuilt = sql.replace(
+        "CHECK (provider IN ('SHODAN'))",
+        "CHECK (provider IN ('SHODAN','LLM_SERVER'))",
+    ).replace("keymaster_keys", "keymaster_keys_new", 1)
+    if "LLM_SERVER" not in rebuilt:
+        raise RuntimeError("keymaster provider CHECK moved; refusing to guess")
+    conn.execute(rebuilt)
+    conn.execute("INSERT INTO keymaster_keys_new SELECT * FROM keymaster_keys")
+    conn.execute("DROP TABLE keymaster_keys")
+    conn.execute("ALTER TABLE keymaster_keys_new RENAME TO keymaster_keys")
+    conn.execute(_DDL_UNIQUE_KEY)
+
+
 def _meta_get(conn: sqlite3.Connection, key: str, default: Optional[str] = None) -> Optional[str]:
     row = conn.execute(
         "SELECT meta_value FROM keymaster_meta WHERE meta_key = ?",
@@ -298,6 +326,7 @@ def init_db(path: Optional[Path] = None) -> None:
         _ensure_column(conn, "keymaster_keys", "key_ciphertext", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "keymaster_keys", "key_fingerprint", "TEXT NOT NULL DEFAULT ''")
         _ensure_column(conn, "keymaster_keys", "is_encrypted", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_provider_vocabulary(conn)
 
         _ensure_default_meta(conn)
         conn.commit()

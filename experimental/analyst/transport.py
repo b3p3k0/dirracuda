@@ -134,9 +134,17 @@ class BoundedHttpClient:
         session: Any | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         cert_fingerprint: str | None = None,
+        bearer_token: str | None = None,
     ) -> None:
         if not callable(monotonic):
             raise TypeError("monotonic clock must be callable")
+        if bearer_token is not None and (
+            type(bearer_token) is not str or not bearer_token.strip()
+        ):
+            raise TypeError("bearer token must be a nonempty string or None")
+        # Held only in memory, never logged, never persisted, never placed in an
+        # error message (contract 9).
+        self._bearer_token = bearer_token
         self._monotonic = monotonic
         # Always verifying, by trust store or by pin (contract 4.4). There is no
         # configuration of build_session that yields an unverified session.
@@ -292,6 +300,11 @@ class BoundedHttpClient:
                     "Accept": intent.accept,
                     "Accept-Encoding": "identity",
                     **({"Content-Type": "application/json"} if intent.body else {}),
+                    **(
+                        {"Authorization": f"Bearer {self._bearer_token}"}
+                        if self._bearer_token
+                        else {}
+                    ),
                 },
             )
             self._set_active(response, cancel)
