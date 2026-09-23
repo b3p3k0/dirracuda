@@ -92,6 +92,20 @@ The approved model is `qwen3.6:27b` at digest
 tag with a different digest is rejected. Model tags can move, so do not bypass this
 check or substitute a similarly named model.
 
+### Why llama.cpp models are not fingerprinted
+
+Ollama gives every model a SHA-256 digest, so Analyst can prove which exact model
+file answered. llama.cpp has no equivalent: it reports a name, a file path and some
+properties, and nothing more. You have the server's word for it.
+
+So a run records one of two identity kinds, and always says which:
+
+- **digest** - verified. An Ollama tag plus its SHA-256.
+- **reported** - the server's own account of itself, not verified.
+
+A reported identity is never displayed as verified anywhere. It is not a weaker
+version of a digest; it is a different claim, and the report says so.
+
 ## Running Analyst
 
 The primary entry point is:

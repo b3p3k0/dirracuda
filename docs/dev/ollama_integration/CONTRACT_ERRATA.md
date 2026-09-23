@@ -884,3 +884,66 @@ which model produced a report and how strongly that is established.
 - `report_json` gains the identity kind and the reported-identity fields from §6.1.
 - The desktop report view and the Web UI results page must render the kind. A run whose
   identity is `reported` must not display as verified anywhere.
+
+---
+
+## E19 — A chat request may carry a reported model identity
+
+**Status:** ACCEPTED (HI, 2026-09-23)
+**Affects:** `CONTRACT.md` §9 (request identity), `ollama_contract.ChatRequest`
+**Raised by:** the N2b stage E blocker
+
+### The conflict
+
+`ollama_contract._require_model_identity` refuses any `ChatRequest` whose
+`model_digest` is not a lowercase SHA-256. `Phase2Dependencies` likewise requires an
+injected client to expose `check_version` and `check_tags`, both of which return
+digest-shaped results.
+
+llama.cpp publishes no digest. Under contract §6.1 its identity kind is `reported`.
+So the run engine cannot build a chat request for an OpenAI-compatible backend at
+all — the one place that constructs work refuses a model the rest of the system
+already accepts.
+
+The only way to proceed today is to send a digest that does not describe the model
+that actually answers. That was measured working against `mimir` and deliberately
+not shipped: a request identity that names the wrong model is a provenance defect,
+and the request identity hash exists precisely to prevent that.
+
+### The correction
+
+`ChatRequest` carries an identity kind, exactly as `analyst_runs` (schema v8) and
+`report.json` (erratum E18) already do:
+
+- `identity_kind` is `digest` or `reported`, and is part of the request identity.
+- `model_digest` is required when the kind is `digest` and must be absent when the
+  kind is `reported`.
+- The request identity hash covers the kind, so two requests differing only in how
+  strongly their model is established hash differently.
+
+`Phase2Dependencies` accepts a client that exposes the backend surface rather than
+the Ollama control surface specifically. A backend that cannot answer a digest
+preflight is preflighted against what it can prove: that the model exists, is a
+text-generation model, and reports the context the run needs.
+
+### Why this direction
+
+Two alternatives were rejected. Giving the adapter a second request type would leave
+two parallel request contracts to keep in step, and the identity rules would drift.
+Deriving a 64-hex hash of the server's properties and storing it as the digest was
+already rejected as decision D18, because a non-cryptographic hash in a field named
+`model_digest` is exactly the confusion D3 exists to prevent.
+
+This direction is the third application of a pattern already accepted twice: the
+schema learned it at v8, the report payload learned it at E18, and the request
+learns it here. Afterwards all three describe identity the same way.
+
+### What does not change
+
+1. An Ollama request is unchanged. Its kind is `digest`, its digest is still
+   required and still verified, and a loopback run stays byte-identical under
+   contract §12.1.
+2. A `reported` identity is still never presented as verified, anywhere.
+3. Bounded bytes, deadlines, disabled redirects and ignored ambient proxies are
+   untouched.
+4. The cloud tag rejection stays in force on the Ollama backend.
