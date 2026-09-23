@@ -69,9 +69,11 @@ class OpenAICompatBackend(BoundedHttpClient):
         endpoint: str | Endpoint,
         plaintext_ack: bool = False,
         model_id: str | None = None,
+        cert_fingerprint: str | None = None,
         **kwargs: Any,
     ) -> None:
         self._endpoint = require_permitted(endpoint, plaintext_ack=plaintext_ack)
+        kwargs["cert_fingerprint"] = cert_fingerprint
         self._plaintext_ack = plaintext_ack
         self._model_id = model_id
         self._base = self._endpoint.base_url

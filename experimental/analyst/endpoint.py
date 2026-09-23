@@ -276,12 +276,10 @@ def check_address_policy(
     if endpoint.is_loopback:
         return endpoint
     if endpoint.scheme == "https":
-        # TLS verification and bearer tokens are N3. Until then an https
-        # profile is refused rather than silently unverified.
-        raise AddressPolicyError(
-            f"{endpoint.base_url} needs TLS verification, which arrives with "
-            "the security card (N3)."
-        )
+        # TLS is verified against the OS trust store, or against a pinned
+        # certificate on the profile (contract 4.4). Either way the connection
+        # is authenticated, so the plaintext rules below do not apply.
+        return endpoint
     actual = resolved_class if resolved_class is not None else endpoint.address_class
     if actual is AddressClass.UNRESOLVED:
         raise AddressPolicyError(

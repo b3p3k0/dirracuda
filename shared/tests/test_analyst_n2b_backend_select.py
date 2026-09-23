@@ -54,10 +54,10 @@ def _run(db: Path, run_id: str, **over):
 def test_a_run_with_no_profile_gets_the_pre_n2b_default(db: Path):
     """Object-for-object what it was before: a raw loopback Ollama client."""
     _run(db, "a" * 32)
-    kind, endpoint, ack, model = run_backend_spec("a" * 32, path=db)
+    kind, endpoint, ack, model, pin = run_backend_spec("a" * 32, path=db)
     assert kind is BackendKind.OLLAMA
     assert endpoint == "http://127.0.0.1:11434"
-    assert (ack, model) == (False, None)
+    assert (ack, model, pin) == (False, None, None)
     client = backend_for_run("a" * 32, path=db)
     assert type(client) is OllamaClient
     assert client.endpoint.base_url == "http://127.0.0.1:11434"
@@ -79,7 +79,7 @@ def test_a_run_pinned_to_a_llama_cpp_profile_rebuilds_that_backend(db: Path):
         db, "c" * 32, profile_id=profile.profile_id, backend_kind="openai",
         model_tag="qwen3.8-27b", model_digest=None, identity_kind="reported",
     )
-    kind, endpoint, ack, model = run_backend_spec("c" * 32, path=db)
+    kind, endpoint, ack, model, pin = run_backend_spec("c" * 32, path=db)
     assert kind is BackendKind.OPENAI_COMPAT
     assert endpoint == _MIMIR
     assert ack is True

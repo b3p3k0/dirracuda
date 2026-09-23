@@ -242,10 +242,10 @@ def test_a_public_endpoint_is_refused_even_with_acknowledgement():
         OpenAICompatBackend(endpoint="http://8.8.8.8:9292", plaintext_ack=True)
 
 
-def test_an_https_endpoint_waits_for_the_security_card():
-    with pytest.raises(AddressPolicyError, match="N3"):
-        OpenAICompatBackend(endpoint="https://100.125.197.36:9292",
-                            plaintext_ack=True)
+def test_an_https_endpoint_needs_no_plaintext_acknowledgement():
+    """N3: TLS is verified, so the plaintext rules do not apply to it."""
+    backend = OpenAICompatBackend(endpoint="https://100.125.197.36:9292")
+    assert backend.endpoint.scheme == "https"
 
 
 def test_a_loopback_endpoint_needs_no_acknowledgement():

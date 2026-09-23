@@ -37,6 +37,7 @@ from .endpoint import (
     classify_host,
     parse_endpoint,
 )
+from .tls import build_session
 from .ollama_contract import (
     CONNECT_TIMEOUT_SECONDS,
     IDLE_READ_TIMEOUT_SECONDS,
@@ -132,13 +133,16 @@ class BoundedHttpClient:
         *,
         session: Any | None = None,
         monotonic: Callable[[], float] = time.monotonic,
+        cert_fingerprint: str | None = None,
     ) -> None:
         if not callable(monotonic):
             raise TypeError("monotonic clock must be callable")
         self._monotonic = monotonic
-        self._session = session if session is not None else requests.Session()
-        self._session.trust_env = False
-        self._session.max_redirects = 0
+        # Always verifying, by trust store or by pin (contract 4.4). There is no
+        # configuration of build_session that yields an unverified session.
+        self._session = build_session(
+            cert_fingerprint=cert_fingerprint, session=session,
+        )
         self._active_lock = threading.Lock()
         self._active_response: Any | None = None
         self._close_target: Any | None = None

@@ -28,13 +28,13 @@ class BackendSelectionError(ValueError):
 
 def run_backend_spec(
     run_id: str, *, path: Path | None = None,
-) -> tuple[BackendKind, str, bool, str | None]:
-    """Return (kind, endpoint, plaintext_ack, model_id) for one run."""
+) -> tuple[BackendKind, str, bool, str | None, str | None]:
+    """Return (kind, endpoint, plaintext_ack, model_id, cert_fingerprint)."""
     conn = open_connection(path, read_only=True)
     try:
         row = conn.execute(
             "SELECT r.backend_kind, r.model_tag, r.identity_kind, "
-            "p.scheme, p.host, p.port, p.plaintext_ack "
+            "p.scheme, p.host, p.port, p.plaintext_ack, p.cert_fingerprint "
             "FROM analyst_runs r "
             "LEFT JOIN analyst_llm_profile p ON p.profile_id = r.profile_id "
             "WHERE r.run_id = ?",
@@ -53,10 +53,13 @@ def run_backend_spec(
         ) from None
     if row["host"] is None:
         # No profile recorded: the pre-N2b default, unchanged.
-        return kind, DEFAULT_ENDPOINT, False, None
+        return kind, DEFAULT_ENDPOINT, False, None, None
     endpoint = f"{row['scheme']}://{row['host']}:{int(row['port'])}"
     model_id = row["model_tag"] if row["identity_kind"] == "reported" else None
-    return kind, endpoint, bool(row["plaintext_ack"]), model_id
+    return (
+        kind, endpoint, bool(row["plaintext_ack"]), model_id,
+        row["cert_fingerprint"],
+    )
 
 
 def backend_for_run(run_id: str, *, path: Path | None = None, **kwargs: Any) -> Any:
@@ -66,15 +69,18 @@ def backend_for_run(run_id: str, *, path: Path | None = None, **kwargs: Any) -> 
     whose host has since moved outside the permitted ranges fails closed here
     rather than reaching the network (contract 4.3).
     """
-    kind, endpoint, plaintext_ack, model_id = run_backend_spec(run_id, path=path)
+    kind, endpoint, plaintext_ack, model_id, pin = run_backend_spec(
+        run_id, path=path,
+    )
     if kind is BackendKind.OLLAMA:
         # Returned as the raw client, not the thin wrapper, so a loopback run
         # is object-for-object what it was before N2b.
-        return OllamaClient(endpoint=endpoint, **kwargs)
+        return OllamaClient(endpoint=endpoint, cert_fingerprint=pin, **kwargs)
     return OpenAICompatBackend(
         endpoint=endpoint,
         plaintext_ack=plaintext_ack,
         model_id=model_id,
+        cert_fingerprint=pin,
         **kwargs,
     )
 
