@@ -26,6 +26,24 @@ class BackendSelectionError(ValueError):
     """A run names a server that cannot be rebuilt."""
 
 
+class RunPinMismatch(BackendSelectionError):
+    """The server a run was created against has changed underneath it.
+
+    Contract 6.4: one report comes from one model. Mixing two destroys the
+    grounding claim the whole read-first contract rests on, so a mismatched
+    resume is refused and the operator is offered a new run instead.
+    """
+
+
+class ProfileUnreachable(BackendSelectionError):
+    """The profile a run was pinned to no longer exists.
+
+    Contract 6.4 holds such a run resumable rather than retargeting it: the
+    profile may come back, and silently running it somewhere else would be a
+    different claim than the one the report will make.
+    """
+
+
 def run_backend_spec(
     run_id: str, *, path: Path | None = None,
 ) -> tuple[BackendKind, str, bool, str | None, str | None]:
@@ -34,7 +52,9 @@ def run_backend_spec(
     try:
         row = conn.execute(
             "SELECT r.backend_kind, r.model_tag, r.identity_kind, "
-            "p.scheme, p.host, p.port, p.plaintext_ack, p.cert_fingerprint "
+            "p.scheme, p.host, p.port, p.plaintext_ack, p.cert_fingerprint, "
+            "p.backend_kind AS profile_backend_kind, "
+            "r.profile_id AS profile_id_recorded "
             "FROM analyst_runs r "
             "LEFT JOIN analyst_llm_profile p ON p.profile_id = r.profile_id "
             "WHERE r.run_id = ?",
@@ -52,8 +72,22 @@ def run_backend_spec(
             f"run names an unknown backend {kind_value!r}"
         ) from None
     if row["host"] is None:
+        if row["profile_id_recorded"] is not None:
+            # The run named a profile and that profile is gone. Hold it
+            # resumable rather than quietly running it somewhere else.
+            raise ProfileUnreachable(
+                "the model server this run was created against is no longer "
+                "configured. Restore that profile, or start a new run."
+            )
         # No profile recorded: the pre-N2b default, unchanged.
         return kind, DEFAULT_ENDPOINT, False, None, None
+    if row["profile_backend_kind"] is not None and (
+        str(row["profile_backend_kind"]) != kind.value
+    ):
+        raise RunPinMismatch(
+            f"this run was created against a {kind.value} server, but that "
+            f"profile is now {row['profile_backend_kind']}. Start a new run."
+        )
     endpoint = f"{row['scheme']}://{row['host']}:{int(row['port'])}"
     model_id = row["model_tag"] if row["identity_kind"] == "reported" else None
     return (
@@ -85,4 +119,10 @@ def backend_for_run(run_id: str, *, path: Path | None = None, **kwargs: Any) -> 
     )
 
 
-__all__ = ["BackendSelectionError", "backend_for_run", "run_backend_spec"]
+__all__ = [
+    "BackendSelectionError",
+    "ProfileUnreachable",
+    "RunPinMismatch",
+    "backend_for_run",
+    "run_backend_spec",
+]

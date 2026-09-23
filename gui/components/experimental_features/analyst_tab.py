@@ -15,6 +15,13 @@ from gui.utils.style import get_theme
 from shared.path_service import get_paths
 
 
+def _consent():
+    """Resolve the egress-consent satellite at call time (one-way import)."""
+    from gui.components.experimental_features import analyst_egress_consent
+
+    return analyst_egress_consent
+
+
 def _editor():
     """Resolve the profile-editor satellite at call time (one-way import)."""
     from gui.components.experimental_features import analyst_profile_editor
@@ -1098,8 +1105,17 @@ class AnalystTab:
                 )
 
         # The run records which server made it, so the worker can rebuild that
-        # backend later and N3 can refuse a mismatched resume.
+        # backend later and a mismatched resume can be refused.
         launch_profile = self._selected_profile()
+        # Contract 10: confirm before anything leaves this machine.
+        if not _consent().confirm_remote_egress(
+            self._advanced_dialog or self.frame,
+            profile=launch_profile,
+            model_name=model_tag or "(default)",
+        ):
+            self._status_var.set("Run cancelled: nothing was sent.")
+            self._set_busy(False)
+            return
         profile_id = None if launch_profile is None else launch_profile.profile_id
         backend_kind = self._selected_backend_kind()
         identity_kind = "reported" if backend_kind == "openai" else "digest"
