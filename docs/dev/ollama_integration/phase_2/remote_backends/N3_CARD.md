@@ -2,7 +2,7 @@
 
 - Branch: `feature/ollama-analyst`
 - Type: **code + docs.** Implemented by codex (DA) under Claude orchestration.
-- Status: **HELD.** Requires N2b merged.
+- Status: **IMPLEMENTED 2026-09-23.** Awaiting the HI security review.
 - Contract: [`CONTRACT_REMOTE_BACKENDS.md`](CONTRACT_REMOTE_BACKENDS.md) §4.4, §9, §10, §11
 - Decisions: **D19** — §4.1-4.3 moved to N2b
 - **Security-critical. Flag the diff for HI review before merge.**
@@ -71,6 +71,47 @@ Extend the existing leak-scan patterns to bearer tokens and to `reasoning_conten
 - `README.md:588-591` — "digest-pinned Ollama model on loopback" becomes wrong when this
   lands. Update it. Note it is **already stale** on the read-first changes; fix both.
 - `CONTRACT_ERRATA.md` — E17 is authored at N0. Confirm it still matches what shipped.
+
+## Closeout, 2026-09-23
+
+| # | Item | Where |
+| --- | --- | --- |
+| 2 | TLS, trust store then pinned SHA-256 | `tls.py`, `test_analyst_n3_tls.py` |
+| 3 | Keymaster `LLM_SERVER` provider | `credentials.py`, `keymaster/store.py` |
+| 4 | Egress consent | `analyst_egress_consent.py` |
+| 5 | Run pinning | `backend_select.py` |
+| 6 | Leak scanning | `test_analyst_n3_leakscan.py` |
+| 7 | Documentation | `ANALYST_GUIDE.md`, `README.md` |
+
+Three deviations, each taken deliberately:
+
+1. **The `CERT_NONE` guardrail is scoped to `experimental/analyst/`**, not the whole
+   repository. The scanner (`shared/http_browser.py`,
+   `gui/utils/protocol_extract_runner.py`) also uses it, behind an explicit
+   `allow_insecure_tls` flag, because browsing an arbitrary open directory on an
+   untrusted host is the product's purpose and validating certificates there would
+   defeat it. Contract 4.4 governs what Analyst sends its own harvested text over,
+   not what the scanner reads from strangers. The `verify=False` ban remains
+   repository-wide.
+2. **Leak scanning is a new test, not an edit to `scripts/analyst_benchmark/leakscan.py`.**
+   That file is frozen provenance whose path seals the benchmark policy scripts check.
+   The rule is enforced in `shared/tests/test_analyst_n3_leakscan.py` instead.
+3. **Keymaster needed a schema rebuild.** Its `CHECK (provider IN ('SHODAN'))` could not
+   be widened in place, so `init_db` rebuilds `keymaster_keys` once when it finds the
+   narrow form. Verified against a hand-built pre-`LLM_SERVER` sidecar.
+
+### Known gap, for the security review
+
+**A worker subprocess cannot decrypt a Keymaster token.** Keymaster is passphrase-gated
+and caches session keys in the GUI process; the worker runs as a separate process and has
+no access to them. `resolve_bearer_token` therefore raises "Keymaster is locked" in a
+worker rather than silently connecting unauthenticated -- which is the safe failure, but
+it means an authenticated remote run cannot currently complete unattended.
+
+Delivering the token to the subprocess safely is a design decision, not an implementation
+detail: an environment variable is visible in `ps`, a file on disk defeats the point of
+encrypting it, and a socket handshake is a new surface. **Deliberately left for the HI.**
+An unauthenticated private-range server under 4.2 is unaffected and works today.
 
 ## Acceptance
 

@@ -587,9 +587,15 @@ Settings are stored at `~/.dirracuda/conf.d/experimental/sherlock.json`.
 
 Analyst is an optional, Linux-only local document-review workflow. It inventories a
 directory or an exact persisted extraction manifest, parses supported documents inside
-a strict sandbox, runs deterministic exposure detectors, sends selected text only to a
-digest-pinned Ollama model on loopback, and publishes a coverage-first report. It never
-logs in to a server or downloads source files.
+a strict sandbox, runs deterministic exposure detectors, sends selected text to a model
+server you choose, and publishes a coverage-first report. It never logs in to a server
+or downloads source files.
+
+By default that model server is a digest-pinned Ollama on loopback. Analyst can also use
+a llama.cpp server, on this machine or another one. A remote server needs TLS and a
+bearer token, or an explicit per-profile acknowledgement that is only accepted for
+private address ranges; a public plaintext endpoint is refused outright. Every remote run
+confirms before it sends anything, and the run view says which server it is using.
 
 Start Dirracuda with `./dirracuda`, then open **Accessories → Analyst**. Fast mode scans
 every supported document with deterministic detectors and sends only flagged files to

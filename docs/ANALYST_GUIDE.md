@@ -106,6 +106,47 @@ So a run records one of two identity kinds, and always says which:
 A reported identity is never displayed as verified anywhere. It is not a weaker
 version of a digest; it is a different claim, and the report says so.
 
+## Serving Analyst from a shared box
+
+Analyst can send work to a model server on another machine. That is the point of the
+remote profiles: offload the analysis to hardware that can actually run a large model.
+
+**Analyst does not arbitrate access to a server it does not own.** If two people point
+Analyst at the same box, they will share it. Analyst warns when the server looks busy,
+reports "server at capacity" clearly when it is, and records contention with the run --
+but it will not queue, lock or wait for you. Neither Ollama nor llama.cpp offers a lock
+to build that on, and a real one would need a coordinator service this tool does not
+have. Analyst assumes you administer the hardware.
+
+### Sizing the context
+
+llama.cpp fixes its context when the server starts, not per request. Analyst reads the
+limit and refuses a run that cannot fit, naming both numbers:
+
+> Model qwen3.8-27b on mimir accepts 32768 tokens. This run needs 42058.
+
+Raise `--ctx-size` for that preset, or pick a model with more room. A host read needs
+more context than per-chunk generation does, so size for the larger of the two.
+
+If the server runs in router mode it reports a context of `0` at `/props`, because the
+router itself holds no model. Analyst reads the real number from the model entry
+instead. A context it cannot determine is treated as unknown, never as unlimited -- the
+run proceeds and the server remains the backstop, because llama.cpp refuses an oversized
+prompt cleanly rather than silently truncating it.
+
+### The Ollama equivalents
+
+`OLLAMA_NUM_PARALLEL` sets how many requests a model serves at once.
+`OLLAMA_MAX_LOADED_MODELS` sets how many models stay resident. Two clients asking for
+different models will make Ollama load and evict repeatedly; that is server RAM and
+configuration, and a client cannot fix it.
+
+### A cold model is not a stuck one
+
+A router may hold a model unloaded or asleep. The first request loads it, which can take
+minutes for a large model. Analyst shows "loading the model" rather than a stall, and its
+read deadline is set to tolerate a cold load. Give it time before cancelling.
+
 ## Running Analyst
 
 The primary entry point is:
