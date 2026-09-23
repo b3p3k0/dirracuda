@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Final, Mapping
 
 from .inventory import InventoryFile, InventoryResult
 from .models import ANALYST_DEFAULTS, FileStage
-from .ollama_contract import valid_model_digest, valid_model_tag
+from .ollama_contract import valid_model_identity, valid_model_tag
 from .source_reopen import SourceRootIdentity
 from .state import RunState
 
@@ -111,7 +111,8 @@ class WorkerRunContext:
     source_identity_sha256: str
     report_label: str = field(repr=False)
     model_tag: str
-    model_digest: str
+    #: None only for a reported identity, which has no digest (E19).
+    model_digest: str | None
     worksheet_version: str
     prompt_sha256: str
     response_schema_sha256: str
@@ -125,6 +126,7 @@ class WorkerRunContext:
     num_predict: int
     isolation_mode: str
     reduced_isolation_ack: bool
+    identity_kind: str = "digest"
     host_type: str | None = None
     protocol_server_id: int | None = None
     ip_address: str | None = field(default=None, repr=False)
@@ -160,8 +162,10 @@ class WorkerRunContext:
         _bounded_text(self.report_label, "report label", 1024)
         if not valid_model_tag(self.model_tag):
             raise WorkerContractError("model tag is outside the worker contract")
-        if not valid_model_digest(self.model_digest):
-            raise WorkerContractError("model digest is outside the worker contract")
+        if not valid_model_identity(
+            self.model_tag, self.model_digest, self.identity_kind,
+        ):
+            raise WorkerContractError("model identity is outside the worker contract")
         if self.worksheet_version != ANALYST_DEFAULTS.worksheet_version:
             raise WorkerContractError("worksheet version differs from the frozen default")
         for value, label in (

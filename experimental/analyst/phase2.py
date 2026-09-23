@@ -48,7 +48,7 @@ from .ollama_contract import (
     VersionCheckResult,
     build_chat_request,
     build_repair_chat_request,
-    valid_model_digest,
+    valid_model_identity,
     valid_model_tag,
 )
 from .ollama_state import (
@@ -349,8 +349,9 @@ def _best_effort_acknowledge_cancel(owner: _FenceOwner) -> None:
 
 def _require_runtime_contract(context: WorkerRunContext) -> None:
     if (
-        not valid_model_tag(context.model_tag)
-        or not valid_model_digest(context.model_digest)
+        not valid_model_identity(
+            context.model_tag, context.model_digest, context.identity_kind,
+        )
         or context.worksheet_version != WORKSHEET_VERSION
         or context.prompt_sha256 != prompt_template_hash()
         or context.response_schema_sha256 != schema_hash()
@@ -379,6 +380,30 @@ def _run_identity_preflight(
     )
     if version.status is not OllamaStatus.SUCCESS:
         raise Phase2Error(Phase2Failure.PREFLIGHT)
+    if context.identity_kind == "reported":
+        # Erratum E19: this server publishes no digest, so there is no digest to
+        # compare. It is preflighted against what it can prove -- that the model
+        # exists here and can serve a chat run. The identity stays "reported"
+        # and is never presented as verified.
+        check_model = getattr(owner.dependencies.client, "check_model", None)
+        if check_model is None:
+            raise Phase2Error(Phase2Failure.PREFLIGHT)
+        tags = _run_control(
+            owner,
+            ContactKind.TAGS,
+            TAGS_REQUEST_SHA256,
+            lambda: TagsCheckResult(
+                check_model(
+                    context.model_tag,
+                    cancel=owner.stop_event.is_set,
+                    poll=owner.client_poll,
+                )
+            ),
+            TagsCheckResult,
+        )
+        if tags.status is not OllamaStatus.SUCCESS:
+            raise Phase2Error(Phase2Failure.PREFLIGHT)
+        return
     tags = _run_control(
         owner,
         ContactKind.TAGS,
@@ -674,6 +699,7 @@ def _build_request(
             nonce=nonce,
             model_tag=context.model_tag,
             model_digest=context.model_digest,
+            identity_kind=context.identity_kind,
         )
         if prompt_kind is PromptKind.MODEL_INVALID_REPAIR
         else build_chat_request(
@@ -681,6 +707,7 @@ def _build_request(
             nonce=nonce,
             model_tag=context.model_tag,
             model_digest=context.model_digest,
+            identity_kind=context.identity_kind,
         )
     )
 

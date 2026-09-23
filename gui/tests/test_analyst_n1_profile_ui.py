@@ -200,7 +200,12 @@ def test_the_tab_exposes_the_profile_selector():
     source = open(analyst_tab.__file__, "r", encoding="utf-8").read()
     assert "_profile_combo" in source
     assert "_manage_profiles" in source
-    assert "discover_models(endpoint=endpoint)" in source
+    # Discovery moved into the satellite when it grew a backend dispatch;
+    # the tab keeps the delegating stub.
+    assert "_editor().discover_models(self)" in source
+    assert "discover_models(endpoint=endpoint)" in open(
+        editor.__file__, encoding="utf-8"
+    ).read().replace("_discover(endpoint=endpoint)", "discover_models(endpoint=endpoint)")
 
 
 def test_profile_helpers_live_in_the_satellite_not_the_tab():

@@ -566,8 +566,10 @@ class TagsCheckResult:
     def __post_init__(self) -> None:
         if self.status not in _CONTROL_STATUSES:
             raise ContractError("status is not valid for a tags contact")
+        # Erratum E19: a reported identity publishes no digest, so a successful
+        # model check carries none. A digest-backed success still must.
         valid = (
-            valid_model_digest(self.model_digest)
+            self.model_digest is None or valid_model_digest(self.model_digest)
             if self.status is OllamaStatus.SUCCESS
             else self.model_digest is None
         )

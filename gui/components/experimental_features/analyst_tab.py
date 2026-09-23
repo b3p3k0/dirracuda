@@ -602,37 +602,14 @@ class AnalystTab:
     def _manage_profiles(self) -> None:
         _editor().manage_profiles(self)
 
+    def _selected_backend_kind(self) -> str:
+        """Return the chosen profile's backend kind, defaulting to Ollama."""
+        profile = self._selected_profile()
+        return "ollama" if profile is None else profile.backend_kind.value
+
     def _discover_models(self) -> None:
-        dialog = self._advanced_dialog
-        button = self._model_connect_btn
-        if dialog is None or button is None:
-            return
-        button.configure(state="disabled")
-        if self._model_status_var is not None:
-            self._model_status_var.set("Connecting to the model server…")
-        preferred_tag = self._model_var.get()
-        endpoint = self._selected_endpoint()
-
-        def work() -> None:
-            try:
-                from experimental.analyst.service import discover_models
-
-                choices = discover_models(endpoint=endpoint)
-            except Exception as exc:
-                held = type(exc).__name__ == "RemoteNotEnabledError"
-                self._schedule(
-                    lambda: self._finish_model_discovery(
-                        dialog, None, preferred_tag, held=held,
-                    )
-                )
-                return
-            self._schedule(
-                lambda: self._finish_model_discovery(
-                    dialog, choices, preferred_tag,
-                )
-            )
-
-        threading.Thread(target=work, daemon=True).start()
+        """Load the chosen server's model list (see analyst_profile_editor)."""
+        _editor().discover_models(self)
 
     def _finish_model_discovery(
         self, dialog, choices, preferred_tag, *, held: bool = False,
@@ -1120,6 +1097,15 @@ class AnalystTab:
                     lambda: self._status_var.set(f"Inventorying… {seen} files")
                 )
 
+        # The run records which server made it, so the worker can rebuild that
+        # backend later and N3 can refuse a mismatched resume.
+        launch_profile = self._selected_profile()
+        profile_id = None if launch_profile is None else launch_profile.profile_id
+        backend_kind = self._selected_backend_kind()
+        identity_kind = "reported" if backend_kind == "openai" else "digest"
+        if identity_kind == "reported":
+            model_digest = None
+
         def work() -> None:
             try:
                 if source_kind == "directory":
@@ -1129,6 +1115,9 @@ class AnalystTab:
                         request,
                         model_tag=model_tag,
                         model_digest=model_digest,
+                        identity_kind=identity_kind,
+                        profile_id=profile_id,
+                        backend_kind=backend_kind,
                         cancel_check=self._launch_cancel_event.is_set,
                         progress_callback=_progress,
                     )
@@ -1143,6 +1132,9 @@ class AnalystTab:
                         mode=mode,
                         model_tag=model_tag,
                         model_digest=model_digest,
+                        identity_kind=identity_kind,
+                        profile_id=profile_id,
+                        backend_kind=backend_kind,
                     )
             except Exception as exc:
                 if (

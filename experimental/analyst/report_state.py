@@ -136,7 +136,9 @@ def load_report_snapshot(
             source_mode=str(row["source_mode"]),
             created_at_utc=str(row["created_at_utc"]),
             model_tag=str(row["model_tag"]),
-            model_digest=str(row["model_digest"]),
+            model_digest=(
+                None if row["model_digest"] is None else str(row["model_digest"])
+            ),
             worksheet_version=str(row["worksheet_version"]),
             prompt_sha256=str(row["prompt_sha256"]),
             response_schema_sha256=str(row["response_schema_sha256"]),
@@ -153,6 +155,11 @@ def load_report_snapshot(
             protocol_server_id=_optional_int(row["protocol_server_id"]),
             ip_address=_optional_text(row["ip_address"]),
             port=_optional_int(row["port"]),
+            identity_kind=row["identity_kind"] or "digest",
+            server_fingerprint=(
+                None if row["server_fingerprint"] is None
+                else str(row["server_fingerprint"])
+            ),
             extract_summary_row_id=_optional_int(row["extract_summary_row_id"]),
         )
         return ReportSnapshot(run, coverage, str(row["output_root"]))
@@ -200,6 +207,8 @@ def build_report_json_payload(
             read_mode={"fast": "quick", "deep": "full"}[run.mode],
             model_tag=run.model_tag,
             model_digest=run.model_digest,
+            identity_kind=run.identity_kind,
+            server_fingerprint=run.server_fingerprint,
             created_at_utc=run.created_at_utc,
             files_read=coverage_summary.model_reviewed_files,
             files_total=coverage_summary.discovered_files,

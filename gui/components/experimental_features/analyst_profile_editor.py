@@ -490,11 +490,75 @@ def manage_profiles(tab) -> None:
     refresh_profile_choices(tab)
 
 
+class ReportedModel:
+    """One model a server reported, with no digest to pin it (erratum E19)."""
+
+    __slots__ = ("model_tag", "model_digest")
+
+    def __init__(self, model_tag: str) -> None:
+        self.model_tag = model_tag
+        self.model_digest = None
+
+
+def discover_models(tab) -> None:
+    """Load the chosen server's model list, off the Tk thread.
+
+    Dispatches on the profile's backend kind. An Ollama catalogue is charged
+    and persisted as before; an OpenAI-compatible one is read live, because a
+    reported model has no digest and the persisted table requires one.
+    """
+    import threading
+
+    dialog = tab._advanced_dialog
+    button = tab._model_connect_btn
+    if dialog is None or button is None:
+        return
+    button.configure(state="disabled")
+    if tab._model_status_var is not None:
+        tab._model_status_var.set("Connecting to the model server\u2026")
+    preferred_tag = tab._model_var.get()
+    endpoint = tab._selected_endpoint()
+    profile = selected_profile(tab)
+    kind = tab._selected_backend_kind()
+    ack = bool(profile.plaintext_ack) if profile is not None else False
+
+    def work() -> None:
+        try:
+            if kind == "openai":
+                from experimental.analyst.service import discover_reported_models
+
+                choices = tuple(
+                    ReportedModel(name)
+                    for name in discover_reported_models(
+                        endpoint, plaintext_ack=ack,
+                    )
+                )
+            else:
+                from experimental.analyst.service import discover_models as _discover
+
+                choices = _discover(endpoint=endpoint)
+        except Exception as exc:
+            held = type(exc).__name__ == "RemoteNotEnabledError"
+            tab._schedule(
+                lambda: tab._finish_model_discovery(
+                    dialog, None, preferred_tag, held=held,
+                )
+            )
+            return
+        tab._schedule(
+            lambda: tab._finish_model_discovery(dialog, choices, preferred_tag)
+        )
+
+    threading.Thread(target=work, daemon=True).start()
+
+
 __all__ = [
     "REMOTE_HELD_NOTE",
     "ProfileEditorDialog",
+    "ReportedModel",
     "describe_profile",
     "describe_profile_short",
+    "discover_models",
     "manage_profiles",
     "open_profile_editor",
     "profile_selected",

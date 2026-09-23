@@ -156,8 +156,11 @@ def test_split_control_results_are_content_free_on_every_failure() -> None:
         TagsCheckResult(OllamaStatus.MODEL_INVALID)
     with pytest.raises(ContractError):
         VersionCheckResult(OllamaStatus.SUCCESS)
+    # Erratum E19: a successful tags contact may carry no digest, because a
+    # reported identity publishes none. A malformed digest is still refused.
+    assert TagsCheckResult(OllamaStatus.SUCCESS).model_digest is None
     with pytest.raises(ContractError):
-        TagsCheckResult(OllamaStatus.SUCCESS)
+        TagsCheckResult(OllamaStatus.SUCCESS, "not-a-digest")
     with pytest.raises(ContractError):
         VersionCheckResult(OllamaStatus.IDENTITY_MISMATCH, "0.32.5")
     with pytest.raises(ContractError):

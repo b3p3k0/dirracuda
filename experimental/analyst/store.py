@@ -461,7 +461,7 @@ def load_worker_run(
         "model_digest,worksheet_version,prompt_sha256,response_schema_sha256,"
         "detector_rules_version,detector_rules_sha256,parser_bundle_json,"
         "parser_bundle_sha256,chunk_chars,overlap_chars,num_ctx,num_predict,"
-        "isolation_mode,reduced_isolation_ack"
+        "isolation_mode,reduced_isolation_ack,identity_kind"
     )
     conn = open_connection(path, read_only=True)
     try:
@@ -519,6 +519,7 @@ def load_worker_run(
             num_predict=row["num_predict"],
             isolation_mode=row["isolation_mode"],
             reduced_isolation_ack=bool(ack),
+            identity_kind=row["identity_kind"] or "digest",
         )
     except (KeyError, TypeError, ValueError, WorkerContractError) as exc:
         raise ForkRequired(

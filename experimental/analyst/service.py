@@ -275,6 +275,29 @@ def discover_models(
         raise AnalystServiceError(ServiceFailure.STORAGE) from None
 
 
+def discover_reported_models(
+    endpoint: str, *, plaintext_ack: bool = False,
+) -> tuple[str, ...]:
+    """Return the text-generation model names an OpenAI-compatible server offers.
+
+    Deliberately not persisted. `analyst_discovered_model.model_digest` is
+    NOT NULL CHECK(64 hex), and a reported identity has no digest, so caching
+    this list would need another schema version. The catalogue is cheap to
+    fetch, needs no token, and changes whenever the server's presets change,
+    so it is read live instead. Decided 2026-09-23.
+    """
+    from .backends.openai_api import OpenAICompatBackend
+
+    resolved = normalize_endpoint(endpoint)
+    backend = OpenAICompatBackend(endpoint=resolved, plaintext_ack=plaintext_ack)
+    try:
+        return tuple(m.model_id for m in backend.list_models())
+    except RemoteNotEnabledError:
+        raise
+    except Exception:
+        raise AnalystServiceError(ServiceFailure.DISCOVERY) from None
+
+
 def list_discovered_models(
     *, endpoint: str = OLLAMA_ENDPOINT, path: Path | None = None,
 ) -> tuple[DiscoveredModel, ...]:

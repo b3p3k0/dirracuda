@@ -185,6 +185,7 @@ def run_read_reduce(
             nonce=nonce,
             model_tag=context.model_tag,
             model_digest=context.model_digest,
+            identity_kind=context.identity_kind,
         )
         while True:
             if stop_event.is_set():

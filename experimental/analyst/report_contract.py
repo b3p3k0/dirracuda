@@ -131,7 +131,8 @@ class ReportRun:
     source_mode: str
     created_at_utc: str
     model_tag: str
-    model_digest: str
+    #: None only for a reported identity, which has no digest (E19).
+    model_digest: str | None
     worksheet_version: str
     prompt_sha256: str
     response_schema_sha256: str
@@ -149,6 +150,10 @@ class ReportRun:
     ip_address: str | None = field(repr=False)
     port: int | None
     extract_summary_row_id: int | None
+    #: Erratum E19. "digest" for a verified Ollama model, "reported" for a
+    #: server that publishes none. Absent on runs created before schema v8.
+    identity_kind: str = "digest"
+    server_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
         texts = (
@@ -157,9 +162,16 @@ class ReportRun:
             self.detector_rules_version, self.isolation_mode,
         )
         shas = (
-            self.model_digest, self.prompt_sha256, self.response_schema_sha256,
+            self.prompt_sha256, self.response_schema_sha256,
             self.detector_rules_sha256, self.parser_bundle_sha256,
         )
+        # Erratum E19: a reported identity carries no digest. A digest identity
+        # still must, and it must still be a lowercase SHA-256.
+        if self.identity_kind == "reported":
+            if self.model_digest is not None:
+                raise ReportContractError("reported identity carries a digest")
+        else:
+            shas = (self.model_digest, *shas)
         numbers = (self.chunk_chars, self.num_ctx, self.num_predict)
         optional_numbers = (
             self.protocol_server_id, self.port, self.extract_summary_row_id,
