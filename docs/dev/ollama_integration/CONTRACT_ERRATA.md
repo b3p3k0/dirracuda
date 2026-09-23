@@ -918,8 +918,15 @@ and the request identity hash exists precisely to prevent that.
 - `identity_kind` is `digest` or `reported`, and is part of the request identity.
 - `model_digest` is required when the kind is `digest` and must be absent when the
   kind is `reported`.
-- The request identity hash covers the kind, so two requests differing only in how
-  strongly their model is established hash differently.
+- The kind is part of the validated request identity -- the frozen dataclass and its
+  validator -- and **not** of the body hash.
+
+  *Corrected 2026-09-23, during implementation.* This erratum first said the identity
+  hash covers the kind. It cannot: `request_sha256` is the SHA-256 of the request body,
+  the body carries the model name but no digest, and adding a field to it would change
+  the bytes an Ollama request puts on the wire, breaking contract §12.1. The property
+  that matters still holds without it -- two requests naming different models already
+  hash differently, because the model name is in the body.
 
 `Phase2Dependencies` accepts a client that exposes the backend surface rather than
 the Ollama control surface specifically. A backend that cannot answer a digest
