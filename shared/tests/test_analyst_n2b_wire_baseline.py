@@ -168,9 +168,10 @@ def test_the_shared_timeouts_are_unchanged():
 def test_one_request_may_be_in_flight_per_process():
     """Contract 11, review finding M2. Whatever module owns the slot, there is
     exactly one and a second caller is refused rather than queued."""
-    from experimental.analyst import ollama_client
+    from experimental.analyst import transport
 
-    slot = ollama_client._GLOBAL_REQUEST_SLOT
+    # The slot moved out of ollama_client so a second backend cannot escape it.
+    slot = transport.GLOBAL_REQUEST_SLOT
     assert slot.acquire(blocking=False) is True
     try:
         session = _RecordingSession()
