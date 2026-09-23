@@ -271,3 +271,87 @@ def test_both_backends_share_one_in_flight_slot():
 
     assert OllamaClient._execute is transport.BoundedHttpClient._execute
     assert OpenAICompatBackend._execute is transport.BoundedHttpClient._execute
+
+
+# --------------------------------------------------------------------------
+# Cancellation wording (contract 7.3)
+# --------------------------------------------------------------------------
+
+def test_llama_cpp_may_say_cancelled_plainly():
+    """Measured: the slot freed within 4 s, so the hedge is not needed."""
+    from experimental.analyst.backends import BackendKind, cancellation_label
+
+    assert cancellation_label(BackendKind.OPENAI_COMPAT) == "cancelled"
+
+
+def test_ollama_keeps_its_hedged_wording():
+    """/api/ps is skewed by keep_alive and cannot prove a stop."""
+    from experimental.analyst.backends import BackendKind, cancellation_label
+
+    label = cancellation_label(BackendKind.OLLAMA)
+    assert label == "cancel requested; server completion unverified"
+
+
+# --------------------------------------------------------------------------
+# Leak scan: the reasoning channel never reaches an artifact
+# --------------------------------------------------------------------------
+
+def test_the_adapter_never_stores_reasoning_text_anywhere():
+    """Contract 7.4 and erratum E1. The parser must retain the fact only."""
+    secret = "VERBATIM ECHO OF SENSITIVE INPUT"
+    out = proto.parse_sse_stream([
+        _frame(choices=[{"index": 0, "finish_reason": "stop",
+                         "delta": {"reasoning_content": secret}}]),
+        "data: [DONE]",
+    ])
+    fields = {name: getattr(out, name) for name in out.__slots__}
+    for surface in (repr(out), str(out), json.dumps(fields, default=str)):
+        assert secret not in surface
+
+
+def test_reasoning_only_answers_are_a_configuration_failure():
+    """Never model_invalid, which would blame the model for our own bug."""
+    from experimental.analyst.backends.openai_api import OpenAICompatBackend
+
+    backend = OpenAICompatBackend(endpoint="http://127.0.0.1:9292")
+    request = build_chat_request("public", nonce=_NONCE)
+    raw = ("data: " + json.dumps({"choices": [{
+        "index": 0, "finish_reason": "stop",
+        "delta": {"reasoning_content": "echo"}}]}) + "\ndata: [DONE]\n").encode()
+    result = backend._result_from(raw, request)
+    assert result.status is OllamaStatus.CONFIGURATION_FAILURE
+    assert result.content is None
+
+
+def test_a_context_overflow_classifies_as_context_exceeded():
+    """Contract 5.4: never a transport failure, never model_invalid."""
+    from experimental.analyst.backends.openai_api import OpenAICompatBackend
+
+    class _Resp:
+        status_code = 400
+        headers = {"content-type": "application/json"}
+
+    backend = OpenAICompatBackend(endpoint="http://127.0.0.1:9292")
+    body = json.dumps({"error": {
+        "code": 400, "type": "exceed_context_size_error",
+        "n_prompt_tokens": 60012, "n_ctx": 32768}}).encode()
+    backend._read_all_status = lambda *a, **k: (body, None)
+    status = backend._classify_http_status(
+        _Resp(), proto and None, lambda: False, 0.0,
+    )
+    assert status is OllamaStatus.CONTEXT_EXCEEDED
+    assert backend._last_overflow.prompt_tokens == 60012
+
+
+def test_a_missing_token_reads_as_identity_mismatch_not_transport():
+    from experimental.analyst.backends.openai_api import OpenAICompatBackend
+
+    class _Resp:
+        status_code = 401
+        headers = {"content-type": "application/json"}
+
+    backend = OpenAICompatBackend(endpoint="http://127.0.0.1:9292")
+    backend._read_all_status = lambda *a, **k: (b"{}", None)
+    assert backend._classify_http_status(
+        _Resp(), None, lambda: False, 0.0,
+    ) is OllamaStatus.IDENTITY_MISMATCH

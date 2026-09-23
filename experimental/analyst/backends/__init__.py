@@ -15,6 +15,7 @@ from .base import (
     BackendKind,
     IdentityKind,
     ModelIdentity,
+    cancellation_label,
 )
 from .ollama import OllamaBackend
 from .openai_api import OpenAICompatBackend
@@ -56,5 +57,6 @@ __all__ = [
     "OpenAICompatBackend",
     "UNKNOWN_CONTEXT",
     "build_backend",
+    "cancellation_label",
     "supported_kinds",
 ]

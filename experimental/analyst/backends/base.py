@@ -40,6 +40,18 @@ class IdentityKind(str, Enum):
     REPORTED = "reported"
 
 
+def cancellation_label(kind: BackendKind) -> str:
+    """Return how honestly a cancellation may be described (contract 7.3).
+
+    Measured: killing the client freed the llama.cpp slot within 4 seconds, so
+    on that backend Analyst may say "cancelled" plainly. Ollama's /api/ps is
+    skewed by keep_alive and cannot prove a stop, so its hedged wording stands.
+    """
+    if kind is BackendKind.OPENAI_COMPAT:
+        return "cancelled"
+    return "cancel requested; server completion unverified"
+
+
 @dataclass(frozen=True, slots=True)
 class BackendCapabilities:
     """What one server will actually honour."""
@@ -153,4 +165,5 @@ __all__ = [
     "IdentityKind",
     "ModelIdentity",
     "UNKNOWN_CONTEXT",
+    "cancellation_label",
 ]
