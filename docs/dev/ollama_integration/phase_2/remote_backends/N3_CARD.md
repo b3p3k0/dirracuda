@@ -2,7 +2,7 @@
 
 - Branch: `feature/ollama-analyst`
 - Type: **code + docs.** Implemented by codex (DA) under Claude orchestration.
-- Status: **IMPLEMENTED 2026-09-23.** Awaiting the HI security review.
+- Status: **IMPLEMENTED 2026-09-23.** Scope accepted 2026-09-24 (D22). Awaiting the HI security review.
 - Contract: [`CONTRACT_REMOTE_BACKENDS.md`](CONTRACT_REMOTE_BACKENDS.md) §4.4, §9, §10, §11
 - Decisions: **D19** — §4.1-4.3 moved to N2b
 - **Security-critical. Flag the diff for HI review before merge.**
@@ -100,18 +100,29 @@ Three deviations, each taken deliberately:
    be widened in place, so `init_db` rebuilds `keymaster_keys` once when it finds the
    narrow form. Verified against a hand-built pre-`LLM_SERVER` sidecar.
 
-### Known gap, for the security review
+### Accepted limitation: no unattended token authentication (D22)
 
 **A worker subprocess cannot decrypt a Keymaster token.** Keymaster is passphrase-gated
-and caches session keys in the GUI process; the worker runs as a separate process and has
-no access to them. `resolve_bearer_token` therefore raises "Keymaster is locked" in a
-worker rather than silently connecting unauthenticated -- which is the safe failure, but
-it means an authenticated remote run cannot currently complete unattended.
+and caches session keys in the GUI process; the worker is detached (`start_new_session`),
+outlives the app, and has no access to them. `resolve_bearer_token` raises "Keymaster is
+locked" rather than silently connecting unauthenticated.
 
-Delivering the token to the subprocess safely is a design decision, not an implementation
-detail: an environment variable is visible in `ps`, a file on disk defeats the point of
-encrypting it, and a socket handshake is a new surface. **Deliberately left for the HI.**
-An unauthenticated private-range server under 4.2 is unaffected and works today.
+**This is accepted, not deferred.** Every delivery route carries a real cost -- an
+environment variable is readable through `/proc`, a file on disk defeats encrypting the
+token at rest, and a keyring or a socket handshake is new attack surface for one secret.
+`service.py:427` already refuses to pass even a *database path* by argv or environment,
+so a secret by that route would contradict a decision this code has already made.
+
+The feature is scoped instead: remote backends are for a model server the operator owns,
+on a network they control. Loopback works, and an acknowledged unauthenticated server on
+a private range works -- which is the case the feature was built for. A public plaintext
+endpoint is refused outright regardless.
+
+Documented for operators in `docs/ANALYST_GUIDE.md` under "What remote support is for",
+and summarised in `README.md`. If the token path is wanted later, the stdin pipe is the
+route to take: `stdin` is currently `DEVNULL`, so the channel is free, and the parent is
+alive at launch by construction. The work is mostly the passphrase prompt, plus a test
+proving the token never reaches the run log -- `stdout` and `stderr` both go to one.
 
 ## Acceptance
 

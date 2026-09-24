@@ -597,6 +597,10 @@ bearer token, or an explicit per-profile acknowledgement that is only accepted f
 private address ranges; a public plaintext endpoint is refused outright. Every remote run
 confirms before it sends anything, and the run view says which server it is using.
 
+Remote support is designed for a model server you own on a network you control, not for
+reaching somebody else's. Bearer-token authentication is not supported for unattended
+runs; see the Analyst guide for what is and is not covered.
+
 Start Dirracuda with `./dirracuda`, then open **Accessories → Analyst**. Fast mode scans
 every supported document with deterministic detectors and sends only flagged files to
 the model; Deep mode reviews every supported nonempty document. The optional automatic

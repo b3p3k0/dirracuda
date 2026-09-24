@@ -106,6 +106,36 @@ So a run records one of two identity kinds, and always says which:
 A reported identity is never displayed as verified anywhere. It is not a weaker
 version of a digest; it is a different claim, and the report says so.
 
+## What remote support is for
+
+Remote backends are built for **a model server you own, on a network you control** --
+a box under your desk, a machine in your rack, a host on your own Tailscale network.
+That is the case it was designed, tested and reasoned about.
+
+It is **not** built for reaching a model server run by somebody else, or one exposed to
+the open internet. Two things follow, and both are deliberate:
+
+- **A public plaintext endpoint is refused outright**, with no override. Analyst will not
+  send harvested file text to an arbitrary address in the clear, whatever you tick.
+- **Authenticated remote runs are not supported unattended.** A run executes in a
+  detached worker process that outlives the app, and that process cannot decrypt a
+  Keymaster-held bearer token. It fails with "Keymaster is locked" rather than quietly
+  connecting without the token. Getting a secret into a detached process safely is a
+  design problem in its own right, and it was left alone rather than solved badly.
+
+So the supported shapes today are:
+
+| Setup | Supported |
+| --- | --- |
+| Ollama or llama.cpp on this machine | Yes, and it needs no acknowledgement |
+| A server on your private LAN, Tailscale, or IPv6 ULA, no token | Yes, with an explicit per-profile acknowledgement |
+| An https server with a valid or pinned certificate, no token | Yes |
+| Anything needing a bearer token | Not unattended -- see above |
+| A public plaintext address | Refused, no override |
+
+If you need the token path, say so and it can be built. Until then, treat remote support
+as "my hardware, my network".
+
 ## Serving Analyst from a shared box
 
 Analyst can send work to a model server on another machine. That is the point of the
