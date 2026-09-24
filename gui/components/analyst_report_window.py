@@ -9,6 +9,7 @@ from tkinter import filedialog, ttk
 
 from experimental.analyst.report_json import (
     UNVERIFIED_NOTICE,
+    coverage_note,
     dumps_report,
     model_identity_label,
 )
@@ -275,7 +276,8 @@ class AnalystReportWindow:
 
         if self.window is not None:
             self.window.title(f"Report - {run['report_label']}")
-        self._status_var.set("")
+        # An empty report is not a swallowed error. Say which it is.
+        self._status_var.set(coverage_note(report))
         self._changed_var.set("changed since saved" if changed else "")
         self._risk_var.set(f"Risk: ● {read['risk_level']}")
         self._host_summary_var.set(str(read["host_summary"]))

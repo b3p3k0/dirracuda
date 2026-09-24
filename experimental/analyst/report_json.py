@@ -45,6 +45,46 @@ def model_identity_label(run: dict) -> str:
     return f"{tag} (reported by the server, not verified{server})"
 
 
+def coverage_note(report: dict) -> str:
+    """Explain an empty report in one line, or return "" when it has content.
+
+    A run whose source folder holds nothing readable completes normally and
+    writes a report with no findings in it. That looked like a swallowed
+    backend error. This says what actually happened, from the counts the
+    report already carries.
+    """
+    run = report.get("run")
+    coverage = report.get("coverage")
+    if type(run) is not dict or type(coverage) is not dict:
+        return ""
+    try:
+        if int(run.get("files_read", 0)) > 0:
+            return ""
+        discovered = int(coverage.get("discovered", 0))
+    except (TypeError, ValueError):
+        return ""
+    if discovered == 0:
+        return "No files were found under the source folder."
+    reasons = []
+    for key, text in (
+        ("unsupported", "unsupported format"),
+        ("no_text_layer", "no text layer"),
+        ("parse_failed", "could not be parsed"),
+    ):
+        try:
+            count = int(coverage.get(key, 0))
+        except (TypeError, ValueError):
+            continue
+        if count > 0:
+            reasons.append(f"{count} {text}")
+    detail = "; ".join(reasons) if reasons else "no readable text"
+    noun = "file" if discovered == 1 else "files"
+    return (
+        f"Nothing was sent to the model. {discovered} {noun} found and none "
+        f"could be read ({detail})."
+    )
+
+
 class ReportValidationError(ValueError):
     """A report value does not match the frozen versioned shape."""
 

@@ -153,6 +153,7 @@ class AnalystRunSummary:
     schedule_state: str
     resource_not_before_utc: str | None
     risk_level: str | None = None
+    completion_code: str | None = None
 
     def __post_init__(self) -> None:
         validate_worker_run_id(self.run_id)
@@ -183,6 +184,9 @@ class AnalystRunSummary:
             or self.model_reviewed_files > self.selected_files
             or self.schedule_state not in {"available", "backoff", "paused_resource"}
             or self.risk_level not in {None, "HIGH", "MED", "LOW"}
+            or self.completion_code not in {
+                None, "complete", "complete_no_supported_content", "abandoned",
+            }
             or (
                 self.resource_not_before_utc is not None
                 and type(self.resource_not_before_utc) is not str
@@ -203,6 +207,10 @@ class AnalystRunSummary:
 
     @property
     def result_label(self) -> str:
+        # A run whose source held nothing readable completes normally. Saying
+        # only "complete" made that look like a swallowed backend error.
+        if self.completion_code == "complete_no_supported_content":
+            return "nothing readable"
         if self.risk_level is not None:
             return f"● {self.risk_level} risk"
         if self.state in {
@@ -752,7 +760,8 @@ def list_run_summaries(
         try:
             rows = conn.execute(
                 "SELECT r.run_id,r.state,r.report_label,r.mode,r.created_at_utc,"
-                "r.updated_at_utc,s.state AS schedule_state,s.not_before_utc,"
+                "r.updated_at_utc,r.completion_code,"
+                "s.state AS schedule_state,s.not_before_utc,"
                 "rd.risk_level,"
                 "count(f.file_id) AS discovered_files,"
                 "sum(CASE WHEN f.work_state='terminal' THEN 1 ELSE 0 END) terminal_files,"
@@ -795,6 +804,10 @@ def list_run_summaries(
                 ),
                 risk_level=(
                     None if row["risk_level"] is None else str(row["risk_level"])
+                ),
+                completion_code=(
+                    None if row["completion_code"] is None
+                    else str(row["completion_code"])
                 ),
             )
             for row in rows
