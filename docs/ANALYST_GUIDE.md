@@ -108,12 +108,12 @@ version of a digest; it is a different claim, and the report says so.
 
 ## What remote support is for
 
-Remote backends are built for **a model server you own, on a network you control** --
-a box under your desk, a machine in your rack, a host on your own Tailscale network.
-That is the case it was designed, tested and reasoned about.
+Remote backends are intended to offload work from an operator's workstation to their
+server on their own network - it **IS NOT** intended to safely pass traffic on the open
+internet. If you intend to use this feature on a box that isn't physically on the same
+network, consider using a VPN like WireGuard or Tailscale, at a minimum.
 
-It is **not** built for reaching a model server run by somebody else, or one exposed to
-the open internet. Two things follow, and both are deliberate:
+Two things follow from that, and both are deliberate:
 
 - **A public plaintext endpoint is refused outright**, with no override. Analyst will not
   send harvested file text to an arbitrary address in the clear, whatever you tick.
