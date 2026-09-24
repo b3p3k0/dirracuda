@@ -11,7 +11,7 @@ import pytest
 from experimental.analyst import contact_contract as contacts
 from experimental.analyst import ollama_contract as contract
 from experimental.analyst.contact_contract import ContactKind
-from experimental.analyst.endpoint import RemoteNotEnabledError
+from experimental.analyst.endpoint import AddressPolicyError
 from experimental.analyst.ollama_client import OllamaClient
 from experimental.analyst.ollama_contract import (
     ContractError,
@@ -184,10 +184,16 @@ def test_client_defaults_to_loopback():
     assert OllamaClient().endpoint.base_url == contract.OLLAMA_ENDPOINT
 
 
-def test_client_refuses_construction_against_a_remote_endpoint():
-    """D17 fires before any socket work, at the client, not in the UI."""
-    with pytest.raises(RemoteNotEnabledError):
+def test_client_refuses_a_remote_endpoint_without_acknowledgement():
+    """Contract 4.2, enforced at the client rather than in the UI."""
+    with pytest.raises(AddressPolicyError):
         OllamaClient(endpoint=_OTHER)
+
+
+def test_client_accepts_an_acknowledged_private_endpoint():
+    assert OllamaClient(
+        endpoint=_OTHER, plaintext_ack=True,
+    ).endpoint.base_url == _OTHER
 
 
 def test_client_refuses_a_chat_request_built_for_another_endpoint():

@@ -1,9 +1,8 @@
 """Named model-server profiles on the Analyst sidecar database.
 
-N1 stores a profile for any endpoint.  It does not make a remote one reachable:
-``OllamaClient`` refuses a non-loopback connection under D17 until N3 writes the
-transport policy.  The columns TLS, Keymaster, and egress consent need are
-created here so those cards add behaviour rather than schema.
+A profile is stored for any endpoint. Whether it can be contacted is decided by
+the transport policy at connection time (contract 4.1-4.3), not here -- so a
+profile can be saved and corrected rather than rejected as you type it.
 """
 
 from __future__ import annotations
@@ -19,6 +18,7 @@ from .endpoint import (
     DEFAULT_HOST,
     DEFAULT_PORT,
     DEFAULT_SCHEME,
+    PRIVATE_CLASSES,
     AddressClass,
     Endpoint,
     parse_endpoint,
@@ -89,8 +89,30 @@ class ServerProfile:
 
     @property
     def is_reachable_now(self) -> bool:
-        """Return whether D17 currently permits contacting this profile."""
-        return self.is_loopback
+        """Return whether the transport policy permits contacting this profile.
+
+        Best effort without DNS: a hostname cannot be classified here, so it is
+        judged on its acknowledgement and re-checked for real at run start
+        (contract 4.3).
+        """
+        return not self.policy_note
+
+    @property
+    def policy_note(self) -> str:
+        """Return what still stands between this profile and a run, or ""."""
+        if self.is_loopback:
+            return ""
+        if self.scheme == "https":
+            return ""
+        if self.address_class is AddressClass.PUBLIC:
+            return "public address - refused"
+        if not self.plaintext_ack:
+            return "needs the plaintext acknowledgement"
+        if self.address_class is AddressClass.UNRESOLVED:
+            return ""
+        if self.address_class not in PRIVATE_CLASSES:
+            return f"{self.address_class.value} address - refused"
+        return ""
 
 
 def _now_utc() -> str:

@@ -637,7 +637,7 @@ class AnalystTab:
 
             if held:
                 if self._model_status_var is not None:
-                    self._model_status_var.set("Remote servers are not enabled yet.")
+                    self._model_status_var.set("That server is not permitted yet.")
                 safe_messagebox.showinfo(
                     "Analyst", analyst_profile_editor.REMOTE_HELD_NOTE,
                     parent=dialog,

@@ -5,9 +5,9 @@ It performs no network, database, or Tk I/O.  Name resolution and the full
 transport policy are N3 concerns; N1 classifies literal addresses only and
 reports a hostname as :attr:`AddressClass.UNRESOLVED`.
 
-D17: until N3 writes the transport policy, :func:`require_connectable` refuses
-any non-loopback endpoint.  The guard is called from the network client, not
-from the UI, so a script or a direct database write cannot bypass it.
+Transport policy (contract 4.1-4.3) lives in :func:`check_address_policy`.
+It is applied inside the network clients, not in the UI, so a script or a
+direct database write cannot bypass it.
 """
 
 from __future__ import annotations
@@ -51,10 +51,6 @@ _UNIQUE_LOCAL: Final = ipaddress.ip_network("fd00::/8")
 
 class EndpointError(ValueError):
     """A supplied endpoint is outside the N1 endpoint contract."""
-
-
-class RemoteNotEnabledError(EndpointError):
-    """D17: a non-loopback endpoint was reached before N3 enabled remote use."""
 
 
 class AddressClass(str, Enum):
@@ -299,22 +295,6 @@ def check_address_policy(
     return endpoint
 
 
-def require_connectable(value: object) -> Endpoint:
-    """Return the endpoint, or refuse it under D17.
-
-    N1 parameterises the endpoint but does not write the transport policy.
-    Until N3 lands, only a loopback endpoint may be contacted.  This guard is
-    the last step before the socket; it is deliberately not in the UI.
-    """
-    endpoint = parse_endpoint(value)
-    if not endpoint.is_loopback:
-        raise RemoteNotEnabledError(
-            f"Remote servers are not enabled yet. {endpoint.base_url} is not "
-            "loopback. Remote support arrives with the security card (N3)."
-        )
-    return endpoint
-
-
 __all__ = [
     "AddressClass",
     "AddressPolicyError",
@@ -329,7 +309,6 @@ __all__ = [
     "MAX_HOST_CHARS",
     "OllamaUrls",
     "PRIVATE_CLASSES",
-    "RemoteNotEnabledError",
     "check_address_policy",
     "classify_host",
     "is_loopback_endpoint",
@@ -337,5 +316,4 @@ __all__ = [
     "permits_plaintext",
     "ollama_urls",
     "parse_endpoint",
-    "require_connectable",
 ]

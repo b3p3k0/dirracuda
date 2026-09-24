@@ -22,7 +22,7 @@ from experimental.analyst.db_schema import (
     validate_schema,
     validate_migration_candidate,
 )
-from experimental.analyst.endpoint import RemoteNotEnabledError
+from experimental.analyst.endpoint import AddressPolicyError
 from experimental.analyst.ollama_client import OllamaClient
 from experimental.analyst.profiles import (
     DEFAULT_PROFILE_NAME,
@@ -359,15 +359,25 @@ def test_a_remote_profile_stores_but_reports_itself_unreachable(db: Path):
     profile = create_profile("mimir", _REMOTE, path=db)
     assert get_profile(profile.profile_id, path=db) is not None
     assert profile.is_loopback is False
+    # Reachable only once the operator acknowledges plaintext (contract 4.2).
     assert profile.is_reachable_now is False
+    assert profile.policy_note == "needs the plaintext acknowledgement"
     assert profile.address_class.value == "cgnat"
 
 
-def test_the_client_refuses_a_stored_remote_profile(db: Path):
+def test_the_client_refuses_an_unacknowledged_stored_profile(db: Path):
     """The guard is in the client, so a stored row cannot bypass it."""
     profile = create_profile("mimir", _REMOTE, path=db)
-    with pytest.raises(RemoteNotEnabledError):
+    with pytest.raises(AddressPolicyError):
         OllamaClient(endpoint=profile.endpoint_url)
+
+
+def test_an_acknowledged_profile_is_reachable(db: Path):
+    profile = create_profile(
+        "mimir-ack", "http://192.168.1.242:11434", plaintext_ack=True, path=db,
+    )
+    assert profile.is_reachable_now is True
+    assert profile.policy_note == ""
 
 
 def test_a_loopback_profile_is_reachable(db: Path):
@@ -380,14 +390,14 @@ def test_a_loopback_profile_is_reachable(db: Path):
 # The service surfaces D17 honestly and leaves no dangling contact
 # --------------------------------------------------------------------------
 
-def test_discover_models_against_a_remote_endpoint_raises_and_closes_the_contact(
+def test_discover_models_against_a_refused_endpoint_closes_the_contact(
     tmp_path: Path,
 ):
-    """Acceptance 7: the refusal comes from the client, not the UI."""
+    """The refusal comes from the client, not the UI."""
     from experimental.analyst import service
 
     path = tmp_path / "analyst.db"
-    with pytest.raises(RemoteNotEnabledError):
+    with pytest.raises(AddressPolicyError):
         service.discover_models(endpoint=_REMOTE, path=path)
 
     conn = open_connection(path, read_only=True)
@@ -402,7 +412,9 @@ def test_discover_models_against_a_remote_endpoint_raises_and_closes_the_contact
     assert rows[0]["state"] != "dispatching", "the charge must be closed out"
 
 
-def test_discover_models_does_not_collapse_d17_into_a_service_error(tmp_path: Path):
+def test_discover_models_does_not_collapse_a_refusal_into_a_service_error(
+    tmp_path: Path,
+):
     """A generic AnalystServiceError would read as 'the server is down'."""
     from experimental.analyst.service import AnalystServiceError
 
@@ -412,9 +424,9 @@ def test_discover_models_does_not_collapse_d17_into_a_service_error(tmp_path: Pa
             "experimental.analyst.service", fromlist=["discover_models"]
         ).discover_models(endpoint=_REMOTE, path=path)
     except AnalystServiceError:  # pragma: no cover - would be the bug
-        pytest.fail("D17 was reported as a generic discovery failure")
-    except RemoteNotEnabledError as exc:
-        assert "not enabled yet" in str(exc)
+        pytest.fail("the refusal was reported as a generic discovery failure")
+    except AddressPolicyError as exc:
+        assert "plaintext" in str(exc) or "refuses" in str(exc)
 
 
 def test_discover_models_persists_per_endpoint(tmp_path: Path, monkeypatch):

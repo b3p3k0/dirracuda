@@ -6,9 +6,9 @@ reverse.  Messageboxes route through ``_mb()`` so test monkeypatches on the
 ``analyst_tab`` namespace still intercept, following the dispatch discipline in
 ``CLAUDE.md``.
 
-D17: a non-loopback profile saves normally but cannot be contacted until N3
-writes the transport policy.  The editor says so plainly rather than letting a
-run fail later.
+A profile is saved whatever its address, but the transport policy decides
+whether it can be contacted (contract 4.1-4.3). The editor says what is still
+missing rather than letting a run fail later.
 """
 
 from __future__ import annotations
@@ -22,8 +22,8 @@ from gui.utils.style import get_theme
 
 
 REMOTE_HELD_NOTE = (
-    "Saved, but not usable yet. Remote servers arrive with the security "
-    "card (N3). Only a loopback profile can run today."
+    "Saved, but not usable yet: tick 'Allow plaintext to this private address' "
+    "on the profile, or use https. A public address is refused outright."
 )
 
 _ADDRESS_LABELS = {
@@ -54,7 +54,7 @@ def _profiles():
 def describe_profile(profile) -> str:
     """Return one list row for a profile, with its address class spelled out."""
     where = _ADDRESS_LABELS.get(profile.address_class.value, "Unknown")
-    held = "" if profile.is_reachable_now else "  — held until N3"
+    held = "" if profile.is_reachable_now else f"  — {profile.policy_note}"
     return f"{profile.name}  ({profile.endpoint_url})  [{where}]{held}"
 
 
@@ -98,7 +98,10 @@ class ProfileEditorDialog:
 
         heading = tk.Label(
             outer,
-            text="Model servers Analyst can use. Only loopback runs today.",
+            text=(
+                "Model servers Analyst can use. Anything off this machine "
+                "needs https, or the plaintext acknowledgement."
+            ),
         )
         self._theme.apply_to_widget(heading, "label")
         heading.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
@@ -199,6 +202,7 @@ class ProfileEditorDialog:
                 values["name"],
                 values["endpoint"],
                 backend_kind=values["backend_kind"],
+                plaintext_ack=values["plaintext_ack"],
                 path=self._db_path,
             )
         except Exception as exc:
@@ -227,6 +231,7 @@ class ProfileEditorDialog:
                 profile.profile_id,
                 name=values["name"],
                 backend_kind=values["backend_kind"],
+                plaintext_ack=values["plaintext_ack"],
                 endpoint=values["endpoint"],
                 path=self._db_path,
             )
@@ -300,6 +305,9 @@ class _ProfileFormDialog:
         self._backend_var = tk.StringVar(
             value="ollama" if profile is None else profile.backend_kind.value
         )
+        self._ack_var = tk.BooleanVar(
+            value=False if profile is None else bool(profile.plaintext_ack)
+        )
 
         self._build()
         self._dialog.grab_set()
@@ -344,21 +352,31 @@ class _ProfileFormDialog:
         )
         backend.grid(row=4, column=1, sticky="w", padx=(8, 0), pady=4)
 
+        # Contract 4.2: plaintext off this machine is opt-in, per profile, and
+        # is only ever accepted for a private address.
+        ack = tk.Checkbutton(
+            outer,
+            text="Allow plaintext to this private address",
+            variable=self._ack_var,
+        )
+        self._theme.apply_to_widget(ack, "checkbox")
+        ack.grid(row=5, column=0, columnspan=2, sticky="w", pady=(6, 0))
+
         note = tk.Label(
             outer,
             text=(
-                "Only a loopback host (127.0.0.1 or localhost) can run today. "
-                "Anything else saves but stays held until N3."
+                "A server on this machine needs nothing else. Anywhere else "
+                "needs https, or the acknowledgement below."
             ),
             wraplength=380,
             justify=tk.LEFT,
         )
         self._theme.apply_to_widget(note, "label")
-        note.grid(row=5, column=0, columnspan=2, sticky="w", pady=(10, 8))
+        note.grid(row=6, column=0, columnspan=2, sticky="w", pady=(10, 8))
 
         buttons = tk.Frame(outer)
         self._theme.apply_to_widget(buttons, "main_window")
-        buttons.grid(row=6, column=0, columnspan=2, sticky="e")
+        buttons.grid(row=7, column=0, columnspan=2, sticky="e")
         save = tk.Button(buttons, text="Save", command=self._save)
         self._theme.apply_to_widget(save, "button_primary")
         save.pack(side=tk.LEFT, padx=(0, 7))
@@ -390,6 +408,7 @@ class _ProfileFormDialog:
             "name": name,
             "endpoint": endpoint.base_url,
             "backend_kind": self._backend_var.get(),
+            "plaintext_ack": bool(self._ack_var.get()),
         }
         self._close()
 
@@ -473,7 +492,7 @@ def selected_endpoint(tab) -> str:
 
 
 def profile_selected(tab, _event=None) -> None:
-    """Show the D17 note when the chosen profile cannot be contacted yet."""
+    """Show what is missing when the chosen profile cannot be contacted."""
     profile = selected_profile(tab)
     if profile is None or profile.is_reachable_now:
         tab._profile_note_var.set("")
@@ -538,7 +557,7 @@ def discover_models(tab) -> None:
 
                 choices = _discover(endpoint=endpoint)
         except Exception as exc:
-            held = type(exc).__name__ == "RemoteNotEnabledError"
+            held = type(exc).__name__ == "AddressPolicyError"
             tab._schedule(
                 lambda: tab._finish_model_discovery(
                     dialog, None, preferred_tag, held=held,

@@ -23,7 +23,7 @@ from .manifest import ExtractionManifest, ManifestError, load_extraction_manifes
 from .models import ANALYST_DEFAULTS
 from .contact_contract import ContactStatus
 from .ollama_client import OllamaClient, OllamaDiscoveryError
-from .endpoint import RemoteNotEnabledError, normalize_endpoint
+from .endpoint import AddressPolicyError, normalize_endpoint
 from .ollama_contract import (
     MAX_JSON_NODES,
     OLLAMA_ENDPOINT,
@@ -222,8 +222,9 @@ def discover_models(
 ) -> tuple[DiscoveredModel, ...]:
     """Explicitly discover, charge, and persist bounded model identities.
 
-    ``endpoint`` selects the server.  D17 is enforced inside ``OllamaClient``;
-    a non-loopback endpoint raises ``RemoteNotEnabledError`` before any socket
+    ``endpoint`` selects the server. The address policy is enforced inside
+    ``OllamaClient``:
+    a refused endpoint raises ``AddressPolicyError`` before any socket
     work, and the caller surfaces that verbatim rather than as a transport
     failure.
     """
@@ -239,7 +240,7 @@ def discover_models(
 
     try:
         discovered = OllamaClient(endpoint=resolved).list_models()
-    except RemoteNotEnabledError:
+    except AddressPolicyError:
         _finish_failed_discovery(
             charge.contact_id, OllamaStatus.TRANSPORT_UNAVAILABLE, path=path,
         )
@@ -292,7 +293,7 @@ def discover_reported_models(
     backend = OpenAICompatBackend(endpoint=resolved, plaintext_ack=plaintext_ack)
     try:
         return tuple(m.model_id for m in backend.list_models())
-    except RemoteNotEnabledError:
+    except AddressPolicyError:
         raise
     except Exception:
         raise AnalystServiceError(ServiceFailure.DISCOVERY) from None

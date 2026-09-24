@@ -4,9 +4,8 @@ The client owns HTTP and cancellation only. It never reads or writes Analyst's
 database, logs prompt/model text, or decides durable retry state.
 
 N1: the endpoint is supplied per client instead of being a module constant.
-D17: until N3 writes the transport policy, construction refuses any non-loopback
-endpoint.  That guard lives here, the last step before the socket, so a script or
-a direct database write cannot bypass it.
+The transport policy (contract 4.1-4.3) is applied at construction, the last
+step before the socket, so a script or a direct database write cannot bypass it.
 """
 
 from __future__ import annotations
@@ -14,7 +13,7 @@ from __future__ import annotations
 import hmac
 from typing import Any, Callable
 
-from .endpoint import DEFAULT_ENDPOINT, Endpoint, require_connectable
+from .endpoint import DEFAULT_ENDPOINT, Endpoint
 from .ollama_contract import (
     EXPECTED_IDENTITY,
     MAX_BODY_BYTES,
@@ -36,6 +35,7 @@ from .ollama_contract import (
 )
 from .transport import (
     GLOBAL_REQUEST_SLOT,
+    require_permitted,
     TIMEOUT_EXCEPTIONS,
     TRANSPORT_EXCEPTIONS,
     BoundedHttpClient,
@@ -86,10 +86,11 @@ class OllamaClient(BoundedHttpClient):
         self,
         *,
         endpoint: str | Endpoint = DEFAULT_ENDPOINT,
+        plaintext_ack: bool = False,
         **kwargs: Any,
     ) -> None:
-        # D17: refuse a non-loopback endpoint before any socket work happens.
-        self._endpoint = require_connectable(endpoint)
+        # Contract 4.1-4.3, applied before any socket work happens.
+        self._endpoint = require_permitted(endpoint, plaintext_ack=plaintext_ack)
         self._urls = self._endpoint.urls()
         super().__init__(**kwargs)
 

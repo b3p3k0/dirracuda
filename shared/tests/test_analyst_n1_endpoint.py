@@ -13,13 +13,11 @@ from experimental.analyst.endpoint import (
     AddressClass,
     Endpoint,
     EndpointError,
-    RemoteNotEnabledError,
     classify_host,
     is_loopback_endpoint,
     normalize_endpoint,
     ollama_urls,
     parse_endpoint,
-    require_connectable,
 )
 
 
@@ -176,49 +174,6 @@ def test_urls_follow_a_supplied_endpoint():
 
 def test_endpoint_urls_helper_agrees_with_module_function():
     assert LOOPBACK_ENDPOINT.urls() == ollama_urls(DEFAULT_ENDPOINT)
-
-
-# --------------------------------------------------------------------------
-# D17 guard
-# --------------------------------------------------------------------------
-
-@pytest.mark.parametrize(
-    "value",
-    ["http://127.0.0.1:11434", "http://localhost:11434", "http://[::1]:11434"],
-)
-def test_require_connectable_allows_loopback(value):
-    assert require_connectable(value).is_loopback
-
-
-@pytest.mark.parametrize(
-    "value",
-    [
-        "http://100.125.197.36:9292",
-        "http://192.168.1.242:11434",
-        "https://mimir:9292",
-        "http://8.8.8.8:11434",
-    ],
-)
-def test_require_connectable_refuses_every_non_loopback_endpoint(value):
-    with pytest.raises(RemoteNotEnabledError):
-        require_connectable(value)
-
-
-def test_remote_refusal_is_not_a_generic_endpoint_error_message():
-    """D17 wants an explicit result, not something that reads as transport."""
-    with pytest.raises(RemoteNotEnabledError) as excinfo:
-        require_connectable("http://mimir:9292")
-    assert "not enabled yet" in str(excinfo.value)
-    assert "mimir" in str(excinfo.value)
-
-
-def test_remote_not_enabled_is_an_endpoint_error():
-    assert issubclass(RemoteNotEnabledError, EndpointError)
-
-
-def test_is_loopback_endpoint_is_false_for_garbage_not_raising():
-    assert is_loopback_endpoint("not-an-endpoint") is False
-    assert is_loopback_endpoint(DEFAULT_ENDPOINT) is True
 
 
 # --------------------------------------------------------------------------

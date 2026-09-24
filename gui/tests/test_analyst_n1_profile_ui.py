@@ -87,12 +87,20 @@ def test_describe_loopback_profile_has_no_held_marker(db):
     assert "held until N3" not in text
 
 
-def test_describe_remote_profile_is_marked_held(db):
+def test_describe_unacknowledged_profile_says_what_is_missing(db):
     profile = profile_store.create_profile("mimir", _REMOTE, path=db)
     text = editor.describe_profile(profile)
     assert "mimir" in text
     assert "Tailscale / CGNAT" in text
-    assert "held until N3" in text
+    assert "needs the plaintext acknowledgement" in text
+
+
+def test_describe_an_acknowledged_profile_is_not_marked(db):
+    profile = profile_store.create_profile(
+        "mimir-ack", "http://192.168.1.242:11434", plaintext_ack=True, path=db,
+    )
+    text = editor.describe_profile(profile)
+    assert "needs the" not in text
 
 
 def test_describe_labels_each_address_class(db):
@@ -296,6 +304,7 @@ def test_profile_form_rejects_a_malformed_port(db, monkeypatch):
         form._host_var = tk.StringVar(value="127.0.0.1")
         form._port_var = tk.StringVar(value="99999")
         form._backend_var = tk.StringVar(value="ollama")
+        form._ack_var = tk.BooleanVar(value=False)
         form._save()
         assert form.result is None
         assert errors and "not usable" in errors[0]
@@ -316,11 +325,13 @@ def test_profile_form_saves_a_valid_remote_address(db):
         form._host_var = tk.StringVar(value="100.125.197.36")
         form._port_var = tk.StringVar(value="9292")
         form._backend_var = tk.StringVar(value="openai")
+        form._ack_var = tk.BooleanVar(value=True)
         form._save()
         assert form.result == {
             "name": "mimir",
             "endpoint": _REMOTE,
             "backend_kind": "openai",
+            "plaintext_ack": True,
         }
         assert BackendKind(form.result["backend_kind"]) is BackendKind.OPENAI_COMPAT
     finally:
