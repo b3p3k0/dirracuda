@@ -179,3 +179,168 @@ def test_a_digest_model_still_round_trips():
         })
     )
     assert loaded == ("qwen3.6:27b", "a" * 64)
+
+
+# --------------------------------------------------------------------------
+# The selector widget dies with the dialog; the choice must not die with it
+# --------------------------------------------------------------------------
+
+class _Settings:
+    def __init__(self, values=None):
+        self.values = dict(values or {})
+
+    def get_setting(self, key, default=None):
+        return self.values.get(key, default)
+
+    def set_setting(self, key, value):
+        self.values[key] = value
+
+
+class _DeadCombo(_Combo):
+    """A combobox whose window is gone, as after the dialog is destroyed."""
+
+    def current(self, index=None):
+        raise RuntimeError('invalid command name ".!combobox"')
+
+
+def test_a_destroyed_selector_does_not_fall_back_to_the_first_profile(db: Path):
+    """The exact launch bug: Analyze ran against Ollama after saving mimir."""
+    profile_store.ensure_default_profile(path=db)
+    mimir = profile_store.create_profile(
+        "mimir", _MIMIR, backend_kind="openai", plaintext_ack=True, path=db,
+    )
+    tab = _Tab()
+    tab._context = {"settings_manager": _Settings(
+        {"analyst.selected_profile_id": mimir.profile_id}
+    )}
+    editor.refresh_profile_choices(tab, select_id=mimir.profile_id)
+
+    tab._profile_combo = _DeadCombo()
+    assert editor.selected_profile(tab).name == "mimir"
+
+    tab._profile_combo = None
+    assert editor.selected_profile(tab).name == "mimir"
+    assert editor.selected_endpoint(tab) == _MIMIR
+
+
+def test_a_launch_before_the_dialog_opens_still_finds_the_saved_server(db: Path):
+    profile_store.ensure_default_profile(path=db)
+    mimir = profile_store.create_profile(
+        "mimir", _MIMIR, backend_kind="openai", plaintext_ack=True, path=db,
+    )
+    tab = _Tab()
+    tab._profile_combo = None
+    tab._context = {"settings_manager": _Settings(
+        {"analyst.selected_profile_id": mimir.profile_id}
+    )}
+    assert editor.selected_profile(tab).name == "mimir"
+
+
+def test_a_failed_store_read_is_not_retried_behind_the_tab(monkeypatch):
+    """refresh_profile_choices already tried. Do not go back to the real DB."""
+    tab = _Tab()
+    tab._context = {"settings_manager": _Settings()}
+    monkeypatch.setattr(
+        profile_store, "ensure_default_profile",
+        lambda **k: (_ for _ in ()).throw(RuntimeError("no db")),
+    )
+    monkeypatch.setattr(
+        profile_store, "list_profiles",
+        lambda **k: pytest.fail("the store must not be read a second time"),
+    )
+    editor.refresh_profile_choices(tab)
+    assert editor.selected_profile(tab) is None
+
+
+# --------------------------------------------------------------------------
+# A reported catalogue is never persisted, so the tab must hold onto it
+# --------------------------------------------------------------------------
+
+@pytest.fixture
+def gui(monkeypatch):
+    import tkinter as tk
+
+    from gui.components.experimental_features import analyst_tab as module
+
+    monkeypatch.setattr(module.AnalystTab, "_refresh_runs", lambda _self: None)
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        yield module, root
+    finally:
+        root.destroy()
+
+
+def _click(widget, text):
+    import tkinter as tk
+
+    for child in widget.winfo_children():
+        if isinstance(child, tk.Button) and child.cget("text") == text:
+            child.invoke()
+            return True
+        if _click(child, text):
+            return True
+    return False
+
+
+@pytest.mark.gui_smoke
+def test_reopening_keeps_the_model_list_the_server_reported(
+    gui, db: Path, monkeypatch,
+) -> None:
+    module, root = gui
+    mimir = profile_store.create_profile(
+        "mimir", _MIMIR, backend_kind="openai", plaintext_ack=True, path=db,
+    )
+    settings = _Settings({"analyst.selected_profile_id": mimir.profile_id})
+    listed = []
+    monkeypatch.setattr(
+        "experimental.analyst.service.list_discovered_models",
+        lambda **kwargs: listed.append(kwargs) or (),
+    )
+    tab = module.AnalystTab(root, {"settings_manager": settings})
+
+    tab._open_advanced()
+    reported = (editor.ReportedModel("a-8b"), editor.ReportedModel("b-70b"))
+    tab._finish_model_discovery(tab._advanced_dialog, reported, None)
+    assert tuple(tab._model_combo.cget("values")) == ("a-8b", "b-70b")
+    assert _click(tab._advanced_dialog, "Save")
+
+    tab._open_advanced()
+    assert tuple(tab._model_combo.cget("values")) == ("a-8b", "b-70b")
+    assert listed == [{"endpoint": _MIMIR}]
+    assert _click(tab._advanced_dialog, "Cancel")
+
+
+@pytest.mark.gui_smoke
+def test_after_saving_the_dialog_a_launch_targets_the_chosen_server(
+    gui, db: Path, monkeypatch,
+) -> None:
+    """The reported blocker: Analyze said the model did not match the server."""
+    module, root = gui
+    profile_store.ensure_default_profile(path=db)
+    mimir = profile_store.create_profile(
+        "mimir", _MIMIR, backend_kind="openai", plaintext_ack=True, path=db,
+    )
+    settings = _Settings()
+    monkeypatch.setattr(
+        "experimental.analyst.service.list_discovered_models",
+        lambda **kwargs: (),
+    )
+    tab = module.AnalystTab(root, {"settings_manager": settings})
+
+    tab._open_advanced()
+    labels = list(tab._profile_combo.cget("values"))
+    index = next(i for i, text in enumerate(labels) if "mimir" in text)
+    tab._profile_combo.current(index)
+    tab._profile_selected()
+    tab._finish_model_discovery(
+        tab._advanced_dialog, (editor.ReportedModel("gpt-oss-120b"),), None,
+    )
+    assert _click(tab._advanced_dialog, "Save")
+
+    assert tab._advanced_dialog is None
+    assert tab._selected_backend_kind() == "openai"
+    assert tab._selected_endpoint() == _MIMIR
+    assert tab._selected_model_tag == "gpt-oss-120b"
+    assert tab._selected_model_digest is None
+    assert settings.values["analyst.selected_profile_id"] == mimir.profile_id

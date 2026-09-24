@@ -445,6 +445,7 @@ def refresh_profile_choices(tab, *, select_id: int | None = None) -> None:
         tab._profile_choices = profile_store.list_profiles()
     except Exception:
         tab._profile_choices = ()
+    tab._profile_choices_loaded = True
     combo = tab._profile_combo
     labels = [describe_profile_short(profile) for profile in tab._profile_choices]
     if combo is not None:
@@ -471,7 +472,14 @@ def refresh_profile_choices(tab, *, select_id: int | None = None) -> None:
 
 
 def selected_profile(tab):
-    """Return the tab's chosen profile, or None when none is stored."""
+    """Return the tab's chosen profile, or None when none is stored.
+
+    The selector widget belongs to the advanced dialog and dies with it. A
+    launch happens after that dialog has closed, so the widget cannot be the
+    only record of the choice: reading a destroyed combobox raised, fell back
+    to the first profile -- the loopback Ollama -- and ran a llama.cpp model
+    against it. The saved profile id is the record that outlives the widget.
+    """
     combo = tab._profile_combo
     if combo is not None:
         try:
@@ -480,7 +488,21 @@ def selected_profile(tab):
             index = -1
         if 0 <= index < len(tab._profile_choices):
             return tab._profile_choices[index]
-    return tab._profile_choices[0] if tab._profile_choices else None
+    choices = tab._profile_choices
+    if not choices and not getattr(tab, "_profile_choices_loaded", False):
+        # The dialog has never been opened, so nothing has loaded the list.
+        try:
+            choices = _profiles().list_profiles()
+        except Exception:
+            choices = ()
+        tab._profile_choices = choices
+        tab._profile_choices_loaded = True
+    wanted = saved_profile_id(tab)
+    if wanted is not None:
+        for profile in choices:
+            if profile.profile_id == wanted:
+                return profile
+    return choices[0] if choices else None
 
 
 def selected_endpoint(tab) -> str:
@@ -664,7 +686,8 @@ def load_selected_model(settings_manager) -> tuple[str | None, str | None]:
 
 def saved_profile_id(tab) -> int | None:
     """Return the profile this tab last ran against, if it still exists."""
-    settings_manager = tab._context.get("settings_manager")
+    context = getattr(tab, "_context", None)
+    settings_manager = None if context is None else context.get("settings_manager")
     if settings_manager is None:
         return None
     try:

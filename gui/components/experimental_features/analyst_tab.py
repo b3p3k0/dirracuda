@@ -122,6 +122,7 @@ class AnalystTab:
         self._manifest_choices = []
         self._manifest_index = -1
         self._model_choices = []
+        self._model_profile_id = None
         self._model_combo = None
         self._model_connect_btn = None
         self._model_status_var = None
@@ -487,14 +488,23 @@ class AnalystTab:
             row=9, column=0, columnspan=3, sticky="w", pady=(1, 3),
         )
 
-        try:
-            from experimental.analyst.service import list_discovered_models
+        # A reported catalogue is never persisted (erratum E19), so reopening
+        # this dialog would show only the saved tag. Keep the list the server
+        # last reported until the operator refreshes it.
+        profile = self._selected_profile()
+        profile_id = None if profile is None else profile.profile_id
+        if self._model_choices and self._model_profile_id == profile_id:
+            model_choices = tuple(self._model_choices)
+        else:
+            try:
+                from experimental.analyst.service import list_discovered_models
 
-            model_choices = list_discovered_models(
-                endpoint=self._selected_endpoint(),
-            )
-        except Exception:
-            model_choices = ()
+                model_choices = list_discovered_models(
+                    endpoint=self._selected_endpoint(),
+                )
+            except Exception:
+                model_choices = ()
+        self._model_profile_id = profile_id
         self._populate_model_choices(model_choices)
 
         offer = tk.Checkbutton(
@@ -525,6 +535,7 @@ class AnalystTab:
                 self._selected_model_digest = snapshot["model_digest"]
                 self._model_var.set(snapshot["model_tag"] or "")
             self._advanced_dialog = None
+            self._profile_combo = None
             self._manifest_combo = None
             self._manifest_refresh_btn = None
             self._model_combo = None
@@ -657,6 +668,8 @@ class AnalystTab:
                 parent=dialog,
             )
             return
+        profile = self._selected_profile()
+        self._model_profile_id = None if profile is None else profile.profile_id
         self._populate_model_choices(choices, preferred_tag=preferred_tag)
 
 
