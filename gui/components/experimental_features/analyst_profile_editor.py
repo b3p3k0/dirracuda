@@ -500,6 +500,35 @@ def profile_selected(tab, _event=None) -> None:
         tab._profile_note_var.set(REMOTE_HELD_NOTE)
 
 
+def clear_model_if_server_changed(tab) -> None:
+    """Drop a selected model that came from a different server.
+
+    A model name only means something on the server that listed it. Keeping one
+    across a profile change let a llama.cpp model be launched as though it were
+    a digest-pinned Ollama model, which fails deep in run creation with a
+    misleading message.
+    """
+    profile = selected_profile(tab)
+    current = None if profile is None else profile.profile_id
+    previous = getattr(tab, "_model_profile_id", None)
+    tab._model_profile_id = current
+    if previous is None or previous == current:
+        return
+    tab._model_choices = []
+    tab._selected_model_tag = None
+    tab._selected_model_digest = None
+    tab._model_var.set("")
+    combo = getattr(tab, "_model_combo", None)
+    if combo is not None:
+        try:
+            combo.configure(values=())
+        except Exception:
+            pass
+    status = getattr(tab, "_model_status_var", None)
+    if status is not None:
+        status.set("Server changed. Connect / Refresh to list its models.")
+
+
 def manage_profiles(tab) -> None:
     """Open the editor over the advanced dialog and reload the selector."""
     dialog = tab._advanced_dialog
@@ -571,12 +600,90 @@ def discover_models(tab) -> None:
     threading.Thread(target=work, daemon=True).start()
 
 
+def persist_model_selection(tab) -> None:
+    """Save the chosen model and the server it came from."""
+    selected_tag = None
+    selected_digest = None
+    combo = tab._model_combo
+    if combo is not None:
+        index = combo.current()
+        if 0 <= index < len(tab._model_choices):
+            choice = tab._model_choices[index]
+            selected_tag = choice.model_tag
+            selected_digest = choice.model_digest
+        elif (
+            not tab._model_choices
+            and tab._selected_model_tag is not None
+            and tab._model_var.get() == tab._selected_model_tag
+        ):
+            selected_tag = tab._selected_model_tag
+            selected_digest = tab._selected_model_digest
+    tab._selected_model_tag = selected_tag
+    tab._selected_model_digest = selected_digest
+
+    settings_manager = tab._context.get("settings_manager")
+    if settings_manager is None:
+        return
+    try:
+        settings_manager.set_setting(
+            "analyst.selected_model_tag", selected_tag,
+        )
+        settings_manager.set_setting(
+            "analyst.selected_model_digest", selected_digest,
+        )
+        # The server the model came from. Without this the selector reverts
+        # to the first profile on reopen, and a reported model then looks
+        # like a digest model with a missing digest.
+        profile = selected_profile(tab)
+        settings_manager.set_setting(
+            "analyst.selected_profile_id",
+            None if profile is None else profile.profile_id,
+        )
+    except Exception:
+        pass
+
+def load_selected_model(settings_manager) -> tuple[str | None, str | None]:
+    if settings_manager is None:
+        return None, None
+    try:
+        tag = settings_manager.get_setting(
+            "analyst.selected_model_tag", None,
+        )
+        digest = settings_manager.get_setting(
+            "analyst.selected_model_digest", None,
+        )
+    except Exception:
+        return None, None
+    if type(tag) is not str or not tag:
+        return None, None
+    # A reported model has no digest. Requiring one here silently dropped
+    # every llama.cpp selection on reopen.
+    if type(digest) is not str or not digest:
+        return tag, None
+    return tag, digest
+
+def saved_profile_id(tab) -> int | None:
+    """Return the profile this tab last ran against, if it still exists."""
+    settings_manager = tab._context.get("settings_manager")
+    if settings_manager is None:
+        return None
+    try:
+        value = settings_manager.get_setting("analyst.selected_profile_id", None)
+    except Exception:
+        return None
+    return value if type(value) is int and value > 0 else None
+
+
 __all__ = [
     "REMOTE_HELD_NOTE",
     "ProfileEditorDialog",
     "ReportedModel",
     "describe_profile",
+    "clear_model_if_server_changed",
     "describe_profile_short",
+    "load_selected_model",
+    "persist_model_selection",
+    "saved_profile_id",
     "discover_models",
     "manage_profiles",
     "open_profile_editor",

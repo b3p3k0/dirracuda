@@ -74,6 +74,7 @@ class ServiceFailure(str, Enum):
     DELETE = "delete"
     REPORT = "report"
     DISCOVERY = "discovery"
+    MODEL_IDENTITY = "model_identity"
 
 
 class AnalystServiceError(RuntimeError):
@@ -349,7 +350,9 @@ def create_directory_run(
             selected_identity_kind,
         ) = _run_model_identity(model_tag, model_digest, identity_kind)
     except (TypeError, ValueError):
-        raise AnalystServiceError(ServiceFailure.CONTRACT) from None
+        # Not a directory problem. Reported separately so the operator is not
+        # sent looking at their folders.
+        raise AnalystServiceError(ServiceFailure.MODEL_IDENTITY) from None
     try:
         selected_output = _selected_output_base(request.output_base)
         _require_existing_directory(selected_output)
@@ -536,7 +539,9 @@ def create_manifest_run(
             selected_identity_kind,
         ) = _run_model_identity(model_tag, model_digest, identity_kind)
     except (TypeError, ValueError):
-        raise AnalystServiceError(ServiceFailure.CONTRACT) from None
+        # Not a directory problem. Reported separately so the operator is not
+        # sent looking at their folders.
+        raise AnalystServiceError(ServiceFailure.MODEL_IDENTITY) from None
     try:
         from .worker_preflight import (
             current_detector_rules,

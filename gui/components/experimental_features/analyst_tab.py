@@ -31,6 +31,10 @@ def _editor():
 
 _CREATE_FAILURE_MESSAGES = {
     "contract": "The source or output directory is not supported by Analyst.",
+    "model_identity": (
+        "The selected model does not match the selected server. Pick the "
+        "server first, then Connect / Refresh and choose a model from it."
+    ),
     "output_invalid": (
         "Output folder must be an existing local directory (not a symlink)."
     ),
@@ -439,7 +443,7 @@ class AnalystTab:
         )
         self._theme.apply_to_widget(profile_note, "label")
         profile_note.grid(row=5, column=0, columnspan=3, sticky="w", pady=(0, 3))
-        self._refresh_profile_choices()
+        self._refresh_profile_choices(select_id=self._saved_profile_id())
 
         model_heading = tk.Label(outer, text="Model")
         self._theme.apply_to_widget(model_heading, "label")
@@ -544,22 +548,20 @@ class AnalystTab:
         self._refresh_manifest_choices()
         ensure_dialog_focus(dialog, parent)
 
+    def _persist_model_selection(self) -> None:
+        """Save the chosen model and the server it came from."""
+        _editor().persist_model_selection(self)
+
     @staticmethod
-    def _load_selected_model(settings_manager) -> tuple[str | None, str | None]:
-        if settings_manager is None:
-            return None, None
-        try:
-            tag = settings_manager.get_setting(
-                "analyst.selected_model_tag", None,
-            )
-            digest = settings_manager.get_setting(
-                "analyst.selected_model_digest", None,
-            )
-        except Exception:
-            return None, None
-        if type(tag) is not str or not tag or type(digest) is not str or not digest:
-            return None, None
-        return tag, digest
+    def _load_selected_model(settings_manager):
+        """Return the saved (model_tag, model_digest); digest may be None."""
+        from gui.components.experimental_features import analyst_profile_editor
+
+        return analyst_profile_editor.load_selected_model(settings_manager)
+
+    def _saved_profile_id(self) -> int | None:
+        """Return the profile this tab last ran against, if it still exists."""
+        return _editor().saved_profile_id(self)
 
     def _populate_model_choices(self, choices, *, preferred_tag=None) -> None:
         self._model_choices = list(choices)
@@ -605,9 +607,13 @@ class AnalystTab:
 
     def _profile_selected(self, _event=None) -> None:
         _editor().profile_selected(self)
+        # A model belongs to the server it came from. Carrying one across meant
+        # a llama.cpp model could be launched as though it had an Ollama digest.
+        _editor().clear_model_if_server_changed(self)
 
     def _manage_profiles(self) -> None:
         _editor().manage_profiles(self)
+
 
     def _selected_backend_kind(self) -> str:
         """Return the chosen profile's backend kind, defaulting to Ollama."""
@@ -653,38 +659,6 @@ class AnalystTab:
             return
         self._populate_model_choices(choices, preferred_tag=preferred_tag)
 
-    def _persist_model_selection(self) -> None:
-        selected_tag = None
-        selected_digest = None
-        combo = self._model_combo
-        if combo is not None:
-            index = combo.current()
-            if 0 <= index < len(self._model_choices):
-                choice = self._model_choices[index]
-                selected_tag = choice.model_tag
-                selected_digest = choice.model_digest
-            elif (
-                not self._model_choices
-                and self._selected_model_tag is not None
-                and self._model_var.get() == self._selected_model_tag
-            ):
-                selected_tag = self._selected_model_tag
-                selected_digest = self._selected_model_digest
-        self._selected_model_tag = selected_tag
-        self._selected_model_digest = selected_digest
-
-        settings_manager = self._context.get("settings_manager")
-        if settings_manager is None:
-            return
-        try:
-            settings_manager.set_setting(
-                "analyst.selected_model_tag", selected_tag,
-            )
-            settings_manager.set_setting(
-                "analyst.selected_model_digest", selected_digest,
-            )
-        except Exception:
-            pass
 
     def _select_all_runs(self) -> None:
         children = self._runs.get_children("")

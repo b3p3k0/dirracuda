@@ -175,7 +175,9 @@ def test_cloud_tag_rejected_at_creation_and_request_build(tmp_path: Path) -> Non
             model_digest=_MODEL_DIGEST,
             path=tmp_path / "analyst.db",
         )
-    assert captured.value.code is ServiceFailure.CONTRACT
+    # A cloud tag is a model-identity failure, reported as one because it
+    # is not a directory problem.
+    assert captured.value.code is ServiceFailure.MODEL_IDENTITY
 
     for builder in (
         build_chat_request,
