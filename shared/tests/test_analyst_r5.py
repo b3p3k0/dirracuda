@@ -83,7 +83,7 @@ def test_markdown_leads_with_read_notice_and_facts_without_low_exposure() -> Non
     assert rendered.count(UNVERIFIED_NOTICE) == 1
     assert rendered.index("## TOP EXPOSURES") < rendered.index(UNVERIFIED_NOTICE)
     assert rendered.index(UNVERIFIED_NOTICE) < rendered.index("## FACTS")
-    assert "| Kind | Value | File | Rank |" in rendered
+    assert "| Kind | Value | File | Seen | Rank |" in rendered
     assert "LOW-ONLY-QUOTE" not in rendered.split(UNVERIFIED_NOTICE, 1)[0]
     assert "LOW-ONLY-QUOTE" in rendered.split("## FACTS", 1)[1]
 
@@ -108,9 +108,9 @@ def test_markdown_keeps_literal_text_without_allowing_structure_injection() -> N
     assert "2023\\_returns.xlsx" not in rendered
     assert "\n# [x](y)" not in rendered
     assert "\\[x\\](y)" in rendered
-    fact_rows = rendered.split("|---|---|---|---|\n", 1)[1].splitlines()
+    fact_rows = rendered.split("|---|---|---|---|---|\n", 1)[1].splitlines()
     assert len(fact_rows) == 2
-    assert all(len(re.findall(r"(?<!\\)\|", row)) == 5 for row in fact_rows)
+    assert all(len(re.findall(r"(?<!\\)\|", row)) == 6 for row in fact_rows)
     assert "\\|" in fact_rows[0]
     assert "\r" not in fact_rows[0] and "continued" in fact_rows[0]
     assert "`` value \\| # ` [x](y) continued ``" in fact_rows[0]
@@ -133,8 +133,8 @@ def test_facts_csv_prefix_guards_spreadsheet_cells() -> None:
     })
     rows = list(csv.reader(io.StringIO(render_facts_csv(payload))))
 
-    assert rows[0] == ["Kind", "Value", "File", "Rank"]
-    assert rows[2] == ["'=kind", "'+quote", "'@file", "low"]
+    assert rows[0] == ["Kind", "Value", "File", "Seen", "Rank"]
+    assert rows[2] == ["'=kind", "'+quote", "'@file", "", "low"]
 
 
 @pytest.mark.parametrize("fmt", ["md", "txt", "html", "csv"])

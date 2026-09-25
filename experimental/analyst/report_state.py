@@ -472,11 +472,36 @@ def _load_host_read(
 def _load_ranked_facts(
     conn: sqlite3.Connection, run_id: str,
 ) -> tuple[report_json.GroundedFact, ...]:
-    candidates: list[
-        tuple[tuple[int, int, int, int], report_json.GroundedFact]
-    ] = []
+    """Return the report's facts, one row per value per file.
+
+    Occurrences of the same value in the same file differ only in provenance,
+    which no report surface has a column for, so they rendered as identical
+    rows -- and they spent the fact budget that model findings never reached.
+    They now fold into one fact carrying a count, keeping the first occurrence
+    so ``provenance`` still names a real span.
+    """
+    # key -> [sort key, field mapping, occurrences]
+    collapsed: dict[tuple[str, ...], list] = {}
     counts: dict[tuple[str, str], int] = {}
     rank_order = {"HIGH": 0, "MED": 1, "low": 2}
+
+    def collect(sort_key: tuple[int, int, int, int], **fields: str) -> None:
+        key = (
+            fields["source"], fields["kind"], fields["category"],
+            fields["quote"], fields["file"],
+        )
+        group = collapsed.get(key)
+        if group is not None:
+            group[2] += 1
+            if sort_key < group[0]:
+                group[0] = sort_key
+                group[1] = fields
+            return
+        bucket = (fields["rank"], fields["source"])
+        counts[bucket] = counts.get(bucket, 0) + 1
+        if counts[bucket] > MAX_REPORT_JSON_FACTS:
+            return
+        collapsed[key] = [sort_key, fields, 1]
     detector_rows = conn.execute(
         "SELECT h.hit_id,h.kind,h.value,h.start_char,h.end_char,"
         "f.ordinal AS file_ordinal,f.relative_path,"
@@ -494,11 +519,8 @@ def _load_ranked_facts(
         kind = str(row["kind"])
         category = _detector_category(kind)
         rank = report_json.rank_fact(kind, category, "detector")
-        key = (rank, "detector")
-        counts[key] = counts.get(key, 0) + 1
-        if counts[key] > MAX_REPORT_JSON_FACTS:
-            continue
-        fact = report_json.GroundedFact(
+        collect(
+            (rank_order[rank], int(row["file_ordinal"]), 0, int(row["hit_id"])),
             kind=kind,
             category=category,
             quote=str(row["value"]),
@@ -509,10 +531,6 @@ def _load_ranked_facts(
             rank=rank,
             source="detector",
         )
-        candidates.append((
-            (rank_order[rank], int(row["file_ordinal"]), 0, int(row["hit_id"])),
-            fact,
-        ))
     model_rows = conn.execute(
         "SELECT m.finding_id,m.category,m.quote,m.canonical_offset,m.canonical_end,"
         "c.start_char,f.ordinal AS file_ordinal,f.relative_path,"
@@ -534,13 +552,10 @@ def _load_ranked_facts(
     for row in model_rows:
         category = str(row["category"])
         rank = report_json.rank_fact("model", category, "model")
-        key = (rank, "model")
-        counts[key] = counts.get(key, 0) + 1
-        if counts[key] > MAX_REPORT_JSON_FACTS:
-            continue
         start = int(row["start_char"]) + int(row["canonical_offset"])
         end = int(row["start_char"]) + int(row["canonical_end"])
-        fact = report_json.GroundedFact(
+        collect(
+            (rank_order[rank], int(row["file_ordinal"]), 1, int(row["finding_id"])),
             kind="model",
             category=category,
             quote=str(row["quote"]),
@@ -549,10 +564,13 @@ def _load_ranked_facts(
             rank=rank,
             source="model",
         )
-        candidates.append((
-            (rank_order[rank], int(row["file_ordinal"]), 1, int(row["finding_id"])),
-            fact,
-        ))
+    candidates = [
+        (
+            group[0],
+            report_json.GroundedFact(**group[1], occurrences=group[2]),
+        )
+        for group in collapsed.values()
+    ]
     candidates.sort(key=lambda item: item[0])
     return tuple(item[1] for item in candidates[:MAX_REPORT_JSON_FACTS])
 

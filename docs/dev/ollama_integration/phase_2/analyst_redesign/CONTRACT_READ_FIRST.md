@@ -338,3 +338,42 @@ list; refresh if the backend changes"):
 
 Unchanged: loopback-only endpoint, cloud rejection, no `/api/show`, content-free ledgers, the
 worker's post-run verification, and every other fail-closed control.
+
+## Amendment A3 (2026-09-25, HI-approved) — the collapsed fact, report schema v3
+
+Refines section 2.3 and the `facts[]` shape in `REPORT_JSON_SCHEMA.md`.
+
+The first full-corpus run (1,244 files) exposed a defect in how facts reach `report.json`.
+`_load_ranked_facts` emitted **one fact per detector occurrence**. The same SSN at forty offsets
+in one file became forty facts that differed only in `provenance` — a field no report surface
+renders. On screen they were byte-identical rows.
+
+That is not only noise. `MAX_REPORT_JSON_FACTS` is 500, and the duplicates spent it: of 4,161
+detector hits and 1,907 model findings, the report carried 500 rows holding 242 distinct values,
+and **not one model finding reached the report**.
+
+Decision:
+
+- A fact is now identified by **`(source, kind, category, quote, file)`**. Occurrences of one
+  value in one file fold into a single fact. The grouping key keeps `file`, so the File column
+  continues to name exactly one file.
+- The fold happens **before** the fact budget is applied, so the budget is spent on distinct
+  evidence.
+- The **first** occurrence by the existing sort order is kept, so `provenance` still names a real
+  span in the document.
+- `GroundedFact` gains two fields and the report becomes **v3**:
+  - `occurrences: int` (>= 1) — how many times this value appears in this file.
+  - `plausibility: str` — one of `valid`, `suspect`, `public`. **v3 only ever writes `valid`.**
+    The other two are reserved here so that the identifier-screening work does not need a second
+    schema bump; a later amendment will define when they are written.
+- `SUPPORTED_REPORT_SCHEMA_VERSIONS` becomes `(1, 2, 3)`. Both new fields are defaulted, and the
+  fact key set is version-gated the same way the run key set already is, so v1 and v2 reports on
+  disk keep opening.
+
+Why `plausibility` rather than dropping a low-confidence fact: coverage honesty is the product
+(frozen contract section 4). A fact that is reported at a lower rank, with the reason named, is
+honest. A fact silently removed is not.
+
+Unchanged: grounding (every quote is still an exact substring of its source), the rank function,
+the risk rubric, `report.html` and `findings.csv`/`findings.jsonl` on disk — those stream
+`FindingReportRow` pages, carry every occurrence, and remain the full evidence record.

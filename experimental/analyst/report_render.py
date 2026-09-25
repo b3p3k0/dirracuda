@@ -9,7 +9,12 @@ import re
 from collections.abc import Callable
 
 from .report_contract import HTML_CSP, csv_safe
-from .report_json import UNVERIFIED_NOTICE, validate_report_json
+from .report_json import (
+    UNVERIFIED_NOTICE,
+    fact_rank_label,
+    fact_seen_label,
+    validate_report_json,
+)
 
 
 _BACKTICK_RUN = re.compile(r"`+")
@@ -57,8 +62,8 @@ def render_markdown(report: dict) -> str:
         "",
         "## FACTS",
         "",
-        "| Kind | Value | File | Rank |",
-        "|---|---|---|---|",
+        "| Kind | Value | File | Seen | Rank |",
+        "|---|---|---|---|---|",
     ])
     lines.extend(
         "| "
@@ -66,7 +71,8 @@ def render_markdown(report: dict) -> str:
             _markdown_table(fact["kind"]),
             _markdown_code(fact["quote"]),
             _markdown_table(fact["file"]),
-            _markdown_table(fact["rank"]),
+            _markdown_table(fact_seen_label(fact)),
+            _markdown_table(fact_rank_label(fact)),
         ))
         + " |"
         for fact in facts
@@ -109,14 +115,16 @@ def render_text(report: dict) -> str:
     else:
         lines.append("(none)")
     lines.extend([
-        "", UNVERIFIED_NOTICE, "", "FACTS", "Kind | Value | File | Rank",
+        "", UNVERIFIED_NOTICE, "", "FACTS",
+        "Kind | Value | File | Seen | Rank",
     ])
     lines.extend(
         " | ".join((
             _plain(fact["kind"]),
             _plain(fact["quote"]),
             _plain(fact["file"]),
-            _plain(fact["rank"]),
+            _plain(fact_seen_label(fact)),
+            _plain(fact_rank_label(fact)),
         ))
         for fact in facts
     )
@@ -149,7 +157,8 @@ def render_html(report: dict) -> str:
         f"<td>{_html(fact['kind'])}</td>"
         f"<td><code>{_html(fact['quote'])}</code></td>"
         f"<td>{_html(fact['file'])}</td>"
-        f"<td>{_html(fact['rank'])}</td>"
+        f"<td>{_html(fact_seen_label(fact))}</td>"
+        f"<td>{_html(fact_rank_label(fact))}</td>"
         "</tr>"
         for fact in facts
     )
@@ -179,7 +188,7 @@ def render_html(report: dict) -> str:
         f"<ol>{exposure_html}</ol>"
         f"<p class=\"notice\">{_html(UNVERIFIED_NOTICE)}</p></section>"
         "<section><h2>FACTS</h2><table><thead><tr>"
-        "<th>Kind</th><th>Value</th><th>File</th><th>Rank</th>"
+        "<th>Kind</th><th>Value</th><th>File</th><th>Seen</th><th>Rank</th>"
         f"</tr></thead><tbody>{facts_html}</tbody></table></section>"
         "</main></body></html>\n"
     )
@@ -190,10 +199,11 @@ def render_facts_csv(report: dict) -> str:
     validate_report_json(report)
     buffer = io.StringIO(newline="")
     writer = csv.writer(buffer, lineterminator="\n", quoting=csv.QUOTE_MINIMAL)
-    writer.writerow(("Kind", "Value", "File", "Rank"))
+    writer.writerow(("Kind", "Value", "File", "Seen", "Rank"))
     for fact in report["facts"]:
         writer.writerow(tuple(csv_safe(value) for value in (
-            fact["kind"], fact["quote"], fact["file"], fact["rank"],
+            fact["kind"], fact["quote"], fact["file"],
+            fact_seen_label(fact), fact_rank_label(fact),
         )))
     return buffer.getvalue()
 

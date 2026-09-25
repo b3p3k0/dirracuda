@@ -47,7 +47,9 @@ grounded evidence file. It carries the read (Layer 1) and the ranked facts (Laye
       "file": "2023_returns.xlsx",
       "provenance": "sheet 2, row 14",
       "rank": "HIGH",
-      "source": "detector"
+      "source": "detector",
+      "occurrences": 48,
+      "plausibility": "valid"
     },
     {
       "kind": "phone",
@@ -56,7 +58,9 @@ grounded evidence file. It carries the read (Layer 1) and the ranked facts (Laye
       "file": "mower_manual.pdf",
       "provenance": "p.7",
       "rank": "low",
-      "source": "detector"
+      "source": "detector",
+      "occurrences": 1,
+      "plausibility": "valid"
     }
   ],
   "coverage": {
@@ -71,8 +75,10 @@ grounded evidence file. It carries the read (Layer 1) and the ranked facts (Laye
 
 ### 1.2 Field rules
 
-- `report_schema_version` — integer, starts at 1. A reader that does not know a version refuses
-  the file cleanly (no guessing).
+- `report_schema_version` — integer, starts at 1; currently **3**. A reader that does not know a
+  version refuses the file cleanly (no guessing). Readers accept `(1, 2, 3)`: v1 predates the
+  model-identity kind (erratum E18), v2 predates the collapsed fact (amendment A3), and both
+  keep opening with the newer fields defaulted.
 - `run.read_mode` — `quick` or `full`.
 - `run.model_tag` / `run.model_digest` — the per-run recorded selection (§7.2 of the contract).
   Digest is lowercase 64-hex.
@@ -87,6 +93,14 @@ grounded evidence file. It carries the read (Layer 1) and the ranked facts (Laye
   `findings.jsonl` (canonical). Each entry is grounded only. Each carries a verbatim `quote`, its `file`, human `provenance`,
   a `rank` (`HIGH`/`MED`/`low`), and `source` (`detector` or `model`). Every quote is an exact
   substring of its source (contract §6.1). `category` reuses the existing detector categories.
+- **One entry per `(source, kind, category, quote, file)`** (amendment A3). Repeated occurrences
+  of one value in one file fold together; they differed only in `provenance` and spent the cap.
+  The fold happens before the cap is applied, and the first occurrence's `provenance` is kept.
+- `facts[].occurrences` — integer >= 1, v3+. How many times this value occurs in this file.
+- `facts[].plausibility` — `valid` / `suspect` / `public`, v3+. What the value's own form says
+  about it under published allocation rules. v3 writes only `valid`; the other two are reserved
+  for the identifier-screening work. A screened-down fact is ranked lower and labelled, never
+  silently removed — coverage honesty is the product (frozen §4).
 - `coverage` — the honest counts. Coverage stays computed (frozen §4); it moves out of the
   report's lead into a "Files read" line plus a details view.
 

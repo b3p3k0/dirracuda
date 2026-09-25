@@ -144,7 +144,9 @@ def test_facts_category_filter_narrows_rows(view, report):
         view._facts.item(item, "values")
         for item in view._facts.get_children("")
     ]
-    assert rows == [("bank_account", "ending in 4321", "payroll_q3.csv", "MED")]
+    assert rows == [
+        ("bank_account", "ending in 4321", "payroll_q3.csv", "", "MED"),
+    ]
 
 
 @pytest.mark.gui_smoke

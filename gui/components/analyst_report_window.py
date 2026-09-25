@@ -11,6 +11,8 @@ from experimental.analyst.report_json import (
     UNVERIFIED_NOTICE,
     coverage_note,
     dumps_report,
+    fact_rank_label,
+    fact_seen_label,
     model_identity_label,
 )
 from experimental.analyst.report_render import render, render_markdown
@@ -218,14 +220,15 @@ class AnalystReportWindow:
 
         self._facts = ttk.Treeview(
             tree_frame,
-            columns=("kind", "value", "file", "rank"),
+            columns=("kind", "value", "file", "seen", "rank"),
             show="headings",
         )
         for key, text, width in (
-            ("kind", "Kind", 145),
-            ("value", "Value", 360),
-            ("file", "File", 330),
-            ("rank", "Rank", 80),
+            ("kind", "Kind", 135),
+            ("value", "Value", 330),
+            ("file", "File", 300),
+            ("seen", "Seen", 60),
+            ("rank", "Rank", 120),
         ):
             self._facts.heading(key, text=text)
             self._facts.column(key, width=width, anchor="w")
@@ -347,7 +350,13 @@ class AnalystReportWindow:
             self._facts.insert(
                 "",
                 "end",
-                values=(fact["kind"], fact["quote"], fact["file"], fact["rank"]),
+                values=(
+                    fact["kind"],
+                    fact["quote"],
+                    fact["file"],
+                    fact_seen_label(fact),
+                    fact_rank_label(fact),
+                ),
             )
 
     def _set_report_actions(self, enabled: bool) -> None:

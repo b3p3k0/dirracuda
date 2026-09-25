@@ -7,11 +7,12 @@ from dataclasses import dataclass, field
 from typing import Iterable, Literal
 
 
-REPORT_SCHEMA_VERSION = 2
+REPORT_SCHEMA_VERSION = 3
 #: Versions this module can still read. v1 predates the model-identity kind
-#: (erratum E18); reports and durable host reads written before N2a stay
-#: readable rather than being orphaned by the bump.
-SUPPORTED_REPORT_SCHEMA_VERSIONS = (1, 2)
+#: (erratum E18); v2 predates the collapsed fact (amendment A3). Reports and
+#: durable host reads written before those stay readable rather than being
+#: orphaned by the bump.
+SUPPORTED_REPORT_SCHEMA_VERSIONS = (1, 2, 3)
 IDENTITY_KINDS = ("digest", "reported")
 UNVERIFIED_NOTICE = "Model's read - not verified. Facts below are grounded."
 MAX_HOST_SUMMARY_CHARS = 1200
@@ -27,6 +28,11 @@ _READ_MODES = frozenset({"quick", "full"})
 _HIGH_KINDS = frozenset({
     "ssn", "passport", "card", "routing", "iban", "bank_account",
 })
+#: How much a fact's own value argues against it, from published allocation
+#: rules. "valid" is the only value F1 writes; the screening rules populate the
+#: other two. "suspect" means probably not a real identifier; "public" means a
+#: real one that is a published business contact rather than personal data.
+_PLAUSIBILITY = frozenset({"valid", "suspect", "public"})
 
 
 def model_identity_label(run: dict) -> str:
@@ -85,6 +91,34 @@ def coverage_note(report: dict) -> str:
     )
 
 
+def fact_seen_label(fact: dict) -> str:
+    """Return how often a fact occurs in its file, or "" when it occurs once.
+
+    A v1 or v2 report carries no count; every one of its rows was a single
+    occurrence, so the absent key reads as one.
+    """
+    try:
+        count = int(fact.get("occurrences", 1))
+    except (TypeError, ValueError):
+        return ""
+    return f"{count}x" if count > 1 else ""
+
+
+def fact_rank_label(fact: dict) -> str:
+    """Return a fact's rank, naming why it was ranked down when it was.
+
+    A demoted fact must say which kind of demotion it got. "suspect" means
+    published allocation rules argue the value is not a real identifier;
+    "public" means it is real but is a published business contact rather than
+    personal data. Silence on that would make a low rank look like an opinion.
+    """
+    rank = str(fact.get("rank", ""))
+    plausibility = fact.get("plausibility", "valid")
+    if type(plausibility) is not str or plausibility == "valid":
+        return rank
+    return f"{rank} \u00b7 {plausibility}"
+
+
 class ReportValidationError(ValueError):
     """A report value does not match the frozen versioned shape."""
 
@@ -102,6 +136,11 @@ class GroundedFact:
     provenance: str = field(repr=False)
     rank: FactRank
     source: str
+    #: How many times this value occurs in this file. ``provenance`` names the
+    #: first of them. Rows that differ only in provenance were byte-identical
+    #: on screen and burned the report's fact budget.
+    occurrences: int = 1
+    plausibility: str = "valid"
 
     def __post_init__(self) -> None:
         if (
@@ -112,11 +151,15 @@ class GroundedFact:
             or type(self.provenance) is not str
             or type(self.rank) is not str
             or type(self.source) is not str
+            or type(self.occurrences) is not int
+            or type(self.plausibility) is not str
             or not self.kind
             or not self.quote
+            or self.occurrences < 1
             or self.category not in _CATEGORIES
             or self.rank not in _FACT_RANKS
             or self.source not in _FACT_SOURCES
+            or self.plausibility not in _PLAUSIBILITY
         ):
             raise ReportValidationError("grounded fact is invalid")
 
@@ -408,6 +451,8 @@ def build_report_json(
                 "provenance": fact.provenance,
                 "rank": fact.rank,
                 "source": fact.source,
+                "occurrences": fact.occurrences,
+                "plausibility": fact.plausibility,
             }
             for fact in ordered_facts
         ],
@@ -492,14 +537,15 @@ def validate_report_json(obj: dict[str, object]) -> None:
     )
 
     fact_values = _list(obj["facts"], "facts")
+    fact_keys = {
+        "kind", "category", "quote", "file", "provenance", "rank", "source",
+    }
+    if version >= 3:
+        fact_keys |= {"occurrences", "plausibility"}
     facts: list[GroundedFact] = []
     for value in fact_values:
         fact = _object(value, "fact")
-        _require_keys(
-            fact,
-            {"kind", "category", "quote", "file", "provenance", "rank", "source"},
-            "fact",
-        )
+        _require_keys(fact, fact_keys, "fact")
         facts.append(GroundedFact(**fact))
     if [fact.rank for fact in facts] != sorted(
         (fact.rank for fact in facts),
