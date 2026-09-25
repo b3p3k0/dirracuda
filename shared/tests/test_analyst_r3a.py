@@ -153,7 +153,7 @@ def test_fresh_schema_has_read_contact_table_index_and_v6_identity() -> None:
         initialize_schema(conn)
 
         assert conn.execute("PRAGMA application_id").fetchone()[0] == APPLICATION_ID
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 9
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 10
         assert conn.execute(
             "SELECT strict FROM pragma_table_list "
             "WHERE name='analyst_read_contact'"

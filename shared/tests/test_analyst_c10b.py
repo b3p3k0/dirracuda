@@ -342,7 +342,7 @@ def test_scan_bounded_overlap_is_not_counted_as_a_duplicate_hit() -> None:
 
 
 def test_scan_bounded_restores_source_order_after_detector_order() -> None:
-    text = "first@example.test then 123-45-6789 then 212-555-0119"
+    text = "first@example.test then 422-52-5082 then 212-555-0119"
 
     hits, overflow = scan_bounded(text, max_hits=3)
 
@@ -515,7 +515,7 @@ def test_verify_regenerated_extraction_rejects_every_identity_drift(
 def test_verify_detector_checkpoint_exact_order_value_and_selection(
     tmp_path: Path,
 ) -> None:
-    text = "first@example.test then 123-45-6789"
+    text = "first@example.test then 422-52-5082"
     db_path, _spec, _inventory_result, fence = _run(tmp_path, bodies=(text,))
     snapshot = claim_next_phase1_file(fence, path=db_path)
     assert snapshot is not None

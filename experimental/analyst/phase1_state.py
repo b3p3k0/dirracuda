@@ -293,14 +293,17 @@ def verify_detector_checkpoint(
                 "regenerated model selection does not match"
             )
         stored_rows = conn.execute(
-            "SELECT ordinal,kind,value,start_char,end_char "
+            "SELECT ordinal,kind,value,start_char,end_char,labeled "
             "FROM analyst_detector_hits WHERE file_id=? ORDER BY ordinal LIMIT ?",
             (file_id, MAX_DETECTOR_HITS + 1),
         ).fetchall()
         if len(stored_rows) > MAX_DETECTOR_HITS:
             raise CheckpointError("durable detector evidence exceeds its bound")
         stored = tuple(
-            (int(item[0]), str(item[1]), str(item[2]), int(item[3]), int(item[4]))
+            (
+                int(item[0]), str(item[1]), str(item[2]), int(item[3]),
+                int(item[4]), None if item[5] is None else bool(item[5]),
+            )
             for item in stored_rows
         )
         if stored != materialized:
@@ -572,7 +575,7 @@ def _provenance_rows(
 
 def _detector_rows(
     hits: Iterable[DetectorHit],
-) -> tuple[tuple[int, str, str, int, int], ...]:
+) -> tuple[tuple[int, str, str, int, int, bool | None], ...]:
     materialized: list[DetectorHit] = []
     for hit in hits:
         if not isinstance(hit, DetectorHit):
@@ -581,7 +584,7 @@ def _detector_rows(
             raise ValueError("detector evidence exceeds its durable cap")
         materialized.append(hit)
     return tuple(
-        (ordinal, hit.kind, hit.value, hit.start, hit.end)
+        (ordinal, hit.kind, hit.value, hit.start, hit.end, hit.labeled)
         for ordinal, hit in enumerate(materialized)
     )
 

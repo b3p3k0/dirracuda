@@ -275,6 +275,44 @@ substitute for data semantics.
 Large, deeply nested or highly compressed files can hit safety limits. A limit failure
 is recorded against that file while the rest of the run continues when safe.
 
+## Known pitfalls and limitations
+
+Analyst finds identifiers by shape and checksum. That is fast and it works on any
+document, but a shape is not proof. A few things are worth knowing before you act on a
+finding.
+
+**A ZIP+4 can look like a bank routing number.** Both are nine digits. About one in ten
+random nine-digit numbers passes the routing-number check by chance, so an address
+written `San Antonio TX 782481234` can read as a bank. Analyst now looks for a nearby
+label such as "Routing" or "ABA". Without one it still reports the number, but marks it
+`suspect` and ranks it lower.
+
+**Any date can look like a date of birth.** Invoice dates, print footers and expiry
+dates all have the same shape. Analyst looks for a nearby label such as "DOB" or "Date
+of Birth". Without one the date is marked `suspect`. A real birth date sitting alone in
+a table cell can be marked this way, so check the file before dismissing it.
+
+**Spreadsheets can invent long numbers.** A repeating decimal stored as a number comes
+out as a long digit string like `25925925925925924`. Those are not card numbers, and
+Analyst refuses them on length.
+
+**Some values are real but not personal.** A toll-free number or an `info@` address is
+a genuine contact, just a business one. Analyst marks these `organizational` so they do
+not sit beside somebody's home phone number.
+
+**What the marks mean:**
+
+| Mark | Meaning |
+|------|---------|
+| (none) | Nothing known argues against this value |
+| `suspect` | Published rules say this is probably not a real identifier |
+| `organizational` | Real, but a published business contact rather than personal data |
+
+Nothing marked this way is hidden. It is reported at a lower rank with the reason shown,
+so you can judge it yourself. Values that cannot be real under any reading — a passport
+"number" that is the word `Number`, a card number of all the same digit — are not
+reported at all.
+
 ## Troubleshooting
 
 ### There is no Analyst tab

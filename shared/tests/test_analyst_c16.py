@@ -166,6 +166,7 @@ def test_populated_exact_v2_migrates_in_place_with_zero_high_bits(
         conn.execute("DROP TABLE analyst_read_contact")
         conn.execute("DROP TABLE analyst_read_exposures")
         conn.execute("DROP TABLE analyst_read")
+        conn.execute("ALTER TABLE analyst_detector_hits DROP COLUMN labeled")
         conn.execute("ALTER TABLE analyst_detector_hits DROP COLUMN fact_rank")
         conn.execute("ALTER TABLE analyst_model_findings DROP COLUMN fact_rank")
         conn.execute("ALTER TABLE analyst_files DROP COLUMN inode_high_bit")

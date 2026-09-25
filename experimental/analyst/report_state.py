@@ -7,7 +7,7 @@ import re
 import sqlite3
 from pathlib import Path
 
-from . import report_json
+from . import detectors, report_json
 from .lease import LeaseFence
 from .models import FileStage, FileTerminal
 from .report_contract import (
@@ -469,6 +469,45 @@ def _load_host_read(
     )
 
 
+#: One notch down. A screened-down fact stays visible and says why.
+_DEMOTED = {"HIGH": "MED", "MED": "low", "low": "low"}
+
+#: Where a machine-shaped identifier is usually not an identifier at all.
+#: Source code and markup are where a label word sits next to another word --
+#: 125 of one corpus's 130 "passport" hits were the word "Number" inside
+#: individualApplication.js.
+_CODE_SUFFIXES = (".js", ".css", ".json", ".htm", ".html", ".map", ".xml")
+#: Paths that announce the file is not real data.
+_SPECIMEN_WORDS = (
+    "sample", "template", "example", "demo", "dummy", "blank", "practice",
+    "worksheet", "placeholder", "mock", "lorem",
+)
+#: Kinds whose value alone cannot survive a bad context. A demographic term or
+#: an email in a template is still a demographic term or an email.
+_CONTEXT_SENSITIVE = frozenset({
+    "ssn", "card", "routing", "bank_account", "iban", "passport", "dob",
+    "phone",
+})
+
+
+def _context_is_unreliable(
+    kind: str, relative_path: str, format_name: object,
+) -> bool:
+    """Return whether where this value was found argues against it.
+
+    Deliberately not "it came from a spreadsheet". A real payroll workbook full
+    of real card numbers is exactly the find that matters, and demoting every
+    numeric cell would bury it. The spreadsheet problem was long floats, and
+    the value rules already refuse those on their digits.
+    """
+    if kind not in _CONTEXT_SENSITIVE:
+        return False
+    lowered = relative_path.casefold()
+    if lowered.endswith(_CODE_SUFFIXES):
+        return True
+    return any(word in lowered for word in _SPECIMEN_WORDS)
+
+
 def _load_ranked_facts(
     conn: sqlite3.Connection, run_id: str,
 ) -> tuple[report_json.GroundedFact, ...]:
@@ -503,8 +542,8 @@ def _load_ranked_facts(
             return
         collapsed[key] = [sort_key, fields, 1]
     detector_rows = conn.execute(
-        "SELECT h.hit_id,h.kind,h.value,h.start_char,h.end_char,"
-        "f.ordinal AS file_ordinal,f.relative_path,"
+        "SELECT h.hit_id,h.kind,h.value,h.start_char,h.end_char,h.labeled,"
+        "f.ordinal AS file_ordinal,f.relative_path,f.format_name,"
         "(SELECT p.kind FROM analyst_provenance_units p WHERE p.file_id=f.file_id "
         "AND p.start_char<=h.start_char AND p.end_char>=h.end_char "
         "ORDER BY p.ordinal LIMIT 1) AS provenance_kind,"
@@ -519,6 +558,22 @@ def _load_ranked_facts(
         kind = str(row["kind"])
         category = _detector_category(kind)
         rank = report_json.rank_fact(kind, category, "detector")
+        screen = detectors.screen_identifier(
+            kind,
+            str(row["value"]),
+            labeled=None if row["labeled"] is None else bool(row["labeled"]),
+        )
+        # A hit already on disk may have been written under older detector
+        # rules that would refuse it today. It is still recorded evidence, so
+        # it is reported as suspect rather than crashing the report or being
+        # deleted from it.
+        plausibility = "suspect" if screen.impossible else screen.plausibility
+        if plausibility == "valid" and _context_is_unreliable(
+            kind, str(row["relative_path"]), row["format_name"],
+        ):
+            plausibility = "suspect"
+        if plausibility == "suspect":
+            rank = _DEMOTED[rank]
         collect(
             (rank_order[rank], int(row["file_ordinal"]), 0, int(row["hit_id"])),
             kind=kind,
@@ -530,6 +585,8 @@ def _load_ranked_facts(
             ),
             rank=rank,
             source="detector",
+            plausibility=plausibility,
+            subject=screen.subject,
         )
     model_rows = conn.execute(
         "SELECT m.finding_id,m.category,m.quote,m.canonical_offset,m.canonical_end,"

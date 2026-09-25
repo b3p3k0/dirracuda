@@ -1472,6 +1472,91 @@ The RCE runtime pipeline was removed in C3, and the remaining signature artifact
 
 ---
 
+## 8.1 Analyst identifier screening
+
+`experimental/analyst/detectors.py` finds identifiers by regex plus a checksum. That
+establishes shape, not authenticity. `screen_identifier(kind, value, *, labeled)` applies
+published allocation rules on top and returns two independent judgements.
+
+| axis | question | values |
+|---|---|---|
+| `plausibility` | is this a real identifier? | `valid`, `suspect`, `impossible` |
+| `subject` | whose is it? | `personal`, `organizational`, `unknown` |
+
+Only `impossible` is refused at scan time. `suspect` demotes the fact one rank
+(`HIGH`→`MED`→`low`) and is labelled in the report; `organizational` is labelled and is
+usually rank-neutral, because contact-kind facts already rank `low`. Nothing is silently
+dropped except values that cannot be real under any reading.
+
+The two axes are deliberately separate. A toll-free number is a real number that belongs
+to a business, so recording it as `suspect` would be false.
+
+### Why checksums are not enough
+
+| check | strength | consequence |
+|---|---|---|
+| Luhn (cards) | catches ~90% of single-digit errors | roughly 1 in 10 random 13-19 digit strings passes |
+| ABA (routing) | mod-10 weighted, 9 digits | roughly 1 in 10 random 9-digit strings passes |
+| mod-97 (IBAN) | 2 check digits | ~1 in 97; the country/length table carries more weight |
+| SSN, DOB, passport, phone, email | none | structure and allocation rules are the only filter |
+
+With 518 card candidates in one real corpus you would expect ~50 false passes from noise
+alone. The ISO/IEC 7812 issuer-range check is what supplies the precision, not Luhn.
+
+### The ZIP+4 / routing-number collision
+
+A US ZIP+4 written without its separator is nine digits, exactly like an ABA routing
+number, and has a ~10% chance of passing the ABA checksum. `782481234` is indistinguishable
+from a routing number by checksum alone.
+
+Mitigation is label proximity: `label_precedes()` looks for `routing`, `RTN`, `ABA`,
+`transit` or `ACH` within `LABEL_WINDOW` (48 characters) before the value. The window is
+one form field wide on purpose — a column header fifty rows above a value is not a label
+for that value, and widening it would make the check meaningless.
+
+The same mechanism gates `dob`, where the problem is larger: every invoice date, print
+footer and expiry date matches `MM/DD/YYYY`. In one 1,244-file corpus there were 1,630
+`dob` hits and the single value `1/19/2011` occurred 94 times.
+
+### Why label proximity needs a schema column
+
+Label proximity is the one screening input that cannot be recomputed from `(kind, value)`.
+It needs the surrounding document text, which exists only during the scan; the report
+layer holds the hit but not the document. Schema **v10** therefore adds one additive
+nullable column, `analyst_detector_hits.labeled` (`NULL`/`0`/`1`). `NULL` means "not
+recorded" and is never held against a value, so rows written before v10 screen exactly as
+they did before.
+
+Everything else the rules need lives in the value, which keeps the rules free to change
+without a migration.
+
+### Determinism
+
+Detector output is re-verified byte for byte when a run resumes
+(`phase1_state.verify_detector_checkpoint`), so nothing the clock can change may cause a
+hit to disappear. A date in the future cannot be a birth date, but it is graded `suspect`
+rather than `impossible` for exactly this reason.
+
+Changing `detectors.py` changes `current_detector_rules()`, which is the SHA-256 of that
+file's bytes. Any run created under the old digest refuses to resume with `PARSER_DRIFT`
+— the behaviour `CONTRACT.md` §9 requires. `DETECTOR_RULES_VERSION` is
+`analyst-detectors-v2`.
+
+### The benchmark constraint
+
+`shared/tests/fixtures/analyst_gold/` is built out of the values these rules screen: every
+SSN is from a never-issued area (`test_analyst_gold_set.py`), every phone uses the `555`
+fiction exchange, and every card is a published test PAN. `scripts/analyst_benchmark/` is
+frozen and must not be edited.
+
+So never-issued ranges grade `suspect`, never `impossible`. A guard test asserts that no
+gold-set value is ever `impossible`; without it, a stricter rule would silently delete the
+benchmark's signal and break the per-document category floor in `test_analyst_c1.py`.
+
+`4242424242424242` is the worked example: a repeating 2-digit cycle *and* a valid Visa
+prefix. An early draft graded repeating cycles `impossible` and simulation caught it
+dropping that number. It is a test card, not an impossible one.
+
 ## 9. Glossary
 
 | Term | Definition |

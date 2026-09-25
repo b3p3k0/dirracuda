@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from typing import Callable, Final
 
@@ -444,7 +444,11 @@ def _screen_dob(value: str, labeled: bool | None, today: date) -> IdentifierScre
     except ValueError:
         return IdentifierScreen(IMPOSSIBLE, PERSONAL, "not a real date")
     if born > today:
-        return IdentifierScreen(IMPOSSIBLE, PERSONAL, "a date in the future")
+        # Logically this cannot be a birth date. It is still only suspect,
+        # because a scan must not depend on the clock: detector output is
+        # re-verified byte for byte when a run resumes, and a hit that
+        # disappears next year would fail that check.
+        return IdentifierScreen(SUSPECT, PERSONAL, "a date in the future")
     if year <= today.year - 120:
         return IdentifierScreen(SUSPECT, PERSONAL, "implies an age over 120")
     if (month, day) in {(1, 1)} and year in {1900, 1970}:
@@ -586,6 +590,17 @@ def _scan(
 
     def record(hit: DetectorHit) -> None:
         check_cancelled()
+        labeled: bool | None = None
+        if hit.kind == "dob":
+            labeled = label_precedes(text, hit.start, DOB_LABELS)
+        elif hit.kind == "routing":
+            labeled = label_precedes(text, hit.start, ROUTING_LABELS)
+        if screen_identifier(hit.kind, hit.value, labeled=labeled).impossible:
+            # A value that cannot be a real identifier under any reading is not
+            # evidence. Everything weaker is recorded and ranked down instead.
+            return
+        if labeled is not None:
+            hit = replace(hit, labeled=labeled)
         key = (hit.kind, hit.start, hit.end, hit.value)
         if key in unique:
             return

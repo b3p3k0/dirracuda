@@ -16,12 +16,14 @@ from __future__ import annotations
 
 import collections
 import pathlib
+import re
 from datetime import date
 
 import pytest
 
 from experimental.analyst.detectors import (
     DOB_LABELS,
+    luhn_ok,
     IdentifierScreen,
     ROUTING_LABELS,
     label_precedes,
@@ -30,7 +32,7 @@ from experimental.analyst.detectors import (
 )
 
 TODAY = date(2026, 9, 25)
-GOLD = pathlib.Path(__file__).resolve().parents[1] / "fixtures/analyst_gold/docs"
+GOLD = pathlib.Path(__file__).resolve().parent / "fixtures/analyst_gold/docs"
 
 
 def _screen(kind, value, **kwargs) -> IdentifierScreen:
@@ -41,6 +43,39 @@ def _screen(kind, value, **kwargs) -> IdentifierScreen:
 # The two anchors. If either breaks, the rules have gone too far.
 # --------------------------------------------------------------------------
 
+#: The same expressions test_analyst_gold_set.py uses to police the corpus.
+#: Reading the fixtures directly matters: scan() now drops impossible hits, so
+#: a guard built on its output could never fail.
+_GOLD_SSN = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
+_GOLD_PAN = re.compile(r"\b\d{13,19}\b")
+_GOLD_PHONE = re.compile(r"(?:\(\d{3}\)\s*|\b\d{3}[ .-])\d{3}[ .-]\d{4}\b")
+_GOLD_EMAIL = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
+
+
+def _gold_candidates():
+    """Yield (kind, value) for every identifier the gold corpus is built from."""
+    for path in sorted(GOLD.glob("*.txt")):
+        text = path.read_text(encoding="utf-8")
+        for match in _GOLD_SSN.finditer(text):
+            yield path.name, "ssn", match.group()
+        for match in _GOLD_PAN.finditer(text):
+            if luhn_ok(match.group()):
+                yield path.name, "card", match.group()
+        for match in _GOLD_PHONE.finditer(text):
+            yield path.name, "phone", match.group()
+        for match in _GOLD_EMAIL.finditer(text):
+            yield path.name, "email", match.group()
+
+
+def test_the_gold_corpus_yields_the_values_this_guard_exists_for():
+    """Fail loudly if the fixtures stop containing what we think they do."""
+    kinds = collections.Counter(kind for _, kind, _ in _gold_candidates())
+    assert kinds["ssn"] >= 50
+    assert kinds["card"] >= 20
+    assert kinds["phone"] >= 100
+    assert kinds["email"] >= 100
+
+
 def test_no_gold_set_value_is_ever_impossible():
     """The benchmark corpus is built from the values these rules screen.
 
@@ -48,13 +83,16 @@ def test_no_gold_set_value_is_ever_impossible():
     fiction exchange, and gold PANs are published test cards. They must all
     stay DETECTED -- demoted is fine, dropped would delete the benchmark's
     signal and break the per-document category floor in test_analyst_c1.
+
+    This reads the fixtures directly rather than going through scan(), because
+    scan() already refuses impossible values and would hide the very failure
+    this test exists to catch.
     """
-    dropped = []
-    for path in sorted(GOLD.glob("*.txt")):
-        for hit in scan(path.read_text(encoding="utf-8")):
-            screen = _screen(hit.kind, hit.value)
-            if screen.impossible:
-                dropped.append((path.name, hit.kind, hit.value, screen.reason))
+    dropped = [
+        (name, kind, value, _screen(kind, value).reason)
+        for name, kind, value in _gold_candidates()
+        if _screen(kind, value).impossible
+    ]
     assert dropped == []
 
 
@@ -256,8 +294,15 @@ def test_an_unknown_label_state_is_never_held_against_a_value():
 # Date of birth
 # --------------------------------------------------------------------------
 
-def test_a_future_date_cannot_be_a_birth_date():
-    assert _screen("dob", "01/15/2030").impossible
+def test_a_future_date_is_suspect_not_dropped():
+    """Logically impossible, but a scan must not depend on the clock.
+
+    Detector output is re-verified byte for byte on resume, so a hit that
+    disappears next year would fail that check.
+    """
+    screen = _screen("dob", "01/15/2030")
+    assert screen.plausibility == "suspect"
+    assert not screen.impossible
 
 
 def test_an_age_over_120_is_suspect():
@@ -351,3 +396,60 @@ def test_an_unknown_kind_is_left_alone():
 def test_a_non_string_is_refused():
     with pytest.raises(TypeError):
         screen_identifier("ssn", 12345)
+
+
+# --------------------------------------------------------------------------
+# Hits already on disk, written under older rules
+# --------------------------------------------------------------------------
+
+def test_a_stored_hit_the_new_rules_would_refuse_is_reported_as_suspect(
+    tmp_path,
+):
+    """Rules change; recorded evidence does not disappear.
+
+    A database written under analyst-detectors-v1 holds values these rules now
+    call impossible. The report must neither crash on them nor delete them.
+    """
+    from experimental.analyst.report_state import _load_ranked_facts
+    from experimental.analyst.service import (
+        DirectoryRunRequest,
+        create_directory_run,
+    )
+    from experimental.analyst.store import open_connection
+    from shared.path_service import get_paths
+
+    source = tmp_path / "source"
+    output = tmp_path / "output"
+    source.mkdir()
+    output.mkdir()
+    (source / "one.txt").write_text("public", encoding="utf-8")
+    paths = get_paths(home_root=tmp_path / "home")
+    run_id, _inv = create_directory_run(
+        DirectoryRunRequest(source, output, "host12", "fast"),
+        path=paths.analyst_db_file,
+        run_id_factory=lambda _size: "b" * 32,
+    )
+    conn = open_connection(paths.analyst_db_file)
+    try:
+        file_id = conn.execute(
+            "SELECT file_id FROM analyst_files WHERE run_id=?", (run_id,),
+        ).fetchone()[0]
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "INSERT INTO analyst_detector_hits("
+            "file_id,ordinal,kind,value,start_char,end_char) VALUES(?,?,?,?,?,?)",
+            (file_id, 0, "ssn", "000-00-0000", 0, 11),
+        )
+        conn.execute("COMMIT")
+    finally:
+        conn.close()
+
+    conn = open_connection(paths.analyst_db_file, read_only=True)
+    try:
+        facts = _load_ranked_facts(conn, run_id)
+    finally:
+        conn.close()
+
+    assert len(facts) == 1
+    assert facts[0].plausibility == "suspect"
+    assert facts[0].rank == "MED", "HIGH demoted one notch, not deleted"

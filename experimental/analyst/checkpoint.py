@@ -491,9 +491,13 @@ def checkpoint_detector(
             raise CheckpointError("detector hits are immutable once written")
         conn.executemany(
             "INSERT INTO analyst_detector_hits("
-            "file_id,ordinal,kind,value,start_char,end_char) VALUES(?,?,?,?,?,?)",
+            "file_id,ordinal,kind,value,start_char,end_char,labeled) "
+            "VALUES(?,?,?,?,?,?,?)",
             (
-                (file_id, ordinal, hit.kind, hit.value, hit.start, hit.end)
+                (
+                    file_id, ordinal, hit.kind, hit.value, hit.start, hit.end,
+                    None if hit.labeled is None else int(hit.labeled),
+                )
                 for ordinal, hit in enumerate(materialized)
             ),
         )

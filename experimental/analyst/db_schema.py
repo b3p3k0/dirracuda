@@ -36,12 +36,13 @@ V5_SCHEMA_VERSION: Final = 5
 V6_SCHEMA_VERSION: Final = 6
 V7_SCHEMA_VERSION: Final = 7
 V8_SCHEMA_VERSION: Final = 8
-PREVIOUS_SCHEMA_VERSION: Final = V8_SCHEMA_VERSION
-SCHEMA_VERSION: Final = 9
+V9_SCHEMA_VERSION: Final = 9
+PREVIOUS_SCHEMA_VERSION: Final = V9_SCHEMA_VERSION
+SCHEMA_VERSION: Final = 10
 KNOWN_SCHEMA_VERSIONS: Final = (
     V1_SCHEMA_VERSION, V2_SCHEMA_VERSION, V3_SCHEMA_VERSION, V4_SCHEMA_VERSION,
     V5_SCHEMA_VERSION, V6_SCHEMA_VERSION, V7_SCHEMA_VERSION, V8_SCHEMA_VERSION,
-    SCHEMA_VERSION,
+    V9_SCHEMA_VERSION, SCHEMA_VERSION,
 )
 
 RUN_STATES: Final = (
@@ -1088,6 +1089,19 @@ class _SchemaStep:
     rebuilds_a_table: bool = False
 
 
+# v10 records whether a kind-appropriate label sat just before a detected
+# value. Only the scanner can know that -- it holds the document text, and the
+# report layer holds only the hit -- so the answer has to be written down. It
+# is the ONE screening input that cannot be recomputed from (kind, value);
+# everything else the screening rules need is in the value itself, which keeps
+# those rules free to change without a migration. NULL means "not recorded",
+# which is never held against a value.
+_V10_ADDITIONAL_DDL: Final = (
+    "ALTER TABLE analyst_detector_hits ADD COLUMN labeled INTEGER "
+    "CHECK(labeled IS NULL OR labeled IN (0,1))",
+)
+
+
 _LADDER: Final = (
     _SchemaStep(V1_SCHEMA_VERSION, (), None, None),
     _SchemaStep(
@@ -1117,7 +1131,11 @@ _LADDER: Final = (
         V8_SCHEMA_VERSION, _V8_ADDITIONAL_DDL, None, None, rebuilds_a_table=True,
     ),
     # v9 widens the contact state CHECK on the three contact tables (D20).
-    _SchemaStep(SCHEMA_VERSION, _V9_ADDITIONAL_DDL, None, None, rebuilds_a_table=True),
+    _SchemaStep(
+        V9_SCHEMA_VERSION, _V9_ADDITIONAL_DDL, None, None, rebuilds_a_table=True,
+    ),
+    # v10 records detector label proximity for the screening rules (F2).
+    _SchemaStep(SCHEMA_VERSION, _V10_ADDITIONAL_DDL, None, None),
 )
 
 

@@ -32,6 +32,22 @@ def _reviewed(tmp_path: Path):
     return _reviewed_phase2(tmp_path, "ordinary synthetic words", _NO_FINDINGS)
 
 
+def _detector_value(kind: str, index: int) -> str:
+    """One distinct, plausible value per hit.
+
+    F2 screens a value against published allocation rules, so a placeholder
+    like "value-0" now reports as suspect and ranks down. F1 folds repeats, so
+    every value must also be distinct for the cap to be exercised.
+    """
+    if kind == "ssn":
+        return f"422-52-{5000 + index:04d}"
+    if kind == "phone":
+        return f"210-234-{5000 + index:04d}"
+    if kind == "dob":
+        return f"03/{1 + index % 28:02d}/19{50 + index % 40:02d}"
+    return f"value-{index}"
+
+
 def _insert_detector_hits(path: Path, kinds: tuple[str, ...]) -> None:
     conn = open_connection(path)
     try:
@@ -43,8 +59,9 @@ def _insert_detector_hits(path: Path, kinds: tuple[str, ...]) -> None:
             "INSERT INTO analyst_detector_hits("
             "file_id,ordinal,kind,value,start_char,end_char) VALUES(?,?,?,?,?,?)",
             (
-                (file_id, index, kind, f"value-{index}", index * 20,
-                 index * 20 + len(f"value-{index}"))
+                (file_id, index, kind, _detector_value(kind, index),
+                 index * 20,
+                 index * 20 + len(_detector_value(kind, index)))
                 for index, kind in enumerate(kinds)
             ),
         )

@@ -101,6 +101,11 @@ class DetectorHit:
     value: str
     start: int
     end: int
+    #: Whether a kind-appropriate label sat just before this value in the
+    #: source text. Only the scanner can answer it, so it is written down;
+    #: every other screening input is recoverable from the value itself.
+    #: None means the question does not apply to this kind.
+    labeled: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)

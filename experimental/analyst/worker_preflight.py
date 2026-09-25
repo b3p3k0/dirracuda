@@ -38,7 +38,7 @@ from .worker_contract import WorkerRunContext
 
 PARSER_BUNDLE_KIND: Final = "analyst-parser-bundle"
 PARSER_BUNDLE_VERSION: Final = 1
-DETECTOR_RULES_VERSION: Final = "analyst-detectors-v1"
+DETECTOR_RULES_VERSION: Final = "analyst-detectors-v2"
 MAX_PARSER_CONTRACT_BYTES: Final = 2 * 1024 * 1024
 
 _MODULE_ROOT = Path(__file__).resolve().parent
