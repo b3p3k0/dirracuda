@@ -52,6 +52,7 @@ def test_a_fact_defaults_to_one_occurrence_and_a_valid_verdict():
     )
     assert fact.occurrences == 1
     assert fact.plausibility == "valid"
+    assert fact.subject == "unknown"
 
 
 @pytest.mark.parametrize("bad", [0, -1, "4", True, 1.0])
@@ -63,11 +64,17 @@ def test_an_impossible_occurrence_count_is_refused(bad):
         )
 
 
-def test_an_unknown_plausibility_is_refused():
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("plausibility", "probably"), ("plausibility", "public"),
+     ("subject", "corporate")],
+)
+def test_an_unknown_screening_value_is_refused(field, value):
+    """`public` moved to the subject axis; plausibility must not take it."""
     with pytest.raises(report_json.ReportValidationError):
         GroundedFact(
             kind="ssn", category="pii", quote="q", file="a", provenance="p",
-            rank="HIGH", source="detector", plausibility="probably",
+            rank="HIGH", source="detector", **{field: value},
         )
 
 
@@ -77,6 +84,7 @@ def test_a_v2_report_validates_without_the_new_fields():
     for fact in report["facts"]:
         fact.pop("occurrences")
         fact.pop("plausibility")
+        fact.pop("subject")
     report_json.validate_report_json(report)
 
 
@@ -107,8 +115,15 @@ def test_a_demoted_fact_says_why_it_was_demoted():
         {"rank": "MED", "plausibility": "suspect"}
     ) == "MED · suspect"
     assert fact_rank_label(
-        {"rank": "low", "plausibility": "public"}
-    ) == "low · public"
+        {"rank": "low", "subject": "organizational"}
+    ) == "low · organizational"
+
+
+def test_the_two_screening_axes_are_reported_separately():
+    """A real toll-free number is not "suspect"; it is simply not personal."""
+    assert fact_rank_label({
+        "rank": "low", "plausibility": "suspect", "subject": "organizational",
+    }) == "low · suspect · organizational"
 
 
 # --------------------------------------------------------------------------
@@ -243,6 +258,7 @@ def _report(*, version: int = 3) -> dict:
             "file": "Sabina/Fed loan/IncomeDrivenRepayment_2018.pdf",
             "provenance": "page page-1", "rank": "HIGH", "source": "detector",
             "occurrences": occurrences, "plausibility": "valid",
+            "subject": "unknown",
         }
 
     run = {

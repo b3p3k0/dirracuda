@@ -49,7 +49,8 @@ grounded evidence file. It carries the read (Layer 1) and the ranked facts (Laye
       "rank": "HIGH",
       "source": "detector",
       "occurrences": 48,
-      "plausibility": "valid"
+      "plausibility": "valid",
+      "subject": "personal"
     },
     {
       "kind": "phone",
@@ -60,7 +61,8 @@ grounded evidence file. It carries the read (Layer 1) and the ranked facts (Laye
       "rank": "low",
       "source": "detector",
       "occurrences": 1,
-      "plausibility": "valid"
+      "plausibility": "valid",
+      "subject": "organizational"
     }
   ],
   "coverage": {
@@ -97,10 +99,12 @@ grounded evidence file. It carries the read (Layer 1) and the ranked facts (Laye
   of one value in one file fold together; they differed only in `provenance` and spent the cap.
   The fold happens before the cap is applied, and the first occurrence's `provenance` is kept.
 - `facts[].occurrences` — integer >= 1, v3+. How many times this value occurs in this file.
-- `facts[].plausibility` — `valid` / `suspect` / `public`, v3+. What the value's own form says
-  about it under published allocation rules. v3 writes only `valid`; the other two are reserved
-  for the identifier-screening work. A screened-down fact is ranked lower and labelled, never
-  silently removed — coverage honesty is the product (frozen §4).
+- `facts[].plausibility` — `valid` / `suspect`, v3+. Whether the value's own form argues against
+  it being a real identifier, under published allocation rules.
+- `facts[].subject` — `personal` / `organizational` / `unknown`, v3+. Whose identifier it looks
+  like. Separate from plausibility: a toll-free number is entirely real and simply belongs to a
+  business. A screened-down fact is ranked lower and labelled, never silently removed — coverage
+  honesty is the product (frozen §4).
 - `coverage` — the honest counts. Coverage stays computed (frozen §4); it moves out of the
   report's lead into a "Files read" line plus a details view.
 

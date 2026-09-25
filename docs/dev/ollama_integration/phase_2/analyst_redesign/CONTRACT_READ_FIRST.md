@@ -363,9 +363,17 @@ Decision:
   span in the document.
 - `GroundedFact` gains two fields and the report becomes **v3**:
   - `occurrences: int` (>= 1) — how many times this value appears in this file.
-  - `plausibility: str` — one of `valid`, `suspect`, `public`. **v3 only ever writes `valid`.**
-    The other two are reserved here so that the identifier-screening work does not need a second
-    schema bump; a later amendment will define when they are written.
+  - `plausibility: str` — `valid` or `suspect`. Whether the value's own form argues against it
+    being a real identifier.
+  - `subject: str` — `personal`, `organizational` or `unknown`. Whose identifier it looks like.
+    **v3 writes only `valid` / `unknown`**; both are reserved here so that the
+    identifier-screening work does not need a second schema bump.
+
+  These are two axes on purpose, and an earlier draft of this amendment wrongly had one. A
+  toll-free number and a role mailbox are entirely real identifiers; they are simply published
+  business contacts rather than personal data. Recording them as `suspect` would have had the
+  report call a real number fake. The axes also differ in effect: `suspect` lowers a rank,
+  while `organizational` is mostly a label, because contact-kind facts already rank `low`.
 - `SUPPORTED_REPORT_SCHEMA_VERSIONS` becomes `(1, 2, 3)`. Both new fields are defaulted, and the
   fact key set is version-gated the same way the run key set already is, so v1 and v2 reports on
   disk keep opening.

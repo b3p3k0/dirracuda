@@ -28,11 +28,14 @@ _READ_MODES = frozenset({"quick", "full"})
 _HIGH_KINDS = frozenset({
     "ssn", "passport", "card", "routing", "iban", "bank_account",
 })
-#: How much a fact's own value argues against it, from published allocation
-#: rules. "valid" is the only value F1 writes; the screening rules populate the
-#: other two. "suspect" means probably not a real identifier; "public" means a
-#: real one that is a published business contact rather than personal data.
-_PLAUSIBILITY = frozenset({"valid", "suspect", "public"})
+#: Whether the value's own form argues against it being a real identifier,
+#: under published allocation rules. F1 writes only "valid".
+_PLAUSIBILITY = frozenset({"valid", "suspect"})
+#: Whose identifier this looks like. A separate question from plausibility: a
+#: toll-free number and a role mailbox are entirely real, they are simply
+#: published business contacts rather than personal data. Conflating the two
+#: would have made the report call a real number "suspect".
+_SUBJECTS = frozenset({"personal", "organizational", "unknown"})
 
 
 def model_identity_label(run: dict) -> str:
@@ -107,16 +110,23 @@ def fact_seen_label(fact: dict) -> str:
 def fact_rank_label(fact: dict) -> str:
     """Return a fact's rank, naming why it was ranked down when it was.
 
-    A demoted fact must say which kind of demotion it got. "suspect" means
-    published allocation rules argue the value is not a real identifier;
-    "public" means it is real but is a published business contact rather than
-    personal data. Silence on that would make a low rank look like an opinion.
+    Two independent things can rank a fact down, and they mean different
+    things. "suspect" says published allocation rules argue the value is not a
+    real identifier. "organizational" says it is entirely real but belongs to a
+    business rather than a person. Silence on either would make a low rank look
+    like an unexplained opinion.
     """
-    rank = str(fact.get("rank", ""))
+    notes = []
     plausibility = fact.get("plausibility", "valid")
-    if type(plausibility) is not str or plausibility == "valid":
+    if type(plausibility) is str and plausibility != "valid":
+        notes.append(plausibility)
+    subject = fact.get("subject", "unknown")
+    if type(subject) is str and subject == "organizational":
+        notes.append(subject)
+    rank = str(fact.get("rank", ""))
+    if not notes:
         return rank
-    return f"{rank} \u00b7 {plausibility}"
+    return rank + "".join(f" \u00b7 {note}" for note in notes)
 
 
 class ReportValidationError(ValueError):
@@ -141,6 +151,7 @@ class GroundedFact:
     #: on screen and burned the report's fact budget.
     occurrences: int = 1
     plausibility: str = "valid"
+    subject: str = "unknown"
 
     def __post_init__(self) -> None:
         if (
@@ -153,6 +164,7 @@ class GroundedFact:
             or type(self.source) is not str
             or type(self.occurrences) is not int
             or type(self.plausibility) is not str
+            or type(self.subject) is not str
             or not self.kind
             or not self.quote
             or self.occurrences < 1
@@ -160,6 +172,7 @@ class GroundedFact:
             or self.rank not in _FACT_RANKS
             or self.source not in _FACT_SOURCES
             or self.plausibility not in _PLAUSIBILITY
+            or self.subject not in _SUBJECTS
         ):
             raise ReportValidationError("grounded fact is invalid")
 
@@ -453,6 +466,7 @@ def build_report_json(
                 "source": fact.source,
                 "occurrences": fact.occurrences,
                 "plausibility": fact.plausibility,
+                "subject": fact.subject,
             }
             for fact in ordered_facts
         ],
@@ -541,7 +555,7 @@ def validate_report_json(obj: dict[str, object]) -> None:
         "kind", "category", "quote", "file", "provenance", "rank", "source",
     }
     if version >= 3:
-        fact_keys |= {"occurrences", "plausibility"}
+        fact_keys |= {"occurrences", "plausibility", "subject"}
     facts: list[GroundedFact] = []
     for value in fact_values:
         fact = _object(value, "fact")

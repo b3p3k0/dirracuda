@@ -55,7 +55,7 @@ def _fact(**overrides) -> dict:
         "kind": "ssn", "category": "pii", "quote": "630-15-0629",
         "file": "Sabina/Fed loan/IncomeDrivenRepayment_2018.pdf",
         "provenance": "page page-1", "rank": "HIGH", "source": "detector",
-        "occurrences": 1, "plausibility": "valid",
+        "occurrences": 1, "plausibility": "valid", "subject": "unknown",
     }
     fact.update(overrides)
     return fact
@@ -104,6 +104,7 @@ def test_a_v2_report_without_the_new_fields_still_renders(view) -> None:
     fact = _fact()
     fact.pop("occurrences")
     fact.pop("plausibility")
+    fact.pop("subject")
     report = _report([fact])
     report["report_schema_version"] = 2
     view._show_report(report, changed=False)
