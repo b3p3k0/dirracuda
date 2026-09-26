@@ -588,8 +588,13 @@ Settings are stored at `~/.dirracuda/conf.d/experimental/sherlock.json`.
 Analyst is an optional, Linux-only local document-review workflow. It inventories a
 directory or an exact persisted extraction manifest, parses supported documents inside
 a strict sandbox, runs deterministic exposure detectors, sends selected text to a model
-server you choose, and publishes a coverage-first report. It never logs in to a server
-or downloads source files.
+server you choose, and publishes a report. It never logs in to a server or downloads
+source files.
+
+A report opens with the facts about the run itself — when it started and finished, how
+long it took, what it read, which model and which detector rules produced it. Below that
+sits the model's plain-language read, clearly labelled as unverified, and below that the
+grounded facts, where every value quoted is an exact substring of a real document.
 
 By default that model server is a digest-pinned Ollama on loopback. Analyst can also use
 a llama.cpp server, on this machine or another one. A remote server needs TLS and a
@@ -606,6 +611,15 @@ every supported document with deterministic detectors and sends only flagged fil
 the model; Deep mode reviews every supported nonempty document. The optional automatic
 post-extract offer is off by default and binds a run to the exact saved extraction
 manifest.
+
+Detected identifiers are screened against published allocation rules — the SSA's
+never-issued ranges, the North American dialling plan, card issuer ranges, Federal
+Reserve routing symbols. A value that cannot be real under any reading is not reported.
+One that is probably not real, or that is real but belongs to a business rather than a
+person, is reported at a lower rank and says why. Repeated values collapse to one row
+with a count, and the report lists the organisations the documents keep referring to.
+Nothing is silently dropped except the impossible; the full evidence, uncapped, is always
+in the exported `findings.csv`.
 
 Analyst has an isolated dependency lane because its reviewed V1 parser stack requires
 Linux x86-64, CPython 3.14, bubblewrap, Antiword, and exact hash-pinned parser artifacts.
