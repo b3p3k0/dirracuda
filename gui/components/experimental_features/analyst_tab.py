@@ -277,6 +277,7 @@ class AnalystTab:
             self._runs.column(key, width=width, anchor="w")
         self._runs.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 7))
         self._runs.bind("<<TreeviewSelect>>", self._on_selection, add="+")
+        self._runs.bind("<Double-Button-1>", self._on_run_activated, add="+")
 
         run_controls = tk.Frame(frame)
         self._theme.apply_to_widget(run_controls, "main_window")
@@ -1455,6 +1456,17 @@ class AnalystTab:
         self._busy = busy
         self._status_var.set(status)
         self._analyze_btn.configure(state="disabled" if busy else "normal")
+
+    def _on_run_activated(self, event) -> None:
+        """Open the report for the double-clicked row, when it has one."""
+        if self._runs.identify_region(event.x, event.y) != "cell":
+            return  # a separator double-click is Tk's own column auto-fit
+        row = self._runs.identify_row(event.y)
+        if row:
+            # The row under the pointer, not selection()[0], which differs
+            # when several rows are selected.
+            self._runs.selection_set(row)
+            self._open_reports()
 
     def _open_reports(self) -> None:
         from experimental.analyst.state import RunState
