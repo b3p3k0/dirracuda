@@ -250,3 +250,55 @@ def test_download_no_full_path_exposure(logged_in_client):
             assert not val.startswith("/"), (
                 f"Response field {key!r} looks like an absolute path: {val!r}"
             )
+
+
+# --------------------------------------------------------------------------
+# Extraction discipline (db.py split into db_common / db_details)
+# --------------------------------------------------------------------------
+
+def test_get_result_details_still_resolves_on_the_db_module():
+    """app.py calls _db.get_result_details, so the name must live here."""
+    import experimental.webui.db as module
+
+    assert callable(module.get_result_details)
+
+
+def test_patching_it_on_the_db_module_is_what_app_py_sees(monkeypatch):
+    import experimental.webui.app as app_module
+    import experimental.webui.db as module
+
+    sentinel = object()
+    monkeypatch.setattr(module, "get_result_details", lambda *a, **k: sentinel)
+    assert app_module._db.get_result_details("p", "h", 1) is sentinel
+
+
+def test_the_detail_module_never_imports_db_at_module_level():
+    """db.py re-exports from db_details, so an import back would be a cycle."""
+    import ast
+    import pathlib
+
+    import experimental.webui.db_details as details
+
+    tree = ast.parse(pathlib.Path(details.__file__).read_text())
+    modules = [
+        node.module or "" for node in tree.body
+        if isinstance(node, ast.ImportFrom)
+    ] + [
+        alias.name for node in tree.body
+        if isinstance(node, ast.Import) for alias in node.names
+    ]
+    assert "experimental.webui.db" not in modules
+
+
+def test_the_shared_helpers_module_imports_neither_side():
+    import ast
+    import pathlib
+
+    import experimental.webui.db_common as common
+
+    tree = ast.parse(pathlib.Path(common.__file__).read_text())
+    modules = [
+        node.module or "" for node in tree.body
+        if isinstance(node, ast.ImportFrom)
+    ]
+    assert not any("webui.db" in name for name in modules)
