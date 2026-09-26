@@ -1,7 +1,7 @@
 # Sourced by install.sh — not standalone.
 # Step 5: Set execute permission on the GUI and daemon launchers.
 
-section "[Step 5]  Launcher permissions"
+section "[Step 5 of 10]  Launcher permissions"
 
 echo "  The ./dirracuda and ./dirracuda-d launchers need execute permission."
 echo "  This is sometimes missing after downloading or cloning the project."

@@ -1,0 +1,10 @@
+Pinacle Ledger Services
+Remittance Advice 004
+
+Payer: Zeno Mordant
+Card on file: 4000000000000127
+ACH routing number: 110000000
+ACH account number: 000555555559
+International settlement IBAN: GB65NWBK77212577002623
+
+Settlement batch closes at 17:00. Retain this advice for reconciliation.

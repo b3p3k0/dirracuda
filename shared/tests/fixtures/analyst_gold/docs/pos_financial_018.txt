@@ -1,0 +1,10 @@
+Vellum & Sparrow Actuarial
+Remittance Advice 018
+
+Payer: Yara Cadwallader
+Card on file: 4000000000000069
+ACH routing number: 110000000
+ACH account number: 000777777771
+International settlement IBAN: GB27NWBK65324357939761
+
+Settlement batch closes at 17:00. Retain this advice for reconciliation.

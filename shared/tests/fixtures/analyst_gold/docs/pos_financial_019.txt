@@ -1,0 +1,10 @@
+Northgate Clearing Cooperative
+Remittance Advice 019
+
+Payer: Rhoda Inglewood
+Card on file: 6011111111111117
+ACH routing number: 110000000
+ACH account number: 000444444440
+International settlement IBAN: GB62NWBK32141058546706
+
+Settlement batch closes at 17:00. Retain this advice for reconciliation.

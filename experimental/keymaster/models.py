@@ -6,7 +6,9 @@ from dataclasses import dataclass
 from typing import Optional
 
 PROVIDER_SHODAN = "SHODAN"
-PROVIDERS = (PROVIDER_SHODAN,)
+#: Bearer tokens for a remote Analyst model server (remote-backends 9).
+PROVIDER_LLM_SERVER = "LLM_SERVER"
+PROVIDERS = (PROVIDER_SHODAN, PROVIDER_LLM_SERVER)
 
 
 @dataclass(frozen=True)

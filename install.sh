@@ -41,6 +41,7 @@ echo "    [6] Configure your Shodan API key       (optional)"
 echo "    [7] Import an existing database         (optional)"
 echo "    [8] ClamAV antivirus / RAM quarantine   (optional)"
 echo "    [9] Web UI setup                       (optional)"
+echo "    [10] Analyst document review setup      (optional)"
 echo
 
 pause
@@ -67,6 +68,8 @@ source "$SCRIPT_DIR/scripts/install_scripts/step7_db_import.sh"
 source "$SCRIPT_DIR/scripts/install_scripts/step8_clamav.sh"
 # shellcheck source=scripts/install_scripts/step9_webui.sh
 source "$SCRIPT_DIR/scripts/install_scripts/step9_webui.sh"
+# shellcheck source=scripts/install_scripts/step10_analyst.sh
+source "$SCRIPT_DIR/scripts/install_scripts/step10_analyst.sh"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Post-install summary

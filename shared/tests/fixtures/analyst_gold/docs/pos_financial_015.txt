@@ -1,0 +1,10 @@
+Vellum & Sparrow Actuarial
+Remittance Advice 015
+
+Payer: Amory Ashgrove
+Card on file: 6011111111111117
+ACH routing number: 110000000
+ACH account number: 000777777771
+International settlement IBAN: GB85NWBK32101059628620
+
+Settlement batch closes at 17:00. Retain this advice for reconciliation.

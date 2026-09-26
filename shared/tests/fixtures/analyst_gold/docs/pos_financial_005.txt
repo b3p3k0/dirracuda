@@ -1,0 +1,10 @@
+Northgate Clearing Cooperative
+Remittance Advice 005
+
+Payer: Wendell Blenkinsop
+Card on file: 5555555555554444
+ACH routing number: 110000000
+ACH account number: 000111111113
+International settlement IBAN: GB11NWBK22511942083324
+
+Settlement batch closes at 17:00. Retain this advice for reconciliation.

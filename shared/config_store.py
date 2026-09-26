@@ -39,6 +39,7 @@ EXPERIMENTAL_MODULES: Tuple[str, ...] = (
     "keymaster",
     "webui",
     "sherlock",
+    "analyst",
 )
 
 

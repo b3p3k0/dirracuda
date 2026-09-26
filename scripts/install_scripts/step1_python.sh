@@ -1,7 +1,7 @@
 # Sourced by install.sh — not standalone.
 # Step 1: Python version check.
 
-section "[Step 1 of 8]  Python version check"
+section "[Step 1 of 10]  Python version check"
 
 echo "  Dirracuda requires Python 3.8 or newer. Python 3.10+ is recommended."
 echo

@@ -1581,7 +1581,10 @@ def test_registry_webui_label():
 def test_registry_tab_order_exact():
     from gui.components.experimental_features.registry import _get_features
     ids = [f.feature_id for f in _get_features()]
-    assert ids == ["se_dork", "reddit", "webui", "dorkbook", "keymaster", "sherlock"]
+    assert ids == [
+        "se_dork", "reddit", "webui", "dorkbook", "keymaster", "sherlock",
+        "analyst",
+    ]
 
 
 def test_webui_tab_get_cfg_fallback(monkeypatch):

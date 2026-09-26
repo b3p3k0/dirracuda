@@ -1,7 +1,7 @@
 # Sourced by install.sh — not standalone.
 # Step 7: Optional import of an existing dirracuda database.
 
-section "[Step 7 of 8]  Import existing database  (optional)"
+section "[Step 7 of 10]  Import existing database  (optional)"
 
 echo "  If you have a dirracuda.db from a previous installation, you can"
 echo "  import it into the canonical home data path to preserve scan history."

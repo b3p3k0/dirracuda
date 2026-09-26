@@ -1024,7 +1024,7 @@ def _start_extract(
                     except Exception:
                         db_path = None
             try:
-                log_path = extract_runner.write_extract_log(
+                summary_reference = extract_runner.write_extract_log(
                     summary,
                     db_path=str(db_path or ""),
                     ip_address=ip_address,
@@ -1034,7 +1034,7 @@ def _start_extract(
                 )
             except TypeError:
                 # Test doubles may still expose the legacy single-arg signature.
-                log_path = extract_runner.write_extract_log(summary)
+                summary_reference = extract_runner.write_extract_log(summary)
 
             def on_success():
                 extract_state["running"] = False
@@ -1072,9 +1072,34 @@ def _start_extract(
                 messagebox.showinfo(
                     "Extraction Complete",
                     f"Downloaded {files} file(s) into quarantine:\n{quarantine_dir}\n\n"
-                    f"Log saved to:\n{log_path}\n\n"
+                    "Summary persisted as:\n"
+                    f"{getattr(summary_reference, 'display_token', summary_reference)}\n\n"
                     "Inspect and promote files from this quarantine path before moving them elsewhere."
                 )
+                if files > 0:
+                    try:
+                        from gui.utils.analyst_post_extract import offer_after_extract
+
+                        manifest_db_path = None
+                        if settings_manager:
+                            candidate = (
+                                settings_manager.get_database_path()
+                                if hasattr(settings_manager, "get_database_path")
+                                else settings_manager.get_setting(
+                                    "backend.database_path", None,
+                                )
+                            )
+                            if candidate:
+                                manifest_db_path = Path(candidate).expanduser().absolute()
+                        offer_after_extract(
+                            detail_window,
+                            settings_manager,
+                            summary_reference,
+                            main_db_path=manifest_db_path,
+                            report_label=str(ip_address),
+                        )
+                    except Exception:
+                        pass
 
             detail_window.after(0, on_success)
 

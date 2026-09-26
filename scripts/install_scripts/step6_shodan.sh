@@ -1,7 +1,7 @@
 # Sourced by install.sh — not standalone.
 # Step 6: Optional Shodan API key configuration.
 
-section "[Step 6 of 8]  Shodan API key  (optional)"
+section "[Step 6 of 10]  Shodan API key  (optional)"
 
 echo "  Dirracuda uses Shodan to search for publicly exposed network hosts."
 echo "  You'll need a free Shodan account and API key to use these features."

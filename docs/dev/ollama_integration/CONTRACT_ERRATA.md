@@ -1,0 +1,956 @@
+# Analyst — Contract Errata
+
+Errata against the frozen C0A contract ([`CONTRACT.md`](CONTRACT.md)). `CONTRACT.md`
+itself is **not edited** — it stays frozen as reviewed and committed at `91bb2aa`.
+Each entry here records a specific, narrow correction, who accepted it, and when.
+
+---
+
+## E1 — GPT-OSS cannot disable thinking
+
+**Status:** ACCEPTED (HI, 2026-08-04)
+**Affects:** §7 (model worksheet), §8 (Ollama request contract)
+**Raised by:** C0B-1 planning, senior review revision 3
+
+### The conflict
+
+§7 states "Temperature 0. Thinking disabled." and §8 states "thinking disabled where
+supported". These disagree, and the stricter reading is unachievable for one of the
+two candidates named in §D1.
+
+Ollama documents that GPT-OSS is an exception to the boolean `think` parameter:
+
+> GPT-OSS requires `think` to be set to `"low"`, `"medium"`, or `"high"`. Passing
+> true/false is ignored for that model.
+
+The trace cannot be fully disabled for GPT-OSS. Source:
+https://docs.ollama.com/capabilities/thinking
+
+### The correction
+
+§7 and §8 align to the §8 wording: **thinking is disabled where supported.**
+Concretely, for the C0B candidate set:
+
+| Model | `think` value |
+|---|---|
+| `gpt-oss:20b` | `"low"` — the shortest trace the model accepts |
+| `qwen3.6:35b` | `false` |
+| `qwen3.6:27b` | `false` |
+
+Preflight confirms the installed Qwen models honour `false` before any scored request.
+
+### Consequences accepted with this erratum
+
+1. **The streamed `thinking` field is sensitive model output.** It is bounded in
+   bytes, counted against cancellation and output-budget accounting, excluded from
+   operational logs and from every committed artifact, and deleted alongside other
+   ephemeral raw results under the same retention policy.
+2. **Candidates do not share identical reasoning settings.** This is a stated
+   limitation of any comparison involving GPT-OSS, not a controlled variable. It is
+   reported wherever GPT-OSS results appear.
+3. **The interaction between thinking tokens and `num_predict` is measured, not
+   assumed.** C0B-1 Stage B records it.
+
+### Reversal condition
+
+If generated reasoning traces over private material are later judged unacceptable,
+`gpt-oss:20b` is eliminated from the candidate set rather than accommodated. This
+erratum does not authorize reasoning traces for any purpose beyond running the
+approved benchmark and the resulting Analyst pipeline.
+
+---
+
+## E2 — B5 terminal proof is compositional
+
+**Status:** ACCEPTED (HI, 2026-08-06)
+**Affects:** `BENCHMARK_PUBLIC_CDF_SCHEMA.md` §12.4
+**Raised by:** final B5 hostile review
+
+### The conflict
+
+The original B5 sentence required one fake-session flow to use the actual bounded
+transport through the selected C→D→F path and "every terminal branch." That is not a
+coherent requirement for terminals which occur before HTTP dispatch: filesystem refusal,
+an uncharged budget refusal, and explicit abandon must not send a request; abandon must
+not construct the client at all. Replaying the full expensive prefix for each quality reason would also
+duplicate evidence already divided deliberately between deterministic scorer tests and
+durable terminal/receipt tests.
+
+### The correction
+
+B5 terminal proof is compositional and closed:
+
+1. One fake-session flow uses the actual `BoundedOllamaTransport` for the complete
+   C→D1→D2→D3→conditional D4→F seeds→acceptance path, including crash, retry, pause,
+   cancellation and resume.
+2. Focused scorer and durable-runtime tests cover every enumerated C/D/F quality-terminal
+   reason and exact artifact/decision ownership. Production-generated checkpoints prove
+   receipt and no-transport re-entry for every structurally distinct terminal owner path:
+   C, each D phase, F seed 1, F final-seed ranking and F acceptance.
+3. Transport-originated safety and provenance terminals use the actual bounded adapter.
+   Pre-dispatch budget and filesystem terminals prove that no HTTP request is made;
+   abandon proves that the transport client is not constructed.
+4. The complete proof suite forbids socket connection and private-root discovery/access.
+
+The authoritative closed proof-node matrix is in
+`BENCHMARK_PUBLIC_CDF_SCHEMA.md` §12.4 and is checked against the frozen reason/state
+sets by `test_b5_terminal_proof_matrix_is_closed_and_names_existing_nodes`.
+
+### Consequences accepted with this erratum
+
+This changes proof composition, not a scoring threshold, terminal outcome, runtime
+behavior or live-data rule. It was accepted before B5 approval and before any public
+checkpoint or scored Ollama call. Any new terminal reason must update both the strict
+schema and the closed proof matrix; an unlisted reason fails the offline gate.
+
+---
+
+## E3 — `/api/show` has a control-specific JSON node cap
+
+**Status:** ACCEPTED FOR CORRECTION (standing HI authorization, 2026-08-08)
+**Affects:** `BENCHMARK_PROTOCOL_C0B2.md` §8
+**Raised by:** first canonical public preflight
+
+### The conflict
+
+The general 4,096-node decoded-JSON cap is sufficient for chat frames and ordinary
+controls, but current Ollama may include a `tensors` collection in `/api/show` even when
+the frozen request sends `verbose:false`. The first canonical public run received a
+69,543-byte, depth-5 response with 4,109 decoded nodes and 459 tensor rows for
+`gpt-oss:20b`. Version and tags passed; show then correctly froze `FAILED_SAFETY`. No
+scored document request occurred. The failed run is retained with a verified receipt.
+
+Ollama documents `verbose` as enabling large verbose fields, while its current API type
+also exposes optional tensors and the observed false/omitted behavior has an open
+upstream report:
+
+- [Show model details](https://docs.ollama.com/api-reference/show-model-details)
+- [Ollama API type](https://github.com/ollama/ollama/blob/main/api/types.go)
+- [Ollama issue 10286](https://github.com/ollama/ollama/issues/10286)
+
+### The correction
+
+Only a `show` control may contain up to 8,192 decoded JSON nodes. The 2 MiB raw-body,
+256 KiB canonical-JSON and depth-16 caps remain unchanged. The sanitizer still persists
+only the frozen model identity, capabilities, safe detail fields and hashes of parameters,
+template and model info; tensor names, shapes and values are discarded. Version, tags,
+ps, chat frames and scored answer JSON retain the 4,096-node cap.
+
+### Consequences accepted with this erratum
+
+This is a control-envelope compatibility correction, not a scoring threshold or model-
+quality change. The immutable failed run is not resumed or reclassified. After the exact
+correction passes review and is committed, a new public run starts from `PREPARED` under
+the new source identity. Any show response above 8,192 nodes remains `FAILED_SAFETY`.
+
+---
+
+## E4 — Size the show-control envelope from every frozen candidate
+
+**Status:** ACCEPTED FOR CORRECTION (standing HI authorization, 2026-08-08)
+**Affects:** E3 and `BENCHMARK_PROTOCOL_C0B2.md` §8
+**Raised by:** replacement canonical public preflight
+
+### The conflict
+
+E3 measured only the first model before selecting 8,192 nodes. The replacement run then
+passed version, tags and the `gpt-oss:20b` show control but froze `FAILED_SAFETY` on the
+next candidate. No scored document request occurred, and the second failed run is also
+retained with a verified receipt.
+
+Measurement of the complete frozen candidate set produced:
+
+| Model | Decoded nodes | Tensor rows | Canonical bytes | Depth |
+|---|---:|---:|---:|---:|
+| `gpt-oss:20b` | 4,109 | 459 | 69,543 | 5 |
+| `qwen3.6:35b` | 10,546 | 1,194 | 105,965 | 5 |
+| `qwen3.6:27b` | 11,318 | 1,307 | 110,924 | 5 |
+
+### The correction
+
+E4 supersedes only E3's 8,192-node value. The show-only limit is 16,384 decoded nodes,
+above the measured complete-candidate maximum. All unchanged E3 constraints still apply:
+2 MiB raw body, 256 KiB canonical JSON, depth 16, sanitized durable evidence and a 4,096-
+node cap for chat, scored answers and every other control.
+
+### Consequences accepted with this erratum
+
+Compatibility limits derived from a candidate set must measure the entire frozen set
+before selection. Tests pin all three observed counts, the exact 16,384/16,385 boundary
+and the unchanged byte/depth/general-control caps. The second failed run is neither
+resumed nor reclassified; a new committed source identity requires a third public run.
+
+---
+
+## E5 — Model findings are bounded, human-reviewed suggestions
+
+**Status:** ACCEPTED FOR PROSPECTIVE CORRECTION (HI decision, 2026-08-09)
+**Affects:** `CONTRACT.md` §§7 and 14; public benchmark false-positive gates
+**Raised by:** canonical C0B-2 terminal review
+
+The HI reconfirmed this decision after reviewing the measured result: one bounded false
+positive across the public evidence is acceptable for a useful assistive partner at this
+stage. Analyst supports—not replaces—the human analyst, so this observed review cost is
+not a showstopper while the no-action, explicit-review and unchanged hard-safety controls
+below hold. This acceptance does not describe the model as perfect or authorize threshold
+drift.
+
+### The conflict
+
+Analyst is a digital intern: it recommends findings to a human analyst and cannot act on
+them. The frozen public protocol nevertheless used inconsistent false-positive gates.
+Stage C allowed one false-positive document among 12 negatives and final acceptance
+allowed one among 40, while D3/D4 and each Stage-F seed required zero. The canonical run
+hit exactly that mismatch: its remaining candidate cleared grounding, recall, boundary,
+schema, context and safety checks, but one negative document produced a retained finding.
+
+Exact-substring grounding proves that quoted evidence exists. It does not prove that the
+model classified that evidence correctly. A human-review control therefore needs both a
+numeric error budget and a UI/report contract; “human in the loop” is not a substitute
+for either.
+
+### The prospective correction
+
+C0B-3 uses these exact document-level limits:
+
+| Gate | Maximum false-positive documents |
+|---|---:|
+| Stage C, 12 negatives | 1 — unchanged |
+| D3/D4, 12 negatives | 1 — replaces zero |
+| Stage F, 16 negatives, independently at each seed | 1 — replaces zero |
+| Final 166-document acceptance, 40 negatives | 1 — unchanged |
+
+The final combined gate is deliberately tighter than the intermediate gates: a candidate
+may continue after one bounded miss, but additional seed-1 misses can still prevent final
+selection. Recall/F1, raw and retained grounding, schema, injection, boundary, length,
+context, cancellation, provenance and safety gates do not change. No metric compensates
+for failing another hard gate.
+
+### Human-review contract
+
+- Deterministic identifier counts remain a separate, authoritative evidence track.
+- Every model-derived finding is labelled **suggested / unreviewed**, shows its verified
+  source quote and provenance, and requires an explicit human accept/reject choice.
+- No model finding triggers copy, delete, move, quarantine, notification, authentication,
+  probing, tagging, upload or any other state change.
+- Findings export includes only rows the human explicitly selects. The report never
+  implies that unreviewed suggestions are adjudicated facts or that no finding means safe.
+- Rejection/override counts become monitoring evidence; they never silently retune the
+  prompt, model or threshold.
+
+### Non-retroactivity
+
+C0B-2 remains terminal `INCONCLUSIVE/no_d3_context_survivor`. E5 does not alter its
+checkpoint, decisions, artifacts, receipt, protocol, schema or outcome document. The
+bounded policy applies only to a fresh, preregistered C0B-3 run under a new source identity.
+Private Stage E remains held until that run produces a valid public selection and the HI
+separately authorizes or defers private execution.
+
+This is an assistive-workflow risk decision, not a claim of population accuracy. It
+follows NIST's context-specific treatment of human-AI roles, oversight and measured risk:
+[AI RMF Core](https://airc.nist.gov/airmf-resources/airmf/5-sec-core/) and
+[trustworthiness characteristics](https://airc.nist.gov/airmf-resources/airmf/3-sec-characteristics/).
+
+---
+
+## E6 — Repeated grounded evidence is normalized, not retried blindly
+
+**Status:** ACCEPTED FOR PROSPECTIVE CORRECTION (HI decision, 2026-08-11)
+**Affects:** `CONTRACT.md` §§7–8; worksheet prompt, evidence normalization and retry
+**Raised by:** canonical C0B-3 terminal review
+
+### The conflict
+
+The public output-truncation fixtures contain identifiers that legitimately occur more
+than once. C0B-3's prompt required exact quoted evidence but did not tell the model to
+emit each category/quote pair only once. One Stage-F answer therefore returned the same
+grounded contact quote twice. The schema was strict-valid, every quote was grounded and
+the source contained the repeated value twice, but the semantic validator rejected the
+answer as duplicate evidence.
+
+The frozen retry repeated the exact prompt, nonce, schema, options, source and seed. It
+returned byte-identical content and could not repair a deterministic semantic error.
+
+### The prospective correction
+
+The production prompt says to emit at most one finding for each unique category and exact
+quote, even when the value repeats in the source. After strict structural validation and
+raw grounding, the aggregator removes later duplicates by `(category, Unicode-NFC quote)`
+in stable first-seen order. Raw counts retain every original row; retained counts and
+display evidence use the normalized set and deterministic source location.
+
+The C0B-4 confirmation policy may recover at most one redundant row in at most one
+chunk/document independently in each scored lane. Recovery requires strict-valid raw
+structure, `duplicate_evidence` as the only semantic error, every raw row grounded, and a
+fully valid normalized answer. Two redundant rows, two affected chunks/documents,
+another semantic error or an ungrounded row fails the gate. The rule is global; it never
+names the observed fixture.
+
+All other schema, grounding, quality, injection, context, safety and provenance rules
+remain unchanged. C0B-2 and C0B-3 retain their exact old prompt, validator, retry and
+terminal meanings.
+
+Production C1 does not blindly repeat an identical deterministic request. Duplicate-only
+normalization is local and needs no second model call. Any future error-specific model
+repair gets a distinct prompt/request identity, hard one-repair bound and explicit tests;
+changing only the random seed is not an accepted repair design.
+
+### Non-retroactivity
+
+C0B-3 remains terminal `INCONCLUSIVE/no_seed1_qualifier`. Its response, attempts,
+aggregate, artifact, receipt and checkpoint are not rescored or resumed. C0B-4 creates a
+new source/policy identity, requests and checkpoint for F72 seeds 17 and 20260804 plus a
+fresh C44 seed-1 acceptance lane. The new F responses are prospective stability evidence,
+not a new untouched document holdout. Final acceptance combines corrected C44 and F72
+evidence with the immutable parent D50/D4 result; Stages C and D are not rerun.
+
+---
+
+## E7 — C0B-4 revalidates the capability it created
+
+**Status:** ACCEPTED FOR CORRECTION (standing HI authorization, 2026-08-11)
+**Affects:** `BENCHMARK_PROTOCOL_C0B4.md` §§3, 7 and 9
+**Raised by:** first C0B-4C invocation
+
+### The conflict
+
+C0B-4 creation intentionally probed only its frozen `DELETE` journal mode. Invocation
+revalidation called the inherited C0B-2 helper, whose default probe covers both `DELETE`
+and `WAL`. The capability digest includes the complete ordered mode list, so the two-mode
+revalidation digest could never equal the stored one-mode creation digest.
+
+The first child therefore ended verified `BLOCKED_FILESYSTEM` before invocation claim,
+precharge, transport construction or model contact. It contains zero invocations and zero
+attempts. Its terminal backup and receipt verify, and the frozen mount fingerprint did
+not change.
+
+### The correction
+
+C0B-4 uses a local revalidator that probes exactly the journal mode frozen in its header,
+then compares mount fingerprint, capability digest and selected mode. C0B-2 and C0B-3
+retain their historical two-mode helper behavior. Offline tests cover real
+create-to-revalidate parity, the exact one-mode call, every comparison mismatch, probe
+failure and the zero-call backed-up filesystem terminal.
+
+The corrected C0B-4 suite passes all 150 tests. Independent hostile review also confirms
+that the associated leak gate scans the original committed bytes even when Git
+replacement refs and a safe dirty overlay are present; Git object reads disable
+replacements and rehash each blob against its tree object ID.
+
+### Non-retroactivity and replacement
+
+The failed child `c0b4-20260811-190217-ac970de2a2f6021965bcd948` remains immutable and is
+not resumed or reclassified. After this correction passes review and is committed under
+a new source/protocol identity, one fresh replacement child may start from `PREPARED`.
+Because the failed child made no request, this replacement does not discard or select on
+model evidence. All scoring, safety, budget, lane and acceptance rules remain unchanged.
+
+---
+
+## E8 — Bound the human review workload explicitly
+
+**Status:** ACCEPTED FOR PROSPECTIVE CORRECTION (HI decision, 2026-08-11)
+**Affects:** `CONTRACT.md` §§7 and 14; public benchmark false-positive gates
+**Raised by:** verified C0B-4 terminal review
+
+### The measured conflict
+
+The verified C0B-4 replacement completed all 92 F72 seed-17 chunks and passed every
+measured grounding, recall, F1, injection, boundary, schema, channel, length and context
+gate. It ended `INCONCLUSIVE/seed17_no_qualifier` only because two of 16 negative
+near-miss documents each produced one grounded financial suggestion, while E5 allowed
+one affected document.
+
+Both cases were deliberately difficult public fixtures containing invalid settlement
+placeholders and explicit non-live context. This conservative classification weakness
+was observed across two template instances; it was not replicated across seeds or runs.
+It is not missing evidence or unsafe behavior. The HI accepted that bounded review cost
+for Analyst's recommendation-only role. C0B-4 remains immutable and is not rescored,
+resumed or reclassified.
+
+### The prospective correction
+
+C0B-5 freezes two independent human-review budgets:
+
+| Gate | Affected negative documents | Retained findings on negatives |
+|---|---:|---:|
+| Each F lane, 16 negatives | at most 2 | at most 2 |
+| Final 166-document aggregate, 40 negatives | at most 4 | at most 4 |
+
+The row cap is required as well as the document cap: four affected documents must not
+hide an unbounded number of suggestions. The final limit retains at least 90% negative-
+document specificity on this curated set and bounds the measured false-positive review
+workload to four rows. These are hard ceilings, not targets or population estimates.
+
+Recall/F1, raw and retained grounding, schema, duplicate recovery, injection, boundary,
+length, context, cancellation, provenance, privacy, budget and no-action gates do not
+change. No passing metric compensates for another failed gate. Deterministic findings
+remain separate and authoritative; model rows remain `suggested/unreviewed` until the
+human explicitly accepts or rejects them.
+
+### Prospective evidence and stop rule
+
+The observed C0B-4 seed 17 is descriptive evidence only and cannot qualify C0B-5 under a
+threshold chosen after seeing it. C0B-5 therefore uses two never-contacted F seeds:
+20260804, which C0B-4 planned but never activated, and 20260811, frozen before contact.
+The corrected C44 lane remains a new request lane. C0B-5 is operational-policy
+confirmation, not an untouched holdout or population-accuracy claim.
+
+One reviewed, source-pinned C0B-5 run is authorized after its offline implementation and
+hostile-review gates pass. A miss remains `INCONCLUSIVE`; it does not automatically widen
+the budget, retune the prompt, change the model or authorize another run.
+
+---
+
+## E9 — Sealed anonymous snapshots use bubblewrap's read-only data handoff
+
+**Status:** ACCEPTED FOR CORRECTION (standing HI authorization, 2026-08-14)
+**Affects:** `CONTRACT.md` §5; `BENCHMARK_PROTOCOL_C0B2.md` §14.5
+**Raised by:** C3 live FD-bound preflight and C4 planning
+
+### The conflict
+
+The frozen private protocol requires a sealed anonymous Linux `memfd`, then says to pass
+that descriptor to bubblewrap with `--ro-bind-fd`. Bubblewrap 0.11.1 accepts
+`--ro-bind-fd` for an opened named filesystem object but rejects a `memfd`: its procfs
+descriptor target is an anonymous deleted object and cannot be used as that bind-mount
+source.
+
+Bubblewrap separately defines `--ro-bind-data FD DEST`: copy bytes from an FD into a file
+that is read-only bind-mounted at the destination. That is the compatible operation for
+an anonymous sealed snapshot.
+
+Source: https://github.com/containers/bubblewrap/blob/main/bubblewrap.c
+
+### The correction
+
+- Named C2 input files continue to use `--ro-bind-fd` from the already-open no-follow
+  descriptor.
+- A bounded, sealed anonymous private snapshot uses `--ro-bind-data` at the same fixed
+  `/input/document` destination.
+- Only that snapshot FD is inherited. The parent validates the seal set and source
+  fingerprint before launch; C3's output, time, memory, task and cancellation bounds stay
+  unchanged.
+
+### Consequences accepted with this erratum
+
+`--ro-bind-data` makes one additional bounded copy into bubblewrap's private sandbox
+filesystem. The private protocol already caps the sealed snapshot at 16 MiB and forbids
+plaintext disk staging, so this is bounded memory/I/O cost rather than a retention or
+egress change. A missing option or failed copy is `sandbox_unavailable`/`sandbox_error`;
+there is no fallback to a named plaintext snapshot.
+
+---
+
+## E10 — Build the PDF parser from matching published source
+
+**Status:** ACCEPTED FOR CORRECTION (standing HI authorization, 2026-08-14)
+**Affects:** `CONTRACT.md` §10; D8; C5 dependency installation
+**Raised by:** C5 dependency provenance review
+
+### The conflict
+
+C0B correctly measured that PyPI's published x86_64 PyMuPDF 1.28.0 wheel embeds MuPDF
+1.29.0, despite the release notes saying 1.28.0. C5 found the more important consequence:
+the wheel records an unidentified local MuPDF checkout, while the published PyMuPDF
+1.28.0 source release and its declared upstream source build use MuPDF 1.28.0. The
+published source therefore does not demonstrably correspond to that wheel's native
+MuPDF 1.29.0 binary.
+
+The wheel's measured hash/version evidence remains historically correct for C0B. It is
+not accepted as the production artifact.
+
+### The correction
+
+- Production uses the controlled installer to verify both the official PyPI PyMuPDF
+  1.28.0 source distribution, SHA-256
+  `e53f3567403a92da15caa9e7ae0164327fff48817e9f40175367fb9de524258d`, and the official
+  MuPDF 1.28.0 source archive, SHA-256
+  `21c7f064903154f1c3a7458bee81f130fc36f9b5147ea13328f9980e02d2dea2`.
+- The build is offline after those verified downloads, uses exact hash-pinned build
+  wheels, disables unused Tesseract/Leptonica OCR code and forbids an implicit fallback
+  to any published PyMuPDF binary artifact.
+- The verified local build reports PyMuPDF 1.28.0 and embedded MuPDF 1.28.0. Every PDF
+  child asserts both exact values before parsing.
+- MuPDF 1.28.0 still satisfies the frozen security floor. Sandbox containment and all
+  parser limits remain unchanged.
+
+This adds a one-time native build and C/C++ toolchain cost to Analyst dependency
+installation. It removes both the unverifiable binary/source mismatch and the upstream
+build script's unverified nested download. Before any network-facing Analyst release,
+C13 must preserve or host both exact hashed dependency source archives and identify an
+exact public Dirracuda commit, tag or archive in the AGPL source offer.
+
+Sources:
+
+- https://pypi.org/pypi/pymupdf/1.28.0/json
+- https://raw.githubusercontent.com/pymupdf/PyMuPDF/1.28.0/setup.py
+- https://raw.githubusercontent.com/ArtifexSoftware/mupdf/1.28.0/include/mupdf/fitz/version.h
+- https://mupdf.com/downloads/archive/mupdf-1.28.0-source.tar.gz
+
+---
+
+## E11 — Separate OOXML package metadata from parsed XML limits
+
+**Status:** ACCEPTED FOR CORRECTION (standing HI authorization, 2026-08-15)
+**Affects:** `CONTRACT.md` §5; C0B container fixture; C6 OOXML extraction
+**Raised by:** C6 hostile review
+
+### The conflict
+
+C0B's hostile-fixture generator used a 16 MiB expanded-container supervisor threshold.
+That prototype value became historical benchmark documentation before production OOXML
+coverage was defined. Applying it to the declared size of every OOXML member would reject
+ordinary image-heavy Office packages even though C6 neither decompresses nor parses their
+media. Silently replacing that value with a larger aggregate cap would also weaken a
+frozen security control without review.
+
+### The correction
+
+C6 distinguishes the package inventory gate from the content it actually expands:
+
+- the source archive remains capped at 100 MiB;
+- the central directory may declare at most 1,000 members, 128 MiB for one member and
+  256 MiB total expansion, with both per-member and aggregate ratios capped at 100:1;
+- only authenticated, allowlisted XML parts are decompressed, with an independently
+  enforced 8 MiB per-part and **16 MiB total parsed-XML** budget;
+- media, embedded packages and all other unsupported members are never decompressed;
+- exact-limit and limit-plus-one tests cover both layers before release.
+
+The 16 MiB C0B fixture remains historically correct for that benchmark. It is not the
+production package-metadata limit.
+
+### Consequences accepted with this erratum
+
+The larger declared-package allowance improves compatibility without granting more XML
+parser input or increasing the existing 512 MiB sandbox memory limit. A hostile archive
+may consume bounded central-directory inspection work up to the new cap, but cannot make
+C6 expand its ignored media. Any future extractor for media or embedded content must add
+its own reviewed decompression budget; E11 does not authorize reuse of this metadata cap
+as a parsing budget.
+
+---
+
+## E12 — Replace the legacy Excel parser shortlist with python-calamine
+
+**Status:** ACCEPTED FOR CORRECTION (HI decision, 2026-08-16)
+**Affects:** `CONTRACT.md` §6; D6; C7 legacy `.xls` extraction
+**Raised by:** C7 dependency and licence review
+
+### The conflict
+
+The frozen C7 shortlist named `xlrd` or sandboxed LibreOffice. `xlrd 2.0.2` is the
+technically smallest option, but its exact licence retains the original BSD advertising
+clause. GNU classifies that licence as incompatible with GPL distribution. LibreOffice
+does not have that conflict, but introduces a much larger mutable native runtime,
+conversion profile and parser surface than this extraction-only feature needs.
+
+### The correction
+
+C7B uses exact `python-calamine==0.8.2` for legacy `.xls`:
+
+- the approved CPython 3.14 / manylinux x86-64 wheel has SHA-256
+  `9d3cfce465ce82eb9100e5e90673a5844fd46eb7b8148c5404c70f941fd8280b`;
+- the Python binding and its embedded calamine 0.36.0 engine are MIT licensed; release
+  packaging preserves the wheel licence, SBOM and reviewed third-party notices;
+- the parser remains inside C3 with exact package/native identities and a narrow runtime
+  closure; Rust does not weaken any filesystem, network, process, time, memory or output
+  boundary;
+- CFB magic remains only a candidate. Successful XLS workbook parsing authenticates the
+  format; legacy Word remains authenticated independently by exact Antiword;
+- only worksheet cell values are supported, including hidden and very-hidden worksheets.
+  Macro, chart, dialog and VBA sheets are ignored, not executed;
+- formulas are never recalculated and formula source is not exposed. Any returned value
+  is the workbook's stored cached result;
+- error cells and blank/empty strings may collapse to an empty value, and date/time cells
+  are automatically converted by the parser. These are explicit coverage limitations,
+  not silently stronger semantics;
+- empty worksheets are detected before iteration because python-calamine 0.8.2 may panic
+  when iterating an empty sheet.
+
+### Consequences accepted with this erratum
+
+The first supported artifact is deliberately limited to the exact Python 3.14 x86-64
+wheel. A different Python ABI, architecture or platform requires its own verified wheel
+hash, runtime-closure review and live sandbox test. An offline source build is deferred:
+it would require a controlled Rust toolchain, vendored crates and an exact Git dependency.
+The wheel is a native parser and remains untrusted input-handling code; sandbox containment
+and hostile testing remain mandatory.
+
+Sources:
+
+- https://pypi.org/project/python-calamine/0.8.2/
+- https://github.com/dimastbk/python-calamine/blob/v0.8.2/LICENSE
+- https://github.com/dimastbk/python-calamine/blob/v0.8.2/Cargo.lock
+- https://github.com/dimastbk/python-calamine/blob/v0.8.2/python/python_calamine/_python_calamine.pyi
+- https://github.com/python-excel/xlrd/blob/2.0.2/LICENSE
+- https://www.gnu.org/licenses/license-list.html#OriginalBSD
+
+---
+
+## E13 — Use rollback journal mode for the Analyst sidecar
+
+**Status:** ACCEPTED FOR CORRECTION (HI decision, 2026-08-16)
+**Affects:** `CONTRACT.md` §3.2; C8 sidecar schema, resume and concurrency
+**Raised by:** C8 current-runtime and mergerfs review
+
+### The conflict
+
+The frozen contract requires SQLite WAL mode. The active Python runtime links SQLite
+3.46.1, and the distro currently offers no fixed upgrade. SQLite now documents a rare
+WAL-reset corruption race affecting versions 3.7.0 through 3.51.2 when two or more
+connections write or checkpoint concurrently. C8 deliberately has a service process and
+a worker process accessing one database, so it matches the affected shape. The canonical
+sidecar directory is also on mergerfs; WAL adds shared-memory behavior that C8 does not
+need for its short serialized control writes.
+
+### The correction
+
+C8 uses `journal_mode=DELETE` and `synchronous=EXTRA` instead of WAL:
+
+- every write uses a short explicit `BEGIN IMMEDIATE` transaction;
+- the worker remains the only steady-state writer, while service writes are brief control
+  transactions protected by the same atomic compare-and-set rules;
+- a fixed busy timeout plus bounded whole-transaction retry owns normal contention;
+- no process, parser, signal wait, GUI callback or network operation occurs inside a
+  transaction;
+- `mmap_size=0` avoids a second mergerfs/FUSE mapping dependency;
+- runtime initialization verifies the selected journal and synchronous modes rather than
+  assuming the PRAGMAs succeeded;
+- C8 must pass real multi-process exclusion, crash rollback, integrity, foreign-key and
+  resume tests at the canonical mergerfs-backed product path before closure.
+
+### Consequences accepted with this erratum
+
+Readers and writers may briefly block one another during the deliberately small control
+transactions. The bounded busy policy makes that visible and recoverable. In return, C8
+avoids the affected WAL path, requires no private SQLite runtime, and uses SQLite's
+strongest rollback-journal durability setting. This does not authorize long write
+transactions or a claim of power-loss testing.
+
+Sources:
+
+- https://sqlite.org/wal.html#the_wal_reset_bug
+- https://sqlite.org/pragma.html#pragma_synchronous
+- https://sqlite.org/lang_transaction.html
+- https://sqlite.org/lockingv3.html
+
+---
+
+## E14 — Bound detector evidence and retain content-free source provenance
+
+**Status:** ACCEPTED FOR IMPLEMENTATION (C8 safety correction, 2026-08-16)
+**Affects:** `CONTRACT.md` §4 and §7; C8 sidecar schema and checkpoint API
+**Raised by:** C8 hostile resource, privacy and coverage review
+
+### The conflict
+
+The frozen contract requires honest source grounding after crash/resume and prohibits
+extracted document bodies in SQLite. Persisting only final finding offsets loses their
+page, paragraph, slide, line or cell identity if the source changes before report
+finalization. Conversely, a generic metadata JSON field can accidentally retain document
+text. Deterministic detectors also had no output-count ceiling, so one bounded 8 MiB text
+could still create hundreds of thousands of hits in one write transaction.
+
+### The correction
+
+- C8 stores bounded, typed, content-free provenance units in a dedicated STRICT table:
+  only canonical parser-generated labels, kinds and character spans; never unit text.
+- Parser identity and extraction metadata use closed keys and safe scalar values. Raw
+  text, nested objects, paths and exception strings are rejected at the persistence
+  boundary.
+- Deterministic hits are capped at 10,000 per file before the first insert. Cap + 1
+  atomically writes the new stable `detector_output_limit/detector_hit_limit` terminal;
+  it cannot loop forever on resume or masquerade as detector-complete.
+- Successful terminals are checked against their exact stage, selection and chunk state
+  both when written and again during finalization. `complete_no_supported_content` is
+  derived from durable file evidence rather than trusted from a caller boolean.
+- Chunks must cover the exact extracted character span. Detector hits must fit that span,
+  and grounded model findings must fit their exact chunk with internally consistent
+  counts and assessment. Typed dataclasses are revalidated rather than trusted.
+
+### Consequences
+
+The schema has nine content tables instead of the preliminary eight-table sketch. This
+is still pre-release schema v1, so no deployed migration or compatibility contract is
+changed. Files that exceed the detector-evidence ceiling remain visible as incomplete
+coverage with an exact stable reason rather than exhausting memory or holding a long
+SQLite write transaction.
+
+---
+
+## E15 — Separate Ollama contacts from semantic model attempts
+
+**Status:** ACCEPTED FOR IMPLEMENTATION (HI decision, 2026-08-16)
+**Affects:** `CONTRACT.md` §3 and §8; C9 shared-resource handling and C10 orchestration
+**Raised by:** C9A/C9B durable scheduling review
+
+### The conflict
+
+C8 permits exactly two semantic attempts per chunk. C9A can identify an explicit
+Ollama resource refusal, but persisting that refusal as timeout, transport failure or a
+generic interruption would either consume a quality attempt or hide the real scheduling
+state. A crash after precharge remains execution-uncertain and must still consume an
+attempt.
+
+### The correction
+
+- Sidecar schema v2 adds a bounded, content-free Ollama contact ledger. Every control,
+  chat and cancellation-health request is charged before network contact.
+- Explicit `resource_busy` contacts advance the exact bounded backoff schedule without
+  creating a semantic attempt. Every other chat terminal, cancellation or orphaned
+  contact atomically links to one of the existing two attempt slots.
+- Failures one through five retain the exact worker lease. Failure six records a
+  300-second `paused_resource` schedule, returns active work to pending, interrupts the
+  run and releases the fence. Resume requires both elapsed cooldown and explicit
+  authorization.
+- C8 run lifecycle values remain unchanged. The one-to-one schedule table is the
+  authoritative joined resource state, avoiding a foreign-key parent-table rebuild.
+- Only the exact empty development v1 sidecar may migrate automatically. Populated v1,
+  partial, foreign and active states fail without mutation.
+
+### Consequences
+
+The sidecar retains more content-free operational rows, bounded at 64 controls per run
+and 16 chat contacts per chunk. Resource pressure no longer spends the two-answer budget,
+but ambiguous delivery remains conservative. C10 must use the charged contact API and
+must not call the C9A client directly.
+
+---
+
+## E16 — Encode unsigned filesystem identities losslessly in SQLite
+
+**Status:** ACCEPTED AND IMPLEMENTED (first-run correction, 2026-08-17)
+**Affects:** C2 inventory identity; C8 sidecar schema and C10/C11 resume reopening
+**Raised by:** first operator run on the canonical mergerfs extraction tree
+
+### The conflict
+
+Linux exposes filesystem device and inode identities as unsigned values, while SQLite
+INTEGER and Python's SQLite binding accept only signed 64-bit integers. The first real
+mergerfs inventory contained valid device and inode values with bit 63 set. Inventory
+succeeded, but durable run creation failed before launch with an integer-conversion
+overflow.
+
+### The correction
+
+- Sidecar schema v3 additively appends one constrained high-bit column for each persisted
+  device and inode. Existing columns retain the low 63 bits.
+- Every write accepts exact uint64 identities, rejects booleans/out-of-range values, and
+  stores only SQLite-safe integers. Every worker/resume read reconstructs the original
+  unsigned value before descriptor-safe source reopening.
+- Exact idle v2 databases migrate transactionally in place; existing v2 rows receive
+  zero high bits. V1 retains its earlier pristine-only migration restriction.
+- The desktop maps closed service failure codes to useful operator guidance without
+  displaying paths, source content or exception text.
+
+### Consequences
+
+Mergerfs identities above `2^63 - 1` now round-trip without truncation or collision.
+Schema v3 changes no run, contact, model-attempt or report semantics.
+
+---
+
+## E17 — Analyst may connect to an operator-configured endpoint
+
+**Status:** ACCEPTED (HI, 2026-09-20)
+**Affects:** §8 (Ollama request contract), §18 (prerequisites)
+**Raised by:** remote-backends N0 planning, after the `mimir` Step 0 probe
+
+### The conflict
+
+§8 requires "exact loopback URL validation (no DNS-derived hosts)" and states verbatim
+that "Analyst connects only to a literal-loopback Ollama endpoint". §18 requires the
+operator to "publish 11434 on host loopback only".
+
+The operator's goal is to offload Analyst to stronger hardware on another machine. That
+is impossible under the literal reading, and the wording would become false the moment a
+remote profile exists.
+
+### The correction
+
+§8's local-only paragraph (lines 218-224) is replaced by:
+
+> Analyst connects only to an endpoint the operator configured. It disables redirects,
+> ignores ambient proxies, and rejects known cloud tag forms (`:cloud` and `-cloud`) on
+> the Ollama backend. A non-loopback endpoint requires TLS and a bearer token, or an
+> explicit per-profile acknowledgement that is accepted only for private address ranges;
+> a public plaintext endpoint is refused with no override. Analyst records the endpoint,
+> backend, and model identity with every run. Analyst cannot prove where a server sends
+> data after receiving it. Server-level egress control remains an operator prerequisite.
+
+§18's loopback publication rule survives as the **default**, not as a constraint. An
+operator who configures a remote profile has accepted the consequence, and the UI
+confirms it per run.
+
+The full policy is frozen in
+[`phase_2/remote_backends/CONTRACT_REMOTE_BACKENDS.md`](phase_2/remote_backends/CONTRACT_REMOTE_BACKENDS.md).
+
+### What does not change
+
+1. Redirects stay disabled. Ambient proxies stay ignored. `trust_env` stays `False`.
+2. Cloud tag rejection stays in force on the Ollama backend.
+3. Bounded response bytes, bounded parsed-object size, and per-read / per-request /
+   total-run deadlines are unchanged.
+4. No "local only" or "zero cloud egress" claim appears anywhere, consistent with the
+   original §8 honesty rule.
+5. The Ollama native transport is not rewritten. It keeps `/api/chat`, per-request
+   `num_ctx`, and tag+digest identity, exactly as benchmarked through C0B-7.
+
+### Consequences accepted with this erratum
+
+1. **Extracted file text leaves the machine on a remote run.** That text is harvested
+   from open directories and is frequently sensitive. Mitigated by per-run consent,
+   a persistent remote marker, and address policy — not eliminated.
+2. **An unauthenticated private-range server is permitted** behind an explicit per-profile
+   acknowledgement. The probed host (`mimir`) is exactly this case: no `--api-key`,
+   reachable only over Tailscale because firewalld admits nothing on the LAN interface.
+   Analyst cannot verify that firewall posture and does not claim to.
+3. **A second backend dialect enters the codebase.** llama.cpp is reached over
+   `/v1/chat/completions`. Ollama's own `/v1` shim is never used: it silently ignores
+   `num_ctx` and returns no model digest, so using it would downgrade the benchmarked
+   local path.
+4. **Model identity weakens for the new backend.** llama.cpp exposes no cryptographic
+   digest. Identity is recorded as `reported` — model id, path, parameter count, size,
+   quantisation type, vocabulary size, and the server build fingerprint — and is labelled
+   unverified everywhere it renders. It is never presented as a digest.
+
+### Reversal condition
+
+If remote runs are later judged unacceptable for the data Analyst handles, remote
+profiles are removed and the loopback default stands alone. This erratum does not
+authorize any hosted or cloud model provider; §8's cloud rejection is unchanged and the
+address policy blocks public endpoints independently.
+
+---
+
+## E18 — Model identity rendering is in scope for the remote-backends contract
+
+**Status:** ACCEPTED (HI, 2026-09-22)
+**Affects:** `phase_2/remote_backends/CONTRACT_REMOTE_BACKENDS.md` §2 (scope), §6.1 (identity)
+**Raised by:** the N2 senior review
+
+### The conflict
+
+The remote-backends contract contradicts itself.
+
+§2 puts **`report.json` content** out of scope:
+
+> **Out of scope.** Prompts, chunking, detectors, the risk rubric, grounding rules,
+> `report.json` content, and the sandbox.
+
+§6.1 then requires a new field in exactly that file:
+
+> `report.json` and the report view must render which kind applies. A `reported` identity
+> is never presented as verified.
+
+Both cannot hold. Taken literally, §2 forbids the labelling §6.1 mandates, and an
+OpenAI-compatible run could only be reported by presenting an unverified identity as
+though it were a digest — which is the failure D3 exists to prevent.
+
+### The correction
+
+§2's exclusion is narrowed. It now reads:
+
+> **Out of scope.** Prompts, chunking, detectors, the risk rubric, grounding rules, and
+> the sandbox. `report.json` content is out of scope **except** for the model-identity
+> block governed by §6, which gains an identity kind. A remote run and a local run must
+> produce the same report for the same input and model, given the same model.
+
+§6.1 is unchanged and remains normative.
+
+### Why this direction
+
+The alternative — honouring §2 and dropping the label — was rejected. It would make
+`report.json` present a server-reported model name with the same authority as a verified
+SHA-256 digest. The whole grounding claim of the read-first contract rests on knowing
+which model produced a report and how strongly that is established.
+
+### What does not change
+
+1. Prompts, chunking, detectors, the risk rubric, grounding rules and the sandbox stay
+   out of scope, unchanged.
+2. The report payload is otherwise untouched. This erratum admits the identity block
+   only.
+3. `REPORT_SCHEMA_VERSION` governs the payload as before.
+4. A `reported` identity is still never presented as verified.
+
+### Consequences accepted with this erratum
+
+- `analyst_runs.model_digest` is `NOT NULL CHECK(64 lowercase hex)`
+  (`db_schema.py:136`), and `report_json.RunMeta.__post_init__` enforces the same shape.
+  Neither can hold a `reported` identity, so N2 carries a schema version that makes the
+  digest nullable and adds an identity kind.
+- `report_json` gains the identity kind and the reported-identity fields from §6.1.
+- The desktop report view and the Web UI results page must render the kind. A run whose
+  identity is `reported` must not display as verified anywhere.
+
+---
+
+## E19 — A chat request may carry a reported model identity
+
+**Status:** ACCEPTED (HI, 2026-09-23)
+**Affects:** `CONTRACT.md` §9 (request identity), `ollama_contract.ChatRequest`
+**Raised by:** the N2b stage E blocker
+
+### The conflict
+
+`ollama_contract._require_model_identity` refuses any `ChatRequest` whose
+`model_digest` is not a lowercase SHA-256. `Phase2Dependencies` likewise requires an
+injected client to expose `check_version` and `check_tags`, both of which return
+digest-shaped results.
+
+llama.cpp publishes no digest. Under contract §6.1 its identity kind is `reported`.
+So the run engine cannot build a chat request for an OpenAI-compatible backend at
+all — the one place that constructs work refuses a model the rest of the system
+already accepts.
+
+The only way to proceed today is to send a digest that does not describe the model
+that actually answers. That was measured working against `mimir` and deliberately
+not shipped: a request identity that names the wrong model is a provenance defect,
+and the request identity hash exists precisely to prevent that.
+
+### The correction
+
+`ChatRequest` carries an identity kind, exactly as `analyst_runs` (schema v8) and
+`report.json` (erratum E18) already do:
+
+- `identity_kind` is `digest` or `reported`, and is part of the request identity.
+- `model_digest` is required when the kind is `digest` and must be absent when the
+  kind is `reported`.
+- The kind is part of the validated request identity -- the frozen dataclass and its
+  validator -- and **not** of the body hash.
+
+  *Corrected 2026-09-23, during implementation.* This erratum first said the identity
+  hash covers the kind. It cannot: `request_sha256` is the SHA-256 of the request body,
+  the body carries the model name but no digest, and adding a field to it would change
+  the bytes an Ollama request puts on the wire, breaking contract §12.1. The property
+  that matters still holds without it -- two requests naming different models already
+  hash differently, because the model name is in the body.
+
+`Phase2Dependencies` accepts a client that exposes the backend surface rather than
+the Ollama control surface specifically. A backend that cannot answer a digest
+preflight is preflighted against what it can prove: that the model exists, is a
+text-generation model, and reports the context the run needs.
+
+### Why this direction
+
+Two alternatives were rejected. Giving the adapter a second request type would leave
+two parallel request contracts to keep in step, and the identity rules would drift.
+Deriving a 64-hex hash of the server's properties and storing it as the digest was
+already rejected as decision D18, because a non-cryptographic hash in a field named
+`model_digest` is exactly the confusion D3 exists to prevent.
+
+This direction is the third application of a pattern already accepted twice: the
+schema learned it at v8, the report payload learned it at E18, and the request
+learns it here. Afterwards all three describe identity the same way.
+
+### What does not change
+
+1. An Ollama request is unchanged. Its kind is `digest`, its digest is still
+   required and still verified, and a loopback run stays byte-identical under
+   contract §12.1.
+2. A `reported` identity is still never presented as verified, anywhere.
+3. Bounded bytes, deadlines, disabled redirects and ignored ambient proxies are
+   untouched.
+4. The cloud tag rejection stays in force on the Ollama backend.

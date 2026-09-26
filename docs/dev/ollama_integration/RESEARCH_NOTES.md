@@ -1,15 +1,15 @@
 # Ollama Integration — Research Notes
 
-Date: 2026-08-04
-All findings verified against sources on this date. Re-check before implementation;
+Date: 2026-08-16
+All findings verified against sources through this date. Re-check before implementation;
 this field moves fast.
 
-## Local Stack (measured on kevin-pc, 2026-08-04)
+## Initial Local Stack (historical, measured on kevin-pc, 2026-08-04)
 
 | Item | Value |
 |------|-------|
 | Ollama server version | 0.32.5 (host `ollama` CLI is not on `PATH`) |
-| Verified endpoint | `http://127.0.0.1:11434`; listener is currently `*:11434` |
+| Verified endpoint | `http://127.0.0.1:11434`; listener was `*:11434` |
 | GPU | RTX 4060 Ti, 16 GB |
 | System RAM | 121 GB |
 | Cores | 24 |
@@ -17,8 +17,27 @@ this field moves fast.
 | `OLLAMA_CONTEXT_LENGTH` | 16384 |
 | `OLLAMA_KV_CACHE_TYPE` | q8_0 |
 | `OLLAMA_FLASH_ATTENTION` | 1 |
-| `OLLAMA_HOST` | 0.0.0.0:11434 (listening on `*`, no auth) |
+| `OLLAMA_HOST` | `0.0.0.0:11434` (listening on `*`, no auth) |
 | `OLLAMA_NO_CLOUD` | **not set** |
+
+## Hardened Deployment Recheck (measured 2026-08-16)
+
+| Item | Value |
+|------|-------|
+| Ollama server version | 0.32.5 |
+| Container image | `ollama/ollama@sha256:4dea9fb511947e24a84237bb636b0203abcb2ff0d3fbc7b4ff865deb91362131` |
+| `OLLAMA_HOST` | `127.0.0.1:11434`; loopback listener only |
+| `OLLAMA_NO_CLOUD` | `1`; daemon log confirms cloud disabled and worker is offline |
+| `OLLAMA_CONTEXT_LENGTH` | 64000 |
+| `OLLAMA_KV_CACHE_TYPE` | q8_0 |
+| `OLLAMA_FLASH_ATTENTION` | 1 |
+
+The listener and cloud settings were corrected from the unsafe initial state before C9
+live acceptance. Proxy-cleared control requests to the host's LAN, Tailscale, VPN and
+container-facing addresses all failed; loopback returned HTTP 200 and Ollama 0.32.5.
+These deployment checks used container metadata and `/api/version` only; they did not
+perform inference or read private data. The local API has no application authentication,
+so raw port 11434 remains loopback-only for MVP.
 
 Reference implementation already on the box: `~/openwebui/scripts/ask-local.sh`
 posts to `/api/chat` with `stream:false`, `options.temperature`, and an optional
@@ -219,14 +238,30 @@ gates against zip bombs. Enforce with a guardrail test in the shape of
 ### Legacy `.doc`/`.xls` — catdoc is not safe
 
 `catdoc`/`xls2csv` carry a heap-corruption / code-execution CVE
-(TALOS-2024-2132) and predictable-temp symlink issues. **Not used.** Policy:
-`.doc` → antiword (installed, `/usr/bin/antiword` v0.37-17); `.xls` → xlrd 2.0.2
-(BSD, pure-Python, historical `.xls` only, cached formula results not formula
-text) or sandboxed LibreOffice; benchmarked in C7. `olefile` is container
-inspection only. All run inside the bubblewrap sandbox.
+(TALOS-2024-2132) and predictable-temp symlink issues. **Not used.** C7A uses exact
+Debian Antiword `0.37-17`, authenticated by parser success inside C3. Revision 17
+removes a document-summary parser with buffer overreads; the package has no active
+upstream. Measured output also showed that its UTF-8 mapping emits CESU-8 surrogate
+pairs for non-BMP characters, so C7A narrowly repairs paired surrogates and rejects
+every malformed form.
+
+The earlier `.xls` shortlist was corrected by accepted erratum E12. `xlrd 2.0.2` is pure Python and
+technically narrow, but its exact licence retains the original BSD advertising clause;
+GNU classifies that licence as GPL-incompatible. LibreOffice is compatible but carries
+a far larger native conversion surface. C7B uses the
+MIT-licensed `python-calamine==0.8.2`: its attested 2.25 MiB wheel has a narrow runtime
+closure and matched `xlrd` on the public XLS fixture. The exact CPython 3.14 / Linux
+x86-64 artifact is hash- and ABI-pinned; other platforms fail closed. It exposes cached
+formula values, not formula text or recalculation. `olefile` was unnecessary: parser
+success independently authenticates XLS after CFB candidate routing. Every accepted
+parser runs inside bubblewrap.
 
 Sources: https://www.talosintelligence.com/vulnerability_reports/TALOS-2024-2132 ·
-https://pypi.org/project/xlrd/
+https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=968812 ·
+https://manpages.debian.org/testing/antiword/antiword.1.en.html ·
+https://github.com/python-excel/xlrd/blob/2.0.2/LICENSE ·
+https://www.gnu.org/licenses/license-list.html#OriginalBSD ·
+https://pypi.org/project/python-calamine/0.8.2/
 
 ### Sandbox mechanism (verified on this box)
 

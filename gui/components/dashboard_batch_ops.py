@@ -274,6 +274,30 @@ def run_post_scan_batch_operations(
             _clamav_cfg = dash._load_clamav_config()
             dash._maybe_show_clamav_dialog(extract_results, _clamav_cfg, wait=True, modal=True)
 
+        if show_dialogs and extract_results:
+            try:
+                from gui.utils.analyst_post_extract import offer_after_extract
+
+                raw_db_path = getattr(getattr(dash, "db_reader", None), "db_path", None)
+                manifest_db_path = (
+                    Path(raw_db_path).expanduser().absolute()
+                    if raw_db_path else None
+                )
+                for result in extract_results:
+                    if (
+                        result.get("status") == "success"
+                        and int(result.get("_analyst_file_count") or 0) > 0
+                    ):
+                        offer_after_extract(
+                            dash.parent,
+                            getattr(dash, "settings_manager", None),
+                            result.get("_analyst_reference"),
+                            main_db_path=manifest_db_path,
+                            report_label=str(result.get("ip_address") or "host"),
+                        )
+            except Exception:
+                pass
+
         # After bulk operations, show the deferred scan summary
         if show_dialogs:
             dash._show_scan_results(scan_results)
@@ -1403,6 +1427,24 @@ def extract_single_server(
         bytes_downloaded = summary["totals"].get("bytes_downloaded", 0)
         size_mb = bytes_downloaded / (1024 * 1024) if bytes_downloaded else 0
 
+        db_path = getattr(getattr(dash, "db_reader", None), "db_path", None)
+        persisted_port = (
+            ftp_port if host_type == "F" else
+            http_port if host_type == "H" else
+            server.get("port")
+        )
+        try:
+            summary_reference = _d("extract_runner").write_extract_log(
+                summary,
+                db_path=str(db_path or ""),
+                ip_address=ip_address,
+                host_type=host_type,
+                protocol_server_id=protocol_server_id,
+                port=persisted_port,
+            )
+        except TypeError:
+            summary_reference = _d("extract_runner").write_extract_log(summary)
+
         # Mark host as extracted (one-way flag)
         try:
             if dash.db_reader:
@@ -1432,6 +1474,8 @@ def extract_single_server(
             "status": "success",
             "notes": f"{files} file(s), {size_mb:.1f} MB",
             "clamav": summary.get("clamav", {"enabled": False}),
+            "_analyst_reference": summary_reference,
+            "_analyst_file_count": files,
         }
     except Exception as e:
         status = "cancelled" if "cancel" in str(e).lower() else "failed"

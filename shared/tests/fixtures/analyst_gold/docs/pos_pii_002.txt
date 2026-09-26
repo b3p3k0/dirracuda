@@ -1,0 +1,10 @@
+Pinacle Ledger Services
+Patient Intake Record 002
+
+Full name: Bram Mordant
+Social Security Number: 999-58-4941
+Date of birth: 01/02/1952
+Passport number: Z75002401
+
+Intake completed by front desk. Identity documents were photocopied
+and filed with the paper chart. No further verification required.

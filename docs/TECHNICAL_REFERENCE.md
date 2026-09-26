@@ -1472,7 +1472,220 @@ The RCE runtime pipeline was removed in C3, and the remaining signature artifact
 
 ---
 
-## 9. Glossary
+## 9. Analyst (Experimental)
+
+Analyst is an optional, Linux-only document-review workflow. It inventories a directory or
+an exact persisted extraction manifest, parses documents inside a bubblewrap sandbox, runs
+deterministic detectors, sends selected text to a model server, and publishes a report. It
+never authenticates to a host and never downloads source files.
+
+Contracts: `docs/dev/ollama_integration/CONTRACT.md` (frozen, with errata in
+`CONTRACT_ERRATA.md`) and `phase_2/analyst_redesign/CONTRACT_READ_FIRST.md`, which
+supersedes the analytical core and carries amendments A1-A5.
+
+### 9.1 Pipeline
+
+```
+inventory -> extract text (sandboxed) -> detectors -> select
+          -> model read (map-reduce) -> rank facts -> finalize report.json
+```
+
+Two concurrency domains: CPU extraction and detectors, then serial GPU model work bounded
+by a single lease. A detached worker (`python -m experimental.analyst.worker`) owns the
+run; the GUI talks to it through `experimental/analyst/service.py` and a SQLite sidecar at
+`~/.dirracuda/data/experimental/analyst.db`.
+
+In Quick look (`fast`) a file reaches the model only if a detector hit it
+(`phase1.py`, `selected = context.mode == "deep" or bool(hits)`). Full read (`deep`) sends
+every readable file.
+
+### 9.2 The two layers
+
+A report separates what the model judged from what was grounded, and labels the first as
+unverified:
+
+| layer | source | where |
+|---|---|---|
+| the read | model judgment | `report.json` `read` block |
+| the facts | grounded evidence, every quote an exact substring | `report.json` `facts` |
+| affiliations | derived from grounded contact facts, no model | `report.json` `affiliations` |
+| the run | facts about the run itself | `report.json` `run` |
+
+### 9.3 Report artifacts and schema versions
+
+`publish_report` writes five files per run: `run.json`, `findings.jsonl`, `findings.csv`,
+`report.html`, `report.json`.
+
+**`report.json` is the ranked summary and is capped** at `MAX_REPORT_JSON_FACTS` (500).
+`findings.jsonl` / `findings.csv` / `report.html` stream `FindingReportRow` pages and are
+**not** capped — they are the full evidence record. A 1,244-file run produced 6,183 CSV
+rows behind a 500-fact `report.json`.
+
+| version | adds | amendment |
+|---|---|---|
+| 1 | the original read-first shape | — |
+| 2 | model identity kind (`digest` / `reported`) | E18, E19 |
+| 3 | `facts[].occurrences`, `facts[].plausibility`, `facts[].subject` | A3 |
+| 4 | the `affiliations` block | A4 |
+| 5 | `run.source_root`, `run.output_root`, `run.report_written_at_utc`, `run.detector_rules_version` | A5 |
+
+Readers accept `(1, 2, 3, 4, 5)`; key sets are version-gated, so an older report on disk
+still opens and simply renders fewer fields. **`report.json` is an artifact, not a
+database** — it is written once at finalization and never migrated. Changes therefore
+apply to new runs only.
+
+`run.report_written_at_utc` is not the run's `finished_at_utc`: the report is built before
+the run is marked complete. It comes from `analyst_runs.report_built_at_utc`, written once
+with `COALESCE`, because a finalization that crashes and resumes must rebuild
+`report.json` byte for byte — the manifest digest is durable and is compared on resume.
+
+### 9.4 The fact layer
+
+A fact is identified by `(source, kind, category, quote, file)`. Occurrences of one value
+in one file fold into a single fact carrying `occurrences`, and the fold happens **before**
+the cap, so the budget is spent on distinct evidence rather than on repeats that differ
+only in `provenance`.
+
+Rank is derived, never model-chosen (`report_json.rank_fact`): government-ID and
+financial-account kinds are `HIGH`, `dob` and model-sourced PII/financial are `MED`,
+everything else is `low`. A `suspect` screening verdict demotes one notch.
+
+**Known characteristic:** the cap is "sort by rank, take 500", so a dominant rank starves
+the others. A real run yielded 73 `HIGH`, 427 `MED`, 0 `low` — contact facts exist in the
+database and in `findings.csv` but do not reach `report.json`. A reserved per-rank quota is
+the recorded fix.
+
+### 9.5 Identifier screening
+
+`experimental/analyst/detectors.py` finds identifiers by regex plus a checksum. That
+establishes shape, not authenticity. `screen_identifier(kind, value, *, labeled)` applies
+published allocation rules on top and returns two independent judgements.
+
+| axis | question | values |
+|---|---|---|
+| `plausibility` | is this a real identifier? | `valid`, `suspect`, `impossible` |
+| `subject` | whose is it? | `personal`, `organizational`, `unknown` |
+
+Only `impossible` is refused at scan time. `suspect` demotes the fact one rank
+(`HIGH`→`MED`→`low`) and is labelled in the report; `organizational` is labelled and is
+usually rank-neutral, because contact-kind facts already rank `low`. Nothing is silently
+dropped except values that cannot be real under any reading.
+
+The two axes are deliberately separate. A toll-free number is a real number that belongs
+to a business, so recording it as `suspect` would be false.
+
+#### Why checksums are not enough
+
+| check | strength | consequence |
+|---|---|---|
+| Luhn (cards) | catches ~90% of single-digit errors | roughly 1 in 10 random 13-19 digit strings passes |
+| ABA (routing) | mod-10 weighted, 9 digits | roughly 1 in 10 random 9-digit strings passes |
+| mod-97 (IBAN) | 2 check digits | ~1 in 97; the country/length table carries more weight |
+| SSN, DOB, passport, phone, email | none | structure and allocation rules are the only filter |
+
+With 518 card candidates in one real corpus you would expect ~50 false passes from noise
+alone. The ISO/IEC 7812 issuer-range check is what supplies the precision, not Luhn.
+
+#### The ZIP+4 / routing-number collision
+
+A US ZIP+4 written without its separator is nine digits, exactly like an ABA routing
+number, and has a ~10% chance of passing the ABA checksum. `782481234` is indistinguishable
+from a routing number by checksum alone.
+
+Mitigation is label proximity: `label_precedes()` looks for `routing`, `RTN`, `ABA`,
+`transit` or `ACH` within `LABEL_WINDOW` (48 characters) before the value. The window is
+one form field wide on purpose — a column header fifty rows above a value is not a label
+for that value, and widening it would make the check meaningless.
+
+The same mechanism gates `dob`, where the problem is larger: every invoice date, print
+footer and expiry date matches `MM/DD/YYYY`. In one 1,244-file corpus there were 1,630
+`dob` hits and the single value `1/19/2011` occurred 94 times.
+
+#### Why label proximity needs a schema column
+
+Label proximity is the one screening input that cannot be recomputed from `(kind, value)`.
+It needs the surrounding document text, which exists only during the scan; the report
+layer holds the hit but not the document. Schema **v10** therefore adds one additive
+nullable column, `analyst_detector_hits.labeled` (`NULL`/`0`/`1`). `NULL` means "not
+recorded" and is never held against a value, so rows written before v10 screen exactly as
+they did before.
+
+Everything else the rules need lives in the value, which keeps the rules free to change
+without a migration.
+
+#### Determinism
+
+Detector output is re-verified byte for byte when a run resumes
+(`phase1_state.verify_detector_checkpoint`), so nothing the clock can change may cause a
+hit to disappear. A date in the future cannot be a birth date, but it is graded `suspect`
+rather than `impossible` for exactly this reason.
+
+Changing `detectors.py` changes `current_detector_rules()`, which is the SHA-256 of that
+file's bytes. Any run created under the old digest refuses to resume with `PARSER_DRIFT`
+— the behaviour `CONTRACT.md` §9 requires. `DETECTOR_RULES_VERSION` is
+`analyst-detectors-v2`.
+
+#### The benchmark constraint
+
+`shared/tests/fixtures/analyst_gold/` is built out of the values these rules screen: every
+SSN is from a never-issued area (`test_analyst_gold_set.py`), every phone uses the `555`
+fiction exchange, and every card is a published test PAN. `scripts/analyst_benchmark/` is
+frozen and must not be edited.
+
+So never-issued ranges grade `suspect`, never `impossible`. A guard test asserts that no
+gold-set value is ever `impossible`; without it, a stricter rule would silently delete the
+benchmark's signal and break the per-document category floor in `test_analyst_c1.py`.
+
+`4242424242424242` is the worked example: a repeating 2-digit cycle *and* a valid Visa
+prefix. An early draft graded repeating cycles `impossible` and simulation caught it
+dropping that number. It is a test card, not an impossible one.
+
+### 9.6 Affiliations
+
+Derived from grounded contact facts, never prompted, so it cannot hallucinate. An
+organisation is an email domain that is not in `FREE_MAIL_DOMAINS`, ranked by **distinct
+files** rather than occurrences — a product manual names its vendor repeatedly and that is
+not a relationship. Threshold `MIN_AFFILIATION_FILES` (3). Read directly from
+`analyst_detector_hits`, because contact facts never survive the fact budget.
+
+Organisations only; no named individuals. Toll-free numbers are collected with a source
+file and labelled "collected, not analysed".
+
+### 9.7 Remote backends
+
+The model server is chosen per run from a stored profile (`experimental/analyst/profiles.py`,
+schema v7). Transport policy lives in `endpoint.py::check_address_policy` and is enforced
+inside the network clients, not the UI, so a script or a direct database write cannot
+bypass it: plaintext to a public address is refused outright with no override; a private
+address needs a per-profile acknowledgement; TLS is verified against the OS trust store or
+a pinned certificate (`tls.py`).
+
+Two identity kinds: `digest` (a verified SHA-256, Ollama) and `reported` (what the server
+says about itself, llama.cpp — erratum E19). A reported identity is never rendered as
+verified.
+
+### 9.8 Sidecar schema
+
+`experimental/analyst/db_schema.py` holds one ordered `_LADDER`; adding a version is three
+edits and every existing database migrates itself on open. Each version has a frozen
+snapshot digest pinned in `shared/tests/test_analyst_schema_ladder_guardrail.py`, so a
+refactor that moves a historical schema fails a test rather than a user's upgrade.
+
+| version | adds |
+|---|---|
+| 7 | `analyst_llm_profile` (model-server profiles) |
+| 8 | `analyst_runs` rebuilt so a reported identity carries no digest |
+| 9 | widened contact-state CHECK on the three contact tables |
+| 10 | `analyst_detector_hits.labeled` (detector label proximity) |
+| 11 | `analyst_runs.report_built_at_utc` |
+
+Two traps this schema has hit and now guards: DDL that interpolates a Python constant will
+silently rewrite historical schemas when the constant changes (fixed with frozen literals),
+and `ALTER TABLE ... RENAME TO` writes the name *quoted* into `sqlite_schema`.
+
+---
+
+## 10. Glossary
 
 | Term | Definition |
 |------|-----------|

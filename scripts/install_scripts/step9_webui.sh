@@ -1,7 +1,7 @@
 # Sourced by install.sh — not standalone.
 # Step 9: Optional web UI dependency install and initial credential setup.
 
-section "[Step 9]  Web UI setup  (optional)"
+section "[Step 9 of 10]  Web UI setup  (optional)"
 
 echo "  The web UI is an optional browser-based interface for scan management,"
 echo "  results browsing, and database export. It runs as a separate service"

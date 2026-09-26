@@ -47,12 +47,12 @@ The tab is the low-input launcher. Two source modes, one output field, Start.
 |  Source                                                                  |
 |   ( ) Latest extract (tmpfs quarantine)     [ 313 files ready ]          |
 |   (o) A directory of extracted files                                     |
-|       [ /home/kevin/Documents/Extracted/174.54.32.233     ] [Browse...]  |
+|       [ <configured-extract-root>/174.54.32.233           ] [Browse...]  |
 |       Detected: 258 documents across 1 host  ·  55 unsupported           |
 |                                                                          |
 |  Output                                                                  |
 |   Reports + findings exports ->                                          |
-|       [ /home/kevin/Documents/Extracted           ] [Browse...]          |
+|       [ <configured-extract-root>                 ] [Browse...]          |
 |                                                                          |
 |  Model:  gpt-oss:20b            [ Change... ]   ● Ollama reachable        |
 |                                                                          |
@@ -103,9 +103,9 @@ Only opened by operators who want to tune. Nothing here is required.
 
 > **C0A note (changed):** original-document copying is OUT of the V1 MVP
 > (materially expands the security surface). The old "Copy documents…" checkboxes
-> are removed. U4 exports selected **report rows/findings** to CSV/JSONL, not file
-> copies. The ClamAV clean/infected/unknown copy contract is deferred with that
-> feature.
+> are removed. U4 exports only explicitly selected **report rows/findings** to
+> CSV/JSONL, not file copies. There is no default-select-all persistence. The ClamAV
+> clean/infected/unknown copy contract is deferred with that feature.
 
 Notes:
 - "Fast vs Deep" is the two-phase decision (RESEARCH_NOTES design consequence 7)
@@ -180,30 +180,61 @@ EXPOSURE SUMMARY
   └────────────────────┴───────┴───────────────────────────────┘
 
 TOP FINDINGS
-  1. HIGH  employees_2019.xlsx  · sheet 2 · 41 rows
-     22 SSNs, 14 full names, 14 home addresses.
-     Evidence: "SSN" column header, rows 2-42.
-  2. HIGH  tax_return_2019.pdf  · p.1
-     SSN 123-45-6789, bank routing + account.
-     Evidence: "Your social security number ... 123-45-6789"
+  1. SUGGESTED · UNREVIEWED · HIGH
+      employees_2019.xlsx · sheet 2 · 41 rows
+      Model suggestion: contact / PII
+      Verified source quote: "SSN" column header, rows 2-42.
+      Deterministic evidence (separate): 22 SSNs, 14 emails.
+  2. SUGGESTED · UNREVIEWED · HIGH
+      tax_return_2019.pdf · p.1
+      Verified source quote: "Your social security number ... 123-45-6789"
   ...
 
 DOCUMENT INVENTORY (sortable table: file · type · category · risk · state)
   ...
 
   Report written to:
-    /home/kevin/Documents/Extracted/_analyst/174.54.32.233/
+    <configured-extract-root>/_analyst/174.54.32.233/
 ================================================================
 ```
 
 Notes:
 - Coverage is the first section, always. A report that leads with findings and
   hides what it skipped is the exact failure mode HI called out.
+- This static report is read-only: it displays no checkbox, accept/reject button or
+  other control. Model-derived rows remain `suggested / unreviewed` until explicit
+  adjudication in the U4 GUI picker below. The verified quote and source provenance
+  stay adjacent, while deterministic detector evidence is visually separate. Empty
+  model output never means the document is safe, and no model row triggers an action
+  or tag.
 - Raw values shown (locked decision 1). The static HTML uses context-appropriate
   escaping, no JS, no remote assets, and a strict CSP (R5); canonical unmodified
   evidence lives only in the 0600 JSONL.
 - The JSONL alongside the HTML feeds a future `dirracuda.db` import without
   re-running anything (D5 forward-compat).
+
+---
+
+## Screen 5 — Findings review and export picker (U4 GUI dialog)
+
+This is an interactive Tk dialog, not part of the static HTML report.
+
+```text
++-- Review Analyst suggestions ----------------------------------------+
+| [ ] employees_2019.xlsx  · SUGGESTED / UNREVIEWED                   |
+|     Quote: "SSN" column header, rows 2-42.                           |
+|     [ Accept ] [ Reject ]                                            |
+|                                                                      |
+| [ ] tax_return_2019.pdf · SUGGESTED / UNREVIEWED                    |
+|     Quote: "Your social security number ..."                        |
+|     [ Accept ] [ Reject ]                                            |
+|                                                                      |
+| Export includes only checked rows.             [ Export ] [ Close ] |
++----------------------------------------------------------------------+
+```
+
+Accept/reject records human adjudication; the separate checkbox controls export. Neither
+defaults to accepted or selected, and neither triggers an action on the source document.
 
 ---
 
@@ -229,7 +260,7 @@ Notes:
 | U1 | New Accessories tab, or fold into an existing one | **Resolved:** new tab (matches Sherlock) |
 | U2 | Post-extract hook auto-prompt, or opt-in toggle in extract dialog | **Resolved:** opt-in toggle, off by default (Sherlock C5.1 precedent) |
 | U3 | Show live findings in the monitor, or only in the final report | **Resolved:** show recent findings (builds trust it is working) |
-| U4 | Copy flagged docs, or export findings | **Resolved: export findings** rows to CSV/JSONL via a per-row checkbox picker (select all/none). No original-document copying in the MVP. |
+| U4 | Copy flagged docs, or export findings | **Resolved: export findings** rows to CSV/JSONL via a per-row checkbox picker. Only explicitly selected rows export; no persisted default-select-all. No original-document copying in the MVP. |
 | U5 | One report per host always, or a combined index across hosts | **Resolved for V1:** per-host reports; combined index deferred |
 
 ## Reduced-isolation note (C0A)

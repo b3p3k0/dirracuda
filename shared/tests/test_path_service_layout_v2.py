@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import stat
 from pathlib import Path
 
 from shared.path_service import (
     bootstrap_layout_v2,
+    ensure_layout_dirs,
     get_legacy_paths,
     get_paths,
     read_layout_state,
@@ -42,6 +44,22 @@ def test_bootstrap_layout_v2_creates_structure_and_seeds_conf(tmp_path: Path) ->
     assert paths.exclusion_list_file.exists()
     assert paths.ransomware_indicators_file.exists()
     assert result["seeded"]["copied"] >= 1
+
+
+def test_path_service_creates_owner_only_analyst_reports_directory(
+    tmp_path: Path,
+) -> None:
+    paths = get_paths(
+        home_root=tmp_path / ".dirracuda",
+        repo_root=tmp_path / "repo",
+    )
+    ensure_layout_dirs(paths=paths)
+
+    assert paths.analyst_reports_dir == (
+        paths.home_root / "data" / "experimental" / "analyst_reports"
+    )
+    assert paths.analyst_reports_dir.is_dir()
+    assert stat.S_IMODE(paths.analyst_reports_dir.stat().st_mode) == 0o700
 
 
 def test_bootstrap_auto_enables_clamav_for_fresh_config_when_scanner_detected(
