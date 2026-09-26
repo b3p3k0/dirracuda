@@ -134,6 +134,8 @@ def load_report_snapshot(
             report_label=str(row["report_label"]),
             mode=str(row["mode"]),
             source_mode=str(row["source_mode"]),
+            source_root=str(row["source_root"]),
+            report_built_at_utc=str(row["report_built_at_utc"] or ""),
             created_at_utc=str(row["created_at_utc"]),
             model_tag=str(row["model_tag"]),
             model_digest=(
@@ -213,6 +215,16 @@ def build_report_json_payload(
             files_read=coverage_summary.model_reviewed_files,
             files_total=coverage_summary.discovered_files,
             flagged_files=flagged_files,
+            source_root=run.source_root,
+            output_root=snapshot.output_root,
+            # The run is not complete yet -- the report is written first, so
+            # finished_at_utc does not exist. This is the instant finalization
+            # began, moments before this payload. It comes from the row and
+            # never from a clock: a crashed finalization that resumes has to
+            # rebuild this payload byte for byte, because the manifest digest
+            # is durable and is compared on resume.
+            report_written_at_utc=run.report_built_at_utc,
+            detector_rules_version=run.detector_rules_version,
         )
         read = _load_host_read(conn, fence.run_id)
         if read is None:

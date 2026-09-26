@@ -11,6 +11,7 @@ from collections.abc import Callable
 from .report_contract import HTML_CSP, csv_safe
 from .report_json import (
     UNVERIFIED_NOTICE,
+    run_header_lines,
     fact_rank_label,
     fact_seen_label,
     validate_report_json,
@@ -28,6 +29,10 @@ def render_markdown(report: dict) -> str:
     facts = report["facts"]
 
     lines = [
+        "# RUN",
+        "",
+        *_header_markdown(report),
+        "",
         "# WHAT THIS IS",
         "",
         f"Risk: ● {_markdown(read['risk_level'])}",
@@ -36,10 +41,6 @@ def render_markdown(report: dict) -> str:
         "",
         f"Likely owner : {_markdown_optional(read['likely_owner'])}",
         f"Contacts     : {_markdown_contacts(read['contacts'])}",
-        (
-            f"Files read   : {_markdown(run['files_read'])}      "
-            f"Flagged files: {_markdown(run['flagged_files'])}"
-        ),
         "",
         "## TOP EXPOSURES",
         "",
@@ -94,6 +95,9 @@ def render_text(report: dict) -> str:
     facts = report["facts"]
 
     lines = [
+        "RUN",
+        *_header_text(report),
+        "",
         "WHAT THIS IS",
         f"Risk: ● {_plain(read['risk_level'])}",
         "",
@@ -101,10 +105,6 @@ def render_text(report: dict) -> str:
         "",
         f"Likely owner : {_plain_optional(read['likely_owner'])}",
         f"Contacts     : {_plain_contacts(read['contacts'])}",
-        (
-            f"Files read   : {_plain(run['files_read'])}      "
-            f"Flagged files: {_plain(run['flagged_files'])}"
-        ),
         "",
         "TOP EXPOSURES",
     ]
@@ -187,13 +187,12 @@ def render_html(report: dict) -> str:
         "th,td{border:1px solid #bcccdc;padding:.45rem;text-align:left;vertical-align:top}"
         "th{background:#eef2f6}code{overflow-wrap:anywhere}"
         "</style></head><body><main>"
+        f"<section><h1>RUN</h1>{_header_html(report)}</section>"
         "<section><h1>WHAT THIS IS</h1>"
         f"<p class=\"risk\">Risk: ● {_html(read['risk_level'])}</p>"
         f"<p>{_html(read['host_summary'])}</p><dl>"
         f"<dt>Likely owner</dt><dd>{_html(owner)}</dd>"
         f"<dt>Contacts</dt><dd>{_html(contact_text)}</dd>"
-        f"<dt>Files read</dt><dd>{_html(run['files_read'])}</dd>"
-        f"<dt>Flagged files</dt><dd>{_html(run['flagged_files'])}</dd>"
         "</dl><h2>TOP EXPOSURES</h2>"
         f"<ol>{exposure_html}</ol>"
         f"<p class=\"notice\">{_html(UNVERIFIED_NOTICE)}</p></section>"
@@ -398,3 +397,31 @@ def _affiliation_html(report: dict) -> str:
             f"({_html(len(numbers))} of {_html(total)} shown):</p><ul>{items}</ul>"
         )
     return body
+
+
+def _header_markdown(report: dict) -> list[str]:
+    """Render the run header as a bullet list.
+
+    Values are escaped: a source path is operator-supplied text and must not
+    be able to introduce structure.
+    """
+    return [
+        f"- **{label}** \u2014 {_markdown(value)}" if label
+        else f"- {_markdown(value)}"
+        for label, value in run_header_lines(report)
+    ]
+
+
+def _header_text(report: dict) -> list[str]:
+    return [
+        f"{label:<11}{_plain(value)}"
+        for label, value in run_header_lines(report)
+    ]
+
+
+def _header_html(report: dict) -> str:
+    rows = "".join(
+        f"<dt>{_html(label)}</dt><dd>{_html(value)}</dd>"
+        for label, value in run_header_lines(report)
+    )
+    return f"<dl>{rows}</dl>" if rows else ""

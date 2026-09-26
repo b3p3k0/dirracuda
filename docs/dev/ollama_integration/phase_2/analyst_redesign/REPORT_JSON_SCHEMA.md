@@ -87,13 +87,18 @@ grounded evidence file. It carries the read (Layer 1) and the ranked facts (Laye
 
 ### 1.2 Field rules
 
-- `report_schema_version` — integer, starts at 1; currently **4**. A reader that does not know a
-  version refuses the file cleanly (no guessing). Readers accept `(1, 2, 3, 4)`: v1 predates the
+- `report_schema_version` — integer, starts at 1; currently **5**. A reader that does not know a
+  version refuses the file cleanly (no guessing). Readers accept `(1, 2, 3, 4, 5)`: v1 predates the
   model-identity kind (erratum E18), v2 predates the collapsed fact (amendment A3), and both
   keep opening with the newer fields defaulted.
 - `run.read_mode` — `quick` or `full`.
 - `run.model_tag` / `run.model_digest` — the per-run recorded selection (§7.2 of the contract).
   Digest is lowercase 64-hex.
+- `run.source_root` / `run.output_root` — v5+. What Analyst read and where it wrote.
+- `run.report_written_at_utc` — v5+. When `report.json` was built, which is a second or two
+  before the run's `finished_at_utc` (the report is written first, so that column does not
+  exist yet). Elapsed time from `created_at_utc` is wall clock and includes any pause.
+- `run.detector_rules_version` — v5+. Which rule set produced the findings.
 - `read.unverified_notice` — the exact frozen string. Always present.
 - `read.likely_owner`, `read.contacts` — model judgment. The UI prefixes them "Likely".
 - `read.risk_level` — `HIGH` / `MED` / `LOW`. Forced to at least HIGH when any grounded fact

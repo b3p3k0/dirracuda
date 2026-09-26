@@ -316,6 +316,11 @@ def test_a_pre_v4_report_renders_without_the_block():
     """A report written before this card has no block and must still open."""
     report = _report((Affiliation("utsa.edu", 19, 36),))
     report.pop("affiliations")
+    for key in (
+        "source_root", "output_root", "report_written_at_utc",
+        "detector_rules_version",
+    ):
+        report["run"].pop(key)
     report["report_schema_version"] = 3
     report_json.validate_report_json(report)
     assert affiliation_lines(report) == "(none)"

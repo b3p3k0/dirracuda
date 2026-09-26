@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Iterable, Literal
 
 
-REPORT_SCHEMA_VERSION = 4
+REPORT_SCHEMA_VERSION = 5
 #: Versions this module can still read. v1 predates the model-identity kind
 #: (erratum E18); v2 predates the collapsed fact (amendment A3). Reports and
 #: durable host reads written before those stay readable rather than being
 #: orphaned by the bump.
-SUPPORTED_REPORT_SCHEMA_VERSIONS = (1, 2, 3, 4)
+SUPPORTED_REPORT_SCHEMA_VERSIONS = (1, 2, 3, 4, 5)
 IDENTITY_KINDS = ("digest", "reported")
 UNVERIFIED_NOTICE = "Model's read - not verified. Facts below are grounded."
 MAX_HOST_SUMMARY_CHARS = 1200
@@ -52,6 +53,122 @@ def model_identity_label(run: dict) -> str:
     fingerprint = run.get("server_fingerprint")
     server = f", server {fingerprint}" if fingerprint else ""
     return f"{tag} (reported by the server, not verified{server})"
+
+
+#: Every displayed timestamp is UTC, labelled. Local time is friendlier at the
+#: keyboard and ambiguous the moment a report is sent to somebody else.
+def _clock(value: object) -> str:
+    """Render one stored ISO-8601 UTC timestamp for display."""
+    if type(value) is not str or len(value) < 16:
+        return ""
+    return f"{value[:10]} {value[11:16]}"
+
+
+def elapsed_label(started: object, finished: object) -> str:
+    """Return wall-clock elapsed time between two stored timestamps, or "".
+
+    Wall clock, so a run that waited on the GPU lease counts the wait. It
+    answers "how long from pressing Analyze to having a report", which is the
+    question an operator is actually asking.
+    """
+    if type(started) is not str or type(finished) is not str:
+        return ""
+    try:
+        start = datetime.fromisoformat(started.replace("Z", "+00:00"))
+        end = datetime.fromisoformat(finished.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    seconds = int((end - start).total_seconds())
+    if seconds < 0:
+        return ""
+    hours, remainder = divmod(seconds, 3600)
+    minutes = remainder // 60
+    if hours:
+        return f"{hours}h {minutes:02d}m"
+    if minutes:
+        return f"{minutes}m {seconds % 60:02d}s"
+    return f"{seconds}s"
+
+
+def throughput_label(files: object, started: object, finished: object) -> str:
+    """Return files per hour, or "" when it cannot be computed honestly."""
+    if type(files) is not int or files <= 0:
+        return ""
+    if type(started) is not str or type(finished) is not str:
+        return ""
+    try:
+        start = datetime.fromisoformat(started.replace("Z", "+00:00"))
+        end = datetime.fromisoformat(finished.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    seconds = (end - start).total_seconds()
+    if seconds < 1:
+        return ""
+    rate = files * 3600.0 / seconds
+    if rate >= 100:
+        return f"{rate:,.0f} files/hour"
+    if rate >= 10:
+        return f"{rate:.0f} files/hour"
+    return f"{rate:.1f} files/hour"
+
+
+def run_header_lines(report: dict) -> list[tuple[str, str]]:
+    """Return the report's run metadata as (label, value) lines.
+
+    Facts about the run, kept apart from the model's read. A report written
+    before this existed simply yields fewer lines rather than blanks.
+    """
+    run = report.get("run")
+    if type(run) is not dict:
+        return []
+    started = run.get("created_at_utc", "")
+    written = run.get("report_written_at_utc", "")
+    lines: list[tuple[str, str]] = []
+
+    ran = _clock(started)
+    if ran:
+        finished = _clock(written)
+        elapsed = elapsed_label(started, written)
+        if finished:
+            ran = f"{ran} \u2192 {finished} UTC"
+            if elapsed:
+                ran = f"{ran}  ({elapsed})"
+        else:
+            ran = f"{ran} UTC"
+        rate = throughput_label(run.get("files_total"), started, written)
+        if rate:
+            ran = f"{ran}  \u00b7  {rate}"
+        lines.append(("Ran", ran))
+
+    source = run.get("source_root")
+    if type(source) is str and source:
+        lines.append(("Source", source))
+    counts = (
+        f"{run.get('files_total', 0):,} files found  \u00b7  "
+        f"{run.get('files_read', 0):,} read  \u00b7  "
+        f"{run.get('flagged_files', 0):,} flagged"
+    )
+    lines.append(("", counts))
+
+    output = run.get("output_root")
+    if type(output) is str and output:
+        lines.append(("Output", output))
+
+    mode = {"quick": "Quick look", "full": "Full read"}.get(
+        str(run.get("read_mode", "")), str(run.get("read_mode", "")),
+    )
+    model = model_identity_label(run)
+    lines.append(("Model", f"{model}  \u00b7  {mode}" if mode else model))
+
+    provenance = [f"run {str(run.get('run_id', ''))[:8]}"]
+    rules = run.get("detector_rules_version")
+    if type(rules) is str and rules:
+        provenance.append(rules)
+    version = report.get("report_schema_version")
+    if type(version) is int:
+        provenance.append(f"report schema {version}")
+    lines.append(("Provenance", "  \u00b7  ".join(provenance)))
+    return lines
 
 
 def coverage_note(report: dict) -> str:
@@ -353,6 +470,19 @@ class RunMeta:
     model_n_ctx: int | None = None
     model_n_ctx_train: int | None = None
     server_fingerprint: str | None = None
+    #: Where Analyst was pointed, and where it wrote. Both were only ever in
+    #: the launcher and the folder name; the report could not say what it read.
+    source_root: str = ""
+    output_root: str = ""
+    #: When report.json was written. NOT the run's finished_at_utc: the report
+    #: is built before the run is marked complete, so that column does not
+    #: exist yet. It lands a second or two earlier, and elapsed time measured
+    #: from it is wall clock, pauses included.
+    report_written_at_utc: str = ""
+    #: Which rule set produced these findings. Two reports on one host can now
+    #: disagree because the rules changed between them, and nothing else on
+    #: the page would say so.
+    detector_rules_version: str = ""
 
     @property
     def is_verified_identity(self) -> bool:
@@ -557,6 +687,10 @@ def build_report_json(
             "files_read": run.files_read,
             "files_total": run.files_total,
             "flagged_files": run.flagged_files,
+            "source_root": run.source_root,
+            "output_root": run.output_root,
+            "report_written_at_utc": run.report_written_at_utc,
+            "detector_rules_version": run.detector_rules_version,
         },
         "read": {
             "unverified_notice": UNVERIFIED_NOTICE,
@@ -659,6 +793,11 @@ def validate_report_json(obj: dict[str, object]) -> None:
             "identity_kind", "model_path", "model_n_params", "model_size_bytes",
             "model_ftype", "model_n_vocab", "model_n_ctx", "model_n_ctx_train",
             "server_fingerprint",
+        }
+    if version >= 5:
+        run_keys |= {
+            "source_root", "output_root", "report_written_at_utc",
+            "detector_rules_version",
         }
     _require_keys(run, run_keys, "run")
     RunMeta(**run)

@@ -37,12 +37,13 @@ V6_SCHEMA_VERSION: Final = 6
 V7_SCHEMA_VERSION: Final = 7
 V8_SCHEMA_VERSION: Final = 8
 V9_SCHEMA_VERSION: Final = 9
-PREVIOUS_SCHEMA_VERSION: Final = V9_SCHEMA_VERSION
-SCHEMA_VERSION: Final = 10
+V10_SCHEMA_VERSION: Final = 10
+PREVIOUS_SCHEMA_VERSION: Final = V10_SCHEMA_VERSION
+SCHEMA_VERSION: Final = 11
 KNOWN_SCHEMA_VERSIONS: Final = (
     V1_SCHEMA_VERSION, V2_SCHEMA_VERSION, V3_SCHEMA_VERSION, V4_SCHEMA_VERSION,
     V5_SCHEMA_VERSION, V6_SCHEMA_VERSION, V7_SCHEMA_VERSION, V8_SCHEMA_VERSION,
-    V9_SCHEMA_VERSION, SCHEMA_VERSION,
+    V9_SCHEMA_VERSION, V10_SCHEMA_VERSION, SCHEMA_VERSION,
 )
 
 RUN_STATES: Final = (
@@ -1102,6 +1103,17 @@ _V10_ADDITIONAL_DDL: Final = (
 )
 
 
+# v11 records when a report was built. The report carries that time, and a
+# finalization that crashes and resumes must rebuild report.json byte for
+# byte -- its manifest digest is durable and is compared on resume. A clock
+# cannot do that, and no existing column survives: begin_finalization requires
+# state='running', so a resume rewrites updated_at_utc. This is written once,
+# on the first finalization, and kept.
+_V11_ADDITIONAL_DDL: Final = (
+    "ALTER TABLE analyst_runs ADD COLUMN report_built_at_utc TEXT",
+)
+
+
 _LADDER: Final = (
     _SchemaStep(V1_SCHEMA_VERSION, (), None, None),
     _SchemaStep(
@@ -1135,7 +1147,9 @@ _LADDER: Final = (
         V9_SCHEMA_VERSION, _V9_ADDITIONAL_DDL, None, None, rebuilds_a_table=True,
     ),
     # v10 records detector label proximity for the screening rules (F2).
-    _SchemaStep(SCHEMA_VERSION, _V10_ADDITIONAL_DDL, None, None),
+    _SchemaStep(V10_SCHEMA_VERSION, _V10_ADDITIONAL_DDL, None, None),
+    # v11 records when a report was built, so a resume reproduces it exactly.
+    _SchemaStep(SCHEMA_VERSION, _V11_ADDITIONAL_DDL, None, None),
 )
 
 

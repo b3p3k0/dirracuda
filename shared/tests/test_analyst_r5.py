@@ -79,7 +79,7 @@ def _report() -> dict:
 def test_markdown_leads_with_read_notice_and_facts_without_low_exposure() -> None:
     rendered = render_markdown(_report())
 
-    assert rendered.startswith("# WHAT THIS IS\n")
+    assert rendered.startswith("# RUN\n")
     assert rendered.count(UNVERIFIED_NOTICE) == 1
     assert rendered.index("## TOP EXPOSURES") < rendered.index(UNVERIFIED_NOTICE)
     assert rendered.index(UNVERIFIED_NOTICE) < rendered.index("## FACTS")

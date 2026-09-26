@@ -40,8 +40,8 @@ from shared.path_service import get_paths
 # --------------------------------------------------------------------------
 
 def test_the_report_version_reads_every_older_one():
-    assert REPORT_SCHEMA_VERSION == 4
-    assert SUPPORTED_REPORT_SCHEMA_VERSIONS == (1, 2, 3, 4)
+    assert REPORT_SCHEMA_VERSION == 5
+    assert SUPPORTED_REPORT_SCHEMA_VERSIONS == (1, 2, 3, 4, 5)
 
 
 def test_a_fact_defaults_to_one_occurrence_and_a_valid_verdict():

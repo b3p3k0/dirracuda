@@ -126,7 +126,8 @@ def test_read_block_populates_from_report_json(view, report):
     assert view._contacts_var.get() == (
         "Contacts     : office@anytowntax.example, (555) 123-4567"
     )
-    assert view._counts_var.get() == "Files read   : 310      Flagged files: 22"
+    header = view._header_var.get()
+    assert "310 read" in header and "22 flagged" in header
     assert "1. HIGH  Client SSNs" in view._exposures_var.get()
     assert "2. MED  Payroll bank accounts" in view._exposures_var.get()
     assert view._notice_var.get() == UNVERIFIED_NOTICE

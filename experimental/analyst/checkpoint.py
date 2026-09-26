@@ -837,8 +837,13 @@ def begin_finalization(
         _require_run_terminal_semantics(conn, fence.run_id)
         cursor = conn.execute(
             "UPDATE analyst_runs SET state='finalizing',finalization_token=?,"
-            "updated_at_utc=?,revision=revision+1 WHERE run_id=? AND state='running'",
-            (finalization_token, timestamp, fence.run_id),
+            "updated_at_utc=?,revision=revision+1,"
+            # Written once and kept. The report carries this time, and a
+            # finalization that crashes and resumes must rebuild report.json
+            # byte for byte -- its manifest digest is durable and compared.
+            "report_built_at_utc=COALESCE(report_built_at_utc,?) "
+            "WHERE run_id=? AND state='running'",
+            (finalization_token, timestamp, timestamp, fence.run_id),
         )
         if cursor.rowcount != 1:
             raise CheckpointError("run finalization compare-and-set failed")

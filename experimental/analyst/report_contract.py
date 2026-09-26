@@ -154,6 +154,15 @@ class ReportRun:
     #: server that publishes none. Absent on runs created before schema v8.
     identity_kind: str = "digest"
     server_fingerprint: str | None = None
+    #: The folder the operator pointed Analyst at. Carried so the report can
+    #: say what it read without going back to the launcher. Defaulted because
+    #: every pre-F4 caller predates the question.
+    source_root: str = ""
+    #: When the report was first built. Read from the row, never a clock: a
+    #: finalization that crashes and resumes must reproduce report.json byte
+    #: for byte, because the manifest digest is durable and is compared on
+    #: resume. begin_finalization writes it once with COALESCE and keeps it.
+    report_built_at_utc: str = ""
 
     def __post_init__(self) -> None:
         texts = (
@@ -195,6 +204,10 @@ class ReportRun:
             or (self.port is not None and self.port > 65535)
             or any(value is not None and not _closed_text(value, 256)
                    for value in (self.host_type, self.ip_address))
+            or type(self.report_built_at_utc) is not str
+            or type(self.source_root) is not str
+            or len(self.source_root) > 4096
+            or "\x00" in self.source_root
         ):
             raise ReportContractError("report run identity is invalid")
 
@@ -221,6 +234,7 @@ class ReportRun:
             "reduced_isolation_ack": self.reduced_isolation_ack,
             "report_label": self.report_label,
             "response_schema_sha256": self.response_schema_sha256,
+            "source_root": self.source_root,
             "run_id": self.run_id,
             "source_mode": self.source_mode,
             "worksheet_version": self.worksheet_version,

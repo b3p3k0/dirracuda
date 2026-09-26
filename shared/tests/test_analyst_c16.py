@@ -146,6 +146,7 @@ def test_populated_exact_v2_migrates_in_place_with_zero_high_bits(
         # downgrade must rebuild it back to its v1 shape. Dropping columns
         # cannot restore a NOT NULL constraint. The v1 literal is the source.
         conn.execute("DROP INDEX idx_analyst_runs_profile")
+        conn.execute("ALTER TABLE analyst_runs DROP COLUMN report_built_at_utc")
         # Rebuild by dropping and recreating under the original name, not by
         # renaming: ALTER TABLE ... RENAME TO writes the name quoted into
         # sqlite_schema, which would not match the v1 literal byte for byte.

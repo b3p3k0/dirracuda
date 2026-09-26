@@ -275,6 +275,23 @@ substitute for data semantics.
 Large, deeply nested or highly compressed files can hit safety limits. A limit failure
 is recorded against that file while the rest of the run continues when safe.
 
+## The run header
+
+Every report opens with a short block of facts about the run itself:
+
+- **Ran** — when it started, when the report was written, how long that took, and roughly how
+  many files an hour it managed. Times are **UTC**. The elapsed time is wall clock, so if the
+  run waited for the graphics card the wait is included.
+- **Source** and **Output** — the folder it read and the folder it wrote to.
+- **Model** — which model, whether its identity was verified, and Quick look or Full read.
+- **Provenance** — the run id, the detector rule set, and the report format version.
+
+That last line matters more than it looks. Two reports on the same host can disagree because
+the detection rules changed between them. The rule set is named so you can tell.
+
+Everything in this block is fact. Everything under **WHAT THIS IS** below it is the model's
+read, and is labelled as unverified.
+
 ## Affiliations
 
 Below the top exposures the report lists **organisations** the documents keep referring to,

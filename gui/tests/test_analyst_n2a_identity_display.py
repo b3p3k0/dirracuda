@@ -107,7 +107,7 @@ def test_an_absent_model_tag_does_not_render_as_empty():
 @pytest.mark.gui_smoke
 def test_the_window_shows_a_verified_digest_run(view):
     view._show_report(_report({}), changed=False)
-    assert view._model_var.get() == "Model        : qwen3.6:27b (verified digest)"
+    assert "qwen3.6:27b (verified digest)" in view._header_var.get()
 
 
 @pytest.mark.gui_smoke
@@ -121,7 +121,7 @@ def test_the_window_never_shows_a_reported_run_as_verified(view):
         }),
         changed=False,
     )
-    shown = view._model_var.get()
+    shown = view._header_var.get()
     assert "qwen3.8-27b" in shown
     assert "not verified" in shown
     assert "verified digest" not in shown
@@ -133,11 +133,11 @@ def test_the_window_renders_a_v1_report(view):
     report = _report({})
     report["report_schema_version"] = 1
     view._show_report(report, changed=False)
-    assert "verified digest" in view._model_var.get()
+    assert "verified digest" in view._header_var.get()
 
 
 @pytest.mark.gui_smoke
-def test_clearing_the_window_resets_the_model_line(view):
+def test_clearing_the_window_resets_the_run_header(view):
     view._show_report(_report({}), changed=False)
     view._clear_report()
-    assert view._model_var.get() == "Model        : —"
+    assert view._header_var.get() == "Select a completed report."

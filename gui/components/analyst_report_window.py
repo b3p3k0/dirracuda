@@ -14,7 +14,7 @@ from experimental.analyst.report_json import (
     dumps_report,
     fact_rank_label,
     fact_seen_label,
-    model_identity_label,
+    run_header_lines,
 )
 from experimental.analyst.report_render import render, render_markdown
 from experimental.analyst.service import AnalystServiceError, ServiceFailure
@@ -26,6 +26,14 @@ from gui.utils.style import get_theme
 
 _FACT_CATEGORIES = ("All", "PII", "Financial", "Contact", "Demographic")
 _LEGACY_MESSAGE = "Legacy run - re-run to view a read."
+
+
+def _header_text(report: dict) -> str:
+    """Lay the run header out as aligned label/value lines for one label."""
+    return "\n".join(
+        f"{label:<11}{value}" if label else f"{'':<11}{value}"
+        for label, value in run_header_lines(report)
+    )
 
 
 class AnalystReportWindow:
@@ -59,6 +67,7 @@ class AnalystReportWindow:
         outer.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
 
         self._build_run_picker(outer)
+        self._build_run_header(outer)
         self._build_read_block(outer)
         self._build_facts_block(outer)
 
@@ -89,6 +98,27 @@ class AnalystReportWindow:
         )
         self.theme.apply_to_widget(changed, "label")
         changed.pack(fill=tk.X, pady=(0, 6))
+
+    def _build_run_header(self, parent: tk.Widget) -> None:
+        """Facts about the run, kept apart from the model's read below it."""
+        card = tk.Frame(parent)
+        self.theme.apply_to_widget(card, "card")
+        card.pack(fill=tk.X, pady=(0, 8))
+
+        heading = tk.Label(card, text="RUN", anchor="w")
+        self.theme.apply_to_widget(heading, "label")
+        heading.pack(fill=tk.X, padx=10, pady=(8, 2))
+
+        self._header_var = tk.StringVar(value="Select a completed report.")
+        header = tk.Label(
+            card,
+            textvariable=self._header_var,
+            anchor="w",
+            justify="left",
+            wraplength=980,
+        )
+        self.theme.apply_to_widget(header, "label")
+        header.pack(fill=tk.X, padx=18, pady=(0, 8))
 
     def _build_read_block(self, parent: tk.Widget) -> None:
         read_card = tk.Frame(parent)
@@ -134,18 +164,6 @@ class AnalystReportWindow:
         )
         self.theme.apply_to_widget(contacts, "label")
         contacts.pack(fill=tk.X, padx=10)
-
-        self._counts_var = tk.StringVar(value="Files read   : —      Flagged files: —")
-        counts = tk.Label(read_card, textvariable=self._counts_var, anchor="w")
-        self.theme.apply_to_widget(counts, "label")
-        counts.pack(fill=tk.X, padx=10)
-
-        # E18: the report must say which model identity kind backs the run, and
-        # a reported identity must never read as verified.
-        self._model_var = tk.StringVar(value="Model        : —")
-        model = tk.Label(read_card, textvariable=self._model_var, anchor="w")
-        self.theme.apply_to_widget(model, "label")
-        model.pack(fill=tk.X, padx=10, pady=(0, 8))
 
         exposures_heading = tk.Label(read_card, text="TOP EXPOSURES", anchor="w")
         self.theme.apply_to_widget(exposures_heading, "label")
@@ -300,6 +318,7 @@ class AnalystReportWindow:
         if self.window is not None:
             self.window.title(f"Report - {run['report_label']}")
         # An empty report is not a swallowed error. Say which it is.
+        self._header_var.set(_header_text(report))
         self._status_var.set(coverage_note(report))
         self._changed_var.set("changed since saved" if changed else "")
         self._risk_var.set(f"Risk: ● {read['risk_level']}")
@@ -312,11 +331,6 @@ class AnalystReportWindow:
         self._contacts_var.set(
             f"Contacts     : {', '.join(contacts) if contacts else '(none)'}"
         )
-        self._counts_var.set(
-            f"Files read   : {run['files_read']}      "
-            f"Flagged files: {run['flagged_files']}"
-        )
-        self._model_var.set(f"Model        : {model_identity_label(run)}")
         exposures = [
             item for item in read["top_exposures"]
             if item["severity"] != "LOW"
@@ -342,8 +356,7 @@ class AnalystReportWindow:
         self._host_summary_var.set("Select a completed report.")
         self._owner_var.set("Likely owner : —")
         self._contacts_var.set("Contacts     : —")
-        self._model_var.set("Model        : —")
-        self._counts_var.set("Files read   : —      Flagged files: —")
+        self._header_var.set("Select a completed report.")
         self._exposures_var.set("(none)")
         self._affiliations_var.set("(none)")
         self._notice_var.set(UNVERIFIED_NOTICE)

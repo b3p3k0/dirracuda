@@ -430,3 +430,44 @@ misrepresent where it came from.
 
 Unchanged: the read, the risk rubric, the fact budget, grounding, and every artifact on
 disk.
+
+## Amendment A5 (2026-09-26, HI-approved) — the run header, report schema v5
+
+Adds four fields to `run` and separates run metadata from the model's read in every view.
+
+After a sixteen-hour run the HI asked a question the report could not answer: when did this
+start, when did it stop, how long did it take, and what did it read? All of it existed only
+in the database and in the output folder's name.
+
+Decision:
+
+- `run.source_root` and `run.output_root` — what Analyst was pointed at, and where it wrote.
+- `run.report_written_at_utc` — **not** the run's `finished_at_utc`. The report is built
+  before the run is marked complete, so that column does not exist yet; this is the instant
+  finalization began, a second or two earlier. Elapsed time measured from it is **wall
+  clock**, so a run that waited on the GPU lease counts the wait. That is the honest answer
+  to "how long from pressing Analyze to having a report".
+- That value **must not come from a clock**, and schema **v11** adds
+  `analyst_runs.report_built_at_utc` to hold it. A finalization that crashes and resumes has
+  to rebuild `report.json` byte for byte, because its manifest digest is durable and is
+  compared on resume (`test_analyst_c12`). No existing column survives that: the resume path
+  re-enters `begin_finalization`, which requires `state='running'` and therefore rewrites
+  `updated_at_utc`. The new column is written once with `COALESCE` and kept.
+- `run.detector_rules_version` — which rule set produced these findings. Two reports on one
+  host can now legitimately disagree because the rules changed between them, and nothing
+  else on the page said so.
+- Every displayed timestamp is **UTC, labelled**. Local time is friendlier at the keyboard
+  and ambiguous the moment a report is sent to someone else.
+- The model identity line and the file counts **move out of `WHAT THIS IS`** into the
+  header. `WHAT THIS IS` is the model's read; those are facts about the run. Mixing them
+  blurred which parts of the page a reader is entitled to trust.
+- Report schema becomes **5**; readers accept `(1, 2, 3, 4, 5)` and the run key set is
+  version-gated as before. A report written before this shows fewer header lines rather
+  than blank ones.
+
+Recording which server ran it was considered and dropped: the endpoint is not stored per
+run, only `profile_id`, and a profile can be edited afterwards, so resolving it at display
+time would be a guess presented as provenance. It would need a column on `analyst_runs`, and
+the HI's ruling was that the juice is not worth the squeeze.
+
+Unchanged: the read, the risk rubric, grounding, the fact budget, and every artifact on disk.
