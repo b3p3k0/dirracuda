@@ -385,3 +385,48 @@ honest. A fact silently removed is not.
 Unchanged: grounding (every quote is still an exact substring of its source), the rank function,
 the risk rubric, `report.html` and `findings.csv`/`findings.jsonl` on disk — those stream
 `FindingReportRow` pages, carry every occurrence, and remain the full evidence record.
+
+## Amendment A4 (2026-09-25, HI-approved) — the affiliations block, report schema v4
+
+Adds a top-level `affiliations` key. Refines section 3 by placing a second grounded layer
+beside the facts, and `REPORT_JSON_SCHEMA.md` §1.1-1.2.
+
+The read names a likely owner and "useful contact points" (section 5.1). It does not answer
+the question the HI asked: *who does this host's owner deal with a lot?* The evidence for
+that already exists as contact facts, and never reaches the report — contact facts rank
+`low` and the fact budget is exhausted before the sort arrives. A real 1,244-file run put
+**zero** email addresses into `report.json`.
+
+Decision:
+
+- `affiliations.organizations[]` — email domains that are not mailbox providers, ranked by
+  **how many distinct files mention them**, not by how often. Repetition inside one document
+  proves nothing: a product manual names its vendor several times. In one real corpus 63 of
+  77 candidate domains appeared in exactly one file.
+- The threshold is **three distinct files** (`MIN_AFFILIATION_FILES`). Two is a coincidence;
+  three is a pattern. It is a judgement call held as a named constant, not a law — at three,
+  one real corpus kept a guitar-parts vendor and dropped a law firm.
+- `FREE_MAIL_DOMAINS` excludes mailbox providers. `@utsa.edu` says someone is connected to a
+  university; `@hotmail.com` says only that they have a Hotmail account. Without the list,
+  `hotmail.com` topped one corpus with 83 files. Inferring it from distinct local parts was
+  tried and does not separate (gmail 27, hotmail 18, **utsa.edu 13**).
+- `affiliations.toll_free[]` — toll-free numbers with a file count and one example source,
+  bounded, with an honest `toll_free_total`. Labelled **collected, not analysed**: there is
+  no offline way to resolve a number to an institution, and one corpus held 159. They are
+  carried because they would otherwise vanish with the rest of the `low`-ranked contacts,
+  and they do carry institutional meaning — `800-772-1213` is the SSA's main line.
+- **Organisations only. No named individuals.** A per-address rollup identifies the owner
+  well, and also names third parties and implies relationships about them. The evidence
+  stays in the facts layer and in `findings.csv`; Analyst does not rank it into a social
+  graph.
+- Derived, never prompted. No model call, no new prompt, no re-pinned SHA. It cannot
+  hallucinate, and the host read is untouched.
+- Report schema becomes **4**; readers accept `(1, 2, 3, 4)` and the top-level key set is
+  version-gated like `run` and `facts` already are.
+
+The block sits at the top level rather than inside `read` on purpose. `read` is the model's
+labelled judgement; this is derived from grounded evidence. Filing it under `read` would
+misrepresent where it came from.
+
+Unchanged: the read, the risk rubric, the fact budget, grounding, and every artifact on
+disk.

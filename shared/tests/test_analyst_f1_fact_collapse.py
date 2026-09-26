@@ -39,9 +39,9 @@ from shared.path_service import get_paths
 # The schema
 # --------------------------------------------------------------------------
 
-def test_report_is_v3_and_the_older_versions_still_read():
-    assert REPORT_SCHEMA_VERSION == 3
-    assert SUPPORTED_REPORT_SCHEMA_VERSIONS == (1, 2, 3)
+def test_the_report_version_reads_every_older_one():
+    assert REPORT_SCHEMA_VERSION == 4
+    assert SUPPORTED_REPORT_SCHEMA_VERSIONS == (1, 2, 3, 4)
 
 
 def test_a_fact_defaults_to_one_occurrence_and_a_valid_verdict():
@@ -251,7 +251,7 @@ def test_the_collapse_happens_before_the_cap(run):
 # The surfaces
 # --------------------------------------------------------------------------
 
-def _report(*, version: int = 3) -> dict:
+def _report(*, version: int = 4) -> dict:
     def fact(quote: str, occurrences: int) -> dict:
         return {
             "kind": "ssn", "category": "pii", "quote": quote,
@@ -274,7 +274,7 @@ def _report(*, version: int = 3) -> dict:
             "model_ftype": None, "model_n_vocab": None, "model_n_ctx": None,
             "model_n_ctx_train": None, "server_fingerprint": None,
         }
-    return {
+    report = {
         "report_schema_version": version,
         "run": run,
         "read": {
@@ -288,6 +288,15 @@ def _report(*, version: int = 3) -> dict:
             "parse_failed": 0, "unsupported": 0,
         },
     }
+    if version >= 4:
+        report["affiliations"] = {
+            "organizations": [
+                {"domain": "utsa.edu", "files": 19, "occurrences": 36},
+            ],
+            "toll_free": [],
+            "toll_free_total": 0,
+        }
+    return report
 
 
 def test_csv_carries_the_count():

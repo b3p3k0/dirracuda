@@ -65,6 +65,16 @@ grounded evidence file. It carries the read (Layer 1) and the ranked facts (Laye
       "subject": "organizational"
     }
   ],
+  "affiliations": {
+    "organizations": [
+      {"domain": "utsa.edu", "files": 19, "occurrences": 36},
+      {"domain": "neisd.net", "files": 8, "occurrences": 14}
+    ],
+    "toll_free": [
+      {"value": "800-772-1213", "files": 5, "example_file": "Sabina/CSN/4506t.pdf"}
+    ],
+    "toll_free_total": 159
+  },
   "coverage": {
     "discovered": 332,
     "terminal": 332,
@@ -77,8 +87,8 @@ grounded evidence file. It carries the read (Layer 1) and the ranked facts (Laye
 
 ### 1.2 Field rules
 
-- `report_schema_version` — integer, starts at 1; currently **3**. A reader that does not know a
-  version refuses the file cleanly (no guessing). Readers accept `(1, 2, 3)`: v1 predates the
+- `report_schema_version` — integer, starts at 1; currently **4**. A reader that does not know a
+  version refuses the file cleanly (no guessing). Readers accept `(1, 2, 3, 4)`: v1 predates the
   model-identity kind (erratum E18), v2 predates the collapsed fact (amendment A3), and both
   keep opening with the newer fields defaulted.
 - `run.read_mode` — `quick` or `full`.
@@ -105,6 +115,14 @@ grounded evidence file. It carries the read (Layer 1) and the ranked facts (Laye
   like. Separate from plausibility: a toll-free number is entirely real and simply belongs to a
   business. A screened-down fact is ranked lower and labelled, never silently removed — coverage
   honesty is the product (frozen §4).
+- `affiliations` — v4+. Derived from grounded contact evidence, never from the model.
+  `organizations[]` are email domains that are not mailbox providers (`FREE_MAIL_DOMAINS`),
+  ranked by `files` (distinct files mentioning them) descending then domain, each at or above
+  `MIN_AFFILIATION_FILES` (3), capped at `MAX_AFFILIATIONS` (20). Ranking on distinct files
+  rather than occurrences is the point: a product manual names its vendor repeatedly and that
+  is not a relationship. `toll_free[]` is bounded by `MAX_TOLL_FREE` (25) with an honest
+  `toll_free_total`, and is collected rather than analysed. **Organisations only — no named
+  individuals** (amendment A4).
 - `coverage` — the honest counts. Coverage stays computed (frozen §4); it moves out of the
   report's lead into a "Files read" line plus a details view.
 

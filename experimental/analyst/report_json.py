@@ -7,12 +7,12 @@ from dataclasses import dataclass, field
 from typing import Iterable, Literal
 
 
-REPORT_SCHEMA_VERSION = 3
+REPORT_SCHEMA_VERSION = 4
 #: Versions this module can still read. v1 predates the model-identity kind
 #: (erratum E18); v2 predates the collapsed fact (amendment A3). Reports and
 #: durable host reads written before those stay readable rather than being
 #: orphaned by the bump.
-SUPPORTED_REPORT_SCHEMA_VERSIONS = (1, 2, 3)
+SUPPORTED_REPORT_SCHEMA_VERSIONS = (1, 2, 3, 4)
 IDENTITY_KINDS = ("digest", "reported")
 UNVERIFIED_NOTICE = "Model's read - not verified. Facts below are grounded."
 MAX_HOST_SUMMARY_CHARS = 1200
@@ -129,6 +129,33 @@ def fact_rank_label(fact: dict) -> str:
     return rank + "".join(f" \u00b7 {note}" for note in notes)
 
 
+def affiliation_lines(report: dict) -> str:
+    """Summarise the affiliations block for a one-label display.
+
+    A pre-v4 report has no block, which reads as "(none)" rather than as an
+    error: those runs pre-date the question being asked.
+    """
+    block = report.get("affiliations")
+    if type(block) is not dict:
+        return "(none)"
+    organizations = block.get("organizations") or []
+    lines = [
+        f"{item['domain']}  -  {item['files']} files, "
+        f"{item['occurrences']} mentions"
+        for item in organizations
+    ]
+    if not lines:
+        lines = ["(no organization appears in enough files to be a pattern)"]
+    numbers = block.get("toll_free") or []
+    if numbers:
+        total = block.get("toll_free_total", len(numbers))
+        lines.append(
+            f"{total} toll-free number(s) collected, not analysed "
+            f"- see the exported report"
+        )
+    return "\n".join(lines)
+
+
 class ReportValidationError(ValueError):
     """A report value does not match the frozen versioned shape."""
 
@@ -175,6 +202,86 @@ class GroundedFact:
             or self.subject not in _SUBJECTS
         ):
             raise ReportValidationError("grounded fact is invalid")
+
+
+#: A domain that names a mailbox provider, not an organisation. "@utsa.edu"
+#: says someone is connected to a university; "@hotmail.com" says only that
+#: they have a Hotmail account. Without this list the provider domains top the
+#: affiliation rollup and bury every real one. Inferring it instead was tried
+#: and does not separate: in a real corpus gmail.com carried 27 distinct local
+#: parts, hotmail.com 18, and utsa.edu 13.
+FREE_MAIL_DOMAINS: Final = frozenset({
+    "aol.com", "att.net", "bellsouth.net", "btinternet.com", "comcast.net",
+    "cox.net", "earthlink.net", "fastmail.com", "gmail.com", "gmx.com",
+    "gmx.net", "googlemail.com", "hotmail.co.uk", "hotmail.com", "hush.com",
+    "icloud.com", "inbox.com", "live.co.uk", "live.com", "mac.com",
+    "mail.com", "mail.ru", "me.com", "msn.com", "optonline.net",
+    "outlook.com", "pm.me", "proton.me", "protonmail.com", "rocketmail.com",
+    "roadrunner.com", "sbcglobal.net", "tutanota.com", "verizon.net",
+    "web.de", "yahoo.co.uk", "yahoo.com", "yandex.com", "ymail.com",
+    "zoho.com",
+})
+
+#: Two files is a coincidence; three is a pattern. Held as a named constant
+#: because it is a judgement call, not a law -- at three, one real corpus kept
+#: a guitar-parts vendor and dropped a law firm.
+MIN_AFFILIATION_FILES: Final = 3
+MAX_AFFILIATIONS: Final = 20
+#: Toll-free numbers are collected, not analysed. There is no offline way to
+#: resolve one to an institution, and a real corpus held 159 distinct numbers.
+#: They are kept because they would otherwise vanish: phone facts rank low and
+#: never survive the fact budget.
+MAX_TOLL_FREE: Final = 25
+
+
+@dataclass(frozen=True, slots=True)
+class Affiliation:
+    """One organisation the host's documents keep referring to."""
+
+    domain: str
+    files: int
+    occurrences: int
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.domain) is not str
+            or not self.domain
+            or type(self.files) is not int
+            or type(self.occurrences) is not int
+            or self.files < 1
+            or self.occurrences < self.files
+        ):
+            raise ReportValidationError("affiliation is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class TollFreeContact:
+    """One toll-free number, collected with where it was found."""
+
+    value: str
+    files: int
+    example_file: str = field(repr=False)
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.value) is not str
+            or not self.value
+            or type(self.files) is not int
+            or self.files < 1
+            or type(self.example_file) is not str
+        ):
+            raise ReportValidationError("toll-free contact is invalid")
+
+
+def email_domain(value: str) -> str:
+    """Return the lowercase domain of one address, or "" when there is none."""
+    _, separator, domain = value.rpartition("@")
+    return domain.casefold() if separator else ""
+
+
+def is_organizational_domain(domain: str) -> bool:
+    """Return whether a domain names an organisation rather than a mailbox."""
+    return bool(domain) and domain not in FREE_MAIL_DOMAINS
 
 
 @dataclass(frozen=True, slots=True)
@@ -397,12 +504,23 @@ def build_report_json(
     read: HostRead,
     facts: Iterable[GroundedFact],
     coverage: Coverage,
+    affiliations: Iterable[Affiliation] = (),
+    toll_free: Iterable[TollFreeContact] = (),
+    toll_free_total: int = 0,
 ) -> dict[str, object]:
-    """Build the exact version-1 report shape without performing I/O."""
+    """Build the exact versioned report shape without performing I/O."""
     if type(run) is not RunMeta or type(read) is not HostRead:
         raise TypeError("run and read must use the report data contracts")
     if type(coverage) is not Coverage:
         raise TypeError("coverage must use the report data contract")
+    organizations = tuple(affiliations)
+    if any(type(item) is not Affiliation for item in organizations):
+        raise TypeError("affiliations must contain Affiliation values")
+    numbers = tuple(toll_free)
+    if any(type(item) is not TollFreeContact for item in numbers):
+        raise TypeError("toll_free must contain TollFreeContact values")
+    if type(toll_free_total) is not int or toll_free_total < len(numbers):
+        raise ValueError("toll_free_total cannot be below what it carries")
 
     fact_values = tuple(facts)
     if any(type(fact) is not GroundedFact for fact in fact_values):
@@ -470,6 +588,25 @@ def build_report_json(
             }
             for fact in ordered_facts
         ],
+        "affiliations": {
+            "organizations": [
+                {
+                    "domain": item.domain,
+                    "files": item.files,
+                    "occurrences": item.occurrences,
+                }
+                for item in organizations
+            ],
+            "toll_free": [
+                {
+                    "value": item.value,
+                    "files": item.files,
+                    "example_file": item.example_file,
+                }
+                for item in numbers
+            ],
+            "toll_free_total": toll_free_total,
+        },
         "coverage": {
             "discovered": coverage.discovered,
             "terminal": coverage.terminal,
@@ -506,11 +643,12 @@ def validate_report_json(obj: dict[str, object]) -> None:
     if version not in SUPPORTED_REPORT_SCHEMA_VERSIONS:
         raise ReportVersionError("report_schema_version is unsupported")
 
-    _require_keys(
-        obj,
-        {"report_schema_version", "run", "read", "facts", "coverage"},
-        "report",
-    )
+    report_keys = {
+        "report_schema_version", "run", "read", "facts", "coverage",
+    }
+    if version >= 4:
+        report_keys |= {"affiliations"}
+    _require_keys(obj, report_keys, "report")
     run = _object(obj["run"], "run")
     run_keys = {
         "run_id", "report_label", "read_mode", "model_tag", "model_digest",
@@ -576,6 +714,41 @@ def validate_report_json(obj: dict[str, object]) -> None:
         "coverage",
     )
     Coverage(**coverage)
+
+    if version >= 4:
+        block = _object(obj["affiliations"], "affiliations")
+        _require_keys(
+            block,
+            {"organizations", "toll_free", "toll_free_total"},
+            "affiliations",
+        )
+        organizations = [
+            Affiliation(**_object(item, "affiliation"))
+            for item in _list(block["organizations"], "affiliations")
+        ]
+        if len(organizations) > MAX_AFFILIATIONS:
+            raise ReportValidationError("affiliations exceed their bound")
+        if organizations != sorted(
+            organizations, key=lambda item: (-item.files, item.domain),
+        ):
+            raise ReportValidationError("affiliations are not canonical")
+        if any(
+            item.files < MIN_AFFILIATION_FILES for item in organizations
+        ):
+            raise ReportValidationError("affiliation is below its threshold")
+        if any(
+            not is_organizational_domain(item.domain) for item in organizations
+        ):
+            raise ReportValidationError("a mailbox provider is not an affiliation")
+        numbers = [
+            TollFreeContact(**_object(item, "toll-free contact"))
+            for item in _list(block["toll_free"], "toll-free contacts")
+        ]
+        if len(numbers) > MAX_TOLL_FREE:
+            raise ReportValidationError("toll-free contacts exceed their bound")
+        total = block["toll_free_total"]
+        if type(total) is not int or total < len(numbers):
+            raise ReportValidationError("toll-free total is invalid")
 
 
 def _fact_label(fact: GroundedFact) -> str:

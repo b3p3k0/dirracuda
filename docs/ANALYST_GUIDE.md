@@ -275,6 +275,28 @@ substitute for data semantics.
 Large, deeply nested or highly compressed files can hit safety limits. A limit failure
 is recorded against that file while the rest of the run continues when safe.
 
+## Affiliations
+
+Below the top exposures the report lists **organisations** the documents keep referring to,
+with how many separate files mention each one. It is worked out from email addresses found
+in the files. Nothing is guessed and the model is not involved.
+
+The count that matters is **files**, not mentions. A product manual sitting in a downloads
+folder names its maker several times, and that is not a relationship. A domain has to appear
+in at least three separate files before it is listed.
+
+Two things it deliberately does not do:
+
+- **Webmail providers are ignored.** `@hotmail.com` tells you someone has a Hotmail account,
+  not who they deal with, so providers like Gmail, Hotmail and Yahoo are skipped. A provider
+  we have not listed can show up here by mistake.
+- **People are not listed.** Individual addresses stay in the facts and in the exported CSV.
+  Analyst reports what is exposed; it does not build a list of somebody's contacts.
+
+Toll-free numbers are gathered at the end of the section with the file they came from. They
+are **collected, not analysed** — a number often belongs to an institution worth knowing
+about, but Analyst cannot look one up, so it just keeps them where you can see them.
+
 ## Known pitfalls and limitations
 
 Analyst finds identifiers by shape and checksum. That is fast and it works on any

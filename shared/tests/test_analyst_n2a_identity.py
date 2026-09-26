@@ -99,9 +99,9 @@ def test_the_schema_and_report_kinds_agree():
 # Payload, and the v1 reports already on disk
 # --------------------------------------------------------------------------
 
-def test_report_schema_version_is_three_and_older_ones_still_read():
-    assert REPORT_SCHEMA_VERSION == 3
-    assert SUPPORTED_REPORT_SCHEMA_VERSIONS == (1, 2, 3)
+def test_report_schema_version_is_four_and_older_ones_still_read():
+    assert REPORT_SCHEMA_VERSION == 4
+    assert SUPPORTED_REPORT_SCHEMA_VERSIONS == (1, 2, 3, 4)
 
 
 def _v1_report():
@@ -142,7 +142,7 @@ def test_a_v2_report_requires_the_identity_keys():
 
 def test_an_unsupported_version_is_refused():
     report = _v1_report()
-    report["report_schema_version"] = 4
+    report["report_schema_version"] = 5
     with pytest.raises(ReportVersionError):
         validate_report_json(report)
 

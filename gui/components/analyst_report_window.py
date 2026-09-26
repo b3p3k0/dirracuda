@@ -9,6 +9,7 @@ from tkinter import filedialog, ttk
 
 from experimental.analyst.report_json import (
     UNVERIFIED_NOTICE,
+    affiliation_lines,
     coverage_note,
     dumps_report,
     fact_rank_label,
@@ -161,6 +162,25 @@ class AnalystReportWindow:
         self.theme.apply_to_widget(exposures, "label")
         exposures.pack(fill=tk.X, padx=18, pady=(2, 8))
 
+        # Grounded and derived, not a model judgement -- so it sits below the
+        # exposures and above the notice that governs the model's read.
+        affiliations_heading = tk.Label(
+            read_card, text="AFFILIATIONS", anchor="w",
+        )
+        self.theme.apply_to_widget(affiliations_heading, "label")
+        affiliations_heading.pack(fill=tk.X, padx=10)
+
+        self._affiliations_var = tk.StringVar(value="(none)")
+        affiliations = tk.Label(
+            read_card,
+            textvariable=self._affiliations_var,
+            anchor="w",
+            justify="left",
+            wraplength=980,
+        )
+        self.theme.apply_to_widget(affiliations, "label")
+        affiliations.pack(fill=tk.X, padx=18, pady=(2, 8))
+
         self._notice_var = tk.StringVar(value=UNVERIFIED_NOTICE)
         notice = tk.Label(
             read_card,
@@ -309,6 +329,7 @@ class AnalystReportWindow:
             if exposures
             else "(none)"
         )
+        self._affiliations_var.set(affiliation_lines(report))
         self._notice_var.set(str(read["unverified_notice"]))
         self._category_var.set("All")
         self._apply_fact_filter()
@@ -324,6 +345,7 @@ class AnalystReportWindow:
         self._model_var.set("Model        : —")
         self._counts_var.set("Files read   : —      Flagged files: —")
         self._exposures_var.set("(none)")
+        self._affiliations_var.set("(none)")
         self._notice_var.set(UNVERIFIED_NOTICE)
         self._facts.delete(*self._facts.get_children(""))
         self._set_report_actions(False)

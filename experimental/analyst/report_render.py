@@ -60,6 +60,12 @@ def render_markdown(report: dict) -> str:
         "",
         UNVERIFIED_NOTICE,
         "",
+        "## AFFILIATIONS",
+        "",
+    ])
+    lines.extend(_affiliation_markdown(report))
+    lines.extend([
+        "",
         "## FACTS",
         "",
         "| Kind | Value | File | Seen | Rank |",
@@ -115,7 +121,11 @@ def render_text(report: dict) -> str:
     else:
         lines.append("(none)")
     lines.extend([
-        "", UNVERIFIED_NOTICE, "", "FACTS",
+        "", UNVERIFIED_NOTICE, "", "AFFILIATIONS",
+    ])
+    lines.extend(_affiliation_text(report))
+    lines.extend([
+        "", "FACTS",
         "Kind | Value | File | Seen | Rank",
     ])
     lines.extend(
@@ -187,6 +197,7 @@ def render_html(report: dict) -> str:
         "</dl><h2>TOP EXPOSURES</h2>"
         f"<ol>{exposure_html}</ol>"
         f"<p class=\"notice\">{_html(UNVERIFIED_NOTICE)}</p></section>"
+        f"<section><h2>AFFILIATIONS</h2>{_affiliation_html(report)}</section>"
         "<section><h2>FACTS</h2><table><thead><tr>"
         "<th>Kind</th><th>Value</th><th>File</th><th>Seen</th><th>Rank</th>"
         f"</tr></thead><tbody>{facts_html}</tbody></table></section>"
@@ -297,3 +308,93 @@ __all__ = [
     "render_markdown",
     "render_text",
 ]
+
+
+def _affiliations(report: dict) -> dict:
+    """Return the affiliations block, or an empty one for a pre-v4 report."""
+    block = report.get("affiliations")
+    return block if type(block) is dict else {}
+
+
+_NO_AFFILIATIONS = "(no organization appears in enough files to be a pattern)"
+
+
+def _toll_free_lines(report: dict, escape) -> list[str]:
+    numbers = _affiliations(report).get("toll_free") or []
+    if not numbers:
+        return []
+    total = _affiliations(report).get("toll_free_total", len(numbers))
+    return [
+        "",
+        f"Toll-free numbers collected, not analysed "
+        f"({len(numbers)} of {total} shown):",
+        *(
+            f"  {escape(item['value'])} - {item['files']} file(s), "
+            f"e.g. {escape(item['example_file'])}"
+            for item in numbers
+        ),
+    ]
+
+
+def _affiliation_markdown(report: dict) -> list[str]:
+    organizations = _affiliations(report).get("organizations") or []
+    if not organizations:
+        return [_NO_AFFILIATIONS, *_toll_free_lines(report, _markdown_table)]
+    return [
+        "| Organization | Files | Mentions |",
+        "|---|---|---|",
+        *(
+            f"| {_markdown_table(item['domain'])} | {item['files']} "
+            f"| {item['occurrences']} |"
+            for item in organizations
+        ),
+        *_toll_free_lines(report, _markdown_table),
+    ]
+
+
+def _affiliation_text(report: dict) -> list[str]:
+    organizations = _affiliations(report).get("organizations") or []
+    if not organizations:
+        return [_NO_AFFILIATIONS, *_toll_free_lines(report, _plain)]
+    return [
+        "Organization | Files | Mentions",
+        *(
+            f"{_plain(item['domain'])} | {item['files']} | {item['occurrences']}"
+            for item in organizations
+        ),
+        *_toll_free_lines(report, _plain),
+    ]
+
+
+def _affiliation_html(report: dict) -> str:
+    block = _affiliations(report)
+    organizations = block.get("organizations") or []
+    if organizations:
+        rows = "".join(
+            "<tr>"
+            f"<td>{_html(item['domain'])}</td>"
+            f"<td>{_html(item['files'])}</td>"
+            f"<td>{_html(item['occurrences'])}</td>"
+            "</tr>"
+            for item in organizations
+        )
+        body = (
+            "<table><thead><tr><th>Organization</th><th>Files</th>"
+            f"<th>Mentions</th></tr></thead><tbody>{rows}</tbody></table>"
+        )
+    else:
+        body = f"<p>{_html(_NO_AFFILIATIONS)}</p>"
+    numbers = block.get("toll_free") or []
+    if numbers:
+        total = block.get("toll_free_total", len(numbers))
+        items = "".join(
+            f"<li><code>{_html(item['value'])}</code> &mdash; "
+            f"{_html(item['files'])} file(s), e.g. {_html(item['example_file'])}"
+            "</li>"
+            for item in numbers
+        )
+        body += (
+            "<p>Toll-free numbers collected, not analysed "
+            f"({_html(len(numbers))} of {_html(total)} shown):</p><ul>{items}</ul>"
+        )
+    return body

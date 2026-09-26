@@ -238,7 +238,15 @@ def build_report_json_payload(
             ),
             unsupported=terminal_counts.get("unsupported_format", 0),
         )
-        return report_json.build_report_json(run_meta, read, facts, coverage)
+        organizations, toll_free, toll_free_total = _load_affiliations(
+            conn, fence.run_id,
+        )
+        return report_json.build_report_json(
+            run_meta, read, facts, coverage,
+            affiliations=organizations,
+            toll_free=toll_free,
+            toll_free_total=toll_free_total,
+        )
     except (ValueError, TypeError, KeyError, OverflowError) as exc:
         raise ReportStateError("durable report JSON state is invalid") from exc
     finally:
@@ -506,6 +514,72 @@ def _context_is_unreliable(
     if lowered.endswith(_CODE_SUFFIXES):
         return True
     return any(word in lowered for word in _SPECIMEN_WORDS)
+
+
+def _load_affiliations(
+    conn: sqlite3.Connection, run_id: str,
+) -> tuple[tuple[report_json.Affiliation, ...],
+           tuple[report_json.TollFreeContact, ...], int]:
+    """Return the organisations this host's documents keep referring to.
+
+    Read straight from the hit table, never from the ranked facts. Contact
+    facts rank ``low`` and the fact budget is spent long before it reaches
+    them -- a real 1,244-file run put zero emails into report.json -- so
+    deriving this from the facts list would silently return nothing.
+
+    An organisation is an email domain that is not a mailbox provider. The
+    ranking signal is how many DISTINCT FILES mention it, not how often: one
+    product manual in a downloads folder mentions its vendor several times,
+    and that is not a relationship. In one real corpus 63 of 77 candidate
+    domains appeared in exactly one file.
+    """
+    domain_files: dict[str, set[int]] = {}
+    domain_hits: dict[str, int] = {}
+    toll_free_files: dict[str, set[int]] = {}
+    toll_free_example: dict[str, str] = {}
+    rows = conn.execute(
+        "SELECT h.kind,h.value,f.file_id,f.relative_path "
+        "FROM analyst_detector_hits h JOIN analyst_files f ON f.file_id=h.file_id "
+        "WHERE f.run_id=? AND h.kind IN ('email','phone') "
+        "ORDER BY f.ordinal,h.hit_id",
+        (run_id,),
+    )
+    for row in rows:
+        kind = str(row["kind"])
+        value = str(row["value"])
+        screen = detectors.screen_identifier(kind, value)
+        if screen.impossible or screen.plausibility != "valid":
+            continue
+        file_id = int(row["file_id"])
+        if kind == "email":
+            domain = report_json.email_domain(value)
+            if not report_json.is_organizational_domain(domain):
+                continue
+            domain_files.setdefault(domain, set()).add(file_id)
+            domain_hits[domain] = domain_hits.get(domain, 0) + 1
+        elif screen.subject == "organizational":
+            toll_free_files.setdefault(value, set()).add(file_id)
+            toll_free_example.setdefault(value, str(row["relative_path"]))
+
+    organizations = tuple(
+        report_json.Affiliation(
+            domain=domain, files=len(files), occurrences=domain_hits[domain],
+        )
+        for domain, files in sorted(
+            domain_files.items(), key=lambda item: (-len(item[1]), item[0]),
+        )
+        if len(files) >= report_json.MIN_AFFILIATION_FILES
+    )[:report_json.MAX_AFFILIATIONS]
+
+    numbers = tuple(
+        report_json.TollFreeContact(
+            value=value, files=len(files), example_file=toll_free_example[value],
+        )
+        for value, files in sorted(
+            toll_free_files.items(), key=lambda item: (-len(item[1]), item[0]),
+        )
+    )
+    return organizations, numbers[:report_json.MAX_TOLL_FREE], len(numbers)
 
 
 def _load_ranked_facts(

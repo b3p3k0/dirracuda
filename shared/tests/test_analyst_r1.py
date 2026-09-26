@@ -248,6 +248,7 @@ def test_build_report_has_exact_shape_sorted_facts_and_model_exposures() -> None
     report = build_report_json(run, read, facts, coverage)
     assert set(report) == {
         "report_schema_version", "run", "read", "facts", "coverage",
+        "affiliations",
     }
     assert report["report_schema_version"] == REPORT_SCHEMA_VERSION
     assert report["read"]["unverified_notice"] == UNVERIFIED_NOTICE
