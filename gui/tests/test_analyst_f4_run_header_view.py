@@ -118,3 +118,62 @@ def test_clearing_resets_the_header(view) -> None:
     view._show_report(_report(), changed=False)
     view._clear_report()
     assert view._header_var.get() == "Select a completed report."
+
+
+# --------------------------------------------------------------------------
+# The notice strip above the header
+# --------------------------------------------------------------------------
+
+@pytest.mark.gui_smoke
+def test_an_ordinary_report_starts_at_the_top(view) -> None:
+    """The retry button, status line and changed line are all conditional.
+
+    Packing them unconditionally left three empty rows above the report.
+    """
+    view._show_report(_report(), changed=False)
+    assert view._status_label.winfo_manager() == ""
+    assert view._changed_label.winfo_manager() == ""
+    assert view._retry_btn.winfo_manager() == ""
+
+
+@pytest.mark.gui_smoke
+def test_a_notice_appears_when_it_has_something_to_say(view) -> None:
+    view._show_report(_report(files_read=0, files_total=1), changed=True)
+    assert view._status_label.winfo_manager() == "pack"
+    assert view._changed_label.winfo_manager() == "pack"
+    assert view._changed_var.get() == "changed since saved"
+
+
+@pytest.mark.gui_smoke
+def test_a_notice_goes_away_again(view) -> None:
+    view._show_report(_report(files_read=0, files_total=1), changed=True)
+    view._show_report(_report(), changed=False)
+    assert view._status_label.winfo_manager() == ""
+    assert view._changed_label.winfo_manager() == ""
+
+
+@pytest.mark.gui_smoke
+def test_a_notice_stays_above_the_run_header(view) -> None:
+    """Re-packing must not send it to the bottom of the dialog."""
+    view._show_report(_report(), changed=False)
+    view._show_report(_report(), changed=True)
+    order = view._header_card.master.pack_slaves()
+    assert order.index(view._changed_label) < order.index(view._header_card)
+
+
+@pytest.mark.gui_smoke
+def test_the_dialog_is_tall_enough_for_the_facts_table(view) -> None:
+    """At 720 the facts table was cut off until the window was dragged taller.
+
+    A withdrawn window reports 1x1, so it has to be shown to be measured.
+    """
+    view.window.deiconify()
+    view.window.update_idletasks()
+    view.window.update()
+    try:
+        # A display shorter than the dialog clamps it; the regression being
+        # guarded is the old 720, not the exact number on a small screen.
+        expected = min(1000, view.window.winfo_screenheight())
+        assert view.window.winfo_height() == expected
+    finally:
+        view.window.withdraw()

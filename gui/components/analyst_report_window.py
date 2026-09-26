@@ -56,7 +56,7 @@ class AnalystReportWindow:
         window = tk.Toplevel(self.parent)
         self.window = window
         window.title("Analyst Reports")
-        window.geometry("1040x720")
+        window.geometry("1040x1000")
         window.minsize(820, 600)
         window.transient(self.parent)
         window.protocol("WM_DELETE_WINDOW", self.destroy)
@@ -75,35 +75,59 @@ class AnalystReportWindow:
         ensure_dialog_focus(window, self.parent)
 
     def _build_run_picker(self, parent: tk.Widget) -> None:
-        row = tk.Frame(parent)
-        self.theme.apply_to_widget(row, "main_window")
-        row.pack(fill=tk.X, pady=(0, 8))
+        """Build the notice strip above the report.
+
+        Every widget here is conditional -- a retry button, a status line, a
+        changed-since-saved line -- and none of them is present most of the
+        time. They are packed only when they have something to say, so an
+        ordinary report starts at the top of the dialog instead of below
+        three empty rows.
+        """
+        self._retry_row = tk.Frame(parent)
+        self.theme.apply_to_widget(self._retry_row, "main_window")
+        self._retry_row.pack(fill=tk.X)
 
         self._retry_btn = tk.Button(
-            row, text="Retry", command=lambda: self._open_run(self._run_id),
+            self._retry_row, text="Retry",
+            command=lambda: self._open_run(self._run_id),
         )
         self.theme.apply_to_widget(self._retry_btn, "button_secondary")
 
         self._status_var = tk.StringVar(value="")
-        status = tk.Label(parent, textvariable=self._status_var, anchor="w", justify="left")
-        self.theme.apply_to_widget(status, "label")
-        status.pack(fill=tk.X, pady=(0, 6))
+        self._status_label = tk.Label(
+            parent, textvariable=self._status_var, anchor="w", justify="left",
+        )
+        self.theme.apply_to_widget(self._status_label, "label")
 
         self._changed_var = tk.StringVar(value="")
-        changed = tk.Label(
+        self._changed_label = tk.Label(
             parent,
             textvariable=self._changed_var,
             anchor="w",
             justify="left",
         )
-        self.theme.apply_to_widget(changed, "label")
-        changed.pack(fill=tk.X, pady=(0, 6))
+        self.theme.apply_to_widget(self._changed_label, "label")
+
+    def _set_notice(self, label: tk.Label, var: tk.StringVar, text: str) -> None:
+        """Show one notice line only while it has text."""
+        var.set(text)
+        try:
+            # winfo_manager, not winfo_ismapped: a withdrawn window maps
+            # nothing, and the question here is whether the widget is packed.
+            packed = label.winfo_manager() == "pack"
+        except tk.TclError:
+            return
+        if text and not packed:
+            label.pack(fill=tk.X, pady=(0, 6), before=self._header_card)
+        elif not text and packed:
+            label.pack_forget()
 
     def _build_run_header(self, parent: tk.Widget) -> None:
         """Facts about the run, kept apart from the model's read below it."""
         card = tk.Frame(parent)
         self.theme.apply_to_widget(card, "card")
         card.pack(fill=tk.X, pady=(0, 8))
+        self._header_card = card
 
         heading = tk.Label(card, text="RUN", anchor="w")
         self.theme.apply_to_widget(heading, "label")
@@ -285,7 +309,9 @@ class AnalystReportWindow:
         if run_id is None:
             return
         self._hide_retry()
-        self._status_var.set("Opening report…")
+        self._set_notice(
+            self._status_label, self._status_var, "Opening report…",
+        )
         self._set_report_actions(False)
         try:
             from experimental.analyst.service import read_report_json
@@ -293,8 +319,9 @@ class AnalystReportWindow:
             report, changed = read_report_json(run_id, path=self.db_path)
         except AnalystServiceError as exc:
             if exc.code is ServiceFailure.BUSY:
-                self._status_var.set(
-                    "Report is busy — the analysis is still writing. Click Retry."
+                self._set_notice(
+                    self._status_label, self._status_var,
+                    "Report is busy — the analysis is still writing. Click Retry.",
                 )
                 self._show_retry()
                 return
@@ -319,8 +346,11 @@ class AnalystReportWindow:
             self.window.title(f"Report - {run['report_label']}")
         # An empty report is not a swallowed error. Say which it is.
         self._header_var.set(_header_text(report))
-        self._status_var.set(coverage_note(report))
-        self._changed_var.set("changed since saved" if changed else "")
+        self._set_notice(self._status_label, self._status_var, coverage_note(report))
+        self._set_notice(
+            self._changed_label, self._changed_var,
+            "changed since saved" if changed else "",
+        )
         self._risk_var.set(f"Risk: ● {read['risk_level']}")
         self._host_summary_var.set(str(read["host_summary"]))
         owner = read["likely_owner"]
@@ -351,7 +381,7 @@ class AnalystReportWindow:
 
     def _clear_report(self) -> None:
         self._report = None
-        self._changed_var.set("")
+        self._set_notice(self._changed_label, self._changed_var, "")
         self._risk_var.set("Risk: —")
         self._host_summary_var.set("Select a completed report.")
         self._owner_var.set("Likely owner : —")
@@ -366,10 +396,10 @@ class AnalystReportWindow:
     def _show_legacy_run(self) -> None:
         self._clear_report()
         self._host_summary_var.set(_LEGACY_MESSAGE)
-        self._status_var.set(_LEGACY_MESSAGE)
+        self._set_notice(self._status_label, self._status_var, _LEGACY_MESSAGE)
 
     def _show_retry(self) -> None:
-        self._retry_btn.pack(side=tk.LEFT, padx=(6, 0))
+        self._retry_btn.pack(side=tk.LEFT, padx=(6, 0), pady=(0, 8))
 
     def _hide_retry(self) -> None:
         self._retry_btn.pack_forget()
@@ -428,7 +458,10 @@ class AnalystReportWindow:
                 parent=self.window,
             )
             return
-        self._status_var.set(f"Exported report to {target}.")
+        self._set_notice(
+            self._status_label, self._status_var,
+            f"Exported report to {target}.",
+        )
 
     @staticmethod
     def _write_owner_only(target: Path, content: str) -> None:
@@ -467,7 +500,9 @@ class AnalystReportWindow:
                 parent=self.window,
             )
             return
-        self._status_var.set("Copied report as Markdown.")
+        self._set_notice(
+            self._status_label, self._status_var, "Copied report as Markdown.",
+        )
 
 
 def show_analyst_report_window(
