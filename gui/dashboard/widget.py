@@ -46,7 +46,9 @@ from gui.utils.keybindings import (
     bind_submit_shortcuts,
 )
 from gui.components import dashboard_logs
+from gui.components import dashboard_about
 from gui.components import dashboard_scan_output_dialog
+from gui.components import dashboard_shodan
 from gui.components import dashboard_status
 from gui.components import dashboard_scan
 from gui.components import dashboard_batch_ops
@@ -66,23 +68,21 @@ from gui.utils.probe_cache_dispatch import get_probe_snapshot_path_for_host, dis
 from gui.utils.probe_snapshot_summary import summarize_probe_snapshot
 from gui.utils.logging_config import get_logger
 from shared.quarantine import create_quarantine_dir
-from shared.config import load_config
 from shared.path_service import get_paths
 from shared.tmpfs_quarantine import get_tmpfs_runtime_state
 
 _logger = get_logger("dashboard")
 _PATHS = get_paths()
 
-_SHODAN_STATUS_NO_KEY = "✖ Shodan API key configured <none>"
-_SHODAN_STATUS_CHECKING = "✔ Shodan API key configured <checking balance...>"
-_SHODAN_STATUS_UNAVAILABLE = "✔ Shodan API key configured <balance unavailable>"
-
-
-def _format_shodan_status_with_credits(credits: str) -> str:
-    value = str(credits or "").strip()
-    if not value:
-        return _SHODAN_STATUS_UNAVAILABLE
-    return f"✔ Shodan API key configured <query credits: {value}>"
+# Defined once, in the satellite that owns them. Re-bound here because the
+# initial footer value is set in _build, and so the names stay patchable on
+# this module.
+_SHODAN_STATUS_NO_KEY = dashboard_shodan._SHODAN_STATUS_NO_KEY
+_SHODAN_STATUS_CHECKING = dashboard_shodan._SHODAN_STATUS_CHECKING
+_SHODAN_STATUS_UNAVAILABLE = dashboard_shodan._SHODAN_STATUS_UNAVAILABLE
+_format_shodan_status_with_credits = (
+    dashboard_shodan._format_shodan_status_with_credits
+)
 
 
 # ── Patch-safe helpers ────────────────────────────────────────────────────────
@@ -944,75 +944,20 @@ class DashboardWidget:
         except Exception as exc:
             _logger.debug("Failed to refresh Shodan status row: %s", exc)
 
-    def _refresh_shodan_status_display(self) -> None:
-        """Set immediate Shodan key state and start async balance lookup when configured."""
-        self._shodan_balance_refresh_generation += 1
-        refresh_id = self._shodan_balance_refresh_generation
+    def _refresh_shodan_status_display(self):
+        dashboard_shodan.refresh_shodan_status_display(self)
 
-        api_key = self._read_shodan_api_key_from_config()
-        if not api_key:
-            self.shodan_status_text.set(_SHODAN_STATUS_NO_KEY)
-            return
+    def _start_shodan_balance_refresh(self, refresh_id, api_key):
+        dashboard_shodan.start_shodan_balance_refresh(self, refresh_id, api_key)
 
-        self.shodan_status_text.set(_SHODAN_STATUS_CHECKING)
-        self._start_shodan_balance_refresh(refresh_id, api_key)
+    def _run_shodan_balance_refresh_worker(self, refresh_id, api_key):
+        dashboard_shodan.run_shodan_balance_refresh_worker(self, refresh_id, api_key)
 
-    def _start_shodan_balance_refresh(self, refresh_id: int, api_key: str) -> None:
-        """Launch background Shodan query-credit fetch."""
-        threading.Thread(
-            target=self._run_shodan_balance_refresh_worker,
-            args=(refresh_id, api_key),
-            name="dashboard-shodan-balance",
-            daemon=True,
-        ).start()
+    def _fetch_shodan_query_credits(self, api_key):
+        return dashboard_shodan.fetch_shodan_query_credits(self, api_key)
 
-    def _run_shodan_balance_refresh_worker(self, refresh_id: int, api_key: str) -> None:
-        """Resolve query credits in worker thread and hand off UI update to Tk thread."""
-        credits = self._fetch_shodan_query_credits(api_key)
-        try:
-            self.parent.after(
-                0,
-                lambda: self._finish_shodan_balance_refresh(refresh_id, credits),
-            )
-        except Exception:
-            # Parent likely torn down while worker finished; safe to drop.
-            pass
-
-    def _fetch_shodan_query_credits(self, api_key: str) -> Optional[str]:
-        """Return query credits display value for one API key, or None on failure."""
-        try:
-            import shodan
-        except Exception:
-            return None
-
-        try:
-            info = shodan.Shodan(api_key).info()
-        except Exception:
-            return None
-
-        if not isinstance(info, dict):
-            return None
-
-        credits = info.get("query_credits")
-        if isinstance(credits, bool):
-            return None
-        if isinstance(credits, int):
-            return str(credits)
-        if isinstance(credits, float):
-            return str(int(credits))
-        if isinstance(credits, str):
-            value = credits.strip()
-            return value or None
-        return None
-
-    def _finish_shodan_balance_refresh(self, refresh_id: int, credits: Optional[str]) -> None:
-        """Apply worker result if it matches latest refresh generation."""
-        if refresh_id != self._shodan_balance_refresh_generation:
-            return
-        if credits is None:
-            self.shodan_status_text.set(_SHODAN_STATUS_UNAVAILABLE)
-            return
-        self.shodan_status_text.set(_format_shodan_status_with_credits(credits))
+    def _finish_shodan_balance_refresh(self, refresh_id, credits):
+        dashboard_shodan.finish_shodan_balance_refresh(self, refresh_id, credits)
 
     def refresh_after_database_change(self, *, refresh_runtime_status: bool = False) -> None:
         """Refresh dashboard DB summary after a known successful database write."""
@@ -1224,188 +1169,17 @@ class DashboardWidget:
         except Exception:
             return None
 
-    def _read_shodan_api_key_from_config(self) -> str:
-        """Return shodan.api_key from runtime config, or empty string when absent/unreadable."""
-        config_path = self._resolve_active_config_path()
-        try:
-            if (
-                config_path is not None
-                and config_path.resolve(strict=False) != _PATHS.config_file.resolve(strict=False)
-            ):
-                if not config_path.exists():
-                    return ""
-                config_data = json.loads(config_path.read_text(encoding="utf-8"))
-                if not isinstance(config_data, dict):
-                    return ""
-                shodan_cfg = config_data.get("shodan", {})
-                if not isinstance(shodan_cfg, dict):
-                    return ""
-                return str(shodan_cfg.get("api_key", "") or "").strip()
+    def _read_shodan_api_key_from_config(self):
+        return dashboard_shodan.read_shodan_api_key_from_config(self)
 
-            cfg = load_config()
-            shodan_cfg = cfg.get("shodan", default={}) or {}
-            if not isinstance(shodan_cfg, dict):
-                return ""
-            return str(shodan_cfg.get("api_key", "") or "").strip()
-        except Exception as exc:
-            _logger.warning("Could not read Shodan API key from config: %s", exc)
-            return ""
+    def _persist_shodan_api_key_to_config(self, api_key):
+        return dashboard_shodan.persist_shodan_api_key_to_config(self, api_key)
 
-    def _persist_shodan_api_key_to_config(self, api_key: str) -> bool:
-        """Write shodan.api_key through owner-scoped runtime config persistence."""
-        key = str(api_key or "").strip()
-        if not key:
-            return False
+    def _prompt_for_shodan_api_key(self):
+        return dashboard_shodan.prompt_for_shodan_api_key(self)
 
-        config_path = self._resolve_active_config_path()
-        try:
-            if (
-                config_path is not None
-                and config_path.resolve(strict=False) != _PATHS.config_file.resolve(strict=False)
-            ):
-                config_data: Dict[str, Any] = {}
-                if config_path.exists():
-                    config_data = json.loads(config_path.read_text(encoding="utf-8"))
-                    if not isinstance(config_data, dict):
-                        config_data = {}
-
-                shodan_cfg = config_data.get("shodan")
-                if not isinstance(shodan_cfg, dict):
-                    shodan_cfg = {}
-                    config_data["shodan"] = shodan_cfg
-                shodan_cfg["api_key"] = key
-
-                config_path.parent.mkdir(parents=True, exist_ok=True)
-                config_path.write_text(
-                    json.dumps(config_data, indent=2, ensure_ascii=True) + "\n",
-                    encoding="utf-8",
-                )
-                return True
-
-            cfg = load_config()
-            shodan_cfg = cfg.get("shodan", default={}) or {}
-            if not isinstance(shodan_cfg, dict):
-                shodan_cfg = {}
-            shodan_cfg["api_key"] = key
-            return cfg.set_section("shodan", shodan_cfg)
-        except Exception as exc:
-            _logger.error("Failed to persist Shodan API key to config: %s", exc)
-            return False
-
-    def _prompt_for_shodan_api_key(self) -> Optional[str]:
-        """
-        Prompt the user to enter a Shodan API key.
-
-        Returns:
-            Trimmed API key string when saved, or None when cancelled.
-        """
-        dialog = tk.Toplevel(self.parent)
-        dialog.title("Shodan API Key Required")
-        dialog.geometry("540x220")
-        dialog.resizable(False, False)
-        dialog.transient(self.parent)
-        dialog.grab_set()
-        self.theme.apply_to_widget(dialog, "main_window")
-
-        container = tk.Frame(dialog)
-        self.theme.apply_to_widget(container, "main_window")
-        container.pack(fill=tk.BOTH, expand=True, padx=16, pady=14)
-
-        title_label = tk.Label(container, text="Shodan API Key Required", font=("TkDefaultFont", 11, "bold"))
-        self.theme.apply_to_widget(title_label, "label")
-        title_label.pack(anchor="w")
-
-        helper = tk.Label(
-            container,
-            text="A Shodan API key is required to start discovery scans. Enter your key to continue.",
-            justify="left",
-            wraplength=500,
-        )
-        self.theme.apply_to_widget(helper, "label")
-        helper.pack(anchor="w", pady=(8, 10))
-
-        key_row = tk.Frame(container)
-        self.theme.apply_to_widget(key_row, "main_window")
-        key_row.pack(fill=tk.X)
-
-        key_label = tk.Label(key_row, text="API Key:")
-        self.theme.apply_to_widget(key_label, "label")
-        key_label.pack(side=tk.LEFT, padx=(0, 8))
-
-        key_var = tk.StringVar()
-        key_entry = tk.Entry(key_row, textvariable=key_var, width=54)
-        self.theme.apply_to_widget(key_entry, "entry")
-        key_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-
-        link_row = tk.Frame(container)
-        self.theme.apply_to_widget(link_row, "main_window")
-        link_row.pack(fill=tk.X, pady=(10, 0))
-
-        need_label = tk.Label(link_row, text="Need a key?")
-        self.theme.apply_to_widget(need_label, "label")
-        need_label.pack(side=tk.LEFT, padx=(0, 6))
-
-        link_label = tk.Label(
-            link_row,
-            text="https://account.shodan.io/register",
-            cursor="hand2",
-            font=("TkDefaultFont", 9, "underline"),
-            fg=self.theme.colors.get("accent", "#4da3ff"),
-        )
-        self.theme.apply_to_widget(link_label, "label")
-        link_label.configure(fg=self.theme.colors.get("accent", "#4da3ff"))
-        link_label.pack(side=tk.LEFT)
-        link_label.bind("<Button-1>", lambda _e: webbrowser.open("https://account.shodan.io/register"))
-
-        result: Dict[str, Optional[str]] = {"api_key": None}
-
-        def _cancel() -> None:
-            result["api_key"] = None
-            dialog.destroy()
-
-        def _save() -> None:
-            key_value = key_var.get().strip()
-            if not key_value:
-                _mb().showerror("Missing API Key", "Please enter a Shodan API key.", parent=dialog)
-                return
-            result["api_key"] = key_value
-            dialog.destroy()
-
-        btn_row = tk.Frame(container)
-        self.theme.apply_to_widget(btn_row, "main_window")
-        btn_row.pack(fill=tk.X, pady=(14, 0))
-
-        cancel_btn = tk.Button(btn_row, text="Cancel", command=_cancel)
-        self.theme.apply_to_widget(cancel_btn, "button_secondary")
-        cancel_btn.pack(side=tk.RIGHT, padx=(8, 0))
-
-        save_btn = tk.Button(btn_row, text="Save & Continue", command=_save)
-        self.theme.apply_to_widget(save_btn, "button_primary")
-        save_btn.pack(side=tk.RIGHT)
-        add_shortcut_hint(
-            btn_row,
-            self.theme,
-            "Enter save and continue  •  Esc cancel  •  Ctrl/Cmd+S save  •  Esc/Ctrl+W/Cmd+W close",
-        )
-        bind_submit_shortcuts(dialog, _save)
-        bind_save_shortcuts(dialog, _save)
-        bind_close_shortcuts(dialog, _cancel)
-        key_entry.focus_set()
-
-        ensure_dialog_focus(dialog, self.parent)
-        dialog.protocol("WM_DELETE_WINDOW", _cancel)
-        self.parent.wait_window(dialog)
-        return result["api_key"]
-
-    def _ensure_shodan_api_key_for_scan(self, scan_options: Dict[str, Any]) -> bool:
-        """
-        Ensure scans have a persisted Shodan API key before launch.
-
-        If config key is missing:
-        - Use api_key_override when provided (persist and continue), or
-        - Prompt user for key (persist; abort when cancelled/failed).
-        """
-        return dashboard_scan.ensure_shodan_api_key_for_scan(self, scan_options)
+    def _ensure_shodan_api_key_for_scan(self, scan_options):
+        return dashboard_shodan.ensure_shodan_api_key_for_scan(self, scan_options)
 
     def _start_new_scan(self, scan_options: dict) -> bool:
         """Start new scan with specified options."""
@@ -1548,86 +1322,12 @@ class DashboardWidget:
     def _open_db_tools(self) -> None:
         self._open_db_surface()
 
-    def _open_about_dialog(self) -> None:
-        dialog = tk.Toplevel(self.parent)
-        dialog.title("About Dirracuda")
-        dialog.transient(self.parent)
-        dialog.grab_set()
-        if self.theme:
-            apply_theme_to_window(dialog)
+    def _open_about_dialog(self):
+        """Show the About dialog (see gui.components.dashboard_about)."""
+        dashboard_about.open_about_dialog(self)
 
-        body = tk.Frame(dialog)
-        self.theme.apply_to_widget(body, "main_window")
-        body.pack(padx=18, pady=16, fill=tk.BOTH, expand=True)
-
-        title = tk.Label(
-            body,
-            text="Dirracuda",
-            font=(None, 14, "bold"),
-            bg=self.theme.colors["primary_bg"],
-            fg=self.theme.colors["text"],
-        )
-        title.pack(anchor="w")
-
-        blurb = (
-            "Dirracuda helps defensive analysts find exposed servers (SMB, FTP, HTTP)\n"
-            "with weak authentication and demonstrate impact via safe, guided workflows.\n"
-            "No warranty expressed or implied; use at your own risk."
-        )
-        tk.Label(
-            body,
-            text=blurb,
-            justify="left",
-            anchor="w",
-            bg=self.theme.colors["primary_bg"],
-            fg=self.theme.colors["text"],
-        ).pack(anchor="w", pady=(6, 10))
-
-        link = tk.Label(
-            body,
-            text="GitHub: https://github.com/b3p3k0/dirracuda",
-            fg=self.theme.colors["accent"],
-            bg=self.theme.colors["primary_bg"],
-            cursor="hand2",
-        )
-        link.pack(anchor="w")
-        link.bind("<Button-1>", lambda e: webbrowser.open("https://github.com/b3p3k0/dirracuda"))
-
-        btn_frame = tk.Frame(body)
-        self.theme.apply_to_widget(btn_frame, "main_window")
-        btn_frame.pack(fill=tk.X, pady=(12, 0))
-
-        manual_button = tk.Button(
-            btn_frame,
-            text="User Manual",
-            command=lambda: self._open_user_manual_from_about(dialog),
-        )
-        self.theme.apply_to_widget(manual_button, "button_secondary")
-        manual_button.pack(side=tk.RIGHT, padx=(0, 6))
-
-        close_button = tk.Button(btn_frame, text="Close", command=dialog.destroy)
-        self.theme.apply_to_widget(close_button, "button_secondary")
-        close_button.pack(side=tk.RIGHT)
-        add_shortcut_hint(
-            btn_frame,
-            self.theme,
-            "Enter close  •  Esc/Ctrl+W/Cmd+W close",
-        )
-        bind_submit_shortcuts(dialog, dialog.destroy, allow_text_submit_with_enter=True)
-        bind_close_shortcuts(dialog, dialog.destroy)
-
-        dialog.update_idletasks()
-        dialog.lift()
-        dialog.focus_set()
-
-    def _open_user_manual_from_about(self, about_dialog: Optional[tk.Misc] = None) -> None:
-        """Close About dialog (if present) then open/focus the shared User Manual window."""
-        try:
-            if about_dialog is not None:
-                about_dialog.destroy()
-        except Exception:
-            pass
-        open_help_manual_dialog(self.parent, theme=self.theme)
+    def _open_user_manual_from_about(self, about_dialog=None):
+        dashboard_about.open_user_manual_from_about(self, about_dialog)
 
 
     def _open_drill_down(self, window_type: str) -> None:
