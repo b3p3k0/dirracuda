@@ -219,3 +219,65 @@ def test_export_passes_the_chosen_options(
         include=frozenset({"facts"}),
         dest_dir=tmp_path,
     )
+
+
+# --------------------------------------------------------------------------
+# Extraction discipline (the export dialog is a satellite of analyst_tab)
+# --------------------------------------------------------------------------
+
+def test_the_satellite_never_imports_the_tab_at_module_level() -> None:
+    """One-way import. A module-level import back would be a cycle.
+
+    The satellite still needs the tab's namespace so monkeypatches reach it,
+    so the import is deliberately inside the helpers instead.
+    """
+    import ast
+    import pathlib
+
+    from gui.components.experimental_features import analyst_export_dialog
+
+    tree = ast.parse(pathlib.Path(analyst_export_dialog.__file__).read_text())
+    module_level = [
+        node for node in tree.body
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+    ]
+    names = [
+        alias.name for node in module_level
+        for alias in node.names
+    ] + [node.module or "" for node in module_level if isinstance(node, ast.ImportFrom)]
+    assert not any("analyst_tab" in name for name in names)
+
+
+def test_the_tab_delegates_rather_than_duplicating() -> None:
+    from gui.components.experimental_features import analyst_tab
+
+    import inspect
+
+    for name in (
+        "_open_export_dialog", "_close_export_dialog",
+        "_start_export", "_finish_export",
+    ):
+        source = inspect.getsource(getattr(analyst_tab.AnalystTab, name))
+        assert "_export()" in source, f"{name} should delegate"
+
+
+def test_messagebox_and_focus_resolve_through_the_tab_namespace(
+    monkeypatch,
+) -> None:
+    """The dispatch rule in CLAUDE.md: a test patch on analyst_tab must land."""
+    from gui.components.experimental_features import (
+        analyst_export_dialog,
+        analyst_tab,
+    )
+
+    sentinel_mb = object()
+    calls = []
+    monkeypatch.setattr(analyst_tab, "safe_messagebox", sentinel_mb)
+    monkeypatch.setattr(
+        analyst_tab, "ensure_dialog_focus",
+        lambda dialog, parent: calls.append((dialog, parent)),
+    )
+
+    assert analyst_export_dialog._mb() is sentinel_mb
+    analyst_export_dialog._focus("d", "p")
+    assert calls == [("d", "p")]

@@ -22,6 +22,13 @@ def _consent():
     return analyst_egress_consent
 
 
+def _export():
+    """Resolve the export-dialog satellite at call time (see analyst_tab docs)."""
+    from gui.components.experimental_features import analyst_export_dialog
+
+    return analyst_export_dialog
+
+
 def _editor():
     """Resolve the profile-editor satellite at call time (one-way import)."""
     from gui.components.experimental_features import analyst_profile_editor
@@ -716,230 +723,19 @@ class AnalystTab:
             self._output_var.set(selected)
 
     def _open_export_dialog(self) -> None:
-        selected = tuple(self._runs.selection())
-        if not selected:
-            return
-        existing = self._export_dialog
-        if existing is not None:
-            try:
-                if existing.winfo_exists():
-                    existing.lift()
-                    existing.focus_force()
-                    return
-            except Exception:
-                pass
-
-        parent = self.frame.winfo_toplevel()
-        dialog = tk.Toplevel(parent)
-        dialog.title("Export reports")
-        dialog.transient(parent)
-        dialog.resizable(False, False)
-        self._theme.apply_to_widget(dialog, "main_window")
-        self._export_dialog = dialog
-
-        outer = tk.Frame(dialog)
-        self._theme.apply_to_widget(outer, "main_window")
-        outer.pack(fill=tk.BOTH, expand=True, padx=16, pady=14)
-        outer.columnconfigure(1, weight=1)
-
-        selected_label = tk.Label(
-            outer, text=f"Selected: {len(selected)} reports", anchor="w",
-        )
-        self._theme.apply_to_widget(selected_label, "label")
-        selected_label.grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
-
-        self._export_format_vars = {
-            "md": tk.BooleanVar(value=True),
-            "json": tk.BooleanVar(value=True),
-            "txt": tk.BooleanVar(value=False),
-            "csv": tk.BooleanVar(value=False),
-        }
-        self._export_layout_var = tk.StringVar(value="per_report")
-        self._export_include_vars = {
-            "read": tk.BooleanVar(value=True),
-            "facts": tk.BooleanVar(value=True),
-        }
-        default_folder = self._output_var.get().strip()
-        if not default_folder or not Path(default_folder).expanduser().is_dir():
-            default_folder = str(Path.home())
-        self._export_folder_var = tk.StringVar(value=default_folder)
-
-        format_label = tk.Label(outer, text="Format")
-        self._theme.apply_to_widget(format_label, "label")
-        format_label.grid(row=1, column=0, sticky="nw", pady=3)
-        format_controls = tk.Frame(outer)
-        self._theme.apply_to_widget(format_controls, "main_window")
-        format_controls.grid(row=1, column=1, columnspan=2, sticky="w", padx=(8, 0))
-        for index, (value, text) in enumerate((
-            ("md", "Markdown"), ("json", "JSON"),
-            ("txt", "Plain text"), ("csv", "CSV (facts)"),
-        )):
-            button = tk.Checkbutton(
-                format_controls, text=text, variable=self._export_format_vars[value],
-            )
-            self._theme.apply_to_widget(button, "checkbox")
-            button.grid(row=index // 2, column=index % 2, sticky="w", padx=(0, 14))
-
-        layout_label = tk.Label(outer, text="Layout")
-        self._theme.apply_to_widget(layout_label, "label")
-        layout_label.grid(row=2, column=0, sticky="nw", pady=(10, 3))
-        layout_controls = tk.Frame(outer)
-        self._theme.apply_to_widget(layout_controls, "main_window")
-        layout_controls.grid(
-            row=2, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=(10, 3),
-        )
-        for value, text in (
-            ("per_report", "One file per report"),
-            ("combined", "One combined file"),
-        ):
-            button = tk.Radiobutton(
-                layout_controls, text=text, variable=self._export_layout_var,
-                value=value,
-            )
-            self._theme.apply_to_widget(button, "checkbox")
-            button.pack(anchor="w")
-
-        include_label = tk.Label(outer, text="Include")
-        self._theme.apply_to_widget(include_label, "label")
-        include_label.grid(row=3, column=0, sticky="w", pady=(10, 3))
-        include_controls = tk.Frame(outer)
-        self._theme.apply_to_widget(include_controls, "main_window")
-        include_controls.grid(
-            row=3, column=1, columnspan=2, sticky="w", padx=(8, 0), pady=(10, 3),
-        )
-        for value, text in (("read", "The read"), ("facts", "The facts")):
-            button = tk.Checkbutton(
-                include_controls, text=text, variable=self._export_include_vars[value],
-            )
-            self._theme.apply_to_widget(button, "checkbox")
-            button.pack(side=tk.LEFT, padx=(0, 14))
-
-        folder_label = tk.Label(outer, text="Folder")
-        self._theme.apply_to_widget(folder_label, "label")
-        folder_label.grid(row=4, column=0, sticky="w", pady=(10, 3))
-        folder_entry = tk.Entry(outer, textvariable=self._export_folder_var, width=42)
-        self._theme.apply_to_widget(folder_entry, "entry")
-        folder_entry.grid(row=4, column=1, sticky="ew", padx=(8, 7), pady=(10, 3))
-
-        def browse() -> None:
-            chosen = filedialog.askdirectory(parent=dialog)
-            if chosen:
-                self._export_folder_var.set(chosen)
-
-        browse_button = tk.Button(outer, text="Browse", command=browse)
-        self._theme.apply_to_widget(browse_button, "button_secondary")
-        browse_button.grid(row=4, column=2, pady=(10, 3))
-
-        actions = tk.Frame(outer)
-        self._theme.apply_to_widget(actions, "main_window")
-        actions.grid(row=5, column=0, columnspan=3, sticky="e", pady=(14, 0))
-        cancel = tk.Button(
-            actions, text="Cancel", command=lambda: self._close_export_dialog(dialog),
-        )
-        self._theme.apply_to_widget(cancel, "button_secondary")
-        cancel.pack(side=tk.LEFT, padx=(0, 7))
-        export = tk.Button(
-            actions,
-            text="Export",
-            command=lambda: self._start_export(dialog, selected, cancel, export),
-        )
-        self._theme.apply_to_widget(export, "button_primary")
-        export.pack(side=tk.LEFT)
-        dialog.protocol("WM_DELETE_WINDOW", lambda: self._close_export_dialog(dialog))
-        dialog.grab_set()
-        ensure_dialog_focus(dialog, parent)
+        """Open the batch export dialog (see analyst_export_dialog)."""
+        _export().open_export_dialog(self)
 
     def _close_export_dialog(self, dialog) -> None:
-        if self._export_dialog is dialog:
-            self._export_dialog = None
-        try:
-            dialog.grab_release()
-            dialog.destroy()
-        except tk.TclError:
-            pass
+        _export().close_export_dialog(self, dialog)
 
     def _start_export(self, dialog, run_ids, cancel_button, export_button) -> None:
-        formats = frozenset(
-            value for value, variable in self._export_format_vars.items()
-            if variable.get()
+        _export().start_export(
+            self, dialog, run_ids, cancel_button, export_button,
         )
-        include = frozenset(
-            value for value, variable in self._export_include_vars.items()
-            if variable.get()
-        )
-        layout = self._export_layout_var.get()
-        destination = Path(self._export_folder_var.get()).expanduser()
-        if not formats:
-            safe_messagebox.showwarning(
-                "Analyst export", "Select at least one format.", parent=dialog,
-            )
-            return
-        if not include:
-            safe_messagebox.showwarning(
-                "Analyst export", "Include the read, the facts, or both.", parent=dialog,
-            )
-            return
-        if not destination.is_dir():
-            safe_messagebox.showwarning(
-                "Analyst export", "Choose an existing export folder.", parent=dialog,
-            )
-            return
 
-        labels = {
-            item.run_id: item.report_label for item in self._summaries
-            if item.run_id in run_ids
-        }
-        cancel_button.configure(state="disabled")
-        export_button.configure(state="disabled")
-
-        def work() -> None:
-            reports = []
-            skipped = 0
-            try:
-                from experimental.analyst.report_export import export_reports
-                from experimental.analyst.service import read_report_json
-
-                for run_id in run_ids:
-                    try:
-                        report, _changed = read_report_json(run_id)
-                    except Exception:
-                        skipped += 1
-                        continue
-                    label = labels.get(run_id, report["run"]["report_label"])
-                    reports.append((label, report))
-                result = export_reports(
-                    reports,
-                    formats=formats,
-                    layout=layout,
-                    include=include,
-                    dest_dir=destination,
-                )
-            except Exception:
-                self._schedule(
-                    lambda: self._finish_export(
-                        dialog, None, skipped, destination,
-                    )
-                )
-                return
-            self._schedule(
-                lambda: self._finish_export(dialog, result, skipped, destination)
-            )
-
-        threading.Thread(target=work, daemon=True).start()
-
-    def _finish_export(self, dialog, result, skipped: int, destination: Path) -> None:
-        self._close_export_dialog(dialog)
-        parent = self.frame.winfo_toplevel()
-        if result is None:
-            safe_messagebox.showerror(
-                "Analyst export", "The selected reports could not be exported.",
-                parent=parent,
-            )
-            return
-        message = f"Exported {result.report_count} reports to {destination}."
-        if skipped:
-            message += f" Skipped {skipped} legacy runs."
-        safe_messagebox.showinfo("Analyst export", message, parent=parent)
+    def _finish_export(self, dialog, result, skipped, destination) -> None:
+        _export().finish_export(self, dialog, result, skipped, destination)
 
     def _update_source_controls(self) -> None:
         if self._manifest_combo is None:
