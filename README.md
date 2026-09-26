@@ -624,7 +624,7 @@ in the exported `findings.csv`.
 Analyst has an isolated dependency lane because its reviewed V1 parser stack requires
 Linux x86-64, CPython 3.14, bubblewrap, Antiword, and exact hash-pinned parser artifacts.
 The interactive installer can prepare that lane without making it a core dependency.
-See the [Analyst User Guide](docs/ANALYST_GUIDE.md) for setup, Ollama hardening,
+See the [Analyst User Guide](docs/ANALYST_GUIDE.md) for setup, model-server hardening,
 supported formats, report interpretation, privacy boundaries, and troubleshooting.
 
 ### Censys Discovery

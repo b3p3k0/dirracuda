@@ -1,16 +1,20 @@
 # Analyst User Guide
 
 > **Experimental feature.** Analyst's inventory, parser sandbox, durable state,
-> Phase 1/Phase 2 worker orchestration, local Ollama boundary, atomic report
+> Phase 1/Phase 2 worker orchestration, the model-server boundary, atomic report
 > publication, standalone-directory and extraction-manifest launchers, opt-in
 > post-extract handoff, task hydration and report browser are implemented and tested.
-> Public-only Ollama and full production-pipeline acceptance passed using synthetic data
-> only; private real-document validation remains explicitly deferred.
+> Remote model servers, TLS with certificate pinning, and identifier screening are
+> implemented and tested. Acceptance passed using synthetic data only; private
+> real-document validation remains explicitly deferred.
 
 Analyst reviews directories of already-extracted documents and builds a per-host
 exposure report. It looks for identifiers such as Social Security numbers, payment-card
-numbers, bank details, email addresses and phone numbers, then uses a local Ollama model
-to classify selected documents and suggest findings with source quotes.
+numbers, bank details, email addresses and phone numbers, then uses a language model to
+classify selected documents and suggest findings with source quotes.
+
+The model runs on a server you choose. By default that is an Ollama on this machine; it
+can also be a llama.cpp server, here or on another machine you own.
 
 It is an assistant, not an authority. A finding means "review this," not "take action."
 Analyst never logs in to a server, downloads a document, copies an original file or
@@ -83,9 +87,11 @@ curl --fail --noproxy '*' http://127.0.0.1:11434/api/tags
 
 If Ollama runs only in a container, its CLI may not exist on the host; use the API checks
 above and run `ollama list` inside that container. Do not expose port 11434 on a LAN or
-VPN interface: the local API has no authentication. A future supported LAN/Tailscale
-mode is planned around an authenticated TLS gateway while Ollama stays on loopback; it
-will not make the raw API public.
+VPN interface: the local API has no authentication.
+
+If you want a model server on another machine, do not publish the raw API. Add it as a
+model server profile instead, which applies the address and TLS rules described under
+**Using another machine**.
 
 The approved model is `qwen3.6:27b` at digest
 `a50eda8ed977ab48a12431878896b27ffd5cef552c17af3317d9623b939a7f1e`. A matching
@@ -371,19 +377,24 @@ Run:
 The check is exact. A newer package is not automatically accepted, and the legacy Excel
 wheel currently requires CPython 3.14 on Linux x86-64.
 
-### Ollama is unreachable
+### The model server is unreachable
 
-Check the local service and installed models:
+For an Ollama server, check the service and its installed models:
 
 ```bash
 ollama --version
 ollama list
 ```
 
-Analyst accepts only a literal loopback Ollama endpoint and does not follow redirects or
-use proxy environment variables. Review Ollama's
-[official troubleshooting guide](https://docs.ollama.com/troubleshooting) if the local
-service is not responding.
+For any server, including llama.cpp, check that it answers where Analyst expects it.
+Open **Advanced**, pick the profile, and press **Connect / Refresh**: it reports what it
+found, or why it could not reach it.
+
+Analyst only contacts an address you configured on a profile. It does not follow
+redirects and does not use proxy environment variables, so a server that answers on a
+different address than the one you set will not be reached. Review Ollama's
+[official troubleshooting guide](https://docs.ollama.com/troubleshooting) if a local
+Ollama is not responding.
 
 ### The model is listed but rejected
 
@@ -432,11 +443,15 @@ that UI ships, then retry. The sidecar lives at
 
 ## Privacy and safety
 
-Analyst connects only to a literal-loopback Ollama endpoint, disables redirects, ignores
-ambient proxies, rejects known cloud tag forms and requires the approved local model
-digest. It cannot prove that the Ollama server itself has no external network access.
-For a stronger local-only setup, disable Ollama cloud features and enforce egress policy
-at the operating-system or container boundary.
+Analyst connects only to an address you configured on a model server profile. It
+disables redirects, ignores ambient proxies and rejects known cloud tag forms. Plaintext
+to a public address is refused outright, with no override; a private address needs an
+explicit acknowledgement on the profile; anything else needs TLS, verified against the
+system trust store or a certificate you pinned yourself.
+
+It cannot prove that the model server itself has no external network access. For a
+stronger local-only setup, keep the server on loopback, disable any cloud features it
+has, and enforce egress policy at the operating-system or container boundary.
 
 Raw identifiers, source quotes and model findings are sensitive. Analyst stores them in
 its owner-only sidecar and reports. File permissions reduce accidental local exposure;
