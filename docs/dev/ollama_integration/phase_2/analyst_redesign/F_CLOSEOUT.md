@@ -135,8 +135,32 @@ read on the same host):
 `gui/tests/` is run separately from `shared`+`experimental`: the combined run hits a known
 Tk abort, recorded in this repository's notes.
 
+## HI decisions taken (2026-09-26)
+
+Approved, having been asked as decisions rather than left implicit in this record:
+
+- **The drop list.** Six value shapes are never reported: a passport value with no digit,
+  an all-one-digit card/SSN/routing number, a card of a length no issuer uses or starting
+  with 0, the three published placeholder SSNs, an undialable phone number, and an IBAN
+  whose country has no scheme or whose length is wrong for it. Everything weaker is kept
+  and ranked down with its reason shown.
+- **The three thresholds.** `MIN_AFFILIATION_FILES` 3, `LABEL_WINDOW` 48 characters,
+  `FREE_MAIL_DOMAINS` 40 entries. All named constants; each is a one-line change once more
+  hosts have been run.
+
+Also ratified earlier and recorded here so the trail is in one place:
+
+- **The `CERT_NONE` fingerprint-capture path** in `tls.py` (2026-09-26). It performs one
+  unvalidated handshake so the operator can be offered a certificate to pin, and returns
+  only a digest -- no socket, context or session a caller could reuse.
+- **D22, the remote-backend scope.** Bearer tokens cannot reach the detached worker, so
+  token auth is not supported for unattended runs. The HI's ruling was to document the
+  limit rather than build secret-passing into the worker; commit `2df7f3b` is that
+  documentation.
+
 ## Outstanding for the HI
 
-- Security review of N3 (`e3fae2e`, `5aba273`, `bd30668`, `5e2c885`, `2df7f3b`).
-- Review of the F-series diff, which changes what Analyst reports as fact and moves host
-  risk levels.
+- Line-by-line security review of the five N3 commits (`e3fae2e`, `5aba273`, `bd30668`,
+  `5e2c885`, `2df7f3b`). The decisions inside them are settled; the code has not had a
+  second pair of eyes. Recommended before `development` -> `main`, not required for
+  promotion to `development`, where Analyst remains opt-in and experimental.
