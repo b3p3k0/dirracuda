@@ -941,10 +941,12 @@ Compatibility note: legacy `top` state is migrated to `top:week` on first week-t
 The Dorkbook module (`experimental/dorkbook`) writes to a separate SQLite database and remains sidecar-only (no automatic startup import into `dirracuda.db`).
 
 Tables:
-- `dorkbook_entries` — protocol-scoped recipes keyed by `entry_id`
+- `dorkbook_entries` — provider-scoped dorks keyed by `entry_id`
 
 Core columns:
-- `protocol` (`SMB|FTP|HTTP`)
+- `provider` (`shodan|self_hosted`; catalog identity, not the scan queue's `searxng` ID)
+- `protocol` (`SMB|FTP|HTTP` for Shodan; NULL for Self-hosted Search)
+- `topic` (defaults to `General`)
 - `nickname` (optional)
 - `query` (required)
 - `query_normalized` (trimmed query for duplicate guard)
@@ -954,9 +956,17 @@ Core columns:
 - `created_at`, `updated_at`
 
 Constraints:
-- `UNIQUE(protocol, query_normalized)` blocks exact trimmed duplicates per protocol
+- Partial unique indexes scope trimmed exact query duplicates to Shodan protocol or Self-hosted Search; NULL protocol cannot bypass uniqueness
 - `UNIQUE(builtin_key)` supports built-in upsert/refresh
 - Built-ins are read-only in UI/store mutation paths
+
+`experimental/dorkbook/schema.py` owns sidecar schema version 2. `init_db()`
+upgrades recognized legacy sidecars transactionally after a SQLite-consistent
+backup alongside the database (`dorkbook.db.pre-providers-*.bak`). IDs, sequence
+high-water marks, and existing row data survive; unchanged built-ins retain
+their timestamps. Unknown schema objects/columns require review instead of
+being discarded. The current desktop/Web UI still exposes Shodan only; provider
+UI integration follows separately. See [upgrade and recovery notes](dev/dorkbook/U1_VALIDATION.md).
 
 ---
 

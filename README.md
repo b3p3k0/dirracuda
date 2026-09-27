@@ -521,13 +521,13 @@ Dorkbook is a notebook for reusable search queries.
 Quick start:
 1. Dashboard → `⚗ Accessories` → `Dorkbook` tab.
 2. Click `Open Dorkbook`.
-3. Use `SMB` / `FTP` / `HTTP` tabs to manage recipes.
+3. Use `SMB` / `FTP` / `HTTP` tabs to manage dorks.
 
 Behavior:
 - Sidecar DB path: `~/.dirracuda/data/experimental/dorkbook.db`
 - Built-ins are read-only (italicized) and seeded one per protocol
 - Custom rows support `Add`, `Copy`, `Use in Discovery Dorks`, `Edit`, `Delete`
-- `Use in Discovery Dorks` populates the protocol-matched field in Discovery Dorks editor as an unsaved/manual-save change
+- `Use in Discovery Dorks` immediately saves the selected query as that protocol's discovery default
 
 ### Keymaster
 

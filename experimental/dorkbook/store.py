@@ -12,12 +12,17 @@ Transaction ownership:
 from __future__ import annotations
 
 import datetime
+from contextlib import closing
 import sqlite3
 from pathlib import Path
 from typing import Iterable, Optional
 
 from experimental.dorkbook.models import (
     DEFAULT_BUILTIN_DORKS,
+    DEFAULT_TOPIC,
+    PROVIDERS,
+    PROVIDER_SHODAN,
+    PROVIDER_SELF_HOSTED,
     PROTOCOLS,
     ROW_KIND_BUILTIN,
     ROW_KIND_CUSTOM,
@@ -26,44 +31,8 @@ from experimental.dorkbook.models import (
     DuplicateEntryError,
     ReadOnlyEntryError,
 )
+from experimental.dorkbook.schema import check_schema, ensure_schema
 from shared.path_service import get_paths, get_legacy_paths, select_existing_path
-
-
-_DDL_ENTRIES = """
-CREATE TABLE IF NOT EXISTS dorkbook_entries (
-    entry_id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    protocol          TEXT NOT NULL,
-    nickname          TEXT NOT NULL DEFAULT '',
-    query             TEXT NOT NULL,
-    query_normalized  TEXT NOT NULL,
-    notes             TEXT NOT NULL DEFAULT '',
-    row_kind          TEXT NOT NULL DEFAULT 'custom',
-    builtin_key       TEXT UNIQUE,
-    created_at        TEXT NOT NULL,
-    updated_at        TEXT NOT NULL,
-    CHECK (protocol IN ('SMB', 'FTP', 'HTTP')),
-    CHECK (row_kind IN ('builtin', 'custom')),
-    CHECK ((row_kind = 'builtin' AND builtin_key IS NOT NULL) OR row_kind = 'custom')
-)
-"""
-
-_DDL_UNIQUE_QUERY = """
-CREATE UNIQUE INDEX IF NOT EXISTS ux_dorkbook_protocol_query_norm
-    ON dorkbook_entries(protocol, query_normalized)
-"""
-
-_REQUIRED_COLUMNS = {
-    "entry_id",
-    "protocol",
-    "nickname",
-    "query",
-    "query_normalized",
-    "notes",
-    "row_kind",
-    "builtin_key",
-    "created_at",
-    "updated_at",
-}
 
 
 def _utcnow() -> str:
@@ -74,11 +43,28 @@ def _utcnow() -> str:
     )
 
 
-def _normalize_protocol(protocol: str) -> str:
-    value = str(protocol or "").strip().upper()
-    if value not in PROTOCOLS:
+def _normalize_provider(provider: str) -> str:
+    if not isinstance(provider, str) or provider.strip().lower() not in PROVIDERS:
+        raise ValueError(f"unsupported provider: {provider!r}")
+    return provider.strip().lower()
+
+
+def _normalize_protocol(protocol: Optional[str], provider: str) -> Optional[str]:
+    if provider == PROVIDER_SELF_HOSTED:
+        if protocol not in (None, ""):
+            raise ValueError("Self-hosted Search dorks do not have a protocol")
+        return None
+    if not isinstance(protocol, str) or protocol.strip().upper() not in PROTOCOLS:
         raise ValueError(f"unsupported protocol: {protocol!r}")
-    return value
+    return protocol.strip().upper()
+
+
+def _normalize_topic(topic: Optional[str]) -> str:
+    if topic is None:
+        return DEFAULT_TOPIC
+    if not isinstance(topic, str):
+        raise ValueError("topic must be text")
+    return topic.strip() or DEFAULT_TOPIC
 
 
 def normalize_query(query: str) -> str:
@@ -110,50 +96,16 @@ def get_db_path(override: Optional[Path] = None) -> Path:
 
 
 def init_db(path: Optional[Path] = None) -> None:
-    """Create sidecar DB and seed read-only builtins."""
+    """Create or migrate the sidecar and refresh read-only built-ins atomically."""
     resolved = get_db_path(path)
     resolved.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(str(resolved)) as conn:
-        conn.execute("PRAGMA journal_mode=WAL")
+    with closing(sqlite3.connect(str(resolved))) as conn:
         conn.execute("PRAGMA foreign_keys=ON")
-        conn.execute(_DDL_ENTRIES)
-        conn.execute(_DDL_UNIQUE_QUERY)
-        upsert_builtin_pack(conn)
-        conn.commit()
-
-
-def _check_schema(conn: sqlite3.Connection) -> None:
-    """Validate sidecar schema for runtime safety."""
-    present = {row[1] for row in conn.execute("PRAGMA table_info(dorkbook_entries)")}
-    missing = _REQUIRED_COLUMNS - present
-    if missing:
-        raise RuntimeError(f"dorkbook sidecar schema: missing columns {missing}")
-
-    indexes = {
-        row[1]: bool(row[2])
-        for row in conn.execute("PRAGMA index_list('dorkbook_entries')")
-    }
-
-    unique_query_ok = any(
-        is_unique
-        and {r[2] for r in conn.execute(f"PRAGMA index_info('{name}')")}
-        == {"protocol", "query_normalized"}
-        for name, is_unique in indexes.items()
-    )
-    if not unique_query_ok:
-        raise RuntimeError(
-            "dorkbook sidecar schema: missing UNIQUE(protocol, query_normalized)"
-        )
-
-    unique_builtin_ok = any(
-        is_unique
-        and [r[2] for r in conn.execute(f"PRAGMA index_info('{name}')")] == ["builtin_key"]
-        for name, is_unique in indexes.items()
-    )
-    if not unique_builtin_ok:
-        raise RuntimeError(
-            "dorkbook sidecar schema: missing UNIQUE(builtin_key)"
-        )
+        with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            ensure_schema(conn, resolved)
+            upsert_builtin_pack(conn)
+        conn.execute("PRAGMA journal_mode=WAL")
 
 
 def open_connection(path: Optional[Path] = None) -> sqlite3.Connection:
@@ -165,16 +117,22 @@ def open_connection(path: Optional[Path] = None) -> sqlite3.Connection:
         )
     conn = sqlite3.connect(str(resolved))
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    _check_schema(conn)
+    try:
+        check_schema(conn)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+    except Exception:
+        conn.close()
+        raise
     return conn
 
 
 def _row_to_entry_dict(row: sqlite3.Row) -> dict:
     entry = DorkbookEntry(
         entry_id=int(row["entry_id"]),
-        protocol=str(row["protocol"]),
+        protocol=row["protocol"],
+        provider=str(row["provider"]),
+        topic=str(row["topic"]),
         nickname=str(row["nickname"] or ""),
         query=str(row["query"] or ""),
         notes=str(row["notes"] or ""),
@@ -186,6 +144,8 @@ def _row_to_entry_dict(row: sqlite3.Row) -> dict:
     return {
         "entry_id": entry.entry_id,
         "protocol": entry.protocol,
+        "provider": entry.provider,
+        "topic": entry.topic,
         "nickname": entry.nickname,
         "query": entry.query,
         "notes": entry.notes,
@@ -196,43 +156,42 @@ def _row_to_entry_dict(row: sqlite3.Row) -> dict:
     }
 
 
-def list_entries(conn: sqlite3.Connection, protocol: str, search_text: str = "") -> list[dict]:
-    """Return ordered entries for one protocol tab."""
-    protocol_norm = _normalize_protocol(protocol)
-    search_norm = str(search_text or "").strip().lower()
-
-    if search_norm:
-        like = f"%{search_norm}%"
-        rows = conn.execute(
-            """
-            SELECT entry_id, protocol, nickname, query, notes, row_kind, builtin_key, created_at, updated_at
-              FROM dorkbook_entries
-             WHERE protocol = ?
-               AND (
-                    lower(query) LIKE ?
-                 OR lower(nickname) LIKE ?
-                 OR lower(notes) LIKE ?
-               )
-             ORDER BY
-                CASE row_kind WHEN 'builtin' THEN 0 ELSE 1 END,
-                lower(CASE WHEN trim(nickname) <> '' THEN nickname ELSE query END),
-                entry_id ASC
-            """,
-            (protocol_norm, like, like, like),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            """
-            SELECT entry_id, protocol, nickname, query, notes, row_kind, builtin_key, created_at, updated_at
-              FROM dorkbook_entries
-             WHERE protocol = ?
-             ORDER BY
-                CASE row_kind WHEN 'builtin' THEN 0 ELSE 1 END,
-                lower(CASE WHEN trim(nickname) <> '' THEN nickname ELSE query END),
-                entry_id ASC
-            """,
-            (protocol_norm,),
-        ).fetchall()
+def list_entries(
+    conn: sqlite3.Connection,
+    protocol: Optional[str] = None,
+    search_text: str = "",
+    *,
+    provider: Optional[str] = PROVIDER_SHODAN,
+    topic: Optional[str] = None,
+) -> list[dict]:
+    """List a provider/protocol, or the entire library with provider=None."""
+    clauses = []
+    params = []
+    if provider is not None:
+        provider = _normalize_provider(provider)
+        clauses.append("provider = ?")
+        params.append(provider)
+    if protocol is not None:
+        protocol = _normalize_protocol(protocol, provider or PROVIDER_SHODAN)
+        clauses.append("protocol IS ?")
+        params.append(protocol)
+    if topic is not None:
+        clauses.append("topic = ?")
+        params.append(_normalize_topic(topic))
+    search = str(search_text or "").strip().lower()
+    if search:
+        clauses.append("(lower(query) LIKE ? OR lower(nickname) LIKE ? OR lower(notes) LIKE ?)")
+        params.extend([f"%{search}%"] * 3)
+    where = " AND ".join(clauses) if clauses else "1"
+    rows = conn.execute(
+        f"""
+        SELECT * FROM dorkbook_entries WHERE {where}
+         ORDER BY CASE provider WHEN 'shodan' THEN 0 ELSE 1 END,
+                  CASE row_kind WHEN 'builtin' THEN 0 ELSE 1 END,
+                  lower(CASE WHEN trim(nickname) <> '' THEN nickname ELSE query END),
+                  entry_id ASC
+        """, params,
+    ).fetchall()
     return [_row_to_entry_dict(row) for row in rows]
 
 
@@ -240,7 +199,7 @@ def get_entry(conn: sqlite3.Connection, entry_id: int) -> Optional[dict]:
     """Return one entry by ID, or None."""
     row = conn.execute(
         """
-        SELECT entry_id, protocol, nickname, query, notes, row_kind, builtin_key, created_at, updated_at
+        SELECT *
           FROM dorkbook_entries
          WHERE entry_id = ?
         """,
@@ -253,53 +212,41 @@ def get_entry(conn: sqlite3.Connection, entry_id: int) -> Optional[dict]:
 
 def query_exists(
     conn: sqlite3.Connection,
-    protocol: str,
+    protocol: Optional[str],
     query: str,
     *,
     exclude_entry_id: Optional[int] = None,
+    provider: str = PROVIDER_SHODAN,
 ) -> bool:
-    """Return True if protocol already has the same normalized query."""
-    protocol_norm = _normalize_protocol(protocol)
-    query_norm = normalize_query(query)
-    if exclude_entry_id is None:
-        row = conn.execute(
-            """
-            SELECT 1
-              FROM dorkbook_entries
-             WHERE protocol = ?
-               AND query_normalized = ?
-             LIMIT 1
-            """,
-            (protocol_norm, query_norm),
-        ).fetchone()
-    else:
-        row = conn.execute(
-            """
-            SELECT 1
-              FROM dorkbook_entries
-             WHERE protocol = ?
-               AND query_normalized = ?
-               AND entry_id <> ?
-             LIMIT 1
-            """,
-            (protocol_norm, query_norm, exclude_entry_id),
-        ).fetchone()
+    """Check trimmed exact equality within a provider and applicable protocol."""
+    provider = _normalize_provider(provider)
+    protocol = _normalize_protocol(protocol, provider)
+    row = conn.execute(
+        """SELECT 1 FROM dorkbook_entries
+            WHERE provider = ? AND protocol IS ? AND query_normalized = ?
+              AND (? IS NULL OR entry_id <> ?) LIMIT 1""",
+        (provider, protocol, normalize_query(query), exclude_entry_id, exclude_entry_id),
+    ).fetchone()
     return row is not None
 
 
 def create_entry(
     conn: sqlite3.Connection,
-    protocol: str,
+    protocol: Optional[str],
     nickname: Optional[str],
     query: str,
     notes: Optional[str],
+    *,
+    provider: str = PROVIDER_SHODAN,
+    topic: Optional[str] = DEFAULT_TOPIC,
 ) -> int:
     """Insert a custom entry and return new entry_id."""
-    protocol_norm = _normalize_protocol(protocol)
+    provider = _normalize_provider(provider)
+    protocol_norm = _normalize_protocol(protocol, provider)
     query_norm = normalize_query(query)
-    if query_exists(conn, protocol_norm, query_norm):
+    if query_exists(conn, protocol_norm, query_norm, provider=provider):
         raise DuplicateEntryError(
-            f"query already exists in {protocol_norm} dorkbook"
+            f"query already exists in {protocol_norm or 'Self-hosted Search'} Dorkbook"
         )
     nickname_norm = _normalize_optional_text(nickname)
     notes_norm = _normalize_optional_text(notes)
@@ -307,11 +254,13 @@ def create_entry(
     cur = conn.execute(
         """
         INSERT INTO dorkbook_entries
-            (protocol, nickname, query, query_normalized, notes, row_kind, builtin_key, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)
+            (provider, protocol, topic, nickname, query, query_normalized, notes, row_kind, builtin_key, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
         """,
         (
+            provider,
             protocol_norm,
+            _normalize_topic(topic),
             nickname_norm,
             query_norm,
             query_norm,
@@ -330,6 +279,8 @@ def update_entry(
     nickname: Optional[str],
     query: str,
     notes: Optional[str],
+    *,
+    topic: Optional[str] = None,
 ) -> None:
     """Update one custom entry."""
     existing = get_entry(conn, entry_id)
@@ -339,16 +290,18 @@ def update_entry(
         raise ReadOnlyEntryError("built-in dorks are read-only")
 
     query_norm = normalize_query(query)
-    protocol_norm = _normalize_protocol(existing["protocol"])
-    if query_exists(conn, protocol_norm, query_norm, exclude_entry_id=entry_id):
+    provider = existing["provider"]
+    protocol_norm = _normalize_protocol(existing["protocol"], provider)
+    if query_exists(conn, protocol_norm, query_norm, exclude_entry_id=entry_id, provider=provider):
         raise DuplicateEntryError(
-            f"query already exists in {protocol_norm} dorkbook"
+            f"query already exists in {protocol_norm or 'Self-hosted Search'} Dorkbook"
         )
 
     conn.execute(
         """
         UPDATE dorkbook_entries
-           SET nickname = ?,
+           SET topic = ?,
+               nickname = ?,
                query = ?,
                query_normalized = ?,
                notes = ?,
@@ -356,6 +309,7 @@ def update_entry(
          WHERE entry_id = ?
         """,
         (
+            existing["topic"] if topic is None else _normalize_topic(topic),
             _normalize_optional_text(nickname),
             query_norm,
             query_norm,
@@ -390,80 +344,41 @@ def upsert_builtin_pack(
     touched = 0
     now = _utcnow()
     for spec in pack:
-        protocol = _normalize_protocol(spec.protocol)
-        query_norm = normalize_query(spec.query)
-        nickname = _normalize_optional_text(spec.nickname)
-        notes = _normalize_optional_text(spec.notes)
-
-        by_key = conn.execute(
-            "SELECT entry_id FROM dorkbook_entries WHERE builtin_key = ?",
+        provider = _normalize_provider(spec.provider)
+        protocol = _normalize_protocol(spec.protocol, provider)
+        query = normalize_query(spec.query)
+        values = (
+            provider, protocol, _normalize_topic(spec.topic),
+            _normalize_optional_text(spec.nickname), query, query,
+            _normalize_optional_text(spec.notes), ROW_KIND_BUILTIN,
+        )
+        existing = conn.execute(
+            """SELECT entry_id, provider, protocol, topic, nickname, query,
+                      query_normalized, notes, row_kind
+                 FROM dorkbook_entries WHERE builtin_key = ?""",
             (spec.builtin_key,),
         ).fetchone()
-
-        by_key_entry_id = int(by_key[0]) if by_key is not None else None
-        conflict = conn.execute(
-            """
-            SELECT entry_id
-              FROM dorkbook_entries
-             WHERE protocol = ?
-               AND query_normalized = ?
-             LIMIT 1
-            """,
-            (protocol, query_norm),
-        ).fetchone()
-        conflict_entry_id = int(conflict[0]) if conflict is not None else None
-        if (
-            conflict_entry_id is not None
-            and (by_key_entry_id is None or conflict_entry_id != by_key_entry_id)
-        ):
-            # Preserve availability and existing custom data when builtin specs
-            # collide with live protocol/query uniqueness constraints.
+        entry_id = existing[0] if existing else None
+        if existing and existing[-1] != ROW_KIND_BUILTIN:
+            continue  # A custom row is never converted by a seed refresh.
+        if query_exists(conn, protocol, query, provider=provider, exclude_entry_id=entry_id):
             continue
-
-        if by_key is not None:
+        if existing:
+            if tuple(existing)[1:] == values:
+                continue  # Reopening the library must not change timestamps.
             conn.execute(
-                """
-                UPDATE dorkbook_entries
-                   SET protocol = ?,
-                       nickname = ?,
-                       query = ?,
-                       query_normalized = ?,
-                       notes = ?,
-                       row_kind = ?,
-                       updated_at = ?
-                 WHERE builtin_key = ?
-                """,
-                (
-                    protocol,
-                    nickname,
-                    query_norm,
-                    query_norm,
-                    notes,
-                    ROW_KIND_BUILTIN,
-                    now,
-                    spec.builtin_key,
-                ),
+                """UPDATE dorkbook_entries
+                      SET provider=?, protocol=?, topic=?, nickname=?, query=?,
+                          query_normalized=?, notes=?, row_kind=?, updated_at=?
+                    WHERE entry_id=?""", (*values, now, entry_id),
             )
-            touched += 1
-            continue
-
-        cur = conn.execute(
-            """
-            INSERT INTO dorkbook_entries
-                (protocol, nickname, query, query_normalized, notes, row_kind, builtin_key, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                protocol,
-                nickname,
-                query_norm,
-                query_norm,
-                notes,
-                ROW_KIND_BUILTIN,
-                spec.builtin_key,
-                now,
-                now,
-            ),
-        )
-        touched += 1 if cur.rowcount > 0 else 0
+        else:
+            conn.execute(
+                """INSERT INTO dorkbook_entries
+                   (provider, protocol, topic, nickname, query, query_normalized,
+                    notes, row_kind, builtin_key, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (*values, spec.builtin_key, now, now),
+            )
+        touched += 1
     return touched

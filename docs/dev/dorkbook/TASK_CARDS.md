@@ -1,5 +1,15 @@
 # Dorkbook v1 - Task Cards
 
+## Current unified-library cards (2026-09-27)
+
+The [approved implementation plan](IMPLEMENTATION_PLAN.md) supersedes the
+historical v1 cards below. U1 storage/migration is implemented and validated;
+see [U1 evidence](U1_VALIDATION.md). U2 saved defaults is next, followed by U3
+desktop, U4 Web UI, U5 shipped dorks/live backend checks, and U6 closeout.
+One card at a time; no push. The current task explicitly permits scoped commits.
+
+## Historical v1 cards
+
 Date: 2026-04-19  
 Execution model: one small card at a time, explicit PASS/FAIL evidence.
 
@@ -223,4 +233,3 @@ python3 -m py_compile \
 
 HI test needed:
 - Yes (final sign-off).
-

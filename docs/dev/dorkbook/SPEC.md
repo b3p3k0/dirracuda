@@ -1,5 +1,10 @@
 # Dorkbook v1 Spec
 
+Historical v1 contract. For the current approved provider-aware design and
+completed U1 storage contract, see [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)
+and [U1_VALIDATION.md](U1_VALIDATION.md). The original single-dork/protocol-tab
+decisions below no longer define the planned unified UI.
+
 Date: 2026-04-19  
 Status: Approved for implementation
 

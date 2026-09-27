@@ -10,6 +10,11 @@ PROTOCOL_FTP = "FTP"
 PROTOCOL_HTTP = "HTTP"
 PROTOCOLS = (PROTOCOL_SMB, PROTOCOL_FTP, PROTOCOL_HTTP)
 
+PROVIDER_SHODAN = "shodan"
+PROVIDER_SELF_HOSTED = "self_hosted"
+PROVIDERS = (PROVIDER_SHODAN, PROVIDER_SELF_HOSTED)
+DEFAULT_TOPIC = "General"
+
 ROW_KIND_BUILTIN = "builtin"
 ROW_KIND_CUSTOM = "custom"
 ROW_KINDS = (ROW_KIND_BUILTIN, ROW_KIND_CUSTOM)
@@ -17,13 +22,15 @@ ROW_KINDS = (ROW_KIND_BUILTIN, ROW_KIND_CUSTOM)
 
 @dataclass(frozen=True)
 class BuiltinDork:
-    """Read-only default Dorkbook recipe."""
+    """Read-only default Dorkbook dork."""
 
     builtin_key: str
-    protocol: str
+    protocol: Optional[str]
     nickname: str
     query: str
     notes: Optional[str] = None
+    provider: str = PROVIDER_SHODAN
+    topic: str = DEFAULT_TOPIC
 
 
 @dataclass(frozen=True)
@@ -31,7 +38,7 @@ class DorkbookEntry:
     """Dorkbook entry row model."""
 
     entry_id: int
-    protocol: str
+    protocol: Optional[str]
     nickname: str
     query: str
     notes: str
@@ -39,6 +46,8 @@ class DorkbookEntry:
     builtin_key: Optional[str]
     created_at: str
     updated_at: str
+    provider: str = PROVIDER_SHODAN
+    topic: str = DEFAULT_TOPIC
 
 
 DEFAULT_BUILTIN_DORKS = (
@@ -76,4 +85,3 @@ class DuplicateEntryError(DorkbookError):
 
 class ReadOnlyEntryError(DorkbookError):
     """Raised when a caller attempts to mutate a read-only builtin row."""
-

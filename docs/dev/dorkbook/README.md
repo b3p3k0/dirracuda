@@ -5,11 +5,24 @@ Status: Active implementation workspace
 
 This folder is the planning + execution hub for the Dorkbook experimental feature.
 
+Current discussion (2026-09-27): [shared discovery query library](UNIFIED_LIBRARY_PROPOSAL.md)
+for Shodan and Self-hosted Search, followed by a broader shipped dork pack.
+The [implementation plan](IMPLEMENTATION_PLAN.md) is approved.
+U1 storage/migration is implemented; see [validation and recovery](U1_VALIDATION.md).
+U2–U6 (application, UI, catalog, closeout) remain pending. The approved dork
+selection includes 33A/33B; 33C is deferred in [candidate notes](CANDIDATE_DORKS.md).
+HI selected one grouped view and persistent **Apply to Search** behavior.
+The [single-view mockup](ASCII_SKETCHES.md#unified-library--review-draft-2026-09-27)
+defines the intended UI; current screens still use the original protocol tabs.
+The v1 sections below describe the original implementation scope; current
+Dorkbook is under Accessories and uses the canonical sidecar path
+`~/.dirracuda/data/experimental/dorkbook.db`.
+
 ## Canonical Scope (v1)
 
 1. Add `Dorkbook` tab under Experimental dialog.
 2. Launch singleton modeless Dorkbook window.
-3. Store recipes in sidecar DB (`~/.dirracuda/dorkbook.db`).
+3. Store dorks in sidecar DB (`~/.dirracuda/dorkbook.db`).
 4. Protocol tabs: SMB, FTP, HTTP.
 5. Built-ins are read-only and italic.
 6. Custom rows support add/edit/delete/copy.
