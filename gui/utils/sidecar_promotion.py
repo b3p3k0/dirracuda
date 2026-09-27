@@ -45,6 +45,9 @@ def build_manual_record_payload(
         "host_type": host_type,
         "ip_address": ip_address,
     }
+    note = prefill.get("_append_notes")
+    if isinstance(note, str) and note.strip():
+        payload["_append_notes"] = note
 
     if host_type == "F":
         payload["port"] = _coerce_port(prefill.get("port"), default=21, label="FTP")

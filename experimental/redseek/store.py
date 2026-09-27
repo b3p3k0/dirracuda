@@ -311,7 +311,7 @@ def get_targets_by_dedupe_keys(
     conn: sqlite3.Connection,
     dedupe_keys: List[str],
 ) -> list[dict]:
-    """Return target rows matching dedupe keys, preserving DB row identity."""
+    """Return target rows with original post metadata for server-note promotion."""
     keys = list(dict.fromkeys(k for k in dedupe_keys if k))
     if not keys:
         return []
@@ -323,13 +323,11 @@ def get_targets_by_dedupe_keys(
         cursor = conn.execute(
             f"""
             SELECT
-                id, post_id, target_raw, target_normalized, host, protocol,
-                notes, parse_confidence, created_at, dedupe_key,
-                probe_status, probe_indicator_matches, probe_preview,
-                probe_checked_at, probe_error, probe_snapshot_json
-              FROM reddit_targets
-             WHERE dedupe_key IN ({placeholders})
-             ORDER BY id ASC
+                t.*, p.post_title, p.post_author, p.post_created_utc
+              FROM reddit_targets t
+              LEFT JOIN reddit_posts p ON t.post_id = p.post_id
+             WHERE t.dedupe_key IN ({placeholders})
+             ORDER BY t.id ASC
             """,
             chunk,
         )

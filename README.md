@@ -464,6 +464,13 @@ Then restart SearXNG and run `Test` again.
 
 redseek ingests submissions from `r/opendirectories`. New runs write `reddit_posts`, `reddit_targets`, and `reddit_ingest_state` directly to the active primary DB, and parsed SMB/FTP/HTTP targets are automatically promoted into the main protocol tables at run completion. No manual "Add to dirracuda DB" step is needed for new runs.
 
+Server details → **Notes** receives the Reddit username, posting date (UTC), and
+full original post title when a target is promoted. Each distinct attribution is appended once;
+your existing notes stay intact and remain editable. Missing authors appear as
+`u/[unknown]`; missing or invalid posting dates are omitted. This also applies to legacy sidecar promotion. Existing hosts gain
+attribution when their targets are included in a later ingest; no bulk backfill runs.
+Older undated attributions remain intact; a later ingest appends the dated version once.
+
 Legacy data already in `~/.dirracuda/data/experimental/reddit_od.db` remains accessible under Accessories → Legacy Sidecar Data → Reddit, with manual promotion still available from that view.
 
 Ingest modes in `Reddit Grab` (Accessories):

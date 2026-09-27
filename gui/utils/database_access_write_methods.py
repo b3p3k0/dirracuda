@@ -793,6 +793,34 @@ def upsert_extracted_flag_for_host(self, ip_address: str, host_type: str,
         raise
     self.clear_cache()
 
+def _append_manual_record_notes(cur, host_type: str, server_id: int, note: Any) -> None:
+    """Append a distinct note within the server write transaction; preserve flags."""
+    if not isinstance(note, str) or not note.strip():
+        return
+    table = {"S": "host_user_flags", "F": "ftp_user_flags", "H": "http_user_flags"}[host_type]
+    columns = {row[1] for row in cur.execute(f"PRAGMA table_info({table})")}
+    if not {"server_id", "notes"} <= columns:
+        return  # Legacy/minimal DBs may not support editable notes yet.
+    row = cur.execute(
+        f"SELECT notes FROM {table} WHERE server_id = ?", (server_id,),
+    ).fetchone()
+    existing = row["notes"] if row else None
+    if existing is not None and not isinstance(existing, str):
+        return  # Preserve malformed legacy data rather than coercing it.
+    existing = existing or ""
+    if f"\n{note}\n" in f"\n{existing}\n":
+        return
+    separator = "" if not existing or existing.endswith("\n") else "\n"
+    merged = existing + separator + note
+    if row is None:
+        cur.execute(f"INSERT INTO {table} (server_id, notes) VALUES (?, ?)", (server_id, merged))
+    else:
+        timestamp = ", updated_at = CURRENT_TIMESTAMP" if "updated_at" in columns else ""
+        cur.execute(
+            f"UPDATE {table} SET notes = ?{timestamp} WHERE server_id = ?", (merged, server_id),
+        )
+
+
 def upsert_manual_server_record(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     Upsert one manually-entered protocol row into the active database.
@@ -801,6 +829,8 @@ def upsert_manual_server_record(self, payload: Dict[str, Any]) -> Dict[str, Any]
     - SMB:  ip_address
     - FTP:  ip_address
     - HTTP: (ip_address, port)
+
+    Optional _append_notes adds distinct source text without replacing user notes.
 
     Returns:
         Dict with host_type, protocol_server_id, row_key, operation.
@@ -1019,6 +1049,7 @@ def upsert_manual_server_record(self, payload: Dict[str, Any]) -> Dict[str, Any]
         if protocol_server_id is None:
             raise RuntimeError("Unable to resolve protocol_server_id after upsert.")
 
+        _append_manual_record_notes(cur, host_type, protocol_server_id, payload.get("_append_notes"))
         conn.commit()
 
     self.clear_cache()

@@ -12,6 +12,7 @@ prefill shapes. Source labels are passed explicitly by each caller.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -37,6 +38,17 @@ def _normalize_path(raw: str) -> str:
     return path
 
 
+def _post_date_text(value) -> str:
+    """Format stored posting time in UTC; bad metadata must not drop a target."""
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return ""
+    try:
+        date = datetime.fromtimestamp(float(value), tz=timezone.utc).date()
+    except (ValueError, OverflowError, OSError):
+        return ""
+    return f" on {date.isoformat()} (UTC)"
+
+
 def row_to_prefill(
     row: dict,
     *,
@@ -54,7 +66,7 @@ def row_to_prefill(
     row:
         Dict with keys: protocol, host, target_normalized, probe_status,
         probe_indicator_matches, probe_preview, probe_checked_at, probe_error,
-        probe_snapshot_json.
+        probe_snapshot_json, and optional post_title/post_author/post_created_utc metadata.
     promotion_source:
         Value for the ``_promotion_source`` prefill key.
     snapshot_source:
@@ -116,6 +128,21 @@ def _row_to_prefill_inner(
         },
         "_probe_snapshot_source": snapshot_source,
     }
+
+    # Use the full stored title, never the truncated target preview in notes.
+    title = row.get("post_title")
+    if isinstance(title, str) and title.strip():
+        author = row.get("post_author")
+        author = author.strip() if isinstance(author, str) else ""
+        if author.lower().startswith("/u/"):
+            author = author[3:].strip()
+        elif author.lower().startswith("u/"):
+            author = author[2:].strip()
+        post_date = _post_date_text(row.get("post_created_utc"))
+        prefill["_append_notes"] = (
+            f"Posted to r/OpenDirectories by u/{author or '[unknown]'}{post_date} "
+            f"original title: {title}"
+        )
 
     if host_type == "H":
         parsed = None
