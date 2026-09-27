@@ -1,15 +1,16 @@
 {% extends "base.html" %}
-{% block title %}SearXNG{% endblock %}
+{% block title %}Self-hosted Search{% endblock %}
 
 {% block content %}
-<h1>SearXNG Discovery</h1>
+<h1>Self-hosted Search</h1>
+<p>Search with your SearXNG or DeGoog instance.</p>
 <div role="status" id="submit-status" aria-live="polite"></div>
 
 <form id="searxng-form" novalidate>
   <div class="form-section">
     <div class="form-row">
-      <label for="instance-url">SearXNG instance URL</label>
-      <input id="instance-url" name="instance-url" type="url" placeholder="http://searxng.example.com" maxlength="500">
+      <label for="instance-url">Self-hosted Search instance URL</label>
+      <input id="instance-url" name="instance-url" type="url" placeholder="Instance base URL" maxlength="500">
     </div>
     <div class="form-row">
       <label for="query">Query</label>

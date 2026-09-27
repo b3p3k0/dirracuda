@@ -112,7 +112,7 @@ def _make_dialog() -> UnifiedScanDialog:
 def test_provider_maximum_reminders_are_exact():
     assert SEARXNG_MAX_REMINDER == "Maximum: 1,000 unique results per run."
     assert SEARXNG_PACING_REMINDER == (
-        "Large runs are automatically paced to protect upstream engines."
+        "SearXNG or DeGoog. Large runs are paced to protect upstream engines."
     )
     assert REDDIT_MAX_REMINDER == "Maximum: 100 posts per RSS snapshot."
 

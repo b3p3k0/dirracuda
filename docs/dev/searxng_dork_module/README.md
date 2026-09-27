@@ -1,34 +1,28 @@
-# SearXNG Dork Module Workspace
+# Self-hosted Search Aggregators Workspace
 
-Date: 2026-04-18
-Status: Complete (C1–C6 shipped)
+The `Self-hosted Search` feature supports SearXNG and DeGoog. The workspace path
+and internal `se_dork` / `searxng` identifiers stay unchanged for compatibility.
 
-This folder is the working area for the new Experimental "SearXNG Dorking" module.
+C7 is complete; automated checks and HI testing passed. See [WORK_NOTES.md](WORK_NOTES.md). C1–C6 and `claude_plans/`
+record the original SearXNG implementation; their sidecar-only and manual
+promotion assumptions were superseded by the primary-DB integration.
 
-## Canonical Conventions
+## Current contract
 
-1. Workspace path: `docs/dev/searxng_dork_module/`.
-2. Module name: `SearXNG Dork Module`.
-3. UI/tab label: `SearXNG Dorking`.
+- One manually entered instance URL; no public-instance discovery or failover.
+- SearXNG: `/config`, then `/search?format=json` with `pageno`.
+- DeGoog: `/api/search-tabs`, then native `/api/search` with `page` and `type=web`.
+- A base URL is detected once per run. Explicit search endpoint URLs also work.
+- Search results share the existing classification, persistence, and probe flow.
+- New runs write to the active primary DB. Legacy sidecar browsing stays available.
+- Desktop Accessories, Start Scan, and Web UI use the same service.
 
-## Locked v1 Scope
+DeGoog needs enabled web engines. No format toggle is required. Pagination stops
+at 10 pages for DeGoog and 40 for SearXNG; the requested result cap remains a
+ceiling. API-key-protected DeGoog search is not supported in this integration.
 
-1. SearXNG only (no direct Google/DDG/Bing scraping).
-2. Single manually entered SearXNG instance URL.
-3. No searx.space import or auto-instance discovery in v1.
-4. Support non-localhost hosts (LAN/WAN/private endpoints).
-5. Default instance URL: `http://192.168.1.20:8090`.
-6. Reuse existing HTTP probe path for candidate verification/classification.
-7. Replace the Experimental `placeholder` tab with this module.
-
-## Why This Direction
-
-Direct anonymous SERP scraping from corporate search engines is fragile and frequently blocked by anti-bot controls (challenge pages, captcha, turnstile, 429s).
-
-SearXNG gives us:
-1. A stable JSON API (`/search?format=json`).
-2. User-controlled deployment model (self-hosted recommended).
-3. Cleaner app-side integration and clearer failure modes.
+See [SPEC.md](SPEC.md), the [operator instructions](../../../README.md#self-hosted-search),
+and the [DeGoog API reference](https://degoog-org.github.io/docs/api.html).
 
 ## Setup Notes From Live Testing
 

@@ -219,8 +219,8 @@ def test_preflight_trailing_slash_stripped():
 def test_preflight_config_http_error():
     http_err = urllib.error.HTTPError(
         url="http://sx:8090/config",
-        code=404,
-        msg="Not Found",
+        code=500,
+        msg="Internal Server Error",
         hdrs={},
         fp=io.BytesIO(b""),
     )
@@ -230,4 +230,4 @@ def test_preflight_config_http_error():
 
     assert result.ok is False
     assert result.reason_code == INSTANCE_UNREACHABLE
-    assert "404" in result.message
+    assert "500" in result.message

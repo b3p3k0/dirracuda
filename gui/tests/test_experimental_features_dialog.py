@@ -666,7 +666,7 @@ def test_dismiss_does_not_write_false_on_uncheck(monkeypatch):
 def test_registry_contains_searxng_tab():
     from gui.components.experimental_features.registry import _get_features
     labels = [f.label for f in _get_features()]
-    assert "SearXNG" in labels
+    assert "Self-hosted Search" in labels
 
 
 def test_registry_does_not_contain_placeholder_tab():

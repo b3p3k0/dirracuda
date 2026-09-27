@@ -271,7 +271,7 @@ def _build_provider_section(owner: Any, parent: tk.Widget) -> None:
 
     searxng_cb = ttk.Checkbutton(
         grid,
-        text="SearXNG",
+        text="Self-hosted Search",
         variable=owner.provider_searxng_var,
         command=owner._sync_searxng_options_state,
     )

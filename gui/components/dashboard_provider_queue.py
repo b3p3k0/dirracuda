@@ -20,7 +20,7 @@ class ProviderSpec:
 
 PROVIDER_SPECS = {
     "reddit": ProviderSpec("reddit", "Reddit", 100, "start_reddit_scan"),
-    "searxng": ProviderSpec("searxng", "SearXNG", 200, "start_searxng_scan"),
+    "searxng": ProviderSpec("searxng", "Self-hosted Search", 200, "start_searxng_scan"),
     "shodan": ProviderSpec("shodan", "Shodan", 300, "start_shodan_provider"),
 }
 

@@ -115,7 +115,7 @@ You're connecting to machines you don't control. A few baseline precautions befo
 
 The main window. From here you can:
 
-- Launch discovery from one **▶ Start Scan** button - selected providers run one at a time (`Reddit` → `SearXNG` → `Shodan`), and Shodan queues selected SMB/FTP/HTTP protocols in sequence
+- Launch discovery from one **▶ Start Scan** button - selected providers run one at a time (`Reddit` → `Self-hosted Search` → `Shodan`), and Shodan queues selected SMB/FTP/HTTP protocols in sequence
 - Access [Accessories](#accessories) 
 - Open the Server List Browser to work with hosts you've found
 - Manage your database (import, export, merge, maintenance)
@@ -382,7 +382,7 @@ The GUI includes a built-in config editor for common settings and an integrated 
 Accessories are grouped under the `⚗ Accessories` button in the dashboard header.
 
 The dialog is modeless and tab-based. Current tabs:
-- `SearXNG`
+- `Self-hosted Search`
 - `Reddit`
 - `Web UI`
 - `Dorkbook`
@@ -390,37 +390,52 @@ The dialog is modeless and tab-based. Current tabs:
 - `Sherlock`
 - `Analyst`
 
-### SearXNG
+### Self-hosted Search
 
-![SearXNG](img/searxng.png)
+![Self-hosted Search](img/searxng.png)
 
-Use this tab to run open-directory dork queries against a SearXNG server, keep confirmed open indexes, and review/probe the results.
+Use this tab to run open-directory dork queries against a SearXNG or DeGoog server, keep confirmed open indexes, and review/probe the results.
 
 Quick start:
-1. Dashboard → `⚗ Accessories` → `SearXNG` tab.
+1. Dashboard → `⚗ Accessories` → `Self-hosted Search` tab.
 2. Fill in your server and query.
 3. Click `Test` to confirm the server is reachable and JSON search is enabled.
 4. Click `Run` to collect results.
 5. Click `Open Results DB` to review and probe retained URLs.
 
 Inputs (persisted across opens/restarts):
-- **SearXNG Server** — base URL of the SearXNG instance you control
+- **Server URL** — base URL of the SearXNG or DeGoog instance you control; an explicit `/search` or `/api/search` endpoint also works
 - **Query** — dork query (default: `site:* intitle:"index of /"`)
 - **Max results** — unique-result fetch cap per run (default 500, max 1,000)
 - **Run Probe on Results** — optional bulk probe pass for retained results
 
 What each action does:
 - **Test** checks server reachability and JSON search support.
-- **Run** executes the query, keeps only confirmed open-index results, and updates status with fetched/stored counts. Each fetched page is stored, classified, filtered, and optionally probed before the next page request. That work consumes the active pacing window; Dirracuda sleeps only for any time left over. Fetching deduplicates normalized URLs and stops at the requested unique-result count, 40 pages, or the first clean empty page. Temporary per-engine failures are advisory when a page still returns results, with 10/20/30-second soft backoff until a clean page resets normal pacing. An empty throttled page triggers a hard retry: early runs (fewer than 5 productive pages and fewer than 50 unique URLs) allow two retries (30 seconds, then 180 seconds); mature runs allow one (30 seconds only). Direct SearXNG HTTP 429 responses use the same run-wide retry budget and honor a valid bounded `Retry-After`. Completed pages remain available if a later request fails, and partial runs still reach primary-DB sync. The 1,000-result setting is a ceiling, not a guarantee. If probe is enabled, the status line also shows probe totals (`✔/✖/○`). On completion, retained SearXNG rows are auto-synced into main HTTP server surfaces. A standalone run shows a result popup, while Live Scan Output keeps the full rollup. In a multi-provider Start Scan run, the popup is suppressed while the serial provider queue continues.
-- **Open Results DB** opens the SearXNG browser against the active primary DB context for new runs. Historical sidecar data is still available from the legacy sidecar browser path.
-- **Cancel a running search** — use the **Running Tasks** control in the dashboard footer, select the SearXNG task, and click **Cancel Task**. In a multi-provider Start Scan run, cancelling the provider queue task also cancels the active SearXNG search. Cancelled runs still sync any retained open-index rows to the primary HTTP table, and completed results are preserved.
+- **Run** executes the query, keeps only confirmed open-index results, and updates status with fetched/stored counts. Each fetched page is stored, classified, filtered, and optionally probed before the next page request. That work consumes the active pacing window; Dirracuda sleeps only for any time left over. Fetching deduplicates normalized URLs and stops at the requested unique-result count, 40 SearXNG pages or 10 DeGoog pages, or the first clean empty page. Temporary per-engine failures are advisory when a page still returns results, with 10/20/30-second soft backoff until a clean page resets normal pacing. An empty throttled page triggers a hard retry: early runs (fewer than 5 productive pages and fewer than 50 unique URLs) allow two retries (30 seconds, then 180 seconds); mature runs allow one (30 seconds only). Direct aggregator HTTP 429 responses use the same run-wide retry budget and honor a valid bounded `Retry-After`. Completed pages remain available if a later request fails, and partial runs still reach primary-DB sync. The 1,000-result setting is a ceiling, not a guarantee. If probe is enabled, the status line also shows probe totals (`✔/✖/○`). On completion, retained search rows are auto-synced into main HTTP server surfaces. A standalone run shows a result popup, while Live Scan Output keeps the full rollup. In a multi-provider Start Scan run, the popup is suppressed while the serial provider queue continues.
+- **Open Results DB** opens the search results browser against the active primary DB context for new runs. Historical sidecar data is still available from the legacy sidecar browser path.
+- **Cancel a running search** — use the **Running Tasks** control in the dashboard footer, select the Self-hosted Search task, and click **Cancel Task**. In a multi-provider Start Scan run, cancelling the provider queue task also cancels the active search. Cancelled runs still sync any retained open-index rows to the primary HTTP table, and completed results are preserved.
 
 ![searxng db](img/searxng_db.png)
 
 Results browser:
 - Columns: `URL`, `Probed`, `Probe Preview`, `Checked`
 - Actions: `Copy URL`, `Open in Explorer`, `Open in system browser`, `Probe Selected` / `Probe URL`; double-click opens a read-only result details view.
-- Primary-backed mode hides manual promotion controls because retained SearXNG rows are synced during run completion. Legacy sidecar browsing keeps promotion controls for historical rows.
+- Primary-backed mode hides manual promotion controls because retained search rows are synced during run completion. Legacy sidecar browsing keeps promotion controls for historical rows.
+
+#### DeGoog setup
+
+Enter your instance base URL and click **Test**. Dirracuda detects DeGoog through
+`/api/search-tabs` after a missing SearXNG `/config` route, then uses native JSON
+from `/api/search`. You can also enter the `/api/search` endpoint directly.
+No JSON/XML setting or SearXNG compatibility toggle is required.
+
+DeGoog must have web search engines installed and enabled. Its native API caps
+pagination at 10 pages, so a large requested result count may not be reached.
+Source names and snippets are retained with each result. API-key-protected
+DeGoog search is not supported by this integration; a 401/403 during **Test**
+reports that limitation. Existing instance authentication settings are unchanged.
+See the [DeGoog API reference](https://degoog-org.github.io/docs/api.html) and
+[search implementation reference](docs/SELF_HOSTED_SEARCH.md).
 
 #### SearXNG live validation (opt-in)
 
@@ -676,7 +691,7 @@ managed service to sign out existing browser sessions. The browser account page
 continues to require the current password.
 
 Current Web UI layout:
-- `Scans` (dropdown): `shodan`, `searxng`, `reddit`
+- `Scans` (dropdown): `Shodan`, `Self-hosted Search`, `Reddit`
 - `Results` (includes read-only Sherlock Risk badges/details when persisted)
 - `Export`
 - `Extras` (dropdown): `dorkbook`, `keymaster`

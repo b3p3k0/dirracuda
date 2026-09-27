@@ -81,12 +81,12 @@ class UnifiedScanDialog:
         self.protocol_ftp_var = tk.BooleanVar(value=True)
         self.protocol_http_var = tk.BooleanVar(value=True)
 
-        # Provider selections (Shodan on by default; SearXNG promoted in C3; Reddit in C4)
+        # Provider selections (Shodan on by default; Self-hosted Search promoted in C3; Reddit in C4)
         self.provider_shodan_var = tk.BooleanVar(value=True)
         self.provider_searxng_var = tk.BooleanVar(value=False)
         self.provider_reddit_var = tk.BooleanVar(value=False)
 
-        # SearXNG options (active when SearXNG provider is selected)
+        # Self-hosted Search options (active when Self-hosted Search provider is selected)
         self.searxng_instance_url_var = tk.StringVar(value="")
         self.searxng_query_var = tk.StringVar(value="")
         self.searxng_max_results_var = tk.StringVar(value="500")
@@ -992,7 +992,7 @@ class UnifiedScanDialog:
     def _build_scan_request(self) -> Dict[str, Any]:
         providers = self._resolve_selected_providers()
         if not providers:
-            raise ValueError("Select at least one discovery provider (Shodan, SearXNG, or Reddit).")
+            raise ValueError("Select at least one discovery provider (Shodan, Self-hosted Search, or Reddit).")
 
         shared_concurrency = self._parse_positive_int(
             self.shared_concurrency_var.get().strip(),
@@ -1015,7 +1015,7 @@ class UnifiedScanDialog:
         else:
             protocols = []
 
-        # SearXNG options required when SearXNG is selected
+        # Self-hosted Search options required when Self-hosted Search is selected
         instance_url = ""
         searxng_query = ""
         searxng_max_results = 500
@@ -1023,11 +1023,11 @@ class UnifiedScanDialog:
             _url_var = getattr(self, "searxng_instance_url_var", None)
             instance_url = str(_url_var.get() if _url_var else "").strip()
             if not instance_url:
-                raise ValueError("SearXNG instance URL is required when SearXNG is selected.")
+                raise ValueError("Self-hosted Search instance URL is required when Self-hosted Search is selected.")
             _q_var = getattr(self, "searxng_query_var", None)
             searxng_query = str(_q_var.get() if _q_var else "").strip()
             if not searxng_query:
-                raise ValueError("SearXNG search query is required when SearXNG is selected.")
+                raise ValueError("Self-hosted Search search query is required when Self-hosted Search is selected.")
             from gui.components.scan_provider_options import validate_searxng_max_results
             _mr_var = getattr(self, "searxng_max_results_var", None)
             searxng_max_results = validate_searxng_max_results(_mr_var.get() if _mr_var else "500")
@@ -1127,11 +1127,11 @@ class UnifiedScanDialog:
         else:
             scan_desc = f"providers: {provider_label}; target: {country_desc}"
 
-        # Extract is Shodan protocol-completion only — silence it for SearXNG-only (M4)
+        # Extract is Shodan protocol-completion only — silence it for Self-hosted Search-only (M4)
         if "shodan" not in scan_request.get("providers", []):
             scan_request["bulk_extract_enabled"] = False
 
-        # Skip Shodan preflight (credit estimate, API key gate) for SearXNG-only (M1/M5)
+        # Skip Shodan preflight (credit estimate, API key gate) for Self-hosted Search-only (M1/M5)
         if "shodan" in scan_request.get("providers", []):
             preflight_result = run_preflight(
                 self.dialog,

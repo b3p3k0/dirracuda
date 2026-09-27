@@ -44,14 +44,14 @@ def format_searxng_rollup(
     db_path: Path | str,
     sync_summary: Optional[Mapping[str, Any]] = None,
 ) -> str:
-    """Build the Shodan-style completion block for a SearXNG run."""
+    """Build the Shodan-style completion block for a Self-hosted Search run."""
     fetched = _count(getattr(result, "fetched_count", 0))
     verified = _count(getattr(result, "verified_count", 0))
     retained = _count(getattr(result, "deduped_count", 0))
 
     lines = [SUMMARY_TITLE, SUMMARY_DIVIDER]
     if str(query or "").strip():
-        lines.append(f"🌍 SearXNG Query: {str(query).strip()}")
+        lines.append(f"🌍 Self-hosted Search Query: {str(query).strip()}")
     lines.extend(
         [
             f"📊 URLs Fetched: {fetched}",
@@ -115,9 +115,9 @@ def format_searxng_popup_summary(
     query: str = "",
     sync_summary: Optional[Mapping[str, Any]] = None,
 ) -> str:
-    """Build the standalone SearXNG completion-dialog message."""
+    """Build the standalone Self-hosted Search completion-dialog message."""
     lines = [
-        f"SearXNG dork search complete. {_count(getattr(result, 'fetched_count', 0))} "
+        f"Self-hosted Search dork search complete. {_count(getattr(result, 'fetched_count', 0))} "
         f"URLs fetched, {_count(getattr(result, 'deduped_count', 0))} retained as "
         "open-index results.",
     ]
@@ -160,7 +160,7 @@ def format_searxng_cancelled_rollup(
     db_path: Path | str,
     sync_summary: Optional[Mapping[str, Any]] = None,
 ) -> str:
-    """Build the completion block for a cancelled SearXNG run.
+    """Build the completion block for a cancelled Self-hosted Search run.
 
     Omits URLs Verified (classification may be partial). Terminal line uses ⚠
     (warning class) to distinguish cancellation from failure; C11C will color
@@ -171,7 +171,7 @@ def format_searxng_cancelled_rollup(
 
     lines = [SUMMARY_TITLE, SUMMARY_DIVIDER]
     if str(query or "").strip():
-        lines.append(f"🌍 SearXNG Query: {str(query).strip()}")
+        lines.append(f"🌍 Self-hosted Search Query: {str(query).strip()}")
     lines.extend(
         [
             f"📊 URLs Fetched: {fetched}",

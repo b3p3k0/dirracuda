@@ -128,7 +128,7 @@ def test_worst_case_provider_state_fits_without_default_scroll(
         assert dialog._content.winfo_reqheight() <= dialog._canvas.winfo_height()
         assert dialog._scrollbar_visible is False
         assert dialog._provider_queue_label.cget("text") == (
-            "Queue: Reddit -> SearXNG -> Shodan"
+            "Queue: Reddit -> Self-hosted Search -> Shodan"
         )
         assert dialog._reddit_query_entry.winfo_ismapped()
         assert str(dialog._reddit_top_window_combo.cget("state")) == "readonly"
@@ -316,11 +316,11 @@ def test_reddit_query_and_top_window_follow_mode_and_sort(
 
 
 # ---------------------------------------------------------------------------
-# C11B — SearXNG scale rows (geometry and widget presence)
+# C11B — Self-hosted Search scale rows (geometry and widget presence)
 # ---------------------------------------------------------------------------
 
 def test_searxng_scale_widgets_present(monkeypatch, tmp_path):
-    """Three ttk.Scale widgets must exist inside the SearXNG options frame."""
+    """Three ttk.Scale widgets must exist inside the Self-hosted Search options frame."""
     from tkinter import ttk
 
     overrides = {
@@ -341,7 +341,7 @@ def test_searxng_scale_widgets_present(monkeypatch, tmp_path):
 
 
 def test_searxng_value_labels_present(monkeypatch, tmp_path):
-    """Three value labels must be attached to the SearXNG options frame."""
+    """Three value labels must be attached to the Self-hosted Search options frame."""
     overrides = {
         "unified_scan_dialog.provider_searxng": True,
     }
@@ -358,7 +358,7 @@ def test_searxng_value_labels_present(monkeypatch, tmp_path):
 
 
 def test_searxng_controls_no_scroll_at_default_geometry(monkeypatch, tmp_path):
-    """With SearXNG enabled and sliders visible, content must not overflow canvas at 960x700."""
+    """With Self-hosted Search enabled and sliders visible, content must not overflow canvas at 960x700."""
     overrides = {
         "unified_scan_dialog.provider_searxng": True,
         "unified_scan_dialog.searxng_instance_url": "http://halcyon:8090",
@@ -371,7 +371,7 @@ def test_searxng_controls_no_scroll_at_default_geometry(monkeypatch, tmp_path):
         canvas_h = dialog._canvas.winfo_height()
         content_h = dialog._content.winfo_reqheight()
         assert content_h <= canvas_h, (
-            f"SearXNG controls overflow at 960x700: "
+            f"Self-hosted Search controls overflow at 960x700: "
             f"reqheight={content_h} > canvas={canvas_h}"
         )
         assert not dialog._scrollbar_visible
@@ -380,7 +380,7 @@ def test_searxng_controls_no_scroll_at_default_geometry(monkeypatch, tmp_path):
 
 
 def test_searxng_scale_disabled_when_searxng_unchecked(monkeypatch, tmp_path):
-    """Scale and value-label widgets must be disabled when SearXNG is unchecked."""
+    """Scale and value-label widgets must be disabled when Self-hosted Search is unchecked."""
     from tkinter import ttk
 
     root, dialog = _build_dialog(monkeypatch, tmp_path)
@@ -400,7 +400,7 @@ def test_searxng_scale_disabled_when_searxng_unchecked(monkeypatch, tmp_path):
 
 
 def test_searxng_scale_enabled_when_searxng_checked(monkeypatch, tmp_path):
-    """Scale widgets must be enabled when SearXNG is checked."""
+    """Scale widgets must be enabled when Self-hosted Search is checked."""
     from tkinter import ttk
 
     root, dialog = _build_dialog(monkeypatch, tmp_path)

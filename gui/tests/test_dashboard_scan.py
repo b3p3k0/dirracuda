@@ -1,6 +1,6 @@
 """
-C3 — SearXNG Core Promotion Path
-Tests for SearXNG dispatch wiring in dashboard_scan.
+C3 — Self-hosted Search Core Promotion Path
+Tests for Self-hosted Search dispatch wiring in dashboard_scan.
 
 Coverage:
   A — start_unified_scan provider routing
@@ -226,7 +226,7 @@ class TestStartUnifiedScanRouting:
             lambda *a, **k: errors.append(a),
         )
         ds.start_unified_scan(dash, _searxng_request(protocols=[]))
-        assert errors == [], "SearXNG-only scan must not trigger 'No protocols selected' error"
+        assert errors == [], "Self-hosted Search-only scan must not trigger 'No protocols selected' error"
 
     def test_reddit_only_calls_start_reddit_scan(self, monkeypatch):
         dash = _make_dash()
@@ -547,7 +547,7 @@ class TestOnSearxngScanDone:
         assert "connection refused" in errors[0][1]
 
     def test_success_shows_results_dialog_with_counts(self, monkeypatch):
-        """SearXNG-only success must call _show_scan_results with counts and primary DB note."""
+        """Self-hosted Search-only success must call _show_scan_results with counts and primary DB note."""
         dash = _make_dash()
         dialog_calls = []
         dash._show_scan_results = lambda r: dialog_calls.append(r)
@@ -566,7 +566,7 @@ class TestOnSearxngScanDone:
         assert "end_time" in r
 
     def test_mixed_run_suppresses_results_dialog(self, monkeypatch):
-        """Mixed SearXNG+Shodan run must not show results dialog (Shodan may still be active)."""
+        """Mixed Self-hosted Search+Shodan run must not show results dialog (Shodan may still be active)."""
         dash = _make_dash()
         dialog_calls = []
         dash._show_scan_results = lambda r: dialog_calls.append(r)
@@ -642,7 +642,7 @@ class TestOnSearxngScanDone:
                 [
                     "Dirracuda Scan Summary",
                     "======================",
-                    '🌍 SearXNG Query: site:* intitle:"index of /"',
+                    '🌍 Self-hosted Search Query: site:* intitle:"index of /"',
                     "📊 URLs Fetched: 42",
                     "🔓 URLs Verified: 42",
                     "📁 Open Indexes Retained: 15",
@@ -742,7 +742,7 @@ class TestOnSearxngScanDone:
 
 
 # ---------------------------------------------------------------------------
-# D — SearXNG progress callback wiring
+# D — Self-hosted Search progress callback wiring
 # ---------------------------------------------------------------------------
 
 class TestSearxngProgressCallback:
@@ -770,7 +770,7 @@ class TestSearxngProgressCallback:
         assert callable(received_cb[0]), "progress_cb must be callable"
 
     def test_progress_callback_routes_to_log_and_summary(self, monkeypatch):
-        """SearXNG-only launch: callback routes to both log and summary bar."""
+        """Self-hosted Search-only launch: callback routes to both log and summary bar."""
         dash = _make_dash()
         log_msgs = []
         summary_calls = []
@@ -781,7 +781,7 @@ class TestSearxngProgressCallback:
         def _fake_run(options, *, db_path=None, progress_cb=None, cancel_event=None):
             if progress_cb:
                 progress_cb("Preflight OK")
-                progress_cb("Querying SearXNG page 1...")
+                progress_cb("Querying Self-hosted Search page 1...")
             return _make_result()
 
         class _SyncThread:
@@ -797,7 +797,7 @@ class TestSearxngProgressCallback:
         assert any(d == "Preflight OK" for _, d in summary_calls), f"summary: {summary_calls}"
 
     def test_mixed_provider_skips_summary_bar(self, monkeypatch):
-        """Mixed SearXNG+Shodan launch: callback routes to log only, not summary bar."""
+        """Mixed Self-hosted Search+Shodan launch: callback routes to log only, not summary bar."""
         dash = _make_dash()
         summary_calls = []
         dash._update_progress_summary = lambda s, d: summary_calls.append((s, d))
@@ -805,7 +805,7 @@ class TestSearxngProgressCallback:
 
         def _fake_run(options, *, db_path=None, progress_cb=None, cancel_event=None):
             if progress_cb:
-                progress_cb("Querying SearXNG page 1...")
+                progress_cb("Querying Self-hosted Search page 1...")
             return _make_result()
 
         class _SyncThread:

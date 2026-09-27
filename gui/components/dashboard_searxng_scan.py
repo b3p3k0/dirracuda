@@ -1,5 +1,5 @@
 """
-SearXNG scan orchestration satellite (C11A extraction).
+Self-hosted Search scan orchestration satellite (C11A extraction).
 
 Extracted from dashboard_scan.py to stay within the 1,700-line limit while
 adding cancellation support. No imports from dashboard_scan.py to avoid
@@ -80,7 +80,7 @@ def _emit_live_rollup(dash, rollup: str) -> None:
 
 
 def _clear_cancel_event(dash) -> None:
-    """Safely clear the active SearXNG cancel event on any terminal path."""
+    """Safely clear the active Self-hosted Search cancel event on any terminal path."""
     try:
         dash._searxng_cancel_event = None
     except Exception:
@@ -103,12 +103,12 @@ def _build_cancel_callback(dash, *, queue_managed: bool) -> Optional[Callable[[]
 
 
 # ---------------------------------------------------------------------------
-# SearXNG scan lifecycle
+# Self-hosted Search scan lifecycle
 # ---------------------------------------------------------------------------
 
 
 def start_searxng_scan(dash, scan_request: dict) -> bool:
-    """Launch a SearXNG dork search in a background thread.
+    """Launch a Self-hosted Search dork search in a background thread.
 
     Returns True if the thread was started, False if validation failed.
     Errors during the run are reported via _on_searxng_scan_done on the UI thread.
@@ -130,8 +130,8 @@ def start_searxng_scan(dash, scan_request: dict) -> bool:
     if getattr(dash, "_searxng_scan_running", False):
         if not queue_managed:
             _mb().showwarning(
-                "SearXNG Busy",
-                "A SearXNG search is already running. Please wait for it to complete.",
+                "Self-hosted Search Busy",
+                "A Self-hosted Search search is already running. Please wait for it to complete.",
             )
         return False
 
@@ -140,8 +140,8 @@ def start_searxng_scan(dash, scan_request: dict) -> bool:
         report_launch_error(
             dash,
             queue_managed=queue_managed,
-            title="SearXNG Error",
-            message="SearXNG instance URL is required.",
+            title="Self-hosted Search Error",
+            message="Self-hosted Search instance URL is required.",
         )
         return False
     query = str(scan_request.get("searxng_query") or "").strip()
@@ -149,8 +149,8 @@ def start_searxng_scan(dash, scan_request: dict) -> bool:
         report_launch_error(
             dash,
             queue_managed=queue_managed,
-            title="SearXNG Error",
-            message="SearXNG search query is required.",
+            title="Self-hosted Search Error",
+            message="Self-hosted Search search query is required.",
         )
         return False
 
@@ -228,13 +228,13 @@ def start_searxng_scan(dash, scan_request: dict) -> bool:
     except Exception:
         pass
 
-    _hook(dash, "_show_scan_output_dialog", "SearXNG", country)
+    _hook(dash, "_show_scan_output_dialog", "Self-hosted Search", country)
     if not queue_managed:
         _hook(dash, "_reset_log_output", country)
     _hook(dash, "_set_searxng_task_running", country,
           cancel_callback=_build_cancel_callback(dash, queue_managed=queue_managed))
     _hook(dash, "_log_status_event",
-          f'SearXNG search started: {instance_url} | query: "{query}"')
+          f'Self-hosted Search search started: {instance_url} | query: "{query}"')
 
     _providers = [str(p).strip().lower() for p in (scan_request.get("providers") or [])]
     _searxng_only = set(_providers) == {"searxng"}
@@ -243,7 +243,7 @@ def start_searxng_scan(dash, scan_request: dict) -> bool:
         def _dispatch(m=msg):
             _hook(dash, "_log_status_event", m)
             if _searxng_only:
-                _hook(dash, "_update_progress_summary", "SearXNG", m)
+                _hook(dash, "_update_progress_summary", "Self-hosted Search", m)
         try:
             dash.parent.after(0, _dispatch)
         except Exception:
@@ -303,8 +303,8 @@ def start_searxng_scan(dash, scan_request: dict) -> bool:
         report_launch_error(
             dash,
             queue_managed=queue_managed,
-            title="SearXNG Error",
-            message=f"Failed to start SearXNG scan: {exc}",
+            title="Self-hosted Search Error",
+            message=f"Failed to start Self-hosted Search scan: {exc}",
         )
         return False
 
@@ -322,7 +322,7 @@ def _on_searxng_scan_done(
     queue_managed: bool = False,
     provider_generation: int = 0,
 ) -> None:
-    """Handle SearXNG scan completion on the UI thread.
+    """Handle Self-hosted Search scan completion on the UI thread.
 
     In multi-provider runs (searxng_only=False), the completion dialog is
     suppressed while the serial provider queue continues. Live output retains
@@ -344,14 +344,14 @@ def _on_searxng_scan_done(
                 result, query=query, db_path=resolved_db_path, sync_summary=sync_summary,
             ),
         )
-        _hook(dash, "_log_status_event", "SearXNG search cancelled.")
+        _hook(dash, "_log_status_event", "Self-hosted Search search cancelled.")
         _hook(dash, "_refresh_dashboard_data")
         _clear_cancel_event(dash)
         return
 
     if result.status == RUN_STATUS_ERROR or result.error:
         error = result.error or "unknown error"
-        _hook(dash, "_log_status_event", f"SearXNG search failed: {error}")
+        _hook(dash, "_log_status_event", f"Self-hosted Search search failed: {error}")
         _clear_cancel_event(dash)
         if queue_managed:
             from gui.components.dashboard_provider_queue import complete_provider
@@ -359,7 +359,7 @@ def _on_searxng_scan_done(
                 dash, "searxng", provider_generation, success=False, error=error,
             )
         else:
-            _mb().showerror("SearXNG Scan Error", f"SearXNG search failed: {error}")
+            _mb().showerror("Self-hosted Search Scan Error", f"Self-hosted Search search failed: {error}")
         return
 
     resolved_db_path = db_path or _resolve_main_db_path(dash)
@@ -384,7 +384,7 @@ def _on_searxng_scan_done(
             "hosts_scanned": result.fetched_count,
             "accessible_hosts": result.deduped_count,
             "shares_found": result.deduped_count,
-            "country": instance_url or "SearXNG instance",
+            "country": instance_url or "Self-hosted Search instance",
             "summary_message": format_searxng_popup_summary(
                 result,
                 query=query,

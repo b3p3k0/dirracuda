@@ -33,11 +33,11 @@ import random
 import threading
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Callable, Optional
 
+from experimental.se_dork.backends import is_degoog_endpoint, normalize_results, search_url
 from experimental.se_dork.client import run_reachability_check
 from experimental.se_dork.models import (
     DEFAULT_MAX_RESULTS,
@@ -212,7 +212,7 @@ def _soft_backoff_seconds(streak: int) -> float:
 
 
 def _throttle_engines(payload: dict) -> tuple[str, ...]:
-    """Extract engines reporting upstream blocking from a SearXNG response."""
+    """Extract engines reporting upstream blocking from a Search response."""
     raw_entries = payload.get("unresponsive_engines")
     if not raw_entries:
         return ()
@@ -352,24 +352,18 @@ def _fetch_page(
     page: int,
     timeout: int = _FETCH_TIMEOUT,
 ) -> tuple[list[dict], tuple[str, ...]]:
-    """Fetch and validate one SearXNG JSON result page."""
-    base = base_url.rstrip("/")
-    params = urllib.parse.urlencode({
-        "q": query,
-        "format": "json",
-        "pageno": page,
-    })
-    url = f"{base}/search?{params}"
+    """Fetch and validate one aggregator JSON result page."""
+    url = search_url(base_url, query, page)
     with urllib.request.urlopen(url, timeout=timeout) as resp:
         raw = resp.read()
 
     payload = json.loads(raw.decode("utf-8", errors="replace"))
     if not isinstance(payload, dict):
-        raise ValueError("SearXNG response is not a JSON object.")
+        raise ValueError("Search response is not a JSON object.")
     results = payload.get("results")
     if not isinstance(results, list):
-        raise ValueError("SearXNG response is missing a valid 'results' list.")
-    return results, _throttle_engines(payload)
+        raise ValueError("Search response is missing a valid 'results' list.")
+    return normalize_results(results, degoog=is_degoog_endpoint(base_url)), _throttle_engines(payload)
 
 
 def _sleep_for_remaining_pacing(
@@ -436,6 +430,7 @@ def _paginate_results(
     retrying_page = False
     stopped_early = False
     stop_warning: Optional[str] = None
+    page_cap = 10 if is_degoog_endpoint(base_url) else _HARD_PAGE_CAP
     sleeper = sleep_fn or time.sleep
 
     def _exec_retry(retry_delay: int) -> Optional[bool]:
@@ -456,11 +451,11 @@ def _paginate_results(
 
     try:
         page = 1
-        while page <= _HARD_PAGE_CAP:
+        while page <= page_cap:
             if cancel_event and cancel_event.is_set():
                 raise _Cancelled()
             suffix = " (retry)" if retrying_page else ""
-            _emit_progress(progress_cb, f"Querying SearXNG page {page}{suffix}...")
+            _emit_progress(progress_cb, f"Querying Self-hosted Search page {page}{suffix}...")
             try:
                 results, page_throttles = _fetch_page(
                     base_url,
@@ -473,7 +468,7 @@ def _paginate_results(
                     if seen_urls:
                         stopped_early = True
                         stop_warning = (
-                            f"SearXNG pagination stopped after page {page - 1}: {exc}"
+                            f"Self-hosted Search pagination stopped after page {page - 1}: {exc}"
                         )
                         break
                     raise
@@ -488,7 +483,7 @@ def _paginate_results(
                 if seen_urls:
                     stopped_early = True
                     stop_warning = (
-                        f"SearXNG pagination stopped after page {page - 1}: {exc}"
+                        f"Self-hosted Search pagination stopped after page {page - 1}: {exc}"
                     )
                     break
                 raise
@@ -523,7 +518,7 @@ def _paginate_results(
                     page_processor(page, new_rows)
                     productive_pages += 1
 
-                if len(seen_urls) >= max_results or page >= _HARD_PAGE_CAP:
+                if len(seen_urls) >= max_results or page >= page_cap:
                     break
 
                 for engine in page_throttles:
@@ -994,7 +989,7 @@ def run_dork_search(
     cancel_event: Optional[threading.Event] = None,
 ) -> RunResult:
     """
-    Run a dork search against the configured SearXNG instance.
+    Run a dork search against the configured search instance.
 
     Always returns a RunResult — never raises.
     """
@@ -1154,7 +1149,7 @@ def run_dork_search(
             raise _Cancelled()
 
         fetch_outcome = _paginate_results(
-            options.instance_url,
+            getattr(preflight, "search_endpoint", None) or options.instance_url,
             options.query,
             max_results,
             timeout=request_timeout,

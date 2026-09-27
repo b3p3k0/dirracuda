@@ -1,4 +1,17 @@
-# SearXNG Dork Module - Task Cards (Claude-Ready)
+# Self-hosted Search Aggregators - Task Cards (Claude-Ready)
+
+Current feature: **Self-hosted Search** (SearXNG and DeGoog). See [SPEC.md](SPEC.md).
+The original C1–C6 material below is historical; current runtime uses the primary DB.
+
+## [DONE] C7 — DeGoog support and shared feature naming
+
+Scope: detect native DeGoog, adapt requests and result metadata, enforce its
+page limit, and update desktop/Web UI labels and current operator docs.
+Keep existing settings, routes, schemas, verification, and cancellation behavior.
+
+Validation: mocked transport/persistence tests, affected UI/Web UI suites,
+a bounded live check of the authorized instance, and README review.
+See `WORK_NOTES.md` for results, line counts, and carry-forward lessons.
 
 Date: 2026-04-18
 Execution model: one small issue/card at a time, explicit PASS/FAIL evidence

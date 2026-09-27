@@ -1,7 +1,15 @@
-# SearXNG Dork Module Roadmap
+# Self-hosted Search Aggregators Roadmap
+
+Current feature: **Self-hosted Search** (SearXNG and DeGoog). See [SPEC.md](SPEC.md).
+The original C1–C6 material below is historical; current runtime uses the primary DB.
 
 Date: 2026-04-18
 Execution model: one card at a time, explicit PASS/FAIL evidence
+
+## [DONE] Objective 7: DeGoog and shared feature naming
+
+Native DeGoog support, shared desktop/Web UI labels, and documentation extraction
+are complete. Automated checks and HI testing passed; see [WORK_NOTES.md](WORK_NOTES.md).
 
 ## [DONE] Objective 0: Contract Freeze and Runtime Baseline
 

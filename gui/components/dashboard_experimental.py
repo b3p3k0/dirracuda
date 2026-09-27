@@ -84,7 +84,7 @@ def _resolve_reddit_sidecar_path() -> Path:
 
 
 def _resolve_se_dork_sidecar_path() -> Path:
-    """Resolve canonical/legacy SearXNG sidecar DB path for legacy browsing."""
+    """Resolve canonical/legacy Self-hosted Search sidecar DB path for legacy browsing."""
     try:
         from shared.path_service import get_legacy_paths, get_paths, select_existing_path
 
@@ -306,7 +306,7 @@ def open_sidecar_legacy_db(widget) -> None:
             threading.Thread(target=_worker, daemon=True).start()
 
     for label, key in [
-        ("SearXNG Dork Results", "se_dork"),
+        ("Self-hosted Search Results", "se_dork"),
         ("Reddit Open Directory Posts", "reddit"),
         ("Migrate All to Main DB", "migrate"),
     ]:

@@ -233,7 +233,7 @@ document.getElementById('searxng-form').addEventListener('submit', async functio
       status: runData.status,
       source: 'searxng',
       kind: 'run',
-      label: 'SearXNG run: ' + query.slice(0, 60),
+      label: 'Self-hosted Search run: ' + query.slice(0, 60),
       progress_message: ''
     });
     startPolling();

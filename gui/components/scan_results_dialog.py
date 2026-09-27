@@ -70,7 +70,7 @@ class ScanResultsDialog:
         return isinstance(protocols, list) and len(protocols) > 1
 
     def _is_searxng_scan(self) -> bool:
-        """Return True when rendering results for a SearXNG dork search."""
+        """Return True when rendering results for a Self-hosted Search dork search."""
         return self.protocol == "searxng"
 
     def _is_reddit_scan(self) -> bool:
@@ -96,7 +96,7 @@ class ScanResultsDialog:
         if self._is_reddit_scan():
             return "Reddit ingest has finished successfully."
         if self._is_searxng_scan():
-            return "SearXNG dork search has finished successfully."
+            return "Self-hosted Search dork search has finished successfully."
         if self._is_multi_scan():
             return "Multi-protocol scan queue has finished successfully."
         if self._is_ftp_scan():
@@ -335,7 +335,7 @@ class ScanResultsDialog:
         summary_message = self.scan_results.get("summary_message")
 
         if self._is_searxng_scan():
-            # SearXNG: show summary_message as-is; skip "servers tested" and shares block
+            # Self-hosted Search: show summary_message as-is; skip "servers tested" and shares block
             details_text = summary_message or "Results written to the active primary database."
         else:
             if summary_message:

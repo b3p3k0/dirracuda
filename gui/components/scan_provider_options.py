@@ -15,7 +15,7 @@ from experimental.se_dork.models import DEFAULT_MAX_RESULTS, MAX_RESULTS
 
 SEARXNG_MAX_REMINDER = f"Maximum: {MAX_RESULTS:,} unique results per run."
 SEARXNG_PACING_REMINDER = (
-    "Large runs are automatically paced to protect upstream engines."
+    "SearXNG or DeGoog. Large runs are paced to protect upstream engines."
 )
 REDDIT_MAX_REMINDER = f"Maximum: {MAX_POSTS} posts per RSS snapshot."
 

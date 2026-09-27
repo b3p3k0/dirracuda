@@ -39,7 +39,7 @@ def _get_features() -> List[ExperimentalFeature]:
     return [
         ExperimentalFeature(
             feature_id="se_dork",
-            label="SearXNG",
+            label="Self-hosted Search",
             build_tab=build_se_dork_tab,
         ),
         ExperimentalFeature(

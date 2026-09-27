@@ -145,7 +145,7 @@ def test_probe_status_emoji_mapping_contract():
 def test_build_window_sets_searxng_title():
     b = _make_browser()
     b._build_window()
-    b.window.title.assert_called_once_with("SearXNG Dork Results")
+    b.window.title.assert_called_once_with("Self-hosted Search Results")
 
 
 def test_build_window_uses_extended_selection_and_wires_scrollbar():
@@ -682,7 +682,7 @@ def test_on_probe_selected_opens_and_finishes_status_dialog():
     assert len(_FakeBatchStatusDialog.created) == 1
     dlg = _FakeBatchStatusDialog.created[0]
     assert dlg.title == "Probe Status"
-    assert dlg.fields["Target"] == "SearXNG Results"
+    assert dlg.fields["Target"] == "Self-hosted Search Results"
     assert dlg.fields["Selected"] == "2"
     # start tick + one update per processed row
     assert dlg.progress_calls[0][0:2] == (0, 2)

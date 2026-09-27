@@ -1,4 +1,7 @@
-# SearXNG Dork Module - Decision Log
+# Self-hosted Search Aggregators - Decision Log
+
+Current feature: **Self-hosted Search** (SearXNG and DeGoog). See [SPEC.md](SPEC.md).
+The original C1–C6 material below is historical; current runtime uses the primary DB.
 
 Date: 2026-04-18
 

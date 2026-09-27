@@ -177,7 +177,7 @@ def test_scans_shodan_renders_authenticated(logged_in):
 def test_scans_searxng_renders_authenticated(logged_in):
     r = logged_in.get("/scans/searxng")
     assert r.status_code == 200
-    assert "SearXNG Discovery" in r.text
+    assert "Self-hosted Search" in r.text
     assert 'id="run-btn"' in r.text
     assert 'id="probe-btn"' not in r.text
     assert 'id="promote-btn"' not in r.text

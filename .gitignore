@@ -7,6 +7,7 @@ docs/*
 !docs/dev/
 !docs/dev/**
 !docs/TECHNICAL_REFERENCE.md
+!docs/SELF_HOSTED_SEARCH.md
 !docs/KBD_QUICKREF.md
 !docs/HISTORY.md
 !docs/ANALYST_GUIDE.md

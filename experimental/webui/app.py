@@ -635,7 +635,7 @@ def create_app(
             result = run_searxng_preflight(body.instance_url)
         except Exception as exc:
             logger.error(
-                "SearXNG preflight failed: exception_class=%s",
+                "Self-hosted Search preflight failed: exception_class=%s",
                 type(exc).__name__,
             )
             return JSONResponse(
@@ -671,7 +671,7 @@ def create_app(
         primary_db_path = request.app.state.db_path
 
         def _runner(job):
-            job.set_progress("Running SearXNG discovery...", 5.0)
+            job.set_progress("Running Self-hosted Search discovery...", 5.0)
             options = SearxngRunOptions(
                 instance_url=body.instance_url,
                 query=body.query,
@@ -682,7 +682,7 @@ def create_app(
             )
             result = run_dork_search(options, db_path=primary_db_path)
             if result.status != SEARXNG_RUN_STATUS_DONE:
-                raise RuntimeError(result.error or "SearXNG run failed")
+                raise RuntimeError(result.error or "Self-hosted Search run failed")
             sync_summary = sync_run_to_main_db(result.run_id, db_path=primary_db_path)
             job.set_metadata(
                 run_id=result.run_id,
@@ -709,7 +709,7 @@ def create_app(
                 sync_cancelled=int(sync_summary.get("cancelled", 0) or 0),
             )
             job.set_progress(
-                f"SearXNG run complete: {result.deduped_count} retained row(s), "
+                f"Self-hosted Search run complete: {result.deduped_count} retained row(s), "
                 f"{int(sync_summary.get('processed', 0) or 0)} synced.",
                 100.0,
             )
@@ -717,7 +717,7 @@ def create_app(
         queued = shared_jobs.submit_external(
             source="searxng",
             kind="run",
-            label=f"SearXNG run: {body.query[:60]}",
+            label=f"Self-hosted Search run: {body.query[:60]}",
             runner=_runner,
             metadata={"query": body.query, "max_results": body.max_results},
         )

@@ -104,7 +104,7 @@ def test_build_uses_updated_labels_and_max_helper_text(monkeypatch):
 
     tab._build(_DummyWidget())
 
-    assert "SearXNG Server:" in texts
+    assert "Server URL:" in texts
     assert "Run Probe on Results" in texts
     assert any("Maximum 1,000" in text for text in texts)
     assert any("automatically paced" in text for text in texts)

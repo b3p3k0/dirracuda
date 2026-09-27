@@ -790,7 +790,7 @@ class DashboardWidget:
         target = str(country or "").strip() or "Global"
         self._searxng_task_id = self._register_running_task(
             task_type="scan",
-            name=f"SearXNG Scan ({target})",
+            name=f"Self-hosted Search Scan ({target})",
             state="running",
             progress="running",
             reopen_callback=self._reopen_scan_output_dialog,

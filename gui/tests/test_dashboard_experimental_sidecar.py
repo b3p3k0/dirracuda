@@ -65,7 +65,7 @@ def test_se_dork_branch_opens_sidecar_browser(monkeypatch):
     monkeypatch.setattr(_mod, "_resolve_se_dork_sidecar_path", lambda: Path("/tmp/se_dork.db"))
     monkeypatch.setattr(_mod, "show_se_dork_browser_window", lambda **kw: calls.append(kw))
 
-    cmd, _widget, _ = _run_pick(monkeypatch, "SearXNG Dork Results", widget)
+    cmd, _widget, _ = _run_pick(monkeypatch, "Self-hosted Search Results", widget)
     cmd()
 
     assert len(calls) == 1

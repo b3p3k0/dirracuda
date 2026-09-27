@@ -1,31 +1,12 @@
-"""
-SearXNG preflight client for the se_dork module.
-
-Checks whether a SearXNG instance is reachable and has JSON search enabled.
-Uses urllib.request only (stdlib, no external deps).
-
-Explicit preflight sequence:
-  1. GET /config       — reachability probe
-  2. GET /search?q=hello&format=json — JSON format capability check
-
-Normal runs call run_reachability_check() and let their real page-1 search
-validate JSON support, avoiding a redundant upstream query.
-
-Failure reason codes:
-  instance_unreachable      — cannot reach the instance at all
-  instance_format_forbidden — 403 on format=json (json not enabled)
-  instance_non_json         — search response body is not valid JSON
-  search_http_error         — non-200, non-403 HTTP status on search
-  search_parse_error        — JSON parsed but missing/invalid 'results' key
-"""
+"""Reachability and explicit JSON preflight for SearXNG and DeGoog."""
 
 from __future__ import annotations
 
 import json
 import urllib.error
 import urllib.request
-from typing import Optional
 
+from experimental.se_dork.backends import instance_base, is_degoog_endpoint, search_url
 from experimental.se_dork.models import (
     INSTANCE_FORMAT_FORBIDDEN,
     INSTANCE_NON_JSON,
@@ -43,78 +24,71 @@ _FORMAT_FORBIDDEN_HINT = (
 
 def run_preflight(instance_url: str, timeout: int = 10) -> PreflightResult:
     """
-    Run a two-step preflight check against a SearXNG instance.
+    Detect the aggregator, then validate its JSON search response.
 
-    instance_url: base URL of the SearXNG instance (trailing slash stripped)
+    instance_url: base URL or search endpoint of a SearXNG or DeGoog instance
     timeout:      seconds per HTTP request
 
     Returns a PreflightResult with ok=True on full success, or ok=False with a
     reason_code and human-readable message describing the failure.
     """
-    base = instance_url.rstrip("/")
-    reachability = run_reachability_check(base, timeout)
+    reachability = run_reachability_check(instance_url, timeout)
     if not reachability.ok:
         return reachability
 
-    # Step 2: JSON format capability via /search?q=hello&format=json
-    return _check_search(base, timeout)
+    # Explicit Test issues one upstream search after detection.
+    result = _check_search(reachability.search_endpoint or instance_url, timeout)
+    result.search_endpoint = reachability.search_endpoint
+    return result
 
 
 def run_reachability_check(instance_url: str, timeout: int = 10) -> PreflightResult:
     """Check instance reachability without issuing an upstream search."""
-    base = instance_url.rstrip("/")
-    failure = _check_reachable(base, timeout)
-    if failure is not None:
-        return failure
-    return PreflightResult(
-        ok=True,
-        reason_code=None,
-        message="Instance reachable.",
-    )
-
-
-def _check_reachable(base: str, timeout: int) -> Optional[PreflightResult]:
-    """
-    GET {base}/config.  Returns a failure PreflightResult if unreachable,
-    None if the instance responded with HTTP 200.
-    """
-    url = f"{base}/config"
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:
-            if resp.status != 200:
-                return PreflightResult(
-                    ok=False,
-                    reason_code=INSTANCE_UNREACHABLE,
-                    message=f"Instance /config returned HTTP {resp.status}.",
-                )
-    except urllib.error.HTTPError as exc:
-        return PreflightResult(
-            ok=False,
-            reason_code=INSTANCE_UNREACHABLE,
-            message=f"Instance /config returned HTTP {exc.code}.",
-        )
-    except urllib.error.URLError as exc:
-        return PreflightResult(
-            ok=False,
-            reason_code=INSTANCE_UNREACHABLE,
-            message=f"Cannot reach instance: {exc.reason}.",
-        )
-    return None
+        base = instance_base(instance_url)
+    except ValueError as exc:
+        return PreflightResult(False, INSTANCE_UNREACHABLE, str(exc))
+    degoog = is_degoog_endpoint(instance_url)
+    if not degoog:
+        try:
+            with urllib.request.urlopen(f"{base}/config", timeout=timeout) as resp:
+                if resp.status != 200:
+                    return PreflightResult(False, INSTANCE_UNREACHABLE,
+                                           f"Instance /config returned HTTP {resp.status}.")
+            return PreflightResult(True, None, "Instance reachable.", base + "/search")
+        except urllib.error.HTTPError as exc:
+            # Missing SearXNG route: try DeGoog's metadata, not an upstream search.
+            if exc.code != 404:
+                return PreflightResult(False, INSTANCE_UNREACHABLE,
+                                       f"Instance /config returned HTTP {exc.code}.")
+        except (urllib.error.URLError, OSError) as exc:
+            return PreflightResult(False, INSTANCE_UNREACHABLE,
+                                   f"Cannot reach instance: {exc}.")
+    try:
+        with urllib.request.urlopen(f"{base}/api/search-tabs", timeout=timeout) as resp:
+            payload = json.loads(resp.read())
+        if not isinstance(payload, dict) or not isinstance(payload.get("tabs"), list):
+            raise ValueError("missing valid 'tabs' list")
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        return PreflightResult(False, INSTANCE_UNREACHABLE,
+                               f"Cannot identify DeGoog at /api/search-tabs: {exc}.")
+    return PreflightResult(True, None, "DeGoog instance reachable.", base + "/api/search")
 
 
 def _check_search(base: str, timeout: int) -> PreflightResult:
     """
-    GET {base}/search?q=hello&format=json.
+    Query the resolved search endpoint.
     Maps HTTP/parse failures to explicit reason codes.
     """
-    url = f"{base}/search?q=hello&format=json"
+    degoog = is_degoog_endpoint(base)
+    url = search_url(base, "hello", 1)
 
     # Fetch
     try:
         with urllib.request.urlopen(url, timeout=timeout) as resp:
             raw = resp.read()
     except urllib.error.HTTPError as exc:
-        if exc.code == 403:
+        if exc.code == 403 and not degoog:
             return PreflightResult(
                 ok=False,
                 reason_code=INSTANCE_FORMAT_FORBIDDEN,
@@ -123,13 +97,15 @@ def _check_search(base: str, timeout: int) -> PreflightResult:
         return PreflightResult(
             ok=False,
             reason_code=SEARCH_HTTP_ERROR,
-            message=f"Search endpoint returned HTTP {exc.code}.",
+            message=(f"Search endpoint returned HTTP {exc.code}."
+                     + (" Check DeGoog access controls; API-key authentication is not supported."
+                        if degoog and exc.code in (401, 403) else "")),
         )
-    except urllib.error.URLError as exc:
+    except (urllib.error.URLError, OSError) as exc:
         return PreflightResult(
             ok=False,
             reason_code=INSTANCE_UNREACHABLE,
-            message=f"Cannot reach instance: {exc.reason}.",
+            message=f"Cannot reach instance: {exc}.",
         )
 
     # Parse JSON
@@ -143,7 +119,7 @@ def _check_search(base: str, timeout: int) -> PreflightResult:
         )
 
     # Validate shape: results key must exist and be a list
-    results = payload.get("results")
+    results = payload.get("results") if isinstance(payload, dict) else None
     if not isinstance(results, list):
         return PreflightResult(
             ok=False,
@@ -151,4 +127,4 @@ def _check_search(base: str, timeout: int) -> PreflightResult:
             message="Search response is missing a valid 'results' list.",
         )
 
-    return PreflightResult(ok=True, reason_code=None, message="Instance OK.")
+    return PreflightResult(ok=True, reason_code=None, message="DeGoog instance OK." if degoog else "Instance OK.")

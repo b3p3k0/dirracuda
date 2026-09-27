@@ -113,7 +113,7 @@ class SeDorkBrowserWindow:
     # ------------------------------------------------------------------
 
     def _build_window(self) -> None:
-        self.window.title("SearXNG Dork Results")
+        self.window.title("Self-hosted Search Results")
         self.window.geometry("1050x480")
         self.theme.apply_to_widget(self.window, "main_window")
 
@@ -290,9 +290,9 @@ class SeDorkBrowserWindow:
         self._show_result_details(row)
 
     def _show_result_details(self, row: dict) -> None:
-        """Show a read-only notes/details window for a SearXNG result."""
+        """Show a read-only notes/details window for a Self-hosted Search result."""
         dialog = tk.Toplevel(self.window)
-        dialog.title("SearXNG Result Details")
+        dialog.title("Self-hosted Search Result Details")
         dialog.transient(self.window)
         self.theme.apply_to_widget(dialog, "main_window")
 
@@ -315,13 +315,13 @@ class SeDorkBrowserWindow:
         close_btn.pack(side=tk.RIGHT)
 
     def _format_result_details(self, row: dict) -> str:
-        """Return read-only details text for a SearXNG result row."""
+        """Return read-only details text for a Self-hosted Search result row."""
         source_engine = str(row.get("source_engine") or "").strip()
         source_engines = str(row.get("source_engines_json") or "").strip()
         source = source_engine or source_engines or "Unknown"
 
         lines = [
-            "SearXNG Result Details",
+            "Self-hosted Search Result Details",
             "",
             "Result",
             f"URL: {row.get('url') or 'Unknown'}",
@@ -525,7 +525,7 @@ class SeDorkBrowserWindow:
             theme=self.theme,
             title="Probe Status",
             fields={
-                "Target": "SearXNG Results",
+                "Target": "Self-hosted Search Results",
                 "Selected": str(total_rows),
             },
             on_cancel=_request_cancel,
@@ -898,7 +898,7 @@ class SeDorkBrowserWindow:
             theme=self.theme,
             title="Bulk Import Status",
             fields={
-                "Target": "SearXNG Results",
+                "Target": "Self-hosted Search Results",
                 "Selected": str(selected_count),
             },
             on_cancel=_request_cancel,

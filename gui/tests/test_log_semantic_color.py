@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 import sys
+
+import pytest
 from collections import deque
 from pathlib import Path
 
@@ -565,3 +567,14 @@ def test_colorize_exception_renders_original_line(monkeypatch):
     inserted_texts = [text for text, _tags in dash.log_text_widget.inserts]
     full_inserted = "".join(inserted_texts)
     assert "SearXNG search started" in full_inserted
+
+
+@pytest.mark.parametrize('message,expected', [
+    ('Self-hosted Search search failed: timeout', 'red'),
+    ('Self-hosted Search pagination stopped after page 2', 'yellow'),
+    ('Self-hosted Search search cancelled.', 'yellow'),
+    ('Querying Self-hosted Search page 2...', 'blue'),
+    ('Self-hosted Search search started: local instance', 'blue'),
+])
+def test_shared_search_label_keeps_semantic_colors(message, expected):
+    assert classify_status_message(message) == expected

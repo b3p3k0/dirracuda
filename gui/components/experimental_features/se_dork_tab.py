@@ -1,5 +1,5 @@
 """
-SearXNG Dorking tab for the Experimental Features dialog.
+Self-hosted Search Dorking tab for the Experimental Features dialog.
 
 C2: Test button wired to run_preflight (threaded). Instance URL persisted
 via settings_manager (key: se_dork.instance_url).
@@ -18,7 +18,7 @@ from typing import Any, Optional
 from experimental.se_dork.models import DEFAULT_MAX_RESULTS, MAX_RESULTS
 from gui.utils.style import get_theme
 
-_DEFAULT_INSTANCE_URL = "http://your.searxng.server:port"
+_DEFAULT_INSTANCE_URL = ""
 _DEFAULT_QUERY = 'site:* intitle:"index of /"'
 _DEFAULT_MAX_RESULTS = str(DEFAULT_MAX_RESULTS)
 _DEFAULT_BULK_PROBE_ENABLED = False
@@ -30,7 +30,7 @@ _SETTINGS_KEY_BULK_PROBE_ENABLED = "se_dork.bulk_probe_enabled"
 
 
 def _coerce_max_results(value: object) -> int:
-    """Normalize saved/user SearXNG limits to the current supported range."""
+    """Normalize saved/user Self-hosted Search limits to the current supported range."""
     candidate = _DEFAULT_MAX_RESULTS if value is None or str(value).strip() == "" else value
     try:
         return max(1, min(MAX_RESULTS, int(str(candidate))))
@@ -82,7 +82,7 @@ def _resolve_probe_worker_count(settings_manager: Any, default: int = _DEFAULT_P
 
 
 def _resolve_main_db_path(context: dict) -> Path:
-    """Resolve the active primary DB path for tab-triggered SearXNG runs."""
+    """Resolve the active primary DB path for tab-triggered Self-hosted Search runs."""
     explicit = context.get("main_db_path")
     if explicit:
         try:
@@ -104,7 +104,7 @@ def _resolve_main_db_path(context: dict) -> Path:
 
 
 class SeDorkTab:
-    """Content widget for the SearXNG Dorking experimental feature tab."""
+    """Content widget for the Self-hosted Search Dorking experimental feature tab."""
 
     def __init__(self, parent: tk.Widget, context: dict) -> None:
         self._context = context
@@ -117,8 +117,8 @@ class SeDorkTab:
         desc_label = tk.Label(
             frame,
             text=(
-                "SearXNG-driven dork search.\n"
-                "Run open-directory queries against a configured SearXNG instance."
+                "Dork search with self-hosted search aggregators.\n"
+                "Supports SearXNG and DeGoog instance URLs."
             ),
             justify="left",
             anchor="w",
@@ -132,7 +132,7 @@ class SeDorkTab:
         self._theme.apply_to_widget(url_row, "main_window")
         url_row.pack(anchor="w", padx=16, pady=(0, 6), fill=tk.X)
 
-        url_label = tk.Label(url_row, text="SearXNG Server:", anchor="w", width=14)
+        url_label = tk.Label(url_row, text="Server URL:", anchor="w", width=14)
         self._theme.apply_to_widget(url_label, "label")
         url_label.pack(side=tk.LEFT)
 
@@ -442,6 +442,6 @@ class SeDorkTab:
 
 
 def build_se_dork_tab(parent: tk.Widget, context: dict) -> tk.Widget:
-    """Build and return the SearXNG Dorking tab frame."""
+    """Build and return the Self-hosted Search Dorking tab frame."""
     tab = SeDorkTab(parent, context)
     return tab.frame

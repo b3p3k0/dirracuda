@@ -1,5 +1,5 @@
 """
-Data models for the SearXNG Dork module.
+Data models for the self-hosted search module.
 
 C2: PreflightResult and reason code constants.
 C3: RunOptions, RunResult, and run status constants.
@@ -22,11 +22,12 @@ MAX_RESULTS = 1000
 
 @dataclass
 class PreflightResult:
-    """Result of a SearXNG instance preflight check."""
+    """Result of a search instance preflight check."""
 
     ok: bool
     reason_code: Optional[str]  # None when ok=True
     message: str
+    search_endpoint: Optional[str] = None  # resolved once; not persisted
 
 
 # ---------------------------------------------------------------------------

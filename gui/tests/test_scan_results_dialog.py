@@ -41,7 +41,7 @@ def test_single_protocol_wording_remains_specific() -> None:
 def test_searxng_wording() -> None:
     dialog = _dialog("searxng")
     assert dialog._is_searxng_scan()
-    assert "SearXNG" in dialog._success_subtitle()
+    assert "Self-hosted Search" in dialog._success_subtitle()
     assert dialog._shares_label() == "Open Index URLs:"
     assert "open-index" in dialog._access_phrase()
     assert not dialog._is_ftp_scan()
