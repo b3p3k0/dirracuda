@@ -108,14 +108,17 @@ by hand.
 | Theming | Use `gui.utils.style.SMBSeekTheme.apply_to_widget(widget, style_name)` with named styles only. Raw style strings are banned. Enforced by `test_theme_style_guardrail.py`. |
 | Component extraction | `DashboardWidget` methods are split into satellite modules. Each function takes `dash` as its first arg and routes messageboxes through `_mb()` so test monkeypatches intercept correctly. New extractions must follow this pattern. |
 
-## Accessories (Experimental) Surfaces
+## Discovery Providers and Accessories
 
-All experimental features live under `experimental/`. Most use a sidecar SQLite DB under
-`~/.dirracuda/data/experimental/`. Exceptions: **Self-hosted Search** (C9) and **Redseek** (C10)
-write new runs directly to the primary `dirracuda.db`; their legacy sidecar data remains
-available under Accessories → Legacy Sidecar Data for historical browsing.
+**Self-hosted Search** and **Reddit/Redseek** are mainstream discovery providers.
+Their only desktop launch surface is Start New Scan; both write new runs to the
+primary `dirracuda.db`. Their implementation packages remain under `experimental/`
+for compatibility. Historical sidecars remain available through Database →
+[Legacy] Sidecar Data. Web UI provider routes remain supported separately.
 
-GUI tabs for these surfaces live in `gui/components/experimental_features/`.
+Accessories contains Web UI, Dorkbook, Keymaster, Sherlock, and Analyst. Its GUI
+tabs live in `gui/components/experimental_features/`. Most accessory stores use
+sidecar SQLite databases under `~/.dirracuda/data/experimental/`.
 
 | Feature | Entry point | DB | Notes |
 |---------|-------------|-----|-------|

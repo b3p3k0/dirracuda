@@ -1,7 +1,7 @@
 """Headless unit tests for the Sherlock Accessories tab.
 
 Uses __new__ to bypass Tk construction (no display required); widgets and Tk
-vars are replaced with mocks/dummies, mirroring test_se_dork_tab.py.
+vars are replaced with mocks/dummies, without constructing a live Tk window.
 """
 
 from __future__ import annotations

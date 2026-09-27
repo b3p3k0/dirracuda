@@ -32,7 +32,6 @@ def _make_stub_widget():
     widget.about_button = None
     widget.theme_toggle_button = None
     widget.copy_log_button = None
-    widget.reddit_grab_button = None
     widget.running_tasks_button = None
     return widget
 

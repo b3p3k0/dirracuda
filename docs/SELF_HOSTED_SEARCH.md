@@ -51,15 +51,15 @@ The self-hosted search module (`experimental/se_dork`) now writes runtime workfl
 | `short_retry_delay` | 30 s | 5–60 | First hard-retry cooldown (early and mature runs) |
 | `long_retry_delay` | 180 s | 60–300 | Second hard-retry cooldown (early runs only) |
 
-A run becomes **mature** after 5 productive pages or 50 unique URLs (whichever comes first). A productive page adds at least one unique URL and completes the full persist/classify/retain/probe pipeline. Early runs allow two retry slots (short then long); mature runs allow only one (short). `Accessories` and WebUI callers use defaults and are not affected in C11A.
+A run becomes **mature** after 5 productive pages or 50 unique URLs (whichever comes first). A productive page adds at least one unique URL and completes the full persist/classify/retain/probe pipeline. Early runs allow two retry slots (short then long); mature runs allow only one (short). Web UI callers use the service defaults.
 
 **Live validation harness (C11D)**: `scripts/live_test_searxng.py` is an opt-in script for end-to-end testing of the SearXNG dork pipeline against a real instance. It requires `--confirm-live` before any network access. A `tempfile.mkdtemp()` directory holds the run DB; the primary database is never opened. After the run, the script asserts stage ordering, SQLite structural integrity, and DB/RunResult field consistency, then deletes the temp directory. Pass `--keep-db` to retain it for debugging. Use `--cancel-after-classify N` for deterministic cancellation at the classified-page boundary (no human Ctrl+C needed). Pytest may import the script's helper functions; it must never execute live behavior. The `--confirm-live` gate prevents any network call, temp-directory creation, or service invocation even when the module is imported.
 
 **Live Scan Output semantic coloring (C11C)**: Search and Reddit progress lines, provider-queue transitions, and completion rollups are colored at display time in `gui/components/log_semantic_color.py::colorize_for_display`, which is called inside `append_log_line` before text is inserted into the Tk Text widget. `log_history` always stores the original input, so C11C adds no ANSI escapes to Copy All and history ordering is unaffected. Pre-existing Shodan subprocess ANSI (raw CLI stdout) passes through unchanged. The feature reuses the existing ANSI tag infrastructure (`ansi_fg_bright_blue` / `_green` / `_yellow` / `_red`) and theme-backed colors already configured in `dashboard_logs.configure_log_tags`. `_log_status_event(message)` signature is unchanged; all callers and test doubles continue to work. Rollup coloring requires `"\n" in line` to prevent misclassification of a standalone `SUMMARY_TITLE` heading emitted by Shodan. The classifier is an exact-allowlist of known Self-hosted Search/Reddit/queue message prefixes (plus legacy SearXNG prefixes) — generic keywords are not used.
 
-**Search tuning controls (C11B)**: Start Scan exposes the three fields above as themed sliders in the Self-hosted Search provider row. Values persist through GUI settings (`unified_scan_dialog.searxng_request_timeout`, `..._short_retry_delay`, `..._long_retry_delay`) and scan templates (`searxng_options.request_timeout`, `..._short_retry_delay`, `..._long_retry_delay`). The scan request carries them as `searxng_request_timeout`, `searxng_short_retry_delay`, `searxng_long_retry_delay`. Dashboard code (`gui/components/dashboard_searxng_scan.py`) reads these keys and coerces them with the same half-up step-snapping helper before constructing `RunOptions`; out-of-range or malformed values fall back to the field defaults. The service layer then clamps again independently. Accessories and WebUI continue using `RunOptions` defaults and are unaffected.
+**Search tuning controls (C11B)**: Start Scan exposes the three fields above as themed sliders in the Self-hosted Search provider row. Values persist through GUI settings (`unified_scan_dialog.searxng_request_timeout`, `..._short_retry_delay`, `..._long_retry_delay`) and scan templates (`searxng_options.request_timeout`, `..._short_retry_delay`, `..._long_retry_delay`). The scan request carries them as `searxng_request_timeout`, `searxng_short_retry_delay`, `searxng_long_retry_delay`. Dashboard code (`gui/components/dashboard_searxng_scan.py`) reads these keys and coerces them with the same half-up step-snapping helper before constructing `RunOptions`; out-of-range or malformed values fall back to the field defaults. The service layer then clamps again independently. Web UI continues using `RunOptions` defaults.
 
-**`dork_runs.status` values**: `running`, `done`, `error`, `cancelled`. Status `cancelled` is set when the caller signals the optional `cancel_event: threading.Event` passed to `run_dork_search`. Cancellation is not an error: `error_message` is null, and the run remains accessible in the results browser. The primary-table sync still runs for cancelled runs that created a `run_id`, preserving any retained rows.
+**`dork_runs.status` values**: `running`, `done`, `error`, `cancelled`. Status `cancelled` is set when the caller signals the optional `cancel_event: threading.Event` passed to `run_dork_search`. Cancellation is not an error: `error_message` is null, and the run row remains in the primary DB. The primary-table sync still runs for cancelled runs that created a `run_id`, preserving any retained rows.
 
 Legacy sidecar files (for example `~/.dirracuda/data/experimental/se_dork.db`) may still exist for historical browsing/migration paths, but they are no longer the default write target for new search runs.
 
@@ -73,32 +73,32 @@ URL normalization (`store.normalize_url`): scheme and netloc lowercased; path ca
 
 ## Desktop and Web UI flow
 
-Search entry path:
+Start New Scan is the only desktop launch surface. Both providers use the
+primary DB; the `experimental/se_dork` package name and settings keys remain
+stable for compatibility.
 
-```
-Dashboard -> Accessories tab -> Test (preflight)
-  -> SeDorkTab._invoke_test -> run_preflight(url) on worker thread
-  -> status label shows pass/fail with reason code
-```
-
-```
-Dashboard -> Accessories tab -> Run (dork search)
-  -> SeDorkTab._invoke_run -> run_dork_search(options) on worker thread
+```text
+Dashboard -> Start New Scan -> Self-hosted Search -> Start Scan
+  -> dashboard_provider_queue -> dashboard_searxng_scan.start_searxng_scan
+  -> run_dork_search(options, db_path=primary_db) on a worker thread
+  -> reachability check, then JSON validation using the actual first-page query
   -> fetches up to 500 unique URLs by default (1,000 maximum)
-  -> deduplicates normalized URLs while paging; stops at 40 SearXNG pages or 10 DeGoog pages,
-     the requested unique-result count, or the first empty page
-  -> writes dork_runs + dork_results rows in active primary DB context
-  -> sync_run_to_main_db(run_id, db_path=primary_db) upserts retained rows into main HTTP tables
-  -> status label shows fetched/stored + sync counts
+  -> writes dork_runs + dork_results in the active primary DB
+  -> sync_run_to_main_db(run_id, db_path=primary_db) upserts retained HTTP targets
+  -> Live Scan Output rollup; result popup for a search-only run
+  -> review/probe/browse current targets in Server List
 ```
 
+Historical sidecar entry path:
+
+```text
+Dashboard -> Database -> [Legacy] Sidecar Data -> Self-hosted Search Results
+  -> SeDorkBrowserWindow (reads the historical sidecar DB)
+  -> stored metadata/probe details and manual promotion remain available
 ```
-Dashboard -> Accessories tab -> Open Results DB
-  -> SeDorkBrowserWindow (reads active primary DB context for new runs)
-  -> allow_promotion=False in primary-backed mode (manual Add-to-DB UI hidden)
-  -> double-click opens a read-only row details view from retained metadata and stored probe snapshots
-  -> legacy sidecar browser path remains available for historical data and manual promotion
-```
+
+Desktop Start New Scan has no standalone Test or Open Results DB buttons.
+The Web UI keeps its existing scan page and `/api/searxng/*` routes.
 
 Explicit SearXNG Test/preflight checks (`experimental/se_dork/client.py`):
 1. GET `/config` — reachability probe

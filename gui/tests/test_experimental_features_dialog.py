@@ -1,5 +1,5 @@
 """
-Tests for ExperimentalFeaturesDialog, RedditTab, and dashboard_experimental routing.
+Tests for Accessories and dashboard_experimental routing.
 
 C3  — regression guards for post-removal behavioral correctness
 C5  — comprehensive coverage: button ordering, warning-dismiss persistence,
@@ -34,7 +34,6 @@ if "impacket" not in sys.modules:
 
 import tkinter as tk
 
-from gui.components.experimental_features.reddit_tab import RedditTab
 from gui.components.experimental_features.dorkbook_tab import DorkbookTab
 from gui.components.dashboard import DashboardWidget
 from gui.utils.sidecar_promotion import SidecarPromotionError
@@ -93,17 +92,6 @@ class _DialogWidget(_FrameWidget):
         self.destroyed = True
 
 
-def _make_reddit_status_tab(context: dict) -> RedditTab:
-    tab = RedditTab.__new__(RedditTab)
-    tab._context = context
-    tab._status_visible = False
-    tab._status_var = _ValueVar()
-    tab._grab_btn = _StatusWidget()
-    tab._status_label = _StatusWidget()
-    tab.frame = _FrameWidget()
-    return tab
-
-
 # ---------------------------------------------------------------------------
 # C5 Group A — Database button packed before Accessories and Config
 # ---------------------------------------------------------------------------
@@ -147,85 +135,8 @@ def test_database_button_packed_before_accessories_and_config(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# C3 — Reddit tab routes reddit_grab_callback correctly (regression guard)
+# Dorkbook tab routing
 # ---------------------------------------------------------------------------
-
-def test_reddit_grab_callback_invoked_from_reddit_tab():
-    """_invoke_reddit_grab must call the context callback — not a stub."""
-    handler_called = []
-    context = {
-        "reddit_grab_callback": lambda: handler_called.append(True),
-        "open_reddit_post_db": lambda: None,
-    }
-    # Use __new__ to skip tkinter construction; _invoke_reddit_grab only needs _context.
-    tab = RedditTab.__new__(RedditTab)
-    tab._context = context
-    tab._invoke_reddit_grab()
-    assert handler_called == [True]
-
-
-def test_open_reddit_post_db_callback_invoked_from_reddit_tab():
-    """_invoke_open_reddit_post_db must call the context callback."""
-    post_db_called = []
-    context = {
-        "reddit_grab_callback": lambda: None,
-        "open_reddit_post_db": lambda: post_db_called.append(True),
-    }
-    tab = RedditTab.__new__(RedditTab)
-    tab._context = context
-    tab._invoke_open_reddit_post_db()
-    assert post_db_called == [True]
-
-
-def test_reddit_tab_silent_when_no_grab_callback():
-    """_invoke_reddit_grab must not raise when callback is absent."""
-    tab = RedditTab.__new__(RedditTab)
-    tab._context = {}
-    tab._invoke_reddit_grab()  # must not raise
-
-
-def test_reddit_tab_silent_when_no_post_db_callback():
-    """_invoke_open_reddit_post_db must not raise when callback is absent."""
-    tab = RedditTab.__new__(RedditTab)
-    tab._context = {}
-    tab._invoke_open_reddit_post_db()  # must not raise
-
-
-def test_reddit_tab_running_status_visible_and_disables_grab():
-    """Reddit tab shows a simple running status while Reddit Grab is active."""
-    tab = _make_reddit_status_tab({"reddit_grab_status_getter": lambda: True})
-
-    tab._update_running_status()
-
-    assert tab._status_var.value == "Reddit Grab is running..."
-    assert tab._grab_btn.configure_calls[-1] == {"state": tk.DISABLED}
-    assert tab._status_label.pack_calls
-    assert tab._status_visible is True
-    assert tab.frame.after_calls
-
-
-def test_reddit_tab_running_status_clears_and_enables_grab():
-    """Reddit tab clears the status line when Reddit Grab is idle."""
-    tab = _make_reddit_status_tab({"reddit_grab_status_getter": lambda: False})
-    tab._status_visible = True
-
-    tab._update_running_status()
-
-    assert tab._status_var.value == ""
-    assert tab._grab_btn.configure_calls[-1] == {"state": tk.NORMAL}
-    assert tab._status_label.pack_forget_calls == 1
-    assert tab._status_visible is False
-
-
-def test_reddit_tab_missing_running_getter_is_safe():
-    """Missing running-state getter leaves the Reddit status line blank."""
-    tab = _make_reddit_status_tab({})
-
-    tab._update_running_status()
-
-    assert tab._status_var.value == ""
-    assert tab._grab_btn.configure_calls[-1] == {"state": tk.NORMAL}
-    assert tab._status_label.pack_calls == []
 
 
 def test_dorkbook_callback_invoked_from_tab():
@@ -245,7 +156,7 @@ def test_dorkbook_tab_silent_when_no_callback():
 
 
 # ---------------------------------------------------------------------------
-# C5 Group C — open_reddit_post_db path resolution (three cases)
+# Dashboard accessory context and sidecar promotion
 # ---------------------------------------------------------------------------
 
 def _make_dash():
@@ -269,36 +180,28 @@ def _make_dash():
     return dash
 
 
-def test_experimental_context_includes_reddit_grab_status_getter(monkeypatch):
-    """Experimental dialog context exposes the dashboard Reddit Grab running state."""
+def test_accessories_context_omits_promoted_provider_launchers(monkeypatch):
     dash = _make_dash()
-    dash._handle_reddit_grab_button_click = MagicMock()
-    dash._open_reddit_post_db = MagicMock()
-    dash._reddit_grab_running = True
     captured = {}
     monkeypatch.setattr(
         "gui.components.experimental_features_dialog.show_experimental_features_dialog",
-        lambda parent, context, settings_manager: captured.update(
-            parent=parent,
-            context=context,
-            settings_manager=settings_manager,
-        ),
+        lambda parent, context, settings_manager: captured.update(context),
     )
 
     dashboard_experimental.handle_experimental_button_click(dash)
 
-    getter = captured["context"]["reddit_grab_status_getter"]
-    assert callable(getter)
-    assert getter() is True
-    dash._reddit_grab_running = False
-    assert getter() is False
-    assert "open_webui_control" not in captured["context"]
+    assert not {
+        "reddit_grab_callback", "reddit_grab_status_getter",
+        "provider_queue_active_getter", "open_reddit_post_db",
+        "open_se_dork_results_db",
+    }.intersection(captured)
+    assert captured["main_db_path"] == str(dash.db_reader.db_path)
+    assert captured["open_dorkbook"]
+    assert captured["open_keymaster"]
 
 
 def test_experimental_context_includes_webui_config_path(monkeypatch):
     dash = _make_dash()
-    dash._handle_reddit_grab_button_click = MagicMock()
-    dash._open_reddit_post_db = MagicMock()
     dash._resolve_active_config_path = MagicMock(return_value=Path("/tmp/app-config.json"))
     captured = {}
     monkeypatch.setattr(
@@ -313,27 +216,6 @@ def test_experimental_context_includes_webui_config_path(monkeypatch):
     dashboard_experimental.handle_experimental_button_click(dash)
 
     assert captured["context"]["webui_config_path"] == "/tmp/app-config.json"
-
-
-def test_open_reddit_post_db_opens_primary_db_without_promotion(monkeypatch):
-    """C10: open_reddit_post_db opens primary DB with allow_promotion=False."""
-    dash = _make_dash()
-
-    calls = []
-    monkeypatch.setattr(
-        "gui.components.dashboard_experimental.show_reddit_browser_window",
-        lambda **kw: calls.append(kw),
-    )
-
-    dashboard_experimental.open_reddit_post_db(dash)
-
-    assert len(calls) == 1
-    assert calls[0]["parent"] is dash.parent
-    assert calls[0]["add_record_callback"] is None
-    assert calls[0]["promote_record_callback"] is None
-    assert calls[0]["promote_records_callback"] is None
-    assert calls[0]["allow_promotion"] is False
-    assert calls[0]["settings_manager"] is dash.settings_manager
 
 
 def test_sidecar_bulk_promotion_callback_refreshes_once(monkeypatch):
@@ -384,114 +266,6 @@ def test_sidecar_promotion_callback_does_not_refresh_when_promotion_fails(monkey
         pass
 
     dash.refresh_after_database_change.assert_not_called()
-
-
-def test_open_reddit_post_db_primary_db_ignores_server_list_getter(monkeypatch):
-    """C10: primary-DB Reddit browser does not use the server list getter."""
-    dash = _make_dash()
-    dash._server_list_getter = MagicMock(return_value=None)
-
-    calls = []
-    monkeypatch.setattr(
-        "gui.components.dashboard_experimental.show_reddit_browser_window",
-        lambda **kw: calls.append(kw),
-    )
-
-    dashboard_experimental.open_reddit_post_db(dash)
-
-    assert len(calls) == 1
-    assert calls[0]["allow_promotion"] is False
-    assert calls[0]["promote_record_callback"] is None
-    dash._server_list_getter.assert_not_called()
-
-
-def test_open_reddit_post_db_primary_db_dead_window_irrelevant(monkeypatch):
-    """C10: primary-DB mode does not inspect server list window state."""
-    dash = _make_dash()
-    mock_win = MagicMock()
-    mock_win.window.winfo_exists.return_value = False
-    dash._server_list_getter = MagicMock(return_value=mock_win)
-
-    calls = []
-    monkeypatch.setattr(
-        "gui.components.dashboard_experimental.show_reddit_browser_window",
-        lambda **kw: calls.append(kw),
-    )
-
-    dashboard_experimental.open_reddit_post_db(dash)
-
-    assert len(calls) == 1
-    assert calls[0]["allow_promotion"] is False
-    assert calls[0]["promote_record_callback"] is None
-    dash._server_list_getter.assert_not_called()
-
-
-def test_open_reddit_post_db_primary_db_no_side_effects_on_server_list(monkeypatch):
-    """C10: opening primary-DB Reddit browser has no server-list side effects."""
-    dash = _make_dash()
-    dash._server_list_getter = MagicMock(return_value=None)
-    dash._open_drill_down = MagicMock()
-
-    calls = []
-    monkeypatch.setattr(
-        "gui.components.dashboard_experimental.show_reddit_browser_window",
-        lambda **kw: calls.append(kw),
-    )
-
-    dashboard_experimental.open_reddit_post_db(dash)
-
-    assert len(calls) == 1
-    assert calls[0]["allow_promotion"] is False
-    assert calls[0]["promote_record_callback"] is None
-    dash._open_drill_down.assert_not_called()
-    dash._server_list_getter.assert_not_called()
-
-
-def test_open_reddit_post_db_primary_db_getter_never_consulted(monkeypatch):
-    """C10: primary-DB mode never consults the server list getter."""
-    dash = _make_dash()
-    getter_calls = {"count": 0}
-
-    def _raising_getter():
-        getter_calls["count"] += 1
-        raise RuntimeError("getter boom")
-
-    dash._server_list_getter = _raising_getter
-    dash._open_drill_down = MagicMock()
-
-    calls = []
-    monkeypatch.setattr(
-        "gui.components.dashboard_experimental.show_reddit_browser_window",
-        lambda **kw: calls.append(kw),
-    )
-
-    dashboard_experimental.open_reddit_post_db(dash)
-
-    assert len(calls) == 1
-    assert calls[0]["allow_promotion"] is False
-    assert calls[0]["promote_record_callback"] is None
-    assert getter_calls["count"] == 0
-
-
-def test_open_reddit_post_db_without_db_reader_has_no_promote_callback(monkeypatch):
-    """Browser still opens, but action reports DB unavailability from the browser."""
-    dash = _make_dash()
-    dash.db_reader = None
-
-    calls = []
-    monkeypatch.setattr(
-        "gui.components.dashboard_experimental.show_reddit_browser_window",
-        lambda **kw: calls.append(kw),
-    )
-
-    dashboard_experimental.open_reddit_post_db(dash)
-
-    assert len(calls) == 1
-    assert calls[0]["parent"] is dash.parent
-    assert calls[0]["add_record_callback"] is None
-    assert calls[0]["promote_record_callback"] is None
-    assert calls[0]["promote_records_callback"] is None
-    assert calls[0]["settings_manager"] is dash.settings_manager
 
 
 # ---------------------------------------------------------------------------
@@ -663,10 +437,10 @@ def test_dismiss_does_not_write_false_on_uncheck(monkeypatch):
 # C1 — Tab registry assertions
 # ---------------------------------------------------------------------------
 
-def test_registry_contains_searxng_tab():
+def test_registry_omits_promoted_search_tab():
     from gui.components.experimental_features.registry import _get_features
     labels = [f.label for f in _get_features()]
-    assert "Self-hosted Search" in labels
+    assert "Self-hosted Search" not in labels
 
 
 def test_registry_does_not_contain_placeholder_tab():
@@ -675,147 +449,16 @@ def test_registry_does_not_contain_placeholder_tab():
     assert "placeholder" not in labels
 
 
-def test_registry_reddit_tab_unchanged():
+def test_registry_omits_promoted_reddit_tab():
     from gui.components.experimental_features.registry import _get_features
     labels = [f.label for f in _get_features()]
-    assert "Reddit" in labels
+    assert "Reddit" not in labels
 
 
 def test_registry_contains_dorkbook_tab():
     from gui.components.experimental_features.registry import _get_features
     labels = [f.label for f in _get_features()]
     assert "Dorkbook" in labels
-
-
-def test_registry_se_dork_feature_id():
-    from gui.components.experimental_features.registry import _get_features
-    ids = [f.feature_id for f in _get_features()]
-    assert "se_dork" in ids
-
-
-def test_registry_orders_se_dork_before_reddit():
-    from gui.components.experimental_features.registry import _get_features
-
-    features = _get_features()
-    assert features[0].feature_id == "se_dork"
-    assert features[1].feature_id == "reddit"
-
-
-def test_registry_dorkbook_after_reddit():
-    from gui.components.experimental_features.registry import _get_features
-
-    features = _get_features()
-    assert features[3].feature_id == "dorkbook"
-
-
-# ---------------------------------------------------------------------------
-# C4 — open_se_dork_results_db path resolution
-# ---------------------------------------------------------------------------
-
-
-def test_open_se_dork_results_db_with_live_server_window(monkeypatch):
-    """SE Dork browser opens in primary-DB mode without promotion actions."""
-    dash = _make_dash()
-    mock_win = MagicMock()
-    mock_win.window.winfo_exists.return_value = True
-    dash._server_list_getter = MagicMock(return_value=mock_win)
-
-    calls = []
-    monkeypatch.setattr(
-        "gui.components.dashboard_experimental.show_se_dork_browser_window",
-        lambda **kw: calls.append(kw),
-    )
-
-    dashboard_experimental.open_se_dork_results_db(dash)
-
-    assert len(calls) == 1
-    assert calls[0]["parent"] is dash.parent
-    assert str(calls[0]["db_path"]) == str(dash.db_reader.db_path)
-    assert calls[0]["add_record_callback"] is None
-    assert calls[0]["promote_record_callback"] is None
-    assert calls[0]["promote_records_callback"] is None
-    assert calls[0]["allow_promotion"] is False
-    assert calls[0]["settings_manager"] is dash.settings_manager
-    dash._server_list_getter.assert_not_called()
-
-
-def test_open_se_dork_results_db_fallback_when_no_server_window(monkeypatch):
-    """Getter=None still opens in primary-DB mode."""
-    dash = _make_dash()
-    dash._server_list_getter = None
-
-    calls = []
-    monkeypatch.setattr(
-        "gui.components.dashboard_experimental.show_se_dork_browser_window",
-        lambda **kw: calls.append(kw),
-    )
-
-    dashboard_experimental.open_se_dork_results_db(dash)
-
-    assert len(calls) == 1
-    assert calls[0]["parent"] is dash.parent
-    assert str(calls[0]["db_path"]) == str(dash.db_reader.db_path)
-    assert calls[0]["add_record_callback"] is None
-    assert calls[0]["promote_record_callback"] is None
-    assert calls[0]["promote_records_callback"] is None
-    assert calls[0]["allow_promotion"] is False
-    assert calls[0]["settings_manager"] is dash.settings_manager
-
-
-def test_open_se_dork_results_db_treats_dead_window_as_none(monkeypatch):
-    """Dead windows are irrelevant to primary-DB browse wiring."""
-    dash = _make_dash()
-    mock_win = MagicMock()
-    mock_win.window.winfo_exists.return_value = False
-    dash._server_list_getter = MagicMock(return_value=mock_win)
-
-    calls = []
-    monkeypatch.setattr(
-        "gui.components.dashboard_experimental.show_se_dork_browser_window",
-        lambda **kw: calls.append(kw),
-    )
-
-    dashboard_experimental.open_se_dork_results_db(dash)
-
-    assert len(calls) == 1
-    assert calls[0]["parent"] is dash.parent
-    assert str(calls[0]["db_path"]) == str(dash.db_reader.db_path)
-    assert calls[0]["add_record_callback"] is None
-    assert calls[0]["promote_record_callback"] is None
-    assert calls[0]["promote_records_callback"] is None
-    assert calls[0]["allow_promotion"] is False
-    assert calls[0]["settings_manager"] is dash.settings_manager
-    dash._server_list_getter.assert_not_called()
-
-
-def test_open_se_dork_results_db_fallback_when_getter_raises(monkeypatch):
-    """Getter exceptions cannot block primary-DB browse wiring."""
-    dash = _make_dash()
-    getter_calls = {"count": 0}
-
-    def _boom():
-        getter_calls["count"] += 1
-        raise RuntimeError("getter boom")
-
-    dash._server_list_getter = _boom
-
-    calls = []
-    monkeypatch.setattr(
-        "gui.components.dashboard_experimental.show_se_dork_browser_window",
-        lambda **kw: calls.append(kw),
-    )
-
-    dashboard_experimental.open_se_dork_results_db(dash)
-
-    assert len(calls) == 1
-    assert calls[0]["parent"] is dash.parent
-    assert str(calls[0]["db_path"]) == str(dash.db_reader.db_path)
-    assert calls[0]["add_record_callback"] is None
-    assert calls[0]["promote_record_callback"] is None
-    assert calls[0]["promote_records_callback"] is None
-    assert calls[0]["allow_promotion"] is False
-    assert calls[0]["settings_manager"] is dash.settings_manager
-    assert getter_calls["count"] == 0
 
 
 def test_open_dorkbook_forwards_parent_and_settings_manager(monkeypatch):
@@ -831,42 +474,6 @@ def test_open_dorkbook_forwards_parent_and_settings_manager(monkeypatch):
     assert len(calls) == 1
     assert calls[0]["parent"] is dash.parent
     assert calls[0]["settings_manager"] is dash.settings_manager
-
-
-# ---------------------------------------------------------------------------
-# C4 — se_dork_tab._open_results_browser wiring
-# ---------------------------------------------------------------------------
-
-
-def test_se_dork_tab_open_results_invokes_context_callback():
-    """_open_results_browser calls the context callback when present."""
-    from gui.components.experimental_features.se_dork_tab import SeDorkTab
-
-    called = []
-    tab = SeDorkTab.__new__(SeDorkTab)
-    tab._context = {"open_se_dork_results_db": lambda: called.append(True)}
-    tab._open_results_browser()
-    assert called == [True]
-
-
-def test_se_dork_tab_fallback_opens_browser_when_no_results_callback(monkeypatch):
-    """When context has no open_se_dork_results_db, browser opens with callback=None."""
-    from gui.components.experimental_features.se_dork_tab import SeDorkTab
-
-    calls = []
-    monkeypatch.setattr(
-        "gui.components.se_dork_browser_window.show_se_dork_browser_window",
-        lambda *a, **kw: calls.append(kw),
-    )
-
-    tab = SeDorkTab.__new__(SeDorkTab)
-    tab._context = {}
-    tab.frame = MagicMock()
-    tab._open_results_browser()
-
-    assert len(calls) == 1
-    assert calls[0].get("add_record_callback") is None
-    assert calls[0].get("settings_manager") is None
 
 
 # ---------------------------------------------------------------------------
@@ -888,7 +495,8 @@ def test_registry_keymaster_feature_id():
 def test_registry_keymaster_after_dorkbook():
     from gui.components.experimental_features.registry import _get_features
     features = _get_features()
-    assert features[4].feature_id == "keymaster"
+    ids = [feature.feature_id for feature in features]
+    assert ids.index("keymaster") == ids.index("dorkbook") + 1
 
 
 def test_keymaster_tab_callback_invoked():
@@ -1104,8 +712,6 @@ def test_censys_discovery_tab_invoke_run_requires_selected_protocol():
 def test_experimental_context_omits_open_censys_results_db(monkeypatch):
     """handle_experimental_button_click should not expose suspended Censys launcher."""
     dash = _make_dash()
-    dash._handle_reddit_grab_button_click = MagicMock()
-    dash._open_reddit_post_db = MagicMock()
     captured = {}
     monkeypatch.setattr(
         "gui.components.experimental_features_dialog.show_experimental_features_dialog",
@@ -1122,8 +728,6 @@ def test_experimental_context_omits_open_censys_results_db(monkeypatch):
 def test_experimental_context_includes_open_app_config(monkeypatch):
     """handle_experimental_button_click context exposes open_app_config."""
     dash = _make_dash()
-    dash._handle_reddit_grab_button_click = MagicMock()
-    dash._open_reddit_post_db = MagicMock()
     dash._open_config_editor = MagicMock()
     captured = {}
     monkeypatch.setattr(
@@ -1582,7 +1186,7 @@ def test_registry_tab_order_exact():
     from gui.components.experimental_features.registry import _get_features
     ids = [f.feature_id for f in _get_features()]
     assert ids == [
-        "se_dork", "reddit", "webui", "dorkbook", "keymaster", "sherlock",
+        "webui", "dorkbook", "keymaster", "sherlock",
         "analyst",
     ]
 

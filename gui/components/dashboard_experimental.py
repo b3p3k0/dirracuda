@@ -113,15 +113,6 @@ def handle_experimental_button_click(widget) -> None:
         config_path = getattr(widget, "config_path", None)
 
     context = {
-        "reddit_grab_callback": widget._handle_reddit_grab_button_click,
-        "reddit_grab_status_getter": lambda: bool(
-            getattr(widget, "_reddit_grab_running", False)
-        ),
-        "provider_queue_active_getter": lambda: bool(
-            getattr(widget, "_provider_queue_active", False)
-        ),
-        "open_reddit_post_db": widget._open_reddit_post_db,
-        "open_se_dork_results_db": lambda: open_se_dork_results_db(widget),
         "open_app_config": widget._open_config_editor,
         "open_dorkbook": lambda: open_dorkbook(widget),
         "open_keymaster": lambda: open_keymaster(widget),
@@ -229,32 +220,6 @@ def stop_analyst_task_hydration(widget) -> None:
         except Exception:
             pass
     widget._analyst_hydration_after_id = None
-
-
-def open_reddit_post_db(widget) -> None:
-    """Open the Reddit Post DB browser in primary-DB mode (promotion disabled)."""
-    show_reddit_browser_window(
-        parent=widget.parent,
-        db_path=_resolve_main_db_path(widget),
-        add_record_callback=None,
-        promote_record_callback=None,
-        promote_records_callback=None,
-        allow_promotion=False,
-        settings_manager=getattr(widget, "settings_manager", None),
-    )
-
-
-def open_se_dork_results_db(widget) -> None:
-    """Open the SE Dork results browser in primary-DB mode (promotion disabled)."""
-    show_se_dork_browser_window(
-        parent=widget.parent,
-        db_path=_resolve_main_db_path(widget),
-        add_record_callback=None,
-        promote_record_callback=None,
-        promote_records_callback=None,
-        allow_promotion=False,
-        settings_manager=getattr(widget, "settings_manager", None),
-    )
 
 
 def open_sidecar_legacy_db(widget) -> None:

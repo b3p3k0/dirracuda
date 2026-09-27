@@ -123,7 +123,6 @@ def _has_conflicting_desktop_work(dash) -> bool:
         for name in (
             "_searxng_scan_running",
             "_reddit_scan_running",
-            "_reddit_grab_running",
             "_queued_scan_active",
         )
     ):

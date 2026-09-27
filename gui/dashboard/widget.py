@@ -31,8 +31,6 @@ from gui.utils.scan_manager import get_scan_manager
 from gui.components.unified_scan_dialog import show_unified_scan_dialog
 from gui.components.ftp_scan_dialog import show_ftp_scan_dialog
 from gui.components.http_scan_dialog import show_http_scan_dialog
-from gui.components.reddit_grab_dialog import show_reddit_grab_dialog
-from experimental.redseek.service import IngestOptions, IngestResult, run_ingest
 from gui.components import dashboard_experimental
 from gui.components import dashboard_database
 from gui.components.scan_results_dialog import show_scan_results_dialog
@@ -246,8 +244,6 @@ class DashboardWidget:
         self.stopping_started_time = None  # Timestamp when stop was initiated
         self.ftp_scan_button = None
         self.http_scan_button = None
-        self.reddit_grab_button = None
-        self._reddit_grab_running = False
         self._searxng_scan_running = False
         self._searxng_task_id: Optional[str] = None
         self._queued_scan_active = False
@@ -417,7 +413,6 @@ class DashboardWidget:
             getattr(self, "about_button", None),
             getattr(self, "theme_toggle_button", None),
             getattr(self, "copy_log_button", None),
-            getattr(self, "reddit_grab_button", None),
             getattr(self, "running_tasks_button", None),
         ):
             if button and button.winfo_exists():
@@ -1087,7 +1082,7 @@ class DashboardWidget:
 
     def _show_quick_scan_dialog(self) -> None:
         """Show scan configuration dialog and start scan."""
-        if getattr(self, "_provider_queue_active", False) or getattr(self, "_searxng_scan_running", False) or getattr(self, "_reddit_scan_running", False) or getattr(self, "_reddit_grab_running", False):
+        if getattr(self, "_provider_queue_active", False) or getattr(self, "_searxng_scan_running", False) or getattr(self, "_reddit_scan_running", False):
             _mb().showwarning("Provider Busy",
                 "A provider scan is already running. Please wait for it to complete.")
             return
@@ -1307,9 +1302,6 @@ class DashboardWidget:
 
     def _handle_experimental_button_click(self) -> None:
         dashboard_experimental.handle_experimental_button_click(self)
-
-    def _open_reddit_post_db(self) -> None:
-        dashboard_experimental.open_reddit_post_db(self)
 
     def _open_config_editor(self) -> None:
         """Open application configuration dialog."""

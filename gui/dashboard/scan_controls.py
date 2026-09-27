@@ -11,7 +11,6 @@ import time
 import tkinter as tk
 from typing import Any
 
-from experimental.redseek.service import IngestOptions, IngestResult
 from gui.components import dashboard_scan
 from gui.utils import safe_messagebox as _fallback_msgbox
 from gui.utils.dialog_helpers import ensure_dialog_focus
@@ -85,174 +84,6 @@ def _handle_http_scan_button_click(self) -> None:
             )
     # Non-idle states: button is disabled; defensive no-op if somehow reached.
 
-def _handle_reddit_grab_button_click(self) -> None:
-    """Handle Reddit Grab button click — opens Reddit Grab dialog."""
-    if getattr(self, "_provider_queue_active", False):
-        _mb().showwarning(
-            "Provider Queue Busy",
-            "A unified provider queue is running. Please wait for it to complete.",
-        )
-        return
-    if self._reddit_grab_running or getattr(self, "_reddit_scan_running", False):
-        _mb().showwarning("Reddit Busy",
-            "A Reddit ingest is already running. Please wait for it to complete.")
-        return
-    self._check_external_scans()
-    if self.scan_button_state != "idle":
-        return
-    _d('show_reddit_grab_dialog')(
-        parent=self.parent,
-        grab_start_callback=self._handle_reddit_grab_start,
-        settings_manager=getattr(self, "settings_manager", None),
-    )
-
-def _handle_reddit_grab_start(self, options: IngestOptions) -> None:
-    """Callback from Reddit Grab dialog — launches background ingest worker."""
-    # Second state check: dialog may have been open while scan state changed.
-    self._check_external_scans()
-    if (
-        getattr(self, "_provider_queue_active", False)
-        or self.scan_button_state != "idle"
-        or self._reddit_grab_running
-        or getattr(self, "_reddit_scan_running", False)
-    ):
-        return
-
-    if getattr(options, "bulk_probe_enabled", False):
-        sm = getattr(self, "settings_manager", None)
-        if sm is not None:
-            if hasattr(sm, "get_smbseek_config_path"):
-                try:
-                    options.probe_config_path = sm.get_smbseek_config_path()
-                except Exception:
-                    options.probe_config_path = None
-            try:
-                options.probe_worker_count = max(
-                    1,
-                    min(8, int(sm.get_setting("probe.batch_max_workers", 3))),
-                )
-            except Exception:
-                options.probe_worker_count = 3
-
-    self._reddit_grab_running = True
-    if self.reddit_grab_button is not None:
-        self.reddit_grab_button.config(state=tk.DISABLED)
-    self._log_status_event(
-        f"Reddit Grab started (sort={options.sort}, max_posts={options.max_posts})"
-    )
-    _d('threading').Thread(
-        target=self._reddit_grab_worker,
-        args=(options,),
-        daemon=True,
-    ).start()
-
-def _reddit_grab_worker(self, options: IngestOptions) -> None:
-    """Background worker: runs run_ingest and marshals result to main thread."""
-    import dataclasses
-    from experimental.redseek.main_db_sync import sync_targets_to_main_db
-
-    main_db_path = dashboard_scan._resolve_main_db_path(self)
-    options = dataclasses.replace(options, replace_cache_scope="state_only")
-
-    sync_summary: dict = {}
-    try:
-        result = _d('run_ingest')(options, db_path=main_db_path)
-    except Exception as exc:
-        result = IngestResult(
-            sort=options.sort,
-            subreddit=options.subreddit,
-            pages_fetched=0,
-            posts_stored=0,
-            posts_skipped=0,
-            targets_stored=0,
-            targets_deduped=0,
-            parse_errors=0,
-            stopped_by_cursor=False,
-            stopped_by_max_posts=False,
-            replace_cache_done=False,
-            rate_limited=False,
-            error=f"unexpected error: {exc}",
-        )
-    else:
-        if not result.error:
-            keys = list(getattr(result, "_probe_candidate_keys", ()))
-            sync_summary = sync_targets_to_main_db(keys, db_path=main_db_path)
-    self.parent.after(
-        0,
-        self._on_reddit_grab_done,
-        result,
-        sync_summary,
-        main_db_path,
-        options.mode,
-        options.query,
-    )
-
-def _on_reddit_grab_done(
-    self,
-    result: IngestResult,
-    sync_summary: dict = None,
-    db_path=None,
-    mode: str = "feed",
-    query: str = "",
-) -> None:
-    """Main-thread completion handler for a Reddit Grab run."""
-    self._reddit_grab_running = False
-    if self.reddit_grab_button is not None and self.scan_button_state == "idle":
-        self.reddit_grab_button.config(state=tk.NORMAL)
-
-    if result.error:
-        detail = f"Error: {result.error}"
-        if result.rate_limited:
-            detail = f"Rate limited (HTTP 429). {detail}"
-        if result.replace_cache_done:
-            detail += "\nNote: cache state was reset before the failure."
-        self._log_status_event(f"Reddit Grab failed: {result.error}")
-        _mb().showerror("Reddit Grab Failed", detail, parent=self.parent)
-    else:
-        stop_reason = ""
-        if result.stopped_by_cursor:
-            stop_reason = " (stopped at known cursor)"
-        elif result.stopped_by_max_posts:
-            stop_reason = " (max posts reached)"
-        summary = (
-            f"sort={result.sort}{stop_reason}\n"
-            f"Pages fetched: {result.pages_fetched}\n"
-            f"Posts stored: {result.posts_stored}  "
-            f"Skipped: {result.posts_skipped}\n"
-            f"Targets stored: {result.targets_stored}  "
-            f"Deduped: {result.targets_deduped}"
-        )
-        if getattr(result, "probe_enabled", False):
-            summary += (
-                "\nProbe:"
-                f" {result.probe_total} attempted"
-                f" ({result.probe_clean} clean,"
-                f" {result.probe_issue} issue,"
-                f" {result.probe_unprobed} unprobed,"
-                f" {result.probe_skipped} skipped)"
-            )
-        ss = sync_summary or {}
-        if ss:
-            summary += (
-                f"\nSynced to main DB:"
-                f" {int(ss.get('inserted', 0))} new,"
-                f" {int(ss.get('updated', 0))} updated,"
-                f" {int(ss.get('skipped', 0))} skipped"
-            )
-        if result.replace_cache_done:
-            summary += "\nCursor state was reset before run."
-        resolved_db_path = db_path or dashboard_scan._resolve_main_db_path(self)
-        dashboard_scan._emit_live_rollup(
-            self,
-            dashboard_scan.format_reddit_rollup(
-                result,
-                mode=mode,
-                query=query,
-                db_path=resolved_db_path,
-                sync_summary=sync_summary,
-            ),
-        )
-        _mb().showinfo("Reddit Grab Complete", summary, parent=self.parent)
 
 def _maybe_warn_mock_mode_persistence(self) -> None:
     """Show one-time warning that mock scans are non-persistent."""
@@ -287,9 +118,6 @@ def _update_scan_button_state(self, new_state: str) -> None:
             self.ftp_scan_button.config(state=tk.NORMAL)
         if self.http_scan_button is not None:
             self.http_scan_button.config(state=tk.NORMAL)
-        if self.reddit_grab_button is not None:
-            state = tk.DISABLED if self._reddit_grab_running else tk.NORMAL
-            self.reddit_grab_button.config(state=state)
     elif new_state == "disabled_external":
         self._set_button_to_disabled()
         self._show_status_bar(f"Scan running by PID: {self.external_scan_pid} - Please wait")
@@ -297,8 +125,6 @@ def _update_scan_button_state(self, new_state: str) -> None:
             self.ftp_scan_button.config(state=tk.DISABLED)
         if self.http_scan_button is not None:
             self.http_scan_button.config(state=tk.DISABLED)
-        if self.reddit_grab_button is not None:
-            self.reddit_grab_button.config(state=tk.DISABLED)
     elif new_state == "scanning":
         self._set_button_to_stop()
         self._hide_status_bar()
@@ -306,32 +132,24 @@ def _update_scan_button_state(self, new_state: str) -> None:
             self.ftp_scan_button.config(state=tk.DISABLED)
         if self.http_scan_button is not None:
             self.http_scan_button.config(state=tk.DISABLED)
-        if self.reddit_grab_button is not None:
-            self.reddit_grab_button.config(state=tk.DISABLED)
     elif new_state == "stopping":
         self._set_button_to_stopping()
         if self.ftp_scan_button is not None:
             self.ftp_scan_button.config(state=tk.DISABLED)
         if self.http_scan_button is not None:
             self.http_scan_button.config(state=tk.DISABLED)
-        if self.reddit_grab_button is not None:
-            self.reddit_grab_button.config(state=tk.DISABLED)
     elif new_state == "retry":
         self._set_button_to_retry()
         if self.ftp_scan_button is not None:
             self.ftp_scan_button.config(state=tk.DISABLED)
         if self.http_scan_button is not None:
             self.http_scan_button.config(state=tk.DISABLED)
-        if self.reddit_grab_button is not None:
-            self.reddit_grab_button.config(state=tk.DISABLED)
     elif new_state == "error":
         self._set_button_to_error()
         if self.ftp_scan_button is not None:
             self.ftp_scan_button.config(state=tk.DISABLED)
         if self.http_scan_button is not None:
             self.http_scan_button.config(state=tk.DISABLED)
-        if self.reddit_grab_button is not None:
-            self.reddit_grab_button.config(state=tk.DISABLED)
 
 def _set_button_to_start(self) -> None:
     """Configure button for start state."""
@@ -537,10 +355,6 @@ def bind_scan_control_methods(widget_cls) -> None:
         "_handle_scan_button_click",
         "_handle_ftp_scan_button_click",
         "_handle_http_scan_button_click",
-        "_handle_reddit_grab_button_click",
-        "_handle_reddit_grab_start",
-        "_reddit_grab_worker",
-        "_on_reddit_grab_done",
         "_maybe_warn_mock_mode_persistence",
         "_start_ftp_scan",
         "_start_http_scan",

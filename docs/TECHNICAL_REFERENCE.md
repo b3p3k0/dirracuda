@@ -87,7 +87,7 @@ Dirracuda scans for internet-accessible servers exposing open or weakly-authenti
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-For SMB/FTP/HTTP scan flows, the GUI invokes CLI scripts as subprocesses via `gui/utils/backend_interface/interface.py` and parses stdout for progress data. Experimental Self-hosted Search dorking (`experimental/se_dork`), Reddit ingestion (`experimental/redseek`), Dorkbook recipe management (`experimental/dorkbook`), and Keymaster key management (`experimental/keymaster`) are in-process paths launched from the dashboard.
+For SMB/FTP/HTTP scan flows, the GUI invokes CLI scripts as subprocesses via `gui/utils/backend_interface/interface.py` and parses stdout for progress data. Self-hosted Search dorking (`experimental/se_dork`), Reddit ingestion (`experimental/redseek`), Dorkbook recipe management (`experimental/dorkbook`), and Keymaster key management (`experimental/keymaster`) are in-process paths launched from the dashboard.
 
 The optional Web UI is disabled by default and installed separately with
 `experimental/webui/requirements-web.txt`. Its C4 scan launcher follows the same CLI
@@ -934,7 +934,7 @@ Compatibility note: legacy `top` state is migrated to `top:week` on first week-t
 
 `replace_cache` behavior: `replace_cache_scope="state_only"` is always used when the primary DB is the target — only `reddit_ingest_state` is cleared (cursor reset), never `reddit_posts` or `reddit_targets`.
 
-**Legacy sidecar** (`~/.dirracuda/data/experimental/reddit_od.db`): historical data from runs before C10 remains available under Accessories → Legacy Sidecar Data → Reddit. The sidecar is no longer written by new runs.
+**Legacy sidecar** (`~/.dirracuda/data/experimental/reddit_od.db`): historical data from runs before C10 remains available under Database → [Legacy] Sidecar Data → Reddit Open Directory Posts. The sidecar is no longer written by new runs.
 
 ### 5.7 Dorkbook Sidecar Database (`~/.dirracuda/data/experimental/dorkbook.db`)
 
@@ -972,7 +972,8 @@ dirracuda
    ├─ UnifiedScanDialog (gui/components/unified_scan_dialog.py)
    │    ├─ ScanDorkEditorDialog (gui/components/scan_dork_editor_dialog.py)
    │    │    └─ Open Dorkbook -> DorkbookWindow (singleton/modeless)
-   │    └─ ScanManager (gui/utils/scan_manager.py)
+   │    ├─ Provider queue -> Reddit / Self-hosted Search (in-process services)
+   │    └─ Shodan -> ScanManager (gui/utils/scan_manager.py)
    │         └─ BackendInterface (gui/utils/backend_interface/interface.py)
    │              ├─ ProcessRunner   — subprocess lifecycle
    │              ├─ ProgressParser  — stdout regex field matching
@@ -983,17 +984,17 @@ dirracuda
    │    ├─ FTP tab
    │    └─ HTTP tab
    ├─ ExperimentalFeaturesDialog (gui/components/experimental_features_dialog.py)
-   │    ├─ Self-hosted Search tab (gui/components/experimental_features/se_dork_tab.py)
-   │    │    └─ SeDorkBrowserWindow (gui/components/se_dork_browser_window.py)
-   │    ├─ Reddit tab (gui/components/experimental_features/reddit_tab.py)
-   │    │    ├─ RedditGrabDialog (gui/components/reddit_grab_dialog.py)
-   │    │    └─ RedditBrowserWindow (gui/components/reddit_browser_window.py)
    │    ├─ Web UI tab (gui/components/experimental_features/webui_tab.py)
    │    │    └─ inline controls: status/start/stop/open browser/copy URL
    │    ├─ Dorkbook tab (gui/components/experimental_features/dorkbook_tab.py)
    │    │    └─ DorkbookWindow (gui/components/dorkbook_window.py)
-   │    └─ Keymaster tab (gui/components/experimental_features/keymaster_tab.py)
-   │         └─ KeymasterWindow (gui/components/keymaster_window.py)
+   │    ├─ Keymaster tab (gui/components/experimental_features/keymaster_tab.py)
+   │    │    └─ KeymasterWindow (gui/components/keymaster_window.py)
+   │    ├─ Sherlock tab (gui/components/experimental_features/sherlock_tab.py)
+   │    └─ Analyst tab (gui/components/experimental_features/analyst_tab.py)
+   ├─ Database -> [Legacy] Sidecar Data
+   │    ├─ SeDorkBrowserWindow (historical search sidecar)
+   │    └─ RedditBrowserWindow (historical Reddit sidecar)
    ├─ DBToolsDialog (gui/components/db_tools_dialog.py)
    │    └─ DBToolsEngine (gui/utils/db_tools_engine.py)
    ├─ RunningTasksWindow (gui/components/running_tasks_window.py)
@@ -1036,7 +1037,7 @@ WebUI jobs are outside this desktop scheduler.
 |---------|---------|
 | Start Scan | Opens `UnifiedScanDialog` (provider/protocol selector + scan options), then always shows preflight confirmation with live-balance + cost visibility before launch. Selected providers run serially by registered priority (`Reddit=100`, `Self-hosted Search=200`, `Shodan=300`); Shodan retains its nested SMB/FTP/HTTP protocol queue. Numeric estimates are shown only when live balance lookup succeeds. |
 | Database | Opens consolidated DB surface (`View Servers`, `DB Tools`, `[Legacy] Sidecar Data`) |
-| Accessories | Opens `ExperimentalFeaturesDialog` (`Self-hosted Search`, `Reddit`, `Web UI`, `Dorkbook`, `Keymaster`, `Sherlock` tabs) |
+| Accessories | Opens `ExperimentalFeaturesDialog` (`Web UI`, `Dorkbook`, `Keymaster`, `Sherlock`, `Analyst` tabs) |
 | Configuration | Opens config editor |
 | About | Opens about dialog |
 | Dark/Light toggle | Switches ttkthemes theme; persisted in `~/.dirracuda/conf.d/prefs/user-prefs.json` |
@@ -1126,13 +1127,11 @@ Backed by `gui/utils/db_tools_engine.py`. Capabilities:
 - **Statistics** — server count by country, protocol breakdown
 - **Maintenance** — SQLite VACUUM, integrity check (`PRAGMA integrity_check`), cascade-deletion preview before purging old sessions
 
-### 6.9 Accessories (Self-hosted Search, Reddit, Web UI, Dorkbook, Keymaster, Sherlock)
+### 6.9 Accessories (Web UI, Dorkbook, Keymaster, Sherlock, Analyst)
 
 `ExperimentalFeaturesDialog` is a modeless tab host opened from the dashboard `Accessories` button. Tabs are registry-driven (`gui/components/experimental_features/registry.py`), so adding/removing experimental modules is a registry edit, not dialog shell surgery.
 
 Current tabs (registry order):
-- `Self-hosted Search`
-- `Reddit`
 - `Web UI`
 - `Dorkbook`
 - `Keymaster`
@@ -1151,6 +1150,8 @@ Current tabs (registry order):
   **Built-in lifecycle** is unchanged: deleting a built-in records its key under `builtin_deleted` (distinct from `builtin_disabled`); `Edit`, `Copy`, or double-click on a built-in opens the Add flow prefilled from it and saves a new custom pattern with a new key; `Restore Built-ins` clears deleted/disabled built-in state and re-adds the code defaults while preserving customs. **C25.5 fix:** `shared/sherlock/serialize.py::dataclass_disabled` now uses `dataclasses.replace(pattern, enabled=False)`, preserving every `SherlockPattern` field (category, label, severity, color_tag, and any future field) while flipping only `enabled`. Previously a disabled built-in could lose its non-default fields.
 
   `Export` serializes the full staged catalog (metadata header plus one row per pattern: key, type, enabled, severity, category, label, pattern, color_tag) to a chosen UTF-8 JSON file via `tkinter.filedialog.asksaveasfilename` (the call lives in `sherlock_value_actions.on_export`); the payload builder is pure `shared/sherlock/export.py` and the export is read-only (never mutates staged edits, selection, the dirty flag, or persistence). Pattern-manager edits stay staged until either `Save & Close` in the manager or the tab-level Save persists settings. Settings persist to the top-level `sherlock` config-store module. The Start Scan dialog mirrors the same `run after probe` flag and opens this surface from its runtime controls.
+
+- `Analyst` — document review; see §9 for its pipeline and runtime contracts.
 
 Suspended module:
 - `Censys Discovery` backend is retained in `experimental/censys_discovery/`, but its GUI surfaces are currently hidden.
@@ -1203,51 +1204,6 @@ Integration seam:
 - `DorkbookWindow` routes all use-actions through `_apply_dork_to_config(config_path, protocol, query)`
 - Canonical path: uses `load_config()` + `cfg.update_sections()`; non-canonical: direct JSON read/write
 - Web surface (`/extras/dorkbook`) applies the same immediate-persist contract via `POST /api/dorkbook/prefill`
-
-Self-hosted Search supports SearXNG and DeGoog from Accessories, Start Scan,
-and the Web UI. See [search flow and preflight](SELF_HOSTED_SEARCH.md#desktop-and-web-ui-flow)
-for the shared service path and backend-specific checks. Existing `/api/searxng/*`
-routes and saved settings remain compatible.
-
-Reddit ingest entry path:
-
-```
-Dashboard -> Accessories tab -> Open Reddit Grab
-  -> RedditGrabDialog -> run_ingest(options, db_path=primary_db)
-  -> fetches one anonymous Reddit Atom/RSS snapshot (feed or subreddit-scoped search)
-  -> optional explicit bulk probe pass for current-run HTTP/HTTPS/FTP targets
-  -> sync_targets_to_main_db(_probe_candidate_keys, db_path=primary_db)
-  -> success: result dialog plus persistent Live Scan Output rollup
-     (counts, dedupe, probe totals, sync totals, DB path)
-  -> failure: error dialog plus timestamped Live Scan Output status
-```
-
-Reddit Post DB entry path:
-
-```
-Dashboard -> Accessories tab -> Open Reddit Post DB
-  -> RedditBrowserWindow (reads reddit_targets in the active primary DB)
-  -> "Add to dirracuda DB" and "Clear DB" are hidden and blocked in primary-backed mode
-  -> "Probe Selected" stores cacheable probe summaries and full snapshots in reddit_targets
-  -> double-click opens a read-only row details view from Reddit metadata and stored probe snapshots
-  -> unknown-protocol rows are skipped with explicit Cannot promote/probe messages
-```
-
-Legacy Reddit sidecar entry path:
-
-```
-Dashboard -> Database -> [Legacy] Sidecar Data -> Reddit
-  -> RedditBrowserWindow (reads ~/.dirracuda/data/experimental/reddit_od.db)
-  -> legacy "Add to dirracuda DB" promotion remains enabled for historical rows
-  -> multi-select bulk import runs in background with BatchStatusDialog progress/cancel and best-effort summary counts
-```
-
-Reddit modes exposed in `RedditGrabDialog`:
-- `feed` — fetches `/r/opendirectories/{new|top}.rss`
-- `search` — fetches `/r/opendirectories/search.rss` with user query and `restrict_sr=1`
-
-Top windows for `sort=top`: `hour`, `day`, `week`, `month`, `year`, `all`.
-RSS does not expose Reddit's old JSON `after` cursor; `max_pages` is accepted for compatibility, but each run makes one feed request with `limit=<max_posts>`. `max_posts` defaults to 100 and is bounded to 1–100 because Reddit caps an anonymous snapshot at 100 entries. User/author mode is unavailable in anonymous RSS mode, while historical `user` rows remain readable from existing databases.
 
 Keymaster entry path:
 
@@ -1320,6 +1276,48 @@ Censys Discovery status:
 - Sidecar path remains `~/.dirracuda/data/experimental/censys_discovery.db`.
 
 ---
+
+### 6.10 Reddit and Self-hosted Search (desktop providers)
+
+Start New Scan is the only desktop launch surface for these providers. They
+write new runs to the active primary DB and auto-sync targets into the main
+protocol tables. Current targets are reviewed in Server List. Their service
+packages and persisted settings keys retain existing names for compatibility.
+Web UI scan pages and API routes remain supported separately.
+
+Self-hosted Search supports SearXNG and DeGoog. See
+[search flow and preflight](SELF_HOSTED_SEARCH.md#desktop-and-web-ui-flow) for
+the shared service path and backend-specific checks.
+
+Reddit ingest entry path:
+
+```text
+Dashboard -> Start New Scan -> Reddit -> Start Scan
+  -> dashboard_provider_queue -> dashboard_scan.start_reddit_scan
+  -> run_ingest(options, db_path=primary_db) on a worker thread
+  -> one anonymous Reddit Atom/RSS snapshot (feed or subreddit-scoped search)
+  -> optional bulk probe for current-run HTTP/HTTPS/FTP targets
+  -> sync_targets_to_main_db(_probe_candidate_keys, db_path=primary_db)
+  -> Live Scan Output rollup; result popup for a Reddit-only run
+  -> review/probe/browse current targets in Server List
+```
+
+Legacy Reddit sidecar entry path:
+
+```text
+Dashboard -> Database -> [Legacy] Sidecar Data -> Reddit Open Directory Posts
+  -> RedditBrowserWindow (reads the historical reddit_od.db)
+  -> manual promotion remains enabled for historical rows
+  -> bulk import uses background progress/cancel and best-effort summary counts
+```
+
+Start New Scan exposes `feed` and `search` modes. Feed fetches
+`/r/opendirectories/{new|top}.rss`; search fetches
+`/r/opendirectories/search.rss` with the query and `restrict_sr=1`.
+Top windows are `hour`, `day`, `week`, `month`, `year`, and `all`.
+RSS has no JSON `after` cursor; `max_pages` remains a compatibility input.
+Each run requests one snapshot with `limit=<max_posts>` (default/maximum 100).
+User/author mode is unavailable; historical `user` rows remain readable.
 
 ## 7. Security Considerations
 

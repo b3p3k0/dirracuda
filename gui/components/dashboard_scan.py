@@ -647,8 +647,7 @@ from gui.components.dashboard_searxng_scan import start_searxng_scan, _on_searxn
 def start_reddit_scan(dash, scan_request: dict) -> bool:
     """Launch a background Reddit ingest from a unified-scan request dict.
 
-    Cross-guards against both _reddit_scan_running (this path) and
-    _reddit_grab_running (legacy accessory path) to prevent DB lock contention.
+    Guards against another Reddit scan to prevent DB lock contention.
     Returns True if the worker thread started, False otherwise.
     """
     queue_managed = bool(scan_request.get("_provider_queue_managed", False))
@@ -662,7 +661,7 @@ def start_reddit_scan(dash, scan_request: dict) -> bool:
                 "A unified provider queue is running. Please wait for it to complete.",
             )
             return False
-    if getattr(dash, "_reddit_scan_running", False) or getattr(dash, "_reddit_grab_running", False):
+    if getattr(dash, "_reddit_scan_running", False):
         if not queue_managed:
             _mb().showwarning(
                 "Reddit Busy",

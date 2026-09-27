@@ -176,7 +176,7 @@ def test_launch_failure_records_error_and_continues(monkeypatch):
 
 def test_queue_start_rejects_conflicting_desktop_provider(monkeypatch):
     dash = _dash()
-    dash._reddit_grab_running = True
+    dash._reddit_scan_running = True
     box, calls = _messagebox_recorder()
     monkeypatch.setattr(provider_queue, "_mb", lambda: box)
 

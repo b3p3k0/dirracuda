@@ -866,17 +866,6 @@ class TestStartRedditScan:
         assert result is False
         assert warnings
 
-    def test_grab_running_blocks_core_scan(self, monkeypatch):
-        dash = _make_dash()
-        dash._reddit_grab_running = True
-        warnings = []
-        monkeypatch.setattr(
-            "gui.components.dashboard.messagebox.showwarning",
-            lambda *a, **k: warnings.append(a),
-        )
-        result = ds.start_reddit_scan(dash, _reddit_request())
-        assert result is False
-        assert warnings
 
     def test_builds_ingest_options_feed_mode(self, monkeypatch):
         dash = _make_dash()

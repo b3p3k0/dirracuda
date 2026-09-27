@@ -54,7 +54,6 @@ class UnifiedScanDialog:
         settings_manager: Optional[Any] = None,
         config_editor_callback: Optional[Callable[[str], None]] = None,
         query_editor_callback: Optional[Callable[[], None]] = None,
-        reddit_grab_callback: Optional[Callable[[], None]] = None,
     ) -> None:
         self.parent = parent
         self.config_path = Path(config_path).resolve()
@@ -62,7 +61,6 @@ class UnifiedScanDialog:
         self._settings_manager = settings_manager
         self.config_editor_callback = config_editor_callback
         self.query_editor_callback = query_editor_callback
-        self.reddit_grab_callback = reddit_grab_callback
         self.theme = get_theme()
         self.template_store = TemplateStore(settings_manager=settings_manager)
 
@@ -760,15 +758,6 @@ class UnifiedScanDialog:
             # Some Tk/WM combos reject grab while viewability is racing; keep dialog usable.
             pass
 
-    def _open_reddit_grab(self) -> None:
-        """Close this dialog and open the Reddit Grab flow via callback."""
-        if not self.reddit_grab_callback:
-            return
-        self._persist_dialog_state()
-        self.result = "cancel"
-        self.dialog.destroy()
-        self.reddit_grab_callback()
-
     # ------------------------------------------------------------------
     # Validation
     # ------------------------------------------------------------------
@@ -1185,7 +1174,6 @@ def show_unified_scan_dialog(
     settings_manager: Optional[Any] = None,
     config_editor_callback: Optional[Callable[[str], None]] = None,
     query_editor_callback: Optional[Callable[[], None]] = None,
-    reddit_grab_callback: Optional[Callable[[], None]] = None,
 ) -> Optional[str]:
     """Show the unified scan launch dialog as a single-instance window."""
     global _ACTIVE_UNIFIED_SCAN_DIALOG
@@ -1200,7 +1188,6 @@ def show_unified_scan_dialog(
         settings_manager=settings_manager,
         config_editor_callback=config_editor_callback,
         query_editor_callback=query_editor_callback,
-        reddit_grab_callback=reddit_grab_callback,
     )
     _ACTIVE_UNIFIED_SCAN_DIALOG = dialog
     try:

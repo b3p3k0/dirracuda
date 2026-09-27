@@ -32,8 +32,6 @@ from gui.utils.scan_manager import get_scan_manager
 from gui.components.unified_scan_dialog import show_unified_scan_dialog
 from gui.components.ftp_scan_dialog import show_ftp_scan_dialog
 from gui.components.http_scan_dialog import show_http_scan_dialog
-from gui.components.reddit_grab_dialog import show_reddit_grab_dialog
-from experimental.redseek.service import IngestOptions, IngestResult, run_ingest
 from gui.components.scan_results_dialog import show_scan_results_dialog
 from gui.components.batch_summary_dialog import show_batch_summary_dialog
 from gui.utils.settings_manager import get_settings_manager

@@ -130,7 +130,9 @@ For the full list of keyboard shortcuts, see [`docs/KBD_QUICKREF.md`](docs/KBD_Q
 
 ![livescan](img/livescan.png)
 
-Triggered from **▶ Start Scan** with the protocol(s) selected. All three follow the same pipeline: Shodan query → reachability check → protocol-specific verification. Only hosts that pass get stored; failures are recorded with a reason code so you can see exactly where each candidate dropped out. Scan summary shows Shodan candidates vs. verified count. The same host registry handles all three protocols - the same IP can carry SMB, FTP, and multiple HTTP endpoint entries without collision.
+**Start New Scan** is the desktop entry for Reddit, Self-hosted Search, and Shodan. Select the providers you want; they run one at a time. Both Reddit and Self-hosted Search write to the main database and sync targets into Server List.
+
+For **Shodan**, select SMB/FTP/HTTP protocols. All three follow the same pipeline: Shodan query → reachability check → protocol-specific verification. Only hosts that pass get stored; failures are recorded with a reason code so you can see exactly where each candidate dropped out. Scan summary shows Shodan candidates vs. verified count. The same host registry handles all three protocols - the same IP can carry SMB, FTP, and multiple HTTP endpoint entries without collision.
 
 ![start new scan dialog](img/scan.png)
 
@@ -157,6 +159,126 @@ Changes there are manual-save only.
 GUI scan dialogs no longer include a per-scan `Custom Shodan Filters` field; GUI query customization is centralized in `Edit Queries` / Dorkbook. CLI users can still pass ad-hoc filters with `--filter`.
 
 Start Scan shows a preflight confirmation that includes an approximate Shodan query-cost estimate before launch.
+
+### Self-hosted Search
+
+Select **Self-hosted Search** in **Start New Scan** to run open-directory dork queries against a SearXNG or DeGoog server. Confirmed open indexes are written to the main database and appear in Server List.
+
+Quick start:
+1. Dashboard → **▶ Start Scan** → select **Self-hosted Search**.
+2. Enter your instance URL, query, and result limit. Deselect other providers if you only want this search.
+3. Optionally enable **Run bulk probe after each scan**.
+4. Click **Start Scan** and review the preflight confirmation. The run checks instance reachability and validates JSON support on the first result page.
+5. Open **Server List** to review, probe, or browse the retained HTTP targets.
+
+Inputs (persisted across opens/restarts):
+- **Instance** — base URL of the SearXNG or DeGoog instance you control; an explicit `/search` or `/api/search` endpoint also works
+- **Query** — required dork query; starts blank unless saved previously (for example, `site:* intitle:"index of /"`)
+- **Results** — unique-result fetch cap per run (default 500, max 1,000)
+- **Run bulk probe after each scan** — optional bulk probe pass for retained results
+
+Start Scan also exposes **Request timeout**, **Short retry**, and **Long retry** tuning sliders.
+
+What happens during a run:
+- **Start Scan** executes the query, keeps only confirmed open-index results, and updates status with fetched/stored counts. Each fetched page is stored, classified, filtered, and optionally probed before the next page request. That work consumes the active pacing window; Dirracuda sleeps only for any time left over. Fetching deduplicates normalized URLs and stops at the requested unique-result count, 40 SearXNG pages or 10 DeGoog pages, or the first clean empty page. Temporary per-engine failures are advisory when a page still returns results, with 10/20/30-second soft backoff until a clean page resets normal pacing. An empty throttled page triggers a hard retry: early runs (fewer than 5 productive pages and fewer than 50 unique URLs) allow two retries (default 30 seconds, then 180 seconds); mature runs allow one (default 30 seconds only). Direct aggregator HTTP 429 responses use the same run-wide retry budget and honor a valid bounded `Retry-After`. Completed pages remain available if a later request fails, and partial runs still reach primary-DB sync. The 1,000-result setting is a ceiling, not a guarantee. If probe is enabled, Live Scan Output also reports probe progress and totals. On completion, retained search rows are auto-synced into main HTTP server surfaces. A standalone run shows a result popup, while Live Scan Output keeps the full rollup. In a multi-provider Start Scan run, the popup is suppressed while the serial provider queue continues.
+- **Cancel a running search** — use the **Running Tasks** control in the dashboard footer, select the Self-hosted Search task, and click **Cancel Task**. In a multi-provider Start Scan run, cancelling the provider queue task also cancels the active search. Cancelled runs still sync any retained open-index rows to the primary HTTP table, and completed results are preserved.
+
+Historical results from older sidecar databases remain available under
+**Database → [Legacy] Sidecar Data** for browsing and migration. New runs use
+the main database; no manual promotion step is needed.
+
+#### DeGoog setup
+
+Enter your instance base URL in Start New Scan. Dirracuda detects DeGoog through
+`/api/search-tabs` after a missing SearXNG `/config` route, then uses native JSON
+from `/api/search`. You can also enter the `/api/search` endpoint directly.
+No JSON/XML setting or SearXNG compatibility toggle is required.
+
+DeGoog must have web search engines installed and enabled. Its native API caps
+pagination at 10 pages, so a large requested result count may not be reached.
+Source names and snippets are retained with each result. API-key-protected
+DeGoog search is not supported by this integration; a 401/403 during a run
+reports that limitation. Existing instance authentication settings are unchanged.
+See the [DeGoog API reference](https://degoog-org.github.io/docs/api.html) and
+[search implementation reference](docs/SELF_HOSTED_SEARCH.md).
+
+#### SearXNG live validation (opt-in)
+
+`scripts/live_test_searxng.py` runs an end-to-end pipeline check against a real instance using a temporary database. Requires `--confirm-live`; never runs automatically.
+
+```bash
+./venv/bin/python scripts/live_test_searxng.py --confirm-live --max-results 100
+```
+
+#### SearXNG `format=json` and 403 troubleshooting
+
+If a search fails with a 403 on `format=json`, enable JSON output in your SearXNG `settings.yml`:
+
+```yaml
+search:
+  formats:
+    - html
+    - json
+```
+
+Then restart SearXNG and retry the search.
+
+### Reddit Ingestion (redseek)
+
+redseek ingests submissions from `r/opendirectories`. New runs write `reddit_posts`, `reddit_targets`, and `reddit_ingest_state` directly to the active primary DB, and parsed SMB/FTP/HTTP targets are automatically promoted into the main protocol tables at run completion. No manual "Add to dirracuda DB" step is needed for new runs.
+
+Server details → **Notes** receives the Reddit username, posting date (UTC), and
+full original post title when a target is promoted. Each distinct attribution is appended once;
+your existing notes stay intact and remain editable. Missing authors appear as
+`u/[unknown]`; missing or invalid posting dates are omitted. This also applies to legacy sidecar promotion. Existing hosts gain
+attribution when their targets are included in a later ingest; no bulk backfill runs.
+Older undated attributions remain intact; a later ingest appends the dated version once.
+
+Legacy data already in `~/.dirracuda/data/experimental/reddit_od.db` remains accessible under Database → [Legacy] Sidecar Data → Reddit Open Directory Posts, with manual promotion still available from that view.
+
+Launch from **▶ Start Scan** by selecting **Reddit**. Deselect other providers for a Reddit-only run, choose your options, then click **Start Scan**.
+
+Ingest modes in Start New Scan:
+
+| Mode | Endpoint | Required input | Notes |
+|------|----------|----------------|-------|
+| `feed` | `/r/opendirectories/{sort}.rss` | none | Default anonymous RSS mode |
+| `search` | `/r/opendirectories/search.rss` with `restrict_sr=1` | query | Subreddit-scoped keyword search |
+
+Sort options:
+- `new`
+- `top` with window `hour`, `day`, `week`, `month`, `year`, or `all`
+
+Only submissions exposed by Reddit's public Atom/RSS feeds are processed. Comments/replies are not.
+RSS does not expose the old JSON cursor, so each run makes one anonymous feed request. Dirracuda sends `limit=<Max posts>` and supports 1–100 posts per snapshot (default and maximum: 100); Reddit may still return fewer. `Max pages` is kept only for compatibility.
+User/author mode is unavailable in anonymous RSS mode. Historical rows from older user-mode runs remain viewable in existing databases.
+
+Shared scan option:
+- **Run bulk probe after each scan** — optional explicit probe pass for concrete HTTP/HTTPS/FTP targets found during that ingest run. Unknown-protocol rows are skipped with a clear notice instead of guessing a protocol. Probe summaries and snapshots are carried into the primary DB automatically.
+
+Successful standalone Reddit runs keep the existing result popup and also append a
+Shodan-style completion rollup to Live Scan Output. Multi-provider Start Scan runs
+suppress the popup while the serial queue continues. The console copy records posts,
+discovered/new targets, optional probe and sync totals, and the active primary database
+path.
+
+Review new targets in **Server List**, where the regular probe, browse, and
+extract actions apply. Reddit attribution appears in server Notes. Historical
+sidecar rows remain available through the legacy-data path above.
+
+Disclaimer:
+
+> Dirracuda's Reddit ingestion feature uses publicly accessible Atom/RSS feeds to retrieve posts from `r/opendirectories`.
+> No authentication is required, and only publicly available data is accessed.
+> This method is not part of Reddit's official API and may change or break at any time.
+
+Known limitations:
+- Reddit RSS feeds are unofficial and may change without notice
+- Data availability is limited and not a complete historical archive
+- RSS has reduced metadata compared with the discontinued JSON listing endpoint; NSFW filtering is best-effort
+- Rate limiting may interrupt runs (HTTP 429 aborts the current run)
+- Some posts contain no usable targets
+- Data quality depends entirely on user-submitted content
 
 ### Shodan Credits
 
@@ -364,7 +486,7 @@ Runtime settings are modular and stored under `~/.dirracuda/conf.d/`:
 - `core/security.json` - security integrations (`security`, `censys`)
 - `core/output.json` - output formatting settings (`output`)
 - `prefs/user-prefs.json` - GUI/user preferences (replaces legacy `state/gui_settings.json`)
-- `experimental/{se_dork,reddit_grab,dorkbook,keymaster,webui,sherlock}.json` - experimental module settings
+- `experimental/{se_dork,reddit_grab,dorkbook,keymaster,webui,sherlock}.json` - provider/accessory settings; existing filenames are retained for compatibility
 
 `~/.dirracuda/conf/config.json` is retained as a generated compatibility view for legacy readers.
 
@@ -381,143 +503,14 @@ The GUI includes a built-in config editor for common settings and an integrated 
 
 Accessories are grouped under the `⚗ Accessories` button in the dashboard header.
 
+Reddit and Self-hosted Search are launched from **Start New Scan**.
+
 The dialog is modeless and tab-based. Current tabs:
-- `Self-hosted Search`
-- `Reddit`
 - `Web UI`
 - `Dorkbook`
 - `Keymaster`
 - `Sherlock`
 - `Analyst`
-
-### Self-hosted Search
-
-![Self-hosted Search](img/searxng.png)
-
-Use this tab to run open-directory dork queries against a SearXNG or DeGoog server, keep confirmed open indexes, and review/probe the results.
-
-Quick start:
-1. Dashboard → `⚗ Accessories` → `Self-hosted Search` tab.
-2. Fill in your server and query.
-3. Click `Test` to confirm the server is reachable and JSON search is enabled.
-4. Click `Run` to collect results.
-5. Click `Open Results DB` to review and probe retained URLs.
-
-Inputs (persisted across opens/restarts):
-- **Server URL** — base URL of the SearXNG or DeGoog instance you control; an explicit `/search` or `/api/search` endpoint also works
-- **Query** — dork query (default: `site:* intitle:"index of /"`)
-- **Max results** — unique-result fetch cap per run (default 500, max 1,000)
-- **Run Probe on Results** — optional bulk probe pass for retained results
-
-What each action does:
-- **Test** checks server reachability and JSON search support.
-- **Run** executes the query, keeps only confirmed open-index results, and updates status with fetched/stored counts. Each fetched page is stored, classified, filtered, and optionally probed before the next page request. That work consumes the active pacing window; Dirracuda sleeps only for any time left over. Fetching deduplicates normalized URLs and stops at the requested unique-result count, 40 SearXNG pages or 10 DeGoog pages, or the first clean empty page. Temporary per-engine failures are advisory when a page still returns results, with 10/20/30-second soft backoff until a clean page resets normal pacing. An empty throttled page triggers a hard retry: early runs (fewer than 5 productive pages and fewer than 50 unique URLs) allow two retries (30 seconds, then 180 seconds); mature runs allow one (30 seconds only). Direct aggregator HTTP 429 responses use the same run-wide retry budget and honor a valid bounded `Retry-After`. Completed pages remain available if a later request fails, and partial runs still reach primary-DB sync. The 1,000-result setting is a ceiling, not a guarantee. If probe is enabled, the status line also shows probe totals (`✔/✖/○`). On completion, retained search rows are auto-synced into main HTTP server surfaces. A standalone run shows a result popup, while Live Scan Output keeps the full rollup. In a multi-provider Start Scan run, the popup is suppressed while the serial provider queue continues.
-- **Open Results DB** opens the search results browser against the active primary DB context for new runs. Historical sidecar data is still available from the legacy sidecar browser path.
-- **Cancel a running search** — use the **Running Tasks** control in the dashboard footer, select the Self-hosted Search task, and click **Cancel Task**. In a multi-provider Start Scan run, cancelling the provider queue task also cancels the active search. Cancelled runs still sync any retained open-index rows to the primary HTTP table, and completed results are preserved.
-
-![searxng db](img/searxng_db.png)
-
-Results browser:
-- Columns: `URL`, `Probed`, `Probe Preview`, `Checked`
-- Actions: `Copy URL`, `Open in Explorer`, `Open in system browser`, `Probe Selected` / `Probe URL`; double-click opens a read-only result details view.
-- Primary-backed mode hides manual promotion controls because retained search rows are synced during run completion. Legacy sidecar browsing keeps promotion controls for historical rows.
-
-#### DeGoog setup
-
-Enter your instance base URL and click **Test**. Dirracuda detects DeGoog through
-`/api/search-tabs` after a missing SearXNG `/config` route, then uses native JSON
-from `/api/search`. You can also enter the `/api/search` endpoint directly.
-No JSON/XML setting or SearXNG compatibility toggle is required.
-
-DeGoog must have web search engines installed and enabled. Its native API caps
-pagination at 10 pages, so a large requested result count may not be reached.
-Source names and snippets are retained with each result. API-key-protected
-DeGoog search is not supported by this integration; a 401/403 during **Test**
-reports that limitation. Existing instance authentication settings are unchanged.
-See the [DeGoog API reference](https://degoog-org.github.io/docs/api.html) and
-[search implementation reference](docs/SELF_HOSTED_SEARCH.md).
-
-#### SearXNG live validation (opt-in)
-
-`scripts/live_test_searxng.py` runs an end-to-end pipeline check against a real instance using a temporary database. Requires `--confirm-live`; never runs automatically.
-
-```bash
-./venv/bin/python scripts/live_test_searxng.py --confirm-live --max-results 100
-```
-
-#### SearXNG `format=json` and 403 troubleshooting
-
-If `Test` fails with a 403 on `format=json`, enable JSON output in your SearXNG `settings.yml`:
-
-```yaml
-search:
-  formats:
-    - html
-    - json
-```
-
-Then restart SearXNG and run `Test` again.
-
-### Reddit Ingestion (redseek)
-
-![reddit](img/reddit.png)
-
-redseek ingests submissions from `r/opendirectories`. New runs write `reddit_posts`, `reddit_targets`, and `reddit_ingest_state` directly to the active primary DB, and parsed SMB/FTP/HTTP targets are automatically promoted into the main protocol tables at run completion. No manual "Add to dirracuda DB" step is needed for new runs.
-
-Server details → **Notes** receives the Reddit username, posting date (UTC), and
-full original post title when a target is promoted. Each distinct attribution is appended once;
-your existing notes stay intact and remain editable. Missing authors appear as
-`u/[unknown]`; missing or invalid posting dates are omitted. This also applies to legacy sidecar promotion. Existing hosts gain
-attribution when their targets are included in a later ingest; no bulk backfill runs.
-Older undated attributions remain intact; a later ingest appends the dated version once.
-
-Legacy data already in `~/.dirracuda/data/experimental/reddit_od.db` remains accessible under Accessories → Legacy Sidecar Data → Reddit, with manual promotion still available from that view.
-
-Ingest modes in `Reddit Grab` (Accessories):
-
-| Mode | Endpoint | Required input | Notes |
-|------|----------|----------------|-------|
-| `feed` | `/r/opendirectories/{sort}.rss` | none | Default anonymous RSS mode |
-| `search` | `/r/opendirectories/search.rss` with `restrict_sr=1` | query | Subreddit-scoped keyword search |
-
-Sort options:
-- `new`
-- `top` with window `hour`, `day`, `week`, `month`, `year`, or `all`
-
-Only submissions exposed by Reddit's public Atom/RSS feeds are processed. Comments/replies are not.
-RSS does not expose the old JSON cursor, so each run makes one anonymous feed request. Dirracuda sends `limit=<Max posts>` and supports 1–100 posts per snapshot (default and maximum: 100); Reddit may still return fewer. `Max pages` is kept only for compatibility.
-User/author mode is unavailable in anonymous RSS mode. Historical rows from older user-mode runs remain viewable in existing databases.
-
-Reddit Grab options:
-- **Run probe on results** — optional explicit probe pass for concrete HTTP/HTTPS/FTP targets found during that ingest run. Unknown-protocol rows are skipped with a clear notice instead of guessing a protocol. Probe summaries and snapshots are carried into the primary DB automatically.
-
-Successful standalone Reddit runs keep the existing result popup and also append a
-Shodan-style completion rollup to Live Scan Output. Multi-provider Start Scan runs
-suppress the popup while the serial queue continues. The console copy records posts,
-discovered/new targets, optional probe and sync totals, and the active primary database
-path.
-
-![reddit db](img/reddit_db.png)
-
-Reddit Post DB (current runs — primary DB):
-- Columns include target metadata plus probe status, preview, and checked time.
-- `Probe Selected` runs the full probe stack for HTTP/HTTPS/FTP targets and stores the probe snapshot.
-- Double-click opens a read-only details view with Reddit metadata and the probe tree when a snapshot is available.
-- Rows from new runs are already synced to the main database; manual promotion is not available from this view.
-
-Disclaimer:
-
-> Dirracuda's Reddit ingestion feature uses publicly accessible Atom/RSS feeds to retrieve posts from `r/opendirectories`.
-> No authentication is required, and only publicly available data is accessed.
-> This method is not part of Reddit's official API and may change or break at any time.
-
-Known limitations:
-- Reddit RSS feeds are unofficial and may change without notice
-- Data availability is limited and not a complete historical archive
-- RSS has reduced metadata compared with the discontinued JSON listing endpoint; NSFW filtering is best-effort
-- Rate limiting may interrupt runs (HTTP 429 aborts the current run)
-- Some posts contain no usable targets
-- Data quality depends entirely on user-submitted content
 
 ### Dorkbook
 
