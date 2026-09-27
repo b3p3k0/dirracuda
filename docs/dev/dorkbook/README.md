@@ -1,7 +1,7 @@
 # Dorkbook Workspace
 
 Date: 2026-09-27
-Status: Unified library implemented; HI acceptance pending.
+Status: Unified library and Start Scan launch consolidation implemented; HI acceptance pending.
 
 Dorkbook is the shared dork library for Shodan and Self-hosted Search
 (SearXNG/DeGoog). Desktop and Web UI show provider groups, topic/text filters,
@@ -15,6 +15,8 @@ legacy dorks and take a SQLite-consistent backup before rebuilding the table.
 No primary results schema, verifier, crawling, or download behavior changed.
 
 ## Current references
+
+- [Start Scan follow-up](START_SCAN_DORKBOOK.md): aligned buttons, one dialog, independent provider queries.
 
 - [Implementation plan](IMPLEMENTATION_PLAN.md): approved behavior and U1–U6 cards.
 - [Unified validation](UNIFIED_VALIDATION.md): commands, live limits, and HI checklist.

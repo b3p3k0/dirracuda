@@ -55,7 +55,8 @@ def bind_self_hosted_query(dialog):
     dialog.dialog.bind("<FocusIn>", refresh, add="+")
 
 
-def open_self_hosted_dorkbook(dialog):
+def open_provider_dorkbook(dialog, provider):
+    """Open the same library from either provider, focusing only its group."""
     from gui.components.dorkbook_window import show_dorkbook_window
     show_dorkbook_window(dialog.dialog, settings_manager=dialog._settings_manager,
-                         scan_query_config_path=str(dialog.config_path), focus_provider="self_hosted")
+                         scan_query_config_path=str(dialog.config_path), focus_provider=provider)

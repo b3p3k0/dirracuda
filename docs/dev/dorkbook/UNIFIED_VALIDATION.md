@@ -2,6 +2,9 @@
 
 Date: 2026-09-27
 Status: implementation complete; HI acceptance pending.
+The [Start Scan follow-up](START_SCAN_DORKBOOK.md) retires the separate Shodan
+editor. Commands below record the earlier implementation snapshot; use the
+follow-up checks for the current launch paths.
 
 ## Outcome
 
@@ -111,10 +114,10 @@ stops on upstream throttling and has mocked regression coverage.
    through scrolling/jump controls. Built-ins are italic and cannot be changed.
 2. Filter Books, search EPUB, and select a row. Confirm full query/notes and
    destination preview. Selection/double-click must not move the default mark.
-3. Keep Start New Scan and Edit Queries open. Apply one dork to each Shodan
-   protocol and one to Self-hosted Search. Confirm only the matching query field
-   updates; no provider toggle, result cap, or scan changes. Save the Shodan
-   editor and verify it does not restore an older default.
+3. Keep Start New Scan open. Use either provider's Dorkbook button and apply
+   one dork to each Shodan protocol and one to Self-hosted Search. Confirm only
+   the matching default/input changes; no provider toggle, result cap, or scan
+   changes. Both buttons must reuse the same library window.
 4. Type a temporary manual Self-hosted Search query. Switch window focus:
    preserve that text. Explicitly Apply another web dork: replace that field.
    Close/reopen and restart Dirracuda: load the applied default again.

@@ -1,11 +1,33 @@
 # Dorkbook UI Sketches
 
+## Start Scan — approved consolidation follow-up, 2026-09-27
+
+```text
+Providers
+────────────────────────────────────────────────────────────────────────────
+☑ Shodan             ☑ SMB [1000] ☑ FTP [1000] ☑ HTTP [1000]  [Dorkbook...]
+                     Estimated cost / results...
+
+☑ Self-hosted Search Instance [https://search-instance_____]
+                     Query    [intitle:"Index of /" music_]  [Dorkbook...]
+                     Results  [1000]
+                     Request timeout  ─────────────────────────────────
+                     Short retry      ─────────────────────────────────
+                     Long retry       ─────────────────────────────────
+```
+
+Both buttons have the same label/size and right alignment. They open or reuse
+one Dorkbook window, focused on the relevant group without hiding the other.
+Applying a dork changes only its destination; Shodan HTTP ebooks and web music
+can be selected together. The separate Shodan editor is retired.
+[Implementation and validation](START_SCAN_DORKBOOK.md).
+
 ## Unified library — review draft, 2026-09-27
 
 HI direction: one view, provider headings with queries beneath them, and an
 **Apply to Search** action that saves the query as the default across runs.
-Example dorks below illustrate layout; the expanded catalog is not finalized
-or validated for live yield. Existing v1 sketches remain below as history.
+Example dorks below illustrate layout; the final catalog is documented in
+[CATALOG_RESEARCH.md](CATALOG_RESEARCH.md), with live-yield limits recorded separately. Existing v1 sketches remain below as history.
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────────────────────────┐

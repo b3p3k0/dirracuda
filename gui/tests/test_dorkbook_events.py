@@ -6,7 +6,6 @@ from unittest.mock import MagicMock
 import pytest
 
 from gui.components import dorkbook_events as events
-from gui.components.scan_dork_editor_dialog import ScanDorkEditorDialog
 
 
 class Var:
@@ -46,19 +45,6 @@ def test_other_destination_apply_does_not_change_input(tmp_path, path, destinati
     dialog = _scan(tmp_path, "manual")
     events.refresh_self_hosted_query(dialog, applied=(events.config_identity(tmp_path / path), destination, "new"))
     assert dialog.searxng_query_var.get() == "manual"
-
-
-def test_shodan_save_reconciles_untouched_fields(tmp_path):
-    dlg = ScanDorkEditorDialog.__new__(ScanDorkEditorDialog)
-    dlg.smb_dork_var = Var("old smb")
-    dlg.ftp_dork_var = Var("manual ftp")
-    dlg.http_dork_var = Var("old http")
-    dlg._open_dork_values = {"smb_dork": "old smb", "ftp_dork": "old ftp", "http_dork": "old http"}
-    data = {"shodan": {"query_components": {"base_query": "applied smb"}},
-            "ftp": {"shodan": {"query_components": {"base_query": "applied ftp"}}},
-            "http": {"shodan": {"query_components": {"base_query": "old http"}}}}
-    values = dlg._reconciled_dork_settings(data)
-    assert values == {"smb_dork": "applied smb", "ftp_dork": "manual ftp", "http_dork": "old http"}
 
 
 def test_scan_options_no_longer_persist_run_query():

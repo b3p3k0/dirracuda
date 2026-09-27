@@ -55,3 +55,12 @@ Date: 2026-04-19
   falsely fails after GUI tests and can falsely pass through cached imports.
 - Use ephemeral browser messages for cross-tab Apply. Do not persist query
   text in localStorage behind the user's preference-storage opt-in setting.
+
+## Start Scan consolidation (2026-09-27)
+
+- Consistent labels must lead to the same UI, not just similar-looking actions.
+  Check and remove superseded launch callbacks and their fallback dialogs.
+- Match widget type, width, padding, and right-edge anchoring across provider
+  panels; equal labels alone do not ensure alignment. Check resized layouts.
+- Validate consolidation by applying different provider queries in the same
+  real scan form, then inspect both persisted destinations and the built request.

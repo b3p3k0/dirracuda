@@ -154,9 +154,13 @@ a machine in the middle can intercept or impersonate the target. Disable it for
 strict verification. The Start Scan checkbox overrides this default for that
 run only.
 
-`Edit Queries` in Start Scan opens the modeless `Discovery Dorks` editor (single-instance) for SMB/FTP/HTTP base queries.
-Changes there are manual-save only.
-GUI scan dialogs no longer include a per-scan `Custom Shodan Filters` field; GUI query customization is centralized in `Edit Queries` / Dorkbook. CLI users can still pass ad-hoc filters with `--filter`.
+Both Shodan and Self-hosted Search have a `Dorkbook...` button in Start Scan.
+They open the same modeless library, focused on the corresponding provider.
+`Apply to Search` saves only the selected destination: Shodan SMB, FTP, HTTP,
+or Self-hosted Search. For example, one scan can use a Shodan HTTP ebook dork
+and a Self-hosted Search music dork independently.
+Create/edit custom dorks in Dorkbook; CLI users can still pass ad-hoc filters
+with `--filter`.
 
 Start Scan shows a preflight confirmation that includes an approximate Shodan query-cost estimate before launch.
 
@@ -521,7 +525,7 @@ Dorkbook keeps Shodan and Self-hosted Search dorks together in one library.
 Quick start:
 
 1. Dashboard → `⚗ Accessories` → `Dorkbook` → `Open Dorkbook`, or use
-   `Dorkbook` beside a scan query.
+   `Dorkbook...` in either provider section of Start Scan.
 2. Browse the expanded provider groups, use `Find Dork`, or filter by topic.
 3. Select a dork to preview its full query and notes. Click `Apply to Search`
    to save it as that destination's default across runs and restarts.

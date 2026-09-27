@@ -9,7 +9,6 @@ from experimental.dorkbook import store
 from experimental.dorkbook.defaults import read_defaults
 from gui.components.dorkbook_events import bind_self_hosted_query
 from gui.components.dorkbook_window import DorkbookWindow, _EntryEditorDialog
-from gui.components.scan_dork_editor_dialog import ScanDorkEditorDialog
 
 
 @pytest.fixture
@@ -60,26 +59,23 @@ def test_grouped_filter_preview_and_explicit_apply(ui):
     assert window.tree.selection() == ("shodan",)
 
 
-def test_apply_refreshes_open_scan_and_shodan_editor(ui):
+def test_provider_defaults_remain_independent_with_scan_open(ui):
     root, window, cfg, web_id, custom_id = ui
     scan = SimpleNamespace(dialog=tk.Toplevel(root), config_path=cfg, searxng_query_var=tk.StringVar(value="manual"),
                            _self_hosted_default="old web")
     bind_self_hosted_query(scan)
-    editor = ScanDorkEditorDialog(root, str(cfg))
     root.update()
-    editor.ftp_dork_var.set("manual ftp")
+    before = read_defaults(cfg)
     window.tree.selection_set(str(web_id))
     window._on_apply()
     assert scan.searxng_query_var.get() == 'intitle:"Index of" books'
+    assert read_defaults(cfg) == {**before, "self_hosted": 'intitle:"Index of" books'}
     window.tree.selection_set(str(custom_id))
     window._on_apply()
-    assert editor.http_dork_var.get() == 'http.title:"Index of" test'
-    assert editor.ftp_dork_var.get() == "manual ftp"
-    assert editor._validate_and_save()
-    assert read_defaults(cfg)["shodan:HTTP"] == 'http.title:"Index of" test'
-    assert read_defaults(cfg)["shodan:FTP"] == "manual ftp"
-    # Dorkbook survives closing the contextual editor.
-    editor.dialog.destroy()
+    assert read_defaults(cfg) == {**before, "self_hosted": 'intitle:"Index of" books',
+                                 "shodan:HTTP": 'http.title:"Index of" test'}
+    assert scan.searxng_query_var.get() == 'intitle:"Index of" books'
+    scan.dialog.destroy()
     assert window.window.winfo_exists()
 
 

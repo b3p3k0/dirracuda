@@ -25,7 +25,6 @@ from gui.components.query_budget_dialog import (
     persist_query_budget_state,
     resolve_config_path_from_settings,
 )
-from gui.components.scan_dork_editor_dialog import show_scan_dork_editor_dialog
 from gui.components.scan_preflight import run_preflight
 from shared.config import resolve_http_allow_insecure_tls
 from gui.utils.dialog_helpers import ensure_dialog_focus
@@ -53,14 +52,12 @@ class UnifiedScanDialog:
         scan_start_callback: Callable[[Dict[str, Any]], None],
         settings_manager: Optional[Any] = None,
         config_editor_callback: Optional[Callable[[str], None]] = None,
-        query_editor_callback: Optional[Callable[[], None]] = None,
     ) -> None:
         self.parent = parent
         self.config_path = Path(config_path).resolve()
         self.scan_start_callback = scan_start_callback
         self._settings_manager = settings_manager
         self.config_editor_callback = config_editor_callback
-        self.query_editor_callback = query_editor_callback
         self.theme = get_theme()
         self.template_store = TemplateStore(settings_manager=settings_manager)
 
@@ -653,47 +650,6 @@ class UnifiedScanDialog:
                 parent=self.dialog,
             )
 
-    def _open_query_editor(self) -> None:
-        """Open non-blocking discovery dork editor with defensive fallback."""
-        try:
-            show_scan_dork_editor_dialog(
-                parent=self.dialog,
-                config_path=str(self.config_path),
-                settings_manager=self._settings_manager,
-            )
-            return
-        except Exception as editor_exc:
-            if self.query_editor_callback:
-                try:
-                    self.query_editor_callback()
-                    return
-                except Exception as callback_exc:
-                    messagebox.showerror(
-                        "Query Editor Error",
-                        (
-                            "Failed to open discovery dork editor:\n"
-                            f"{editor_exc}\n\n"
-                            "Fallback query editor also failed:\n"
-                            f"{callback_exc}"
-                        ),
-                        parent=self.dialog,
-                    )
-                    return
-
-            messagebox.showwarning(
-                "Discovery Dorks Unavailable",
-                (
-                    "Failed to open discovery dork editor.\n"
-                    f"Reason: {editor_exc}\n\n"
-                    "Falling back to Application Configuration."
-                ),
-                parent=self.dialog,
-            )
-            try:
-                self._open_config_editor()
-            except Exception:
-                return
-
     def _on_cost_estimate_help_clicked(self, _event=None) -> None:
         self._show_cost_estimate_help_dialog()
 
@@ -1177,7 +1133,6 @@ def show_unified_scan_dialog(
     scan_start_callback: Callable[[Dict[str, Any]], None],
     settings_manager: Optional[Any] = None,
     config_editor_callback: Optional[Callable[[str], None]] = None,
-    query_editor_callback: Optional[Callable[[], None]] = None,
 ) -> Optional[str]:
     """Show the unified scan launch dialog as a single-instance window."""
     global _ACTIVE_UNIFIED_SCAN_DIALOG
@@ -1191,7 +1146,6 @@ def show_unified_scan_dialog(
         scan_start_callback=scan_start_callback,
         settings_manager=settings_manager,
         config_editor_callback=config_editor_callback,
-        query_editor_callback=query_editor_callback,
     )
     _ACTIVE_UNIFIED_SCAN_DIALOG = dialog
     try:

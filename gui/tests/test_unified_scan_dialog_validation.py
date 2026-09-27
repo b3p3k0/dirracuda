@@ -269,92 +269,7 @@ def test_try_grab_dialog_swallows_visibility_and_grab_errors():
     assert stub.grab_set_calls == 1
 
 
-def test_open_query_editor_opens_scan_dork_editor(monkeypatch):
-    dlg = UnifiedScanDialog.__new__(UnifiedScanDialog)
-    calls = {"editor": 0}
-    dlg._settings_manager = None
-    dlg.config_path = Path("/tmp/config.json")
-    dlg.dialog = object()
-    dlg.query_editor_callback = lambda: (_ for _ in ()).throw(AssertionError("fallback should not run"))
-    dlg._open_config_editor = lambda: (_ for _ in ()).throw(AssertionError("fallback should not run"))
-
-    monkeypatch.setattr(
-        "gui.components.unified_scan_dialog.show_scan_dork_editor_dialog",
-        lambda **_kwargs: calls.__setitem__("editor", calls["editor"] + 1),
-    )
-
-    dlg._open_query_editor()
-
-    assert calls["editor"] == 1
-
-
-def test_open_query_editor_falls_back_to_query_callback_when_editor_fails(monkeypatch):
-    dlg = UnifiedScanDialog.__new__(UnifiedScanDialog)
-    calls = {"query": 0, "fallback": 0}
-    dlg._settings_manager = None
-    dlg.config_path = Path("/tmp/config.json")
-    dlg.query_editor_callback = lambda: calls.__setitem__("query", calls["query"] + 1)
-    dlg._open_config_editor = lambda: calls.__setitem__("fallback", calls["fallback"] + 1)
-    dlg.dialog = object()
-
-    monkeypatch.setattr(
-        "gui.components.unified_scan_dialog.show_scan_dork_editor_dialog",
-        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
-    )
-    dlg._open_query_editor()
-
-    assert calls["query"] == 1
-    assert calls["fallback"] == 0
-
-
-def test_open_query_editor_falls_back_to_config_editor_when_editor_fails(monkeypatch):
-    dlg = UnifiedScanDialog.__new__(UnifiedScanDialog)
-    dlg._settings_manager = None
-    dlg.config_path = Path("/tmp/config.json")
-    dlg.query_editor_callback = None
-    calls = {"fallback": 0, "warning": 0}
-    dlg._open_config_editor = lambda: calls.__setitem__("fallback", calls["fallback"] + 1)
-    dlg.dialog = object()
-
-    monkeypatch.setattr(
-        "gui.components.unified_scan_dialog.show_scan_dork_editor_dialog",
-        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
-    )
-    monkeypatch.setattr(
-        "gui.components.unified_scan_dialog.messagebox.showwarning",
-        lambda *args, **kwargs: calls.__setitem__("warning", calls["warning"] + 1),
-    )
-
-    dlg._open_query_editor()
-
-    assert calls["warning"] == 1
-    assert calls["fallback"] == 1
-
-
-def test_open_query_editor_shows_error_if_editor_and_query_fallback_fail(monkeypatch):
-    dlg = UnifiedScanDialog.__new__(UnifiedScanDialog)
-    dlg._settings_manager = None
-    dlg.config_path = Path("/tmp/config.json")
-    dlg.query_editor_callback = lambda: (_ for _ in ()).throw(RuntimeError("fallback boom"))
-    dlg._open_config_editor = lambda: (_ for _ in ()).throw(AssertionError("config fallback should not run"))
-    dlg.dialog = object()
-    calls = {"error": 0}
-
-    monkeypatch.setattr(
-        "gui.components.unified_scan_dialog.show_scan_dork_editor_dialog",
-        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
-    )
-    monkeypatch.setattr(
-        "gui.components.unified_scan_dialog.messagebox.showerror",
-        lambda *args, **kwargs: calls.__setitem__("error", calls["error"] + 1),
-    )
-
-    dlg._open_query_editor()
-
-    assert calls["error"] == 1
-
-
-def test_show_unified_scan_dialog_passes_query_editor_callback(monkeypatch):
+def test_show_unified_scan_dialog_keeps_only_config_editor_callback(monkeypatch):
     captured = {}
 
     class _DialogStub:
@@ -372,11 +287,11 @@ def test_show_unified_scan_dialog_passes_query_editor_callback(monkeypatch):
         scan_start_callback=lambda _req: None,
         settings_manager=None,
         config_editor_callback=lambda _path: None,
-        query_editor_callback=lambda: None,
     )
 
     assert result == "start"
-    assert callable(captured["query_editor_callback"])
+    assert callable(captured["config_editor_callback"])
+    assert "query_editor_callback" not in captured
 
 
 def test_no_open_query_budget_dialog_method_on_unified_dialog():

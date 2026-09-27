@@ -34,7 +34,7 @@ class _ScanManagerStub:
         return False
 
 
-def test_show_quick_scan_dialog_passes_query_editor_callback(monkeypatch):
+def test_show_quick_scan_dialog_keeps_only_config_editor_callback(monkeypatch):
     dash = DashboardWidget.__new__(DashboardWidget)
     dash.parent = object()
     dash.config_path = "/tmp/config.json"
@@ -58,7 +58,7 @@ def test_show_quick_scan_dialog_passes_query_editor_callback(monkeypatch):
     dash._show_quick_scan_dialog()
 
     assert captured["config_editor_callback"] == dash._open_config_editor_from_scan
-    assert captured["query_editor_callback"] == dash._open_config_editor
+    assert "query_editor_callback" not in captured
 
 
 def test_show_quick_scan_dialog_does_not_pass_reddit_grab_callback(monkeypatch):

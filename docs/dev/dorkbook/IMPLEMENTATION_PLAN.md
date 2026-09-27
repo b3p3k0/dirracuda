@@ -33,8 +33,10 @@ this work touches it. Keep compatible internal paths and provider IDs.
   delete confirmation/session mute, singleton behavior, and window geometry.
 - Accessories and scan-query controls open the same library. A contextual
   launch focuses the appropriate provider without hiding the other group.
-- Keep direct query entry in scan controls. Dorkbook owns saved dorks; scan
-  controls own run setup. There is no second provider-specific dork collection.
+- Direct query entry remains in Self-hosted Search. Shodan custom queries are
+  edited in Dorkbook; its old separate editor was retired in the approved
+  [Start Scan follow-up](START_SCAN_DORKBOOK.md). Both launch buttons reuse
+  the same library. Scan controls own run setup.
 - Desktop and Web UI share provider-aware storage and persistent application.
   Web UI adopts the grouping and wording while retaining its existing CRUD
   scope; full desktop/Web CRUD parity is not required by this card.

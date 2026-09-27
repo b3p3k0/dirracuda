@@ -98,8 +98,9 @@ def build_searxng_sub_panel(
     )
 
     if vars_dict.get("open_dorkbook"):
-        dorkbook_button = ttk.Button(frame, text="Dorkbook…", command=vars_dict["open_dorkbook"], padding=(4, 0))
-        dorkbook_button.grid(row=1, column=2, sticky="w")
+        dorkbook_button = ttk.Button(frame, text="Dorkbook...", width=12, command=vars_dict["open_dorkbook"], padding=(4, 0))
+        dorkbook_button.grid(row=1, column=2, sticky="e")
+        frame._dorkbook_button = dorkbook_button
 
     _grid_label(frame, "Results", 2, 0, theme)
     results_entry = ttk.Entry(frame, textvariable=vars_dict["max_results"], width=8)

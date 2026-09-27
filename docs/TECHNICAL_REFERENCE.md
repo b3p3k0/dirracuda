@@ -522,7 +522,7 @@ The success marker is only emitted on the non-error path; its absence signals fa
 Structurally identical to FTP. Implementation lives in `commands/http/operation.py`.
 
 **Shodan dork:** defaults to `http.title:"Index of /"` from `http.shodan.query_components.base_query` in `~/.dirracuda/conf.d/core/scan.json` (page-based fetch with HTTP budget cap).
-Operators can edit SMB/FTP/HTTP discovery dorks from `Start Scan -> Edit Queries` (Discovery Dorks editor). GUI scan dialogs do not expose a per-scan custom-filter text box; that surface is intentionally centralized to avoid conflicting query-control paths.
+Both `Start Scan -> Dorkbook...` buttons open the shared library. Shodan focuses its group; Self-hosted Search focuses its group. Custom dorks are edited there, and Apply persists only the selected provider/protocol default. There is no separate Shodan query editor.
 
 **Target transport** is shared by verification, probing, browsing, and
 extraction. When a recorded IP exists, it remains the socket destination. A
@@ -981,8 +981,8 @@ being discarded. Desktop and Web UI expose both providers. See
 dirracuda
 └─ Dirracuda GUI (gui/components/dashboard.py shim -> gui/dashboard/widget.py)
    ├─ UnifiedScanDialog (gui/components/unified_scan_dialog.py)
-   │    ├─ ScanDorkEditorDialog (gui/components/scan_dork_editor_dialog.py)
-   │    │    └─ Open Dorkbook -> DorkbookWindow (singleton/modeless)
+   │    ├─ Shodan / Self-hosted Search Dorkbook... buttons
+   │    │    └─ DorkbookWindow (shared singleton/modeless)
    │    ├─ Provider queue -> Reddit / Self-hosted Search (in-process services)
    │    └─ Shodan -> ScanManager (gui/utils/scan_manager.py)
    │         └─ BackendInterface (gui/utils/backend_interface/interface.py)
@@ -1192,13 +1192,13 @@ Dashboard -> Accessories tab -> Open Dorkbook
   -> singleton modeless window (focus existing on repeated open)
 ```
 
-Discovery Dorks editor path:
+Start Scan contextual paths:
 
 ```text
-Dashboard -> Start Scan -> Edit Queries
-  -> ScanDorkEditorDialog (singleton modeless editor)
-  -> Save writes only SMB/FTP/HTTP base-query keys
-  -> Open Dorkbook button opens/focuses DorkbookWindow
+Dashboard -> Start Scan -> Shodan or Self-hosted Search -> Dorkbook...
+  -> dorkbook_events.open_provider_dorkbook(dialog, provider)
+  -> same DorkbookWindow, corresponding provider group focused
+  -> Apply changes only that dork's destination; no scan is started
 ```
 
 Unified-library behavior:

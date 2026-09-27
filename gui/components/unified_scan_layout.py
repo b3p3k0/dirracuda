@@ -7,6 +7,7 @@ from tkinter import ttk
 from typing import Any
 
 from gui.components.dashboard_provider_queue import PROVIDER_SPECS, rank_providers
+from gui.components.dorkbook_events import open_provider_dorkbook
 from gui.components.scan_dialog import ScanDialog
 from gui.components.scan_provider_options import (
     build_reddit_sub_panel,
@@ -281,7 +282,7 @@ def _build_provider_section(owner: Any, parent: tk.Widget) -> None:
         {
             "instance_url":      owner.searxng_instance_url_var,
             "query":             owner.searxng_query_var,
-            "open_dorkbook": lambda: _open_self_hosted_dorkbook(owner),
+            "open_dorkbook": lambda: open_provider_dorkbook(owner, "self_hosted"),
             "max_results":       owner.searxng_max_results_var,
             "request_timeout":   owner.searxng_request_timeout_var,
             "short_retry_delay": owner.searxng_short_retry_delay_var,
@@ -372,14 +373,12 @@ def _build_shodan_options(owner: Any, parent: tk.Widget) -> tk.Frame:
         entry = ttk.Entry(frame, textvariable=results_var, width=8)
         entry.grid(row=0, column=column + 1, sticky="w", padx=(0, 12), pady=2)
 
-    edit_button = tk.Button(
-        frame,
-        text="Edit Queries",
-        command=owner._open_query_editor,
-        font=owner.theme.fonts["small"],
+    dorkbook_button = ttk.Button(
+        frame, text="Dorkbook...", width=12, padding=(4, 0),
+        command=lambda: open_provider_dorkbook(owner, "shodan"),
     )
-    owner.theme.apply_to_widget(edit_button, "button_secondary")
-    edit_button.grid(row=0, column=6, sticky="e", pady=2)
+    dorkbook_button.grid(row=0, column=6, sticky="e", pady=2)
+    frame._dorkbook_button = dorkbook_button
     frame.grid_columnconfigure(6, weight=1)
 
     estimate_row = tk.Frame(frame)
@@ -649,8 +648,3 @@ def _build_footer(owner: Any) -> None:
     cancel_button = tk.Button(row, text="Cancel", command=owner._cancel)
     owner.theme.apply_to_widget(cancel_button, "button_secondary")
     cancel_button.pack(side=tk.RIGHT, padx=(0, 8))
-
-
-def _open_self_hosted_dorkbook(owner):
-    from gui.components.dorkbook_events import open_self_hosted_dorkbook
-    open_self_hosted_dorkbook(owner)
