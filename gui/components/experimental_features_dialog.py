@@ -73,14 +73,23 @@ class ExperimentalFeaturesDialog:
         notebook.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
 
         from gui.components.experimental_features.registry import build_all_tabs
-        tab_context = {**context, "settings_manager": settings_manager}
+        close_guards = []
+
+        def close() -> None:
+            if all(guard() for guard in close_guards):
+                dialog.destroy()
+
+        tab_context = {
+            **context, "settings_manager": settings_manager,
+            "register_close_guard": close_guards.append,
+        }
         build_all_tabs(notebook, tab_context)
 
         btn_frame = tk.Frame(outer)
         self._theme.apply_to_widget(btn_frame, "main_window")
         btn_frame.pack(fill=tk.X, pady=(8, 0))
 
-        close_btn = tk.Button(btn_frame, text="Close", command=dialog.destroy)
+        close_btn = tk.Button(btn_frame, text="Close", command=close)
         self._theme.apply_to_widget(close_btn, "button_secondary")
         close_btn.pack(side=tk.RIGHT)
         add_shortcut_hint(
@@ -89,9 +98,9 @@ class ExperimentalFeaturesDialog:
             "Enter close  •  Esc/Ctrl+W/Cmd+W close",
         )
 
-        dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
-        bind_submit_shortcuts(dialog, dialog.destroy, allow_text_submit_with_enter=True)
-        bind_close_shortcuts(dialog, dialog.destroy)
+        dialog.protocol("WM_DELETE_WINDOW", close)
+        bind_submit_shortcuts(dialog, close, allow_text_submit_with_enter=True)
+        bind_close_shortcuts(dialog, close)
 
         ensure_dialog_focus(dialog, parent)
 

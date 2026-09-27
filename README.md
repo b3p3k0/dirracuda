@@ -584,6 +584,9 @@ colors. Detail popups and Web UI Results show the latest saved Sherlock summary;
 the Web UI is currently read-only for Sherlock.
 
 Settings are stored at `~/.dirracuda/conf.d/experimental/sherlock.json`.
+Click **Save** to keep changes. Closing Accessories or Sherlock Settings with
+unsaved edits asks whether to discard them: **Yes** closes without saving;
+**Cancel** keeps the window and edits open.
 
 ### Analyst
 

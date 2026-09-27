@@ -169,6 +169,57 @@ def askyesnocancel(*args: Any, **kwargs: Any) -> Any:
     return _call("askyesnocancel", *args, **kwargs)
 
 
+def askyescancel(title: str, message: str, *, parent: tk.Widget) -> bool:
+    """Ask with exactly Yes/Cancel buttons; dismissal always means Cancel."""
+    from gui.utils.dialog_helpers import ensure_dialog_focus
+    from gui.utils.keybindings import bind_close_shortcuts
+    from gui.utils.style import get_theme
+
+    owner = _resolve_parent(parent)
+    previous_grab = parent.grab_current()
+    theme = get_theme()
+    dialog = tk.Toplevel(owner)
+    dialog.title(title)
+    dialog.transient(owner)
+    dialog.resizable(False, False)
+    theme.apply_to_widget(dialog, "main_window")
+    accepted = False
+
+    def finish(yes: bool = False) -> None:
+        nonlocal accepted
+        accepted = yes
+        dialog.destroy()
+
+    label = tk.Label(dialog, text=message, justify="left", wraplength=380)
+    theme.apply_to_widget(label, "label")
+    label.pack(padx=20, pady=(20, 12))
+    buttons = tk.Frame(dialog)
+    theme.apply_to_widget(buttons, "main_window")
+    buttons.pack(padx=20, pady=(0, 16), anchor="e")
+    yes_button = tk.Button(buttons, text="Yes", command=lambda: finish(True))
+    theme.apply_to_widget(yes_button, "button_secondary")
+    yes_button.pack(side=tk.LEFT, padx=(0, 8))
+    cancel_button = tk.Button(buttons, text="Cancel", command=finish, default=tk.ACTIVE)
+    theme.apply_to_widget(cancel_button, "button_secondary")
+    cancel_button.pack(side=tk.LEFT)
+    dialog.protocol("WM_DELETE_WINDOW", finish)
+    bind_close_shortcuts(dialog, finish)
+    dialog.bind("<Return>", lambda _event: finish(dialog.focus_get() == yes_button))
+    dialog.bind("<KP_Enter>", lambda _event: finish(dialog.focus_get() == yes_button))
+    dialog.update_idletasks()
+    dialog.grab_set()
+    dialog.after(0, cancel_button.focus_set)
+    ensure_dialog_focus(dialog, owner)
+    try:
+        dialog.wait_window()
+    finally:
+        if _widget_exists(previous_grab):
+            previous_grab.grab_set()
+        if owner is not None:
+            _restore_parent(owner)
+    return accepted
+
+
 def askretrycancel(*args: Any, **kwargs: Any) -> Any:
     return _call("askretrycancel", *args, **kwargs)
 
@@ -181,5 +232,6 @@ __all__ = [
     "askokcancel",
     "askyesno",
     "askyesnocancel",
+    "askyescancel",
     "askretrycancel",
 ] + [name for name in _CONSTANTS if name in globals()]

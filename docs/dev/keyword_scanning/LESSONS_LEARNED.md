@@ -184,3 +184,19 @@ Seeded before implementation. Append after each major card.
 39. Near-black and white alone have a small midtone gap where neither reaches
     4.5:1. A pure-black fallback closes that gap without changing the highlight.
     Regression cases around `#777777` keep the threshold honest.
+
+## C28 - Unsaved Settings On Close
+
+40. Guard the owning window's close routes, not just a tab button. Accessories
+    Close, X, Enter, and Escape/Ctrl+W all destroyed the same host without
+    consulting Sherlock. An optional close-guard registration lets the tab own
+    its dirty-state decision while both hosts use it consistently.
+
+41. Dirty state must include swatches and options, not only pattern edits.
+    Compare their staged values with a snapshot captured on load/successful
+    save. Failed saves keep the old baseline; reverting a value avoids a false
+    warning. The check needs no disk access or per-pattern work.
+
+42. Tk has no native Yes/Cancel messagebox. Keep the custom two-button prompt
+    in the safe-messagebox utility, default to Cancel, and restore any previous
+    grab so cancelling from a modal settings window does not break modality.

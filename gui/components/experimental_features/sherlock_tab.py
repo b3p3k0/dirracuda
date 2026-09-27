@@ -96,6 +96,7 @@ class SherlockTab:
         # True when pattern-manager edits have not been persisted to disk;
         # cleared only by a successful save (never auto-reset on manager open).
         self._pattern_manager_dirty: bool = False
+        self._saved_options = self._options_state()
         self._build(self.frame)
 
     # ------------------------------------------------------------------
@@ -112,6 +113,24 @@ class SherlockTab:
         except Exception:
             return default_settings()
         return settings_from_dict(raw)
+
+    def _options_state(self) -> tuple:
+        """Snapshot staged controls without validating, saving, or doing I/O."""
+        return (
+            self._ignore_case_var.get(), self._run_after_probe_var.get(),
+            tuple(self._color_vars[sev].get() for sev in _SEVERITY_ORDER),
+            tuple(self._user_color_vars[key].get() for key in USER_COLOR_KEYS),
+        )
+
+    def confirm_close(self) -> bool:
+        """Allow the host to close only after unsaved edits are acknowledged."""
+        if not self._pattern_manager_dirty and self._options_state() == self._saved_options:
+            return True
+        return safe_messagebox.askyescancel(
+            "Unsaved Sherlock Changes",
+            "You have unsaved Sherlock changes. Discard them?",
+            parent=self.frame.winfo_toplevel(),
+        )
 
     def _collect_colors(self) -> Optional[Dict[Severity, str]]:
         """Validate severity color entries; on first invalid show error, None."""
@@ -187,6 +206,7 @@ class SherlockTab:
             return False
         if ok:
             self._pattern_manager_dirty = False
+            self._saved_options = self._options_state()
             self._set_status("Saved.")
             return True
         self._set_status("Save failed; settings were not written.")
@@ -556,6 +576,9 @@ class SherlockTab:
 def build_sherlock_tab(parent: tk.Widget, context: dict) -> tk.Widget:
     """Build and return the Sherlock tab frame."""
     tab = SherlockTab(parent, context)
+    register = context.get("register_close_guard")
+    if register is not None:
+        register(tab.confirm_close)
     return tab.frame
 
 
@@ -571,14 +594,23 @@ def open_sherlock_settings_window(parent: tk.Widget, settings_manager: Any) -> N
     win.transient(parent)
     theme.apply_to_widget(win, "main_window")
 
-    frame = build_sherlock_tab(win, {"settings_manager": settings_manager})
+    close_guards = []
+
+    def close() -> None:
+        if all(guard() for guard in close_guards):
+            win.destroy()
+
+    frame = build_sherlock_tab(win, {
+        "settings_manager": settings_manager,
+        "register_close_guard": close_guards.append,
+    })
     frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
 
-    close_btn = tk.Button(win, text="Close", command=win.destroy)
+    close_btn = tk.Button(win, text="Close", command=close)
     theme.apply_to_widget(close_btn, "button_secondary")
     close_btn.pack(side=tk.RIGHT, padx=8, pady=(0, 8))
 
-    win.protocol("WM_DELETE_WINDOW", win.destroy)
+    win.protocol("WM_DELETE_WINDOW", close)
     win.grab_set()
     ensure_dialog_focus(win, parent)
     win.wait_window()

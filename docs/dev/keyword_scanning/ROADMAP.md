@@ -457,3 +457,25 @@ The new contrast test file is 121 lines. README is 770 -> 772. All touched
 files remain in the excellent band (<=1200). Diff/dead-code review found no
 obsolete path to remove; both tables use the same new helper. No dependency,
 schema, auth, saved-settings, or network changes.
+
+## C28 - Confirm Discarding Unsaved Sherlock Settings
+
+Status: implemented, 2026-09-27; HI visual acceptance pending. C27 accepted by
+HI before this card began.
+
+Accessories and standalone Sherlock Settings now check unsaved colors,
+options, and staged patterns before closing. Yes discards; Cancel retains edits.
+All existing host close routes use the same guard. Successful Save resets the
+baseline; failed Save does not. README and C28 document the behavior.
+
+Validation: C28's exact targeted Xvfb/pytest command passed **270 tests, no
+skips**; `git diff --check` passed. Real-Tk coverage includes all Accessories
+close routes, standalone settings, save/failure/revert behavior, Yes/Cancel
+buttons, dismissal defaults, and restoration of the previous modal grab.
+Full-suite and HI visual acceptance are not claimed.
+
+Line counts: Sherlock tab 584 -> 616, Accessories shell 154 -> 163,
+safe-messagebox 185 -> 237, new test file 182, README 772 -> 775. All touched
+files remain <=1200 lines. Existing oversized test files were run unchanged.
+Close-route review found no remaining direct host-destroy callbacks to remove
+in these two settings hosts; registry and other tabs remain unchanged.

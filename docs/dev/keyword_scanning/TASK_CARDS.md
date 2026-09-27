@@ -693,3 +693,41 @@ Sources:
 - [W3C G18 contrast calculation and 4.5:1 target](https://www.w3.org/WAI/WCAG21/Techniques/general/G18)
 - Local theme state mapping: `gui/utils/style.py`, Treeview configuration.
 - Local display contract: `SPEC.md`, Display Tint Precedence.
+
+## C28 - Confirm Discarding Unsaved Sherlock Settings
+
+Status: implemented, 2026-09-27; HI visual acceptance pending. HI authorized
+direct implementation and commit after accepting C27's visual result.
+
+Issue/root cause: Accessories wired Close, window X, and keyboard close routes
+directly to `destroy`. Sherlock tracked staged pattern edits, but colors and
+options had no saved-state comparison and no host close guard.
+
+Fix:
+- Snapshot the color/option controls on load and successful save. At close,
+  compare those values and the existing pattern dirty flag. No disk read,
+  settings write, or pattern scan is needed to decide whether to prompt.
+- Register Sherlock's close guard with Accessories and the standalone Sherlock
+  Settings host. Every existing host close route checks it before destroying.
+- Show `You have unsaved Sherlock changes. Discard them?` with exactly Yes and
+  Cancel through `safe_messagebox.askyescancel`. Yes permits discard; Cancel,
+  Escape, window X, and default Enter keep edits open. Focused Yes accepts Enter.
+- Use a small themed prompt because native Tk messageboxes offer Yes/No or
+  Yes/No/Cancel, not Yes/Cancel. Restore any previous modal grab on dismissal.
+- A failed save keeps the warning; a successful save clears it. Reverting
+  color/option edits to their loaded/saved values closes without a warning.
+- Other Accessories tabs retain their existing save/close behavior. Closing
+  the whole application is outside this card.
+
+Validation command:
+`xvfb-run -a ./venv/bin/python -m pytest gui/tests/test_sherlock_unsaved_changes.py gui/tests/test_sherlock_tab.py gui/tests/test_experimental_features_dialog.py gui/tests/test_experimental_features_dialog_geometry.py gui/tests/test_safe_messagebox.py gui/tests/test_theme_style_guardrail.py gui/tests/test_messagebox_guardrail.py -q`
+
+Also run `git diff --check` and before/after line counts. Existing large test
+modules are exercised unchanged; new regression coverage lives in its own
+small file. README now explains Save and the discard choices.
+
+HI check: `./dirracuda` -> Accessories -> Sherlock; change a color, Close,
+Cancel (edit remains), then Close/Yes (discard). Reopen and verify the original
+color. Change it again, Save, then Close: no prompt. Also try the window X.
+
+Source: [Python's native messagebox choices](https://docs.python.org/3/library/tkinter.messagebox.html).
