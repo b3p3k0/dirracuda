@@ -1,8 +1,8 @@
 # Dorkbook v1 Roadmap
 
 Current work (2026-09-27): use the [unified-library plan](IMPLEMENTATION_PLAN.md).
-U1 provider-aware storage is implemented; U2–U6 remain pending. The objectives
-below record the original v1 rollout.
+U1–U6 are implemented; [HI acceptance](UNIFIED_VALIDATION.md) remains pending.
+The objectives below record the original v1 rollout.
 
 Date: 2026-04-19  
 Execution model: one card at a time, explicit PASS/FAIL evidence

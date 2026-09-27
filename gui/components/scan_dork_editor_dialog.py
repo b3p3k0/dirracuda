@@ -7,7 +7,6 @@ base queries in config.json.
 
 from __future__ import annotations
 
-import json
 import tkinter as tk
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
@@ -29,6 +28,8 @@ from gui.utils.keybindings import (
     bind_submit_shortcuts,
 )
 from gui.utils.style import get_theme
+from experimental.dorkbook.defaults import read_defaults, reconcile_query
+from gui.components.dorkbook_events import config_identity
 from shared.config import load_config
 from shared.path_service import get_paths
 
@@ -52,14 +53,6 @@ def _is_canonical_runtime_config_path(config_path: Path) -> bool:
         return config_path.expanduser().resolve(strict=False) == _CANONICAL_CONFIG_PATH
     except Exception:
         return False
-
-
-def _resolve_field_for_protocol(protocol: str) -> str:
-    normalized = str(protocol or "").strip().upper()
-    field = _PROTOCOL_TO_DORK_FIELD.get(normalized)
-    if field is None:
-        raise ValueError(f"Unsupported protocol for discovery dorks: {protocol!r}")
-    return field
 
 
 class ScanDorkEditorDialog:
@@ -101,6 +94,8 @@ class ScanDorkEditorDialog:
         self.dialog = tk.Toplevel(parent)
         self._load_dorks_from_config()
         self._create_dialog()
+        self.dialog.bind("<<DorkbookApplied>>", self._on_dorkbook_applied, add="+")
+        self.dialog.bind("<FocusIn>", self._on_focus_refresh, add="+")
 
     def _load_dorks_from_config(self) -> None:
         config_data = self._load_runtime_config_json(self.config_path)
@@ -245,6 +240,7 @@ class ScanDorkEditorDialog:
                 parent=self.dialog,
                 settings_manager=self.settings_manager,
                 scan_query_config_path=str(self.config_path),
+                focus_provider="shodan",
             )
         except Exception as exc:
             messagebox.showerror(
@@ -252,6 +248,28 @@ class ScanDorkEditorDialog:
                 f"Could not open Dorkbook:\n{exc}",
                 parent=self._messagebox_parent(),
             )
+
+    def _refresh_saved_defaults(self, applied=None):
+        latest = read_defaults(str(self.config_path))
+        for protocol, field in _PROTOCOL_TO_DORK_FIELD.items():
+            query = latest["shodan:" + protocol]
+            baseline = self._open_dork_values[field]
+            current = self._field_var(field).get()
+            explicit = applied == "shodan:" + protocol
+            self._field_var(field).set(query if explicit else reconcile_query(current, baseline, query))
+            self._open_dork_values[field] = query
+
+    def _on_dorkbook_applied(self, event):
+        payload = getattr(event.widget, "_dorkbook_applied", None)
+        if payload and payload[0] == config_identity(self.config_path):
+            self._refresh_saved_defaults(applied=payload[1])
+
+    def _on_focus_refresh(self, event):
+        if event.widget is self.dialog:
+            try:
+                self._refresh_saved_defaults()
+            except (OSError, ValueError, RuntimeError):
+                pass
 
     def _field_var(self, field: str) -> tk.StringVar:
         if field == "smb_dork":
@@ -311,26 +329,17 @@ class ScanDorkEditorDialog:
         return self.parent
 
     def _load_runtime_config_json(self, config_path: Path, *, strict: bool = False) -> Dict[str, Any]:
-        if _is_canonical_runtime_config_path(config_path):
-            try:
-                return dict(load_config().config or {})
-            except Exception as exc:
-                if strict:
-                    raise ValueError("Failed to load canonical runtime config") from exc
-                return {}
-        if not config_path.exists():
-            return {}
-        try:
-            loaded = json.loads(config_path.read_text(encoding="utf-8"))
-        except Exception as exc:
-            if strict:
-                raise ValueError(f"Config file is not valid JSON: {config_path}") from exc
-            return {}
-        if isinstance(loaded, dict):
-            return loaded
-        if strict:
-            raise ValueError(f"Config file root must be a JSON object: {config_path}")
-        return {}
+        explicit = None if _is_canonical_runtime_config_path(config_path) else str(config_path)
+        return dict(load_config(explicit, strict=strict).config or {})
+
+    def _reconciled_dork_settings(self, config_data):
+        current = self._current_dork_settings()
+        latest = read_discovery_dorks(config_data)
+        baseline = getattr(self, "_open_dork_values", current)
+        for field in self.DORK_FIELDS:
+            current[field] = reconcile_query(current[field], baseline[field], latest[field])
+            self._field_var(field).set(current[field])
+        return current
 
     def _validate_and_save(self) -> bool:
         self._validate_all_fields()
@@ -348,26 +357,15 @@ class ScanDorkEditorDialog:
             return False
 
         try:
-            if _is_canonical_runtime_config_path(self.config_path):
-                cfg = load_config()
-                config_data = {
-                    "shodan": cfg.get("shodan", default={}) or {},
-                    "ftp": cfg.get("ftp", default={}) or {},
-                    "http": cfg.get("http", default={}) or {},
-                }
-                apply_discovery_dorks(config_data, self._current_dork_settings())
-                updates = {
-                    section: config_data[section]
-                    for section in ("shodan", "ftp", "http")
-                    if isinstance(config_data.get(section), dict)
-                }
-                if not cfg.update_sections(updates):
-                    raise RuntimeError("failed to persist discovery dork sections")
-            else:
-                config_data = self._load_runtime_config_json(self.config_path, strict=True)
-                apply_discovery_dorks(config_data, self._current_dork_settings())
-                self.config_path.parent.mkdir(parents=True, exist_ok=True)
-                self.config_path.write_text(json.dumps(config_data, indent=2), encoding="utf-8")
+            explicit = None if _is_canonical_runtime_config_path(self.config_path) else str(self.config_path)
+            cfg = load_config(explicit, strict=True)
+            config_data = {
+                section: cfg.get(section, default={}) or {}
+                for section in ("shodan", "ftp", "http")
+            }
+            apply_discovery_dorks(config_data, self._reconciled_dork_settings(config_data))
+            if not cfg.update_sections(config_data):
+                raise RuntimeError("failed to persist discovery dork sections")
 
             self.smb_dork = self._field_var("smb_dork").get().strip()
             self.ftp_dork = self._field_var("ftp_dork").get().strip()
@@ -418,19 +416,6 @@ class ScanDorkEditorDialog:
         self.config_path = _normalize_config_path(config_path)
         if settings_manager is not None:
             self.settings_manager = settings_manager
-
-    def populate_from_dorkbook(self, *, protocol: str, query: str) -> None:
-        """
-        Populate one protocol field from Dorkbook without saving.
-
-        This marks the editor dirty in-memory and keeps explicit Save/Cancel behavior.
-        """
-        field = _resolve_field_for_protocol(protocol)
-        normalized_query = str(query or "").strip()
-        if not normalized_query:
-            raise ValueError("Selected dork query is blank.")
-        self._field_var(field).set(normalized_query)
-        self.focus_dialog()
 
 
 _ACTIVE_SCAN_DORK_EDITOR_DIALOG: Optional[ScanDorkEditorDialog] = None
@@ -488,24 +473,3 @@ def show_scan_dork_editor_dialog(
         config_path=config_path,
         settings_manager=settings_manager,
     )
-
-
-def populate_discovery_dork_from_dorkbook(
-    parent: tk.Widget,
-    *,
-    config_path: str,
-    protocol: str,
-    query: str,
-    settings_manager: Optional[Any] = None,
-) -> None:
-    """
-    Open/focus the Discovery Dorks editor and populate one protocol query.
-
-    Population is intentionally unsaved until the user clicks Save.
-    """
-    dialog = _get_or_open_scan_dork_editor_dialog(
-        parent=parent,
-        config_path=config_path,
-        settings_manager=settings_manager,
-    )
-    dialog.populate_from_dorkbook(protocol=protocol, query=query)

@@ -15,7 +15,7 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
-from shared.config_store import ConfigStore, get_config_store
+from shared.config_store import ConfigStore, get_config_store, _atomic_write_json
 from shared.path_service import get_paths, get_legacy_paths
 
 logger = logging.getLogger(__name__)
@@ -146,7 +146,7 @@ class SMBSeekConfig:
     and the new reorganized structure.
     """
     
-    def __init__(self, config_file: Optional[str] = None):
+    def __init__(self, config_file: Optional[str] = None, *, strict: bool = False):
         """
         Initialize configuration manager.
         
@@ -155,6 +155,7 @@ class SMBSeekConfig:
                 (default: ~/.dirracuda/conf/config.json with legacy fallback)
         """
         self._config_store = get_config_store(paths=_PATHS, legacy=_LEGACY)
+        self._strict = strict
         self._explicit_config_file = (
             Path(config_file).expanduser().resolve(strict=False)
             if config_file
@@ -163,6 +164,14 @@ class SMBSeekConfig:
         self.config_file = str(
             self._explicit_config_file if self._explicit_config_file else _PATHS.config_file
         )
+        if strict:
+            if self._explicit_config_file is not None:
+                with self._explicit_config_file.open(encoding="utf-8") as handle:
+                    payload = json.load(handle)
+                if not isinstance(payload, dict):
+                    raise ValueError("Configuration root must be an object")
+            else:
+                self._config_store.validate_runtime_sources()
         if self._explicit_config_file is None:
             ensure_http_tls_policy_migrated(self._config_store)
         self.config = self.load_configuration()
@@ -429,12 +438,20 @@ class SMBSeekConfig:
 
         try:
             if self._explicit_config_file is not None:
-                current = load_json_config(self.config_file)
+                if self._strict:
+                    with open(self.config_file, encoding="utf-8") as handle:
+                        current = json.load(handle)
+                    if not isinstance(current, dict):
+                        raise ValueError("Configuration root must be an object")
+                else:
+                    current = load_json_config(self.config_file)
                 if not isinstance(current, dict):
                     current = {}
                 for section, value in updates.items():
                     current[section] = value
-                if not save_json_config(self.config_file, current):
+                if self._strict:
+                    _atomic_write_json(Path(self.config_file), current)
+                elif not save_json_config(self.config_file, current):
                     return False
                 self.config = self._deep_merge(self.config, updates)
                 return True
@@ -936,7 +953,7 @@ def resolve_http_allow_insecure_tls(config_path: Optional[str] = None) -> bool:
     return SMBSeekConfig(config_file=explicit).get_http_allow_insecure_tls()
 
 
-def load_config(config_file: Optional[str] = None) -> SMBSeekConfig:
+def load_config(config_file: Optional[str] = None, *, strict: bool = False) -> SMBSeekConfig:
     """
     Convenience function to load Dirracuda configuration.
 
@@ -946,4 +963,4 @@ def load_config(config_file: Optional[str] = None) -> SMBSeekConfig:
     Returns:
         SMBSeekConfig instance
     """
-    return SMBSeekConfig(config_file)
+    return SMBSeekConfig(config_file, strict=strict)

@@ -1,190 +1,152 @@
-var token = document.querySelector('meta[name="csrf-token"]').content;
-var activeProtocol = "SMB";
-var searchTimer = null;
-
-function escHtml(str) {
-  if (str == null) return '';
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-function showStatus(msg, isError) {
-  var el = document.getElementById('dorkbook-status');
-  el.textContent = msg;
-  el.className = isError ? 'status-error' : 'status-ok';
-}
-
-function loadEntries(protocol) {
-  var search = document.getElementById('dorkbook-search').value || '';
-  var url = '/api/dorkbook/entries?protocol=' + encodeURIComponent(protocol) +
-    (search ? '&search=' + encodeURIComponent(search) : '');
-  fetch(url, {credentials: 'same-origin'})
-    .then(function(r) { return r.json(); })
-    .then(function(data) { renderEntries(data.entries || []); })
-    .catch(function(err) { showStatus('Failed to load entries: ' + err, true); });
-}
-
-function renderEntries(entries) {
-  var tbody = document.getElementById('dorkbook-tbody');
-  tbody.innerHTML = '';
-  if (!entries.length) {
-    var tr = document.createElement('tr');
-    var td = document.createElement('td');
-    td.colSpan = 4;
-    td.textContent = 'No recipes. Use Add below to create one.';
-    tr.appendChild(td);
-    tbody.appendChild(tr);
-    return;
+/* Unified provider library. Selecting a row is always preview-only. */
+(function () {
+  'use strict';
+  var token = document.querySelector('meta[name="csrf-token"]').content;
+  var entries = [], defaults = {}, selected = null, loadVersion = 0, searchTimer;
+  var applyChannel = null;
+  try { applyChannel = new BroadcastChannel('dirracuda.dorkbook.applied'); } catch (_) {}
+  var labels = {shodan: 'Shodan', self_hosted: 'Self-hosted Search'};
+  var focusProvider = new URLSearchParams(window.location.search).get('provider');
+  function el(id) { return document.getElementById(id); }
+  function status(message, error) {
+    el('dorkbook-status').textContent = message;
+    el('dorkbook-status').className = error ? 'status-error' : 'status-ok';
   }
-  entries.forEach(function(row) {
-    var tr = document.createElement('tr');
-    if (row.row_kind === 'builtin') {
-      tr.classList.add('is-builtin');
-    }
-    var tdNick = document.createElement('td');
-    tdNick.textContent = row.nickname || '';
-    if (row.row_kind === 'builtin') {
-      tdNick.style.fontStyle = 'italic';
-    }
-    var tdQuery = document.createElement('td');
-    tdQuery.textContent = row.query || '';
-    var tdNotes = document.createElement('td');
-    tdNotes.textContent = row.notes || '';
-    var tdActions = document.createElement('td');
-
-    var applyBtn = document.createElement('button');
-    applyBtn.type = 'button';
-    applyBtn.className = 'btn btn-secondary btn-sm';
-    applyBtn.textContent = 'Apply to Config';
-    applyBtn.setAttribute('data-entry-id', row.entry_id);
-    tdActions.appendChild(applyBtn);
-
-    if (row.row_kind !== 'builtin') {
-      var delBtn = document.createElement('button');
-      delBtn.type = 'button';
-      delBtn.className = 'btn btn-danger btn-sm';
-      delBtn.textContent = 'Delete';
-      delBtn.style.marginLeft = '0.4rem';
-      delBtn.setAttribute('data-entry-id', row.entry_id);
-      tdActions.appendChild(delBtn);
-      delBtn.addEventListener('click', function() {
-        handleDelete(Number(this.getAttribute('data-entry-id')));
+  async function api(url, options) {
+    var response = await fetch(url, Object.assign({credentials: 'same-origin', cache: 'no-store'}, options));
+    var data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Request failed (' + response.status + ')');
+    return data;
+  }
+  function destination(row) {
+    return row.provider === 'self_hosted' ? 'self_hosted' : 'shodan:' + row.protocol;
+  }
+  function preview(row) {
+    selected = row;
+    el('preview-name').textContent = row ? row.nickname || 'Unnamed dork' : 'Select a dork';
+    el('preview-destination').textContent = row ? labels[row.provider] + (row.protocol ? ' / ' + row.protocol : '') : '';
+    el('preview-kind').textContent = row ? (row.row_kind === 'builtin' ? 'Built-in · read-only' : 'Custom dork') : '';
+    el('preview-query').textContent = row ? row.query : '';
+    el('copy-dork').disabled = !row;
+    el('preview-notes').textContent = row ? row.notes || '' : '';
+    el('apply-dork').disabled = !row;
+    el('delete-dork').disabled = !row || row.row_kind === 'builtin';
+    document.querySelectorAll('[data-entry-id]').forEach(function (tr) {
+      tr.setAttribute('aria-selected', row && Number(tr.dataset.entryId) === row.entry_id ? 'true' : 'false');
+    });
+  }
+  function render() {
+    var tbody = el('dorkbook-tbody');
+    tbody.replaceChildren();
+    var search = el('dorkbook-search').value.trim().toLowerCase();
+    var topic = el('dorkbook-topic').value;
+    ['shodan', 'self_hosted'].forEach(function (provider) {
+      var group = document.createElement('tr'), heading = document.createElement('th');
+      group.id = 'provider-' + provider;
+      heading.colSpan = 5; heading.scope = 'rowgroup'; heading.textContent = labels[provider];
+      group.appendChild(heading); tbody.appendChild(group);
+      var filtered = entries.filter(function (row) {
+        return row.provider === provider && (!topic || row.topic === topic) &&
+          [row.nickname, row.query, row.notes, row.topic].join(' ').toLowerCase().includes(search);
       });
-    }
-
-    applyBtn.addEventListener('click', function() {
-      handleApply(Number(this.getAttribute('data-entry-id')));
+      if (!filtered.length) {
+        var empty = document.createElement('tr'), cell = document.createElement('td');
+        cell.colSpan = 5; cell.textContent = 'No matching dorks.'; empty.appendChild(cell); tbody.appendChild(empty);
+      }
+      filtered.forEach(function (row) {
+        var tr = document.createElement('tr'); tr.dataset.entryId = row.entry_id;
+        tr.tabIndex = 0;
+        [row.nickname || 'Unnamed dork', row.protocol || '—', row.topic, row.query,
+          defaults[destination(row)] === row.query ? '✓ Default' : ''].forEach(function (value, index) {
+          var td = document.createElement('td');
+          td.dataset.label = ['Name', 'Protocol', 'Topic', 'Query', 'Default'][index];
+          if (row.row_kind === 'builtin') {
+            var italic = document.createElement('em'); italic.textContent = value; td.appendChild(italic);
+          } else { td.textContent = value; }
+          tr.appendChild(td);
+        });
+        tr.addEventListener('click', function () { preview(row); });
+        tr.addEventListener('keydown', function (event) {
+          if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); preview(row); }
+        });
+        tbody.appendChild(tr);
+      });
     });
-
-    tr.appendChild(tdNick);
-    tr.appendChild(tdQuery);
-    tr.appendChild(tdNotes);
-    tr.appendChild(tdActions);
-    tbody.appendChild(tr);
-  });
-}
-
-function switchTab(protocol) {
-  activeProtocol = protocol;
-  document.getElementById('add-protocol').value = protocol;
-  var tabs = document.querySelectorAll('#dorkbook-tabs .tab-btn');
-  tabs.forEach(function(btn) {
-    var active = btn.getAttribute('data-protocol') === protocol;
-    btn.classList.toggle('active', active);
-    btn.setAttribute('aria-selected', active ? 'true' : 'false');
-  });
-  loadEntries(protocol);
-}
-
-function handleAdd(event) {
-  event.preventDefault();
-  var protocol = document.getElementById('add-protocol').value;
-  var nickname = document.getElementById('add-nickname').value || '';
-  var query = document.getElementById('add-query').value || '';
-  var notes = document.getElementById('add-notes').value || '';
-  if (!query.trim()) {
-    showStatus('Query is required.', true);
-    return;
+    preview(selected && entries.find(function (row) { return row.entry_id === selected.entry_id; }) || null);
   }
-  fetch('/api/dorkbook/entries', {
-    method: 'POST',
-    credentials: 'same-origin',
-    headers: {'Content-Type': 'application/json', 'X-CSRF-Token': token},
-    body: JSON.stringify({protocol: protocol, nickname: nickname, query: query, notes: notes})
-  })
-    .then(function(r) {
-      if (r.status === 409) {
-        return r.json().then(function(d) { throw new Error(d.error || 'duplicate entry'); });
-      }
-      if (!r.ok) {
-        return r.json().then(function(d) { throw new Error(d.error || 'add failed'); });
-      }
-      return r.json();
-    })
-    .then(function() {
-      document.getElementById('dorkbook-add-form').reset();
-      document.getElementById('add-protocol').value = activeProtocol;
-      showStatus('Entry added.', false);
-      loadEntries(activeProtocol);
-    })
-    .catch(function(err) { showStatus('Add failed: ' + err.message, true); });
-}
-
-function handleApply(entryId) {
-  fetch('/api/dorkbook/prefill', {
-    method: 'POST',
-    credentials: 'same-origin',
-    headers: {'Content-Type': 'application/json', 'X-CSRF-Token': token},
-    body: JSON.stringify({entry_id: entryId})
-  })
-    .then(function(r) {
-      if (!r.ok) {
-        return r.json().then(function(d) { throw new Error(d.error || 'apply failed'); });
-      }
-      return r.json();
-    })
-    .then(function(data) {
-      showStatus('Applied ' + (data.protocol || '') + ' query to discovery config.', false);
-    })
-    .catch(function(err) { showStatus('Apply failed: ' + err.message, true); });
-}
-
-function handleDelete(entryId) {
-  fetch('/api/dorkbook/entries/' + entryId, {
-    method: 'DELETE',
-    credentials: 'same-origin',
-    headers: {'X-CSRF-Token': token}
-  })
-    .then(function(r) {
-      if (!r.ok) {
-        return r.json().then(function(d) { throw new Error(d.error || 'delete failed'); });
-      }
-      return r.json();
-    })
-    .then(function() {
-      showStatus('Entry deleted.', false);
-      loadEntries(activeProtocol);
-    })
-    .catch(function(err) { showStatus('Delete failed: ' + err.message, true); });
-}
-
-document.addEventListener('DOMContentLoaded', function() {
-  document.querySelectorAll('#dorkbook-tabs .tab-btn').forEach(function(btn) {
-    btn.addEventListener('click', function() {
-      switchTab(this.getAttribute('data-protocol'));
-    });
+  async function load() {
+    var version = ++loadVersion;
+    try {
+      var responses = await Promise.all([api('/api/dorkbook/entries'), api('/api/dorkbook/defaults')]);
+      if (version !== loadVersion) return;
+      entries = responses[0].entries; defaults = responses[1].defaults;
+      var prior = el('dorkbook-topic').value;
+      el('dorkbook-topic').replaceChildren(new Option('All topics', ''));
+      Array.from(new Set(entries.map(function (row) { return row.topic; }))).sort().forEach(function (topic) {
+        el('dorkbook-topic').add(new Option(topic, topic));
+      });
+      el('dorkbook-topic').value = prior;
+      render();
+      if (labels[focusProvider]) { el('provider-' + focusProvider).scrollIntoView({block: 'center'}); focusProvider = null; }
+    } catch (error) { status(error.message, true); }
+  }
+  el('dorkbook-search').addEventListener('input', function () {
+    clearTimeout(searchTimer); searchTimer = setTimeout(render, 150);
   });
-
-  var searchInput = document.getElementById('dorkbook-search');
-  searchInput.addEventListener('input', function() {
-    clearTimeout(searchTimer);
-    searchTimer = setTimeout(function() { loadEntries(activeProtocol); }, 250);
+  el('dorkbook-topic').addEventListener('change', render);
+  el('add-provider').addEventListener('change', function () {
+    var web = this.value === 'self_hosted'; el('add-protocol').disabled = web;
+    el('add-query').maxLength = web ? 500 : 2000;
   });
-
-  document.getElementById('dorkbook-add-form').addEventListener('submit', handleAdd);
-
-  loadEntries(activeProtocol);
-});
+  el('dorkbook-add-form').addEventListener('submit', async function (event) {
+    event.preventDefault();
+    var provider = el('add-provider').value;
+    try {
+      await api('/api/dorkbook/entries', {method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-CSRF-Token': token},
+        body: JSON.stringify({provider: provider, protocol: provider === 'shodan' ? el('add-protocol').value : null,
+          topic: el('add-topic').value, nickname: el('add-nickname').value, query: el('add-query').value, notes: el('add-notes').value})});
+      el('add-nickname').value = ''; el('add-query').value = ''; el('add-notes').value = '';
+      status('Dork added.'); await load();
+    } catch (error) { status(error.message, true); }
+  });
+  el('copy-dork').addEventListener('click', async function () {
+    if (!selected) return;
+    try {
+      if (!navigator.clipboard) throw new Error('Clipboard unavailable');
+      await navigator.clipboard.writeText(selected.query);
+      status('Query copied.');
+    } catch (_) {
+      // HTTP deployments may lack Clipboard API access; leave an exact selection.
+      var selection = window.getSelection();
+      if (!selection) { status('Clipboard unavailable. Select and copy the query above.', true); return; }
+      var range = document.createRange();
+      range.selectNodeContents(el('preview-query'));
+      selection.removeAllRanges(); selection.addRange(range);
+      status('Clipboard unavailable. Query selected — press Ctrl+C (⌘C on Mac).');
+    }
+  });
+  el('apply-dork').addEventListener('click', async function () {
+    if (!selected) return;
+    var button = this; button.disabled = true;
+    try {
+      var data = await api('/api/dorkbook/apply', {method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-CSRF-Token': token}, body: JSON.stringify({entry_id: selected.entry_id})});
+      // Explicit Apply events update the matching input in other open browser tabs.
+      try { if (applyChannel) applyChannel.postMessage({destination: data.destination, query: data.query}); } catch (_) {}
+      status('Saved default for ' + labels[data.provider] + (data.protocol ? ' / ' + data.protocol : '') + '.');
+      await load();
+    } catch (error) { status(error.message, true); }
+    finally { button.disabled = !selected; }
+  });
+  el('delete-dork').addEventListener('click', async function () {
+    if (!selected || selected.row_kind === 'builtin') return;
+    if (!el('mute-delete-confirm').checked && !window.confirm('Delete this custom dork? Its applied search default will be kept.')) return;
+    try {
+      await api('/api/dorkbook/entries/' + selected.entry_id, {method: 'DELETE', headers: {'X-CSRF-Token': token}});
+      preview(null); status('Dork deleted.'); await load();
+    } catch (error) { status(error.message, true); }
+  });
+  window.addEventListener('focus', load);
+  load();
+}());

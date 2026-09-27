@@ -1,5 +1,5 @@
 """
-Dorkbook tab for the Experimental Features dialog.
+Dorkbook launch tab in Accessories.
 
 Provides one launch action:
   - Open Dorkbook
@@ -13,7 +13,7 @@ from gui.utils.style import get_theme
 
 
 class DorkbookTab:
-    """Content widget for the Dorkbook experimental feature tab."""
+    """Content widget for the Dorkbook accessory tab."""
 
     def __init__(self, parent: tk.Widget, context: dict) -> None:
         self._context = context
@@ -24,8 +24,8 @@ class DorkbookTab:
 
     def _build(self, frame: tk.Frame) -> None:
         description = (
-            "Dorkbook stores reusable dork recipes in a sidecar DB.\n"
-            "Built-ins stay read-only, and custom recipes can be managed per protocol."
+            "Explore and save dorks for Shodan and Self-hosted Search in one library.\n"
+            "Apply a dork to save its query as your search default, or adapt it into your own."
         )
         desc_label = tk.Label(
             frame,

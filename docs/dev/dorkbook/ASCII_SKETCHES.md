@@ -81,8 +81,8 @@ Status: Frozen baseline for v1 implementation
 │ Experimental Features                                        │
 │  [SearXNG] [Reddit] [Dorkbook]                              │
 │                                                              │
-│  Dorkbook stores reusable dork recipes in a sidecar DB.     │
-│  Built-ins stay read-only; custom recipes are editable.     │
+│  Dorkbook stores reusable dorks in a sidecar DB.     │
+│  Built-ins stay read-only; custom dorks are editable.     │
 │                                                              │
 │  [ Open Dorkbook ]                                           │
 │                                                              │
@@ -95,7 +95,7 @@ Status: Frozen baseline for v1 implementation
 ```text
 ┌────────────────────────────────────────────────────────────────────────────┐
 │ Dorkbook                                                                   │
-│ Dorkbook stores reusable dork recipes by protocol.                         │
+│ Dorkbook stores reusable dorks by protocol.                         │
 │                                                                            │
 │  Tabs:  [ SMB ] [ FTP ] [ HTTP ]                                           │
 │                                                                            │
@@ -108,7 +108,7 @@ Status: Frozen baseline for v1 implementation
 │  │ My Fast Filter      | smb has_screenshot:true           | optional   │   │
 │  └──────────────────────────────────────────────────────────────────────┘   │
 │                                                                            │
-│  2 recipe(s).                                                              │
+│  2 dork(s).                                                              │
 │                                                                            │
 │  [ Add ] [ Copy ] [ Edit ] [ Delete ]                                     │
 └────────────────────────────────────────────────────────────────────────────┘
@@ -173,7 +173,7 @@ Right-click on built-in row:
 ┌──────────────────────────────────────────────────────────────┐
 │ Confirm Delete                                               │
 │                                                              │
-│ Delete the selected Dorkbook recipe?                         │
+│ Delete the selected Dorkbook dork?                         │
 │ Default SMB Dork                                             │
 │                                                              │
 │ [ ] Hide this message (until app restart)                    │
@@ -186,8 +186,8 @@ Right-click on built-in row:
 
 ```text
 Empty tab:
-  "No recipes yet. Use Add to create one."
+  "No dorks yet. Use Add to create one."
 
 No search matches:
-  "0 recipe(s) match search."
+  "0 dork(s) match search."
 ```

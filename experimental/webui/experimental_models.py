@@ -182,10 +182,24 @@ class RedditActionRequest(BaseModel):
 class DorkbookEntryCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    protocol: Literal["SMB", "FTP", "HTTP"]
+    provider: Literal["shodan", "self_hosted"] = "shodan"
+    protocol: Optional[Literal["SMB", "FTP", "HTTP"]] = None
+    topic: str = Field(default="General", min_length=1, max_length=100)
     nickname: str = Field(default="", max_length=200)
     query: str = Field(min_length=1, max_length=2000)
     notes: str = Field(default="", max_length=2000)
+
+    @model_validator(mode="after")
+    def _validate_destination(self):
+        if (self.provider == "shodan") != (self.protocol is not None):
+            raise ValueError("Shodan requires a protocol; Self-hosted Search has none")
+        self.query = self.query.strip()
+        self.topic = self.topic.strip()
+        if not self.query or not self.topic:
+            raise ValueError("query and topic cannot be blank")
+        if self.provider == "self_hosted" and len(self.query) > 500:
+            raise ValueError("Self-hosted Search query must not exceed 500 characters")
+        return self
 
 
 class DorkbookPrefillRequest(BaseModel):

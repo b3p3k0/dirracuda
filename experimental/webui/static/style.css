@@ -725,3 +725,21 @@ tbody tr.selected td { background: var(--bg3); color: var(--accent); }
   .filter-bar { flex-direction: column; align-items: flex-start; }
   .filter-bar input { max-width: 100%; }
 }
+
+/* Unified Dorkbook preview and selection. */
+#dorkbook-table tr[data-entry-id] { cursor: pointer; }
+#dorkbook-table tr[aria-selected="true"] { background: var(--info-bg); }
+#dorkbook-table tr[data-entry-id]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+#dorkbook-table td { overflow-wrap: anywhere; }
+#preview-query { white-space: pre-wrap; overflow-wrap: anywhere; }
+#dorkbook-preview { scroll-margin-top: 1rem; }
+
+#dorkbook-library { max-height: 42vh; overflow: auto; }
+#dorkbook-table thead { position: sticky; top: 0; background: var(--bg2); z-index: 1; }
+#dorkbook-table [id^="provider-"] { scroll-margin-top: 3rem; }
+@media (max-width: 600px) {
+  #dorkbook-library { max-height: 36vh; }
+}

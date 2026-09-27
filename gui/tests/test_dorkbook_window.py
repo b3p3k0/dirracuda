@@ -39,16 +39,6 @@ def _reset_singleton():
     dorkbook_window._WINDOW_INSTANCE = None
 
 
-def test_resolve_initial_protocol_uses_default_when_missing_settings_manager():
-    assert dorkbook_window._resolve_initial_protocol(None) == "SMB"
-
-
-def test_resolve_initial_protocol_reads_settings_manager():
-    sm = MagicMock()
-    sm.get_setting.return_value = "http"
-    assert dorkbook_window._resolve_initial_protocol(sm) == PROTOCOL_HTTP
-
-
 def test_is_builtin_row_detects_builtin():
     assert dorkbook_window._is_builtin_row({"row_kind": ROW_KIND_BUILTIN}) is True
     assert dorkbook_window._is_builtin_row({"row_kind": "custom"}) is False
@@ -189,115 +179,62 @@ def test_confirm_delete_sets_mute_flag_when_requested(monkeypatch):
     assert set_calls == [(dorkbook_window.DORKBOOK_DELETE_CONFIRM_MUTE_KEY, True)]
 
 
-def test_on_use_in_discovery_dorks_applies_immediately_and_sets_status(monkeypatch):
+def _apply_window():
     win = dorkbook_window.DorkbookWindow.__new__(dorkbook_window.DorkbookWindow)
     win.window = MagicMock()
-    win.settings_manager = MagicMock()
-    win._scan_query_config_path = "/tmp/config.json"
-
-    class _Status:
-        def __init__(self) -> None:
-            self.value = ""
-
-        def set(self, value: str) -> None:
-            self.value = value
-
-    status = _Status()
-    win._tab_by_protocol = {
-        "HTTP": {"status_var": status},
-    }
-    win._selected_row = lambda _protocol: {"query": "http.title:\"Index of /\""}
+    win.status_var = MagicMock()
+    win._selected_row = lambda: {"provider": "self_hosted", "protocol": None, "query": 'intitle:"Index of"'}
     win._resolve_scan_query_config_path = lambda: "/tmp/config.json"
+    win._load_entries = MagicMock()
+    return win
 
+
+def test_apply_persists_before_notify_and_reports_success(monkeypatch):
+    win = _apply_window()
     calls = []
-    monkeypatch.setattr(
-        dorkbook_window,
-        "_apply_dork_to_config",
-        lambda config_path, protocol, query: calls.append((config_path, protocol, query)),
-    )
-
-    win._on_use_in_discovery_dorks("HTTP")
-
-    assert len(calls) == 1
-    assert calls[0] == ("/tmp/config.json", "HTTP", "http.title:\"Index of /\"")
-    assert "Applied" in status.value
-    assert "Click Save" not in status.value
+    monkeypatch.setattr(dorkbook_window, "apply_default", lambda *args, **kwargs: calls.append("persist") or args[2])
+    monkeypatch.setattr(dorkbook_window, "broadcast_applied", lambda *args: calls.append("notify"))
+    win._on_apply()
+    assert calls == ["persist", "notify"]
+    assert "Saved" in win.status_var.set.call_args.args[0]
 
 
-def test_on_use_in_discovery_dorks_warns_when_context_missing(monkeypatch):
-    win = dorkbook_window.DorkbookWindow.__new__(dorkbook_window.DorkbookWindow)
-    win.window = MagicMock()
-    win._tab_by_protocol = {"SMB": {"status_var": MagicMock()}}
-    win._selected_row = lambda _protocol: {"query": "smb authentication: disabled"}
-    win._resolve_scan_query_config_path = lambda: None
-
-    warnings = []
-    monkeypatch.setattr(
-        dorkbook_window.messagebox,
-        "showwarning",
-        lambda *args, **kwargs: warnings.append((args, kwargs)),
-    )
-
-    win._on_use_in_discovery_dorks("SMB")
-
-    assert len(warnings) == 1
-    assert warnings[0][0][0] == "Discovery Dorks Context Missing"
+def test_apply_failure_never_notifies_or_reports_success(monkeypatch):
+    win = _apply_window()
+    monkeypatch.setattr(dorkbook_window, "apply_default", MagicMock(side_effect=OSError("read-only")))
+    notify = MagicMock()
+    monkeypatch.setattr(dorkbook_window, "broadcast_applied", notify)
+    monkeypatch.setattr(dorkbook_window.messagebox, "showerror", MagicMock())
+    win._on_apply()
+    notify.assert_not_called()
+    win.status_var.set.assert_not_called()
+    win._load_entries.assert_not_called()
 
 
-def test_tree_double_click_invokes_use_action():
-    class _Tree:
-        def __init__(self):
-            self.selection = []
-            self.focused = None
-
-        def identify_row(self, _y):
-            return "row-1"
-
-        def selection_set(self, row_iid):
-            self.selection = [row_iid]
-
-        def focus(self, row_iid):
-            self.focused = row_iid
-
-    tree = _Tree()
-    win = dorkbook_window.DorkbookWindow.__new__(dorkbook_window.DorkbookWindow)
-    win._tab_by_protocol = {"FTP": {"tree": tree}}
-    win._selected_row = lambda _protocol: {"query": "port:21"}
-    win._set_action_visibility = lambda _protocol, _row: None
-
-    calls = []
-    win._on_use_in_discovery_dorks = lambda protocol: calls.append(protocol)
-
-    class _Evt:
-        y = 10
-
-    win._on_tree_double_click("FTP", _Evt())
-
-    assert tree.selection == ["row-1"]
-    assert tree.focused == "row-1"
-    assert calls == ["FTP"]
+def test_double_click_only_previews():
+    win = _apply_window()
+    win.tree = MagicMock()
+    win.tree.identify_row.return_value = "42"
+    win._on_selection_changed = MagicMock()
+    win._on_apply = MagicMock()
+    win._on_tree_double_click(types.SimpleNamespace(y=10))
+    win.tree.selection_set.assert_called_once_with("42")
+    win._on_selection_changed.assert_called_once()
+    win._on_apply.assert_not_called()
 
 
-def test_build_context_menu_includes_use_action():
-    labels = []
+def test_default_identity_has_four_independent_destinations():
+    for protocol in ("SMB", "FTP", "HTTP"):
+        assert dorkbook_window._destination({"provider": "shodan", "protocol": protocol}) == "shodan:" + protocol
+    assert dorkbook_window._destination({"provider": "self_hosted", "protocol": None}) == "self_hosted"
 
-    class _Menu:
-        def delete(self, *_args, **_kwargs):
-            labels.clear()
 
-        def add_command(self, *, label, command):
-            labels.append(label)
-
-    win = dorkbook_window.DorkbookWindow.__new__(dorkbook_window.DorkbookWindow)
-    win._tab_by_protocol = {"SMB": {"context_menu": _Menu()}}
-    win._on_add = lambda _protocol: None
-    win._on_copy = lambda _protocol: None
-    win._on_use_in_discovery_dorks = lambda _protocol: None
-    win._on_edit = lambda _protocol: None
-    win._on_delete = lambda _protocol: None
-
-    win._build_context_menu("SMB", {"query": "smb authentication: disabled", "row_kind": "builtin"})
-
-    assert "Add" in labels
-    assert "Copy" in labels
-    assert "Use in Discovery Dorks" in labels
+def test_builtin_edit_and_delete_are_read_only():
+    win = _apply_window()
+    win._selected_row = lambda: {"row_kind": "builtin"}
+    win._show_entry_editor = MagicMock()
+    win._confirm_delete = MagicMock()
+    win._on_edit()
+    win._on_delete()
+    win._show_entry_editor.assert_not_called()
+    win._confirm_delete.assert_not_called()

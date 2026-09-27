@@ -1,16 +1,16 @@
 # Dorkbook v1 Spec
 
 Historical v1 contract. For the current approved provider-aware design and
-completed U1 storage contract, see [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)
-and [U1_VALIDATION.md](U1_VALIDATION.md). The original single-dork/protocol-tab
-decisions below no longer define the planned unified UI.
+implemented unified contract, see [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)
+and [UNIFIED_VALIDATION.md](UNIFIED_VALIDATION.md). The original single-dork/protocol-tab
+decisions below no longer define the current unified UI.
 
 Date: 2026-04-19  
 Status: Approved for implementation
 
 ## Problem
 
-Operators keep personal dork recipes scattered across notes and config edits.  
+Operators keep personal dorks scattered across notes and config edits.
 We need one reusable in-app notebook for protocol-specific dorks.
 
 ## Locked Decisions
@@ -57,7 +57,7 @@ We need one reusable in-app notebook for protocol-specific dorks.
    - Inputs: Nickname, Query, Notes.
    - Inline validation for required query.
 4. Empty/no-match states:
-   - Empty tab text: no recipes yet.
+   - Empty tab text: no dorks yet.
    - Filtered no-match text: no search matches.
 
 ## Data Contract (Sidecar)

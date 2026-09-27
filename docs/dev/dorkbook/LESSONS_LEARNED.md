@@ -29,3 +29,29 @@ Date: 2026-04-19
 6. Keep duplicate matching explicit and deterministic (trimmed exact equality per protocol).
 7. Add regression tests for each discovered production-risk edge case before/with the fix.
 8. Prefer small, surgical fixes and targeted validation suites unless risk profile requires broader runs.
+
+## Unified defaults and backend checks (2026-09-27)
+
+- A canonical config filename passed as an explicit override bypasses modular
+  shards. Resolve canonical identity and use `load_config()` for that profile.
+- GUI settings snapshots can overwrite newer module config. Preserve the
+  config-owned `se_dork.default_query` from current storage during prefs saves.
+- Fallback-to-default reads are useful at startup but unsafe before a save.
+  Strict config loading validates JSON roots before materialization; reject
+  malformed structures/query types rather than coercing them or replacing data.
+- Refresh untouched fields against their last loaded baseline. Preserve manual
+  run-local input; explicit Apply alone replaces the matching live field.
+- Derive default marks from query text. A selected row, catalog edit, or delete
+  must never silently become a configuration change.
+- HTTP 200 does not mean search engines succeeded. SearXNG reports failures in
+  `unresponsive_engines`; DeGoog also uses `engineTimings` with `rate_limited`
+  and `errorReason`. Inspect both, stop on upstream limits, and keep yield
+  claims separate from API/response-shape validation.
+- Keep migration fixtures pinned to the original three built-ins; a growing
+  catalog must not retroactively change what a legacy database contained.
+- Render populated catalogs, not just empty widgets: the second provider can
+  fall below the viewport, and a small query-row button can overflow layouts.
+- Test headless imports in a fresh interpreter. A global `sys.modules` check
+  falsely fails after GUI tests and can falsely pass through cached imports.
+- Use ephemeral browser messages for cross-tab Apply. Do not persist query
+  text in localStorage behind the user's preference-storage opt-in setting.

@@ -87,7 +87,7 @@ Dirracuda scans for internet-accessible servers exposing open or weakly-authenti
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-For SMB/FTP/HTTP scan flows, the GUI invokes CLI scripts as subprocesses via `gui/utils/backend_interface/interface.py` and parses stdout for progress data. Self-hosted Search dorking (`experimental/se_dork`), Reddit ingestion (`experimental/redseek`), Dorkbook recipe management (`experimental/dorkbook`), and Keymaster key management (`experimental/keymaster`) are in-process paths launched from the dashboard.
+For SMB/FTP/HTTP scan flows, the GUI invokes CLI scripts as subprocesses via `gui/utils/backend_interface/interface.py` and parses stdout for progress data. Self-hosted Search dorking (`experimental/se_dork`), Reddit ingestion (`experimental/redseek`), Dorkbook dork management (`experimental/dorkbook`), and Keymaster key management (`experimental/keymaster`) are in-process paths launched from the dashboard.
 
 The optional Web UI is disabled by default and installed separately with
 `experimental/webui/requirements-web.txt`. Its C4 scan launcher follows the same CLI
@@ -134,16 +134,17 @@ override precedence for tests or controlled deployments.
 | `GET /scans/searxng` | session | Self-hosted Search discovery page (run with optional inline probe pass). |
 | `GET /scans/reddit` | session | Reddit ingestion page (anonymous RSS feed/search modes). |
 | `GET /extras` | n/a | Route not registered; returns 404. Use `/extras/dorkbook` or `/extras/keymaster`. |
-| `GET /extras/dorkbook` | session | Dorkbook recipe management. |
+| `GET /extras/dorkbook` | session | Dorkbook dork management. |
 | `GET /extras/keymaster` | session | Keymaster unlock/manage/apply. |
 | `GET /export` | session | Dedicated export page (moved off `/results` in C29). |
 | `POST /api/searxng/preflight` | session + CSRF + same-origin | Validate Self-hosted Search instance URL. |
 | `POST /api/searxng/run` | session + CSRF + same-origin | Queue Self-hosted Search discovery run; 202 + job_id. |
 | `POST /api/reddit/run` | session + CSRF + same-origin | Queue Reddit ingest run; 202 + job_id. |
-| `GET /api/dorkbook/entries` | session | List Dorkbook entries by protocol (SMB/FTP/HTTP) + optional search. |
+| `GET /api/dorkbook/entries` | session | List both providers; optional provider, protocol, topic, and search filters. |
 | `POST /api/dorkbook/entries` | session + CSRF + same-origin | Create entry in Dorkbook sidecar DB. |
 | `DELETE /api/dorkbook/entries/{entry_id}` | session + CSRF + same-origin | Delete custom dork entry (built-in dorks cannot be deleted). |
-| `POST /api/dorkbook/prefill` | session + CSRF + same-origin | Apply selected dork to canonical discovery config (immediate-persist). |
+| `POST /api/dorkbook/apply` (also `/prefill`) | session + CSRF + same-origin | Save a selected dork as its provider/protocol default. |
+| `GET /api/dorkbook/defaults` | session | Read four saved destinations; imports legacy desktop web query if absent. |
 | `GET /api/keymaster/status` | session | Passphrase configured + lock state. |
 | `GET /api/keymaster/keys` | session | List keys; response includes `api_key_masked` (first 4 + last 4 chars only); no key material. |
 | `POST /api/keymaster/unlock` | session + CSRF + same-origin | Unlock with passphrase; session keys stored in `session.keymaster_session_keys`. |
@@ -310,7 +311,7 @@ This shape applies to all three protocols. Protocol-specific differences are cov
 | `shared/` | Protocol-agnostic utilities shared by CLI and GUI | See §2.1 |
 | `experimental/se_dork/` | Self-hosted Search pipeline (backends, client, service, store, classifier, models) | `backends.py`, `client.py`, `service.py`, `store.py`, `classifier.py`, `models.py` |
 | `experimental/redseek/` | Reddit ingestion pipeline (client fetch, parse, primary-DB persistence, auto-sync) | `client.py`, `service.py`, `parser.py`, `store.py`, `mapper.py`, `main_db_sync.py` |
-| `experimental/dorkbook/` | Dorkbook sidecar persistence for reusable protocol dorks | `models.py`, `store.py` |
+| `experimental/dorkbook/` | Provider-aware dork library and shared defaults | `models.py`, `catalog.py`, `store.py`, `defaults.py` |
 | `experimental/keymaster/` | Keymaster sidecar persistence for reusable API keys | `models.py`, `store.py` |
 | `experimental/censys_discovery/` | Censys Platform v3 discovery sidecar (**development suspended**; backend retained, UI currently hidden) | `client.py`, `service.py`, `store.py`, `query_builder.py`, `models.py` |
 | `gui/components/`, `gui/dashboard/` | Tkinter windows/dialogs plus dashboard shim+implementation | `gui/components/dashboard.py` (compat shim), `gui/dashboard/widget.py`, `unified_scan_dialog.py`, `server_list_window/`, `running_tasks_window.py`, `db_tools_dialog.py`, `*_browser_window.py` |
@@ -965,8 +966,8 @@ upgrades recognized legacy sidecars transactionally after a SQLite-consistent
 backup alongside the database (`dorkbook.db.pre-providers-*.bak`). IDs, sequence
 high-water marks, and existing row data survive; unchanged built-ins retain
 their timestamps. Unknown schema objects/columns require review instead of
-being discarded. The current desktop/Web UI still exposes Shodan only; provider
-UI integration follows separately. See [upgrade and recovery notes](dev/dorkbook/U1_VALIDATION.md).
+being discarded. Desktop and Web UI expose both providers. See
+[upgrade and recovery notes](dev/dorkbook/U1_VALIDATION.md).
 
 ---
 
@@ -1200,20 +1201,22 @@ Dashboard -> Start Scan -> Edit Queries
   -> Open Dorkbook button opens/focuses DorkbookWindow
 ```
 
-Per-tab behavior:
-- Protocol tabs: SMB / FTP / HTTP
-- Actions: Add, Copy, Use in Discovery Dorks, Edit, Delete
-- Right-click menu mirrors the same row actions
-- Double-click row is an alias of "Use in Discovery Dorks"
-- Built-ins are seeded/read-only and italicized
-- Delete confirmation can be muted for the current app session
-- "Use in Discovery Dorks" writes the selected query immediately to the canonical discovery config (immediate-persist; no separate Save step)
-- If no scan-config context is available, use-action warns and performs no write
+Unified-library behavior:
+- Expanded Shodan and Self-hosted Search groups; global text/topic filters and full preview
+- 52 read-only italic built-ins; custom add/edit/delete on desktop, add/delete on Web
+- Copy Query and explicit Apply to Search; selection/double-click only previews
+- Default marks compare saved query text; editing/deleting a dork never changes its saved default
+- Session-only delete confirmation mute; desktop singleton/window geometry retained
 
 Integration seam:
-- `DorkbookWindow` routes all use-actions through `_apply_dork_to_config(config_path, protocol, query)`
-- Canonical path: uses `load_config()` + `cfg.update_sections()`; non-canonical: direct JSON read/write
-- Web surface (`/extras/dorkbook`) applies the same immediate-persist contract via `POST /api/dorkbook/prefill`
+- `experimental/dorkbook/defaults.py` reads/applies all four destinations through `SMBSeekConfig`
+- Shodan retains existing base-query keys; Self-hosted Search uses `se_dork.default_query`
+- Import nonblank `unified_scan_dialog.searxng_query` only when the canonical key is absent
+- New web-search manual edits are run-local; old GUI preference saves cannot overwrite Apply
+- Clean fields refresh on focus; explicit Apply updates the matching open input without changing provider/options
+- Strict config reads reject malformed persisted data before fallback or overwrite
+- `experimental/webui/dorkbook_routes.py` owns authenticated library/default routes; `/prefill` remains an alias
+- [Detailed validation, live limitations, and HI checklist](dev/dorkbook/UNIFIED_VALIDATION.md)
 
 Keymaster entry path:
 

@@ -100,16 +100,16 @@ def test_database_itself_blocks_duplicates_with_null_protocol(connection):
 
 
 def test_library_filters_combine_provider_topic_and_search(connection):
-    web_id = add_web(connection, "web books marker", topic="Books")
+    web_id = add_web(connection, "web books marker", topic="Test books")
     http_id = store.create_entry(
-        connection, "HTTP", "Books marker", "http books", "", topic="Books",
+        connection, "HTTP", "Books marker", "http books", "", topic="Test books",
     )
     music_id = add_web(connection, "music marker", topic="Music")
     assert {row["entry_id"] for row in store.list_entries(
-        connection, provider=None, topic="Books", search_text="marker",
+        connection, provider=None, topic="Test books", search_text="marker",
     )} == {web_id, http_id}
     assert {row["entry_id"] for row in store.list_entries(
-        connection, provider="self_hosted", topic="Books",
+        connection, provider="self_hosted", topic="Test books",
     )} == {web_id}
     assert music_id not in {row["entry_id"] for row in store.list_entries(connection)}
     assert http_id in {row["entry_id"] for row in store.list_entries(connection)}

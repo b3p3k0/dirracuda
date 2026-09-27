@@ -2,11 +2,10 @@
 
 ## Current unified-library cards (2026-09-27)
 
-The [approved implementation plan](IMPLEMENTATION_PLAN.md) supersedes the
-historical v1 cards below. U1 storage/migration is implemented and validated;
-see [U1 evidence](U1_VALIDATION.md). U2 saved defaults is next, followed by U3
-desktop, U4 Web UI, U5 shipped dorks/live backend checks, and U6 closeout.
-One card at a time; no push. The current task explicitly permits scoped commits.
+U1–U6 are implemented. The [approved plan](IMPLEMENTATION_PLAN.md) supersedes
+the historical v1 cards below. [Unified validation](UNIFIED_VALIDATION.md)
+records automated checks, live upstream limits, file sizes, and remaining HI
+acceptance. HI authorized continuous execution and scoped commits; no push.
 
 ## Historical v1 cards
 

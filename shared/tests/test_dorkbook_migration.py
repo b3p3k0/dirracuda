@@ -36,6 +36,8 @@ def legacy_db(path, *, wal=False):
     conn.execute(LEGACY_DDL)
     conn.execute("CREATE UNIQUE INDEX ux_dorkbook_protocol_query_norm ON dorkbook_entries(protocol, query_normalized)")
     for spec in DEFAULT_BUILTIN_DORKS:
+        if spec.builtin_key not in {"builtin_smb_default", "builtin_ftp_default", "builtin_http_default"}:
+            continue
         conn.execute(
             """INSERT INTO dorkbook_entries
                (protocol, nickname, query, query_normalized, notes, row_kind,
@@ -57,7 +59,7 @@ def legacy_db(path, *, wal=False):
 
 def old_rows(conn):
     fields = ", ".join(sorted(schema.LEGACY_COLUMNS))
-    return conn.execute(f"SELECT {fields} FROM dorkbook_entries ORDER BY entry_id").fetchall()
+    return conn.execute(f"SELECT {fields} FROM dorkbook_entries WHERE entry_id <= 50 ORDER BY entry_id").fetchall()
 
 
 def columns(conn):
@@ -78,7 +80,7 @@ def test_upgrade_preserves_rows_timestamps_sequence_and_private_backup(tmp_path)
         assert backup.execute("PRAGMA quick_check").fetchone()[0] == "ok"
     with closing(store.open_connection(path)) as conn:
         assert [tuple(row) for row in old_rows(conn)] == before
-        assert {(r[0], r[1]) for r in conn.execute("SELECT provider, topic FROM dorkbook_entries")} == {("shodan", "General")}
+        assert {(r[0], r[1]) for r in conn.execute("SELECT provider, topic FROM dorkbook_entries WHERE entry_id <= 50")} == {("shodan", "General")}
         next_id = store.create_entry(conn, "HTTP", "Next", "next query", "")
         assert next_id > 9000
         conn.commit()
@@ -250,7 +252,7 @@ def test_simultaneous_initializers_migrate_once(tmp_path):
         list(pool.map(store.init_db, [path, path]))
     assert len(list(tmp_path.glob("*.bak"))) == 1
     with closing(store.open_connection(path)) as conn:
-        assert len(store.list_entries(conn, provider=None)) == 4
+        assert len(store.list_entries(conn, provider=None)) == len(DEFAULT_BUILTIN_DORKS) + 1
 
 
 @pytest.mark.parametrize("provider,protocol", [

@@ -141,6 +141,10 @@ class UnifiedScanDialog:
         self._load_initial_values()
         self._init_tls_policy_default()
         self._create_dialog()
+        from gui.components.dorkbook_events import bind_self_hosted_query, refresh_self_hosted_query
+        if not self._settings_manager:
+            refresh_self_hosted_query(self)
+        bind_self_hosted_query(self)
 
     # ------------------------------------------------------------------
     # Defaults/load/persist

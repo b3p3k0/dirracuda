@@ -13,8 +13,6 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
-from experimental.dorkbook import store as dork_store
-from experimental.dorkbook.models import ROW_KIND_BUILTIN, DuplicateEntryError, ReadOnlyEntryError
 from experimental.redseek.main_db_sync import sync_targets_to_main_db as sync_reddit_to_main_db
 from experimental.redseek.service import IngestOptions as RedditIngestOptions, run_ingest
 from experimental.se_dork.client import run_preflight as run_searxng_preflight
@@ -25,13 +23,10 @@ from experimental.se_dork.service import run_dork_search
 import experimental.webui.db as _db
 import experimental.webui.db_actions as _db_actions
 from experimental.webui.experimental_models import (
-    DorkbookEntryCreateRequest,
-    DorkbookPrefillRequest,
     RedditRunRequest,
     SearxngPreflightRequest,
     SearxngRunRequest,
 )
-from gui.components.discovery_dork_config import apply_discovery_dorks, read_discovery_dorks
 import experimental.webui.results_probe_actions as _results_probe_actions
 import experimental.webui.sherlock_view as _sherlock_view
 from experimental.webui.auth import (
@@ -87,12 +82,6 @@ logger = logging.getLogger(__name__)
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 _STATIC_DIR = Path(__file__).parent / "static"
 _PATHS = get_paths()
-
-_DORKBOOK_PROTOCOL_TO_FIELD = {
-    "SMB": "smb_dork",
-    "FTP": "ftp_dork",
-    "HTTP": "http_dork",
-}
 
 _PASSWORD_POLICY_MESSAGES = {
     "too_short": f"Password must be at least {PASSWORD_MIN_LENGTH} characters.",
@@ -1232,167 +1221,8 @@ def create_app(
             request, "dorkbook.html", {"session": session, "active_page": "extras_dorkbook"}
         )
 
-    @app.get("/api/dorkbook/entries")
-    async def _dorkbook_list_entries(
-        request: Request,
-        protocol: Literal["SMB", "FTP", "HTTP"] = Query("SMB"),
-        search: str = Query(""),
-        session: Session = Depends(get_session),
-    ) -> JSONResponse:
-        try:
-            dork_store.init_db(_PATHS.dorkbook_db_file)
-            with dork_store.open_connection(_PATHS.dorkbook_db_file) as conn:
-                rows = dork_store.list_entries(conn, protocol, search_text=search)
-        except Exception as exc:
-            logger.warning(
-                "dorkbook list_entries failed: exception_class=%s",
-                type(exc).__name__,
-            )
-            return JSONResponse({"error": "dorkbook unavailable"}, status_code=500)
-        return JSONResponse({"entries": rows})
-
-    @app.post("/api/dorkbook/entries", status_code=201)
-    async def _dorkbook_create_entry(
-        body: DorkbookEntryCreateRequest,
-        request: Request,
-        session: Session = Depends(get_session),
-    ) -> JSONResponse:
-        if not same_origin(request):
-            return JSONResponse({"error": "origin check failed"}, status_code=403)
-        csrf_tok = request.headers.get("X-CSRF-Token")
-        if not validate_csrf(csrf_tok, session.csrf_token):
-            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
-        try:
-            dork_store.init_db(_PATHS.dorkbook_db_file)
-            with dork_store.open_connection(_PATHS.dorkbook_db_file) as conn:
-                entry_id = dork_store.create_entry(
-                    conn,
-                    protocol=body.protocol,
-                    nickname=body.nickname,
-                    query=body.query,
-                    notes=body.notes,
-                )
-                conn.commit()
-        except DuplicateEntryError:
-            return JSONResponse({"error": "query already exists"}, status_code=409)
-        except Exception as exc:
-            logger.warning(
-                "dorkbook create_entry failed: exception_class=%s",
-                type(exc).__name__,
-            )
-            return JSONResponse(
-                {"error": "dorkbook operation failed"},
-                status_code=500,
-            )
-        return JSONResponse({"entry_id": entry_id, "ok": True}, status_code=201)
-
-    @app.delete("/api/dorkbook/entries/{entry_id}")
-    async def _dorkbook_delete_entry(
-        entry_id: int,
-        request: Request,
-        session: Session = Depends(get_session),
-    ) -> JSONResponse:
-        if not same_origin(request):
-            return JSONResponse({"error": "origin check failed"}, status_code=403)
-        csrf_tok = request.headers.get("X-CSRF-Token")
-        if not validate_csrf(csrf_tok, session.csrf_token):
-            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
-        try:
-            dork_store.init_db(_PATHS.dorkbook_db_file)
-            with dork_store.open_connection(_PATHS.dorkbook_db_file) as conn:
-                row = dork_store.get_entry(conn, entry_id)
-                if row is None:
-                    return JSONResponse({"error": "entry not found"}, status_code=404)
-                if str(row.get("row_kind") or "").strip().lower() == ROW_KIND_BUILTIN:
-                    return JSONResponse({"error": "built-in dorks are read-only"}, status_code=403)
-                try:
-                    dork_store.delete_entry(conn, entry_id)
-                except ReadOnlyEntryError:
-                    return JSONResponse(
-                        {"error": "built-in dorks are read-only"},
-                        status_code=403,
-                    )
-                conn.commit()
-        except Exception as exc:
-            logger.warning(
-                "dorkbook delete_entry failed: exception_class=%s",
-                type(exc).__name__,
-            )
-            return JSONResponse(
-                {"error": "dorkbook operation failed"},
-                status_code=500,
-            )
-        return JSONResponse({"ok": True})
-
-    @app.post("/api/dorkbook/prefill")
-    async def _dorkbook_prefill(
-        body: DorkbookPrefillRequest,
-        request: Request,
-        session: Session = Depends(get_session),
-    ) -> JSONResponse:
-        if not same_origin(request):
-            return JSONResponse({"error": "origin check failed"}, status_code=403)
-        csrf_tok = request.headers.get("X-CSRF-Token")
-        if not validate_csrf(csrf_tok, session.csrf_token):
-            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
-        try:
-            dork_store.init_db(_PATHS.dorkbook_db_file)
-            with dork_store.open_connection(_PATHS.dorkbook_db_file) as conn:
-                row = dork_store.get_entry(conn, body.entry_id)
-        except Exception as exc:
-            logger.warning(
-                "dorkbook prefill store access failed: exception_class=%s",
-                type(exc).__name__,
-            )
-            return JSONResponse({"error": "dorkbook unavailable"}, status_code=500)
-        if row is None:
-            return JSONResponse({"error": "entry not found"}, status_code=404)
-        protocol = str(row.get("protocol") or "").strip().upper()
-        field = _DORKBOOK_PROTOCOL_TO_FIELD.get(protocol)
-        if field is None:
-            return JSONResponse(
-                {"error": f"unsupported protocol in dorkbook entry: {protocol!r}"},
-                status_code=422,
-            )
-        query = str(row.get("query") or "").strip()
-        main_config_path: Path = request.app.state.main_config_path
-        try:
-            if main_config_path.resolve(strict=False) == _PATHS.config_file.resolve(strict=False):
-                cfg = load_main_config(str(main_config_path))
-                config_data = {
-                    "shodan": cfg.get("shodan", default={}) or {},
-                    "ftp": cfg.get("ftp", default={}) or {},
-                    "http": cfg.get("http", default={}) or {},
-                }
-                current = read_discovery_dorks(config_data)
-                current[field] = query
-                apply_discovery_dorks(config_data, current)
-                updates = {
-                    s: config_data[s]
-                    for s in ("shodan", "ftp", "http")
-                    if isinstance(config_data.get(s), dict)
-                }
-                if not cfg.update_sections(updates):
-                    raise RuntimeError("failed to persist discovery dork sections")
-            else:
-                if not main_config_path.is_file():
-                    return JSONResponse({"error": "config file not found"}, status_code=404)
-                import json as _json
-                data = _json.loads(main_config_path.read_text(encoding="utf-8"))
-                current = read_discovery_dorks(data)
-                current[field] = query
-                apply_discovery_dorks(data, current)
-                main_config_path.write_text(_json.dumps(data, indent=2), encoding="utf-8")
-        except Exception as exc:
-            logger.warning(
-                "dorkbook prefill config write failed: exception_class=%s",
-                type(exc).__name__,
-            )
-            return JSONResponse(
-                {"error": "failed to update discovery configuration"},
-                status_code=500,
-            )
-        return JSONResponse({"ok": True, "protocol": protocol})
+    from experimental.webui.dorkbook_routes import dorkbook_router
+    app.include_router(dorkbook_router)
 
     @app.get("/extras/keymaster", response_class=HTMLResponse)
     async def _extras_keymaster_page(

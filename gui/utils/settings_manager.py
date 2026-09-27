@@ -187,6 +187,13 @@ class SettingsManager:
             module_payload = user_prefs_payload.pop(module_name, {})
             if not isinstance(module_payload, dict):
                 module_payload = {}
+            if module_name == "se_dork":
+                # Search defaults belong to Dorkbook/config, not this cached
+                # preferences snapshot. A later GUI save must not undo Apply.
+                module_payload.pop("default_query", None)
+                current = self._config_store.load_module_prefs(module_name, strict=True)
+                if "default_query" in current:
+                    module_payload["default_query"] = current["default_query"]
             self._config_store.save_module_prefs(module_name, module_payload)
 
         self._config_store.save_user_prefs(user_prefs_payload)

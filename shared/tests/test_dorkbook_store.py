@@ -58,7 +58,7 @@ def test_init_db_creates_schema_and_seeds_builtins(db_path: Path) -> None:
     assert http[0]["row_kind"] == ROW_KIND_BUILTIN
 
 
-def test_init_db_idempotent_keeps_single_builtin_per_protocol(tmp_path: Path) -> None:
+def test_init_db_idempotent_keeps_full_catalog_without_duplicates(tmp_path: Path) -> None:
     db = tmp_path / "idempotent.db"
     init_db(db)
     init_db(db)
@@ -72,7 +72,7 @@ def test_init_db_idempotent_keeps_single_builtin_per_protocol(tmp_path: Path) ->
             """
         ).fetchall()
     counts = {row["protocol"]: row["c"] for row in rows}
-    assert counts == {"SMB": 1, "FTP": 1, "HTTP": 1}
+    assert counts == {"SMB": 1, "FTP": 1, "HTTP": 25, None: 25}
 
 
 def test_create_entry_blocks_exact_trimmed_duplicate_within_protocol(db_path: Path) -> None:
@@ -147,7 +147,7 @@ def test_upsert_builtin_pack_refreshes_entry_by_builtin_key(db_path: Path) -> No
         )
         conn.commit()
         rows = list_entries(conn, PROTOCOL_HTTP)
-        builtin = [r for r in rows if r["row_kind"] == ROW_KIND_BUILTIN][0]
+        builtin = next(r for r in rows if r["builtin_key"] == "builtin_http_default")
 
     assert builtin["nickname"] == "Default HTTP Dork (Updated)"
     assert builtin["query"] == 'http.title:"Index of /" has_screenshot:true'
@@ -156,7 +156,8 @@ def test_upsert_builtin_pack_refreshes_entry_by_builtin_key(db_path: Path) -> No
 
 def test_upsert_builtin_pack_skips_conflicting_builtin_update(db_path: Path) -> None:
     with open_connection(db_path) as conn:
-        before_builtin = [r for r in list_entries(conn, PROTOCOL_HTTP) if r["row_kind"] == ROW_KIND_BUILTIN][0]
+        before_builtin = next(r for r in list_entries(conn, PROTOCOL_HTTP)
+                              if r["builtin_key"] == "builtin_http_default")
         create_entry(conn, PROTOCOL_HTTP, "Mine", "future query", "custom")
         conn.commit()
 
@@ -173,7 +174,8 @@ def test_upsert_builtin_pack_skips_conflicting_builtin_update(db_path: Path) -> 
             ],
         )
         conn.commit()
-        after_builtin = [r for r in list_entries(conn, PROTOCOL_HTTP) if r["row_kind"] == ROW_KIND_BUILTIN][0]
+        after_builtin = next(r for r in list_entries(conn, PROTOCOL_HTTP)
+                             if r["builtin_key"] == "builtin_http_default")
         custom_rows = [
             r for r in list_entries(conn, PROTOCOL_HTTP) if r["row_kind"] != ROW_KIND_BUILTIN
         ]

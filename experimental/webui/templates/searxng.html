@@ -14,7 +14,8 @@
     </div>
     <div class="form-row">
       <label for="query">Query</label>
-      <input id="query" name="query" type="text" placeholder="inurl:index.of filetype:zip" maxlength="500">
+      <input id="query" name="query" type="text" data-dork-destination="self_hosted" placeholder='intitle:"Index of /"' maxlength="500">
+      <a href="/extras/dorkbook?provider=self_hosted" target="_blank" rel="noopener">Dorkbook</a>
     </div>
     <div class="form-row">
       <label for="max-results">Max results</label>
@@ -65,4 +66,5 @@
 
 {% block scripts %}
 <script src="/static/searxng.js"></script>
+<script src="/static/dorkbook_defaults.js"></script>
 {% endblock %}

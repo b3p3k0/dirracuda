@@ -1,8 +1,8 @@
 # Unified Dorkbook and shipped dorks
 
 Date: 2026-09-27
-Status: HI approved execution. U1 implemented; validation recorded in
-[U1_VALIDATION.md](U1_VALIDATION.md). U2–U6 remain pending.
+Status: U1–U6 implemented. Automated validation and live backend limitations
+are recorded in [UNIFIED_VALIDATION.md](UNIFIED_VALIDATION.md). HI acceptance pending.
 
 ## Outcome
 
@@ -83,10 +83,11 @@ authentication, CSRF, and same-origin checks on existing Web UI operations.
 | U2: Saved defaults | Shared read/apply service, legacy Self-hosted Search preference handling, stale-input policy | Four independent destinations, save failures, restart and manual-input behavior |
 | U3: Desktop | Grouped Dorkbook, preview, filters, default marks, contextual launch and scan-field refresh | Mocked UI/wiring checks plus HI layout and restart check |
 | U4: Web UI | Same catalog and application contract, grouped presentation, contextual access | Route/default behavior and existing auth/CSRF/origin regression checks plus HI browser check |
-| U5: Shipped dorks | Broad researched candidates, HI pruning, provider-specific built-ins and useful notes | Catalog invariants and upgrade/collision tests; live yield remains a separate HI check |
+| U5: Shipped dorks | Broad researched candidates, HI pruning, provider-specific built-ins and useful notes | Catalog invariants and upgrade/collision tests; live backend behavior checked separately |
 | U6: Closeout | Terminology/docs cleanup, removal of superseded dead paths, final evidence and lessons | Focused regression, docs review, file-size report, HI acceptance |
 
-Work one card at a time: confirm, state root cause, fix, validate, report, wait.
+HI authorized continuous execution through U6 with scoped commits (2026-09-27).
+The original one-card-and-wait rule is superseded for this task.
 Update docs with each card rather than leaving all documentation to U6. Commit
 permission is available for this task; suggest checkpointing completed work
 before changing cards. No push. If delegation helps, the lead acts as PA/RA and

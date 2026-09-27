@@ -516,18 +516,31 @@ The dialog is modeless and tab-based. Current tabs:
 
 ![dorkbook](img/dorkbook.png)
 
-Dorkbook is a notebook for reusable search queries.
+Dorkbook keeps Shodan and Self-hosted Search dorks together in one library.
 
 Quick start:
-1. Dashboard → `⚗ Accessories` → `Dorkbook` tab.
-2. Click `Open Dorkbook`.
-3. Use `SMB` / `FTP` / `HTTP` tabs to manage dorks.
 
-Behavior:
-- Sidecar DB path: `~/.dirracuda/data/experimental/dorkbook.db`
-- Built-ins are read-only (italicized) and seeded one per protocol
-- Custom rows support `Add`, `Copy`, `Use in Discovery Dorks`, `Edit`, `Delete`
-- `Use in Discovery Dorks` immediately saves the selected query as that protocol's discovery default
+1. Dashboard → `⚗ Accessories` → `Dorkbook` → `Open Dorkbook`, or use
+   `Dorkbook` beside a scan query.
+2. Browse the expanded provider groups, use `Find Dork`, or filter by topic.
+3. Select a dork to preview its full query and notes. Click `Apply to Search`
+   to save it as that destination's default across runs and restarts.
+
+The 52 shipped dorks cover books/comics/audiobooks, movies/TV, music, photos,
+design assets, software, game mods, and CAD/3D models, plus broad directory
+searches. Notes suggest variations to try. Shodan has separate SMB, FTP, and
+HTTP defaults; Self-hosted Search shares one default across SearXNG and DeGoog.
+
+Built-ins are read-only and italicized. Add your own dorks, copy queries, or
+edit/delete custom rows. Selecting or double-clicking only previews; applying
+updates the matching open search field without starting a scan. Manual edits
+in Self-hosted Search are for the current run; use Dorkbook to save a default.
+Editing/deleting a custom dork does not change its previously applied query.
+
+Desktop and Web UI use the same library and defaults. The sidecar stays at
+`~/.dirracuda/data/experimental/dorkbook.db`; upgrades back up legacy sidecars
+before migration. See [upgrade/recovery](docs/dev/dorkbook/U1_VALIDATION.md) and
+[validation and HI checks](docs/dev/dorkbook/UNIFIED_VALIDATION.md).
 
 ### Keymaster
 
@@ -700,7 +713,7 @@ Current Web UI layout:
 Notes:
 - Root `/scans` and `/extras` are intentionally not registered and return 404.
 - Queue state is shared and survives page navigation/refresh.
-- Dorkbook prefill is immediate-persist to discovery config.
+- Dorkbook `Apply to Search` saves provider-specific defaults immediately.
 - Keymaster `apply` writes `shodan.api_key`; secure-mode toggle/reset stays desktop-only for now.
 
 Remote access requires `remote_enabled=true`, a matching CIDR allowlist, and TLS

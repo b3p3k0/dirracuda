@@ -1,42 +1,30 @@
 # Dorkbook Workspace
 
-Date: 2026-04-19  
-Status: Active implementation workspace
+Date: 2026-09-27
+Status: Unified library implemented; HI acceptance pending.
 
-This folder is the planning + execution hub for the Dorkbook experimental feature.
+Dorkbook is the shared dork library for Shodan and Self-hosted Search
+(SearXNG/DeGoog). Desktop and Web UI show provider groups, topic/text filters,
+and a full query preview. **Apply to Search** saves one of four independent
+defaults; selecting a row only previews it. The pack contains 52 built-ins,
+including the three original broad Shodan dorks.
 
-Current discussion (2026-09-27): [shared discovery query library](UNIFIED_LIBRARY_PROPOSAL.md)
-for Shodan and Self-hosted Search, followed by a broader shipped dork pack.
-The [implementation plan](IMPLEMENTATION_PLAN.md) is approved.
-U1 storage/migration is implemented; see [validation and recovery](U1_VALIDATION.md).
-U2–U6 (application, UI, catalog, closeout) remain pending. The approved dork
-selection includes 33A/33B; 33C is deferred in [candidate notes](CANDIDATE_DORKS.md).
-HI selected one grouped view and persistent **Apply to Search** behavior.
-The [single-view mockup](ASCII_SKETCHES.md#unified-library--review-draft-2026-09-27)
-defines the intended UI; current screens still use the original protocol tabs.
-The v1 sections below describe the original implementation scope; current
-Dorkbook is under Accessories and uses the canonical sidecar path
-`~/.dirracuda/data/experimental/dorkbook.db`.
+The canonical sidecar remains
+`~/.dirracuda/data/experimental/dorkbook.db`. Provider schema upgrades preserve
+legacy dorks and take a SQLite-consistent backup before rebuilding the table.
+No primary results schema, verifier, crawling, or download behavior changed.
 
-## Canonical Scope (v1)
+## Current references
 
-1. Add `Dorkbook` tab under Experimental dialog.
-2. Launch singleton modeless Dorkbook window.
-3. Store dorks in sidecar DB (`~/.dirracuda/dorkbook.db`).
-4. Protocol tabs: SMB, FTP, HTTP.
-5. Built-ins are read-only and italic.
-6. Custom rows support add/edit/delete/copy.
-7. Search is current-tab only.
-8. Delete confirmation supports session-only mute.
-9. Persist window geometry and active protocol tab.
+- [Implementation plan](IMPLEMENTATION_PLAN.md): approved behavior and U1–U6 cards.
+- [Unified validation](UNIFIED_VALIDATION.md): commands, live limits, and HI checklist.
+- [Migration validation/recovery](U1_VALIDATION.md): backup and rollback instructions.
+- [Catalog research](CATALOG_RESEARCH.md): final dorks, source links, and adaptation notes.
+- [Candidate menu](CANDIDATE_DORKS.md): HI selections and deferred 33C exploration.
+- [Current mockup](ASCII_SKETCHES.md): grouped view; historical v1 sketches follow.
+- [Lessons learned](LESSONS_LEARNED.md): guardrails for future changes.
+- [Open questions](OPEN_QUESTIONS.md): remaining acceptance and follow-up work.
 
-## Source of Truth Files
-
-1. `SPEC.md` — behavior and data contracts.
-2. `ROADMAP.md` — objective sequence.
-3. `TASK_CARDS.md` — card-by-card execution and gates.
-4. `ASCII_SKETCHES.md` — mandatory UI contract.
-5. `CLAUDE_PROMPTS.md` — prompt templates for implementation/review.
-6. `OPEN_QUESTIONS.md` — unresolved decisions (should remain short/empty once locked).
-7. `VALIDATION_REPORT.md` — final evidence and PASS/FAIL.
-8. `LESSONS_LEARNED.md` — carry-forward implementation guardrails from completed work.
+The v1 spec, roadmap, task cards, prompts, and original validation report are
+retained as clearly marked historical records. The implementation plan and
+unified validation describe the current application.

@@ -510,3 +510,9 @@ def test_start_reddit_only_skips_preflight(monkeypatch):
     assert errors == [], f"Unexpected error dialogs: {errors}"
     assert "payload" in captured
     assert dlg.dialog.destroyed is True
+
+
+@pytest.fixture(autouse=True)
+def _isolate_dork_defaults(monkeypatch):
+    monkeypatch.setattr("experimental.dorkbook.defaults.read_defaults",
+                        lambda config_path=None, *, legacy_query=None: {"self_hosted": legacy_query or ""})

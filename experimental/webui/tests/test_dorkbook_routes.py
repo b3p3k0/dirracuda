@@ -129,9 +129,9 @@ def test_list_entries_returns_entries(logged_in, monkeypatch):
     monkeypatch.setattr(
         dork_store,
         "open_connection",
-        lambda *_a, **_kw: contextlib.nullcontext(mock_conn),
+        lambda *_a, **_kw: mock_conn,
     )
-    monkeypatch.setattr(dork_store, "list_entries", lambda conn, protocol, search_text="": [_SMB_ROW])
+    monkeypatch.setattr(dork_store, "list_entries", lambda conn, protocol, search_text="", **kwargs: [_SMB_ROW])
 
     r = logged_in.get("/api/dorkbook/entries?protocol=SMB")
     assert r.status_code == 200
@@ -193,11 +193,11 @@ def test_create_entry_succeeds(logged_in, monkeypatch):
     monkeypatch.setattr(
         dork_store,
         "open_connection",
-        lambda *_a, **_kw: contextlib.nullcontext(mock_conn),
+        lambda *_a, **_kw: mock_conn,
     )
     monkeypatch.setattr(
         dork_store, "create_entry",
-        lambda conn, protocol, nickname, query, notes: 99,
+        lambda conn, protocol, nickname, query, notes, **kwargs: 99,
     )
 
     r = logged_in.post(
@@ -219,7 +219,7 @@ def test_create_entry_rejects_duplicate(logged_in, monkeypatch, caplog):
     monkeypatch.setattr(
         dork_store,
         "open_connection",
-        lambda *_a, **_kw: contextlib.nullcontext(mock_conn),
+        lambda *_a, **_kw: mock_conn,
     )
     monkeypatch.setattr(
         dork_store, "create_entry",
@@ -274,7 +274,7 @@ def test_delete_entry_rejects_builtin(logged_in, monkeypatch):
     monkeypatch.setattr(
         dork_store,
         "open_connection",
-        lambda *_a, **_kw: contextlib.nullcontext(mock_conn),
+        lambda *_a, **_kw: mock_conn,
     )
     monkeypatch.setattr(dork_store, "get_entry", lambda conn, entry_id: _SMB_ROW)
 
@@ -298,7 +298,7 @@ def test_delete_entry_read_only_exception_is_sanitized(
     monkeypatch.setattr(
         dork_store,
         "open_connection",
-        lambda *_a, **_kw: contextlib.nullcontext(mock_conn),
+        lambda *_a, **_kw: mock_conn,
     )
     monkeypatch.setattr(dork_store, "get_entry", lambda *_a, **_kw: _CUSTOM_ROW)
     monkeypatch.setattr(
@@ -345,7 +345,7 @@ def test_delete_entry_succeeds(logged_in, monkeypatch):
     monkeypatch.setattr(
         dork_store,
         "open_connection",
-        lambda *_a, **_kw: contextlib.nullcontext(mock_conn),
+        lambda *_a, **_kw: mock_conn,
     )
     monkeypatch.setattr(dork_store, "get_entry", lambda conn, entry_id: _CUSTOM_ROW)
     deleted = []
@@ -389,7 +389,7 @@ def test_prefill_returns_404_when_entry_missing(logged_in, monkeypatch):
     monkeypatch.setattr(
         dork_store,
         "open_connection",
-        lambda *_a, **_kw: contextlib.nullcontext(mock_conn),
+        lambda *_a, **_kw: mock_conn,
     )
     monkeypatch.setattr(dork_store, "get_entry", lambda conn, entry_id: None)
 
@@ -427,7 +427,7 @@ def test_prefill_writes_to_config(logged_in, monkeypatch, main_config_path):
     monkeypatch.setattr(
         dork_store,
         "open_connection",
-        lambda *_a, **_kw: contextlib.nullcontext(mock_conn),
+        lambda *_a, **_kw: mock_conn,
     )
     monkeypatch.setattr(dork_store, "get_entry", lambda conn, entry_id: _CUSTOM_ROW)
 
@@ -453,11 +453,11 @@ def test_prefill_config_exception_is_sanitized(logged_in, monkeypatch, caplog):
     monkeypatch.setattr(
         dork_store,
         "open_connection",
-        lambda *_a, **_kw: contextlib.nullcontext(mock_conn),
+        lambda *_a, **_kw: mock_conn,
     )
     monkeypatch.setattr(dork_store, "get_entry", lambda *_a, **_kw: _CUSTOM_ROW)
     monkeypatch.setattr(
-        "experimental.webui.app.apply_discovery_dorks",
+        "experimental.webui.dorkbook_routes.defaults.apply_default",
         _raise_sentinel(),
     )
 
@@ -483,7 +483,7 @@ def test_prefill_returns_404_when_config_missing(logged_in, app, monkeypatch, tm
     monkeypatch.setattr(
         dork_store,
         "open_connection",
-        lambda *_a, **_kw: contextlib.nullcontext(mock_conn),
+        lambda *_a, **_kw: mock_conn,
     )
     monkeypatch.setattr(dork_store, "get_entry", lambda conn, entry_id: _CUSTOM_ROW)
 
@@ -498,3 +498,100 @@ def test_prefill_returns_404_when_config_missing(logged_in, app, monkeypatch, tm
         assert r.status_code == 404
     finally:
         app.state.main_config_path = original
+
+
+@pytest.fixture
+def real_dorkbook(app, tmp_path):
+    """Keep route integration tests away from the user's sidecar and config."""
+    app.state.dorkbook_db_path = tmp_path / "dorkbook.db"
+    return app.state.dorkbook_db_path
+
+
+def test_unified_library_groups_and_filters(logged_in, real_dorkbook):
+    tok = _csrf(logged_in)
+    query = 'intitle:"Index of /" "test epub"'
+    created = logged_in.post("/api/dorkbook/entries", json={
+        "provider": "self_hosted", "query": query, "nickname": "Test Books", "topic": "Test topic",
+    }, headers={"X-CSRF-Token": tok})
+    assert created.status_code == 201
+    rows = logged_in.get("/api/dorkbook/entries").json()["entries"]
+    assert {row["provider"] for row in rows} == {"shodan", "self_hosted"}
+    filtered = logged_in.get("/api/dorkbook/entries", params={
+        "provider": "self_hosted", "topic": "Test topic", "search": "Test Books",
+    }).json()["entries"]
+    assert len(filtered) == 1 and filtered[0]["query"] == query
+    assert filtered[0]["protocol"] is None
+    duplicate = logged_in.post("/api/dorkbook/entries", json={
+        "provider": "self_hosted", "query": query,
+    }, headers={"X-CSRF-Token": tok})
+    assert duplicate.status_code == 409
+
+
+@pytest.mark.parametrize("payload", [
+    {"provider": "self_hosted", "protocol": "HTTP", "query": "query"},
+    {"provider": "shodan", "query": "query"},
+    {"provider": "searxng", "query": "query"},
+    {"provider": "self_hosted", "query": " "},
+    {"provider": "self_hosted", "query": "x" * 501},
+    {"provider": "self_hosted", "query": "query", "topic": " "},
+])
+def test_invalid_destinations_rejected(logged_in, real_dorkbook, payload):
+    assert logged_in.post("/api/dorkbook/entries", json=payload,
+                          headers={"X-CSRF-Token": _csrf(logged_in)}).status_code == 422
+
+
+@pytest.mark.parametrize("destination,provider,protocol", [
+    ("shodan:SMB", "shodan", "SMB"), ("shodan:FTP", "shodan", "FTP"),
+    ("shodan:HTTP", "shodan", "HTTP"), ("self_hosted", "self_hosted", None),
+])
+def test_apply_persists_only_its_destination(logged_in, real_dorkbook, main_config_path,
+                                           destination, provider, protocol):
+    headers = {"X-CSRF-Token": _csrf(logged_in)}
+    before = logged_in.get("/api/dorkbook/defaults").json()["defaults"]
+    query = "unique test query for " + destination
+    created = logged_in.post("/api/dorkbook/entries", json={
+        "provider": provider, "protocol": protocol, "query": query,
+    }, headers=headers)
+    entry_id = created.json()["entry_id"]
+    response = logged_in.post("/api/dorkbook/apply", json={"entry_id": entry_id}, headers=headers)
+    assert response.status_code == 200
+    assert response.json()["destination"] == destination
+    after = logged_in.get("/api/dorkbook/defaults").json()["defaults"]
+    assert after == {**before, destination: query}
+    # Removing the library row must not remove its saved default.
+    assert logged_in.delete(f"/api/dorkbook/entries/{entry_id}", headers=headers).status_code == 200
+    assert logged_in.get("/api/dorkbook/defaults").json()["defaults"] == after
+    from experimental.dorkbook.defaults import read_defaults
+    assert read_defaults(main_config_path) == after
+
+
+def test_defaults_require_session_and_disable_cache(client, logged_in):
+    response = logged_in.get("/api/dorkbook/defaults")
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    client.cookies.clear()
+    assert client.get("/api/dorkbook/defaults").status_code == 303
+    assert client.post("/api/dorkbook/apply", json={"entry_id": 1}).status_code == 303
+
+
+@pytest.mark.parametrize("headers", [{}, {"Origin": "http://attacker.example"}])
+def test_apply_requires_csrf_and_origin(logged_in, headers):
+    if headers:
+        headers = {**headers, "X-CSRF-Token": _csrf(logged_in)}
+    assert logged_in.post("/api/dorkbook/apply", json={"entry_id": 1}, headers=headers).status_code == 403
+
+
+def test_defaults_failure_is_sanitized(logged_in, monkeypatch, caplog):
+    monkeypatch.setattr("experimental.webui.dorkbook_routes.defaults.read_defaults", _raise_sentinel())
+    _assert_sanitized(logged_in.get("/api/dorkbook/defaults"), caplog, 500,
+                      {"error": "discovery configuration unavailable"})
+
+
+def test_library_is_single_view_and_contextual_links(logged_in):
+    page = logged_in.get("/extras/dorkbook")
+    assert page.status_code == 200
+    assert "Apply to Search" in page.text
+    assert "dorkbook-tabs" not in page.text
+    assert "recipe" not in page.text.lower()
+    assert "provider=self_hosted" in logged_in.get("/scans/searxng").text
+    assert "provider=shodan" in logged_in.get("/scans/shodan").text

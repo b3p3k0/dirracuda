@@ -7,6 +7,7 @@ from importlib.machinery import SourceFileLoader
 import json
 from pathlib import Path
 import sys
+import subprocess
 import types
 
 import pytest
@@ -226,28 +227,25 @@ def test_follow_file_reopens_after_rotation(tmp_path, monkeypatch, capsys):
     assert "new-after-rotation" in capsys.readouterr().out
 
 
-def test_daemon_modules_import_without_tkinter(monkeypatch):
-    blocked = {"tkinter"}
-
-    class Blocker:
-        def find_spec(self, fullname, path=None, target=None):
-            if fullname.split(".", 1)[0] in blocked:
-                raise AssertionError(f"headless import attempted: {fullname}")
-            return None
-
-    blocker = Blocker()
-    sys.meta_path.insert(0, blocker)
-    try:
-        __import__("experimental.webui.daemon_cli")
-        __import__("experimental.webui.service_control")
-        __import__("experimental.webui.systemd_control")
-        __import__("experimental.webui.server")
-        assert not any(
-            name == "tkinter" or name.startswith("tkinter.")
-            for name in sys.modules
-        )
-    finally:
-        sys.meta_path.remove(blocker)
+def test_daemon_modules_import_without_tkinter():
+    # GUI tests legitimately import Tk in this process. A fresh interpreter
+    # checks daemon imports themselves and cannot pass through cached modules.
+    script = """
+import sys
+class Blocker:
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split('.', 1)[0] == 'tkinter':
+            raise AssertionError(f'headless import attempted: {fullname}')
+        return None
+sys.meta_path.insert(0, Blocker())
+for name in ('daemon_cli', 'service_control', 'systemd_control', 'server'):
+    __import__('experimental.webui.' + name)
+assert not any(name == 'tkinter' or name.startswith('tkinter.') for name in sys.modules)
+"""
+    result = subprocess.run([sys.executable, "-c", script],
+                            cwd=Path(__file__).resolve().parents[3],
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_root_launcher_reexecs_repository_venv(monkeypatch):

@@ -97,6 +97,10 @@ def build_searxng_sub_panel(
         pady=0,
     )
 
+    if vars_dict.get("open_dorkbook"):
+        dorkbook_button = ttk.Button(frame, text="Dorkbook…", command=vars_dict["open_dorkbook"], padding=(4, 0))
+        dorkbook_button.grid(row=1, column=2, sticky="w")
+
     _grid_label(frame, "Results", 2, 0, theme)
     results_entry = ttk.Entry(frame, textvariable=vars_dict["max_results"], width=8)
     results_entry.grid(row=2, column=1, sticky="w", padx=(4, 0), pady=0)
@@ -410,9 +414,11 @@ def load_searxng_settings(dialog: Any, sm: Any) -> None:
     dialog.searxng_instance_url_var.set(
         str(g("unified_scan_dialog.searxng_instance_url", "") or "")
     )
-    dialog.searxng_query_var.set(
-        str(g("unified_scan_dialog.searxng_query", "") or "")
-    )
+    from experimental.dorkbook.defaults import read_defaults
+    defaults = read_defaults(getattr(dialog, "config_path", None),
+                             legacy_query=str(g("unified_scan_dialog.searxng_query", "") or ""))
+    dialog._self_hosted_default = defaults["self_hosted"]
+    dialog.searxng_query_var.set(dialog._self_hosted_default)
     dialog.searxng_max_results_var.set(str(validate_searxng_max_results(
         g("unified_scan_dialog.searxng_max_results", DEFAULT_MAX_RESULTS)
     )))
@@ -444,10 +450,6 @@ def persist_searxng_settings(dialog: Any, sm: Any) -> None:
     sm.set_setting(
         "unified_scan_dialog.searxng_instance_url",
         dialog.searxng_instance_url_var.get().strip(),
-    )
-    sm.set_setting(
-        "unified_scan_dialog.searxng_query",
-        dialog.searxng_query_var.get().strip(),
     )
     sm.set_setting(
         "unified_scan_dialog.searxng_max_results",

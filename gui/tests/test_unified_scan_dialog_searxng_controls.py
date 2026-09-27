@@ -385,3 +385,9 @@ class TestScanRequest:
         assert "searxng_request_timeout" not in req
         assert "searxng_short_retry_delay" not in req
         assert "searxng_long_retry_delay" not in req
+
+
+@pytest.fixture(autouse=True)
+def _isolate_dork_defaults(monkeypatch):
+    monkeypatch.setattr("experimental.dorkbook.defaults.read_defaults",
+                        lambda config_path=None, *, legacy_query=None: {"self_hosted": legacy_query or ""})

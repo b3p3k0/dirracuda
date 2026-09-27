@@ -1,7 +1,7 @@
 # Dorkbook v1 Validation Report
 
-Current work (2026-09-27): [U1 provider-storage validation](U1_VALIDATION.md).
-The results below are historical v1 evidence, not a claim that U2–U6 are done.
+Current work (2026-09-27): [unified U1–U6 validation](UNIFIED_VALIDATION.md).
+The results below are historical v1 evidence.
 
 Date: 2026-04-19  
 Status: Implementation + adversarial hardening complete (manual HI pending)

@@ -2,18 +2,18 @@
 
 Date: 2026-09-27
 Status: Provider grouping, persistent application, and terminology agreed.
-The [implementation plan](IMPLEMENTATION_PLAN.md) is approved; U1 storage/migration
-is implemented. This document preserves design rationale; the plan tracks execution.
+The [implementation plan](IMPLEMENTATION_PLAN.md) is implemented through U6.
+This document preserves the original design rationale; see [validation](UNIFIED_VALIDATION.md).
 
 ## Why this comes before the dork pack
 
 The requested starter pack covers ebooks, movies/TV, music, photos, and other
-collections. Research exposed a product boundary: Dorkbook currently applies
+collections. Research exposed a product boundary: Dorkbook originally applied
 Shodan queries, while Self-hosted Search accepts web-search queries. HI asked
 to explore consolidating both in Dorkbook before choosing the shipped dorks.
 The broader starter pack remains the original objective.
 
-## Confirmed current behavior
+## Behavior before consolidation (historical)
 
 - Dorkbook has SMB/FTP/HTTP tabs and one built-in per protocol.
 - Its sidecar schema restricts protocol to those three values. There is no

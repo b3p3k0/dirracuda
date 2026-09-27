@@ -385,6 +385,21 @@ class ConfigStore:
     # Load/compose
     # ------------------------------------------------------------------
 
+    def validate_runtime_sources(self) -> None:
+        """Reject malformed persisted input before an explicit settings mutation.
+
+        Normal runtime reads retain their legacy fallback policy. Callers that
+        must preserve user data can opt into this check before loading/writing.
+        """
+        paths = list(self.all_main_shard_paths().values()) if self.has_any_main_shard() else list(
+            _legacy_main_config_candidates(self.paths, self.legacy))
+        for path in paths:
+            if path.exists():
+                with path.open(encoding="utf-8") as handle:
+                    payload = json.load(handle)
+                if not isinstance(payload, dict):
+                    raise ValueError(f"Configuration root must be an object: {path}")
+
     def load_runtime_config(self) -> Tuple[Dict[str, Any], Optional[str]]:
         """Return composed runtime config + optional migration warning."""
         migration = self.ensure_migrated()
@@ -532,9 +547,15 @@ class ConfigStore:
             raise KeyError(f"Unsupported module prefs shard: {module_name}")
         return self.conf_d_dir / "experimental" / f"{module_name}.json"
 
-    def load_module_prefs(self, module_name: str) -> Dict[str, Any]:
+    def load_module_prefs(self, module_name: str, *, strict: bool = False) -> Dict[str, Any]:
         path = self.module_prefs_path(module_name)
-        root = _safe_read_json_object(path)
+        if strict and path.exists():
+            with path.open(encoding="utf-8") as handle:
+                root = json.load(handle)
+            if not isinstance(root, dict) or not isinstance(root.get(module_name, {}), dict):
+                raise ValueError(f"Module preferences must be an object: {path}")
+        else:
+            root = _safe_read_json_object(path)
         module_cfg = root.get(module_name)
         if isinstance(module_cfg, dict):
             return copy.deepcopy(module_cfg)

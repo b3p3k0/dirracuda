@@ -1,141 +1,48 @@
-"""
-Dorkbook window.
-
-Modeless singleton window with SMB/FTP/HTTP tabs for managing dork recipes
-stored in the Dorkbook sidecar DB.
-"""
-
+"""One provider-grouped Dorkbook library shared by all desktop launch surfaces."""
 from __future__ import annotations
 
-import json
-import tkinter as tk
-from tkinter import ttk
-from tkinter import font as tkfont
+from contextlib import closing
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
+import tkinter as tk
+from tkinter import ttk, font as tkfont
 
 from experimental.dorkbook import store as dork_store
-from experimental.dorkbook.models import (
-    PROTOCOL_FTP,
-    PROTOCOL_HTTP,
-    PROTOCOL_SMB,
-    PROTOCOLS,
-    ROW_KIND_BUILTIN,
-    DuplicateEntryError,
-    ReadOnlyEntryError,
-)
-from gui.components.discovery_dork_config import apply_discovery_dorks, read_discovery_dorks
+from experimental.dorkbook.defaults import apply_default, read_defaults
+from experimental.dorkbook.models import PROTOCOLS, ROW_KIND_BUILTIN
+from gui.components.dorkbook_events import broadcast_applied
 from gui.utils import safe_messagebox as messagebox
 from gui.utils.dialog_helpers import ensure_dialog_focus
-from gui.utils.session_flags import (
-    DORKBOOK_DELETE_CONFIRM_MUTE_KEY,
-    get_flag,
-    set_flag,
-)
+from gui.utils.session_flags import DORKBOOK_DELETE_CONFIRM_MUTE_KEY, get_flag, set_flag
 from gui.utils.style import get_theme
-from shared.config import load_config as _load_config
-from shared.path_service import get_paths as _get_paths
 
 _WINDOW_INSTANCE = None
-
 _WINDOW_SETTINGS_NAME = "dorkbook"
-_SETTINGS_ACTIVE_TAB_KEY = "dorkbook.active_protocol_tab"
-_DEFAULT_GEOMETRY = "1000x560"
-
-_COL_HEADERS = {
-    "nickname": "Nickname",
-    "query": "Query",
-    "notes": "Notes",
-}
-_COL_WIDTHS = {
-    "nickname": 220,
-    "query": 520,
-    "notes": 240,
-}
-_COLS = ["nickname", "query", "notes"]
-
-_PROTOCOL_TO_DORK_FIELD = {
-    "SMB": "smb_dork",
-    "FTP": "ftp_dork",
-    "HTTP": "http_dork",
-}
-
-
-def _apply_dork_to_config(config_path: str, protocol: str, query: str) -> None:
-    """Write one protocol's dork directly to the discovery config (immediate-persist)."""
-    path = Path(config_path).expanduser()
-    proto_key = str(protocol).strip().upper()
-    field = _PROTOCOL_TO_DORK_FIELD.get(proto_key)
-    if field is None:
-        raise ValueError(f"unsupported protocol for discovery dorks: {protocol!r}")
-    q = str(query).strip()
-    _canonical = _get_paths().config_file.resolve(strict=False)
-    if path.resolve(strict=False) == _canonical:
-        cfg = _load_config(str(path))
-        config_data = {
-            "shodan": cfg.get("shodan", default={}) or {},
-            "ftp": cfg.get("ftp", default={}) or {},
-            "http": cfg.get("http", default={}) or {},
-        }
-        current = read_discovery_dorks(config_data)
-        current[field] = q
-        apply_discovery_dorks(config_data, current)
-        updates = {
-            s: config_data[s]
-            for s in ("shodan", "ftp", "http")
-            if isinstance(config_data.get(s), dict)
-        }
-        if not cfg.update_sections(updates):
-            raise RuntimeError("failed to persist discovery dork sections")
-    else:
-        if not path.is_file():
-            raise FileNotFoundError(f"Config not found: {config_path}")
-        data = json.loads(path.read_text(encoding="utf-8"))
-        current = read_discovery_dorks(data)
-        current[field] = q
-        apply_discovery_dorks(data, current)
-        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+_DEFAULT_GEOMETRY = "1120x720"
+PROVIDER_LABELS = {"shodan": "Shodan", "self_hosted": "Self-hosted Search"}
 
 
 def _window_instance_is_live(instance) -> bool:
-    if instance is None:
-        return False
     try:
-        return bool(instance.window.winfo_exists())
+        return instance is not None and bool(instance.window.winfo_exists())
     except Exception:
         return False
 
 
-def _resolve_initial_protocol(settings_manager: Any, default: str = PROTOCOL_SMB) -> str:
-    """Resolve last active Dorkbook tab from GUI settings."""
-    if settings_manager is None:
-        return default
-    try:
-        value = str(settings_manager.get_setting(_SETTINGS_ACTIVE_TAB_KEY, default) or default).strip().upper()
-    except Exception:
-        value = default
-    return value if value in PROTOCOLS else default
+def _is_builtin_row(row) -> bool:
+    return bool(row) and row.get("row_kind") == ROW_KIND_BUILTIN
 
 
-def _is_builtin_row(row: Optional[dict]) -> bool:
-    if not row:
-        return False
-    return str(row.get("row_kind") or "").strip().lower() == ROW_KIND_BUILTIN
-
-
-def _clipboard_payload_for_row(row: dict) -> str:
-    """v1 copy semantics: query text only."""
+def _clipboard_payload_for_row(row) -> str:
     return str(row.get("query") or "")
 
 
-def _normalize_scan_query_config_path(config_path: Optional[Any]) -> Optional[str]:
-    raw = str(config_path or "").strip()
-    if not raw:
-        return None
-    try:
-        return str(Path(raw).expanduser())
-    except Exception:
-        return None
+def _normalize_scan_query_config_path(config_path) -> Optional[str]:
+    return str(Path(config_path).expanduser()) if config_path else None
+
+
+def _destination(row) -> str:
+    return "self_hosted" if row["provider"] == "self_hosted" else "shodan:" + row["protocol"]
 
 
 class _EntryEditorDialog:
@@ -150,6 +57,10 @@ class _EntryEditorDialog:
         nickname: str = "",
         query: str = "",
         notes: str = "",
+        provider: str = "shodan",
+        protocol: Optional[str] = "SMB",
+        topic: str = "General",
+        editing: bool = False,
     ) -> None:
         self.parent = parent
         self.theme = theme
@@ -157,7 +68,7 @@ class _EntryEditorDialog:
 
         self.dialog = tk.Toplevel(parent)
         self.dialog.title(title)
-        self.dialog.geometry("760x360")
+        self.dialog.geometry("780x440")
         self.dialog.resizable(True, True)
         self.dialog.transient(parent)
         self.dialog.grab_set()
@@ -167,11 +78,34 @@ class _EntryEditorDialog:
         self.theme.apply_to_widget(outer, "main_window")
         outer.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
 
+        metadata = tk.Frame(outer)
+        self.theme.apply_to_widget(metadata, "main_window")
+        metadata.pack(fill=tk.X, pady=(0, 8))
+        self.provider_var = tk.StringVar(value=PROVIDER_LABELS[provider])
+        self.protocol_var = tk.StringVar(value=protocol or "HTTP")
+        self.topic_var = tk.StringVar(value=topic)
+        for label, variable, values in (
+            ("Provider", self.provider_var, tuple(PROVIDER_LABELS.values())),
+            ("Protocol", self.protocol_var, PROTOCOLS),
+            ("Topic", self.topic_var, None),
+        ):
+            widget = tk.Label(metadata, text=label + ":")
+            self.theme.apply_to_widget(widget, "label")
+            widget.pack(side=tk.LEFT, padx=(0, 5))
+            entry = ttk.Combobox(metadata, textvariable=variable, values=values or (), width=20)
+            entry.configure(state="disabled" if editing and values else "readonly" if values else "normal")
+            entry.pack(side=tk.LEFT, padx=(0, 10))
+            if label == "Protocol":
+                self.protocol_entry = entry
+        self._editing = editing
+        self.provider_var.trace_add("write", lambda *_: self._sync_protocol())
+        self._sync_protocol()
+
         nickname_row = tk.Frame(outer)
         self.theme.apply_to_widget(nickname_row, "main_window")
         nickname_row.pack(fill=tk.X, pady=(0, 8))
 
-        nickname_label = tk.Label(nickname_row, text="Nickname:", width=10, anchor="w")
+        nickname_label = tk.Label(nickname_row, text="Name:", width=10, anchor="w")
         self.theme.apply_to_widget(nickname_label, "label")
         nickname_label.pack(side=tk.LEFT)
 
@@ -223,15 +157,24 @@ class _EntryEditorDialog:
 
         self.dialog.bind("<Escape>", lambda _e: self._on_cancel())
         self.dialog.protocol("WM_DELETE_WINDOW", self._on_cancel)
-        ensure_dialog_focus(self.dialog, parent)
         query_entry.focus_set()
+        ensure_dialog_focus(self.dialog, parent)
+
+    def _sync_protocol(self) -> None:
+        self.protocol_entry.configure(
+            state="disabled" if self._editing or self.provider_var.get() == PROVIDER_LABELS["self_hosted"] else "readonly"
+        )
 
     def _on_save(self) -> None:
         query = str(self.query_var.get() or "").strip()
         if not query:
             self.error_var.set("Query is required.")
             return
+        provider = next(key for key, value in PROVIDER_LABELS.items() if value == self.provider_var.get())
         self.result = {
+            "provider": provider,
+            "protocol": self.protocol_var.get() if provider == "shodan" else None,
+            "topic": self.topic_var.get().strip() or "General",
             "nickname": str(self.nickname_var.get() or "").strip(),
             "query": query,
             "notes": str(self.notes_text.get("1.0", tk.END) or "").strip(),
@@ -313,556 +256,328 @@ class _DeleteConfirmDialog:
 
 
 class DorkbookWindow:
-    """Modeless Dorkbook recipe manager window."""
+    """Modeless singleton with explicit persistence and selection-only preview."""
 
-    def __init__(
-        self,
-        parent: tk.Widget,
-        *,
-        settings_manager=None,
-        db_path: Optional[Path] = None,
-        scan_query_config_path: Optional[str] = None,
-    ) -> None:
+    def __init__(self, parent, *, settings_manager=None, db_path=None,
+                 scan_query_config_path=None, focus_provider=None):
         self.parent = parent
         self.settings_manager = settings_manager
         self.db_path = db_path
         self._scan_query_config_path = _normalize_scan_query_config_path(scan_query_config_path)
         self.theme = get_theme()
-
-        self._tab_by_protocol: dict[str, dict] = {}
-        self._protocol_by_tab_id: dict[str, str] = {}
-
-        self._ensure_sidecar_ready()
-        self.window = tk.Toplevel(parent)
+        self.rows = {}
+        self.defaults = {}
+        self._refresh_pending = None
+        dork_store.init_db(db_path)
+        self.window = tk.Toplevel(parent._root())
         self.window.title("Dorkbook")
         self.window.geometry(_DEFAULT_GEOMETRY)
-        self.window.minsize(760, 420)
+        self.window.minsize(850, 560)
         self.theme.apply_to_widget(self.window, "main_window")
-
         self._restore_window_state()
         self._build_ui()
-        self._load_all_tabs()
-
+        self._load_entries()
+        if focus_provider:
+            self.focus_provider(focus_provider)
         self.window.protocol("WM_DELETE_WINDOW", self._on_close)
-        self.window.bind("<Escape>", lambda _e: self._on_close())
+        self.window.bind("<Escape>", lambda _event: self._on_close())
+        self.window.bind("<FocusIn>", self._on_focus)
+        self.window.bind("<<DorkbookApplied>>", lambda _event: self._load_entries())
 
-    def _build_ui(self) -> None:
-        outer = tk.Frame(self.window)
-        self.theme.apply_to_widget(outer, "main_window")
-        outer.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
-        heading = tk.Label(
-            outer,
-            text="Dorkbook stores reusable dork recipes by protocol.",
-            anchor="w",
-            justify="left",
-        )
-        self.theme.apply_to_widget(heading, "label")
-        heading.pack(fill=tk.X, pady=(0, 8))
-
-        self.notebook = ttk.Notebook(outer)
-        self.notebook.pack(fill=tk.BOTH, expand=True)
-        self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
-
-        for protocol in PROTOCOLS:
-            self._build_protocol_tab(protocol)
-
-        initial_protocol = _resolve_initial_protocol(self.settings_manager, PROTOCOL_SMB)
-        tab = self._tab_by_protocol.get(initial_protocol)
-        if tab is not None:
-            self.notebook.select(tab["frame"])
-
-    def _build_protocol_tab(self, protocol: str) -> None:
-        frame = tk.Frame(self.notebook)
+    def _frame(self, parent):
+        frame = tk.Frame(parent)
         self.theme.apply_to_widget(frame, "main_window")
-        self.notebook.add(frame, text=protocol)
+        return frame
 
-        row_by_iid: dict[str, dict] = {}
+    def _label(self, parent, **kwargs):
+        label = tk.Label(parent, **kwargs)
+        self.theme.apply_to_widget(label, "label")
+        return label
 
-        search_row = tk.Frame(frame)
-        self.theme.apply_to_widget(search_row, "main_window")
-        search_row.pack(fill=tk.X, padx=8, pady=(8, 4))
-
-        search_label = tk.Label(search_row, text="Search:", anchor="w")
-        self.theme.apply_to_widget(search_label, "label")
-        search_label.pack(side=tk.LEFT)
-
-        search_var = tk.StringVar(value="")
-        search_entry = tk.Entry(search_row, textvariable=search_var, width=40)
-        self.theme.apply_to_widget(search_entry, "entry")
-        search_entry.pack(side=tk.LEFT, padx=(6, 0))
-        search_var.trace_add("write", lambda *_: self._load_entries(protocol))
-
-        tree_frame = tk.Frame(frame)
-        self.theme.apply_to_widget(tree_frame, "main_window")
-        tree_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 4))
-
-        scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL)
-        tree = ttk.Treeview(
-            tree_frame,
-            columns=_COLS,
-            show="headings",
-            selectmode="browse",
-            yscrollcommand=scrollbar.set,
-        )
-        scrollbar.config(command=tree.yview)
-
-        for col in _COLS:
-            tree.heading(col, text=_COL_HEADERS[col])
-            tree.column(col, width=_COL_WIDTHS[col], minwidth=50, anchor="w")
-
-        builtin_font = tkfont.Font(
-            family=self.theme.fonts["body"][0],
-            size=self.theme.fonts["body"][1],
-            slant="italic",
-        )
-        tree.tag_configure("builtin", font=builtin_font)
-
-        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    def _build_ui(self):
+        outer = self._frame(self.window)
+        outer.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
+        heading = self._frame(outer)
+        heading.pack(fill=tk.X)
+        self._label(heading, text="Explore a dork, adapt its query, then apply it to your next search.", anchor="w").pack(side=tk.LEFT)
+        jumps = self._frame(heading)
+        jumps.pack(side=tk.RIGHT)
+        self._label(jumps, text="Jump to:").pack(side=tk.LEFT, padx=(10, 4))
+        for provider, label in PROVIDER_LABELS.items():
+            ttk.Button(jumps, text=label, padding=(4, 0),
+                       command=lambda key=provider: self.focus_provider(key, clear_filters=False)).pack(side=tk.LEFT, padx=2)
+        filters = self._frame(outer)
+        filters.pack(fill=tk.X, pady=10)
+        self._label(filters, text="Find Dork:").pack(side=tk.LEFT)
+        self.search_var = tk.StringVar(value="")
+        search = tk.Entry(filters, textvariable=self.search_var)
+        self.theme.apply_to_widget(search, "entry")
+        search.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 20))
+        self._label(filters, text="Topic:").pack(side=tk.LEFT)
+        self.topic_var = tk.StringVar(value="All topics")
+        self.topic_combo = ttk.Combobox(filters, textvariable=self.topic_var, state="readonly", width=20)
+        self.topic_combo.pack(side=tk.LEFT, padx=(8, 0))
+        self.search_var.trace_add("write", self._schedule_reload)
+        self.topic_var.trace_add("write", self._schedule_reload)
+        table = self._frame(outer)
+        table.pack(fill=tk.BOTH, expand=True)
+        self.tree = ttk.Treeview(table, columns=("protocol", "topic", "query", "default"), selectmode="browse", height=14)
+        self.tree.heading("#0", text="Provider / Dork")
+        self.tree.column("#0", width=250, minwidth=160)
+        for name, title, width in (("protocol", "Protocol", 70), ("topic", "Topic", 130),
+                                   ("query", "Query preview", 420), ("default", "Default", 70)):
+            self.tree.heading(name, text=title)
+            self.tree.column(name, width=width, minwidth=60, stretch=name == "query")
+        self._builtin_font = tkfont.Font(family=self.theme.fonts["body"][0], size=self.theme.fonts["body"][1], slant="italic")
+        self.tree.tag_configure("builtin", font=self._builtin_font)
+        scrollbar = ttk.Scrollbar(table, orient=tk.VERTICAL, command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scrollbar.set)
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.tree.bind("<<TreeviewSelect>>", self._on_selection_changed)
+        self.tree.bind("<Double-1>", self._on_tree_double_click)
+        self.tree.bind("<Button-3>", self._on_right_click)
+        self._label(outer, text="Selected Dork", anchor="w").pack(fill=tk.X, pady=(10, 3))
+        self.preview = tk.Text(outer, height=6, wrap=tk.WORD)
+        self.theme.apply_to_widget(self.preview, "text")
+        self.preview.pack(fill=tk.X)
+        self.preview.configure(state=tk.DISABLED)
+        self.status_var = tk.StringVar(value="")
+        self._label(outer, textvariable=self.status_var, anchor="w").pack(fill=tk.X, pady=6)
+        actions = self._frame(outer)
+        actions.pack(fill=tk.X)
+        self.buttons = {}
+        for label, command in (("Add Dork", self._on_add), ("Edit Dork", self._on_edit),
+                               ("Delete Dork", self._on_delete), ("Copy Query", self._on_copy),
+                               ("Apply to Search", self._on_apply)):
+            button = tk.Button(actions, text=label, command=command)
+            if label == "Apply to Search":
+                self.theme.apply_to_widget(button, "button_primary")
+            else:
+                self.theme.apply_to_widget(button, "button_secondary")
+            button.pack(side=tk.RIGHT if label == "Apply to Search" else tk.LEFT, padx=(0, 8))
+            self.buttons[label] = button
+        self.context_menu = tk.Menu(self.window, tearoff=0)
 
-        tree.bind("<<TreeviewSelect>>", lambda _e: self._on_selection_changed(protocol))
-        tree.bind("<Button-3>", lambda e: self._on_right_click(protocol, e))
-        tree.bind("<Double-1>", lambda e: self._on_tree_double_click(protocol, e))
+    def _schedule_reload(self, *_args):
+        if self._refresh_pending is not None:
+            self.window.after_cancel(self._refresh_pending)
+        self._refresh_pending = self.window.after(150, self._load_entries)
 
-        status_var = tk.StringVar(value="")
-        status_label = tk.Label(frame, textvariable=status_var, anchor="w")
-        self.theme.apply_to_widget(status_label, "label")
-        status_label.pack(fill=tk.X, padx=8, pady=(0, 4))
-
-        btn_row = tk.Frame(frame)
-        self.theme.apply_to_widget(btn_row, "main_window")
-        btn_row.pack(fill=tk.X, padx=8, pady=(0, 8))
-
-        add_btn = tk.Button(btn_row, text="Add", command=lambda: self._on_add(protocol))
-        self.theme.apply_to_widget(add_btn, "button_secondary")
-        add_btn.pack(side=tk.LEFT, padx=(0, 6))
-
-        copy_btn = tk.Button(btn_row, text="Copy", command=lambda: self._on_copy(protocol))
-        self.theme.apply_to_widget(copy_btn, "button_secondary")
-        copy_btn.pack(side=tk.LEFT, padx=(0, 6))
-        copy_btn.configure(state=tk.DISABLED)
-
-        use_btn = tk.Button(
-            btn_row,
-            text="Use in Discovery Dorks",
-            command=lambda: self._on_use_in_discovery_dorks(protocol),
-        )
-        self.theme.apply_to_widget(use_btn, "button_secondary")
-        use_btn.pack(side=tk.LEFT, padx=(0, 6))
-        use_btn.configure(state=tk.DISABLED)
-
-        use_hint = tk.Label(
-            btn_row,
-            text="Applies immediately. For full query editing: Start Scan → Edit Queries.",
-            anchor="w",
-        )
-        self.theme.apply_to_widget(use_hint, "label")
-        use_hint.pack(side=tk.LEFT, padx=(8, 0))
-
-        edit_btn = tk.Button(btn_row, text="Edit", command=lambda: self._on_edit(protocol))
-        self.theme.apply_to_widget(edit_btn, "button_secondary")
-        delete_btn = tk.Button(btn_row, text="Delete", command=lambda: self._on_delete(protocol))
-        self.theme.apply_to_widget(delete_btn, "button_secondary")
-
-        context_menu = tk.Menu(self.window, tearoff=0)
-
-        tab_info = {
-            "protocol": protocol,
-            "frame": frame,
-            "search_var": search_var,
-            "tree": tree,
-            "row_by_iid": row_by_iid,
-            "status_var": status_var,
-            "copy_btn": copy_btn,
-            "use_btn": use_btn,
-            "edit_btn": edit_btn,
-            "delete_btn": delete_btn,
-            "edit_delete_visible": False,
-            "context_menu": context_menu,
-        }
-        self._tab_by_protocol[protocol] = tab_info
-        self._protocol_by_tab_id[str(frame)] = protocol
-        self._hide_edit_delete_buttons(protocol)
-
-    def _ensure_sidecar_ready(self) -> None:
-        dork_store.init_db(self.db_path)
-
-    def _open_store_connection(self):
-        return dork_store.open_connection(self.db_path)
-
-    def _load_all_tabs(self) -> None:
-        for protocol in PROTOCOLS:
-            self._load_entries(protocol)
-
-    def _load_entries(self, protocol: str) -> None:
-        tab = self._tab_by_protocol[protocol]
-        tree = tab["tree"]
-        search_text = str(tab["search_var"].get() or "")
-
-        tree.delete(*tree.get_children())
-        tab["row_by_iid"].clear()
-
+    def _load_entries(self):
+        if self._refresh_pending is not None:
+            self.window.after_cancel(self._refresh_pending)
+        self._refresh_pending = None
+        selected = self.tree.selection()
+        opened = {key: self.tree.item(key, "open") for key in PROVIDER_LABELS if self.tree.exists(key)}
         try:
-            with self._open_store_connection() as conn:
-                rows = dork_store.list_entries(conn, protocol, search_text=search_text)
+            with closing(dork_store.open_connection(self.db_path)) as conn:
+                all_rows = dork_store.list_entries(conn, provider=None)
+                rows = dork_store.list_entries(conn, provider=None, search_text=self.search_var.get(),
+                                              topic=None if self.topic_var.get() == "All topics" else self.topic_var.get())
         except Exception as exc:
-            tab["status_var"].set(f"Load error: {exc}")
-            self._set_action_visibility(protocol, None)
+            self.status_var.set(f"Load failed: {exc}")
             return
-
+        default_error = ""
+        try:
+            legacy_query = self.settings_manager.get_setting("unified_scan_dialog.searxng_query", "") if self.settings_manager else None
+            self.defaults = read_defaults(self._resolve_scan_query_config_path(), legacy_query=legacy_query)
+        except (OSError, ValueError, RuntimeError) as exc:
+            self.defaults = {}
+            default_error = f" Saved defaults unavailable: {exc}"
+        self.topic_combo.configure(values=("All topics", *sorted({row["topic"] for row in all_rows})))
+        self.tree.delete(*self.tree.get_children())
+        self.rows = {}
+        for provider, label in PROVIDER_LABELS.items():
+            self.tree.insert("", tk.END, iid=provider, text=label, open=opened.get(provider, True))
         for row in rows:
             iid = str(row["entry_id"])
-            tags = ("builtin",) if _is_builtin_row(row) else ()
-            tree.insert(
-                "",
-                tk.END,
-                iid=iid,
-                values=(row["nickname"], row["query"], row["notes"]),
-                tags=tags,
-            )
-            tab["row_by_iid"][iid] = row
+            self.rows[iid] = row
+            self.tree.insert(row["provider"], tk.END, iid=iid, text=row["nickname"] or "Untitled dork",
+                             values=(row["protocol"] or "—", row["topic"], row["query"],
+                                     "✓" if self.defaults.get(_destination(row)) == row["query"].strip() else ""),
+                             tags=("builtin",) if _is_builtin_row(row) else ())
+        if selected and self.tree.exists(selected[0]):
+            self.tree.selection_set(selected[0])
+        self.status_var.set(f"{len(rows)} dorks. Apply to Search saves a default; selecting only previews." + default_error)
+        self._on_selection_changed()
 
-        if search_text.strip():
-            tab["status_var"].set(f"{len(rows)} recipe(s) match search.")
-        elif rows:
-            tab["status_var"].set(f"{len(rows)} recipe(s).")
-        else:
-            tab["status_var"].set("No recipes yet. Use Add to create one.")
+    def _selected_row(self):
+        selected = self.tree.selection()
+        return self.rows.get(selected[0]) if selected else None
 
-        self._set_action_visibility(protocol, self._selected_row(protocol))
+    def _on_selection_changed(self, _event=None):
+        row = self._selected_row()
+        for name in ("Copy Query", "Apply to Search"):
+            self.buttons[name].configure(state=tk.NORMAL if row else tk.DISABLED)
+        for name in ("Edit Dork", "Delete Dork"):
+            self.buttons[name].configure(state=tk.NORMAL if row and not _is_builtin_row(row) else tk.DISABLED)
+        self.preview.configure(state=tk.NORMAL)
+        self.preview.delete("1.0", tk.END)
+        if row:
+            destination = PROVIDER_LABELS[row["provider"]] + (" · " + row["protocol"] if row["protocol"] else "")
+            kind = "Built-in · read-only" if _is_builtin_row(row) else "Custom"
+            self.preview.insert("1.0", f"{row['nickname'] or 'Untitled dork'} — {kind}\nApplies to: {destination}\n\n{row['query']}\n\n{row['notes'] or ''}")
+        self.preview.configure(state=tk.DISABLED)
 
-    def _selected_row(self, protocol: str) -> Optional[dict]:
-        tab = self._tab_by_protocol[protocol]
-        selected = tab["tree"].selection()
-        if not selected:
-            return None
-        iid = str(selected[0])
-        return tab["row_by_iid"].get(iid)
+    def _on_tree_double_click(self, event):
+        iid = self.tree.identify_row(event.y)
+        if iid:
+            self.tree.selection_set(iid)
+            self.tree.focus(iid)
+            self._on_selection_changed()
+        # Keep Treeview's native expand/collapse behavior for provider headings.
 
-    def _show_edit_delete_buttons(self, protocol: str) -> None:
-        tab = self._tab_by_protocol[protocol]
-        if tab["edit_delete_visible"]:
-            return
-        tab["edit_btn"].pack(side=tk.LEFT, padx=(0, 6))
-        tab["delete_btn"].pack(side=tk.LEFT, padx=(0, 6))
-        tab["edit_delete_visible"] = True
-
-    def _hide_edit_delete_buttons(self, protocol: str) -> None:
-        tab = self._tab_by_protocol[protocol]
-        if not tab["edit_delete_visible"]:
-            return
-        tab["edit_btn"].pack_forget()
-        tab["delete_btn"].pack_forget()
-        tab["edit_delete_visible"] = False
-
-    def _set_action_visibility(self, protocol: str, row: Optional[dict]) -> None:
-        tab = self._tab_by_protocol[protocol]
-        if row is None:
-            tab["copy_btn"].configure(state=tk.DISABLED)
-            tab["use_btn"].configure(state=tk.DISABLED)
-            self._hide_edit_delete_buttons(protocol)
-            return
-
-        tab["copy_btn"].configure(state=tk.NORMAL)
-        tab["use_btn"].configure(state=tk.NORMAL)
-        if _is_builtin_row(row):
-            self._hide_edit_delete_buttons(protocol)
-        else:
-            self._show_edit_delete_buttons(protocol)
-
-    def _build_context_menu(self, protocol: str, row: Optional[dict]) -> None:
-        tab = self._tab_by_protocol[protocol]
-        menu = tab["context_menu"]
+    def _on_right_click(self, event):
+        iid = self.tree.identify_row(event.y)
+        if iid:
+            self.tree.selection_set(iid)
+        row = self._selected_row()
+        menu = self.context_menu
         menu.delete(0, tk.END)
-        menu.add_command(label="Add", command=lambda: self._on_add(protocol))
-
-        if row is None:
-            return
-
-        menu.add_command(label="Copy", command=lambda: self._on_copy(protocol))
-        menu.add_command(label="Use in Discovery Dorks", command=lambda: self._on_use_in_discovery_dorks(protocol))
-        if not _is_builtin_row(row):
-            menu.add_command(label="Edit", command=lambda: self._on_edit(protocol))
-            menu.add_command(label="Delete", command=lambda: self._on_delete(protocol))
-
-    def _on_right_click(self, protocol: str, event) -> None:
-        tab = self._tab_by_protocol[protocol]
-        tree = tab["tree"]
-
-        row_iid = tree.identify_row(event.y)
-        if row_iid:
-            tree.selection_set(row_iid)
-            tree.focus(row_iid)
-        else:
-            tree.selection_remove(tree.selection())
-
-        row = self._selected_row(protocol)
-        self._set_action_visibility(protocol, row)
-        self._build_context_menu(protocol, row)
+        menu.add_command(label="Add Dork", command=self._on_add)
+        if row:
+            menu.add_command(label="Copy Query", command=self._on_copy)
+            menu.add_command(label="Apply to Search", command=self._on_apply)
+            if not _is_builtin_row(row):
+                menu.add_command(label="Edit Dork", command=self._on_edit)
+                menu.add_command(label="Delete Dork", command=self._on_delete)
         try:
-            tab["context_menu"].tk_popup(event.x_root, event.y_root)
+            menu.tk_popup(event.x_root, event.y_root)
         finally:
-            tab["context_menu"].grab_release()
+            menu.grab_release()
 
-    def _on_tree_double_click(self, protocol: str, event) -> None:
-        tab = self._tab_by_protocol[protocol]
-        tree = tab["tree"]
-        row_iid = tree.identify_row(event.y)
-        if not row_iid:
+    def _on_apply(self):
+        row = self._selected_row()
+        if not row:
             return
-        tree.selection_set(row_iid)
-        tree.focus(row_iid)
-        self._set_action_visibility(protocol, self._selected_row(protocol))
-        self._on_use_in_discovery_dorks(protocol)
+        path = self._resolve_scan_query_config_path()
+        try:
+            query = apply_default(row["provider"], row["protocol"], row["query"], config_path=path)
+        except Exception as exc:
+            messagebox.showerror("Apply Failed", f"Could not save the search default:\n{exc}", parent=self.window)
+            return
+        broadcast_applied(self.window, path, _destination(row), query)
+        self._load_entries()
+        self.status_var.set(f"Applied to {PROVIDER_LABELS[row['provider']]}{(' · ' + row['protocol']) if row['protocol'] else ''}. Saved for future searches.")
 
-    def _show_entry_editor(
-        self,
-        *,
-        title: str,
-        nickname: str = "",
-        query: str = "",
-        notes: str = "",
-    ) -> Optional[dict]:
-        dialog = _EntryEditorDialog(
-            self.window,
-            self.theme,
-            title=title,
-            nickname=nickname,
-            query=query,
-            notes=notes,
-        )
-        return dialog.show()
+    def _on_copy(self):
+        row = self._selected_row()
+        if row:
+            self.window.clipboard_clear()
+            self.window.clipboard_append(_clipboard_payload_for_row(row))
+            self.status_var.set("Copied query to clipboard.")
 
-    def _confirm_delete(self, row: dict) -> bool:
-        if get_flag(DORKBOOK_DELETE_CONFIRM_MUTE_KEY, False):
-            return True
+    def _show_entry_editor(self, **kwargs):
+        return _EntryEditorDialog(self.window, self.theme, **kwargs).show()
 
-        label = str(row.get("nickname") or "").strip() or str(row.get("query") or "").strip()
-        dialog = _DeleteConfirmDialog(
-            self.window,
-            self.theme,
-            prompt_text=(
-                "Delete the selected Dorkbook recipe?\n\n"
-                f"{label}"
-            ),
-        )
-        confirmed, mute_until_restart = dialog.show()
-        if confirmed and mute_until_restart:
-            set_flag(DORKBOOK_DELETE_CONFIRM_MUTE_KEY, True)
-        return confirmed
-
-    def _on_selection_changed(self, protocol: str) -> None:
-        self._set_action_visibility(protocol, self._selected_row(protocol))
-
-    def _on_add(self, protocol: str) -> None:
-        payload = self._show_entry_editor(title=f"Add {protocol} Dork")
+    def _on_add(self):
+        selected = self.tree.selection()
+        row = self._selected_row()
+        provider = row["provider"] if row else selected[0] if selected and selected[0] in PROVIDER_LABELS else "shodan"
+        payload = self._show_entry_editor(title="Add Dork", provider=provider, protocol=row["protocol"] if row else "HTTP")
         if payload is None:
             return
-
         try:
-            with self._open_store_connection() as conn:
-                dork_store.create_entry(
-                    conn,
-                    protocol=protocol,
-                    nickname=payload.get("nickname"),
-                    query=payload.get("query", ""),
-                    notes=payload.get("notes"),
-                )
+            with closing(dork_store.open_connection(self.db_path)) as conn:
+                dork_store.create_entry(conn, **payload)
                 conn.commit()
-        except DuplicateEntryError as exc:
-            messagebox.showerror("Duplicate Dork", str(exc), parent=self.window)
-            return
         except Exception as exc:
             messagebox.showerror("Add Failed", str(exc), parent=self.window)
             return
+        self._load_entries()
 
-        self._load_entries(protocol)
-
-    def _on_copy(self, protocol: str) -> None:
-        row = self._selected_row(protocol)
-        if row is None:
+    def _on_edit(self):
+        row = self._selected_row()
+        if not row or _is_builtin_row(row):
             return
-        payload = _clipboard_payload_for_row(row)
-        self.window.clipboard_clear()
-        self.window.clipboard_append(payload)
-        self._tab_by_protocol[protocol]["status_var"].set("Copied query to clipboard.")
+        payload = self._show_entry_editor(title="Edit Dork", editing=True,
+                                         **{key: row[key] or "" for key in ("nickname", "query", "notes", "provider", "protocol", "topic")})
+        if payload is None:
+            return
+        payload.pop("provider")
+        payload.pop("protocol")
+        try:
+            with closing(dork_store.open_connection(self.db_path)) as conn:
+                dork_store.update_entry(conn, entry_id=row["entry_id"], **payload)
+                conn.commit()
+        except Exception as exc:
+            messagebox.showerror("Edit Failed", str(exc), parent=self.window)
+            return
+        self._load_entries()
 
-    def update_scan_query_context(self, scan_query_config_path: Optional[str]) -> None:
+    def _confirm_delete(self, row):
+        if get_flag(DORKBOOK_DELETE_CONFIRM_MUTE_KEY, False):
+            return True
+        confirmed, mute = _DeleteConfirmDialog(self.window, self.theme,
+            prompt_text="Delete the selected dork?\n\n" + (row.get("nickname") or row["query"])).show()
+        if confirmed and mute:
+            set_flag(DORKBOOK_DELETE_CONFIRM_MUTE_KEY, True)
+        return confirmed
+
+    def _on_delete(self):
+        row = self._selected_row()
+        if not row or _is_builtin_row(row) or not self._confirm_delete(row):
+            return
+        try:
+            with closing(dork_store.open_connection(self.db_path)) as conn:
+                dork_store.delete_entry(conn, row["entry_id"])
+                conn.commit()
+        except Exception as exc:
+            messagebox.showerror("Delete Failed", str(exc), parent=self.window)
+            return
+        self._load_entries()
+
+    def update_scan_query_context(self, scan_query_config_path):
         normalized = _normalize_scan_query_config_path(scan_query_config_path)
         if normalized:
             self._scan_query_config_path = normalized
 
-    def _resolve_scan_query_config_path(self) -> Optional[str]:
+    def _resolve_scan_query_config_path(self):
         if self._scan_query_config_path:
             return self._scan_query_config_path
-        if self.settings_manager is None:
-            return None
-        try:
-            candidate = str(self.settings_manager.get_setting("backend.config_path", "") or "").strip()
-        except Exception:
-            candidate = ""
-        if not candidate and hasattr(self.settings_manager, "get_smbseek_config_path"):
-            try:
-                candidate = str(self.settings_manager.get_smbseek_config_path() or "").strip()
-            except Exception:
-                candidate = ""
-        return _normalize_scan_query_config_path(candidate)
+        if self.settings_manager:
+            candidate = self.settings_manager.get_setting("backend.config_path", "")
+            if not candidate and hasattr(self.settings_manager, "get_smbseek_config_path"):
+                candidate = self.settings_manager.get_smbseek_config_path()
+            return _normalize_scan_query_config_path(candidate)
+        return None
 
-    def _on_use_in_discovery_dorks(self, protocol: str) -> None:
-        row = self._selected_row(protocol)
-        if row is None:
-            return
-        query = str(row.get("query") or "").strip()
-        if not query:
-            messagebox.showwarning(
-                "Cannot Use Dork",
-                "Selected row has no query text.",
-                parent=self.window,
-            )
-            return
+    def focus_provider(self, provider, *, clear_filters=True):
+        if provider in PROVIDER_LABELS:
+            # Contextual launch resets stale filters; simple navigation keeps them.
+            if clear_filters:
+                self.search_var.set("")
+                self.topic_var.set("All topics")
+            if self._refresh_pending is not None:
+                self.window.after_cancel(self._refresh_pending)
+            self._load_entries()
+            self.tree.item(provider, open=True)
+            self.tree.selection_set(provider)
+            self.tree.focus(provider)
+            self.tree.see(provider)
 
-        config_path = self._resolve_scan_query_config_path()
-        if not config_path:
-            messagebox.showwarning(
-                "Discovery Dorks Context Missing",
-                "No scan config context is available.\nOpen Start Scan -> Edit Queries first, then try again.",
-                parent=self.window,
-            )
-            return
+    def _on_focus(self, event):
+        if event.widget is self.window:
+            self._load_entries()
 
-        try:
-            _apply_dork_to_config(config_path, protocol, query)
-        except Exception as exc:
-            messagebox.showerror(
-                "Use Dork Failed",
-                f"Could not apply dork to config:\n{exc}",
-                parent=self.window,
-            )
-            return
-
-        self._tab_by_protocol[protocol]["status_var"].set(
-            f"Applied {protocol} query to discovery config."
-        )
-
-    def _on_edit(self, protocol: str) -> None:
-        row = self._selected_row(protocol)
-        if row is None:
-            return
-        if _is_builtin_row(row):
-            return
-
-        payload = self._show_entry_editor(
-            title=f"Edit {protocol} Dork",
-            nickname=str(row.get("nickname") or ""),
-            query=str(row.get("query") or ""),
-            notes=str(row.get("notes") or ""),
-        )
-        if payload is None:
-            return
-
-        try:
-            with self._open_store_connection() as conn:
-                dork_store.update_entry(
-                    conn,
-                    entry_id=int(row["entry_id"]),
-                    nickname=payload.get("nickname"),
-                    query=payload.get("query", ""),
-                    notes=payload.get("notes"),
-                )
-                conn.commit()
-        except DuplicateEntryError as exc:
-            messagebox.showerror("Duplicate Dork", str(exc), parent=self.window)
-            return
-        except ReadOnlyEntryError as exc:
-            messagebox.showerror("Edit Not Allowed", str(exc), parent=self.window)
-            return
-        except Exception as exc:
-            messagebox.showerror("Edit Failed", str(exc), parent=self.window)
-            return
-
-        self._load_entries(protocol)
-
-    def _on_delete(self, protocol: str) -> None:
-        row = self._selected_row(protocol)
-        if row is None:
-            return
-        if _is_builtin_row(row):
-            return
-        if not self._confirm_delete(row):
-            return
-
-        try:
-            with self._open_store_connection() as conn:
-                dork_store.delete_entry(conn, int(row["entry_id"]))
-                conn.commit()
-        except ReadOnlyEntryError as exc:
-            messagebox.showerror("Delete Not Allowed", str(exc), parent=self.window)
-            return
-        except Exception as exc:
-            messagebox.showerror("Delete Failed", str(exc), parent=self.window)
-            return
-
-        self._load_entries(protocol)
-
-    def _on_tab_changed(self, _event=None) -> None:
-        if self.settings_manager is None:
-            return
-        try:
-            tab_id = str(self.notebook.select())
-            protocol = self._protocol_by_tab_id.get(tab_id)
-            if protocol in PROTOCOLS:
-                self.settings_manager.set_setting(_SETTINGS_ACTIVE_TAB_KEY, protocol)
-        except Exception:
-            pass
-
-    def _restore_window_state(self) -> None:
-        if self.settings_manager is None:
-            return
-        try:
-            geometry = str(
-                self.settings_manager.get_window_setting(
-                    _WINDOW_SETTINGS_NAME,
-                    "geometry",
-                    _DEFAULT_GEOMETRY,
-                )
-                or _DEFAULT_GEOMETRY
-            )
+    def _restore_window_state(self):
+        if self.settings_manager:
+            geometry = self.settings_manager.get_window_setting(_WINDOW_SETTINGS_NAME, "geometry", _DEFAULT_GEOMETRY)
             if geometry:
                 self.window.geometry(geometry)
-        except Exception:
-            pass
 
-    def _save_window_state(self) -> None:
-        if self.settings_manager is None:
-            return
-        try:
-            self.settings_manager.set_window_setting(
-                _WINDOW_SETTINGS_NAME,
-                "geometry",
-                self.window.geometry(),
-            )
-        except Exception:
-            pass
-        try:
-            tab_id = str(self.notebook.select())
-            protocol = self._protocol_by_tab_id.get(tab_id)
-            if protocol in PROTOCOLS:
-                self.settings_manager.set_setting(_SETTINGS_ACTIVE_TAB_KEY, protocol)
-        except Exception:
-            pass
+    def focus_window(self):
+        self.window.deiconify()
+        self.window.lift()
+        self.window.focus_force()
 
-    def focus_window(self) -> None:
-        try:
-            self.window.deiconify()
-            self.window.lift()
-            self.window.focus_force()
-        except Exception:
-            pass
-
-    def _on_close(self) -> None:
+    def _on_close(self):
         global _WINDOW_INSTANCE
-        self._save_window_state()
+        if self.settings_manager:
+            self.settings_manager.set_window_setting(_WINDOW_SETTINGS_NAME, "geometry", self.window.geometry())
+        if self._refresh_pending is not None:
+            self.window.after_cancel(self._refresh_pending)
         try:
             self.window.destroy()
         finally:
@@ -870,31 +585,22 @@ class DorkbookWindow:
                 _WINDOW_INSTANCE = None
 
 
-def show_dorkbook_window(
-    parent: tk.Widget,
-    *,
-    settings_manager=None,
-    db_path: Optional[Path] = None,
-    scan_query_config_path: Optional[str] = None,
-) -> None:
-    """Open singleton Dorkbook window or focus existing one."""
+def show_dorkbook_window(parent, *, settings_manager=None, db_path=None,
+                         scan_query_config_path=None, focus_provider=None):
+    """Open the same library from Accessories or a contextual query button."""
     global _WINDOW_INSTANCE
     if _window_instance_is_live(_WINDOW_INSTANCE):
         _WINDOW_INSTANCE.update_scan_query_context(scan_query_config_path)
+        if focus_provider:
+            _WINDOW_INSTANCE.focus_provider(focus_provider)
         _WINDOW_INSTANCE.focus_window()
         return
-
     try:
-        _WINDOW_INSTANCE = DorkbookWindow(
-            parent,
-            settings_manager=settings_manager,
-            db_path=db_path,
-            scan_query_config_path=scan_query_config_path,
-        )
+        kwargs = dict(settings_manager=settings_manager, db_path=db_path,
+                      scan_query_config_path=scan_query_config_path)
+        if focus_provider:
+            kwargs["focus_provider"] = focus_provider
+        _WINDOW_INSTANCE = DorkbookWindow(parent, **kwargs)
     except Exception as exc:
         _WINDOW_INSTANCE = None
-        messagebox.showerror(
-            "Dorkbook Unavailable",
-            f"Could not open Dorkbook.\n\n{exc}",
-            parent=parent,
-        )
+        messagebox.showerror("Dorkbook Unavailable", f"Could not open Dorkbook.\n\n{exc}", parent=parent)

@@ -20,7 +20,8 @@ Keep the three broad Shodan defaults and offer a broad Self-hosted Search dork.
 Numbers below identify ideas, not final query counts: an idea may produce
 separate Shodan HTTP and Self-hosted Search dorks or several format variants.
 Clues are not final query strings. Research syntax for selected ideas; live
-yield checks are optional. Do not force SMB/FTP equivalents.
+yield is not a ship gate; required live backend checks are recorded in
+[unified validation](UNIFIED_VALIDATION.md). Do not force SMB/FTP equivalents.
 
 | ID | Candidate | Matching clues / variants |
 |---|---|---|

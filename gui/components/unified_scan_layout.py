@@ -281,6 +281,7 @@ def _build_provider_section(owner: Any, parent: tk.Widget) -> None:
         {
             "instance_url":      owner.searxng_instance_url_var,
             "query":             owner.searxng_query_var,
+            "open_dorkbook": lambda: _open_self_hosted_dorkbook(owner),
             "max_results":       owner.searxng_max_results_var,
             "request_timeout":   owner.searxng_request_timeout_var,
             "short_retry_delay": owner.searxng_short_retry_delay_var,
@@ -648,3 +649,8 @@ def _build_footer(owner: Any) -> None:
     cancel_button = tk.Button(row, text="Cancel", command=owner._cancel)
     owner.theme.apply_to_widget(cancel_button, "button_secondary")
     cancel_button.pack(side=tk.RIGHT, padx=(0, 8))
+
+
+def _open_self_hosted_dorkbook(owner):
+    from gui.components.dorkbook_events import open_self_hosted_dorkbook
+    open_self_hosted_dorkbook(owner)

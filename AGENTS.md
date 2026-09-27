@@ -123,7 +123,7 @@ sidecar SQLite databases under `~/.dirracuda/data/experimental/`.
 | Feature | Entry point | DB | Notes |
 |---------|-------------|-----|-------|
 | Web UI | `experimental/webui/server.py` | config/state | FastAPI companion; cookie sessions, CSRF protection; remote mode requires TLS + allowlist |
-| Dorkbook | `experimental/dorkbook/store.py` | sidecar | Shodan query library; built-in read-only dorks + user customs |
+| Dorkbook | `experimental/dorkbook/store.py` | sidecar | Unified Shodan/Self-hosted Search dork library; shared saved defaults, read-only built-ins + user customs |
 | Keymaster | `experimental/keymaster/store.py` | sidecar | Multi-key API key store; selecting a key updates active Shodan key in memory |
 | Redseek | `experimental/redseek/service.py` | **primary** | Reddit ingestion via anonymous RSS feed/search only; new runs write to primary DB, auto-sync SMB/FTP/HTTP targets; legacy data in `reddit_od.db` |
 | Self-hosted Search | `experimental/se_dork/service.py` | **primary** | SearXNG/DeGoog dork search; two-commit transaction model; auto-sync to primary protocol tables |

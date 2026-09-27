@@ -1,61 +1,51 @@
 {% extends "base.html" %}
 {% block title %}Dorkbook{% endblock %}
-
 {% block content %}
 <h1>Dorkbook</h1>
-<p>Reusable dork recipes by protocol. Apply a recipe to immediately update the active discovery query.</p>
-
+<p>Explore dorks for Shodan and Self-hosted Search. Select a dork to preview it; Apply to Search saves it as the default for its destination.</p>
 <div role="status" id="dorkbook-status" aria-live="polite"></div>
-
 <div class="form-section">
-  <div id="dorkbook-tabs" role="tablist">
-    <button type="button" class="tab-btn active" role="tab" data-protocol="SMB" aria-selected="true">SMB</button>
-    <button type="button" class="tab-btn" role="tab" data-protocol="FTP" aria-selected="false">FTP</button>
-    <button type="button" class="tab-btn" role="tab" data-protocol="HTTP" aria-selected="false">HTTP</button>
+  <div class="form-row">
+    <label for="dorkbook-search">Search all dorks</label>
+    <input id="dorkbook-search" type="search" placeholder="Name, query, or notes" maxlength="200">
+    <label for="dorkbook-topic">Topic</label>
+    <select id="dorkbook-topic"><option value="">All topics</option></select>
   </div>
-
-  <div class="form-row dorkbook-search-row">
-    <label for="dorkbook-search">Search</label>
-    <input id="dorkbook-search" type="text" placeholder="filter by nickname, query, or notes" maxlength="200">
+  <p>Jump to: <a href="#provider-shodan">Shodan</a> · <a href="#provider-self_hosted">Self-hosted Search</a></p>
+  <div class="table-wrap" id="dorkbook-library">
+    <table id="dorkbook-table" class="results-table">
+      <thead><tr><th>Name</th><th>Protocol</th><th>Topic</th><th>Query</th><th>Default</th></tr></thead>
+      <tbody id="dorkbook-tbody"></tbody>
+    </table>
   </div>
-
-  <table id="dorkbook-table" class="results-table">
-    <thead>
-      <tr>
-        <th>Nickname</th>
-        <th>Query</th>
-        <th>Notes</th>
-        <th>Actions</th>
-      </tr>
-    </thead>
-    <tbody id="dorkbook-tbody">
-    </tbody>
-  </table>
-
-  <p class="info-text">For editing, renaming, or copying entries, open Dorkbook in the desktop app.</p>
+  <p>Built-in dorks appear in italics and are read-only. Edit custom dorks in the desktop app.</p>
 </div>
-
+<div class="form-section" id="dorkbook-preview" aria-live="polite">
+  <h2 id="preview-name">Select a dork</h2>
+  <p id="preview-destination"></p>
+  <p id="preview-kind"></p>
+  <pre id="preview-query"></pre>
+  <p id="preview-notes"></p>
+  <button id="copy-dork" type="button" disabled>Copy Query</button>
+  <button id="apply-dork" type="button" disabled>Apply to Search</button>
+  <button id="delete-dork" type="button" disabled>Delete Custom Dork</button>
+  <label><input type="checkbox" id="mute-delete-confirm"> Skip delete confirmation for this session</label>
+</div>
 <div class="form-section">
-  <h2>Add Custom Entry</h2>
-  <form id="dorkbook-add-form" novalidate>
-    <input type="hidden" id="add-protocol" name="protocol" value="SMB">
+  <h2>Add Custom Dork</h2>
+  <form id="dorkbook-add-form">
     <div class="form-row">
-      <label for="add-nickname">Nickname</label>
-      <input id="add-nickname" name="nickname" type="text" maxlength="200" placeholder="optional display name">
+      <label for="add-provider">Provider</label>
+      <select id="add-provider"><option value="shodan">Shodan</option><option value="self_hosted">Self-hosted Search</option></select>
+      <label for="add-protocol">Protocol</label>
+      <select id="add-protocol"><option>SMB</option><option>FTP</option><option>HTTP</option></select>
     </div>
-    <div class="form-row">
-      <label for="add-query">Query <span aria-hidden="true">*</span></label>
-      <input id="add-query" name="query" type="text" maxlength="2000" required placeholder="e.g. smb authentication: disabled">
-    </div>
-    <div class="form-row">
-      <label for="add-notes">Notes</label>
-      <textarea id="add-notes" name="notes" maxlength="2000" rows="3" placeholder="optional notes"></textarea>
-    </div>
-    <div class="form-row">
-      <button type="submit" class="btn btn-primary">Save</button>
-    </div>
+    <div class="form-row"><label for="add-topic">Topic</label><input id="add-topic" maxlength="100" value="General" required></div>
+    <div class="form-row"><label for="add-nickname">Name</label><input id="add-nickname" maxlength="200" placeholder="Optional name"></div>
+    <div class="form-row"><label for="add-query">Query</label><input id="add-query" maxlength="2000" required></div>
+    <div class="form-row"><label for="add-notes">Notes</label><textarea id="add-notes" maxlength="2000" rows="3"></textarea></div>
+    <button type="submit">Save Dork</button>
   </form>
 </div>
-
-<script src="/static/dorkbook.js"></script>
 {% endblock %}
+{% block scripts %}<script src="/static/dorkbook.js"></script>{% endblock %}

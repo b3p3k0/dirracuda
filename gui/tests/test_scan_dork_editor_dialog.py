@@ -229,60 +229,6 @@ def test_validate_and_save_rejects_malformed_existing_config(monkeypatch, tmp_pa
     assert cfg.read_text(encoding="utf-8") == "{bad json"
 
 
-def test_populate_discovery_dork_from_dorkbook_opens_and_populates(monkeypatch):
-    calls = {"populate": []}
-
-    class _DialogStub:
-        def __init__(self, parent, config_path, settings_manager=None, on_close_callback=None):
-            self.parent = parent
-            self.config_path = config_path
-            self.settings_manager = settings_manager
-            self.on_close_callback = on_close_callback
-            self.dialog = _DialogWidget(exists=True)
-
-        def focus_dialog(self) -> None:
-            return None
-
-        def populate_from_dorkbook(self, *, protocol: str, query: str) -> None:
-            calls["populate"].append((protocol, query))
-
-    monkeypatch.setattr(dork_editor_dialog, "ScanDorkEditorDialog", _DialogStub)
-
-    dork_editor_dialog.populate_discovery_dork_from_dorkbook(
-        parent=object(),
-        config_path="/tmp/config.json",
-        protocol="FTP",
-        query='port:21 "230 Login successful"',
-    )
-
-    assert calls["populate"] == [("FTP", 'port:21 "230 Login successful"')]
-
-
-def test_populate_from_dorkbook_maps_protocol_to_field_and_is_manual_save():
-    dlg = dork_editor_dialog.ScanDorkEditorDialog.__new__(dork_editor_dialog.ScanDorkEditorDialog)
-    dlg.smb_dork_var = _Var("smb old")
-    dlg.ftp_dork_var = _Var("ftp old")
-    dlg.http_dork_var = _Var("http old")
-    dlg.focus_dialog = lambda: None
-
-    dlg.populate_from_dorkbook(protocol="HTTP", query="http.title:\"Index of /\"")
-
-    assert dlg.smb_dork_var.get() == "smb old"
-    assert dlg.ftp_dork_var.get() == "ftp old"
-    assert dlg.http_dork_var.get() == "http.title:\"Index of /\""
-
-
-def test_populate_from_dorkbook_rejects_unknown_protocol():
-    dlg = dork_editor_dialog.ScanDorkEditorDialog.__new__(dork_editor_dialog.ScanDorkEditorDialog)
-    dlg.smb_dork_var = _Var("smb old")
-    dlg.ftp_dork_var = _Var("ftp old")
-    dlg.http_dork_var = _Var("http old")
-    dlg.focus_dialog = lambda: None
-
-    with pytest.raises(ValueError, match="Unsupported protocol"):
-        dlg.populate_from_dorkbook(protocol="SMTP", query="port:25")
-
-
 def test_open_dorkbook_uses_current_scan_context(monkeypatch):
     dlg = dork_editor_dialog.ScanDorkEditorDialog.__new__(dork_editor_dialog.ScanDorkEditorDialog)
     dlg.dialog = object()
