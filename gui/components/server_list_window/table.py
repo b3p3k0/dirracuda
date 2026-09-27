@@ -14,6 +14,7 @@ import re
 
 from shared.sherlock import default_settings, settings_from_dict
 from gui.utils.sherlock_risk_display import (
+    sherlock_foreground,
     resolve_sherlock_risk as _resolve_sherlock_risk,
     sherlock_row_tag as _sherlock_row_tag,
 )
@@ -206,9 +207,11 @@ def update_table_display(tree, filtered_servers: List[Dict[str, Any]], settings_
             risk_text = severity.display_text(count)
             tag_name = _sherlock_row_tag(severity, color_tag)
             if tag_name not in configured_sherlock_tags:
+                background = sherlock_settings.tint_for(severity, color_tag)
                 tree.tag_configure(
                     tag_name,
-                    background=sherlock_settings.tint_for(severity, color_tag),
+                    background=background,
+                    foreground=sherlock_foreground(background),
                 )
                 configured_sherlock_tags.add(tag_name)
             row_tags = (tag_name,)

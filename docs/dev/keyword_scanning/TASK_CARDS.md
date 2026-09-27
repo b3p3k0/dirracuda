@@ -630,3 +630,66 @@ Validation:
 - Targeted matrix across C21-C25.
 - `pytest -k sherlock`, GUI guardrails, `git diff --check`.
 - Full-suite failures, if any, are bucketed as unrelated vs Sherlock-attributable.
+
+## C27 - Readable Text On Sherlock Highlights
+
+Status: implemented, 2026-09-27; HI visual acceptance pending. HI approved
+direct Codex implementation and a local commit for this session (no Claude
+handoff; pushes remain HI-owned).
+
+Goal: Keep text readable on bright and dark Sherlock row backgrounds in both
+desktop themes, without adding settings or dependencies.
+
+Confirmed root cause:
+- `server_list_window/table.py::update_table_display` and
+  `batch_summary_dialog.py::show_batch_summary_dialog` configure Sherlock tags
+  with a background only. Text inherits the global Treeview foreground.
+- Dark mode supplies `#f1f5fb`. An isolated real-Tk reproduction confirmed the
+  LOW tag has background `#ffff80` and an empty foreground. That pair has only
+  1.04:1 contrast; `#111111` on the same yellow gives 17.86:1.
+
+Implementation:
+- Add a small pure foreground resolver in `gui/utils/sherlock_risk_display.py`.
+  Use the W3C sRGB relative-luminance and contrast formulas below.
+- Compare near-black `#111111` and white `#ffffff` against the final resolved
+  background; choose the higher-contrast candidate. If neither reaches 4.5:1,
+  use `#000000` as the narrow midtone fallback. Do not round before comparing.
+- Resolve the background through existing `settings.tint_for` first, then set
+  both background and foreground on each Sherlock tag in both desktop tables.
+- Compute only inside the existing per-refresh configured-tag guard: at most
+  12 severity/tag combinations, not once per host. No global cache needed.
+- The choice depends on the highlight, not the global theme. Existing tags
+  therefore remain readable when the theme changes without rebuilding rows.
+- Reuse the existing `validate_color` settings boundary. Malformed helper
+  inputs raise `ValueError`; no arbitrary object coercion or new color formats.
+- Keep selected-row foreground/background controlled by the existing ttk state
+  map. Verify selection and deselection with real Tk.
+
+Scope: shared display helper, Server List, probe batch summary, and targeted
+tests. Preserve background colors, User-tag precedence, severity/count text,
+blank/stale rows, settings formats, and snapshot-only behavior. No matcher,
+schema, auth, Web UI, global theme redesign, or dependency changes.
+
+Validation:
+- Pure cases: default red/orange/yellow, bright green User color, dark custom
+  color, black/white, midtones including the black fallback, and invalid input.
+- Real-Tk checks: both surfaces and themes, live theme switch, selected and
+  deselected rows, color refresh, and unchanged unhighlighted/stale rows.
+- Assert foreground contrast against the resolved User color, including empty
+  User-color fallback to severity. Verify bounded tag configuration counts.
+- Run `xvfb-run -a ./venv/bin/python -m pytest gui/tests/test_sherlock_contrast.py gui/tests/test_sherlock_risk_display.py gui/tests/test_sherlock_risk_column.py gui/tests/test_batch_summary_dialog.py gui/tests/test_theme_runtime_toggle.py gui/tests/test_theme_style_guardrail.py gui/tests/test_messagebox_guardrail.py -q`.
+- Run `git diff --check` and before/after line counts. Initial runtime sizes:
+  helper 110, Server List table 492, batch summary 275; all excellent (<=1200).
+  Pause and propose modularization if any touched file exceeds 1700 lines.
+- HI visual check after implementation: launch `./dirracuda`, open Server List
+  with existing Sherlock findings, switch dark/light themes, select/deselect
+  bright and dark highlighted rows, and compare an existing probe summary.
+- Review README's Sherlock section at closeout; add a short user-facing note
+  only once automatic text contrast ships. No dead-code removal is needed for
+  the proposal; review touched paths after implementation. HI authorized a local
+  commit for C27; do not push.
+
+Sources:
+- [W3C G18 contrast calculation and 4.5:1 target](https://www.w3.org/WAI/WCAG21/Techniques/general/G18)
+- Local theme state mapping: `gui/utils/style.py`, Treeview configuration.
+- Local display contract: `SPEC.md`, Display Tint Precedence.

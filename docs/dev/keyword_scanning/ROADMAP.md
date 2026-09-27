@@ -419,3 +419,41 @@ File-size audit (guardrail 1200): `sherlock_pattern_manager.py` 1019,
 `sherlock_category_actions.py` 340, `shared/sherlock/serialize.py` 214,
 `shared/sherlock/grouping.py` 194 — all clear. `CLAUDE.md` is untracked
 (gitignored/local) and was not modified. Sherlock two-pane redesign closed.
+
+## C27 - Readable Text On Sherlock Highlights
+
+Status: implemented and validated, 2026-09-27; HI visual acceptance pending.
+HI approved direct Codex implementation and a local commit for this session.
+
+Choose a contrasting foreground from the final Sherlock highlight color in
+both the Server List and probe summary. Reuse the existing shared display
+helper and per-tag configuration guards. See C27 in `TASK_CARDS.md` for the
+color rule, narrow scope, source, and validation matrix.
+
+Exit criteria: bright highlights get near-black text; dark custom highlights
+get light text; selected rows and theme switching remain readable; existing
+colors, tint precedence, Risk text, and blank-row behavior are preserved.
+
+README's Sherlock section now explains automatic dark/light text selection.
+The session workflow override is recorded in this folder's README.
+
+Planning baseline: C27's exact targeted pytest command passed under Xvfb
+(43 passed, no skips). The isolated Tk reproduction used in-memory Sherlock
+settings and confirmed an empty foreground on the yellow LOW tag. These checks
+confirm the existing behavior, not a completed fix. `git diff --check` passed.
+
+Implementation validation: C27's updated targeted command (including
+`gui/tests/test_sherlock_contrast.py`) passed: **66 passed, no skips**. Tests
+cover near-black/white/midtone fallback, invalid input, both desktop surfaces
+and themes, live theme changes, selection state maps, color refresh, blank and
+stale rows, and four contrast calculations for 40 highlighted rows. The first
+two runs exposed test-harness mistakes (Treeview query API and Tcl color-object
+comparison); those were corrected before the passing run. No runtime failures
+remain in this matrix. Full-suite and visual acceptance are not claimed.
+
+Runtime line counts: `sherlock_risk_display.py` 110 -> 139,
+`server_list_window/table.py` 492 -> 495, `batch_summary_dialog.py` 275 -> 279.
+The new contrast test file is 121 lines. README is 770 -> 772. All touched
+files remain in the excellent band (<=1200). Diff/dead-code review found no
+obsolete path to remove; both tables use the same new helper. No dependency,
+schema, auth, saved-settings, or network changes.

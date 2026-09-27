@@ -4,6 +4,16 @@ This workspace covers the planned Sherlock feature: optional keyword and
 wildcard highlighting for high-risk exposure clues found in existing probe
 snapshots.
 
+## Session Workflow Override (2026-09-27)
+
+HI approved direct Codex implementation and commits for this session, starting
+with C27. Work one card at a time: confirm, fix, validate, report, then wait for
+HI testing and the next task. Keep decisions and results in this packet. HI
+owns pushes. The historical Claude handoff rules below do not apply during
+this session.
+
+## Historical Planning Workflow
+
 This folder is for planning, RA review, Claude prompts, and documentation only.
 It does not authorize coding, schema changes, migrations, or runtime edits by
 the planning agent.

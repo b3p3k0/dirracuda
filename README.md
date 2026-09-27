@@ -574,6 +574,8 @@ export the whole catalog to JSON from the right.
 When Sherlock finds matches, the Server List `Risk` column shows `HIGH n`,
 `MED n`, or `LOW n`; blank means there is no current finding to show. Row color
 uses the pattern's User color when one is set, otherwise the severity color.
+Text automatically switches between dark and light to stay readable against
+the highlight in either theme.
 You can also run Sherlock manually from the Server List against selected hosts'
 latest probe snapshots.
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 
-from shared.sherlock import Severity, normalize_color_tag
+from shared.sherlock import Severity, normalize_color_tag, validate_color
 
 # Persisted severity tokens -> Severity. Explicit (not severity_from_str, which
 # defaults unknowns to MED) so malformed tokens render blank instead of mislabeled.
@@ -20,6 +20,35 @@ _SHERLOCK_SEVERITY_BY_TOKEN = {
     "med": Severity.MED,
     "low": Severity.LOW,
 }
+
+
+def sherlock_foreground(background: str) -> str:
+    """Choose readable text for a resolved Sherlock #RRGGBB background.
+
+    Uses W3C G18 relative luminance and contrast (4.5:1 minimum). Near-black
+    and white cover most colors; pure black covers the small midtone gap.
+    Invalid inputs raise ValueError via the existing settings color validator.
+    Call once per configured tag, not once per row. No theme state is needed.
+    https://www.w3.org/WAI/WCAG21/Techniques/general/G18
+    """
+    background = validate_color(background)
+
+    def luminance(color: str) -> float:
+        channels = [int(color[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+        linear = [
+            c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+            for c in channels
+        ]
+        return sum(c * weight for c, weight in zip(linear, (0.2126, 0.7152, 0.0722)))
+
+    background_luminance = luminance(background)
+
+    def contrast(color: str) -> float:
+        low, high = sorted((background_luminance, luminance(color)))
+        return (high + 0.05) / (low + 0.05)
+
+    foreground = max(("#111111", "#ffffff"), key=contrast)
+    return foreground if contrast(foreground) >= 4.5 else "#000000"
 
 
 def resolve_sherlock_risk(risk: Any) -> Optional[Tuple[Severity, int, str]]:

@@ -168,3 +168,19 @@ Seeded before implementation. Append after each major card.
    the module that actually calls it (`sherlock_value_actions`) rather than
    removing an import that tests relied on via module-object identity. Verify the
    patch seam before deleting an "unused" import.
+
+## C27 - Highlight Contrast
+
+37. A custom row background needs a matching foreground. Sherlock configured
+    only backgrounds, so dark-mode text inherited from Treeview became nearly
+    invisible on yellow (1.04:1 measured contrast). Resolve text from the final
+    User/severity background in the shared display helper, and check both
+    Server List and probe summary. Background-only assertions missed this bug.
+
+38. Keep contrast work inside the existing configured-tag guard, not on every
+    host. Background-based foregrounds also avoid theme-toggle callbacks. Check
+    ttk selection separately: its state map can override ordinary tag colors.
+
+39. Near-black and white alone have a small midtone gap where neither reaches
+    4.5:1. A pure-black fallback closes that gap without changing the highlight.
+    Regression cases around `#777777` keep the threshold honest.

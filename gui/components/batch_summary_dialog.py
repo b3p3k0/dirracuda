@@ -10,7 +10,9 @@ from tkinter import filedialog, ttk
 from gui.utils import safe_messagebox as messagebox
 from typing import Any, Dict, List, Optional
 from gui.utils.keybindings import add_shortcut_hint, bind_close_shortcuts, bind_save_shortcuts, bind_submit_shortcuts
-from gui.utils.sherlock_risk_display import resolve_sherlock_risk, sherlock_row_tag
+from gui.utils.sherlock_risk_display import (
+    resolve_sherlock_risk, sherlock_foreground, sherlock_row_tag,
+)
 
 
 def show_batch_summary_dialog(
@@ -84,9 +86,11 @@ def show_batch_summary_dialog(
                 severity, _count, color_tag = resolved
                 tag_name = sherlock_row_tag(severity, color_tag)
                 if tag_name not in configured_risk_tags:
+                    background = sherlock_settings.tint_for(severity, color_tag)
                     tree.tag_configure(
                         tag_name,
-                        background=sherlock_settings.tint_for(severity, color_tag),
+                        background=background,
+                        foreground=sherlock_foreground(background),
                     )
                     configured_risk_tags.add(tag_name)
                 row_tags = (tag_name,)
