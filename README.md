@@ -330,6 +330,11 @@ Read-only directory enumeration that previews accessible shares without download
 
 Live scan/probe/extract output is shown in monitor dialogs. Hiding a monitor does not stop the task; reopen it from **Running Tasks**.
 
+Automatic scan updates and passive result summaries do not request focus or block
+other app windows. Hidden monitors stay hidden through stage changes and completion;
+explicitly reopening one brings it forward. On X11 desktops, new automatic windows
+also request no initial activation. Error/decision prompts retain their existing behavior.
+
 ### Browsing Shares
 
 ![file browser](img/browse.png)

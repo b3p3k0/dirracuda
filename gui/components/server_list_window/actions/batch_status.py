@@ -418,7 +418,6 @@ class ServerListWindowBatchStatusMixin:
                 return
             try:
                 dialog.mark_finished(status, notes)
-                dialog.show()
             except Exception:
                 pass
 

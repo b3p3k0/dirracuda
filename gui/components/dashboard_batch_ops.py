@@ -1,8 +1,8 @@
 """
 Batch operation helpers for DashboardWidget (C8 extraction).
 
-Each function takes the dashboard instance (dash) as first arg and mirrors
-the original method behavior from dashboard.py. No UI text or behavior changes.
+Each function takes the dashboard instance (dash) as first arg and preserves
+the original dashboard method dispatch conventions.
 
 Intra-class call discipline: calls to other DashboardWidget methods go through
 dash._method_name() so instance-level monkeypatches in tests still intercept.
@@ -35,6 +35,7 @@ import tkinter as tk  # annotations + tk.TclError only — use _d("tk")/_d("ttk"
 
 from gui.utils import safe_messagebox as _fallback_msgbox
 from gui.utils.logging_config import get_logger
+from gui.utils.background_windows import show_background_window
 from gui.utils.probe_snapshot_summary import summarize_probe_snapshot
 from gui.utils.sherlock_post_probe import run_sherlock_after_probe
 from gui.utils.sherlock_risk_display import (
@@ -264,7 +265,7 @@ def run_post_scan_batch_operations(
                 summary_payload["extract"] = list(extract_results)
                 summary_stack.append(("extract", extract_results))
 
-        # Present summaries in LIFO order
+        # Create summaries in LIFO order without waiting for dismissal.
         while summary_stack:
             job_type, results = summary_stack.pop()
             if show_dialogs and results:
@@ -272,7 +273,7 @@ def run_post_scan_batch_operations(
 
         if show_dialogs and extract_results:
             _clamav_cfg = dash._load_clamav_config()
-            dash._maybe_show_clamav_dialog(extract_results, _clamav_cfg, wait=True, modal=True)
+            dash._maybe_show_clamav_dialog(extract_results, _clamav_cfg, wait=False, modal=False)
 
         if show_dialogs and extract_results:
             try:
@@ -444,7 +445,7 @@ def run_background_fetch(
     fetch_fn: Callable[[], Any],
 ) -> tuple:
     """
-    Run a blocking fetch function off the UI thread while showing a small modal.
+    Run a blocking fetch off the UI thread with a passive progress window.
 
     Returns:
         (result, error_message_or_None)
@@ -455,10 +456,9 @@ def run_background_fetch(
 
     try:
         dialog = _d("tk").Toplevel(dash.parent)
+        dialog.withdraw()
         dialog.title(title)
         dialog.geometry("380x140")
-        dialog.transient(dash.parent)
-        dialog.grab_set()
         dash.theme.apply_to_widget(dialog, "main_window")
 
         label = _d("tk").Label(dialog, text=message)
@@ -470,9 +470,9 @@ def run_background_fetch(
 
         dialog.update_idletasks()
 
-        # This dialog has no cancel path; keep it modal until fetch completes.
+        # Hiding must not end the worker wait or advance to incomplete results.
         try:
-            dialog.protocol("WM_DELETE_WINDOW", lambda: None)
+            dialog.protocol("WM_DELETE_WINDOW", dialog.withdraw)
         except Exception:
             pass
 
@@ -503,6 +503,7 @@ def run_background_fetch(
 
         _d("threading").Thread(target=worker, daemon=True).start()
         dialog.after(80, poll_done)
+        show_background_window(dialog)
         dash.parent.wait_window(dialog)
     finally:
         _safe_destroy_dialog(dialog)
@@ -657,11 +658,11 @@ def execute_batch_probe(
     try:
         # Create progress dialog quickly, then hand work to background thread.
         progress_dialog = _d("tk").Toplevel(dash.parent)
+        progress_dialog.withdraw()
         setattr(dash, "_bulk_probe_progress_dialog", progress_dialog)
 
         progress_dialog.title("Bulk Probe Progress")
         progress_dialog.geometry("420x170")
-        progress_dialog.transient(dash.parent)
         dash.theme.apply_to_widget(progress_dialog, "main_window")
 
         progress_label = _d("tk").Label(progress_dialog, text=f"Probing 0/{len(servers)} servers...")
@@ -699,8 +700,7 @@ def execute_batch_probe(
 
         dash.theme.apply_theme_to_application(progress_dialog)
 
-        # Ensure initial paint before heavy work.
-        progress_dialog.update_idletasks()
+        show_background_window(progress_dialog)
 
         # Start background worker and UI tick.
         _d("threading").Thread(target=worker, daemon=True).start()
@@ -1186,9 +1186,9 @@ def execute_batch_extract(
 
     try:
         progress_dialog = _d("tk").Toplevel(dash.parent)
+        progress_dialog.withdraw()
         progress_dialog.title("Bulk Extract Progress")
         progress_dialog.geometry("420x170")
-        progress_dialog.transient(dash.parent)
         dash.theme.apply_to_widget(progress_dialog, "main_window")
 
         progress_label = _d("tk").Label(progress_dialog, text=f"Extracting from 0/{len(servers)} servers...")
@@ -1224,7 +1224,7 @@ def execute_batch_extract(
             )
 
         dash.theme.apply_theme_to_application(progress_dialog)
-        progress_dialog.update_idletasks()
+        show_background_window(progress_dialog)
 
         _d("threading").Thread(target=worker, daemon=True).start()
         progress_dialog.after(150, ui_tick)
@@ -1525,8 +1525,8 @@ def show_batch_summary(
         show_export=True,
         show_protocol=True,
         show_stats=False,
-        wait=True,
-        modal=True,
+        wait=False,
+        modal=False,
         show_risk=show_risk,
         sherlock_settings=sherlock_settings,
     )

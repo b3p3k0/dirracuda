@@ -4,8 +4,7 @@ Dirracuda Scan Results Dialog
 Displays scan completion results with summary statistics and navigation options.
 Handles successful, interrupted, and failed scan scenarios with appropriate messaging.
 
-Design Decision: Modal results dialog ensures users see scan outcomes
-and provides clear options for viewing detailed results or returning to main interface.
+Results remain available without interrupting typing or blocking subsequent work.
 """
 
 import tkinter as tk
@@ -18,13 +17,13 @@ import os
 
 from gui.utils import safe_messagebox as messagebox
 from gui.utils.style import get_theme
-from gui.utils.dialog_helpers import ensure_dialog_focus
+from gui.utils.background_windows import show_background_window
 from gui.utils.keybindings import add_shortcut_hint, bind_close_shortcuts, bind_submit_shortcuts
 
 
 class ScanResultsDialog:
     """
-    Modal dialog displaying scan results and statistics.
+    Nonmodal dialog displaying scan results and statistics.
     
     Shows:
     - Scan completion status (success/interrupted/failed)
@@ -130,15 +129,13 @@ class ScanResultsDialog:
     def _create_dialog(self) -> None:
         """Create the scan results dialog."""
         self.dialog = tk.Toplevel(self.parent)
+        self.dialog.withdraw()
         self.dialog.title("Scan Results")
         self.dialog.geometry("600x625")
         self.dialog.minsize(500, 400)
         
         # Apply theme
         self.theme.apply_to_widget(self.dialog, "main_window")
-        
-        # Make modal
-        self.dialog.transient(self.parent)
         
         # Center dialog
         self._center_dialog()
@@ -152,15 +149,7 @@ class ScanResultsDialog:
         # Setup event handlers
         self._setup_event_handlers()
         
-        # Ensure window is fully rendered before grabbing
-        self.dialog.update_idletasks()
-        self.dialog.grab_set()
-
-        # Ensure dialog appears on top and gains focus (critical for VMs)
-        ensure_dialog_focus(self.dialog, self.parent)
-
-        # Focus on close button
-        self._focus_close_button()
+        show_background_window(self.dialog)
 
     def _center_dialog(self) -> None:
         """Center dialog on parent window."""
@@ -492,11 +481,6 @@ class ScanResultsDialog:
         bind_submit_shortcuts(self.dialog, self._close_dialog, allow_text_submit_with_enter=True)
         bind_close_shortcuts(self.dialog, self._close_dialog)
     
-    def _focus_close_button(self) -> None:
-        """Set focus to close button."""
-        if hasattr(self, 'close_button'):
-            self.close_button.focus_set()
-    
     def _format_duration(self) -> str:
         """Format scan duration for display."""
         duration_seconds = self.scan_results.get("duration_seconds", 0)
@@ -528,9 +512,7 @@ class ScanResultsDialog:
         self.dialog.destroy()
     
     def show(self) -> Optional[str]:
-        """Show dialog and wait for result."""
-        # Wait for dialog to close
-        self.parent.wait_window(self.dialog)
+        """Return immediately; the result window stays available until closed."""
         return self.result
 
 
@@ -543,7 +525,7 @@ def show_scan_results_dialog(parent: tk.Widget, scan_results: Dict[str, Any],
         scan_results: Dictionary containing scan results and metadata
         
     Returns:
-        Dialog result ("close")
+        None immediately; the dialog remains open until the user closes it.
     """
     dialog = ScanResultsDialog(parent, scan_results)
     return dialog.show()

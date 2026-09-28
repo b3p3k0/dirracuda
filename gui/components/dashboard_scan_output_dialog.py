@@ -7,6 +7,7 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import ttk
 from typing import Optional
+from gui.utils.background_windows import show_background_window
 
 
 def _dialog_exists(dash) -> bool:
@@ -20,10 +21,10 @@ def ensure_scan_output_dialog(dash) -> None:
         return
 
     dialog = tk.Toplevel(dash.parent)
+    dialog.withdraw()
     dialog.title("Live Scan Output")
     dialog.geometry("900x420")
     dialog.minsize(720, 320)
-    dialog.transient(dash.parent)
     dialog.protocol("WM_DELETE_WINDOW", lambda: hide_scan_output_dialog(dash))
     dash.theme.apply_to_widget(dialog, "main_window")
 
@@ -88,6 +89,7 @@ def ensure_scan_output_dialog(dash) -> None:
     dash._configure_log_tags()
     dash._render_log_placeholder()
     dash.theme.apply_theme_to_application(dialog)
+    show_background_window(dialog)
 
 
 def show_scan_output_dialog(dash, *, protocol: str, country: Optional[str]) -> None:
@@ -100,13 +102,6 @@ def show_scan_output_dialog(dash, *, protocol: str, country: Optional[str]) -> N
     title = f"Live Scan Output - {protocol_label} ({target})"
     if getattr(dash, "scan_output_title_var", None):
         dash.scan_output_title_var.set(title)
-
-    try:
-        dash.scan_output_dialog.deiconify()
-        dash.scan_output_dialog.lift()
-        dash.scan_output_dialog.focus_force()
-    except tk.TclError:
-        return
 
 
 def hide_scan_output_dialog(dash) -> None:
@@ -142,4 +137,3 @@ def destroy_scan_output_dialog(dash) -> None:
     dash.log_jump_button = None
     dash.copy_log_button = None
     dash.clear_log_button = None
-

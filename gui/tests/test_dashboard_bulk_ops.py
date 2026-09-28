@@ -101,6 +101,7 @@ class _FakeDialog:
     created = []
 
     def __init__(self, *_args, **_kwargs):
+        self.tk = types.SimpleNamespace(call=lambda *_: "test")
         self.exists = True
         self.protocol_handlers = {}
         self.after_callbacks = []
@@ -118,7 +119,7 @@ class _FakeDialog:
         return None
 
     def grab_set(self):
-        return None
+        raise AssertionError("Automatic progress must not take a modal grab")
 
     def grab_release(self):
         self.grab_release_calls += 1
@@ -1066,7 +1067,7 @@ def test_execute_batch_probe_passes_configured_depth_to_probe_worker(monkeypatch
 
 
 def test_run_background_fetch_closes_via_ui_poll_without_destroy_after(monkeypatch):
-    """Background fetch modal should close from UI poll path, not worker-thread after()."""
+    """Background fetch should close from UI poll path, not worker-thread after()."""
     _FakeDialog.created.clear()
     monkeypatch.setattr("gui.components.dashboard.tk.Toplevel", _FakeDialog)
     monkeypatch.setattr("gui.components.dashboard.tk.Label", _FakeWidget)

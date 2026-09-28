@@ -13,6 +13,7 @@ from tkinter import ttk
 from typing import Any, Callable, Dict, List, Optional
 
 from gui.utils import session_flags
+from gui.utils.background_windows import show_background_window
 from gui.utils.keybindings import add_shortcut_hint, bind_close_shortcuts, bind_submit_shortcuts
 
 _BOOL_TRUE = frozenset(("true", "yes", "1"))
@@ -118,6 +119,8 @@ def _build_dialog(
             error_rows.append((ip, item.get("path", "-"), item.get("error", "-")))
 
     dialog = tk.Toplevel(parent)
+    if not modal:
+        dialog.withdraw()
     dialog.title("ClamAV Scan Results")
     dialog.geometry("760x440")
     dialog.transient(parent)
@@ -255,6 +258,9 @@ def _build_dialog(
 
     bind_submit_shortcuts(dialog, dialog.destroy, allow_text_submit_with_enter=True)
     bind_close_shortcuts(dialog, dialog.destroy)
+
+    if not modal:
+        show_background_window(dialog)
 
     if wait:
         parent.wait_window(dialog)

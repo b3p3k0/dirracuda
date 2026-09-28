@@ -1107,6 +1107,8 @@ When `Run after probe` runs Sherlock on a fresh snapshot, the shared probe batch
 
 Long-running monitor dialogs (scan/probe/extract and related batch jobs) are non-modal and integrated with the shared Running Tasks registry. Hiding a monitor does not cancel work; active/queued tasks remain reopenable through Running Tasks.
 
+Automatic scan, probe/extract, and ClamAV summaries are nonmodal and do not wait for dismissal; multiple summaries can remain open while queue cleanup proceeds. Automatic console stage updates and Server List batch completion preserve hidden monitors. Explicit monitor reopen still raises/focuses the requested window. Passive windows are not transient/always-above their parent. `gui/utils/background_windows.py` sets `_NET_WM_USER_TIME=0` on Tk's X11 wrapper before mapping, preventing initial activation on compliant desktops. Other Tk backends retain their desktop mapping policy; no focus-restoration workaround runs. The fetch/probe/extract worker waits remain in place to preserve execution ordering and UI-thread teardown. Background messagebox alerts and the opt-in Analyst question retain their existing behavior.
+
 ### 6.6 File Browser
 
 All three protocol browsers are read-only. Navigation traverses directories up to `file_browser.max_depth` (12) with a max of `max_entries_per_dir` (5000) entries per listing. File viewing:

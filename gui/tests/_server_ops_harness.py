@@ -88,6 +88,7 @@ class AsyncFakeDialog(FakeDialog):
     created: List["AsyncFakeDialog"] = []
 
     def __init__(self, *_args, **_kwargs) -> None:
+        self.tk = SimpleNamespace(call=lambda *_: "test")
         super().__init__()
         self.exists = True
         self.protocol_handlers: Dict[str, Any] = {}

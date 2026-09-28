@@ -227,6 +227,7 @@ def test_show_batch_summary_dialog_wires_vertical_scrollbar(monkeypatch):
     """Summary dialog should wire Treeview y-scroll to a right-side scrollbar."""
     tree_instances = []
     scrollbar_instances = []
+    monkeypatch.setattr(summary, "show_background_window", lambda _dialog: None)
 
     class _DummyBase:
         def __init__(self, *args, **kwargs):
@@ -239,6 +240,9 @@ def test_show_batch_summary_dialog_wires_vertical_scrollbar(monkeypatch):
             return None
 
     class _DummyTop(_DummyBase):
+        def withdraw(self):
+            return None
+
         def title(self, *_args, **_kwargs):
             return None
 
@@ -314,6 +318,7 @@ def test_show_batch_summary_dialog_tints_only_finding_rows(monkeypatch):
     """show_risk tints fresh-finding rows; blank rows stay untinted."""
     inserts = []
     configured = []
+    monkeypatch.setattr(summary, "show_background_window", lambda _dialog: None)
 
     class _DummyBase:
         def __init__(self, *args, **kwargs):
@@ -326,6 +331,9 @@ def test_show_batch_summary_dialog_tints_only_finding_rows(monkeypatch):
             return None
 
     class _DummyTop(_DummyBase):
+        def withdraw(self):
+            return None
+
         def title(self, *_a, **_k):
             return None
 

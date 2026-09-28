@@ -8,6 +8,7 @@ import csv
 import tkinter as tk
 from tkinter import filedialog, ttk
 from gui.utils import safe_messagebox as messagebox
+from gui.utils.background_windows import show_background_window
 from typing import Any, Dict, List, Optional
 from gui.utils.keybindings import add_shortcut_hint, bind_close_shortcuts, bind_save_shortcuts, bind_submit_shortcuts
 from gui.utils.sherlock_risk_display import (
@@ -38,6 +39,8 @@ def show_batch_summary_dialog(
     With ``show_risk`` False the dialog renders exactly as before.
     """
     dialog = tk.Toplevel(parent)
+    if not modal:
+        dialog.withdraw()
     title = f"{(job_type or 'batch').title()} {title_suffix}"
     dialog.title(title)
     dialog.geometry(geometry)
@@ -153,6 +156,9 @@ def show_batch_summary_dialog(
             dialog,
             lambda: _export_batch_summary(results, job_type, dialog, show_protocol=show_protocol, show_risk=show_risk),
         )
+
+    if not modal:
+        show_background_window(dialog)
 
     if wait:
         parent.wait_window(dialog)

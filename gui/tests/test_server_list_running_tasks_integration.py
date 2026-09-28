@@ -134,6 +134,7 @@ def test_server_list_batch_task_survives_hide_and_removes_on_finalize():
     stub.active_jobs[job_id]["completed"] = 1
     stub._finalize_batch_job(job_id, dialog, show_summary=False)
     assert registry.count() == 0
+    assert dialog.hidden is True  # Completion must not reopen the hidden monitor.
 
 
 def test_server_list_batch_task_progress_updates_from_future_completion():
