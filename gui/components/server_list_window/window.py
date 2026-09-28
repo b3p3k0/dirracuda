@@ -242,6 +242,8 @@ class ServerListWindow(ServerListWindowActionsMixin):
 
         # Center window
         self._center_window()
+        from gui.utils.window_positions import remember_window_position
+        remember_window_position(self.window, "server_list", self.settings_manager)
 
         # Build UI components
         self._create_header()

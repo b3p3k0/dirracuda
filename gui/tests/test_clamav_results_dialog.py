@@ -19,6 +19,14 @@ from unittest.mock import MagicMock, patch, call
 
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def _isolate_window_positions(monkeypatch, tmp_path):
+    from gui.utils.settings_manager import SettingsManager
+    from gui.utils import window_positions
+    settings = SettingsManager(str(tmp_path))
+    monkeypatch.setattr(window_positions, "get_settings_manager", lambda: settings)
+
 # ---------------------------------------------------------------------------
 # 1. session_flags
 # ---------------------------------------------------------------------------

@@ -18,6 +18,7 @@ import os
 from gui.utils import safe_messagebox as messagebox
 from gui.utils.style import get_theme
 from gui.utils.background_windows import show_background_window
+from gui.utils.window_positions import remember_window_position
 from gui.utils.keybindings import add_shortcut_hint, bind_close_shortcuts, bind_submit_shortcuts
 
 
@@ -139,6 +140,7 @@ class ScanResultsDialog:
         
         # Center dialog
         self._center_dialog()
+        remember_window_position(self.dialog, "scan_results")
         
         # Build UI based on scan status
         self._create_header()

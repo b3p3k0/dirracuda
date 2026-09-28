@@ -941,8 +941,9 @@ class XSMBSeekGUI:
         # Configure window behavior
         self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
         
-        # Center window on screen
+        from gui.utils.window_positions import remember_window_position
         self._center_window()
+        remember_window_position(self.root, "main_window", self.settings_manager)
         
         # Update window title to show SMBSeek path
         smbseek_path = self.config.get_smbseek_path()
@@ -956,9 +957,7 @@ class XSMBSeekGUI:
         self.scan_manager = get_scan_manager(str(GUI_DIR), ui_dispatcher=self.ui_dispatcher)
 
     def _center_window(self) -> None:
-        """
-        Center the main window on screen using current startup defaults.
-        """
+        """Default placement used until the user chooses a remembered position."""
         target_width = WINDOW_WIDTH
         target_height = WINDOW_HEIGHT
         

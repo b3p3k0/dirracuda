@@ -36,6 +36,7 @@ import tkinter as tk  # annotations + tk.TclError only — use _d("tk")/_d("ttk"
 from gui.utils import safe_messagebox as _fallback_msgbox
 from gui.utils.logging_config import get_logger
 from gui.utils.background_windows import show_background_window
+from gui.utils.window_positions import remember_window_position
 from gui.utils.probe_snapshot_summary import summarize_probe_snapshot
 from gui.utils.sherlock_post_probe import run_sherlock_after_probe
 from gui.utils.sherlock_risk_display import (
@@ -459,6 +460,7 @@ def run_background_fetch(
         dialog.withdraw()
         dialog.title(title)
         dialog.geometry("380x140")
+        remember_window_position(dialog, "bulk_preparation", getattr(dash, "settings_manager", None))
         dash.theme.apply_to_widget(dialog, "main_window")
 
         label = _d("tk").Label(dialog, text=message)
@@ -663,6 +665,7 @@ def execute_batch_probe(
 
         progress_dialog.title("Bulk Probe Progress")
         progress_dialog.geometry("420x170")
+        remember_window_position(progress_dialog, "bulk_probe", getattr(dash, "settings_manager", None))
         dash.theme.apply_to_widget(progress_dialog, "main_window")
 
         progress_label = _d("tk").Label(progress_dialog, text=f"Probing 0/{len(servers)} servers...")
@@ -1189,6 +1192,7 @@ def execute_batch_extract(
         progress_dialog.withdraw()
         progress_dialog.title("Bulk Extract Progress")
         progress_dialog.geometry("420x170")
+        remember_window_position(progress_dialog, "bulk_extract", getattr(dash, "settings_manager", None))
         dash.theme.apply_to_widget(progress_dialog, "main_window")
 
         progress_label = _d("tk").Label(progress_dialog, text=f"Extracting from 0/{len(servers)} servers...")

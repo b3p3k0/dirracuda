@@ -69,6 +69,8 @@ def _load_http_browser_config(config_path: Optional[str]) -> Dict:
 class HttpBrowserWindow(UnifiedBrowserCore):
     """Tkinter toplevel window for HTTP directory-index navigation and file download."""
 
+    POSITION_KEY = "http_browser"
+
     def __init__(
         self,
         parent: tk.Widget,

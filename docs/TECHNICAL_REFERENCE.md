@@ -1111,6 +1111,8 @@ Automatic scan, probe/extract, and ClamAV summaries are nonmodal and do not wait
 
 ### 6.6 File Browser
 
+Window positions for the dashboard, Server List, protocol browsers, Start Scan, Running Tasks, scan/batch monitors, preparation, and scan/batch/ClamAV results are stored as `windows.<window_type>.position` in GUI preferences. `gui/utils/window_positions.py` restores the validated Tk position suffix after default placement, without changing size, clamping coordinates, or requesting focus. Only normal-window Configure events are saved, after 400 ms of settled movement or immediately on Hide/Destroy; child events and minimized/maximized geometry are ignored. Dorkbook/Keymaster retain their existing full-geometry preferences. No database migration or monitor-layout inference is involved.
+
 All three protocol browsers are read-only. Navigation traverses directories up to `file_browser.max_depth` (12) with a max of `max_entries_per_dir` (5000) entries per listing. File viewing:
 - Text files: decoded as UTF-8 (fallback to Latin-1) up to `viewer.max_view_size_mb` (5MB)
 - Image files: displayed inline up to `viewer.max_image_size_mb` (15MB) / `max_image_pixels` (20M px)

@@ -335,6 +335,11 @@ other app windows. Hidden monitors stay hidden through stage changes and complet
 explicitly reopening one brings it forward. On X11 desktops, new automatic windows
 also request no initial activation. Error/decision prompts retain their existing behavior.
 
+The dashboard, Server List, SMB/FTP/HTTP browsers, Start Scan, Running Tasks, and
+scan/probe/extract monitor and result windows remember where you place them across
+restarts. Move a window once; its next opening uses that position with its normal
+size. Dorkbook and Keymaster continue to remember both size and position.
+
 ### Browsing Shares
 
 ![file browser](img/browse.png)

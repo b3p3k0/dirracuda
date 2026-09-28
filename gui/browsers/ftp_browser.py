@@ -72,6 +72,8 @@ def _load_ftp_browser_config(config_path: Optional[str]) -> Dict:
 class FtpBrowserWindow(UnifiedBrowserCore):
     """Tkinter toplevel window for anonymous FTP navigation and file download."""
 
+    POSITION_KEY = "ftp_browser"
+
     def __init__(
         self,
         parent: tk.Widget,

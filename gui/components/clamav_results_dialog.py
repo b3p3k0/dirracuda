@@ -14,6 +14,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from gui.utils import session_flags
 from gui.utils.background_windows import show_background_window
+from gui.utils.window_positions import remember_window_position
 from gui.utils.keybindings import add_shortcut_hint, bind_close_shortcuts, bind_submit_shortcuts
 
 _BOOL_TRUE = frozenset(("true", "yes", "1"))
@@ -123,6 +124,7 @@ def _build_dialog(
         dialog.withdraw()
     dialog.title("ClamAV Scan Results")
     dialog.geometry("760x440")
+    remember_window_position(dialog, "clamav_results")
     dialog.transient(parent)
     if modal:
         dialog.grab_set()

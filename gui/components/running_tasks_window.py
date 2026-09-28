@@ -9,6 +9,7 @@ from tkinter import ttk
 from typing import List, Optional
 
 from gui.utils.running_tasks import RunningTaskRegistry, RunningTaskSnapshot
+from gui.utils.window_positions import remember_window_position
 from gui.utils.keybindings import bind_close_shortcuts, bind_tree_enter_shortcut
 
 
@@ -49,6 +50,7 @@ class RunningTasksWindow:
         self.window = tk.Toplevel(self.parent)
         self.window.title("Running Tasks")
         self.window.geometry("760x320")
+        remember_window_position(self.window, "running_tasks")
         self.window.minsize(640, 240)
         self.window.transient(self.parent)
         self.window.protocol("WM_DELETE_WINDOW", self.destroy)

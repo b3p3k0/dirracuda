@@ -110,6 +110,9 @@ class AsyncFakeDialog(FakeDialog):
     def grab_set(self) -> None:
         return None
 
+    def bind(self, *_args, **_kwargs):
+        return None
+
     def grab_release(self) -> None:
         self.grab_release_calls += 1
 

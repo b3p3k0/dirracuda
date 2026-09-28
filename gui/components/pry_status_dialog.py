@@ -6,6 +6,7 @@ import tkinter as tk
 from tkinter import ttk
 from pathlib import Path
 from typing import Callable, Optional, Dict
+from gui.utils.window_positions import remember_window_position
 
 
 class BatchStatusDialog:
@@ -45,6 +46,7 @@ class BatchStatusDialog:
         self._hide_button: Optional[tk.Button] = None
 
         self._build_layout()
+        remember_window_position(self.window, "extract_status" if title == "Extract Status" else "probe_status")
 
         self.window.protocol("WM_DELETE_WINDOW", self.hide)
         self.show()

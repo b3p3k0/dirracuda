@@ -240,6 +240,9 @@ def test_show_batch_summary_dialog_wires_vertical_scrollbar(monkeypatch):
             return None
 
     class _DummyTop(_DummyBase):
+        def bind(self, *_args, **_kwargs):
+            return None
+
         def withdraw(self):
             return None
 
@@ -331,6 +334,9 @@ def test_show_batch_summary_dialog_tints_only_finding_rows(monkeypatch):
             return None
 
     class _DummyTop(_DummyBase):
+        def bind(self, *_args, **_kwargs):
+            return None
+
         def withdraw(self):
             return None
 

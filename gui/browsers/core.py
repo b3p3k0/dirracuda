@@ -20,6 +20,7 @@ from typing import Any, Dict, Optional
 
 from gui.utils import safe_messagebox as messagebox
 from gui.utils.coercion import _coerce_bool
+from gui.utils.window_positions import remember_window_position
 from gui.utils.keybindings import add_shortcut_hint, bind_browser_navigation_shortcuts
 
 
@@ -79,6 +80,7 @@ class UnifiedBrowserCore:
         self.window = tk.Toplevel(self.parent)
         self.window.title(self._adapt_window_title())
         self.window.geometry("900x620")
+        remember_window_position(self.window, self.POSITION_KEY, getattr(self, "settings_manager", None))
         self.window.minsize(720, 480)
         self.window.protocol("WM_DELETE_WINDOW", self._on_close)
         if self.theme:

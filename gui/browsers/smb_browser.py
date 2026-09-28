@@ -252,6 +252,8 @@ class SmbBrowserWindow(UnifiedBrowserCore):
         self.window = tk.Toplevel(self.parent)
         self.window.title(f"SMB File Browser - {self.ip_address}")
         self.window.geometry("900x620")
+        from gui.utils.window_positions import remember_window_position
+        remember_window_position(self.window, "smb_browser", self.settings_manager)
         self.window.minsize(720, 480)
         self.window.protocol("WM_DELETE_WINDOW", self._on_close)
         if self.theme:

@@ -8,6 +8,7 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Optional
 from gui.utils.background_windows import show_background_window
+from gui.utils.window_positions import remember_window_position
 
 
 def _dialog_exists(dash) -> bool:
@@ -24,6 +25,7 @@ def ensure_scan_output_dialog(dash) -> None:
     dialog.withdraw()
     dialog.title("Live Scan Output")
     dialog.geometry("900x420")
+    remember_window_position(dialog, "scan_output", getattr(dash, "settings_manager", None))
     dialog.minsize(720, 320)
     dialog.protocol("WM_DELETE_WINDOW", lambda: hide_scan_output_dialog(dash))
     dash.theme.apply_to_widget(dialog, "main_window")

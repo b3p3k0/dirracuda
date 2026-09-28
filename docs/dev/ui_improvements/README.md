@@ -1,8 +1,15 @@
 # UI improvements
 
-## Current task: quiet background scan windows
+## Current task: remembered window positions
 
-Status: approved scope implemented; automated validation complete, HI testing next.
+HI approved main working windows plus scan dialogs. Implemented position memory
+across restarts without automatic monitor fitting or size changes. See
+[POSITION_MEMORY.md](POSITION_MEMORY.md) for scope, decisions, validation, and HI
+test steps. Dorkbook/Keymaster retain their existing full-geometry persistence.
+
+## Completed task: quiet background scan windows
+
+Status: committed as `409222d`; HI reported the result looking good.
 This task is separate from the completed Dorkbook work.
 
 The reported problem is background scan activity interrupting typing by activating

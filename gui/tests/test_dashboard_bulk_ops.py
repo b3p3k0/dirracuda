@@ -112,6 +112,9 @@ class _FakeDialog:
     def title(self, *_args, **_kwargs):
         return None
 
+    def bind(self, *_args, **_kwargs):
+        return None
+
     def geometry(self, *_args, **_kwargs):
         return None
 

@@ -14,6 +14,7 @@ from gui.components.scan_provider_options import (
     build_searxng_sub_panel,
 )
 from gui.utils.dialog_helpers import ensure_dialog_focus
+from gui.utils.window_positions import remember_window_position
 from gui.utils.keybindings import bind_close_shortcuts, bind_submit_shortcuts
 
 
@@ -32,6 +33,7 @@ def build_dialog(owner: Any) -> None:
     owner.theme.apply_to_widget(owner.dialog, "main_window")
     owner.dialog.transient(owner.parent)
     _center_dialog(owner)
+    remember_window_position(owner.dialog, "start_scan", owner._settings_manager)
 
     body_shell = tk.Frame(owner.dialog)
     owner.theme.apply_to_widget(body_shell, "main_window")

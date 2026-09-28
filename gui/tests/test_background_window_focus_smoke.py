@@ -34,7 +34,11 @@ def settle(root):
 
 
 @pytest.fixture
-def desktop():
+def desktop(monkeypatch, tmp_path):
+    from gui.utils.settings_manager import SettingsManager
+    from gui.utils import window_positions
+    settings = SettingsManager(str(tmp_path))
+    monkeypatch.setattr(window_positions, "get_settings_manager", lambda: settings)
     wm = subprocess.check_output(
         ["xprop", "-root", "_NET_SUPPORTING_WM_CHECK"], text=True,
     )

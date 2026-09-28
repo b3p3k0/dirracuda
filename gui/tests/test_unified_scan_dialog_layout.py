@@ -81,6 +81,24 @@ def _destroy(root, dialog) -> None:
         root.destroy()
 
 
+def test_start_scan_remembers_dragged_position_on_reopen(monkeypatch, tmp_path):
+    root, dialog = _build_dialog(monkeypatch, tmp_path, {"windows.start_scan.position": "+50+30"})
+    try:
+        assert dialog.dialog.geometry().endswith("+50+30")
+        dialog.dialog.geometry("+90+40")
+        root.update()
+        dialog.dialog.destroy()
+        saved = dict(dialog._settings_manager.values)
+        assert saved["windows.start_scan.position"] == "+90+40"
+    finally:
+        root.destroy()
+    root, dialog = _build_dialog(monkeypatch, tmp_path, saved)
+    try:
+        assert dialog.dialog.geometry() == DEFAULT_GEOMETRY + "+90+40"
+    finally:
+        _destroy(root, dialog)
+
+
 def test_compact_default_geometry_and_fixed_footer(monkeypatch, tmp_path):
     root, dialog = _build_dialog(monkeypatch, tmp_path)
     try:
