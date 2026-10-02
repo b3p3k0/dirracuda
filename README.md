@@ -238,6 +238,12 @@ your existing notes stay intact and remain editable. Missing authors appear as
 attribution when their targets are included in a later ingest; no bulk backfill runs.
 Older undated attributions remain intact; a later ingest appends the dated version once.
 
+Notes belong to the saved server record and persist when Shodan or Self-hosted
+Search rediscovers it, even with Reddit deselected. SMB and FTP records match by
+IP; HTTP records match by IP and port. HTTP hostnames and directory paths share
+that endpoint record, so treat Reddit attribution as endpoint history. Check the
+original post to confirm whether it listed the exact directory URL.
+
 Legacy data already in `~/.dirracuda/data/experimental/reddit_od.db` remains accessible under Database → [Legacy] Sidecar Data → Reddit Open Directory Posts, with manual promotion still available from that view.
 
 Launch from **▶ Start Scan** by selecting **Reddit**. Deselect other providers for a Reddit-only run, choose your options, then click **Start Scan**.
