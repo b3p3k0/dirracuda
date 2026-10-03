@@ -44,7 +44,8 @@
       protocol: protocol,
       shares_only: _asBool(src.shares_only, false),
       favorites_only: _asBool(src.favorites_only, false),
-      hide_avoid: _asBool(src.hide_avoid, false)
+      hide_avoid: _asBool(src.hide_avoid, false),
+      has_notes_only: _asBool(src.has_notes_only, false)
     };
   }
 

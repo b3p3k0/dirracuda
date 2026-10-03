@@ -419,3 +419,18 @@ A partial feature page swap (for example replacing placeholder copy) can fail ex
 93. Replacing a password is not the whole recovery workflow. Clear only the
     account's pair lockouts, preserve IP-wide spray protection, and restart a
     running managed service so existing in-memory sessions are revoked.
+
+94. A list filter that pages must live in SQL next to the other filters, not in
+    Python after `LIMIT`; otherwise `total_count` and page windows lie. The
+    `has_notes_only` filter reuses the outer `WHERE` for this reason.
+
+95. Guard `*_user_flags.notes` per table like `favorite`/`avoid`; older DBs and
+    test fixtures lack it. Default to `0`/`''` so the column renders `○`.
+
+96. SQLite `TRIM(x)` strips only spaces. Pass `' ' || char(9) || char(10) ||
+    char(13)` to approximate Python `strip()` so "whitespace-only" notes agree
+    with desktop. Bound list-row text with `substr()` before shaping previews.
+
+97. Native `<details>` gives a multi-select dropdown that stays open across
+    checkbox ticks with no inline script (CSP-safe); add only outside-click and
+    `Esc` close handlers. Set previews via the `title` property, never HTML.

@@ -741,7 +741,7 @@ continues to require the current password.
 
 Current Web UI layout:
 - `Scans` (dropdown): `Shodan`, `Self-hosted Search`, `Reddit`
-- `Results` (includes read-only Sherlock Risk badges/details when persisted)
+- `Results` (includes read-only Sherlock Risk badges/details when persisted, a `Notes` ✔/○ column with hover preview, and a `Filters ▾` dropdown with `Has Notes`)
 - `Export`
 - `Extras` (dropdown): `dorkbook`, `keymaster`
 - `Config`, `Account`

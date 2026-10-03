@@ -151,10 +151,13 @@ Shodan balance is fetched server-side only. The API key is never sent to the bro
 
 - Default protocol view is `ALL` and loads on page open
 - Search is desktop-style: case-insensitive substring match on IP and accessible-share text
-- Row filters:
+- Row filters live in the `Filters ▾` dropdown (shows the active count, e.g. `Filters (2) ▾`; stays open while you tick, closes on outside click or `Esc`):
   - `Show Only Shares > 0`
   - `Favorites Only`
   - `Hide Avoid`
+  - `Has Notes`
+  - Ticking saves the preference; click `Refresh` (or press Enter in search) to apply
+- `Notes` column shows `✔` when the host has user notes, `○` when not; hover the cell for a short preview. Only user notes count (same as desktop), not the legacy CSV-import server note
 - Inline row actions:
   - Click `Favorite`, `Avoid`, or `Probed` cells to toggle state on that row
   - `Probed` toggle uses desktop compromised semantics (`issue/clean` with `indicator_matches` `1/0`)

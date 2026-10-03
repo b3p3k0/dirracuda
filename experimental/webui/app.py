@@ -1110,6 +1110,7 @@ def create_app(
         shares_only: bool = Query(default=False),
         favorites_only: bool = Query(default=False),
         hide_avoid: bool = Query(default=False),
+        has_notes_only: bool = Query(default=False),
     ) -> JSONResponse:
         if "country" in request.query_params:
             return JSONResponse(
@@ -1134,6 +1135,7 @@ def create_app(
                 shares_only=shares_only,
                 favorites_only=favorites_only,
                 hide_avoid=hide_avoid,
+                has_notes_only=has_notes_only,
             )
         except Exception:
             logger.exception("results query failed: protocol=%s", protocol)

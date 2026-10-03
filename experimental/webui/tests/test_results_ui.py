@@ -20,8 +20,8 @@ def test_results_table_keeps_probe_status_without_probe_action_column():
 
     assert "<th>Probed</th>" in template
     assert "<th>Probe</th>" not in template
-    assert 'colspan="13"' in template
-    assert len(data_cells) + 1 == 13
+    assert 'colspan="14"' in template
+    assert len(data_cells) + 1 == 14
     assert "['Probe', 'Run']" not in script
     assert "probe-action-cell" not in script
 
@@ -31,8 +31,8 @@ def test_results_table_has_readonly_sherlock_risk_column():
     script = _source(RESULTS_SCRIPT)
     style = _source(RESULTS_STYLE)
 
-    # Risk column placed between Extracted and Type (desktop order).
-    assert "<th>Extracted</th>\n        <th>Risk</th>\n        <th>Type</th>" in template
+    # Notes follows Extracted, with Risk still immediately before Type.
+    assert "<th>Extracted</th>\n        <th>Notes</th>\n        <th>Risk</th>\n        <th>Type</th>" in template
 
     # Row badge cell + read-only detail block rendered from persisted data.
     assert "['Risk', r.sherlock_risk]" in script
@@ -85,3 +85,29 @@ def test_detail_probe_reuses_single_target_job_and_tracks_running_state():
     assert "setAttribute('data-detail-field', 'probe-status')" in script
     assert "_syncDetailProbeStatus(tr, state.probe_status);" in script
     assert "var probeStatus = baseRow ? _getProbeStatus(baseRow)" in script
+
+
+def test_notes_use_plain_text_and_title_and_send_filter():
+    script = _source(RESULTS_SCRIPT)
+    build_row = script.split("function buildRow(r) {", 1)[1].split("function closeOpenDetail()", 1)[0]
+    assert "['Extracted', r.extract_status_emoji],\n    ['Notes', r.has_notes],\n    ['Risk', r.sherlock_risk]" in build_row
+    assert "td.textContent = pair[1] != null ? String(pair[1]) : '';" in build_row
+    assert "if (pair[0] === 'Notes') {\n        td.title = r.notes_preview ? String(r.notes_preview) : '';" in build_row
+    assert "innerHTML" not in build_row
+    assert "insertAdjacentHTML" not in build_row
+    assert "'&has_notes_only=' + (hasNotesOnly ? 'true' : 'false')" in script
+
+
+def test_quick_filter_changes_persist_without_reloading():
+    script = _source(RESULTS_SCRIPT)
+    for filter_id in ("shares-only-filter", "favorites-only-filter", "hide-avoid-filter", "has-notes-only-filter"):
+        handler = script.split(f"document.getElementById('{filter_id}').addEventListener('change', function() {{", 1)[1].split("});", 1)[0]
+        assert "persistResultsPrefs();" in handler
+        assert "updateQuickFilterLabel();" in handler
+        assert "loadResults" not in handler
+    assert "applyResultsPrefsFromStorage();\nupdateQuickFilterLabel();\nloadResults();" in script
+    assert "count ? 'Filters (' + count + ') ▾' : 'Filters ▾'" in script
+    assert "dropdown.open && !dropdown.contains(e.target)" in script
+    assert "e.key === 'Escape' && dropdown.open" in script
+    assert "dropdown.removeAttribute('open');" in script
+    assert "document.getElementById('quick-filters-label').focus();" in script

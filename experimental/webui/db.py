@@ -355,6 +355,20 @@ def _extract_status_to_emoji(extracted: object) -> str:
 
 
 
+def _format_notes_preview(raw, max_line_len=60, max_lines=2) -> str:
+    """Return a compact, plain-text preview of user notes."""
+    if not isinstance(raw, str) or not raw.strip():
+        return ""
+    lines = [line.strip() for line in raw.splitlines() if line.strip()]
+    kept = [
+        line[:max_line_len - 1] + "…" if len(line) > max_line_len else line
+        for line in lines[:max_lines]
+    ]
+    if kept and len(lines) > max_lines and not kept[-1].endswith("…"):
+        kept[-1] += "…"
+    return "\n".join(kept)
+
+
 def _build_smb_arm(
     table_columns: dict[str, set[str]],
     country: Optional[str],
@@ -408,6 +422,19 @@ def _build_smb_arm(
                 "FROM host_user_flags uf WHERE uf.server_id = s.id LIMIT 1)"
             )
 
+    has_notes_expr = "0"
+    notes_head_expr = "''"
+    if _table_has_columns(table_columns, "host_user_flags", "server_id", "notes"):
+        has_notes_expr = (
+            "CASE WHEN TRIM(COALESCE((SELECT uf.notes FROM host_user_flags uf "
+            "WHERE uf.server_id = s.id LIMIT 1), ''), "
+            "' ' || char(9) || char(10) || char(13)) != '' THEN 1 ELSE 0 END"
+        )
+        notes_head_expr = (
+            "(SELECT substr(COALESCE(uf.notes, ''), 1, 400) "
+            "FROM host_user_flags uf WHERE uf.server_id = s.id LIMIT 1)"
+        )
+
     probe_status_expr = "'unprobed'"
     extracted_expr = "0"
     if _table_has_columns(table_columns, "host_probe_cache", "server_id"):
@@ -434,6 +461,8 @@ def _build_smb_arm(
             {avoid_expr} AS avoid,
             {probe_status_expr} AS probe_status,
             {extracted_expr} AS extracted,
+            {has_notes_expr} AS has_notes,
+            {notes_head_expr} AS notes_head,
             {accessible_count_expr} AS accessible_shares,
             {accessible_list_expr} AS accessible_shares_list,
             {denied_count_expr} AS denied_shares_count
@@ -477,6 +506,19 @@ def _build_ftp_arm(
                 "FROM ftp_user_flags uf WHERE uf.server_id = f.id LIMIT 1)"
             )
 
+    has_notes_expr = "0"
+    notes_head_expr = "''"
+    if _table_has_columns(table_columns, "ftp_user_flags", "server_id", "notes"):
+        has_notes_expr = (
+            "CASE WHEN TRIM(COALESCE((SELECT uf.notes FROM ftp_user_flags uf "
+            "WHERE uf.server_id = f.id LIMIT 1), ''), "
+            "' ' || char(9) || char(10) || char(13)) != '' THEN 1 ELSE 0 END"
+        )
+        notes_head_expr = (
+            "(SELECT substr(COALESCE(uf.notes, ''), 1, 400) "
+            "FROM ftp_user_flags uf WHERE uf.server_id = f.id LIMIT 1)"
+        )
+
     probe_status_expr = "'unprobed'"
     extracted_expr = "0"
     accessible_count_expr = "0"
@@ -515,6 +557,8 @@ def _build_ftp_arm(
             {avoid_expr} AS avoid,
             {probe_status_expr} AS probe_status,
             {extracted_expr} AS extracted,
+            {has_notes_expr} AS has_notes,
+            {notes_head_expr} AS notes_head,
             {accessible_count_expr} AS accessible_shares,
             {accessible_list_expr} AS accessible_shares_list,
             0 AS denied_shares_count
@@ -557,6 +601,19 @@ def _build_http_arm(
                 "(SELECT COALESCE(uf.avoid, 0) "
                 "FROM http_user_flags uf WHERE uf.server_id = h.id LIMIT 1)"
             )
+
+    has_notes_expr = "0"
+    notes_head_expr = "''"
+    if _table_has_columns(table_columns, "http_user_flags", "server_id", "notes"):
+        has_notes_expr = (
+            "CASE WHEN TRIM(COALESCE((SELECT uf.notes FROM http_user_flags uf "
+            "WHERE uf.server_id = h.id LIMIT 1), ''), "
+            "' ' || char(9) || char(10) || char(13)) != '' THEN 1 ELSE 0 END"
+        )
+        notes_head_expr = (
+            "(SELECT substr(COALESCE(uf.notes, ''), 1, 400) "
+            "FROM http_user_flags uf WHERE uf.server_id = h.id LIMIT 1)"
+        )
 
     probe_status_expr = "'unprobed'"
     extracted_expr = "0"
@@ -609,6 +666,8 @@ def _build_http_arm(
             {avoid_expr} AS avoid,
             {probe_status_expr} AS probe_status,
             {extracted_expr} AS extracted,
+            {has_notes_expr} AS has_notes,
+            {notes_head_expr} AS notes_head,
             {accessible_count_expr} AS accessible_shares,
             {accessible_list_expr} AS accessible_shares_list,
             0 AS denied_shares_count
@@ -627,6 +686,7 @@ def get_results_table_rows(
     shares_only: bool = False,
     favorites_only: bool = False,
     hide_avoid: bool = False,
+    has_notes_only: bool = False,
 ) -> tuple[list[dict], int]:
     """Return desktop-parity rows for one protocol/all with optional server-side filters."""
     if not Path(db_path).exists():
@@ -683,6 +743,8 @@ def get_results_table_rows(
             filter_clauses.append("COALESCE(favorite, 0) = 1")
         if hide_avoid:
             filter_clauses.append("COALESCE(avoid, 0) != 1")
+        if has_notes_only:
+            filter_clauses.append("COALESCE(has_notes, 0) = 1")
         search_norm = (search or "").strip().lower()
         if search_norm:
             filter_clauses.append(
@@ -717,6 +779,8 @@ def get_results_table_rows(
                     "avoid": "✖" if int(data.get("avoid") or 0) else "○",
                     "probe_status_emoji": _probe_status_to_emoji(data.get("probe_status")),
                     "extract_status_emoji": _extract_status_to_emoji(data.get("extracted")),
+                    "has_notes": "✔" if int(row["has_notes"] or 0) else "○",
+                    "notes_preview": _format_notes_preview(row["notes_head"]),
                     "host_type": data.get("host_type") or "",
                     "ip_address": data.get("ip_address") or "",
                     "shares": f"📁 {shares_count}" if shares_count > 0 else str(shares_count),

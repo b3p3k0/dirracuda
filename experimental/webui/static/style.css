@@ -400,6 +400,31 @@ tbody tr.selected td { background: var(--bg3); color: var(--accent); }
 .filter-bar input { max-width: 120px; flex: 0 0 auto; }
 .filter-bar .page-label { color: var(--text-dim); margin-left: 8px; }
 
+.filter-dropdown { position: relative; display: inline-block; }
+.filter-dropdown summary {
+  background: var(--bg3);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 10px;
+  line-height: 1.4;
+  cursor: pointer;
+  list-style: none;
+}
+.filter-dropdown summary::-webkit-details-marker { display: none; }
+.filter-dropdown summary:hover { background: var(--bg2); border-color: var(--accent); }
+.filter-dropdown-panel {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 10;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+}
+.filter-dropdown-panel label { display: block; white-space: nowrap; }
+
 /* --- Share summary ---------------------------------------------------- */
 .share-summary {
   background: var(--bg2);
@@ -724,6 +749,7 @@ tbody tr.selected td { background: var(--bg3); color: var(--accent); }
 
   .filter-bar { flex-direction: column; align-items: flex-start; }
   .filter-bar input { max-width: 100%; }
+  .filter-dropdown-panel { position: static; }
 }
 
 /* Unified Dorkbook preview and selection. */

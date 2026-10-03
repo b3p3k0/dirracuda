@@ -38,6 +38,15 @@ function updatePagerButtons() {
   document.getElementById('last-btn').disabled = currentPage >= totalPages;
 }
 
+function updateQuickFilterLabel() {
+  var count = 0;
+  ['shares-only-filter', 'favorites-only-filter', 'hide-avoid-filter', 'has-notes-only-filter'].forEach(function(id) {
+    if (document.getElementById(id).checked) count++;
+  });
+  document.getElementById('quick-filters-label').textContent =
+    count ? 'Filters (' + count + ') ▾' : 'Filters ▾';
+}
+
 function applyResultsPrefsFromStorage() {
   if (!window.DirracudaPrefs || !window.DirracudaPrefs.isAvailable()) return;
   var saved = window.DirracudaPrefs.readSection('results');
@@ -47,6 +56,7 @@ function applyResultsPrefsFromStorage() {
   document.getElementById('shares-only-filter').checked = !!saved.shares_only;
   document.getElementById('favorites-only-filter').checked = !!saved.favorites_only;
   document.getElementById('hide-avoid-filter').checked = !!saved.hide_avoid;
+  document.getElementById('has-notes-only-filter').checked = !!saved.has_notes_only;
 
   var activeBtn = document.querySelector('.proto-tab[data-proto="' + currentProto + '"]');
   if (activeBtn) {
@@ -61,7 +71,8 @@ function persistResultsPrefs() {
     protocol: currentProto,
     shares_only: document.getElementById('shares-only-filter').checked,
     favorites_only: document.getElementById('favorites-only-filter').checked,
-    hide_avoid: document.getElementById('hide-avoid-filter').checked
+    hide_avoid: document.getElementById('hide-avoid-filter').checked,
+    has_notes_only: document.getElementById('has-notes-only-filter').checked
   });
 }
 
@@ -373,6 +384,7 @@ function buildRow(r) {
     ['Avoid', r.avoid],
     ['Probed', r.probe_status_emoji],
     ['Extracted', r.extract_status_emoji],
+    ['Notes', r.has_notes],
     ['Risk', r.sherlock_risk],
     ['Type', r.host_type],
     ['IP Address', r.ip_address],
@@ -390,6 +402,9 @@ function buildRow(r) {
       _renderRiskCell(td, pair[1]);
     } else {
       td.textContent = pair[1] != null ? String(pair[1]) : '';
+      if (pair[0] === 'Notes') {
+        td.title = r.notes_preview ? String(r.notes_preview) : '';
+      }
     }
 
     if (idx === 0 || idx === 1 || idx === 2) {
@@ -735,11 +750,13 @@ function loadResults() {
   var sharesOnly = document.getElementById('shares-only-filter').checked;
   var favoritesOnly = document.getElementById('favorites-only-filter').checked;
   var hideAvoid = document.getElementById('hide-avoid-filter').checked;
+  var hasNotesOnly = document.getElementById('has-notes-only-filter').checked;
   var url = '/api/results/' + currentProto +
     '?page=' + currentPage + '&page_size=' + pageSize +
     '&shares_only=' + (sharesOnly ? 'true' : 'false') +
     '&favorites_only=' + (favoritesOnly ? 'true' : 'false') +
-    '&hide_avoid=' + (hideAvoid ? 'true' : 'false');
+    '&hide_avoid=' + (hideAvoid ? 'true' : 'false') +
+    '&has_notes_only=' + (hasNotesOnly ? 'true' : 'false');
   if (search) url += '&search=' + encodeURIComponent(search);
 
   var tbody = document.getElementById('results-body');
@@ -910,9 +927,38 @@ document.querySelectorAll('.proto-tab').forEach(function(btn) {
   });
 });
 
-document.getElementById('shares-only-filter').addEventListener('change', persistResultsPrefs);
-document.getElementById('favorites-only-filter').addEventListener('change', persistResultsPrefs);
-document.getElementById('hide-avoid-filter').addEventListener('change', persistResultsPrefs);
+document.getElementById('shares-only-filter').addEventListener('change', function() {
+  persistResultsPrefs();
+  updateQuickFilterLabel();
+});
+document.getElementById('favorites-only-filter').addEventListener('change', function() {
+  persistResultsPrefs();
+  updateQuickFilterLabel();
+});
+document.getElementById('hide-avoid-filter').addEventListener('change', function() {
+  persistResultsPrefs();
+  updateQuickFilterLabel();
+});
+
+document.getElementById('has-notes-only-filter').addEventListener('change', function() {
+  persistResultsPrefs();
+  updateQuickFilterLabel();
+});
+
+document.addEventListener('click', function(e) {
+  var dropdown = document.getElementById('quick-filters');
+  if (dropdown.open && !dropdown.contains(e.target)) {
+    dropdown.removeAttribute('open');
+  }
+});
+
+document.addEventListener('keydown', function(e) {
+  var dropdown = document.getElementById('quick-filters');
+  if (e.key === 'Escape' && dropdown.open) {
+    dropdown.removeAttribute('open');
+    document.getElementById('quick-filters-label').focus();
+  }
+});
 
 document.getElementById('load-btn').addEventListener('click', function() {
   currentPage = 1;
@@ -1004,4 +1050,5 @@ document.getElementById('bulk-probe-btn').addEventListener('click', function() {
 });
 
 applyResultsPrefsFromStorage();
+updateQuickFilterLabel();
 loadResults();

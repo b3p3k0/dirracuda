@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from experimental.webui.app import create_app
 from experimental.webui.auth import set_password
 from experimental.webui.config import TLSConfig, WebUIConfig
+from experimental.webui.db import _format_notes_preview
 import experimental.webui.results_probe_actions as _probe_actions
 from gui.utils import probe_patterns
 
@@ -324,6 +325,11 @@ def test_results_page_renders_filter_controls(logged_in_client):
     assert "Show Only Shares &gt; 0" in r.text
     assert "Favorites Only" in r.text
     assert "Hide Avoid" in r.text
+    dropdown = re.search(r'<details[^>]*id="quick-filters"[^>]*>(.*?)</details>', r.text, re.S)
+    assert dropdown is not None
+    for filter_id in ("shares-only-filter", "favorites-only-filter", "hide-avoid-filter", "has-notes-only-filter"):
+        assert f'id="{filter_id}"' in dropdown.group(1)
+    assert "<th>Notes</th>" in r.text
     assert "country-filter" not in r.text
     assert "&country=" not in r.text
 
@@ -386,6 +392,8 @@ def test_all_protocol_results_mixed_rows_and_metadata(creds, cfg_no_tls, db_all_
             "avoid",
             "probe_status_emoji",
             "extract_status_emoji",
+            "has_notes",
+            "notes_preview",
             "host_type",
             "ip_address",
             "shares",
@@ -1340,3 +1348,128 @@ def test_results_probe_schema_fallback_per_target_error(creds, cfg_no_tls, tmp_p
     done = _poll_probe_until_complete(c, job_id)
     assert done["summary"] == {"total": 1, "completed": 1, "succeeded": 0, "failed": 1}
     assert "missing required table/column" in done["results"][0].get("error", "")
+
+
+@pytest.fixture
+def db_with_notes(db_all_protocols):
+    """User notes across all protocols, including missing and legacy server notes."""
+    conn = sqlite3.connect(str(db_all_protocols))
+    try:
+        for proto, flags in (("smb", "host"), ("ftp", "ftp"), ("http", "http")):
+            conn.execute(f"ALTER TABLE {flags}_user_flags ADD COLUMN notes TEXT")
+            conn.execute(f"ALTER TABLE {proto}_servers ADD COLUMN notes TEXT")
+            conn.execute(
+                f"UPDATE {flags}_user_flags SET notes = ? WHERE server_id = 1",
+                ("  Short note  ",),
+            )
+            for server_id, note in enumerate((None, "  \n\t ", "x" * 500, " first \n\n second \r\n third "), 2):
+                conn.execute(
+                    f"INSERT INTO {proto}_servers (id, ip_address, last_seen, notes) VALUES (?, ?, ?, ?)",
+                    (server_id, f"10.0.1.{server_id}", "2026-05-10T14:00:00", "Server-only note" if server_id == 2 else None),
+                )
+                conn.execute(
+                    f"INSERT INTO {flags}_user_flags (server_id, favorite, notes) VALUES (?, ?, ?)",
+                    (server_id, int(server_id == 5), note),
+                )
+            # Also exercise the correlated subquery when no flags row exists.
+            conn.execute(
+                f"INSERT INTO {proto}_servers (id, ip_address, last_seen) VALUES (6, '10.0.1.6', '2026-05-10T14:00:00')"
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    return db_all_protocols
+
+
+@pytest.mark.parametrize("protocol", ["smb", "ftp", "http"])
+def test_notes_indicators_and_previews(creds, cfg_no_tls, db_with_notes, protocol):
+    c = _logged_in_client_for_db(creds, cfg_no_tls, db_with_notes)
+    response = c.get(f"/api/results/{protocol}")
+    assert response.status_code == 200
+    rows = {row["protocol_server_id"]: row for row in response.json()["results"]}
+    assert len(rows) == 6
+    for server_id, preview in ((1, "Short note"), (4, "x" * 59 + "…"), (5, "first\nsecond…")):
+        assert rows[server_id]["has_notes"] == "✔"
+        assert rows[server_id]["notes_preview"] == preview
+    for server_id in (2, 3, 6):
+        assert rows[server_id]["has_notes"] == "○"
+        assert rows[server_id]["notes_preview"] == ""
+
+
+@pytest.mark.parametrize("protocol,prefix", [("smb", "S"), ("ftp", "F"), ("http", "H"), ("all", None)])
+def test_has_notes_filter_counts_and_pagination(creds, cfg_no_tls, db_with_notes, protocol, prefix):
+    c = _logged_in_client_for_db(creds, cfg_no_tls, db_with_notes)
+    prefixes = [prefix] if prefix else ["S", "F", "H"]
+    expected = {f"{kind}:{server_id}" for kind in prefixes for server_id in (1, 4, 5)}
+    response = c.get(f"/api/results/{protocol}?has_notes_only=true")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["total_count"] == len(expected)
+    assert {row["row_key"] for row in payload["results"]} == expected
+    assert all(row["has_notes"] == "✔" for row in payload["results"])
+
+    paged_keys = []
+    for page in range(1, len(expected) + 1):
+        response = c.get(f"/api/results/{protocol}?has_notes_only=true&page_size=1&page={page}")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["total_count"] == len(expected)
+        assert payload["total_pages"] == len(expected)
+        assert len(payload["results"]) == 1
+        paged_keys.append(payload["results"][0]["row_key"])
+    assert len(set(paged_keys)) == len(expected)
+    assert set(paged_keys) == expected
+
+    response = c.get(f"/api/results/{protocol}?has_notes_only=true&favorites_only=true")
+    assert response.status_code == 200
+    expected_favorites = {f"{kind}:5" for kind in prefixes}
+    if "S" in prefixes:
+        expected_favorites.add("S:1")
+    payload = response.json()
+    assert payload["total_count"] == len(expected_favorites)
+    assert {row["row_key"] for row in payload["results"]} == expected_favorites
+
+
+@pytest.mark.parametrize("protocol", ["all", "smb", "ftp", "http"])
+def test_legacy_flags_without_notes(creds, cfg_no_tls, db_all_protocols, protocol):
+    c = _logged_in_client_for_db(creds, cfg_no_tls, db_all_protocols)
+    response = c.get(f"/api/results/{protocol}")
+    assert response.status_code == 200
+    rows = response.json()["results"]
+    assert rows
+    assert all(row["has_notes"] == "○" and row["notes_preview"] == "" for row in rows)
+    response = c.get(f"/api/results/{protocol}?has_notes_only=true")
+    assert response.status_code == 200
+    assert response.json()["results"] == []
+    assert response.json()["total_count"] == 0
+
+
+def test_notes_without_flags_tables(logged_in_client):
+    response = logged_in_client.get("/api/results/all")
+    assert response.status_code == 200
+    rows = response.json()["results"]
+    assert len(rows) == 2
+    assert all(row["has_notes"] == "○" and row["notes_preview"] == "" for row in rows)
+    response = logged_in_client.get("/api/results/all?has_notes_only=true")
+    assert response.status_code == 200
+    assert response.json()["results"] == []
+    assert response.json()["total_count"] == 0
+
+
+@pytest.mark.parametrize("raw,expected", [
+    (None, ""), (123, ""), (["note"], ""), (b"note", ""),
+    ("", ""), (" \n\t\r ", ""), ("  Short note  ", "Short note"),
+    ("x" * 60, "x" * 60), ("x" * 61, "x" * 59 + "…"),
+    (" one \r\n\n two \n three ", "one\ntwo…"),
+    ("one\ntwo…\nthree", "one\ntwo…"),
+    ("one\n" + "x" * 61 + "\nthree", "one\n" + "x" * 59 + "…"),
+    ("<script>alert(1)</script>", "<script>alert(1)</script>"),
+])
+def test_format_notes_preview(raw, expected):
+    assert _format_notes_preview(raw) == expected
+
+
+def test_format_notes_preview_custom_limits():
+    assert _format_notes_preview("abcdef\nsecond", max_line_len=5, max_lines=1) == "abcd…"
+    assert _format_notes_preview("one\ntwo", max_lines=1) == "one…"
+    assert _format_notes_preview("note", max_lines=0) == ""
