@@ -31,9 +31,9 @@ def _skip_real_pacing_waits(monkeypatch):
 def test_progress_emits_page_store_classify_probe(monkeypatch, tmp_path):
     """Happy path: all four progress phases emit at least one message."""
     from experimental.se_dork.service import run_dork_search
-    from experimental.se_dork.models import RunOptions
+    from experimental.se_dork.models import PreflightResult, RunOptions
 
-    ok = MagicMock(); ok.ok = True; ok.message = "OK"
+    ok = PreflightResult(ok=True, reason_code=None, message="OK")
     monkeypatch.setattr("experimental.se_dork.service.run_reachability_check", lambda url, timeout=10: ok)
 
     _calls = []
@@ -64,7 +64,7 @@ def test_progress_emits_page_store_classify_probe(monkeypatch, tmp_path):
         progress_cb=lambda m: msgs.append(m),
     )
 
-    assert any("Querying SearXNG page" in m for m in msgs), f"page missing: {msgs}"
+    assert any("Querying Self-hosted Search page" in m for m in msgs), f"page missing: {msgs}"
     assert any("stored" in m for m in msgs), f"store missing: {msgs}"
     assert any("classifying" in m for m in msgs), f"classify missing: {msgs}"
     assert any("probing" in m for m in msgs), f"probe missing: {msgs}"
@@ -73,7 +73,7 @@ def test_progress_emits_page_store_classify_probe(monkeypatch, tmp_path):
 def test_progress_emits_terminal_on_reachability_exception(monkeypatch):
     """Reachability exception must emit a terminal progress line before returning."""
     from experimental.se_dork.service import run_dork_search
-    from experimental.se_dork.models import RunOptions
+    from experimental.se_dork.models import PreflightResult, RunOptions
 
     def _failing_preflight(url):
         raise ConnectionError("host unreachable")
@@ -94,9 +94,9 @@ def test_progress_emits_terminal_on_reachability_exception(monkeypatch):
 def test_progress_emits_terminal_on_fetch_exception(monkeypatch, tmp_path):
     """Fetch failure must emit a terminal progress line before returning."""
     from experimental.se_dork.service import run_dork_search
-    from experimental.se_dork.models import RunOptions
+    from experimental.se_dork.models import PreflightResult, RunOptions
 
-    ok = MagicMock(); ok.ok = True; ok.message = "OK"
+    ok = PreflightResult(ok=True, reason_code=None, message="OK")
     monkeypatch.setattr("experimental.se_dork.service.run_reachability_check", lambda url, timeout=10: ok)
 
     def _failing_urlopen(url, timeout=None):
@@ -111,6 +111,6 @@ def test_progress_emits_terminal_on_fetch_exception(monkeypatch, tmp_path):
     )
 
     assert result.status == "error"
-    assert any("Fetch error" in m for m in msgs), (
+    assert any("Fetch error" in m and "network timeout" in m for m in msgs), (
         f"Expected terminal fetch error message in: {msgs}"
     )

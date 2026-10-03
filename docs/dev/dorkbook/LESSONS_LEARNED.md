@@ -91,3 +91,6 @@ Date: 2026-04-19
 - A dialog that saves settings is not enough; every probe runner must read
   them. Use `scan_provider_options.resolve_probe_limits` and pass all five
   limits (workers, dirs, files, timeout, depth) into the provider options.
+- Stub result dataclasses with the real type (`PreflightResult(...)`), not a
+  bare `MagicMock`. A mock invents every new optional field, so a test can
+  fail on the mock or pass for the wrong reason.
