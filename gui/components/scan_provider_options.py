@@ -44,6 +44,34 @@ def coerce_searxng_tuning(
     return max(lo, min(hi, snapped))
 
 
+# Saved probe limits (written by ProbeConfigDialog / batch probe dialogs).
+_PROBE_LIMIT_SETTINGS = (
+    # key, setting name, default, min, max
+    ("workers", "probe.batch_max_workers", 3, 1, 8),
+    ("max_dirs", "probe.max_directories_per_share", 3, 1, None),
+    ("max_files", "probe.max_files_per_directory", 5, 1, None),
+    ("timeout", "probe.share_timeout_seconds", 10, 1, None),
+    ("max_depth", "probe.max_depth_levels", 1, 1, 3),
+)
+
+
+def resolve_probe_limits(settings_manager: Any) -> Dict[str, int]:
+    """Return saved bulk-probe limits, clamped; bad values fall back per field."""
+    limits: Dict[str, int] = {}
+    for key, setting, default, lo, hi in _PROBE_LIMIT_SETTINGS:
+        value = default
+        if settings_manager is not None:
+            try:
+                value = int(settings_manager.get_setting(setting, default))
+            except Exception:
+                value = default
+        value = max(lo, value)
+        if hi is not None:
+            value = min(hi, value)
+        limits[key] = value
+    return limits
+
+
 def _make_snap_callback(
     dbl_var: tk.DoubleVar,
     disp_var: tk.StringVar,

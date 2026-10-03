@@ -50,6 +50,10 @@ class RunOptions:
     bulk_probe_enabled: bool = False
     probe_config_path: Optional[str] = None
     probe_worker_count: Optional[int] = None
+    probe_max_directories: int = 3
+    probe_max_files: int = 5
+    probe_timeout_seconds: int = 10
+    probe_max_depth: int = 1
     request_timeout: int = 15
     short_retry_delay: int = 30
     long_retry_delay: int = 180

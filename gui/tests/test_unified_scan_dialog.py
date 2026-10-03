@@ -516,3 +516,72 @@ def test_start_reddit_only_skips_preflight(monkeypatch):
 def _isolate_dork_defaults(monkeypatch):
     monkeypatch.setattr("experimental.dorkbook.defaults.read_defaults",
                         lambda config_path=None, *, legacy_query=None: {"self_hosted": legacy_query or ""})
+
+
+# ---------------------------------------------------------------------------
+# Probe config step for non-Shodan providers
+# ---------------------------------------------------------------------------
+
+
+class _ProbeDialogStub:
+    outcome = {"status": "ok"}
+    shown = 0
+
+    def __init__(self, *_a, **_k) -> None:
+        pass
+
+    def show(self):
+        type(self).shown += 1
+        return dict(type(self).outcome)
+
+
+def _start_non_shodan(monkeypatch, provider: str, *, probe: bool, outcome: str):
+    dlg = _make_dialog()
+    dlg.theme = None
+    dlg.provider_shodan_var.set(False)
+    getattr(dlg, f"provider_{provider}_var").set(True)
+    if provider == "reddit":
+        dlg.reddit_mode_var.set("feed")
+    dlg.bulk_probe_enabled_var.set(probe)
+    monkeypatch.setattr("gui.components.unified_scan_dialog.persist_query_budget_state", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        "gui.components.unified_scan_dialog.run_preflight",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("Shodan preflight must not run")),
+    )
+    stub = type("_Stub", (_ProbeDialogStub,), {"outcome": {"status": outcome}, "shown": 0})
+    monkeypatch.setattr("gui.components.unified_scan_dialog.ProbeConfigDialog", stub)
+    captured = {}
+    dlg.scan_start_callback = lambda payload: captured.setdefault("payload", payload)
+    dlg._start()
+    return dlg, stub, captured
+
+
+@pytest.mark.parametrize("provider", ["searxng", "reddit"])
+def test_non_shodan_probe_on_shows_probe_config_and_launches(monkeypatch, provider):
+    dlg, stub, captured = _start_non_shodan(monkeypatch, provider, probe=True, outcome="ok")
+    assert stub.shown == 1
+    assert captured["payload"]["bulk_probe_enabled"] is True
+    assert dlg.dialog.destroyed is True
+
+
+@pytest.mark.parametrize("provider", ["searxng", "reddit"])
+def test_non_shodan_probe_abort_keeps_dialog_open(monkeypatch, provider):
+    dlg, stub, captured = _start_non_shodan(monkeypatch, provider, probe=True, outcome="abort")
+    assert stub.shown == 1
+    assert captured == {}
+    assert dlg.dialog.destroyed is False
+
+
+@pytest.mark.parametrize("provider", ["searxng", "reddit"])
+def test_non_shodan_probe_disable_launches_without_probe(monkeypatch, provider):
+    dlg, stub, captured = _start_non_shodan(monkeypatch, provider, probe=True, outcome="disable")
+    assert stub.shown == 1
+    assert captured["payload"]["bulk_probe_enabled"] is False
+    assert dlg.dialog.destroyed is True
+
+
+@pytest.mark.parametrize("provider", ["searxng", "reddit"])
+def test_non_shodan_probe_off_skips_probe_config(monkeypatch, provider):
+    dlg, stub, captured = _start_non_shodan(monkeypatch, provider, probe=False, outcome="abort")
+    assert stub.shown == 0
+    assert "payload" in captured

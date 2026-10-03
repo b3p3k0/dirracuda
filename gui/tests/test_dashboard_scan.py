@@ -411,6 +411,10 @@ class TestStartSearxngScan:
         opts = captured_opts[0]
         assert opts.probe_config_path == "/fake/config.json"
         assert opts.probe_worker_count == 4
+        assert opts.probe_max_directories == 4
+        assert opts.probe_max_files == 4
+        assert opts.probe_timeout_seconds == 4
+        assert opts.probe_max_depth == 3
 
     def test_max_results_clamped_to_1000(self, monkeypatch):
         dash = _make_dash()
@@ -1001,6 +1005,10 @@ class TestStartRedditScan:
 
         assert captured[0].probe_config_path == "/cfg/probe.json"
         assert captured[0].probe_worker_count == 5
+        assert captured[0].probe_max_directories == 5
+        assert captured[0].probe_max_files == 5
+        assert captured[0].probe_timeout_seconds == 5
+        assert captured[0].probe_max_depth == 3
 
     def test_managed_launch_does_not_reset_shared_live_output(self, monkeypatch):
         dash = _make_dash()

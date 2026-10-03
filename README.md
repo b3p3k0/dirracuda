@@ -181,14 +181,14 @@ Quick start:
 1. Dashboard → **▶ Start Scan** → select **Self-hosted Search**.
 2. Enter your instance URL, query, and result limit. Deselect other providers if you only want this search.
 3. Optionally enable **Run bulk probe after each scan**.
-4. Click **Start Scan** and review the preflight confirmation. The run checks instance reachability and validates JSON support on the first result page.
+4. Click **Start Scan**. If probe is on, set its limits in **Configure Bulk Probe** first. The run checks instance reachability and validates JSON support on the first result page.
 5. Open **Server List** to review, probe, or browse the retained HTTP targets.
 
 Inputs (persisted across opens/restarts):
 - **Instance** — base URL of the SearXNG or DeGoog instance you control; an explicit `/search` or `/api/search` endpoint also works
 - **Query** — required dork query; starts blank unless saved previously (for example, `site:* intitle:"index of /"`)
 - **Results** — unique-result fetch cap per run (default 500, max 1,000)
-- **Run bulk probe after each scan** — optional bulk probe pass for retained results
+- **Run bulk probe after each scan** — optional bulk probe pass for retained results. Start Scan opens **Configure Bulk Probe** (workers, directories, files, timeout, depth); the values are saved for the next scan.
 
 Start Scan also exposes **Request timeout**, **Short retry**, and **Long retry** tuning sliders.
 
@@ -278,7 +278,7 @@ RSS does not expose the old JSON cursor, so each run makes one anonymous feed re
 User/author mode is unavailable in anonymous RSS mode. Historical rows from older user-mode runs remain viewable in existing databases.
 
 Shared scan option:
-- **Run bulk probe after each scan** — optional explicit probe pass for concrete HTTP/HTTPS/FTP targets found during that ingest run. Unknown-protocol rows are skipped with a clear notice instead of guessing a protocol. Probe summaries and snapshots are carried into the primary DB automatically.
+- **Run bulk probe after each scan** — optional explicit probe pass for concrete HTTP/HTTPS/FTP targets found during that ingest run. Start Scan opens **Configure Bulk Probe** first, as for Self-hosted Search. Unknown-protocol rows are skipped with a clear notice instead of guessing a protocol. Probe summaries and snapshots are carried into the primary DB automatically.
 
 Successful standalone Reddit runs keep the existing result popup and also append a
 Shodan-style completion rollup to Live Scan Output. Multi-provider Start Scan runs

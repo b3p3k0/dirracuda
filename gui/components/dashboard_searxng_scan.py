@@ -167,19 +167,13 @@ def start_searxng_scan(dash, scan_request: dict) -> bool:
 
     sm = getattr(dash, "settings_manager", None)
     probe_config_path = None
-    probe_worker_count = 3
-    if sm is not None:
-        if hasattr(sm, "get_smbseek_config_path"):
-            try:
-                probe_config_path = sm.get_smbseek_config_path()
-            except Exception:
-                pass
+    if sm is not None and hasattr(sm, "get_smbseek_config_path"):
         try:
-            probe_worker_count = max(1, min(8, int(
-                sm.get_setting("probe.batch_max_workers", probe_worker_count)
-            )))
+            probe_config_path = sm.get_smbseek_config_path()
         except Exception:
             pass
+    from gui.components.scan_provider_options import resolve_probe_limits
+    probe_limits = resolve_probe_limits(sm)
 
     from gui.components.scan_provider_options import (
         coerce_searxng_tuning,
@@ -193,7 +187,11 @@ def start_searxng_scan(dash, scan_request: dict) -> bool:
         max_results=max(1, min(MAX_RESULTS, _to_int(scan_request.get("searxng_max_results", 500)))),
         bulk_probe_enabled=bool(scan_request.get("bulk_probe_enabled", False)),
         probe_config_path=probe_config_path,
-        probe_worker_count=probe_worker_count,
+        probe_worker_count=probe_limits["workers"],
+        probe_max_directories=probe_limits["max_dirs"],
+        probe_max_files=probe_limits["max_files"],
+        probe_timeout_seconds=probe_limits["timeout"],
+        probe_max_depth=probe_limits["max_depth"],
         allow_insecure_tls=scan_request.get("allow_insecure_tls"),
         request_timeout=coerce_searxng_tuning(
             scan_request.get("searxng_request_timeout", SEARXNG_TIMEOUT_DEFAULT),

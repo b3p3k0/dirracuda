@@ -25,7 +25,7 @@ from gui.components.query_budget_dialog import (
     persist_query_budget_state,
     resolve_config_path_from_settings,
 )
-from gui.components.scan_preflight import run_preflight
+from gui.components.scan_preflight import ProbeConfigDialog, run_preflight
 from shared.config import resolve_http_allow_insecure_tls
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.style import get_theme
@@ -1092,6 +1092,14 @@ class UnifiedScanDialog:
             if preflight_result is None:
                 return
             scan_request = preflight_result
+        elif scan_request.get("bulk_probe_enabled"):
+            # No Shodan preflight, but the probe still needs its config step.
+            outcome = ProbeConfigDialog(self.dialog, self.theme, self._settings_manager).show()
+            status = outcome.get("status")
+            if status == "abort":
+                return
+            if status == "disable":
+                scan_request["bulk_probe_enabled"] = False
 
         self.result = "start"
         self.scan_start_callback(scan_request)

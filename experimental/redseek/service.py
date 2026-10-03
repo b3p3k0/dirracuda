@@ -73,6 +73,10 @@ class IngestOptions:
     bulk_probe_enabled: bool = False
     probe_config_path: Optional[str] = None
     probe_worker_count: Optional[int] = None
+    probe_max_directories: int = 3
+    probe_max_files: int = 5
+    probe_timeout_seconds: int = 10
+    probe_max_depth: int = 1
     replace_cache_scope: Literal["full", "state_only"] = "full"
 
 
@@ -195,12 +199,30 @@ def _resolve_probe_worker_count(options: IngestOptions) -> int:
         return 3
 
 
+def _resolve_probe_limits(options: IngestOptions) -> dict[str, int]:
+    """Return run_sidecar_probe limit kwargs from options; bad values use defaults."""
+    limits: dict[str, int] = {}
+    for key, attr, default in (
+        ("max_directories", "probe_max_directories", 3),
+        ("max_files", "probe_max_files", 5),
+        ("timeout_seconds", "probe_timeout_seconds", 10),
+        ("max_depth", "probe_max_depth", 1),
+    ):
+        try:
+            limits[key] = max(1, int(getattr(options, attr, default)))
+        except (TypeError, ValueError):
+            limits[key] = default
+    limits["max_depth"] = min(3, limits["max_depth"])
+    return limits
+
+
 def _probe_targets_for_keys(
     dedupe_keys: list[str],
     db_path: Optional[Path],
     *,
     config_path: Optional[str] = None,
     worker_count: int = 3,
+    probe_limits: Optional[dict[str, int]] = None,
 ) -> dict[str, int]:
     """Probe current-run concrete targets and persist sidecar probe fields."""
     from gui.utils.sidecar_probe import (
@@ -271,6 +293,7 @@ def _probe_targets_for_keys(
                     target,
                     config_path=config_path,
                     indicator_patterns=patterns,
+                    **(probe_limits or {}),
                 ): row
                 for row, target in targets
             }
@@ -335,6 +358,7 @@ def _finalize_result_with_optional_probe(
         db_path,
         config_path=getattr(options, "probe_config_path", None),
         worker_count=_resolve_probe_worker_count(options),
+        probe_limits=_resolve_probe_limits(options),
     )
     result.probe_total = summary.get("total", 0)
     result.probe_clean = summary.get("clean", 0)

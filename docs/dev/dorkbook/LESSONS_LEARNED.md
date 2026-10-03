@@ -82,3 +82,12 @@ Date: 2026-04-19
   panels; equal labels alone do not ensure alignment. Check resized layouts.
 - Validate consolidation by applying different provider queries in the same
   real scan form, then inspect both persisted destinations and the built request.
+
+## Non-Shodan probe config (2026-10-03)
+
+- Provider paths that skip the Shodan preflight still need the probe-config
+  step. `ProbeConfigDialog` lived only inside `run_preflight`, so Self-hosted
+  Search and Reddit started probes with no dialog.
+- A dialog that saves settings is not enough; every probe runner must read
+  them. Use `scan_provider_options.resolve_probe_limits` and pass all five
+  limits (workers, dirs, files, timeout, depth) into the provider options.

@@ -740,6 +740,31 @@ def _persist_page_classification(
         conn.close()
 
 
+_DEFAULT_PROBE_LIMITS = {
+    "max_directories": 3,
+    "max_files": 5,
+    "timeout_seconds": 10,
+    "max_depth": 1,
+}
+
+
+def _resolve_probe_limits(options: RunOptions) -> dict[str, int]:
+    """Return probe_url limit kwargs from options; bad values use defaults."""
+    limits: dict[str, int] = {}
+    for key, attr in (
+        ("max_directories", "probe_max_directories"),
+        ("max_files", "probe_max_files"),
+        ("timeout_seconds", "probe_timeout_seconds"),
+        ("max_depth", "probe_max_depth"),
+    ):
+        try:
+            limits[key] = max(1, int(getattr(options, attr, _DEFAULT_PROBE_LIMITS[key])))
+        except (TypeError, ValueError):
+            limits[key] = _DEFAULT_PROBE_LIMITS[key]
+    limits["max_depth"] = min(3, limits["max_depth"])
+    return limits
+
+
 def _probe_page_rows(
     page: int,
     rows: list[dict],
@@ -750,6 +775,7 @@ def _probe_page_rows(
     progress_cb: Optional[Callable[[str], None]],
     cancel_event: Optional[threading.Event] = None,
     allow_insecure_tls: Optional[bool] = None,
+    probe_limits: Optional[dict[str, int]] = None,
 ) -> tuple[list[tuple[dict, object]], dict[str, int]]:
     from experimental.se_dork.probe import (
         ProbeOutcome,
@@ -781,9 +807,7 @@ def _probe_page_rows(
                 probe_url,
                 row["url"],
                 config_path=config_path,
-                max_directories=3,
-                max_files=5,
-                timeout_seconds=10,
+                **(probe_limits or _DEFAULT_PROBE_LIMITS),
                 indicator_patterns=indicator_patterns,
                 cancel_event=cancel_event,
                 allow_insecure_tls=allow_insecure_tls,
@@ -882,6 +906,7 @@ def _process_result_page(
     progress_cb: Optional[Callable[[str], None]],
     cancel_event: Optional[threading.Event] = None,
     allow_insecure_tls: Optional[bool] = None,
+    probe_limits: Optional[dict[str, int]] = None,
 ) -> None:
     """Persist, classify, retain, and optionally probe one fetched page."""
     if cancel_event and cancel_event.is_set():
@@ -961,6 +986,7 @@ def _process_result_page(
         progress_cb=progress_cb,
         cancel_event=cancel_event,
         allow_insecure_tls=allow_insecure_tls,
+        probe_limits=probe_limits,
     )
     try:
         _persist_probe_outcomes(db_path, probe_outcomes)
@@ -1043,6 +1069,7 @@ def run_dork_search(
         )
     except (TypeError, ValueError):
         probe_worker_count = 3
+    probe_limits = _resolve_probe_limits(options)
 
     totals = _PageProcessTotals()
     fetch_outcome = _FetchOutcome(rows=[])
@@ -1155,6 +1182,7 @@ def run_dork_search(
                 progress_cb=_emit,
                 cancel_event=cancel_event,
                 allow_insecure_tls=run_allow_insecure_tls,
+                probe_limits=probe_limits,
             )
         except _Cancelled:
             raise
