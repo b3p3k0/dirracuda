@@ -141,6 +141,61 @@ Commit closeout: reran the full 11-file validation command recorded under the
 first task against the current development branch: **316 passed**. Reviewed
 README and the complete diff; only attribution/date files are included.
 
+## 2026-10-02 — Reddit notes on later Shodan/Search results
+
+Issue: hosts seen during scans with Reddit deselected still show Reddit notes.
+HI suspected they were previously ingested via Reddit and wanted that behavior
+preserved if it was legitimate history.
+
+Result: **confirmed in code and deterministic reproduction**. No production-code
+fix needed. The investigation did not inspect HI's individual live records or
+run live discovery; it verifies the mechanism and its identity boundaries.
+
+Evidence:
+- `unified_scan_dialog._resolve_selected_providers` includes Reddit only when
+  its checkbox is selected; the provider queue dispatches the requested list.
+- Only `experimental/redseek/mapper.py` generates attribution through
+  `_append_notes`. Self-hosted Search's sync mapper does not set that field.
+- SMB writes reuse the row matching IP. FTP upserts also match IP; HTTP upserts
+  match `(ip_address, port)`. Rediscovery retains the row ID and updates scan
+  metadata. A result in a new run need not be a newly created server row.
+- Notes live in separate protocol-specific user-flags tables keyed by server
+  ID. Shodan writes and Search promotion leave those existing notes intact.
+- Server List reads each protocol's flags with a join on its server ID. Numeric
+  IDs shared by different protocol tables do not cause cross-protocol leakage.
+
+Identity qualification: different HTTP paths, schemes, or hostnames resolving
+to the same IP and effective port share one server record. Search promotion can
+update the saved browse hostname/path while retaining earlier notes. Attribution
+therefore records endpoint history; it does not establish that the exact current
+URL appeared in the post. IP reassignment can also make history stale. These
+identity rules predate the attribution change; exact-URL provenance would be
+a separate design task, not a reason to erase useful notes.
+
+Changes: added eight regression cases in
+`shared/tests/test_redseek_provider_notes.py`, clarified README, and recorded
+this investigation. No runtime, schema, dependency, or auth changes. Existing
+uncommitted Self-hosted Search/Dorkbook work was preserved. No commit or push.
+
+Validation:
+
+```bash
+./venv/bin/python -m pytest shared/tests/test_redseek_provider_notes.py shared/tests/test_redseek_attribution.py shared/tests/test_se_dork_main_db_sync.py gui/tests/test_database_access_protocol_writes.py gui/tests/test_database_access_protocol_union.py gui/tests/test_dashboard_provider_queue.py gui/tests/test_unified_scan_dialog.py -q
+./venv/bin/python -m py_compile shared/tests/test_redseek_provider_notes.py
+git diff --check -- README.md docs/dev/reddit_od_module/WORK_NOTES.md
+```
+
+**133 passed**. New cases cover SMB/FTP/HTTP rediscovery, repeat Search sync,
+preserving user notes/favorites, different IPs/HTTP ports, protocol IDs that
+coincide numerically, two hostnames sharing an endpoint, and verified Shodan
+batch writes refreshing access results while preserving notes. Network calls
+are blocked/mocked and all databases are temporary. Compile/diff checks PASS.
+
+File sizes: test file new → 178 lines; README 831 → 837 lines (including existing
+unrelated edits); working notes were 159 lines before this entry. All touched
+files remain in the excellent range. No HI test required for this mechanism;
+an affected host example would be needed to audit a specific observed record.
+
 ## Lessons to carry forward
 
 - Server Notes live in `host_user_flags`, `ftp_user_flags`, and `http_user_flags`.
@@ -157,3 +212,6 @@ README and the complete diff; only attribution/date files are included.
   in normal sync. Destination user-flags tables still need their own guards.
 - A display-only metadata conversion failure must not cause the shared mapper
   to discard an otherwise usable target. Keep date fallbacks local to formatting.
+- Provider selection controls which discovery runs execute; it does not filter
+  or erase the shared server registry's historical notes. Explain the registry's
+  identity rules before treating carried-forward attribution as a leak.

@@ -351,7 +351,7 @@ class TestCancelledRollup:
         lines = rollup.split("\n")
         assert lines[0] == "Dirracuda Scan Summary"
         assert lines[1] == "=" * len("Dirracuda Scan Summary")
-        assert any("SearXNG Query" in l for l in lines)
+        assert any("Self-hosted Search Query" in l for l in lines)
         assert any("URLs Fetched: 15" in l for l in lines)
         assert any("Open Indexes Retained: 4" in l for l in lines)
         assert any("Fetch Pacing: 3 pages, 6s delayed" in l for l in lines)

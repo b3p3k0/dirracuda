@@ -12,7 +12,7 @@ import pytest
 from experimental.se_dork.backends import normalize_results, search_url
 from experimental.se_dork.client import run_preflight, run_reachability_check
 from experimental.se_dork.models import RunOptions
-from experimental.se_dork.service import _fetch_page, _paginate_results, run_dork_search
+from experimental.se_dork.service import _fetch_page, _paginate_results, _throttle_engines, run_dork_search
 
 
 def response(payload):
@@ -93,8 +93,14 @@ def test_invalid_url_fails_before_network(url):
     opened.assert_not_called()
 
 
-def test_both_request_dialects_preserve_query():
-    query = 'intitle:"index of" + files & data'
+@pytest.mark.parametrize('query', [
+    'intitle:"Index of /"',
+    'intitle:Index of /',
+    'intitle:"index of" + files & data',
+    '"a+b & 50% café" -site:example.test',
+    '"literal %22 and \\ backslash"',
+])
+def test_both_request_dialects_preserve_query(query):
     for endpoint, page_key in [('https://search.test/sub/search', 'pageno'),
                                ('https://search.test/sub/api/search', 'page')]:
         parts = urlsplit(search_url(endpoint, query, 2))
@@ -114,6 +120,94 @@ def test_native_metadata_is_preserved_without_mutating_payload():
     assert 'engine' not in row
     assert warnings == ()
     assert normalize_results([{'source': {}, 'sources': 'bad'}], degoog=True)[0]['engines'] == []
+
+
+@pytest.mark.parametrize('timing', [
+    {'name': 'Brave Search', 'status': 'rate_limited'},
+    {'name': 'Brave Search', 'httpStatus': 429},
+    {'name': 'Brave Search', 'httpStatus': '429'},
+])
+def test_degoog_http_200_exposes_upstream_rate_limits(timing):
+    with patch('urllib.request.urlopen', return_value=response({
+        'results': [], 'engineTimings': [timing],
+    })):
+        rows, warnings = _fetch_page('https://search.test/api/search', 'query', 1)
+    assert rows == []
+    assert warnings == ('Brave Search',)
+
+
+@pytest.mark.parametrize('timings', [
+    None, {}, 'rate_limited', [None, 429, 'rate_limited'],
+    [{'name': 'Brave Search', 'status': 'ok', 'time': 429, 'resultCount': 429}],
+    [{'name': 'Brave Search', 'status': 'timeout', 'httpStatus': 504}],
+    [{'name': 'Brave Search', 'status': {}, 'httpStatus': []}],
+])
+def test_degoog_malformed_or_unrelated_timings_are_not_rate_limits(timings):
+    assert _throttle_engines({'engineTimings': timings}) == ()
+
+
+def test_degoog_rate_limit_labels_merge_with_existing_searxng_warnings():
+    assert _throttle_engines({
+        'unresponsive_engines': [['Brave Search', 'HTTP error 429']],
+        'engineTimings': [
+            {'name': 'Brave Search', 'status': 'rate_limited'},
+            {'engine': 'Other Search', 'httpStatus': 429},
+            {'name': {}, 'source': 'Third Search', 'status': 'rate_limited'},
+            {'name': [], 'status': 'rate_limited'},
+        ],
+    }) == ('Brave Search', 'Other Search', 'Third Search', 'unknown')
+
+
+def test_degoog_empty_rate_limited_results_use_existing_bounded_retries():
+    limited = response({'results': [], 'engineTimings': [{
+        'name': 'Brave Search', 'time': 129, 'resultCount': 0,
+        'status': 'rate_limited', 'httpStatus': 429,
+    }]})
+    sleeps = []
+    with patch('urllib.request.urlopen', side_effect=[limited] * 3) as opened:
+        outcome = _paginate_results('https://search.test/api/search', 'query', 10,
+                                    sleep_fn=sleeps.append)
+    assert outcome.rows == []
+    assert outcome.stopped_early
+    assert outcome.hard_retry_count == 2
+    assert outcome.throttle_engines == ('Brave Search',)
+    assert sum(sleeps) == 210
+    assert opened.call_count == 3
+    assert all(parse_qs(urlsplit(call.args[0]).query)['page'] == ['1']
+               for call in opened.call_args_list)
+    assert outcome.error and 'stopped early' in outcome.error
+
+
+def test_degoog_productive_rate_limited_results_advance_with_soft_backoff():
+    sleeps = []
+    with patch('urllib.request.urlopen', side_effect=[
+        response({'results': [{'url': 'https://files.test/'}], 'engineTimings': [
+            {'name': 'Brave Search', 'status': 'rate_limited'},
+        ]}), response({'results': []}),
+    ]) as opened:
+        outcome = _paginate_results('https://search.test/api/search', 'query', 10,
+                                    sleep_fn=sleeps.append)
+    assert outcome.unique_count == 1
+    assert outcome.throttled_page_count == 1
+    assert outcome.hard_retry_count == 0
+    assert sleeps == pytest.approx([10.0], abs=0.01)
+    assert [parse_qs(urlsplit(call.args[0]).query)['page']
+            for call in opened.call_args_list] == [['1'], ['2']]
+
+
+def test_degoog_rate_limit_cooldown_remains_cancellable():
+    event = threading.Event()
+    def cancel_when_waiting(message):
+        if 'waiting' in message:
+            event.set()
+    with patch('urllib.request.urlopen', return_value=response({
+        'results': [], 'engineTimings': [{'name': 'Brave Search', 'httpStatus': 429}],
+    })) as opened:
+        outcome = _paginate_results('https://search.test/api/search', 'query', 10,
+                                    cancel_event=event, progress_cb=cancel_when_waiting)
+    assert event.is_set()
+    assert opened.call_count == 1
+    assert outcome.stopped_early
 
 
 def test_degoog_stops_at_ten_pages():

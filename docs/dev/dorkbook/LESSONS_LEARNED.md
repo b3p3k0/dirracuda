@@ -1,5 +1,23 @@
 # Dorkbook Lessons Learned
 
+## Query reliability investigation (2026-09-28)
+
+- Distinguish authored phrase quotes from JSON/URL escaping. Decode the actual
+  `q` parameter and compare it with the saved/form query before rewriting syntax.
+- Never strip quotes from custom or saved queries to compensate for a failed
+  upstream. Built-in wording changes are explicit catalog edits backed by live
+  comparisons; previously applied defaults have no built-in provenance.
+- Read DeGoog `engineTimings` in production, not just in the diagnostic script.
+  HTTP 200 plus Wikipedia hits can mask a throttled general-purpose engine.
+- Keep API shape, raw hit counts, title clues, and verified open directories
+  separate. Title clues are hints, not target verification or a useful-yield PASS.
+- Browser engine selections may differ from API defaults. Identify the engine
+  producing a useful browser hit before comparing query variants.
+- Choose representative catalog cases by stable keys, not substrings containing
+  quotes. Otherwise changing authored syntax silently drops test coverage.
+- Match rate limiting against error/status fields, never incidental timings or
+  counts that happen to contain 429. Record unrun cases when limits stop a run.
+
 ## Provider migration (2026-09-27)
 
 - `PRAGMA table_info` omits generated columns. Inspect `table_xinfo` before a

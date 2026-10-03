@@ -1,7 +1,9 @@
 # Dorkbook Workspace
 
-Date: 2026-09-27
-Status: Unified library and Start Scan launch consolidation implemented; HI acceptance pending.
+Date: 2026-10-02
+Status: Query reliability validation pending. HI reports improved DeGoog results;
+full live coverage on both backends and the release testing claim remain pending.
+See [current findings and approved wording](QUERY_RELIABILITY.md).
 
 Dorkbook is the shared dork library for Shodan and Self-hosted Search
 (SearXNG/DeGoog). Desktop and Web UI show provider groups, topic/text filters,
@@ -16,6 +18,8 @@ No primary results schema, verifier, crawling, or download behavior changed.
 
 ## Current references
 
+- [Query reliability](QUERY_RELIABILITY.md): exact-string trace, live failures,
+  DeGoog throttling fix, and full catalog comparison/unblock commands.
 - [Start Scan follow-up](START_SCAN_DORKBOOK.md): aligned buttons, one dialog, independent provider queries.
 
 - [Implementation plan](IMPLEMENTATION_PLAN.md): approved behavior and U1–U6 cards.

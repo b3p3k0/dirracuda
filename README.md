@@ -168,6 +168,15 @@ Start Scan shows a preflight confirmation that includes an approximate Shodan qu
 
 Select **Self-hosted Search** in **Start New Scan** to run open-directory dork queries against a SearXNG or DeGoog server. Confirmed open indexes are written to the main database and appear in Server List.
 
+Self-hosted Search results depend on your backend's enabled search engines,
+available indexes, and upstream restrictions. Dorkbook's shipped dorks are
+starting points to explore and adapt; they aren't guaranteed to work everywhere,
+every time. Few or no results can reflect upstream restrictions, limited coverage,
+or query syntax—not necessarily a problem with Dorkbook. If results are
+unexpectedly sparse, try the same query directly in your backend's browser
+interface and check logs for engine errors or rate limits. See
+[Self-hosted Search troubleshooting](docs/SELF_HOSTED_SEARCH.md#troubleshooting-sparse-or-empty-results).
+
 Quick start:
 1. Dashboard → **▶ Start Scan** → select **Self-hosted Search**.
 2. Enter your instance URL, query, and result limit. Deselect other providers if you only want this search.
@@ -182,6 +191,11 @@ Inputs (persisted across opens/restarts):
 - **Run bulk probe after each scan** — optional bulk probe pass for retained results
 
 Start Scan also exposes **Request timeout**, **Short retry**, and **Long retry** tuning sliders.
+
+Query text is passed through with its search operators and quotes intact; quotes
+are not added around it. Zero retained directories can mean irrelevant search
+hits were filtered out, not that the engine returned nothing. Upstream throttling
+reported inside either backend's JSON response uses the bounded retry/pacing policy.
 
 What happens during a run:
 - **Start Scan** executes the query, keeps only confirmed open-index results, and updates status with fetched/stored counts. Each fetched page is stored, classified, filtered, and optionally probed before the next page request. That work consumes the active pacing window; Dirracuda sleeps only for any time left over. Fetching deduplicates normalized URLs and stops at the requested unique-result count, 40 SearXNG pages or 10 DeGoog pages, or the first clean empty page. Temporary per-engine failures are advisory when a page still returns results, with 10/20/30-second soft backoff until a clean page resets normal pacing. An empty throttled page triggers a hard retry: early runs (fewer than 5 productive pages and fewer than 50 unique URLs) allow two retries (default 30 seconds, then 180 seconds); mature runs allow one (default 30 seconds only). Direct aggregator HTTP 429 responses use the same run-wide retry budget and honor a valid bounded `Retry-After`. Completed pages remain available if a later request fails, and partial runs still reach primary-DB sync. The 1,000-result setting is a ceiling, not a guarantee. If probe is enabled, Live Scan Output also reports probe progress and totals. On completion, retained search rows are auto-synced into main HTTP server surfaces. A standalone run shows a result popup, while Live Scan Output keeps the full rollup. In a multi-provider Start Scan run, the popup is suppressed while the serial provider queue continues.

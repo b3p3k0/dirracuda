@@ -29,11 +29,48 @@ their existing names for compatibility.
 
 DeGoog uses native JSON without a compatibility toggle. API-key authentication
 is not supported by this integration. Both transports keep TLS certificate
-verification enabled. DeGoog does not expose SearXNG's `unresponsive_engines`
-contract; direct HTTP 429 responses still use the shared retry policy.
+verification enabled. SearXNG's `unresponsive_engines` and DeGoog's
+`engineTimings` (`rate_limited` or HTTP status 429) both feed the shared bounded
+retry/pacing policy, including HTTP-200 responses. Direct HTTP 429 handling is
+unchanged. Timing values such as 429 ms are not treated as HTTP status codes.
+
+Queries remain text through Apply, the scan form, and RunOptions; only surrounding
+whitespace is trimmed. `backends.search_url()` URL-encodes `q` once. It does not
+wrap the query in extra quotes or strip intentional phrase syntax. Browser engine
+selections can differ from an instance's API defaults, so compare engine metadata
+as well as query text when troubleshooting.
 
 References: [DeGoog API](https://degoog-org.github.io/docs/api.html),
 [SearXNG API](https://docs.searxng.org/dev/search_api.html).
+
+## Troubleshooting sparse or empty results
+
+A reachable instance does not guarantee working upstream search engines. Result
+counts and relevance depend on the enabled engines, their indexes, query syntax,
+and upstream restrictions. Shipped dorks are starting points to explore and adapt.
+
+1. Run the exact query in the same instance's browser interface, preserving
+   quotes and punctuation. If both searches are sparse, check the backend's
+   engine errors and server logs for HTTP 429, CAPTCHA, access denial, or timeouts.
+   Allow cooldown or resolve the reported backend problem before retrying.
+2. Compare the engines supplying browser results with the API's enabled engines.
+   Browser preferences can differ from API defaults. A page of unrelated results
+   from one surviving engine does not mean the other engines are working.
+3. Review **Live Scan Output** for fetched and retained counts. Dirracuda keeps
+   confirmed open indexes; ordinary pages, stale links, or inaccessible results
+   can leave no retained directories even when the search returned hits.
+4. Once engines are working, try a broader query or change one operator at a
+   time. Quotes affect phrase matching, and operator support varies by engine.
+   Keep useful variants as custom dorks; Dirracuda preserves intentional quotes.
+
+For API diagnostics, SearXNG reports per-engine failures in
+`unresponsive_engines`; DeGoog reports them in `engineTimings`. An HTTP-200 search
+response can still contain upstream failures. Check these fields alongside the
+result list, rather than treating HTTP success as proof of a healthy search.
+
+The [SearXNG search API](https://docs.searxng.org/dev/search_api.html) explains
+engine-specific query syntax; the [DeGoog API guide](https://degoog-org.github.io/docs/api.html)
+documents engine selection for API requests.
 
 ## Runtime tables and pacing
 

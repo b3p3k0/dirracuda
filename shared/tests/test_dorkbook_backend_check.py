@@ -54,7 +54,9 @@ def run_check(monkeypatch, tmp_path):
 def test_healthy_empty_results_are_not_a_yield_failure(run_check):
     result, report, calls = run_check({"results": [], "unresponsive_engines": []})
     assert result == 0
-    assert [check["status"] for check in report["checks"]] == ["PASS", "PASS"]
+    assert [check["status"] for check in report["checks"]] == ["API_OK", "API_OK"]
+    assert all(check["yield"] == "EMPTY" for check in report["checks"])
+    assert report["coverage_complete"] is True
     assert [check["page"] for check in report["checks"]] == [1, 2]
     assert len(calls) == 2
 
@@ -81,7 +83,7 @@ def test_degoog_normalization_records_engines_without_target_urls(run_check):
 def test_engine_errors_cannot_be_reported_as_success(run_check, degoog, payload):
     result, report, _calls = run_check(payload, degoog=degoog)
     assert result == 1
-    assert report["checks"][0]["status"] != "PASS"
+    assert report["checks"][0]["status"] != "API_OK"
     assert report["checks"][0]["engine_errors"]
 
 
@@ -99,6 +101,8 @@ def test_upstream_limits_stop_before_next_query_or_page(run_check, degoog, paylo
     assert result == 1
     assert report["checks"][0]["status"] == "UPSTREAM_LIMITED"
     assert len(calls) == len(report["checks"]) == 1
+    assert report["coverage_complete"] is False
+    assert len(report["remaining_checks"]) == 1
 
 
 def test_http_limit_records_retry_after_and_stops(run_check):
@@ -130,7 +134,7 @@ def test_malformed_payload_is_recorded_instead_of_crashing(run_check, degoog, pa
 def test_optional_null_metadata_does_not_crash(run_check, degoog, payload):
     result, report, _calls = run_check(payload, degoog=degoog)
     assert result == 0
-    assert report["checks"][0]["status"] == "PASS"
+    assert report["checks"][0]["status"] == "API_OK"
     assert report["checks"][0]["engine_errors"] == []
 
 
@@ -144,3 +148,51 @@ def test_cli_confirmation_is_required_before_network_access(monkeypatch, tmp_pat
     with pytest.raises(SystemExit) as exc:
         checker.main()
     assert exc.value.code == 2
+
+
+def test_representative_selection_uses_keys_not_quoted_syntax(monkeypatch):
+    monkeypatch.setattr(checker, "DEFAULT_BUILTIN_DORKS", [SimpleNamespace(
+        provider="self_hosted", topic="Books", builtin_key="builtin_self_hosted_epub",
+        query="intitle:Index of / .epub",
+    )])
+    cases = checker.catalog_cases()
+    assert cases[0]["key"] == "builtin_self_hosted_epub"
+
+
+def test_unquoted_comparison_is_explicit_and_keeps_shipped_query(monkeypatch):
+    query = 'intitle:"Index of /" "music"'
+    dork = SimpleNamespace(provider="self_hosted", topic="Music", builtin_key="music", query=query)
+    monkeypatch.setattr(checker, "DEFAULT_BUILTIN_DORKS", [dork])
+    cases = checker.catalog_cases(all_dorks=True, compare_unquoted=True)
+    assert cases[0]["query"] == query
+    assert cases[1]["query"] == "intitle:Index of / music"
+    assert cases[1]["variant"] == "unquoted_candidate"
+    assert dork.query == query
+
+
+def test_title_clues_are_reported_separately_from_api_success(run_check):
+    _, report, _ = run_check({"results": [
+        {"title": "Index of /books/"}, {"title": "Refractive index"},
+        {"title": "Directory listing for /"}, {"title": None},
+    ]})
+    check = report["checks"][0]
+    assert check["status"] == "API_OK"
+    assert check["results"] == 4
+    assert check["directory_title_clues"] == 2
+    assert check["yield"] == "DIRECTORY_TITLE_CLUES"
+
+
+def test_elapsed_time_429_is_not_mistaken_for_rate_limiting(run_check):
+    _, report, calls = run_check({"results": [], "engineTimings": [
+        {"name": "Brave", "status": "error", "time": 429, "errorReason": "timeout"},
+    ]}, degoog=True)
+    assert report["checks"][0]["status"] == "UPSTREAM_ERROR"
+    assert len(calls) == 2
+
+
+def test_http_status_in_engine_metadata_is_enough_to_stop(run_check):
+    _, report, calls = run_check({"results": [], "engineTimings": [
+        {"name": "Brave", "httpStatus": 429},
+    ]}, degoog=True)
+    assert report["checks"][0]["status"] == "UPSTREAM_LIMITED"
+    assert len(calls) == 1

@@ -215,8 +215,8 @@ def _throttle_engines(payload: dict) -> tuple[str, ...]:
     """Extract engines reporting upstream blocking from a Search response."""
     raw_entries = payload.get("unresponsive_engines")
     if not raw_entries:
-        return ()
-    if isinstance(raw_entries, dict):
+        entries = []
+    elif isinstance(raw_entries, dict):
         entries = list(raw_entries.items())
     elif isinstance(raw_entries, (list, tuple)):
         entries = list(raw_entries)
@@ -245,6 +245,23 @@ def _throttle_engines(payload: dict) -> tuple[str, ...]:
         normalized = detail.lower()
         if any(marker in normalized for marker in _THROTTLE_MARKERS):
             label = engine or "unknown"
+            if label not in engines:
+                engines.append(label)
+
+    # DeGoog can return HTTP 200 with no results while its upstream engines
+    # report 429 in engineTimings. Feed that signal into the same bounded retry
+    # policy; searching all timing values would misread e.g. elapsedMs=429.
+    timings = payload.get("engineTimings")
+    if isinstance(timings, list):
+        for timing in timings:
+            if not isinstance(timing, dict):
+                continue
+            status = timing.get("status")
+            rate_limited = isinstance(status, str) and status.lower() == "rate_limited"
+            if not rate_limited and timing.get("httpStatus") not in (429, "429"):
+                continue
+            label = next((value.strip() for key in ("engine", "name", "source")
+                          if isinstance(value := timing.get(key), str) and value.strip()), "unknown")
             if label not in engines:
                 engines.append(label)
     return tuple(engines)
