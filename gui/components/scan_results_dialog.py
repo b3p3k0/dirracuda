@@ -19,6 +19,7 @@ from gui.utils import safe_messagebox as messagebox
 from gui.utils.style import get_theme
 from gui.utils.background_windows import show_background_window
 from gui.utils.window_positions import remember_window_position
+from gui.utils.scrollable_body import ScrollableBody, wrap_label
 from gui.utils.keybindings import add_shortcut_hint, bind_close_shortcuts, bind_submit_shortcuts
 
 
@@ -132,21 +133,21 @@ class ScanResultsDialog:
         self.dialog = tk.Toplevel(self.parent)
         self.dialog.withdraw()
         self.dialog.title("Scan Results")
-        self.dialog.geometry("600x625")
+        self.dialog.geometry("575x725")
         self.dialog.minsize(500, 400)
         
         # Apply theme
         self.theme.apply_to_widget(self.dialog, "main_window")
         
-        # Center dialog
-        self._center_dialog()
-        remember_window_position(self.dialog, "scan_results")
-        
-        # Build UI based on scan status
+        # Reserve actions before allocating the remaining space to the body.
+        self._create_button_panel()
+        self.body = ScrollableBody(self.dialog)
+        self.body.pack(fill=tk.BOTH, expand=True)
         self._create_header()
         self._create_summary_section()
         self._create_details_section()
-        self._create_button_panel()
+        self._center_dialog()
+        remember_window_position(self.dialog, "scan_results")
         
         # Setup event handlers
         self._setup_event_handlers()
@@ -158,14 +159,14 @@ class ScanResultsDialog:
         self.dialog.update_idletasks()
         
         # Get parent position and size
-        parent_x = self.parent.winfo_x()
-        parent_y = self.parent.winfo_y()
+        parent_x = self.parent.winfo_rootx()
+        parent_y = self.parent.winfo_rooty()
         parent_width = self.parent.winfo_width()
         parent_height = self.parent.winfo_height()
         
         # Calculate center position
-        width = self.dialog.winfo_width()
-        height = self.dialog.winfo_height()
+        # A withdrawn Toplevel still reports provisional 1x1 dimensions.
+        width, height = 575, 725
         x = parent_x + (parent_width // 2) - (width // 2)
         y = parent_y + (parent_height // 2) - (height // 2)
         
@@ -173,7 +174,7 @@ class ScanResultsDialog:
     
     def _create_header(self) -> None:
         """Create dialog header with status-appropriate title and icon."""
-        header_frame = tk.Frame(self.dialog)
+        header_frame = tk.Frame(self.body.content)
         self.theme.apply_to_widget(header_frame, "main_window")
         header_frame.pack(fill=tk.X, padx=20, pady=(20, 10))
         
@@ -204,7 +205,7 @@ class ScanResultsDialog:
         # Icon and title
         title_container = tk.Frame(header_frame)
         self.theme.apply_to_widget(title_container, "main_window")
-        title_container.pack(anchor="w")
+        title_container.pack(fill=tk.X)
         
         icon_label = self.theme.create_styled_label(
             title_container,
@@ -220,6 +221,7 @@ class ScanResultsDialog:
             fg=title_color
         )
         title_label.pack(side=tk.LEFT)
+        wrap_label(title_label, title_container, padding=55)
         
         # Subtitle
         subtitle_label = self.theme.create_styled_label(
@@ -229,10 +231,11 @@ class ScanResultsDialog:
             fg=self.theme.colors["text_secondary"]
         )
         subtitle_label.pack(anchor="w", pady=(5, 0))
+        wrap_label(subtitle_label, header_frame)
     
     def _create_summary_section(self) -> None:
         """Create scan summary statistics section."""
-        summary_frame = tk.Frame(self.dialog)
+        summary_frame = tk.Frame(self.body.content)
         self.theme.apply_to_widget(summary_frame, "card")
         summary_frame.pack(fill=tk.X, padx=20, pady=10)
         
@@ -251,7 +254,7 @@ class ScanResultsDialog:
         
         # Configure grid
         for i in range(2):
-            stats_frame.columnconfigure(i, weight=1)
+            stats_frame.columnconfigure(i, weight=1, uniform="stat")
         
         # Extract statistics
         duration = self._format_duration()
@@ -278,7 +281,7 @@ class ScanResultsDialog:
             
             stat_frame = tk.Frame(stats_frame)
             self.theme.apply_to_widget(stat_frame, "card")
-            stat_frame.grid(row=row, column=col, sticky="w", padx=10, pady=2)
+            stat_frame.grid(row=row, column=col, sticky="ew", padx=10, pady=2)
             
             label_widget = self.theme.create_styled_label(
                 stat_frame,
@@ -287,6 +290,7 @@ class ScanResultsDialog:
                 fg=self.theme.colors["text_secondary"]
             )
             label_widget.pack(anchor="w")
+            wrap_label(label_widget, stat_frame)
             
             value_widget = self.theme.create_styled_label(
                 stat_frame,
@@ -294,10 +298,11 @@ class ScanResultsDialog:
                 "body"
             )
             value_widget.pack(anchor="w")
+            wrap_label(value_widget, stat_frame)
     
     def _create_details_section(self) -> None:
         """Create details section with status-specific information."""
-        details_frame = tk.Frame(self.dialog)
+        details_frame = tk.Frame(self.body.content)
         self.theme.apply_to_widget(details_frame, "card")
         details_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 10))
         
@@ -362,6 +367,7 @@ class ScanResultsDialog:
             wraplength=500
         )
         details_label.pack(anchor="w", padx=15, pady=(0, 15))
+        wrap_label(details_label, parent, padding=30)
     
     def _create_interruption_details(self, parent: tk.Widget) -> None:
         """Create details for interrupted scan."""
@@ -388,6 +394,7 @@ class ScanResultsDialog:
             wraplength=500
         )
         details_label.pack(anchor="w", padx=15, pady=(0, 15))
+        wrap_label(details_label, parent, padding=30)
     
     def _create_error_details(self, parent: tk.Widget) -> None:
         """Create details for failed scan."""
@@ -437,6 +444,7 @@ class ScanResultsDialog:
             wraplength=500
         )
         details_label.pack(anchor="w", padx=15, pady=(0, 15))
+        wrap_label(details_label, parent, padding=30)
     
     def _create_unknown_details(self, parent: tk.Widget) -> None:
         """Create details for unknown status."""
@@ -453,12 +461,13 @@ class ScanResultsDialog:
             wraplength=500
         )
         details_label.pack(anchor="w", padx=15, pady=(0, 15))
+        wrap_label(details_label, parent, padding=30)
     
     def _create_button_panel(self) -> None:
         """Create dialog button panel with context-appropriate options."""
         button_frame = tk.Frame(self.dialog)
         self.theme.apply_to_widget(button_frame, "main_window")
-        button_frame.pack(fill=tk.X, padx=20, pady=(10, 20))
+        button_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=20, pady=(10, 20))
 
         add_shortcut_hint(
             button_frame,

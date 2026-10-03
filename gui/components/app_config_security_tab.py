@@ -1,6 +1,7 @@
 """Security tab card builders extracted from AppConfigDialog (C6B)."""
 
 import sys
+from gui.utils.scrollable_body import wrap_label
 import tkinter as tk
 
 from gui.utils import safe_messagebox as messagebox  # noqa: F401 — keep for satellite discipline
@@ -87,6 +88,7 @@ def create_http_tls_card(dialog, security_tab) -> None:
         fg=dialog.theme.colors["text_secondary"],
     )
     note.pack(anchor=tk.W, padx=12, pady=(0, 10))
+    wrap_label(note, card, padding=24)
 
 
 def create_clamav_card(dialog, security_tab) -> None:

@@ -13,6 +13,7 @@ placement would load impacket at import time.
 from __future__ import annotations
 
 import threading
+from gui.utils.scrollable_body import flow_row
 import tkinter as tk
 from tkinter import ttk
 from pathlib import Path
@@ -152,7 +153,7 @@ class UnifiedBrowserCore:
             self.btn_cancel,
         ):
             btn.pack(side=tk.LEFT, padx=5)
-        self._add_shortcut_hint(button_frame)
+        self._add_shortcut_hint(self.window)
 
         # Download tuning strip (FTP/HTTP; SMB overrides _build_window entirely)
         tuning_frame = tk.Frame(self.window)
@@ -204,6 +205,8 @@ class UnifiedBrowserCore:
                 text="(HTTP large-file split not active in this version)",
             ).pack(side=tk.LEFT, padx=(6, 0))
 
+        flow_row(tuning_frame)
+
         # Treeview (protocol-specific columns via adapter hook)
         tree_frame = tk.Frame(self.window)
         tree_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 5))
@@ -216,7 +219,7 @@ class UnifiedBrowserCore:
         status_label = tk.Label(
             self.window, textvariable=self.status_var, anchor="w"
         )
-        status_label.pack(fill=tk.X, padx=10, pady=(0, 5))
+        status_label.pack(side=tk.BOTTOM, before=tree_frame, fill=tk.X, padx=10, pady=(0, 5))
         if self.theme:
             self.theme.apply_theme_to_application(self.window)
 

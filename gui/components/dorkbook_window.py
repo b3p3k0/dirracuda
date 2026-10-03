@@ -14,6 +14,7 @@ from gui.components.dorkbook_events import broadcast_applied
 from gui.utils import safe_messagebox as messagebox
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.session_flags import DORKBOOK_DELETE_CONFIRM_MUTE_KEY, get_flag, set_flag
+from gui.utils.scrollable_body import ScrollableBody, flow_row
 from gui.utils.style import get_theme
 
 _WINDOW_INSTANCE = None
@@ -74,9 +75,9 @@ class _EntryEditorDialog:
         self.dialog.grab_set()
         self.theme.apply_to_widget(self.dialog, "main_window")
 
-        outer = tk.Frame(self.dialog)
-        self.theme.apply_to_widget(outer, "main_window")
-        outer.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
+        body = ScrollableBody(self.dialog)
+        body.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
+        outer = body.content
 
         metadata = tk.Frame(outer)
         self.theme.apply_to_widget(metadata, "main_window")
@@ -97,6 +98,7 @@ class _EntryEditorDialog:
             entry.pack(side=tk.LEFT, padx=(0, 10))
             if label == "Protocol":
                 self.protocol_entry = entry
+        flow_row(metadata)
         self._editing = editing
         self.provider_var.trace_add("write", lambda *_: self._sync_protocol())
         self._sync_protocol()
@@ -143,9 +145,9 @@ class _EntryEditorDialog:
         error_label.configure(fg=self.theme.colors["error"])
         error_label.pack(fill=tk.X, pady=(0, 6))
 
-        btn_row = tk.Frame(outer)
+        btn_row = tk.Frame(self.dialog)
         self.theme.apply_to_widget(btn_row, "main_window")
-        btn_row.pack(fill=tk.X)
+        btn_row.pack(side=tk.BOTTOM, before=body, fill=tk.X, padx=12, pady=10)
 
         save_btn = tk.Button(btn_row, text="Save", command=self._on_save)
         self.theme.apply_to_widget(save_btn, "button_primary")
@@ -328,6 +330,8 @@ class DorkbookWindow:
                                    ("query", "Query preview", 420), ("default", "Default", 70)):
             self.tree.heading(name, text=title)
             self.tree.column(name, width=width, minwidth=60, stretch=name == "query")
+        from gui.utils.scrollable_body import fit_tree_headings
+        fit_tree_headings(self.tree)
         self._builtin_font = tkfont.Font(family=self.theme.fonts["body"][0], size=self.theme.fonts["body"][1], slant="italic")
         self.tree.tag_configure("builtin", font=self._builtin_font)
         scrollbar = ttk.Scrollbar(table, orient=tk.VERTICAL, command=self.tree.yview)
@@ -337,14 +341,16 @@ class DorkbookWindow:
         self.tree.bind("<<TreeviewSelect>>", self._on_selection_changed)
         self.tree.bind("<Double-1>", self._on_tree_double_click)
         self.tree.bind("<Button-3>", self._on_right_click)
-        self._label(outer, text="Selected Dork", anchor="w").pack(fill=tk.X, pady=(10, 3))
-        self.preview = tk.Text(outer, height=6, wrap=tk.WORD)
+        footer = self._frame(outer)
+        footer.pack(side=tk.BOTTOM, before=table, fill=tk.X)
+        self._label(footer, text="Selected Dork", anchor="w").pack(fill=tk.X, pady=(10, 3))
+        self.preview = tk.Text(footer, height=6, wrap=tk.WORD)
         self.theme.apply_to_widget(self.preview, "text")
         self.preview.pack(fill=tk.X)
         self.preview.configure(state=tk.DISABLED)
         self.status_var = tk.StringVar(value="")
-        self._label(outer, textvariable=self.status_var, anchor="w").pack(fill=tk.X, pady=6)
-        actions = self._frame(outer)
+        self._label(footer, textvariable=self.status_var, anchor="w").pack(fill=tk.X, pady=6)
+        actions = self._frame(footer)
         actions.pack(fill=tk.X)
         self.buttons = {}
         for label, command in (("Add Dork", self._on_add), ("Edit Dork", self._on_edit),

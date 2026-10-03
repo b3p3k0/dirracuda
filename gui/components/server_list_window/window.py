@@ -5,6 +5,7 @@ Orchestrates all server list functionality using extracted modules.
 Maintains all shared state and coordinates between components.
 """
 
+from gui.utils.scrollable_body import flow_row
 import tkinter as tk
 from tkinter import ttk, filedialog, simpledialog
 from gui.utils import safe_messagebox as messagebox
@@ -233,7 +234,9 @@ class ServerListWindow(ServerListWindowActionsMixin):
         """Create the server list window."""
         self.window = tk.Toplevel(self.parent)
         self.window.title("Server List Browser")
-        self.window.geometry("1500x1000")
+        width = min(1500, self.window.winfo_screenwidth() - 40)
+        height = min(1000, self.window.winfo_screenheight() - 60)
+        self.window.geometry(f"{width}x{height}")
         self.window.minsize(800, 500)
 
         # Apply theme
@@ -766,12 +769,12 @@ class ServerListWindow(ServerListWindowActionsMixin):
         """Create bottom button panel with actions."""
         self.button_frame = tk.Frame(self.window)
         self.theme.apply_to_widget(self.button_frame, "main_window")
-        self.button_frame.pack(fill=tk.X, padx=10, pady=(5, 10))
+        self.button_frame.pack(side=tk.BOTTOM, before=self.table_frame, fill=tk.X, padx=10, pady=(5, 10))
 
         # Left side - selection + status info
         info_container = tk.Frame(self.button_frame)
         self.theme.apply_to_widget(info_container, "main_window")
-        info_container.pack(side=tk.LEFT, anchor="w")
+        info_container.pack(fill=tk.X)
 
         self.selection_label = self.theme.create_styled_label(
             info_container,
@@ -797,7 +800,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
         # Right side - action buttons
         button_container = tk.Frame(self.button_frame)
         self.theme.apply_to_widget(button_container, "main_window")
-        button_container.pack(side=tk.RIGHT)
+        button_container.pack(fill=tk.X)
 
         # Batch/quick action buttons
         self.details_button = tk.Button(
@@ -864,6 +867,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
         )
         self.theme.apply_to_widget(self.running_tasks_button, "button_secondary")
         self.running_tasks_button.pack(side=tk.LEFT, padx=(0, 20))
+        flow_row(button_container)
         self._initialize_running_tasks_button()
 
         self._update_action_buttons_state()

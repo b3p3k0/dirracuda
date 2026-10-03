@@ -30,6 +30,7 @@ import: this module -> pattern manager; the pattern manager never imports this o
 from __future__ import annotations
 
 import uuid
+from gui.utils.scrollable_body import flow_row
 import tkinter as tk
 from typing import List, Optional
 
@@ -123,6 +124,7 @@ def build_category_action_row(tab, parent: tk.Widget) -> None:
     delete_btn = tk.Button(row, text="Delete", command=tab._on_category_delete)
     tab._theme.apply_to_widget(delete_btn, "button_danger")
     delete_btn.pack(side=tk.LEFT)
+    flow_row(row)
 
 
 # ----------------------------------------------------------------------

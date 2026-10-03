@@ -13,6 +13,7 @@ missing rather than letting a run fail later.
 
 from __future__ import annotations
 
+from gui.utils.scrollable_body import wrap_label
 import tkinter as tk
 from tkinter import ttk
 from typing import Callable
@@ -105,6 +106,7 @@ class ProfileEditorDialog:
         )
         self._theme.apply_to_widget(heading, "label")
         heading.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        wrap_label(heading, outer, padding=32)
 
         self._listbox = tk.Listbox(outer, height=10, exportselection=False)
         self._theme.apply_to_widget(self._listbox, "listbox")

@@ -18,6 +18,7 @@ from tkinter import ttk, filedialog
 from gui.utils import safe_messagebox as messagebox
 from typing import Callable, Optional
 
+from gui.utils.scrollable_body import ScrollableBody
 from gui.utils.style import get_theme
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.keybindings import add_shortcut_hint, bind_close_shortcuts
@@ -119,10 +120,10 @@ class DBToolsDialog:
         bind_close_shortcuts(self.dialog, self._on_close)
 
         # Create layout
+        self._create_button_frame()
         self._create_header()
         self._create_notebook()
         self._create_progress_frame()
-        self._create_button_frame()
         self.theme.apply_theme_to_application(self.dialog)
 
         # Center dialog
@@ -175,9 +176,9 @@ class DBToolsDialog:
 
     def _create_import_tab(self) -> None:
         """Create the Import & Merge tab."""
-        tab = tk.Frame(self.notebook)
-        self.theme.apply_to_widget(tab, "main_window")
-        self.notebook.add(tab, text="Import & Merge")
+        body = ScrollableBody(self.notebook)
+        tab = body.content
+        self.notebook.add(body, text="Import & Merge")
 
         # File selection section
         file_frame = tk.LabelFrame(tab, text="External Data Source")
@@ -192,6 +193,7 @@ class DBToolsDialog:
         path_entry = tk.Entry(path_frame, textvariable=self.import_path_var, width=50)
         self.theme.apply_to_widget(path_entry, "entry")
         path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+        path_entry.configure(width=1)
 
         browse_btn = tk.Button(
             path_frame,
@@ -597,9 +599,9 @@ class DBToolsDialog:
 
     def _create_export_tab(self) -> None:
         """Create the Export & Backup tab."""
-        tab = tk.Frame(self.notebook)
-        self.theme.apply_to_widget(tab, "main_window")
-        self.notebook.add(tab, text="Export & Backup")
+        body = ScrollableBody(self.notebook)
+        tab = body.content
+        self.notebook.add(body, text="Export & Backup")
 
         # Export section
         export_frame = tk.LabelFrame(tab, text="Export Database")
@@ -755,9 +757,9 @@ class DBToolsDialog:
 
     def _create_stats_tab(self) -> None:
         """Create the Statistics tab."""
-        tab = tk.Frame(self.notebook)
-        self.theme.apply_to_widget(tab, "main_window")
-        self.notebook.add(tab, text="Statistics")
+        body = ScrollableBody(self.notebook)
+        tab = body.content
+        self.notebook.add(body, text="Statistics")
 
         # Header with refresh button
         header_frame = tk.Frame(tab)
@@ -892,9 +894,9 @@ class DBToolsDialog:
 
     def _create_maintenance_tab(self) -> None:
         """Create the Maintenance tab."""
-        tab = tk.Frame(self.notebook)
-        self.theme.apply_to_widget(tab, "main_window")
-        self.notebook.add(tab, text="Maintenance")
+        body = ScrollableBody(self.notebook)
+        tab = body.content
+        self.notebook.add(body, text="Maintenance")
 
         # Vacuum section
         vacuum_frame = tk.LabelFrame(tab, text="Optimize Database")
@@ -1255,7 +1257,7 @@ class DBToolsDialog:
         """Create button frame."""
         button_frame = tk.Frame(self.dialog)
         self.theme.apply_to_widget(button_frame, "main_window")
-        button_frame.pack(fill=tk.X, padx=20, pady=(0, 20))
+        button_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=20, pady=(0, 20))
 
         add_shortcut_hint(
             button_frame,

@@ -27,6 +27,7 @@ so the existing test patches on that namespace keep intercepting.
 from __future__ import annotations
 
 import dataclasses
+from gui.utils.scrollable_body import flow_row
 import tkinter as tk
 from collections import Counter
 from tkinter import ttk
@@ -291,6 +292,7 @@ def build_filter_row(tab, parent: tk.Widget) -> None:
     clear_btn = tk.Button(row, text="Clear", command=tab._on_clear_filters)
     tab._theme.apply_to_widget(clear_btn, "button_secondary")
     clear_btn.pack(side=tk.LEFT)
+    flow_row(row)
 
 
 def build_category_pane(tab, parent: tk.Widget) -> None:
@@ -512,13 +514,18 @@ def build_table(tab, parent: tk.Widget) -> None:
     for col, (heading, width) in headings.items():
         tree.heading(col, text=heading)
         anchor = "center" if col in ("enabled", "severity", "user_tag", "type") else "w"
-        tree.column(col, width=width, anchor=anchor, stretch=(col == "pattern"))
+        heading_font = ttk.Style(tree).lookup("Treeview.Heading", "font") or "TkHeadingFont"
+        minimum = int(tree.tk.call("font", "measure", heading_font, heading)) + 16
+        tree.column(col, width=max(width, minimum), minwidth=minimum,
+                    anchor=anchor, stretch=(col == "pattern"))
 
     scrollbar = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview)
-    tree.configure(yscrollcommand=scrollbar.set)
+    horizontal = ttk.Scrollbar(table_frame, orient="horizontal", command=tree.xview)
+    tree.configure(yscrollcommand=scrollbar.set, xscrollcommand=horizontal.set)
 
     tree.grid(row=0, column=0, sticky="nsew")
     scrollbar.grid(row=0, column=1, sticky="ns")
+    horizontal.grid(row=1, column=0, sticky="ew")
     table_frame.grid_rowconfigure(0, weight=1)
     table_frame.grid_columnconfigure(0, weight=1)
 
@@ -564,7 +571,7 @@ def open_pattern_manager(tab) -> None:
 
     action_row = tk.Frame(outer)
     tab._theme.apply_to_widget(action_row, "main_window")
-    action_row.pack(anchor="w", pady=(8, 0), fill=tk.X)
+    action_row.pack(side=tk.BOTTOM, before=panes, pady=(8, 0), fill=tk.X)
 
     add_btn = tk.Button(action_row, text="Add", command=tab._on_add)
     tab._theme.apply_to_widget(add_btn, "button_secondary")
@@ -625,6 +632,8 @@ def open_pattern_manager(tab) -> None:
     close_btn = tk.Button(action_row, text="Close", command=tab._close_manager)
     tab._theme.apply_to_widget(close_btn, "button_secondary")
     close_btn.pack(side=tk.LEFT, padx=(0, 6))
+
+    flow_row(action_row)
 
     tab._pattern_manager = dialog
     tab._active_category = _FACET_ALL

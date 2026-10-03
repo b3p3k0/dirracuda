@@ -16,6 +16,7 @@ import json
 import queue
 import threading
 import time
+from gui.utils.scrollable_body import wrap_form_labels, flow_row
 import tkinter as tk
 from tkinter import ttk
 from datetime import datetime
@@ -303,7 +304,7 @@ class SmbBrowserWindow(UnifiedBrowserCore):
 
         for btn in (self.btn_up, self.btn_refresh, self.btn_view, self.btn_download, self.btn_cancel):
             btn.pack(side=tk.LEFT, padx=5)
-        self._add_shortcut_hint(button_frame)
+        self._add_shortcut_hint(self.window)
 
         # Download tuning controls (workers + large threshold)
         tuning_frame = tk.Frame(self.window)
@@ -351,7 +352,7 @@ class SmbBrowserWindow(UnifiedBrowserCore):
 
         self.status_var = tk.StringVar(value="Ready.")
         status = tk.Label(self.window, textvariable=self.status_var, anchor="w")
-        status.pack(fill=tk.X, padx=10, pady=(0, 10))
+        status.pack(side=tk.BOTTOM, before=tree_frame, fill=tk.X, padx=10, pady=(0, 10))
         if self.theme:
             self.theme.apply_theme_to_application(self.window)
 
@@ -682,6 +683,10 @@ class SmbBrowserWindow(UnifiedBrowserCore):
         dialog.protocol("WM_DELETE_WINDOW", on_ok)
         self.theme.apply_theme_to_application(dialog)
         ensure_dialog_focus(dialog, self.window)
+        wrap_form_labels(dialog)
+        dialog.update_idletasks()
+        dialog.geometry(f"{max(450, dialog.winfo_reqwidth())}x{dialog.winfo_reqheight()}")
+        ensure_dialog_focus(dialog, self.window)
         dialog.wait_window()
 
         return result["proceed"]
@@ -732,6 +737,10 @@ class SmbBrowserWindow(UnifiedBrowserCore):
 
         dialog.protocol("WM_DELETE_WINDOW", on_cancel)
         self.theme.apply_theme_to_application(dialog)
+        wrap_form_labels(dialog)
+        dialog.update_idletasks()
+        dialog.geometry(f"{max(450, dialog.winfo_reqwidth())}x{dialog.winfo_reqheight()}")
+        ensure_dialog_focus(dialog, self.window)
         dialog.wait_window()
 
         return result["proceed"]

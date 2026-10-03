@@ -712,6 +712,11 @@ class SMBSeekTheme:
             fieldbackground=self.colors["primary_bg"],
             bordercolor=self.colors["border"],
         )
+        # ttk's default row height is a fixed pixel value even when Tk scales
+        # the font. Reserve the font's line height so rows remain legible.
+        tree_font = style.lookup("Treeview", "font") or "TkDefaultFont"
+        line_height = int(root.tk.call("font", "metrics", tree_font, "-linespace"))
+        _safe_configure("Treeview", rowheight=max(20, line_height + 4))
         _safe_map(
             "Treeview",
             background=[("selected", self.colors["accent"])],

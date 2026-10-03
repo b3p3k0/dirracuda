@@ -120,12 +120,12 @@ def show_batch_summary_dialog(
         )
         if theme:
             theme.apply_to_widget(stats_label, "label")
-        stats_label.pack(pady=(0, 6))
+        stats_label.pack(side=tk.BOTTOM, before=tree_frame, pady=(0, 6))
 
     button_frame = tk.Frame(dialog)
     if theme:
         theme.apply_to_widget(button_frame, "main_window")
-    button_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+    button_frame.pack(side=tk.BOTTOM, before=tree_frame, fill=tk.X, padx=10, pady=(0, 10))
 
     if show_export:
         save_button = tk.Button(

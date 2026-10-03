@@ -82,7 +82,7 @@ class RunningTasksWindow:
         btn_row = tk.Frame(frame)
         if self.theme:
             self.theme.apply_to_widget(btn_row, "main_window")
-        btn_row.pack(fill=tk.X, pady=(4, 0))
+        btn_row.pack(side=tk.BOTTOM, before=self.tree, fill=tk.X, pady=(4, 0))
 
         self._cancel_btn = tk.Button(
             btn_row,
@@ -102,7 +102,7 @@ class RunningTasksWindow:
         )
         if self.theme:
             self.theme.apply_to_widget(self.empty_label, "label")
-        self.empty_label.pack(fill=tk.X, pady=(8, 0))
+        self.empty_label.pack(side=tk.BOTTOM, before=self.tree, fill=tk.X, pady=(8, 0))
 
         if self.theme:
             self.theme.apply_theme_to_application(self.window)

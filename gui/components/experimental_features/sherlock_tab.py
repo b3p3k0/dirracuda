@@ -25,6 +25,7 @@ thin delegating stub methods that drive that dialog; behavior is unchanged.
 
 from __future__ import annotations
 
+from gui.utils.scrollable_body import flow_row
 import tkinter as tk
 from tkinter import ttk
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -258,6 +259,8 @@ class SherlockTab:
                 on_pick=lambda s=sev: self._pick_color(s),
             )
 
+        flow_row(color_row)
+
         # User colors
         self._build_caption(frame, "User colors")
         user_row = tk.Frame(frame)
@@ -273,6 +276,7 @@ class SherlockTab:
                 on_pick=lambda k=key: self._pick_user_color(k),
                 on_clear=lambda k=key: self._clear_user_color(k),
             )
+        flow_row(user_row)
 
         # Patterns
         self._build_caption(frame, "Patterns")

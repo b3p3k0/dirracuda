@@ -183,16 +183,19 @@ def prompt_for_shodan_api_key(dash) -> Optional[str]:
     save_btn = tk.Button(btn_row, text="Save & Continue", command=_save)
     dash.theme.apply_to_widget(save_btn, "button_primary")
     save_btn.pack(side=tk.RIGHT)
-    add_shortcut_hint(
-        btn_row,
+    shortcut_hint = add_shortcut_hint(
+        container,
         dash.theme,
         "Enter save and continue  •  Esc cancel  •  Ctrl/Cmd+S save  •  Esc/Ctrl+W/Cmd+W close",
     )
+    shortcut_hint.configure(wraplength=480)
     bind_submit_shortcuts(dialog, _save)
     bind_save_shortcuts(dialog, _save)
     bind_close_shortcuts(dialog, _cancel)
     key_entry.focus_set()
 
+    dialog.update_idletasks()
+    dialog.geometry(f"540x{max(220, dialog.winfo_reqheight())}")
     ensure_dialog_focus(dialog, dash.parent)
     dialog.protocol("WM_DELETE_WINDOW", _cancel)
     dash.parent.wait_window(dialog)

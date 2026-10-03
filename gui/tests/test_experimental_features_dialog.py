@@ -299,6 +299,7 @@ def test_dialog_title_is_set_from_constant(monkeypatch):
     """_build() must call dialog.title() with _DIALOG_TITLE, not a hardcoded string."""
     from gui.components.experimental_features_dialog import ExperimentalFeaturesDialog, _DIALOG_TITLE
 
+    monkeypatch.setattr("gui.components.experimental_features_dialog.ScrollableBody", lambda *_a: MagicMock())
     captured_title = []
 
     class _FakeToplevel:
@@ -366,6 +367,9 @@ def _patch_warning_tk(monkeypatch):
             self.args = args
             self.kwargs = kwargs
             self.pack_calls = []
+
+        def bind(self, *args, **kwargs):
+            return None
 
         def pack(self, *args, **kwargs):
             self.pack_calls.append((args, kwargs))

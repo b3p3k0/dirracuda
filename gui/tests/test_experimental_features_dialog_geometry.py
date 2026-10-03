@@ -13,7 +13,7 @@ def test_accessories_dialog_default_width_allows_sherlock_user_colors(monkeypatc
 
     class _FakeWidget:
         def __init__(self, *args, **kwargs):
-            pass
+            self.content = self
 
         def pack(self, *args, **kwargs):
             pass
@@ -40,6 +40,7 @@ def test_accessories_dialog_default_width_allows_sherlock_user_colors(monkeypatc
         def winfo_exists(self):
             return True
 
+    monkeypatch.setattr(dialog_mod, "ScrollableBody", _FakeWidget)
     monkeypatch.setattr(dialog_mod.tk, "Toplevel", _FakeToplevel)
     monkeypatch.setattr(dialog_mod.tk, "Frame", _FakeWidget)
     monkeypatch.setattr(dialog_mod.tk, "Button", _FakeWidget)

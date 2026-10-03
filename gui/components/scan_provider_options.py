@@ -6,6 +6,7 @@ production-code limit while SearXNG and Reddit option panels are both present.
 from __future__ import annotations
 
 import math
+from gui.utils.scrollable_body import wrap_label
 import tkinter as tk
 from typing import Any, Callable, Dict
 
@@ -164,6 +165,7 @@ def build_searxng_sub_panel(
     )
     hint = _small_label(frame, _hint_text, theme)
     hint.grid(row=hint_row, column=0, columnspan=3, sticky="w", pady=0)
+    wrap_label(hint, frame, padding=12)
     frame._helper_label = hint  # type: ignore[attr-defined]
     frame._searxng_instance_entry = instance_entry  # type: ignore[attr-defined]
     frame._searxng_query_entry = query_entry  # type: ignore[attr-defined]

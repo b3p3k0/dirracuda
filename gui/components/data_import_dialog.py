@@ -10,6 +10,7 @@ validation feedback before committing changes to the database.
 
 import tkinter as tk
 from tkinter import ttk, filedialog
+from gui.utils.scrollable_body import ScrollableBody
 from gui.utils import safe_messagebox as messagebox
 from typing import Dict, List, Any, Optional, Callable
 import os
@@ -98,12 +99,14 @@ class DataImportDialog:
         self.dialog.grab_set()
         
         # Create main layout
+        self._create_button_panel()
+        self.body = ScrollableBody(self.dialog)
+        self.body.pack(fill=tk.BOTH, expand=True)
         self._create_header()
         self._create_file_selection()
         self._create_options_panel()
         self._create_preview_panel()
         self._create_validation_panel()
-        self._create_button_panel()
         
         # Setup event handlers
         self._setup_event_handlers()
@@ -120,7 +123,7 @@ class DataImportDialog:
 
     def _create_header(self) -> None:
         """Create dialog header with title and description."""
-        header_frame = tk.Frame(self.dialog)
+        header_frame = tk.Frame(self.body.content)
         header_frame.pack(fill=tk.X, padx=20, pady=10)
         
         title_label = self.theme.create_styled_label(
@@ -139,7 +142,7 @@ class DataImportDialog:
     
     def _create_file_selection(self) -> None:
         """Create file selection section."""
-        file_frame = tk.LabelFrame(self.dialog, text="File Selection")
+        file_frame = tk.LabelFrame(self.body.content, text="File Selection")
         file_frame.pack(fill=tk.X, padx=20, pady=(0, 10))
         
         # File path entry and browse button
@@ -148,7 +151,7 @@ class DataImportDialog:
         
         tk.Label(path_frame, text="Import File:").pack(side=tk.LEFT)
         
-        file_entry = tk.Entry(path_frame, textvariable=self.file_path_var, width=50)
+        file_entry = tk.Entry(path_frame, textvariable=self.file_path_var, width=1)
         file_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(10, 5))
         
         browse_button = tk.Button(
@@ -169,7 +172,7 @@ class DataImportDialog:
     
     def _create_options_panel(self) -> None:
         """Create import options panel."""
-        options_frame = tk.LabelFrame(self.dialog, text="Import Options")
+        options_frame = tk.LabelFrame(self.body.content, text="Import Options")
         options_frame.pack(fill=tk.X, padx=20, pady=(0, 10))
         
         inner_frame = tk.Frame(options_frame)
@@ -213,7 +216,7 @@ class DataImportDialog:
     
     def _create_preview_panel(self) -> None:
         """Create data preview panel."""
-        preview_frame = tk.LabelFrame(self.dialog, text="Data Preview")
+        preview_frame = tk.LabelFrame(self.body.content, text="Data Preview")
         preview_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 10))
         
         # Preview tree
@@ -245,7 +248,7 @@ class DataImportDialog:
     
     def _create_validation_panel(self) -> None:
         """Create validation results panel."""
-        validation_frame = tk.LabelFrame(self.dialog, text="Validation Results")
+        validation_frame = tk.LabelFrame(self.body.content, text="Validation Results")
         validation_frame.pack(fill=tk.X, padx=20, pady=(0, 10))
         
         # Validation text widget
@@ -262,7 +265,7 @@ class DataImportDialog:
     def _create_button_panel(self) -> None:
         """Create dialog button panel."""
         button_frame = tk.Frame(self.dialog)
-        button_frame.pack(fill=tk.X, padx=20, pady=10)
+        button_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=20, pady=10)
         
         # Preview button
         preview_button = tk.Button(

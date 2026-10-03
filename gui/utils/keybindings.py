@@ -240,5 +240,7 @@ def add_shortcut_hint(parent: tk.Widget, theme: Any, text: str) -> tk.Label:
             label.configure(fg=theme.colors.get("text_secondary", label.cget("fg")))
         except Exception:
             pass
-    label.pack(anchor="w")
+    label.pack(fill=tk.X)
+    from gui.utils.scrollable_body import wrap_label
+    wrap_label(label, frame)
     return label

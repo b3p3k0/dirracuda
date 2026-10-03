@@ -9,6 +9,7 @@ Design: Compact two-column layout covering FTP-specific parameters
 Uses the same region map and country validation logic as ScanDialog.
 """
 
+from gui.utils.scrollable_body import wrap_form_labels
 import tkinter as tk
 from tkinter import ttk, simpledialog
 from gui.utils import safe_messagebox as messagebox
@@ -312,6 +313,8 @@ class FtpScanDialog:
         self.dialog.transient(self.parent)
         self._center_dialog()
 
+        self._create_button_panel()
+
         # Scrollable content
         wrapper = tk.Frame(self.dialog, bg=self.theme.colors["primary_bg"])
         wrapper.pack(fill=tk.BOTH, expand=True)
@@ -327,7 +330,8 @@ class FtpScanDialog:
         self._canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.configure(command=self._canvas.yview)
         self._content = tk.Frame(self._canvas, bg=self.theme.colors["primary_bg"])
-        self._canvas.create_window((0, 0), window=self._content, anchor="nw")
+        content_id = self._canvas.create_window((0, 0), window=self._content, anchor="nw")
+        self._canvas.bind("<Configure>", lambda event: self._canvas.itemconfigure(content_id, width=event.width))
         self._content.bind(
             "<Configure>",
             lambda _e: self._canvas.configure(
@@ -342,7 +346,7 @@ class FtpScanDialog:
         self._create_header()
         self._create_options()
         self._create_config_section()
-        self._create_button_panel()
+        wrap_form_labels(self._content)
 
         self.dialog.protocol("WM_DELETE_WINDOW", self._cancel)
         self.dialog.bind("<Return>", lambda _e: self._start())
@@ -413,6 +417,13 @@ class FtpScanDialog:
         right = tk.Frame(columns)
         self.theme.apply_to_widget(right, "card")
         right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        def arrange_columns(event):
+            stacked = event.width < left.winfo_reqwidth() + right.winfo_reqwidth() + 8
+            side = tk.TOP if stacked else tk.LEFT
+            left.pack_configure(side=side, fill=tk.BOTH, expand=True)
+            right.pack_configure(side=side, fill=tk.BOTH, expand=True)
+        columns.bind("<Configure>", arrange_columns)
 
         # Left column
         self._create_country_option(left)
@@ -1015,7 +1026,7 @@ class FtpScanDialog:
     def _create_button_panel(self) -> None:
         frame = tk.Frame(self.dialog)
         self.theme.apply_to_widget(frame, "main_window")
-        frame.pack(fill=tk.X, padx=20, pady=(5, 15))
+        frame.pack(side=tk.BOTTOM, fill=tk.X, padx=20, pady=(5, 15))
 
         btns = tk.Frame(frame)
         self.theme.apply_to_widget(btns, "main_window")

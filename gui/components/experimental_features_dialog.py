@@ -21,6 +21,7 @@ from tkinter import ttk
 from typing import Any, Optional
 
 from gui.utils.style import get_theme
+from gui.utils.scrollable_body import ScrollableBody, wrap_label
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.keybindings import add_shortcut_hint, bind_close_shortcuts, bind_submit_shortcuts
 
@@ -61,9 +62,9 @@ class ExperimentalFeaturesDialog:
         self._theme.apply_to_widget(dialog, "main_window")
         dialog.transient(parent)
 
-        outer = tk.Frame(dialog)
-        self._theme.apply_to_widget(outer, "main_window")
-        outer.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
+        body = ScrollableBody(dialog)
+        body.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
+        outer = body.content
 
         self._build_warning_section(outer, settings_manager)
 
@@ -83,9 +84,9 @@ class ExperimentalFeaturesDialog:
         }
         build_all_tabs(notebook, tab_context)
 
-        btn_frame = tk.Frame(outer)
+        btn_frame = tk.Frame(dialog)
         self._theme.apply_to_widget(btn_frame, "main_window")
-        btn_frame.pack(fill=tk.X, pady=(8, 0))
+        btn_frame.pack(side=tk.BOTTOM, before=body, fill=tk.X, padx=12, pady=(8, 10))
 
         close_btn = tk.Button(btn_frame, text="Close", command=close)
         self._theme.apply_to_widget(close_btn, "button_secondary")
@@ -131,6 +132,7 @@ class ExperimentalFeaturesDialog:
         )
         self._theme.apply_to_widget(warn_label, "label")
         warn_label.pack(anchor="w", padx=10, pady=(8, 4))
+        wrap_label(warn_label, warn_frame, padding=20)
 
         self.dismiss_var = tk.BooleanVar(value=False)
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from gui.utils.scrollable_body import flow_row
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, ttk
@@ -323,6 +324,7 @@ class AnalystTab:
         )
         self._theme.apply_to_widget(self._delete_btn, "button_danger")
         self._delete_btn.pack(side=tk.LEFT, padx=(0, 7))
+        flow_row(run_controls)
 
         self._status_var = tk.StringVar(value="Ready.")
         status = tk.Label(frame, textvariable=self._status_var, anchor="w")

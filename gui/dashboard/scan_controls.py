@@ -8,6 +8,7 @@ public method names stable while reducing widget.py size.
 import os
 import sys
 import time
+from gui.utils.scrollable_body import flow_row, wrap_label
 import tkinter as tk
 from typing import Any
 
@@ -259,9 +260,11 @@ def _show_stop_confirmation(self) -> None:
         dialog,
         warning_text,
         "body",
+        wraplength=350,
         justify="center"
     )
     warning_label.pack(pady=(0, 20), padx=20)
+    wrap_label(warning_label, dialog, padding=40)
 
     # Progress context (if available)
     current_progress = getattr(self, "current_progress_summary", "")
@@ -277,7 +280,7 @@ def _show_stop_confirmation(self) -> None:
     # Buttons frame
     buttons_frame = tk.Frame(dialog)
     self.theme.apply_to_widget(buttons_frame, "main_window")
-    buttons_frame.pack(pady=20)
+    buttons_frame.pack(side=tk.BOTTOM, before=header_label, fill=tk.X, padx=20, pady=20)
 
     # Stop now button
     stop_now_btn = tk.Button(
@@ -309,6 +312,7 @@ def _show_stop_confirmation(self) -> None:
     # Handle window close
     dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
 
+    flow_row(buttons_frame)
     # Finalize geometry and focus/stacking after content exists.
     dialog.update_idletasks()
     parent_x = self.parent.winfo_x()
@@ -316,7 +320,7 @@ def _show_stop_confirmation(self) -> None:
     parent_w = self.parent.winfo_width()
     parent_h = self.parent.winfo_height()
     dialog_w = dialog.winfo_width()
-    dialog_h = dialog.winfo_height()
+    dialog_h = max(dialog.winfo_height(), dialog.winfo_reqheight())
     x = parent_x + max(0, (parent_w - dialog_w) // 2)
     y = parent_y + max(0, (parent_h - dialog_h) // 2)
     dialog.geometry(f"{dialog_w}x{dialog_h}+{x}+{y}")

@@ -142,7 +142,7 @@ def show_server_detail_popup(parent_window, server_data, theme, settings_manager
         fg=theme.colors["text_secondary"]
     )
     status_label.configure(textvariable=status_var)
-    status_label.pack(pady=(0, 5))
+    status_label.pack(side=tk.BOTTOM, before=text_frame, pady=(0, 5))
 
     # Button frame for Explore and Close buttons
     button_frame = tk.Frame(detail_window)
@@ -162,7 +162,7 @@ def show_server_detail_popup(parent_window, server_data, theme, settings_manager
     notes_frame = tk.Frame(detail_window)
     if theme:
         theme.apply_to_widget(notes_frame, "main_window")
-    notes_frame.pack(fill=tk.X, padx=10, pady=(5, 5))
+    notes_frame.pack(side=tk.BOTTOM, before=text_frame, fill=tk.X, padx=10, pady=(5, 5))
     if theme:
         notes_label = theme.create_styled_label(notes_frame, "Notes:", "body")
     else:
@@ -204,7 +204,7 @@ def show_server_detail_popup(parent_window, server_data, theme, settings_manager
             pass
 
     # Pack button frame after notes section
-    button_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+    button_frame.pack(side=tk.BOTTOM, before=text_frame, fill=tk.X, padx=10, pady=(0, 10))
 
     def _open_browse_window() -> None:
         if host_type == "H":

@@ -721,13 +721,9 @@ class ExtensionEditorDialog:
         main_frame.pack(padx=20, pady=20, fill=tk.BOTH, expand=True)
 
         # Create two-column layout
-        self._create_list_columns(main_frame)
-
-        # Create control buttons
-        self._create_control_buttons(main_frame)
-
-        # Create bottom buttons
         self._create_bottom_buttons(main_frame)
+        self._create_control_buttons(main_frame)
+        self._create_list_columns(main_frame)
 
         # Handle window close
         self.window.protocol("WM_DELETE_WINDOW", self._on_cancel)
@@ -806,11 +802,11 @@ class ExtensionEditorDialog:
     def _create_control_buttons(self, parent: tk.Frame):
         """Create control buttons for list operations."""
         control_frame = tk.Frame(parent)
-        control_frame.pack(fill=tk.X, pady=10)
+        control_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=10)
 
         # Left side buttons (Add, Edit, Remove)
         left_buttons = tk.Frame(control_frame)
-        left_buttons.pack(side=tk.LEFT)
+        left_buttons.pack(side=tk.TOP, anchor="w")
 
         add_btn = tk.Button(left_buttons, text="Add", command=self._on_add, width=10)
         edit_btn = tk.Button(left_buttons, text="Edit", command=self._on_edit, width=10)
@@ -823,7 +819,7 @@ class ExtensionEditorDialog:
 
         # Right side buttons (Move operations)
         right_buttons = tk.Frame(control_frame)
-        right_buttons.pack(side=tk.RIGHT)
+        right_buttons.pack(side=tk.TOP, anchor="w")
 
         move_to_excluded_btn = tk.Button(
             right_buttons,
@@ -846,7 +842,7 @@ class ExtensionEditorDialog:
     def _create_bottom_buttons(self, parent: tk.Frame):
         """Create bottom action buttons."""
         button_frame = tk.Frame(parent)
-        button_frame.pack(fill=tk.X, pady=(10, 0))
+        button_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(10, 0))
 
         # Left side - Reset button
         reset_btn = tk.Button(

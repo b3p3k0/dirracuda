@@ -84,6 +84,8 @@ class FtpServerPickerDialog:
         self.tree.column("country", width=80, minwidth=50)
         self.tree.column("banner", width=240, minwidth=100)
         self.tree.column("last_seen", width=160, minwidth=100)
+        from gui.utils.scrollable_body import fit_tree_headings
+        fit_tree_headings(self.tree)
 
         vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=vsb.set)
@@ -94,7 +96,7 @@ class FtpServerPickerDialog:
 
         # Button row
         btn_frame = tk.Frame(self._dialog)
-        btn_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+        btn_frame.pack(side=tk.BOTTOM, before=tree_frame, fill=tk.X, padx=10, pady=(0, 10))
 
         browse_btn = tk.Button(
             btn_frame, text="Browse Selected", command=self._on_open_browser
@@ -109,7 +111,7 @@ class FtpServerPickerDialog:
         # Status
         self.status_var = tk.StringVar(value="")
         tk.Label(self._dialog, textvariable=self.status_var, anchor="w").pack(
-            fill=tk.X, padx=10, pady=(0, 5)
+            side=tk.BOTTOM, before=btn_frame, fill=tk.X, padx=10, pady=(0, 5)
         )
 
     # ------------------------------------------------------------------

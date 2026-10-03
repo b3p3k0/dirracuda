@@ -233,7 +233,7 @@ def _build_dialog(
     btn_frame = tk.Frame(dialog)
     if theme:
         theme.apply_to_widget(btn_frame, "main_window")
-    btn_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+    btn_frame.pack(side=tk.BOTTOM, before=nb, fill=tk.X, padx=10, pady=(0, 10))
 
     def _on_mute():
         on_mute()

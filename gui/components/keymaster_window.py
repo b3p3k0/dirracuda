@@ -24,6 +24,7 @@ from experimental.keymaster.models import (
 )
 from gui.utils import safe_messagebox as messagebox
 from gui.utils.dialog_helpers import ensure_dialog_focus
+from gui.utils.scrollable_body import ScrollableBody, flow_row, fit_tree_headings
 from gui.utils.style import get_theme
 from shared.config import load_config
 from shared.path_service import get_paths
@@ -155,9 +156,9 @@ class _KeyEditorDialog:
         self.dialog.grab_set()
         self.theme.apply_to_widget(self.dialog, "main_window")
 
-        outer = tk.Frame(self.dialog)
-        self.theme.apply_to_widget(outer, "main_window")
-        outer.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
+        body = ScrollableBody(self.dialog)
+        body.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
+        outer = body.content
 
         label_row = tk.Frame(outer)
         self.theme.apply_to_widget(label_row, "main_window")
@@ -201,9 +202,9 @@ class _KeyEditorDialog:
         error_label.configure(fg=self.theme.colors["error"])
         error_label.pack(fill=tk.X, pady=(0, 6))
 
-        btn_row = tk.Frame(outer)
+        btn_row = tk.Frame(self.dialog)
         self.theme.apply_to_widget(btn_row, "main_window")
-        btn_row.pack(fill=tk.X)
+        btn_row.pack(side=tk.BOTTOM, before=body, fill=tk.X, padx=12, pady=10)
 
         save_btn = tk.Button(btn_row, text="Save", command=self._on_save)
         self.theme.apply_to_widget(save_btn, "button_primary")
@@ -254,6 +255,7 @@ class _SimpleDeleteConfirmDialog:
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("Confirm Delete")
         self.dialog.geometry("460x160")
+        self.dialog.minsize(460, 160)
         self.dialog.resizable(False, False)
         self.dialog.transient(parent)
         self.dialog.grab_set()
@@ -287,6 +289,8 @@ class _SimpleDeleteConfirmDialog:
 
         self.dialog.bind("<Escape>", lambda _e: self._on_cancel())
         self.dialog.protocol("WM_DELETE_WINDOW", self._on_cancel)
+        self.dialog.update_idletasks()
+        self.dialog.geometry(f"460x{max(160, self.dialog.winfo_reqheight())}")
         ensure_dialog_focus(self.dialog, parent)
 
     def _on_confirm(self) -> None:
@@ -698,9 +702,13 @@ class KeymasterWindow:
         search_entry.pack(side=tk.LEFT, padx=(6, 0))
         self._search_var.trace_add("write", lambda *_: self._load_entries())
 
+        security_row = tk.Frame(outer)
+        self.theme.apply_to_widget(security_row, "main_window")
+        security_row.pack(fill=tk.X, pady=(0, 6))
+
         self._secure_mode_var = tk.BooleanVar(value=True)
         secure_mode_cb = tk.Checkbutton(
-            search_row,
+            security_row,
             text="Secure storage",
             variable=self._secure_mode_var,
         )
@@ -708,12 +716,12 @@ class KeymasterWindow:
         secure_mode_cb.pack(side=tk.RIGHT, padx=(6, 0))
         self._secure_mode_var.trace_add("write", lambda *_: self._on_secure_mode_toggled())
 
-        self._unlock_btn = tk.Button(search_row, text="Unlock", command=self._unlock_session)
+        self._unlock_btn = tk.Button(security_row, text="Unlock", command=self._unlock_session)
         self.theme.apply_to_widget(self._unlock_btn, "button_secondary")
         self._unlock_btn.pack(side=tk.RIGHT, padx=(6, 0))
 
         self._reset_btn = tk.Button(
-            search_row,
+            security_row,
             text="Forgot Passphrase / Reset",
             command=self._on_forgot_passphrase_reset,
         )
@@ -722,7 +730,7 @@ class KeymasterWindow:
 
         self._auto_check_var = tk.BooleanVar(value=self._read_auto_check_setting())
         auto_check_cb = tk.Checkbutton(
-            search_row,
+            security_row,
             text="Auto check",
             variable=self._auto_check_var,
         )
@@ -747,6 +755,7 @@ class KeymasterWindow:
         for col in _COLS:
             self._tree.heading(col, text=_COL_HEADERS[col])
             self._tree.column(col, width=_COL_WIDTHS[col], minwidth=50, anchor="w")
+        fit_tree_headings(self._tree)
 
         self._tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
@@ -758,11 +767,11 @@ class KeymasterWindow:
         self._status_var = tk.StringVar(value="")
         status_lbl = tk.Label(outer, textvariable=self._status_var, anchor="w")
         self.theme.apply_to_widget(status_lbl, "label")
-        status_lbl.pack(fill=tk.X, pady=(0, 4))
+        status_lbl.pack(side=tk.BOTTOM, before=tree_frame, fill=tk.X, pady=(0, 4))
 
         btn_row = tk.Frame(outer)
         self.theme.apply_to_widget(btn_row, "main_window")
-        btn_row.pack(fill=tk.X)
+        btn_row.pack(side=tk.BOTTOM, before=status_lbl, fill=tk.X)
 
         add_btn = tk.Button(btn_row, text="Add", command=self._on_add)
         self.theme.apply_to_widget(add_btn, "button_secondary")
@@ -795,6 +804,7 @@ class KeymasterWindow:
         self.theme.apply_to_widget(self._delete_btn, "button_secondary")
         self._delete_btn.configure(state=tk.DISABLED)
         self._delete_btn.pack(side=tk.LEFT)
+        flow_row(btn_row)
 
         self._context_menu = tk.Menu(self.window, tearoff=0)
 

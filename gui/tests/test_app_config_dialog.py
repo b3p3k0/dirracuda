@@ -561,6 +561,7 @@ def test_build_top_level_tabs_uses_expected_order(monkeypatch):
     dlg.theme = SimpleNamespace(apply_to_widget=lambda *_args, **_kwargs: None)
     monkeypatch.setattr("gui.components.app_config_dialog.tk.Frame", lambda *_args, **_kwargs: object())
 
+    monkeypatch.setattr("gui.components.app_config_dialog.ScrollableBody", lambda *_args: SimpleNamespace(content=object()))
     notebook = _Notebook()
     tabs = dlg._build_top_level_tabs(notebook)
     assert notebook.added == list(AppConfigDialog.TOP_LEVEL_TABS)

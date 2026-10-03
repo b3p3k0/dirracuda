@@ -78,9 +78,9 @@ class SimpleConfigEditorWindow:
         self._center_window()
         
         # Build UI
+        self._create_button_panel()
         self._create_header()
         self._create_text_editor()
-        self._create_button_panel()
 
         # Setup event handlers
         self._setup_event_handlers()
@@ -180,7 +180,7 @@ class SimpleConfigEditorWindow:
         """Create button panel with Open, Save, Cancel."""
         button_frame = tk.Frame(self.window)
         self.theme.apply_to_widget(button_frame, "main_window")
-        button_frame.pack(fill=tk.X, padx=10, pady=(5, 10))
+        button_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=(5, 10))
         
         # Left side - Open button
         open_button = tk.Button(

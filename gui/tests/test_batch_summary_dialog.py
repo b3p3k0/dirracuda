@@ -230,6 +230,9 @@ def test_show_batch_summary_dialog_wires_vertical_scrollbar(monkeypatch):
     monkeypatch.setattr(summary, "show_background_window", lambda _dialog: None)
 
     class _DummyBase:
+        def bind(self, *args, **kwargs):
+            return None
+
         def __init__(self, *args, **kwargs):
             pass
 
@@ -324,6 +327,9 @@ def test_show_batch_summary_dialog_tints_only_finding_rows(monkeypatch):
     monkeypatch.setattr(summary, "show_background_window", lambda _dialog: None)
 
     class _DummyBase:
+        def bind(self, *args, **kwargs):
+            return None
+
         def __init__(self, *args, **kwargs):
             pass
 

@@ -204,13 +204,13 @@ class FileViewerWindow:
         # --- Status bar ---
         self.status_var = tk.StringVar()
         status_label = tk.Label(self.window, textvariable=self.status_var, anchor="w")
-        status_label.pack(fill=tk.X, padx=10, pady=(0, 5))
+        status_label.pack(side=tk.BOTTOM, before=content_frame, fill=tk.X, padx=10, pady=(0, 5))
         if self.theme:
             self.theme.apply_to_widget(status_label, "status_bar")
 
         # --- Button bar ---
         button_frame = tk.Frame(self.window)
-        button_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+        button_frame.pack(side=tk.BOTTOM, before=content_frame, fill=tk.X, padx=10, pady=(0, 10))
         if self.theme:
             self.theme.apply_to_widget(button_frame, "main_window")
 

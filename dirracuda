@@ -480,8 +480,12 @@ def show_smbseek_setup_dialog(parent=None, current_path: str = ".") -> Optional[
         result = None
         dialog.destroy()
     
+    from gui.utils.scrollable_body import ScrollableBody, flow_row
+    body = ScrollableBody(dialog)
+    body.pack(fill="both", expand=True)
+
     # Header
-    header_frame = ttk.Frame(dialog)
+    header_frame = ttk.Frame(body.content)
     header_frame.pack(fill="x", padx=20, pady=(20, 10))
     
     ttk.Label(
@@ -497,7 +501,7 @@ def show_smbseek_setup_dialog(parent=None, current_path: str = ".") -> Optional[
     ).pack(anchor="w", pady=(5, 0))
     
     # Instructions
-    instructions_frame = ttk.LabelFrame(dialog, text="Setup Instructions", padding=10)
+    instructions_frame = ttk.LabelFrame(body.content, text="Setup Instructions", padding=10)
     instructions_frame.pack(fill="x", padx=20, pady=10)
     
     instructions = [
@@ -516,7 +520,7 @@ def show_smbseek_setup_dialog(parent=None, current_path: str = ".") -> Optional[
         ttk.Label(instructions_frame, text=instruction, justify="left").pack(anchor="w")
     
     # Path selection
-    path_frame = ttk.LabelFrame(dialog, text="Dirracuda Path", padding=10)
+    path_frame = ttk.LabelFrame(body.content, text="Dirracuda Path", padding=10)
     path_frame.pack(fill="x", padx=20, pady=10)
     
     path_var = tk.StringVar(master=dialog, value=current_path)
@@ -529,7 +533,7 @@ def show_smbseek_setup_dialog(parent=None, current_path: str = ".") -> Optional[
     
     # Buttons
     button_frame = ttk.Frame(dialog)
-    button_frame.pack(fill="x", padx=20, pady=(10, 20))
+    button_frame.pack(side="bottom", before=body, fill="x", padx=20, pady=(10, 20))
     
     ttk.Button(
         button_frame,
@@ -540,6 +544,8 @@ def show_smbseek_setup_dialog(parent=None, current_path: str = ".") -> Optional[
     ttk.Button(button_frame, text="Cancel", command=on_cancel).pack(side="right")
     ttk.Button(button_frame, text="OK", command=on_ok).pack(side="right", padx=(0, 5))
     
+    flow_row(button_frame)
+
     # Handle window closing
     dialog.protocol("WM_DELETE_WINDOW", on_cancel)
     

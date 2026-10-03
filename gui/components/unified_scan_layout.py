@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from gui.utils.scrollable_body import flow_row, wrap_form_labels
 import tkinter as tk
 from tkinter import ttk
 from typing import Any
@@ -91,6 +92,7 @@ def build_dialog(owner: Any) -> None:
     owner._sync_reddit_options_state()
     owner._sync_targeting_mode_state()
     owner._refresh_provider_queue_label()
+    wrap_form_labels(owner._content)
     owner.theme.apply_theme_to_application(owner.dialog)
     if owner.country_entry:
         owner.country_entry.focus_set()
@@ -541,6 +543,8 @@ def _build_runtime(owner: Any, parent: tk.Widget) -> None:
     owner.theme.apply_to_widget(sherlock_settings_btn, "button_secondary")
     sherlock_settings_btn.pack(side=tk.LEFT, padx=(8, 0))
 
+    flow_row(sherlock_row)
+
     bulk_extract_checkbox = ttk.Checkbutton(
         parent,
         text="Run bulk extract after each scan",
@@ -551,7 +555,7 @@ def _build_runtime(owner: Any, parent: tk.Widget) -> None:
 
     owner.skip_indicator_extract_checkbox = ttk.Checkbutton(
         parent,
-        text="Skip extract on hosts with malware indicators",
+        text="Skip hosts with malware indicators",
         variable=owner.skip_indicator_extract_var,
     )
     owner.skip_indicator_extract_checkbox.pack(anchor="w", padx=(18, 0), pady=1)

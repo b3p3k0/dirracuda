@@ -11,6 +11,7 @@ and guides users through database setup with appropriate feedback.
 
 import tkinter as tk
 from tkinter import ttk, filedialog
+from gui.utils.scrollable_body import ScrollableBody
 from gui.utils import safe_messagebox as messagebox
 import os
 import sys
@@ -111,10 +112,12 @@ class DatabaseSetupDialog:
         self.dialog.protocol("WM_DELETE_WINDOW", self._on_exit_option)
         
         # Create layout
+        self._create_button_frame()
+        self.body = ScrollableBody(self.dialog)
+        self.body.pack(fill=tk.BOTH, expand=True)
         self._create_header()
         self._create_options_frame()
         self._create_progress_frame()
-        self._create_button_frame()
         
         # Center dialog
         self._center_dialog()
@@ -128,7 +131,7 @@ class DatabaseSetupDialog:
 
     def _create_header(self) -> None:
         """Create dialog header with title and description."""
-        header_frame = tk.Frame(self.dialog)
+        header_frame = tk.Frame(self.body.content)
         header_frame.pack(fill=tk.X, padx=20, pady=20)
         
         # Title with icon
@@ -156,7 +159,7 @@ class DatabaseSetupDialog:
     
     def _create_options_frame(self) -> None:
         """Create options selection frame."""
-        self.options_frame = tk.Frame(self.dialog)
+        self.options_frame = tk.Frame(self.body.content)
         self.options_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
         
         # Option 1: Import Database
@@ -232,7 +235,7 @@ class DatabaseSetupDialog:
     
     def _create_progress_frame(self) -> None:
         """Create progress display frame."""
-        self.progress_frame = tk.Frame(self.dialog)
+        self.progress_frame = tk.Frame(self.body.content)
         self.progress_frame.pack(fill=tk.X, padx=20, pady=10)
         
         # Progress bar
@@ -256,7 +259,7 @@ class DatabaseSetupDialog:
         """Create button frame with cancel option."""
         try:
             button_frame = tk.Frame(self.dialog)
-            button_frame.pack(fill=tk.X, padx=20, pady=20)
+            button_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=20, pady=20)
             
             # Cancel button (initially hidden)
             self.cancel_button = tk.Button(

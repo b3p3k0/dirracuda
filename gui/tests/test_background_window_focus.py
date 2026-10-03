@@ -33,6 +33,7 @@ def test_provider_transitions_preserve_console_visibility_and_focus(hidden):
 def test_results_do_not_grab_focus_or_wait_for_dismissal(monkeypatch):
     window = MagicMock()
     monkeypatch.setattr(scan_results.tk, "Toplevel", lambda _parent: window)
+    monkeypatch.setattr(scan_results, "ScrollableBody", lambda _parent: MagicMock())
     display = MagicMock()
     monkeypatch.setattr(scan_results, "show_background_window", display)
     result = scan_results.ScanResultsDialog.__new__(scan_results.ScanResultsDialog)

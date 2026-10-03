@@ -34,6 +34,7 @@ from gui.components.app_config_security_tab import (
     create_http_tls_card,
     create_tmpfs_card,
 )
+from gui.utils.scrollable_body import ScrollableBody
 from gui.utils.style import get_theme
 from shared.db_path_resolution import (
     auto_detect_database_path,
@@ -440,9 +441,9 @@ class AppConfigDialog:
         self.censys_pat_masked = True
 
         self._center_window()
+        self._create_button_panel()
         self._create_header()
         self._create_sections()
-        self._create_button_panel()
         self._validate_all_fields()
         bind_submit_shortcuts(self.dialog, self._on_ok)
         bind_save_shortcuts(self.dialog, self._on_ok)
@@ -513,10 +514,9 @@ class AppConfigDialog:
     def _build_top_level_tabs(self, notebook: ttk.Notebook) -> Dict[str, tk.Frame]:
         tabs: Dict[str, tk.Frame] = {}
         for label in self.TOP_LEVEL_TABS:
-            frame = tk.Frame(notebook)
-            self.theme.apply_to_widget(frame, "main_window")
-            notebook.add(frame, text=label)
-            tabs[label] = frame
+            body = ScrollableBody(notebook)
+            notebook.add(body, text=label)
+            tabs[label] = body.content
         return tabs
 
     def _create_compact_card(self, parent: tk.Widget, title: str, fields: tuple[str, ...]) -> None:
@@ -849,7 +849,7 @@ class AppConfigDialog:
     def _create_button_panel(self) -> None:
         panel = tk.Frame(self.dialog)
         self.theme.apply_to_widget(panel, "main_window")
-        panel.pack(fill=tk.X, padx=18, pady=(4, 16))
+        panel.pack(side=tk.BOTTOM, fill=tk.X, padx=18, pady=(4, 16))
 
         add_shortcut_hint(
             panel,
