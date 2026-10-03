@@ -256,7 +256,7 @@ class TestCancelTrigger:
     def test_start_message_not_counted(self):
         evt = threading.Event()
         trigger = lts._make_cancel_trigger(evt, 1)
-        trigger("Querying SearXNG page 1...")
+        trigger("Querying Self-hosted Search page 1...")
         assert not evt.is_set()
 
     def test_same_page_classified_twice_counts_once(self):
@@ -283,7 +283,7 @@ class TestExtractStageEvents:
 
     def test_normal_page_flow_no_probe(self):
         msgs = [
-            "Querying SearXNG page 1...",
+            "Querying Self-hosted Search page 1...",
             "Page 1: received 5 results, 5 new (5 unique total).",
             "Page 1: stored 5 rows.",
             "Page 1: classified 5; retained 2 open indexes.",
@@ -298,7 +298,7 @@ class TestExtractStageEvents:
 
     def test_normal_page_flow_with_probe(self):
         msgs = [
-            "Querying SearXNG page 1...",
+            "Querying Self-hosted Search page 1...",
             "Page 1: received 5 results, 5 new (5 unique total).",
             "Page 1: stored 5 rows.",
             "Page 1: classified 5; retained 2 open indexes.",
@@ -309,7 +309,7 @@ class TestExtractStageEvents:
 
     def test_duplicate_only_page_uses_received_as_terminal(self):
         msgs = [
-            "Querying SearXNG page 2...",
+            "Querying Self-hosted Search page 2...",
             "Page 2: received 5 results, 0 new (10 unique total).",
         ]
         ev = self._ev(msgs)
@@ -328,12 +328,12 @@ class TestExtractStageEvents:
         assert ev["page_received_new"][1] == 3
 
     def test_retry_not_in_start_idx(self):
-        msgs = ["Querying SearXNG page 1 (retry)..."]
+        msgs = ["Querying Self-hosted Search page 1 (retry)..."]
         ev = self._ev(msgs)
         assert 1 not in ev["page_start_idx"]
 
     def test_retry_in_retry_set(self):
-        msgs = ["Querying SearXNG page 1 (retry)..."]
+        msgs = ["Querying Self-hosted Search page 1 (retry)..."]
         ev = self._ev(msgs)
         assert 1 in ev["retry_pages"]
 
@@ -358,7 +358,7 @@ class TestCheckStageOrder:
 
     def _page(self, n, recv_new=5, retained=0, probed=False):
         """Build canonical progress messages for one page."""
-        msgs = [f"Querying SearXNG page {n}..."]
+        msgs = [f"Querying Self-hosted Search page {n}..."]
         msgs.append(f"Page {n}: received 5 results, {recv_new} new ({n*5} unique total).")
         if recv_new > 0:
             msgs.append(f"Page {n}: stored 5 rows.")
@@ -420,7 +420,7 @@ class TestCheckStageOrder:
         msgs = (
             self._page(1, retained=0)
             + [
-                "Querying SearXNG page 2...",
+                "Querying Self-hosted Search page 2...",
                 "Page 2: received 5 results, 0 new (5 unique total).",
             ]
         )
@@ -430,7 +430,7 @@ class TestCheckStageOrder:
         msgs = (
             self._page(1, retained=0)
             + [
-                "Querying SearXNG page 2...",
+                "Querying Self-hosted Search page 2...",
                 "Page 2: received 5 results, 0 new (5 unique total).",
             ]
             + self._page(3, retained=0)
@@ -452,7 +452,7 @@ class TestCheckStageOrder:
         msgs = (
             self._page(1, retained=0)
             + [
-                "Querying SearXNG page 2 (retry)...",
+                "Querying Self-hosted Search page 2 (retry)...",
             ]
             + self._page(2, retained=0)
         )
@@ -736,7 +736,7 @@ class TestExitCodePriority:
         messages = []
         for page in range(1, pages + 1):
             messages.extend([
-                f"Querying SearXNG page {page}...",
+                f"Querying Self-hosted Search page {page}...",
                 f"Page {page}: received 5 results, 5 new ({page * 5} unique total).",
                 f"Page {page}: stored 5 rows.",
                 f"Page {page}: classified 5; retained 0 open indexes.",
@@ -855,7 +855,7 @@ class TestExitCodePriority:
 
     def _legacy_done_messages(self):
         return [
-            "Querying SearXNG page 1...",
+            "Querying Self-hosted Search page 1...",
             "Page 1: received 5 results, 5 new (5 unique total).",
             "Page 1: stored 5 rows.",
             "Page 1: classified 5; retained 0 open indexes.",
@@ -896,3 +896,82 @@ class TestExitCodePriority:
         r = _make_result(status=RUN_STATUS_DONE, run_id=None)
         # No inject_messages → no page events → FAIL on mandatory done checks
         assert self._run(tmp_path, result_override=r) == 1
+
+
+# ---------------------------------------------------------------------------
+# TestServiceOutputContract — feed real service output through the parsers
+# ---------------------------------------------------------------------------
+class _FakeResponse:
+    def __init__(self, results):
+        self._data = json.dumps({"results": results}).encode()
+    def __enter__(self): return self
+    def __exit__(self, *a): pass
+    def read(self): return self._data
+
+
+class TestServiceOutputContract:
+    """Guard against drift between service progress text and harness regexes."""
+
+    def _run_service(self, monkeypatch, tmp_path, first_error=None):
+        import urllib.error
+        from email.message import Message
+        from experimental.se_dork.models import PreflightResult
+        from experimental.se_dork.service import run_dork_search
+
+        monkeypatch.setattr("experimental.se_dork.service.time.sleep", lambda _s: None)
+        monkeypatch.setattr(
+            "experimental.se_dork.service.random.uniform",
+            lambda low, high: (low + high) / 2,
+        )
+        ok = PreflightResult(ok=True, reason_code=None, message="OK")
+        monkeypatch.setattr(
+            "experimental.se_dork.service.run_reachability_check",
+            lambda url, timeout=10: ok,
+        )
+
+        calls = []
+        def _fake_urlopen(url, timeout=None):
+            calls.append(url)
+            if first_error is not None and len(calls) == 1:
+                raise urllib.error.HTTPError(url, first_error, "err", Message(), None)
+            served = len(calls) - (1 if first_error is not None else 0)
+            results = (
+                [{"url": f"http://ex{i}.com/", "title": "OD", "content": ""} for i in range(3)]
+                if served == 1 else []
+            )
+            return _FakeResponse(results)
+        monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+
+        fv = MagicMock(); fv.verdict = "OPEN_INDEX"; fv.reason_code = "OPEN_INDEX"; fv.http_status = 200
+        monkeypatch.setattr("experimental.se_dork.classifier.classify_url", lambda *a, **k: fv)
+        fo = MagicMock()
+        fo.probe_status = "clean"; fo.probe_indicator_matches = 0; fo.probe_preview = None
+        fo.probe_checked_at = "2026-01-01T00:00:00"; fo.probe_error = None
+        fo.probe_snapshot_payload = None
+        monkeypatch.setattr("experimental.se_dork.probe.probe_url", lambda *a, **k: fo)
+        monkeypatch.setattr("experimental.se_dork.probe.build_indicator_patterns", lambda *a, **k: [])
+
+        msgs = []
+        result = run_dork_search(
+            RunOptions(instance_url="http://test.local", query="test",
+                       max_results=5, bulk_probe_enabled=True),
+            db_path=tmp_path / "se_dork.db",
+            progress_cb=msgs.append,
+        )
+        assert result.status == RUN_STATUS_DONE, msgs
+        return msgs
+
+    def test_happy_path_output_parses_clean(self, monkeypatch, tmp_path):
+        msgs = self._run_service(monkeypatch, tmp_path)
+        ev = lts._extract_stage_events(msgs, probe_enabled=True)
+        assert set(ev["page_start_idx"]) == {1, 2}, msgs
+        assert 1 in ev["page_probed_idx"], msgs
+        assert ev["run_complete_idx"] is not None, msgs
+        assert lts._check_stage_order(ev, probe_enabled=True) == []
+
+    def test_retry_output_counts_retry_page(self, monkeypatch, tmp_path):
+        msgs = self._run_service(monkeypatch, tmp_path, first_error=429)
+        ev = lts._extract_stage_events(msgs, probe_enabled=True)
+        assert ev["retry_pages"] == {1}, msgs
+        assert set(ev["page_start_idx"]) == {1, 2}, msgs
+        assert lts._check_stage_order(ev, probe_enabled=True) == []

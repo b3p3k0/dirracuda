@@ -37,8 +37,8 @@ from shared.path_service import get_paths
 # ---------------------------------------------------------------------------
 # Progress-message patterns (exact strings from service.py)
 # ---------------------------------------------------------------------------
-_RE_PAGE_START = re.compile(r"^Querying SearXNG page (\d+)\.\.\.$")
-_RE_PAGE_RETRY = re.compile(r"^Querying SearXNG page (\d+) \(retry\)\.\.\.$")
+_RE_PAGE_START = re.compile(r"^Querying Self-hosted Search page (\d+)\.\.\.$")
+_RE_PAGE_RETRY = re.compile(r"^Querying Self-hosted Search page (\d+) \(retry\)\.\.\.$")
 _RE_PAGE_RECEIVED = re.compile(
     r"^Page (\d+): received \d+ results, (\d+) new \(\d+ unique total\)\.$"
 )

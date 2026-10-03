@@ -94,3 +94,11 @@ Date: 2026-04-19
 - Stub result dataclasses with the real type (`PreflightResult(...)`), not a
   bare `MagicMock`. A mock invents every new optional field, so a test can
   fail on the mock or pass for the wrong reason.
+
+## Live harness wording drift (2026-10-03)
+
+- A parser of service progress text needs a test that feeds it real service
+  output. Hand-written message lists only test the parser against itself. The
+  live harness missed every page-start line after the DeGoog rename.
+- `TestServiceOutputContract` in `scripts/tests/test_live_test_searxng.py` runs
+  the mocked service through the harness parsers. Keep it when the wording changes.
