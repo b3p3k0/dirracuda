@@ -62,7 +62,8 @@ def test_risk_column_between_extracted_and_type(tk_root):
     tree = _make_tree(tk_root)
     cols = list(tree["columns"])
     assert "Risk" in cols
-    assert cols.index("Risk") == cols.index("extracted") + 1
+    assert cols.index("notes") == cols.index("extracted") + 1
+    assert cols.index("Risk") == cols.index("notes") + 1
     assert cols.index("Risk") + 1 == cols.index("Type")
 
 

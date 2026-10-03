@@ -10,6 +10,8 @@ from tkinter import ttk
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Callable
 
+from gui.components.server_list_window.filter_dropdown import FilterDropdown
+
 
 def create_filter_panel(parent, theme, filter_vars, callbacks):
     """
@@ -58,51 +60,10 @@ def create_filter_panel(parent, theme, filter_vars, callbacks):
     theme.apply_to_widget(clear_button, "button_secondary")
     clear_button.pack(side=tk.LEFT, padx=(0, 10))
 
-    # Favorites only filter checkbox
-    favorites_checkbox = tk.Checkbutton(
-        search_frame,
-        text="Favorites only",
-        variable=filter_vars['favorites_only'],
-        command=callbacks['on_favorites_only_changed']
+    filter_dropdown = FilterDropdown(
+        search_frame, theme, filter_vars, callbacks['on_quick_filter_changed']
     )
-    theme.apply_to_widget(favorites_checkbox, "checkbox")
-    favorites_checkbox.pack(side=tk.LEFT, padx=(0, 10))
-
-    exclude_avoid_checkbox = tk.Checkbutton(
-        search_frame,
-        text="Exclude avoid",
-        variable=filter_vars['exclude_avoid'],
-        command=callbacks['on_exclude_avoid_changed']
-    )
-    theme.apply_to_widget(exclude_avoid_checkbox, "checkbox")
-    exclude_avoid_checkbox.pack(side=tk.LEFT, padx=(0, 10))
-
-    probed_only_checkbox = tk.Checkbutton(
-        search_frame,
-        text="Probed only",
-        variable=filter_vars['probed_only'],
-        command=callbacks['on_probed_only_changed']
-    )
-    theme.apply_to_widget(probed_only_checkbox, "checkbox")
-    probed_only_checkbox.pack(side=tk.LEFT, padx=(0, 10))
-
-    exclude_compromised_checkbox = tk.Checkbutton(
-        search_frame,
-        text="Exclude compromised",
-        variable=filter_vars['exclude_compromised'],
-        command=callbacks['on_exclude_compromised_changed']
-    )
-    theme.apply_to_widget(exclude_compromised_checkbox, "checkbox")
-    exclude_compromised_checkbox.pack(side=tk.LEFT, padx=(0, 10))
-
-    shares_filter_checkbox = tk.Checkbutton(
-        search_frame,
-        text="Show Only Shares >0",
-        variable=filter_vars['shares_filter'],
-        command=callbacks['on_shares_filter_changed']
-    )
-    theme.apply_to_widget(shares_filter_checkbox, "checkbox")
-    shares_filter_checkbox.pack(side=tk.LEFT, padx=(0, 10))
+    filter_dropdown.button.pack(side=tk.LEFT, padx=(0, 10))
 
     # Advanced toggle button aligned to the right of the search row
     mode_button = tk.Button(
@@ -297,11 +258,7 @@ def create_filter_panel(parent, theme, filter_vars, callbacks):
         'advanced_filters_frame': advanced_filters_frame,
         'search_entry': search_entry,
         'date_combo': date_combo,
-        'shares_filter_checkbox': shares_filter_checkbox,
-        'favorites_checkbox': favorites_checkbox,
-        'exclude_avoid_checkbox': exclude_avoid_checkbox,
-        'probed_only_checkbox': probed_only_checkbox,
-        'exclude_compromised_checkbox': exclude_compromised_checkbox,
+        'filter_dropdown': filter_dropdown,
         'protocol_smb_checkbox': protocol_smb_checkbox,
         'protocol_ftp_checkbox': protocol_ftp_checkbox,
         'protocol_http_checkbox': protocol_http_checkbox,
@@ -521,3 +478,11 @@ def update_mode_display(advanced_filters_frame, is_advanced_mode: bool):
         advanced_filters_frame.pack(fill=tk.X, pady=(5, 0))
     else:
         advanced_filters_frame.pack_forget()
+
+
+def has_notes(server) -> bool:
+    return bool(str(server.get("notes") or "").strip())
+
+
+def apply_has_notes_filter(servers, has_notes_only: bool):
+    return servers if not has_notes_only else [s for s in servers if has_notes(s)]

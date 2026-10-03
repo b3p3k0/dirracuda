@@ -1,6 +1,14 @@
 # UI improvements
 
-## Current task: remembered window positions
+## Current task: Server List Notes column and Filters dropdown
+
+Adds a `Notes` ✔/○ column and folds the quick-filter checkboxes, plus a new
+`Has notes` filter, into one stay-open `Filters ▾` popover. See
+[NOTES_FILTER.md](NOTES_FILTER.md) for decisions, lessons, and validation.
+
+## Completed task: remembered window positions
+
+Status: committed as `39a5bd9`.
 
 HI approved main working windows plus scan dialogs. Implemented position memory
 across restarts without automatic monitor fitting or size changes. See

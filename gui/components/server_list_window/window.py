@@ -112,6 +112,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self.exclude_avoid = tk.BooleanVar()
         self.probed_only = tk.BooleanVar()
         self.exclude_compromised = tk.BooleanVar()
+        self.has_notes_only = tk.BooleanVar()
         self.protocol_smb = tk.BooleanVar(value=True)
         self.protocol_ftp = tk.BooleanVar(value=True)
         self.protocol_http = tk.BooleanVar(value=True)
@@ -461,6 +462,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
             'exclude_avoid': self.exclude_avoid,
             'probed_only': self.probed_only,
             'exclude_compromised': self.exclude_compromised,
+            'has_notes_only': self.has_notes_only,
             'protocol_smb': self.protocol_smb,
             'protocol_ftp': self.protocol_ftp,
             'protocol_http': self.protocol_http,
@@ -471,11 +473,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
         filter_callbacks = {
             'on_search_changed': self._apply_filters,
             'on_date_filter_changed': self._apply_filters,
-            'on_shares_filter_changed': self._apply_filters,
-            'on_favorites_only_changed': self._apply_filters,
-            'on_exclude_avoid_changed': self._apply_filters,
-            'on_probed_only_changed': self._apply_filters,
-            'on_exclude_compromised_changed': self._apply_filters,
+            'on_quick_filter_changed': self._apply_filters,
             'on_protocol_filter_changed': self._apply_filters,
             'on_country_filter_changed': self._apply_filters,
             'on_country_filter_text_changed': self._on_country_filter_text_changed,
@@ -510,12 +508,11 @@ class ServerListWindow(ServerListWindowActionsMixin):
         if 'add_record_button' in self.filter_widgets:
             self.add_record_button = self.filter_widgets['add_record_button']
 
-        # Disable favorites/avoid checkboxes if no settings manager
-        if not self.settings_manager:
-            if 'favorites_checkbox' in self.filter_widgets:
-                self.filter_widgets['favorites_checkbox'].configure(state="disabled")
-            if 'exclude_avoid_checkbox' in self.filter_widgets:
-                self.filter_widgets['exclude_avoid_checkbox'].configure(state="disabled")
+        # Disable favorites/avoid options if no settings manager
+        if not self.settings_manager and 'filter_dropdown' in self.filter_widgets:
+            dropdown = self.filter_widgets['filter_dropdown']
+            dropdown.set_option_state('favorites_only', False)
+            dropdown.set_option_state('exclude_avoid', False)
 
         # Extract country listbox reference and populate it
         if 'country_listbox' in self.filter_widgets:
@@ -938,6 +935,9 @@ class ServerListWindow(ServerListWindowActionsMixin):
         if self.exclude_compromised.get():
             filtered = filters.apply_exclude_compromised_filter(filtered, True)
 
+        if self.has_notes_only.get():
+            filtered = filters.apply_has_notes_filter(filtered, True)
+
         self.filtered_servers = filtered
 
         # Update table display using table module
@@ -1149,6 +1149,11 @@ class ServerListWindow(ServerListWindowActionsMixin):
         # Show details using details module
         self._show_server_detail_popup(server_data)
 
+    def _on_notes_saved(self, server_data):
+        row_key = server_data.get("row_key")
+        if self.tree and row_key and self.tree.exists(row_key):
+            self.tree.set(row_key, "notes", "✔" if filters.has_notes(server_data) else "○")
+
     def _show_server_detail_popup(self, server_data: Dict[str, Any]) -> None:
         """Show server detail popup using details module."""
         ip_address = server_data.get("ip_address")
@@ -1171,6 +1176,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
             probe_callback=self._launch_probe_from_detail,
             extract_callback=self._launch_extract_from_detail,
             browse_callback=self._launch_browse_from_detail,
+            notes_callback=self._on_notes_saved,
         )
 
     def _notify_database_changed(self) -> None:

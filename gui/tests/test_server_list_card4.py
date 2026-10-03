@@ -170,7 +170,7 @@ def _servers():
 class TestFilterPanelLayout:
     """Headless layout guard for always-visible Server List filters."""
 
-    def test_shares_filter_is_fulltime_after_exclude_compromised(self, monkeypatch):
+    def test_filter_dropdown_is_fulltime_after_clear(self, monkeypatch):
         f = _get_filters()
 
         class DummyWidget:
@@ -210,27 +210,31 @@ class TestFilterPanelLayout:
             monkeypatch.setattr(f.tk, widget_name, DummyWidget)
         monkeypatch.setattr(f.ttk, "Combobox", DummyWidget)
 
+        class DummyVar:
+            def get(self):
+                return False
+
+            def trace_add(self, *_args):
+                return "trace-id"
+
         filter_vars = {
-            "search_text": object(),
-            "date_filter": object(),
-            "shares_filter": object(),
-            "favorites_only": object(),
-            "exclude_avoid": object(),
-            "probed_only": object(),
-            "exclude_compromised": object(),
-            "protocol_smb": object(),
-            "protocol_ftp": object(),
-            "protocol_http": object(),
-            "country_filter_text": object(),
+            "search_text": DummyVar(),
+            "date_filter": DummyVar(),
+            "shares_filter": DummyVar(),
+            "favorites_only": DummyVar(),
+            "exclude_avoid": DummyVar(),
+            "probed_only": DummyVar(),
+            "exclude_compromised": DummyVar(),
+            "has_notes_only": DummyVar(),
+            "protocol_smb": DummyVar(),
+            "protocol_ftp": DummyVar(),
+            "protocol_http": DummyVar(),
+            "country_filter_text": DummyVar(),
         }
         callbacks = {
             "on_search_changed": MagicMock(),
             "on_clear_search": MagicMock(),
-            "on_favorites_only_changed": MagicMock(),
-            "on_exclude_avoid_changed": MagicMock(),
-            "on_probed_only_changed": MagicMock(),
-            "on_exclude_compromised_changed": MagicMock(),
-            "on_shares_filter_changed": MagicMock(),
+            "on_quick_filter_changed": MagicMock(),
             "on_toggle_mode": MagicMock(),
             "on_add_record": MagicMock(),
             "on_save_filter_template": MagicMock(),
@@ -255,14 +259,13 @@ class TestFilterPanelLayout:
 
         search_frame = filter_frame.children[0]
         search_texts = [child.kwargs.get("text") for child in search_frame.children]
-        assert search_texts.index("Show Only Shares >0") == (
-            search_texts.index("Exclude compromised") + 1
-        )
+        assert search_texts.index("Filters ▾") == search_texts.index("Clear") + 1
 
-        shares_checkbox = widget_refs["shares_filter_checkbox"]
-        assert shares_checkbox.parent is search_frame
-        assert shares_checkbox.kwargs["variable"] is filter_vars["shares_filter"]
-        assert shares_checkbox.kwargs["command"] is callbacks["on_shares_filter_changed"]
+        dropdown = widget_refs["filter_dropdown"]
+        assert dropdown.button.parent is search_frame
+        assert dropdown.filter_vars is filter_vars
+        assert dropdown.on_changed is callbacks["on_quick_filter_changed"]
+        assert dropdown.button.pack_calls == [{"side": "left", "padx": (0, 10)}]
         assert "Shares > 0" not in {widget.kwargs.get("text") for widget in walk(filter_frame)}
 
 

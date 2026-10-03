@@ -68,6 +68,7 @@ class ServerListWindowTemplateMixin:
         self.exclude_avoid.set(False)
         self.probed_only.set(False)
         self.exclude_compromised.set(False)
+        self.has_notes_only.set(False)
         self.protocol_smb.set(True)
         self.protocol_ftp.set(True)
         self.protocol_http.set(True)
@@ -135,6 +136,7 @@ class ServerListWindowTemplateMixin:
             self.exclude_avoid.set(prefs.get('exclude_avoid', False))
             self.probed_only.set(prefs.get('probed_only', False))
             self.exclude_compromised.set(prefs.get('exclude_compromised', False))
+            self.has_notes_only.set(prefs.get('has_notes_only', False))
             self._set_selected_protocol_types(prefs.get('protocol_types', ['S', 'F', 'H']))
         except Exception:
             # Graceful degradation if settings are malformed
@@ -153,6 +155,7 @@ class ServerListWindowTemplateMixin:
             'exclude_avoid': bool(self.exclude_avoid.get()),
             'probed_only': bool(self.probed_only.get()),
             'exclude_compromised': bool(self.exclude_compromised.get()),
+            'has_notes_only': bool(self.has_notes_only.get()),
             'protocol_types': self._get_selected_protocol_types(),
         }
 
@@ -213,6 +216,7 @@ class ServerListWindowTemplateMixin:
             'exclude_avoid': bool(self.exclude_avoid.get()),
             'probed_only': bool(self.probed_only.get()),
             'exclude_compromised': bool(self.exclude_compromised.get()),
+            'has_notes_only': bool(self.has_notes_only.get()),
             'protocol_types': self._get_selected_protocol_types(),
             'country_codes': self._get_selected_country_codes(),
             'advanced_mode': bool(self.is_advanced_mode),
@@ -227,6 +231,7 @@ class ServerListWindowTemplateMixin:
         self.exclude_avoid.set(bool(state.get('exclude_avoid', False)))
         self.probed_only.set(bool(state.get('probed_only', False)))
         self.exclude_compromised.set(bool(state.get('exclude_compromised', False)))
+        self.has_notes_only.set(bool(state.get('has_notes_only', False)))
         self._set_selected_protocol_types(state.get('protocol_types', ['S', 'F', 'H']))
 
         if self.country_listbox:

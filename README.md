@@ -322,7 +322,9 @@ The **preflight screen** shows your live balance and an estimated post-scan bala
 
 ![server list browser](img/servers.png)
 
- Shows discovered hosts with IP/hostname, country, and accessible share counts as well as status indicators and a favorite/avoid list.
+ Shows discovered hosts with IP/hostname, country, and accessible share counts as well as status indicators and a favorite/avoid list. The `Notes` column shows ✔ when a host has notes (yours, or the Reddit post line added by Reddit runs) and ○ when it has none. Hover a row to read its notes; edit them in the details popup.
+
+Quick filters live in the `Filters ▾` dropdown next to the search box: Favorites only, Exclude avoid, Probed only, Exclude compromised, Show Only Shares >0, and Has notes. Tick any combination; the list updates on each tick and the button shows how many are on, e.g. `Filters (2) ▾`. Click elsewhere or press `Esc` to close it.
 
 **Operations** (right-click a host or use the bottom-row buttons):
 
@@ -772,7 +774,7 @@ For route-level behavior, API contracts, and security/runtime details, see
 
 **Scan templates** save your unified scan configuration - protocol selection, country/region filters, Shodan filters, max results, shared concurrency/timeout, and SMB/HTTP protocol-specific toggles. Click "Save Current" in the Start Scan dialog. Templates live in `~/.dirracuda/state/templates/scan/` as JSON files you can edit directly.
 
-**Filter templates** save your server list filters - search text, date range, countries, checkboxes. Click "Save Filters" in the advanced filter panel. Stored in `~/.dirracuda/state/templates/filter/`.
+**Filter templates** save your server list filters - search text, date range, countries, protocols, and the `Filters ▾` quick filters. Click "Save Filters" in the advanced filter panel. Stored in `~/.dirracuda/state/templates/filter/`.
 
 Both auto-restore your last-used template on startup.
 

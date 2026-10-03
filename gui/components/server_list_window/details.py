@@ -78,7 +78,7 @@ def _open_http_detail_browser(parent, server_data, theme, settings_manager=None)
 
 def show_server_detail_popup(parent_window, server_data, theme, settings_manager=None,
                              probe_status_callback=None, indicator_patterns: Optional[Sequence[probe_patterns.IndicatorPattern]] = None,
-                             probe_callback=None, extract_callback=None, browse_callback=None):
+                             probe_callback=None, extract_callback=None, browse_callback=None, notes_callback=None):
     """
     Show server detail popup window.
 
@@ -194,6 +194,11 @@ def show_server_detail_popup(parent_window, server_data, theme, settings_manager
                 except Exception:
                     pass
             server_data["notes"] = new_notes
+            if callable(notes_callback):
+                try:
+                    notes_callback(server_data)
+                except Exception:
+                    pass
         except Exception:
             # Silently ignore; we don't want to block dialog close
             pass
