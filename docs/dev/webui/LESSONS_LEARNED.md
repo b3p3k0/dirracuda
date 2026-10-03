@@ -434,3 +434,10 @@ A partial feature page swap (for example replacing placeholder copy) can fail ex
 97. Native `<details>` gives a multi-select dropdown that stays open across
     checkbox ticks with no inline script (CSP-safe); add only outside-click and
     `Esc` close handlers. Set previews via the `title` property, never HTML.
+
+98. A dashboard status row backed by a network or subprocess check (the Web UI
+    health probe can block for 2 s, and systemd mode calls `systemctl`) runs in a
+    worker thread and applies its result through `after(0, ...)`. Use a busy flag
+    so polls do not stack, and a generation counter so a direct push from the Web
+    UI tab beats a stale in-flight poll. Cancel the poll in
+    `teardown_dashboard_monitors`.

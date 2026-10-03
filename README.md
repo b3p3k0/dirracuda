@@ -733,6 +733,9 @@ command list.
 
 From the desktop app, use `Accessories → Web UI` to control the same service.
 The tab reports whether direct-process or systemd control is active.
+The dashboard status rows show `✔ Web UI` while the service is running and
+healthy, and `✖ Web UI` otherwise. They re-check every 30 seconds and update
+as soon as you use Start or Stop in the tab.
 `Manage Credentials` is also the trusted local recovery path: it can replace
 the single configured Web UI password without the old password, requires the
 new password twice, clears that account's lockouts, and restarts a running

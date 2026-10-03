@@ -277,9 +277,19 @@ class WebUITab:
             return
         self._apply_failed_status(status.reason or status.state)
 
+    def _notify_dashboard(self, running: bool) -> None:
+        callback = (getattr(self, "_context", None) or {}).get("on_webui_status_changed")
+        if not callable(callback):
+            return
+        try:
+            callback(running)
+        except Exception:
+            pass
+
     def _apply_status(self, running: bool) -> None:
         if not self.frame.winfo_exists():
             return
+        self._notify_dashboard(running)
         if running:
             self._status_var.set("Running")
             self._start_btn.configure(state=tk.DISABLED)
@@ -294,6 +304,7 @@ class WebUITab:
     def _apply_failed_status(self, reason: str) -> None:
         if not self.frame.winfo_exists():
             return
+        self._notify_dashboard(False)
         suffix = "startup failed"
         if reason:
             suffix = reason

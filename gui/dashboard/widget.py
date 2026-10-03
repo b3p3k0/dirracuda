@@ -48,6 +48,7 @@ from gui.components import dashboard_about
 from gui.components import dashboard_scan_output_dialog
 from gui.components import dashboard_shodan
 from gui.components import dashboard_status
+from gui.components import dashboard_webui_status
 from gui.components import dashboard_scan
 from gui.components import dashboard_batch_ops
 from gui.components.help_manual_dialog import open_help_manual_dialog
@@ -195,6 +196,14 @@ class DashboardWidget:
             value=_SHODAN_STATUS_NO_KEY,
         )
         self._shodan_balance_refresh_generation = 0
+        self.webui_status_text = tk.StringVar(
+            master=self.parent,
+            value=dashboard_status.compose_webui_status_line(False),
+        )
+        self._webui_status_generation = 0
+        self._webui_status_busy = False
+        self._webui_status_after_id = None
+        self._webui_status_poll_stopped = False
         self._status_static_mode = True  # Keep status label static post-initialization
         self._status_summary_initialized = False
 
@@ -267,6 +276,7 @@ class DashboardWidget:
         self._build_dashboard()
         self.running_tasks_registry.subscribe(self._on_running_tasks_changed)
         dashboard_experimental.start_analyst_task_hydration(self)
+        dashboard_webui_status.start_webui_status_poll(self)
 
         # Initial data load
         self._refresh_dashboard_data()
@@ -538,7 +548,7 @@ class DashboardWidget:
         footer.pack(fill=tk.X, padx=10, pady=(0, 12))
         footer.columnconfigure(0, weight=1)
         footer.columnconfigure(1, weight=0)
-        footer.rowconfigure(5, minsize=24)
+        footer.rowconfigure(6, minsize=24)
 
         clamav_status_label = tk.Label(
             footer,
@@ -576,6 +586,18 @@ class DashboardWidget:
         )
         shodan_status_label.grid(row=2, column=0, sticky="w", pady=(2, 0))
 
+        webui_status_label = tk.Label(
+            footer,
+            textvariable=self.webui_status_text,
+            anchor="w",
+            justify="left",
+            bg=self.theme.colors["card_bg"],
+            fg=self.theme.colors["text_secondary"],
+            font=self.theme.fonts["status"],
+            wraplength=520,
+        )
+        webui_status_label.grid(row=3, column=0, sticky="w", pady=(2, 0))
+
         status_summary_label = tk.Label(
             footer,
             textvariable=self.status_text,
@@ -586,7 +608,7 @@ class DashboardWidget:
             font=self.theme.fonts["status"],
             wraplength=520
         )
-        status_summary_label.grid(row=3, column=0, sticky="w", pady=(4, 0))
+        status_summary_label.grid(row=4, column=0, sticky="w", pady=(4, 0))
 
         self.update_time_label = tk.Label(
             footer,
@@ -596,13 +618,13 @@ class DashboardWidget:
             fg=self.theme.colors["text_secondary"],
             font=self.theme.fonts["status"]
         )
-        self.update_time_label.grid(row=4, column=0, sticky="w", pady=(4, 0))
+        self.update_time_label.grid(row=5, column=0, sticky="w", pady=(4, 0))
 
         button_frame = tk.Frame(
             footer,
             bg=self.theme.colors["card_bg"]
         )
-        button_frame.grid(row=5, column=1, sticky="se", padx=(10, 0), pady=(20, 0))
+        button_frame.grid(row=6, column=1, sticky="se", padx=(10, 0), pady=(20, 0))
 
         self.running_tasks_button = tk.Button(
             button_frame,
@@ -842,6 +864,7 @@ class DashboardWidget:
     def teardown_dashboard_monitors(self) -> None:
         """Destroy non-modal monitor windows during application shutdown."""
         dashboard_experimental.stop_analyst_task_hydration(self)
+        dashboard_webui_status.stop_webui_status_poll(self)
         try:
             if self.running_tasks_window is not None:
                 self.running_tasks_window.destroy()
@@ -927,7 +950,7 @@ class DashboardWidget:
         return dashboard_status.compose_runtime_status_lines(clamav_cfg, tmpfs_state)
 
     def _update_runtime_status_display(self) -> None:
-        """Refresh runtime status rows for ClamAV, tmpfs, and Shodan key state."""
+        """Refresh runtime status rows for ClamAV, tmpfs, Shodan key, and Web UI."""
         try:
             clamav_line, tmpfs_line = self._compose_runtime_status_lines()
             self.clamav_status_text.set(clamav_line)
@@ -938,6 +961,10 @@ class DashboardWidget:
             self._refresh_shodan_status_display()
         except Exception as exc:
             _logger.debug("Failed to refresh Shodan status row: %s", exc)
+        try:
+            dashboard_webui_status.refresh_webui_status(self)
+        except Exception as exc:
+            _logger.debug("Failed to refresh Web UI status row: %s", exc)
 
     def _refresh_shodan_status_display(self):
         dashboard_shodan.refresh_shodan_status_display(self)

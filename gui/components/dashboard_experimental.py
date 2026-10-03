@@ -23,6 +23,7 @@ from gui.components.reddit_browser_window import show_reddit_browser_window
 from gui.components.se_dork_browser_window import show_se_dork_browser_window
 from gui.components.dorkbook_window import show_dorkbook_window
 from gui.components.keymaster_window import show_keymaster_window
+from gui.components import dashboard_webui_status
 from gui.utils.sidecar_promotion import (
     promote_sidecar_prefill,
     promote_sidecar_prefills,
@@ -119,6 +120,9 @@ def handle_experimental_button_click(widget) -> None:
         "parent": widget.parent,
         "main_db_path": str(_resolve_main_db_path(widget)),
         "running_tasks_registry": getattr(widget, "running_tasks_registry", None),
+        "on_webui_status_changed": lambda running: dashboard_webui_status.set_webui_status(
+            widget, running
+        ),
     }
     if config_path is not None:
         context["webui_config_path"] = config_path

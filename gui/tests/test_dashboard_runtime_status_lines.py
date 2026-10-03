@@ -274,3 +274,148 @@ def test_finish_shodan_balance_refresh_ignores_stale_result(monkeypatch):
 
     dash._finish_shodan_balance_refresh(second_id, "111")
     assert dash.shodan_status_text.get() == "✔ Shodan API key configured <query credits: 111>"
+
+
+# ---------------------------------------------------------------------------
+# Web UI status row
+# ---------------------------------------------------------------------------
+
+from gui.components import dashboard_status, dashboard_webui_status
+
+
+class _SyncThread:
+    """Runs the worker inline on start() so tests stay deterministic."""
+
+    started = 0
+
+    def __init__(self, target=None, **_kwargs) -> None:
+        self._target = target
+
+    def start(self) -> None:
+        _SyncThread.started += 1
+        self._target()
+
+
+class _PollParent(_AfterQueue):
+    def __init__(self) -> None:
+        super().__init__()
+        self.cancelled = []
+
+    def after_cancel(self, after_id) -> None:
+        self.cancelled.append(after_id)
+
+
+def _make_webui_dashboard() -> DashboardWidget:
+    dash = _make_dashboard()
+    dash.parent = _PollParent()
+    dash.webui_status_text = _Var("✖ Web UI")
+    dash._webui_status_generation = 0
+    dash._webui_status_busy = False
+    dash._webui_status_after_id = None
+    dash._webui_status_poll_stopped = False
+    return dash
+
+
+def _patch_check(monkeypatch, result):
+    monkeypatch.setattr(dashboard_webui_status.threading, "Thread", _SyncThread)
+    monkeypatch.setattr(dashboard_webui_status, "check_webui_running", lambda: result)
+
+
+def test_compose_webui_status_line():
+    assert dashboard_status.compose_webui_status_line(True) == "✔ Web UI"
+    assert dashboard_status.compose_webui_status_line(False) == "✖ Web UI"
+
+
+def test_refresh_webui_status_applies_result_on_ui_thread(monkeypatch):
+    dash = _make_webui_dashboard()
+    _patch_check(monkeypatch, True)
+
+    dashboard_webui_status.refresh_webui_status(dash)
+    assert dash.webui_status_text.get() == "✖ Web UI"  # not applied off-thread
+    dash.parent.run_all()
+
+    assert dash.webui_status_text.get() == "✔ Web UI"
+    assert dash._webui_status_busy is False
+
+
+def test_refresh_webui_status_skips_while_check_in_flight(monkeypatch):
+    dash = _make_webui_dashboard()
+    _patch_check(monkeypatch, True)
+    _SyncThread.started = 0
+
+    dashboard_webui_status.refresh_webui_status(dash)
+    dashboard_webui_status.refresh_webui_status(dash)  # busy: no second worker
+    dash.parent.run_all()
+
+    assert _SyncThread.started == 1
+    assert dash.webui_status_text.get() == "✔ Web UI"
+
+
+def test_direct_push_drops_stale_poll_result(monkeypatch):
+    dash = _make_webui_dashboard()
+    _patch_check(monkeypatch, False)
+
+    dashboard_webui_status.refresh_webui_status(dash)
+    dashboard_webui_status.set_webui_status(dash, True)  # Start clicked mid-check
+    dash.parent.run_all()
+
+    assert dash.webui_status_text.get() == "✔ Web UI"
+    assert dash._webui_status_busy is False
+
+
+def test_check_webui_running_returns_false_on_error(monkeypatch):
+    import experimental.webui.service_control as service_control
+
+    def _boom(*_args, **_kwargs):
+        raise OSError("health probe exploded")
+
+    monkeypatch.setattr(service_control, "get_status", _boom)
+
+    assert dashboard_webui_status.check_webui_running() is False
+
+
+def test_check_webui_running_uses_service_status(monkeypatch):
+    import types
+    import experimental.webui.service_control as service_control
+
+    seen = []
+
+    def _status(host, port):
+        seen.append((host, port))
+        return types.SimpleNamespace(running=True)
+
+    monkeypatch.setattr(service_control, "get_status", _status)
+
+    assert dashboard_webui_status.check_webui_running() is True
+    assert len(seen) == 1
+
+
+def test_webui_poll_reschedules_and_stops(monkeypatch):
+    dash = _make_webui_dashboard()
+    _patch_check(monkeypatch, True)
+
+    dashboard_webui_status.start_webui_status_poll(dash)
+    assert len(dash.parent._callbacks) == 1
+    tick = dash.parent._callbacks.pop(0)
+    tick()  # runs a refresh and schedules the next tick
+    assert dash._webui_status_after_id is not None
+
+    after_id = dash._webui_status_after_id
+    dashboard_webui_status.stop_webui_status_poll(dash)
+    assert dash.parent.cancelled == [after_id]
+    assert dash._webui_status_after_id is None
+
+    dash.parent._callbacks.clear()
+    tick()  # a tick that already fired must not reschedule after stop
+    assert dash.parent._callbacks == []
+
+
+def test_update_runtime_status_display_refreshes_webui(monkeypatch):
+    dash = _make_runtime_dashboard()
+    dash._refresh_shodan_status_display = lambda: None
+    calls = []
+    monkeypatch.setattr(dashboard_webui_status, "refresh_webui_status", calls.append)
+
+    dash._update_runtime_status_display()
+
+    assert calls == [dash]

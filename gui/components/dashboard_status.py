@@ -53,3 +53,9 @@ def compose_runtime_status_lines(
     tmpfs_icon = "\u2714" if tmpfs_active else "\u2716"
     tmpfs_line = f"{tmpfs_icon} tmpfs <{mountpoint}>"
     return clamav_line, tmpfs_line
+
+
+def compose_webui_status_line(running: bool) -> str:
+    """Build the Web UI status line (tick when the server is running)."""
+    icon = "\u2714" if running else "\u2716"
+    return f"{icon} Web UI"
