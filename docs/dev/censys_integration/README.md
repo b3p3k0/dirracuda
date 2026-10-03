@@ -68,9 +68,7 @@ Primary source set used for this contract:
 
 Agency/process guides:
 
-1. https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AI_AGENT_FIELD_GUIDE.md
-2. https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AI_AGENT_DOC_STYLE_GUIDE.md
-3. https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AI_AGENT_CODE_REVIEW_GUIDE.md
+1. https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AGENT_CHARTER.md (links the Development, Review, and Writing SOPs)
 
 ## Working Model
 

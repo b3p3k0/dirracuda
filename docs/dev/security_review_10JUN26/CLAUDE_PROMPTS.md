@@ -35,11 +35,7 @@ Read before work:
 - docs/dev/security_review_10JUN26/VALIDATION_PLAN.md
 - docs/dev/security_review_10JUN26/RISK_REGISTER.md
 - docs/dev/security_review_10JUN26/LESSONS_LEARNED.md
-- https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AI_AGENT_FIELD_GUIDE.md
-- https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AI_AGENT_ROLE_GUIDE.md
-- https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AI_AGENT_DEVELOPMENT_GUIDE.md
-- https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AI_AGENT_CODE_REVIEW_GUIDE.md
-- https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AI_AGENT_DOC_STYLE_GUIDE.md
+- https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AGENT_CHARTER.md (links the Development, Review, and Writing SOPs)
 
 Hard rules:
 - Work on exactly one named card.

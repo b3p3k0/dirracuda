@@ -105,9 +105,7 @@ The 95-test baseline comprises:
 
 Primary project and standards inputs:
 
-- [AI Agent Field Guide](https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AI_AGENT_FIELD_GUIDE.md)
-- [AI Agent Documentation Style Guide](https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AI_AGENT_DOC_STYLE_GUIDE.md)
-- [AI Agent Code Review Guide](https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AI_AGENT_CODE_REVIEW_GUIDE.md)
+- [Agent Charter](https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AGENT_CHARTER.md) (links the Development, Review, and Writing SOPs)
 - [OWASP SSRF Prevention](https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html)
 - [Python urllib.request](https://docs.python.org/3/library/urllib.request.html)
 - [Python zipfile](https://docs.python.org/3/library/zipfile.html)

@@ -64,10 +64,8 @@ summaries, database export, and limited web UI configuration.
 
 - Local repo: `README.md`, `CLAUDE.md`, `docs/TECHNICAL_REFERENCE.md`, and
   current Experimental dialog code.
-- AI field/development/doc style guides:
-  - https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AI_AGENT_FIELD_GUIDE.md
-  - https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AI_AGENT_DEVELOPMENT_GUIDE.md
-  - https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/AI_AGENT_DOC_STYLE_GUIDE.md
+- Agent Charter, which links the Development, Review, and Writing SOPs:
+  - https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AGENT_CHARTER.md
 - FastAPI docs:
   - https://fastapi.tiangolo.com/tutorial/background-tasks/
   - https://fastapi.tiangolo.com/tutorial/cors/

@@ -2,7 +2,7 @@ You are joining an existing software project in-progress.
 
 Startup requirements (before first fix):
 1) Read relevant onboarding and working docs:
-- https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/AI_AGENT_FIELD_GUIDE.md
+- https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AGENT_CHARTER.md
 - /home/kevin/DEV/dirracuda/README.md
 - /home/kevin/DEV/dirracuda/CLAUDE.md
 - /home/kevin/DEV/dirracuda/docs/TECHNICAL_REFERENCE.md

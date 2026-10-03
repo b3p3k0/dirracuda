@@ -278,7 +278,7 @@ Deliver:
 Goal:
 Stabilize HTTP MVP, enforce regression gates, and document known limits.
 
-HI Guidance: adapt the existing document as neccessary but do not make major structural changes or large edits. adhere to the style guide at https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/AI_AGENT_DOC_STYLE_GUIDE.md and align with existing document style and tone
+HI Guidance: adapt the existing document as neccessary but do not make major structural changes or large edits. adhere to the style guide at https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/WRITING_SOP.md and align with existing document style and tone
 
 Scope:
 

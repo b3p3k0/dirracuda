@@ -120,7 +120,7 @@ Scope:
    - `Servers` window -> `Reddit Post DB (EXP)`
 2. Keep wording concise; no broad README restructuring.
 3. Update validation report/checklist artifacts for V2 deltas.
-4. match existing tone, tempo and verbosity. apply style guide at https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/AI_AGENT_DOC_STYLE_GUIDE.md
+4. match existing tone, tempo and verbosity. apply style guide at https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/WRITING_SOP.md
 
 Primary touch targets:
 1. `README.md`

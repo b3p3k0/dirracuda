@@ -63,9 +63,9 @@ cards after HI and PA/RA approve each card plan.
 - Tcl/Tk `focus` manual:
   https://www.tcl-lang.org/man/tcl8.6/TkCmd/focus.htm
 - Current doc style guide:
-  https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AI_AGENT_DOC_STYLE_GUIDE.md
+  https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/WRITING_SOP.md
 - Code review guide:
-  https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AI_AGENT_CODE_REVIEW_GUIDE.md
+  https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/REVIEW_SOP.md
 
 Note: the originally supplied root-level style-guide URL returns 404. The
 current file is under `agent_sops/`.

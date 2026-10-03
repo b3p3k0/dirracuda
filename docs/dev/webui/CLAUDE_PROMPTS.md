@@ -22,11 +22,7 @@ Read before changing files:
 - docs/dev/webui/ASCII_SKETCHES.md
 - docs/dev/webui/TASK_CARDS.md
 - docs/dev/webui/LESSONS_LEARNED.md
-- https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AI_AGENT_FIELD_GUIDE.md
-- https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AI_AGENT_ROLE_GUIDE.md
-- https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AI_AGENT_DEVELOPMENT_GUIDE.md
-- https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AI_AGENT_CODE_REVIEW_GUIDE.md
-- https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AI_AGENT_DOC_STYLE_GUIDE.md
+- https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AGENT_CHARTER.md (links the Development, Review, and Writing SOPs)
 
 Operating rules:
 - State your active role at the top of your response (`PA`, `RA`, or `DA`).

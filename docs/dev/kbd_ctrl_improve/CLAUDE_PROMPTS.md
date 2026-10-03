@@ -49,7 +49,7 @@ Review Claude/DA's plan or implementation for Card C{N}.
 
 Use docs/dev/kbd_ctrl_improve/SPEC.md and TASK_CARDS.md as the contract.
 Also apply:
-- https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AI_AGENT_CODE_REVIEW_GUIDE.md
+- https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/REVIEW_SOP.md
 
 Focus:
 1. Does the plan solve the card and only the card?

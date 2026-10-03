@@ -21,10 +21,7 @@ Read before changing files:
 - docs/dev/inetgrate_exp_feat/TASK_CARDS.md
 - docs/dev/inetgrate_exp_feat/LESSONS_LEARNED.md
 - docs/dev/inetgrate_exp_feat/RISK_REGISTER.md
-- https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AI_AGENT_FIELD_GUIDE.md
-- https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AI_AGENT_DOC_STYLE_GUIDE.md
-- https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AI_AGENT_DEVELOPMENT_GUIDE.md
-- https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AI_AGENT_CODE_REVIEW_GUIDE.md
+- https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AGENT_CHARTER.md (links the Development, Review, and Writing SOPs)
 
 Operating rules:
 - Implement only the requested card.

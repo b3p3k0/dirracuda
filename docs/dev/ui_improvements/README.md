@@ -96,8 +96,8 @@ Implementation references: [Tk focus](https://www.tcl-lang.org/man/tcl8.6/TkCmd/
 [Tk event-loop waits](https://www.tcl-lang.org/man/tcl8.6/TkCmd/tkwait.htm), and
 [EWMH user-time hint](https://specifications.freedesktop.org/wm/1.5/ar01s05.html).
 
-Startup references: [AI-HI field guide](https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AI_AGENT_FIELD_GUIDE.md),
-[documentation style guide](https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AI_AGENT_DOC_STYLE_GUIDE.md),
+Startup references: [Agent Charter](https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AGENT_CHARTER.md),
+[documentation style guide](https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/WRITING_SOP.md),
 [repository instructions](../../../AGENTS.md), and prior lessons in
 [scan dialogs](../scan_dialogs/LESSONS_LEARNED.md),
 [provider promotion](../promote_reddit_and_websearch/LESSONS_LEARNED.md), and

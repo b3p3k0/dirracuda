@@ -78,5 +78,5 @@ No live-network run was performed by the agent.
 - [Earlier integration roadmap](../inetgrate_exp_feat/ROADMAP.md)
 - [Earlier integration lessons](../inetgrate_exp_feat/LESSONS_LEARNED.md)
 - [Entrypoint lessons](../entrypoint_canonicalization/LESSONS_LEARNED.md)
-- [Operating guide](https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AI_AGENT_FIELD_GUIDE.md)
-- [Writing guide](https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AI_AGENT_DOC_STYLE_GUIDE.md)
+- [Operating guide](https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/AGENT_CHARTER.md)
+- [Writing guide](https://raw.githubusercontent.com/b3p3k0/configs/refs/heads/main/agent_sops/WRITING_SOP.md)
