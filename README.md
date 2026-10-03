@@ -352,6 +352,15 @@ Read-only directory enumeration that previews accessible shares without download
 
 Live scan/probe/extract output is shown in monitor dialogs. Hiding a monitor does not stop the task; reopen it from **Running Tasks**.
 
+Closing the dashboard while tasks are running asks for confirmation and requests
+cancellation. The console reports amber when tracked work stops and cleanup
+completes, or red when work remains or cleanup fails. Tracebacks and multiline
+diagnostics go to private `/tmp/dirracuda-*.log` files; the console prints a short
+message and the exact `cat` command to view each dump. This includes batch failures
+that arrive after the window closes. If saving a dump fails, the diagnostics stay
+in the console.
+Redirected output uses plain text; `NO_COLOR` also disables console colors.
+
 Automatic scan updates and passive result summaries do not request focus or block
 other app windows. Hidden monitors stay hidden through stage changes and completion;
 explicitly reopening one brings it forward. On X11 desktops, new automatic windows

@@ -16,8 +16,12 @@ Usage:
 from __future__ import annotations
 
 import queue
+import threading
 import tkinter as tk
 from typing import Any, Callable
+from gui.utils.logging_config import get_logger
+
+_logger = get_logger("ui_dispatcher")
 
 
 class UIDispatcher:
@@ -47,6 +51,8 @@ class UIDispatcher:
         self._root = root
         self._queue: queue.Queue = queue.Queue()
         self._running = True
+        self.failed = False
+        self._lock = threading.Lock()
         self._after_id: str | None = None
         self._start_polling()
 
@@ -54,22 +60,18 @@ class UIDispatcher:
         """
         Queue a callback to run on the main thread.
 
-        Safe to call from any thread. Does nothing if dispatcher is stopped
-        or root is destroyed.
+        Safe to call from any thread. Does nothing after stop(); the owner
+        must call stop() on the UI thread when its window is destroyed.
 
         Args:
             callback: Function to call on the main thread.
             *args: Positional arguments for callback.
             **kwargs: Keyword arguments for callback.
         """
-        if not self._running:
-            return
-        try:
-            if not self._root.winfo_exists():
-                return
-        except (tk.TclError, RuntimeError):
-            return
-        self._queue.put((callback, args, kwargs))
+        # Even winfo_exists() is a Tk call: workers must only touch Python state.
+        with self._lock:
+            if self._running:
+                self._queue.put((callback, args, kwargs))
 
     def _start_polling(self) -> None:
         """Begin the polling loop."""
@@ -96,12 +98,9 @@ class UIDispatcher:
                 callback, args, kwargs = self._queue.get_nowait()
                 try:
                     callback(*args, **kwargs)
-                except tk.TclError:
-                    # Widget may have been destroyed; ignore
-                    pass
                 except Exception:
-                    # Don't let one bad callback kill the dispatcher
-                    pass
+                    self.failed = True
+                    _logger.exception("Interface update failed; details follow")
                 processed += 1
             except queue.Empty:
                 break
@@ -119,7 +118,8 @@ class UIDispatcher:
 
         Cancels pending after() and drains queue to prevent TclError on shutdown.
         """
-        self._running = False
+        with self._lock:
+            self._running = False
 
         # Cancel pending after callback
         if self._after_id is not None:

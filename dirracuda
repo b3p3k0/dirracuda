@@ -1477,134 +1477,15 @@ class XSMBSeekGUI:
             )
     
     def _on_closing(self) -> None:
-        """Handle application closing."""
-        if getattr(self, "_closing", False):
-            return
-        self._closing = True
-        self._pending_tmpfs_startup_warning = None
-        self._pending_tmpfs_warning_code = None
-        dashboard = self.dashboard
-        has_active_work = False
-        try:
-            if dashboard and hasattr(dashboard, "has_active_or_queued_work"):
-                has_active_work = bool(dashboard.has_active_or_queued_work())
-            elif self.scan_manager and self.scan_manager.is_scanning:
-                has_active_work = True
-        except Exception:
-            has_active_work = bool(self.scan_manager and self.scan_manager.is_scanning)
+        """Close through the shared shutdown routine, preserving patchable services."""
+        from gui.utils.app_shutdown import close_application
+        close_application(
+            self, messagebox=messagebox, time=time, logger=_logger,
+            get_tmpfs_runtime_state=get_tmpfs_runtime_state,
+            tmpfs_has_quarantined_files=tmpfs_has_quarantined_files,
+            cleanup_tmpfs_quarantine=cleanup_tmpfs_quarantine,
+        )
 
-        if has_active_work:
-            response = messagebox.askyesno(
-                "Tasks in Progress",
-                "A scan is running or scans/tasks are queued.\n\n"
-                "Stop all running and queued tasks and exit?",
-                icon="warning",
-                parent=self.root,
-            )
-            if not response:
-                self._closing = False
-                return
-            try:
-                if dashboard and hasattr(dashboard, "request_cancel_active_or_queued_work"):
-                    dashboard.request_cancel_active_or_queued_work()
-                elif self.scan_manager and self.scan_manager.is_scanning:
-                    self.scan_manager.interrupt_scan()
-            except Exception:
-                pass
-            start = time.time()
-            retried = False
-            while (time.time() - start) < 6.0:
-                try:
-                    if self.root and self.root.winfo_exists():
-                        self.root.update_idletasks()
-                        self.root.update()
-                except tk.TclError:
-                    break
-                try:
-                    if dashboard and hasattr(dashboard, "has_active_or_queued_work"):
-                        still_active = bool(dashboard.has_active_or_queued_work())
-                    else:
-                        still_active = bool(self.scan_manager and self.scan_manager.is_scanning)
-                except Exception:
-                    still_active = bool(self.scan_manager and self.scan_manager.is_scanning)
-                if not still_active:
-                    break
-                elapsed = time.time() - start
-                if (not retried) and elapsed >= 3.0:
-                    retried = True
-                    try:
-                        if dashboard and hasattr(dashboard, "request_cancel_active_or_queued_work"):
-                            dashboard.request_cancel_active_or_queued_work()
-                        if dashboard and hasattr(dashboard, "force_terminate_active_work"):
-                            dashboard.force_terminate_active_work()
-                        elif self.scan_manager and self.scan_manager.is_scanning:
-                            self.scan_manager.interrupt_scan()
-                    except Exception:
-                        pass
-                time.sleep(0.10)
-
-            try:
-                if dashboard and hasattr(dashboard, "has_active_or_queued_work"):
-                    if dashboard.has_active_or_queued_work() and hasattr(dashboard, "force_terminate_active_work"):
-                        dashboard.force_terminate_active_work()
-            except Exception:
-                pass
-
-        # tmpfs data-loss confirmation gate.
-        try:
-            tmpfs_state = get_tmpfs_runtime_state()
-            if tmpfs_state.get("tmpfs_active") and tmpfs_has_quarantined_files():
-                proceed = messagebox.askyesno(
-                    "In-Memory Quarantine Will Be Lost",
-                    "There are quarantined files stored in memory (tmpfs).\n\n"
-                    "Closing now will permanently delete them.\n\n"
-                    "Do you want to continue?",
-                    icon="warning",
-                    parent=self.root,
-                )
-                if not proceed:
-                    self._closing = False
-                    return
-        except Exception as exc:
-            _logger.warning("tmpfs close warning check failed: %s", exc)
-        
-        # Persist any pending configuration changes (geometry is fixed by design)
-        self.config.save_config()
-        
-        # Clean up and exit
-        try:
-            # Close any open drill-down windows
-            for window in self.drill_down_windows.values():
-                try:
-                    window.destroy()
-                except:
-                    pass
-
-            if dashboard and hasattr(dashboard, "teardown_dashboard_monitors"):
-                try:
-                    dashboard.teardown_dashboard_monitors()
-                except Exception:
-                    pass
-            
-            # Clean up backend interfaces
-            if self.db_reader:
-                self.db_reader.clear_cache()
-
-            # Stop UI dispatcher before destroying root to prevent TclError
-            if self.ui_dispatcher:
-                self.ui_dispatcher.stop()
-
-        except Exception as e:
-            _logger.warning("Cleanup error: %s", e)
-        finally:
-            try:
-                cleanup_result = cleanup_tmpfs_quarantine()
-                if not cleanup_result.get("ok", False):
-                    _logger.warning("tmpfs cleanup warning: %s", cleanup_result.get("message"))
-            except Exception as exc:
-                _logger.warning("tmpfs cleanup exception: %s", exc)
-            self.root.destroy()
-    
     def run(self) -> None:
         """Start the GUI application main loop."""
         try:

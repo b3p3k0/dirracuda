@@ -3,16 +3,57 @@
 Provides a centralized logging setup with:
 - Default WARNING level (silent under normal operation)
 - Debug via XSMBSEEK_DEBUG_* environment variables
-- Stderr output only (no file handlers)
+- Brief stderr messages; exception diagnostics saved under /tmp
 - Safe for library imports (NullHandler fallback)
 """
 
+import copy
 import logging
 import os
+import shlex
 import sys
+import tempfile
 
 # Named logger for GUI subsystem
 GUI_LOGGER_NAME = "dirracuda_gui"
+
+
+class ConsoleFormatter(logging.Formatter):
+    """Keep diagnostics in private dumps and console messages brief."""
+
+    def format(self, record):
+        # Formatter caches exception text on records. Keep the original intact
+        # for other handlers, including diagnostic capture in tests.
+        text = super().format(copy.copy(record))
+        if record.exc_info or record.exc_text or record.stack_info or "\n" in text:
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8", errors="backslashreplace",
+                    prefix="dirracuda-", suffix=".log", dir="/tmp", delete=False,
+                ) as dump:
+                    dump.write(text + "\n")
+                    dump_path = dump.name
+            except OSError as exc:
+                # Never discard diagnostics if the disk is full/unavailable.
+                return self._colorize(text, record.levelno) + (
+                    f"\nCould not save diagnostic dump: {exc}"
+                )
+            summary = text.splitlines()[0]
+            if summary.endswith("; details follow"):
+                summary = summary[:-len("; details follow")]
+            return self._colorize(summary, record.levelno) + (
+                f" Console log is saved; run cat {shlex.quote(dump_path)} to view."
+            )
+        return self._colorize(text, record.levelno)
+
+    def _colorize(self, text, level):
+        if (sys.stderr.isatty() and "NO_COLOR" not in os.environ
+                and os.environ.get("TERM") != "dumb"):
+            if level >= logging.ERROR:
+                return f"\033[31m{text}\033[0m"
+            if level >= logging.WARNING:
+                return f"\033[33m{text}\033[0m"
+        return text
 
 
 def setup_gui_logging() -> logging.Logger:
@@ -40,7 +81,7 @@ def setup_gui_logging() -> logging.Logger:
     # Stream to stderr (not stdout)
     handler = logging.StreamHandler(sys.stderr)
     handler.setLevel(level)
-    handler.setFormatter(logging.Formatter(
+    handler.setFormatter(ConsoleFormatter(
         "%(asctime)s %(levelname)s [%(name)s] %(message)s",
         datefmt="%H:%M:%S"
     ))

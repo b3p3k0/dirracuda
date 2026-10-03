@@ -44,6 +44,7 @@ from shared.quarantine import create_quarantine_dir
 from shared.path_service import get_paths, get_legacy_paths, select_existing_path
 
 from .batch_operations import ServerListWindowBatchOperationsMixin
+from gui.utils.batch_delivery import BatchDelivery
 
 class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerListWindowBatchStatusMixin):
 
@@ -130,10 +131,12 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
 
         self._register_batch_running_task(job_id)
 
+        if getattr(self, "_batch_delivery", None) is None:
+            self._batch_delivery = BatchDelivery(self.window, self._on_batch_future_done)
         for target in targets:
             future = executor.submit(self._run_batch_task, job_id, job_type, target, options, cancel_event)
             job_record["futures"].append((target, future))
-            future.add_done_callback(lambda fut, target=target, jid=job_id: self.window.after(0, self._on_batch_future_done, jid, target, fut))
+            self._batch_delivery.watch(job_id, target, future)
 
         if self._is_table_lock_required(job_type):
             self._set_table_interaction_enabled(False)
@@ -158,7 +161,8 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                 "ip_address": target.get("ip_address"),
                 "action": job_type,
                 "status": "failed",
-                "notes": str(exc)
+                "notes": str(exc),
+                "_exception": exc,
             }
 
     def _execute_probe_target(self, job_id: str, target: Dict[str, Any], options: Dict[str, Any], cancel_event: threading.Event) -> Dict[str, Any]:
@@ -197,34 +201,31 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                     server["accessible_shares_list"] = accessible_dirs_list
                     break
 
-            self._handle_probe_status_update(ip_address, status, row_key=row_key)
-            try:
-                snapshot_id = self.db_reader.upsert_probe_snapshot_for_host(
+            self._batch_delivery.schedule(self._handle_probe_status_update, ip_address, status, row_key=row_key)
+            snapshot_id = self.db_reader.upsert_probe_snapshot_for_host(
+                ip_address,
+                host_type,
+                snapshot,
+                port=port,
+            )
+            self.db_reader.upsert_probe_cache_for_host(
+                ip_address,
+                host_type,
+                status=status,
+                indicator_matches=len(analysis.get("matches", [])),
+                snapshot_path=None,
+                latest_snapshot_id=snapshot_id,
+                accessible_dirs_count=accessible_dirs_count,
+                accessible_dirs_list=accessible_dirs_list,
+            )
+            if snapshot_id is not None:
+                run_sherlock_after_probe(
+                    self.settings_manager,
+                    self.db_reader,
                     ip_address,
                     host_type,
-                    snapshot,
                     port=port,
                 )
-                self.db_reader.upsert_probe_cache_for_host(
-                    ip_address,
-                    host_type,
-                    status=status,
-                    indicator_matches=len(analysis.get("matches", [])),
-                    snapshot_path=None,
-                    latest_snapshot_id=snapshot_id,
-                    accessible_dirs_count=accessible_dirs_count,
-                    accessible_dirs_list=accessible_dirs_list,
-                )
-                if snapshot_id is not None:
-                    run_sherlock_after_probe(
-                        self.settings_manager,
-                        self.db_reader,
-                        ip_address,
-                        host_type,
-                        port=port,
-                    )
-            except Exception:
-                pass
 
             notes: List[str] = [f"{accessible_dirs_count} directorie(s)"]
             if issue_detected:
@@ -319,39 +320,36 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                     server["accessible_shares_list"] = accessible_dirs_list
                     break
 
-            self._handle_probe_status_update(ip_address, status, row_key=row_key)
-            try:
-                snapshot_id = self.db_reader.upsert_probe_snapshot_for_host(
+            self._batch_delivery.schedule(self._handle_probe_status_update, ip_address, status, row_key=row_key)
+            snapshot_id = self.db_reader.upsert_probe_snapshot_for_host(
+                ip_address,
+                host_type,
+                snapshot,
+                protocol_server_id=protocol_server_id,
+                port=http_port,
+            )
+            self.db_reader.upsert_probe_cache_for_host(
+                ip_address,
+                host_type,
+                status=status,
+                indicator_matches=len(analysis.get("matches", [])),
+                snapshot_path=None,
+                latest_snapshot_id=snapshot_id,
+                accessible_dirs_count=accessible_dirs_count,
+                accessible_dirs_list=accessible_dirs_list,
+                accessible_files_count=total_files,
+                protocol_server_id=protocol_server_id,
+                port=http_port,
+            )
+            if snapshot_id is not None:
+                run_sherlock_after_probe(
+                    self.settings_manager,
+                    self.db_reader,
                     ip_address,
                     host_type,
-                    snapshot,
                     protocol_server_id=protocol_server_id,
                     port=http_port,
                 )
-                self.db_reader.upsert_probe_cache_for_host(
-                    ip_address,
-                    host_type,
-                    status=status,
-                    indicator_matches=len(analysis.get("matches", [])),
-                    snapshot_path=None,
-                    latest_snapshot_id=snapshot_id,
-                    accessible_dirs_count=accessible_dirs_count,
-                    accessible_dirs_list=accessible_dirs_list,
-                    accessible_files_count=total_files,
-                    protocol_server_id=protocol_server_id,
-                    port=http_port,
-                )
-                if snapshot_id is not None:
-                    run_sherlock_after_probe(
-                        self.settings_manager,
-                        self.db_reader,
-                        ip_address,
-                        host_type,
-                        protocol_server_id=protocol_server_id,
-                        port=http_port,
-                    )
-            except Exception:
-                pass
 
             notes_h: List[str] = [f"{total} entries"]
             if issue_detected:
@@ -396,38 +394,39 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                 "action": "probe",
                 "status": status,
                 "notes": str(exc),
+                "_exception": exc,
                 "units": 1,
             }
 
         if cancel_event.is_set():
-            raise probe_runner.ProbeError("Probe cancelled")
+            return {
+                "ip_address": ip_address, "row_key": row_key, "action": "probe",
+                "status": "cancelled", "notes": "Probe cancelled", "units": 1,
+            }
 
         analysis = probe_patterns.attach_indicator_analysis(result, self.indicator_patterns)
         issue_detected = bool(analysis.get("is_suspicious"))
-        self._handle_probe_status_update(ip_address, 'issue' if issue_detected else 'clean', row_key=row_key)
-        try:
-            snapshot_id = self.db_reader.upsert_probe_snapshot_for_host(
+        self._batch_delivery.schedule(self._handle_probe_status_update, ip_address, 'issue' if issue_detected else 'clean', row_key=row_key)
+        snapshot_id = self.db_reader.upsert_probe_snapshot_for_host(
+            ip_address,
+            host_type,
+            result,
+        )
+        self.db_reader.upsert_probe_cache_for_host(
+            ip_address,
+            host_type,
+            status='issue' if issue_detected else 'clean',
+            indicator_matches=len(analysis.get("matches", [])),
+            snapshot_path=None,
+            latest_snapshot_id=snapshot_id,
+        )
+        if snapshot_id is not None:
+            run_sherlock_after_probe(
+                self.settings_manager,
+                self.db_reader,
                 ip_address,
                 host_type,
-                result,
             )
-            self.db_reader.upsert_probe_cache_for_host(
-                ip_address,
-                host_type,
-                status='issue' if issue_detected else 'clean',
-                indicator_matches=len(analysis.get("matches", [])),
-                snapshot_path=None,
-                latest_snapshot_id=snapshot_id,
-            )
-            if snapshot_id is not None:
-                run_sherlock_after_probe(
-                    self.settings_manager,
-                    self.db_reader,
-                    ip_address,
-                    host_type,
-                )
-        except Exception:
-            pass
 
         share_count = len(result.get("shares", []))
         notes: List[str] = []
@@ -472,19 +471,17 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                 "ip_address": ip_address,
                 "action": "extract",
                 "status": "failed",
-                "notes": f"Quarantine error: {exc}"
+                "notes": f"Quarantine error: {exc}",
+                "_exception": exc,
             }
 
         dialog = self.active_jobs.get(job_id, {}).get("dialog")
 
         try:
-            self.window.after(0, self._update_batch_status_dialog, dialog, 0, self.active_jobs.get(job_id, {}).get("total"), f"Extracting {ip_address}")
+            self._batch_delivery.schedule(self._update_batch_status_dialog, dialog, 0, self.active_jobs.get(job_id, {}).get("total"), f"Extracting {ip_address}")
 
             def progress_cb(rel_path: str, index: int, limit: Optional[int]) -> None:
-                try:
-                    self.window.after(0, self._update_batch_status_dialog, dialog, 0, None, f"{ip_address}: {index}/{limit or '?'} {rel_path}")
-                except Exception:
-                    pass
+                self._batch_delivery.schedule(self._update_batch_status_dialog, dialog, 0, None, f"{ip_address}: {index}/{limit or '?'} {rel_path}")
 
             if host_type == "F":
                 raw_port = target.get("port")
@@ -632,7 +629,8 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
                 "ip_address": ip_address,
                 "action": "extract",
                 "status": status,
-                "notes": str(exc)
+                "notes": str(exc),
+                "_exception": exc,
             }
 
         files = summary["totals"].get("files_downloaded", 0)
@@ -649,10 +647,11 @@ class ServerListWindowBatchMixin(ServerListWindowBatchOperationsMixin, ServerLis
         )
 
         # Mark host as extracted (successful run, even if zero files)
-        self._handle_extracted_update(ip_address, row_key=row_key, host_type=host_type)
+        self._persist_extracted_flag(ip_address, row_key=row_key, host_type=host_type)
+        self._batch_delivery.schedule(self._handle_extracted_update, ip_address, row_key=row_key, host_type=host_type, persist=False)
 
         # Update dialog progress (per target)
-        self.window.after(0, self._update_batch_status_dialog, dialog, 1, self.active_jobs.get(job_id, {}).get("total"), f"Extracted {ip_address}")
+        self._batch_delivery.schedule(self._update_batch_status_dialog, dialog, 1, self.active_jobs.get(job_id, {}).get("total"), f"Extracted {ip_address}")
 
         return {
             "ip_address": ip_address,

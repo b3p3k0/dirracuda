@@ -34,3 +34,24 @@ Date: 2026-04-21
 
 ## Wave 1.2 Follow-through (Dashboard DB Summary Refresh)
 - Dashboard DB summary refreshes must go through the shared database-change hook; the static summary gate must be explicitly unlocked for post-write refreshes and re-locked afterward.
+
+## Batch shutdown callbacks (2026-10-03)
+
+- `after()` and `winfo_exists()` are Tk calls too. Workers enqueue Python callbacks;
+  only the UI thread polls, checks widgets, and cancels timers. A liveness check on
+  a worker can fail before it ever reaches the supposedly protected callback.
+- Keep failure reporting outside UI delivery. Closing a window may discard its
+  queued updates, but a failed Future or database write must still reach the log.
+- `shutdown(wait=False)` and removing a Running Tasks row do not mean a worker
+  stopped. Retain pending futures and subprocess handles when assessing shutdown.
+- Server List is a wrapper: call its `_close_window()` teardown, not a nonexistent
+  `destroy()` method. Root destruction alone skips its cancellation hooks.
+- Amber means tracked work stopped and cleanup completed. Red means errors or
+  unfinished work; do not infer clean shutdown from a cancellation request.
+- Regression coverage: `test_batch_shutdown.py`, `test_dirracuda_close_behavior.py`,
+  and `test_console_severity.py` under `gui/tests/`. Tests use controlled Futures,
+  thread-checked fake widgets, and mocked network/database operations.
+- Keep console exception summaries brief; save the full entry in a unique,
+  owner-only `/tmp/dirracuda-*.log` and print its `cat` command outside ANSI color.
+  Preserve the original log record for other handlers. If creating/writing the
+  dump fails, retain the traceback in the console rather than lose diagnostics.

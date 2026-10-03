@@ -18,6 +18,7 @@ Covers:
 
 import importlib
 import sys
+from types import SimpleNamespace
 import threading
 import types
 from pathlib import Path
@@ -208,6 +209,7 @@ class _BatchMixinStub(ServerListWindowBatchMixin):
 
     def __init__(self, db_reader=None):
         self.window = _StubWindow()
+        self._batch_delivery = SimpleNamespace(schedule=lambda fn, *a, **kw: fn(*a, **kw))
         self.tree = _StubTree()
         self.db_reader = db_reader or MagicMock()
         self.settings_manager = _StubSettingsManager()

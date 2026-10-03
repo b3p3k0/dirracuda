@@ -8,7 +8,7 @@ import time
 import platform
 import json
 import threading
-from concurrent.futures import Future
+from concurrent.futures import CancelledError, Future
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 
@@ -213,6 +213,8 @@ class ServerListWindowBatchStatusMixin:
 
             try:
                 result = future.result()
+            except CancelledError:
+                result = {"status": "cancelled", "notes": "Cancelled before starting"}
             except Exception as exc:
                 result = {
                     "ip_address": target.get("ip_address"),
@@ -727,8 +729,8 @@ class ServerListWindowBatchStatusMixin:
                 self._apply_filters()
                 self._restore_selection(selected_ips)
 
-        def _handle_extracted_update(self, ip_address: str, row_key: Optional[str] = None, host_type: str = "S") -> None:
-            """Mark host as extracted in-memory and persist to DB."""
+        def _persist_extracted_flag(self, ip_address: str, row_key: Optional[str] = None, host_type: str = "S") -> None:
+            """Persist extraction independently of the window lifetime."""
             if not ip_address:
                 return
             target_server = None
@@ -741,22 +743,26 @@ class ServerListWindowBatchStatusMixin:
                     target_server = server
                     break
             if self.db_reader:
-                try:
-                    kw = {}
-                    psid = (target_server or {}).get("protocol_server_id")
-                    port = (target_server or {}).get("port")
-                    if psid is not None:
-                        kw["protocol_server_id"] = psid
-                    if port is not None:
-                        kw["port"] = port
-                    self.db_reader.upsert_extracted_flag_for_host(
-                        ip_address,
-                        host_type,
-                        True,
-                        **kw,
-                    )
-                except Exception:
-                    pass
+                kw = {}
+                psid = (target_server or {}).get("protocol_server_id")
+                port = (target_server or {}).get("port")
+                if psid is not None:
+                    kw["protocol_server_id"] = psid
+                if port is not None:
+                    kw["port"] = port
+                self.db_reader.upsert_extracted_flag_for_host(
+                    ip_address,
+                    host_type,
+                    True,
+                    **kw,
+                )
+
+        def _handle_extracted_update(self, ip_address: str, row_key: Optional[str] = None, host_type: str = "S", *, persist: bool = True) -> None:
+            """Refresh extraction UI on the main thread; legacy callers also persist."""
+            if not ip_address:
+                return
+            if persist:
+                self._persist_extracted_flag(ip_address, row_key=row_key, host_type=host_type)
 
             for server in self.all_servers:
                 if row_key is not None:
