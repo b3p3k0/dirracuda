@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import sys
 import tkinter as tk
 from typing import Any, Iterable, Optional
 
+from gui.utils import last_scan_window
 from gui.utils import safe_messagebox as _fallback_msgbox
 
 
@@ -186,6 +188,8 @@ def start_provider_queue(dash, scan_request: dict) -> bool:
     generation = int(getattr(dash, "_provider_queue_generation", 0) or 0) + 1
     dash._provider_queue_generation = generation
     dash._provider_queue_active = True
+    dash._provider_queue_started_at = datetime.now(timezone.utc)
+    dash._provider_queue_providers = list(ranked)
     dash._provider_queue_pending = list(ranked)
     dash._provider_queue_current = None
     dash._provider_queue_request = dict(scan_request)
@@ -312,11 +316,31 @@ def complete_provider(
     return True
 
 
+def _record_scan_window(dash, *, cancelled: bool) -> None:
+    try:
+        start = getattr(dash, "_provider_queue_started_at", None)
+        db_path = getattr(getattr(dash, "db_reader", None), "db_path", None)
+        if start is None or not db_path:
+            return
+        last_scan_window.record_last_scan_window(
+            start,
+            datetime.now(timezone.utc),
+            db_path,
+            providers=list(getattr(dash, "_provider_queue_providers", []) or []),
+            cancelled=cancelled,
+        )
+    except Exception:
+        pass
+    finally:
+        dash._provider_queue_started_at = None
+
+
 def cancel_provider_queue(dash, *, notify: bool = False) -> bool:
     """Cancel pending providers and invalidate callbacks from the active generation."""
     if not is_provider_queue_active(dash):
         return False
 
+    _record_scan_window(dash, cancelled=True)
     current = getattr(dash, "_provider_queue_current", None)
     dash._provider_queue_generation = (
         int(getattr(dash, "_provider_queue_generation", 0) or 0) + 1
@@ -355,6 +379,7 @@ def _finish_provider_queue(dash) -> None:
     if not is_provider_queue_active(dash):
         return
 
+    _record_scan_window(dash, cancelled=False)
     batch = getattr(dash, "_provider_queue_shodan_batch", {}) or {}
     probe_rows = list(batch.get("probe") or [])
     extract_rows = list(batch.get("extract") or [])
