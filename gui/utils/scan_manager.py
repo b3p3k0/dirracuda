@@ -850,21 +850,6 @@ class ScanManager:
             _logger.error("Error during scan cancellation: %s", e)
             return False
     
-    def get_last_scan_time(self) -> Optional[datetime]:
-        """
-        Get timestamp of last completed scan for filtering.
-        
-        Returns:
-            Datetime of last scan completion or None if no scans
-        """
-        if not self.scan_results or not self.scan_results.get("end_time"):
-            return None
-        
-        try:
-            return datetime.fromisoformat(self.scan_results["end_time"])
-        except (ValueError, TypeError):
-            return None
-
     def _get_recent_scan_stats_from_db(self) -> Optional[Dict[str, int]]:
         """
         Get recent scan statistics from database as fallback when parsing fails.

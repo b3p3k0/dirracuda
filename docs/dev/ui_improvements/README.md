@@ -1,6 +1,14 @@
 # UI improvements
 
-## Current task: Server List Notes column and Filters dropdown
+## Current task: Server List Most Recent Scan Only filter
+
+Adds a `Most Recent Scan Only` option to `Filters ▾`. It shows hosts from the
+last desktop provider-queue run and removes the broken `Since Last Scan` date
+option plus other dead recent-scan code. See
+[RECENT_SCAN_FILTER.md](RECENT_SCAN_FILTER.md) for decisions, removals, and
+validation.
+
+## Completed task: Server List Notes column and Filters dropdown
 
 Adds a `Notes` ✔/○ column and folds the quick-filter checkboxes, plus a new
 `Has notes` filter, into one stay-open `Filters ▾` popover. See

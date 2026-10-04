@@ -23,7 +23,7 @@ import sys
 from gui.utils.database_access import DatabaseReader
 from gui.utils.style import get_theme
 from gui.utils.data_export_engine import get_export_engine
-from gui.utils.scan_manager import get_scan_manager
+from gui.utils import last_scan_window
 from gui.utils.template_store import TemplateStore
 from gui.utils.logging_config import get_logger
 from gui.utils.keybindings import bind_close_shortcuts, bind_tree_enter_shortcut
@@ -114,6 +114,8 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self.probed_only = tk.BooleanVar()
         self.exclude_compromised = tk.BooleanVar()
         self.has_notes_only = tk.BooleanVar()
+        self.most_recent_scan_only = tk.BooleanVar()
+        self._last_scan_window = None
         self.protocol_smb = tk.BooleanVar(value=True)
         self.protocol_ftp = tk.BooleanVar(value=True)
         self.protocol_http = tk.BooleanVar(value=True)
@@ -148,7 +150,6 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self.status_label = None
         self.mode_button = None
         self.add_record_button = None
-        self.show_all_button = None
         self.context_menu = None
         self.probe_button = None
         self.extract_button = None
@@ -187,10 +188,6 @@ class ServerListWindow(ServerListWindowActionsMixin):
         except Exception as exc:
             _logger.warning("Filter template store unavailable: %s", exc)
             self.filter_template_store = None
-
-        # Date filtering state
-        self.filter_recent = self.window_data.get("filter_recent", False)
-        self.last_scan_time = None
 
         # Data management
         self.all_servers = []
@@ -453,6 +450,9 @@ class ServerListWindow(ServerListWindowActionsMixin):
 
     def _create_filter_panel(self) -> None:
         """Create filtering controls panel using filters module."""
+        self._last_scan_window = last_scan_window.load_last_scan_window(
+            getattr(self.db_reader, "db_path", None)
+        )
         # Load persisted filter preferences before building UI
         self._load_filter_preferences()
 
@@ -466,6 +466,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
             'probed_only': self.probed_only,
             'exclude_compromised': self.exclude_compromised,
             'has_notes_only': self.has_notes_only,
+            'most_recent_scan_only': self.most_recent_scan_only,
             'protocol_smb': self.protocol_smb,
             'protocol_ftp': self.protocol_ftp,
             'protocol_http': self.protocol_http,
@@ -490,14 +491,11 @@ class ServerListWindow(ServerListWindowActionsMixin):
             'on_delete_filter_template': self._on_delete_filter_template
         }
 
-        # Add show all toggle if needed
-        if self.filter_recent:
-            filter_callbacks['on_show_all_toggle'] = self._toggle_show_all_results
-
         # Create filter panel using module
         self.filter_frame, self.filter_widgets = filters.create_filter_panel(
             self.window, self.theme, filter_vars, filter_callbacks
         )
+        self._sync_recent_scan_option()
 
         # Wire template dropdown variable and populate options
         if 'filter_template_dropdown' in self.filter_widgets:
@@ -925,7 +923,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
         # Apply date filter
         date_filter_value = self.date_filter.get()
         if date_filter_value and date_filter_value != "All":
-            filtered = filters.apply_date_filter(filtered, date_filter_value, self.last_scan_time)
+            filtered = filters.apply_date_filter(filtered, date_filter_value)
 
         # Apply accessible shares filter
         if self.shares_filter.get():
@@ -950,6 +948,9 @@ class ServerListWindow(ServerListWindowActionsMixin):
         if self.has_notes_only.get():
             filtered = filters.apply_has_notes_filter(filtered, True)
 
+        if self.most_recent_scan_only.get():
+            filtered = filters.apply_recent_scan_filter(filtered, self._last_scan_window)
+
         self.filtered_servers = filtered
 
         # Update table display using table module
@@ -964,11 +965,24 @@ class ServerListWindow(ServerListWindowActionsMixin):
         self._update_action_buttons_state()
         self._persist_filter_preferences()
 
+    def _sync_recent_scan_option(self) -> None:
+        enabled = self._last_scan_window is not None
+        if not enabled:
+            self.most_recent_scan_only.set(False)
+        dropdown = (getattr(self, "filter_widgets", None) or {}).get("filter_dropdown")
+        if dropdown is not None:
+            dropdown.set_option_state("most_recent_scan_only", enabled)
+            dropdown.set_option_hint(
+                "most_recent_scan_only", None if enabled else "No recorded scan yet"
+            )
+
     def _load_data(self) -> None:
         """Load server data from database."""
         try:
             self._db_available = bool(self.db_reader and self.db_reader.is_database_available())
             if not self._db_available:
+                self._last_scan_window = None
+                self._sync_recent_scan_option()
                 self.all_servers = []
                 self.filtered_servers = []
                 table.update_table_display(self.tree, self.filtered_servers, self.settings_manager)
@@ -977,9 +991,10 @@ class ServerListWindow(ServerListWindowActionsMixin):
                 self._update_action_buttons_state()
                 return
 
-            # Get last scan time from scan manager
-            scan_manager = get_scan_manager()
-            self.last_scan_time = scan_manager.get_last_scan_time()
+            self._last_scan_window = last_scan_window.load_last_scan_window(
+                getattr(self.db_reader, "db_path", None)
+            )
+            self._sync_recent_scan_option()
 
             # Get all servers (no pagination limit) — unified S+F rows
             servers, total_count = self.db_reader.get_protocol_server_list(
@@ -1008,10 +1023,6 @@ class ServerListWindow(ServerListWindowActionsMixin):
             # For large datasets this results in thousands of per-server DB queries
             # on the UI thread and can make the window appear permanently "Loading...".
             # Denied share lists are fetched lazily when a details popup is opened.
-
-            # Set initial date filter if requested
-            if self.filter_recent and self.last_scan_time:
-                self.date_filter.set("Since Last Scan")
 
             # Reset sort state for fresh dataset
             self._reset_sort_state()

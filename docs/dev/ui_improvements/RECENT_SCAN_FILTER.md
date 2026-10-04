@@ -39,7 +39,7 @@ filter.
 | `last_scan_time` attribute and its load | `server_list_window/window.py` | Only fed `Since Last Scan`. |
 | `ScanManager.get_last_scan_time()` | `gui/utils/scan_manager.py` | Only caller was the Server List. |
 | `filter_recent` flag, `on_show_all_toggle` callback, `show_all_button` | `window.py`, `filters.py`, `actions/templates.py::_toggle_show_all_results` | `window_data` is always `{}` (`gui/dashboard/widget.py::_open_drill_down`), so this never ran. |
-| `apply_recent_discoveries_filter()` | `actions/templates.py` | No callers. It also passes `recent_discovery_only=` to `get_server_list`, which does not accept it, so calling it raises `TypeError`. |
+| `apply_recent_discoveries_filter()` | `actions/templates.py` | Two obsolete `recent_activity` routes in `dirracuda` and `scripts/legacy/xsmbseek_legacy.py` called it; C2 removes those routes. It also passes `recent_discovery_only=` to `get_server_list`, which does not accept it, so calling it raises `TypeError`. |
 
 ### Kept on purpose
 
@@ -114,4 +114,58 @@ filter.
 
 ## Validation
 
-To be filled in at closeout.
+C2 completed on 2026-10-04. No commit or push.
+
+RA follow-up: load the recorded window before restoring filter preferences.
+A saved `most_recent_scan_only = True` now survives the initial panel build
+when the active DB has a valid window. The deferred data load still reloads the
+window. Two regression cases follow the panel build and deferred initial load,
+then check the first filter application and persisted preferences. A valid
+window preserves True; no window forces and persists False.
+
+```text
+xvfb-run -a ./venv/bin/python -m pytest gui/tests/test_server_list_recent_scan_filter.py gui/tests/test_server_list_notes_filter.py gui/tests/test_server_list_card4.py gui/tests/test_last_scan_window.py -q
+151 passed in 1.08s
+
+xvfb-run -a ./venv/bin/python -m pytest gui/tests -q -o faulthandler_timeout=60
+2469 passed, 8 skipped in 28.82s
+```
+
+The sandbox blocked Tk's connection to Xvfb on the first attempt. Both commands
+above ran with a working Xvfb display outside the sandbox. The theme-style and
+messagebox guardrails passed unchanged.
+
+Before deletion and after implementation, the whole-repo audit used:
+
+```bash
+grep -rnE 'Since Last Scan|last_scan_time|get_last_scan_time|filter_recent|on_show_all_toggle|show_all_button|_toggle_show_all_results|apply_recent_discoveries_filter|apply_date_filter' . --exclude-dir=.git --exclude-dir=venv --exclude-dir=__pycache__ --exclude-dir=.pytest_cache
+```
+
+| Symbol | Before removal | After removal |
+|---|---|---|
+| `Since Last Scan` | `filters.py`, `window.py`, this plan | Migration test and removal documentation only |
+| `last_scan_time` / `get_last_scan_time` | `filters.py`, `window.py`, `scan_manager.py`, this plan | Historical references in this plan only |
+| `filter_recent` | `window.py`, `actions/templates.py`, this plan | Historical references only; unrelated `filter_recent_candidates` functions and tests remain |
+| `on_show_all_toggle` / `show_all_button` | `filters.py`, `window.py`, this plan | Historical references in this plan only |
+| `_toggle_show_all_results` | `window.py`, `actions/templates.py`, this plan | Historical references in this plan only |
+| `apply_recent_discoveries_filter` | `actions/templates.py`, `dirracuda`, `scripts/legacy/xsmbseek_legacy.py`, this plan | Historical references in this plan only |
+| `apply_date_filter` | Definition in `filters.py`, caller in `window.py`, this plan | Definition and caller use two arguments; regression tests check the signature |
+
+The audit found two obsolete `recent_activity` routes missed by the original
+plan. Both routes and their unused `ServerListWindow` imports were removed.
+No existing tests referenced the removed symbols. The new tests cover parsing,
+inclusive bounds, notes intersection, hint visibility and live updates, saved
+state, legacy dates, data reloads, and the real checkbutton-to-table path.
+The `recent_scan_only` database heuristic remains unchanged.
+
+RA real-lifecycle check (Xvfb, real `ServerListWindow` + `DatabaseReader` on a
+temp DB, temp `HOME`): no window → option disabled with hint; queue record →
+tick shows only the run's 2 of 4 hosts, `Filters (1) ▾`; restart with a fresh
+`SettingsManager` → still ticked, same rows; switch to another DB → window
+`None`, tick forced off.
+
+## Follow-ups (not in scope)
+
+- `apply_date_filter` compares local `datetime.now()` against UTC `last_seen`,
+  so `Last 24 Hours` etc. are skewed by the local UTC offset. Existing bug.
+- Web UI Results has its own `Filters ▾`; it has no Most Recent Scan Only yet.

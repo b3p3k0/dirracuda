@@ -11,6 +11,7 @@ QUICK_FILTERS: Tuple[Tuple[str, str], ...] = (
     ("exclude_compromised", "Exclude compromised"),
     ("shares_filter", "Show Only Shares >0"),
     ("has_notes_only", "Has notes"),
+    ("most_recent_scan_only", "Most Recent Scan Only"),
 )
 
 
@@ -30,6 +31,8 @@ class FilterDropdown:
         self.popover = None
         self.option_widgets: Dict[str, tk.Checkbutton] = {}
         self._option_states: Dict[str, bool] = {}
+        self._option_hints: Dict[str, str] = {}
+        self.hint_widgets: Dict[str, tk.Label] = {}
         self._outside_window = None
         self._outside_bind_id = None
         self._traces = []
@@ -76,6 +79,7 @@ class FilterDropdown:
             self.theme.apply_to_widget(option, "checkbox")
             option.pack(anchor="w", fill=tk.X)
             self.option_widgets[key] = option
+            self.set_option_hint(key, self._option_hints.get(key))
         self.popover.bind("<Escape>", lambda _event: self.close())
         self._outside_window = self.button.winfo_toplevel()
         self._outside_bind_id = self._outside_window.bind(
@@ -103,6 +107,7 @@ class FilterDropdown:
                 pass
         self.popover = None
         self.option_widgets.clear()
+        self.hint_widgets.clear()
 
     def toggle(self):
         if self.is_open():
@@ -114,6 +119,22 @@ class FilterDropdown:
         self._option_states[key] = enabled
         if self.is_open() and key in self.option_widgets:
             self.option_widgets[key].configure(state=tk.NORMAL if enabled else tk.DISABLED)
+
+    def set_option_hint(self, key, text_or_none):
+        if text_or_none is None:
+            self._option_hints.pop(key, None)
+        else:
+            self._option_hints[key] = text_or_none
+        if not self.is_open() or key not in self.option_widgets:
+            return
+        hint = self.hint_widgets.pop(key, None)
+        if hint is not None:
+            hint.destroy()
+        if text_or_none is not None:
+            hint = tk.Label(self.popover, text=text_or_none, anchor="w")
+            self.theme.apply_to_widget(hint, "status_bar")
+            hint.pack(after=self.option_widgets[key], anchor="w", fill=tk.X, padx=(24, 4))
+            self.hint_widgets[key] = hint
 
     def _on_destroy(self, event):
         if event.widget is self.button:

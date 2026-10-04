@@ -324,7 +324,7 @@ The **preflight screen** shows your live balance and an estimated post-scan bala
 
  Shows discovered hosts with IP/hostname, country, and accessible share counts as well as status indicators and a favorite/avoid list. The `Notes` column shows ✔ when a host has notes (yours, or the Reddit post line added by Reddit runs) and ○ when it has none. Hover a row to read its notes; edit them in the details popup.
 
-Quick filters live in the `Filters ▾` dropdown next to the search box: Favorites only, Exclude avoid, Probed only, Exclude compromised, Show Only Shares >0, and Has notes. Tick any combination; the list updates on each tick and the button shows how many are on, e.g. `Filters (2) ▾`. Click elsewhere or press `Esc` to close it.
+Quick filters live in the `Filters ▾` dropdown next to the search box: Favorites only, Exclude avoid, Probed only, Exclude compromised, Show Only Shares >0, Has notes, and Most Recent Scan Only. Tick any combination; the list updates on each tick and the button shows how many are on, e.g. `Filters (2) ▾`. Click elsewhere or press `Esc` to close it. Most Recent Scan Only shows hosts from the last desktop scan run (all providers in that run); it stays greyed out until a scan has run from Start New Scan; CLI and Web UI scans are not tracked.
 
 **Operations** (right-click a host or use the bottom-row buttons):
 

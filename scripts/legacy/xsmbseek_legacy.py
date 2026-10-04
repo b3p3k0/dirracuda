@@ -391,7 +391,7 @@ def show_smbseek_setup_dialog(parent=None, current_path: str = ".") -> Optional[
 # Import GUI components
 try:
     from gui.components.dashboard import DashboardWidget
-    from gui.components.server_list_window import open_server_list_window, ServerListWindow
+    from gui.components.server_list_window import open_server_list_window
     from gui.components.config_editor_window import open_config_editor_window
     from gui.components.app_config_dialog import open_app_config_dialog
     from gui.components.data_import_dialog import open_data_import_dialog
@@ -892,9 +892,6 @@ class XSMBSeekGUI:
                 )
             elif window_type == "data_import":
                 open_data_import_dialog(self.root, self.db_reader)
-            elif window_type == "recent_activity":
-                server_window = ServerListWindow(self.root, self.db_reader)
-                server_window.apply_recent_discoveries_filter()
             else:
                 # For other window types, show placeholder message
                 window_titles = {

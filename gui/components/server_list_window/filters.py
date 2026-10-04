@@ -7,10 +7,13 @@ Uses callback pattern for event wiring to prevent tight coupling.
 
 import tkinter as tk
 from tkinter import ttk
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Any, Callable
 
 from gui.components.server_list_window.filter_dropdown import FilterDropdown
+
+
+DATE_FILTER_OPTIONS = ["All", "Last 24 Hours", "Last 7 Days", "Last 30 Days"]
 
 
 def create_filter_panel(parent, theme, filter_vars, callbacks):
@@ -83,17 +86,6 @@ def create_filter_panel(parent, theme, filter_vars, callbacks):
     # Right-packed after mode_button so this appears immediately to its left.
     add_record_button.pack(side=tk.RIGHT, padx=(0, 8))
 
-    # Show all results toggle (if callback provided)
-    show_all_button = None
-    if 'on_show_all_toggle' in callbacks:
-        show_all_button = tk.Button(
-            search_frame,
-            text="📈 Show All Results",
-            command=callbacks['on_show_all_toggle']
-        )
-        theme.apply_to_widget(show_all_button, "button_primary")
-        show_all_button.pack(side=tk.LEFT)
-
     # Advanced filters (hidden initially)
     advanced_filters_frame = tk.Frame(filter_frame)
     theme.apply_to_widget(advanced_filters_frame, "card")
@@ -153,7 +145,7 @@ def create_filter_panel(parent, theme, filter_vars, callbacks):
     date_combo = ttk.Combobox(
         left_column,
         textvariable=filter_vars['date_filter'],
-        values=["All", "Since Last Scan", "Last 24 Hours", "Last 7 Days", "Last 30 Days"],
+        values=DATE_FILTER_OPTIONS,
         width=18,
         state="readonly"
     )
@@ -271,9 +263,6 @@ def create_filter_panel(parent, theme, filter_vars, callbacks):
         'filter_template_delete_button': delete_button,
     }
 
-    if show_all_button:
-        widget_refs['show_all_button'] = show_all_button
-
     return filter_frame, widget_refs
 
 
@@ -303,14 +292,13 @@ def apply_search_filter(servers: List[Dict[str, Any]], search_term: str) -> List
     return filtered
 
 
-def apply_date_filter(servers: List[Dict[str, Any]], filter_type: str, last_scan_time) -> List[Dict[str, Any]]:
+def apply_date_filter(servers: List[Dict[str, Any]], filter_type: str) -> List[Dict[str, Any]]:
     """
     Apply date-based filtering to server list.
 
     Args:
         servers: List of servers to filter
         filter_type: Type of date filter to apply
-        last_scan_time: Last scan time for "Since Last Scan" filter
 
     Returns:
         Filtered list of servers
@@ -321,9 +309,7 @@ def apply_date_filter(servers: List[Dict[str, Any]], filter_type: str, last_scan
     now = datetime.now()
     cutoff_time = None
 
-    if filter_type == "Since Last Scan" and last_scan_time:
-        cutoff_time = last_scan_time
-    elif filter_type == "Last 24 Hours":
+    if filter_type == "Last 24 Hours":
         cutoff_time = now - timedelta(hours=24)
     elif filter_type == "Last 7 Days":
         cutoff_time = now - timedelta(days=7)
@@ -350,12 +336,26 @@ def apply_date_filter(servers: List[Dict[str, Any]], filter_type: str, last_scan
         # If we found a valid date, compare it
         if server_date and server_date >= cutoff_time:
             filtered.append(server)
-        elif not server_date:
-            # If no date available and we're filtering for recent items, exclude
-            # But if filtering "Since Last Scan" and no date, include (assume old data)
-            if filter_type == "Since Last Scan":
-                filtered.append(server)
 
+    return filtered
+
+
+def apply_recent_scan_filter(servers, window):
+    if window is None:
+        return servers
+
+    filtered = []
+    for server in servers:
+        try:
+            last_seen = datetime.fromisoformat(server.get("last_seen"))
+        except (TypeError, ValueError):
+            continue
+        if last_seen.tzinfo is None:
+            last_seen = last_seen.replace(tzinfo=timezone.utc)
+        else:
+            last_seen = last_seen.astimezone(timezone.utc)
+        if window["start"] <= last_seen <= window["end"]:
+            filtered.append(server)
     return filtered
 
 

@@ -10,7 +10,7 @@ from tkinter import simpledialog
 from gui.utils import safe_messagebox as messagebox
 from typing import Dict, Any, Optional
 
-from gui.components.server_list_window import filters, table
+from gui.components.server_list_window import filters
 from gui.utils.dialog_helpers import ensure_dialog_focus
 from gui.utils.template_store import TemplateStore
 
@@ -53,12 +53,6 @@ class ServerListWindowTemplateMixin:
         self.protocol_ftp.set("F" in selected)
         self.protocol_http.set("H" in selected)
 
-    def _toggle_show_all_results(self) -> None:
-        """Toggle showing all results when in recent-filter mode."""
-        self.filter_recent = not self.filter_recent
-        self._update_mode_display()
-        self._apply_filters(force=True)
-
     def _reset_filters(self) -> None:
         """Reset filters to default values and refresh list."""
         self.search_text.set("")
@@ -69,6 +63,7 @@ class ServerListWindowTemplateMixin:
         self.probed_only.set(False)
         self.exclude_compromised.set(False)
         self.has_notes_only.set(False)
+        self.most_recent_scan_only.set(False)
         self.protocol_smb.set(True)
         self.protocol_ftp.set(True)
         self.protocol_http.set(True)
@@ -130,17 +125,23 @@ class ServerListWindowTemplateMixin:
 
         try:
             self.search_text.set(prefs.get('search_text', ''))
-            self.date_filter.set(prefs.get('date_filter', 'All'))
+            date_filter = prefs.get('date_filter', 'All')
+            self.date_filter.set(date_filter if date_filter in filters.DATE_FILTER_OPTIONS else 'All')
             self.shares_filter.set(prefs.get('shares_filter', True))
             self.favorites_only.set(prefs.get('favorites_only', False))
             self.exclude_avoid.set(prefs.get('exclude_avoid', False))
             self.probed_only.set(prefs.get('probed_only', False))
             self.exclude_compromised.set(prefs.get('exclude_compromised', False))
             self.has_notes_only.set(prefs.get('has_notes_only', False))
+            self.most_recent_scan_only.set(prefs.get('most_recent_scan_only', False))
             self._set_selected_protocol_types(prefs.get('protocol_types', ['S', 'F', 'H']))
         except Exception:
             # Graceful degradation if settings are malformed
             pass
+
+        sync_recent_scan = getattr(self, "_sync_recent_scan_option", None)
+        if sync_recent_scan is not None:
+            sync_recent_scan()
 
     def _persist_filter_preferences(self) -> None:
         """Persist filter preferences to settings manager if available."""
@@ -156,6 +157,7 @@ class ServerListWindowTemplateMixin:
             'probed_only': bool(self.probed_only.get()),
             'exclude_compromised': bool(self.exclude_compromised.get()),
             'has_notes_only': bool(self.has_notes_only.get()),
+            'most_recent_scan_only': bool(self.most_recent_scan_only.get()),
             'protocol_types': self._get_selected_protocol_types(),
         }
 
@@ -217,6 +219,7 @@ class ServerListWindowTemplateMixin:
             'probed_only': bool(self.probed_only.get()),
             'exclude_compromised': bool(self.exclude_compromised.get()),
             'has_notes_only': bool(self.has_notes_only.get()),
+            'most_recent_scan_only': bool(self.most_recent_scan_only.get()),
             'protocol_types': self._get_selected_protocol_types(),
             'country_codes': self._get_selected_country_codes(),
             'advanced_mode': bool(self.is_advanced_mode),
@@ -225,13 +228,18 @@ class ServerListWindowTemplateMixin:
     def _apply_filter_state(self, state: Dict[str, Any]) -> None:
         """Apply a saved filter state to UI and refresh results."""
         self.search_text.set(state.get('search_text', ''))
-        self.date_filter.set(state.get('date_filter', 'All'))
+        date_filter = state.get('date_filter', 'All')
+        self.date_filter.set(date_filter if date_filter in filters.DATE_FILTER_OPTIONS else 'All')
         self.shares_filter.set(bool(state.get('shares_filter', False)))
         self.favorites_only.set(bool(state.get('favorites_only', False)))
         self.exclude_avoid.set(bool(state.get('exclude_avoid', False)))
         self.probed_only.set(bool(state.get('probed_only', False)))
         self.exclude_compromised.set(bool(state.get('exclude_compromised', False)))
         self.has_notes_only.set(bool(state.get('has_notes_only', False)))
+        self.most_recent_scan_only.set(bool(state.get('most_recent_scan_only', False)))
+        sync_recent_scan = getattr(self, "_sync_recent_scan_option", None)
+        if sync_recent_scan is not None:
+            sync_recent_scan()
         self._set_selected_protocol_types(state.get('protocol_types', ['S', 'F', 'H']))
 
         if self.country_listbox:
@@ -451,49 +459,3 @@ class ServerListWindowTemplateMixin:
             self.window.deiconify()
             self.window.lift()
             ensure_dialog_focus(self.window, self.parent)
-
-    def apply_recent_discoveries_filter(self) -> None:
-        """Apply filter to show only recent discoveries (used by dashboard)."""
-        try:
-            if hasattr(self, "_cancel_initial_data_load"):
-                self._cancel_initial_data_load()
-
-            # Clear existing filters first
-            self.search_text.set("")
-            self.date_filter.set("All")
-
-            # Load servers with recent scan filter
-            servers, total_count = self.db_reader.get_server_list(
-                limit=None,
-                offset=0,
-                country_codes=None,
-                favorites_only=False,
-                probed_only=False,
-                exclude_avoid=False,
-                exclude_compromised=False,
-                shares_filter=False,
-                recent_discovery_only=True
-            )
-
-            self.all_servers = servers
-            self.filtered_servers = servers
-            self.count_label.config(text=f"Showing {len(servers)} of {total_count} servers")
-
-            table.populate_server_table(
-                self.tree,
-                self.filtered_servers,
-                self.country_code_list,
-                attach_probe_status=self._attach_probe_status
-            )
-
-            self._reset_sort_state()
-            self._on_selection_changed()
-            self._update_action_buttons_state()
-            self._update_context_menu_state()
-
-        except Exception as e:
-            messagebox.showerror(
-                "Recent Discoveries",
-                f"Failed to apply recent discoveries filter: {e}",
-                parent=self.window
-            )
