@@ -343,3 +343,9 @@ def test_dialog_destroy_cancels_worker_and_pending_poll(ui):
     assert ui.calls[0][2]['cancel_event'].is_set()
     assert not ui.root.tk.call('after', 'info')
     assert not any(box.called for box in ui.boxes.values())
+
+
+@pytest.mark.parametrize('count,text', [(0, '0 hosts'), (1, '1 host'), (2, '2 hosts')])
+def test_hosts_text_pluralizes(count, text):
+    from gui.components.server_list_window import export
+    assert export._hosts_text(count) == text

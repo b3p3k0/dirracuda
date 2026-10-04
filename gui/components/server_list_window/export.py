@@ -44,6 +44,10 @@ def show_export_dropdown(parent_window, button, selected_data, all_data, theme,
     menu.post(button.winfo_rootx(), button.winfo_rooty() + button.winfo_height())
 
 
+def _hosts_text(count):
+    return f"{count} host" if count == 1 else f"{count} hosts"
+
+
 def _host_counts_text(counts):
     return f"SMB {counts['S']} · FTP {counts['F']} · HTTP {counts['H']}"
 
@@ -73,7 +77,7 @@ def save_hosts_to_database(parent_window, servers, theme, active_db_path):
     theme.apply_to_widget(dialog, "main_window")
     counts = {kind: sum(key.startswith(kind + ':') for key in row_keys) for kind in 'SFH'}
     summary = tk.Label(
-        dialog, text=f"Save {len(row_keys)} hosts ({_host_counts_text(counts)}) to {Path(filename).name}?",
+        dialog, text=f"Save {_hosts_text(len(row_keys))} ({_host_counts_text(counts)}) to {Path(filename).name}?",
         wraplength=520, justify=tk.LEFT,
     )
     theme.apply_to_widget(summary, "label")
@@ -179,7 +183,7 @@ def _show_subset_result(parent_window, result):
     else:
         counts = result['hosts']
         text = (
-            f"Saved {sum(counts.values())} hosts ({_host_counts_text(counts)})\n"
+            f"Saved {_hosts_text(sum(counts.values()))} ({_host_counts_text(counts)})\n"
             f"Rows: {sum(result['rows'].values())}\n"
             f"Size: {result['size_bytes'] / (1024 * 1024):.2f} MB\n"
             f"File: {result['output_path']}\n"
