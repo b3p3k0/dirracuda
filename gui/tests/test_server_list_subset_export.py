@@ -161,7 +161,7 @@ def start(ui):
 def test_context_menu_selection_group_and_callback(ui, monkeypatch):
     ui.window._create_context_menu(ui.window.tree)
     menu = ui.window.context_menu
-    index = menu.index('💾 Save Selected to Database…')
+    index = menu.index('📤 Export Selected…')
     assert menu.entrycget(index - 2, 'label') == '🔗 Copy URL'
     assert menu.type(index - 1) == menu.type(index + 1) == 'separator'
     assert menu.entrycget(index, 'state') == 'normal'

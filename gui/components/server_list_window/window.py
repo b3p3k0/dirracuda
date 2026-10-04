@@ -569,7 +569,7 @@ class ServerListWindow(ServerListWindowActionsMixin):
         _add_selection_command("📋 Copy IP", self._on_copy_ip)
         _add_selection_command("🔗 Copy URL", self._on_copy_url)
         self.context_menu.add_separator()
-        _add_selection_command("💾 Save Selected to Database…", self._save_selected_to_database)
+        _add_selection_command("📤 Export Selected…", self._save_selected_to_database)
         self.context_menu.add_separator()
         _add_selection_command("🔍 Probe Selected", self._on_probe_selected)
         _add_selection_command("📦 Extract Selected", self._on_extract_selected)

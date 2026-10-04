@@ -338,13 +338,13 @@ Quick filters live in the `Filters ▾` dropdown next to the search box: Favorit
 | ⭐ Toggle Favorite | Mark/unmark selected servers as favorites |
 | 🚫 Toggle Avoid | Mark/unmark selected servers to avoid |
 | ⚠ Toggle Compromised | Mark/unmark selected servers as likely compromised |
-| 💾 Save Selected to Database… | Save the selected hosts to a new `.db` file you can share (see below) |
+| 📤 Export Selected… | Export the selected hosts to a new `.db` file you can share (see below) |
 | 📤 Export ▾ | Bottom-row button: Selected or All shown → Database, CSV, JSON, or ZIP. `Ctrl+E` still opens the CSV/JSON/ZIP menu for the selection |
 | 🗑️ Delete Selected | Remove selected servers from the database |
 
 Server List also includes an **Add Record** control (next to `Advanced`) for manually inserting one SMB/FTP/HTTP host row into the active database. Save keeps your current filters unchanged. If the newly added row does not appear, it is usually hidden by an active filter (most commonly `Show Only Shares >0`). Inserted records can then be probed and investigated from the GUI.
 
-**Sharing a selection.** Filter the list (for example, to hosts with ebooks), select the rows, then choose **Save Selected to Database…**. Pick a file name, confirm, and the export runs in the background with a Cancel button. The new file uses the normal Dirracuda schema and holds only the selected hosts with their access rows, file manifests, probe snapshots (file listings), probe status, flags and notes, and Sherlock results. Saved credentials are included unless you untick the checkbox; anyone with the file can read them. Analyst results, failure logs, extract history, and Reddit/Search/Censys run data are never included, and local file paths are cleared. The receiver can open the file as their database or load it with **DB Tools → Import & Merge**.
+**Sharing a selection.** Filter the list (for example, to hosts with ebooks), select the rows, then right-click and choose **Export Selected…** (or **Export ▾ → Selected → Database…**). Pick a file name, confirm, and the export runs in the background with a Cancel button. The new file uses the normal Dirracuda schema and holds only the selected hosts with their access rows, file manifests, probe snapshots (file listings), probe status, flags and notes, and Sherlock results. Saved credentials are included unless you untick the checkbox; anyone with the file can read them. Analyst results, failure logs, extract history, and Reddit/Search/Censys run data are never included, and local file paths are cleared. The receiver can open the file as their database or load it with **DB Tools → Import & Merge**.
 
 ### Probing Shares
 
