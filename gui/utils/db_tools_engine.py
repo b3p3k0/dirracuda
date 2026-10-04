@@ -212,6 +212,7 @@ from gui.utils.db_tools_engine_core_methods import bind_db_tools_engine_core_met
 from gui.utils.db_tools_engine_merge_methods import bind_db_tools_engine_merge_methods
 from gui.utils.db_tools_engine_merge_host_data_methods import bind_db_tools_engine_merge_host_data_methods
 from gui.utils.db_tools_engine_maintenance_methods import bind_db_tools_engine_maintenance_methods
+from gui.utils.db_tools_engine_subset_methods import bind_db_tools_engine_subset_methods
 
 _SHARED_BIND_SYMBOLS: Dict[str, Any] = {
     "MIN_DATE": MIN_DATE,
@@ -251,6 +252,7 @@ bind_db_tools_engine_core_methods(DBToolsEngine, _SHARED_BIND_SYMBOLS)
 bind_db_tools_engine_merge_methods(DBToolsEngine, _SHARED_BIND_SYMBOLS)
 bind_db_tools_engine_merge_host_data_methods(DBToolsEngine, _SHARED_BIND_SYMBOLS)
 bind_db_tools_engine_maintenance_methods(DBToolsEngine, _SHARED_BIND_SYMBOLS)
+bind_db_tools_engine_subset_methods(DBToolsEngine, _SHARED_BIND_SYMBOLS)
 
 def get_db_tools_engine(db_path: str) -> DBToolsEngine:
     """
