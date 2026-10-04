@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock, patch, call
 
@@ -293,6 +294,8 @@ class TestReturnDictRegression:
         from gui.components.server_list_window.actions.batch import ServerListWindowBatchMixin
 
         obj = object.__new__(ServerListWindowBatchMixin)
+        obj._batch_delivery = SimpleNamespace(schedule=lambda fn, *a, **kw: fn(*a, **kw))
+        obj.all_servers = []
         obj.window = MagicMock()
         obj.active_jobs = {"j1": {"dialog": None, "total": 1}}
         obj.db_reader = MagicMock()

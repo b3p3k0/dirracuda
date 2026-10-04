@@ -264,6 +264,7 @@ def _server_list_host(reader, settings_manager=None):
     )
 
     host = ServerListWindowBatchMixin.__new__(ServerListWindowBatchMixin)
+    host._batch_delivery = types.SimpleNamespace(schedule=lambda fn, *a, **kw: fn(*a, **kw))
     host.db_reader = reader
     host.settings_manager = settings_manager
     host.indicator_patterns = []
