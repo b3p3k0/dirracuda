@@ -46,7 +46,58 @@ receiver loads it through the existing DB Tools → Merge.
 
 `window.py` is at 1236 lines. C2 puts new dialog code in `export.py`, so the window gains only the wiring.
 
-## Open items
+## C0 results (2026-10-04)
 
-- C0 output may add a Merge-extension card.
-- Analyst data may be large (chunks/files). C0 decides between the full copy and the results-only copy (runs + findings, without chunks).
+Method: built a fresh DB with `shared/db_migrations.run_migrations` and read
+`pragma table_info` / `pragma foreign_key_list` for each table. Read
+`merge_database` in `gui/utils/db_tools_engine_merge_methods.py`.
+
+### Finding F1 — Analyst is not in the primary DB
+
+Analyst state lives in its own sidecar (`get_paths().analyst_db_file`). It has
+an exact versioned schema with an `application_id` check
+(`experimental/analyst/db_schema.py`). We cannot put it into a primary-schema
+subset file.
+
+### Finding F2 — Merge drops a large part of the export
+
+`merge_database` imports these tables: servers (3), access (3),
+share_credentials, file_manifests, vulnerabilities, failure_logs. It does
+**not** import: probe_snapshots (+ entries/errors/rce), `*_probe_cache`,
+`*_user_flags` (flags + notes), or sherlock_results/hits. The file listing that
+backs "hosts with ebooks" is in probe_snapshots. If the receiver merges, they
+lose it. If they open the subset file as their active DB
+(`database_setup_dialog` / `app_config_dialog` already support this), they
+keep everything.
+
+### Table registry (proposed)
+
+Target creation: `run_migrations(tmp_path)` on an empty file. Then `ATTACH`
+the source read-only and run `INSERT … SELECT` over the shared column names.
+IDs are kept as they are, so FKs stay valid without a remap.
+
+| Table | Rule | Host key |
+|---|---|---|
+| smb_servers, ftp_servers, http_servers | INCLUDE | `id` in selection |
+| share_access, ftp_access, http_access | INCLUDE | `server_id` |
+| share_credentials | INCLUDE if checkbox | `server_id` |
+| file_manifests, vulnerabilities | INCLUDE | `server_id` |
+| host_user_flags, ftp_user_flags, http_user_flags | INCLUDE | `server_id` |
+| host_probe_cache, ftp_probe_cache, http_probe_cache | INCLUDE, `snapshot_path` → NULL (local absolute path) | `server_id` |
+| probe_snapshots | INCLUDE | `(host_type, protocol_server_id)` |
+| probe_snapshot_entries/errors/rce | INCLUDE | `snapshot_id` |
+| sherlock_results | INCLUDE | `(host_type, protocol_server_id)` |
+| sherlock_hits | INCLUDE | `result_id` |
+| scan_sessions | INCLUDE referenced only | ids used by copied rows |
+| failure_logs | EXCLUDE | scan noise, keyed by IP only |
+| extract_run_summaries | EXCLUDE | local download activity |
+| app_migration_state/reports | EXCLUDE (target writes its own) | — |
+| reddit_*, dork_*, censys_* (if present) | EXCLUDE | discovery-run provenance |
+| any other table | test FAILS until classified | — |
+
+### Decisions needed from HI
+
+| # | Question | Options | Recommendation |
+|---|---|---|---|
+| Q1 | Analyst (F1) | (a) Drop from v1. (b) Separate card: also write a filtered Analyst sidecar next to the .db. | (a). The sidecar has strict schema identity. Filtering it is a separate effort with its own risk. |
+| Q2 | Merge gap (F2) | (a) Ship v1. The receiver opens the file directly (full data) or merges (partial data). Queue C4 to extend Merge. (b) Extend Merge before C1. | (a). Merge writes into someone else's DB. That is larger blast radius and should be reviewed on its own. |
