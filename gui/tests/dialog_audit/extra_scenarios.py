@@ -25,6 +25,8 @@ def register(add, cases, scenario_type):
         ("batch-probe-config","components.server_list_window.actions.batch_operations","ServerListWindowBatchOperationsMixin._prompt_probe_batch_settings",("Start","Cancel")),
         ("filter-template","components.server_list_window.actions.templates","ServerListWindowTemplateMixin._on_save_filter_template._prompt_overwrite_choice",("Update","New Template","Cancel")),
         ("export-progress","components.server_list_window.export","export_servers_to_format",("Preparing export",)),
+        ("subset-export-confirm","components.server_list_window.export","save_hosts_to_database",("Save","Cancel","Include saved credentials")),
+        ("subset-export-progress","components.server_list_window.export","_run_subset_export",("Cancel",)),
         ("import-progress","components.data_import_dialog","DataImportDialog._import_data",("Starting import",)),
     ]
     for row in rows: add(*row)
@@ -106,6 +108,15 @@ def build(name, env):
         engine.export_data.side_effect=export_data
         env.patch("gui.utils.safe_messagebox.showinfo",return_value=None)
         return export.export_servers_to_format([server],"selected","csv",root,theme,engine)
+    if name in {"subset-export-confirm","subset-export-progress"}:
+        from gui.components.server_list_window import export
+        filename=str(env.paths.data_dir/"fixture-subset.db")
+        active_db_path=str(env.paths.main_db_file)
+        if name=="subset-export-confirm":
+            env.patch("gui.components.server_list_window.export.filedialog.asksaveasfilename",return_value=filename)
+            return export.save_hosts_to_database(root,[{**server,"row_key":"S:1"}],theme,active_db_path)
+        # Workers are inert, so the progress dialog stays open for capture.
+        return export._run_subset_export(root,filename,["S:1"],True,theme,active_db_path)
     if name=="import-progress":
         from gui.components.data_import_dialog import DataImportDialog
         obj=DataImportDialog(root,env.db);obj.selected_file=str(env.paths.data_dir/"fixture.csv");obj.preview_data={"total_records":1}

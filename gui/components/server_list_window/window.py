@@ -569,6 +569,8 @@ class ServerListWindow(ServerListWindowActionsMixin):
         _add_selection_command("📋 Copy IP", self._on_copy_ip)
         _add_selection_command("🔗 Copy URL", self._on_copy_url)
         self.context_menu.add_separator()
+        _add_selection_command("💾 Save Selected to Database…", self._save_selected_to_database)
+        self.context_menu.add_separator()
         _add_selection_command("🔍 Probe Selected", self._on_probe_selected)
         _add_selection_command("📦 Extract Selected", self._on_extract_selected)
         _add_selection_command("🗂️ Browse Selected", self._on_file_browser_selected)
@@ -847,6 +849,12 @@ class ServerListWindow(ServerListWindowActionsMixin):
         )
         self.theme.apply_to_widget(self.sherlock_button, "button_secondary")
         self.sherlock_button.pack(side=tk.LEFT, padx=(0, 8))
+
+        self.export_button = tk.Button(
+            button_container, text="📤 Export ▾", command=self._show_export_dropdown
+        )
+        self.theme.apply_to_widget(self.export_button, "button_secondary")
+        self.export_button.pack(side=tk.LEFT, padx=(0, 8))
 
         self.delete_button = tk.Button(
             button_container,
@@ -1192,6 +1200,17 @@ class ServerListWindow(ServerListWindowActionsMixin):
             callback()
         except Exception as exc:
             _logger.warning("Server List database-change callback failed: %s", exc)
+
+    def _save_selected_to_database(self) -> None:
+        selected_data = table.get_selected_server_data(self.tree, self.filtered_servers)
+        export.save_hosts_to_database(self.window, selected_data, self.theme, self.db_reader.db_path)
+
+    def _show_export_dropdown(self) -> None:
+        export.show_export_dropdown(
+            self.window, self.export_button,
+            table.get_selected_server_data(self.tree, self.filtered_servers),
+            self.filtered_servers, self.theme, get_export_engine(), self.db_reader.db_path,
+        )
 
     def _export_selected_servers(self) -> None:
         """Export selected servers using export module."""

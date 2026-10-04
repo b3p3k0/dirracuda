@@ -6,10 +6,188 @@ All operations use explicit dependency injection to avoid tight coupling.
 """
 
 import tkinter as tk
+import threading
+from pathlib import Path
+from queue import Empty, Queue
 from tkinter import ttk, filedialog
 from gui.utils import safe_messagebox as messagebox
+from gui.utils.db_tools_engine import DBToolsEngine
+from gui.utils.dialog_helpers import ensure_dialog_focus
 from datetime import datetime
 from typing import Dict, List, Any
+
+
+def show_export_dropdown(parent_window, button, selected_data, all_data, theme,
+                         export_engine, active_db_path):
+    """Post the button's export choices using the current selection and filters."""
+    menu = tk.Menu(parent_window, tearoff=0)
+    for label, export_type, data in (
+        ("Selected", "selected", list(selected_data)),
+        ("All shown", "all", list(all_data)),
+    ):
+        if export_type == "all":
+            menu.add_separator()
+        state = tk.NORMAL if data else tk.DISABLED
+        menu.add_command(
+            label=f"{label} → Database…", state=state,
+            command=lambda rows=data: save_hosts_to_database(
+                parent_window, rows, theme, active_db_path
+            ),
+        )
+        for fmt in ("csv", "json", "zip"):
+            menu.add_command(
+                label=f"{label} → {fmt.upper()}", state=state,
+                command=lambda rows=data, kind=export_type, format_type=fmt: export_servers_to_format(
+                    rows, kind, format_type, parent_window, theme, export_engine
+                ),
+            )
+    menu.post(button.winfo_rootx(), button.winfo_rooty() + button.winfo_height())
+
+
+def _host_counts_text(counts):
+    return f"SMB {counts['S']} · FTP {counts['F']} · HTTP {counts['H']}"
+
+
+def save_hosts_to_database(parent_window, servers, theme, active_db_path):
+    """Choose a destination and confirm the host subset and credential policy."""
+    if not servers:
+        return
+    row_keys = [row['row_key'] for row in servers]
+    filename = filedialog.asksaveasfilename(
+        parent=parent_window, title="Save Hosts to Database", defaultextension=".db",
+        filetypes=[("SQLite databases", "*.db"), ("All files", "*.*")],
+        initialfile=f"dirracuda_subset_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db",
+    )
+    if not filename:
+        return
+    if Path(filename).resolve() == Path(active_db_path).resolve():
+        messagebox.showerror(
+            "Export Error", "Choose a different file. The active database cannot be overwritten.",
+            parent=parent_window,
+        )
+        return
+
+    dialog = tk.Toplevel(parent_window)
+    dialog.title("Save Hosts to Database")
+    dialog.transient(parent_window)
+    theme.apply_to_widget(dialog, "main_window")
+    counts = {kind: sum(key.startswith(kind + ':') for key in row_keys) for kind in 'SFH'}
+    summary = tk.Label(
+        dialog, text=f"Save {len(row_keys)} hosts ({_host_counts_text(counts)}) to {Path(filename).name}?",
+        wraplength=520, justify=tk.LEFT,
+    )
+    theme.apply_to_widget(summary, "label")
+    summary.pack(padx=20, pady=(20, 10), anchor="w")
+    include_credentials = tk.BooleanVar(master=dialog, value=True)
+    checkbox = tk.Checkbutton(dialog, text="Include saved credentials", variable=include_credentials)
+    theme.apply_to_widget(checkbox, "checkbox")
+    checkbox.pack(padx=20, anchor="w")
+    theme.create_styled_label(
+        dialog, "Anyone with this file can read these credentials.", "small",
+        fg=theme.colors["text_secondary"],
+    ).pack(padx=20, pady=(0, 10), anchor="w")
+    note = tk.Label(dialog, text="Analyst results are not included.")
+    theme.apply_to_widget(note, "label")
+    note.pack(padx=20, anchor="w")
+
+    def save():
+        credentials = include_credentials.get()
+        dialog.destroy()
+        _run_subset_export(parent_window, filename, row_keys, credentials, theme, active_db_path)
+
+    buttons = tk.Frame(dialog)
+    theme.apply_to_widget(buttons, "main_window")
+    buttons.pack(padx=20, pady=20, anchor="e")
+    save_button = tk.Button(buttons, text="Save", command=save)
+    theme.apply_to_widget(save_button, "button_primary")
+    save_button.pack(side=tk.LEFT, padx=(0, 8))
+    cancel_button = tk.Button(buttons, text="Cancel", command=dialog.destroy)
+    theme.apply_to_widget(cancel_button, "button_secondary")
+    cancel_button.pack(side=tk.LEFT)
+    dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
+    dialog.grab_set()
+    ensure_dialog_focus(dialog, parent_window)
+
+
+def _run_subset_export(parent_window, filename, row_keys, include_credentials, theme, active_db_path):
+    """Run the engine off-thread; polling owns all Tk work and teardown."""
+    updates = Queue()
+    cancel_event = threading.Event()
+    dialog = tk.Toplevel(parent_window)
+    dialog.title("Saving Hosts to Database")
+    dialog.transient(parent_window)
+    theme.apply_to_widget(dialog, "main_window")
+    label = tk.Label(dialog, text="Preparing export…", wraplength=480)
+    theme.apply_to_widget(label, "label")
+    label.pack(padx=20, pady=(20, 10))
+    progress_bar = ttk.Progressbar(dialog, length=400, mode="determinate")
+    theme.apply_to_widget(progress_bar, "progress_bar")
+    progress_bar.pack(padx=20, pady=10)
+    cancel_button = tk.Button(dialog, text="Cancel", command=cancel_event.set)
+    theme.apply_to_widget(cancel_button, "button_secondary")
+    cancel_button.pack(padx=20, pady=(10, 20))
+    dialog.protocol("WM_DELETE_WINDOW", cancel_event.set)
+
+    def worker():
+        try:
+            result = DBToolsEngine(str(active_db_path)).export_subset(
+                filename, row_keys, include_credentials=include_credentials,
+                progress_callback=lambda percent, text: updates.put(("progress", (percent, text))),
+                cancel_event=cancel_event,
+            )
+        except Exception as exc:
+            result = dict(success=False, cancelled=False, error=str(exc))
+        updates.put(("result", result))
+
+    def poll():
+        nonlocal poll_id
+        poll_id = None
+        while True:
+            try:
+                kind, value = updates.get_nowait()
+            except Empty:
+                break
+            if kind == "result":
+                dialog.destroy()
+                _show_subset_result(parent_window, value)
+                return
+            percent, text = value
+            if percent >= 0:
+                progress_bar.configure(value=percent)
+            label.configure(text=text)
+        poll_id = dialog.after(100, poll)
+
+    def on_destroy(event):
+        # Parent shutdown can destroy this dialog before the worker finishes.
+        if event.widget == dialog:
+            cancel_event.set()
+            if poll_id is not None:
+                dialog.after_cancel(poll_id)
+
+    dialog.bind("<Destroy>", on_destroy, add="+")
+    poll_id = dialog.after(100, poll)
+    threading.Thread(target=worker, daemon=True).start()
+    dialog.grab_set()
+    ensure_dialog_focus(dialog, parent_window)
+
+
+def _show_subset_result(parent_window, result):
+    if result.get('cancelled'):
+        messagebox.showinfo("Export Cancelled", "Export cancelled.", parent=parent_window)
+    elif not result['success']:
+        messagebox.showerror("Export Error", result['error'], parent=parent_window)
+    else:
+        counts = result['hosts']
+        text = (
+            f"Saved {sum(counts.values())} hosts ({_host_counts_text(counts)})\n"
+            f"Rows: {sum(result['rows'].values())}\n"
+            f"Size: {result['size_bytes'] / (1024 * 1024):.2f} MB\n"
+            f"File: {result['output_path']}\n"
+            f"Missing hosts: {len(result['missing'])}"
+        )
+        if result['warnings']:
+            text += "\nWarnings:\n" + "\n".join(result['warnings'])
+        messagebox.showinfo("Export Complete", text, parent=parent_window)
 
 
 def show_export_menu(parent_window, server_data, export_type, theme, export_engine):
