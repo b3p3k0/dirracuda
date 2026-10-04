@@ -338,9 +338,13 @@ Quick filters live in the `Filters ▾` dropdown next to the search box: Favorit
 | ⭐ Toggle Favorite | Mark/unmark selected servers as favorites |
 | 🚫 Toggle Avoid | Mark/unmark selected servers to avoid |
 | ⚠ Toggle Compromised | Mark/unmark selected servers as likely compromised |
+| 💾 Save Selected to Database… | Save the selected hosts to a new `.db` file you can share (see below) |
+| 📤 Export ▾ | Bottom-row button: Selected or All shown → Database, CSV, JSON, or ZIP. `Ctrl+E` still opens the CSV/JSON/ZIP menu for the selection |
 | 🗑️ Delete Selected | Remove selected servers from the database |
 
 Server List also includes an **Add Record** control (next to `Advanced`) for manually inserting one SMB/FTP/HTTP host row into the active database. Save keeps your current filters unchanged. If the newly added row does not appear, it is usually hidden by an active filter (most commonly `Show Only Shares >0`). Inserted records can then be probed and investigated from the GUI.
+
+**Sharing a selection.** Filter the list (for example, to hosts with ebooks), select the rows, then choose **Save Selected to Database…**. Pick a file name, confirm, and the export runs in the background with a Cancel button. The new file uses the normal Dirracuda schema and holds only the selected hosts with their access rows, file manifests, probe snapshots (file listings), probe status, flags and notes, and Sherlock results. Saved credentials are included unless you untick the checkbox; anyone with the file can read them. Analyst results, failure logs, extract history, and Reddit/Search/Censys run data are never included, and local file paths are cleared. The receiver can open the file as their database or load it with **DB Tools → Import & Merge**.
 
 ### Probing Shares
 
@@ -488,7 +492,7 @@ Configure it from **App Config → ClamAV Settings**:
 Opened via **DB Tools** on the dashboard. Four tabs:
 
 **Import & Merge** - supports two source types:
-- External `.db` merge: merge by IP into current DB (includes shares, credentials, file manifests, vulnerabilities, failure logs).
+- External `.db` merge: merge by IP into current DB (includes shares, credentials, file manifests, vulnerabilities, failure logs, probe snapshots, probe status, user flags and notes, and Sherlock results). Flags combine (a flag set on either side stays set). Notes are kept: differing incoming notes are appended under a `--- merged YYYY-MM-DD ---` line.
 - CSV host import: import protocol server rows only (SMB/FTP/HTTP registries), using the same conflict strategies.
 
 Three conflict strategies are available in both paths: **Keep Newer** (default - picks whichever record has the more recent `last_seen`), **Keep Source**, and **Keep Current**. Auto-backup fires before import/merge unless you disable it.
