@@ -95,9 +95,45 @@ IDs are kept as they are, so FKs stay valid without a remap.
 | reddit_*, dork_*, censys_* (if present) | EXCLUDE | discovery-run provenance |
 | any other table | test FAILS until classified | — |
 
-### Decisions needed from HI
+### HI decisions after C0 (2026-10-04)
+
+| # | Decision |
+|---|---|
+| Q1 | **Analyst is out of v1.** This replaces the Analyst part of D2. |
+| Q2 | **Fix Merge first.** A new card, CM, extends Merge before the export cards. |
+
+## Revised card order
+
+CM → C1 → C2 → C3. One card at a time. Each card is accepted before the next one starts.
+
+### CM — Merge learns the host-scoped tables
+
+New satellite `gui/utils/db_tools_engine_merge_host_data_methods.py`, bound the same way as the existing merge methods. `db_tools_engine_merge_methods.py` is at 1319 lines, so it gains only the call sites. Every new step runs inside the existing `BEGIN IMMEDIATE` transaction, after the server ID maps are built. Every new step is skipped with a warning when either side lacks the table or the required columns (the same pattern as today).
+
+| Table | Match key on target | Conflict rule |
+|---|---|---|
+| probe_snapshots | `snapshot_hash` (globally UNIQUE) | Hash exists: reuse the target id, insert nothing. Otherwise insert, with `protocol_server_id` remapped through the protocol's id map. Build `snapshot_id_map`. |
+| probe_snapshot_entries/errors/rce | — | Insert only for newly inserted snapshots, with `snapshot_id` remapped. |
+| `*_probe_cache` (PK `server_id`) | mapped `server_id` | No row: insert. Row exists: apply `strategy` on `last_probe_at` (KEEP_NEWER / SOURCE / CURRENT). Always remap `latest_snapshot_id`. Never import `snapshot_path`: keep the target value, or NULL on insert. |
+| `*_user_flags` (PK `server_id`) | mapped `server_id` | See **Q3**. |
+| sherlock_results (UNIQUE `host_type, protocol_server_id`) | mapped key | No row: insert. Row exists: apply `strategy` on `scanned_at`. When the source wins, replace that result's hits. Remap `snapshot_id`; unmapped → NULL (renders as stale, as designed). |
+| sherlock_hits | `result_id` | Copied with their result. |
+
+Also in CM:
+- `MergeResult` gains counters: snapshots, probe_cache, flags, sherlock.
+- `preview_merge` reports them.
+- The DB Tools merge summary shows them.
+
+Tests: a round trip for each table, each strategy on the cache and on sherlock, snapshot hash dedupe, id remap when the target ids differ, rollback on a mid-merge failure, and a missing table on either side.
+
+DA must verify: is `snapshot_hash` content-only, or does it include host identity? If it is content-only, two hosts with the same listing share one row. Then the dedupe rule must also match `(host_type, protocol_server_id)`.
+
+### C1–C3
+
+These stay as written above, with Analyst removed. The C1 round-trip test now asserts **full** fidelity through Merge.
+
+### Decision needed from HI
 
 | # | Question | Options | Recommendation |
 |---|---|---|---|
-| Q1 | Analyst (F1) | (a) Drop from v1. (b) Separate card: also write a filtered Analyst sidecar next to the .db. | (a). The sidecar has strict schema identity. Filtering it is a separate effort with its own risk. |
-| Q2 | Merge gap (F2) | (a) Ship v1. The receiver opens the file directly (full data) or merges (partial data). Queue C4 to extend Merge. (b) Extend Merge before C1. | (a). Merge writes into someone else's DB. That is larger blast radius and should be reviewed on its own. |
+| Q3 | Flags and notes when the target already has a row for that host | (a) The target's flags win. Fill the target's notes only when they are empty. (b) Apply `strategy` on `updated_at`, like the cache. (c) Flags: OR (a favorite stays a favorite). Notes: append the source notes under a `--- merged <date> ---` line when they differ. | (c). It never loses anyone's notes and never removes a flag. (b) can overwrite local notes silently. |
