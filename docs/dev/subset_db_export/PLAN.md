@@ -132,7 +132,14 @@ DA must verify: is `snapshot_hash` content-only, or does it include host identit
 
 These stay as written above, with Analyst removed. The C1 round-trip test now asserts **full** fidelity through Merge.
 
-### Decision needed from HI
+### HI decision Q3 (2026-10-04): combine, never lose
+
+Flags: a flag set on either side stays set (logical OR of favorite/avoid and
+any other boolean flag columns). Notes: when both sides are non-empty and
+differ, set target notes to `<target>\n--- merged YYYY-MM-DD ---\n<source>`.
+Target empty → take source. Same text → no change.
+
+Options that were offered:
 
 | # | Question | Options | Recommendation |
 |---|---|---|---|
